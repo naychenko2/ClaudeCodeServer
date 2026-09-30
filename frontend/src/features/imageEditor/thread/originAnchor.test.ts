@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { OriginAnchor } from './VersionCards';
+import { OriginAnchor, VersionCard } from './VersionCards';
 import type { ImageThread, ImageThreadLaunch, ImageThreadVersion } from './threadsApi';
 
 // Якорь «origin» нити: черновик «Новая картинка» виден только до первого запуска —
@@ -51,5 +51,22 @@ describe('OriginAnchor', () => {
     const html = render(draft({ file: 'img/hero.png', draftFolder: null, launches: [launch('done')] }));
     expect(html).toContain('data-image-version');
     expect(html).not.toContain('data-image-draft');
+  });
+});
+
+// Одиночная карточка — на всю ленту, в запуске на 2+ варианта — половина (не больше двух в ряд)
+describe('VersionCard: ширина', () => {
+  const t = draft({ file: 'img/hero.png', draftFolder: null });
+  const card = (solo?: boolean) => renderToStaticMarkup(createElement(VersionCard, {
+    projectId: 'p1', sessionId: 's1', thread: t, version: t.versions[0], focused: true, solo,
+  }));
+
+  it('одиночная по умолчанию занимает всю ширину', () => {
+    expect(card()).toContain('width:100%');
+    expect(card()).not.toContain('calc(');
+  });
+
+  it('в паре — половина ленты', () => {
+    expect(card(false)).toContain('width:calc((100% - 12px) / 2)');
   });
 });

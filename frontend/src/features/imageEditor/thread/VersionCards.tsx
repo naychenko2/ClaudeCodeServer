@@ -29,16 +29,26 @@ import { queueText, useJobStatus, useProgress } from './useJobStatus';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
-const CARD_W = 300;
+const CARD_GAP = SP.md;
+// Не больше двух карточек в ряд: ширина — половина ленты за вычетом зазора. Одиночная
+// карточка (и любая на мобиле) — на всю ленту: крупное превью 5:3 решено осознанно.
+const cardWidth = (mobile: boolean, solo: boolean) => (mobile || solo ? '100%' : `calc((100% - ${CARD_GAP}px) / 2)`);
+// Пропорция превью: общая у карточки и её скелетона, иначе лента прыгает при загрузке.
+const PREVIEW_RATIO = '5 / 3';
+// Потолок высоты превью: на широкой, но невысокой ленте карточка не должна занимать весь
+// экран — рамка тогда становится шире 5:3, картинка вписывается через contain.
+const PREVIEW_MAX_HEIGHT = '60vh';
 
 function Note({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{children}</div>;
 }
 
-function Shell({ current, mobile, children, testId }: { current: boolean; mobile: boolean; children: ReactNode; testId?: string }) {
+function Shell({ current, mobile, solo, children, testId }: {
+  current: boolean; mobile: boolean; solo: boolean; children: ReactNode; testId?: string;
+}) {
   return (
     <div data-image-version={testId} data-current={current ? 'true' : 'false'} style={{
-      width: mobile ? '100%' : CARD_W, maxWidth: '100%', boxSizing: 'border-box', padding: SP.sm,
+      width: cardWidth(mobile, solo), maxWidth: '100%', boxSizing: 'border-box', padding: SP.sm,
       display: 'flex', flexDirection: 'column', gap: SP.xs,
       background: C.bgCard, border: `1px solid ${current ? C.accent : C.border}`, borderRadius: R.xl,
       boxShadow: current ? `0 0 0 3px ${C.accentLight}` : 'none',
@@ -51,7 +61,7 @@ function Shell({ current, mobile, children, testId }: { current: boolean; mobile
 function Picture({ src, onOpen }: { src: string | null; onOpen?: () => void }) {
   const [failed, setFailed] = useState<string | null>(null);
   const frame = {
-    height: 180, borderRadius: R.md, border: `1px solid ${C.borderLight}`, background: C.bgInset, overflow: 'hidden',
+    aspectRatio: PREVIEW_RATIO, maxHeight: PREVIEW_MAX_HEIGHT, boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.borderLight}`, background: C.bgInset, overflow: 'hidden',
   } as const;
   if (!src || failed === src) {
     return (
@@ -70,10 +80,11 @@ function Picture({ src, onOpen }: { src: string | null; onOpen?: () => void }) {
   );
 }
 
-// Карточка версии: шапка, картинка, подпись «вариант 1 из 2 · от исходника · модель», действия
-export function VersionCard({ projectId, sessionId, thread, version, focused, model }: {
+// Карточка версии: шапка, картинка, подпись «вариант 1 из 2 · от исходника · модель», действия.
+// solo — карточка в блоке одна (якорь нити, единственный вариант запуска).
+export function VersionCard({ projectId, sessionId, thread, version, focused, model, solo = true }: {
   projectId: string; sessionId: string; thread: ImageThread; version: ImageThreadVersion; focused: boolean;
-  model?: string | null;
+  model?: string | null; solo?: boolean;
 }) {
   const mobile = useIsMobile();
   const [busy, setBusy] = useState(false);
@@ -89,7 +100,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const open = () => openEditor(sessionId, thread.id, version.id);
 
   return (
-    <Shell current={current} mobile={mobile} testId={String(version.number)}>
+    <Shell current={current} mobile={mobile} solo={solo} testId={String(version.number)}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
         {current && <Badge size="xs" tone="accent" icon={ic(Target)}>в работе</Badge>}
         <span title={name} style={{
@@ -149,7 +160,7 @@ function DraftBox({ thread, focused, personal }: { thread: ImageThread; focused:
   const folder = saveFolder(thread);
   return (
     <div data-image-draft="" style={{
-      width: mobile ? '100%' : CARD_W, maxWidth: '100%', boxSizing: 'border-box', padding: SP.lg,
+      width: cardWidth(mobile, true), maxWidth: '100%', boxSizing: 'border-box', padding: SP.lg,
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.xs, textAlign: 'center',
       border: `1.5px dashed ${focused ? C.accent : C.border}`, borderRadius: R.xl, background: C.bgInset,
       fontSize: FS.sm, color: C.textMuted,
@@ -190,15 +201,15 @@ function estimateText(e: unknown): string | null {
   return `${x.approx ? '≈ ' : ''}${money(x.amount, x.unit)}`;
 }
 
-function Skeleton({ mobile }: { mobile: boolean }) {
+function Skeleton({ mobile, solo }: { mobile: boolean; solo: boolean }) {
   return (
     <div data-image-version="skeleton" style={{
-      width: mobile ? '100%' : CARD_W, maxWidth: '100%', boxSizing: 'border-box', padding: SP.sm,
+      width: cardWidth(mobile, solo), maxWidth: '100%', boxSizing: 'border-box', padding: SP.sm,
       display: 'flex', flexDirection: 'column', gap: SP.xs,
       background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
     }}>
       <div className="cc-skel" style={{ height: 14, width: '55%', borderRadius: R.sm }} />
-      <div className="cc-skel" style={{ height: 180, borderRadius: R.md }} />
+      <div className="cc-skel" style={{ aspectRatio: PREVIEW_RATIO, maxHeight: PREVIEW_MAX_HEIGHT, borderRadius: R.md }} />
     </div>
   );
 }
@@ -208,7 +219,7 @@ function RunningLine({ projectId, jobId, model }: { projectId: string; jobId: st
   const running = (status?.phase ?? 'run') === 'run';
   const progress = useProgress(status, running);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, maxWidth: CARD_W * 2 + SP.md }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary }}>
         <Dot color={C.accent} />Рисуем…{model ? ` · ${model}` : ''}{queueText(progress.queuePosition)}
         <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
@@ -243,6 +254,8 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const info = [model, variantsWord(count), estimateText(data.estimate)].filter(Boolean).join(' · ');
   const status = launch?.status ?? (versions.length ? 'done' : 'running');
   const endNote = launchEndNote(status, versions.length, count);
+  const skeletons = status === 'running' ? Math.max(0, Math.min(count, 4) - versions.length) : 0;
+  const solo = versions.length + skeletons === 1;
 
   return (
     <div data-image-launch={status} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
@@ -256,12 +269,12 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
       {status === 'running' && <RunningLine projectId={projectId} jobId={jobId} model={model} />}
 
       {(versions.length > 0 || status === 'running') && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.md }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: CARD_GAP }}>
           {versions.map(v => (
-            <VersionCard key={v.id} projectId={projectId} sessionId={sessionId} thread={thread} version={v} focused={focused} model={model} />
+            <VersionCard key={v.id} projectId={projectId} sessionId={sessionId} thread={thread} version={v} focused={focused} model={model} solo={solo} />
           ))}
-          {status === 'running' && Array.from({ length: Math.max(0, Math.min(count, 4) - versions.length) }, (_, i) => (
-            <Skeleton key={i} mobile={mobile} />
+          {Array.from({ length: skeletons }, (_, i) => (
+            <Skeleton key={i} mobile={mobile} solo={solo} />
           ))}
         </div>
       )}

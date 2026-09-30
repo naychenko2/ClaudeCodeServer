@@ -22,7 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -47,7 +47,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // осиротевший дефолт (как в AuthController.Me для личной)
         var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
             ? dpid : null;
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
     }
 
     // Можно ли включить руки проекта (ADR-016 §7): матрица без тумблера самого проекта —
@@ -417,31 +417,6 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         wkStore.Delete(knowledgeRoot);
     }
 
-    // Тумблер грани десктопного агента в проекте (ADR-008, «Два уровня, которые нельзя
-    // смешивать»). Ось выдачи грани — «проект + тип чата», и это ВТОРАЯ её половина.
-    //
-    // Выключение обязано быть рубильником: состав инструментов зафиксирован на момент
-    // запуска CLI, поэтому запущенный процесс доработал бы ход с гранью в руках. Гасим
-    // сеансы рук проекта и рассылаем cancel по их вызовам — тогда снятый тумблер значит
-    // «руки убраны сейчас», а не «в следующий раз не выдадим».
-    [HttpPut("{id}/desktop-agent")]
-    public async Task<IActionResult> SetDesktopAgent(string id, [FromBody] SetDesktopAgentRequest req,
-        CancellationToken ct)
-    {
-        var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
-        // Включать грань можно только с поднятым флагом; выключение доступно всегда —
-        // рубильник не должен зависеть от состояния фичи, которую он гасит
-        if (req.Enabled && !flags.IsEnabled(UserId, FeatureFlagKeys.DesktopAgent))
-            return BadRequest(new { error = "Десктопный агент выключен: включите «Десктопный агент» в экспериментальных функциях" });
-
-        var updated = projects.SetDesktopAgent(id, req.Enabled);
-        var stopped = req.Enabled ? 0 : await desktopHands.CancelForProjectAsync(id, ct);
-        if (stopped > 0)
-            logger.LogInformation("Грань десктопа выключена в проекте {ProjectId}: погашено сеансов {Count}", id, stopped);
-        return Ok(new { project = WithCount(updated), handsStopped = stopped });
-    }
-
     // Тумблер рук локального проекта (ADR-016 §7). Включение — только когда матрица пускает
     // (флаг, локальный проект, руки установлены на устройстве); выключение доступно всегда.
     // Руки — свойство чата: адаптеры живых чатов проекта пересоздаются при следующем сообщении.
@@ -687,8 +662,6 @@ public record CreateProjectRequest(string Name, string? RootPath, bool CreateDir
 public record SetProjectDeviceRequest(string? DeviceId, string? RootPath = null);
 // McpServersOn — ключи включённых серверов личного реестра (allow-модель доступа;
 // null = не менять, пустой список = «никто не включён»).
-// Enabled — грань десктопного агента в проекте (ADR-008): выключение гасит сеансы рук
-public record SetDesktopAgentRequest(bool Enabled);
 public record SetHandsRequest(bool Enabled);
 // Порог автоправила архивации проекта (дней); null — наследовать личный порог владельца
 public record SetProjectArchiveDaysRequest(int? Days);

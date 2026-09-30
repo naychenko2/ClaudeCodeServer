@@ -88,11 +88,7 @@ public class KeepMcpServersTests : IDisposable
         WidgetsMcp: new WidgetsMcpContext("http://localhost:5999", () => "tok", UseHttp: true),
         // CodeGraph требует ProjectId (non-nullable).
         CodeGraphMcp: new CodeGraphMcpContext("http://localhost:5999", () => "tok", "proj1"),
-        DifyMcp: null, // dify живёт за секцией Dify appsettings — без неё hasDify=false
-        // Desktop — отдельный токен грани; нам важно проверить гейт hasDesktop,
-        // а реальный файл ищется локально — null/none файла → hasDesktop=false,
-        // но мы хотим видеть, что блок TrimMcp НЕ гасит desktop отдельно от себя.
-        DesktopMcp: new DesktopMcpContext("http://localhost:5999", "tok", "sess-test"));
+        DifyMcp: null); // dify живёт за секцией Dify appsettings — без неё hasDify=false
 
     // Вызов приватного BuildTurnMcpConfig готовой сессии + разбор temp-конфига.
     // Возвращает СПИСОК КЛЮЧЕЙ серверов из конфига (порядок не важен): с ним тесты говорят
@@ -141,7 +137,7 @@ public class KeepMcpServersTests : IDisposable
     /// если бы гашение скопом потерялось, белый список без надобности выключил бы всё подряд.
     /// </summary>
     [Fact]
-    public void ПустойKeepВсёВыключеноКромеDesktop()
+    public void ПустойKeepВсёВыключено()
     {
         var servers = BuildFor(BuildProviders(trimMcp: true));
 

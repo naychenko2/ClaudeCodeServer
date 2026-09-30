@@ -27,13 +27,6 @@ public class DeviceExecChannelTests : IDisposable
         if (Directory.Exists(_dataDir)) Directory.Delete(_dataDir, recursive: true);
     }
 
-    private sealed class SilentSender : IDeviceCommandSender
-    {
-        public Task SendCallAsync(string connectionId, DesktopCallCommand command, CancellationToken ct = default) => Task.CompletedTask;
-        public Task SendGoAsync(string connectionId, DesktopGoCommand go, CancellationToken ct = default) => Task.CompletedTask;
-        public Task SendCancelAsync(string connectionId, DesktopCancelCommand cancel, CancellationToken ct = default) => Task.CompletedTask;
-    }
-
     private sealed class CountingOpener : IDeviceExecOpenSender
     {
         public int Calls;
@@ -64,7 +57,7 @@ public class DeviceExecChannelTests : IDisposable
         }
     }
 
-    private sealed record Rig(DeviceRegistry Registry, DesktopCallRouter Router, DeviceExecChannel Channel, CountingOpener Opener, DesktopDevice Device);
+    private sealed record Rig(DeviceRegistry Registry, DeviceConnectionRegistry Router, DeviceExecChannel Channel, CountingOpener Opener, DesktopDevice Device);
 
     private Rig NewRig(string? requiredCli = RequiredCli, AgentReleaseCatalog? releases = null)
     {
@@ -72,7 +65,7 @@ public class DeviceExecChannelTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { [DeviceHarnessPolicy.CliVersionKey] = requiredCli })
             .Build();
         var registry = new DeviceRegistry(_dataDir);
-        var router = new DesktopCallRouter(new SilentSender(), [], NullLogger<DesktopCallRouter>.Instance);
+        var router = new DeviceConnectionRegistry([], NullLogger<DeviceConnectionRegistry>.Instance);
         var opener = new CountingOpener();
         var channel = new DeviceExecChannel(registry, router, new DeviceHarnessPolicy(config), opener,
             NullLogger<DeviceExecChannel>.Instance, new ImmediateTime(), releases);
@@ -419,13 +412,13 @@ public class DeviceExecChannelTests : IDisposable
     }
 
     [Fact]
-    public async Task HelloКлиентаРук_СведенийАгентаНеЗатирает()
+    public async Task HelloБезПолейАгента_СведенийАгентаНеЗатирает()
     {
         var rig = NewRig();
         await ConnectAsync(rig, AgentHello(RequiredCli));
 
         await rig.Channel.HelloAsync(Conn, Owner, rig.Device.Id,
-            new DeviceHello(DesktopProtocol.Version, [DesktopCallKinds.Screen], "wpf-1.0"));
+            new DeviceHello(DesktopProtocol.Version, [], "1.0"));
 
         var device = rig.Registry.Get(Owner, rig.Device.Id)!;
         device.CliVersion.Should().Be(RequiredCli);

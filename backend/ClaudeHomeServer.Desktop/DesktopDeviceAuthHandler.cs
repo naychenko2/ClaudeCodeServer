@@ -8,8 +8,8 @@ using Microsoft.Extensions.Options;
 namespace ClaudeHomeServer.Services.Desktop;
 
 /// <summary>
-/// Схема аутентификации самого устройства (ADR-008, «Аутентификация и транспорт»):
-/// канал клиента (SignalR-подключение, отдача результата вызова) авторизуется device-токеном,
+/// Схема аутентификации самого устройства (заведена ADR-008, живёт в канале ADR-016):
+/// канал агента (хаб устройств, канал исполнения, самоотзыв) авторизуется device-токеном,
 /// а не пользовательским JWT и не сервисным токеном владельца. Пользовательский токен на
 /// клиент не копируется вовсе — у клиента есть только его собственный device-токен.
 ///
@@ -34,7 +34,7 @@ public sealed class DesktopDeviceAuthHandler : AuthenticationHandler<Authenticat
 
     public const string FingerprintHeader = "X-Device-Fingerprint";
 
-    /// <summary>Устройство в принципале (то же имя claim, что у capability-токена канала).</summary>
+    /// <summary>Устройство в принципале.</summary>
     public const string DeviceIdClaim = DesktopProtocol.DeviceIdClaim;
 
     /// <summary>Версия device-токена: по ней видно, что принципал построен не на прошлой выдаче.</summary>

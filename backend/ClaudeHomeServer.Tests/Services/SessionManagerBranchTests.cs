@@ -224,20 +224,6 @@ public class SessionManagerBranchTests : IDisposable
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*ветвить нечего*");
     }
 
-    // --- §9.3 — десктопный чат ---
-
-    [Fact]
-    public async Task Гейт_ДесктопныйЧат_400()
-    {
-        var (session, _, _, text1, _) = await SeedBranchableChatAsync("desktop");
-        session.DesktopChat = true;
-
-        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*транскрипт десктопного чата*");
-    }
-
     // --- §9.6 — групповой чат и режим штаба ---
 
     [Fact]

@@ -10,15 +10,6 @@ namespace ClaudeHomeServer.Services.Desktop;
 /// <summary>Сервер → устройство. Строго типизированный клиент: имена методов — часть протокола.</summary>
 public interface IDesktopDeviceClient
 {
-    /// <summary>Команда принята к исполнению не будет, пока не придёт встречный Go.</summary>
-    Task Call(DesktopCallCommand command);
-
-    /// <summary>Разрешение исполнять: с этого момента идут часы дедлайна.</summary>
-    Task Go(DesktopGoCommand go);
-
-    /// <summary>Отмена: гасит ожидание и невыполненные шаги.</summary>
-    Task Cancel(DesktopCancelCommand cancel);
-
     /// <summary>
     /// Открыть канал исполнения (ADR-016): устройство подключается WebSocket'ом к
     /// /api/devices/exec с этим execId.
@@ -27,26 +18,24 @@ public interface IDesktopDeviceClient
 }
 
 /// <summary>
-/// Канал устройств десктопного агента (ADR-008, «Протокол канала»). Маппинг — /hubs/devices.
+/// Хаб устройств — канал управления агента локальных проектов (ADR-016). Маппинг — /hubs/devices.
 ///
 /// Авторизация — ТОЛЬКО схемой токена устройства: дефолтная JwtBearer и сервисный JWT
 /// владельца этой поверхности не открывают. Владелец и устройство берутся из claims токена,
 /// заголовки в решении не участвуют.
 ///
-/// Push идёт в КОНКРЕТНОЕ соединение (групп нет): адресат вызова определён сеансом рук.
-/// Результат сюда не приезжает — он уходит HTTP-POST'ом мимо 32-КБ лимита сообщения хаба.
+/// Push идёт в КОНКРЕТНОЕ соединение (групп нет). Поток исполнения сюда не приезжает — он
+/// идёт отдельным WebSocket <see cref="DeviceExecProtocol.Path"/>.
 ///
 /// Живёт в самой вертикали, а не в <c>Hubs/</c> рядом с <c>SessionHub</c>/<c>TerminalHub</c>
 /// (Этап 5, вынос Desktop): это ОТДЕЛЬНЫЙ канал устройств, и все его зависимости —
-/// собственные (<see cref="DesktopCallRouter"/>, <see cref="DesktopProtocol"/>). Шов, как у
-/// <c>ITerminalHubNotifier</c>, здесь был бы лишним: он понадобился терминалу потому, что
-/// <c>TerminalHub</c> держит корневой <c>ProjectManager</c> и физически не мог уехать из Main.
-/// Оставить хаб в Main означало бы цикл Main.Hubs ⇄ вертикаль: хаб зовёт маршрутизатор,
-/// маршрутизатор пушит в хаб через <c>IHubContext&lt;DeviceHub&gt;</c>.
+/// собственные (<see cref="DeviceConnectionRegistry"/>, <see cref="DeviceExecChannel"/>).
+/// Оставить хаб в Main означало бы цикл Main.Hubs ⇄ вертикаль: хаб зовёт канал исполнения,
+/// канал пушит в хаб через <c>IHubContext&lt;DeviceHub&gt;</c>.
 /// </summary>
 [Authorize(AuthenticationSchemes = DesktopProtocol.DeviceTokenScheme)]
 public sealed class DeviceHub(
-    DesktopCallRouter router,
+    DeviceConnectionRegistry connections,
     DeviceExecChannel exec,
     ILogger<DeviceHub> log,
     AgentTicketService? agentTickets = null,
@@ -68,20 +57,19 @@ public sealed class DeviceHub(
             return;
         }
 
-        router.RegisterConnection(Context.ConnectionId, ownerId, deviceId);
+        connections.RegisterConnection(Context.ConnectionId, ownerId, deviceId);
         await base.OnConnectedAsync();
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        await router.RemoveConnectionAsync(Context.ConnectionId);
+        await connections.RemoveConnectionAsync(Context.ConnectionId);
         await base.OnDisconnectedAsync(exception);
     }
 
     /// <summary>
-    /// Представление устройства: версия протокола объявляется явно, поддерживаемые типы шагов
-    /// сервер не додумывает. До Hello устройство командам недоступно.
-    /// Агент локальных проектов (ADR-016) дополнительно объявляет платформу, версии и
+    /// Представление устройства: версия протокола объявляется явно, до Hello устройство
+    /// командам недоступно. Агент локальных проектов (ADR-016) объявляет платформу, версии и
     /// возможности, а в ответ получает требуемую версию CLI и вердикт «харнес готов»;
     /// поставив нужную копию CLI, он повторяет Hello.
     /// </summary>
@@ -97,44 +85,6 @@ public sealed class DeviceHub(
 
         return await exec.HelloAsync(
             Context.ConnectionId, OwnerId ?? "", DeviceId ?? "", hello, Context.ConnectionAborted);
-    }
-
-    /// <summary>Подтверждение приёма команды. Не пришло за 2 с — вызов кончается честной ошибкой.</summary>
-    public Task Ack(string callId)
-    {
-        if (!router.Ack(callId, Context.ConnectionId)) throw UnknownCall(callId);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>Устройство разговаривает с человеком и просит времени (минуты).</summary>
-    public Task Awaiting(string callId, int minutes)
-    {
-        if (!router.Awaiting(callId, Context.ConnectionId, minutes)) throw UnknownCall(callId);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>Человек подтвердил действие — сервер отвечает встречным Go.</summary>
-    public Task Confirm(string callId)
-    {
-        if (!router.Confirm(callId, Context.ConnectionId)) throw UnknownCall(callId);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>Человек отклонил действие — отказ уходит модели текстом.</summary>
-    public Task Decline(string callId)
-    {
-        if (!router.Decline(callId, Context.ConnectionId)) throw UnknownCall(callId);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Индекс последнего применённого шага по ходу батча: без него при обрыве и дедлайне
-    /// вернуть этот индекс (инвариант ADR) было бы нечем.
-    /// </summary>
-    public Task Progress(string callId, int lastAppliedStep)
-    {
-        if (!router.Progress(callId, Context.ConnectionId, lastAppliedStep)) throw UnknownCall(callId);
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -198,8 +148,4 @@ public sealed class DeviceHub(
     {
         HandsEndReason.StoppedFromTray, HandsEndReason.HandsDisabled, HandsEndReason.AgentStopping,
     };
-
-    // Донесение по чужому или неизвестному callId — не «тихо ок»: устройство обязано увидеть отказ.
-    private static HubException UnknownCall(string callId) =>
-        new($"Вызов {callId} этому устройству не адресован");
 }

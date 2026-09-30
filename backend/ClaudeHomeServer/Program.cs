@@ -333,10 +333,6 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectIconMigrator,
 builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
     ClaudeHomeServer.Services.Backup.DataBackupServiceAdapter>();
 builder.Services.AddSingleton<JwtService>();
-// Шов IDesktopCapabilityTokens (Core) — форвард на тот же синглтон, не второй экземпляр:
-// вертикаль Desktop берёт у токенов ровно выдачу и проверку capability-токена канала.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IDesktopCapabilityTokens>(
-    sp => sp.GetRequiredService<JwtService>());
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
 // AppSettingsService реализует ITierModelResolver (Core-шов для слота модели).
@@ -781,37 +777,19 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.Backup.BackupService>());
 
-// === Десктопный агент (ADR-008): руки песочницы на машине пользователя ===
-// Реестр устройств и хеши их токенов — единственный стор грани; сеансы рук и живые
-// соединения канала живут только в памяти (рестарт бэкенда гасит сеанс по построению).
+// === Канал устройства (ADR-016): агент локальных проектов на машине пользователя ===
+// Реестр устройств и хеши их токенов — единственный стор канала; живые соединения хаба
+// живут только в памяти.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceRegistry>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DevicePairingService>();
-// Отправитель команд на устройство: push в конкретное соединение хаба (групп нет)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceCommandSender,
-    ClaudeHomeServer.Services.Desktop.DeviceHubCommandSender>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopCallRouter>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopChatDirectory,
-    ClaudeHomeServer.Services.Desktop.DesktopChatDirectory>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopDeviceDirectory,
-    ClaudeHomeServer.Services.Desktop.DesktopDeviceDirectory>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopHandsNotifier,
-    ClaudeHomeServer.Services.Composition.DesktopHandsNotifier>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceConnectionRegistry>();
 // Статус рук локального проекта (ADR-016 §7) — в чат хода из донесений агента
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.ILocalHandsNotifier,
     ClaudeHomeServer.Services.Composition.LocalHandsNotifier>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopCallCanceller,
-    ClaudeHomeServer.Services.Desktop.DesktopRouterCallCanceller>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>();
-// Разрыв соединения — один из поводов погасить сеанс: маршрутизатор канала знает о нём
-// первым, поэтому сеансы подписаны на него наблюдателем, а не наоборот (форвард на тот же
-// синглтон, не второй экземпляр).
-// Второй наблюдатель — диспетчер выхода устройства в онлайн (ADR-016, план §5; регистрация
-// блоком ниже). Стоит ДО службы сеансов: одиночный резолв наблюдателя обязан отдавать её.
+// Наблюдатель соединений — диспетчер выхода устройства в онлайн (ADR-016, план §5;
+// регистрация блоком ниже): форвард на тот же синглтон, не второй экземпляр.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>());
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
 // Канал исполнения локальных проектов (ADR-016): шов IDeviceExecChannel (Core) — форвард
 // на тот же синглтон, который обслуживает WebSocket /api/devices/exec и Hello хаба.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IHostCliVersion, ClaudeHomeServer.Services.Execution.HostCliVersion>();
@@ -841,7 +819,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IProjectFile
 
 // Фоновая работа при офлайн-устройстве (ADR-016, вариант А плана §5): гейт готовности
 // устройства проекта для пяти механизмов, диспетчер выхода устройства в онлайн (наблюдатель
-// маршрутизатора + поминутный проход с потолком 24 ч) и его обработчики — исполнитель задач
+// реестра соединений + поминутный проход с потолком 24 ч) и его обработчики — исполнитель задач
 // (с под-задачами штаба), очередь чата, автоматизации персон. Сторожа догоняют своим тиком.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IProjectDeviceGate>(
     sp => new ClaudeHomeServer.Services.Execution.ProjectDeviceGate(
@@ -856,8 +834,6 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineH
     sp => sp.GetRequiredService<TaskExecutionService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
     sp => sp.GetRequiredService<PersonaAutomationService>());
-// Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>(builder.Configuration);
 // TaskSchedulerService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddGatedHostedService<ChatExpiryService>(builder.Configuration);
 // Автоправило архивации чатов (флаг chat-auto-archive) — singleton + hosted: кнопка
@@ -1251,16 +1227,13 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ISessionBroa
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.SessionHubBroadcaster>());
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office).
-// Плюс ДВЕ именованные схемы грани десктопа (ADR-008, «Авторизация канала»): дефолтная
-// JwtBearer к /api/devices/* не допускается вовсе — сервисный JWT владельца лежит в env
-// каждого его хода, и на нём «ось выдачи» превратилась бы в барьер состава, а не
-// авторизации. Схемы именованные: контроллеры грани называют их явным
-// [Authorize(AuthenticationSchemes = ...)], и ни один эндпоинт не открывается «заодно».
+// Плюс именованная схема токена устройства: дефолтная JwtBearer к каналу устройства не
+// допускается вовсе — сервисный JWT владельца лежит в env каждого его хода. Схема
+// именованная: эндпоинты канала называют её явным [Authorize(AuthenticationSchemes = ...)],
+// и ни один эндпоинт не открывается «заодно».
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer()
     .AddNegotiate()
-    // capability-токен чата: audience desktop, claims ownerId + sessionId + deviceId, TTL минуты
-    .AddDesktopCapabilityAuth()
     // токен устройства: 256 бит, на сервере только хеш в data/devices.json
     .AddDesktopDeviceAuth();
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)

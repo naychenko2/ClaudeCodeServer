@@ -839,24 +839,6 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task Update_ДесктопныйЧатНаСтороннего_Отказ()
-    {
-        // ADR-008: кадры рабочего стола из транскрипта стороннему вендору не отдаём. Гейт
-        // живёт в MigrateProviderAsync — единственной точке смены провайдера, — поэтому
-        // закрывает и настройки чата, и кнопку «Продолжить на …».
-        var dir = MkProjectDir("prov11");
-        var project = _projectManager.Create("PROV11", dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
-        session.DesktopChat = true;
-
-        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
-
-        (await act.Should().ThrowAsync<InvalidOperationException>())
-            .WithMessage("Десктопный чат нельзя перевести на стороннего провайдера*");
-        session.Provider.Should().Be("claude");
-    }
-
-    [Fact]
     public async Task Update_ПереноситьНечегоПоСырымПолям_ОстальныеПоляПрименяются()
     {
         // Провайдеров UpdateAsync считает по эффективным моделям, а миграция — по сырым

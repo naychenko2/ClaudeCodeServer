@@ -1,4 +1,6 @@
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
@@ -7,54 +9,52 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ClaudeHomeServer.Tests.Services.Desktop;
 
 /// <summary>
-/// Сборка грани десктопа из настоящего контейнера (ADR-008). Под-задачи первой волны
-/// писались в изоляции, и разъехавшаяся склейка — не теоретический риск: не
-/// зарегистрированный <see cref="IDeviceCommandSender"/> или незнакомое имя схемы
-/// авторизации ломают грань ТОЛЬКО в рантайме, юнит-тесты про них ничего не знают.
+/// Сборка канала устройства (ADR-016) из настоящего контейнера. Разъехавшаяся склейка — не
+/// теоретический риск: не зарегистрированная служба или незнакомое имя схемы авторизации
+/// ломают канал ТОЛЬКО в рантайме, юнит-тесты про них ничего не знают.
 /// </summary>
 public class DesktopWiringTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     [Fact]
-    public void СлужбыГрани_РезолвятсяИзКонтейнера()
+    public void СлужбыКанала_РезолвятсяИзКонтейнера()
     {
         using var scope = factory.Services.CreateScope();
         var sp = scope.ServiceProvider;
 
         sp.GetRequiredService<DeviceRegistry>().Should().NotBeNull();
         sp.GetRequiredService<DevicePairingService>().Should().NotBeNull();
-        sp.GetRequiredService<IDeviceCommandSender>().Should().NotBeNull();
-        sp.GetRequiredService<DesktopCallRouter>().Should().NotBeNull();
-        sp.GetRequiredService<DesktopHandsSessionService>().Should().NotBeNull();
-        sp.GetRequiredService<DesktopAccessGate>().Should().NotBeNull();
+        sp.GetRequiredService<DeviceConnectionRegistry>().Should().NotBeNull();
+        sp.GetRequiredService<AgentTicketService>().Should().NotBeNull();
+        sp.GetRequiredService<IDeviceExecChannel>()
+            .Should().BeSameAs(sp.GetRequiredService<DeviceExecChannel>(), "шов Core — форвард на тот же синглтон");
     }
 
     /// <summary>
-    /// Разрыв соединения гасит сеанс рук: наблюдатель канала обязан быть ТЕМ ЖЕ экземпляром
-    /// службы сеансов, а не вторым — иначе гасился бы чужой пустой реестр.
+    /// Выход устройства в онлайн будит ждавшую его работу: наблюдатель реестра соединений
+    /// обязан быть ТЕМ ЖЕ экземпляром диспетчера, что крутит поминутный проход, а не вторым.
     /// </summary>
     [Fact]
-    public void НаблюдательСоединений_ЭтоСлужбаСеансов()
+    public void НаблюдательСоединений_ЭтоДиспетчерВыходаВОнлайн()
     {
         using var scope = factory.Services.CreateScope();
         var sp = scope.ServiceProvider;
 
-        sp.GetRequiredService<IDeviceConnectionObserver>()
-            .Should().BeSameAs(sp.GetRequiredService<DesktopHandsSessionService>());
+        sp.GetServices<IDeviceConnectionObserver>().Should().ContainSingle()
+            .Which.Should().BeSameAs(sp.GetRequiredService<DeviceOnlineDispatcher>());
     }
 
     /// <summary>
-    /// Обе схемы грани зарегистрированы под теми именами, которыми их называют эндпоинты:
+    /// Схема токена устройства зарегистрирована под тем именем, которым её называют эндпоинты:
     /// незарегистрированная схема в [Authorize] — 500 на первом же запросе.
     /// </summary>
     [Fact]
-    public async Task СхемыАвторизацииГрани_Зарегистрированы()
+    public async Task СхемаАвторизацииУстройства_Зарегистрирована()
     {
         using var scope = factory.Services.CreateScope();
         var schemes = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
 
-        (await schemes.GetSchemeAsync(DesktopCapabilityAuthHandler.SchemeName)).Should().NotBeNull();
         (await schemes.GetSchemeAsync(DesktopDeviceAuthHandler.SchemeName)).Should().NotBeNull();
         (await schemes.GetSchemeAsync(ClaudeHomeServer.Protocol.DesktopProtocol.DeviceTokenScheme))
-            .Should().NotBeNull("канал устройств авторизуется той же схемой, что и остальная грань");
+            .Should().NotBeNull("канал устройств авторизуется схемой токена устройства");
     }
 }

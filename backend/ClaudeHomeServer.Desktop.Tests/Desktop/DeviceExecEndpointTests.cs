@@ -187,7 +187,7 @@ public class DeviceExecEndpointTests : IDisposable
     private async Task<(IDeviceExecStream Stream, string ExecId)> OpenReadyStreamAsync(Func<string, Task<WebSocket>> connect)
     {
         var channel = _factory.Services.GetRequiredService<DeviceExecChannel>();
-        var router = _factory.Services.GetRequiredService<DesktopCallRouter>();
+        var router = _factory.Services.GetRequiredService<DeviceConnectionRegistry>();
         router.RegisterConnection(Conn, _ownerId, _deviceId);
         await channel.HelloAsync(Conn, _ownerId, _deviceId,
             new DeviceHello(DesktopProtocol.Version, null, null, "linux-x64", DeviceAgentCompatibility.MinVersion, "2.1.281", [DeviceCapabilities.Exec]));

@@ -768,8 +768,6 @@ public class ClaudeSession : ILlmSessionAdapter
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
     // не настроена (тогда dify продолжает ехать записью внешнего базового конфига)
     private readonly DifyMcpContext? _difyMcp;
-    // MCP-сервер десктопной грани (ADR-008): null — грань чату не доставляется
-    private readonly DesktopMcpContext? _desktopMcp;
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
@@ -877,7 +875,6 @@ public class ClaudeSession : ILlmSessionAdapter
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
         _difyMcp = context.DifyMcp;
-        _desktopMcp = context.DesktopMcp;
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _externalMcpProvider = context.ExternalMcpProvider;
         _browserEnabled = context.BrowserEnabled;
@@ -1013,8 +1010,6 @@ public class ClaudeSession : ILlmSessionAdapter
                 + "(Mcp:HttpTransport=false либо не-http адрес), но stdio-ветка dify недоступна "
                 + "(mcp-dify/dist не собран) — без внешней записи базового конфига инструменты баз знаний "
                 + "пропадут. Соберите mcp-dify (npm run build) или верните Mcp:HttpTransport=true.");
-        var desktopServerPath = _desktopMcp is not null ? MapMcpPath(DesktopServerLocator.FindDesktopServerPath()) : null;
-        var hasDesktop = desktopServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var hasModules = _modulesMcp is { Servers.Count: > 0 };
         var hasFalAi = !string.IsNullOrEmpty(_falMcpApiKey);
@@ -1032,7 +1027,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // а локальный исполнитель задач без tasks не закрывает задачу через tasks_complete.
         // Белый список KeepMcpServers в LlmProviderConfig выделяет ровно нужные серверы
         // (на local-qwen по умолчанию ["tasks"]), остальные гасятся выборочно. Пустой список
-        // = прежнее «всё или ничего» (гасится всё, кроме desktop). Родной Claude и облачные
+        // = прежнее «всё или ничего» (гасится всё). Родной Claude и облачные
         // провайдеры не задеты (TrimMcpServers=false по умолчанию).
         var provider = _providers?.ResolveByModel(EffectiveModel);
         var trimMcp = provider is { TrimMcpServers: true };
@@ -1061,11 +1056,9 @@ public class ClaudeSession : ILlmSessionAdapter
             hasGlif = hasGlif && Keep("glif");
             if (!Keep("user")) userServers = null;
             if (!Keep("external")) { externalMcp = null; hasExternal = false; }
-            // desktop по-прежнему остаётся всегда: десктопные чаты работают через эту грань,
-            // и стоит он дёшево
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif
+            && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
             && !hasHiggsfield && !hasImageEditor && !hasLocalMedia && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
@@ -1837,32 +1830,6 @@ public class ClaudeSession : ILlmSessionAdapter
                         },
                     };
                 shapes["dify"] = $"s{difySearchOnly}:t:{(difyHttp ? "http" : "stdio")}";
-            }
-
-            if (hasDesktop && _desktopMcp is not null)
-            {
-                // Десктопная грань (ADR-008): шесть инструментов desktop_* — руки на машине
-                // пользователя. Состав постоянный: офлайн-устройство и отсутствие сеанса рук —
-                // это ОТВЕТ инструмента честным текстом, а не изменение tools/list. Право чата
-                // на грань бэкенд проверяет на КАЖДЫЙ вызов (тип чата + включение в проекте +
-                // активный сеанс), чат-вызывателя выводит из capability-токена.
-                servers["desktop"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { desktopServerPath! },
-                    // alwaysLoad — по той же причине, что у tasks (см. выше): без него первый
-                    // вызов в ходе падает «No such tool available», а ретраить клик по чужому
-                    // рабочему столу нельзя — ввод не идемпотентен
-                    ["alwaysLoad"] = true,
-                    ["env"] = new System.Text.Json.Nodes.JsonObject
-                    {
-                        ["DESKTOP_API_URL"] = _desktopMcp.ApiUrl,
-                        // Capability-токен грани, а не сервисный JWT владельца: /api/devices/*
-                        // сервисный токен не принимает вовсе (ADR-008, «Авторизация канала»)
-                        ["DESKTOP_API_TOKEN"] = _desktopMcp.Token,
-                        ["DESKTOP_SESSION_ID"] = _desktopMcp.SessionId,
-                    },
-                };
             }
 
             // pmem-серверы персон-консультантов (файловые сабагенты):

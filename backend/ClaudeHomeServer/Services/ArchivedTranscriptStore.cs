@@ -17,10 +17,7 @@ public sealed class ArchivedTranscriptStore
 {
     private const string DirName = "archived-transcripts";
 
-    // Потолок копии — защита места на диске, и только она. Гейт десктопных чатов —
-    // отдельный (desktopChat) и по другой причине: кадры рабочего стола не отдаём
-    // наружу. Порог по размеру в качестве того гейта промахивается в обе стороны:
-    // мелкий десктопный скопировался бы, а крупный обычный — самый ценный — нет.
+    // Потолок копии — защита места на диске, и только она.
     // internal для теста: юнит уменьшает порог, не разводя полгигабайта на диске.
     internal long MaxCopyBytes = 512L * 1024 * 1024;
 
@@ -47,14 +44,10 @@ public sealed class ArchivedTranscriptStore
     /// Захоронить копию транскрипта при архивации чата. Источник ищется по тем же правилам,
     /// что и уборка при удалении (FindAllTranscripts по всем корням профилей); из нескольких
     /// копий берётся самая длинная — самые полные. false = копии нет (транскрипт уже вычистил
-    /// CLI, ходов не было, десктопный чат, ключ небезопасен) — не ошибка, чат архивируется.
+    /// CLI, ходов не было, ключ небезопасен) — не ошибка, чат архивируется.
     /// </summary>
-    public bool Archive(string? claudeSessionId, bool desktopChat,
-        IEnumerable<string> searchRoots, string? cwd)
+    public bool Archive(string? claudeSessionId, IEnumerable<string> searchRoots, string? cwd)
     {
-        // Десктопные чаты: в их jsonl — кадры рабочего стола; наружу (бэкап уезжает в облако)
-        // не отдаём. Гейт по признаку чата, а не по размеру файла — см. MaxCopyBytes
-        if (desktopChat) return false;
         // ClaudeSessionId — внешний ключ (resumeSessionId из POST /api/chats): без белого
         // списка запись по нему — path traversal (тот же инвариант, что у DeleteEverywhere)
         if (!TranscriptMigrator.IsSafeSessionId(claudeSessionId)) return false;

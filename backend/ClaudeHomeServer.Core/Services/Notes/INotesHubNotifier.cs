@@ -7,8 +7,8 @@ namespace ClaudeHomeServer.Services.Notes;
 // `task_changed` (TaskChangedMessage) из NoteTaskSyncService. По этому шву
 // потом будут резать Team и Desktop.
 //
-// Образец цены: IDesktopHandsNotifier (Core) + тонкая обёртка DesktopHandsNotifier
-// (Main) поверх IHubContext<SessionHub>. Контракт намеренно узкий: NoteTaskSyncService
+// Образец цены: ILocalHandsNotifier (вертикаль) + тонкая обёртка LocalHandsNotifier
+// (Main) поверх веера ядра сессий. Контракт намеренно узкий: NoteTaskSyncService
 // отдаёт логическое событие (`action`/`noteId` или `taskId`), реализация в Main
 // сама конструирует NotesChangedMessage/TaskChangedMessage и шлёт через Hub —
 // Core не знает ни о Hub, ни о типе сообщений (NotesChangedMessage живёт в

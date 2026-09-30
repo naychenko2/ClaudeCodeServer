@@ -37,6 +37,14 @@ P=$(venv qwen3tts-env 3.12); uv pip install -q -p "$P" $TI $T28 -e "$AUDIO_ROOT/
 # perth (водяной знак) и webrtcvad импортируют pkg_resources — его нет в setuptools>=81
 P=$(venv chatterbox 3.12); uv pip install -q -p "$P" $TI chatterbox-tts "setuptools<81"
 clone Plachtaa/seed-vc seed-vc
+# Seed-VC ищет веса в двух местах: свои — в ./checkpoints (cache_dir), BigVGAN и Whisper — в
+# ./checkpoints/hf_cache (inference.py ставит HF_HUB_CACHE). Оба ведём в общий HF-кэш
+HUB=${HF_HOME:-$HOME/.cache/huggingface}/hub
+mkdir -p "$AUDIO_ROOT/seed-vc/checkpoints"
+ln -sfn "$HUB" "$AUDIO_ROOT/seed-vc/checkpoints/hf_cache"
+for r in models--Plachta--Seed-VC models--Plachta--ASTRAL-quantization models--funasr--campplus models--lj1995--VoiceConversionWebUI; do
+  ln -sfn "$HUB/$r" "$AUDIO_ROOT/seed-vc/checkpoints/$r"
+done
 P=$(venv seedvc-env 3.12)
 grep -vE '^(torch|torchvision|torchaudio|gradio|FreeSimpleGUI|sounddevice|--)' "$AUDIO_ROOT/seed-vc/requirements.txt" > /tmp/seedvc-req.txt
 uv pip install -q -p "$P" $TI $T28 torchvision==0.23.0+cu128 -r /tmp/seedvc-req.txt "setuptools<81"

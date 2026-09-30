@@ -334,7 +334,9 @@ public sealed partial class LocalMediaService
             : 15 + (int)Math.Ceiling(speech * 1.0) + (transcribeReference ? 12 : 0);
     }
 
-    public static int? VoiceConvertEta(string mode, double? seconds) => null;
+    // Seed-VC с холодной загрузкой: речь 17 с — 13,8 с, пение 30 с — 15,8 с
+    public static int? VoiceConvertEta(string mode, double? seconds) =>
+        seconds is { } s ? 8 + (int)Math.Ceiling(s * 0.3) : null;
 
     // RVC: 17 с речи — 11 с
     public static int? RvcConvertEta(double? seconds) => seconds is { } s ? 8 + (int)Math.Ceiling(s * 0.2) : null;

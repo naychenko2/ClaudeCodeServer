@@ -27,10 +27,12 @@ if family == "seedvc":
                     ("Plachta/Seed-VC", "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema_v2.pth"),
                     ("Plachta/Seed-VC", "config_dit_mel_seed_uvit_whisper_base_f0_44k.yml")]:
         print(hf_hub_download(repo, f), flush=True)
-    for repo in ["openai/whisper-small", "facebook/hubert-large-ll60k", "nvidia/bigvgan_v2_22khz_80band_256x",
-                 "nvidia/bigvgan_v2_44khz_128band_512x"]:
-        print(snapshot_download(repo, allow_patterns=["*.json", "*.safetensors", "*.bin", "*.txt", "*.py", "*.pt",
-                                                      "*.model"]), flush=True)
+    for repo in ["openai/whisper-small", "facebook/hubert-large-ll60k"]:
+        print(snapshot_download(repo, allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model"]), flush=True)
+    # у BigVGAN в репозитории ещё дискриминаторы на гигабайты — инференсу нужен только генератор
+    for repo in ["nvidia/bigvgan_v2_22khz_80band_256x", "nvidia/bigvgan_v2_44khz_128band_512x"]:
+        for f in ["bigvgan_generator.pt", "config.json"]:
+            print(hf_hub_download(repo, f), flush=True)
 elif family == "audiosr":
     for n in ["basic", "speech"]:
         print(hf_hub_download(f"haoheliu/audiosr_{n}", "pytorch_model.bin"), flush=True)

@@ -22,10 +22,15 @@ public class UserStore : IForgejoAccountStore, IUserStore
     // Сведение родного Claude к семейству на записи; без реестра (юнит-тесты) — по форме id
     private readonly Llm.LlmProviderRegistry? _providers;
 
+    // Файл NT-хэшей для NTLM WebDAV (вне data/). Пишется ТОЛЬКО отсюда — в моменты, когда
+    // открытый пароль виден; null — юнит-тесты и стенды без NTLM
+    private readonly WebDav.NtlmUserFile? _ntlm;
+
     public UserStore(IConfiguration config, IHostEnvironment env, ILogger<UserStore> logger,
-        Llm.LlmProviderRegistry? providers = null)
+        Llm.LlmProviderRegistry? providers = null, WebDav.NtlmUserFile? ntlm = null)
     {
         _providers = providers;
+        _ntlm = ntlm;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
         _filePath = Path.Combine(dataDir, "users.json");
@@ -42,6 +47,8 @@ public class UserStore : IForgejoAccountStore, IUserStore
         }
 
         Load(logger); // конструктор однопоточен — отдельный лок не нужен
+        // Пользователи, удалённые при остановленном сервере, не должны входить по NTLM
+        _ntlm?.Retain(_users.Select(u => u.Username));
     }
 
     private void Load(ILogger logger)
@@ -145,7 +152,11 @@ public class UserStore : IForgejoAccountStore, IUserStore
     {
         if (_devPassword != null && password == _devPassword) return true;
         var result = _hasher.VerifyHashedPassword(user, user.PasswordHash, password);
-        return result != PasswordVerificationResult.Failed;
+        if (result == PasswordVerificationResult.Failed) return false;
+        // Настоящий пароль подтверждён (мастер-пароль выше сюда не доходит) — вход в веб и
+        // Basic WebDAV заодно заполняют NTLM-файл тем, у кого строки ещё нет
+        _ntlm?.Record(user.Username, password);
+        return true;
     }
 
     /// <summary>
@@ -165,6 +176,7 @@ public class UserStore : IForgejoAccountStore, IUserStore
         user.PasswordHash = _hasher.HashPassword(user, password);
         // Смена пароля обесценивает все ранее выданные токены этого пользователя
         user.TokenVersion++;
+        _ntlm?.Record(user.Username, password);
     }
 
     /// <summary>
@@ -227,6 +239,8 @@ public class UserStore : IForgejoAccountStore, IUserStore
             {
                 if (_users.Any(u => u.Id != id && string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase)))
                     throw new InvalidOperationException($"Пользователь '{username}' уже существует");
+                // Хэш под новым именем без пароля не пересчитать: строка появится при следующем входе
+                _ntlm?.Remove(user.Username);
                 user.Username = username;
             }
 
@@ -258,6 +272,7 @@ public class UserStore : IForgejoAccountStore, IUserStore
                 throw new InvalidOperationException("Нельзя удалить единственного администратора");
 
             _users.Remove(user);
+            _ntlm?.Remove(user.Username);
             Save();
             return true;
         }
@@ -273,6 +288,7 @@ public class UserStore : IForgejoAccountStore, IUserStore
             user.PasswordHash = _hasher.HashPassword(user, newPassword);
             // Версию бампаем сами: админский сброс обязан выкидывать пользователя со всех устройств
             user.TokenVersion++;
+            _ntlm?.Record(user.Username, newPassword);
             Save();
             return true;
         }

@@ -204,6 +204,16 @@ Knowledge и Tasks. Сторож при этом остаётся зелёным
 Ломающее изменение формата любого стора = инкремент `BackupSchema.Version` (иначе старый код молча
 обнулит стор при откате). Детали — [features.md](features.md#бэкапы-и-восстановление).
 
+**Исключение, выбранное сознательно: файл NT-хэшей для NTLM WebDAV.** Решение `027fd933` (01.08.2026)
+убрало `User.NtHash` из `users.json`: хэш уезжал в облачный бэкап и равнозначен паролю
+(pass-the-hash, MD4 без соли). 30.09.2026 пользователь выбрал NTLM по ОСНОВНОМУ паролю
+(вариант A разведки f375c276), и хэш снова лежит на диске, то есть решение откатано частично.
+Компенсации: файл `NTLM_USER_FILE` живёт **вне `data/`** и в бэкап не попадает (пропал — хэши
+заполнятся заново при входах), права `0600`, запись атомарная, пишет его только `UserStore` через
+`NtlmUserFile`, а Negotiate предлагается **только по HTTPS**: NetNTLMv2 по открытому :80
+перебирается офлайн. В `users.json` поля `NtHash` по-прежнему нет, и `UserStoreNtHashMigrationTests`
+это держит. Подробности — [remote-access.md](../operations/remote-access.md#4-webdav-сетевой-диск-windows).
+
 ## HTTP-клиент к опциональной зависимости — через `AddQuietHttpClient`
 
 [Core/Services/Http/QuietHttpLogger.cs](../../backend/ClaudeHomeServer.Core/Services/Http/QuietHttpLogger.cs).

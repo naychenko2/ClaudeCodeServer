@@ -292,6 +292,8 @@ builder.Services.AddSignalR(o =>
 // Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability/overview.md.
 builder.Services.AddObservability(builder.Configuration);
 
+// Файл NT-хэшей для NTLM WebDAV (gss-ntlmssp, вне data/); пишет его только UserStore
+builder.Services.AddSingleton<ClaudeHomeServer.WebDav.NtlmUserFile>();
 builder.Services.AddSingleton<UserStore>();
 builder.Services.AddSingleton<IForgejoAccountStore>(sp => sp.GetRequiredService<UserStore>());
 // Этап 5, волна E: узкие Core-швы для выноса Notes (NotesKnowledgeService → UserStore
@@ -1234,7 +1236,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ISessionBroa
 // и ни один эндпоинт не открывается «заодно».
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer()
-    .AddNegotiate()
+    // Неудачный Type3 (на Linux gss-ntlmssp кидает исключение → 500) → 401 с одним Basic
+    .AddNegotiate(o => o.Events = new Microsoft.AspNetCore.Authentication.Negotiate.NegotiateEvents
+    {
+        OnAuthenticationFailed = ClaudeHomeServer.WebDav.NegotiateFailure.HandleAsync,
+    })
     // токен устройства: 256 бит, на сервере только хеш в data/devices.json
     .AddDeviceAuth();
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)

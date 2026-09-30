@@ -1,0 +1,1416 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Редактор видео v6 — режим «Монтаж»</title>
+<style>
+  /* Токены — копия theme.css (обе темы): макет открывается без сети и без сборки.
+     Имена переменных повторяют C.* из lib/design.ts: --c-bg-panel = C.bgPanel и т. д. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2; --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-diff-add-text: #3F7A4F; --c-diff-add-bg: #E3EFE2; --c-diff-rem-text: #B4452F; --c-diff-rem-bg: #F6E0DA;
+    --c-info: #3E7CA6; --c-warning-text: #8A6A28; --c-warning-bg: #F5ECD6; --c-danger: #B4452F; --c-danger-bg: #F6E0DA;
+    --c-success: #3F7A4F;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-modal: 0 24px 64px rgba(23, 19, 15, 0.28);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18; --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-diff-add-text: #8FC47E; --c-diff-add-bg: #2A3A26; --c-diff-rem-text: #EE8A72; --c-diff-rem-bg: #45281F;
+    --c-info: #5FA0CC; --c-warning-text: #E7B96E; --c-warning-bg: #3D3222; --c-danger: #EE8A72; --c-danger-bg: #45281F;
+    --c-success: #8FC47E;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.6);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+  }
+
+  /* Шкалы: FS xs 11 · sm 12 · base 13 · md 14 · lg 16; SP 2/4/8/12/16/24; R sm 6 · md 8 · lg 10 · xl 12 · xxl 14 · max 999 · sheet 22 */
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; padding: 12px 16px 40px; background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+  body.w390 { padding: 6px 0 40px; }
+  button { font: inherit; color: inherit; }
+  textarea { font: inherit; color: inherit; }
+  svg { flex-shrink: 0; display: block; }
+  .mono { font-family: 'JetBrains Mono', 'Courier New', monospace; }
+  .grow { flex: 1 1 0; min-width: 0; }
+  .ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .muted { color: var(--c-text-muted); }
+  .page { max-width: 1360px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading); margin: 0 0 4px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 6px; max-width: 980px; line-height: 1.5; }
+  body.w390 h1.doc, body.w390 p.lead { padding: 0 12px; }
+  ins { text-decoration: none; background: var(--c-diff-add-bg); color: var(--c-diff-add-text); border-radius: 3px; padding: 0 1px; }
+  del { background: var(--c-diff-rem-bg); color: var(--c-diff-rem-text); border-radius: 3px; padding: 0 1px; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 80; background: var(--c-bg-main); display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 0 8px; }
+  body.w390 .demo { padding: 8px 12px 8px; }
+  .demo .grp { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .demo .lbl { font-size: 11px; color: var(--c-text-muted); margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--c-border); background: var(--c-bg-card); border-radius: 10px; padding: 4px 9px; }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .vdesc { font-size: 12px; color: var(--c-text-secondary); margin: 0 0 8px; line-height: 1.5; max-width: 1100px; min-height: 18px; }
+  body.w390 .vdesc { padding: 0 12px; }
+  .vdesc b { color: var(--c-text-heading); }
+
+  .frame { border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; background: var(--c-bg-main); }
+  body.w390 .frame { border: none; padding: 0; border-radius: 0; }
+
+  /* Раскладка приложения */
+  .app { position: relative; display: flex; gap: 8px; height: 900px; width: 100%; }
+  .app.mob { width: 390px; max-width: 100%; margin: 0 auto; height: 820px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; gap: 0; }
+  body.w390 .app.mob { border-radius: 0; border-left: none; border-right: none; }
+  .rail { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 6px; }
+  .rail .ri { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: var(--c-text-muted); }
+  .rail .ri.on { background: var(--c-bg-selected); color: var(--c-accent); }
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  .island.side { flex: 0 0 236px; }
+  .ph { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset);
+    font-weight: 600; color: var(--c-text-heading); }
+  .ph .sub { font-weight: 400; font-size: 11px; color: var(--c-text-muted); }
+  .chat { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; background: var(--c-bg-main); border-radius: 14px; overflow: hidden; border: 1px solid var(--c-border-light); position: relative; }
+  .app.mob .chat { border: none; border-radius: 0; }
+  .chat > .ph { background: var(--c-bg-main); font-family: 'PT Serif', Georgia, serif; font-size: 16px; color: var(--c-accent); border-bottom-color: var(--c-border-light); }
+  .feed { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 12px 16px 8px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .app.mob .feed { padding: 10px 10px 6px; }
+  .feedin { max-width: 950px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+  .dock { padding: 0 16px 10px; position: relative; }
+  .dockin { max-width: 950px; margin: 0 auto; position: relative; }
+  .app.mob .dock { padding: 0 8px 8px; }
+
+  /* Дерево файлов */
+  .tree { padding: 6px 6px 10px; overflow-y: auto; flex: 1 1 auto; font-size: 12.5px; }
+  .tr { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px; border-radius: 8px; color: var(--c-text-primary); cursor: default; position: relative; }
+  .tr:hover { background: var(--c-bg-selected); }
+  .tr svg { color: var(--c-text-muted); }
+  .tr.dir svg { color: var(--c-accent); }
+  .tr.hi { background: var(--c-accent-light); box-shadow: inset 0 0 0 1px var(--c-accent-muted); }
+  .tr.new .nm::after { content: ' · новое'; color: var(--c-accent); font-size: 11px; }
+  .tr .cb { width: 15px; height: 15px; border-radius: 5px; border: 1px solid var(--c-border); background: var(--c-bg-white); display: grid; place-items: center; flex-shrink: 0; cursor: pointer; padding: 0; }
+  .tr .cb.on { background: var(--c-accent); border-color: transparent; color: var(--c-on-accent); }
+  .tr .more { margin-left: auto; opacity: .0; }
+  .tr:hover .more, .tr .more.open { opacity: 1; }
+  .treefoot { padding: 8px; border-top: 1px solid var(--c-border-light); display: flex; flex-direction: column; gap: 6px; }
+  .treehint { font-size: 11px; color: var(--c-text-muted); line-height: 1.4; }
+
+  /* Сообщения ленты */
+  .umsg { align-self: flex-end; max-width: 80%; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; padding: 8px 12px; line-height: 1.45; }
+  .amsg { display: flex; gap: 10px; align-items: flex-start; line-height: 1.5; }
+  .amsg .av { width: 24px; height: 24px; border-radius: 8px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; flex-shrink: 0; margin-top: 1px; }
+  .amsg .tx { min-width: 0; }
+  .amsg .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .typing { font-size: 12px; color: var(--c-text-muted); padding-left: 34px; }
+  .quiet { display: block; font-size: 11.5px; color: var(--c-text-muted); text-align: center; line-height: 1.45; padding: 0 12px; }
+  .quiet b { color: var(--c-text-secondary); font-weight: 600; }
+  .lnk { color: var(--c-accent); cursor: pointer; background: none; border: none; padding: 0; font-size: inherit; }
+  .lnk:hover { text-decoration: underline; }
+  .empty { margin: auto; text-align: center; max-width: 460px; color: var(--c-text-secondary); line-height: 1.5; padding: 20px 8px; }
+  .empty h3 { font-family: 'PT Serif', Georgia, serif; color: var(--c-text-heading); font-weight: 400; font-size: 20px; margin: 0 0 6px; }
+  .sugg { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
+
+  /* ≈ Badge */
+  .badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600;
+    background: var(--c-accent-light); color: var(--c-accent); border: 1px solid var(--c-accent-muted); white-space: nowrap; }
+  .badge.n { background: var(--c-bg-selected); color: var(--c-text-secondary); border-color: var(--c-border); font-weight: 500; }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); border-color: transparent; }
+  .badge.err { background: var(--c-danger-bg); color: var(--c-danger); border-color: transparent; }
+  .badge.ok { background: var(--c-diff-add-bg); color: var(--c-success); border-color: transparent; }
+
+  /* ≈ Button xs / sm */
+  .btn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 8px; font-size: 12px; cursor: pointer;
+    border: 1px solid transparent; background: transparent; color: var(--c-text-secondary); white-space: nowrap; flex-shrink: 0; }
+  .btn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.out { border-color: var(--c-border); background: var(--c-bg-card); color: var(--c-text-heading); }
+  .btn.acc { background: var(--c-accent); color: var(--c-on-accent); font-weight: 600; }
+  .btn.acc:hover { filter: brightness(1.05); }
+  .btn.dng { color: var(--c-danger); border-color: var(--c-border); background: var(--c-bg-card); }
+  .btn[disabled] { opacity: .45; cursor: not-allowed; }
+  .btn.sm { height: 24px; padding: 0 8px; font-size: 11.5px; }
+
+  /* Кнопки плашки — геометрия ProjectGitBar: 28 px, R.md */
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--c-border); border-radius: 8px;
+    background: var(--c-bg-card); color: var(--c-text-heading); font-size: 12.5px; cursor: pointer; white-space: nowrap; min-width: 0; flex-shrink: 0; }
+  .pill .k { color: var(--c-text-muted); }
+  .pill svg.chev { color: var(--c-text-muted); }
+  .pill.live { border-color: var(--c-accent-muted); }
+  .bacc { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: none; border-radius: 8px;
+    background: var(--c-accent); color: var(--c-on-accent); font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  .bacc[disabled] { opacity: .45; cursor: not-allowed; }
+  .ibtn { display: inline-grid; place-items: center; width: 28px; height: 28px; border: none; background: transparent; border-radius: 8px;
+    color: var(--c-text-muted); cursor: pointer; flex-shrink: 0; padding: 0; }
+  .ibtn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ibtn.stop { color: var(--c-danger); border: 1px solid var(--c-border); background: var(--c-bg-card); }
+
+  /* ≈ Chip */
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); font-size: 12px; white-space: nowrap; cursor: pointer; min-width: 0; flex-shrink: 0; }
+  .chip.picked { background: var(--c-accent-light); border-color: var(--c-accent-muted); color: var(--c-accent); }
+  .chip.dash { border-style: dashed; border-color: var(--c-dashed); background: transparent; color: var(--c-text-secondary); }
+  .chip.shrink { flex-shrink: 1; min-width: 120px; }
+  .chip .x { display: inline-grid; place-items: center; color: inherit; opacity: .7; margin-right: -4px; border: none; background: none; padding: 0; cursor: pointer; }
+  .chip .lead { width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0; margin-left: -4px; }
+  .chip b { font-weight: 600; }
+
+  .step { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 2px; border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-bg-card); flex-shrink: 0; }
+  .step button { width: 22px; height: 22px; border: none; background: transparent; border-radius: 50%; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .step span { min-width: 14px; text-align: center; color: var(--c-text-heading); font-weight: 600; font-size: 12.5px; }
+  .price { font-size: 12.5px; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; flex-shrink: 0; }
+  .price .k { font-weight: 400; color: var(--c-text-muted); }
+
+  /* === Плашка полосы — эталон ProjectGitBar: 51 px, R.xxl, bgPanel === */
+  .plate { position: relative; display: flex; align-items: center; gap: 6px; height: 51px; padding: 0 8px; margin: 8px 0;
+    background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 14px; min-width: 0; }
+  .vsep { width: 1px; height: 18px; background: var(--c-divider); flex-shrink: 0; }
+  .swwrap { position: relative; display: inline-flex; flex-shrink: 0; }
+  .sw { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px; border: none; border-radius: 8px; background: transparent;
+    color: var(--c-text-heading); font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .sw:hover, .sw.open { background: var(--c-bg-selected); }
+  .sw svg.ico { color: var(--c-accent); }
+  .sw svg.chev { color: var(--c-text-muted); }
+  .sw .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+  .spent { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-card);
+    font-size: 12.5px; color: var(--c-text-secondary); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  .spent b { color: var(--c-text-heading); }
+  .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--c-accent); animation: pulse 1.2s ease-in-out infinite; flex-shrink: 0; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .micro { display: flex; align-items: center; gap: 6px; height: 32px; margin: 6px 0; padding: 0 4px 0 2px; background: var(--c-bg-panel);
+    border: 1px solid var(--c-border); border-radius: 10px; min-width: 0; font-size: 12px; }
+  .micro .sw { height: 26px; font-size: 12px; }
+  .micro .exp { display: flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; border: none; background: transparent; padding: 0; cursor: pointer; height: 100%; color: var(--c-text-secondary); font-size: 12px; }
+  .micro .exp b { color: var(--c-text-heading); font-weight: 600; }
+  .bridge { font-size: 12px; }
+
+  /* ≈ Menu */
+  .menu { position: absolute; z-index: 40; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; box-shadow: var(--shadow-dropdown);
+    padding: 4px; min-width: 260px; max-width: min(380px, calc(100vw - 24px)); }
+  .menu.up { bottom: calc(100% + 6px); left: 0; }
+  .menu.upr { bottom: calc(100% + 6px); right: 0; }
+  .menu.dn { top: calc(100% + 4px); left: 0; }
+  .mi { display: flex; align-items: flex-start; gap: 10px; min-height: 34px; padding: 7px 10px; border-radius: 8px; color: var(--c-text-primary); font-size: 13px; cursor: pointer; line-height: 1.35; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi.on { background: var(--c-accent-light); }
+  .mi .st { color: var(--c-text-muted); font-size: 11.5px; display: block; }
+  .mi svg { color: var(--c-text-muted); margin-top: 1px; }
+  .mi.on > svg { color: var(--c-accent); }
+  .mi.dis { opacity: .5; cursor: default; }
+  .msep { height: 1px; background: var(--c-border-light); margin: 4px 6px; }
+  .mhead { font-size: 11px; color: var(--c-text-muted); padding: 6px 10px 2px; }
+  .mrow { display: flex; justify-content: space-between; gap: 12px; padding: 5px 10px; font-size: 12.5px; }
+  .mrow .w { color: var(--c-text-muted); font-size: 11.5px; }
+  .mrow.cx { color: var(--c-text-muted); } .mrow.cx .a { text-decoration: line-through; }
+
+  /* === Композер: три строки === */
+  .comp { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 14px; padding: 8px 8px 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .comp.direct { border-color: var(--c-accent-muted); box-shadow: var(--shadow-focus); }
+  .hint { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-text-muted); min-width: 0; }
+  .hint b { color: var(--c-text-secondary); font-weight: 600; }
+  .ta { width: 100%; min-height: 42px; max-height: 140px; border: none; outline: none; resize: none; background: transparent; font-size: 14px; line-height: 1.45; padding: 0 4px 0 0; }
+  .app.mob .ta { font-size: 16px; }
+  .ta::placeholder { color: var(--c-text-muted); }
+  .crow { display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: -4px; }
+  .seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 10px; background: var(--c-bg-selected); flex-shrink: 0; }
+  .seg button { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 8px; font-size: 12px; color: var(--c-text-secondary); cursor: pointer; border: none; background: transparent; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-text-heading); box-shadow: var(--shadow-card); font-weight: 600; }
+  .seg button.on svg { color: var(--c-accent); }
+  .app.mob .crow .seg button { padding: 0 8px; }
+  .send { width: 32px; height: 32px; border-radius: 10px; border: none; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; flex-shrink: 0; cursor: pointer; }
+  .submit { height: 32px; padding: 0 12px; border-radius: 10px; font-size: 13px; }
+
+  /* === Карточка фильма в ленте === */
+  .film { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-card); overflow: hidden; }
+  .film.cur { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .fh { display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px 12px; flex-wrap: wrap; }
+  .fh .nm { font-weight: 600; color: var(--c-text-heading); font-size: 14px; }
+  .fh .sub { color: var(--c-text-muted); font-size: 12px; }
+  .fh .ic { width: 26px; height: 26px; border-radius: 8px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; flex-shrink: 0; }
+  .plan { margin: 0 10px 8px; padding: 8px 10px; border-radius: 12px; background: var(--c-bg-panel); border: 1px solid var(--c-border-light); }
+  .plan .ph2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+  .plan .ph2 b { color: var(--c-text-heading); }
+  .steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 7px 0 6px; font-size: 12px; }
+  .stp { display: inline-flex; align-items: center; gap: 5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .stp .si { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--c-border); color: var(--c-text-muted); font-size: 9px; }
+  .stp.done .si { background: var(--c-accent); border-color: transparent; color: var(--c-on-accent); }
+  .stp.now { color: var(--c-text-heading); font-weight: 600; }
+  .stp.now .si { border-color: var(--c-accent); }
+  .stp.now .si::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); animation: pulse 1.2s infinite; }
+  .stp.skip { color: var(--c-text-muted); text-decoration: line-through; }
+  .stp .pr { color: var(--c-text-muted); font-weight: 400; }
+  .stp.arrow { color: var(--c-text-muted); }
+  .bar { height: 4px; border-radius: 999px; background: var(--c-bg-selected); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--c-accent); border-radius: 999px; transition: width .1s linear; }
+  .money { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 11.5px; color: var(--c-text-muted); }
+  .money b { color: var(--c-text-heading); font-weight: 600; }
+
+  .scenes { display: flex; flex-direction: column; gap: 2px; padding: 0 6px 6px; }
+  .scene { position: relative; display: grid; grid-template-columns: 150px minmax(0, 1fr) 176px; gap: 12px; padding: 8px 8px; border-radius: 10px; border: 1px solid transparent; cursor: pointer; }
+  .scene:hover { background: var(--c-bg-selected); }
+  .app.mob .scene { grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; padding: 8px 6px; }
+  .app.mob .sbody { grid-column: 1 / -1; grid-row: 2; }
+  .app.mob .fr { width: 56px; }
+  .app.mob .sside .bar { width: 96px; }
+  .app.mob .plan { margin: 0 6px 8px; }
+  .app.mob .scenes { padding: 0 2px 6px; }
+  .scene.sel { border-color: var(--c-accent); box-shadow: var(--shadow-focus); background: var(--c-bg-white); }
+  .scene.err { background: var(--c-danger-bg); }
+  .sfr { display: flex; align-items: center; gap: 4px; align-self: start; position: relative; }
+  .fr { width: 64px; aspect-ratio: 16 / 9; border-radius: 6px; border: 1px solid var(--c-border-light); position: relative; overflow: hidden; cursor: pointer; flex-shrink: 0; padding: 0; }
+  .fr.draft { border: 1px dashed var(--c-dashed); background: var(--c-bg-panel); color: var(--c-text-muted); font-size: 10px; display: grid; place-items: center; }
+  .fr.drawing { background: var(--c-bg-selected); }
+  .fr.drawing::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent); animation: shimmer 1.1s infinite; }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  .fr .fv { position: absolute; right: 2px; bottom: 2px; font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 4px; background: rgba(0,0,0,.45); color: #fff; }
+  .fr .fp { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.15); }
+  .fr .fp i { display: block; height: 100%; background: var(--c-accent); }
+  .fr:hover { outline: 2px solid var(--c-accent-muted); }
+  .fr.changed { outline: 2px solid var(--c-warning-text); }
+  .sarr { width: 18px; height: 18px; display: grid; place-items: center; color: var(--c-text-muted); flex-shrink: 0; border-radius: 50%; }
+  .sarr.clip { background: var(--c-accent); color: var(--c-on-accent); }
+  .sbody { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .shead { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--c-text-muted); flex-wrap: wrap; }
+  .stext { font-size: 12.5px; line-height: 1.45; color: var(--c-text-primary); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: text; border-radius: 6px; padding: 1px 3px; margin: 0 -3px; }
+  .stext:hover { background: var(--c-bg-white); box-shadow: inset 0 0 0 1px var(--c-border); }
+  .stext.ph { color: var(--c-text-muted); font-style: italic; }
+  .stext.full { -webkit-line-clamp: unset; }
+  .stext .cur { display: inline-block; width: 1px; height: 13px; background: var(--c-accent); vertical-align: -2px; animation: pulse .8s infinite; }
+  .sedit { width: 100%; min-height: 58px; border: 1px solid var(--c-accent-muted); border-radius: 8px; background: var(--c-bg-white); box-shadow: var(--shadow-focus); padding: 4px 6px; font-size: 12.5px; line-height: 1.45; resize: vertical; outline: none; }
+  .app.mob .sedit { font-size: 16px; }
+  .shelp { font-size: 11px; color: var(--c-text-muted); }
+  .mark { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--c-warning-text); margin-top: 2px; }
+  .mark.ag { color: var(--c-accent); }
+  .sside { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; text-align: right; min-width: 0; }
+  .sst { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .sst .d { width: 7px; height: 7px; border-radius: 50%; background: var(--c-text-muted); flex-shrink: 0; }
+  .sst.run .d { background: var(--c-accent); animation: pulse 1.1s infinite; }
+  .sst.ok .d { background: var(--c-success); }
+  .sst.err { color: var(--c-danger); } .sst.err .d { background: var(--c-danger); }
+  .sst.off { color: var(--c-text-muted); }
+  .sside .bar { width: 120px; }
+  .sprice { font-size: 12px; color: var(--c-text-heading); font-weight: 600; white-space: nowrap; }
+  .sprice .k { font-weight: 400; color: var(--c-text-muted); }
+  .vnav { display: inline-flex; align-items: center; gap: 2px; font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .vnav button { width: 20px; height: 20px; border: none; background: transparent; border-radius: 6px; display: grid; place-items: center; cursor: pointer; color: var(--c-text-muted); padding: 0; }
+  .vnav button:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .vnav button[disabled] { opacity: .3; cursor: default; }
+  .vnote { font-size: 11px; color: var(--c-text-muted); max-width: 176px; }
+  .frmenu { top: calc(100% + 4px); left: 0; min-width: 230px; }
+
+  .assem { margin: 2px 10px 10px; border-radius: 12px; border: 1px solid var(--c-border-light); background: var(--c-bg-panel); padding: 10px; display: grid; grid-template-columns: minmax(0, 360px) 1fr; gap: 12px; align-items: start; }
+  .app.mob .assem { grid-template-columns: 1fr; }
+  .player { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #111; }
+  .player .reel { position: absolute; inset: 0; display: flex; width: 400%; }
+  .player .reel > div { flex: 1 1 0; }
+  .player.play .reel { animation: reel 8s steps(1) infinite; }
+  @keyframes reel { 0% { transform: translateX(0); } 25% { transform: translateX(-25%); } 50% { transform: translateX(-50%); } 75% { transform: translateX(-75%); } }
+  .player .pbtn { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 44px; height: 44px; border-radius: 50%; border: none; background: rgba(0,0,0,.45); color: #fff; display: grid; place-items: center; cursor: pointer; }
+  .player .ptime { position: absolute; left: 8px; bottom: 6px; right: 8px; display: flex; justify-content: space-between; font-size: 11px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .player .ptl { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.25); }
+  .player.play .ptl i { animation: ptl 8s linear infinite; }
+  .player .ptl i { display: block; height: 100%; width: 0; background: var(--c-accent); }
+  @keyframes ptl { to { width: 100%; } }
+  .ainfo { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; line-height: 1.45; min-width: 0; }
+  .ainfo .t { font-weight: 600; color: var(--c-text-heading); }
+  .ainfo .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .stale { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--c-warning-text); }
+  .fempty { margin: 0 10px 10px; padding: 14px; border: 1px dashed var(--c-dashed); border-radius: 12px; color: var(--c-text-secondary); text-align: center; font-size: 12.5px; line-height: 1.5; }
+
+  /* Карточка картинки (нить из редактора картинок v3) */
+  .imgc { display: grid; grid-template-columns: 200px 1fr; gap: 12px; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; padding: 8px; box-shadow: var(--shadow-card); }
+  .imgc.cur { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .app.mob .imgc { grid-template-columns: 120px 1fr; gap: 8px; }
+  .imgc .big { aspect-ratio: 16 / 9; border-radius: 10px; border: 1px solid var(--c-border-light); position: relative; overflow: hidden; }
+  .imgc .meta { min-width: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
+  .imgc .ttl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; color: var(--c-text-heading); }
+
+  /* Тост */
+  .toast { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); z-index: 70; background: var(--c-text-heading); color: var(--c-bg-main); border-radius: 12px; padding: 8px 12px;
+    font-size: 12.5px; display: flex; align-items: center; gap: 10px; box-shadow: var(--shadow-dropdown); max-width: calc(100% - 24px); }
+  .toast button { background: none; border: none; color: var(--c-accent-muted); font-weight: 600; cursor: pointer; padding: 0; white-space: nowrap; }
+  [data-theme="dark"] .toast button { color: var(--c-accent); }
+
+  /* Шторки (телефон) */
+  .scrim { position: absolute; inset: 0; z-index: 50; background: var(--c-overlay); }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 51; background: var(--c-bg-card); border-radius: 22px 22px 0 0; box-shadow: var(--shadow-sheet); padding: 8px 14px 18px; max-height: 86%; overflow-y: auto; }
+  .sheet .grab { width: 36px; height: 4px; border-radius: 999px; background: var(--c-divider); margin: 0 auto 10px; }
+  .sheet .shh { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--c-text-heading); font-size: 16px; margin-bottom: 10px; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 10px 10px; align-items: center; font-size: 12.5px; }
+  .kv .l { color: var(--c-text-muted); font-size: 12px; }
+  .kv .c { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+
+  /* === Попап «Монтаж» (≈ Modal, почти во весь экран) === */
+  .mscrim { position: absolute; inset: 0; z-index: 60; background: var(--c-overlay); }
+  .modal { position: absolute; inset: 14px; z-index: 61; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 16px; box-shadow: var(--shadow-modal); display: flex; flex-direction: column; overflow: hidden; }
+  .app.mob .modal { inset: 0; border-radius: 0; border: none; }
+  .mh { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--c-border-light); flex-wrap: wrap; }
+  .mh .t { font-family: 'PT Serif', Georgia, serif; font-size: 17px; color: var(--c-text-heading); }
+  .mbody { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 290px minmax(0, 1fr); }
+  .app.mob .mbody { grid-template-columns: 1fr; overflow-y: auto; }
+  .mleft { border-right: 1px solid var(--c-border-light); background: var(--c-bg-panel); padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .app.mob .mleft { order: 2; border-right: none; border-top: 1px solid var(--c-border-light); overflow: visible; }
+  .mleft h4 { margin: 0; font-size: 13px; color: var(--c-text-heading); display: flex; align-items: center; gap: 6px; }
+  .mleft .lbl { font-size: 11.5px; color: var(--c-text-muted); margin-bottom: 4px; }
+  .mleft textarea { width: 100%; min-height: 96px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-bg-white); padding: 8px; font-size: 13px; line-height: 1.45; resize: vertical; outline: none; }
+  .app.mob .mleft textarea, .app.mob .scr textarea { font-size: 16px; }
+  .mleft textarea:focus, .scr textarea:focus { border-color: var(--c-accent-muted); box-shadow: var(--shadow-focus); }
+  .mcenter { min-width: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .app.mob .mcenter { overflow: visible; padding: 10px; }
+  .ribbon { display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 4px 2px 8px; }
+  .rfr { width: 104px; flex-shrink: 0; }
+  .rfr .img { aspect-ratio: 16 / 9; border-radius: 8px; border: 1px solid var(--c-border-light); }
+  .rfr .cap { font-size: 11px; color: var(--c-text-muted); margin-top: 3px; }
+  .rsc { width: 120px; flex-shrink: 0; border: 1px solid var(--c-border); border-radius: 10px; padding: 6px; background: var(--c-bg-white); cursor: pointer; font-size: 11px; line-height: 1.35; color: var(--c-text-secondary); }
+  .rsc.sel { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .rsc b { color: var(--c-text-heading); display: block; font-size: 11.5px; }
+  .rsc .tx { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .mplayer { max-width: 520px; width: 100%; align-self: center; }
+  .tl { border: 1px solid var(--c-border-light); border-radius: 12px; background: var(--c-bg-panel); padding: 8px 10px 10px; }
+  .tlh { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--c-text-muted); margin-bottom: 6px; }
+  .tlscroll { overflow-x: auto; padding-bottom: 4px; }
+  .track { display: flex; align-items: stretch; height: 44px; gap: 0; }
+  .tclip { position: relative; border-radius: 6px; overflow: hidden; border: 2px solid transparent; cursor: pointer; flex-shrink: 0; }
+  .tclip.sel { border-color: var(--c-accent); }
+  .tclip .lab { position: absolute; left: 5px; top: 3px; font-size: 10.5px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); white-space: nowrap; }
+  .tclip .dur { position: absolute; left: 5px; bottom: 3px; font-size: 10px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .tclip .gap { position: absolute; top: 0; bottom: 0; right: 0; background: repeating-linear-gradient(45deg, rgba(0,0,0,.25) 0 4px, transparent 4px 8px); }
+  .tclip .hdl { position: absolute; right: 0; top: 0; bottom: 0; width: 10px; background: rgba(255,255,255,.85); cursor: ew-resize; display: grid; place-items: center; touch-action: none; }
+  .tclip .hdl::after { content: ''; width: 2px; height: 16px; border-radius: 2px; background: #555; }
+  .cut { width: 22px; flex-shrink: 0; display: grid; place-items: center; cursor: pointer; }
+  .cut span { width: 18px; height: 18px; border-radius: 5px; transform: rotate(45deg); background: var(--c-bg-white); border: 1px solid var(--c-border); display: grid; place-items: center; }
+  .cut span i { transform: rotate(-45deg); font-style: normal; font-size: 9px; font-weight: 700; color: var(--c-text-secondary); }
+  .cut.sel span { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .cut.on span i { color: var(--c-accent); }
+  .mtrack { margin-top: 6px; height: 22px; border-radius: 6px; background: linear-gradient(90deg, var(--c-accent-muted), var(--c-accent-light) 80%, transparent); display: flex; align-items: center; padding: 0 8px; font-size: 11px; color: var(--c-text-secondary); cursor: pointer; border: 2px solid transparent; }
+  .mtrack.sel { border-color: var(--c-accent); }
+  .scr { display: flex; flex-direction: column; gap: 10px; }
+  .scr .row { display: grid; grid-template-columns: 150px 1fr; gap: 12px; padding: 10px; border: 1px solid var(--c-border-light); border-radius: 12px; background: var(--c-bg-white); }
+  .app.mob .scr .row { grid-template-columns: 1fr; }
+  .scr .row.sel { border-color: var(--c-accent); }
+  .scr textarea { width: 100%; min-height: 64px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-card); padding: 6px 8px; font-size: 13px; line-height: 1.5; resize: vertical; outline: none; }
+  .scr .hd { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--c-text-muted); margin-bottom: 4px; flex-wrap: wrap; }
+  .mfoot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--c-border-light); font-size: 11.5px; color: var(--c-text-muted); flex-wrap: wrap; }
+  .segw { display: inline-flex; padding: 2px; gap: 2px; border-radius: 10px; background: var(--c-bg-selected); flex-wrap: wrap; }
+  .segw button { height: 26px; padding: 0 10px; border-radius: 8px; font-size: 12px; color: var(--c-text-secondary); cursor: pointer; border: none; background: transparent; }
+  .segw button.on { background: var(--c-bg-card); color: var(--c-text-heading); box-shadow: var(--shadow-card); font-weight: 600; }
+
+  /* Кадры фильма (градиенты вместо картинок) */
+  .g0 { background: linear-gradient(170deg, #22305A 0%, #6E5A8A 55%, #E9A07A 100%); }
+  .g1 { background: linear-gradient(180deg, #8FA3B8 0%, #C9D0D6 60%, #7E8C7A 100%); }
+  .g1b { background: linear-gradient(180deg, #B9C3CC 0%, #EEF0F1 55%, #A4AEA2 100%); }
+  .g2 { background: radial-gradient(circle at 60% 62%, #6B4A36 0 12%, transparent 13%), linear-gradient(180deg, #A7B0AA 0%, #CFC6B4 70%, #6B7B6E 100%); }
+  .g3 { background: radial-gradient(circle at 45% 60%, #F4EFE6 0 10%, transparent 11%), linear-gradient(180deg, #5A3E30 0%, #A9774F 60%, #E7C9A0 100%); }
+  .g4 { background: radial-gradient(circle at 50% 70%, #FFF3C4 0 14%, transparent 15%), linear-gradient(180deg, #F2B45A 0%, #F6CF83 50%, #7C6A8E 100%); }
+  .gm0 { background: linear-gradient(135deg, #5C7CA0, #E3B37E); }
+  .gm1 { background: linear-gradient(135deg, #7A9A8E, #D8E0C8); }
+  .gm2 { background: linear-gradient(135deg, #4F6378, #C9D6E3); }
+
+  /* ===== v5: сцена — нить, фильм — список файлов ===== */
+  .alt { filter: saturate(1.35) brightness(1.08); }
+  .vs1 { filter: hue-rotate(-14deg) saturate(1.12); } .vs2 { filter: brightness(1.12) saturate(.9); } .vs3 { filter: saturate(.72) contrast(1.06); }
+  .drawing { background: var(--c-bg-selected) !important; position: relative; }
+  .drawing::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent); animation: shimmer 1.1s infinite; }
+  /* Кадры A/B в полосе и карточке */
+  .sframes { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
+  .sfb { position: relative; width: 44px; height: 26px; border-radius: 6px; border: 1px solid var(--c-border); padding: 0; cursor: pointer; overflow: hidden; flex-shrink: 0; display: block; }
+  .sfb.big { width: 76px; height: 43px; }
+  .sfb .l { position: absolute; left: 3px; top: 1px; font-size: 9.5px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  .sfb .v { position: absolute; right: 2px; bottom: 1px; font-size: 9px; font-weight: 700; padding: 0 3px; border-radius: 4px; background: rgba(0,0,0,.45); color: #fff; }
+  .sfb.empty { border-style: dashed; border-color: var(--c-accent-muted); background: var(--c-accent-light); color: var(--c-accent); font-size: 10.5px; font-weight: 600; display: grid; place-items: center; }
+  .sfb:hover { outline: 2px solid var(--c-accent-muted); }
+  .sfb.changed { outline: 2px solid var(--c-warning-text); }
+  .sfb .fp { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.15); } .sfb .fp i { display: block; height: 100%; background: var(--c-accent); }
+  .sarr2 { color: var(--c-text-muted); display: grid; place-items: center; }
+  .fmenu { top: calc(100% + 4px); left: 0; min-width: 270px; }
+  .fmenu.up { top: auto; bottom: calc(100% + 6px); }
+  .imgpick { display: inline-block; width: 30px; height: 17px; border-radius: 4px; border: 1px solid var(--c-border-light); flex-shrink: 0; margin-top: 1px; }
+
+  /* Карточка сцены */
+  .scard { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-card); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .scard.cur { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .sch { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+  .sch .nm { font-weight: 600; color: var(--c-text-heading); font-size: 14px; }
+  .sch .sub { color: var(--c-text-muted); font-size: 12px; }
+  .sch .ic { width: 26px; height: 26px; border-radius: 8px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; flex-shrink: 0; }
+  .sgrid { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .app.mob .sgrid { grid-template-columns: 1fr; gap: 8px; }
+  .sright { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 12.5px; }
+  .clip { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #111; }
+  .clip .la, .clip .lb { position: absolute; inset: 0; }
+  .clip .lb { opacity: 0; }
+  .clip.play .lb { animation: xf 3.2s ease-in-out infinite; }
+  .clip.play .la { animation: kb 3.2s ease-in-out infinite; }
+  @keyframes xf { 0%, 12% { opacity: 0; } 88%, 100% { opacity: 1; } }
+  @keyframes kb { to { transform: scale(1.08); } }
+  .clip.pre { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--c-bg-panel); border: 1px solid var(--c-border-light); }
+  .clip.pre > div { position: relative; }
+  .clip.pre .cap { position: absolute; left: 6px; top: 4px; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .clip.pre .none { display: grid; place-items: center; color: var(--c-text-muted); font-size: 11.5px; text-align: center; padding: 6px; border: 1px dashed var(--c-dashed); border-radius: 8px; margin: 6px; }
+  .clip .shoot { position: absolute; inset: 0; background: rgba(0,0,0,.35); display: grid; place-items: center; color: #fff; font-size: 12px; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  .clip .pbtn { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 44px; height: 44px; border-radius: 50%; border: none; background: rgba(0,0,0,.45); color: #fff; display: grid; place-items: center; cursor: pointer; }
+  .clip .ptime { position: absolute; left: 8px; bottom: 6px; right: 8px; display: flex; justify-content: space-between; font-size: 11px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .clip .ptl { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.25); }
+  .clip .ptl i { display: block; height: 100%; width: 0; background: var(--c-accent); }
+  .clip.play .ptl i { animation: ptl 3.2s linear infinite; }
+  .frow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--c-text-muted); }
+  .vers { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .vt { width: 58px; aspect-ratio: 16 / 9; border-radius: 7px; border: 2px solid transparent; position: relative; cursor: pointer; padding: 0; overflow: hidden; outline: 1px solid var(--c-border-light); }
+  .vt.on { border-color: var(--c-accent); box-shadow: var(--shadow-focus); outline: none; }
+  .vt .n { position: absolute; right: 3px; bottom: 1px; font-size: 9.5px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  .vt .sv { position: absolute; left: 3px; top: 3px; width: 13px; height: 13px; border-radius: 50%; background: var(--c-success); color: #fff; display: grid; place-items: center; }
+  .vmeta { font-size: 11.5px; color: var(--c-text-muted); }
+  .vmeta b { color: var(--c-text-heading); font-weight: 600; }
+  .sacts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .split { display: inline-flex; position: relative; }
+  .split .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .split .btn + .btn { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(0,0,0,.12); padding: 0 6px; }
+  .savedln { font-size: 12px; color: var(--c-text-secondary); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .savedln .ok { color: var(--c-success); display: inline-flex; }
+  .scompact { display: flex; align-items: center; gap: 10px; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 12px; padding: 6px 8px 6px 6px; cursor: pointer; min-width: 0; }
+  .scompact:hover { border-color: var(--c-border); }
+  .scompact .th { width: 64px; aspect-ratio: 16 / 9; border-radius: 6px; flex-shrink: 0; position: relative; overflow: hidden; }
+  .scompact .t1 { font-weight: 600; color: var(--c-text-heading); font-size: 12.5px; }
+  .scompact .t2 { font-size: 11.5px; color: var(--c-text-muted); }
+  .scompact .run { display: inline-flex; align-items: center; gap: 5px; }
+
+  /* Карточка фильма — лёгкий список */
+  .fcard { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-card); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .fcard.cur { border-color: var(--c-accent-muted); }
+  .fch { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .fch .nm { font-weight: 600; color: var(--c-text-heading); font-size: 14px; }
+  .fch .sub { color: var(--c-text-muted); font-size: 12px; }
+  .fch .ic { width: 26px; height: 26px; border-radius: 8px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; flex-shrink: 0; }
+  .tiles { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; align-items: stretch; }
+  .tile { width: 150px; flex-shrink: 0; border: 1px solid var(--c-border-light); border-radius: 10px; background: var(--c-bg-white); padding: 5px; cursor: grab; display: flex; flex-direction: column; gap: 4px; font-size: 11px; position: relative; }
+  .tile.cur { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .tile.drag { opacity: .4; }
+  .tile.over { box-shadow: -4px 0 0 var(--c-accent); }
+  .tile .th { aspect-ratio: 16 / 9; border-radius: 6px; position: relative; overflow: hidden; }
+  .tile .th.none { border: 1px dashed var(--c-dashed); background: var(--c-bg-panel); display: grid; place-items: center; color: var(--c-text-muted); font-size: 10.5px; }
+  .tile .th .pos { position: absolute; left: 4px; top: 3px; font-size: 10px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  .tile .th .gr { position: absolute; right: 3px; top: 3px; color: #fff; opacity: .8; }
+  .tile .th .fp { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.2); } .tile .th .fp i { display: block; height: 100%; background: var(--c-accent); }
+  .tile .t1 { display: flex; align-items: center; gap: 4px; font-weight: 600; color: var(--c-text-heading); font-size: 11.5px; min-width: 0; }
+  .tile .tx { color: var(--c-text-secondary); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .tile .tx .cur { display: inline-block; width: 1px; height: 11px; background: var(--c-accent); vertical-align: -1px; animation: pulse .8s infinite; }
+  .tile .ts { color: var(--c-text-muted); display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .tile .ts.warn { color: var(--c-warning-text); }
+  .tile .ts.ok { color: var(--c-success); }
+  .tile.add { border-style: dashed; border-color: var(--c-dashed); background: transparent; cursor: pointer; align-items: center; justify-content: center; color: var(--c-text-secondary); min-height: 112px; font-size: 12px; gap: 6px; }
+  .tile.add:hover { background: var(--c-bg-selected); }
+  .fstale { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; border-radius: 10px; background: var(--c-warning-bg); color: var(--c-warning-text); font-size: 12px; }
+  .ffoot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--c-text-secondary); }
+  .app.mob .tile { width: 132px; }
+
+  /* Карточка картинки для кадра */
+  .imgc .big.none { border: 1px dashed var(--c-dashed); background: var(--c-bg-panel); display: grid; place-items: center; color: var(--c-text-muted); font-size: 12px; text-align: center; padding: 8px; }
+
+  /* «Монтаж» v5 */
+  .mres { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--c-border-light); background: var(--c-diff-add-bg); color: var(--c-success); font-size: 12.5px; }
+  .mres.run { background: var(--c-bg-panel); color: var(--c-text-secondary); }
+  .mres b { color: var(--c-text-heading); }
+  .mwarn { font-size: 11.5px; color: var(--c-warning-text); display: flex; gap: 6px; align-items: center; }
+  .mtile { width: 128px; }
+  .tclip.off { opacity: .35; }
+  .scr .row.file textarea { display: none; }
+
+  /* ===== v6: режим «Сцены» ===== */
+  a.lnk { text-decoration: none; }
+  a.mi, a.btn, a.bacc, a.pill { text-decoration: none; }
+  a.mi { color: var(--c-text-primary); }
+  .modesw { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 10px; background: var(--c-bg-selected); }
+  .modesw a, .modesw span { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 8px; font-size: 12px; color: var(--c-text-secondary); text-decoration: none; }
+  .modesw .on { background: var(--c-bg-card); color: var(--c-text-heading); font-weight: 600; box-shadow: var(--shadow-card); }
+  .modesw a:hover { color: var(--c-text-heading); }
+  .splitacc { display: inline-flex; position: relative; flex-shrink: 0; }
+  .splitacc > .bacc:first-child, .splitacc > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .splitacc > .bacc + .bacc, .splitacc > .btn + .btn { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(0,0,0,.14); padding: 0 6px; }
+  .pill.re { font-weight: 500; }
+  .infilm { color: var(--c-text-muted); font-weight: 400; }
+  .chip.picked .infilm { color: inherit; opacity: .75; }
+  .fnote { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--c-text-secondary); padding: 6px 8px; border-radius: 10px; background: var(--c-bg-panel); border: 1px solid var(--c-border-light); }
+  .fnote b { color: var(--c-text-heading); }
+  .tr a.nm { color: inherit; text-decoration: none; }
+  .tr.film-file { cursor: pointer; }
+  .tr.film-file:hover .nm { color: var(--c-accent); }
+
+  /* ===== v6: полоса «Монтаж» — две строки: управление фильмом и мини-таймлайн ===== */
+  .mplate { position: relative; margin: 8px 0; background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 14px; padding: 7px 8px 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .mrow1 { display: flex; align-items: center; gap: 6px; height: 32px; min-width: 0; }
+  .mrow2 { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 51px; }
+  .mtl { display: flex; align-items: center; flex-shrink: 0; padding: 2px 0 2px 2px; }
+  .mth { position: relative; display: block; width: 84px; height: 47px; border-radius: 8px; border: 2px solid transparent; outline: 1px solid var(--c-border-light); cursor: grab; flex-shrink: 0; padding: 0; background: transparent; }
+  .mth .bg { position: absolute; inset: 0; border-radius: 6px; overflow: hidden; }
+  .mth .no { position: absolute; left: 5px; top: 2px; font-size: 10.5px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  .mth .du { position: absolute; left: 5px; bottom: 2px; font-size: 10px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7); white-space: nowrap; }
+  .mth .upd { position: absolute; right: -5px; top: -5px; width: 12px; height: 12px; border-radius: 50%; background: var(--c-accent); border: 2px solid var(--c-bg-panel); }
+  .mth .cl { position: absolute; right: 3px; top: 3px; font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 4px; background: rgba(0,0,0,.5); color: #fff; white-space: nowrap; }
+  .mth .tw { position: absolute; right: 3px; bottom: 3px; width: 15px; height: 15px; border-radius: 50%; background: var(--c-warning-bg); color: var(--c-warning-text); display: grid; place-items: center; }
+  .mth:hover { outline: 2px solid var(--c-accent-muted); }
+  .mth.open { border-color: var(--c-accent); }
+  .mth.new { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .mth.drag { opacity: .4; }
+  .mth.over { box-shadow: -5px 0 0 var(--c-accent); }
+  .mcut { position: relative; width: 26px; height: 47px; display: grid; place-items: center; cursor: pointer; border: none; background: transparent; padding: 0; flex-shrink: 0; }
+  .mcut > span { width: 20px; height: 20px; border-radius: 50%; background: var(--c-bg-card); border: 1px solid var(--c-border); font-size: 10px; font-weight: 700; color: var(--c-text-secondary); display: grid; place-items: center; }
+  .mcut.on > span { background: var(--c-accent-light); border-color: var(--c-accent-muted); color: var(--c-accent); }
+  .mcut.open > span, .mcut:hover > span { border-color: var(--c-accent); }
+  .mcut .cl { position: absolute; top: 4px; right: 0; font-size: 10px; color: var(--c-accent); font-style: normal; font-weight: 700; }
+  .madd { width: 38px; height: 47px; margin-left: 8px; border: 1px dashed var(--c-dashed); border-radius: 8px; background: transparent; color: var(--c-text-secondary); display: grid; place-items: center; cursor: pointer; padding: 0; flex-shrink: 0; }
+  .madd:hover, .madd.open { background: var(--c-bg-selected); border-color: var(--c-accent-muted); color: var(--c-accent); }
+  .mstat { font-size: 11.5px; color: var(--c-text-muted); display: flex; align-items: center; gap: 5px; min-width: 0; line-height: 1.35; }
+  .mstat.warn { color: var(--c-warning-text); }
+  .mempty { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; height: 47px; border: 1px dashed var(--c-dashed); border-radius: 10px; padding: 0 8px 0 12px; color: var(--c-text-secondary); font-size: 12.5px; min-width: 0; }
+  .mres2 { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--c-text-secondary); white-space: nowrap; flex-shrink: 0; }
+  .mres2 .ok { color: var(--c-success); display: inline-flex; }
+  .mres2 b { color: var(--c-text-heading); font-weight: 600; }
+  .mres2.old { color: var(--c-text-muted); text-decoration: line-through; }
+  .bacc.prog { position: relative; overflow: hidden; opacity: 1 !important; background: var(--c-accent-muted); color: var(--c-text-heading); }
+  .bacc.prog::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: var(--p); background: var(--c-accent); opacity: .55; transition: width .1s linear; }
+  .bacc.prog span { position: relative; }
+  .mform { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12.5px; }
+  .mform input[type=range] { flex: 1 1 auto; accent-color: var(--c-accent); }
+  .menu .segw { margin: 2px 10px 6px; }
+  .chip .clm { color: var(--c-accent); font-weight: 700; }
+  .scompact a.btn { text-decoration: none; }
+  .mdur { font-size: 12px; color: var(--c-text-muted); white-space: nowrap; }
+  .sheet .mtl { overflow-x: auto; max-width: 100%; padding-bottom: 6px; }
+  .sheet .mrow2 { flex-wrap: wrap; }
+  .histnote { align-self: center; font-size: 11px; color: var(--c-text-muted); border: 1px dashed var(--c-dashed); border-radius: 999px; padding: 2px 10px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="doc">Редактор видео v6 — режим «Монтаж»</h1>
+  <p class="lead">Второй режим работы с видео — полоса <b>«Монтаж»</b> над композером. Фильм живёт в полосе, а не в ленте: чип фильма, мини-таймлайн (порядок, склейки, «+»), музыка и «Собрать» — прямо над полем ввода, чат остаётся на виду. Подрезка, «Сценарий» и большой плеер — в попапе «Открыть монтаж». Съёмка сцен — в <a class="lnk" id="toScenes" href="video-editor-v6-scenes.html">режиме «Сцены» →</a>. Записка — <code>video-editor-v6-proposal.md</code>.</p>
+  <div class="demo" id="demo"></div>
+  <p class="vdesc" id="vdesc"></p>
+  <div class="frame"><div id="root"></div></div>
+</div>
+
+<script>
+// Иконки — пути lucide (как в продукте), обводка ICON_STROKE 1.75
+const P = {
+  film: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/>',
+  clapper: '<path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  git: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
+  left: '<path d="m15 18-6-6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
+  arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  spark: '<path d="M9.9 15.5A2 2 0 0 0 8.5 14.1L2.4 12.5a.5.5 0 0 1 0-1l6.1-1.6A2 2 0 0 0 9.9 8.5l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  up: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 19v3"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>', pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+  stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  video: '<path d="m16 13 5.2 3.5a.5.5 0 0 0 .8-.4V7.9a.5.5 0 0 0-.8-.4L16 11"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
+  pencil: '<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
+  down: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+  alert: '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+  fold: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
+  chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  cpu: '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>',
+  user: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
+  minus: '<path d="M5 12h14"/>', plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  panel: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 15h18"/>',
+  grip: '<circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/>',
+  skip: '<path d="M5 4v16"/><path d="M19 4 9 12l10 8V4Z"/>',
+  redo: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+};
+const ic = (n, s = 15, cls = '') => `<svg class="${cls}" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
+const chev = (s = 12) => ic('chev', s, 'chev');
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const usd = n => '$' + n.toFixed(2);
+const fmtT = s => { s = Math.round(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const fmtS = s => (Math.round(s * 10) / 10).toString().replace('.', ',') + ' с';
+const pad2 = n => String(n).padStart(2, '0');
+const base = p => p.split('/').pop();
+const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
+const ORD = ['первую', 'вторую', 'третью', 'четвёртую', 'пятую', 'шестую', 'седьмую', 'восьмую'];
+/* ================= Данные ================= */
+const TEXTS = [
+  'Рассвет над хребтом. Камера медленно опускается в долину, свет растекается по склонам.',
+  'Долина тонет в тумане. Сквозь него проступает деревянная хижина, над трубой тянется дымок.',
+  'Наезд на окно хижины. На подоконнике дымится чашка кофе, пар поднимается в холодный воздух.',
+  'Камера уходит вверх от чашки к вершинам: солнце выходит из-за хребта, туман тает.',
+  'Солнце над вершинами. Камера медленно отъезжает, в кадр входит тропа к хижине.',
+];
+const OSEN = ['Листья кружат над рекой, камера плывёт вдоль берега.', 'Мост в тумане, по нему медленно идёт человек с зонтом.'];
+const AG = ['g0', 'g1', 'g2', 'g3', 'g4'];
+const CUTS = { cut: ['Встык', '|', 'резкий переход, без длительности'], dissolve: ['Наплыв', '≈', 'кадры перетекают друг в друга'], fade: ['Затемнение', '■', 'через чёрный кадр'] };
+const MUSIC = ['music/утро.mp3', 'music/тишина-леса.mp3'];
+// Соседний макет — режим «Сцены». Переход между режимами — ссылкой с параметрами состояния
+const SCENES = 'video-editor-v6-scenes.html';
+function shref(q = {}) { return SCENES + '?' + new URLSearchParams({ ...q, theme: S.theme, w: S.w }).toString(); }
+
+/* ================= Состояние ================= */
+function fresh(keep) {
+  return {
+    theme: keep?.theme || 'light', w: keep?.w || 1360,
+    strip: 'montage', collapsed: false, mobStrip: true, menu: null, sheet: null,
+    films: {}, fname: null, feed: [], draft: '', typing: false, toast: null, pop: null,
+    jobs: [], drag: null, treeHi: null, seq: 1,
+    tree: ['images/', 'images/горы/', 'images/горы/гора-1.png', 'images/горы/гора-2.png', 'images/горы/гора-3.png',
+      'music/', 'music/утро.mp3', 'music/тишина-леса.mp3', 'video/', 'video/клипы/', 'video/клипы/водопад.mp4', 'README.md'],
+    gOf: { 'video/клипы/водопад.mp4': 'gm1' }, treeNew: [],
+  };
+}
+let S = fresh();
+const uid = () => 'x' + (S.seq++);
+const mob = () => S.w === 390;
+const film = () => S.fname ? S.films[S.fname] : null;
+const curFile = it => it.files[it.cur];
+const itemName = it => it.k === 'file' ? base(it.path) : `сцена ${it.n}`;
+const ItemName = it => it.k === 'file' ? base(it.path) : `Сцена ${it.n}`;
+const itemAcc = it => it.k === 'file' ? base(it.path) : `сцену ${it.n}`;
+const itemGen = it => it.k === 'file' ? base(it.path) : `сцены ${it.n}`;
+// Наплыв накладывает соседние клипы друг на друга — фильм короче суммы сцен
+const filmDur = f => f.items.reduce((a, it) => a + it.trim, 0) - f.cuts.reduce((a, c) => a + (c.t === 'dissolve' ? c.d : 0), 0);
+const filmSub = f => `${f.items.length} ${plural(f.items.length, 'сцена', 'сцены', 'сцен')} · ${fmtT(filmDur(f))}`;
+const cutTxt = c => c.t === 'cut' ? 'встык' : `${CUTS[c.t][0].toLowerCase()} ${fmtS(c.d)}`;
+const textChanged = it => it.k === 'scene' && it.shot != null && it.text.trim() !== it.shot.trim();
+const Who = (w, a, b) => w === 'claude' ? 'Claude ' + a : 'Вы ' + b;
+const lastSceneN = () => { const f = film(); const sc = f ? f.items.filter(it => it.k === 'scene') : []; return sc.length ? sc[sc.length - 1].n : 1; };
+
+function newFilm(name) {
+  const f = { name, folder: `video/${name}/`, items: [], cuts: [], music: { file: '', vol: 60, fade: 4, by: '' }, out: [], built: 0, stale: false, why: [], building: false };
+  S.films[name] = f; addTree(f.folder + name + '.film');
+  return f;
+}
+function sceneItem(folder, n, o = {}) {
+  const path = `${folder}scene-${pad2(n)}.mp4`; addTree(path);
+  const text = o.text ?? (folder.includes('осень') ? OSEN[n - 1] : TEXTS[n - 1]) ?? 'Новая сцена.';
+  const g = o.g || (folder.includes('осень') ? (n === 1 ? 'gm0' : 'gm2') : AG[n % 5]);
+  S.gOf[path] = g;
+  return { id: uid(), k: 'scene', n, folder, files: [path], cur: 0, dur: o.dur || 8, trim: o.dur || 8, g, text, shot: text, by: o.by || '', upd: false, isNew: false };
+}
+function fileItem(path) { return { id: uid(), k: 'file', path, files: [path], cur: 0, dur: 6, trim: 6, g: S.gOf[path] || 'gm1', by: '', upd: false, isNew: false }; }
+function syncCuts(f) { const n = Math.max(0, f.items.length - 1); while (f.cuts.length < n) f.cuts.push({ t: 'cut', d: 1, by: '' }); f.cuts.length = n; }
+function markStale(f, why) { if (!f.built) return; f.stale = true; if (!f.why.includes(why)) f.why.push(why); }
+// Сохранённые сцены проекта — то, что «+» → «Сцена из проекта…» может поставить в фильм
+function library(f) {
+  const inFilm = new Set(f.items.flatMap(it => it.files));
+  return S.tree.filter(p => /^video\/[^/]+\/scene-\d\d\.mp4$/.test(p) && !inFilm.has(p)).map(p => ({ path: p, folder: p.slice(0, p.length - base(p).length), n: +p.match(/scene-(\d\d)/)[1] }));
+}
+const mp4List = f => { const inFilm = new Set(f.items.flatMap(it => it.files)); return S.tree.filter(p => /\.mp4$/.test(p) && !/\/scene-\d\d/.test(p) && !/\/film(\.v\d+)?\.mp4$/.test(p) && !inFilm.has(p)); };
+
+/* ================= Лента ================= */
+function push(item) { S.feed.push(item); }
+function quiet(html, key) {
+  const last = S.feed[S.feed.length - 1];
+  if (key && last && last.t === 'quiet' && last.key === key) { last.html = html; return; }
+  push({ t: 'quiet', html, key });
+}
+function say(html, acts, delay = 500, then) {
+  S.typing = true; render();
+  setTimeout(() => { S.typing = false; push({ t: 'agent', html, acts }); then && then(); render(); }, delay);
+}
+function toast(text, act, actLabel) { S.toast = { text, act, actLabel, id: uid() }; const id = S.toast.id; setTimeout(() => { if (S.toast?.id === id) { S.toast = null; render(); } }, 4200); }
+function addTree(p) {
+  const parts = p.split('/'); let acc = '';
+  for (let k = 0; k < parts.length - 1; k++) { acc += parts[k] + '/'; if (!S.tree.includes(acc)) S.tree.push(acc); }
+  if (!S.tree.includes(p)) { S.tree.push(p); S.treeNew.push(p); }
+}
+const treeLink = p => `<button class="lnk" data-act="showTree" data-p="${esc(p)}">Показать в дереве</button>`;
+
+/* ================= Движок задач ================= */
+function addJob(j) { j.p = 0; S.jobs.push(j); }
+setInterval(() => {
+  if (!S.jobs.length) return;
+  for (const j of [...S.jobs]) { j.p = Math.min(1, j.p + 0.1 / j.dur); if (j.p >= 1) { S.jobs.splice(S.jobs.indexOf(j), 1); j.done(); } }
+  if (!S.drag) render();
+}, 100);
+
+/* ================= Действия с фильмом (человек и Claude — одни и те же) ================= */
+const mark = (o, who) => { o.by = who === 'claude' ? 'claude' : ''; };
+function moveItem(f, from, to, who) {
+  if (from === to || to < 0 || to >= f.items.length) return;
+  const [it] = f.items.splice(from, 1); f.items.splice(to, 0, it); mark(it, who);
+  markStale(f, 'порядок сцен');
+  quiet(`${Who(who, 'переставил', 'переставили')} ${itemAcc(it)} на место ${to + 1}`, who + 'order' + it.id);
+}
+function setCut(f, i, patch, who) {
+  const c = f.cuts[i]; Object.assign(c, patch); mark(c, who);
+  markStale(f, `склейка ${i + 1} → ${i + 2}`);
+  quiet(`${Who(who, 'поменял', 'поменяли')} склейку ${i + 1} → ${i + 2} на «${cutTxt(c)}»`, 'cut' + i);
+}
+function setMusic(f, patch, who) {
+  Object.assign(f.music, patch); mark(f.music, who);
+  markStale(f, 'музыка');
+  quiet(f.music.file ? `${Who(who, 'поставил', 'поставили')} музыку: ${esc(f.music.file)} · громкость ${f.music.vol} % · затухание ${f.music.fade} с` : `${Who(who, 'убрал', 'убрали')} музыку из фильма`, 'music');
+}
+function removeItem(f, i, who) {
+  const [it] = f.items.splice(i, 1); syncCuts(f);
+  markStale(f, `убрана ${itemName(it)}`);
+  quiet(`${Who(who, 'убрал', 'убрали')} из фильма «${esc(f.name)}»: ${itemName(it)} — файл ${esc(curFile(it))} остался в проекте`);
+}
+function addItem(f, it, who) {
+  f.items.forEach(x => { x.isNew = false; });
+  f.items.push(it); syncCuts(f); it.isNew = true; mark(it, who);
+  markStale(f, `добавлена ${itemName(it)}`);
+  quiet(`${it.k === 'file' ? `Готовый файл <b>${esc(it.path)}</b>` : `<b>Сцена ${it.n}</b>`} ${who === 'claude' ? 'добавлена Claude' : 'добавлена'} в фильм «${esc(f.name)}» · место ${f.items.length} · ${fmtT(filmDur(f))}`);
+}
+function trimItem(f, i, t, who) {
+  const it = f.items[i]; it.trim = Math.max(1, Math.min(it.dur, t)); mark(it, who);
+  markStale(f, 'подрезка');
+  quiet(`${Who(who, 'подрезал', 'подрезали')} ${itemAcc(it)}: осталось ${fmtS(it.trim)} из ${it.dur} с`, 'trim' + it.id);
+}
+function pickFile(f, i, k) {
+  const it = f.items[i]; it.cur = k; it.upd = false; markStale(f, `файл ${itemGen(it)}`);
+  quiet(`Вы выбрали для ${itemGen(it)} файл <b>${esc(base(curFile(it)))}</b>${k < it.files.length - 1 ? ' — прежняя версия' : ''}`, 'file' + it.id);
+}
+function build(f, who) {
+  if (f.building || !f.items.length) return;
+  f.building = true;
+  addJob({ kind: 'build', fid: f.name, dur: 2.2, done: () => {
+    f.building = false; f.built++; f.stale = false; f.why = [];
+    f.items.forEach(it => { it.upd = false; it.isNew = false; });
+    let path = f.folder + 'film.mp4', k = 2; while (S.tree.includes(path)) path = `${f.folder}film.v${k++}.mp4`;
+    addTree(path); f.out.push(path);
+    quiet(`${who === 'claude' ? 'Claude собрал фильм' : 'Фильм собран'}: <b>${esc(path)}</b> · ${filmSub(f)} · бесплатно · <button class="lnk" data-act="openPop">Открыть монтаж</button> · ${treeLink(path)}`);
+    if (who === 'claude') say(`Собрал: <b>${esc(path)}</b>, ${fmtT(filmDur(f))}. Прежние сборки не трогал — каждая пересборка ложится новым файлом.`, null, 300);
+  } });
+}
+
+/* ================= Агент в «Монтаже»: умеет то же, что человек ================= */
+function agentReply(t) {
+  const low = t.toLowerCase(); const f = film();
+  if (!f) return say('Сначала выберите фильм в полосе «Монтаж» — чип слева.', null, 300);
+  const nums = (low.match(/\d+/g) || []).map(Number);
+  if (/собер|пересобер|собрать/.test(low)) {
+    if (!f.items.length) return say('Собирать нечего: в фильме пока нет сцен.', null, 300);
+    return say(`Собираю «${esc(f.name)}» из файлов сцен: ${filmSub(f)} — бесплатно.`, null, 300, () => build(f, 'claude'));
+  }
+  if (/наплыв|затемн|встык/.test(low)) {
+    const tt = /наплыв/.test(low) ? 'dissolve' : /затемн/.test(low) ? 'fade' : 'cut';
+    let idx = /везде|все|всех|кажд/.test(low) || !nums.length ? f.cuts.map((_, k) => k) : [Math.min(nums[0], nums[1] || nums[0] + 1) - 1];
+    idx = idx.filter(k => k >= 0 && k < f.cuts.length);
+    if (!idx.length) return say('Такого стыка в фильме нет — стыки нумеруются по сценам: «между 2 и 3».', null, 300);
+    return say(`Ставлю «${CUTS[tt][0].toLowerCase()}» ${idx.length > 1 ? 'на все стыки' : `на стык ${idx[0] + 1} → ${idx[0] + 2}`}${tt === 'cut' ? '' : ', 1 с'}. Метка «✦» — на стыке в мини-таймлайне.`, null, 400, () => idx.forEach(k => setCut(f, k, { t: tt, d: 1 }, 'claude')));
+  }
+  if (/поменяй|переставь|местами|перенеси/.test(low) && nums.length >= 2) {
+    const [a, b] = nums; if (!f.items[a - 1] || !f.items[b - 1]) return say('Таких мест в фильме нет.', null, 300);
+    return say(`Переставляю: ${ItemName(f.items[a - 1])} встанет на место ${b}. Метка «✦ Claude» — на миниатюре.`, null, 400, () => moveItem(f, a - 1, b - 1, 'claude'));
+  }
+  if (/музык/.test(low)) {
+    if (/убери|без/.test(low)) return say('Убираю музыку — останется звук сцен.', null, 300, () => setMusic(f, { file: '' }, 'claude'));
+    return say('Поставлю music/утро.mp3 — спокойная, без слов, темп под медленную камеру. Громкость 50 %, чтобы не спорила с шумом сцен, затухание 4 с в конце.', null, 400, () => setMusic(f, { file: 'music/утро.mp3', vol: 50, fade: 4 }, 'claude'));
+  }
+  if (/убери/.test(low) && nums.length) {
+    if (!f.items[nums[0] - 1]) return say('Такого места в фильме нет.', null, 300);
+    return say(`Убираю ${itemAcc(f.items[nums[0] - 1])} из фильма — файл останется в проекте.`, null, 300, () => removeItem(f, nums[0] - 1, 'claude'));
+  }
+  if (/водопад|добавь/.test(low)) {
+    const p = mp4List(f)[0]; if (!p) return say('Готовых mp4 вне фильма в проекте нет.', null, 300);
+    return say(`Добавляю ${esc(p)} в конец фильма.`, null, 300, () => addItem(f, fileItem(p), 'claude'));
+  }
+  if (/сохрани/.test(low)) return say(`Фильм сохраняется сам, на каждое изменение: <b>${esc(f.folder + f.name)}.film</b> — порядок, склейки, подрезка, музыка. Сам ролик получится при сборке: «собери фильм».`, null, 300);
+  say('В макете ответы заготовлены. Попробуйте: «поставь наплыв между 1 и 2», «поменяй местами 1 и 3», «поставь музыку», «собери фильм».', null, 400);
+}
+function submit() {
+  const t = S.draft.trim(); if (!t) return;
+  S.draft = ''; push({ t: 'user', text: t }); agentReply(t);
+}
+
+/* ================= Меню полосы «Монтаж» ================= */
+function filmMenuItems() {
+  const f = film();
+  return `<div class="mhead">Фильмы проекта</div>${Object.values(S.films).map(x => `<div class="mi ${x === f ? 'on' : ''}" data-act="pickFilm" data-f="${esc(x.name)}">${ic('film', 15)}<div class="grow">${esc(x.name)}<span class="st">${filmSub(x)}${x.out.length ? ' · собран' : ''} · ${esc(x.folder + x.name)}.film</span></div>${x === f ? ic('check', 14) : ''}</div>`).join('')}
+    <div class="msep"></div><div class="mi" data-act="newFilm">${ic('plus', 15)}<div class="grow">Новый фильм<span class="st">пустой — сцены добавите «+» или кнопкой «В фильм →» в режиме «Сцены»</span></div></div>
+    ${f ? `<div class="mi" data-act="showTree" data-p="${esc(f.folder + f.name)}.film">${ic('folder', 15)}<div class="grow">Показать в дереве<span class="st">${esc(f.folder + f.name)}.film</span></div></div>` : ''}`;
+}
+function musicMenuItems(f) {
+  const m = f.music;
+  return `<div class="mhead">Музыка фильма «${esc(f.name)}»${m.by === 'claude' ? ' · ✦ поставил Claude' : ''}</div>
+    ${MUSIC.map(p => `<div class="mi ${m.file === p ? 'on' : ''}" data-act="setMusic" data-v="${esc(p)}">${ic('music', 15)}<div class="grow">${esc(base(p))}<span class="st">${esc(p)}</span></div>${m.file === p ? ic('check', 14) : ''}</div>`).join('')}
+    <div class="mi ${m.file ? '' : 'on'}" data-act="setMusic" data-v="">${ic('x', 15)}<div class="grow">Без музыки<span class="st">только звук сцен</span></div>${m.file ? '' : ic('check', 14)}</div>
+    ${m.file ? `<div class="msep"></div><div class="mform">Громкость<input type="range" min="0" max="100" step="5" value="${m.vol}" data-role="vol"><b id="volv">${m.vol} %</b></div>
+    <div class="mhead">Затухание в конце</div><div class="segw">${[0, 2, 4].map(v => `<button class="${m.fade === v ? 'on' : ''}" data-act="setFade" data-v="${v}">${v ? v + ' с' : 'нет'}</button>`).join('')}</div>` : ''}
+    <div class="msep"></div><div class="mi" data-act="musicAsk">${ic('spark', 15)}<div class="grow">Подобрать с Claude…<span class="st">просьба уйдёт в чат</span></div></div>`;
+}
+function cutMenuItems(f, i) {
+  const c = f.cuts[i];
+  return `<div class="mhead">Склейка ${i + 1} → ${i + 2} · ${esc(itemName(f.items[i]))} → ${esc(itemName(f.items[i + 1]))}${c.by === 'claude' ? ' · ✦ Claude' : ''}</div>
+    ${Object.entries(CUTS).map(([k, [t, sym, st]]) => `<div class="mi ${c.t === k ? 'on' : ''}" data-act="setCut" data-i="${i}" data-v="${k}"><span style="width:15px;text-align:center;font-weight:700;color:var(--c-text-muted)">${sym}</span><div class="grow">${t}<span class="st">${st}</span></div>${c.t === k ? ic('check', 14) : ''}</div>`).join('')}
+    ${c.t !== 'cut' ? `<div class="mhead">Длительность</div><div class="segw">${[0.5, 1, 2].map(d => `<button class="${c.d === d ? 'on' : ''}" data-act="setCutD" data-i="${i}" data-v="${d}">${fmtS(d)}</button>`).join('')}</div>` : ''}
+    <div class="mhead" style="padding-bottom:6px">Бесплатно, генерация не нужна — меняет только сборку</div>`;
+}
+function itemMenuItems(f, i) {
+  const it = f.items[i]; const d = `data-i="${i}"`;
+  let h = `<div class="mhead">${i + 1} · ${ItemName(it)} · ${esc(curFile(it))} · ${fmtS(it.trim)}${it.by === 'claude' ? ' · ✦ Claude' : ''}</div>`;
+  if (it.upd) h += `<div class="mrow" style="color:var(--c-accent);justify-content:flex-start;gap:6px"><span>●</span><span>Обновлена: в фильм идёт ${esc(base(curFile(it)))} — пересоберите</span></div>`;
+  if (textChanged(it)) h += `<div class="mrow" style="color:var(--c-warning-text);justify-content:flex-start;gap:6px">${ic('alert', 13)}<span>Текст изменён — переснять</span></div>`;
+  if (it.k === 'scene') h += `<a class="mi" href="${shref({ jump: '5', n: it.n })}">${ic('redo', 15)}<div class="grow">Переснять<span class="st">полоса переключится на «Сцены» со сценой ${it.n}</span></div>${ic('arrow', 13)}</a>`;
+  if (it.files.length > 1) h += `<div class="msep"></div><div class="mhead">Другая версия файла</div>` + it.files.map((p, k) => `<div class="mi ${k === it.cur ? 'on' : ''}" data-act="pickFile" ${d} data-v="${k}">${ic('video', 15)}<div class="grow">${esc(base(p))}<span class="st">${k === it.files.length - 1 ? 'последняя' : 'прежняя'}${k === it.cur ? ' · в фильме' : ''}</span></div>${k === it.cur ? ic('check', 14) : ''}</div>`).join('') + '<div class="msep"></div>';
+  else if (it.k === 'scene') h += `<div class="mi dis" title="Новая версия появится после «Переснять» и «Сохранить сцену»">${ic('video', 15)}<div class="grow">Другая версия файла<span class="st">у сцены пока один файл</span></div></div>`;
+  h += `<div class="mi" data-act="openPop" ${d}>${ic('scissors', 15)}<div class="grow">Подрезать…<span class="st">в «Открыть монтаж»</span></div></div>`;
+  h += `<div class="mi ${i === 0 ? 'dis' : ''}" data-act="${i === 0 ? 'noop' : 'mmove'}" ${d} data-d="-1">${ic('left', 15)}<div class="grow">Раньше<span class="st">или перетащите миниатюру</span></div></div>`;
+  h += `<div class="mi ${i === f.items.length - 1 ? 'dis' : ''}" data-act="${i === f.items.length - 1 ? 'noop' : 'mmove'}" ${d} data-d="1">${ic('right', 15)}<div class="grow">Позже</div></div>`;
+  h += `<div class="mi" data-act="showTree" data-p="${esc(curFile(it))}">${ic('folder', 15)}<div class="grow">Показать в дереве</div></div>`;
+  h += `<div class="msep"></div><div class="mi" data-act="mremove" ${d} style="color:var(--c-danger)">${ic('x', 15)}<div class="grow">Убрать из фильма<span class="st">файл останется в проекте</span></div></div>`;
+  return h;
+}
+function plusMenuItems(f, sub) {
+  const back = `<div class="mi" data-act="${mob() ? 'sheet' : 'menu'}" data-m="plus">${ic('left', 15)}<div class="grow">Назад</div></div><div class="msep"></div>`;
+  if (sub === 'scenes') {
+    const lib = library(f);
+    return (sub && f.items.length ? back : '') + `<div class="mhead">Сохранённые сцены проекта — встанет в конец</div>${lib.length ? lib.map(x => `<div class="mi" data-act="addScene" data-p="${esc(x.path)}"><span class="imgpick ${S.gOf[x.path] || 'gm2'}"></span><div class="grow ell">Сцена ${x.n} · ${esc(base(x.path))}<span class="st ell">${esc(x.folder)}</span></div></div>`).join('') : '<div class="mrow w">Все сохранённые сцены уже в фильме</div>'}`;
+  }
+  if (sub === 'mp4') {
+    const l = mp4List(f);
+    return back + `<div class="mhead">Готовый mp4 из проекта — встанет в конец</div>${l.length ? l.map(p => `<div class="mi" data-act="addFile" data-p="${esc(p)}"><span class="imgpick ${S.gOf[p] || 'gm1'}"></span><div class="grow ell">${esc(base(p))}<span class="st ell">${esc(p)}</span></div></div>`).join('') : '<div class="mrow w">Других mp4 в проекте нет</div>'}`;
+  }
+  const act = mob() ? 'sheet' : 'menu';
+  return `<div class="mhead">Добавить в конец фильма</div>
+    <div class="mi" data-act="${act}" data-m="plus:scenes">${ic('clapper', 15)}<div class="grow">Сцена из проекта…<span class="st">сохранённые сцены: ${library(f).length}</span></div>${ic('right', 13)}</div>
+    <div class="mi" data-act="${act}" data-m="plus:mp4">${ic('video', 15)}<div class="grow">Готовый mp4…<span class="st">любой клип проекта, например водопад.mp4</span></div>${ic('right', 13)}</div>
+    <div class="msep"></div><a class="mi" href="${shref({ jump: 'n' })}">${ic('spark', 15)}<div class="grow">Снять новую<span class="st">полоса переключится на «Сцены»: кадр A — кадр B последней сцены</span></div>${ic('arrow', 13)}</a>`;
+}
+
+/* ================= Полоса «Монтаж» ================= */
+function stripMenu() {
+  const f = film();
+  const rows = [
+    ['git', 'git', 'Git', 'feat/site-header · +42 −7 · 2 к публикации'],
+    ['images', 'image', 'Картинки', 'картинка не выбрана'],
+  ].map(([k, i, t, st]) => `<div class="mi ${S.strip === k ? 'on' : ''}" data-act="strip" data-k="${k}">${ic(i, 15)}<div class="grow">${t}<span class="st">${esc(st)}</span></div>${S.strip === k ? ic('check', 14) : ''}</div>`).join('');
+  return `<div data-act="noop" class="menu up">${rows}
+    <a class="mi" href="${shref({ jump: 'take', n: lastSceneN() })}" title="Соседний макет: полоса «Сцены»">${ic('clapper', 15)}<div class="grow">Сцены<span class="st">съёмка сцены: кадры, модель, версии · «В фильм →»</span></div>${ic('arrow', 13)}</a>
+    <div class="mi ${S.strip === 'montage' ? 'on' : ''}" data-act="strip" data-k="montage">${ic('film', 15)}<div class="grow">Монтаж<span class="st">${f ? esc(f.name) + ' · ' + filmSub(f) : 'фильм не выбран'}</span></div>${S.strip === 'montage' ? ic('check', 14) : ''}</div>
+    <div class="msep"></div><div class="mi" data-act="collapse">${ic('fold', 15)}<div>Свернуть полосу в строку</div></div></div>`;
+}
+function switcher(label, icon) {
+  return `<div class="swwrap"><button class="sw ${S.menu === 'strips' ? 'open' : ''}" data-act="menu" data-m="strips" title="Полоса над композером: Git, Картинки, Сцены, Монтаж">${ic(icon, 15, 'ico')}${label}${chev()}</button>${S.menu === 'strips' ? stripMenu() : ''}</div>`;
+}
+const pop = (key, html, cls = 'up', style = '') => !mob() && S.menu === key ? `<div data-act="noop" class="menu ${cls}" style="${style}">${html}</div>` : '';
+function filmChip(f) {
+  return `<div class="swwrap" style="min-width:0;flex:0 1 auto"><button class="chip picked" style="max-width:100%" data-act="${mob() ? 'sheet' : 'menu'}" data-m="film" title="Фильм — файл проекта ${esc(f.folder + f.name)}.film. Клик — все фильмы проекта, «Новый фильм», «Показать в дереве»">${ic('film', 13)}<span class="ell"><b>${esc(f.name)}</b> · ${filmSub(f)}</span>${chev(11)}</button>${pop('film', filmMenuItems(), 'up', 'min-width:320px')}</div>`;
+}
+function musicChip(f) {
+  const m = f.music;
+  return `<div class="swwrap"><button class="chip ${m.file ? '' : 'dash'}" data-act="${mob() ? 'sheet' : 'menu'}" data-m="music" title="Музыка фильма: файл, громкость, затухание">${ic('music', 13)}${m.file ? `${esc(base(m.file))} <span class="muted">· ${m.vol} %</span>` : 'Без музыки'}${m.by === 'claude' ? '<span class="clm">✦</span>' : ''}${chev(11)}</button>${pop('music', musicMenuItems(f), 'up', 'min-width:300px')}</div>`;
+}
+function buildArea(f, compact) {
+  const bj = f.building ? S.jobs.find(j => j.kind === 'build') : null;
+  const open = compact ? '' : `<button class="pill" data-act="openPop" title="Подрезка сцен, «Сценарий», большой плеер">${ic('scissors', 14)}Открыть монтаж</button>`;
+  if (!f.items.length) return `<button class="bacc" disabled title="Добавьте хотя бы одну сцену">Собрать · бесплатно</button>`;
+  if (bj) { const p = Math.round(bj.p * 100); return `${open}<button class="bacc prog" disabled style="--p:${p}%"><span>Собираем film.mp4… ${p} %</span></button>`; }
+  const out = f.out[f.out.length - 1];
+  if (out && !f.stale) return `${open}<span class="mres2"><span class="ok">${ic('check', 13)}</span><b>${esc(base(out))}</b> · <button class="lnk" data-act="openPop" data-play="1">Открыть</button> · ${treeLink(out)}</span>`;
+  if (out) return `${open}<span class="mres2 old" title="Собран до изменений: ${esc(f.why.join(', '))}">${esc(base(out))}</span><button class="bacc" data-act="build" title="Собрать заново — новым файлом, ${esc(base(out))} останется">Пересобрать · бесплатно</button>`;
+  return `${open}<button class="bacc" data-act="build" title="Склеить сцены, склейки и музыку в ${esc(f.folder)}film.mp4">Собрать · бесплатно</button>`;
+}
+function thumb(f, it, i) {
+  const key = 'item:' + i;
+  const over = S.drag && S.drag.over === i && S.drag.from !== i ? 'over' : '';
+  const dragging = S.drag && S.drag.from === i ? 'drag' : '';
+  const tch = textChanged(it);
+  const tip = `${i + 1} · ${ItemName(it)} · ${base(curFile(it))} · ${fmtS(it.trim)}${it.upd ? ' · обновлена: в фильм идёт новый файл — пересобрать' : ''}${it.by === 'claude' ? ' · ✦ изменил Claude' : ''}${tch ? ' · текст изменён — переснять' : ''}${it.isNew ? ' · только что добавлена' : ''} — клик: меню, перетаскивание: порядок`;
+  return `<span class="swwrap"><button class="mth ${it.isNew ? 'new' : ''} ${S.menu === key ? 'open' : ''} ${over} ${dragging}" ${mob() ? '' : 'draggable="true"'} data-dragi="${i}" data-act="${mob() ? 'sheet' : 'menu'}" data-m="${key}" title="${esc(tip)}">
+    <span class="bg ${it.g} ${it.cur ? 'vs1' : ''}"></span><span class="no">${i + 1}</span><span class="du">${it.k === 'file' ? 'mp4' : 'Сц. ' + it.n} · ${fmtS(it.trim)}</span>
+    ${it.upd ? '<span class="upd"></span>' : ''}${it.by === 'claude' ? '<span class="cl">✦ Claude</span>' : ''}${tch ? `<span class="tw">${ic('alert', 10)}</span>` : ''}</button>${pop(key, itemMenuItems(f, i), 'up', 'min-width:290px')}</span>`;
+}
+function cutBtn(f, i) {
+  const c = f.cuts[i]; const key = 'cut:' + i;
+  return `<span class="swwrap"><button class="mcut ${c.t !== 'cut' ? 'on' : ''} ${S.menu === key ? 'open' : ''}" data-act="${mob() ? 'sheet' : 'menu'}" data-m="${key}" title="Склейка ${i + 1} → ${i + 2}: ${cutTxt(c)}${c.by === 'claude' ? ' · ✦ Claude' : ''} — клик: выбрать склейку"><span>${CUTS[c.t][1]}</span>${c.by === 'claude' ? '<i class="cl">✦</i>' : ''}</button>${pop(key, cutMenuItems(f, i), 'up', 'min-width:270px')}</span>`;
+}
+function plusBtn(f) {
+  const open = S.menu && S.menu.startsWith('plus');
+  return `<span class="swwrap"><button class="madd ${open ? 'open' : ''}" data-act="${mob() ? 'sheet' : 'menu'}" data-m="plus" title="Добавить: сцена из проекта, готовый mp4, снять новую">${ic('plus', 16)}</button>${open && !mob() ? `<div data-act="noop" class="menu up" style="min-width:300px">${plusMenuItems(f, S.menu.split(':')[1])}</div>` : ''}</span>`;
+}
+function timeline(f) {
+  if (!f.items.length) {
+    const open = S.menu === 'plus:scenes';
+    return `<div class="mempty">${ic('film', 15)}<span class="grow">В фильме пока нет сцен</span><span class="swwrap"><button class="btn out sm" data-act="${mob() ? 'sheet' : 'menu'}" data-m="plus:scenes">${ic('plus', 13)}Сцена из проекта</button>${open && !mob() ? `<div data-act="noop" class="menu up" style="min-width:300px;left:auto;right:0">${plusMenuItems(f, 'scenes')}</div>` : ''}</span><a class="btn acc sm" href="${shref({ jump: 'n' })}" title="Полоса переключится на «Сцены»">${ic('spark', 13)}Снять новую ${ic('arrow', 12)}</a></div>`;
+  }
+  const cells = f.items.map((it, i) => thumb(f, it, i) + (i < f.cuts.length ? cutBtn(f, i) : '')).join('');
+  const upd = f.items.filter(it => it.upd);
+  const stat = f.stale ? `<span class="mstat warn">${ic('alert', 12)}<span>Изменено после сборки: ${esc(f.why.join(' · '))}</span></span>`
+    : upd.length ? `<span class="mstat">${upd.map(itemName).join(', ')} обновлена</span>`
+    : `<span class="mstat"><span>Перетащите сцену — порядок · клик по стыку — склейка · клик по сцене — меню</span></span>`;
+  return `<div class="mtl">${cells}${plusBtn(f)}</div>${stat}`;
+}
+function montageStrip() {
+  const f = film();
+  if (!f) return `<div class="plate">${switcher('Монтаж', 'film')}<div class="vsep"></div><span class="grow muted ell" style="font-size:12px">Фильм не выбран. Откройте файл .film в дереве или заведите новый</span><button class="chip dash" data-act="newFilm">${ic('plus', 13)}Новый фильм</button></div>`;
+  return `<div class="mplate"><div class="mrow1">${switcher('Монтаж', 'film')}<div class="vsep"></div>${filmChip(f)}${f.items.length ? musicChip(f) : ''}<span class="grow"></span>${buildArea(f)}</div>
+    <div class="mrow2">${timeline(f)}</div></div>`;
+}
+function gitStrip() {
+  return `<div class="plate">${switcher('Git', 'git')}<div class="vsep"></div><span class="mono muted" style="font-size:12.5px">feat/site-header</span><span style="font-size:12px"><span style="color:var(--c-diff-add-text)">+42</span> <span style="color:var(--c-diff-rem-text)">−7</span></span><span class="grow"></span><button class="pill">2 к публикации</button><button class="bacc">Опубликовать</button></div>`;
+}
+function imagesStrip() {
+  return `<div class="plate">${switcher('Картинки', 'image')}<div class="vsep"></div><span class="grow muted" style="font-size:12px">Картинка не выбрана</span><button class="pill">fal <span class="k">· Nano Banana Pro</span>${chev()}</button><span class="price">1 вариант <span class="k">· ≈ $0.04</span></span></div>`;
+}
+// Свёрнутая строка и телефон: «🎞 утро-в-горах · 4 сцены · Собрать»
+function microLine() {
+  const f = film();
+  let icon = 'git', label = 'Git', txt = 'feat/site-header · +42 −7', act = '';
+  if (S.strip === 'images') { icon = 'image'; label = 'Картинки'; txt = 'картинка не выбрана'; }
+  if (S.strip === 'montage') {
+    icon = 'film'; label = 'Монтаж';
+    txt = f ? `🎞 <b>${esc(f.name)}</b> · ${f.items.length} ${plural(f.items.length, 'сцена', 'сцены', 'сцен')}${f.stale ? ' · изменён' : ''}` : 'фильм не выбран';
+    if (f && f.items.length) {
+      const bj = f.building ? S.jobs.find(j => j.kind === 'build') : null;
+      const out = f.out[f.out.length - 1];
+      act = bj ? `<span class="mdur">${Math.round(bj.p * 100)} %</span>`
+        : out && !f.stale ? `<span class="mres2" style="font-size:12px"><span class="ok">${ic('check', 12)}</span>${esc(base(out))}</span>`
+        : `<button class="bacc" style="height:26px;padding:0 9px;font-size:12px" data-act="build">${out ? 'Пересобрать' : 'Собрать'}</button>`;
+    }
+  }
+  return `<div class="micro"><div class="swwrap"><button class="sw" data-act="${mob() ? 'sheet' : 'menu'}" data-m="strips">${ic(icon, 14, 'ico')}${label}${chev()}</button>${!mob() && S.menu === 'strips' ? stripMenu() : ''}</div>
+    <button class="exp" data-act="${mob() ? 'sheet' : 'expand'}" data-m="strip">${f && f.building && S.strip === 'montage' ? '<span class="pulse"></span>' : ''}<span class="ell">${txt}</span></button>
+    ${act}<button class="ibtn" style="width:26px;height:26px" data-act="${mob() ? 'sheet' : 'expand'}" data-m="strip" title="Развернуть">${ic('chev', 14)}</button></div>`;
+}
+function stripArea() {
+  if (mob()) return S.mobStrip ? microLine() : '';
+  if (S.collapsed) return microLine();
+  return S.strip === 'montage' ? montageStrip() : S.strip === 'images' ? imagesStrip() : gitStrip();
+}
+
+/* ================= Композер ================= */
+function composer() {
+  const f = film();
+  const hint = f && S.strip === 'montage' ? `<div class="hint">${ic('film', 12)}<span class="ell">Claude видит фильм <b>«${esc(f.name)}»</b> из полосы: порядок, склейки, музыку, сборку — правки видны меткой «✦ Claude»</span></div>` : '';
+  return `<div class="comp">${hint}
+    <textarea id="ta" class="ta" rows="2" placeholder="${esc(f ? 'Спросите Claude… Например: поставь наплыв между 1 и 2' : 'Спросите Claude…')}">${esc(S.draft)}</textarea>
+    <div class="crow"><button class="ibtn" title="Прикрепить">${ic('plus', 16)}</button><span class="grow"></span><button class="ibtn" title="Голос">${ic('mic', 16)}</button><button class="send" data-act="submit" title="Отправить">${ic('up', 16)}</button></div></div>`;
+}
+
+/* ================= Лента ================= */
+function sceneRow(it) {
+  return `<div class="scompact" style="cursor:default"><div class="th ${it.g}"></div>
+    <div class="grow" style="min-width:0"><div class="t1 ell">Сцена ${it.n} · ${esc(it.folder)}</div><div class="t2 ell">${esc(it.sub)}</div></div>
+    <a class="btn out sm" href="${shref({ jump: 'take', n: it.n })}" title="Полоса переключится на «Сцены»">Работать с этой ${ic('arrow', 12)}</a></div>`;
+}
+function feedHtml() {
+  if (!S.feed.length) return `<div class="empty"><h3>Новый чат</h3>Режим «Монтаж»: фильм собирается из сохранённых сцен прямо в полосе над полем ввода. Порядок — перетаскиванием, склейка — клик по стыку, «Собрать» — справа.</div>`;
+  return `<div class="feedin">${S.feed.map(it => {
+    if (it.t === 'user') return `<div class="umsg">${esc(it.text)}</div>`;
+    if (it.t === 'agent') return `<div class="amsg"><span class="av">${ic('spark', 13)}</span><div class="tx">${it.html}${it.acts ? `<div class="acts">${it.acts.map(a => a.href ? `<a class="btn ${a.acc ? 'acc' : 'out'} sm" href="${a.href}">${esc(a.l)}</a>` : `<button class="btn ${a.acc ? 'acc' : 'out'} sm" data-act="${a.a}">${esc(a.l)}</button>`).join('')}</div>` : ''}</div></div>`;
+    if (it.t === 'quiet') return `<div class="quiet">${it.html}</div>`;
+    if (it.t === 'scene') return sceneRow(it);
+    if (it.t === 'note') return `<div class="histnote">${esc(it.text)}</div>`;
+    return '';
+  }).join('')}${S.typing ? '<div class="typing">Claude пишет…</div>' : ''}</div>`;
+}
+
+/* ================= Попап «Открыть монтаж»: подрезка, «Сценарий», большой плеер ================= */
+const pps = () => mob() ? 9 : 22;
+function popHtml() {
+  const f = film(); const m = S.pop;
+  const bj = f.building ? S.jobs.find(j => j.kind === 'build') : null;
+  const out = f.out[f.out.length - 1];
+  const res = bj ? `<div class="mres run"><span class="sst run"><span class="d"></span>Собираем ${esc(f.folder)}film.mp4… ${Math.round(bj.p * 100)} %</span><span class="muted">файлы сцен, склейки и музыка · бесплатно</span></div>`
+    : out && !f.stale ? `<div class="mres">${ic('check', 14)}<span class="grow">Собран: <b>${esc(out)}</b> · ${fmtT(filmDur(f))}</span><button class="btn out sm" data-act="showTree" data-p="${esc(out)}">${ic('folder', 13)}Показать в дереве</button></div>` : '';
+  const btn = !f.items.length ? '' : bj ? `<button class="btn acc sm" disabled>Собираем…</button>` : out && !f.stale ? '' : `<button class="btn acc sm" data-act="build">${ic('film', 13)}${out ? 'Пересобрать' : 'Собрать'} · бесплатно</button>`;
+  return `<div class="mscrim" data-act="closePop"></div><div class="modal" role="dialog" aria-label="Монтаж">
+    <div class="mh">${ic('scissors', 16)}<span class="t">Монтаж · ${esc(f.name)}</span><span class="muted" style="font-size:12px">${filmSub(f)}${f.music.file ? ' · ' + esc(base(f.music.file)) : ''}</span>
+      <div class="segw"><button class="${m.view === 'edit' ? 'on' : ''}" data-act="pview" data-v="edit">Монтаж</button><button class="${m.view === 'script' ? 'on' : ''}" data-act="pview" data-v="script">Сценарий</button></div>
+      <span class="grow"></span>${btn}<button class="btn out sm" data-act="closePop">Готово</button></div>
+    ${res}
+    ${m.view === 'script' ? `<div class="mcenter" id="mcenter" style="flex:1 1 auto">${scriptView(f)}</div>` : `<div class="mbody" id="mbody"><div class="mleft">${popLeft(f, m)}</div><div class="mcenter" id="mcenter">${popCenter(f, m)}</div></div>`}
+    <div class="mfoot">${ic('msg', 12)}<span class="grow">Порядок, подрезка, склейки и музыка меняют только сборку — файлы сцен не трогаются. Правки уходят в ленту тихими строками, Claude их видит.</span></div></div>`;
+}
+function popLeft(f, m) {
+  if (!f.items.length) return '<div class="muted">В фильме пока нет сцен.</div>';
+  if (m.k === 'cut' && f.cuts[m.i]) {
+    const c = f.cuts[m.i];
+    return `<h4>${ic('scissors', 14)}Склейка ${m.i + 1} → ${m.i + 2}</h4><div class="lbl">Как ${esc(itemName(f.items[m.i]))} переходит в ${esc(itemAcc(f.items[m.i + 1]))}</div>
+      <div class="segw">${Object.entries(CUTS).map(([k, [t]]) => `<button class="${c.t === k ? 'on' : ''}" data-act="setCut" data-i="${m.i}" data-v="${k}">${t}</button>`).join('')}</div>
+      ${c.t !== 'cut' ? `<div class="lbl">Длительность</div><div class="segw">${[0.5, 1, 2].map(d => `<button class="${c.d === d ? 'on' : ''}" data-act="setCutD" data-i="${m.i}" data-v="${d}">${fmtS(d)}</button>`).join('')}</div>` : ''}
+      <div class="muted" style="font-size:11.5px">Бесплатно, генерация не нужна.</div>`;
+  }
+  if (m.k === 'music') return `<h4>${ic('music', 14)}Музыка</h4>${musicMenuItems(f)}`;
+  const i = Math.min(m.i, f.items.length - 1); const it = f.items[i];
+  const trim = `<div><div class="lbl">Подрезка · осталось ${fmtS(it.trim)} из ${it.dur} с</div><div style="display:flex;gap:6px"><button class="btn out sm" data-act="trim" data-i="${i}" data-d="-0.5">− 0,5 с</button><button class="btn out sm" data-act="trim" data-i="${i}" data-d="0.5">+ 0,5 с</button></div><div class="muted" style="font-size:11px;margin-top:4px">Или тяните ручку клипа на таймлайне</div></div>`;
+  const vers = it.files.length > 1 ? `<div><div class="lbl">Файл в сборке</div><div class="segw">${it.files.map((p, k) => `<button class="${k === it.cur ? 'on' : ''}" data-act="pickFile" data-i="${i}" data-v="${k}">${esc(base(p))}</button>`).join('')}</div></div>` : '';
+  return `<h4>${ic(it.k === 'file' ? 'video' : 'clapper', 14)}${i + 1} · ${ItemName(it)}</h4><div class="fr ${it.g} ${it.cur ? 'vs1' : ''}" style="width:160px"></div>
+    <div class="muted" style="font-size:12px">В сборку идёт <b>${esc(curFile(it))}</b></div>${vers}
+    ${it.k === 'scene' ? `<div><div class="lbl">Текст сцены</div><div style="font-size:12.5px;line-height:1.45">${esc(it.text)}</div>${textChanged(it) ? `<div class="mark">${ic('alert', 12)}Текст изменён — переснять</div>` : ''}<div class="muted" style="font-size:11px;margin-top:4px">Править — во вкладке «Сценарий»</div></div>` : ''}
+    ${trim}<div><div class="lbl">Порядок · место ${i + 1} из ${f.items.length}</div><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn out sm" data-act="mmove" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''}>${ic('left', 13)}Раньше</button><button class="btn out sm" data-act="mmove" data-i="${i}" data-d="1" ${i === f.items.length - 1 ? 'disabled' : ''}>Позже${ic('right', 13)}</button><button class="btn sm" data-act="mremove" data-i="${i}">Убрать из фильма</button></div></div>
+    ${it.k === 'scene' ? `<a class="btn out sm" style="align-self:flex-start" href="${shref({ jump: '5', n: it.n })}">${ic('redo', 13)}Переснять в «Сценах» ${ic('arrow', 12)}</a>` : ''}`;
+}
+function popCenter(f, m) {
+  const p = pps(); const n = Math.max(1, f.items.length);
+  // Плеер: миниатюры сцен сменяют друг друга — вместо настоящего видео
+  const kf = f.items.map((_, k) => `${(k * 100 / n).toFixed(2)}% { transform: translateX(-${(k * 100 / n).toFixed(4)}%); }`).join(' ');
+  const reel = f.items.map(it => `<div class="${it.g} ${it.cur ? 'vs1' : ''}"></div>`).join('');
+  const player = `<style>@keyframes reelN { ${kf} }</style><div class="mplayer"><div class="player ${m.play ? 'play' : ''}"><div class="reel" style="width:${n * 100}%;${m.play ? `animation:reelN ${n * 2}s steps(1) infinite` : ''}">${reel}</div><button class="pbtn" data-act="pplay">${ic(m.play ? 'pause' : 'play', 18)}</button><div class="ptime"><span>${esc(f.out.length && !f.stale ? base(f.out[f.out.length - 1]) : 'предпросмотр сборки')}</span><span>${fmtT(filmDur(f))}</span></div><div class="ptl"><i style="${m.play ? `animation:ptl ${n * 2}s linear infinite` : ''}"></i></div></div></div>`;
+  const track = f.items.map((it, i) => {
+    const clip = `<div class="tclip ${it.g} ${m.k === 'item' && m.i === i ? 'sel' : ''}" style="width:${it.dur * p}px" data-act="psel" data-k="item" data-i="${i}" title="${esc(ItemName(it))} · ${esc(base(curFile(it)))}"><span class="lab">${i + 1}</span><span class="dur">${fmtS(it.trim)}</span>${it.trim < it.dur ? `<span class="gap" style="width:${(it.dur - it.trim) * p}px"></span>` : ''}<span class="hdl" data-trim="${i}" style="right:${(it.dur - it.trim) * p}px" title="Подрезать конец клипа"></span></div>`;
+    const c = f.cuts[i];
+    const cut = c ? `<div class="cut ${m.k === 'cut' && m.i === i ? 'sel' : ''} ${c.t !== 'cut' ? 'on' : ''}" data-act="psel" data-k="cut" data-i="${i}" title="Склейка ${i + 1} → ${i + 2}: ${cutTxt(c)}"><span><i>${CUTS[c.t][1]}</i></span></div>` : '';
+    return clip + cut;
+  }).join('');
+  const width = f.items.reduce((a, it) => a + it.dur * p, 0) + f.cuts.length * 22;
+  return `${player}<div class="tl"><div class="tlh">${ic('scissors', 13)}Таймлайн · ${fmtT(filmDur(f))} · ширина клипа — по длительности · ручка справа — подрезка · ромб — склейка</div>
+    <div class="tlscroll" id="tlscroll"><div class="track">${track}</div><div class="mtrack ${m.k === 'music' ? 'sel' : ''}" style="width:${width}px" data-act="psel" data-k="music" data-i="0">${ic('music', 12)}&nbsp;${f.music.file ? esc(f.music.file) + ` · ${f.music.vol} % · затухание ${f.music.fade} с` : 'без музыки — нажмите, чтобы выбрать'}</div></div></div>`;
+}
+function scriptView(f) {
+  return `<div class="muted" style="font-size:12px;line-height:1.5">Сценарий · ${esc(f.name)} — тексты сцен по порядку фильма, как документ. Это тот же текст, что в карточках сцен. Правка ничего не переснимает: у снятой сцены появится «Текст изменён — переснять».</div>
+    <div class="scr">${f.items.map((it, i) => {
+      if (it.k === 'file') return `<div class="row file"><div class="fr ${it.g}"></div><div><div class="hd">${i + 1} · ${esc(base(it.path))} · готовый файл · ${fmtS(it.trim)}</div><div class="muted" style="font-size:12px">Текста нет — это готовое видео из проекта.</div></div></div>`;
+      return `<div class="row"><div class="fr ${it.g} ${it.cur ? 'vs1' : ''}"></div>
+      <div><div class="hd">${i + 1} · Сцена ${it.n} · ${esc(base(curFile(it)))} · ${fmtS(it.trim)}${textChanged(it) ? ` <span class="badge warn">текст изменён — переснять</span>` : ''}</div><textarea id="stx${it.id}" data-role="stext" data-i="${i}">${esc(it.text)}</textarea></div></div>`;
+    }).join('')}</div>`;
+}
+
+/* ================= Дерево и шторки ================= */
+function treeHtml() {
+  const rows = S.tree.slice().sort().map(p => {
+    const dir = p.endsWith('/'); const depth = p.split('/').length - (dir ? 2 : 1);
+    const nm = dir ? p.split('/').slice(-2)[0] + '/' : base(p);
+    const isFilm = /\.film$/.test(p) || /\/film(\.v\d+)?\.mp4$/.test(p);
+    const icon = dir ? 'folder' : /\.film$/.test(p) ? 'film' : /\.mp4$/.test(p) ? 'video' : /\.png$/.test(p) ? 'image' : /\.mp3$/.test(p) ? 'music' : 'file';
+    const cur = film() && isFilm && p.startsWith(film().folder);
+    return `<div class="tr ${dir ? 'dir' : ''} ${isFilm ? 'film-file' : ''} ${S.treeHi === p ? 'hi' : ''} ${S.treeNew.includes(p) ? 'new' : ''}" style="padding-left:${6 + depth * 14}px" ${isFilm ? `data-act="openFilmFile" data-p="${esc(p)}" title="${/\.film$/.test(p) ? 'Фильм: порядок сцен, склейки, музыка' : 'Собранный фильм'}. Клик — чат с полосой «Монтаж»"` : ''}>${ic(icon, 14)}<span class="nm ell">${esc(nm)}</span>${cur && /\.film$/.test(p) ? '<span class="badge" style="margin-left:auto;height:16px;font-size:10px">в полосе</span>' : ''}</div>`;
+  }).join('');
+  return `<div class="tree">${rows}</div><div class="treefoot"><div class="treehint">Фильм — файл <b>.film</b> в папке фильма: порядок сцен, склейки, подрезка, музыка. Рядом — сцены и собранный <b>film.mp4</b>. Клик по любому из них открывает «Монтаж».</div></div>`;
+}
+function sheetHtml() {
+  if (!S.sheet) return '';
+  const f = film(); const k = S.sheet; let body = '';
+  const back = `<div class="mi" data-act="sheet" data-m="strip">${ic('left', 16)}<div class="grow">К полосе «Монтаж»</div></div><div class="msep"></div>`;
+  if (k === 'strips') {
+    body = `<div class="shh">Полоса над композером</div>
+      <a class="mi" href="${shref({ jump: 'take', n: lastSceneN() })}">${ic('clapper', 16)}<div class="grow">Сцены<span class="st">съёмка сцены · соседний макет</span></div>${ic('arrow', 14)}</a>
+      <div class="mi ${S.strip === 'montage' && S.mobStrip ? 'on' : ''}" data-act="strip" data-k="montage">${ic('film', 16)}<div class="grow">Монтаж<span class="st">${f ? esc(f.name) + ' · ' + filmSub(f) : 'фильм не выбран'}</span></div></div>
+      <div class="mi" data-act="strip" data-k="git">${ic('git', 16)}<div class="grow">Git<span class="st">feat/site-header</span></div></div>
+      <div class="msep"></div><div class="mi" data-act="hideStrip">${ic('x', 16)}<div>Не показывать полосу</div></div>`;
+  } else if (k === 'strip' && f) {
+    body = `<div class="shh">${ic('film', 16)}Монтаж</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${filmChip(f)}${f.items.length ? musicChip(f) : ''}</div>
+      <div class="mrow2" style="margin-bottom:10px">${timeline(f)}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end">${buildArea(f)}</div>`;
+  } else if (k === 'film') body = `<div class="shh">${ic('film', 16)}Фильмы</div>${filmMenuItems()}`;
+  else if (k === 'music' && f) body = `<div class="shh">${ic('music', 16)}Музыка</div>${back}${musicMenuItems(f)}`;
+  else if (k.startsWith('cut:') && f) body = `<div class="shh">${ic('scissors', 16)}Склейка</div>${back}${cutMenuItems(f, +k.split(':')[1])}`;
+  else if (k.startsWith('item:') && f) body = `<div class="shh">${ic('clapper', 16)}${ItemName(f.items[+k.split(':')[1]])}</div>${back}${itemMenuItems(f, +k.split(':')[1])}`;
+  else if (k.startsWith('plus') && f) body = `<div class="shh">${ic('plus', 16)}Добавить</div>${f.items.length ? back : ''}${plusMenuItems(f, k.split(':')[1])}`;
+  else if (k === 'files') body = `<div class="shh">${ic('folder', 16)}Файлы</div>${treeHtml()}`;
+  return `<div class="scrim" data-act="closeSheet"></div><div class="sheet"><div class="grab"></div>${body}</div>`;
+}
+
+/* ================= Корневая отрисовка ================= */
+function appHtml() {
+  const chat = `<div class="chat"><div class="ph">${mob() ? `<span class="ell grow">Лендинг · утро</span><button class="ibtn" data-act="sheet" data-m="files" title="Файлы">${ic('folder', 16)}</button><button class="ibtn" data-act="sheet" data-m="strips" title="Полоса над композером">${ic('panel', 16)}</button>` : '<span class="ell grow">Лендинг · утро</span>'}</div>
+    <div class="feed" id="feed">${feedHtml()}</div>
+    <div class="dock"><div class="dockin">${stripArea()}${composer()}</div></div>
+    ${S.toast ? `<div class="toast"><span>${esc(S.toast.text)}</span>${S.toast.act ? `<button data-act="toastAct">${esc(S.toast.actLabel)}</button>` : ''}</div>` : ''}</div>`;
+  if (mob()) return `<div class="app mob">${chat}${sheetHtml()}${S.pop && film() ? popHtml() : ''}</div>`;
+  return `<div class="app"><div class="rail"><span class="ri on">${ic('chat', 16)}</span><span class="ri">${ic('folder', 16)}</span><span class="ri">${ic('user', 16)}</span></div>
+    <div class="island side"><div class="ph">${ic('folder', 15)}Файлы<span class="sub">лендинг</span></div>${treeHtml()}</div>${chat}
+    ${S.pop && film() ? popHtml() : ''}</div>`;
+}
+const JUMPS = [
+  ['3', 'Пустой фильм', 'В полосе — только что заведённый «новый-фильм». Пустое состояние: «В фильме пока нет сцен · + Сцена из проекта · Снять новую». Нажмите «Сцена из проекта» → выберите сцену: она встанет первой. «Снять новую →» ведёт в режим «Сцены».'],
+  ['4', 'Порядок, склейка, музыка, сборка', 'Фильм «утро-в-горах» из 4 сцен, не собран. Перетащите миниатюру 3 на место 1 → клик по кружку между 2 и 3 → «Затемнение», 1 с → чип «Без музыки» → утро.mp3 → «Собрать · бесплатно» → film.mp4 → «Показать в дереве». Или попросите Claude: «поставь наплыв между 1 и 2».'],
+  ['5', 'Переснять сцену', 'Фильм собран. Клик по сцене 2 в мини-таймлайне → «Переснять →» — переход в режим «Сцены» с этой сценой. Там: «Переснять» → «Сохранить сцену» → «Открыть «Монтаж» →». Вернётесь сюда в состояние «5б».'],
+  ['5б', 'Сцена обновлена', 'Вернулись из «Сцен»: сцена 2 сохранена новым файлом scene-02.v2.mp4. На миниатюре — точка «обновлена», film.mp4 зачёркнут, справа — «Пересобрать». В меню сцены — «Другая версия файла»: можно вернуть прежний файл.'],
+  ['6', 'Открыть монтаж', 'Фильм собран. «Открыть монтаж» → тяните ручку справа у клипа (подрезка) или «− 0,5 с» → вкладка «Сценарий» → поправьте текст сцены 3 и кликните мимо → «Готово». В ленте — тихие строки о подрезке и тексте, у сцены 3 — пометка «текст изменён».'],
+  ['7', 'Длинная лента', 'Сорок сообщений после сборки. Лента прокручена вниз, а фильм — в полосе: чип, мини-таймлайн, «film.mp4 · Открыть». Прокрутите ленту вверх — полоса остаётся на месте.'],
+  ['8', 'Телефон 390', 'Ширина 390: полоса свёрнута в строку «Монтаж · 🎞 утро-в-горах · 4 сцены · Собрать». Тап по строке — шторка с мини-таймлайном; тап по сцене или стыку — их меню шторкой; «Открыть монтаж» — на весь экран.'],
+  ['a', 'Пришли из «Сцен»', 'Так выглядит переход по «В фильм →»: сцена 4 встала в конец фильма «утро-в-горах» (обведена), полоса переключилась на «Монтаж», в ленте — тихая строка «Сцена 4 добавлена в фильм».'],
+  ['c', 'Агент собрал 3 сцены', 'Сюда ведёт «Открыть «Монтаж» →» после агента в режиме «Сцены»: фильм «утро» из 3 сцен Claude, у каждой метка «✦ Claude». Напишите «поставь наплыв везде» и «собери фильм».'],
+];
+let DESC = '';
+function demoHtml() {
+  const t = (k, v, l) => `<button class="tbtn" data-demo="${k}" data-v="${v}" aria-pressed="${S[k] === v}">${l}</button>`;
+  return `<div class="grp"><span class="lbl">Режим</span><span class="modesw"><a href="${shref({ jump: 'take', n: lastSceneN() })}" id="modeScenes">${ic('clapper', 13)}Сцены →</a><span class="on">${ic('film', 13)}Монтаж</span></span></div>
+    <div class="grp"><span class="lbl">Тема</span>${t('theme', 'light', 'Светлая')}${t('theme', 'dark', 'Тёмная')}</div>
+    <div class="grp"><span class="lbl">Ширина</span>${t('w', 1360, '1360')}${t('w', 390, '390')}</div>
+    <div class="grp"><span class="lbl">Сразу к</span>${JUMPS.map(([k, l]) => `<button class="tbtn" data-jump="${k}" title="${esc(l)}">${k} · ${l}</button>`).join('')}</div>`;
+}
+
+let rendering = false;
+function render() {
+  document.documentElement.setAttribute('data-theme', S.theme);
+  document.body.classList.toggle('w390', mob());
+  document.getElementById('demo').innerHTML = demoHtml();
+  document.getElementById('vdesc').innerHTML = DESC;
+  document.getElementById('toScenes').href = shref({ jump: 'take', n: lastSceneN() });
+  const ae = document.activeElement; const aid = ae && ae.id; let s0, s1;
+  if (aid && ae.tagName === 'TEXTAREA') { s0 = ae.selectionStart; s1 = ae.selectionEnd; }
+  const sc = {}; ['feed', 'mcenter', 'tlscroll'].forEach(id => { const el = document.getElementById(id); if (el) sc[id] = [el.scrollTop, el.scrollLeft, el.scrollHeight - el.scrollTop - el.clientHeight < 40]; });
+  const n0 = render.feedLen || 0;
+  rendering = true;
+  document.getElementById('root').innerHTML = appHtml();
+  rendering = false;
+  for (const [id, [t, l, bottom]] of Object.entries(sc)) { const el = document.getElementById(id); if (!el) continue; el.scrollLeft = l; el.scrollTop = id === 'feed' && (bottom || S.feed.length > n0) ? el.scrollHeight : t; }
+  if (render.toBottom || !(('feed') in sc)) { const el = document.getElementById('feed'); if (el) el.scrollTop = el.scrollHeight; render.toBottom = false; }
+  render.feedLen = S.feed.length;
+  if (aid) { const el = document.getElementById(aid); if (el) { el.focus(); if (s0 != null) try { el.setSelectionRange(s0, s1); } catch (e) {} } }
+  if (render.focusNext) { const el = document.getElementById(render.focusNext); render.focusNext = null; if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n); } }
+}
+
+/* ================= Быстрые состояния («Сразу к») ================= */
+function setupMorning(k, o = {}) {
+  const f = newFilm('утро-в-горах');
+  for (let n = 1; n <= 5; n++) addTree(`${f.folder}кадры/кадр-${n}.png`);
+  for (let n = 1; n <= k; n++) f.items.push(sceneItem(f.folder, n));
+  syncCuts(f);
+  if (o.music) f.music.file = 'music/утро.mp3';
+  if (o.built) { addTree(f.folder + 'film.mp4'); f.out.push(f.folder + 'film.mp4'); f.built = 1; }
+  return f;
+}
+function setupAutumn() {
+  const f = newFilm('осень');
+  for (let n = 1; n <= 2; n++) f.items.push(sceneItem(f.folder, n, { dur: 7 }));
+  syncCuts(f); f.cuts[0] = { t: 'dissolve', d: 1, by: '' };
+  addTree(f.folder + 'film.mp4'); f.out.push(f.folder + 'film.mp4'); f.built = 1;
+  return f;
+}
+function setupAgent() {
+  const f = newFilm('утро');
+  for (let n = 1; n <= 3; n++) { const it = sceneItem(f.folder, n, { by: 'claude' }); f.items.push(it); }
+  syncCuts(f);
+  push({ t: 'user', text: 'Сделай 3 сцены про утро' });
+  push({ t: 'agent', html: 'Сделаю 3 сцены про утро по 8 с. Каждую готовую сцену сохраню и поставлю в конец фильма «утро», после каждой остановлюсь.' });
+  f.items.forEach((it, i) => { push({ t: 'scene', n: it.n, folder: f.folder, g: it.g, sub: `версия 2 из 2 · ${base(curFile(it))} · в фильме утро, место ${i + 1} · потрачено $3.28` }); quiet(`Claude добавил сцену ${it.n} в фильм «утро» · место ${i + 1} · ${fmtT((i + 1) * 8)}`); });
+  push({ t: 'agent', html: 'Все 3 сцены сняты, сохранены в <b>video/утро/</b> и стоят в фильме «утро» · 0:24 · потрачено $9.84. Порядок, склейки, музыка и сборка — в режиме «Монтаж».' });
+  quiet('Вы переключили полосу на «Монтаж» · фильм «утро»');
+  return f;
+}
+function history(f, n) {
+  for (let k = 1; k <= n; k++) push({ t: 'scene', n: k, folder: f.folder, g: AG[k % 5], sub: `версия 2 из 2 · scene-${pad2(k)}.mp4 · в фильме ${f.name}, место ${k} · потрачено $3.28` });
+}
+// Длинная лента: фильм давно уехал бы вверх, но он в полосе
+function longFeed(f) {
+  const Q = [
+    ['Какие ещё сцены можно добавить к утру?', 'Можно добавить сцену с тропой к хижине или отъезд камеры от вершин — у папки сцен есть кадр-5.png, он подойдёт как кадр B.'],
+    ['Сколько стоит одна сцена в Veo?', 'Около $3.24: два кадра по $0.04 и 2 варианта клипа по $1.60. Локальные модели снимают бесплатно, но дольше.'],
+    ['Можно сделать вертикальную версию для Reels?', 'Можно: пропорции задаются у первой сцены. Для 9:16 лучше переснять сцены — обрезка 16:9 потеряет края гор.'],
+    ['А музыку можно подобрать спокойнее?', 'В проекте есть music/тишина-леса.mp3 — тише и медленнее утра.mp3. Поставить можно в чипе музыки в полосе.'],
+    ['Что будет, если я удалю scene-03.mp4?', 'Фильм не соберётся: в .film на него ссылка. В полосе у сцены появится «файл не найден», и сборка попросит заменить или убрать её.'],
+    ['Подбери текст для описания ролика', 'Утро в горах: рассвет над хребтом, туман в долине, дымок над хижиной и первая чашка кофе. 32 секунды тишины.'],
+    ['Можно ли выложить сцену отдельно?', 'Да, сцена — обычный mp4 в проекте: video/утро-в-горах/scene-02.mp4. Её можно скачать или поставить в другой фильм.'],
+    ['Как поменять название фильма?', 'Имя — это имя файла .film и папки. Переименуйте в дереве — полоса подхватит новое имя.'],
+  ];
+  for (let r = 0; r < 5; r++) Q.forEach(([q, a], k) => { if (r * 8 + k >= 40) return; push({ t: 'user', text: q }); push({ t: 'agent', html: a }); });
+}
+function jump(k) {
+  S.jobs = [];
+  S = fresh(S); render.toBottom = true;
+  const d = JUMPS.find(j => j[0] === k); DESC = d ? `<b>${d[0]} · ${d[1]}.</b> ${d[2]}` : '';
+  const q = new URLSearchParams(location.search);
+  if (k === 'film') {
+    const name = q.get('film') || 'утро-в-горах'; const n = +q.get('k') || 4;
+    const f = name === 'осень' ? (setupMorning(4, { built: true, music: true }), setupAutumn()) : name === 'утро' ? (setupMorning(4, { built: true, music: true }), setupAgent()) : (setupAutumn(), setupMorning(n, { built: n === 4, music: true }));
+    S.fname = f.name;
+    if (name === 'утро-в-горах') history(f, n);
+    const tp = q.get('tree');
+    quiet(tp ? `Вы открыли из дерева <b>${esc(tp)}</b> — полоса «Монтаж», фильм «${esc(f.name)}»` : `Вы переключили полосу на «Монтаж» · фильм «${esc(f.name)}» · ${filmSub(f)}`);
+    DESC = `<b>Пришли из «Сцен».</b> Полоса «Монтаж» с фильмом «${esc(f.name)}». Полоса помнит последний режим на чат: вернуться — «Монтаж ▾» → «Сцены».`;
+  }
+  if (k === 'a') {
+    // Переход по «В фильм →»: сцена n встаёт в конец выбранного фильма
+    const name = q.get('film') || 'утро-в-горах'; const n = +q.get('n') || 4; const from = q.get('from') || 'утро-в-горах';
+    let f;
+    if (name === 'осень') { setupMorning(4, { built: true, music: true }); f = setupAutumn(); }
+    else if (name === 'new') { setupAutumn(); setupMorning(Math.min(n - 1, 4), { built: true, music: true }); f = newFilm('новый-фильм'); }
+    else { setupAutumn(); f = setupMorning(n - 1, { built: true, music: true }); history(f, n - 1); }
+    S.fname = f.name;
+    const it = sceneItem(`video/${from}/`, n);
+    push({ t: 'scene', n, folder: it.folder, g: it.g, sub: `версия 1 из 2 · scene-${pad2(n)}.mp4 · в фильме ${f.name}` });
+    quiet(`Вы нажали «В фильм →» у сцены ${n} — полоса переключилась на «Монтаж»`);
+    addItem(f, it, 'you');
+    if (name === 'new') quiet(`Вы завели фильм «новый-фильм»: <b>video/новый-фильм/новый-фильм.film</b> · имя — в меню чипа или переименованием в дереве`);
+    if (d) DESC = `<b>a · Пришли из «Сцен».</b> Сцена ${n} встала в конец фильма «${esc(f.name)}» (обведена), полоса переключилась на «Монтаж». ${f.built ? 'Фильм был собран — теперь справа «Пересобрать».' : 'Дальше — «Собрать · бесплатно».'}`;
+  }
+  if (k === '3') {
+    setupMorning(4, { built: true, music: true }); setupAutumn();
+    const f = newFilm('новый-фильм'); S.fname = f.name;
+    push({ t: 'user', text: 'Заведи новый фильм, соберу его из готовых сцен' });
+    quiet(`Вы завели фильм «новый-фильм»: <b>video/новый-фильм/новый-фильм.film</b>`);
+  }
+  if (k === '4' || k === '8') {
+    if (k === '8') S.w = 390;
+    setupAutumn(); const f = setupMorning(4); S.fname = f.name;
+    push({ t: 'user', text: 'Сделай 4 сцены про утро в горах' });
+    push({ t: 'agent', html: 'Все 4 сцены сняты, сохранены в <b>video/утро-в-горах/</b> и стоят в фильме «утро-в-горах» · 0:32 · потрачено $13.00.' });
+    history(f, 4);
+    quiet('Вы переключили полосу на «Монтаж» · фильм «утро-в-горах» · 4 сцены · 0:32');
+  }
+  if (k === '5' || k === '6' || k === '7' || k === '5б') {
+    setupAutumn(); const f = setupMorning(4, { built: true, music: true }); S.fname = f.name;
+    push({ t: 'user', text: 'Сделай 4 сцены про утро в горах' });
+    push({ t: 'agent', html: 'Все 4 сцены сняты, сохранены и стоят в фильме «утро-в-горах» · 0:32 · потрачено $13.00.' });
+    history(f, 4);
+    quiet(`Фильм собран: <b>${f.folder}film.mp4</b> · ${filmSub(f)} · бесплатно · <button class="lnk" data-act="openPop">Открыть монтаж</button> · ${treeLink(f.folder + 'film.mp4')}`);
+    if (k === '7') { longFeed(f); push({ t: 'note', text: '↑ выше — 40 сообщений; карточки фильма в ленте нет, фильм — в полосе' }); }
+    if (k === '5б') {
+      const it = f.items[1]; const p = f.folder + 'scene-02.v2.mp4'; addTree(p); it.files.push(p); it.cur = 1; it.upd = true;
+      push({ t: 'scene', n: 2, folder: f.folder, g: it.g, sub: 'версия 3 из 4 · scene-02.v2.mp4 · в фильме утро-в-горах, место 2 · «сделай плавнее»' });
+      quiet(`Сохранено как: <b>${p}</b> · фильм «утро-в-горах» возьмёт новый файл — в «Монтаже» у сцены точка «обновлена»`);
+      markStale(f, 'сцена 2 обновлена');
+      quiet('Вы вернулись в «Монтаж» · сцена 2 обновлена: в фильм идёт scene-02.v2.mp4 — пересобрать');
+    }
+  }
+  if (k === 'c') { setupAutumn(); setupMorning(4, { built: true, music: true }); const f = setupAgent(); S.fname = f.name; }
+  if (!S.fname) { setupAutumn(); S.fname = setupMorning(4, { built: true, music: true }).name; }
+  S.treeNew = []; S.mobStrip = true;
+  render();
+}
+
+/* ================= События ================= */
+document.addEventListener('click', e => {
+  const dm = e.target.closest('[data-demo]');
+  if (dm) { const k = dm.dataset.demo; let v = dm.dataset.v; v = k === 'w' ? +v : v; S[k] = v; if (k === 'w') S.sheet = null; render(); return; }
+  const jp = e.target.closest('[data-jump]');
+  if (jp) { const k = jp.dataset.jump; history_replace(k); jump(k); return; }
+  if (e.target.closest('a[href]')) return;
+  const el = e.target.closest('[data-act]');
+  const act = el?.dataset.act;
+  if (!el) { if (S.menu) { S.menu = null; render(); } return; }
+  const f = film();
+  const i = el.dataset.i != null ? +el.dataset.i : null;
+  if (act !== 'menu' && act !== 'noop') S.menu = null;
+  switch (act) {
+    case 'noop': return;
+    case 'menu': S.menu = S.menu === el.dataset.m ? null : el.dataset.m; break;
+    case 'strip': S.strip = el.dataset.k; S.collapsed = false; if (mob()) { S.mobStrip = true; S.sheet = null; } break;
+    case 'collapse': S.collapsed = true; break;
+    case 'expand': S.collapsed = false; break;
+    case 'sheet': S.sheet = el.dataset.m; break;
+    case 'closeSheet': S.sheet = null; break;
+    case 'hideStrip': S.mobStrip = false; S.sheet = null; break;
+    case 'submit': submit(); break;
+    case 'pickFilm': S.fname = el.dataset.f; S.sheet = null; quiet(`Вы переключили полосу на фильм «${esc(S.fname)}» · ${filmSub(film())}`, 'pickFilm'); break;
+    case 'newFilm': { let n = 'новый-фильм', k = 2; while (S.films[n]) n = 'новый-фильм-' + k++; newFilm(n); S.fname = n; S.sheet = null; quiet(`Вы завели фильм «${n}»: <b>video/${n}/${n}.film</b>`); break; }
+    case 'openFilmFile': {
+      const p = el.dataset.p; const name = p.split('/')[1];
+      if (S.films[name]) { S.fname = name; S.strip = 'montage'; S.collapsed = false; S.sheet = null; if (mob()) S.mobStrip = true; quiet(`Вы открыли из дерева <b>${esc(p)}</b> — полоса «Монтаж», фильм «${esc(name)}»`, 'pickFilm'); }
+      break;
+    }
+    case 'setMusic': setMusic(f, { file: el.dataset.v }, 'you'); if (mob() && S.sheet) S.sheet = 'strip'; break;
+    case 'setFade': setMusic(f, { fade: +el.dataset.v }, 'you'); S.menu = mob() ? null : 'music'; break;
+    case 'musicAsk': S.sheet = null; S.draft = 'Подбери музыку к фильму: спокойная, без слов'; render.focusNext = 'ta'; break;
+    // Выбор склейки оставляет поповер открытым (видно длительность); на телефоне шторка возвращается к полосе
+    case 'setCut': setCut(f, i, { t: el.dataset.v }, 'you'); if (!S.pop && !mob()) S.menu = 'cut:' + i; if (mob() && S.sheet) S.sheet = f.cuts[i].t === 'cut' ? 'strip' : 'cut:' + i; break;
+    case 'setCutD': setCut(f, i, { d: +el.dataset.v }, 'you'); if (!S.pop && !mob()) S.menu = 'cut:' + i; if (mob() && S.sheet) S.sheet = 'strip'; break;
+    case 'pickFile': pickFile(f, i, +el.dataset.v); S.sheet = null; break;
+    case 'mmove': { const to = i + +el.dataset.d; moveItem(f, i, to, 'you'); if (S.pop) S.pop.i = to; S.sheet = null; break; }
+    case 'mremove': removeItem(f, i, 'you'); if (S.pop) S.pop.i = Math.max(0, i - 1); S.sheet = null; break;
+    case 'addScene': { const p = el.dataset.p; const n = +p.match(/scene-(\d\d)/)[1]; const it = sceneItem(p.slice(0, p.length - base(p).length), n); addItem(f, it, 'you'); S.sheet = null; break; }
+    case 'addFile': addItem(f, fileItem(el.dataset.p), 'you'); S.sheet = null; break;
+    case 'build': S.sheet = null; build(f, 'you'); break;
+    case 'openPop': S.sheet = null; S.pop = { view: 'edit', k: 'item', i: i ?? 0, play: !!el.dataset.play }; break;
+    case 'closePop': if (e.target.classList.contains('mscrim') || el.tagName === 'BUTTON') { S.pop = null; toast('«Монтаж» закрыт — правки в фильме, история — тихими строками в ленте'); render.toBottom = true; } break;
+    case 'pview': S.pop.view = el.dataset.v; break;
+    case 'psel': S.pop.k = el.dataset.k; S.pop.i = i; break;
+    case 'pplay': S.pop.play = !S.pop.play; break;
+    case 'trim': trimItem(f, i, f.items[i].trim + +el.dataset.d, 'you'); break;
+    case 'showTree': case 'toastAct': {
+      const p = act === 'toastAct' ? S.toast.act : el.dataset.p;
+      S.treeHi = p; S.toast = null; S.pop = null; S.sheet = mob() ? 'files' : null;
+      setTimeout(() => { if (S.treeHi === p) { S.treeHi = null; render(); } }, 3000);
+      render(); document.querySelector('.tr.hi')?.scrollIntoView({ block: 'nearest' }); return;
+    }
+    default: break;
+  }
+  render();
+});
+function history_replace(k) { const q = new URLSearchParams(location.search); q.set('jump', k); q.delete('film'); q.delete('n'); q.delete('k'); q.delete('tree'); q.delete('from'); history.replaceState(null, '', '?' + q.toString()); }
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.id === 'ta') { S.draft = t.value; return; }
+  if (t.dataset.role === 'vol') { const v = document.getElementById('volv'); if (v) v.textContent = t.value + ' %'; return; }
+  if (t.dataset.role === 'stext') { film().items[+t.dataset.i].text = t.value; }
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.role === 'vol') { setMusic(film(), { vol: +t.value }, 'you'); S.menu = mob() ? null : 'music'; render(); }
+});
+document.addEventListener('keydown', e => {
+  const t = e.target;
+  if (t.id === 'ta' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); render(); document.getElementById('ta')?.focus(); return; }
+  if (e.key === 'Escape') { if (S.menu) S.menu = null; else if (S.sheet) S.sheet = null; else if (S.pop) { S.pop = null; toast('«Монтаж» закрыт — правки в фильме, история — тихими строками в ленте'); } render(); }
+});
+// Правка текста в «Сценарии»: пометка «Текст изменён — переснять» и тихая строка
+const origText = {};
+document.addEventListener('focusin', e => { const t = e.target; if (t.dataset?.role === 'stext' && !rendering) { const it = film().items[+t.dataset.i]; if (!(it.id in origText)) origText[it.id] = it.text; } });
+document.addEventListener('focusout', e => {
+  if (rendering) return;
+  const t = e.target; if (t.dataset?.role !== 'stext') return;
+  const it = film().items[+t.dataset.i]; const o = origText[it.id]; delete origText[it.id];
+  if (o == null || o.trim() === it.text.trim()) return;
+  it.text = it.text.trim();
+  quiet(`Вы поправили текст сцены ${it.n} в «Сценарии»: «${esc(it.text.length > 60 ? it.text.slice(0, 60) + '…' : it.text)}» — клип снят по прежнему тексту, у сцены «Текст изменён — переснять»`, 'txt' + it.id);
+  setTimeout(render, 150);
+});
+// Перетаскивание сцен в мини-таймлайне полосы
+document.addEventListener('dragstart', e => {
+  const t = e.target.closest?.('[data-dragi]'); if (!t) return;
+  S.menu = null; S.drag = { from: +t.dataset.dragi, over: null };
+  e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', t.dataset.dragi); } catch (x) {}
+  t.classList.add('drag');
+});
+document.addEventListener('dragover', e => {
+  if (!S.drag) return; const t = e.target.closest?.('[data-dragi]'); if (!t) return;
+  e.preventDefault(); const o = +t.dataset.dragi;
+  if (S.drag.over !== o) { document.querySelectorAll('.mth.over').forEach(x => x.classList.remove('over')); S.drag.over = o; if (o !== S.drag.from) t.classList.add('over'); }
+});
+document.addEventListener('drop', e => {
+  if (!S.drag) return; e.preventDefault();
+  const t = e.target.closest?.('[data-dragi]'); const d = S.drag; S.drag = null;
+  if (t) moveItem(film(), d.from, +t.dataset.dragi, 'you');
+  render();
+});
+document.addEventListener('dragend', () => { if (S.drag) { S.drag = null; render(); } });
+// Подрезка ручкой на таймлайне попапа
+let trimDrag = null;
+document.addEventListener('pointerdown', e => {
+  const h = e.target.closest('[data-trim]'); if (!h || !S.pop) return;
+  e.preventDefault(); e.stopPropagation();
+  const i = +h.dataset.trim; const it = film().items[i];
+  trimDrag = { i, x0: e.clientX, t0: it.trim, it }; S.pop.k = 'item'; S.pop.i = i;
+});
+document.addEventListener('pointermove', e => {
+  if (!trimDrag) return; const it = trimDrag.it;
+  const v = Math.round((trimDrag.t0 + (e.clientX - trimDrag.x0) / pps()) * 2) / 2;
+  const nv = Math.max(1, Math.min(it.dur, v)); if (nv !== it.trim) { it.trim = nv; render(); }
+});
+document.addEventListener('pointerup', () => {
+  if (!trimDrag) return; const { i, t0, it } = trimDrag; trimDrag = null;
+  if (it.trim !== t0) { const v = it.trim; it.trim = t0; trimItem(film(), i, v, 'you'); }
+  render();
+});
+// Состояние из адреса: ?jump=4&theme=dark&w=390 (так же приходят переходы из режима «Сцены»)
+(() => {
+  const q = new URLSearchParams(location.search);
+  if (q.get('theme')) S.theme = q.get('theme');
+  if (q.get('w')) S.w = +q.get('w');
+  const j = q.get('jump');
+  jump(j === 'added' ? 'a' : j === 'agent' ? 'c' : j === 'updated' ? '5б' : j || '4');
+})();
+</script>
+</body>
+</html>

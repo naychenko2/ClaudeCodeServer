@@ -548,8 +548,9 @@ public sealed partial class LocalMediaService(
                     throw new LocalMediaInputException($"Файл «{value}» — не модель голоса RVC (.pth из local_voice_train).");
                 return new InputFile(bytes, ".pth", null);
             case MediaKind.VoiceIndex:
-                // Индекс faiss начинается с «Ix»
-                if (!relative.EndsWith(".index", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'I' || bytes[1] != 'x')
+                // Индекс faiss начинается с четырёхбуквенного кода типа: I + три знака (IwFl у IVFFlat, IxF2, IxHN…)
+                if (!relative.EndsWith(".index", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'I'
+                    || !bytes.AsSpan(1, 3).ToArray().All(b => char.IsAsciiLetterOrDigit((char)b)))
                     throw new LocalMediaInputException($"Файл «{value}» — не индекс голоса RVC (.index из local_voice_train).");
                 return new InputFile(bytes, ".index", null);
             default:

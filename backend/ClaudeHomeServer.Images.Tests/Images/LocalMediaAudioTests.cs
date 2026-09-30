@@ -296,7 +296,8 @@ public class LocalMediaAudioTests : IDisposable
         Put("src.wav", Wav(5));
         Put("voice/bad.pth", Encoding.ASCII.GetBytes("not a zip"));
         Put("voice/me.pth", [.. "PK"u8.ToArray(), 3, 4, 0, 0]);
-        Put("voice/me.index", [.. "IxMI"u8.ToArray(), 0, 0]);
+        // Настоящий заголовок индекса Applio — IVFFlat
+        Put("voice/me.index", [.. "IwFl"u8.ToArray(), 3, 0, 0, 0]);
 
         var bad = await service.SubmitAsync(Audio(LocalMediaOps.VoiceConvert, new JsonObject
         {

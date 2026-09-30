@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 (globalThis as unknown as { localStorage: Storage }).localStorage = {
   getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {}, key: () => null, length: 0,
 } as Storage;
-import { nextComposerMode } from '../../../lib/composerModes';
+import { nextComposerMode, type ComposerModeSeen } from '../../../lib/composerModes';
 import { __resetComposerStrips, getComposerStripsVersion } from '../../../lib/composerStrips';
 import { createDraft } from '../thread/actions';
 import { threadsApi, type ImageThread, type ImageThreadsState } from '../thread/threadsApi';
@@ -28,9 +28,9 @@ const state = (focus: string | null, threads: ImageThread[], revision = 1): Imag
   ({ focus, revision, threads });
 
 // Что видит поле ввода: какие режимы в переключателе и какой из них включится
-function composer(prevKey: string | null, modeId: string | null) {
+function composer(seen: ComposerModeSeen, modeId: string | null) {
   const available = MODES.filter(m => m.action.isAvailable(CTX));
-  return { switcher: available.length > 0, ...nextComposerMode(available, CTX, prevKey, modeId) };
+  return { switcher: available.length > 0, ...nextComposerMode(available, CTX, seen, modeId) };
 }
 
 beforeEach(() => {
@@ -42,21 +42,21 @@ afterEach(() => vi.restoreAllMocks());
 describe('режим «Картинка» при фокусе с сервера', () => {
   it('черновик, выбранный извне (агент): переключатель есть, режим остаётся «Чат»', () => {
     __applyThreads('s1', 'p1', state('d1', [thread({ id: 'd1', file: null, draftFolder: '' })]));
-    const c = composer(null, null);
+    const c = composer({}, null);
     expect(c.switcher).toBe(true);
     expect(c.modeId).toBeNull();
   });
 
   it('«Нарисовать новую» от человека включает режим у черновика', async () => {
     vi.spyOn(threadsApi, 'create').mockResolvedValue(state('d1', [thread({ id: 'd1', file: null, draftFolder: '' })], 2));
-    const before = composer(null, null);
+    const before = composer({}, null);
     expect(await createDraft('p1', 's1', '')).toBe(true);
-    expect(composer(before.key, null).modeId).toBe('image');
+    expect(composer(before.seen, null).modeId).toBe('image');
   });
 
   it('картинка-файл, выбранная извне: переключатель есть, режим остаётся «Чат»', () => {
     __applyThreads('s1', 'p1', state('t1', [thread({})]));
-    const c = composer(null, null);
+    const c = composer({}, null);
     expect(c.switcher).toBe(true);
     expect(c.modeId).toBeNull();
   });
@@ -64,17 +64,34 @@ describe('режим «Картинка» при фокусе с сервера'
   it('ручной уход в «Чат» у черновика держится, пока повод тот же', () => {
     __applyThreads('s1', 'p1', state('d1', [thread({ id: 'd1', file: null, draftFolder: '' })]));
     requestImageMode('s1');
-    const first = composer(null, null);
+    const first = composer({}, null);
     expect(first.modeId).toBe('image');
     // Человек нажал «Чат» — перерисовка с тем же ключом режим не навязывает
-    expect(composer(first.key, null).modeId).toBeNull();
+    expect(composer(first.seen, null).modeId).toBeNull();
+  });
+
+  it('снятый и заново выбранный фокус не навязывает режим по прежнему поводу', () => {
+    const d1 = thread({ id: 'd1', file: null, draftFolder: '' });
+    __applyThreads('s1', 'p1', state('d1', [thread({}), d1]));
+    requestImageMode('s1');
+    const first = composer({}, null);
+    expect(first.modeId).toBe('image');
+    // Человек нажал «Чат», потом ✕ на чипе — режим пропал из переключателя
+    __applyThreads('s1', 'p1', state(null, [thread({}), d1], 2));
+    const gone = composer(first.seen, null);
+    expect(gone.switcher).toBe(false);
+    // «Работать с этой» у картинки в ленте — фокус вернулся, повода нового нет
+    __applyThreads('s1', 'p1', state('t1', [thread({}), d1], 3));
+    const back = composer(gone.seen, null);
+    expect(back.switcher).toBe(true);
+    expect(back.modeId).toBeNull();
   });
 
   it('«Редактировать» из дерева включает режим у картинки-файла', () => {
     __applyThreads('s1', 'p1', state('t1', [thread({})]));
-    const before = composer(null, null);
+    const before = composer({}, null);
     requestImageMode('s1');
-    expect(composer(before.key, null).modeId).toBe('image');
+    expect(composer(before.seen, null).modeId).toBe('image');
   });
 
   it('смена фокуса с сервера будит поле ввода, даже если полоса уже запрошена', () => {

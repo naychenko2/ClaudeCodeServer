@@ -8,19 +8,24 @@ import type { ComposerModeApi, ComposerModeCtx } from './subsystems/registryCore
 
 export interface ComposerModeEntry { name?: string; action?: ComposerModeApi }
 
-// modes — только доступные сейчас режимы. prevKey — ключ, на который поле уже
-// переключалось; тот же ключ второй раз режим не навязывает, иначе ручной уход в «Чат»
-// откатывался бы на каждой перерисовке
+// Поводы, на которые поле уже переключалось: режим → его последний повод
+export type ComposerModeSeen = Readonly<Record<string, string>>;
+
+// modes — только доступные сейчас режимы. Тот же повод второй раз режим не навязывает,
+// иначе ручной уход в «Чат» откатывался бы на каждой перерисовке. Память — по каждому
+// режиму и переживает его временное исчезновение: снятый и заново выбранный фокус
+// картинки возвращает режим с прежним поводом, и это не просьба человека
 export function nextComposerMode(
-  modes: readonly ComposerModeEntry[], ctx: ComposerModeCtx, prevKey: string | null, modeId: string | null,
-): { key: string | null; modeId: string | null } {
+  modes: readonly ComposerModeEntry[], ctx: ComposerModeCtx, seen: ComposerModeSeen, modeId: string | null,
+): { key: string | null; seen: ComposerModeSeen; modeId: string | null } {
   for (const m of modes) {
     const k = m.name && m.action?.autoSelect?.(ctx);
     if (!k) continue;
     const key = `${m.name}:${k}`;
-    return { key, modeId: key === prevKey ? modeId : m.name! };
+    if (seen[m.name!] === k) return { key, seen, modeId };
+    return { key, seen: { ...seen, [m.name!]: k }, modeId: m.name! };
   }
-  return { key: null, modeId };
+  return { key: null, seen, modeId };
 }
 
 // Затравка поля режима (ComposerModeApi.prefill). key — повод (режим + нить): фиксируется

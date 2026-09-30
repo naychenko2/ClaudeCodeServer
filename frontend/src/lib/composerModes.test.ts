@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { nextPrefill, type PrefillState } from './composerModes';
+import { nextComposerMode, nextPrefill, type ComposerModeEntry, type ComposerModeSeen, type PrefillState } from './composerModes';
+import type { ComposerModeApi } from './subsystems/registryCore';
 
 const EMPTY: PrefillState = { key: null, auto: null };
 
@@ -66,5 +67,51 @@ describe('затравка поля режима', () => {
       { next: null, field: '' },
       { next: { key: 't1', text: 'a' } },
     ])).toBe('');
+  });
+});
+
+// Режим-заглушка: повод задаёт тест, доступность — фильтр по списку, как в Composer
+const CTX = { projectId: null, sessionId: 's1' };
+const mode = (name: string, reason: () => string | null): ComposerModeEntry =>
+  ({ name, action: { autoSelect: () => reason() } as unknown as ComposerModeApi });
+
+describe('самовключение режима поля', () => {
+  it('новый повод включает режим, тот же повод после ручного «Чата» — нет', () => {
+    const m = mode('image', () => 'request:1');
+    const first = nextComposerMode([m], CTX, {}, null);
+    expect(first.modeId).toBe('image');
+    expect(nextComposerMode([m], CTX, first.seen, null).modeId).toBeNull();
+  });
+
+  it('режим пропал и вернулся с тем же поводом — не навязывается повторно', () => {
+    const m = mode('image', () => 'request:1');
+    const first = nextComposerMode([m], CTX, {}, null);
+    // Человек ушёл в «Чат», затем режим временно недоступен (снят фокус)
+    const gone = nextComposerMode([], CTX, first.seen, null);
+    expect(gone.modeId).toBeNull();
+    const back = nextComposerMode([m], CTX, gone.seen, null);
+    expect(back.modeId).toBeNull();
+  });
+
+  it('режим пропал и вернулся с новым поводом — включается', () => {
+    let n = 1;
+    const m = mode('image', () => `request:${n}`);
+    const first = nextComposerMode([m], CTX, {}, null);
+    const gone = nextComposerMode([], CTX, first.seen, null);
+    n = 2;
+    expect(nextComposerMode([m], CTX, gone.seen, null).modeId).toBe('image');
+  });
+
+  it('повод другого режима не стирает память первого', () => {
+    let active: 'a' | 'b' = 'a';
+    const a = mode('a', () => (active === 'a' ? 'request:1' : null));
+    const b = mode('b', () => (active === 'b' ? 'request:1' : null));
+    let seen: ComposerModeSeen = nextComposerMode([a, b], CTX, {}, null).seen;
+    active = 'b';
+    const viaB = nextComposerMode([a, b], CTX, seen, null);
+    expect(viaB.modeId).toBe('b');
+    seen = viaB.seen;
+    active = 'a';
+    expect(nextComposerMode([a, b], CTX, seen, null).modeId).toBeNull();
   });
 });

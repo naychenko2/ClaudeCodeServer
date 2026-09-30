@@ -38,7 +38,7 @@ import { Button, IconButton, Modal, Notice } from './ui';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, subscribeComposerStrips } from '../lib/composerStrips';
-import { nextComposerMode, nextPrefill, type PrefillState } from '../lib/composerModes';
+import { nextComposerMode, nextPrefill, type ComposerModeSeen, type PrefillState } from '../lib/composerModes';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -614,10 +614,10 @@ export function Composer({
   const [modeId, setModeId] = useState<string | null>(null);
   // Самовключение режима по поводу от владельца (черновик, «Редактировать»): считаем по
   // состоянию, а не по клику — фокус картинки приходит и от агента, и после перезагрузки
-  const autoKeyRef = useRef<string | null>(null);
-  const autoMode = nextComposerMode(slotModes, modeCtx, autoKeyRef.current, modeId);
+  const autoSeenRef = useRef<ComposerModeSeen>({});
+  const autoMode = nextComposerMode(slotModes, modeCtx, autoSeenRef.current, modeId);
   useEffect(() => {
-    autoKeyRef.current = autoMode.key;
+    autoSeenRef.current = autoMode.seen;
     if (autoMode.modeId !== modeId) setModeId(autoMode.modeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- переключаемся только на новый ключ
   }, [autoMode.key]);

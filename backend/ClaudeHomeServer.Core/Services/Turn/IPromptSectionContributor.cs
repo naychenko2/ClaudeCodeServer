@@ -70,6 +70,9 @@ public sealed record PromptSessionContext(
     // MCP-сервер local-media доехал до хода (в нём уже учтены чат проекта, файлы на
     // сервере, не ADR-016 и не ReadOnly-персона)
     bool HasLocalMediaMcp = false,
+    // MCP-сервер редактора картинок (image_new/image_generate) доехал до хода: без него
+    // TrimMcpServers или выключенный модуль оставляют ход без этих инструментов
+    bool HasImageEditorMcp = false,
     // Живого человека у хода нет — см. TurnAudience.IsUnattended
     bool Unattended = false);
 

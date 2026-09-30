@@ -3097,6 +3097,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     WorkspaceSections: _workspaceMcp?.Sections ?? Array.Empty<string>(),
                     ServerContent: _serverContent,
                     HasLocalMediaMcp: _localMediaMcp is not null && McpDelivered("local-media"),
+                    HasImageEditorMcp: _imageEditorMcp is not null && McpDelivered(McpEndpoints.ImageEditorName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth));
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);

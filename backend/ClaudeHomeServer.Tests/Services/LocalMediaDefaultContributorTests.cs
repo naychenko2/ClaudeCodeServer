@@ -31,8 +31,9 @@ public class LocalMediaDefaultContributorTests
         new(session ?? new Session { ProjectId = "p1", OwnerId = "u1" }, "u1", null, "/root",
             HasLocalMediaMcp: hasLocalMediaMcp, Unattended: unattended);
 
-    private static PromptSessionContext Personal(bool unattended = false) =>
-        new(new Session { OwnerId = "u1" }, "u1", null, null, Unattended: unattended);
+    private static PromptSessionContext Personal(bool unattended = false, bool hasImageEditorMcp = true) =>
+        new(new Session { OwnerId = "u1" }, "u1", null, null,
+            HasImageEditorMcp: hasImageEditorMcp, Unattended: unattended);
 
     [Fact]
     public void Проект_с_local_media_и_флагом_видит_правило() =>
@@ -66,6 +67,12 @@ public class LocalMediaDefaultContributorTests
     [Fact]
     public void Личный_чат_без_запуска_агентом_правила_нет() =>
         Contributor(agentLaunch: false).IsEnabled(Personal()).Should().BeFalse();
+
+    // Находка (B) финального ревью: TrimMcpServers без image-editor (local-qwen) или выключенный
+    // модуль — инструментов image_new/image_generate у хода нет, звать их правилом нельзя
+    [Fact]
+    public void Личный_чат_без_доставленного_редактора_правила_нет() =>
+        Contributor().IsEnabled(Personal(hasImageEditorMcp: false)).Should().BeFalse();
 
     [Fact]
     public void Проекту_флаг_редактора_не_нужен() =>

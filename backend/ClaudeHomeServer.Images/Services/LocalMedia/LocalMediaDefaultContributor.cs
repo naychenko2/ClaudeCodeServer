@@ -33,8 +33,16 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
         && LocalMediaOptions.IsEnabled(config)
         && SubsystemGate.IsEnabled(config, "images")
         && (sessionContext.Session.ProjectId is null
-            ? flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor) && config.GetValue(EditorAgentLaunchKey, true)
+            ? PersonalEditorReady(ownerId, sessionContext)
             : sessionContext.HasLocalMediaMcp);
+
+    // Личный вариант зовёт image_new/image_generate: сервер редактора обязан доехать до хода (как
+    // local-media у проектного). Флаг читается живьём — контекст MCP собран при создании сессии и
+    // выключение флага посреди чата не увидит; без AgentLaunch сервер едет, но без image_generate
+    private bool PersonalEditorReady(string ownerId, PromptSessionContext sessionContext) =>
+        sessionContext.HasImageEditorMcp
+        && flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)
+        && config.GetValue(EditorAgentLaunchKey, true);
 
     public Task<PromptSectionContribution?> BuildAsync(PromptSessionContext sessionContext, string? turnText)
     {

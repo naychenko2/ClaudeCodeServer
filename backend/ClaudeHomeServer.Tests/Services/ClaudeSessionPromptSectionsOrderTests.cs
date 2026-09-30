@@ -319,7 +319,8 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
 
         var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
             bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
-            new Session { Model = "qwen-test-27b", OwnerId = "u1" });
+            new Session { Model = "qwen-test-27b", OwnerId = "u1" },
+            context => context with { ImageEditorMcp = ImageEditorMcp });
 
         // Название секции статично упомянуто в BuiltInSystemPrompt (ссылка на правило хвоста), поэтому
         // ищем заголовок и тело самой секции
@@ -332,11 +333,12 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             .Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule);
     }
 
-    // Проводка контекста секции (находка A финального ревью 33571541): поля HasLocalMediaMcp
-    // и Unattended собирает сам ClaudeSession из факта доставки MCP в конфиг хода и
+    // Проводка контекста секции (находки A и B финального ревью 33571541): поля HasLocalMediaMcp,
+    // HasImageEditorMcp и Unattended собирает сам ClaudeSession из факта доставки MCP в конфиг хода и
     // признаков хода — тест руками их не задаёт. Без этих ходов замена проводки на false оставалась
     // зелёной во всех наборах
     private static readonly LocalMediaMcpContext LocalMediaMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+    private static readonly ImageEditorMcpContext ImageEditorMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
 
     // Провайдер урезает набор MCP до tasks, как local-qwen по умолчанию
     private static readonly Dictionary<string, string?> TrimToTasks = new()
@@ -361,6 +363,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
     }
 
     private static Session ProjectChat() => new() { Model = "qwen-test-27b", OwnerId = "u1", ProjectId = "p1" };
+    private static Session PersonalChat() => new() { Model = "qwen-test-27b", OwnerId = "u1" };
 
     [Fact]
     public async Task LocalMediaDefault_ПроектныйЧат_LocalMediaДоставлен_ПравилоПроекта()
@@ -394,6 +397,27 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             agentDepth: source == "AgentDepth=1" ? 1 : 0);
 
         section.Should().BeNull($"{source}: ход без человека не должен занимать общую GPU по умолчанию");
+    }
+
+    [Fact]
+    public async Task LocalMediaDefault_ЛичныйЧат_РедакторДоставлен_ЛичноеПравило()
+    {
+        var section = await LocalMediaDefaultSectionAsync(PersonalChat(), c => c with { ImageEditorMcp = ImageEditorMcp });
+
+        section.Should().NotBeNull("сервер редактора доехал до хода — личный вариант правила обязан прийти");
+        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule);
+    }
+
+    [Theory]
+    [InlineData("TrimMcpServers без image-editor")]
+    [InlineData("модуль редактора выключен")]
+    public async Task LocalMediaDefault_ЛичныйЧат_РедактораНетУХода_ПравилаНет(string why)
+    {
+        var section = why == "модуль редактора выключен"
+            ? await LocalMediaDefaultSectionAsync(PersonalChat(), c => c)
+            : await LocalMediaDefaultSectionAsync(PersonalChat(), c => c with { ImageEditorMcp = ImageEditorMcp }, TrimToTasks);
+
+        section.Should().BeNull($"{why}: image_new/image_generate у хода нет («No such tool available»)");
     }
 
     private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate

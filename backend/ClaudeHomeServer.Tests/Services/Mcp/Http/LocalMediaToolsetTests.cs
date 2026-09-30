@@ -102,8 +102,10 @@ public class LocalMediaToolsetTests : IDisposable
         var generating = env.Toolset.ToolsFor(env.Context).Where(t => !service.Contains(t.Name)).ToList();
 
         generating.Should().HaveCount(8);
+        // Правило хвоста (local-media-default) — оговоркой впереди, запрет «без правила» — дословно
         generating.Should().OnlyContain(t => t.Description.StartsWith(
-            "Вызывай ТОЛЬКО если пользователь явно попросил локальную генерацию (локально / нашими моделями / "
+            "Есть в ходе правило хвостовой секции «Картинки и видео: локальная модель по умолчанию» — вызывай по нему. "
+            + "Без него — вызывай ТОЛЬКО если пользователь явно попросил локальную генерацию (локально / нашими моделями / "
             + "на своей видеокарте / бесплатно) в ТЕКУЩЕЙ просьбе; иначе используй glif/fal."));
     }
 

@@ -321,8 +321,11 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
             new Session { Model = "qwen-test-27b", OwnerId = "u1" });
 
-        systemPrompt.Should().NotContain("локальная модель по умолчанию",
-            "правило едет хвостом хода и в системный блок не попадает ни при какой настройке провайдера");
+        // Название секции статично упомянуто в BuiltInSystemPrompt (ссылка на правило хвоста), поэтому
+        // ищем заголовок и тело самой секции
+        systemPrompt.Should().NotContain("## Картинки и видео: локальная модель по умолчанию",
+                "правило едет хвостом хода и в системный блок не попадает ни при какой настройке провайдера")
+            .And.NotContain(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.NoticeRule);
         sections.Where(s => s.Kind == "turn").Select(s => s.Key).Should().ContainInOrder(
             "image-editor-state", "local-media-default");
         sections.Single(s => s.Key == "local-media-default").Text

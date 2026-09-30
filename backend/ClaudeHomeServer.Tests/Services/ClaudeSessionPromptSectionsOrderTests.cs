@@ -303,8 +303,39 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         tail.Text.Should().Contain("«лампа»");
     }
 
+    // Порядок хвоста (шаг 3 «локальная по умолчанию»): правило local-media-default едет хвостом
+    // сразу после блока «Картинки в этом чате» и ссылается на него; в системный блок не попадает
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalMediaDefault_ХвостомПослеБлокаКартинок(bool recallInTurnText)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+        }).Build();
+        var contributor = new ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor(
+            new AllFlags(), config);
+
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            new Session { Model = "qwen-test-27b", OwnerId = "u1" });
+
+        systemPrompt.Should().NotContain("локальная модель по умолчанию",
+            "правило едет хвостом хода и в системный блок не попадает ни при какой настройке провайдера");
+        sections.Where(s => s.Kind == "turn").Select(s => s.Key).Should().ContainInOrder(
+            "image-editor-state", "local-media-default");
+        sections.Single(s => s.Key == "local-media-default").Text
+            .Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule);
+    }
+
+    private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => true;
+    }
+
     private async Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTailTurnAsync(
-        bool recallInTurnText, string stateText)
+        bool recallInTurnText, string stateText, Action<TurnEventBus>? extra = null, Session? info = null)
     {
         var clis = new ConcurrentDictionary<int, Process>();
         var argsCaptured = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -318,6 +349,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
                 "image-editor-state", stateText, "Состояние редактора", InTurnTail: true));
             return next();
         }, "Test.ImageEditorState");
+        extra?.Invoke(bus);
         bus.OnNotification<PromptAssembled>(e =>
         {
             if (e.Snapshot?.Draft is { } draft) snapshot.TrySetResult(draft.Sections);
@@ -345,7 +377,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
 
         try
         {
-            var session = new ClaudeSession(new Session { Model = "qwen-test-27b" }, context,
+            var session = new ClaudeSession(info ?? new Session { Model = "qwen-test-27b" }, context,
                 providers: new LlmProviderRegistry(config));
             await using var _ = session;
             await session.SendMessageAsync("привет");

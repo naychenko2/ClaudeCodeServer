@@ -179,8 +179,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     return () => { alive = false; window.removeEventListener(BADGE_EVENT, refresh); };
   }, [isAdmin]);
 
-  // Пункт «Устройства» — под любым из флагов desktop-agent и local-projects: без обоих
-  // подключать нечего
+  // Пункт «Устройства» — под флагом local-projects: без него подключать нечего
   const devicesMenu = useDevicesMenuVisible();
 
   // Доступна ли выкатка на бой. Спрашиваем только у админа: фича admin-only и вдобавок
@@ -547,8 +546,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowModelsSpend={() => setShowModelsSpend(true)}
           onShowMcpServers={() => setShowMcpServers(true)}
-          // Устройства — клиент рук (desktop-agent) или агент локальных проектов
-          // (local-projects): режим модалка выбирает сама
+          // Устройства — агенты локальных проектов (local-projects)
           onShowDevices={devicesMenu ? () => setShowDevices(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           // Админский список подсистем инстанса (Этап 5, волна 3): только

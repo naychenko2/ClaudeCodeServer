@@ -21,7 +21,7 @@ namespace ClaudeHomeServer.Tests.Services.Mcp.Http;
 /// <summary>
 /// Тулсет local-media: гейты на каждый вызов (сессия владельца, тумблер, чат проекта, проект на
 /// сервере по ProjectCapabilities) и сквозной путь «поставить → дождаться → файл в проекте» на
-/// фейковом ComfyUI. Состав постоянный: 11 инструментов, не зависящих от хода.
+/// фейковом ComfyUI. Состав постоянный: 20 инструментов, не зависящих от хода.
 /// </summary>
 public class LocalMediaToolsetTests : IDisposable
 {
@@ -57,6 +57,7 @@ public class LocalMediaToolsetTests : IDisposable
             ["LocalMedia:Enabled"] = enabled ? "true" : "false",
             ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
             ["LocalMedia:PollIntervalMs"] = "500",
+            ["LocalMedia:AudioEnabled"] = "true",
         }).Build();
         var (sessions, projects) = BuildSessionManager(config);
         var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "proj_" + Guid.NewGuid().ToString("N"))).FullName;
@@ -78,7 +79,7 @@ public class LocalMediaToolsetTests : IDisposable
     }
 
     [Fact]
-    public void СвояСессия_ОдиннадцатьИнструментов_ОдинаковыйСостав()
+    public void СвояСессия_ДвадцатьИнструментов_ОдинаковыйСостав()
     {
         var env = Build();
 
@@ -86,7 +87,9 @@ public class LocalMediaToolsetTests : IDisposable
 
         names.Should().Equal("local_generate_image", "local_edit_image", "local_face_detail",
             "local_text_to_video", "local_image_to_video", "local_reference_to_video", "local_video_upscale",
-            "local_video_inpaint", "local_job_status", "local_jobs_wait", "local_models");
+            "local_video_inpaint", "local_music_generate", "local_music_edit", "local_speech", "local_voice_convert",
+            "local_voice_train", "local_audio_separate", "local_audio_to_midi", "local_audio_enhance", "local_transcribe",
+            "local_job_status", "local_jobs_wait", "local_models");
         env.Toolset.ToolsFor(env.Context).Should().BeSameAs(env.Toolset.ToolsFor(env.Context),
             "состав статичный — не зависит ни от хода, ни от вызова");
     }
@@ -97,11 +100,21 @@ public class LocalMediaToolsetTests : IDisposable
     public void ГенерирующиеИнструменты_ПервоеПредложение_ТолькоПоЯвнойПросьбе()
     {
         var env = Build();
-        var service = new HashSet<string> { "local_job_status", "local_jobs_wait", "local_models" };
+        // Обработка звука (стемы, MIDI, смена голоса…) работает с файлами пользователя и облачной замены
+        // в чате не имеет — у неё свой первый абзац без запрета
+        var notGenerating = new HashSet<string>
+        {
+            "local_job_status", "local_jobs_wait", "local_models", "local_music_edit", "local_voice_convert",
+            "local_voice_train", "local_audio_separate", "local_audio_to_midi", "local_audio_enhance", "local_transcribe",
+        };
 
-        var generating = env.Toolset.ToolsFor(env.Context).Where(t => !service.Contains(t.Name)).ToList();
+        var tools = env.Toolset.ToolsFor(env.Context);
+        var generating = tools.Where(t => !notGenerating.Contains(t.Name)).ToList();
 
-        generating.Should().HaveCount(8);
+        generating.Should().HaveCount(10);
+        tools.Where(t => t.Name is "local_music_edit" or "local_voice_convert" or "local_voice_train"
+                or "local_audio_separate" or "local_audio_to_midi" or "local_audio_enhance" or "local_transcribe")
+            .Should().HaveCount(7).And.OnlyContain(t => t.Description.StartsWith(LocalMediaToolset.AudioLocal));
         // Правило хвоста (local-media-default) — оговоркой впереди, запрет «без правила» — дословно
         generating.Should().OnlyContain(t => t.Description.StartsWith(
             "Есть в ходе правило хвостовой секции «Картинки и видео: локальная модель по умолчанию» — вызывай по нему. "
@@ -209,6 +222,34 @@ public class LocalMediaToolsetTests : IDisposable
         image["content_type"]!.GetValue<string>().Should().Be("image/png");
         image["width"]!.GetValue<int>().Should().Be(1664);
         File.Exists(Path.Combine(env.Project.RootPath, path)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task СквознойПуть_Стемы_ЗвукВПолеAudio_БезРазмеров_СтатистикаДвижка()
+    {
+        var env = Build();
+        var dir = Directory.CreateDirectory(Path.Combine(env.Project.RootPath, "music")).FullName;
+        File.WriteAllBytes(Path.Combine(dir, "song.wav"), LocalMediaTestImages.Wav());
+
+        var submitted = await env.Toolset.CallAsync("local_audio_separate",
+            new JsonObject { ["audio"] = "music/song.wav", ["mode"] = "4stems" }, env.Context, default);
+        submitted.IsError.Should().BeFalse(submitted.Text);
+        var jobId = JsonNode.Parse(submitted.Text)!["job_id"]!.GetValue<string>();
+        var worker = _comfy.Prompts.Single()["prompt"]!["worker"]!["inputs"]!;
+        worker["op"]!.GetValue<string>().Should().Be("separate");
+
+        _comfy.CompleteAudio(_comfy.Pending.Single(), [], ($"{jobId}_vocals.mp3", [1, 2, 3]), ($"{jobId}_drums.mp3", [4, 5]));
+        var waited = await env.Toolset.CallAsync("local_jobs_wait",
+            new JsonObject { ["job_ids"] = new JsonArray(jobId) }, env.Context, default);
+
+        var job = JsonNode.Parse(waited.Text)!["jobs"]![0]!.AsObject();
+        job.ContainsKey("images").Should().BeFalse();
+        var audio = job["audio"]!.AsArray();
+        audio.Should().HaveCount(2);
+        audio[0]!["content_type"]!.GetValue<string>().Should().Be("audio/mpeg");
+        audio[0]!.AsObject().ContainsKey("width").Should().BeFalse("у звука нет размеров");
+        job["stats"]!["engine"]!.GetValue<string>().Should().Be("4stems");
+        File.Exists(Path.Combine(env.Project.RootPath, audio[1]!["path"]!.GetValue<string>())).Should().BeTrue();
     }
 
     private static async Task<JsonObject> StatusAsync(Env env, string jobId)

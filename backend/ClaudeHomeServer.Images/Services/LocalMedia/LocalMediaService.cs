@@ -30,7 +30,9 @@ public sealed record LocalMediaRequest(
     string? Mask = null,
     IReadOnlyList<string>? RefVideos = null,
     IReadOnlyList<string>? RefAudios = null,
-    string? Identity = null);
+    string? Identity = null,
+    // Аудио-операции: аргументы инструмента как есть, разбор и белые списки — в LocalMediaService.Audio
+    JsonObject? Args = null);
 
 // Задача и её живое положение: Position — сколько задач ComfyUI впереди (0 — идёт),
 // Warning — временный сбой опроса (ComfyUI недоступен), задача при этом жива. EtaSeconds без
@@ -48,7 +50,7 @@ public sealed record LocalMediaCallResult(LocalMediaJobView? View, string? Error
 
 // Фасад локальной генерации: проверки, загрузка входов, постановка графа, опрос и
 // сбор результата в папку проекта. Граф — только из ComfyWorkflows
-public sealed class LocalMediaService(
+public sealed partial class LocalMediaService(
     ComfyClient comfy,
     LocalMediaJobStore store,
     ILocalMediaProjectAccess projects,
@@ -85,8 +87,12 @@ public sealed class LocalMediaService(
         if (!options.Enabled) return LocalMediaCallResult.Fail("Локальная генерация выключена на этом сервере.");
         if (!LocalMediaOps.IsKnown(request.Op)) return LocalMediaCallResult.Fail("Неизвестная операция.");
 
+        if (LocalMediaOps.IsAudio(request.Op) && !options.AudioEnabled)
+            return LocalMediaCallResult.Fail("Локальные аудиомодели на этом сервере не установлены.");
         var prompt = (request.Prompt ?? "").Trim();
-        if (request.Op is not (LocalMediaOps.FaceDetail or LocalMediaOps.VideoUpscale) && prompt.Length == 0)
+        // У аудио prompt нужен не всем операциям — проверка в разборе аргументов операции
+        if (request.Op is not (LocalMediaOps.FaceDetail or LocalMediaOps.VideoUpscale) && !LocalMediaOps.IsAudio(request.Op)
+            && prompt.Length == 0)
             return LocalMediaCallResult.Fail("Нужен prompt — описание того, что сгенерировать.");
         if (prompt.Length > ComfyWorkflows.MaxPromptLength
             || (request.NegativePrompt?.Length ?? 0) > ComfyWorkflows.MaxPromptLength)
@@ -107,10 +113,11 @@ public sealed class LocalMediaService(
                     + "дождись их (local_jobs_wait) и повтори.");
 
             // Тяжёлые операции держат GPU десятки минут: у владельца одновременно одна
-            var heavy = IsHeavy(request);
+            var heavy = IsHeavy(request) || IsHeavyAudio(request);
             if (heavy && store.ActiveHeavyCount(request.OwnerId) > 0)
-                return LocalMediaCallResult.Fail("У тебя уже идёт тяжёлая локальная задача (апскейл, инпейнт или "
-                    + "референсы с identity=max) — дождись её (local_jobs_wait) и повтори.");
+                return LocalMediaCallResult.Fail("У тебя уже идёт тяжёлая локальная задача (апскейл, инпейнт, "
+                    + "референсы с identity=max, обучение голоса или правка трека моделью xl-base) — дождись её "
+                    + "(local_jobs_wait) и повтори.");
 
             ComfyQueueState queue;
             try
@@ -177,6 +184,8 @@ public sealed class LocalMediaService(
         LocalMediaJob job, string root, string prompt, long seed, string prefix, LocalMediaOptions options,
         CancellationToken ct)
     {
+        if (LocalMediaOps.IsAudio(request.Op))
+            return await BuildAudioAsync(request, job, root, prompt, seed, prefix, options, ct);
         var images = request.Images ?? [];
         switch (request.Op)
         {
@@ -470,7 +479,7 @@ public sealed class LocalMediaService(
         return await UploadAsync(job, input.Bytes, stem + input.Extension, ct);
     }
 
-    private enum MediaKind { Image, Video, Audio }
+    private enum MediaKind { Image, Video, Audio, VoiceModel, VoiceIndex }
 
     private sealed record InputFile(byte[] Bytes, string Extension, MediaProbe.VideoInfo? Video);
 
@@ -483,6 +492,8 @@ public sealed class LocalMediaService(
         {
             MediaKind.Video => ("видео", "готового видео"),
             MediaKind.Audio => ("звук", "готового звука"),
+            MediaKind.VoiceModel => ("модель голоса", "модели голоса"),
+            MediaKind.VoiceIndex => ("индекс голоса", "индекса голоса"),
             _ => ("картинку", "готовой картинки"),
         };
         if (value.Length == 0) throw new LocalMediaInputException($"Пустая ссылка на {what}.");
@@ -493,9 +504,16 @@ public sealed class LocalMediaService(
             var source = store.Get(value, request.OwnerId);
             if (source is null || source.ProjectId != request.ProjectId)
                 throw new LocalMediaInputException($"Задача {value} не найдена.");
-            var type = kind == MediaKind.Video ? "video/" : "image/";
-            var output = kind == MediaKind.Audio ? null
-                : source.Outputs.FirstOrDefault(o => o.ContentType.StartsWith(type, StringComparison.Ordinal));
+            // У задачи со стемами звуковых файлов несколько — по job_id берётся первый, конкретный — путём
+            Func<LocalMediaOutput, bool> fits = kind switch
+            {
+                MediaKind.Video => o => o.ContentType.StartsWith("video/", StringComparison.Ordinal),
+                MediaKind.Audio => o => o.ContentType.StartsWith("audio/", StringComparison.Ordinal),
+                MediaKind.VoiceModel => o => o.Path.EndsWith(".pth", StringComparison.Ordinal),
+                MediaKind.VoiceIndex => o => o.Path.EndsWith(".index", StringComparison.Ordinal),
+                _ => o => o.ContentType.StartsWith("image/", StringComparison.Ordinal),
+            };
+            var output = source.Outputs.FirstOrDefault(fits);
             if (source.Status != LocalMediaStatuses.Completed || output is null)
                 throw new LocalMediaInputException($"У задачи {value} нет {result}.");
             relative = output.Path;
@@ -524,6 +542,16 @@ public sealed class LocalMediaService(
                 var audio = MediaProbe.DetectAudioExtension(bytes)
                     ?? throw new LocalMediaInputException($"Файл «{value}» — не звук (нужен WAV, MP3, FLAC или OGG).");
                 return new InputFile(bytes, audio, null);
+            case MediaKind.VoiceModel:
+                // .pth торча — zip-архив
+                if (!relative.EndsWith(".pth", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'P' || bytes[1] != 'K')
+                    throw new LocalMediaInputException($"Файл «{value}» — не модель голоса RVC (.pth из local_voice_train).");
+                return new InputFile(bytes, ".pth", null);
+            case MediaKind.VoiceIndex:
+                // Индекс faiss начинается с «Ix»
+                if (!relative.EndsWith(".index", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'I' || bytes[1] != 'x')
+                    throw new LocalMediaInputException($"Файл «{value}» — не индекс голоса RVC (.index из local_voice_train).");
+                return new InputFile(bytes, ".index", null);
             default:
                 var image = ImageFormatSniffer.DetectExtension(bytes)
                     ?? throw new LocalMediaInputException($"Файл «{value}» — не картинка (нужен PNG, JPEG или WebP).");
@@ -669,6 +697,17 @@ public sealed class LocalMediaService(
                 });
             }
 
+            // Партитура YuE2 — текстом из истории: её можно поправить и передать обратно в abc
+            if (current.Op == LocalMediaOps.MusicGenerate && history.Texts.Count > 0)
+            {
+                var relative = $"{folder}/{current.Id}-score.abc";
+                var full = SafePath.Join(root, relative);
+                ProjectLinkGuard.EnsureNoLink(root, full);
+                await File.WriteAllTextAsync(full, history.Texts[0], ct);
+                projects.NotifyWritten(root, relative);
+                outputs.Add(new LocalMediaOutput { Path = relative, ContentType = "text/plain" });
+            }
+
             // Латент видео — вход будущего апскейла: остаётся в output ComfyUI, в сторе только путь
             var (latentVideo, latentAudio) = LocalMediaOps.KeepsLatent(current.Op)
                 ? (LatentPath(history.Latents, "_video_"), LatentPath(history.Latents, "_audio_"))
@@ -712,6 +751,14 @@ public sealed class LocalMediaService(
         ".webp" => "image/webp",
         ".mp4" => "video/mp4",
         ".webm" => "video/webm",
+        ".mp3" => "audio/mpeg",
+        ".wav" => "audio/wav",
+        ".flac" => "audio/flac",
+        ".ogg" => "audio/ogg",
+        ".mid" => "audio/midi",
+        // Модель голоса RVC и её индекс — вход следующих local_voice_convert
+        ".pth" or ".index" => "application/octet-stream",
+        ".txt" or ".srt" or ".lrc" or ".abc" => "text/plain",
         _ => null,
     };
 

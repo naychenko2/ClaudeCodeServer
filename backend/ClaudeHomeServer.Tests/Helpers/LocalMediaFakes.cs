@@ -106,6 +106,24 @@ public sealed class FakeComfy : HttpMessageHandler
         };
     }
 
+    // Аудио-задача закончилась: файлы в outputs.{node}.audio (SaveAudio*, CcsAudioWorker) и
+    // необязательный текст PreviewAny (партитура YuE2)
+    public void CompleteAudio(string promptId, string[] texts, params (string Name, byte[] Bytes)[] outputs)
+    {
+        Complete(promptId);
+        foreach (var (name, bytes) in outputs) Files[$"ccs-local-media/{name}"] = bytes;
+        var nodes = History[promptId]["outputs"]!.AsObject();
+        nodes["save"] = new JsonObject
+        {
+            ["audio"] = new JsonArray([.. outputs.Select(o => (JsonNode)new JsonObject
+            {
+                ["filename"] = o.Name, ["subfolder"] = "ccs-local-media", ["type"] = "output",
+            })]),
+        };
+        if (texts.Length > 0)
+            nodes["score"] = new JsonObject { ["text"] = new JsonArray([.. texts.Select(t => (JsonNode)t)]) };
+    }
+
     // Видеозадача закончилась: mp4 в images у SaveVideo и два латента у SaveLatent (как у t2v/i2v)
     public void CompleteVideo(string promptId, string jobId, byte[] mp4, bool withLatents = true)
     {

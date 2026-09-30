@@ -22,6 +22,8 @@ public sealed record ComfyHistoryEntry(bool Completed, bool Failed, string? Erro
     public long? StartedAtMs { get; init; }
     public long? FinishedAtMs { get; init; }
     public IReadOnlyList<string> CachedNodes { get; init; } = [];
+    // Текстовые выходы нод (PreviewAny: outputs.{node}.text) — партитура ABC у YuE2
+    public IReadOnlyList<string> Texts { get; init; } = [];
 
     // Длительность прогона по меткам ComfyUI; null — меток нет или они несостоятельны
     public double? RunSeconds => StartedAtMs is { } start && FinishedAtMs is { } end && end >= start
@@ -151,7 +153,8 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         var latents = new List<ComfyOutputFile>();
         if (entry["outputs"] is JsonObject outputs)
             foreach (var (_, output) in outputs)
-                foreach (var key in new[] { "images", "gifs", "videos", "latents" })
+                // audio — SaveAudio* и узел CcsAudioWorker (у него там и MIDI, и модели голоса)
+                foreach (var key in new[] { "images", "gifs", "videos", "latents", "audio" })
                     if (output?[key] is JsonArray list)
                         foreach (var item in list)
                         {
@@ -164,12 +167,20 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                             (key == "latents" ? latents : files).Add(file);
                         }
 
+        var texts = new List<string>();
+        if (entry["outputs"] is JsonObject textOutputs)
+            foreach (var (_, output) in textOutputs)
+                if (output?["text"] is JsonArray list)
+                    texts.AddRange(list.OfType<JsonValue>().Select(v => v.TryGetValue<string>(out var t) ? t : null)
+                        .Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!));
+
         return new ComfyHistoryEntry(completed && !failed, failed, error ?? (failed ? "ComfyUI завершил задачу ошибкой" : null),
             files, latents)
         {
             StartedAtMs = startedAt,
             FinishedAtMs = finishedAt,
             CachedNodes = cached,
+            Texts = texts,
         };
 
         // Метка сообщения — миллисекунды эпохи; число бывает и целым, и дробным

@@ -117,9 +117,9 @@ public class LocalMediaDefaultContributorTests
         section.Key.Should().Be("local-media-default");
         section.InTurnTail.Should().BeTrue("правило едет хвостом хода и в системный блок не попадает");
         section.Text.Should().Be(LocalMediaDefaultContributor.ProjectRule);
-        section.Text.Should().Contain("рисую локально (бесплатно), ≈N с/мин; нужно облако — скажи")
+        section.Text.Should().Contain("рисую локально (бесплатно), ≈N с; нужно облако — скажи")
             .And.Contain("local_text_to_video").And.Contain("local_generate_image")
-            .And.Contain("Сам в облако не запускай")
+            .And.Contain("если стоит «по умолчанию» — image_generate передавай с provider local")
             .And.NotContain(LocalMediaDefaultContributor.PersonalNoVideoRule);
     }
 
@@ -131,9 +131,27 @@ public class LocalMediaDefaultContributorTests
         section.InTurnTail.Should().BeTrue();
         section.Text.Should().Be(LocalMediaDefaultContributor.PersonalRule);
         section.Text.Should().Contain(LocalMediaDefaultContributor.PersonalNoVideoRule)
-            .And.Contain("рисую локально (бесплатно), ≈N с/мин; нужно облако — скажи")
-            .And.Contain("image_generate с provider local")
+            .And.Contain("рисую локально (бесплатно), ≈N с; нужно облако — скажи")
+            .And.Contain("если стоит «по умолчанию» или блока нет — image_generate передавай с provider local")
             .And.NotContain("local_text_to_video").And.NotContain("local_generate_image");
+    }
+
+    // Правки по ревью b15cbe58: (б) выбор в полосе и исключение из ChoiceRule, (в) N не выдумывать,
+    // (г) согласие на облако не переносится, (д) сервис текущей просьбы, а не прошлых вызовов
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Тексты_согласованы_с_блоком_картинок_и_не_прилипают(bool personal)
+    {
+        var text = personal ? LocalMediaDefaultContributor.PersonalRule : LocalMediaDefaultContributor.ProjectRule;
+
+        text.Should().Contain("если в блоке «Картинки в этом чате» указан поставщик — используй его (не подменяй)", "(б)")
+            .And.Contain("(это исключение из правила «не передавай provider»)", "(б)")
+            .And.Contain("если числа нет — не называй его, скажи просто «рисую локально (бесплатно)»", "(в)")
+            .And.NotContain("с/мин", "(в)")
+            .And.Contain("согласие на одно облачное действие не распространяется на следующие просьбы", "(г)")
+            .And.Contain("1. Сервис, названный в ТЕКУЩЕЙ просьбе", "(д)")
+            .And.Contain("даже если предыдущие картинки в этом чате рисовались локально; прошлые вызовы правилом не считаются", "(д)");
     }
 
     // Внутри варианта текст не зависит от хода: иначе хвост гонял бы разный текст

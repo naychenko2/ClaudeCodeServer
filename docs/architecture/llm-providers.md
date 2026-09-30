@@ -526,6 +526,18 @@ CLI). Ни номера версии, ни суффикса `[1m]` в сохра
 версию `claude --version` сервера (`ClaudeCliVersion`, Core), а `DeviceAgent:CliVersion` —
 только аварийный пин поверх неё.
 
+**Новая модель = новая версия CLI.** Маппинг алиаса семейства в конкретную модель зашит в
+сам claude CLI, поэтому продукт узнаёт о новой модели только после `claude update` на хосте.
+Напоминает об этом сторож `ClaudeCliUpdateWatcher` (Llm, gated hosted): раз в сутки
+(`ClaudeCliUpdate:Interval`) сверяет `ClaudeCliVersion` с npm `latest` пакета
+`@anthropic-ai/claude-code` и шлёт админам с флагом `claude-cli-update-watch` одно
+уведомление на каждую новую версию (ссылка `/models` открывает «Модели и расход» →
+«Расход», там строка версий из `GET /api/models/claude-cli`). Состояние —
+`data/claude-cli-update.json`; версия помечается уведомлённой только при ≥1 доставке.
+`ClaudeCliVersion` перечитывается (`RefreshAsync`: сторож и эндпоинт с `refresh=true`),
+а не кэшируется на процесс: неудачный опрос известную версию не затирает, параллельные
+опросы делят один процесс CLI. Смотрит только CLI хоста — у `cc-sandbox` своя копия.
+
 ## Пул подписок Claude и опрос usage
 
 `ClaudeSubscriptionPool` (секция `ClaudeSubscriptions`) — несколько аккаунтов Claude на

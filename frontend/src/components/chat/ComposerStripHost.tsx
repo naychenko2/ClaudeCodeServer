@@ -4,18 +4,19 @@
 // картинки → запомненная полоса чата → Git; свёрнутость — своя у каждой полосы чата).
 // Хост рисует заголовок-переключатель «Git ▾» / «Картинки ▾» один раз для всех полос
 // и отдаёт его полосе в ctx.switcher: полоса ставит его на место своего заголовка.
-// В меню переключателя у каждой полосы строка состояния и пункт «Свернуть полосу в
-// строку» / «Развернуть полосу»; на телефоне то же меню открывается шторкой (прототип
-// docs/mockups/image-editor-v3-strips-prototype.html, вариант C). Пока полоса одна,
-// переключателя нет — полоса выглядит как раньше.
+// В меню переключателя у каждой полосы строка состояния; на телефоне то же меню
+// открывается шторкой (прототип docs/mockups/image-editor-v3-strips-prototype.html,
+// вариант C). Сворачивания в меню нет: у каждой полосы своя кнопка ⌃, а свёрнутая
+// строка разворачивается щелчком по ней. Пока полоса одна, переключателя нет —
+// полоса выглядит как раньше.
 import { useEffect, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
-import { Check, ChevronDown, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
+import { Check, ChevronDown } from 'lucide-react';
 import { C, FS, SP } from '../../lib/design';
 import { useComposerStrip } from '../../lib/composerStrips';
 import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
 import type { ComposerStripApi, ComposerStripCtx, SlotContribution } from '../../lib/subsystems/registry';
-import { Button, Dot, Menu, MenuItem, MenuSep, Modal } from '../ui';
+import { Button, Dot, Menu, MenuItem, Modal } from '../ui';
 import { ICON_STROKE } from '../ui/icons';
 
 export type ComposerStripContribution = SlotContribution<ComposerStripCtx, ComposerStripApi>;
@@ -82,13 +83,6 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
           onClick={() => { close(); select(s.name!); }}
         />
       ))}
-      <MenuSep />
-      <MenuItem
-        icon={collapsed ? <ChevronsUpDown size={15} strokeWidth={ICON_STROKE} /> : <ChevronsDownUp size={15} strokeWidth={ICON_STROKE} />}
-        isMobile={isMobile}
-        label={collapsed ? 'Развернуть полосу' : 'Свернуть полосу в строку'}
-        onClick={() => { close(); setCollapsed(!collapsed); }}
-      />
     </>
   );
 

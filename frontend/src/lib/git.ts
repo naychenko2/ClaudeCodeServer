@@ -488,7 +488,7 @@ export function workingDiffStat(status: GitStatus | null): { added: number; dele
   return { added, deleted, files: seen.size };
 }
 
-// Строка состояния git-полосы над композером и её пункта в меню переключателя полос:
+// Строка состояния git-полосы над композером (её пункт в меню переключателя полос):
 // есть что фиксировать → есть что публиковать → чисто (прототип полос, вариант C)
 export type GitStripTone = 'changes' | 'ahead' | 'clean';
 export function gitStripStatus(status: GitStatus | null, unpushed: number): { text: string; tone: GitStripTone } {
@@ -497,6 +497,12 @@ export function gitStripStatus(status: GitStatus | null, unpushed: number): { te
   const ahead = (status?.ahead ?? 0) > 0 ? status!.ahead : unpushed;
   if (ahead > 0) return { text: `${ahead} ${plural(ahead, 'коммит', 'коммита', 'коммитов')} к публикации`, tone: 'ahead' };
   return { text: 'чисто, всё опубликовано', tone: 'clean' };
+}
+
+// Git-полоса «без дела»: чисто, всё опубликовано и нет своего дерева (чата или хода).
+// Тогда полоса стоит строкой и не разворачивается (ProjectGitBar, autoMicro)
+export function gitStripIdle(status: GitStatus | null, unpushed: number, hasTree: boolean): boolean {
+  return !hasTree && gitStripStatus(status, unpushed).tone === 'clean';
 }
 
 // Состояние git проекта (статус/история/ветки/busy/ошибка)

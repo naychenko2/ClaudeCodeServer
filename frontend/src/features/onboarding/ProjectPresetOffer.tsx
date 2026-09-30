@@ -8,6 +8,7 @@
 
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
 import { Button } from '../../components/ui';
+import { renderInlineCode } from '../../lib/inlineCode';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { AlertCircle, Check, X } from 'lucide-react';
 
@@ -209,30 +210,6 @@ export function cardBodyForKey(key: string | null | undefined): string {
   if (!key) return CARD_BODY_NEUTRAL;
   return CARD_BODIES[key] ?? CARD_BODY_NEUTRAL;
 }
-// Поля внутри backticks сохраняем как код (раз дизайн даёт один шрифт для inline-кода,
-// нам хватает обычной строки — без тяжёлого markdown-парсера внутри карточки).
-function renderBody(body: string): React.ReactNode {
-  // Грубая подсветка `…` бэктиками внутри карточки (дизайн не обязывает полный markdown,
-  // но имя файла `CLAUDE.md` хочется показать в моноширинном — так его проще выделить).
-  const parts: React.ReactNode[] = [];
-  const re = /`([^`\n]+)`/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let idx = 0;
-  while ((m = re.exec(body))) {
-    if (m.index > last) parts.push(body.slice(last, m.index));
-    parts.push(<code key={idx++} style={inlineCode}>{m[1]}</code>);
-    last = m.index + m[0].length;
-  }
-  if (last < body.length) parts.push(body.slice(last));
-  return parts;
-}
-
-const inlineCode: React.CSSProperties = {
-  fontFamily: FONT.mono, fontSize: '0.95em', background: C.bgPanel,
-  padding: '0 4px', borderRadius: 4,
-};
-
 export function ProjectPresetOfferCard({ state, pendingKey, appliedNote, onApply, onDecline, error, busy }: ProjectPresetOfferCardProps) {
   if (state.mode === 'hidden') return null;
   if (state.mode === 'applied' && error) {
@@ -271,7 +248,7 @@ export function ProjectPresetOfferCard({ state, pendingKey, appliedNote, onApply
     <div style={cardShell} aria-busy={busy || undefined}>
       <CardHeader icon={<AlertCircle size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent }} />}
         title="Разложить проект по полочкам" />
-      <div style={bodyText}>{renderBody(cardBodyForKey(pendingKey))}</div>
+      <div style={bodyText}>{renderInlineCode(cardBodyForKey(pendingKey))}</div>
       <ErrorLine message={error} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: SP.sm }}>
         <Button

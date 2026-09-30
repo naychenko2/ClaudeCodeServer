@@ -3,11 +3,11 @@
 // Состояния §4: скелетон, ошибка-баннер, протухшие данные, пусто, недоступная/исчерпанная квота.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, ExternalLink } from 'lucide-react';
+import { AlertTriangle, ArrowUpCircle, ExternalLink } from 'lucide-react';
 import type { ProviderBalanceInfo, SpendOverviewResponse, SubscriptionUsage, UsageResponse, UsageSnapshot } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, GROUP_COLORS, R, SP } from '../../lib/design';
-import { Button, Dot } from '../../components/ui';
+import { Button, Dot, Notice } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import {
@@ -22,6 +22,7 @@ import { addDaysUtc, openSpend, spendQuery, todayUtc } from '../../lib/spendCont
 import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
 import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';
+import { CLI_CHANGELOG_URL, cliChangesSummary } from '../../lib/cliChangesSummary';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
 import type { FreshnessSpec, PillSpec, ProviderCardData, UnavailableModelRow } from './ProviderCard';
@@ -237,6 +238,13 @@ function subFreshness(sub: SubscriptionUsage, pollStatus: string | undefined, la
       copyCommand: sub.loginCommand ?? null,
     };
   }
+  if (pollStatus === 'rate_limited') {
+    return {
+      corner: { dot: C.warning, text: `на ${fmtClock(ts)}`, textTone: C.warningText },
+      detail: <>Опрос лимитов упёрся в ограничение частоты: у setup-токена оно около раза в час. Показаны последние снимки. Полноценный вход в профиль аккаунта снимает ограничение.</>,
+      copyCommand: sub.loginCommand ?? null,
+    };
+  }
   if (pollStatus === 'error') {
     return {
       corner: { dot: C.warning, text: `на ${fmtClock(ts)}`, textTone: C.warningText },
@@ -355,7 +363,9 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
       expandedPills: subscriptionExpandedPills(sub),
       hint: unauthorized
         ? 'Опрос лимитов недоступен — в профиле нет полноценного входа'
-        : 'Данных пока нет — цифры появятся после первого хода или ближайшего опроса',
+        : pollStatus === 'rate_limited'
+          ? 'Опрос лимитов упёрся в ограничение частоты — повторим позже'
+          : 'Данных пока нет — цифры появятся после первого хода или ближайшего опроса',
       hasExhausted: false,
       unavailableModels,
       onRecheckModel,
@@ -503,6 +513,16 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
   const prevProvRef = useRef<Record<string, ProvState>>({});
 
   const isAdmin = me?.role === 'admin';
+
+  // Версия claude CLI хоста (сторож обновлений): только админу. refresh при
+  // открытии — после `claude update` строка сразу показывает актуальность.
+  const [cli, setCli] = useState<Awaited<ReturnType<typeof api.models.claudeCli>> | null>(null);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let c = false;
+    api.models.claudeCli(true).then(d => { if (!c) setCli(d); }).catch(() => {});
+    return () => { c = true; };
+  }, [isAdmin]);
 
   const providerKeys = useMemo(() => cliProviderKeys(), []);
   const balanceKeys = useMemo(
@@ -733,10 +753,52 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
 
   // === Рендер ===
 
+  // Строка версии claude CLI — до раннего выхода пустой вкладки: видна и без провайдеров.
+  // Сравнить нельзя (updateAvailable = null) — строки нет. Новые модели — в самой плашке,
+  // изменения — одной строкой-сводкой под ней и ссылкой на полный CHANGELOG (поштучный
+  // список из сотен пунктов, в основном исправлений, админу не нужен).
+  const cliModels = cli?.newModels ?? [];
+  const cliSummary = cliChangesSummary(cli?.changes ?? []);
+  // «будет по умолчанию» — только когда в семействе несколько новых версий: иначе пометка
+  // стояла бы у каждой модели и ничего не различала
+  const familyOf = (name: string) => name.split(' ')[0];
+  const modelLabel = (m: (typeof cliModels)[number]) =>
+    `${m.name} (с ${m.cliVersion}${m.isFamilyDefault && cliModels.filter(o => familyOf(o.name) === familyOf(m.name)).length > 1 ? ', будет по умолчанию' : ''})`;
+  const cliLine = !isAdmin || !cli || cli.updateAvailable == null ? null
+    : cli.updateAvailable ? (
+      <div style={{ marginBottom: SP.md }}>
+        <Notice icon={ArrowUpCircle} title={`claude CLI ${cli.current} · доступна ${cli.latest}`}>
+          Новые модели Claude приходят только с обновлением CLI — выполните claude update на сервере.
+          {cliModels.length > 0 && (
+            <div style={{ marginTop: SP.xs, fontWeight: 600 }}>
+              Новые модели: {cliModels.map(modelLabel).join(', ')}
+            </div>
+          )}
+        </Notice>
+        {cliSummary && (
+          <div style={{
+            marginTop: SP.xs, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.sm,
+            fontSize: FS.xs, color: C.textSecondary,
+          }}>
+            <span>Что изменилось — {cliSummary}</span>
+            <Button variant="ghost" size="xs" href={CLI_CHANGELOG_URL}
+              leftIcon={<ExternalLink size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
+              Полный список
+            </Button>
+          </div>
+        )}
+      </div>
+    ) : (
+      <div style={{ marginBottom: SP.md, fontSize: FS.xs, color: C.textSecondary }}>
+        claude CLI {cli.current} · актуальна
+      </div>
+    );
+
   // Пустое состояние
   if (!loading && !hasAny && quotaCards.length === 0 && moneyTiles.length === 0) {
     return (
       <div style={{ paddingTop: SP.md }}>
+        {cliLine}
         <div style={{ fontFamily: FONT.serif, fontSize: FS.xl, color: C.textHeading }}>Ни один провайдер не подключён</div>
         <div style={{ marginTop: SP.sm, fontSize: FS.sm, color: C.textSecondary, maxWidth: 460 }}>
           Ключи провайдеров задаются в файле настроек сервера. Добавьте ключ — и здесь появятся баланс, квоты и расход.
@@ -750,6 +812,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
 
   return (
     <div style={{ paddingTop: SP.md }}>
+      {cliLine}
       {/* Ошибка загрузки сводки — баннер + повтор (отдельные провайдер-ошибки видны в карточках) */}
       {usageError && (
         <div style={{

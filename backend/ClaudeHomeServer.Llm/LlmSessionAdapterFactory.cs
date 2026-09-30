@@ -75,6 +75,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Pre-flight проба локального эндпоинта (LocalEndpointProbe): при выключенном llama.cpp/vLLM
     // ход завершается сразу с понятной красной карточкой, без шагов цепочки. null (тесты) — выключена.
     private readonly ILocalEndpointProbe? _localProbe;
+    // Серверный ход провайдера с NormalizeToolInputArrays через шлюз LLM (ADR-016 §2). null —
+    // тесты без DI: ход провайдера идёт напрямую, как раньше.
+    private readonly Gateway.ServerTurnGateway? _serverGateway;
 
     public LlmSessionAdapterFactory(IConfiguration config, IAgentPromptSource agentPrompt,
         IWorkspaceDatasetLookup workspaceStore, LlmProviderRegistry providers,
@@ -89,8 +92,10 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ILocalEndpointProbe? localProbe = null,
         ILoggerFactory? loggerFactory = null,
         ICommandExpansion? commandExpansion = null,
-        ISkillSnapshotSource? skillSnapshot = null)
+        ISkillSnapshotSource? skillSnapshot = null,
+        Gateway.ServerTurnGateway? serverGateway = null)
     {
+        _serverGateway = serverGateway;
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
         _fallbackSettings = fallbackSettings;
@@ -177,7 +182,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         var claudeSession = new Claude.ClaudeSession(session, innerContext, _mcpConfigPath, _agentPrompt,
             _commandExpansion, _skillSnapshot, _workspaceStore, _disallowedTools, _providers,
             _subscriptionPool, _fileWatcherOptions, _bgLingerTimeout, _falMcpApiKey,
-            _glifMcpToken, _assignments, _fileChangeAttributor, _log, _sessionLog);
+            _glifMcpToken, _assignments, _fileChangeAttributor, _log, _sessionLog, _serverGateway);
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,

@@ -13,7 +13,8 @@ import type { Project, Session } from '../types';
 import { C, FONT, R, SP } from '../lib/design';
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../lib/breakpoints';
 import { basename } from '../lib/paths';
-import { ensureGit, useGitState, loadUnpushedLog, clearGitError, workingDiffStat, gitStripStatus } from '../lib/git';
+import { plural } from '../lib/plural';
+import { ensureGit, useGitState, loadUnpushedLog, clearGitError, workingDiffStat, gitStripIdle, gitStripStatus } from '../lib/git';
 import type { TurnTree } from '../lib/turnWorktree';
 import { wsPanels } from '../pages/workspace/panelStackState';
 import { PublishDialog } from './PublishDialog';
@@ -160,7 +161,11 @@ export function ProjectGitBar({
   // показываем микростроку с одной меткой ветки. Разворачивать нечего, slim не поможет.
   const microOnly = !hosted && isCompact && isEmpty && treeActive;
   // На планшете: либо микрострока (свёрнуто, либо действий нет), либо slim-бар
-  const showMicro = hosted ? !!hostCollapsed : isCompact && (collapsed || microOnly);
+  // С хостом полос чистое дерево без своего worktree — всегда строка: переключатель полос
+  // держит плашку на экране, а показывать в полный рост нечего. Выбор человека в сторе
+  // хоста не трогаем — появятся правки, вернётся тот вид, что был выбран
+  const autoMicro = hosted && gitStripIdle(status, st.unpushed.length, treeActive);
+  const showMicro = hosted ? !!hostCollapsed || autoMicro : isCompact && (collapsed || microOnly);
   const expand = () => (hosted ? onCollapsedChange!(false) : setCollapsedPersist(false));
 
   // Базовый контейнер плашки: общий для slim и full, геометрия — параметром.
@@ -181,9 +186,11 @@ export function ProjectGitBar({
   // Метка ветки — без изменений на всех раскладках: это ответ на «где мы работаем».
   const branchLabel = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+      {/* С переключателем полос иконка ветки уже стоит на «Git ▾» слева — не повторяем её;
+          папка worktree несёт свой смысл и остаётся */}
       {worktreeBranch
         ? <FolderGit2 size={15} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />
-        : <GitBranch size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+        : !switcher && <GitBranch size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
       <span title={worktreeBranch ? `Отдельное дерево чата: ${label}` : label} style={{
         fontFamily: FONT.mono, fontSize: 12.5, color: C.textSecondary,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -219,12 +226,15 @@ export function ProjectGitBar({
     </span>
   ) : null;
 
-  // diff-пилюля +N/−M. На планшете tap-цель выше (32 vs 28) — иначе под палец тесновато.
+  // diff-пилюля «файлы +N −M». На планшете tap-цель выше (32 vs 28) — иначе под палец
+  // тесновато. У каждой цифры свой title: без него «7 +120 −40» читается как загадка
   const diffPill = diff.files > 0 ? (
     <button
       type="button"
       onClick={openChanges}
       title="Открыть изменения"
+      // Подсказки у цифр видны только мышью — скринридеру и клавиатуре смысл отдаём целиком
+      aria-label={`Открыть изменения: ${diff.files} ${plural(diff.files, 'файл', 'файла', 'файлов')}, +${diff.added} −${diff.deleted} строк`}
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
         height: slim ? 32 : 28, padding: '0 11px',
@@ -232,9 +242,10 @@ export function ProjectGitBar({
         cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12.5, flexShrink: 0,
       }}
     >
-      {diff.added > 0 && <span style={{ color: C.diffAddText }}>+{diff.added}</span>}
-      {diff.deleted > 0 && <span style={{ color: C.diffRemText }}>−{diff.deleted}</span>}
-      {diff.added === 0 && diff.deleted === 0 && <span style={{ color: C.textMuted }}>±0</span>}
+      <span title={`Изменено ${diff.files} ${plural(diff.files, 'файл', 'файла', 'файлов')}`} style={{ color: C.textSecondary }}>{diff.files}</span>
+      {diff.added > 0 && <span title={`Добавлено строк: ${diff.added}`} style={{ color: C.diffAddText }}>+{diff.added}</span>}
+      {diff.deleted > 0 && <span title={`Удалено строк: ${diff.deleted}`} style={{ color: C.diffRemText }}>−{diff.deleted}</span>}
+      {diff.added === 0 && diff.deleted === 0 && <span title="Строки не менялись" style={{ color: C.textMuted }}>±0</span>}
     </button>
   ) : null;
 
@@ -353,31 +364,36 @@ export function ProjectGitBar({
   // чтобы человек видел состояние, не разворачивая.
   // С хостом полос строка — div: внутри неё живёт переключатель-кнопка, а <button> в
   // <button> вложить нельзя
-  const MicroTag = switcher ? 'div' : 'button';
+  // Строка чистого дерева (autoMicro) не разворачивается: в полный рост в ней нечего
+  // делать, поэтому она не кнопка — без шеврона, hover-подложки и клика
+  const MicroTag = switcher || autoMicro ? 'div' : 'button';
   const microRow = (
     <MicroTag
-      {...(switcher
-        ? { role: 'button', tabIndex: 0, onKeyDown: (e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); } } }
-        : { type: 'button' as const })}
+      {...(autoMicro
+        ? {}
+        : switcher
+          ? { role: 'button', tabIndex: 0, onKeyDown: (e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); } } }
+          : { type: 'button' as const })}
       data-git-strip="mini"
-      onClick={expand}
-      title="Развернуть полосу «Git»"
+      onClick={autoMicro ? undefined : expand}
+      title={autoMicro ? undefined : 'Развернуть полосу «Git»'}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, margin: hosted ? '4px 0 6px' : '4px 0',
         width: '100%', boxSizing: 'border-box', minWidth: 0,
         background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
-        padding: switcher ? '0 6px 0 4px' : '0 8px 0 10px', height: hosted ? 30 : 28, cursor: 'pointer',
+        padding: switcher ? '0 6px 0 4px' : '0 8px 0 10px', height: hosted ? 30 : 28,
+        cursor: autoMicro ? 'default' : 'pointer',
         // Не скрываем по hover — на тач-экране hover'а нет, и без подложки кнопка
         // выглядит как обычная подпись. Десктопный курсор получает лёгкий tint.
         transition: 'background 0.12s',
       }}
-      onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-      onMouseLeave={e => { e.currentTarget.style.background = C.bgPanel; }}
+      onMouseEnter={autoMicro ? undefined : e => { e.currentTarget.style.background = C.bgSelected; }}
+      onMouseLeave={autoMicro ? undefined : e => { e.currentTarget.style.background = C.bgPanel; }}
     >
       {switcher}
       {worktreeBranch
         ? <FolderGit2 size={14} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />
-        : <GitBranch size={14} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+        : !switcher && <GitBranch size={14} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
       <span title={worktreeBranch ? `Отдельное дерево чата: ${label}` : label} style={{
         fontFamily: FONT.mono, fontSize: 12, color: C.textSecondary,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
@@ -393,7 +409,7 @@ export function ProjectGitBar({
       {diff.added > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.diffAddText, fontWeight: 700, flexShrink: 0 }}>+{diff.added}</span>}
       {diff.deleted > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.diffRemText, fontWeight: 700, flexShrink: 0 }}>−{diff.deleted}</span>}
       {publishN > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.accent, fontWeight: 700, flexShrink: 0 }}>↑{publishN}</span>}
-      <ChevronDown size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
+      {!autoMicro && <ChevronDown size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
     </MicroTag>
   );
 
@@ -436,17 +452,9 @@ export function ProjectGitBar({
           чата, только дерево хода, оба дерева сразу. Полный путь — в title */}
       {turnTreeSegment}
 
-      {/* Строка состояния: что делать дальше — фиксировать, публиковать или ничего */}
-      {hosted && !slim && (
-        <span data-git-status={strip.tone} style={{
-          display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: FONT.sans, fontSize: 12, color: C.textMuted,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: '0 1 auto',
-        }}>
-          <span style={{ width: 6, height: 6, borderRadius: R.full, background: toneColor, flexShrink: 0 }} />
-          {strip.text}
-        </span>
-      )}
-
+      {/* Строки состояния в полосе нет: всё, что она говорила, уже на кнопках — файлы
+          и строки в diff-пилюле, коммиты в «Опубликовать N», «чисто» в свёрнутой строке.
+          Текст состояния остался в меню переключателя полос (action.status) */}
       <div style={{ flex: 1 }} />
 
       {/* diff-пилюля +N/−M — кликом открывает панель «Изменения» */}

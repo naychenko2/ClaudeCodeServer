@@ -1254,6 +1254,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private bool TranscriptOnServer(Session info) =>
         info.ProjectId is null || _projects.GetById(info.ProjectId) is not { } p || ProjectCapabilities.TranscriptOnServer(p);
 
+    // Адрес шлюза LLM для серверного процесса CLI (ADR-016 §2, серверный ход провайдера с
+    // NormalizeToolInputArrays) — тот же, что у MCP-серверов хода, у песочницы это мост хоста.
+    // У чата проекта, привязанного к устройству, — null: CLI там живёт на устройстве, и шлюз
+    // ходу ставит раннер устройства.
+    private string? LlmGatewayApiUrlFor(Session info, string? ownerId) =>
+        info.ProjectId is not null && _projects.GetById(info.ProjectId) is { } p && ProjectCapabilities.IsDeviceBound(p)
+            ? null
+            : ResolveTasksApiUrl(ownerId);
+
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
     // владельца, что у tasks/notes; владение проектом дополнительно проверяет CodeGraphController.
@@ -4092,7 +4101,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             MainRootPath: projectRoot,
             ServerContent: ServerContentFor(session.ProjectId),
             TranscriptOnServer: TranscriptOnServer(session),
-            HandsEnabled: hands));
+            HandsEnabled: hands,
+            LlmGatewayApiUrl: LlmGatewayApiUrlFor(session, ownerId)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -5585,7 +5595,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 HiggsfieldMcp: higgsfieldMcp,
                 ImageEditorMcp: imageEditorMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
-                MainRootPath: null);
+                MainRootPath: null,
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId));
                 // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается
         }
         else
@@ -5659,7 +5670,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 MainRootPath: projectRoot,
                 ServerContent: ProjectCapabilities.ServerContentEnabled(project),
                 TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project),
-                HandsEnabled: hands);
+                HandsEnabled: hands,
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, project.OwnerId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

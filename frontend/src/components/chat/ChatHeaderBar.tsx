@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronRight } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -97,9 +97,12 @@ function RateRow({ w }: { w: RateWindow }) {
         <span style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary }}>
           {windowLabel(w.limitType)}{w.isUsingOverage ? ' · перерасход' : ''}
         </span>
-        <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>{w.stale ? '—' : `${w.pct}%${w.isUsingOverage ? '+' : ''}`}</span>
+        {/* Процента нет (событие хода без utilization) — не «0%», а «в пределах нормы», как на экране «Использование» */}
+        <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>
+          {w.stale ? '—' : w.hasUtil ? `${w.pct}%${w.isUsingOverage ? '+' : ''}` : 'в пределах нормы'}
+        </span>
       </div>
-      {!w.stale && (
+      {!w.stale && w.hasUtil && (
         <div style={{ height: 4, borderRadius: 2, background: C.track, overflow: 'hidden', margin: '3px 0' }}>
           <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
         </div>
@@ -201,28 +204,59 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
   stats: CostStats; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void; windows: RateWindow[];
 }) {
   const sub = billing === 'subscription';
+  const [costOpen, setCostOpen] = useState(false);
+  const costBody = <>
+    {sub && (
+      <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, marginBottom: 6, lineHeight: 1.45 }}>
+        Эквивалент на pay-as-you-go API. По подписке покрыто абонплатой — отдельно не списывается.
+      </div>
+    )}
+    {stats.cost > 0 && <>
+      <BadgeRow k={sub ? '≈ Всего' : 'Всего'} v={fmtUsd(stats.cost)} />
+      <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
+      <BadgeRow k="Входные токены" v={fmtTokens(stats.input)} />
+      <BadgeRow k="Выходные токены" v={fmtTokens(stats.output)} />
+      <BadgeRow k="Кэш (чтение)" v={fmtTokens(stats.cacheRead)} />
+      <BadgeRow k="Кэш (запись)" v={fmtTokens(stats.cacheCreate)} />
+    </>}
+  </>;
+  // Есть лимиты — они главное, идут первыми; расход по API-тарифу свёрнут внизу над
+  // чертой «Оплата». Лимитов нет (оплата по ключу) — расход и есть содержимое, без сворачивания
+  if (windows.length === 0) {
+    return <>
+      <div style={badgeTitleStyle}>{sub ? 'Claude · ≈ по API-тарифу' : 'Стоимость Claude'}</div>
+      {costBody}
+      <BillingLine sub={sub} billing={billing} onBillingChange={onBillingChange} />
+    </>;
+  }
   return (
     <>
-      <div style={badgeTitleStyle}>{sub ? 'Claude · ≈ по API-тарифу' : 'Стоимость Claude'}</div>
-      {sub && (
-        <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, marginBottom: 8, lineHeight: 1.45 }}>
-          Эквивалент на pay-as-you-go API. По подписке покрыто абонплатой — отдельно не списывается.
-        </div>
-      )}
-      {stats.cost > 0 && <>
-        <BadgeRow k={sub ? '≈ Всего' : 'Всего'} v={fmtUsd(stats.cost)} />
-        <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
-        <BadgeRow k="Входные токены" v={fmtTokens(stats.input)} />
-        <BadgeRow k="Выходные токены" v={fmtTokens(stats.output)} />
-        <BadgeRow k="Кэш (чтение)" v={fmtTokens(stats.cacheRead)} />
-        <BadgeRow k="Кэш (запись)" v={fmtTokens(stats.cacheCreate)} />
-      </>}
-      {windows.length > 0 && (
-        <>
-          <div style={badgeSectionStyle}>Лимиты подписки</div>
-          {windows.map(w => <RateRow key={w.limitType} w={w} />)}
-        </>
-      )}
+      <div style={badgeTitleStyle}>Лимиты подписки</div>
+      {/* Порядок — как в стопке баров на пилюле (5 часов → неделя → по моделям), а не
+          по проценту: иначе строки попапа не совпадали бы с барами и прыгали местами */}
+      {ratePillSegments(windows).map(s => windows.find(w => w.limitType === s.limitType)!)
+        .map(w => <RateRow key={w.limitType} w={w} />)}
+      <button type="button" onClick={() => setCostOpen(o => !o)} aria-expanded={costOpen}
+        style={{
+          ...badgeSectionStyle, display: 'flex', alignItems: 'center', gap: 4, width: '100%',
+          border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+        }}>
+        <ChevronRight size={12} strokeWidth={ICON_STROKE} style={{ transform: costOpen ? 'rotate(90deg)' : undefined, transition: 'transform 120ms' }} />
+        {sub ? '≈ по API-тарифу' : 'Стоимость'}
+        {stats.cost > 0 && <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, textTransform: 'none' }}>{fmtUsd(stats.cost)}</span>}
+      </button>
+      {costOpen && costBody}
+      <BillingLine sub={sub} billing={billing} onBillingChange={onBillingChange} />
+    </>
+  );
+}
+
+// Строка «Оплата: Подписка | API-ключ» под чертой в конце поповера Claude
+function BillingLine({ sub, billing, onBillingChange }: {
+  sub: boolean; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
+}) {
+  return (
+    <>
       <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.bgInset}`, display: 'flex', alignItems: 'center', gap: 6, fontFamily: FONT.sans, fontSize: 11 }}>
         <span style={{ color: C.textMuted }}>Оплата:</span>
         {/* Настройка серверная, общая для всех — не-админу показываем режим без переключателя */}
@@ -254,42 +288,53 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
 // Окна лимитов на лицевой стороне пилюли, каждое цветом своего уровня.
 // compact — только худшее окно и «+N» (мобила/планшет: шапка тесная).
 // Нормальный уровень — нейтральным текстом пилюли: янтарь и красный заметны только на фоне спокойных окон
-// Мини-бар окна — тот же, что у пилюли контекста (ContextAmount): трек + заливка цветом уровня.
-// Процент неизвестен — бар не рисуем, остаётся «—».
-function RateMiniBar({ seg, compact }: { seg: RatePillSegment; compact?: boolean }) {
-  if (seg.pct === null) return null;
+// Стопка мини-баров: окна друг под другом в постоянном порядке (5ч → неделя → по моделям),
+// каждое — трек + заливка цветом своего уровня. Процент неизвестен — пустой трек, чтобы
+// стопка не прыгала по высоте; подписи и цифры всех окон — в подсказке и поповере.
+// При дробном масштабе экрана (125%, 150%) полосы в 3px начинались с разных долей
+// физического пикселя и сглаживались по-разному — верхняя плотнее нижней. Поэтому
+// толщина и зазор считаются в целых физических пикселях, а края рисуются без
+// сглаживания (crispEdges): шаг полос целый — все три округляются одинаково.
+function RateBarStack({ segs, compact }: { segs: RatePillSegment[]; compact?: boolean }) {
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+  const snap = (css: number) => Math.max(1, Math.round(css * dpr)) / dpr;
+  const w = compact ? 18 : 24;
+  const h = snap(compact ? 2 : 3);
+  const gap = snap(compact ? 1 : 2);
+  const total = segs.length * h + (segs.length - 1) * gap;
   return (
-    <span style={{ width: compact ? 18 : 26, height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', display: 'inline-block' }}>
-      <span style={{ display: 'block', width: `${seg.pct}%`, height: '100%', background: RATE_COLORS[seg.level].fill }} />
-    </span>
+    <svg width={w} height={total} viewBox={`0 0 ${w} ${total}`} shapeRendering="crispEdges" aria-hidden style={{ flexShrink: 0, display: 'block' }}>
+      {segs.map((s, i) => {
+        const y = i * (h + gap);
+        return (
+          <g key={s.limitType}>
+            {/* Цвет — через style: C.* это var(--…), а в атрибуте fill CSS-переменные не резолвятся */}
+            <rect x={0} y={y} width={w} height={h} rx={h / 2} style={{ fill: C.track }} />
+            {s.pct !== null && s.pct > 0 && (
+              <rect x={0} y={y} width={Math.max(h, (w * s.pct) / 100)} height={h} rx={h / 2} style={{ fill: RATE_COLORS[s.level].fill }} />
+            )}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
+// Лицевая сторона лимитов: стопка баров видимых окон + подпись худшего окна («5ч 41%») и «+N»
+// за окна, не влезшие в стопку. Одинаково на десктопе и мобиле, compact — лишь мельче бары.
 function RatePillText({ windows, compact }: { windows: RateWindow[]; compact?: boolean }) {
-  const segColor = (level: RateWindow['level']) => level === 'normal' ? C.textSecondary : RATE_COLORS[level].text;
-  const segStyle = (level: RateWindow['level']) => ({ color: segColor(level), display: 'inline-flex', alignItems: 'center', gap: 5 });
-  if (compact) {
-    const c = ratePillCompact(windows);
-    if (!c) return <span style={{ color: C.textMuted }}>—</span>;
-    return (
-      <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center' }}>
-        <span style={segStyle(c.head.level)}>{c.head.label} <RateMiniBar seg={c.head} compact /> {c.head.text}</span>
-        {c.more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(c.more)}</span>}
-      </span>
-    );
-  }
-  // Десктоп: не больше трёх окон, остальные — «+N» (полный список в подсказке и поповере)
   const { segments: segs, more } = ratePillVisible(windows);
-  if (segs.length === 0) return <span style={{ color: C.textMuted }}>—</span>;
+  const worst = ratePillCompact(windows)?.head;
+  if (segs.length === 0 || !worst) return <span style={{ color: C.textMuted }}>—</span>;
+  const color = worst.level === 'normal' ? C.textSecondary : RATE_COLORS[worst.level].text;
   return (
-    <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center' }}>
-      {segs.map((s, i) => (
-        <span key={s.limitType} style={{ display: 'inline-flex', alignItems: 'center', whiteSpace: 'pre' }}>
-          {i > 0 && <span style={{ color: C.textMuted, fontWeight: 400 }}> · </span>}
-          <span style={segStyle(s.level)}>{s.label} <RateMiniBar seg={s} /> {s.text}</span>
-        </span>
-      ))}
-      {more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(more)}</span>}
+    <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+      <RateBarStack segs={segs} compact={compact} />
+      <span>
+        {/* Процентов нет ни у одного окна — «худшее» выбрано наугад, подпись окна ничего не значит */}
+        <span style={{ color }}>{windows.some(w => w.hasUtil) ? `${worst.label} ${worst.text}` : worst.text}</span>
+        {more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(more)}</span>}
+      </span>
     </span>
   );
 }
@@ -473,7 +518,8 @@ function ContextAmount({ estimate, isCompacting, isMobile }: {
           <span style={{ display: 'block', width: `${estimate.pct}%`, height: '100%', background: c.fill }} />
         </span>
       ) : null}
-      <span style={{ color: tone ? c.text : undefined }}>
+      {/* Норма — нейтральным текстом, как у лимитов Claude: янтарь и красный заметны только на спокойном фоне */}
+      <span style={{ color: tone ? c.text : C.textSecondary }}>
         {isCompacting ? '…' : hasPct ? `${estimate.pct}%` : estimate.fresh ? '✦' : '—'}
       </span>
     </span>
@@ -530,7 +576,7 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
         <BadgeRow k="Обрезка контекста" v={prunedSummaryText(estimate.pruned)} />
       )}
       <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
-        Сжимает историю диалога в саммари, освобождая место в окне. При заполнении {assistantName} делает это автоматически.
+        Заменит историю кратким пересказом. При заполнении {assistantName} сожмёт сам.
       </div>
       {compactNote && (
         <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, marginTop: 8, padding: '6px 9px', background: C.bgInset, borderRadius: 6, lineHeight: 1.4 }}>

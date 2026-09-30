@@ -23,7 +23,7 @@ import { DeployModal } from './DeployModal';
 import { PowerModal } from './PowerModal';
 import { RemoteCommandsModal } from './RemoteCommandsModal';
 import { api } from '../lib/api';
-import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
+import { hasPendingOpen, subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
 import { BADGE_EVENT, loadIncidentBadge } from '../features/telemetry/incidentBadge';
 
@@ -68,7 +68,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showSubsystems, setShowSubsystems] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
-  const [showModelsSpend, setShowModelsSpend] = useState(false);
+  // Пендинг при маунте — холодный старт по ссылке из уведомления (#/models)
+  const [showModelsSpend, setShowModelsSpend] = useState(hasPendingOpen);
   const [showMcpServers, setShowMcpServers] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
   const [showDeploy, setShowDeploy] = useState(false);
@@ -91,7 +92,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // absolute-пробник раздувает scrollWidth трека, хоть и невидим).
   const probeFullRef = useRef<HTMLDivElement>(null);
 
-  // «Собрать цепочку…» из панелей выбора модели — открыть единый раздел «Модели и расход»
+  // «Собрать цепочку…» из панелей выбора модели и диплинк #/models — открыть единый раздел
+  // «Модели и расход»
   useEffect(() => subscribeModelProvidersNav(() => setShowModelsSpend(true)), []);
 
   // Замер «влезают ли 5 табов» — по скрытому компактному эталону полного набора

@@ -16,7 +16,6 @@ import {
 import { useActionVisibility } from '../hooks/useActionVisibility';
 import { ComposerModelPicker } from './ComposerModelPicker';
 import { USAGE } from '../lib/models';
-import { ComposerEffortPicker } from './ComposerEffortPicker';
 import { TeamDrawer } from '../features/team/TeamDrawer';
 import {
   DEFAULT_TEAM_SETTINGS, buildTeamTurnText, teamMechanic,
@@ -807,9 +806,8 @@ export function Composer({
     : 0;
   const layout = pickLayout(stripWidth, hasTP, hasKR, hasLoop, !!isMobile, leftBudget);
   const rightForm: StripForm = layout.rightForm;
-  // Подписи правой группы теряются по лестнице: усилие (с формы B), собеседник (с B2),
-  // модель (только в C). Усилие компактно начиная с B — на ступень раньше собеседника
-  const effortCompact = rightForm === 'B' || rightForm === 'B2' || rightForm === 'C';
+  // Подписи правой группы теряются по лестнице: уровень усилия в плашке модели (с формы B),
+  // собеседник (с B2), модель (только в C)
   const compactStrip = rightForm === 'C';
   const widePickers = rightForm === 'A-wide';
   const rightWidth = layout.rightWidth;
@@ -817,7 +815,7 @@ export function Composer({
   const autoChipVisible = layout.autoChipVisible;
   const loopInMenu = layout.loopInMenu;
   const krInMenu = layout.krInMenu;
-  // Модель и усилие получают maxTriggerWidth по форме правой группы (выводится из таблицы
+  // Плашка «модель · усилие» получает maxTriggerWidth = model + effort по форме (из таблицы
   // номиналов — STRIP_RIGHT_MAX, см. lib/composerStrip). B2/C-форма у собеседника — компактная,
   // companionLabel=null передаём чтобы CompanionSelector не пытался выставить maxWidth на
   // короткой форме (там собственный compactStyle)
@@ -2664,8 +2662,8 @@ export function Composer({
         {teamImplementBadge}
         {loopPill}
       </div>
-      {/* Правая группа: модель → усилие → собеседник, прижаты к правому краю */}
-      {(onModelChange || onEffortChange || companionSelector) && (
+      {/* Правая группа: «модель · усилие» → собеседник, прижаты к правому краю */}
+      {(onModelChange || companionSelector) && (
         <div ref={rightRef} style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
           {onModelChange && (
             <ComposerModelPicker
@@ -2676,11 +2674,12 @@ export function Composer({
               compact={compactStrip}
               // У чата с персоной своё назначение модели — пункт «По умолчанию» подписывается им
               usage={selectedPersona ? USAGE.chatPersona : USAGE.chatNew}
-              maxTriggerWidth={rightMax.model ?? undefined}
+              // Усилие живёт в той же плашке: подпись уровня снимается с формы B
+              effort={effort}
+              onEffortChange={onEffortChange}
+              showEffortLabel={rightMax.effort !== null}
+              maxTriggerWidth={rightMax.model === null ? undefined : rightMax.model + (rightMax.effort ?? 0)}
             />
-          )}
-          {onEffortChange && (
-            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={effortCompact} maxTriggerWidth={rightMax.effort ?? undefined} />
           )}
           {companionSelector}
         </div>

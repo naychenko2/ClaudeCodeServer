@@ -16,7 +16,8 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
     ModelAssignmentResolver assignments, PersonaManager personas,
     SpecialtySettingsStore specialty, UserStore users,
     AppSettingsService appSettings, LocalActionOverridesStore localActions,
-    SessionManager sessions, TaskManager tasks) : ControllerBase
+    SessionManager sessions, TaskManager tasks,
+    ClaudeHomeServer.Services.Llm.Claude.ClaudeCliUpdateWatcher cliUpdates) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
     private bool IsAdmin => User.IsInRole("admin");
@@ -46,6 +47,18 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         };
 
         return Ok(new { models = await catalog.GetModelsAsync(ct), providers = caps, assignments = resolved });
+    }
+
+    // Версия claude CLI хоста и последняя вышедшая (сторож ClaudeCliUpdateWatcher) — строка
+    // в «Модели и расход». Только админ: обновляет CLI он. refresh=true перечитывает
+    // локальную версию (после `claude update` строка сразу показывает актуальность), npm не
+    // трогает. updateAvailable = null — сравнить нельзя, UI строку не рисует.
+    [HttpGet("claude-cli")]
+    public async Task<IActionResult> ClaudeCli([FromQuery] bool refresh, CancellationToken ct)
+    {
+        if (!IsAdmin) return StatusCode(403, new { error = "Только для администратора" });
+        var status = refresh ? await cliUpdates.RefreshCurrentAsync(ct) : cliUpdates.GetStatus();
+        return Ok(status);
     }
 
     // Эффективный резолв модели для показа «Сейчас пойдёт» (спека блок 4, ADR-007 §5 п.5):

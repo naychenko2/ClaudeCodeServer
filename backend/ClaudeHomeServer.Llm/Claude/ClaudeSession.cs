@@ -3095,7 +3095,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasMemoryMcp: _memoryMcp is not null,
                     HasWorkspaceMcp: _workspaceMcp is not null,
                     WorkspaceSections: _workspaceMcp?.Sections ?? Array.Empty<string>(),
-                    ServerContent: _serverContent);
+                    ServerContent: _serverContent,
+                    HasLocalMediaMcp: _localMediaMcp is not null && McpDelivered("local-media"),
+                    Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth));
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try
@@ -3148,7 +3150,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // и не делегированный ход (вызван Task() из другого чата) — тот же признак «нет
             // живого пользователя», что и в гейте авто-allow permission (Info.TaskExecution/
             // AutomationRuleId) выше по файлу.
-            if (!Info.TaskExecution && Info.AutomationRuleId is null && _currentTurnAgentDepth < 1)
+            if (!Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth))
             {
                 var askHint =
                     "Если нужно уточнить что-то у пользователя и у вопроса есть 2–4 осмысленных варианта ответа — " +
@@ -3168,7 +3170,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // исполнитель задачи, ход правила автоматизации и делегированный ход из другого
             // чата. talk трогать не стали: там формат ответа устоялся, менять его задним
             // числом — отдельное решение.
-            var heard = !Info.TaskExecution && Info.AutomationRuleId is null && _currentTurnAgentDepth < 1;
+            var heard = !Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth);
             if (Prompts.VoicePrompts.SectionFor(Info.VoiceMode, Info.IsVoiceDigest, heard) is { } voiceSection)
                 Add("voice-mode", Info.VoiceMode
                         ? (Info.IsVoiceDigest ? "Формат для озвучки ответов" : "Формат для голосового режима")

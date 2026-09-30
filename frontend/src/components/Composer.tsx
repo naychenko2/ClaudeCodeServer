@@ -1437,11 +1437,17 @@ export function Composer({
     // talkActive/isListening: поле подменяется зонами разговора/записи — по
     // возврату textarea наблюдатель переподписывается на свежий узел
   }, [talkActive, isListening, tallInput, columnNeed]);
-  // Сброс защёлки: поле пустое — столбца у однострочного поля быть не должно
+  // Сброс защёлки: поле пустое — столбца у однострочного поля быть не должно. Смотрим на
+  // видимое значение поля, а не на text: высоту набирал и буфер режима (промпт картинки,
+  // в том числе подставленный prefill'ом), а при уходе из режима пустой text не меняется —
+  // столбец оставался у однострочного «Чата». Смена режима сбрасывает защёлку всегда:
+  // поле показывает другой буфер, и ResizeObserver перемерит его заново
+  const latchModeRef = useRef(fieldModeId);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс защёлки столбца при опустевшем поле
-    if (text === '') setTallInput(false);
-  }, [text]);
+    const modeChanged = latchModeRef.current !== fieldModeId;
+    latchModeRef.current = fieldModeId;
+    if (modeChanged || fieldValue === '') setTallInput(false);
+  }, [fieldValue, fieldModeId]);
   // Столбец только при живом textarea: в разговоре и записи поле низкое, кнопки — ряд
   const columnRight = tallInput && !talkActive && !isListening;
 

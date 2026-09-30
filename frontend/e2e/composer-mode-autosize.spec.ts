@@ -174,3 +174,54 @@ test('узкий «Чат» после многострочного промпт
     await request.dispose();
   }
 });
+
+// Четвёртый заход: поле «Картинки» заполнил prefill — промпт последнего запуска картинки,
+// без единого нажатия клавиши. Выросшее поле защёлкивает столбец кнопок справа (tallInput),
+// а защёлка сбрасывалась только по пустому буферу «Чата» — он и так пуст, эффект не
+// срабатывал, и после ухода в «Чат» однострочное поле стояло в карточке высотой в столбец.
+// Поэтому мерим не только textarea (она-то одна строка), но и строку ввода целиком.
+// Запуск с промптом дописываем в ответ ручки нитей: рисовать на тестовой data нечем
+test('после prefill промпта картинки уход в «Чат» схлопывает строку ввода', async ({ page, playwright, baseURL }) => {
+  const request = await playwright.request.newContext({ baseURL });
+  const token = await login(request);
+  const headers = { Authorization: `Bearer ${token}` };
+  await request.put('/api/feature-flags/image-editor', { headers, data: { enabled: true } });
+  const chat = await request.post('/api/chats', { headers, data: { mode: 'auto', name: `E2E composer prefill ${Date.now()}` } });
+  expect(chat.ok(), 'чат должен создаться').toBeTruthy();
+  const sid = (await chat.json()).id as string;
+  const threads = `/api/image-editor/chats/${sid}/threads`;
+  const revision = ((await (await request.get(threads, { headers })).json()) as { revision: number }).revision;
+  const r = await request.post(threads, { headers, data: { draftFolder: '', revision } });
+  expect(r.ok(), `черновик должен завестись: ${r.status()}`).toBeTruthy();
+
+  await page.route(url => url.pathname === threads, async route => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const res = await route.fetch();
+    const body = await res.json() as { threads: { launches?: unknown[] }[] };
+    for (const t of body.threads) {
+      t.launches = [{ jobId: 'job-prefill', baseVersionId: null, baseStepId: null, at: new Date().toISOString(), status: 'done', initiator: 'human', prompt: LONG }];
+    }
+    await route.fulfill({ response: res, json: body });
+  });
+
+  const rowHeight = () => page.locator('[data-composer-input]').evaluate(el => el.parentElement!.parentElement!.getBoundingClientRect().height);
+  try {
+    await page.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+    await page.goto(`/#/chats/${sid}`);
+    const field = page.locator('textarea.cc-composer-input');
+    await expect(field).toBeVisible();
+    await expect(field).toHaveValue('');
+
+    await page.getByRole('button', { name: 'Режим «Картинка»' }).click();
+    await expect(field).toHaveValue(LONG);
+    await expect.poll(() => fieldHeight(page)).toBeGreaterThan(150);
+
+    await page.getByRole('button', { name: 'Режим «Чат»' }).click();
+    await expect(field).toHaveValue('');
+    await expect.poll(() => fieldHeight(page), { message: 'поле «Чата» после prefill' }).toBeLessThan(ONE_LINE_MAX);
+    await expect.poll(rowHeight, { message: 'строка ввода «Чата» после prefill' }).toBeLessThan(ONE_LINE_MAX + 6);
+  } finally {
+    await request.delete(`/api/chats/${sid}`, { headers });
+    await request.dispose();
+  }
+});

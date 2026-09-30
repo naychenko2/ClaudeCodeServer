@@ -676,7 +676,7 @@ public sealed partial class LocalMediaService(
                 var file = wanted[n];
                 var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
                 var bytes = await comfy.DownloadAsync(file, ct);
-                var relative = $"{folder}/{current.Id}-{n + 1}{ext}";
+                var relative = $"{folder}/{current.Id}-{OutputSuffix(file.FileName, current.Id, n)}{ext}";
                 var full = SafePath.Join(root, relative);
                 ProjectLinkGuard.EnsureNoLink(root, full);
                 Directory.CreateDirectory(Path.GetDirectoryName(full)!);
@@ -737,6 +737,23 @@ public sealed partial class LocalMediaService(
         {
             _collectGate.Release();
         }
+    }
+
+    // Имя файла в проекте. У воркера аудио хвост значимый (lm_…_vocals.wav → lm_…-vocals.wav): по нему
+    // агент отличает вокал от минуса и .pth от .index. Нативные выходы ComfyUI (lm_…_00001_.png) и
+    // подозрительные хвосты — по номеру, как раньше
+    public static string OutputSuffix(string fileName, string jobId, int index)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var head = jobId + "_";
+        if (stem.StartsWith(head, StringComparison.Ordinal))
+        {
+            var tail = stem[head.Length..];
+            if (tail.Length is > 0 and <= 40 && tail.All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '_')
+                && tail.Any(char.IsAsciiLetterLower))
+                return tail;
+        }
+        return (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static string? LatentPath(IReadOnlyList<ComfyOutputFile> latents, string marker) =>

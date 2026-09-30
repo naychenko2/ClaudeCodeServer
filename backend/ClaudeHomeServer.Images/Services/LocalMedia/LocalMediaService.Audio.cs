@@ -148,7 +148,7 @@ public sealed partial class LocalMediaService
             {
                 var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
                 return (ComfyWorkflows.AudioWorker("audio_to_midi", new JsonObject(), [name], job.Id, 15),
-                    seconds is { } s ? 5 + (int)Math.Ceiling(s * 0.07) : null);
+                    seconds is { } s ? 4 + (int)Math.Ceiling(s * 0.01) : null);
             }
 
             case LocalMediaOps.AudioEnhance:
@@ -160,7 +160,7 @@ public sealed partial class LocalMediaService
                 {
                     case "denoise":
                         return (ComfyWorkflows.AudioWorker("denoise", new JsonObject(), [name], job.Id, 15),
-                            seconds is { } d ? 20 + (int)Math.Ceiling(d * 0.05) : null);
+                            seconds is { } d ? 5 + (int)Math.Ceiling(d * 0.05) : null);
                     case "upsample":
                         if (seconds > UpsampleMaxSeconds)
                             throw new LocalMediaInputException($"Расширение частот — для записей до {UpsampleMaxSeconds} с: "
@@ -330,7 +330,7 @@ public sealed partial class LocalMediaService
     {
         var speech = chars / 12.0;
         return engine == "chatterbox"
-            ? 15 + (int)Math.Ceiling(speech * 0.7)
+            ? 20 + (int)Math.Ceiling(speech * 0.7)
             : 15 + (int)Math.Ceiling(speech * 1.0) + (transcribeReference ? 12 : 0);
     }
 

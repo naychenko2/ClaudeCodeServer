@@ -251,9 +251,11 @@ public class LocalMediaAudioTests : IDisposable
 
         var midi = await service.SubmitAsync(Audio(LocalMediaOps.AudioToMidi, new JsonObject { ["audio"] = stemsJob.Id }), default);
 
+        (await service.GetAsync(Owner, stemsJob.Id, default))!.Job.Outputs.Select(o => Path.GetFileName(o.Path))
+            .Should().Equal($"{stemsJob.Id}-vocals.wav", $"{stemsJob.Id}-instrumental.wav");
         midi.Error.Should().BeNull();
         _comfy.UploadPaths.Last().Should().Contain(midi.View!.Job.Id);
-        midi.View.EtaSeconds.Should().Be(5 + (int)Math.Ceiling(30 * 0.07));
+        midi.View.EtaSeconds.Should().Be(4 + (int)Math.Ceiling(30 * 0.01));
     }
 
     [Fact]
@@ -346,6 +348,16 @@ public class LocalMediaAudioTests : IDisposable
         parsed.Files.Should().ContainSingle().Which.FileName.Should().Be("lm_1_00001_.mp3");
         parsed.Texts.Should().Equal("X:1\nK:C");
     }
+
+    // Суффикс воркера — смысловой: по нему агент отличает вокал от минуса и .pth от .index
+    [Theory]
+    [InlineData("lm_0123456789abcdef0123456789abcdef_vocals.mp3", "vocals")]
+    [InlineData("lm_0123456789abcdef0123456789abcdef_voice.index", "voice")]
+    [InlineData("lm_0123456789abcdef0123456789abcdef_00001_.mp3", "3")]
+    [InlineData("lm_0123456789abcdef0123456789abcdef_Evil Name.mp3", "3")]
+    [InlineData("чужое_имя.wav", "3")]
+    public void ИмяРезультата_СуффиксВоркераИлиНомер(string fileName, string suffix) =>
+        LocalMediaService.OutputSuffix(fileName, "lm_0123456789abcdef0123456789abcdef", 2).Should().Be(suffix);
 
     [Fact]
     public void Длительность_Wav() => AudioProbe.Seconds(Wav(12.5)).Should().BeApproximately(12.5, 0.01);

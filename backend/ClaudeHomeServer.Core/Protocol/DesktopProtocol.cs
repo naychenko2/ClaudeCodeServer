@@ -23,15 +23,15 @@ public static class DesktopProtocol
     public const string DeviceTokenScheme = "DesktopDevice";
 
     // Claims токена устройства. Имена НЕ свои: их выдаёт сторона авторизации
-    // (DesktopDeviceAuthHandler), и разъехавшиеся литералы означали бы пустого владельца
+    // (DeviceAuthHandler), и разъехавшиеся литералы означали бы пустого владельца
     // в хабе при формально успешной проверке токена. Источник правды — здесь,
-    // `DesktopDeviceAuthHandler` ссылается на эти литералы, а не объявляет свои.
+    // `DeviceAuthHandler` ссылается на эти литералы, а не объявляет свои.
     public const string OwnerIdClaim = "sub";
     public const string DeviceIdClaim = "did";
 
     // Три числа ниже — только поля ответа на Hello (DeviceHelloAck). Фаз вызова, которыми
-    // они управляли, больше нет, но позиционный контракт ответа не трогаем: его разбирают
-    // агенты, уже стоящие на машинах.
+    // они управляли, больше нет, но поля оставлены, чтобы не менять формат ответа Hello
+    // для уже установленных агентов (SignalR сериализует JSON по именам, агент их не читает).
 
     /// <summary>Ack на команду (поле ответа Hello).</summary>
     public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(2);
@@ -51,7 +51,7 @@ public static class DesktopProtocol
 
 /// <summary>
 /// Ответ на Hello: версия сервера и потолки протокола (первые четыре поля остались от рук
-/// ADR-008 и держатся ради позиционного контракта). Поля агента локальных проектов (ADR-016)
+/// ADR-008 и сохранены, чтобы не менять формат ответа Hello для уже установленных агентов: SignalR сериализует JSON по именам, агент этих полей не читает). Поля агента локальных проектов (ADR-016)
 /// — аддитивные.
 /// <see cref="RequiredCliVersion"/> — версия управляемой копии CLI, которую агент обязан
 /// держать (null — сервер её не задал); <see cref="HarnessReady"/> и

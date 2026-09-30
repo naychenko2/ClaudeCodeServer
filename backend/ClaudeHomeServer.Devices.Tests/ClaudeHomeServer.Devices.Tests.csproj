@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- Тестовая сборка вертикали Desktop. По образцу Dossiers.Tests/Turn.Tests:
+    <!-- Тестовая сборка вертикали Devices. По образцу Dossiers.Tests/Turn.Tests:
          SDK=Web ради FrameworkReference Microsoft.AspNetCore.App, OutputType=Library
          ради отсутствия Main. -->
     <OutputType>Library</OutputType>
@@ -13,7 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ClaudeHomeServer.Desktop\ClaudeHomeServer.Desktop.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Devices\ClaudeHomeServer.Devices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
     <!-- ProjectReference на Main и Main.Tests: тесты грани поднимают общий стек
          (JwtService и UserStore для capability-токенов, хелперы фейков).

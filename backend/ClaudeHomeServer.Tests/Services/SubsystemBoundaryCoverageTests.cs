@@ -50,10 +50,10 @@ public class SubsystemBoundaryCoverageTests
         // сборок не содержит их, и проверка полноты Boundaries по ним ничего не проверяет.
         _ = typeof(ClaudeHomeServer.Services.Dossiers.DossiersSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Memory.MemorySubsystem).Assembly;
-        // Desktop — отдельная сборка (Этап 5, вынос Desktop): форс-загрузка нужна,
+        // Devices — отдельная сборка (Этап 5, вынос Devices, бывш. Desktop): форс-загрузка нужна,
         // чтобы сторож видел типы канала устройства (реестр, хаб устройств, схема
-        // авторизации) и проверял их границы по Desktop.dll.
-        _ = typeof(ClaudeHomeServer.Services.Desktop.DeviceRegistry).Assembly;
+        // авторизации) и проверял их границы по Devices.dll.
+        _ = typeof(ClaudeHomeServer.Services.Devices.DeviceRegistry).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Architecture.ArchitectureSubsystem).Assembly;

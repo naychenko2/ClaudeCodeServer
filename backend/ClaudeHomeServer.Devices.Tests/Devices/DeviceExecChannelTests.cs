@@ -2,14 +2,14 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace ClaudeHomeServer.Tests.Services.Desktop;
+namespace ClaudeHomeServer.Tests.Services.Devices;
 
 // Возможности устройства и канал исполнения (ADR-016, задача 2.1): сведения агента из Hello,
 // вердикт «харнес не готов» по версии управляемой копии CLI и отказ хода СРАЗУ, с причиной,

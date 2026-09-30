@@ -5,7 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -15,7 +15,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
-namespace ClaudeHomeServer.Tests.Desktop;
+namespace ClaudeHomeServer.Tests.Devices;
 
 /// <summary>
 /// Билет браузера к localhost-API агента (ADR-016, задача 4.2): выдаётся веб-сессии владельца

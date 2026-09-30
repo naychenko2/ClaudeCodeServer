@@ -5,7 +5,7 @@ using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>
 /// Схема аутентификации самого устройства (заведена ADR-008, живёт в канале ADR-016):
@@ -18,14 +18,14 @@ namespace ClaudeHomeServer.Services.Desktop;
 /// утёкший токен работал бы с любой машины.
 ///
 /// Ставится на эндпоинты явно:
-/// <c>[Authorize(AuthenticationSchemes = DesktopDeviceAuthHandler.SchemeName)]</c>.
+/// <c>[Authorize(AuthenticationSchemes = DeviceAuthHandler.SchemeName)]</c>.
 ///
 /// Имена <c>SchemeName</c> и <c>DeviceIdClaim</c> берутся из WS-контракта
 /// <see cref="DesktopProtocol"/> — это единственный источник правды, чтобы литералы
 /// не разъехались между контрактом и авторизацией (иначе пустой владелец в хабе
 /// при формально успешной проверке токена).
 /// </summary>
-public sealed class DesktopDeviceAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
+public sealed class DeviceAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
     public const string SchemeName = DesktopProtocol.DeviceTokenScheme;
 
@@ -42,7 +42,7 @@ public sealed class DesktopDeviceAuthHandler : AuthenticationHandler<Authenticat
 
     private readonly DeviceRegistry _devices;
 
-    public DesktopDeviceAuthHandler(
+    public DeviceAuthHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
@@ -84,13 +84,13 @@ public sealed class DesktopDeviceAuthHandler : AuthenticationHandler<Authenticat
     }
 }
 
-public static class DesktopDeviceAuthExtensions
+public static class DeviceAuthExtensions
 {
     /// <summary>
     /// Регистрирует схему устройства рядом с дефолтной JwtBearer (вызов — в Program.cs).
     /// Дефолтной не делается никогда: обычный периметр [Authorize] остаётся на JwtBearer.
     /// </summary>
-    public static AuthenticationBuilder AddDesktopDeviceAuth(this AuthenticationBuilder builder) =>
-        builder.AddScheme<AuthenticationSchemeOptions, DesktopDeviceAuthHandler>(
-            DesktopDeviceAuthHandler.SchemeName, displayName: null, configureOptions: _ => { });
+    public static AuthenticationBuilder AddDeviceAuth(this AuthenticationBuilder builder) =>
+        builder.AddScheme<AuthenticationSchemeOptions, DeviceAuthHandler>(
+            DeviceAuthHandler.SchemeName, displayName: null, configureOptions: _ => { });
 }

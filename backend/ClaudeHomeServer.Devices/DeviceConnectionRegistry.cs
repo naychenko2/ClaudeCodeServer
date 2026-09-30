@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Protocol;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>Живое соединение устройства. Ready — устройство представилось (Hello).</summary>
 public sealed record DeviceConnection(
@@ -11,8 +11,6 @@ public sealed record DeviceConnection(
     DateTimeOffset ConnectedAt)
 {
     public int ProtocolVersion { get; init; }
-    public IReadOnlyList<string> SupportedSteps { get; init; } = [];
-    public string? ClientVersion { get; init; }
     public bool Ready { get; init; }
 }
 
@@ -77,8 +75,6 @@ public sealed class DeviceConnectionRegistry
         var ready = conn with
         {
             ProtocolVersion = hello.ProtocolVersion,
-            SupportedSteps = hello.SupportedSteps ?? [],
-            ClientVersion = hello.ClientVersion,
             Ready = true
         };
         _connections[connectionId] = ready;

@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Protocol;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>
 /// Файловая система каталога релизов. Шов нужен тестам раздачи: они доказывают, что строки

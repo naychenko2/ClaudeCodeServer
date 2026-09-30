@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>Исход обмена кода сопряжения на device-токен.</summary>
 public enum DevicePairingStatus

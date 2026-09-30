@@ -351,10 +351,10 @@ diff/артефакты/виджеты; оправдывает интеграц�
 **Перед правками в персонах (промпт, память, групповые чаты, пантеон OmO, аватары, MCP
 personas/memory) — прочитай [docs/architecture/personas.md](docs/architecture/personas.md).**
 
-## Канал устройства (ClaudeHomeServer.Desktop)
+## Канал устройства (ClaudeHomeServer.Devices)
 
 Серверная половина агента локальных проектов ([ADR-016](docs/adr/ADR-016-local-projects.md)): реестр и сопряжение устройств, хаб `/hubs/devices`, канал исполнения; руки ADR-008 удалены 2026-09-30.
-Инварианты и подробности — [backend/ClaudeHomeServer.Desktop/CLAUDE.md](backend/ClaudeHomeServer.Desktop/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+Инварианты и подробности — [backend/ClaudeHomeServer.Devices/CLAUDE.md](backend/ClaudeHomeServer.Devices/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Механики OmO в чатах
 

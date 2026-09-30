@@ -1,19 +1,19 @@
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace ClaudeHomeServer.Tests.Services.Desktop;
+namespace ClaudeHomeServer.Tests.Services.Devices;
 
 /// <summary>
 /// Сборка канала устройства (ADR-016) из настоящего контейнера. Разъехавшаяся склейка — не
 /// теоретический риск: не зарегистрированная служба или незнакомое имя схемы авторизации
 /// ломают канал ТОЛЬКО в рантайме, юнит-тесты про них ничего не знают.
 /// </summary>
-public class DesktopWiringTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
+public class DevicesWiringTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     [Fact]
     public void СлужбыКанала_РезолвятсяИзКонтейнера()
@@ -53,7 +53,7 @@ public class DesktopWiringTests(TestWebApplicationFactory factory) : IClassFixtu
         using var scope = factory.Services.CreateScope();
         var schemes = scope.ServiceProvider.GetRequiredService<IAuthenticationSchemeProvider>();
 
-        (await schemes.GetSchemeAsync(DesktopDeviceAuthHandler.SchemeName)).Should().NotBeNull();
+        (await schemes.GetSchemeAsync(DeviceAuthHandler.SchemeName)).Should().NotBeNull();
         (await schemes.GetSchemeAsync(ClaudeHomeServer.Protocol.DesktopProtocol.DeviceTokenScheme))
             .Should().NotBeNull("канал устройств авторизуется схемой токена устройства");
     }

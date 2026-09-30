@@ -4,7 +4,7 @@ using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>Выданный билет: сам билет уходит браузеру один раз и на сервере не хранится.</summary>
 public sealed record AgentTicket(string Ticket, string DeviceId, DateTimeOffset ExpiresAt);

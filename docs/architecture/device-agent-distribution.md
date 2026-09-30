@@ -5,7 +5,7 @@
 Решения и их обоснования — в ADR и в
 [плане](../research/agent-distribution-plan-2026-09.md) (Р1–Р12); здесь — устройство и
 операции. Код агента — `ClaudeHomeServer.DeviceAgent` (`Install/`, `Supervision/`, `Update/`,
-`Versioning/`), раздача — `ClaudeHomeServer.Desktop/AgentReleaseCatalog.cs` и
+`Versioning/`), раздача — `ClaudeHomeServer.Devices/AgentReleaseCatalog.cs` и
 `Controllers/AgentDownloadsController.cs`.
 
 ## Путь версии от выкатки до устройства

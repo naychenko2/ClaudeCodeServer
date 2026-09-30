@@ -1,7 +1,7 @@
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -240,7 +240,7 @@ public sealed class TurnTokenServiceTests : IDisposable
         http.Request.RouteValues[TurnTokenEndpointFilter.RouteKey] = turnId;
         if (token is not null) http.Request.Headers[TurnTokenEndpointFilter.HeaderName] = token;
         var (deviceToken, fingerprint) = device ?? (_device.Token, GatewayTestDevice.Fingerprint);
-        if (deviceToken is not null) http.Request.Headers.Authorization = DesktopDeviceAuthHandler.TokenPrefix + deviceToken;
+        if (deviceToken is not null) http.Request.Headers.Authorization = DeviceAuthHandler.TokenPrefix + deviceToken;
         if (fingerprint is not null) http.Request.Headers[TurnTokenEndpointFilter.DeviceFingerprintHeader] = fingerprint;
         var passed = false;
         var result = await filter.InvokeAsync(new DefaultEndpointFilterInvocationContext(http),

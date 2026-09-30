@@ -1,7 +1,7 @@
 using System.Security.Claims;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -72,7 +72,7 @@ public class DeviceHubTests
         ack.AckTimeoutSeconds.Should().Be((int)DesktopProtocol.AckTimeout.TotalSeconds);
         ack.MaxBatchSteps.Should().Be(DesktopProtocol.MaxBatchSteps);
         router.IsOnline(Owner, Device).Should().BeTrue();
-        router.Find(Owner, Device)!.SupportedSteps.Should().BeEquivalentTo(["click", "type"]);
+        router.Find(Owner, Device)!.ProtocolVersion.Should().Be(DesktopProtocol.Version);
     }
 
     [Fact]

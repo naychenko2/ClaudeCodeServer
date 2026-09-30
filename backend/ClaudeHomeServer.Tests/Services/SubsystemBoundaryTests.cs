@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <c>ClaudeHomeServer.Services.Composition</c> (контракт <c>IAppSubsystem</c>),
 /// <c>ClaudeHomeServer.Services.Mcp</c> (сознательная граница для <c>McpSecretStore</c>).
 ///
-/// Всё прочее под <c>ClaudeHomeServer.Services.*</c> (Desktop, Backup, Llm, Images, Tts,
+/// Всё прочее под <c>ClaudeHomeServer.Services.*</c> (Devices, Backup, Llm, Images, Tts,
 /// Deploy, Memory, Turn, Docs, Git и т.п.) — нарушение. Список не дописывается под каждую
 /// новую вертикаль: появилась новая — тест автоматом ловит любую ссылку на неё, и повод
 /// обсудить шов. Подход — как в <c>PiiRules</c> (default-deny с явным allow-list).
@@ -84,10 +84,10 @@ public class SubsystemBoundaryTests
         // чтобы сторож видел их типы и проверял границы по Dossiers.dll / Memory.dll.
         _ = typeof(ClaudeHomeServer.Services.Dossiers.DossiersSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Memory.MemorySubsystem).Assembly;
-        // Desktop — отдельная сборка (Этап 5, вынос Desktop): форс-загрузка нужна,
+        // Devices — отдельная сборка (Этап 5, вынос Devices): форс-загрузка нужна,
         // чтобы сторож видел типы канала устройства (реестр, хаб устройств, схема
-        // авторизации) и проверял их границы по Desktop.dll.
-        _ = typeof(ClaudeHomeServer.Services.Desktop.DeviceRegistry).Assembly;
+        // авторизации) и проверял их границы по Devices.dll.
+        _ = typeof(ClaudeHomeServer.Services.Devices.DeviceRegistry).Assembly;
         // === Этап 5, волна C, шаг 2: новые швы Core, использованные вынесенными
         // вертикалями. Форс-загрузка нужна, чтобы вертикальные сборки (Modules,
         // ProjectServices) видели соответствующие Core-интерфейсы по сборке Core.dll.
@@ -1054,21 +1054,21 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.InstanceSecretFiles",
                 }),
         },
-        // Desktop — канал устройства агента локальных проектов (ADR-016; руки ADR-008
-        // удалены), отдельная сборка ClaudeHomeServer.Desktop (Этап 5, вынос Desktop).
+        // Devices — канал устройства агента локальных проектов (ADR-016; руки ADR-008
+        // удалены), отдельная сборка ClaudeHomeServer.Devices (Этап 5, вынос Devices).
         // Допусков нет: связи с корнем закрыты швами спины, хаб устройств живёт в самой
         // вертикали, а Protocol.* проходит по сборке Core.
-        // ADR-016 (задача 2.1): Desktop РЕАЛИЗУЕТ Core-шов `Services.Execution.IDeviceExecChannel`
+        // ADR-016 (задача 2.1): Devices РЕАЛИЗУЕТ Core-шов `Services.Execution.IDeviceExecChannel`
         // (канал исполнения на устройстве, WebSocket /api/devices/exec), потребитель —
-        // Execution (`RemoteProcessRunner`, задача 2.3). Прямого ребра Execution ⇄ Desktop нет:
+        // Execution (`RemoteProcessRunner`, задача 2.3). Прямого ребра Execution ⇄ Devices нет:
         // шов проходит по сборке Core, отдельного допуска не требует.
         new object[]
         {
             new VerticalBoundary(
-                "Desktop",
-                "ClaudeHomeServer.Services.Desktop",
+                "Devices",
+                "ClaudeHomeServer.Services.Devices",
                 SharedAllowedPrefixes
-                    .Concat(new[] { "ClaudeHomeServer.Services.Desktop" })
+                    .Concat(new[] { "ClaudeHomeServer.Services.Devices" })
                     .ToArray(),
                 Array.Empty<string>()),
         },
@@ -1288,7 +1288,7 @@ public class SubsystemBoundaryTests
         //  - `ICheapTextRunner` — уже в Core с волны 1 Skills;
         //  - `IHubContext<SessionHub>` и `Protocol.NotesChangedMessage` →
         //    `INotesHubNotifier` (первый в проекте шов Hub-рассылки для вынесенной
-        //    вертикали; по этому образцу пойдут Team и Desktop);
+        //    вертикали; по этому образцу пойдут Team и Devices);
         //  - `ProjectManager` → `IProjectManager` (3 метода), `UserStore` → `IUserStore`,
         //    `ProjectEventLogService` → `IProjectEventLogService`;
         //  - `FileService.SafeJoinPublic` → Core-примитив `SafePath.Join`;

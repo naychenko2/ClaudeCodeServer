@@ -4,7 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>
 /// Реестр устройств десктопного агента — data/devices.json (ADR-008, «Аутентификация и
@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.Desktop;
 ///
 /// Реестр только заводит, проверяет и отзывает устройства. Сопряжение кодом — в
 /// <see cref="DevicePairingService"/>, приём токена на границе HTTP — в
-/// <see cref="DesktopDeviceAuthHandler"/>.
+/// <see cref="DeviceAuthHandler"/>.
 /// </summary>
 public sealed class DeviceRegistry
 {

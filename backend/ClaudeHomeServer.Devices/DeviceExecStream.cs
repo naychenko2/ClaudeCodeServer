@@ -3,7 +3,7 @@ using System.Threading.Channels;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Execution;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>
 /// Поток одного исполнения поверх WebSocket устройства (ADR-016). Соединение сменяемо:

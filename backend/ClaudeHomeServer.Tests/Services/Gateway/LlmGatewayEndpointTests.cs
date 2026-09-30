@@ -3,7 +3,7 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Turn;
@@ -120,7 +120,7 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
         (await _client.SendAsync(bare)).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "без учётки устройства");
 
         var noPrint = new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{t.Grant.TurnId}/llm/api/hello");
-        noPrint.Headers.TryAddWithoutValidation("Authorization", DesktopDeviceAuthHandler.TokenPrefix + _device.Token);
+        noPrint.Headers.TryAddWithoutValidation("Authorization", DeviceAuthHandler.TokenPrefix + _device.Token);
         noPrint.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, t.Token);
         (await _client.SendAsync(noPrint)).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "без отпечатка машины");
 

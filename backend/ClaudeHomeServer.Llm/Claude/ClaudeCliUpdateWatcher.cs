@@ -10,9 +10,9 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // Сторож обновлений claude CLI. Новые модели Claude приходят в продукт только с новой
 // версией CLI (маппинг алиаса `sonnet` → конкретной модели зашит в сам CLI), поэтому раз
 // в сутки сверяем версию на хосте с npm `latest` и, если хост отстал, шлём админам одно
-// уведомление на каждую новую версию. Уведомление — только админам с включённым флагом
-// claude-cli-update-watch; версия помечается «уведомлённой» лишь при ≥1 доставке, иначе
-// флаг, включённый после первой проверки, молчал бы до следующего релиза CLI.
+// уведомление на каждую новую версию — всем админам, фич-флага нет. Версия помечается
+// «уведомлённой» лишь при ≥1 доставке: без админов (или при отказе доставки всем) она
+// придёт на следующей проверке, а не пропадёт до следующего релиза CLI.
 //
 // При отставании подтягивается CHANGELOG.md claude-code: список изменений пропущенных
 // версий и новые модели (их называет заголовок уведомления). Файл качается вне _lock —
@@ -51,7 +51,6 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
 
     private readonly IHttpClientFactory _http;
     private readonly IUserStore _users;
-    private readonly IFeatureFlagGate _flags;
     private readonly INotificationSender _notifications;
     private readonly ILogger<ClaudeCliUpdateWatcher> _log;
     private readonly Func<Task<string?>> _refreshCurrent;
@@ -60,22 +59,21 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
     private readonly SemaphoreSlim _lock = new(1, 1);
     private State _state;
 
-    public ClaudeCliUpdateWatcher(IHttpClientFactory http, IUserStore users, IFeatureFlagGate flags,
+    public ClaudeCliUpdateWatcher(IHttpClientFactory http, IUserStore users,
         INotificationSender notifications, IConfiguration config, ILogger<ClaudeCliUpdateWatcher> log)
-        : this(http, users, flags, notifications, log, ClaudeCliVersion.RefreshAsync,
+        : this(http, users, notifications, log, ClaudeCliVersion.RefreshAsync,
             Path.Combine(SubsystemHostingExtensions.ResolveDataDir(config), StateFileName),
             config.GetValue("ClaudeCliUpdate:Interval", TimeSpan.FromHours(24)))
     {
     }
 
     // Для тестов: подменный опрос версии и путь состояния во временной папке
-    internal ClaudeCliUpdateWatcher(IHttpClientFactory http, IUserStore users, IFeatureFlagGate flags,
+    internal ClaudeCliUpdateWatcher(IHttpClientFactory http, IUserStore users,
         INotificationSender notifications, ILogger<ClaudeCliUpdateWatcher> log,
         Func<Task<string?>> refreshCurrent, string statePath, TimeSpan interval)
     {
         _http = http;
         _users = users;
-        _flags = flags;
         _notifications = notifications;
         _log = log;
         _refreshCurrent = refreshCurrent;
@@ -280,7 +278,6 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
         {
             try
             {
-                if (!_flags.IsEnabled(admin.Id, FeatureFlagKeys.ClaudeCliUpdateWatch)) continue;
                 await _notifications.SendAsync(admin.Id, new CreateNotificationRequest
                 {
                     Kind = "info",

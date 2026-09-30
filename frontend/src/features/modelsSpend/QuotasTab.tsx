@@ -22,7 +22,6 @@ import { addDaysUtc, openSpend, spendQuery, todayUtc } from '../../lib/spendCont
 import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
 import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { renderInlineCode } from '../../lib/inlineCode';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
@@ -515,17 +514,16 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
 
   const isAdmin = me?.role === 'admin';
 
-  // Версия claude CLI хоста (сторож обновлений): только админу и за флагом. refresh при
+  // Версия claude CLI хоста (сторож обновлений): только админу. refresh при
   // открытии — после `claude update` строка сразу показывает актуальность.
-  const cliWatch = useFeature(FLAGS.claudeCliUpdateWatch);
   const [cli, setCli] = useState<Awaited<ReturnType<typeof api.models.claudeCli>> | null>(null);
   const [cliChangesOpen, setCliChangesOpen] = useState(false);
   useEffect(() => {
-    if (!isAdmin || !cliWatch) return;
+    if (!isAdmin) return;
     let c = false;
     api.models.claudeCli(true).then(d => { if (!c) setCli(d); }).catch(() => {});
     return () => { c = true; };
-  }, [isAdmin, cliWatch]);
+  }, [isAdmin]);
 
   const providerKeys = useMemo(() => cliProviderKeys(), []);
   const balanceKeys = useMemo(
@@ -768,7 +766,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
   const familyOf = (name: string) => name.split(' ')[0];
   const modelLabel = (m: (typeof cliModels)[number]) =>
     `${m.name} (с ${m.cliVersion}${m.isFamilyDefault && cliModels.filter(o => familyOf(o.name) === familyOf(m.name)).length > 1 ? ', будет по умолчанию' : ''})`;
-  const cliLine = !isAdmin || !cliWatch || !cli || cli.updateAvailable == null ? null
+  const cliLine = !isAdmin || !cli || cli.updateAvailable == null ? null
     : cli.updateAvailable ? (
       <div style={{ marginBottom: SP.md }}>
         <Notice icon={ArrowUpCircle} title={`claude CLI ${cli.current} · доступна ${cli.latest}`}>

@@ -22,7 +22,6 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
 
     private readonly NpmHandler _npm = new();
     private readonly StubUsers _users = new();
-    private readonly StubFlags _flags = new();
     private readonly RecordingSender _sender = new();
     private string? _current = "2.1.283";
 
@@ -30,7 +29,6 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
     {
         Directory.CreateDirectory(_tempDir);
         _users.Add("admin1", "admin");
-        _flags.On("admin1");
         _npm.Version = "2.1.300";
     }
 
@@ -40,7 +38,7 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
     }
 
     private ClaudeCliUpdateWatcher Create() => new(
-        new StubHttpClientFactory(_npm), _users, _flags, _sender,
+        new StubHttpClientFactory(_npm), _users, _sender,
         NullLogger<ClaudeCliUpdateWatcher>.Instance,
         () => Task.FromResult(_current), StatePath, TimeSpan.FromHours(24));
 
@@ -77,14 +75,14 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
     }
 
     [Fact]
-    public async Task NoAdminHasFlag_VersionNotMarked_FlagLaterStillNotifies()
+    public async Task NoDelivery_VersionNotMarked_NextCheckNotifies()
     {
-        _flags.Off("admin1");
+        _sender.FailFor.Add("admin1");
         var w = Create();
         await w.CheckOnceAsync();
         _sender.Sent.Should().BeEmpty();
 
-        _flags.On("admin1");
+        _sender.FailFor.Clear();
         await w.CheckOnceAsync();
         _sender.Sent.Should().ContainSingle();
     }
@@ -126,12 +124,10 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
     }
 
     [Fact]
-    public async Task OnlyAdminsWithFlag_AndFailureOfOneDoesNotStopOthers()
+    public async Task OnlyAdmins_AndFailureOfOneDoesNotStopOthers()
     {
         _users.Add("user1", "user");
-        _flags.On("user1");
         _users.Add("admin2", "admin");
-        _flags.On("admin2");
         _sender.FailFor.Add("admin1");
 
         await Create().CheckOnceAsync();
@@ -347,14 +343,6 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
         public bool IsTokenVersionCurrent(string userId, int version) => true;
     }
 
-    private sealed class StubFlags : IFeatureFlagGate
-    {
-        private readonly HashSet<string> _on = [];
-        public void On(string userId) => _on.Add(userId);
-        public void Off(string userId) => _on.Remove(userId);
-        public bool IsEnabled(string userId, string key) =>
-            key == FeatureFlagKeys.ClaudeCliUpdateWatch && _on.Contains(userId);
-    }
 
     private sealed class RecordingSender : INotificationSender
     {

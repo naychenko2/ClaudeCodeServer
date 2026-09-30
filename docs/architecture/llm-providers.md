@@ -530,7 +530,7 @@ CLI). Ни номера версии, ни суффикса `[1m]` в сохра
 сам claude CLI, поэтому продукт узнаёт о новой модели только после `claude update` на хосте.
 Напоминает об этом сторож `ClaudeCliUpdateWatcher` (Llm, gated hosted): раз в сутки
 (`ClaudeCliUpdate:Interval`) сверяет `ClaudeCliVersion` с npm `latest` пакета
-`@anthropic-ai/claude-code` и шлёт админам с флагом `claude-cli-update-watch` одно
+`@anthropic-ai/claude-code` и шлёт всем админам (фич-флага нет) одно
 уведомление на каждую новую версию (ссылка `/models` открывает «Модели и расход» →
 «Расход», там строка версий из `GET /api/models/claude-cli`). Состояние —
 `data/claude-cli-update.json`; версия помечается уведомлённой только при ≥1 доставке.

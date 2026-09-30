@@ -26,7 +26,6 @@
 |---|---|---|---|---|
 | `workspace-destructive` | файлы и чаты: необратимое `files_delete`/`chats_delete` у workspace-server | false | dev | есть |
 | `change-dossiers-recall` | recall-промпт и MCP-инструменты по паспортам изменений | false | dev | есть |
-| `desktop-agent` | вся грань: тип чата «Десктопный», реестр устройств, `desktop_*` в ход | false | dev | есть |
 | `specialty-prompt-sections` | секции промпта специальности + UI каталога в настройках | false | dev | есть |
 | `chat-auto-archive` | только автоправило архивации чатов (ручной архив — без флага) | false | dev | есть |
 | `visual-plan` | контекстные замечания к разделам плана | false | dev | есть |
@@ -85,31 +84,6 @@
 - **Источник:** [ADR-004](../adr/ADR-004-change-dossiers.md), §8 «Фич-флаги и выкатка»
   (флаг №2 двухфлаговой выкатки; этап 1 — флаг `change-dossiers` — из каталога уже
   снят).
-
-### `desktop-agent` — Десктопный агент
-
-- **Описание (из каталога):** Агент из песочницы может смотреть на экран вашего
-  компьютера и действовать в окнах — через приложение AI Home Desktop на этой машине.
-  Работает только в чате типа «Десктопный» и только пока вы сами начали сеанс
-  с устройства. Действия идут вне песочницы, с вашими правами.
-- **Дефолт / стадия:** false / dev.
-- **Что за флагом:** вся грань целиком:
-  - **Бэк:** создание чата типа «Десктопный» без флага — 400
-    ([SessionsController.cs:39-40](../../backend/ClaudeHomeServer/Controllers/SessionsController.cs));
-    включение грани в проекте — 400 (выключение — всегда)
-    ([ProjectsController.cs:304-305](../../backend/ClaudeHomeServer/Controllers/ProjectsController.cs));
-    доставка `desktop_*` в ход требует флаг владельца И `DesktopAgentEnabled` проекта И
-    tool-ключ `desktop` у персоны
-    ([SessionManager.cs:1191-1193](../../backend/ClaudeHomeServer/Services/SessionManager.cs));
-    capability-токены реестра устройств проверяют флаг на каждый вызов
-    ([DesktopAccessGate.cs:224-225](../../backend/ClaudeHomeServer.Desktop/DesktopAccessGate.cs)).
-  - **Фронт:** кнопка создания «Десктопного» чата
-    ([SessionList.tsx:193](../../frontend/src/components/SessionList.tsx)); пункт «Устройства»
-    в меню ([HubHeader.tsx:182](../../frontend/src/components/HubHeader.tsx)); грань
-    «Десктопный агент» в настройках проекта ([EditDialog.tsx:244](../../frontend/src/features/projects/dialogs/EditDialog.tsx)).
-- **Ключ во фронте `FLAGS`:** есть (`FLAGS.desktopAgent`).
-- **Источник:** [ADR-008-desktop-agent.md](../adr/ADR-008-desktop-agent.md) и раздел
-  «Десктопный агент» [CLAUDE.md](../../CLAUDE.md).
 
 ### `specialty-prompt-sections` — Инструкции и типовые умения для ролей
 
@@ -280,6 +254,7 @@
 | [edit-project-compact-proposal.md:33, :92](../mockups/edit-project-compact-proposal.md) | (без ключа: «фон — только владельцу за флагом») | **снят** — то же `project-backgrounds` (секция фона проекта) |
 | [ADR-013-server-chat-watchdogs.md:1, :3, :177](../adr/ADR-013-server-chat-watchdogs.md) | `chat-watchdogs` | **снят** 2026-09-01 — нет ни в каталоге, ни в `FLAGS`; сторожа работают по умолчанию. Та же пометка живёт и в указателе: [adr-index.md:155](../architecture/adr-index.md) цитирует статус ADR-013 «dark launch за флагом» как есть. Подтверждено [adr-index.md:159, :211](../architecture/adr-index.md) и [claude-md-cleanup-2026-09.md:338](../research/claude-md-cleanup-2026-09.md) |
 | [mcp-allowlist-plan.md:123, :125, :199, :230, :244, :254, :267](../research/mcp-allowlist-plan.md) | `mcp-allowlist` | **снят** — allow-list стал единственной моделью ([CLAUDE.md](../../CLAUDE.md), раздел о личном реестре; «deny-модель умерла вместе с флагом mcp-allowlist» — [McpToolsetStabilityTests.cs:166](../../backend/ClaudeHomeServer.Tests/Services/McpToolsetStabilityTests.cs)) |
+| [desktop-agent-client.md](desktop-agent-client.md), [ADR-008-desktop-agent.md](../adr/ADR-008-desktop-agent.md) | `desktop-agent` | **удалён вместе с фичей** 2026-09-30 — не снят после dark launch, а убран: руки ADR-008 заменены руками локальных проектов (ADR-016 §7); документы помечены историческими |
 | [personas.md:191](../architecture/personas.md) | `persona-memory-consolidation` | **нет в текущем каталоге** — имя упоминается только в комментариях кода ([PersonaMemoryConsolidationService.cs:7](../../backend/ClaudeHomeServer.Memory/PersonaMemoryConsolidationService.cs), [PersonaMemoryAutolearnService.cs:150](../../backend/ClaudeHomeServer.Memory/PersonaMemoryAutolearnService.cs)); поимённой проверки ключа в коде не найдено |
 
 Пометки на **живые** флаги (сверка прошла успешно, в каталоге есть):
@@ -288,12 +263,11 @@
 [features.md:1895](../architecture/features.md), [archive-chats.md:193, :260](../product/archive-chats.md)),
 `project-map-hygiene` ([project-map-hygiene-plan-2026-09.md:3](../research/project-map-hygiene-plan-2026-09.md),
 [CLAUDE.md:182](../../CLAUDE.md)), `specialty-prompt-sections`
-([specialties-personalization.md:121](../product/specialties-personalization.md)),
-`desktop-agent` ([CLAUDE.md:320, :322](../../CLAUDE.md)).
+([specialties-personalization.md:121](../product/specialties-personalization.md)).
 
 Безымянные «опция за флагом» (ключ в тексте не назван, гипотетический будущий
 тумблер, не снятый флаг): approval-режим Chrome 144 —
-[ADR-008-desktop-agent.md:269](../adr/ADR-008-desktop-agent.md) и
+[ADR-008-desktop-agent.md:279](../adr/ADR-008-desktop-agent.md) и
 «турбо-режим» браузера — [browser-channel.md:84](../research/browser-channel.md).
 
 Кроме пометок «за флагом», тот же класс расхождения: [ADR-004](../adr/ADR-004-change-dossiers.md)

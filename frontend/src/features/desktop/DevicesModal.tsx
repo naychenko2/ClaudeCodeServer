@@ -4,7 +4,6 @@ import { api } from '../../lib/api';
 import { C, FONT, FS, MODAL_W, R, SP } from '../../lib/design';
 import { Button, ConfirmDialog, EmptyState, Modal, Notice, SegmentedControl } from '../../components/ui';
 import { useIsMobile } from '../../lib/breakpoints';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import {
   agentInstallCommand, fetchAgentManifest, guessAgentOs, INSECURE_AGENT_INSTALL_TEXT, isSecureAgentOrigin,
   type AgentManifestState, type AgentOs,
@@ -12,21 +11,17 @@ import {
 import { CopyCommand } from './AgentCommands';
 import type { DesktopDevice, DesktopPairingCode, DeviceAgentUpdate } from '../../types';
 
-// Раздел «Устройства» — модалка из меню аватара (ADR-008, вторая волна): что подключено
-// к рукам и как подключить новое.
+// Раздел «Устройства» — модалка из меню аватара: компьютеры с агентом локальных проектов
+// (ADR-016) и подключение нового.
 //
-// Здесь ровно одна операция с секретом — выпуск кода сопряжения. Код показывается человеку,
-// человек вводит его в окне клиента; API-ключ владельца и его JWT на устройство не уезжают
-// никогда, устройство получает СВОЙ токен и только его.
-//
-// Под флагом local-projects (agent-distribution AD-7) код уходит не в окно клиента, а в
-// строку установки агента одной командой; без флага модалка остаётся модалкой клиента рук.
+// Здесь ровно одна операция с секретом — выпуск кода сопряжения. Код уходит в строку установки
+// агента одной командой (agent-distribution AD-7); API-ключ владельца и его JWT на устройство
+// не уезжают никогда, устройство получает СВОЙ токен и только его.
 
 const POLL_MS = 3000;
 
 export function DevicesModal({ onClose }: { onClose: () => void }) {
   const isMobile = useIsMobile();
-  const agentMode = useFeature(FLAGS.localProjects);
   const [devices, setDevices] = useState<DesktopDevice[] | null>(null);
   const [pairing, setPairing] = useState<DesktopPairingCode | null>(null);
   const [err, setErr] = useState('');
@@ -97,9 +92,7 @@ export function DevicesModal({ onClose }: { onClose: () => void }) {
     <>
       <Modal
         title="Устройства"
-        subtitle={agentMode
-          ? 'Компьютеры с агентом AI Home: на них живут локальные проекты и руки десктопного чата.'
-          : 'Компьютеры, которым можно отдать руки в десктопном чате: что подключено и как подключить новое.'}
+        subtitle="Компьютеры с агентом AI Home: на них живут локальные проекты."
         width={MODAL_W.form}
         onClose={onClose}
       >
@@ -113,13 +106,11 @@ export function DevicesModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {agentMode && !isSecureAgentOrigin(window.location.origin)
+        {!isSecureAgentOrigin(window.location.origin)
           // Открытый канал из сети: сервер код не выпустит, а команда качала бы агента по http
           ? <Notice icon={ShieldOff} title="Нужен HTTPS" style={{ marginBottom: SP.md }}>{INSECURE_AGENT_INSTALL_TEXT}</Notice>
           : pairing
-          ? (agentMode
-            ? <AgentInstallCard code={pairing} onCancel={() => void cancelPairing()} isMobile={isMobile} />
-            : <PairingCard code={pairing} onCancel={() => void cancelPairing()} isMobile={isMobile} />)
+          ? <AgentInstallCard code={pairing} onCancel={() => void cancelPairing()} isMobile={isMobile} />
           : (
             <div style={{ marginBottom: SP.md }}>
               <Button
@@ -127,7 +118,7 @@ export function DevicesModal({ onClose }: { onClose: () => void }) {
                 leftIcon={<Plug size={15} strokeWidth={2.2} />}
                 onClick={() => void startPairing()}
               >
-                {agentMode ? 'Подключить компьютер' : 'Подключить устройство'}
+                Подключить компьютер
               </Button>
             </div>
           )}
@@ -137,9 +128,7 @@ export function DevicesModal({ onClose }: { onClose: () => void }) {
             compact
             icon={<Laptop size={20} strokeWidth={2} />}
             title="Устройств пока нет"
-            subtitle={agentMode
-              ? 'Нажмите «Подключить компьютер» и выполните одну команду в терминале этого компьютера.'
-              : 'Поставьте AI Home Desktop на свой компьютер и введите там код подключения.'}
+            subtitle="Нажмите «Подключить компьютер» и выполните одну команду в терминале этого компьютера."
           />
         )}
 
@@ -154,14 +143,14 @@ export function DevicesModal({ onClose }: { onClose: () => void }) {
               <div style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans }}>
                 {/* Отпечаток — примета машины для человека, а не проверка */}
                 {d.fingerprint}
-                {agentMode && d.agentVersion
+                {d.agentVersion
                   ? ` · агент ${d.agentVersion}`
                   : d.clientVersion ? ` · клиент ${d.clientVersion}` : ''}
                 {d.lastSeenAt
                   ? ` · последний раз на связи ${new Date(d.lastSeenAt).toLocaleString('ru-RU')}`
                   : ' · ещё не выходило на связь'}
               </div>
-              {agentMode && <AgentUpdateLine update={d.agentUpdate} />}
+              <AgentUpdateLine update={d.agentUpdate} />
             </div>
             <Button
               variant="ghost" size="sm"
@@ -225,37 +214,6 @@ const cardStyle = {
   background: C.bgPanel, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
   padding: SP.lg, marginBottom: SP.md,
 } as const;
-
-// Карточка выпущенного кода: сам код, сколько ему жить и сколько попыток осталось.
-// Код не секрет длительного действия — он живёт 5 минут и сгорает после пятой ошибки,
-// поэтому показывается прямо, без «показать/скрыть».
-function PairingCard({ code, onCancel, isMobile }: {
-  code: DesktopPairingCode; onCancel: () => void; isMobile: boolean;
-}) {
-  const left = useCodeLeft(code.expiresAt);
-
-  return (
-    <div style={cardStyle}>
-      <div style={{ fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans, marginBottom: SP.sm }}>
-        Введите этот код в окне клиента AI Home Desktop на подключаемом компьютере.
-      </div>
-      <div style={{
-        fontFamily: FONT.mono, fontSize: isMobile ? 26 : 30, fontWeight: 700,
-        letterSpacing: '0.18em', color: C.accent, userSelect: 'all',
-      }}>
-        {code.code}
-      </div>
-      <div style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, marginTop: SP.xs }}>
-        {left > 0
-          ? `Годен ещё ${formatLeft(left)} · попыток осталось ${code.attemptsLeft}`
-          : 'Код истёк — выпустите новый'}
-      </div>
-      <div style={{ marginTop: SP.md, display: 'flex', gap: SP.sm }}>
-        <Button variant="ghost" size="sm" onClick={onCancel}>Отменить</Button>
-      </div>
-    </div>
-  );
-}
 
 // Подключение компьютера одной командой (Р10): код вшит в строку установки, строку собираем
 // из адреса, с которого открыта веб-морда. Сервер не раздаёт агента (503 на манифест) —

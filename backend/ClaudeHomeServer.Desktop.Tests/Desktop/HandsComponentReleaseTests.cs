@@ -82,7 +82,7 @@ public class DeviceHubHandsReportTests : IDisposable
         context.SetupGet(c => c.User).Returns(new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
             [new System.Security.Claims.Claim(DesktopProtocol.OwnerIdClaim, _owner),
              new System.Security.Claims.Claim(DesktopProtocol.DeviceIdClaim, deviceId)], "device-token")));
-        var router = new DesktopCallRouter(Moq.Mock.Of<IDeviceCommandSender>(), [], NullLogger<DesktopCallRouter>.Instance);
+        var router = new DeviceConnectionRegistry([], NullLogger<DeviceConnectionRegistry>.Instance);
         var exec = new DeviceExecChannel(new DeviceRegistry(_temp), router,
             new DeviceHarnessPolicy(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build()),
             Moq.Mock.Of<IDeviceExecOpenSender>(), NullLogger<DeviceExecChannel>.Instance);

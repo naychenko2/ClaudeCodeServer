@@ -3,7 +3,6 @@ import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListCh
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
-import { HandsBadge } from '../../features/desktop/HandsBadge';
 import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName, useProviders } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
@@ -1258,9 +1257,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         </span>
       </span>
     );
-    // Десктопный чат: руки, их устройство и «Стоп». Компонент сам решает, показываться
-    // ли — у обычного чата он пуст, поэтому условия типа чата здесь нет
-    slots.push(<HandsBadge key="hands" session={session} />);
     // Руки локального проекта — полоса «Руки» над композером (features/localHands/HandsStrip)
     // Локальный проект (ADR-016): где живут файлы и в сети ли устройство — иначе
     // закрытый гейт хода и пропавшие панели выглядят поломкой

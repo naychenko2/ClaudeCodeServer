@@ -117,20 +117,6 @@ public class ChatDigestServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task BuildDigest_ДесктопномуЧату_СводкаНеСтроится()
-    {
-        var runner = new CountingRunner("сводка");
-        var (sut, chat) = BuildSut(runner);
-        chat.DesktopChat = true;
-
-        var act = () => sut.BuildDigestAsync(TestUserId, chat.Id, CancellationToken.None);
-        await act.Should().ThrowExactlyAsync<InvalidOperationException>()
-            .WithMessage("*десктоп*");
-        runner.Calls.Should().Be(0);
-        chat.ArchiveSummary.Should().BeNull();
-    }
-
-    [Fact]
     public async Task BuildDigest_Кэш_ВторойКликНеЗовётМодель()
     {
         var runner = new CountingRunner("Первая сводка.");

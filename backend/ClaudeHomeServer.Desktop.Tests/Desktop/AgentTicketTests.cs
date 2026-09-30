@@ -127,7 +127,7 @@ public sealed class AgentTicketTests : IDisposable
         context.SetupGet(c => c.ConnectionId).Returns("conn");
         context.SetupGet(c => c.User).Returns(new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(DesktopProtocol.OwnerIdClaim, Owner), new Claim(DesktopProtocol.DeviceIdClaim, deviceId)], "device-token")));
-        var router = new DesktopCallRouter(Mock.Of<IDeviceCommandSender>(), [], NullLogger<DesktopCallRouter>.Instance);
+        var router = new DeviceConnectionRegistry([], NullLogger<DeviceConnectionRegistry>.Instance);
         var exec = new DeviceExecChannel(new DeviceRegistry(_temp), router,
             new DeviceHarnessPolicy(new ConfigurationBuilder().Build()), Mock.Of<IDeviceExecOpenSender>(),
             NullLogger<DeviceExecChannel>.Instance);

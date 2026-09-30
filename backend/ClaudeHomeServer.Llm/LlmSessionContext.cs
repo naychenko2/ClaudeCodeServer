@@ -188,15 +188,6 @@ public sealed record LocalMediaMcpContext(string ApiUrl, Func<string> TokenFacto
 public sealed record CodeGraphMcpContext(string ApiUrl, Func<string> TokenFactory, string ProjectId,
     string? SessionId = null, string? RootPath = null, bool UseHttp = false);
 
-// Контекст MCP-сервера десктопной грани (ADR-008): адрес API, capability-токен хода
-// и id чата. Токен отдельный — сервисный JWT владельца эндпоинты /api/devices/* не
-// принимают вовсе (иначе руками ходил бы любой чат владельца, включая ночной
-// tasks-executor): audience desktop, claims ownerId + sessionId + deviceId, TTL — минуты.
-// Чат-вызыватель бэкенд выводит ИЗ ТОКЕНА; DESKTOP_SESSION_ID уезжает в X-Caller-Session-Id
-// и служит только диагностикой (GET /api/mcp/calls) — в решении об авторизации он не
-// участвует (спуфится). null — грань чату не доставляется.
-public sealed record DesktopMcpContext(string ApiUrl, string Token, string SessionId);
-
 // Один MCP-сервер внешнего модуля (контракт docs/modules/integration-contract.md §6):
 // Key — ключ сервера в mcp-конфиге хода, Command/Args — запуск из манифеста (args уже
 // резолвнуты от каталога модуля), ModuleId — id модуля, ApiUrl — адрес модуля ЧЕРЕЗ gateway
@@ -326,11 +317,6 @@ public sealed record LlmSessionContext(
     // запускает разбор Pending-очереди — ходы, накопленные через EnqueueBypass во время
     // оркестрации, доставляются штатно (теперь уже в свободный адаптер). null (тесты) — no-op.
     Action<string>? OrchestrationDone = null,
-    // MCP-сервер десктопной грани (ADR-008): руки на машине пользователя.
-    // null — грань чату не положена (не десктопный чат, выключена в проекте, нет флага,
-    // чат-исполнитель задачи / автоматизации / групповой). Решается по КОНФИГУРАЦИИ
-    // на момент запуска CLI — от свойств хода состав не зависит.
-    DesktopMcpContext? DesktopMcp = null,
     // Сводный признак «у сессии есть продуктовые MCP-серверы, чей АДРЕС допускает http»:
     // от него (вместе с живым рубильником ниже) ClaudeSession ставит NO_PROXY хода
     // (ADR-012) — обход прокси нужен ЛЮБОМУ http-серверу, а не одному виджету. Решение

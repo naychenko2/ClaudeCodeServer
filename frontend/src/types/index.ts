@@ -137,10 +137,6 @@ export interface Project {
   // Ключи серверов личного MCP-реестра, ВКЛЮЧЁННЫХ в этом проекте (allow-list):
   // сервер едет в ход только там, где явно включён. Пусто/нет — не включён никто
   mcpServersOn?: string[] | null;
-  // Грань десктопного агента включена в этом проекте (ADR-008, флаг desktop-agent):
-  // вторая половина оси выдачи «проект + десктопный чат». Тумблер — рубильник: снятие
-  // гасит живые сеансы рук проекта, а не только запрещает новые
-  desktopAgentEnabled?: boolean;
   // Персона-«руководитель проекта»: дефолт для новых чатов проекта;
   // null/отсутствует — онбординг проекта ещё не пройден (гейт в WorkspacePage)
   defaultPersonaId?: string | null;
@@ -793,9 +789,6 @@ export interface Session {
   // Закреплён в списке чатов
   isPinned?: boolean;
   claudeSessionId?: string;
-  // Десктопный чат (ADR-008): тип задаётся при создании и не меняется — в его транскрипте
-  // лежат кадры чужого рабочего стола, поэтому продолжить его обычным чатом нельзя
-  desktopChat?: boolean;
   // Чат картинки (ADR-018 §1): тип задаётся при создании, внутри меняется только путь
   imageChat?: SessionImageChat | null;
   mode: Mode;
@@ -3759,7 +3752,7 @@ export interface VideoFeedResponse {
   items: VideoItem[];
 }
 
-// ---------- Десктопный агент (ADR-008) ----------
+// ---------- Устройства (канал устройства ADR-016) ----------
 
 // Устройство владельца из GET /api/devices. Отпечаток наружу урезан до 12 символов —
 // он служит человеку приметой «это та самая машина», а не проверкой.
@@ -3819,26 +3812,6 @@ export interface LocalHandsChatStatus {
   state: string | null;
   reason: string | null;
   deviceName: string | null;
-}
-
-// Сеанс рук глазами веб-морды (GET /api/devices/hands/chat/{id}).
-// facetRefusal — почему грань чату не выдана; null — выдана
-export interface DesktopHandsChatStatus {
-  active: boolean;
-  session: DesktopHandsSessionView | null;
-  requestedAt?: string | null;
-  facetRefusal?: string | null;
-}
-
-export interface DesktopHandsSessionView {
-  chatSessionId: string;
-  chat?: string | null;
-  // Имя устройства, которому отданы руки
-  device?: string | null;
-  startedAt: string;
-  expiresAt?: string | null;
-  idleDeadlineAt?: string | null;
-  hardDeadlineAt?: string | null;
 }
 
 // === Карта плана (часть B фичи «Визуальный разворот плана») ===

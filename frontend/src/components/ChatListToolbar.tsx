@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Plus, CalendarDays, Tags, List, ListTree, Check, MonitorSmartphone,
+  Plus, CalendarDays, Tags, List, ListTree, Check,
   ArrowDownWideNarrow, ArrowUpNarrowWide, CalendarArrowDown, CalendarArrowUp,
   SlidersHorizontal, Archive,
 } from 'lucide-react';
@@ -53,10 +53,6 @@ type Tier = 'comfort' | 'cozy' | 'compact';
 
 interface ChatListToolbarProps {
   onNew: () => void;
-  // Второй тип чата — десктопный (ADR-008): отдельная кнопка рядом с «+», а не выбор
-  // в диалоге. Тип задаётся ТОЛЬКО при создании и потом не меняется, поэтому дверей две.
-  // undefined — грань в этом проекте не включена, кнопки нет вовсе
-  onNewDesktop?: () => void;
   creating?: boolean;
   // Оффлайн — кнопка создания не рисуется (создать чат без сети нельзя), тулбар остаётся
   hideNew?: boolean;
@@ -85,7 +81,7 @@ function SheetSec({ children }: { children: React.ReactNode }) {
 }
 
 export function ChatListToolbar({
-  onNew, onNewDesktop, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
+  onNew, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
   isMobile = false, groupByOptions = ['days', 'tags', 'none'],
 }: ChatListToolbarProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -127,14 +123,6 @@ export function ChatListToolbar({
   const [viewSheet, setViewSheet] = useState(false);
 
   const newIcon = <Plus size={15} strokeWidth={2.4} />;
-  // Кнопка десктопного чата: нейтральная иконка рядом с главным действием — накат
-  // акцента на второй тип чата сделал бы из него равное главное действие
-  const desktopBtn = (size: 'xs' | 'sm' | 'lg') => onNewDesktop && !hideNew ? (
-    <IconButton size={size} title="Новый десктопный чат (руки на вашем компьютере)"
-      onClick={onNewDesktop}>
-      <MonitorSmartphone size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-    </IconButton>
-  ) : null;
   const sort = SORT_META[sortOrder];
 
   // === Мобильная ступень: [+ текстом flex] [Ф lg] [Вид lg] ===
@@ -152,7 +140,6 @@ export function ChatListToolbar({
             </Button>
           )}
         </div>
-        {desktopBtn('lg')}
         <FilterBar
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
           hiddenCount={hiddenCount} isMobile triggerSize="lg"
@@ -279,7 +266,6 @@ export function ChatListToolbar({
       </PanelHeaderSlot>
       {!hideNew && (
         <PanelHeaderSlot pinned>
-          {desktopBtn('xs')}
           <Button
             variant="primary" size="xs" title="Новый чат" loading={creating}
             leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
@@ -312,8 +298,6 @@ export function ChatListToolbar({
           {newIcon}
         </Button>
       ))}
-
-      {desktopBtn('sm')}
 
       {/* Группировка: PillSwitch только иконками (comfort/cozy) или кнопка-меню на compact */}
       {tier === 'compact' ? (

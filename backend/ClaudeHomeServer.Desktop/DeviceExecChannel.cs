@@ -39,7 +39,7 @@ public sealed class DeviceHubExecOpenSender(IHubContext<DeviceHub, IDesktopDevic
 public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel, IDeviceFolderBindChannel
 {
     private readonly DeviceRegistry _registry;
-    private readonly DesktopCallRouter _router;
+    private readonly DeviceConnectionRegistry _connections;
     private readonly DeviceHarnessPolicy _harness;
     private readonly IDeviceExecOpenSender _opener;
     private readonly ILogger<DeviceExecChannel> _log;
@@ -49,7 +49,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
 
     public DeviceExecChannel(
         DeviceRegistry registry,
-        DesktopCallRouter router,
+        DeviceConnectionRegistry connections,
         DeviceHarnessPolicy harness,
         IDeviceExecOpenSender opener,
         ILogger<DeviceExecChannel> log,
@@ -57,7 +57,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
         AgentReleaseCatalog? releases = null)
     {
         _registry = registry;
-        _router = router;
+        _connections = connections;
         _harness = harness;
         _opener = opener;
         _log = log;
@@ -66,7 +66,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
     }
 
     /// <summary>
-    /// Hello устройства: сведения агента сохраняются ДО того, как маршрутизатор объявит
+    /// Hello устройства: сведения агента сохраняются ДО того, как реестр соединений объявит
     /// устройство онлайн, — наблюдатели онлайна видят уже свежие возможности. В ответ уходит
     /// требуемая версия CLI и вердикт по объявленной копии, а агенту — ещё и сведения о
     /// раздаче (agent-distribution Р9): текущая и минимальная версии и архив под его RID.
@@ -75,7 +75,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
         string connectionId, string ownerId, string deviceId, DeviceHello hello, CancellationToken ct = default)
     {
         var device = _registry.UpdateAgentInfo(ownerId, deviceId, hello);
-        var ack = await _router.HelloAsync(connectionId, hello, ct);
+        var ack = await _connections.HelloAsync(connectionId, hello, ct);
 
         var (ready, problem) = _harness.Evaluate(device?.CliVersion);
         if (!ready && !string.IsNullOrWhiteSpace(hello.AgentVersion))
@@ -120,7 +120,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
         return new DeviceExecStatus(
             device.Id,
             device.Name,
-            _router.IsOnline(ownerId, deviceId),
+            _connections.IsOnline(ownerId, deviceId),
             device.Platform,
             device.AgentVersion,
             device.CliVersion,
@@ -147,7 +147,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
         if (!status.HarnessReady)
             throw new DeviceExecRefusedException(DeviceExecRefusal.HarnessNotReady, $"{name}: {status.HarnessProblem}.");
 
-        var connection = _router.Find(ownerId, deviceId)
+        var connection = _connections.Find(ownerId, deviceId)
             ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети — сообщение не взято в работу.");
 
         return await OpenStreamAsync(connection, purpose: null, maxOutage: null, ct,
@@ -173,7 +173,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
         if (status.AgentOutdated)
             throw new DeviceExecRefusedException(DeviceExecRefusal.AgentOutdated, $"{name}: {status.AgentProblem}.");
 
-        var connection = _router.Find(ownerId, deviceId)
+        var connection = _connections.Find(ownerId, deviceId)
             ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
 
         return await OpenStreamAsync(connection, DeviceExecPurposes.Relay, RelayProtocol.MaxOutage, ct,
@@ -198,7 +198,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
         if (status.AgentOutdated)
             throw new DeviceExecRefusedException(DeviceExecRefusal.AgentOutdated, $"{name}: {status.AgentProblem}.");
 
-        var connection = _router.Find(ownerId, deviceId)
+        var connection = _connections.Find(ownerId, deviceId)
             ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
 
         return await OpenStreamAsync(connection, DeviceExecPurposes.BindFolder, RelayProtocol.MaxOutage, ct,
@@ -208,7 +208,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
     private async Task<IDeviceExecStream> OpenStreamAsync(DeviceConnection connection, string? purpose, TimeSpan? maxOutage,
         CancellationToken ct, string noResponse)
     {
-        var stream = new DeviceExecStream(DesktopProtocol.NewCallId(), connection.OwnerId, connection.DeviceId,
+        var stream = new DeviceExecStream(DeviceExecProtocol.NewExecId(), connection.OwnerId, connection.DeviceId,
             s => _streams.TryRemove(s.ExecId, out _), maxOutage, _time);
         _streams[stream.ExecId] = stream;
 

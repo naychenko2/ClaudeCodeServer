@@ -19,7 +19,6 @@ import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/G
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
-import { DesktopFacetSection } from '../../desktop/DesktopFacetSection';
 import { DeviceSection } from '../../desktop/DeviceSection';
 import { LocalHandsSection } from '../../localHands/LocalHandsSection';
 import { ProjectMapSection } from './ProjectMapSection';
@@ -244,8 +243,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   // Фон проекта — только владельцу: участник без прав владельца фон менять не может
   // (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем за тем же
   // условием, чтобы не показывать недоступное действие.
-  // Грань десктопа за флагом: без него секции нет — включать нечего, сервер откажет
-  const desktopEnabled = useFeature(FLAGS.desktopAgent);
   // Локальные проекты (ADR-016 §3.4): секция привязки к устройству — за флагом.
   // Без флага секция не рисуется — ручка PUT /projects/{id}/device закрыта на бэке 404
   const localProjectsEnabled = useFeature(FLAGS.localProjects);
@@ -581,7 +578,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       </div>
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
-      {desktopEnabled && <DesktopFacetSection project={project} onUpdated={onProjectUpdated} />}
       {/* Секция привязки к устройству (ADR-016 §3.4) — за флагом local-projects.
           Внутри показ/скрытие деталей идёт через поле project.device (а не deviceId
           руками), иначе сторож G10 краснеет на каждом обращении */}

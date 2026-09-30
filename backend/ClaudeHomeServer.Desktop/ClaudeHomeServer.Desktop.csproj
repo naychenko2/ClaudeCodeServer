@@ -30,8 +30,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- JWT: DesktopCaller читает и пишет claims capability-токена
-         (JwtRegisteredClaimNames), схема устройства собирает ClaimsIdentity.
+    <!-- JWT: схема устройства собирает ClaimsIdentity с JwtRegisteredClaimNames.Sub.
          Web SDK этот пакет не даёт — он не часть Microsoft.AspNetCore.App.
          Версия — та же, что резолвится в Main транзитивно через
          Microsoft.AspNetCore.Authentication.JwtBearer 10.0.0; расхождение

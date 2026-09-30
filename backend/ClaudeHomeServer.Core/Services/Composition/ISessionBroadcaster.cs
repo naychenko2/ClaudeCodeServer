@@ -34,8 +34,8 @@ namespace ClaudeHomeServer.Services.Composition;
 //                   другая операция, и на broadcast она не влияет.
 //
 // НЕ покрывает (см. задачу):
-//   - DesktopCallRouter (Services/Desktop) — типизированный хаб устройств
-//     (Clients.Client(connectionId).Call/Go/Cancel), другой канал (ADR-008);
+//   - DeviceExecChannel (Services/Desktop) — типизированный хаб устройств
+//     (Clients.Client(connectionId).ExecOpen), другой канал (ADR-016);
 //   - TerminalService (Services/Terminal) — IHubContext<TerminalHub> +
 //     Groups.AddToGroupAsync, управление членством;
 //   - FileWatcherService (Services) — шлёт в ту же project-группу, но СВОИМ методом хаба

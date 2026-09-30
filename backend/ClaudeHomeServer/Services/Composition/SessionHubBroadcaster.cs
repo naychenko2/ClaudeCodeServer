@@ -15,8 +15,8 @@ namespace ClaudeHomeServer.Services.Composition;
 // с фронтом; см. SignalR Hub в docs/architecture/api.md.
 //
 // Что НЕ покрывает (см. задачу Ф4 и ADR-014):
-//   - DesktopCallRouter — IHubContext<DeviceHub> + типизированные вызовы
-//     Clients.Client(connectionId).Call/Go/Cancel; оставлен как есть;
+//   - DeviceExecChannel — IHubContext<DeviceHub> + типизированный вызов
+//     Clients.Client(connectionId).ExecOpen; оставлен как есть;
 //   - TerminalService — IHubContext<TerminalHub> + Groups.AddToGroupAsync,
 //     управление членством; оставлен как есть.
 //

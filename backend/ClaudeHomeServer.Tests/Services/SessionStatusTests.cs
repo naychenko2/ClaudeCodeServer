@@ -260,4 +260,44 @@ public class SessionStatusTests : IDisposable
         // Не должен бросать исключение, просто пустой список
         sut.GetById("any-id").Should().BeNull();
     }
+
+    // --- Записи с полями удалённого десктопного агента (ADR-008) ---
+
+    // Разовой миграции нет: старые записи sessions.json/projects.json с DesktopChat и
+    // DesktopAgentEnabled обязаны читаться штатно (неизвестное поле System.Text.Json пропускает),
+    // а бывший десктопный чат — становиться обычным чатом проекта с сохранённым транскриптом.
+    // Упади загрузка — JsonFileStore унёс бы весь стор в .corrupt, и чаты с проектами пропали бы.
+
+    [Fact]
+    public void LoadSessions_ЗаписьСDesktopChat_ЧитаетсяОбычнымЧатом()
+    {
+        File.WriteAllText(_sessionsJsonPath, """
+            [{ "Id": "chat-desktop", "ProjectId": "proj-1", "Status": 4,
+               "CreatedAt": "2026-09-01T10:00:00Z", "UpdatedAt": "2026-09-01T10:00:00Z",
+               "ClaudeSessionId": "csid-desktop", "DesktopChat": true }]
+            """);
+
+        var sut = CreateSessionManager();
+
+        var loaded = sut.GetById("chat-desktop");
+        loaded.Should().NotBeNull("запись с полем удалённого типа чата не должна теряться");
+        loaded!.ClaudeSessionId.Should().Be("csid-desktop", "транскрипт бывшего десктопного чата сохраняется");
+        sut.GetByProject("proj-1").Select(s => s.Id).Should().Contain("chat-desktop");
+    }
+
+    [Fact]
+    public void LoadProjects_ЗаписьСDesktopAgentEnabled_ЧитаетсяШтатно()
+    {
+        File.WriteAllText(_projectsJsonPath, """
+            [{ "Id": "proj-desktop", "Name": "Старый проект", "RootPath": "/tmp/old-desktop-project",
+               "OwnerId": "owner-1", "CreatedAt": "2026-09-01T10:00:00Z", "UpdatedAt": "2026-09-01T10:00:00Z",
+               "DesktopAgentEnabled": true }]
+            """);
+
+        var userStore = new UserStore(_config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var projects = new ProjectManager(_config, userStore, new AppSettingsService(_config));
+
+        projects.GetById("proj-desktop").Should().NotBeNull("запись с полем удалённого тумблера не должна теряться")
+            .And.Subject.As<Project>().Name.Should().Be("Старый проект");
+    }
 }

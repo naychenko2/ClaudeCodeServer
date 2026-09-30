@@ -12,20 +12,20 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Controllers;
 
 /// <summary>
-/// Реестр устройств десктопного агента и сопряжение (ADR-008). Управление устройствами —
+/// Реестр устройств и сопряжение (канал устройства ADR-016). Управление устройствами —
 /// работа человека в вебе, поэтому обычный [Authorize]; обмен кода на токен анонимен —
 /// у клиента на этот момент нет вообще никаких учётных данных.
 ///
 /// Сервисный токен владельца сюда не пускается ни на одну ручку: он лежит в env КАЖДОГО
 /// хода (включая ночной tasks-executor), и с ним ход завёл бы себе устройство или снял
-/// чужое. Вызовы канала с capability-токеном чата живут отдельно от этого контроллера.
+/// чужое.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("api/devices")]
 public class DevicesController(
     DeviceRegistry registry, DevicePairingService pairing, UserStore users,
-    DesktopCallRouter router) : ControllerBase
+    DeviceConnectionRegistry connections) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -175,7 +175,7 @@ public class DevicesController(
         revoked = device.Revoked,
         revokedAt = device.RevokedAt,
         tokenVersion = device.TokenVersion,
-        online = router.IsOnline(device.OwnerId, device.Id),
+        online = connections.IsOnline(device.OwnerId, device.Id),
         platform = device.Platform,
         capabilities = new
         {

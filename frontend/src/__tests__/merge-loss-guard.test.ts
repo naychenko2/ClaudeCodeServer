@@ -30,9 +30,6 @@ const INLAYS: ReadonlyArray<{ file: string; anchor: string; meaning: string }> =
     meaning: 'быстрые фразы: модалка правки набора' },
   { file: 'components/Composer.tsx', anchor: "useActionVisibility('composer'",
     meaning: 'губа: настройка видимости кнопок ряда (useActionVisibility)' },
-  // Кнопка создания десктопного чата — потеряна edd570c9, вернулась acc06ba7
-  { file: 'components/SessionList.tsx', anchor: 'onNewDesktop=',
-    meaning: 'кнопка создания десктопного чата в списке (onNewDesktop)' },
 ];
 
 describe('сторож врезок: master-правки, которые мерж не должен уносить', () => {

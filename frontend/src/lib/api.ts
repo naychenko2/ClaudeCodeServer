@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { readStoredToken, request } from './offline';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
 
@@ -490,9 +490,7 @@ export const api = {
       }),
   },
 
-  // Десктопный агент (ADR-008): устройства владельца, сопряжение и веб-половина сеанса рук.
-  // Начать сеанс отсюда нельзя ни при каких условиях — эта дверь на самом устройстве,
-  // веб-морда может только попросить (request) и остановить (handsStop).
+  // Устройства владельца и сопряжение (канал устройства ADR-016).
   devices: {
     list: () => request<DesktopDevice[]>('/devices'),
     // Код сопряжения: 8 символов, живёт 5 минут, принадлежит ЭТОЙ веб-сессии
@@ -505,17 +503,6 @@ export const api = {
       }),
     // Отзыв: запись остаётся надгробием, токен устройства умирает немедленно
     revoke: (id: string) => request<void>(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-
-    // Статус сеанса для бейджа «руки на …». Отдельный запрос, а не только событие ленты:
-    // событие эфемерное, и после перезагрузки страницы бейдж погас бы при живых руках
-    handsChat: (chatSessionId: string) =>
-      request<DesktopHandsChatStatus>(`/devices/hands/chat/${encodeURIComponent(chatSessionId)}`),
-    handsRequest: (chatSessionId: string) =>
-      request<{ requested: boolean; active: boolean; requestedAt?: string }>(
-        `/devices/hands/chat/${encodeURIComponent(chatSessionId)}/request`, { method: 'POST' }),
-    handsStop: (chatSessionId: string) =>
-      request<{ stopped: boolean }>(
-        `/devices/hands/chat/${encodeURIComponent(chatSessionId)}/stop`, { method: 'POST' }),
   },
 
   providers: {
@@ -754,14 +741,6 @@ export const api = {
       request<Project>(`/projects/${encodeURIComponent(id)}/device`, {
         method: 'PUT', body: JSON.stringify(body),
       }).then(noted),
-    // Тумблер грани десктопного агента в проекте (ADR-008). Отдельная ручка, а не поле
-    // update: выключение — рубильник, сервер гасит живые сеансы рук проекта и отвечает,
-    // сколько погасил (состав инструментов зафиксирован на запуске CLI, и запущенный ход
-    // иначе доработал бы с гранью в руках)
-    setDesktopAgent: (id: string, enabled: boolean) =>
-      request<{ project: Project; handsStopped: number }>(
-        `/projects/${encodeURIComponent(id)}/desktop-agent`,
-        { method: 'PUT', body: JSON.stringify({ enabled }) }),
     // Тумблер рук локального проекта (ADR-016 §7): включение сервер пускает только по
     // матрице (иначе 400 с причиной), выключение — всегда
     setHands: (id: string, enabled: boolean) =>
@@ -1473,12 +1452,10 @@ export const api = {
     // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки тем»)
     iconBatch: (projectId: string) =>
       request<{ processed: number; skipped: number }>(`/projects/${encodeURIComponent(projectId)}/sessions/icon-batch`, { method: 'POST' }),
-    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string, desktop?: boolean) =>
+    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
-        // desktop — ТИП чата (ADR-008), задаётся только при создании: из десктопного чата
-        // нельзя продолжить обычный и наоборот, поэтому в update этого поля нет
-        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort, desktop }),
+        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
       }),
     update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {

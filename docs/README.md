@@ -46,10 +46,9 @@
 
 **features/** — [decision-history-import-texts.md](features/decision-history-import-texts.md)
 (тексты README ветки `ccs/dossiers/v1` и подписей импорта в панели «История решений»),
-[desktop-agent.md](features/desktop-agent.md) (десктопный агент: что сделано серверной
-половиной первой волны, эндпоинты и чего ещё нет),
-[desktop-agent-client.md](features/desktop-agent-client.md) (десктопный клиент второй волны:
-устройство решения, сопряжение и токен, фазы вызова в канале, запуск и отладка),
+[desktop-agent.md](features/desktop-agent.md) и
+[desktop-agent-client.md](features/desktop-agent-client.md) (исторические: руки ADR-008, удалены
+2026-09-30),
 [image-generation.md](features/image-generation.md) (выбор генератора картинок:
 иконка проекта, аватар персоны), [image-editor.md](features/image-editor.md) (редактор
 картинок v2: поставщики, чат картинки, агент, правки без ИИ), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
@@ -96,8 +95,8 @@
 [ADR-007](adr/ADR-007-model-preset-chains.md) (пресет как именованная цепочка моделей),
 [ADR-008](adr/ADR-008-project-background-generation.md) (фон проекта: контракт генерации
 без разметки, серверная сборка тайла и форма хранения),
-[ADR-008-desktop-agent](adr/ADR-008-desktop-agent.md) (десктопный агент: авторизация канала,
-сеанс рук, форма снапшота — номер совпал с фоном проекта, это разные решения),
+[ADR-008-desktop-agent](adr/ADR-008-desktop-agent.md) (десктопный агент, заменён ADR-016 §7,
+код удалён 2026-09-30 — номер совпал с фоном проекта, это разные решения),
 [ADR-009](adr/ADR-009-project-icon-glyph.md) (значок проекта: контракт ответа модели,
 белый список lucide и форма хранения),
 [ADR-009-local-action-route-format](adr/ADR-009-local-action-route-format.md) (контракт формата

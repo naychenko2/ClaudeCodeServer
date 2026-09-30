@@ -594,30 +594,9 @@ public record RecallManifestMessage(IReadOnlyList<RecallItemDto> Items)
 public record PromptSnapshotMessage(string SnapshotId, bool Applied, string? InheritedFromId = null)
     : ServerMessage("prompt_snapshot");
 
-// Статус сеанса рук десктопного агента (ADR-008 о десктопном агенте, раздел «Сеанс рук
-// и согласие») — источник бейджа «руки на home» в шапке чата и индикатора в оболочке.
-// Эфемерное событие: в history.json не пишется (аудит действий строится отдельным
-// персистируемым типом по серверной копии кадра, это не он).
-// Active=false — сеанс погашен; поля устройства и чата остаются заполненными, иначе бейджу
-// нечего снимать. Reason — отчего погас: idle (15 минут без вызовов) | cap (потолок 2 часа) |
-// client_closed | facet_off (грань выключили в проекте) | disconnected | restart | stopped
-// (человек нажал «Стоп»); у активного — null.
-// DeviceName — ЧЕЛОВЕЧЕСКОЕ имя устройства («home», «work»), то же, что принимает параметр
-// device инструментов desktop_*: GUID устройства наружу не отдаём.
-// ChatSessionId/ChatName — чат, которому принадлежат руки. Дублируют контекст намеренно:
-// бейдж живёт и вне ленты этого чата (список чатов, шапка приложения), а базовый SessionId
-// заполняется адресом броадкаста, а не смыслом.
-// StartedAt/ExpiresAt — UTC: старт сеанса и предельный срок (минимум из «15 минут без
-// вызовов» и потолка 2 часа), по нему фронт рисует отсчёт без опроса сервера.
-public record DesktopSessionMessage(bool Active, string DeviceName, string ChatSessionId,
-    string? ChatName = null, DateTime? StartedAt = null, DateTime? ExpiresAt = null,
-    string? Reason = null)
-    : ServerMessage("desktop_session");
-
 // Статус рук локального проекта в чате (ADR-016 §7) — источник бейджа LocalHandsBadge и строк
-// ленты. Не путать с DesktopSessionMessage (руки десктопного агента, ADR-008). Эфемерное: в
-// history.json не пишется. State — HandsChatStates; Reason — HandsEndReason у stopped и
-// HandsEndReason.Busy у unavailable; DeviceName — человеческое имя устройства.
+// ленты. Эфемерное: в history.json не пишется. State — HandsChatStates; Reason —
+// HandsEndReason у stopped и HandsEndReason.Busy у unavailable; DeviceName — человеческое имя устройства.
 public record HandsStatusMessage(string State, string? DeviceName = null, string? Reason = null)
     : ServerMessage("hands_status");
 

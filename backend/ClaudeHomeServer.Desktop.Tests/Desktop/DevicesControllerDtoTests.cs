@@ -29,7 +29,7 @@ public class DevicesControllerDtoTests : IDisposable
 
     private readonly DeviceRegistry _registry;
     private readonly UserStore _users;
-    private readonly DesktopCallRouter _router;
+    private readonly DeviceConnectionRegistry _router;
     private readonly string _ownerId;
 
     public DevicesControllerDtoTests()
@@ -49,23 +49,13 @@ public class DevicesControllerDtoTests : IDisposable
         _users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _ownerId = _users.FindByUsername("owner")!.Id;
 
-        _router = new DesktopCallRouter(new SilentSender(), [], NullLogger<DesktopCallRouter>.Instance);
+        _router = new DeviceConnectionRegistry([], NullLogger<DeviceConnectionRegistry>.Instance);
     }
 
     public void Dispose()
     {
         TestFs.DeleteDirectoryResilient(_dir);
         GC.SuppressFinalize(this);
-    }
-
-    private sealed class SilentSender : IDeviceCommandSender
-    {
-        public Task SendCallAsync(string connectionId, DesktopCallCommand command, CancellationToken ct = default) =>
-            Task.CompletedTask;
-        public Task SendGoAsync(string connectionId, DesktopGoCommand go, CancellationToken ct = default) =>
-            Task.CompletedTask;
-        public Task SendCancelAsync(string connectionId, DesktopCancelCommand cancel, CancellationToken ct = default) =>
-            Task.CompletedTask;
     }
 
     private DevicesController Controller()

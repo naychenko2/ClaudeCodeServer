@@ -166,7 +166,7 @@ export function quickAvailability(
   if (own) return { route: toRoute(pv, own, action, count), reason: '', fallback: null };
   const reason = `${pv.label} ${cannot(pv.label)} ${QUICK_SKILL[action]}`;
   for (const p of catalog.providers) {
-    if (p.key === pv.key) continue;
+    if (p.key === pv.key || p.available === false) continue;
     const m = pickQuickModel(p, AUTO_MODEL, op);
     if (m) return { route: null, reason, fallback: toRoute(p, m, action, count) };
   }

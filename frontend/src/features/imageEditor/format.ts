@@ -58,6 +58,15 @@ export const providerHint = (p: ImageEditProvider) =>
   p.priceUnit === 'usd' ? 'оплата в долларах' : p.priceUnit === 'credits' ? 'оплата в кредитах'
     : isFreeUnit(p.priceUnit) ? 'бесплатно, на своей видеокарте' : '';
 
+// Пометка заведённого, но лежащего поставщика; пункт при этом остаётся выбираемым
+export const unavailableMark = (p: ImageEditProvider) => (p.available === false ? 'недоступен' : '');
+
+// «Локальные модели (недоступен)» — для строки «Как в настройках — сейчас …»
+export const providerTitle = (p: ImageEditProvider) => {
+  const mark = unavailableMark(p);
+  return mark ? `${p.label} (${mark})` : p.label;
+};
+
 // Операции поставщика — объединение caps его моделей; null — у какой-то модели caps нет,
 // и честно сказать, чего поставщик не умеет, нельзя
 export function providerOps(p: ImageEditProvider): ImageEditOp[] | null {

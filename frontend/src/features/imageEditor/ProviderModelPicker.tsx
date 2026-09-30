@@ -1,12 +1,12 @@
 // «Поставщик ▾ → Модель ▾» (макет image-editor-v1, экран 3). Список поставщиков —
-// только доступные сейчас из каталога: ненастроенный сервер не присылает вовсе.
+// заведённые из каталога: ненастроенный сервер не присылает вовсе, лежащий — с пометкой.
 // На телефоне оба выбора живут в одной шторке «Чем рисовать».
 
 import { useState, type MouseEvent, type ReactNode } from 'react';
 import { AlertTriangle, Check, ChevronDown, Coins } from 'lucide-react';
 import { Button, Menu, MenuItem, Modal, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import type { ImageEditCatalog, ImageEditModel, ImageEditProvider } from './api';
-import { effectiveProvider, isFreeUnit, modelBlockReason, money, providerHint, type ProviderChoice } from './format';
+import { effectiveProvider, isFreeUnit, modelBlockReason, money, providerHint, unavailableMark, type ProviderChoice } from './format';
 
 interface Props {
   catalog: ImageEditCatalog;
@@ -36,17 +36,17 @@ function Row({ name, hint, aside }: { name: string; hint?: string; aside?: React
   );
 }
 
-function ProviderItems({ catalog, value, onPick }: { catalog: ImageEditCatalog; value: ProviderChoice; onPick: (p: ProviderChoice) => void }) {
+export function ProviderItems({ catalog, value, onPick }: { catalog: ImageEditCatalog; value: ProviderChoice; onPick: (p: ProviderChoice) => void }) {
   const admin = catalog.providers.find(p => p.key === catalog.default.provider);
   return (
     <>
       {admin && (
         <MenuItem icon={tick(value === 'settings')} onClick={() => onPick('settings')}
-          label={<Row name="Как в настройках" hint={`сейчас ${admin.label} — выбрал администратор`} />} />
+          label={<Row name="Как в настройках" hint={`сейчас ${admin.label} — выбрал администратор`} aside={unavailableMark(admin) || undefined} />} />
       )}
       {catalog.providers.map(p => (
         <MenuItem key={p.key} icon={tick(value === p.key)} onClick={() => onPick(p.key)}
-          label={<Row name={p.label} hint={providerHint(p)} />} />
+          label={<Row name={p.label} hint={providerHint(p)} aside={unavailableMark(p) || undefined} />} />
       ))}
     </>
   );

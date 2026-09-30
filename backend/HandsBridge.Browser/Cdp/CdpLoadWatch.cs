@@ -95,7 +95,9 @@ public sealed class CdpLoadWatch : IDisposable
         var ceiling = started + Ticks(loadTimeout);
         var deadline = ceiling;
         var loader = loaderId;
-        var domReady = false;
+        long? domReadyAt = null;
+        // Чем кончилось ожидание — для этапов hands.log
+        string? outcome = null;
         try
         {
             while (await NextAsync(deadline, cancellationToken) is { } e)
@@ -111,33 +113,62 @@ public sealed class CdpLoadWatch : IDisposable
                         var eventLoader = CdpBrowser.Str(e.Params, "loaderId");
                         if (loader is not null && eventLoader != loader)
                             continue;
-                        if (name == "load")
-                            return CdpLoadState.Settled;
-                        if (name == "networkAlmostIdle" && domReady)
-                            return CdpLoadState.Settled;
-                        if (name == "DOMContentLoaded" && !domReady)
+                        if (name == "load" || (name == "networkAlmostIdle" && domReadyAt is not null))
                         {
-                            domReady = true;
+                            outcome = name;
+                            return CdpLoadState.Settled;
+                        }
+                        if (name == "DOMContentLoaded" && domReadyAt is null)
+                        {
+                            domReadyAt = Stopwatch.GetTimestamp();
                             loader ??= eventLoader;
-                            deadline = Math.Min(ceiling, Stopwatch.GetTimestamp() + Ticks(settle));
+                            deadline = Math.Min(ceiling, domReadyAt.Value + Ticks(settle));
                         }
                         break;
                     }
                     // С известным загрузчиком конец загрузки до DOMContentLoaded мог прийти от
                     // прежнего документа — верим ему только после готовности своего
-                    case "Page.frameStoppedLoading" when domReady:
+                    case "Page.frameStoppedLoading" when domReadyAt is not null:
+                        outcome = "конец загрузки";
                         return CdpLoadState.Settled;
                     case "Page.frameStoppedLoading" when loaderId is null:
+                        outcome = "переход отменён";
                         return CdpLoadState.NotLoaded;
                     case "Page.navigatedWithinDocument" when loaderId is null:
+                        outcome = "внутри документа";
                         return CdpLoadState.Settled;
                 }
             }
-            return domReady ? CdpLoadState.DomReady : CdpLoadState.NotLoaded;
+            // Короткое окно затишья и потолок загрузки — разные беды: реклама держит load или
+            // вся загрузка упёрлась в потолок
+            outcome = deadline < ceiling ? "затишье истекло" : "потолок загрузки";
+            return domReadyAt is not null ? CdpLoadState.DomReady : CdpLoadState.NotLoaded;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            outcome = "отмена";
+            throw;
+        }
+        catch (CdpDisconnectedException)
+        {
+            outcome = "обрыв соединения";
+            throw;
         }
         finally
         {
-            CdpMeter.AddWait(Stopwatch.GetElapsedTime(started));
+            var now = Stopwatch.GetTimestamp();
+            CdpMeter.AddWait(Stopwatch.GetElapsedTime(started, now));
+            // load до DOMContentLoaded не приходит, поэтому без готовности DOM затишья нет вовсе
+            if (domReadyAt is { } ready)
+            {
+                CdpMeter.AddStage("DOMContentLoaded", Stopwatch.GetElapsedTime(started, ready));
+                CdpMeter.AddStage("затишье", Stopwatch.GetElapsedTime(ready, now), outcome);
+            }
+            else
+            {
+                CdpMeter.AddStage("DOMContentLoaded", Stopwatch.GetElapsedTime(started, now),
+                    outcome == "потолок загрузки" ? "не пришёл" : outcome);
+            }
         }
     }
 

@@ -23,8 +23,16 @@ namespace ClaudeHomeServer.HandsBridge.Browser.Session;
 /// сессии текущей вкладки; навигация, снимок, <c>browser_query</c>, клик и ввод JS не запускают.
 /// </summary>
 /// <param name="evaluateTimeout">Потолок исполнения <c>browser_evaluate</c>; null — <see cref="EvaluateTimeout"/>.</param>
-public sealed class BrowserSession(IBrowserSource source, TimeSpan? evaluateTimeout = null)
+/// <param name="pauseCap">Потолок паузы <c>browser_wait</c> без текста; null — <see cref="MaxPause"/>.</param>
+public sealed class BrowserSession(IBrowserSource source, TimeSpan? evaluateTimeout = null, TimeSpan? pauseCap = null)
 {
+    /// <summary>
+    /// Потолок паузы без условия. Переход (а клик и ввод — если открыли новую страницу) сам ждёт
+    /// готовность DOM и затишье, а модель по привычке ставила 3–30 с после каждого перехода (около
+    /// полутора минут за разговор). Нужно ждать содержимое — ждут текст, его ожидание этим потолком не режется.
+    /// </summary>
+    public static readonly TimeSpan MaxPause = TimeSpan.FromSeconds(2);
+
     /// <summary>
     /// Потолок исполнения скрипта модели: синхронную часть браузер обрывает сам, ожидание промиса
     /// режет наш таймаут команды. Долгой работе в странице тут не место — ход не должен висеть.
@@ -416,15 +424,23 @@ public sealed class BrowserSession(IBrowserSource source, TimeSpan? evaluateTime
 
     /// <summary>
     /// Ожидание текста в дереве доступности текущей вкладки (опрос) либо пауза. Потолок времени
-    /// держит гейт; без явного времени текст ждётся <see cref="DefaultTextWaitMs"/>.
+    /// держит гейт; без явного времени текст ждётся <see cref="DefaultTextWaitMs"/>. Пауза без
+    /// текста урезается до <see cref="MaxPause"/>, и модель узнаёт об этом из ответа.
     /// </summary>
     public Task<BrowserReply> WaitAsync(string? text, int? timeoutMs, CancellationToken cancellationToken) =>
         RunAsync(async browser =>
         {
             if (string.IsNullOrEmpty(text))
             {
-                await Task.Delay(timeoutMs!.Value, cancellationToken);
-                return new BrowserReply($"Waited {timeoutMs} ms.");
+                var capMs = (int)(pauseCap ?? MaxPause).TotalMilliseconds;
+                var pauseMs = Math.Min(timeoutMs!.Value, capMs);
+                await Task.Delay(pauseMs, cancellationToken);
+                return pauseMs == timeoutMs
+                    ? new BrowserReply($"Waited {pauseMs} ms.")
+                    : new BrowserReply(
+                        $"Waited {pauseMs} ms instead of {timeoutMs} ms: a pause without text is capped at {capMs} ms. " +
+                        "browser_navigate already waits for the page to load; browser_click and browser_type wait for it too when the action opens a new page. " +
+                        "For changes without a new page and for content that appears later, call browser_wait with text='...' that should appear on the page.");
             }
 
             var limit = TimeSpan.FromMilliseconds(timeoutMs ?? DefaultTextWaitMs);
@@ -464,8 +480,14 @@ public sealed class BrowserSession(IBrowserSource source, TimeSpan? evaluateTime
     /// <summary>Снимок вкладки; таблица ссылок заменяется его ссылками, если вкладка всё ещё текущая.</summary>
     private async Task<AxSnapshot> TakeSnapshotAsync(CdpPage page, int? root, int budgetChars, CancellationToken cancellationToken)
     {
+        var started = Stopwatch.GetTimestamp();
         var tree = await page.GetFullAXTreeAsync(cancellationToken);
+        var fetched = Stopwatch.GetTimestamp();
         var snapshot = AxSnapshotFormatter.Format(tree, root, budgetChars);
+        var formatted = Stopwatch.GetTimestamp();
+        CdpMeter.AddStage("снимок", Stopwatch.GetElapsedTime(started, formatted),
+            $"AX-дерево {Ms(Stopwatch.GetElapsedTime(started, fetched))} мс, {snapshot.InputNodes} узлов, " +
+            $"сжатие {Ms(Stopwatch.GetElapsedTime(fetched, formatted))} мс");
         lock (_state)
         {
             if (_current == page.TargetId)
@@ -545,7 +567,8 @@ public sealed class BrowserSession(IBrowserSource source, TimeSpan? evaluateTime
 
             return reply with
             {
-                Timing = new BrowserTiming(Stopwatch.GetElapsedTime(started), queue, acquire, meter.Calls, meter.Cdp, meter.Wait),
+                Timing = new BrowserTiming(Stopwatch.GetElapsedTime(started), queue, acquire, meter.Calls, meter.Cdp, meter.Wait,
+                    meter.Stages),
             };
         }
         finally
@@ -757,6 +780,8 @@ public sealed class BrowserSession(IBrowserSource source, TimeSpan? evaluateTime
             description += $"\n(at line {line.GetInt32() + 1}, column {column.GetInt32() + 1} of the script)";
         return description.Length > MaxExceptionChars ? description[..MaxExceptionChars] + "…" : description;
     }
+
+    private static long Ms(TimeSpan span) => (long)span.TotalMilliseconds;
 
     private static string OneLine(string text, int max)
     {

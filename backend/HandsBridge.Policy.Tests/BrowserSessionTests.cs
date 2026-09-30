@@ -176,6 +176,86 @@ public sealed class BrowserSessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Pause_without_text_is_capped_and_the_model_is_told_to_wait_for_text()
+    {
+        var session = new BrowserSession(_source, pauseCap: TimeSpan.FromMilliseconds(50));
+
+        var reply = await session.WaitAsync(null, 30_000, CancellationToken.None);
+
+        Assert.False(reply.IsError, reply.Text);
+        Assert.StartsWith("Waited 50 ms instead of 30000 ms: a pause without text is capped at 50 ms.", reply.Text);
+        Assert.Contains("browser_click and browser_type wait for it too when the action opens a new page", reply.Text);
+        Assert.Contains("browser_wait with text='...'", reply.Text);
+        Assert.True(reply.Timing!.Total < TimeSpan.FromSeconds(10), $"пауза {reply.Timing.Total}");
+    }
+
+    [Fact]
+    public async Task Pause_under_the_cap_is_kept_as_asked()
+    {
+        var session = new BrowserSession(_source, pauseCap: TimeSpan.FromMilliseconds(50));
+
+        var reply = await session.WaitAsync(null, 20, CancellationToken.None);
+
+        Assert.Equal("Waited 20 ms.", reply.Text);
+    }
+
+    [Fact]
+    public void Default_pause_cap_is_two_seconds()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(2), BrowserSession.MaxPause);
+    }
+
+    // ---------- этапы замера ----------
+
+    [Fact]
+    public async Task Navigate_log_line_splits_navigation_load_quiet_and_snapshot()
+    {
+        _source.Current.LoadDelay = TimeSpan.FromMilliseconds(150);
+
+        var reply = await _session.NavigateAsync("https://example.org/", CancellationToken.None);
+
+        var stages = reply.Timing!.Stages!;
+        Assert.Equal(["Page.navigate", "DOMContentLoaded", "затишье", "снимок"], stages.Select(s => s.Name));
+        Assert.True(stages[1].Elapsed >= TimeSpan.FromMilliseconds(50), $"DOMContentLoaded {stages[1].Elapsed}");
+        Assert.Equal("load", stages[2].Detail);
+        Assert.Matches(@"^AX-дерево \d+ мс, 3 узлов, сжатие \d+ мс$", stages[3].Detail!);
+
+        var line = reply.LogLine("browser_navigate");
+        Assert.Matches(@"\[Page\.navigate \d+ мс, DOMContentLoaded \d+ мс, затишье \d+ мс \(load\), " +
+                       @"снимок \d+ мс \(AX-дерево \d+ мс, 3 узлов, сжатие \d+ мс\)\]; ответ \d+ симв\.", line);
+    }
+
+    [Fact]
+    public async Task Quiet_that_ran_out_is_marked_as_expired_not_as_the_load_ceiling()
+    {
+        _source.Current.Settles = false;
+
+        var reply = await _session.NavigateAsync("https://example.org/", CancellationToken.None);
+
+        var quiet = reply.Timing!.Stages!.Single(s => s.Name == "затишье");
+        Assert.Equal("затишье истекло", quiet.Detail);
+    }
+
+    [Fact]
+    public void Log_line_prints_stages_in_order_with_details()
+    {
+        var timing = new BrowserTiming(TimeSpan.FromMilliseconds(3_000), TimeSpan.Zero, TimeSpan.Zero, 3,
+            TimeSpan.FromMilliseconds(1_200), TimeSpan.FromMilliseconds(1_800),
+            [
+                new("Page.navigate", TimeSpan.FromMilliseconds(1_000)),
+                new("DOMContentLoaded", TimeSpan.FromMilliseconds(800)),
+                new("затишье", TimeSpan.FromMilliseconds(1_000), "затишье истекло"),
+                new("снимок", TimeSpan.FromMilliseconds(200), "AX-дерево 150 мс, 4000 узлов, сжатие 50 мс"),
+            ]);
+
+        var line = new BrowserReply("ok", Timing: timing).LogLine("browser_navigate");
+
+        Assert.Equal("браузер: browser_navigate 3000 мс: очередь 0, браузер 0, CDP 3 выз. 1200 мс, ожидание страницы 1800 мс " +
+                     "[Page.navigate 1000 мс, DOMContentLoaded 800 мс, затишье 1000 мс (затишье истекло), " +
+                     "снимок 200 мс (AX-дерево 150 мс, 4000 узлов, сжатие 50 мс)]; ответ 2 симв.", line);
+    }
+
+    [Fact]
     public async Task Refusal_of_the_source_reaches_the_model()
     {
         _source.Refusal = "Google Chrome was not found.";

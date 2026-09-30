@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -55,7 +56,9 @@ public sealed class CdpPage(CdpConnection connection, string targetId, string se
         CancellationToken cancellationToken = default)
     {
         using var watch = WatchLoad();
+        var started = Stopwatch.GetTimestamp();
         var r = await Send("Page.navigate", new JsonObject { ["url"] = url }, cancellationToken);
+        CdpMeter.AddStage("Page.navigate", Stopwatch.GetElapsedTime(started));
         var frameId = CdpBrowser.Str(r, "frameId");
         var error = CdpBrowser.Str(r, "errorText");
         if (error.Length > 0)

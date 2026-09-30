@@ -323,7 +323,11 @@ public sealed partial class LocalMediaService
     // MiniMax Music 3 fp16 + энкодер int8: 175 с песни — 267 с
     public static int? MiniMaxMusicEta(int seconds) => 30 + (int)Math.Ceiling(seconds * 1.35);
 
-    public static int? MusicEditEta(string task, double? seconds) => null;
+    // Правка трека 60 с, холодная загрузка: turbo — cover 19 с, repaint 10 с; xl-base (fp32, 50 шагов) —
+    // extract 37 с, lego 29 с, complete 28 с
+    public static int? MusicEditEta(string task, double? seconds) => seconds is not { } s ? null
+        : task is "extract" or "lego" or "complete" ? 20 + (int)Math.Ceiling(s * 0.3)
+        : 15 + (int)Math.Ceiling(s * 0.08);
 
     // Qwen3-TTS: ~12 знаков русского текста на секунду речи, синтез ≈ длине речи плюс загрузка;
     // без расшифровки образца её делает whisper на CPU (+12 с). Chatterbox быстрее ≈ на треть

@@ -8,7 +8,7 @@ import { useCallback, useMemo } from 'react';
 import { api as appApi, followChat, showToast } from 'aihome_shell/kit';
 import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditQuoteRequest } from '../api';
 import {
-  effectiveProvider, isRemovalPrompt, modelBlockReason, pickOp, priceSum, priceText, variantsWord,
+  effectiveProvider, isRemovalPrompt, modelBlockReason, pickOp, priceSum, priceText, providerTitle, variantsWord,
 } from '../format';
 import { currentModel } from '../ProviderModelPicker';
 import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson } from '../marks';
@@ -65,7 +65,7 @@ export function launchSummaryParts(projectId: string, thread: ImageThread | null
   const settings = effectiveSettings(getPrefs(projectId), thread?.settings);
   const { pv, m } = resolveModel(getCatalog(projectId), settings);
   const price = m?.priceHint ? priceSum(m.priceHint.amount * settings.count, m.priceHint.unit, true) : null;
-  return { provider: pv?.label ?? null, model: m?.label ?? null, count: settings.count, price };
+  return { provider: pv ? providerTitle(pv) : null, model: m?.label ?? null, count: settings.count, price };
 }
 
 export function loadImage(src: string): Promise<HTMLImageElement> {

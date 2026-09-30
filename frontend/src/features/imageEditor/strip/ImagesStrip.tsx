@@ -20,7 +20,7 @@ import { CharactersPanel } from '../characters/CharactersPanel';
 import { CHARACTERS_PANEL, revealWorkspacePanel } from '../characters/panel';
 import { useCharacters } from '../characters/useCharacters';
 import { maxSamples, roleShort, SAMPLE_ROLES, type Sample } from '../editorInputs';
-import { effectiveProvider, modelBlockReason, providerHint, providerTitle, unavailableMark, variantsWord } from '../format';
+import { effectiveProvider, modelBlockReason, ownerUnavailableMark, providerHint, unavailableMark, variantsWord } from '../format';
 import { ProjectImagePicker } from '../PanelSections';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { enterScope, isPersonalScope } from '../scope';
@@ -54,7 +54,7 @@ function Label({ children }: { children: ReactNode }) {
 
 // Выбор в карточке настроек: имя и подсказка в две строки
 function Opt({ on, name, hint, disabled, title, onClick }: {
-  on: boolean; name: string; hint?: string; disabled?: boolean; title?: string; onClick: () => void;
+  on: boolean; name: string; hint?: ReactNode; disabled?: boolean; title?: string; onClick: () => void;
 }) {
   return (
     <Button size="sm" variant={on ? 'ghostAccent' : 'secondary'} disabled={disabled} title={title} onClick={onClick}
@@ -148,6 +148,14 @@ function SampleChips({ projectId, max }: { projectId: string; max: number }) {
   );
 }
 
+// Подсказка с пометкой лежащего поставщика отдельным span цвета предупреждения
+function joinHint(hint: string, warn: string, warnFirst: boolean): ReactNode {
+  if (!warn) return hint;
+  const w = <span key="w" style={{ color: C.warningText }}>{warn}</span>;
+  if (!hint) return w;
+  return warnFirst ? <>{w} · {hint}</> : <>{hint} · {w}</>;
+}
+
 // Лежащий поставщик выбирается как обычный — пометка лишь предупреждает заранее
 export function ProviderOpts({ catalog, choice, onPick }: {
   catalog: ImageEditCatalog; choice: string; onPick: (provider: string | null) => void;
@@ -156,12 +164,13 @@ export function ProviderOpts({ catalog, choice, onPick }: {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
       {admin && (
-        <Opt on={choice === 'settings'} name="Как в настройках" hint={`сейчас ${providerTitle(admin)}`}
+        <Opt on={choice === 'settings'} name="Как в настройках"
+          hint={joinHint(`сейчас ${admin.label}`, ownerUnavailableMark(admin), false)}
           onClick={() => onPick(null)} />
       )}
       {catalog.providers.map(p => (
         <Opt key={p.key} on={choice === p.key} name={p.label}
-          hint={[unavailableMark(p), providerHint(p)].filter(Boolean).join(' · ')}
+          hint={joinHint(providerHint(p), unavailableMark(p), true)}
           onClick={() => onPick(p.key)} />
       ))}
     </div>

@@ -1,12 +1,12 @@
-// Заведённый, но лежащий поставщик (available: false): пометка «недоступен» в обоих выборах,
-// пункт остаётся выбираемым; старые ответы без поля — без пометки
+// Заведённый, но лежащий поставщик (available: false): пометка «сейчас не отвечает» цветом
+// предупреждения в обоих выборах, пункт остаётся выбираемым; старые ответы без поля — без пометки
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ImageEditCatalog, ImageEditProvider } from './api';
 import { ProviderItems } from './ProviderModelPicker';
 import { ProviderOpts } from './strip/ImagesStrip';
-import { providerTitle, unavailableMark } from './format';
+import { ownerUnavailableMark, providerTitle, unavailableMark } from './format';
 
 const FAL: ImageEditProvider = { key: 'fal', label: 'fal', priceUnit: 'usd', models: [{ id: 'auto', label: 'Авто' }] };
 const local = (available?: boolean): ImageEditProvider =>
@@ -22,27 +22,34 @@ const strip = (c: ImageEditCatalog) =>
   renderToStaticMarkup(createElement(ProviderOpts, { catalog: c, choice: 'settings', onPick: () => {} }));
 // Кнопки выбора поставщика в полосе «Картинки» — по одной на пункт
 const buttons = (html: string) => html.match(/<button[^>]*>.*?<\/button>/g) ?? [];
+// Пометка отдельным span цвета предупреждения (токен C.warningText)
+const warn = (text: string) => new RegExp(`<span style="[^"]*color:var\\(--c-warning-text\\)[^"]*">(<svg.*?</svg>)?${text}</span>`);
 
 describe('поставщик с available: false', () => {
   it('подпись и пометка', () => {
-    expect(unavailableMark(local(false))).toBe('недоступен');
-    expect(providerTitle(local(false))).toBe('Локальные модели (недоступен)');
+    expect(unavailableMark(local(false))).toBe('сейчас не отвечает');
+    expect(ownerUnavailableMark(local(false))).toBe('поставщик сейчас не отвечает');
+    expect(providerTitle(local(false))).toBe('Локальные модели (поставщик сейчас не отвечает)');
     for (const p of [local(), local(true)]) {
       expect(unavailableMark(p)).toBe('');
+      expect(ownerUnavailableMark(p)).toBe('');
       expect(providerTitle(p)).toBe('Локальные модели');
     }
   });
 
   it('выбор поставщика в редакторе: пометка у пункта и у «Как в настройках», пункты не заблокированы', () => {
     const html = picker(catalog(local(false)));
-    expect(html.match(/недоступен/g)).toHaveLength(2);
+    expect(html.match(/не отвечает/g)).toHaveLength(2);
+    expect(html).toMatch(warn('поставщик сейчас не отвечает'));
+    expect(html).toMatch(warn('сейчас не отвечает'));
+    expect(html.match(/lucide-triangle-alert|lucide-alert-triangle/g)).toHaveLength(2);
     expect(html).not.toMatch(/disabled|aria-disabled="true"/);
   });
 
-  it('полоса «Картинки»: «сейчас Локальные модели (недоступен)», кнопка остаётся кликабельной', () => {
+  it('полоса «Картинки»: пометка отдельным span, остальная подсказка прежняя, кнопка кликабельна', () => {
     const html = strip(catalog(local(false)));
-    expect(html).toContain('сейчас Локальные модели (недоступен)');
-    expect(html).toContain('недоступен · бесплатно, на своей видеокарте');
+    expect(html).toMatch(new RegExp(`сейчас Локальные модели · ${warn('поставщик сейчас не отвечает').source}`));
+    expect(html).toMatch(new RegExp(`${warn('сейчас не отвечает').source} · бесплатно, на своей видеокарте`));
     const btns = buttons(html);
     expect(btns).toHaveLength(3);
     btns.forEach(b => expect(b).not.toMatch(/disabled/));
@@ -50,8 +57,8 @@ describe('поставщик с available: false', () => {
 
   it('поле не пришло или true — без пометки', () => {
     for (const c of [catalog(local()), catalog(local(true))]) {
-      expect(picker(c)).not.toContain('недоступен');
-      expect(strip(c)).not.toContain('недоступен');
+      expect(picker(c)).not.toContain('не отвечает');
+      expect(strip(c)).not.toContain('не отвечает');
     }
   });
 });

@@ -58,12 +58,17 @@ export const providerHint = (p: ImageEditProvider) =>
   p.priceUnit === 'usd' ? 'оплата в долларах' : p.priceUnit === 'credits' ? 'оплата в кредитах'
     : isFreeUnit(p.priceUnit) ? 'бесплатно, на своей видеокарте' : '';
 
-// Пометка заведённого, но лежащего поставщика; пункт при этом остаётся выбираемым
-export const unavailableMark = (p: ImageEditProvider) => (p.available === false ? 'недоступен' : '');
+// Пометка заведённого, но лежащего поставщика; пункт при этом остаётся выбираемым.
+// «Сейчас» обязательно: лежит видеокарта или ComfyUI, а не запрет навсегда
+export const unavailableMark = (p: ImageEditProvider) => (p.available === false ? 'сейчас не отвечает' : '');
 
-// «Локальные модели (недоступен)» — для строки «Как в настройках — сейчас …»
+// Та же пометка там, где рядом нет строки самого поставщика («Как в настройках», сводка):
+// подлежащее названо явно, чтобы пометка не читалась как недоступность пункта
+export const ownerUnavailableMark = (p: ImageEditProvider) => (p.available === false ? 'поставщик сейчас не отвечает' : '');
+
+// «Локальные модели (поставщик сейчас не отвечает)» — для строк-сводок без цвета
 export const providerTitle = (p: ImageEditProvider) => {
-  const mark = unavailableMark(p);
+  const mark = ownerUnavailableMark(p);
   return mark ? `${p.label} (${mark})` : p.label;
 };
 

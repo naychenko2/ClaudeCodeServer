@@ -1004,6 +1004,10 @@ export function Composer({
     // Прямая DOM-мутация осознанно: высота поля не должна гонять ререндер на каждый ввод
     // eslint-disable-next-line react-hooks/immutability -- стиль DOM-узла из эффекта, не рендер-данные
     el.style.height = 'auto';
+    // Пустое поле не меряем: Chrome включает в scrollHeight перенесённый плейсхолдер, и в
+    // узком поле («Чат» на мобиле, длинное имя ассистента) пустое поле вставало на две-три
+    // строки. Высота 'auto' — это rows=1, дотянутая до minHeight режима
+    if (!el.value) return;
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, []);
 

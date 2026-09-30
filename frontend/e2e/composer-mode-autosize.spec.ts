@@ -133,3 +133,44 @@ test('поле возвращается к одной строке при сме
     await request.dispose();
   }
 });
+
+// Третий заход: в узком поле «Чата» (мобила, 320px) Chrome включает перенесённый
+// плейсхолдер в scrollHeight ПУСТОГО textarea, и авторазмер ставил пустому полю две строки.
+// На десктопной ширине плейсхолдер влезает в строку, поэтому сценарии выше были зелёными.
+// Ввод — настоящими нажатиями клавиш, возврат в «Чат» — кликом по переключателю
+test('узкий «Чат» после многострочного промпта, набранного с клавиатуры, — одна строка', async ({ page, playwright, baseURL }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  const request = await playwright.request.newContext({ baseURL });
+  const token = await login(request);
+  const headers = { Authorization: `Bearer ${token}` };
+  await request.put('/api/feature-flags/image-editor', { headers, data: { enabled: true } });
+  const chat = await request.post('/api/chats', { headers, data: { mode: 'auto', name: `E2E composer narrow ${Date.now()}` } });
+  expect(chat.ok(), 'чат должен создаться').toBeTruthy();
+  const sid = (await chat.json()).id as string;
+  const threads = `/api/image-editor/chats/${sid}/threads`;
+  const revision = ((await (await request.get(threads, { headers })).json()) as { revision: number }).revision;
+  const r = await request.post(threads, { headers, data: { draftFolder: '', revision } });
+  expect(r.ok(), `черновик должен завестись: ${r.status()}`).toBeTruthy();
+
+  try {
+    await page.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+    await page.goto(`/#/chats/${sid}`);
+    const field = page.locator('textarea.cc-composer-input');
+    await expect(field).toBeVisible();
+
+    await page.getByRole('button', { name: 'Режим «Картинка»' }).click();
+    await field.click();
+    await field.pressSequentially('Рыжий кот на подоконнике, акварель, мягкий свет.');
+    await page.keyboard.press('Shift+Enter');
+    await field.pressSequentially('На заднем плане старый город и туман.');
+    // Пустая «Картинка» — 78px; поле выросло под набранный текст
+    await expect.poll(() => fieldHeight(page)).toBeGreaterThan(90);
+
+    await page.getByRole('button', { name: 'Режим «Чат»' }).click();
+    await expect(field).toHaveValue('');
+    await expect.poll(() => fieldHeight(page), { message: 'ручной уход в «Чат» в узком поле' }).toBeLessThan(ONE_LINE_MAX);
+  } finally {
+    await request.delete(`/api/chats/${sid}`, { headers });
+    await request.dispose();
+  }
+});

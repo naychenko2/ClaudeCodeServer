@@ -6,6 +6,7 @@ using System.Security.Claims;
 using System.Text;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http.Features;
 using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.WebDav;
@@ -146,7 +147,7 @@ public static class WebDavHandler
                 case "PROPPATCH": await HandleProppatchAsync(ctx, relPath, projectName); break;
                 case "GET":
                 case "HEAD": await HandleGetAsync(ctx, files, root, relPath, method == "HEAD"); break;
-                case "PUT": await HandlePutAsync(ctx, files, root, relPath); break;
+                case "PUT": await HandlePutAsync(ctx, root, relPath); break;
                 case "DELETE": HandleDelete(ctx, files, root, relPath); break;
                 case "MKCOL": HandleMkcol(ctx, files, root, relPath); break;
                 case "COPY": await HandleCopyAsync(ctx, files, root, relPath, projectName); break;
@@ -586,7 +587,19 @@ public static class WebDavHandler
     // PUT
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandlePutAsync(HttpContext ctx, FileService files, string root, string relPath)
+    /// <summary>Лимит тела PUT по умолчанию (2 ГБ); стандартные 30 МБ Kestrel обрывали загрузку.</summary>
+    internal const long DefaultMaxPutBytes = 2L * 1024 * 1024 * 1024;
+
+    /// <summary>Лимит тела PUT из <c>WebDav:MaxPutBytes</c>; ноль и отрицательное — дефолт, «без лимита» не бывает.</summary>
+    private static long ResolveMaxPutBytes(HttpContext ctx)
+    {
+        var configured = ctx.RequestServices.GetService<IConfiguration>()?.GetValue<long?>("WebDav:MaxPutBytes");
+        return configured is > 0 ? configured.Value : DefaultMaxPutBytes;
+    }
+
+    private sealed class PutBodyTooLargeException : Exception;
+
+    internal static async Task HandlePutAsync(HttpContext ctx, string root, string relPath)
     {
         if (string.IsNullOrEmpty(relPath))
         {
@@ -594,13 +607,87 @@ public static class WebDavHandler
             return;
         }
 
+        var logger = (ctx.RequestServices.GetService<ILoggerFactory>() ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance)
+            .CreateLogger(nameof(WebDavHandler));
+        var maxBytes = ResolveMaxPutBytes(ctx);
+        var contentLength = ctx.Request.ContentLength;
+
+        // Заведомо слишком большое тело отбиваем до касания диска
+        if (contentLength > maxBytes)
+        {
+            logger.LogWarning("PUT {Path}: тело {ContentLength} байт больше лимита {MaxBytes}", relPath, contentLength, maxBytes);
+            ctx.Response.StatusCode = 413;
+            return;
+        }
+
+        // Лимит Kestrel поднимаем на уровне запроса: пока тело не начали читать, фича изменяема
+        if (ctx.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } bodySize)
+            bodySize.MaxRequestBodySize = maxBytes;
+
         var absPath = FileService.SafeJoinPublic(root, relPath);
         var existed = File.Exists(absPath);
 
-        // Стриминг тела запроса на диск вместо буферизации всего файла в памяти
+        // Тело пишется во временный файл рядом с целью (одна ФС — атомарный rename):
+        // сбой чтения тела не должен обнулять существующий файл
+        var slash = relPath.LastIndexOf('/');
+        var relDir = slash < 0 ? "" : relPath[..slash];
+        var tmpName = $".{relPath[(slash + 1)..]}.davput-{Guid.NewGuid():N}.tmp";
+        var tmpAbs = FileService.SafeJoinPublic(root, relDir.Length == 0 ? tmpName : $"{relDir}/{tmpName}");
+
         Directory.CreateDirectory(Path.GetDirectoryName(absPath)!);
-        await using (var fs = new FileStream(absPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
-            await ctx.Request.Body.CopyToAsync(fs);
+        long received = 0;
+        var bodyRead = false;
+        var moved = false;
+        try
+        {
+            await using (var fs = new FileStream(tmpAbs, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            {
+                var buffer = new byte[81920];
+                int read;
+                while ((read = await ctx.Request.Body.ReadAsync(buffer, ctx.RequestAborted)) > 0)
+                {
+                    received += read;
+                    // Тело без Content-Length (chunked) меряем сами
+                    if (received > maxBytes)
+                        throw new PutBodyTooLargeException();
+                    await fs.WriteAsync(buffer.AsMemory(0, read), ctx.RequestAborted);
+                }
+            }
+            bodyRead = true;
+
+            File.Move(tmpAbs, absPath, overwrite: true);
+            moved = true;
+        }
+        catch (PutBodyTooLargeException)
+        {
+            logger.LogWarning("PUT {Path}: тело больше лимита {MaxBytes} (Content-Length {ContentLength}, получено {Received} байт)",
+                relPath, maxBytes, contentLength, received);
+            ctx.Response.StatusCode = 413;
+            return;
+        }
+        catch (BadHttpRequestException ex)
+        {
+            logger.LogWarning(ex, "PUT {Path}: сбой чтения тела (Content-Length {ContentLength}, получено {Received} байт)",
+                relPath, contentLength, received);
+            ctx.Response.StatusCode = ex.StatusCode;
+            return;
+        }
+        catch (Exception ex) when (!bodyRead && ex is IOException or OperationCanceledException)
+        {
+            // Обрыв клиентом: соединение сброшено или запрос отменён посреди тела
+            logger.LogWarning(ex, "PUT {Path}: тело не дочитано, обрыв клиентом (Content-Length {ContentLength}, получено {Received} байт)",
+                relPath, contentLength, received);
+            ctx.Response.StatusCode = 400;
+            return;
+        }
+        finally
+        {
+            if (!moved)
+            {
+                try { File.Delete(tmpAbs); }
+                catch (Exception ex) { logger.LogWarning(ex, "PUT {Path}: не удалось удалить временный файл {Tmp}", relPath, tmpAbs); }
+            }
+        }
 
         ctx.Response.StatusCode = existed ? 204 : 201;
     }

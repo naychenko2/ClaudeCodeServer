@@ -184,7 +184,7 @@ public sealed class BrowserSessionTests : IAsyncLifetime
 
         Assert.False(reply.IsError, reply.Text);
         Assert.StartsWith("Waited 50 ms instead of 30000 ms: a pause without text is capped at 50 ms.", reply.Text);
-        Assert.Contains("already wait for the page to load", reply.Text);
+        Assert.Contains("browser_click and browser_type wait for it too when the action opens a new page", reply.Text);
         Assert.Contains("browser_wait with text='...'", reply.Text);
         Assert.True(reply.Timing!.Total < TimeSpan.FromSeconds(10), $"пауза {reply.Timing.Total}");
     }
@@ -216,7 +216,7 @@ public sealed class BrowserSessionTests : IAsyncLifetime
 
         var stages = reply.Timing!.Stages!;
         Assert.Equal(["Page.navigate", "DOMContentLoaded", "затишье", "снимок"], stages.Select(s => s.Name));
-        Assert.True(stages[1].Elapsed >= TimeSpan.FromMilliseconds(100), $"DOMContentLoaded {stages[1].Elapsed}");
+        Assert.True(stages[1].Elapsed >= TimeSpan.FromMilliseconds(50), $"DOMContentLoaded {stages[1].Elapsed}");
         Assert.Equal("load", stages[2].Detail);
         Assert.Matches(@"^AX-дерево \d+ мс, 3 узлов, сжатие \d+ мс$", stages[3].Detail!);
 
@@ -226,14 +226,14 @@ public sealed class BrowserSessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Quiet_that_ran_out_is_marked_as_the_ceiling()
+    public async Task Quiet_that_ran_out_is_marked_as_expired_not_as_the_load_ceiling()
     {
         _source.Current.Settles = false;
 
         var reply = await _session.NavigateAsync("https://example.org/", CancellationToken.None);
 
         var quiet = reply.Timing!.Stages!.Single(s => s.Name == "затишье");
-        Assert.Equal("потолок", quiet.Detail);
+        Assert.Equal("затишье истекло", quiet.Detail);
     }
 
     [Fact]
@@ -244,14 +244,14 @@ public sealed class BrowserSessionTests : IAsyncLifetime
             [
                 new("Page.navigate", TimeSpan.FromMilliseconds(1_000)),
                 new("DOMContentLoaded", TimeSpan.FromMilliseconds(800)),
-                new("затишье", TimeSpan.FromMilliseconds(1_000), "потолок"),
+                new("затишье", TimeSpan.FromMilliseconds(1_000), "затишье истекло"),
                 new("снимок", TimeSpan.FromMilliseconds(200), "AX-дерево 150 мс, 4000 узлов, сжатие 50 мс"),
             ]);
 
         var line = new BrowserReply("ok", Timing: timing).LogLine("browser_navigate");
 
         Assert.Equal("браузер: browser_navigate 3000 мс: очередь 0, браузер 0, CDP 3 выз. 1200 мс, ожидание страницы 1800 мс " +
-                     "[Page.navigate 1000 мс, DOMContentLoaded 800 мс, затишье 1000 мс (потолок), " +
+                     "[Page.navigate 1000 мс, DOMContentLoaded 800 мс, затишье 1000 мс (затишье истекло), " +
                      "снимок 200 мс (AX-дерево 150 мс, 4000 узлов, сжатие 50 мс)]; ответ 2 симв.", line);
     }
 

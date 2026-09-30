@@ -27,9 +27,9 @@ namespace ClaudeHomeServer.HandsBridge.Browser.Session;
 public sealed class BrowserSession(IBrowserSource source, TimeSpan? evaluateTimeout = null, TimeSpan? pauseCap = null)
 {
     /// <summary>
-    /// Потолок паузы без условия. Переход, клик и ввод сами ждут готовность DOM и затишье, а
-    /// модель по привычке ставила 3–30 с после каждого перехода (около полутора минут за
-    /// разговор). Нужно ждать содержимое — ждут текст, его ожидание этим потолком не режется.
+    /// Потолок паузы без условия. Переход (а клик и ввод — если открыли новую страницу) сам ждёт
+    /// готовность DOM и затишье, а модель по привычке ставила 3–30 с после каждого перехода (около
+    /// полутора минут за разговор). Нужно ждать содержимое — ждут текст, его ожидание этим потолком не режется.
     /// </summary>
     public static readonly TimeSpan MaxPause = TimeSpan.FromSeconds(2);
 
@@ -439,8 +439,8 @@ public sealed class BrowserSession(IBrowserSource source, TimeSpan? evaluateTime
                     ? new BrowserReply($"Waited {pauseMs} ms.")
                     : new BrowserReply(
                         $"Waited {pauseMs} ms instead of {timeoutMs} ms: a pause without text is capped at {capMs} ms. " +
-                        "browser_navigate, browser_click and browser_type already wait for the page to load, so no pause is needed after them. " +
-                        "To wait for content, call browser_wait with text='...' that should appear on the page.");
+                        "browser_navigate already waits for the page to load; browser_click and browser_type wait for it too when the action opens a new page. " +
+                        "For changes without a new page and for content that appears later, call browser_wait with text='...' that should appear on the page.");
             }
 
             var limit = TimeSpan.FromMilliseconds(timeoutMs ?? DefaultTextWaitMs);

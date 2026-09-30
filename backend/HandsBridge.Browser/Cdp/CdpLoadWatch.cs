@@ -97,7 +97,7 @@ public sealed class CdpLoadWatch : IDisposable
         var loader = loaderId;
         long? domReadyAt = null;
         // Чем кончилось ожидание — для этапов hands.log
-        var outcome = "потолок";
+        string? outcome = null;
         try
         {
             while (await NextAsync(deadline, cancellationToken) is { } e)
@@ -139,7 +139,20 @@ public sealed class CdpLoadWatch : IDisposable
                         return CdpLoadState.Settled;
                 }
             }
+            // Короткое окно затишья и потолок загрузки — разные беды: реклама держит load или
+            // вся загрузка упёрлась в потолок
+            outcome = deadline < ceiling ? "затишье истекло" : "потолок загрузки";
             return domReadyAt is not null ? CdpLoadState.DomReady : CdpLoadState.NotLoaded;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            outcome = "отмена";
+            throw;
+        }
+        catch (CdpDisconnectedException)
+        {
+            outcome = "обрыв соединения";
+            throw;
         }
         finally
         {
@@ -154,7 +167,7 @@ public sealed class CdpLoadWatch : IDisposable
             else
             {
                 CdpMeter.AddStage("DOMContentLoaded", Stopwatch.GetElapsedTime(started, now),
-                    outcome == "потолок" ? "не пришёл" : outcome);
+                    outcome == "потолок загрузки" ? "не пришёл" : outcome);
             }
         }
     }

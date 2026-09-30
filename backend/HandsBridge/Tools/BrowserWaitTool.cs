@@ -18,8 +18,9 @@ public static partial class BrowserWaitTool
     /// Keywords: browser, wait, loading, appear, delay, pause.
     /// </summary>
     /// <remarks>
-    /// Do not call it after browser_navigate, browser_click or browser_type: they already wait for the page to load
-    /// and return a fresh snapshot. To wait for content that appears later, pass text: the page's accessibility tree is
+    /// Do not call it after browser_navigate: it already waits for the page to load and returns a fresh snapshot;
+    /// browser_click and browser_type wait for the load too when the action opens a new page. For changes without a new
+    /// page and for content that appears later, pass text: the page's accessibility tree is
     /// checked repeatedly until an element name or value contains the text (case-insensitive), up to ms milliseconds
     /// (default 10000, at most 30000). Without text, ms is a plain pause capped at 2000.
     /// </remarks>

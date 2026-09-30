@@ -189,6 +189,82 @@ public sealed class CdpPageTests : IAsyncLifetime
         Assert.Equal(CdpLoadState.NotLoaded, await watch.WaitForLoadAsync("F1", null, Forever, Forever).WaitAsync(Short));
     }
 
+    // ---------- чем кончилось затишье (этапы hands.log) ----------
+
+    [Theory]
+    [InlineData("load", "load")]
+    [InlineData("networkAlmostIdle", "networkAlmostIdle")]
+    [InlineData("stopped", "конец загрузки")]
+    public async Task Quiet_that_settled_is_marked_by_its_event(string settle, string outcome)
+    {
+        var meter = CdpMeter.Start();
+        using var watch = _page.WatchLoad();
+        Lifecycle("S1", "F1", "L1", "DOMContentLoaded");
+        if (settle == "stopped")
+            _pipe.Frame("""{"method":"Page.frameStoppedLoading","sessionId":"S1","params":{"frameId":"F1"}}""");
+        else
+            Lifecycle("S1", "F1", "L1", settle);
+
+        Assert.Equal(CdpLoadState.Settled, await watch.WaitForLoadAsync("F1", "L1", Forever, Forever).WaitAsync(Short));
+        Assert.Equal(outcome, Quiet(meter));
+    }
+
+    [Fact]
+    public async Task Quiet_window_that_ran_out_is_not_the_load_ceiling()
+    {
+        var meter = CdpMeter.Start();
+        using var watch = _page.WatchLoad();
+        Lifecycle("S1", "F1", "L1", "DOMContentLoaded");
+
+        var state = await watch.WaitForLoadAsync("F1", "L1", Forever, TimeSpan.FromMilliseconds(100)).WaitAsync(Short);
+
+        Assert.Equal(CdpLoadState.DomReady, state);
+        Assert.Equal("затишье истекло", Quiet(meter));
+    }
+
+    [Fact]
+    public async Task Quiet_cut_by_the_load_ceiling_is_marked_as_the_ceiling()
+    {
+        var meter = CdpMeter.Start();
+        using var watch = _page.WatchLoad();
+        Lifecycle("S1", "F1", "L1", "DOMContentLoaded");
+
+        var state = await watch.WaitForLoadAsync("F1", "L1", TimeSpan.FromMilliseconds(100), Forever).WaitAsync(Short);
+
+        Assert.Equal(CdpLoadState.DomReady, state);
+        Assert.Equal("потолок загрузки", Quiet(meter));
+    }
+
+    [Fact]
+    public async Task Cancelled_quiet_is_marked_as_cancel()
+    {
+        var meter = CdpMeter.Start();
+        using var watch = _page.WatchLoad();
+        using var cts = new CancellationTokenSource();
+        Lifecycle("S1", "F1", "L1", "DOMContentLoaded");
+
+        var wait = watch.WaitForLoadAsync("F1", "L1", Forever, Forever, cts.Token);
+        await Drain();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait.WaitAsync(Short));
+        Assert.Equal("отмена", Quiet(meter));
+    }
+
+    [Fact]
+    public async Task Dom_that_never_came_is_marked_as_not_arrived()
+    {
+        var meter = CdpMeter.Start();
+        using var watch = _page.WatchLoad();
+
+        Assert.Equal(CdpLoadState.NotLoaded,
+            await watch.WaitForLoadAsync("F1", "L1", TimeSpan.FromMilliseconds(100), Forever).WaitAsync(Short));
+        var dom = Assert.Single(meter.Stages);
+        Assert.Equal(("DOMContentLoaded", "не пришёл"), (dom.Name, dom.Detail));
+    }
+
+    static string? Quiet(CdpMeter meter) => meter.Stages.Single(s => s.Name == "затишье").Detail;
+
     [Fact]
     public async Task Enable_learns_the_main_frame()
     {

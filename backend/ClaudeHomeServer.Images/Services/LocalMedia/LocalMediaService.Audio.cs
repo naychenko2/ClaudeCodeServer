@@ -30,6 +30,13 @@ public sealed partial class LocalMediaService
         ["de"] = "german", ["fr"] = "french", ["pt"] = "portuguese", ["es"] = "spanish", ["it"] = "italian",
     };
 
+    // MOSS-TTS v1.5: 31 язык кодами ISO (воркер переводит в названия)
+    public static readonly IReadOnlySet<string> MossLanguages = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "zh", "yue", "en", "ar", "cs", "da", "nl", "fi", "fr", "de", "el", "he", "hi", "hu", "it", "ja", "ko", "mk", "ms",
+        "fa", "pl", "pt", "ro", "ru", "es", "sw", "sv", "tl", "th", "tr", "vi",
+    };
+
     public static readonly IReadOnlySet<string> ChatterboxLanguages = new HashSet<string>(StringComparer.Ordinal)
     {
         "ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi", "it", "ja", "ko", "ms", "nl", "no", "pl", "pt",
@@ -257,7 +264,7 @@ public sealed partial class LocalMediaService
     {
         var text = Limit(Str(a, "text") ?? "", MaxSpeechTextLength, "text");
         if (text.Length == 0) throw new LocalMediaInputException("Нужен text — что озвучить.");
-        var engine = OneOf(a, "engine", "qwen", ["qwen", "chatterbox"]);
+        var engine = OneOf(a, "engine", "qwen", ["qwen", "chatterbox", "moss"]);
         var language = Str(a, "language") ?? "ru";
         var voice = Str(a, "voice");
         var speaker = Str(a, "speaker");
@@ -279,7 +286,17 @@ public sealed partial class LocalMediaService
         }
 
         string op;
-        if (engine == "chatterbox")
+        if (engine == "moss")
+        {
+            if (voice is not null || speaker is not null)
+                throw new LocalMediaInputException("У engine=moss голос задаёт только образец reference; описание голоса "
+                    + "(voice) и дикторы (speaker) — у engine=qwen.");
+            if (!MossLanguages.Contains(language))
+                throw new LocalMediaInputException("language для moss — одно из: " + string.Join(", ", MossLanguages) + ".");
+            p["language"] = language;
+            op = "tts_moss";
+        }
+        else if (engine == "chatterbox")
         {
             if (voice is not null || speaker is not null)
                 throw new LocalMediaInputException("У engine=chatterbox голос задаёт только образец reference; описание голоса "
@@ -360,9 +377,13 @@ public sealed partial class LocalMediaService
     public static int SpeechEta(string engine, int chars, bool transcribeReference)
     {
         var speech = chars / 12.0;
-        return engine == "chatterbox"
-            ? 20 + (int)Math.Ceiling(speech * 0.7)
-            : 15 + (int)Math.Ceiling(speech * 1.0) + (transcribeReference ? 12 : 0);
+        // MOSS-TTS: 23 с речи — 12 с, клон — 14 с; загрузка 8B-модели ≈6 с плюс старт процесса
+        return engine switch
+        {
+            "chatterbox" => 20 + (int)Math.Ceiling(speech * 0.7),
+            "moss" => 20 + (int)Math.Ceiling(speech * 0.6),
+            _ => 15 + (int)Math.Ceiling(speech * 1.0) + (transcribeReference ? 12 : 0),
+        };
     }
 
     // Seed-VC с холодной загрузкой: речь 17 с — 13,8 с, пение 30 с — 15,8 с

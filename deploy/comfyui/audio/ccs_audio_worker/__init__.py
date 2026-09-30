@@ -41,6 +41,7 @@ OPS = {
     "tts": "tts",
     "voice_clone": "tts",
     "tts_chatterbox": "chatterbox",
+    "tts_moss": "moss",
     "voice_convert": "seedvc",
     "rvc_convert": "rvc",
     "rvc_train": "rvc",

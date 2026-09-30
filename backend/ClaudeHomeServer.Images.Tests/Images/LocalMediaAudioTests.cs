@@ -136,6 +136,8 @@ public class LocalMediaAudioTests : IDisposable
 
     [Theory]
     [InlineData("chatterbox", "voice", "тёплый", "только образец")]
+    [InlineData("moss", "speaker", "Ryan", "только образец")]
+    [InlineData("moss", "language", "xx", "language для moss")]
     [InlineData("qwen", "language", "xx", "language для qwen")]
     [InlineData("qwen", "speaker", "Nobody", "speaker")]
     [InlineData("gpt", "voice", "тёплый", "engine")]
@@ -150,6 +152,24 @@ public class LocalMediaAudioTests : IDisposable
 
         result.Error.Should().Contain(error);
         _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Речь_Moss_КлонПоОбразцу_ЯзыкКодом()
+    {
+        var (service, _) = Build();
+        Put("voice/ref.wav", Wav(6));
+
+        var result = await service.SubmitAsync(Audio(LocalMediaOps.Speech, new JsonObject
+        {
+            ["text"] = "Проверка клона", ["engine"] = "moss", ["reference"] = "voice/ref.wav",
+        }), default);
+
+        result.Error.Should().BeNull();
+        Worker()["op"]!.GetValue<string>().Should().Be("tts_moss");
+        WorkerParams()["language"]!.GetValue<string>().Should().Be("ru", "воркер MOSS сам переводит код в название");
+        Worker()["inputs"]!.GetValue<string>().Should().EndWith("-ref.wav");
+        result.View!.EtaSeconds.Should().Be(LocalMediaService.SpeechEta("moss", "Проверка клона".Length, false));
     }
 
     [Fact]

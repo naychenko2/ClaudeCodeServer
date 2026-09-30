@@ -87,19 +87,20 @@ public sealed partial class LocalMediaToolset
             ExplicitOnly + "Озвучить текст НАШЕЙ моделью на своей GPU. engine=qwen — Qwen3-TTS 1.7B (по умолчанию, 10 языков): "
             + "голос по описанию voice («тёплый баритон диктора радио, спокойно»), готовый диктор speaker или клон по "
             + "образцу reference (5–15 с чистой речи; reference_text — ТОЧНАЯ расшифровка образца, без неё распознаем сами). "
-            + "engine=chatterbox — Chatterbox Multilingual (23 языка, голос только по образцу reference, быстрее, тембр ближе "
-            + "к образцу). Длинный текст режется по предложениям, голос держится. Результат — wav." + AudioTail,
+            + "engine=moss — MOSS-TTS v1.5 (31 язык; лучший клон по образцу reference: разборчиво и близко по тембру, быстрее "
+            + "всех; без образца — свой голос). engine=chatterbox — Chatterbox Multilingual (23 языка, клон по reference). Длинный текст режется по предложениям, голос держится. Результат — wav." + AudioTail,
             Obj(["text"], new JsonObject
             {
                 ["text"] = Str($"Что озвучить, до {LocalMediaService.MaxSpeechTextLength} символов; числа лучше словами"),
-                ["language"] = Str("Язык кодом ISO: ru (по умолчанию), en, de, fr, es, it, pt, zh, ja, ko; у chatterbox ещё "
-                    + "ar, da, el, fi, he, hi, ms, nl, no, pl, sv, sw, tr"),
+                ["language"] = Str("Язык кодом ISO: ru (по умолчанию), en, de, fr, es, it, pt, zh, ja, ko; у chatterbox и moss "
+                    + "ещё ar, da, el, fi, he, hi, ms, nl, pl, sv, sw, tr (у moss также cs, fa, hu, mk, ro, th, tl, vi, yue)"),
                 ["voice"] = Str("Только qwen: описание голоса словами (пол, возраст, тембр, манера)"),
                 ["speaker"] = Enum(LocalMediaService.QwenSpeakers, "Только qwen: готовый диктор (родные языки — китайский, "
                     + "английский, японский, корейский); voice тогда — указание манеры"),
                 ["reference"] = Str("Образец голоса для клона: " + AudioRefDescription),
                 ["reference_text"] = Str("Точная расшифровка образца (только qwen); не знаешь — не передавай"),
-                ["engine"] = Enum(["qwen", "chatterbox"], "qwen (по умолчанию) или chatterbox"),
+                ["engine"] = Enum(["qwen", "chatterbox", "moss"], "qwen (по умолчанию, умеет описание голоса), moss "
+                    + "(лучший клон по образцу) или chatterbox"),
                 ["expressiveness"] = Num(0.25, 2, "Только chatterbox: выразительность (по умолчанию 0,5)"),
                 ["seed"] = Seed(),
             }));
@@ -185,9 +186,9 @@ public sealed partial class LocalMediaToolset
             "ace: 3 мин песни ≈ 74 с; yue2: 3 мин ≈ 60 с; minimax: 3 мин ≈ 4,5 мин"),
         AudioOp("local_music_edit", "ACE-Step 1.5 turbo / xl-base; YuE2-3B (cover, CC BY-NC)", "cover, repaint, extract, lego, complete",
             "трек 60 с: cover ≈ 19 с (yue2 ≈ 20 с), repaint ≈ 10 с, extract/lego/complete ≈ 30–37 с"),
-        AudioOp("local_speech", "Qwen3-TTS 1.7B / Chatterbox Multilingual",
+        AudioOp("local_speech", "Qwen3-TTS 1.7B / MOSS-TTS v1.5 / Chatterbox Multilingual",
             "озвучка по описанию голоса, диктором или клоном по образцу",
-            "qwen: ≈ длина речи + 15 с (25 с речи ≈ 40 с); chatterbox ≈ на треть быстрее"),
+            "qwen: ≈ длина речи + 15 с (25 с речи ≈ 40 с); moss: 23 с речи ≈ 12–14 с + загрузка; chatterbox ≈ на треть быстрее qwen"),
         AudioOp("local_voice_convert", "Seed-VC (GPL-3.0) / RVC (Applio)", "смена голоса: по образцу или моделью голоса",
             "речь 17 с ≈ 14 с, пение 30 с ≈ 16 с; rvc 17 с ≈ 11 с"),
         AudioOp("local_voice_train", "RVC (Applio)", "обучение модели голоса; тяжёлая", "101 с записи, 100 эпох ≈ 4 мин"),

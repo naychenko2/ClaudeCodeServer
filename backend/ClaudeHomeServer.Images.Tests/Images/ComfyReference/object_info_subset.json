@@ -4716,6 +4716,7 @@
       "transcribe",
       "tts",
       "tts_chatterbox",
+      "tts_moss",
       "upsample",
       "voice_clone",
       "voice_convert"

@@ -162,6 +162,17 @@ public class ComfyWorkflowsTests
         ComfyGraphValidator.Validate(wf, ComfyReferenceFiles.ObjectInfo()).Should().BeEmpty(name);
     }
 
+    // Белый список операций живёт в двух местах: WorkerOps бэкенда и OPS узла CcsAudioWorker
+    // (deploy/comfyui/audio). Разошлись — операция бэкенда упадёт в ComfyUI «Value not in list»
+    [Fact]
+    public void АудиоВоркер_ОперацииБэкендаСовпадаютСУзлом()
+    {
+        var node = ComfyReferenceFiles.ObjectInfo()["CcsAudioWorker"]!["input"]!["required"]!["op"]![0]!.AsArray()
+            .Select(v => v!.GetValue<string>());
+
+        node.Should().BeEquivalentTo(ComfyWorkflows.WorkerOps);
+    }
+
     [Fact]
     public void Валидатор_ЛовитОшибкуСхемы()
     {

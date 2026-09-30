@@ -43,6 +43,10 @@ clone QwenLM/Qwen3-TTS qwen3-tts
 P=$(venv qwen3tts-env 3.12); uv pip install -q -p "$P" $TI $T28 -e "$AUDIO_ROOT/qwen3-tts" faster-whisper
 # perth (водяной знак) и webrtcvad импортируют pkg_resources — его нет в setuptools>=81
 P=$(venv chatterbox 3.12); uv pip install -q -p "$P" $TI chatterbox-tts "setuptools<81"
+clone OpenMOSS/MOSS-TTS moss-tts
+[ -d "$AUDIO_ROOT/moss-tts/.venv" ] || uv venv -q -p 3.12 "$AUDIO_ROOT/moss-tts/.venv"
+(cd "$AUDIO_ROOT/moss-tts" && uv pip install -q -p .venv/bin/python --extra-index-url https://download.pytorch.org/whl/cu128 \
+  --index-strategy unsafe-best-match -e ".[torch-runtime]")
 clone Plachtaa/seed-vc seed-vc
 # Seed-VC ищет веса в двух местах: свои — в ./checkpoints (cache_dir), BigVGAN и Whisper — в
 # ./checkpoints/hf_cache (inference.py ставит HF_HUB_CACHE). Оба ведём в общий HF-кэш
@@ -75,6 +79,7 @@ export HF_HUB_DISABLE_XET=1   # xet-клиент не видит HTTPS_PROXY
 "$AUDIO_ROOT/bench/.venv/bin/python" "$DEPLOY/warm_models.py" whisper
 "$AUDIO_ROOT/qwen3tts-env/.venv/bin/python" "$DEPLOY/warm_models.py" qwen3tts "$AUDIO_MODELS"
 "$AUDIO_ROOT/chatterbox/.venv/bin/python" "$DEPLOY/warm_models.py" chatterbox "$AUDIO_MODELS"
+"$AUDIO_ROOT/moss-tts/.venv/bin/python" "$DEPLOY/warm_models.py" moss "$AUDIO_MODELS"
 "$AUDIO_ROOT/util/.venv/bin/python" "$DEPLOY/warm_models.py" separator "$AUDIO_MODELS"
 "$AUDIO_ROOT/acestep15/.venv/bin/python" "$DEPLOY/warm_models.py" acestep "$AUDIO_MODELS"
 
@@ -86,6 +91,7 @@ cat > "$AUDIO_ROOT/workers.json" <<JSON
 {"families": {
   "tts": {"python": "$AUDIO_ROOT/qwen3tts-env/.venv/bin/python", "script": "$W/worker_tts.py"},
   "chatterbox": {"python": "$AUDIO_ROOT/chatterbox/.venv/bin/python", "script": "$W/worker_chatterbox.py"},
+  "moss": {"python": "$AUDIO_ROOT/moss-tts/.venv/bin/python", "script": "$W/worker_moss.py"},
   "sep": {"python": "$AUDIO_ROOT/util/.venv/bin/python", "script": "$W/worker_sep.py"},
   "midi": {"python": "$AUDIO_ROOT/midi/.venv/bin/python", "script": "$W/worker_midi.py"},
   "dfn": {"python": "$AUDIO_ROOT/dfn/.venv/bin/python", "script": "$W/worker_dfn.py"},

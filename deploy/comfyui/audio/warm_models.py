@@ -49,6 +49,10 @@ elif family == "chatterbox":
     # только файлы мультиязычной модели (from_local), а не весь репозиторий
     local("ResembleAI/chatterbox", ["ve.pt", "t3_mtl23ls_v2.safetensors", "s3gen.pt", "conds.pt",
                                     "grapheme_mtl_merged_expanded_v1.json", "Cangjie5_TC.json", "mtl_tokenizer.json"])
+elif family == "moss":
+    # модель (8B bf16, ≈17 ГБ) и её аудиокодек — воркер читает их по пути
+    local("OpenMOSS-Team/MOSS-TTS-v1.5")
+    local("OpenMOSS-Team/MOSS-Audio-Tokenizer")
 elif family == "separator":
     from audio_separator.separator import Separator
     sep = Separator(model_file_dir=os.path.join(models, "separator"))

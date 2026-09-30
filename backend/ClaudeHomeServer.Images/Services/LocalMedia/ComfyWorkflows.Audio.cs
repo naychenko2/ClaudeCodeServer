@@ -242,7 +242,7 @@ public static partial class ComfyWorkflows
     // Операции узла CcsAudioWorker — зеркало OPS в deploy/comfyui/audio/ccs_audio_worker
     public static readonly IReadOnlySet<string> WorkerOps = new HashSet<string>(StringComparer.Ordinal)
     {
-        "separate", "tts", "voice_clone", "tts_chatterbox", "voice_convert", "rvc_convert", "rvc_train",
+        "separate", "tts", "voice_clone", "tts_chatterbox", "tts_moss", "voice_convert", "rvc_convert", "rvc_train",
         "audio_to_midi", "denoise", "upsample", "master", "music_edit", "transcribe",
     };
 

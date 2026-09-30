@@ -22,6 +22,19 @@ def stamp_lrc(t):
     return f"[{cs // 6000:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}]"
 
 
+def preload_cuda():
+    """У ctranslate2 своих библиотек CUDA нет: грузим cublas и cudnn CUDA 12 из колёс nvidia
+    глобально, дальше его dlopen находит их по soname."""
+    import ctypes
+    import glob
+    import os
+    import nvidia
+    for pattern in ("cublas/lib/libcublasLt.so.12", "cublas/lib/libcublas.so.12", "cudnn/lib/libcudnn*.so.9"):
+        for root in nvidia.__path__:
+            for lib in sorted(glob.glob(os.path.join(root, pattern))):
+                ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+
+
 def main():
     job = load_job()
     if job.op != "transcribe":
@@ -33,6 +46,7 @@ def main():
                          capture_output=True, check=True).stdout
     pcm = np.frombuffer(raw, dtype=np.float32)
 
+    preload_cuda()
     from faster_whisper import WhisperModel
     model = WhisperModel(MODEL, device="cuda", compute_type="float16")
     job.lap("load")

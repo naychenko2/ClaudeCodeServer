@@ -15,7 +15,7 @@ ComfyUI ставится этот узел — так у GPU1 остаётся �
 пишется только в output/ccs-local-media.
 
 Конфиг: $CCS_AUDIO_WORKERS или ~/ai-data/audio-workers/workers.json
-  {"families": {"tts": {"python": ".../.venv/bin/python", "script": ".../worker_tts.py"}}}
+  {"families": {"tts": {"python": ".../.venv/bin/python", "script": ".../worker_tts.py", "env": {...}}}}
 Протокол воркера: argv[1] — путь к job.json; последняя строка stdout, начинающаяся с
 CCS_RESULT, — JSON {"files": [имена в out_dir], "stats": {...}}.
 """
@@ -129,6 +129,8 @@ class CcsAudioWorker:
         # Веса ставятся при установке: скачивание внутри задачи держало бы общую очередь GPU
         env = dict(os.environ, PYTHONUNBUFFERED="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
         env.pop("PYTHONPATH", None)
+        # переменные семейства из машинного конфига (каталоги весов и т. п.)
+        env.update({str(k): str(v) for k, v in (family.get("env") or {}).items()})
         proc = subprocess.Popen([family["python"], family["script"], job_path], env=env,
                                 cwd=family.get("cwd") or os.path.dirname(family["script"]),
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

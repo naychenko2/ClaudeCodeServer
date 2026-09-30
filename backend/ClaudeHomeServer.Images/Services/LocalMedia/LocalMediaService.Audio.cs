@@ -336,21 +336,29 @@ public sealed partial class LocalMediaService
 
     public static int? VoiceConvertEta(string mode, double? seconds) => null;
 
-    public static int? RvcConvertEta(double? seconds) => null;
+    // RVC: 17 с речи — 11 с
+    public static int? RvcConvertEta(double? seconds) => seconds is { } s ? 8 + (int)Math.Ceiling(s * 0.2) : null;
 
-    public static int? VoiceTrainEta(double totalSeconds, int epochs) => null;
+    // RVC-обучение на 101 с речи, 100 эпох: подготовка и признаки ≈30 с, эпоха ≈2 с — время эпохи
+    // растёт с длиной записей (≈0,02 с на секунду звука)
+    public static int? VoiceTrainEta(double totalSeconds, int epochs) =>
+        totalSeconds <= 0 ? null : 40 + (int)Math.Ceiling(totalSeconds * 0.2 + totalSeconds * 0.02 * epochs);
 
-    // Стемы трека 180 с: vocals (BS-RoFormer) 71 с, 4stems (HTDemucs ft) 38 с
+    // Стемы трека 180 с: vocals (BS-RoFormer) 71 с, 4stems (HTDemucs ft) 38 с, 6stems 23 с,
+    // karaoke (Mel-RoFormer) 74 с
     public static int? SeparateEta(string mode, double? seconds) => seconds is not { } s ? null : mode switch
     {
         "vocals" => 5 + (int)Math.Ceiling(s * 0.37),
         "4stems" => 3 + (int)Math.Ceiling(s * 0.2),
+        "6stems" => 3 + (int)Math.Ceiling(s * 0.11),
+        "karaoke" => 5 + (int)Math.Ceiling(s * 0.38),
         _ => null,
     };
 
     public static int? UpsampleEta(double? seconds) => null;
 
-    public static int? TranscribeEta(double? seconds) => null;
+    // Whisper large-v3-turbo на GPU: 180 с вокала — 6,5 с, 101 с речи — 4,8 с
+    public static int? TranscribeEta(double? seconds) => seconds is { } s ? 3 + (int)Math.Ceiling(s * 0.02) : null;
 
     // --- Разбор аргументов: только строки, числа в пределах и значения из белых списков ---
 

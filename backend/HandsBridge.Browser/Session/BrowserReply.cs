@@ -1,4 +1,5 @@
 using System.Text;
+using ClaudeHomeServer.HandsBridge.Browser.Cdp;
 
 namespace ClaudeHomeServer.HandsBridge.Browser.Session;
 
@@ -28,6 +29,19 @@ public sealed record BrowserReply(
               .Append(", браузер ").Append(Ms(t.Acquire))
               .Append(", CDP ").Append(t.CdpCalls).Append(" выз. ").Append(Ms(t.Cdp)).Append(" мс")
               .Append(", ожидание страницы ").Append(Ms(t.Wait)).Append(" мс");
+            if (t.Stages is { Count: > 0 } stages)
+            {
+                sb.Append(" [");
+                for (var i = 0; i < stages.Count; i++)
+                {
+                    if (i > 0)
+                        sb.Append(", ");
+                    sb.Append(stages[i].Name).Append(' ').Append(Ms(stages[i].Elapsed)).Append(" мс");
+                    if (stages[i].Detail is { } detail)
+                        sb.Append(" (").Append(detail).Append(')');
+                }
+                sb.Append(']');
+            }
         }
 
         sb.Append("; ответ ").Append(Text.Length).Append(" симв.");
@@ -50,10 +64,15 @@ public sealed record BrowserReply(
 /// <param name="CdpCalls">Команд CDP, включая команды запуска.</param>
 /// <param name="Cdp">Время команд CDP от записи до ответа.</param>
 /// <param name="Wait">Ожидание событий страницы: загрузка, начало перехода, затишье.</param>
+/// <param name="Stages">
+/// Этапы внутри вызова (<c>Page.navigate</c>, DOMContentLoaded, затишье, снимок): CDP и ожидание
+/// выше — суммы, по ним не видно, переход тормозит или снимок.
+/// </param>
 public sealed record BrowserTiming(
     TimeSpan Total,
     TimeSpan Queue,
     TimeSpan Acquire,
     int CdpCalls,
     TimeSpan Cdp,
-    TimeSpan Wait);
+    TimeSpan Wait,
+    IReadOnlyList<CdpStage>? Stages = null);

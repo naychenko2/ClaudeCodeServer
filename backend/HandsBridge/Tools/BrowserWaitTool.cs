@@ -18,12 +18,13 @@ public static partial class BrowserWaitTool
     /// Keywords: browser, wait, loading, appear, delay, pause.
     /// </summary>
     /// <remarks>
-    /// With text, the page's accessibility tree is checked repeatedly until an element name or value contains the text
-    /// (case-insensitive), up to ms milliseconds (default 10000). Without text, ms is a plain pause.
-    /// ms is at most 30000.
+    /// Do not call it after browser_navigate, browser_click or browser_type: they already wait for the page to load
+    /// and return a fresh snapshot. To wait for content that appears later, pass text: the page's accessibility tree is
+    /// checked repeatedly until an element name or value contains the text (case-insensitive), up to ms milliseconds
+    /// (default 10000, at most 30000). Without text, ms is a plain pause capped at 2000.
     /// </remarks>
     /// <param name="text">Text to wait for on the page.</param>
-    /// <param name="ms">Timeout for text, or pause length without text, in milliseconds (1-30000).</param>
+    /// <param name="ms">Timeout for text (1-30000), or pause length without text (capped at 2000), in milliseconds.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Whether the text appeared, or confirmation of the pause.</returns>
     [McpServerTool(Name = "browser_wait", Title = "Browser: Wait", ReadOnly = true, OpenWorld = false)]

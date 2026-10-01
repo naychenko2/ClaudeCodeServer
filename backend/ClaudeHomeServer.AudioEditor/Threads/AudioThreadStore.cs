@@ -197,6 +197,17 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
             }, log) with { NewVersions = [version] };
         });
 
+    // Версию сохранили в проект: нить идёт за новым путём (черновик перестаёт быть черновиком), прежний
+    // путь уходит в Lineage. Версии не трогает: исходник остаётся тем файлом, от которого начинали
+    public AudioThreadWrite MoveToFile(string ownerId, string sessionId, string threadId, string path,
+        AudioThreadEvent? log = null) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) => Replace(state, thread with
+        {
+            File = path,
+            DraftFolder = null,
+            Lineage = thread.File is { } old && old != path ? [.. thread.Lineage, old] : thread.Lineage,
+        }, log));
+
     // Состояние для блока хода и записи журнала, ещё не показанные ходу; курсор сдвигается.
     // Ревизию не трогает: сборка хода — не правка состояния
     public (AudioThreadsState State, IReadOnlyList<AudioThreadEvent> Fresh) TakeForTurn(string ownerId, string sessionId)

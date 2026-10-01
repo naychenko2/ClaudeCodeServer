@@ -134,6 +134,24 @@ public sealed class AudioJobThreads(
         }
     }
 
+    // Человек сохранил версию в проект: нить идёт за сохранённым — основным звуком, а у версии из одних
+    // стемов за папкой стемов (её путь и отдаёт сохранение). Файл уже в проекте, поэтому сбой следа
+    // ответ ручки не портит
+    public async Task OnSavedAsync(string ownerId, string scopeKey, string sessionId, string threadId, string path)
+    {
+        try
+        {
+            var written = store.MoveToFile(ownerId, sessionId, threadId, path,
+                new AudioThreadEvent(store.Now(), AudioThreadEventKinds.Saved, $"Человек сохранил звук в проект: {path}", threadId));
+            if (written.Status == AudioThreadWriteStatus.Ok)
+                await BroadcastAsync(ownerId, scopeKey, sessionId, written.State);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Звук: сохранение {Path} не записано в нить {ThreadId}", path, threadId);
+        }
+    }
+
     public async Task BroadcastAsync(string ownerId, string scopeKey, string sessionId, AudioThreadsState state)
     {
         if (broadcaster is null) return;

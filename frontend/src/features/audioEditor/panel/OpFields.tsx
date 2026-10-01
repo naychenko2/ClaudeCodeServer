@@ -13,7 +13,7 @@ import { opInfo } from '../ops';
 import type { AudioSelection } from '../player/selection';
 import { pickedSlug } from '../voices/model';
 import { LIBRARY_VOICE_OPS, type PanelInputs, type Replica, type TrimInputs } from './inputs';
-import { SOURCE_LABEL, SPEAK_SOURCES, type PanelState } from './model';
+import { MUSIC_FIELD_LABELS, SOURCE_LABEL, SPEAK_SOURCES, type PanelState } from './model';
 import { ParamField } from './ParamField';
 import { PieceField, type PieceBinding } from './PieceField';
 import { Hint, ic, Label } from './primitives';
@@ -47,7 +47,10 @@ export function SchemaFields({ fields, values, setField, only }: {
   fields: AudioParamField[]; values: Record<string, unknown>; setField: (k: string, v: unknown) => void; only?: string[];
 }) {
   const list = only ? fields.filter(f => only.includes(f.key)) : fields;
-  return <>{list.map(f => <ParamField key={f.key} field={f} value={values[f.key]} onChange={v => setField(f.key, v)} />)}</>;
+  // Ключи музыки сюда попадают только в режиме «Музыка» (splitSchema) — подпись берём оттуда
+  return <>{list.map(f => (
+    <ParamField key={f.key} field={f} value={values[f.key]} onChange={v => setField(f.key, v)} label={MUSIC_FIELD_LABELS[f.key]} />
+  ))}</>;
 }
 
 export function Language({ languages, value, onChange, auto }: {

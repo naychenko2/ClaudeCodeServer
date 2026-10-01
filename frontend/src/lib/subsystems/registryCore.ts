@@ -16,6 +16,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
 import type { AuthState, ChatItem, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
+import { subscribeFlags } from '../featureFlags';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
 // Вклад в слот. Ровно два вида:
@@ -375,6 +376,9 @@ export function getSlotAction<A = Record<string, unknown>>(slot: string, name: s
 // изменение стора подсистем поднимаем версию и оповещаем подписчиков — иначе
 // useSyncExternalStore вернул бы прежний снапшот и слот не перерисовался бы.
 subscribeSubsystems(emit);
+// Фич-флаги владельца — тоже: вклады, гейтящие себя флагом прямо в слоте (геттер в манифесте),
+// без этого не перерисовались бы на тумблер до перезагрузки
+subscribeFlags(emit);
 
 // Примитивы подписки — база хуков ниже. Экспортируются, чтобы тест мог проверить
 // пересчёт вкладов на смену тумблера без рендера React.

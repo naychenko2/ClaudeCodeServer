@@ -221,7 +221,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // ── Схема модели: поля операции и «Дополнительно» ──
   const noAi = isNoAi(state.op);
   const schema = useSchema(noAi ? null : state.provider?.key ?? null, noAi ? null : state.model?.id ?? null, state.op);
-  const { main, extra } = splitSchema(schema.schema);
+  const { main, extra } = splitSchema(schema.schema, state.mode);
   // Поля, которых у модели нет, сервер отверг бы — чистим, как только схема пришла
   useEffect(() => {
     if (!schema.schema) return;

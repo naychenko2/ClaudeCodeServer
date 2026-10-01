@@ -18,6 +18,7 @@ import { launchFromComposer } from '../thread/actions';
 import {
   focusThread, getCatalog, getFocusedThread, getJobsOf, mutate, suggestPrompt, useAudioThreads, type JobProgress,
 } from '../thread/threadStore';
+import { launchOf, launchVersions } from '../thread/model';
 import {
   asMode, cancelLine, opTitle, parseDenial, parseFocus, parseLaunch, parseReady, priceText, stateLine, str, voicesLine,
   type Denial, type LaunchView,
@@ -123,6 +124,11 @@ export function launchMeta(L: LaunchView, catalog: AudioCatalog | null): string 
 export type LaunchPhase = 'run' | 'done' | 'failed' | 'cancelled' | 'interrupted' | 'gone';
 
 // Нет нити в чате (удалена) — 'gone'; запуск ещё не записан в нить — идёт
+// Запуск, который нить уже знает, целиком рисует якорь audio_launch_versions карточки нити:
+// строка запуска, прогресс, «Отменить», версии. Своя карточка тут — второй блок на запуск
+export const launchOwned = (thread: AudioThread | undefined, jobId: string): boolean =>
+  !!thread && (!!launchOf(thread, jobId) || launchVersions(thread, jobId).length > 0);
+
 export function launchPhase(thread: AudioThread | undefined, jobId: string, loaded: boolean): LaunchPhase {
   if (!thread) return loaded ? 'gone' : 'run';
   const l = thread.launches.find(x => x.jobId === jobId);
@@ -202,6 +208,7 @@ export function AudioLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   }, [phase, launch?.jobId, scope, ctx.sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const title = opTitle(launch?.op ?? (str(input.op) as never), asMode(input.mode));
+  if (launch && launchOwned(thread, launch.jobId)) return null;
   if (item.result === undefined) {
     return <Card kind="launch"><CardHead icon={<Dot color={C.accent} />} title="Запускаю операцию со звуком…" meta={title} /></Card>;
   }

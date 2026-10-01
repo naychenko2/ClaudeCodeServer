@@ -175,9 +175,21 @@ describe('автоформа по схеме', () => {
     });
   });
   it('известные ключи — на виду, прочее и непередаваемое — в «Дополнительно»', () => {
-    const { main, extra } = splitSchema(schema);
+    const { main, extra } = splitSchema(schema, 'voice');
     expect(main.map(f => f.key)).toEqual(['speaker', 'expressiveness', 'voice']);
     expect(extra.map(f => f.key)).toEqual(['steps', 'loop', 'tag', 'plan', 'cfg_weight']);
+  });
+  it('ключи музыки на виду только в «Музыке»: у голосовой модели они остаются в «Дополнительно»', () => {
+    const withMusic: AudioParamSchema = { ...schema, fields: [
+      { key: 'speaker', type: 'string' }, { key: 'key', type: 'string' }, { key: 'strength', type: 'number' }, { key: 'bpm', type: 'integer' },
+    ] };
+    const voice = splitSchema(withMusic, 'voice');
+    expect(voice.main.map(f => f.key)).toEqual(['speaker']);
+    expect(voice.extra.map(f => f.key)).toEqual(['key', 'strength', 'bpm']);
+    expect(splitSchema(withMusic, 'process').extra.map(f => f.key)).toEqual(['key', 'strength', 'bpm']);
+    const music = splitSchema(withMusic, 'music');
+    expect(music.main.map(f => f.key)).toEqual(['speaker', 'key', 'strength', 'bpm']);
+    expect(music.extra).toEqual([]);
   });
   it('в params — только передаваемые ключи схемы', () => {
     expect(pruneFields({ speaker: 'Eric', cfg_weight: 0.5, alien: 1, tag: '' }, schema)).toEqual({ speaker: 'Eric' });

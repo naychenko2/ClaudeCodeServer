@@ -313,7 +313,11 @@ export const OP_FIELD_LABELS: Record<string, string> = {
   loudness_rate: 'Громкость',
   emotion: 'Эмоция',
   remove_background_noise: 'Убрать фоновый шум',
-  // Музыка
+};
+
+// Ключи музыки — на виду только в режиме «Музыка»: у голосовой модели поле key или strength
+// значит другое, и прятать его из «Дополнительно» под чужой подписью нельзя
+export const MUSIC_FIELD_LABELS: Record<string, string> = {
   bpm: 'Темп, BPM',
   key: 'Тональность',
   strength: 'Близость к исходнику',
@@ -322,11 +326,16 @@ export const OP_FIELD_LABELS: Record<string, string> = {
   abc: 'Партитура ABC',
 };
 
-export function splitSchema(schema: AudioParamSchema | null): { main: AudioParamField[]; extra: AudioParamField[] } {
+export function opFieldLabels(mode: AudioMode): Record<string, string> {
+  return mode === 'music' ? { ...OP_FIELD_LABELS, ...MUSIC_FIELD_LABELS } : OP_FIELD_LABELS;
+}
+
+export function splitSchema(schema: AudioParamSchema | null, mode: AudioMode): { main: AudioParamField[]; extra: AudioParamField[] } {
   const fields = schema?.fields ?? [];
+  const labels = opFieldLabels(mode);
   return {
-    main: fields.filter(f => f.key in OP_FIELD_LABELS && f.passed !== false),
-    extra: fields.filter(f => !(f.key in OP_FIELD_LABELS) || f.passed === false),
+    main: fields.filter(f => f.key in labels && f.passed !== false),
+    extra: fields.filter(f => !(f.key in labels) || f.passed === false),
   };
 }
 

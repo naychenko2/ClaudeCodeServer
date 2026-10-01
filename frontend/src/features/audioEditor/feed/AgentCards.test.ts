@@ -78,8 +78,9 @@ beforeEach(() => {
 });
 
 describe('audio_generate', () => {
+  // Нить ещё не знает запуск (стор отстаёт от результата инструмента) — карточка рисует его сама
   it('идёт: операция, поставщик · модель, цена и «Отменить»', () => {
-    withThreads(thread('running'));
+    withThreads(thread(null));
     const out = html(AudioLaunchCard, tool('audio_generate', { threadId: 't1' }, LAUNCH));
     expect(out).toContain('Claude — запуск: Озвучить');
     expect(out).toContain('Локально · Qwen3-TTS 1.7B · 2 вар. · бесплатно');
@@ -87,20 +88,19 @@ describe('audio_generate', () => {
     expect(out).toContain('Отменить');
   });
 
-  it('готово: ссылки на версии запуска', () => {
-    withThreads(thread('done'));
-    const out = html(AudioLaunchCard, tool('audio_generate', { threadId: 't1' }, LAUNCH));
-    expect(out).toContain('Готово: Озвучить');
-    expect(out).toContain('Версия 1');
-    expect(out).toContain('Версия 2');
-    expect(out).not.toContain('Отменить');
-  });
-
-  it('ошибка: «Не получилось» с причиной', () => {
-    withThreads(thread('failed'));
-    const out = html(AudioLaunchCard, tool('audio_generate', { threadId: 't1' }, LAUNCH));
-    expect(out).toContain('Не получилось: Озвучить');
-    expect(out).toContain('Поставщик не справился.');
+  it('запуск, который знает нить, — молчит: его рисует якорь audio_launch_versions', () => {
+    for (const status of ['running', 'done', 'failed', 'cancelled', 'interrupted'] as const) {
+      withThreads(thread(status));
+      expect(html(AudioLaunchCard, tool('audio_generate', { threadId: 't1' }, LAUNCH)), status).toBe('');
+    }
+    // Версии запуска без записи о нём — тоже его
+    const t = thread('done');
+    withThreads({ ...t, launches: [] });
+    expect(html(AudioLaunchCard, tool('audio_generate', { threadId: 't1' }, LAUNCH))).toBe('');
+    // Чужой запуск той же нити — не повод молчать
+    withThreads(thread('running'));
+    const other = LAUNCH.replace('"j1"', '"j2"');
+    expect(html(AudioLaunchCard, tool('audio_generate', { threadId: 't1' }, other))).toContain('Claude — запуск: Озвучить');
   });
 
   it('причина сбоя — текст задачи и деньги', () => {
@@ -110,9 +110,7 @@ describe('audio_generate', () => {
       .toBe('У поставщика закончились средства.');
   });
 
-  it('прервалось и звук удалён', () => {
-    withThreads(thread('interrupted'));
-    expect(html(AudioLaunchCard, tool('audio_generate', { threadId: 't1' }, LAUNCH))).toContain('Сервер перезапускался');
+  it('звук удалён', () => {
     withThreads();
     expect(html(AudioLaunchCard, tool('audio_generate', { threadId: 't1' }, LAUNCH))).toContain('Этого звука в чате уже нет');
   });

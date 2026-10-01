@@ -157,11 +157,11 @@ for (const theme of ['light', 'dark'] as const) {
       await expect(page.getByText('Дикторы (ru): 12 дикторов, голосов проекта: 2')).toBeVisible();
       await expect(page.getByRole('button', { name: 'Вставить в промпт' })).toBeVisible();
       await expect(page.getByRole('button', { name: /Сгенерировать · бесплатно/ })).toBeVisible();
-      await expect(page.getByText('Готово: Озвучить')).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Версия 2' })).toBeVisible();
-      await expect(page.getByText('Claude — запуск: Озвучить')).toBeVisible();
-      await expect(page.getByText('Не получилось: Озвучить')).toBeVisible();
-      await expect(page.getByText(/Сервис озвучки ответил 503/)).toBeVisible();
+      // Запуски, которые знает нить, рисует якорь audio_launch_versions — не эта карточка
+      // (вместе с якорями — e2e/audio-ui-merged.spec.ts)
+      await expect(page.getByText('Готово: Озвучить')).toHaveCount(0);
+      await expect(page.getByText('Claude — запуск: Озвучить')).toHaveCount(0);
+      await expect(page.getByText('Не получилось: Озвучить')).toHaveCount(0);
       await expect(page.getByText('Лимит запусков за ход')).toBeVisible();
       await expect(page.getByText('Запуск недоступен на чужом ходу')).toBeVisible();
       await expect(page.getByText('Склеено: склейка-реплик.wav')).toBeVisible();

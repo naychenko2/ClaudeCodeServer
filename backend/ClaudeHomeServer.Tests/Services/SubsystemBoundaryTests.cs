@@ -113,6 +113,9 @@ public class SubsystemBoundaryTests
         // ImageEditor — динамический модуль (ADR-018 §10.1): Main на него не ссылается,
         // без форс-загрузки сторож прошёл бы по нему вакуумно.
         _ = typeof(ClaudeHomeServer.Services.ImageEditor.ImageEditorSubsystem).Assembly;
+        // AudioEditor — динамический модуль «Звук» (ADR-021): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.AudioEditor.AudioEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): форс-загрузка нужна,
         // чтобы сторож видел типы Prompts (OmoPrompts, SubagentPrompts, OmcPersonaRouting)
         // и проверял границы по Prompts.dll.
@@ -274,6 +277,19 @@ public class SubsystemBoundaryTests
                 "ClaudeHomeServer.Services.ImageEditor",
                 SharedAllowedPrefixes
                     .Concat(new[] { "ClaudeHomeServer.Services.ImageEditor" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // AudioEditor — динамический модуль «Звук» (ADR-021 §1). Только общая спинка: Higgsfield,
+        // локальные модели и DSP — швы Core в нейтральных namespace. Ссылка на сборку ImageEditor
+        // (а не на Core) — нарушение, так и проверяется мутацией.
+        new object[]
+        {
+            new VerticalBoundary(
+                "AudioEditor",
+                "ClaudeHomeServer.Services.AudioEditor",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.AudioEditor" })
                     .ToArray(),
                 Array.Empty<string>()),
         },
@@ -1754,17 +1770,25 @@ public class SubsystemBoundaryTests
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).
         "ClaudeHomeServer.Core.Telemetry",
-        // ADR-018 §10.1: швы модуля редактора картинок в спине — IHiggsfieldAccess,
-        // список авторазрешения тулсета агента (ImageEditorAgentTools), имя рабочей папки для
-        // бэкапа и записи операций растра.
+        // ADR-018 §10.1: швы модуля редактора картинок в спине — список авторазрешения
+        // тулсета агента (ImageEditorAgentTools), имя рабочей папки для бэкапа и записи
+        // операций растра.
         // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
         "ClaudeHomeServer.Services.ImageEditor",
+        // ADR-021 §2: имя рабочей папки модуля «Звук» для бэкапа (AudioEditorPaths) — Main
+        // типов динамического модуля не видит. Сам модуль — в ClaudeHomeServer.AudioEditor.
+        "ClaudeHomeServer.Services.AudioEditor",
         // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая
         // функция по сигнатуре байтов, нужна и модулю редактора, и LocalMedia в Images.
         "ClaudeHomeServer.Services.ImageEditor.Versioning",
         // ADR-018 §10.1: шов растра. Реализация (SkiaImageRaster) в Images, потребитель —
         // модуль редактора; namespace сохранён при переносе интерфейса из Images.
         "ClaudeHomeServer.Services.Images.Editing.Raster",
+        // ADR-021 §2: общие швы медиа-модулей (картинки и звук) под нейтральными именами —
+        // IHiggsfieldAccess (доступ к инстансной интеграции Higgsfield) и ProjectLinkGuard
+        // (запрет символических ссылок в путях проекта). Перенесены из Services.ImageEditor.
+        "ClaudeHomeServer.Services.Higgsfield",
+        "ClaudeHomeServer.Services.Media",
     ];
 
     /// <summary>

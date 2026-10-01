@@ -23,6 +23,8 @@ public static class LocalMediaRegistration
         services.AddSingleton<LocalMediaService>();
         // Шов для поставщика «Локальные модели» редактора картинок (модуль ImageEditor)
         services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.ILocalImageMedia, LocalImageMediaAdapter>();
+        // Шов локальных аудио-моделей для модуля «Звук» (ADR-021)
+        services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalAudioMedia, LocalAudioMediaAdapter>();
         services.AddSingleton<LocalMediaCleanup>();
         services.AddGatedHostedService<LocalMediaCollector>(config, "images");
         return services;

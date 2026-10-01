@@ -17,7 +17,7 @@
 import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb, DraftingCompass,
+  TableOfContents, Lightbulb, DraftingCompass, Image as ImageIcon, AudioLines,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
@@ -40,6 +40,9 @@ export const PANEL_KEYS = [
   // Панели подсистем (слот workspace-panel-def): ключ зарезервирован здесь, тело и
   // доступность — у подсистемы; выключена подсистема — нет содержимого, нет и кнопки
   'characters',
+  // Панели генерации (ADR-021 §3): «Картинки» и «Звук» — вклады вертикалей тем же
+  // слотом; справа одновременно живёт только одна из них (см. EXCLUSIVE_PANEL_SETS)
+  'images', 'sound',
   // Фоновый эфир рядом с работой: живёт и в проекте, и в разделе «Чаты».
   // Каталог каналов панелью НЕ является: он открывается в центральном острове
   // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
@@ -132,6 +135,9 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   toc:      { title: 'Оглавление', Icon: TableOfContents },
   // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
   characters: { title: 'Персонажи', Icon: Contact },
+  // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные
+  images:   { title: 'Картинки',  Icon: ImageIcon },
+  sound:    { title: 'Звук',      Icon: AudioLines },
 
   // Разделы хаба. Ключи намеренно длиннее воркспейсных: рядом живут похожие по
   // смыслу панели проекта, и путать их нельзя. personasList — все персоны
@@ -170,6 +176,8 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   context: 'right',
   toc: 'right',
   characters: 'right',
+  images: 'right',
+  sound: 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
@@ -182,6 +190,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc', 'video', 'characters',
+  'images', 'sound',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];
@@ -195,6 +204,23 @@ export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
 // Персона — если собеседник персона). В рельсе они отделены сепаратором от
 // инструментов проекта.
 export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
+
+// Правая зона раздела «Чаты»: панели сессии плюс панели генерации личного чата
+export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'images', 'sound'];
+
+// Панели генерации: справа одна за раз, а в планшетной зоне они держат поток до
+// GEN_PANEL_INLINE_MIN (genPanelPlacement)
+export const GEN_PANEL_KEYS: readonly PanelKey[] = ['images', 'sound'];
+
+// Наборы взаимоисключающих панелей: открытие одной закрывает остальные из её набора
+// в ЛЮБОЙ зоне, при любой ширине окна. «Справа одна панель генерации» (ADR-021 §3):
+// с прочими панелями картинки и звук соседствуют по обычной модели зоны.
+export const EXCLUSIVE_PANEL_SETS: readonly (readonly PanelKey[])[] = [GEN_PANEL_KEYS];
+
+// Соперники панели — те, кого её открытие закрывает
+export function panelRivals(k: PanelKey): PanelKey[] {
+  return EXCLUSIVE_PANEL_SETS.flatMap(set => (set.includes(k) ? set.filter(x => x !== k) : []));
+}
 
 // Панели ЦЕНТРАЛЬНОЙ ОБЛАСТИ: показывают не проект и не сессию, а то, что открыто
 // в центре прямо сейчас. Живут ровно столько, сколько живёт их источник: закрыли

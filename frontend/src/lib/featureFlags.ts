@@ -40,6 +40,8 @@ export const FLAGS = {
   localProjects: 'local-projects',
   // Локальная модель по умолчанию для картинок и видео (MCP local-media).
   localMediaDefault: 'local-media-default',
+  // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта.
+  audioEditor: 'audio-editor',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

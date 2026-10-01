@@ -132,7 +132,10 @@ Viaduct Community без форка; лицензионные рамки BUSL-1.
 проекта — нити и фокус в хранилище модуля, швы ядра `IChatFeed`, `module_record` и события
 жизненного цикла чата, чаты v2 уходят в архив, реестр полос над композером),
 [ADR-020](adr/ADR-020-local-media-audio.md) (аудио в local-media: музыка нативными нодами ComfyUI,
-голос, стемы и реставрация — venv-воркерами через узел `CcsAudioWorker` в общей очереди GPU1);
+голос, стемы и реставрация — venv-воркерами через узел `CcsAudioWorker` в общей очереди GPU1),
+[ADR-021](adr/ADR-021-audio-editor-and-generation-panel.md) (модуль «Звук» отдельной сборкой и
+MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.Media`, общий каркас панели
+генерации и перенос настроек картинок в неё, тулсет `audio_*`, этапы — черновик);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

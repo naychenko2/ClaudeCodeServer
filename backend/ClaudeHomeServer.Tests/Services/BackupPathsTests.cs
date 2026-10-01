@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.Backup;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Spend;
@@ -133,6 +134,19 @@ public class BackupPathsTests
         var dir = $"{ImageEditorPaths.WorkspaceDirName}/user-1/{ImageEditorPaths.ChatsDirName}";
         BackupPaths.ShouldInclude($"{dir}/0f3c9a.json").Should().BeFalse();
         BackupPaths.ShouldInclude($"{dir}/0f3c9a.mask.png").Should().BeFalse();
+    }
+
+    [Fact]
+    public void МодульЗвук_РабочаяПапкаИсключена_НитиИПрефыЕдут()
+    {
+        // Файлы вариантов задач — кеш на 7 дней (ADR-021 §2); имя из константы Core, её же
+        // читает модуль «Звук»
+        var job = $"{AudioEditorPaths.WorkspaceDirName}/user-1/job-1";
+        BackupPaths.ShouldInclude($"{job}/v1.mp3").Should().BeFalse();
+        BackupPaths.ShouldInclude($"{job}/stems/vocals.wav").Should().BeFalse();
+        // Нити и префы — другие корни: карточка в ленте живёт бессрочно, выбор человека тоже
+        BackupPaths.ShouldInclude("audio-threads/user-1/session-1.json").Should().BeTrue();
+        BackupPaths.ShouldInclude("audio-editor-prefs/user-1/personal.json").Should().BeTrue();
     }
 
     [Fact]

@@ -14,6 +14,7 @@ import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionC
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
 import { getFabObstacle, subscribeFabObstacle } from '../../lib/ai/fabObstacle';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useGenSheetRaised } from '../../lib/genSheet';
 import { useListAutoFocus } from '../../lib/listAutoFocus';
 import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
 import { rankContext } from '../../lib/ai/suggest';
@@ -96,6 +97,8 @@ export function AiLauncher() {
   const [semanticCaps, setSemanticCaps] = useState(false);
   // Мобильный вид — палитра становится нижней шторкой
   const isMobile = useIsMobile();
+  // Поднятая шторка панели генерации — кнопка лежала бы поверх её опций
+  const sheetRaised = useGenSheetRaised();
   const aiBusy = useAiBusy();
   // Какие чаты ждут ответа человека (permission_request / ask_question без ответа).
   // Глобальный стор — AiLauncher видит «нужен ответ» из любого раздела, даже уйдя из чата.
@@ -592,7 +595,7 @@ export function AiLauncher() {
           только «работа»; маячок «нужен ответ» и accent-ореол «идеи» — в CSS по data-state.
           Геометрия (размер, наведение, ужимание) осталась inline; ореол и анимации — в CSS,
           т.к. box-shadow/transform анимаций inline-стилем не перебить. */}
-      {!open && (
+      {!open && !sheetRaised && (
         <button
           ref={fabRef}
           className="cc-fab"

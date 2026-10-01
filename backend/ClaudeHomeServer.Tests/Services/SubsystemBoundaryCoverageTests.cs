@@ -67,6 +67,9 @@ public class SubsystemBoundaryCoverageTests
         // ImageEditor — динамический модуль (ADR-018 §10.1): Main на него не ссылается,
         // без typeof проверка полноты Boundaries по нему ничего не проверяет.
         _ = typeof(ClaudeHomeServer.Services.ImageEditor.ImageEditorSubsystem).Assembly;
+        // AudioEditor — динамический модуль «Звук» (ADR-021): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.AudioEditor.AudioEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): без typeof набор
         // сборок её не содержит, и проверка полноты Boundaries по ней ничего не проверяет.
         _ = typeof(ClaudeHomeServer.Services.Prompts.OmoPrompts).Assembly;
@@ -244,6 +247,10 @@ public class SubsystemBoundaryCoverageTests
             // вертикалям доступны как спина по сборке Core.
             // `ClaudeHomeServer.Services.ImageEditor` здесь больше нет: это модуль редактора
             // (ADR-018 §10.1) со своей строкой в Boundaries; его швы в Core проверяются тем же сторожем.
+            // Спина медиа-модулей (ADR-021 §2): швы, общие для картинок и звука, живут только
+            // в Core (CoreAllowedNamespaces) и своей вертикали не имеют.
+            "ClaudeHomeServer.Services.Higgsfield",   // IHiggsfieldAccess
+            "ClaudeHomeServer.Services.Media",        // ProjectLinkGuard
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

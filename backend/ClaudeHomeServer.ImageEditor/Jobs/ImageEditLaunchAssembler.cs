@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 

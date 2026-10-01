@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;

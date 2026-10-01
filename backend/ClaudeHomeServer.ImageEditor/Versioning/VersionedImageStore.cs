@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Versioning;
 

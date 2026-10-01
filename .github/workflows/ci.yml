@@ -15,6 +15,11 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      # ffmpeg для тестов монтажа без ИИ модуля «Звук» (ADR-021, этап 5).
+      # В ubuntu-latest он есть в репозитории universe, но ставится явно — без
+      # зависимости от состава предустановленного софта в будущих образах.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - uses: actions/setup-dotnet@v4
         with:
           # Проекты на net10.0. Раньше тут стояло 9.0.x, и сборка проходила лишь потому,

@@ -37,6 +37,14 @@ public sealed class FakeComfy : HttpMessageHandler
                 ["queue_pending"] = new JsonArray([.. Pending.Select((id, i) => (JsonNode)new JsonArray(100 + i, id, new JsonObject()))]),
             });
 
+        // Снятие ждущих: {"delete":[id…]}
+        if (request.Method == HttpMethod.Post && path == "/queue")
+        {
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject();
+            foreach (var id in body["delete"]?.AsArray() ?? []) Pending.Remove(id!.GetValue<string>());
+            return Json(new JsonObject());
+        }
+
         if (request.Method == HttpMethod.Post && path == "/prompt")
         {
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject();

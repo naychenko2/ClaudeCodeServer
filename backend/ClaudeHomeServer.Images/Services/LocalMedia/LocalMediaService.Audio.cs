@@ -12,6 +12,11 @@ public sealed partial class LocalMediaService
     public const int MaxSpeechTextLength = 5000;
     public const int MaxTrainClips = 20;
     public const int MaxAbcLength = 20000;
+    // Расшифровка образца голоса у клона Qwen и описание голоса словами
+    public const int MaxReferenceTextLength = 2000;
+    public const int MaxVoiceDescriptionLength = 500;
+    // Образец голоса для клона: хватает 5–15 с чистой речи
+    public const int MaxReferenceSeconds = 60;
 
     // Описание стиля для ACE-Step: воркер правки (worker_acestep.py) молча режет prompt до 2000,
     // поведение энкодера на большей длине не проверено — отказываем заранее на обоих путях ace.
@@ -50,16 +55,71 @@ public sealed partial class LocalMediaService
 
     // Тяжёлые аудио-операции держат GPU десятки минут: обучение голоса и правка трека моделью
     // xl-base (20 ГБ весов fp32)
-    public static bool IsHeavyAudio(LocalMediaRequest request) =>
-        request.Op == LocalMediaOps.VoiceTrain
-        || (request.Op == LocalMediaOps.MusicEdit
-            && Str(request.Args, "task") is "extract" or "lego" or "complete");
+    public static bool IsHeavyAudio(LocalMediaRequest request) => IsHeavyAudio(request.Op, request.Args);
+
+    public static bool IsHeavyAudio(string op, JsonObject? args) =>
+        op == LocalMediaOps.VoiceTrain
+        || (op == LocalMediaOps.MusicEdit && Str(args, "task") is "extract" or "lego" or "complete");
+
+    // Источник входов аудио-сборки: у инструментов local-media — файлы проекта и job_id прошлых
+    // задач, у шва ILocalAudioMedia — байты запроса. Ссылка на вход — значение аргумента (audio,
+    // reference, audios[k], voice_model, voice_index)
+    internal interface IAudioInputs
+    {
+        InputFile Read(string reference, MediaKind kind);
+
+        Task<string> UploadAsync(byte[] bytes, string fileName, CancellationToken ct);
+    }
+
+    // Что сборка узнала о задаче — движок и длины для стора задач и ETA. Id — префикс имён входов
+    // и выходов воркера
+    internal sealed class AudioBuildInfo(string id)
+    {
+        public string Id { get; } = id;
+        public string? Engine { get; set; }
+        public double? InputSeconds { get; set; }
+        public int? DurationSeconds { get; set; }
+    }
 
     private async Task<(JsonObject Graph, int? EtaSeconds)> BuildAudioAsync(LocalMediaRequest request, LocalMediaJob job,
         string root, string prompt, long seed, string prefix, LocalMediaOptions options, CancellationToken ct)
     {
-        var a = request.Args ?? new JsonObject();
-        switch (request.Op)
+        var info = new AudioBuildInfo(job.Id)
+        {
+            Engine = job.Engine,
+            InputSeconds = job.InputSeconds,
+            DurationSeconds = job.DurationSeconds,
+        };
+        try
+        {
+            return await BuildAudioGraphAsync(request.Op, request.Args, info, new ProjectAudioInputs(this, request, job, root),
+                prompt, seed, prefix, options.MaxAudioInputSeconds, ct);
+        }
+        finally
+        {
+            job.Engine = info.Engine;
+            job.InputSeconds = info.InputSeconds;
+            job.DurationSeconds = info.DurationSeconds;
+        }
+    }
+
+    private sealed class ProjectAudioInputs(LocalMediaService service, LocalMediaRequest request, LocalMediaJob job, string root)
+        : IAudioInputs
+    {
+        public InputFile Read(string reference, MediaKind kind) => service.ReadInput(request, root, reference, kind);
+
+        public Task<string> UploadAsync(byte[] bytes, string fileName, CancellationToken ct) =>
+            service.UploadAsync(job, bytes, fileName, ct);
+    }
+
+    // Разбор аргументов, белые списки, пределы и граф аудио-операции — общие для инструментов
+    // local-media и шва ILocalAudioMedia. Ошибка запроса — LocalMediaInputException
+    internal static async Task<(JsonObject Graph, int? EtaSeconds)> BuildAudioGraphAsync(string op, JsonObject? args,
+        AudioBuildInfo job, IAudioInputs inputs, string prompt, long seed, string prefix, int maxAudioInputSeconds,
+        CancellationToken ct)
+    {
+        var a = args ?? new JsonObject();
+        switch (op)
         {
             case LocalMediaOps.MusicGenerate:
                 return BuildMusic(a, job, prompt, seed, prefix);
@@ -68,11 +128,11 @@ public sealed partial class LocalMediaService
             {
                 var task = OneOf(a, "task", "cover", MusicEditTasks);
                 if (OneOf(a, "engine", "ace", ["ace", "yue2"]) == "yue2")
-                    return await BuildYuE2CoverAsync(request, a, job, root, prompt, task, seed, prefix, options, ct);
+                    return await BuildYuE2CoverAsync(a, job, inputs, prompt, task, seed, prefix, maxAudioInputSeconds, ct);
                 if (task is "cover" or "repaint" && prompt.Length == 0)
                     throw new LocalMediaInputException("Для cover и repaint нужен prompt — стиль и содержание результата.");
                 CheckAceCaption(prompt);
-                var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
+                var (name, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 var p = new JsonObject { ["task"] = task, ["prompt"] = prompt, ["seed"] = seed };
                 if (Str(a, "lyrics") is { } lyrics) p["lyrics"] = Limit(lyrics, ComfyWorkflows.MaxLyricsLength, "lyrics");
                 switch (task)
@@ -104,7 +164,7 @@ public sealed partial class LocalMediaService
             }
 
             case LocalMediaOps.Speech:
-                return await BuildSpeechAsync(request, a, job, root, seed, options, ct);
+                return await BuildSpeechAsync(a, job, inputs, seed, maxAudioInputSeconds, ct);
 
             case LocalMediaOps.VoiceConvert:
             {
@@ -115,21 +175,21 @@ public sealed partial class LocalMediaService
                 if (mode == "speech" && shift != 0)
                     throw new LocalMediaInputException("Seed-VC в режиме speech сдвиг высоты не применяет: уберите "
                         + "pitch_shift или возьмите mode=singing / engine=rvc.");
-                var (source, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
+                var (source, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 job.Engine = engine;
                 if (mode != null)
                 {
-                    var (target, _) = await AudioInputAsync(request, job, root, Required(a, "reference"), "ref", options, ct);
+                    var (target, _) = await AudioInputAsync(inputs, job, Required(a, "reference"), "ref", maxAudioInputSeconds, ct);
                     var p = new JsonObject { ["mode"] = mode, ["pitch_shift"] = shift };
                     return (ComfyWorkflows.AudioWorker("voice_convert", p, [source, target], job.Id, 30),
                         VoiceConvertEta(mode, seconds));
                 }
-                var model = await UploadInputAsync(request, job, root, Required(a, "voice_model"), MediaKind.VoiceModel,
+                var model = await UploadFileAsync(inputs, Required(a, "voice_model"), MediaKind.VoiceModel,
                     $"{job.Id}-voice", ct);
-                var inputs = new List<string> { source, model };
+                var workerInputs = new List<string> { source, model };
                 if (Str(a, "voice_index") is { } index)
-                    inputs.Add(await UploadInputAsync(request, job, root, index, MediaKind.VoiceIndex, $"{job.Id}-voice", ct));
-                return (ComfyWorkflows.AudioWorker("rvc_convert", new JsonObject { ["pitch_shift"] = shift }, inputs, job.Id, 30),
+                    workerInputs.Add(await UploadFileAsync(inputs, index, MediaKind.VoiceIndex, $"{job.Id}-voice", ct));
+                return (ComfyWorkflows.AudioWorker("rvc_convert", new JsonObject { ["pitch_shift"] = shift }, workerInputs, job.Id, 30),
                     RvcConvertEta(seconds));
             }
 
@@ -142,7 +202,7 @@ public sealed partial class LocalMediaService
                 double total = 0;
                 for (var k = 0; k < clips.Count; k++)
                 {
-                    var (name, seconds) = await AudioInputAsync(request, job, root, clips[k], $"clip{k + 1}", options, ct);
+                    var (name, seconds) = await AudioInputAsync(inputs, job, clips[k], $"clip{k + 1}", maxAudioInputSeconds, ct);
                     names.Add(name);
                     total += seconds ?? 0;
                 }
@@ -157,7 +217,7 @@ public sealed partial class LocalMediaService
             {
                 var mode = OneOf(a, "mode", "vocals", SeparateModes);
                 var format = OneOf(a, "format", "mp3", ["mp3", "wav", "flac"]);
-                var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
+                var (name, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 job.Engine = mode;
                 return (ComfyWorkflows.AudioWorker("separate", new JsonObject { ["mode"] = mode, ["format"] = format },
                     [name], job.Id, 30), SeparateEta(mode, seconds));
@@ -165,7 +225,7 @@ public sealed partial class LocalMediaService
 
             case LocalMediaOps.AudioToMidi:
             {
-                var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
+                var (name, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 return (ComfyWorkflows.AudioWorker("audio_to_midi", new JsonObject(), [name], job.Id, 15),
                     seconds is { } s ? 4 + (int)Math.Ceiling(s * 0.01) : null);
             }
@@ -173,7 +233,7 @@ public sealed partial class LocalMediaService
             case LocalMediaOps.AudioEnhance:
             {
                 var mode = OneOf(a, "mode", "denoise", EnhanceModes);
-                var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
+                var (name, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 job.Engine = mode;
                 switch (mode)
                 {
@@ -188,7 +248,7 @@ public sealed partial class LocalMediaService
                         return (ComfyWorkflows.AudioWorker("upsample", new JsonObject { ["model"] = model }, [name], job.Id, 30),
                             UpsampleEta(seconds));
                     default:
-                        var (reference, _) = await AudioInputAsync(request, job, root, Required(a, "reference"), "ref", options, ct);
+                        var (reference, _) = await AudioInputAsync(inputs, job, Required(a, "reference"), "ref", maxAudioInputSeconds, ct);
                         return (ComfyWorkflows.AudioWorker("master", new JsonObject(), [name, reference], job.Id, 15),
                             seconds is { } m ? 18 + (int)Math.Ceiling(m * 0.02) : null);
                 }
@@ -196,7 +256,7 @@ public sealed partial class LocalMediaService
 
             case LocalMediaOps.Transcribe:
             {
-                var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
+                var (name, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 var p = new JsonObject();
                 if (Str(a, "language") is { } language)
                 {
@@ -212,10 +272,17 @@ public sealed partial class LocalMediaService
         }
     }
 
+    private static async Task<string> UploadFileAsync(IAudioInputs inputs, string reference, MediaKind kind, string stem,
+        CancellationToken ct)
+    {
+        var input = inputs.Read(reference, kind);
+        return await inputs.UploadAsync(input.Bytes, stem + input.Extension, ct);
+    }
+
     // Кавер YuE2: мелодия исходника (SheetSage2) + новые слова и стиль. Длина — по исходнику, не больше
     // потолка песни
-    private async Task<(JsonObject Graph, int? EtaSeconds)> BuildYuE2CoverAsync(LocalMediaRequest request, JsonObject a,
-        LocalMediaJob job, string root, string prompt, string task, long seed, string prefix, LocalMediaOptions options,
+    private static async Task<(JsonObject Graph, int? EtaSeconds)> BuildYuE2CoverAsync(JsonObject a, AudioBuildInfo job,
+        IAudioInputs inputs, string prompt, string task, long seed, string prefix, int maxAudioInputSeconds,
         CancellationToken ct)
     {
         if (task != "cover")
@@ -225,7 +292,7 @@ public sealed partial class LocalMediaService
         var lyrics = Limit(Str(a, "lyrics") ?? "", ComfyWorkflows.MaxLyricsLength, "lyrics");
         if (lyrics.Length == 0)
             throw new LocalMediaInputException("YuE2 поёт по словам — передай lyrics (их можно взять из local_transcribe вокала).");
-        var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
+        var (name, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
         var length = (int)Math.Clamp(Math.Round(seconds ?? ComfyWorkflows.MaxMusicSeconds), ComfyWorkflows.MinMusicSeconds,
             ComfyWorkflows.MaxMusicSeconds);
         job.Engine = "yue2";
@@ -233,7 +300,7 @@ public sealed partial class LocalMediaService
         return (ComfyWorkflows.YuE2Cover(prompt, lyrics, name, length, seed, prefix), YuE2CoverEta(length));
     }
 
-    private static (JsonObject Graph, int? EtaSeconds) BuildMusic(JsonObject a, LocalMediaJob job, string prompt, long seed,
+    private static (JsonObject Graph, int? EtaSeconds) BuildMusic(JsonObject a, AudioBuildInfo job, string prompt, long seed,
         string prefix)
     {
         if (prompt.Length == 0)
@@ -277,8 +344,8 @@ public sealed partial class LocalMediaService
                 $"Описание стиля для ACE-Step — не длиннее {AceCaptionMaxChars} символов, сейчас {prompt.Length}.");
     }
 
-    private async Task<(JsonObject Graph, int? EtaSeconds)> BuildSpeechAsync(LocalMediaRequest request, JsonObject a,
-        LocalMediaJob job, string root, long seed, LocalMediaOptions options, CancellationToken ct)
+    private static async Task<(JsonObject Graph, int? EtaSeconds)> BuildSpeechAsync(JsonObject a, AudioBuildInfo job,
+        IAudioInputs inputs, long seed, int maxAudioInputSeconds, CancellationToken ct)
     {
         var text = Limit(Str(a, "text") ?? "", MaxSpeechTextLength, "text");
         if (text.Length == 0) throw new LocalMediaInputException("Нужен text — что озвучить.");
@@ -292,15 +359,15 @@ public sealed partial class LocalMediaService
         job.InputSeconds = null;
 
         var p = new JsonObject { ["text"] = text, ["seed"] = seed };
-        var inputs = new List<string>();
+        var workerInputs = new List<string>();
         if (reference is not null)
         {
             if (voice is not null || speaker is not null)
                 throw new LocalMediaInputException("Голос задаётся чем-то одним: reference (образец), voice (описание) или speaker.");
-            var (name, seconds) = await AudioInputAsync(request, job, root, reference, "ref", options, ct);
-            if (seconds is > 60)
-                throw new LocalMediaInputException("Образец голоса — до 60 секунд (хватает 5–15 с чистой речи).");
-            inputs.Add(name);
+            var (name, seconds) = await AudioInputAsync(inputs, job, reference, "ref", maxAudioInputSeconds, ct);
+            if (seconds is > MaxReferenceSeconds)
+                throw new LocalMediaInputException($"Образец голоса — до {MaxReferenceSeconds} секунд (хватает 5–15 с чистой речи).");
+            workerInputs.Add(name);
         }
 
         string op;
@@ -333,7 +400,7 @@ public sealed partial class LocalMediaService
             if (reference is not null)
             {
                 op = "voice_clone";
-                if (refText is not null) p["ref_text"] = Limit(refText, 2000, "reference_text");
+                if (refText is not null) p["ref_text"] = Limit(refText, MaxReferenceTextLength, "reference_text");
             }
             else
             {
@@ -343,29 +410,29 @@ public sealed partial class LocalMediaService
                     if (!QwenSpeakers.Contains(speaker))
                         throw new LocalMediaInputException("speaker — один из: " + string.Join(", ", QwenSpeakers) + ".");
                     p["speaker"] = speaker;
-                    if (voice is not null) p["instruct"] = Limit(voice, 500, "voice");
+                    if (voice is not null) p["instruct"] = Limit(voice, MaxVoiceDescriptionLength, "voice");
                 }
                 else if (voice is not null)
                 {
-                    p["voice"] = Limit(voice, 500, "voice");
+                    p["voice"] = Limit(voice, MaxVoiceDescriptionLength, "voice");
                 }
             }
         }
-        return (ComfyWorkflows.AudioWorker(op, p, inputs, job.Id, 20),
+        return (ComfyWorkflows.AudioWorker(op, p, workerInputs, job.Id, 20),
             SpeechEta(engine, text.Length, reference is not null && refText is null && engine == "qwen"));
     }
 
-    // Звук из проекта (или job_id прошлой задачи) — в input ComfyUI; длина — для потолка и ETA
-    private async Task<(string Name, double? Seconds)> AudioInputAsync(LocalMediaRequest request, LocalMediaJob job,
-        string root, string reference, string stem, LocalMediaOptions options, CancellationToken ct)
+    // Входной звук — в input ComfyUI; длина — для потолка и ETA
+    private static async Task<(string Name, double? Seconds)> AudioInputAsync(IAudioInputs inputs, AudioBuildInfo job,
+        string reference, string stem, int maxAudioInputSeconds, CancellationToken ct)
     {
-        var input = ReadInput(request, root, reference, MediaKind.Audio);
+        var input = inputs.Read(reference, MediaKind.Audio);
         var seconds = AudioProbe.Seconds(input.Bytes);
-        if (seconds > options.MaxAudioInputSeconds)
+        if (seconds > maxAudioInputSeconds)
             throw new LocalMediaInputException($"Звук «{reference}» — ≈{seconds:0} с, а локально берём до "
-                + $"{options.MaxAudioInputSeconds} с.");
+                + $"{maxAudioInputSeconds} с.");
         job.InputSeconds ??= seconds is { } s ? Math.Round(s, 1) : null;
-        return (await UploadAsync(job, input.Bytes, $"{job.Id}-{stem}{input.Extension}", ct), seconds);
+        return (await inputs.UploadAsync(input.Bytes, $"{job.Id}-{stem}{input.Extension}", ct), seconds);
     }
 
     // --- Время по замерам стенда (RTX 3090, холодная загрузка модели включена) ---

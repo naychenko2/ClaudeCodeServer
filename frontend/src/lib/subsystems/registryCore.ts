@@ -276,18 +276,37 @@ export interface ComposerChipCtx { projectId: string | null; sessionId: string |
 // свой чип. Пустой список — прикладывать нечего
 export interface ComposerChipApi { beforeSend?: (ctx: ComposerChipCtx) => Promise<File[]> }
 
-// Слот `workspace-panel-def`: панель рабочей области от подсистемы (например,
-// «Персонажи»). Имя вклада — ключ панели; render рисует тело, action описывает её
-// для рельсы и каталога панелей.
-export interface WorkspacePanelDefCtx { projectId: string; isMobile: boolean; onClose: () => void }
+// Слот `workspace-panel-def`: панель рабочей области от подсистемы («Персонажи»,
+// панели генерации «Картинки» и «Звук»). Имя вклада — ключ панели; render рисует
+// тело, action описывает её для рельсы и каталога панелей. Слот читают и проект, и
+// раздел «Чаты»: projectId = null — личный чат вне проекта, sessionId = null — чат
+// не выбран.
+export interface WorkspacePanelDefCtx {
+  projectId: string | null;
+  sessionId: string | null;
+  isMobile: boolean;
+  onClose: () => void;
+}
 export interface WorkspacePanelDefApi {
   title: string;
   icon: ReactNode;
-  isAvailable?: (projectId: string) => boolean;
+  // false — панели здесь нет (например, проектная панель в личном чате)
+  isAvailable?: (projectId: string | null) => boolean;
 }
 // Показать панель рабочей области извне (например, пунктирный чип «Персонаж» в полосе):
-// событие окна с detail = { key }; слушает страница проекта, неизвестный ключ пропускается
+// событие окна с detail = { key, tab? }; слушают страница проекта и раздел «Чаты»,
+// неизвестный ключ пропускается. tab — вкладка, которую панель покажет сама: хост её
+// не разбирает, панель слушает то же событие. sessionId — чат, ради которого просят показ
+// (автооткрытие по выбору картинки): телефонная шторка ждёт полосу именно этого чата
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
+export interface RevealPanelDetail { key: string; tab?: string; sessionId?: string }
+
+export function revealWorkspacePanel(key: string, tab?: string, sessionId?: string) {
+  const detail: RevealPanelDetail = { key };
+  if (tab !== undefined) detail.tab = tab;
+  if (sessionId !== undefined) detail.sessionId = sessionId;
+  window.dispatchEvent(new CustomEvent<RevealPanelDetail>(REVEAL_PANEL_EVENT, { detail }));
+}
 
 // ---- Хранилище ----
 const _manifests: SubsystemManifest[] = [];

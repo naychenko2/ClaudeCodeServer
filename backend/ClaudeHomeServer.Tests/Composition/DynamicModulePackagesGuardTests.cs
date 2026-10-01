@@ -17,6 +17,7 @@ public class DynamicModulePackagesGuardTests
         "ClaudeHomeServer.Notes",
         "ClaudeHomeServer.Spend",
         "ClaudeHomeServer.ImageEditor",
+        "ClaudeHomeServer.AudioEditor",
     };
 
     [Theory]

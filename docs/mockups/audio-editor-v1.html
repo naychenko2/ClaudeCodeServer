@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Раздел «Звук» v1 — Голос, Музыка, Обработка в чате AI Home</title>
+<style>
+  /* Токены — копия theme.css (значения обеих тем), чтобы макет был самодостаточным */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42); --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F; --c-danger-border: #F5C6BF;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    --c-skeleton: #E4DCCC;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #454037;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-success: #7CB86A; --c-success-bg: #1F2B1C; --c-success-text: #8FC47E;
+    --c-warning: #E0A955; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72; --c-danger-border: #5A302A;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+    --c-skeleton: #38332D;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+  button, textarea, input, select { font: inherit; color: inherit; }
+  .page { max-width: 1540px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; color: var(--c-text-heading); margin: 0 0 6px; }
+  h2.doc { font-family: 'PT Serif', Georgia, serif; font-size: 19px; color: var(--c-text-heading); margin: 28px 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 10px; max-width: 980px; line-height: 1.55; }
+  code, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  code { font-size: 11.5px; background: var(--c-bg-selected); border-radius: 4px; padding: 0 4px; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 90; background: var(--c-bg-main); display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 0 12px; }
+  .demo .grp { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .demo .lbl { font-size: 11px; color: var(--c-text-muted); margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--c-border); background: var(--c-bg-card); border-radius: 10px; padding: 5px 10px; }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+
+  .frame { background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; box-shadow: var(--shadow-card); overflow-x: auto; }
+  .app { position: relative; margin: 0 auto; height: 860px; display: flex; gap: 8px; }
+  .app.mobile { width: 360px; height: 760px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; gap: 0; }
+  .caption { font-size: 11px; color: var(--c-text-muted); margin: 8px 0 0; }
+
+  .rail { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; }
+  .ri { position: relative; width: 36px; height: 36px; border-radius: 10px; border: none; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .ri:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ri.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .ri[disabled] { opacity: .4; cursor: default; }
+  .ri .new { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--c-accent); }
+
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; position: relative; }
+  .island.main { flex: 1; min-width: 420px; }
+  .island.side { width: 330px; flex: 0 0 330px; }
+  .app.mobile .island { border-radius: 0; border: none; box-shadow: none; min-width: 0; }
+  .ph { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); }
+  .ph .ttl { font-size: 13px; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; }
+  .ph .sub { font-size: 11px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .pbody { flex: 1; overflow: auto; min-height: 0; padding: 10px; }
+  .grow { flex: 1; min-width: 0; }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 10px;
+    border: 1px solid var(--c-border); background: var(--c-bg-card); cursor: pointer; font-size: 13px; white-space: nowrap; }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn:focus-visible, .ib:focus-visible, .chip:focus-visible, .opt:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); font-weight: 600; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.sm { height: 28px; padding: 0 9px; font-size: 12px; border-radius: 8px; }
+  .btn.xs { height: 24px; padding: 0 8px; font-size: 11px; border-radius: 7px; }
+  .btn[disabled] { opacity: .5; cursor: default; box-shadow: none; }
+  .ib { width: 30px; height: 30px; border-radius: 8px; border: none; background: transparent; color: var(--c-text-muted); display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto; padding: 0; }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .ib.sm { width: 24px; height: 24px; }
+  svg.i { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+  svg.i.s { width: 13px; height: 13px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); cursor: pointer; font-size: 12px; white-space: nowrap; max-width: 100%; min-width: 0; }
+  .chip > span.t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .chip:hover { border-color: var(--c-accent-muted); }
+  .chip.acc { border-color: var(--c-accent); color: var(--c-accent); background: var(--c-accent-light); }
+  .chip.dash { border-style: dashed; color: var(--c-text-secondary); flex: 0 0 auto; }
+  .chip .x { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; color: var(--c-text-muted); }
+  .seg { display: inline-flex; background: var(--c-bg-inset); border-radius: 10px; padding: 2px; gap: 2px; flex-wrap: wrap; }
+  .seg button { border: none; background: transparent; color: var(--c-text-secondary); height: 26px; padding: 0 10px; border-radius: 8px; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); font-weight: 600; }
+  .seg button[disabled] { opacity: .45; cursor: default; }
+  .seg.full { display: flex; } .seg.full button { flex: 1; justify-content: center; }
+  .muted { color: var(--c-text-muted); } .sec { color: var(--c-text-secondary); }
+  .hint { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.45; }
+  .lbl2 { font-size: 11px; font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .04em; margin: 12px 0 6px; display: flex; align-items: center; gap: 6px; }
+  input.fld, textarea.fld, select.fld { width: 100%; border: 1.5px solid var(--c-border); background: var(--c-bg-white); border-radius: 8px; padding: 6px 9px; outline: none; font-size: 12.5px; }
+  textarea.fld { resize: vertical; line-height: 1.45; }
+  input.fld:focus, textarea.fld:focus, select.fld:focus { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  input[type=range] { accent-color: var(--c-accent); width: 100%; }
+  input[type=checkbox] { accent-color: var(--c-accent); width: 15px; height: 15px; }
+  .badge { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: 6px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+  .badge.ok { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.acc { background: var(--c-accent-light); color: var(--c-accent); }
+  .badge.info { background: var(--c-info-bg); color: var(--c-info); }
+  .badge.dng { background: var(--c-danger-bg); color: var(--c-danger-text); }
+  .badge.mut { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+
+  /* Лента */
+  .feed { flex: 1; overflow: auto; padding: 14px 18px 8px; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+  .app.mobile .feed { padding: 10px 10px 6px; }
+  .msg { max-width: 640px; line-height: 1.55; }
+  .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 8px 12px; max-width: 480px; }
+  .msg.bot .who { font-size: 11px; font-weight: 600; color: var(--c-accent); margin-bottom: 2px; }
+  .quiet { align-self: center; font-size: 11.5px; color: var(--c-text-muted); text-align: center; max-width: 600px; line-height: 1.45; }
+  .quiet b { color: var(--c-text-secondary); }
+
+  /* Карточка запуска агентом */
+  .launch { max-width: 540px; border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-bg-card); padding: 9px 12px; margin-top: 6px; }
+  .launch .t { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--c-text-heading); font-size: 12.5px; flex-wrap: wrap; }
+  .launch .prompt { font-size: 12px; line-height: 1.5; background: var(--c-bg-inset); border-radius: 8px; padding: 6px 9px; white-space: pre-wrap; margin-top: 6px; }
+  .by { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; color: var(--c-accent); }
+
+  /* Карточка нити звука */
+  .acard { position: relative; max-width: 560px; width: 100%; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; padding: 9px 10px; margin-top: 6px; }
+  .acard.focus { border-color: var(--c-accent); box-shadow: 0 0 0 3px var(--c-accent-light); }
+  .acard.draft { border-style: dashed; }
+  .acard .hd { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; flex-wrap: wrap; }
+  .acard .fname { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-weight: 600; }
+  .stepnav { display: inline-flex; align-items: center; gap: 1px; font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .what { font-size: 11.5px; color: var(--c-text-secondary); margin: 3px 0 0; }
+  .player { display: flex; align-items: center; gap: 8px; margin-top: 7px; min-width: 0; }
+  .play { width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; cursor: pointer; flex: 0 0 34px; }
+  .play.sm { width: 24px; height: 24px; flex-basis: 24px; }
+  .play svg.i { fill: currentColor; }
+  .tm { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--c-text-muted); white-space: nowrap; }
+  .wave { position: relative; flex: 1; min-width: 0; height: 40px; cursor: crosshair; user-select: none; touch-action: none; }
+  .wave.sm { height: 22px; }
+  .wave svg { width: 100%; height: 100%; display: block; }
+  .wave .selb { position: absolute; top: -2px; bottom: -2px; background: rgba(217,119,87,.16); border-left: 2px solid var(--c-accent); border-right: 2px solid var(--c-accent); pointer-events: none; }
+  .wave .head { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--c-text-heading); pointer-events: none; }
+  .selinfo { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--c-text-secondary); margin-top: 4px; }
+  .foot { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .foot .meta { flex: 1; min-width: 160px; font-size: 10.5px; color: var(--c-text-muted); font-family: 'JetBrains Mono', monospace; }
+  .ab { display: inline-flex; align-items: center; gap: 4px; }
+  .files { border: 1px solid var(--c-border-light); border-radius: 9px; margin-top: 7px; overflow: hidden; }
+  .files .fr { display: flex; align-items: center; gap: 7px; padding: 5px 8px; font-size: 12px; border-top: 1px solid var(--c-border-light); min-width: 0; }
+  .files .fr:first-child { border-top: none; }
+  .files .fr .nm { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .ms { width: 22px; height: 20px; border-radius: 5px; border: 1px solid var(--c-border); background: var(--c-bg-white); font-size: 10px; font-weight: 700; cursor: pointer; color: var(--c-text-secondary); padding: 0; }
+  .ms.on.m { background: var(--c-warning-bg); color: var(--c-warning-text); border-color: var(--c-warning); }
+  .ms.on.s { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .fr.dim .wave, .fr.dim .nm { opacity: .35; }
+  .preview { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--c-bg-inset); border-radius: 7px; padding: 6px 8px; margin-top: 6px; white-space: pre-wrap; line-height: 1.5; color: var(--c-text-secondary); max-height: 110px; overflow: auto; }
+  .prog { height: 4px; border-radius: 4px; background: var(--c-track); overflow: hidden; margin: 7px 0 3px; }
+  .prog > i { display: block; height: 100%; background: var(--c-accent); }
+  .skel { background: var(--c-skeleton); border-radius: 6px; animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  .box { border-radius: 9px; padding: 8px 10px; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; align-items: flex-start; margin-top: 7px; }
+  .box.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .box.dng { background: var(--c-danger-bg); color: var(--c-danger-text); border: 1px solid var(--c-danger-border); }
+  .box.info { background: var(--c-info-bg); color: var(--c-info); }
+  .box .body { flex: 1; min-width: 0; } .box .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+  /* Полоса «Звук» над композером */
+  .strip { position: relative; margin: 8px 14px 6px; background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 16px; height: 48px; padding: 0 8px; display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .app.mobile .strip { margin: 6px 8px; height: 42px; padding: 0 6px; gap: 5px; }
+  .strip.mini { height: 30px; border-radius: 10px; cursor: pointer; padding: 0 6px 0 4px; }
+  .strip .sum { font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+  .swb { display: inline-flex; align-items: center; gap: 5px; border: none; background: transparent; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--c-text-heading); padding: 0 4px; height: 28px; border-radius: 8px; flex: 0 0 auto; }
+  .swb:hover { background: var(--c-bg-selected); }
+  .setb { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--c-border); background: var(--c-bg-white); cursor: pointer; font-size: 12px; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+  .setb.open { border-color: var(--c-accent); }
+  .setb .t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .q { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--c-info); background: var(--c-info-bg); height: 22px; padding: 0 7px; border-radius: 7px; white-space: nowrap; flex: 0 0 auto; }
+  .vava { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--c-on-accent); background: var(--c-accent); flex: 0 0 26px; border: none; cursor: pointer; }
+  .vava.lg { width: 34px; height: 34px; flex-basis: 34px; font-size: 13px; }
+  .vava.off { background: transparent; color: var(--c-text-muted); border: 1.5px dashed var(--c-dashed); }
+  .menu { position: absolute; z-index: 60; min-width: 250px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--shadow-dropdown); padding: 4px; }
+  .mi { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; border: none; background: transparent; padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 12.5px; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi.on { color: var(--c-accent); }
+  .mi small { display: block; font-size: 11px; color: var(--c-text-muted); }
+  .msep { height: 1px; background: var(--c-divider); margin: 4px 6px; }
+
+  /* Карточка настроек звука */
+  .scard { position: absolute; right: 0; bottom: calc(100% + 6px); width: 470px; max-height: 640px; overflow: auto; z-index: 50; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 16px; box-shadow: var(--shadow-dropdown); padding: 6px 14px 12px; cursor: default; }
+  .opts { display: flex; flex-wrap: wrap; gap: 5px; }
+  .opt { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 1px solid var(--c-border); background: var(--c-bg-white); border-radius: 9px; padding: 4px 8px; cursor: pointer; text-align: left; font-size: 12px; max-width: 100%; }
+  .opt:hover { border-color: var(--c-accent-muted); }
+  .opt.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .opt.on .n { color: var(--c-accent); }
+  .opt .n { font-weight: 600; display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .opt .h { font-size: 10.5px; color: var(--c-text-muted); }
+  .opt.off { opacity: .55; cursor: not-allowed; background: transparent; border-style: dashed; }
+  .opt.off .h { color: var(--c-text-secondary); }
+  .opt.op { flex-direction: row; align-items: center; gap: 5px; padding: 0 9px; height: 28px; border-radius: 999px; }
+  .opt.op.link { border-style: dashed; color: var(--c-text-secondary); }
+  .ru { font-size: 9.5px; font-weight: 700; color: var(--c-success-text); background: var(--c-success-bg); border-radius: 4px; padding: 0 4px; }
+  .nru { font-size: 9.5px; font-weight: 700; color: var(--c-text-muted); background: var(--c-bg-selected); border-radius: 4px; padding: 0 4px; }
+  .fld-row { margin-top: 9px; }
+  .fld-row > .l { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--c-text-heading); margin-bottom: 4px; }
+  .fld-row > .l .v { margin-left: auto; font-weight: 400; color: var(--c-text-secondary); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .fld-row > .l .code { font-family: 'JetBrains Mono', monospace; font-weight: 400; font-size: 10.5px; color: var(--c-text-muted); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .adv { margin-top: 12px; border: 1px solid var(--c-border-light); border-radius: 10px; background: var(--c-bg-panel); }
+  .adv > .hd { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--c-text-heading); }
+  .adv > .bd { padding: 0 10px 10px; }
+  .pricebar { position: sticky; bottom: -12px; margin: 12px -14px -12px; padding: 9px 14px; background: var(--c-bg-card); border-top: 1px solid var(--c-border-light); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pricebar .p { flex: 1; min-width: 150px; font-size: 12px; color: var(--c-text-secondary); }
+  .count { display: inline-flex; align-items: center; border: 1px solid var(--c-border); border-radius: 8px; height: 26px; background: var(--c-bg-white); }
+  .count button { border: none; background: transparent; width: 22px; height: 24px; cursor: pointer; color: var(--c-text-secondary); }
+  .count span { min-width: 16px; text-align: center; font-size: 12px; font-weight: 600; }
+  .secs { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .dlg { display: grid; grid-template-columns: 110px 1fr 24px; gap: 5px; align-items: start; margin-top: 5px; }
+  .clips { display: flex; flex-direction: column; gap: 4px; }
+  .clip { display: flex; align-items: center; gap: 6px; font-size: 11.5px; background: var(--c-bg-white); border: 1px solid var(--c-border-light); border-radius: 7px; padding: 3px 6px; }
+  .drop { border: 1.5px dashed var(--c-dashed); border-radius: 9px; padding: 9px; text-align: center; color: var(--c-text-muted); font-size: 11.5px; cursor: pointer; }
+
+  /* Композер */
+  .composer { margin: 0 14px 12px; background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 16px; padding: 8px 8px 6px 10px; box-shadow: var(--shadow-card); position: relative; }
+  .app.mobile .composer { margin: 0 8px 8px; }
+  .composer.aud { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .composer .inrow { display: flex; align-items: flex-start; gap: 8px; }
+  .composer textarea { flex: 1; min-width: 0; border: none; outline: none; resize: none; background: transparent; min-height: 40px; line-height: 1.5; font-size: 13.5px; }
+  .composer .bar { display: flex; align-items: center; gap: 6px; }
+  .composer .ptag { font-size: 11px; color: var(--c-text-muted); margin-bottom: 3px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .mswitch { display: flex; gap: 2px; padding: 2px; background: var(--c-bg-inset); border-radius: 8px; flex: 0 0 auto; margin-top: 2px; }
+  .mswitch button { width: 26px; height: 20px; border: none; border-radius: 6px; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .mswitch button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); }
+  .send { height: 32px; min-width: 32px; padding: 0 10px; border-radius: 10px; border: none; background: var(--c-accent); color: var(--c-on-accent); display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+
+  /* Панель «Голоса» */
+  .voice { border: 1px solid var(--c-border-light); background: var(--c-bg-card); border-radius: 11px; padding: 8px; margin-bottom: 7px; }
+  .voice.on { border-color: var(--c-accent); }
+  .voice .top { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .voice .nm { font-weight: 600; color: var(--c-text-heading); font-size: 12.5px; }
+  .pv { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 4px; }
+  .pv td { padding: 4px 3px; border-top: 1px solid var(--c-border-light); vertical-align: top; }
+  .pv td:first-child { color: var(--c-text-secondary); width: 48%; }
+  .empty { text-align: center; padding: 26px 14px; color: var(--c-text-muted); line-height: 1.55; }
+  .empty .big { font-size: 14px; color: var(--c-text-heading); font-weight: 600; margin-bottom: 4px; }
+  .empty .ico { width: 44px; height: 44px; border-radius: 50%; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; margin: 0 auto 8px; }
+
+  /* Шторка (телефон) */
+  .ovl { position: absolute; inset: 0; background: var(--c-overlay); z-index: 69; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 88%; background: var(--c-bg-card); border-radius: 18px 18px 0 0; box-shadow: var(--shadow-sheet); z-index: 70; display: flex; flex-direction: column; }
+  .sheet .grab { width: 40px; height: 4px; border-radius: 4px; background: var(--c-track); margin: 7px auto 0; flex: 0 0 auto; }
+  .sheet .sb { overflow: auto; padding: 0 12px 12px; position: relative; }
+  .sheet .pricebar { margin: 12px -12px -12px; padding: 9px 12px; bottom: -12px; }
+
+  /* Галерея карточек */
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; align-items: start; }
+  .gcell { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; padding: 10px 12px 12px; min-width: 0; }
+  .gcell h4 { margin: 0 0 2px; font-size: 13px; color: var(--c-text-heading); }
+  .gcell .acard { max-width: none; }
+  .gcell .scard { position: static; width: auto; max-height: none; box-shadow: none; margin-top: 6px; }
+  .gcell .strip { margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="doc">Раздел «Звук» v1: Голос, Музыка, Обработка в чате AI Home</h1>
+  <p class="lead">Макет на согласование, код продукта не менялся. Звук устроен так же, как картинки: полоса «Звук» над полем ввода, нить звука в ленте (нить → версии), поставщика и модель выбирает человек, цена видна до запуска, в проект сохраняет только человек. Почти всё кликабельно: режимы, операции, поставщики, модели, «Дополнительно», версии ‹ ›, A/B, микшер стемов, выделение интервала на волне (протяните мышью), панель «Голоса». Тексты и решения — в <code>audio-editor-v1-proposal.md</code>.</p>
+  <div class="demo" id="demo"></div>
+  <div class="frame"><div id="app"></div></div>
+  <p class="caption" id="cap"></p>
+
+  <h2 class="doc">Карточки версий и состояния</h2>
+  <p class="lead">Каждый вид результата и каждое состояние отдельно. Это те же карточки, что живут в ленте.</p>
+  <div class="gallery" id="gallery"></div>
+</div>
+
+<script>
+/* ===================== Иконки ===================== */
+const IC = {
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  wand: '<path d="m15 4-1 1M20 9l-1 1M18 2v3M22 6h-3M3 21l12-12 2 2L5 23z"/>',
+  waves: '<path d="M2 12h2M6 8v8M10 4v16M14 7v10M18 10v4M22 12h0"/>',
+  play: '<path d="M7 4.5v15l12-7.5z"/>', pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  down: '<path d="m6 9 6 6 6-6"/>', up: '<path d="m18 15-6-6-6 6"/>', left: '<path d="m15 18-6-6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  tree: '<path d="M3 5h6l2 2h10v12H3z"/>', img: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  git: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+  dl: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5M12 3v12"/>',
+  alert: '<path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"/><path d="M12 9v4M12 17h.01"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', minus: '<path d="M5 12h14"/>', more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/>',
+  ab: '<path d="M4 18 8 6l4 12M5.3 14h5.4M15 6h3.5a3 3 0 0 1 0 6H15zM15 12h4a3 3 0 0 1 0 6h-4z"/>',
+  back: '<path d="m15 18-6-6 6-6"/>', send: '<path d="M12 19V5M5 12l7-7 7 7"/>', text: '<path d="M4 7V5h16v2M9 19h6M12 5v14"/>',
+};
+const ic = (n, s) => `<svg class="i${s ? ' s' : ''}" viewBox="0 0 24 24">${IC[n] || ''}</svg>`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ===================== Данные: поставщики, модели, операции ===================== */
+// Источник состава — матрица Александра (задача 56858361). Модели fal — отобранные, 3–6 на операцию.
+const PROV = {
+  local: { label: 'Локально', hint: 'своя видеокарта · бесплатно, очередь GPU' },
+  fal: { label: 'fal', hint: 'облако · цена в $' },
+  higgsfield: { label: 'Higgsfield', hint: 'облако · кредиты' },
+  yandex: { label: 'Яндекс', hint: 'SpeechKit · рубли' },
+  none: { label: 'Без ИИ', hint: 'мгновенно · бесплатно' },
+};
+const LIC = {
+  nc: ['warn', 'CC BY-NC', 'Только некоммерческое использование'],
+  gpl: ['info', 'GPL-3.0', 'Свободная лицензия с копилефтом'],
+  wm: ['warn', 'водяной знак', 'Поставщик встраивает неслышимый водяной знак'],
+  clean: ['ok', 'коммерчески чистая', 'Обучена на лицензированных данных'],
+  unk: ['mut', 'лицензия не указана', 'У оригинала модели лицензия не указана'],
+};
+const lic = k => k && LIC[k] ? `<span class="badge ${LIC[k][0]}" title="${LIC[k][2]}">${LIC[k][1]}</span>` : '';
+
+// Поля «Дополнительно» — автоформа по схеме модели: [код, подпись, тип, параметры]
+const A = (k, l, t, o = {}) => ({ k, l, t, ...o });
+const LANGS = ['Русский', 'Английский', 'Авто'];
+const TRACKS = ['vocals', 'backing_vocals', 'drums', 'bass', 'guitar', 'keyboard', 'percussion', 'strings', 'synth', 'fx', 'brass', 'woodwinds'];
+const TRACK_RU = { vocals: 'вокал', backing_vocals: 'бэк-вокал', drums: 'барабаны', bass: 'бас', guitar: 'гитара', keyboard: 'клавишные', percussion: 'перкуссия', strings: 'струнные', synth: 'синтезатор', fx: 'эффекты', brass: 'медные', woodwinds: 'деревянные' };
+const YA_VOICES = ['alena', 'marina', 'jane', 'omazh', 'dasha', 'julia', 'lera', 'masha', 'zahar', 'filipp', 'ermil', 'madi_ru', 'alexander', 'kirill', 'anton'];
+const QWEN_SPK = ['Vivian', 'Serena', 'Uncle_Fu', 'Dylan', 'Eric', 'Ryan', 'Aiden', 'Ono_Anna', 'Sohee'];
+const OUTFMT = ['mp3_44100_128', 'mp3_44100_192', 'wav_44100', 'opus_48000_128', '… ещё 21'];
+
+// price: {u: k|s|m|run|cr|rub|free|none, v, eta}
+const M = {
+  /* ---- Голос: озвучка ---- */
+  qwen: { label: 'Qwen3-TTS 1.7B', ru: 1, price: { u: 'free', eta: '~15 с' }, srcs: ['preset', 'desc', 'clone', 'lib'], note: '10 языков · Apache-2.0', speakers: QWEN_SPK,
+    adv: [A('seed', 'Seed', 'num', { def: 'случайный' }), A('language=auto', 'Определять язык сам', 'bool', { def: 'нет', note: 'воркер умеет, бэкенд пока не пропускает' })] },
+  moss: { label: 'MOSS-TTS v1.5', ru: 1, price: { u: 'free', eta: '~10 с' }, srcs: ['own', 'clone', 'lib'], note: '31 язык · лучший клон · Apache-2.0', adv: [A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  chatterbox: { label: 'Chatterbox Multilingual', ru: 1, price: { u: 'free', eta: '~20 с' }, srcs: ['own', 'clone', 'lib'], note: '23 языка · MIT', expr: 1,
+    adv: [A('cfg_weight', 'Следование образцу', 'range', { min: 0, max: 1, step: .05, def: .5 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  mm28: { label: 'MiniMax Speech 2.8 HD', ru: 1, price: { u: 'k', v: 0.1 }, srcs: ['preset', 'lib'], note: 'эмоции, паузы <#x#>, теги (laughs) · также turbo, 2.6, 02', emo: 1,
+    adv: [A('language_boost', 'Подсказка языка', 'sel', { opts: ['auto', 'Russian', 'English', '… ещё 35'], def: 'auto' }), A('english_normalization', 'Читать числа по-английски', 'bool', { def: 'нет' }),
+      A('pronunciation_dict', 'Словарь произношений', 'text', { ph: 'AI Home/эй-ай хоум' }),
+      A('normalization_setting.target_loudness', 'Целевая громкость, LUFS', 'range', { min: -70, max: -10, step: 1, def: -18 }), A('normalization_setting.range', 'Диапазон', 'num', { def: '—' }), A('normalization_setting.peak', 'Пик', 'num', { def: '—' }),
+      A('voice_modify.pitch', 'Тембр: высота', 'range', { min: -100, max: 100, step: 1, def: 0 }), A('voice_modify.intensity', 'Тембр: напор', 'range', { min: -100, max: 100, step: 1, def: 0 }), A('voice_modify.timbre', 'Тембр: окраска', 'range', { min: -100, max: 100, step: 1, def: 0 }),
+      A('audio_setting.sample_rate', 'Частота', 'sel', { opts: ['32000', '44100', '24000'], def: '32000' }), A('audio_setting.bitrate', 'Битрейт', 'sel', { opts: ['128000', '256000'], def: '128000' }),
+      A('audio_setting.format', 'Формат', 'sel', { opts: ['mp3', 'pcm', 'flac'], def: 'mp3' }), A('audio_setting.channel', 'Каналы', 'sel', { opts: ['1', '2'], def: '1' })] },
+  el4: { label: 'ElevenLabs v4', ru: 1, price: { u: 'k', v: 0.08 }, srcs: ['preset', 'lib'], note: 'аудиотеги · также v3, multilingual-v2, turbo-v2.5',
+    adv: [A('stability', 'Стабильность', 'range', { min: 0, max: 1, step: .05, def: .5 }), A('similarity_boost', 'Похожесть', 'range', { min: 0, max: 1, step: .05, def: .75 }), A('ipa', 'Произношение IPA', 'text', { ph: '/ˈeɪ aɪ/' }), A('output_format', 'Формат', 'sel', { opts: OUTFMT, def: 'mp3_44100_128' })] },
+  gem: { label: 'Gemini 3.8 Flash TTS', ru: 1, price: { u: 'k', v: 0.05 }, srcs: ['preset'], note: '30 голосов · также Lite, 3.1 Flash, gemini-tts', adv: [A('style_prompt', 'Манера чтения', 'text', { ph: 'бодро, как ведущий' })] },
+  fqwen: { label: 'Qwen3-TTS 1.7B (fal)', ru: 1, price: { u: 'k', v: 0.09 }, srcs: ['preset', 'desc', 'lib'], note: 'голос по описанию, клон-эмбеддинг · также 0.6B', adv: [A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  inworld: { label: 'Inworld TTS-1.5 Max', ru: 1, price: { u: 'k', v: 0.01 }, srcs: ['preset'], note: 'самый дешёвый из отобранных', adv: [A('temperature', 'Вариативность', 'range', { min: 0, max: 2, step: .1, def: 1 })] },
+  cbhd: { label: 'Chatterbox HD', ru: 1, price: { u: 'k', v: 0.025 }, srcs: ['own', 'lib'], lic: 'wm', note: 'клон по образцу', expr: 1, adv: [A('cfg_weight', 'Следование образцу', 'range', { min: 0, max: 1, step: .05, def: .5 })] },
+  seed_audio: { label: 'Seed Audio 1.0', ru: 1, price: { u: 'cr', v: 0.3 }, srcs: ['preset', 'lib'], note: 'голос-пресет, элемент воркспейса или клон на лету',
+    adv: [A('format', 'Формат', 'sel', { opts: ['wav', 'mp3', 'pcm', 'ogg_opus'], def: 'mp3' }), A('sample_rate', 'Частота', 'sel', { opts: ['8000', '16000', '24000', '32000', '44100', '48000'], def: '24000' }),
+      A('image_references', 'Образ (картинка-подсказка)', 'file', { ph: 'картинка из проекта' })] },
+  t2s: { label: 'Text2Speech v2', ru: 1, price: { u: 'cr', v: 0.15 }, srcs: ['preset', 'lib'], note: 'движок на выбор: elevenlabs, minimax, seed_speech, vibe_voice, cozy_voice', variant: 1, adv: [] },
+  hqwen: { label: 'Qwen Audio TTS', ru: 1, price: { u: 'cr', v: 0.2 }, srcs: ['preset', 'desc', 'lib'], note: '13 языков, инструкция манеры',
+    adv: [A('format', 'Формат', 'sel', { opts: ['wav', 'mp3'], def: 'mp3' }), A('sample_rate', 'Частота', 'sel', { opts: ['16000', '24000', '48000'], def: '24000' }), A('seed', 'Seed', 'num', { def: '0…65535' })] },
+  hel4: { label: 'ElevenLabs v4', ru: 1, price: { u: 'cr', v: 0.4 }, srcs: ['preset', 'lib'], note: 'также v4 turbo (только один голос)',
+    adv: [A('stability', 'Стабильность', 'range', { min: 0, max: 1, step: .05, def: .5 }), A('similarity_boost', 'Похожесть', 'range', { min: 0, max: 1, step: .05, def: .75 })] },
+  hinw: { label: 'Inworld TTS', off: 'Только для игрового конвейера Higgsfield — эта модель есть у fal' },
+  yandex: { label: 'SpeechKit v3', ru: 1, price: { u: 'rub', v: 0.16 }, srcs: ['preset'], note: '15 голосов · роли · до 3000 символов · mp3', yaRole: 1, adv: [] },
+  /* ---- Голос: диалог ---- */
+  hel4d: { label: 'ElevenLabs v4 · диалог', ru: 1, price: { u: 'cr', v: 0.8 }, note: 'до 10 голосов, до 10 000 символов', adv: [A('stability', 'Стабильность', 'range', { min: 0, max: 1, step: .05, def: .5 })] },
+  vibe: { label: 'VibeVoice 7B', ru: 0, price: { u: 'm', v: 0.04 }, note: 'длинный подкаст · также 1.5B, 0.5B', adv: [A('cfg_scale', 'Следование тексту', 'range', { min: 1, max: 3, step: .1, def: 1.3 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  dia: { label: 'Dia', ru: 0, price: { u: 'k', v: 0.04 }, note: 'реплики [S1]/[S2], смех и вздохи', adv: [] },
+  eldlg: { label: 'ElevenLabs v3 · диалог', ru: 1, price: { u: 'k', v: 0.1 }, note: 'text-to-dialogue', adv: [A('stability', 'Стабильность', 'range', { min: 0, max: 1, step: .05, def: .5 })] },
+  gemd: { label: 'Gemini 3.8 Flash · 2 голоса', ru: 1, price: { u: 'k', v: 0.05 }, note: 'ровно два спикера', adv: [] },
+  /* ---- Смена голоса ---- */
+  seedvc: { label: 'Seed-VC', ru: 1, price: { u: 'free', eta: '~30 с' }, lic: 'gpl', note: 'без обучения, по образцу 1–30 с', target: ['lib'],
+    adv: [A('diffusion_steps', 'Шаги', 'range', { min: 4, max: 100, step: 1, def: 30 }), A('convert_style', 'Переносить манеру', 'bool', { def: 'нет' })] },
+  rvc: { label: 'RVC (своя модель)', ru: 1, price: { u: 'free', eta: '~20 с' }, note: 'по обученной модели .pth + .index', target: ['rvc'],
+    adv: [A('index_rate', 'Вес индекса', 'range', { min: 0, max: 1, step: .05, def: .75 }), A('f0', 'Метод высоты', 'sel', { opts: ['rmvpe'], def: 'rmvpe' })] },
+  elvc: { label: 'ElevenLabs Voice Changer', ru: 1, price: { u: 'm', v: 0.3 }, note: 'готовые голоса Rachel, Aria, Roger…', target: ['preset'],
+    adv: [A('seed', 'Seed', 'num', { def: 'случайный' }), A('output_format', 'Формат', 'sel', { opts: OUTFMT, def: 'mp3_44100_128' })] },
+  /* ---- Обучение ---- */
+  rvctrain: { label: 'RVC (Applio)', ru: 1, price: { u: 'free', eta: '~8 мин на 200 эпох' }, heavy: 1, note: 'тяжёлая задача · одна за раз',
+    adv: [A('sample_rate', 'Частота модели', 'sel', { opts: ['32000', '40000', '48000'], def: '40000' }), A('batch_size', 'Размер пачки', 'range', { min: 1, max: 32, step: 1, def: 8 })] },
+  /* ---- Музыка: песня ---- */
+  ace: { label: 'ACE-Step 1.5 XL', ru: 1, price: { u: 'free', eta: '~10 с на 20 с трека' }, note: '51 язык вокала · MIT · умеет инструментал', bpm: 1,
+    adv: [A('timesignature', 'Размер', 'sel', { opts: ['4', '3', '6'], def: '4' }), A('cfg_scale', 'cfg_scale', 'range', { min: 1, max: 5, step: .1, def: 2 }), A('temperature', 'Температура', 'range', { min: .1, max: 1.5, step: .05, def: .85 }),
+      A('top_p', 'top_p', 'range', { min: .1, max: 1, step: .05, def: .9 }), A('steps', 'Шаги', 'range', { min: 8, max: 100, step: 1, def: 50 }), A('cfg', 'cfg', 'range', { min: 1, max: 15, step: .5, def: 7 }), A('shift', 'shift', 'range', { min: 1, max: 6, step: .5, def: 3 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  yue2: { label: 'YuE2-3B', ru: 1, price: { u: 'free', eta: '~60 с на 3 мин' }, lic: 'nc', note: 'разборчивый вокал, пишет ноты .abc · только со словами', needLyrics: 1, abc: 1,
+    adv: [A('temperature', 'Температура', 'range', { min: .1, max: 1.5, step: .05, def: 1 }), A('top_k', 'top_k', 'range', { min: 1, max: 200, step: 1, def: 100 }), A('repetition_penalty', 'Штраф за повторы', 'range', { min: 1, max: 2, step: .05, def: 1.2 }), A('max_abc_tokens', 'Длина партитуры, токенов', 'num', { def: 8192 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  mmm3: { label: 'MiniMax Music 3', ru: 1, price: { u: 'free', eta: '~4,5 мин на 3 мин' }, lic: 'unk', note: 'самый разборчивый вокал, медленно',
+    adv: [A('cfg', 'cfg', 'range', { min: 1, max: 5, step: .1, def: 1.7 }), A('top_k', 'top_k', 'range', { min: 1, max: 100, step: 1, def: 50 }), A('steps', 'Шаги', 'range', { min: 10, max: 60, step: 1, def: 30 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  elmus: { label: 'ElevenLabs Music v2.5', ru: 1, price: { u: 'm', v: 0.6 }, note: '3 с – 10 мин · план по частям · также v2, v1', plan: 1, maxDur: 600,
+    adv: [A('seed', 'Seed (только с планом)', 'num', { def: 'случайный' }), A('output_format', 'Формат', 'sel', { opts: OUTFMT, def: 'mp3_44100_128' })] },
+  fmm3: { label: 'MiniMax Music 3 (fal)', ru: 1, price: { u: 's', v: 0.002 }, note: 'до 5 мин · также music v2.6/2.5/2/1.5', maxDur: 300, adv: [] },
+  lyria: { label: 'Lyria 3.5', ru: 0, price: { u: 'run', v: 0.1 }, note: 'Google · также Lyria 3 Pro, 3, 2', adv: [A('negative_prompt', 'Чего не должно быть', 'text', { ph: 'vocals, drums' }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  sa3: { label: 'Stable Audio 3 Medium', ru: 0, price: { u: 'run', v: 0.038 }, lic: 'clean', note: 'до 6 мин · также Small (до 2 мин), 2.5, Open', maxDur: 360,
+    adv: [A('steps', 'Шаги', 'range', { min: 4, max: 100, step: 1, def: 50 }), A('cfg_scale', 'cfg_scale', 'range', { min: 1, max: 15, step: .5, def: 7 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  face: { label: 'ACE-Step (fal)', ru: 1, price: { u: 's', v: 0.0002 }, note: 'также prompt-to-audio', bpm: 1, adv: [A('steps', 'Шаги', 'range', { min: 8, max: 100, step: 1, def: 27 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  sonilo: { label: 'Sonilo v1.1', ru: 0, price: { u: 's', v: 0.0025 }, lic: 'clean', note: 'только инструментал', adv: [] },
+  hsonilo: { label: 'Sonilo Music', off: 'Только для игрового конвейера Higgsfield — эта модель есть у fal' },
+  /* ---- Музыка: правки трека ---- */
+  acecover: { label: 'ACE-Step 1.5 XL', ru: 1, price: { u: 'free', eta: '~15 с' }, adv: [A('steps', 'Шаги', 'range', { min: 4, max: 100, step: 1, def: 8 }), A('guidance', 'guidance', 'range', { min: 1, max: 15, step: .5, def: 7 }), A('shift', 'shift', 'range', { min: 1, max: 6, step: .5, def: 3 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  yuecover: { label: 'YuE2-3B · новые слова', ru: 1, price: { u: 'free', eta: '~60 с' }, lic: 'nc', needLyrics: 1, note: 'берёт мелодию исходника, поёт новые слова', adv: [A('mode', 'Режим', 'sel', { opts: ['melody'], def: 'melody' }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  facea2a: { label: 'ACE-Step audio-to-audio', ru: 1, price: { u: 's', v: 0.0002 }, adv: [A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  sa3a2a: { label: 'Stable Audio 3 Medium', ru: 0, price: { u: 'run', v: 0.042 }, lic: 'clean', note: 'также Small · Stable Audio 2.5', adv: [A('steps', 'Шаги', 'range', { min: 4, max: 100, step: 1, def: 50 })] },
+  acerep: { label: 'ACE-Step 1.5 XL', ru: 1, price: { u: 'free', eta: '~15 с' }, adv: [A('steps', 'Шаги', 'range', { min: 4, max: 100, step: 1, def: 8 }), A('guidance', 'guidance', 'range', { min: 1, max: 15, step: .5, def: 7 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  faceinp: { label: 'ACE-Step inpaint', ru: 1, price: { u: 's', v: 0.0002 }, adv: [] },
+  sa3inp: { label: 'Stable Audio 3 inpainting', ru: 0, price: { u: 'run', v: 0.045 }, lic: 'clean', note: 'несколько кусков за раз · также 2.5 inpaint', multi: 1, adv: [] },
+  mireloinp: { label: 'Mirelo SFX 1.6 inpaint', ru: 0, price: { u: 's', v: 0.01 }, note: 'для звуков и эмбиента', adv: [] },
+  faceout: { label: 'ACE-Step outpaint', ru: 1, price: { u: 's', v: 0.0002 }, adv: [] },
+  sa3out: { label: 'Stable Audio 3 outpainting', ru: 0, price: { u: 'run', v: 0.045 }, lic: 'clean', adv: [] },
+  mireloext: { label: 'Mirelo SFX 1.6 extend', ru: 0, price: { u: 's', v: 0.01 }, note: 'для звуков и эмбиента', adv: [] },
+  acexl: { label: 'ACE-Step 1.5 xl-base', ru: 1, price: { u: 'free', eta: '~2 мин' }, heavy: 1, note: 'тяжёлая задача · одна за раз', adv: [A('steps', 'Шаги', 'range', { min: 8, max: 100, step: 1, def: 50 }), A('guidance', 'guidance', 'range', { min: 1, max: 15, step: .5, def: 7 }), A('shift', 'shift', 'range', { min: 1, max: 6, step: .5, def: 3 })] },
+  yueabc: { label: 'YuE2-3B', ru: 1, price: { u: 'free', eta: '~60 с' }, lic: 'nc', adv: [A('temperature', 'Температура', 'range', { min: .1, max: 1.5, step: .05, def: 1 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  /* ---- Звуковые эффекты ---- */
+  elsfx: { label: 'ElevenLabs SFX v2', ru: 0, price: { u: 's', v: 0.002 }, note: '0,5–22 с или авто · петля', maxDur: 22,
+    adv: [A('prompt_influence', 'Буквальность', 'range', { min: 0, max: 1, step: .05, def: .3 }), A('output_format', 'Формат', 'sel', { opts: OUTFMT, def: 'mp3_44100_128' })] },
+  mirelo: { label: 'Mirelo SFX 1.6', ru: 0, price: { u: 's', v: 0.01 }, note: 'петли для эмбиента', adv: [A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  sonsfx: { label: 'Sonilo SFX', ru: 0, price: { u: 's', v: 0.0018 }, lic: 'clean', adv: [] },
+  sa3sfx: { label: 'Stable Audio 3 Small SFX', ru: 0, price: { u: 'run', v: 0.02 }, lic: 'clean', adv: [A('steps', 'Шаги', 'range', { min: 4, max: 100, step: 1, def: 8 })] },
+  cassette: { label: 'CassetteAI SFX', ru: 0, price: { u: 'm', v: 0.02 }, note: 'до 30 с', maxDur: 30, adv: [] },
+  mmaudio: { label: 'MMAudio v2', ru: 0, price: { u: 's', v: 0.001 }, adv: [A('num_steps', 'Шаги', 'range', { min: 4, max: 50, step: 1, def: 25 }), A('cfg_strength', 'cfg', 'range', { min: 1, max: 10, step: .5, def: 4.5 })] },
+  hmirelo: { label: 'Mirelo Text-to-Audio', off: 'Только для игрового конвейера Higgsfield — эта модель есть у fal' },
+  /* ---- Обработка ---- */
+  sepl: { label: 'BS-RoFormer · HTDemucs ft · Mel-RoFormer', ru: 1, price: { u: 'free', eta: '~25 с' }, note: 'модель выбирается по режиму', adv: [] },
+  demucs: { label: 'Demucs', ru: 1, price: { u: 's', v: 0.0007 }, note: 'стемы на выбор',
+    adv: [A('model', 'Модель', 'sel', { opts: ['htdemucs_6s', 'htdemucs', 'htdemucs_ft', 'hdemucs_mmi', 'mdx', 'mdx_extra', 'mdx_q', 'mdx_extra_q'], def: 'htdemucs_6s' }),
+      A('segment_length', 'Длина сегмента, с', 'num', { def: 'авто' }), A('overlap', 'Перекрытие', 'range', { min: 0, max: 1, step: .05, def: .25 }), A('shifts', 'Сдвиги (точнее, дольше)', 'range', { min: 1, max: 10, step: 1, def: 1 }), A('output_format', 'Формат', 'sel', { opts: ['wav', 'mp3'], def: 'mp3' })] },
+  sam: { label: 'SAM Audio · выделить звук', ru: 1, price: { u: 'run', v: 0.05 }, note: 'опишите словами, что вытащить · также span-separate', desc: 1, adv: [] },
+  eliso: { label: 'ElevenLabs Audio Isolation', ru: 1, price: { u: 'm', v: 0.1 }, note: 'только голос от фона', adv: [] },
+  dfn: { label: 'DeepFilterNet 3', ru: 1, price: { u: 'free', eta: '~5 с' }, adv: [A('atten_db', 'Сила подавления, дБ', 'range', { min: 0, max: 100, step: 1, def: 100 })] },
+  fdfn: { label: 'DeepFilterNet 3 (fal)', ru: 1, price: { u: 's', v: 0.001 }, note: 'заодно поднимает до 48 кГц', adv: [] },
+  veed: { label: 'VEED Clean Audio', ru: 1, price: { u: 'm', v: 0.0125 }, adv: [] },
+  audiosr: { label: 'AudioSR', ru: 1, price: { u: 'free', eta: '~2 мин' }, note: 'вход до 120 с · медленно', adv: [A('ddim_steps', 'Шаги', 'range', { min: 10, max: 200, step: 1, def: 50 }), A('guidance_scale', 'guidance', 'range', { min: 1, max: 10, step: .5, def: 3.5 }), A('seed', 'Seed', 'num', { def: 'случайный' })] },
+  match: { label: 'Matchering', ru: 1, price: { u: 'free', eta: '~10 с' }, lic: 'gpl', adv: [] },
+  whisper: { label: 'Whisper large-v3-turbo', ru: 1, price: { u: 'free', eta: '~8 с' }, note: 'MIT', adv: [A('beam_size', 'Ширина поиска', 'range', { min: 1, max: 10, step: 1, def: 5 }), A('vad_filter', 'Пропускать тишину', 'bool', { def: 'да' })] },
+  wizper: { label: 'Wizper (Whisper v3)', ru: 1, price: { u: 'm', v: 0.0005 }, note: 'умеет перевод на английский',
+    adv: [A('task', 'Задача', 'sel', { opts: ['transcribe', 'translate → en'], def: 'transcribe' }), A('max_segment_len', 'Длина строки субтитров', 'range', { min: 10, max: 29, step: 1, def: 29 }), A('merge_chunks', 'Склеивать короткие куски', 'bool', { def: 'да' })] },
+  scribe: { label: 'ElevenLabs Scribe v2', ru: 1, price: { u: 'm', v: 0.008 }, note: 'также speech-to-text v1', adv: [A('diarize', 'Различать говорящих', 'bool', { def: 'нет' })] },
+  cohere: { label: 'Cohere Transcribe', ru: 1, price: { u: 'm', v: 0.006 }, adv: [] },
+  nemo: { label: 'Nemotron ASR', ru: 0, price: { u: 'm', v: 0.003 }, adv: [] },
+  align: { label: 'ElevenLabs Forced Alignment', ru: 1, price: { u: 'run', v: 0.22 }, adv: [] },
+  pitch: { label: 'Basic Pitch', ru: 1, price: { u: 'free', eta: '~5 с, на процессоре' }, adv: [A('onset_threshold', 'Порог начала ноты', 'range', { min: 0, max: 1, step: .05, def: .5 }), A('frame_threshold', 'Порог кадра', 'range', { min: 0, max: 1, step: .05, def: .3 }), A('min_note_ms', 'Короче — не нота, мс', 'num', { def: 58 })] },
+  trim: { label: 'Обрезка и громкость', ru: 1, price: { u: 'none' }, adv: [] },
+};
+
+// Источники голоса для озвучки
+const SRC = { preset: 'Готовый диктор', desc: 'По описанию', clone: 'Образец', lib: 'Из «Голосов»', own: 'Свой голос модели' };
+
+// Операции по режимам. models: {провайдер: [ид моделей]} — нет ключа → у поставщика операции нет
+const MODES = {
+  voice: { label: 'Голос', icon: 'mic', ops: [
+    { id: 'speak', label: 'Озвучить', run: 'Озвучить', count: 1, text: 'Текст для озвучки — паузы <#0.5#> и теги (laughs) понимают MiniMax и ElevenLabs',
+      models: { local: ['qwen', 'moss', 'chatterbox'], fal: ['mm28', 'el4', 'gem', 'fqwen', 'inworld', 'cbhd'], higgsfield: ['seed_audio', 't2s', 'hqwen', 'hel4', 'hinw'], yandex: ['yandex'] },
+      fields: ['vsrc', 'lang', 'speed', 'pitchv', 'volume', 'emotion', 'expr', 'yarole', 'variant'] },
+    { id: 'dialog', label: 'Диалог', run: 'Озвучить диалог', count: 1, text: 'Тема или подводка (необязательно) — реплики заполните ниже',
+      models: { fal: ['vibe', 'eldlg', 'dia', 'gemd'], higgsfield: ['hel4d'] }, why: { local: 'Локально диалога нет — озвучьте реплики по одной', yandex: 'У Яндекса один голос на запрос' }, fields: ['dialog', 'lang'] },
+    { id: 'convert', label: 'Сменить голос', run: 'Сменить голос', input: 1, text: 'Комментарий не нужен — нажмите «Сменить голос»',
+      models: { local: ['seedvc', 'rvc'], fal: ['elvc'] }, why: { higgsfield: 'У Higgsfield смены голоса нет', yandex: 'У Яндекса смены голоса нет' }, fields: ['target', 'vcmode', 'pshift', 'bgnoise'] },
+    { id: 'train', label: 'Обучить голос', run: 'Обучить', heavy: 1, text: 'Имя голоса для библиотеки, например «Андрей»',
+      models: { local: ['rvctrain'] }, why: { fal: 'У fal обучения голоса нет', higgsfield: 'У Higgsfield обучения голоса нет', yandex: 'У Яндекса обучения голоса нет' }, fields: ['clips', 'epochs'] },
+    { id: '→transcribe', label: 'В текст', link: ['process', 'transcribe'] },
+  ] },
+  music: { label: 'Музыка', icon: 'music', ops: [
+    { id: 'song', label: 'Песня', run: 'Сочинить', count: 1, text: 'Стиль: жанр, настроение, инструменты, голос — по-английски модели понимают лучше',
+      models: { local: ['ace', 'yue2', 'mmm3'], fal: ['elmus', 'fmm3', 'lyria', 'sa3', 'face', 'sonilo'], higgsfield: ['hsonilo'] }, why: { yandex: 'У Яндекса только озвучка' }, fields: ['lyrics', 'dur', 'bpm', 'key', 'vlang', 'plan'] },
+    { id: 'cover', label: 'Кавер', run: 'Сделать кавер', input: 1, count: 1, text: 'Новый стиль: например «акустика, женский вокал»',
+      models: { local: ['acecover', 'yuecover'], fal: ['facea2a', 'sa3a2a'] }, why: { higgsfield: 'У Higgsfield правки музыки нет', yandex: 'У Яндекса только озвучка' }, fields: ['strength', 'lyrics'] },
+    { id: 'repaint', label: 'Перегенерировать кусок', run: 'Перегенерировать', input: 1, count: 1, text: 'Что должно звучать в выделенном куске',
+      models: { local: ['acerep'], fal: ['faceinp', 'sa3inp', 'mireloinp'] }, why: { higgsfield: 'У Higgsfield правки музыки нет', yandex: 'У Яндекса только озвучка' }, fields: ['interval', 'lyrics'] },
+    { id: 'outpaint', label: 'Продолжить', run: 'Продолжить', input: 1, count: 1, text: 'Чем продолжить: например «плавное затухание, струнные»',
+      models: { fal: ['faceout', 'sa3out', 'mireloext'] }, why: { local: 'Локально продолжения нет — есть у fal', higgsfield: 'У Higgsfield правки музыки нет', yandex: 'У Яндекса только озвучка' }, fields: ['side', 'add'] },
+    { id: 'extract', label: 'Вытащить дорожку', run: 'Вытащить', input: 1, heavy: 1, text: 'Комментарий не нужен — выберите дорожку',
+      models: { local: ['acexl'] }, why: { fal: 'У fal — через «Обработка → Стемы»', higgsfield: 'Нет', yandex: 'Нет' }, fields: ['track', 'stemhint'] },
+    { id: 'lego', label: 'Дописать дорожку', run: 'Дописать', input: 1, heavy: 1, text: 'Характер новой дорожки: например «тёплый бас, пальцами»',
+      models: { local: ['acexl'] }, why: { fal: 'У fal нет', higgsfield: 'Нет', yandex: 'Нет' }, fields: ['track'] },
+    { id: 'complete', label: 'Доаранжировать', run: 'Доаранжировать', input: 1, heavy: 1, text: 'Комментарий необязателен',
+      models: { local: ['acexl'] }, why: { fal: 'У fal нет', higgsfield: 'Нет', yandex: 'Нет' }, fields: ['tracks'] },
+    { id: 'abc', label: 'Править ноты', run: 'Сыграть по нотам', input: 1, text: 'Стиль исполнения (можно оставить прежний)',
+      models: { local: ['yueabc'] }, why: { fal: 'Ноты .abc пишет только YuE2', higgsfield: 'Нет', yandex: 'Нет' }, fields: ['abc', 'lyrics'] },
+    { id: 'sfx', label: 'Звуковой эффект', run: 'Сгенерировать звук', count: 1, text: 'Опишите звук до 450 символов: «скрип двери в пустом подъезде»',
+      models: { fal: ['elsfx', 'mirelo', 'sonsfx', 'sa3sfx', 'cassette', 'mmaudio'], higgsfield: ['hmirelo'] }, why: { local: 'Локально звуковых эффектов нет', yandex: 'У Яндекса только озвучка' }, fields: ['sfxdur', 'loop'] },
+  ] },
+  process: { label: 'Обработка', icon: 'wand', ops: [
+    { id: 'separate', label: 'Стемы', run: 'Разделить', input: 1, text: 'Для SAM Audio — что выделить: «лай собаки»',
+      models: { local: ['sepl'], fal: ['demucs', 'sam', 'eliso'] }, why: { higgsfield: 'Нет', yandex: 'Нет' }, fields: ['sepmode', 'stems', 'fmt'] },
+    { id: 'denoise', label: 'Очистить шум', run: 'Очистить', input: 1, text: 'Комментарий не нужен',
+      models: { local: ['dfn'], fal: ['fdfn', 'veed', 'eliso'] }, why: { higgsfield: 'Нет', yandex: 'Нет' }, fields: [] },
+    { id: 'upsample', label: 'Восстановить частоты', run: 'Восстановить', input: 1, text: 'Комментарий не нужен',
+      models: { local: ['audiosr'], fal: ['fdfn'] }, why: { higgsfield: 'Нет', yandex: 'Нет' }, fields: ['srmodel', 'len120'] },
+    { id: 'master', label: 'Мастеринг', run: 'Сделать мастеринг', input: 1, text: 'Комментарий не нужен — выберите образец',
+      models: { local: ['match'] }, why: { fal: 'У fal мастеринга по образцу нет', higgsfield: 'Нет', yandex: 'Нет' }, fields: ['ref'] },
+    { id: 'transcribe', label: 'В текст', run: 'Распознать', input: 1, text: 'Подсказка имён и терминов (необязательно)',
+      models: { local: ['whisper'], fal: ['wizper', 'scribe', 'cohere', 'nemo'] }, why: { higgsfield: 'Нет', yandex: 'Серверного распознавания Яндекса в продукте нет' }, fields: ['tlang', 'outs'] },
+    { id: 'align', label: 'Время к тексту', run: 'Расставить время', input: 1, text: 'Вставьте точный текст записи — получите .srt и .lrc',
+      models: { fal: ['align'] }, why: { local: 'Локально — побочно в «В текст»', higgsfield: 'Нет', yandex: 'Нет' }, fields: ['outs'] },
+    { id: 'midi', label: 'В MIDI', run: 'Снять ноты', input: 1, text: 'Комментарий не нужен',
+      models: { local: ['pitch'] }, why: { fal: 'Нет', higgsfield: 'Нет', yandex: 'Нет' }, fields: ['midihint'] },
+    { id: 'trim', label: 'Обрезка и громкость', run: 'Применить', input: 1, text: 'Комментарий не нужен', noai: 1,
+      models: { none: ['trim'] }, fields: ['interval', 'gain', 'norm', 'fades', 'conv'] },
+  ] },
+};
+const opsOf = m => MODES[m].ops;
+const opById = (m, id) => opsOf(m).find(o => o.id === id);
+
+/* ===================== Голоса (библиотека) ===================== */
+const VOICES = [
+  { slug: 'anya', name: 'Аня', kind: 'По образцам', files: '3 образца · 0:42', tr: true, prov: [
+    ['Локально · Qwen3-TTS, MOSS, Chatterbox', 'ok', 'по образцу на лету'], ['Локально · Seed-VC (смена голоса)', 'ok', 'образец 1–30 с'],
+    ['Higgsfield · Seed Audio', 'ok', 'элемент воркспейса el_7f2…'], ['fal · MiniMax клон', 'exp', 'MiniMax удалил клон: не использовался 9 дней'],
+    ['fal · Qwen3 клон', 'ok', 'эмбеддинг сохранён'], ['Яндекс', 'no', 'Яндекс не клонирует голоса']] },
+  { slug: 'andrey', name: 'Андрей', kind: 'Модель RVC', files: 'voice.pth · voice.index · 200 эпох', tr: false, prov: [
+    ['Локально · RVC (смена голоса)', 'ok', 'обучена 30.09'], ['Остальные', 'no', 'модель RVC понимают только локальные']] },
+  { slug: 'baritone', name: 'Тёплый баритон', kind: 'По описанию', files: '«тёплый баритон диктора радио, спокойно»', tr: false, prov: [
+    ['Локально · Qwen3-TTS', 'ok', 'описание уходит в каждый запуск'], ['fal · Qwen3 voice-design', 'ok', '$0.09 / 1000 симв.'],
+    ['fal · MiniMax voice-design', 'need', 'нужно создать голос: $3 один раз']] },
+];
+
+/* ===================== Состояние ===================== */
+const S = {
+  theme: 'light', dev: 'desktop', scope: 'project', scene: 'normal',
+  mode: 'voice', op: { voice: 'speak', music: 'song', process: 'separate' },
+  prov: {}, model: {}, vsrc: {}, adv: false, open: false, collapsed: false, cmode: 'audio', menu: null, sheet: null,
+  text: 'Добро пожаловать в подкаст AI Home! Сегодня — о том, как звучит код.',
+  dur: 20, sel: { a: 6.2, b: 11.8 }, ver: { A: 3, B: 2 }, abB: 'B', mute: {}, solo: null, play: null,
+  instr: false, count: 2, voice: 'anya', voiceOpen: 'anya', newVoice: null, lyrics: '[Verse]\nСтроки кода в тишине\nЗвучат, как дождь в окне\n[Chorus]\nAI Home, AI Home…',
+  dlg: [['Аня', 'Привет! Это подкаст AI Home.'], ['Тёплый баритон', 'А сегодня мы слушаем код.']],
+  tracks: { drums: 1, bass: 1 }, panel: true,
+};
+const key = () => `${S.mode}:${S.op[S.mode]}`;
+const curOp = () => opById(S.mode, S.op[S.mode]);
+const personal = () => S.scope === 'personal';
+function provAvail(op, p) {
+  if (p === 'none') return op.models.none ? null : 'нет';
+  if (p === 'local' && personal()) return 'Локальные модели работают только в чате проекта — результат ложится в его папку';
+  if (!op.models[p]) return (op.why && op.why[p]) || 'Нет этой операции';
+  if (op.models[p].every(id => M[id].off)) return M[op.models[p][0]].off;
+  return null;
+}
+function curProv() {
+  const op = curOp();
+  if (op.noai) return 'none';
+  let p = S.prov[key()];
+  if (p && !provAvail(op, p)) return p;
+  return ['local', 'fal', 'higgsfield', 'yandex'].find(x => !provAvail(op, x)) || 'fal';
+}
+function curModel() {
+  const op = curOp(), p = curProv();
+  const list = (op.models[p] || []).filter(id => !M[id].off);
+  const m = S.model[key() + ':' + p];
+  return m && list.includes(m) ? m : list[0];
+}
+
+/* ===================== Цена ===================== */
+const fx = v => v < 0.01 ? v.toFixed(4) : v < 1 ? v.toFixed(3) : v.toFixed(2);
+function priceOf(mid, opt = {}) {
+  const m = M[mid]; if (!m || !m.price) return '';
+  const p = m.price, n = opt.count || 1, chars = opt.chars ?? S.text.length, dur = opt.dur ?? S.dur;
+  const nn = n > 1 ? ` × ${n}` : '';
+  switch (p.u) {
+    case 'k': return `≈ $${fx(p.v * chars / 1000 * n)} · ${chars} симв. по $${p.v} за 1000${nn}`;
+    case 's': return `≈ $${fx(p.v * dur * n)} · ${dur} с по $${p.v} за с${nn}`;
+    case 'm': return `≈ $${fx(p.v * dur / 60 * n)} · ${dur} с по $${p.v} за мин${nn}`;
+    case 'run': return `$${fx(p.v * n)} · $${p.v} за запуск${nn}`;
+    case 'cr': return `${(p.v * n).toFixed(2).replace('.', ',')} кредита · ${String(p.v).replace('.', ',')} за запрос${nn}`;
+    case 'rub': return `≈ ${(p.v * n).toFixed(2).replace('.', ',')} ₽ · за запрос${nn}`;
+    case 'free': return `Бесплатно · ${p.eta} · очередь GPU: ${S.scene === 'queue' ? 2 : 0}`;
+    case 'none': return 'Без ИИ · мгновенно · бесплатно';
+  }
+}
+function unitHint(mid) {
+  const p = M[mid] && M[mid].price; if (!p) return '';
+  return { k: `$${p.v} / 1000 симв.`, s: `$${p.v} / с`, m: `$${p.v} / мин`, run: `$${p.v} / запуск`, cr: `${String(p.v).replace('.', ',')} кр. / запрос`, rub: `≈ ${String(p.v).replace('.', ',')} ₽ / запрос`, free: 'бесплатно', none: 'бесплатно' }[p.u];
+}
+const shortPrice = () => {
+  const mid = curModel(), p = M[mid].price, n = curOp().count ? S.count : 1;
+  if (p.u === 'free' || p.u === 'none') return 'бесплатно';
+  const full = priceOf(mid, { count: n }); return full.split(' · ')[0];
+};
+
+/* ===================== Волна ===================== */
+function bars(seed, n) {
+  let x = seed * 9301 + 49297; const out = [];
+  for (let i = 0; i < n; i++) { x = (x * 9301 + 49297) % 233280; const r = x / 233280; const env = 0.35 + 0.65 * Math.sin(Math.PI * (i + 3) / (n + 6)); out.push(Math.max(.08, env * (.35 + .65 * r))); }
+  return out;
+}
+// id — ключ волны (для выделения/плейхеда), len — длительность, sel — показывать выделение
+function wave(id, seed, len, o = {}) {
+  const n = o.n || 90, b = bars(seed, n), w = 100 / n;
+  const played = S.play && S.play.id === id ? S.play.t / len : (o.played || 0);
+  const rects = b.map((h, i) => `<rect x="${(i * w + w * .18).toFixed(2)}" y="${(50 - h * 46).toFixed(1)}" width="${(w * .64).toFixed(2)}" height="${(h * 92).toFixed(1)}" rx="0.6" fill="${i / n < played ? 'var(--c-accent)' : (o.color || 'var(--c-track)')}"/>`).join('');
+  const sel = o.sel && S.sel ? `<div class="selb" style="left:${S.sel.a / len * 100}%;width:${(S.sel.b - S.sel.a) / len * 100}%"></div>` : '';
+  const head = S.play && S.play.id === id ? `<div class="head" style="left:${played * 100}%"></div>` : '';
+  return `<div class="wave${o.sm ? ' sm' : ''}" data-wave="${id}" data-len="${len}" ${o.sel ? 'data-sel="1"' : ''} title="${o.sel ? 'Протяните мышью, чтобы выделить кусок' : 'Клик — перемотать'}"><svg viewBox="0 0 100 100" preserveAspectRatio="none">${rects}</svg>${sel}${head}</div>`;
+}
+const mmss = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+function player(id, seed, len, o = {}) {
+  const on = S.play && S.play.id === id;
+  return `<div class="player"><button class="play${o.sm ? ' sm' : ''}" data-act="play:${id}:${len}" title="${on ? 'Пауза' : 'Слушать'}">${ic(on ? 'pause' : 'play', o.sm)}</button>${wave(id, seed, len, o)}<span class="tm" data-tm="${id}">${on ? mmss(S.play.t) : '0:00.0'} / ${mmss(len)}</span></div>`;
+}
+
+/* ===================== Полоса «Звук» ===================== */
+function focusName() {
+  if (S.scene === 'empty') return null;
+  return { A: `podcast-intro.mp3 · версия ${S.ver.A}`, B: `greeting.wav · версия ${S.ver.B}` }.A;
+}
+function stripSummary(short) {
+  const op = curOp(), p = curProv(), mid = curModel(), m = M[mid];
+  const voice = S.mode === 'voice' && (S.vsrc[key()] || 'lib') === 'lib' && !personal() ? VOICES.find(v => v.slug === S.voice).name : null;
+  const parts = [MODES[S.mode].label + ' · ' + op.label, PROV[p].label, m.label, voice, op.count ? `${S.count} вар.` : null, shortPrice()];
+  return parts.filter(Boolean).join(' · ');
+}
+function queueBadge() {
+  const mid = curModel(), heavy = curOp().heavy;
+  if (S.scene === 'queue') return `<span class="q" title="Общая очередь GPU с картинками и видео. Тяжёлые задачи идут по одной">${ic('cpu', 1)}GPU: 2-я в очереди · старт ≈ через 3 мин</span>`;
+  if (S.scene === 'running') return `<span class="q">${ic('clock', 1)}идёт: Озвучка · 40 % · ещё ≈ 12 с</span>`;
+  if (M[mid].price.u === 'free' && heavy) return `<span class="q" title="Тяжёлая задача — одна за раз">${ic('cpu', 1)}тяжёлая · очередь пуста</span>`;
+  return '';
+}
+function switcherMenu() {
+  if (S.menu !== 'switch') return '';
+  return `<div class="menu" style="left:6px;bottom:calc(100% + 4px)">
+    <button class="mi" data-act="noop">${ic('git')}<span>Git<small>feat/podcast · +12 −3</small></span></button>
+    <button class="mi" data-act="noop">${ic('img')}<span>Картинки<small>картинка не выбрана</small></span></button>
+    <button class="mi on" data-act="menu:">${ic('waves')}<span>Звук<small>${focusName() ? 'работаем с ' + focusName() : 'звук не выбран'}</small></span></button>
+    <div class="msep"></div>
+    <button class="mi" data-act="shortcut:voice">${ic('mic')}<span>Голос<small>ярлык: «Звук» в режиме «Голос»</small></span></button>
+    <button class="mi" data-act="shortcut:music">${ic('music')}<span>Музыка<small>ярлык: «Звук» в режиме «Музыка»</small></span></button>
+    <div class="msep"></div>
+    <button class="mi" data-act="collapse">${ic('up')}<span>Свернуть полосу в строку</span></button></div>`;
+}
+function strip() {
+  const mob = S.dev === 'mobile', f = focusName();
+  const sw = `<button class="swb" data-act="menu:switch" title="Сменить полосу над композером">${ic('waves', 1)}Звук${ic('down', 1)}</button>`;
+  if (S.collapsed) {
+    return `<div class="strip mini" data-act="expand" title="Развернуть полосу «Звук»">${sw}<span class="sum">${f ? 'Работаем с: ' + f : 'Звук не выбран'} · ${esc(stripSummary())}</span>${f ? `<button class="ib sm" data-act="release" title="Снять выбор">${ic('x', 1)}</button>` : ''}${ic('down', 1)}${switcherMenu()}</div>`;
+  }
+  const chip = f
+    ? `<span class="chip acc" title="Режим «Звук» и Claude работают с этой версией. ✕ — снять выбор"><span class="t">${mob ? '' : 'Работаем с: '}<b>${esc(f)}</b></span><span class="x" data-act="release">${ic('x', 1)}</span></span>`
+    : `<span class="chip dash" data-act="newdraft" title="Карточка «Новый звук» в ленте, поле — в режим «Звук»">${ic('spark', 1)}Новый звук</span>`;
+  const vlib = S.mode === 'voice' && !personal() && !mob
+    ? `<button class="vava" data-act="panel" title="Голос: ${VOICES.find(v => v.slug === S.voice).name} — подключён к озвучке">${VOICES.find(v => v.slug === S.voice).name[0]}</button>` : '';
+  return `<div class="strip">${sw}${chip}<span class="grow"></span>${mob ? '' : queueBadge()}
+    <button class="setb${S.open ? ' open' : ''}" data-act="toggleSettings" title="Настройки звука">${ic('sliders', 1)}<span class="t">${mob ? `${MODES[S.mode].label} · ${shortPrice()}` : esc(stripSummary(true))}</span>${ic('down', 1)}</button>
+    ${vlib}<button class="ib sm" data-act="collapse" title="Свернуть полосу в строку">${ic('up', 1)}</button>
+    ${S.open && !mob ? `<div class="scard" data-stop="1">${settings()}</div>` : ''}${switcherMenu()}</div>`;
+}
+
+/* ===================== Карточка настроек ===================== */
+function fieldRow(label, body, val, code) {
+  return `<div class="fld-row"><div class="l">${label}${code ? ` <span class="code">${code}</span>` : ''}${val !== undefined ? `<span class="v">${val}</span>` : ''}</div>${body}</div>`;
+}
+const range = (id, min, max, step, val) => `<input type="range" min="${min}" max="${max}" step="${step}" value="${val}" data-rng="${id}">`;
+const sel = opts => `<select class="fld">${opts.map(o => `<option>${esc(o)}</option>`).join('')}</select>`;
+const segm = (name, opts, on) => `<div class="seg">${opts.map(([k, l, dis]) => `<button class="${k === on ? 'on' : ''}" data-act="${name}:${k}" ${dis ? `disabled title="${esc(dis)}"` : ''}>${l}</button>`).join('')}</div>`;
+
+function renderField(f, mid) {
+  const m = M[mid], p = curProv();
+  switch (f) {
+    case 'vsrc': {
+      const all = ['preset', 'desc', 'clone', 'lib', 'own'].filter(k => m.srcs && (m.srcs.includes(k) || k === 'lib' || k === 'clone'));
+      const ok = k => (m.srcs || []).includes(k) || (k === 'clone' && (m.srcs || []).includes('own'));
+      const libOff = personal() ? 'Библиотека «Голоса» живёт в проекте — в личном чате загрузите образец' : null;
+      const cur = S.vsrc[key()] && ok(S.vsrc[key()]) && !(S.vsrc[key()] === 'lib' && libOff) ? S.vsrc[key()] : ((m.srcs || []).find(k => k !== 'lib' || !libOff) || 'preset');
+      const opts = all.filter(k => k !== 'own').map(k => [k, SRC[k], k === 'lib' && libOff ? libOff : (!ok(k) ? `${m.label} так не умеет` : null)]);
+      let sub = '';
+      if (cur === 'preset') {
+        const list = p === 'yandex' ? YA_VOICES : mid === 'qwen' ? m.speakers : p === 'higgsfield' ? ['список голосов Higgsfield (list_voices)…', 'Ava', 'Leo'] : ['Wise Woman', 'Calm Narrator', 'Deep Voice Man', '… ещё по каталогу модели'];
+        sub = sel(list) + (mid === 'qwen' ? `<div class="hint" style="margin-top:4px">Родные языки дикторов — китайский, английский, японский, корейский. Манеру можно добавить описанием:</div><input class="fld" style="margin-top:4px" placeholder="спокойно, с улыбкой">` : '')
+          + (mid === 'hqwen' ? `<input class="fld" style="margin-top:4px" placeholder="Инструкция: эмоция, диалект, скорость">` : '');
+      } else if (cur === 'desc') {
+        sub = `<textarea class="fld" rows="2" placeholder="тёплый баритон диктора радио, спокойно (до 500 символов)"></textarea><div class="hint">Без описания — «спокойный, ясный голос диктора». Сохранить голос в библиотеку — «＋ Голос» в панели «Голоса».</div>`;
+      } else if (cur === 'clone') {
+        sub = `<div class="drop">${ic('upload', 1)} Образец: файл из проекта или версия нити · 5–60 с чистой речи</div><input class="fld" style="margin-top:4px" placeholder="Точная расшифровка образца — без неё распознаем сами (+12 с)"><div class="hint">Длинный образец обрежем до 15 с.</div>`;
+      } else {
+        sub = `<div class="opts">${VOICES.map(v => `<button class="opt op${S.voice === v.slug ? ' on' : ''}" data-act="voice:${v.slug}"><span class="vava" style="width:18px;height:18px;flex-basis:18px;font-size:9px">${v.name[0]}</span>${v.name}</button>`).join('')}<button class="opt op link" data-act="panel">＋ Голос</button></div>`
+          + (p === 'fal' && mid === 'mm28' && S.voice === 'anya' ? `<div class="box warn">${ic('alert', 1)}<div class="body">Клон «Аня» у MiniMax удалён: не использовался 9 дней. Пересоздать по образцам — $1.5, займёт ~20 с.<div class="acts"><button class="btn xs">Пересоздать · $1.5</button></div></div></div>` : '')
+          + (S.voice === 'andrey' ? `<div class="box warn">${ic('alert', 1)}<div class="body">«Андрей» — модель RVC: озвучивать текстом её нельзя, только сменить голос готовой записи («Голос → Сменить голос»).</div></div>` : '');
+      }
+      return fieldRow('Голос', segm('vsrc', opts, cur) + `<div style="margin-top:6px">${sub}</div>`);
+    }
+    case 'lang': return fieldRow('Язык', sel(p === 'yandex' ? ['Русский'] : mid === 'moss' ? ['Русский', 'Английский', '… ещё 29'] : mid === 'chatterbox' ? ['Русский', 'Английский', '… ещё 21'] : mid === 'mm28' ? ['Русский (language_boost)', 'Авто', '… ещё 36'] : ['Русский', 'Английский', '… ещё 8']));
+    case 'speed': return mid === 'qwen' || mid === 'moss' || mid === 'chatterbox' ? '' : fieldRow('Скорость', range('speed', p === 'yandex' ? .1 : p === 'higgsfield' && mid === 'seed_audio' ? -50 : .5, p === 'yandex' ? 3 : p === 'higgsfield' && mid === 'seed_audio' ? 100 : 2, p === 'higgsfield' && mid === 'seed_audio' ? 1 : .1, p === 'higgsfield' && mid === 'seed_audio' ? 0 : 1), mid === 'seed_audio' ? '0' : '1,0×', mid === 'seed_audio' ? 'speech_rate' : '');
+    case 'pitchv': return ['mm28', 'seed_audio', 'hqwen'].includes(mid) ? fieldRow('Высота', range('pitch', mid === 'hqwen' ? .5 : -12, mid === 'hqwen' ? 2 : 12, mid === 'hqwen' ? .1 : 1, mid === 'hqwen' ? 1 : 0), mid === 'hqwen' ? '1,0×' : '0 пт') : '';
+    case 'volume': return ['mm28', 'seed_audio', 'hqwen'].includes(mid) ? fieldRow('Громкость', range('vol', mid === 'seed_audio' ? -50 : 0, mid === 'mm28' ? 10 : 100, 1, mid === 'mm28' ? 1 : mid === 'hqwen' ? 50 : 0), '', mid === 'mm28' ? 'vol 0–10' : mid === 'seed_audio' ? 'loudness_rate' : 'volume') : '';
+    case 'emotion': return m.emo ? fieldRow('Эмоция', segm('emo', [['auto', 'Авто'], ['happy', 'Радость'], ['sad', 'Грусть'], ['angry', 'Злость'], ['fearful', 'Страх'], ['disgusted', 'Отвращение'], ['surprised', 'Удивление'], ['neutral', 'Ровно']], 'auto')) : '';
+    case 'yarole': return m.yaRole ? fieldRow('Роль', segm('role', [['good', 'Добрый'], ['evil', 'Злой'], ['friendly', 'Дружелюбный'], ['whisper', 'Шёпот'], ['strict', 'Строгий']], 'friendly')) + `<div class="hint">До 3000 символов за запрос, на выходе mp3.</div>` : '';
+    case 'expr': return m.expr ? fieldRow('Выразительность', range('expr', .25, 2, .05, .5), '0,50') : '';
+    case 'variant': return m.variant ? fieldRow('Движок', segm('variant', [['elevenlabs', 'ElevenLabs'], ['minimax', 'MiniMax'], ['seed_speech', 'Seed Speech'], ['vibe_voice', 'VibeVoice'], ['cozy_voice', 'CozyVoice']], 'minimax')) : '';
+    case 'dialog': return fieldRow(`Реплики · ${mid === 'gemd' ? 'ровно 2 голоса' : 'до 10 голосов'}`, S.dlg.map((r, i) => `<div class="dlg">${sel([r[0], ...VOICES.filter(v => v.name !== r[0] && v.slug !== 'andrey').map(v => v.name), 'Готовый диктор…'])}<textarea class="fld" rows="1">${esc(r[1])}</textarea><button class="ib sm" title="Убрать реплику">${ic('x', 1)}</button></div>`).join('') + `<button class="btn xs ghost" style="margin-top:4px" data-act="addline">＋ Реплика</button>`);
+    case 'target': {
+      const t = m.target[0];
+      if (t === 'lib') return fieldRow('Чей голос', `<div class="opts">${VOICES.filter(v => v.slug !== 'andrey').map(v => `<button class="opt op${S.voice === v.slug ? ' on' : ''}" data-act="voice:${v.slug}">${v.name}</button>`).join('')}<button class="opt op link">Образец из файла…</button></div><div class="hint">Образец 1–30 с.</div>`);
+      if (t === 'rvc') return fieldRow('Модель голоса', `<div class="opts"><button class="opt op on">Андрей · voice.pth + voice.index</button><button class="opt op link" data-act="op:voice:train">＋ Обучить новую</button></div>`);
+      return fieldRow('Голос', sel(['Rachel', 'Aria', 'Roger', '… ещё по каталогу ElevenLabs']));
+    }
+    case 'vcmode': return mid === 'seedvc' ? fieldRow('Что в записи', segm('vcm', [['speech', 'Речь'], ['singing', 'Пение']], 'speech')) : '';
+    case 'pshift': return mid === 'elvc' ? '' : fieldRow('Сдвиг высоты', range('ps', -24, 24, 1, 0), '0 пт') + (mid === 'seedvc' ? '<div class="hint">Для пения в другом регистре. В режиме «Речь» Seed-VC сдвиг пока не применяет.</div>' : '');
+    case 'bgnoise': return mid === 'elvc' ? `<label class="fld-row" style="display:flex;gap:6px;align-items:center"><input type="checkbox" checked> Убрать фоновый шум</label>` : '';
+    case 'clips': return fieldRow('Записи голоса · 1–20 файлов, в сумме 2–30 мин', `<div class="clips"><div class="clip">${ic('file', 1)}<span class="grow mono">andrey-lecture-1.wav</span>12:40</div><div class="clip">${ic('file', 1)}<span class="grow mono">andrey-lecture-2.wav</span>9:05</div></div><div class="drop" style="margin-top:4px">${ic('upload', 1)} Добавить из проекта или нити</div><div class="hint">Всего 21:45 — хорошо. Музыку из записей сначала уберите: «Обработка → Стемы».</div>`);
+    case 'epochs': return fieldRow('Эпохи', range('ep', 20, 1000, 10, 200), '200') + '<div class="hint">Больше — точнее и дольше: ≈ 4 мин на 100 эпох. Результат — voice.pth и voice.index, голос сам попадёт в «Голоса».</div>';
+    case 'lyrics': {
+      if (S.op.music === 'cover' && S.mode === 'music' && mid !== 'yuecover') return fieldRow('Слова (необязательно)', `<textarea class="fld" rows="2" placeholder="пусто — слова исходника"></textarea>`);
+      if (S.op.music === 'repaint' && S.mode === 'music') return fieldRow('Слова для куска (необязательно)', `<textarea class="fld" rows="2" placeholder="[Chorus] …"></textarea>`);
+      if (S.op.music === 'abc' && S.mode === 'music') return fieldRow('Слова', `<textarea class="fld" rows="2">${esc(S.lyrics)}</textarea>`);
+      const need = m.needLyrics;
+      const instr = S.instr && !need;
+      return fieldRow('Слова', `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">${segm('instr', [['0', 'Со словами'], ['1', 'Инструментал', need ? `${m.label} поёт только со словами` : (mid === 'sonilo' ? null : null)]], (instr ? '1' : '0'))}</div>`
+        + (instr ? '<div class="hint">Слов не будет — только музыка.</div>' : `<textarea class="fld mono" rows="5" style="font-size:11.5px">${esc(S.lyrics)}</textarea><div class="secs">${['[Verse]', '[Chorus]', '[Bridge]', '[Intro]', '[Outro]'].map(s => `<button class="btn xs">${s}</button>`).join('')}<span class="hint" style="align-self:center">до 5000 символов</span></div>`));
+    }
+    case 'dur': { const mx = m.maxDur || 240; return fieldRow('Длительность', range('dur', mid === 'elmus' ? 3 : 10, mx, 1, Math.min(S.dur, mx)), `${S.dur} с`) + `<div class="hint">${mid === 'elmus' ? '3 с – 10 мин' : mid === 'sa3' ? 'до 6 мин' : mid === 'fmm3' ? 'до 5 мин' : '10–240 с'}${m.price.u === 's' || m.price.u === 'm' ? ' · цена считается от длительности' : ''}${mid === 'yue2' || mid === 'mmm3' ? ' · может закончить раньше' : ''}</div>`; }
+    case 'bpm': return m.bpm ? `<div class="two">${fieldRow('Темп', range('bpm', 40, 220, 1, 120), '120 bpm')}${fieldRow('Тональность', sel(['C major', 'A minor', 'F# major', 'D minor', '… ещё 30']))}</div>` : '';
+    case 'key': return '';
+    case 'vlang': return m.bpm ? fieldRow('Язык вокала', sel(['Русский', 'Английский', 'Неизвестно', '… ещё 48'])) : '';
+    case 'plan': return m.plan ? `<div class="adv" style="margin-top:9px"><div class="hd">${ic('music', 1)}План по частям <span class="muted" style="font-weight:400">composition_plan · до 30 частей</span></div><div class="bd">
+        ${[['Вступление', '8 с', 'lo-fi piano', 'drums'], ['Припев', '12 с', 'warm synth, choir', '—']].map(r => `<div style="display:grid;grid-template-columns:1fr 60px;gap:4px;margin-top:4px"><input class="fld" value="${r[0]}: [Intro] {тихо}"><input class="fld" value="${r[1]}"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:3px"><input class="fld" placeholder="стили +" value="${r[2]}"><input class="fld" placeholder="стили −" value="${r[3]}"></div>`).join('')}
+        ${fieldRow('Держаться плана', range('ca', 0, 1, .05, .5), '0,50', 'context_adherence')}
+        ${fieldRow('Образец звучания · до 30 с', `<div class="drop">${ic('upload', 1)} Кусок версии или файла · сила: <b>средняя</b> (низкая…очень высокая)</div>`, undefined, 'audio_reference')}
+        <button class="btn xs ghost" style="margin-top:4px">＋ Часть</button></div></div>` : '';
+    case 'strength': return fieldRow('Близость к исходнику', range('str', 0, 1, .05, .6), '0,60') + '<div class="hint">0 — свободно, 1 — почти как было.</div>';
+    case 'interval': return fieldRow('Кусок', `${player('settings', 3, 20, { sel: true, sm: true })}<div class="selinfo">${ic('scissors', 1)}${mmss(S.sel.a)} – ${mmss(S.sel.b)} · ${(S.sel.b - S.sel.a).toFixed(1).replace('.', ',')} с <button class="btn xs ghost" data-act="selall">до конца</button>${M[mid] && M[mid].multi ? '<button class="btn xs ghost">＋ ещё кусок</button>' : ''}</div>`);
+    case 'side': return fieldRow('Куда', segm('side', [['end', 'В конец'], ['start', 'В начало']], 'end'));
+    case 'add': return fieldRow('Добавить', range('add', 2, 60, 1, 10), '10 с');
+    case 'track': return fieldRow('Дорожка', `<div class="opts">${TRACKS.map((t, i) => `<button class="opt op${i === 0 ? ' on' : ''}">${TRACK_RU[t]}</button>`).join('')}</div>`);
+    case 'stemhint': return `<div class="box info">${ic('alert', 1)}<div class="body">Нужны просто вокал и минус? Быстрее и дешевле — «Обработка → Стемы».<div class="acts"><button class="btn xs" data-act="op:process:separate">Открыть «Стемы»</button></div></div></div>`;
+    case 'tracks': return fieldRow('Чем доаранжировать', `<div class="opts">${TRACKS.map(t => `<button class="opt op${S.tracks[t] ? ' on' : ''}" data-act="trk:${t}">${S.tracks[t] ? ic('check', 1) : ''}${TRACK_RU[t]}</button>`).join('')}</div>`);
+    case 'abc': return fieldRow('Партитура · score.abc', `<textarea class="fld mono" rows="6" style="font-size:11px">X:1\nT:podcast-intro\nM:4/4\nL:1/8\nK:Am\n|: A2 c2 e2 c2 | d2 f2 a2 f2 | e2 ^g2 b2 g2 | a8 :|</textarea><div class="hint">Поправьте мелодию или аккорды — YuE2 споёт по ним. До 20 000 символов.</div>`);
+    case 'sfxdur': return fieldRow('Длительность', segm('sfxauto', [['auto', 'Авто'], ['set', 'Задать']], 'set') + `<div style="margin-top:4px">${range('dur', .5, M[mid].maxDur || 22, .5, Math.min(S.dur, 22))}</div>`, `${Math.min(S.dur, 22)} с`);
+    case 'loop': return `<label class="fld-row" style="display:flex;gap:6px;align-items:center"><input type="checkbox"> Петля — бесшовный повтор${mid === 'elsfx' || mid === 'mirelo' ? '' : ' <span class="muted">(у этой модели нет)</span>'}</label>`;
+    case 'sepmode': return mid === 'sepl' ? fieldRow('Что разделить', segm('sep', [['vocals', 'Вокал + минус'], ['4', '4 стема'], ['6', '6 стемов'], ['karaoke', 'Караоке']], 'vocals')) + '<div class="hint">Караоке: основной вокал отдельно от бэк-вокала и музыки.</div>' : mid === 'sam' ? '<div class="hint">Что выделить, напишите в поле ввода.</div>' : '';
+    case 'stems': return mid === 'demucs' ? fieldRow('Стемы', `<div class="opts">${['вокал', 'барабаны', 'бас', 'прочее', 'гитара', 'пианино'].map(s => `<button class="opt op on">${ic('check', 1)}${s}</button>`).join('')}</div>`) : '';
+    case 'fmt': return mid === 'sepl' ? fieldRow('Формат стемов', segm('fmt', [['mp3', 'mp3'], ['wav', 'wav'], ['flac', 'flac']], 'mp3')) : '';
+    case 'srmodel': return mid === 'audiosr' ? fieldRow('Что в записи', segm('srm', [['basic', 'Музыка и звуки'], ['speech', 'Речь']], 'basic')) : '';
+    case 'len120': return mid === 'audiosr' ? `<div class="box warn">${ic('alert', 1)}<div class="body">AudioSR берёт до 120 с, а версия длиннее (3:02). Обрежьте кусок или возьмите fal · DeepFilterNet 3.</div></div>` : '';
+    case 'ref': return fieldRow('Образец звучания', `<div class="opts"><button class="opt op on">${ic('music', 1)}reference-track.mp3</button><button class="opt op link">Версия нити…</button><button class="opt op link">Файл проекта…</button></div><div class="hint">Громкость и частоты станут как у образца.</div>`);
+    case 'tlang': return fieldRow('Язык', sel(['Определить сам', 'Русский', 'Английский', '… ещё 96']));
+    case 'outs': return fieldRow('Получите', `<span class="badge mut">.txt</span> <span class="badge mut">.srt</span> <span class="badge mut">.lrc</span>`);
+    case 'midihint': return '<div class="hint" style="margin-top:8px">Точнее всего на одном инструменте или вокале — полный микс сначала разделите на стемы.</div>';
+    case 'gain': return fieldRow('Громкость', range('gain', -20, 20, .5, 0), '0 дБ');
+    case 'norm': return `<label class="fld-row" style="display:flex;gap:6px;align-items:center"><input type="checkbox" checked> Нормализовать до −14 LUFS</label>`;
+    case 'fades': return `<div class="two">${fieldRow('Нарастание', range('fi', 0, 10, .5, 1), '1 с')}${fieldRow('Затухание', range('fo', 0, 10, .5, 2), '2 с')}</div>`;
+    case 'conv': return `<div class="two">${fieldRow('Формат', sel(['mp3', 'wav', 'flac', 'ogg']))}${fieldRow('Частота', sel(['как есть', '44,1 кГц', '48 кГц']))}</div>`;
+  }
+  return '';
+}
+function advForm(mid) {
+  const m = M[mid];
+  const id = { mm28: 'fal-ai/minimax/speech-2.8-hd', el4: 'fal-ai/elevenlabs/tts/eleven-v4', demucs: 'fal-ai/demucs', wizper: 'fal-ai/wizper', elmus: 'fal-ai/elevenlabs/music', elsfx: 'fal-ai/elevenlabs/sound-effects/v2' }[mid];
+  const src = curProv() === 'fal' ? `по схеме модели <code>${id || 'get_model_schema'}</code>` : curProv() === 'higgsfield' ? 'по каталогу Higgsfield' : curProv() === 'local' ? 'параметры локального движка' : '';
+  const rows = (m.adv || []).map(a => {
+    let ctl;
+    if (a.t === 'range') ctl = range(a.k, a.min, a.max, a.step, a.def);
+    else if (a.t === 'sel') ctl = sel(a.opts);
+    else if (a.t === 'bool') ctl = `<label style="display:flex;gap:6px;align-items:center;font-size:12px"><input type="checkbox"> вкл.</label>`;
+    else if (a.t === 'file') ctl = `<div class="drop">${ic('upload', 1)} ${a.ph}</div>`;
+    else ctl = `<input class="fld" placeholder="${esc(a.ph || a.def)}">`;
+    return fieldRow(a.l, ctl + (a.note ? `<div class="hint">${a.note}</div>` : ''), a.t === 'range' ? String(a.def).replace('.', ',') : undefined, a.k);
+  }).join('');
+  return `<div class="adv"><div class="hd" data-act="adv">${ic(S.adv ? 'down' : 'right', 1)}Дополнительно <span class="muted" style="font-weight:400">${m.adv && m.adv.length ? m.adv.length + ' параметр.' : 'нет'}</span><span class="grow"></span><span class="hint">${src}</span></div>
+    ${S.adv ? `<div class="bd">${rows || '<div class="hint">У этой модели дополнительных параметров нет.</div>'}${rows ? '<div class="hint" style="margin-top:8px">Поле не тронуто — модель берёт своё значение по умолчанию. «Сбросить» вернёт все.</div><button class="btn xs ghost" style="margin-top:4px">Сбросить</button>' : ''}</div>` : ''}</div>`;
+}
+function settings() {
+  const mode = S.mode, op = curOp(), p = curProv(), mid = curModel(), m = M[mid];
+  const modeSeg = `<div class="seg full" style="margin-top:6px">${Object.entries(MODES).map(([k, v]) => `<button class="${k === mode ? 'on' : ''}" data-act="mode:${k}">${ic(v.icon, 1)}${v.label}</button>`).join('')}</div>`;
+  const ops = `<div class="lbl2">Операция</div><div class="opts">${opsOf(mode).map(o => o.link
+    ? `<button class="opt op link" data-act="op:${o.link[0]}:${o.link[1]}" title="Общая операция — живёт в «Обработке»">${o.label} →</button>`
+    : `<button class="opt op${o.id === op.id ? ' on' : ''}" data-act="op:${mode}:${o.id}">${o.label}${o.heavy ? ` <span class="badge mut" title="Тяжёлая задача: одна за раз, минуты">${ic('cpu', 1)}</span>` : ''}</button>`).join('')}</div>`;
+  const inputNote = op.input ? `<div class="hint" style="margin-top:6px">${ic('waves', 1)} Берём текущую версию: <b>${focusName() || 'выберите звук в ленте'}</b></div>` : '';
+  let provs = '';
+  if (!op.noai) {
+    provs = `<div class="lbl2">Поставщик</div><div class="opts">${['local', 'fal', 'higgsfield', 'yandex'].map(k => {
+      const why = provAvail(op, k);
+      const firstOk = (op.models[k] || []).find(id => !M[id].off);
+      const hint = why ? why : (k === 'local' ? 'бесплатно · своя видеокарта' : unitHint(firstOk));
+      return `<button class="opt${k === p ? ' on' : ''}${why ? ' off' : ''}" ${why ? `title="${esc(why)}"` : `data-act="prov:${k}"`}><span class="n">${k === 'local' && personal() ? ic('lock', 1) : ''}${PROV[k].label}</span><span class="h">${esc(hint)}</span></button>`;
+    }).join('')}</div>`;
+    provs += `<div class="lbl2">Модель <span class="hint" style="text-transform:none;letter-spacing:0;font-weight:400">${p === 'fal' ? 'отобранные · остальные — по запросу' : ''}</span></div><div class="opts">${(op.models[p] || []).map(id => {
+      const x = M[id];
+      if (x.off) return `<button class="opt off" title="${esc(x.off)}"><span class="n">${x.label}</span><span class="h">${esc(x.off)}</span></button>`;
+      return `<button class="opt${id === mid ? ' on' : ''}" data-act="model:${id}" title="${esc(x.note || '')}"><span class="n">${x.label} ${x.ru ? '<span class="ru">RU</span>' : '<span class="nru" title="Русский — по описанию модели не поддерживается">без RU</span>'} ${lic(x.lic)}${x.heavy ? `<span class="badge mut">${ic('cpu', 1)} тяжёлая</span>` : ''}</span><span class="h">${esc(unitHint(id))}${x.note ? ' · ' + esc(x.note) : ''}</span></button>`;
+    }).join('')}</div>`;
+  } else {
+    provs = `<div class="box info">${ic('scissors', 1)}<div class="body">Правка без ИИ: мгновенно и бесплатно, без поставщика и модели.</div></div>`;
+  }
+  const fields = op.fields.map(f => renderField(f, mid)).join('');
+  const count = op.count ? `<span class="count"><button data-act="cnt:-1" ${S.count <= 1 ? 'disabled' : ''}>−</button><span>${S.count}</span><button data-act="cnt:1" ${S.count >= 4 ? 'disabled' : ''}>+</button></span>` : '';
+  const block = S.mode === 'voice' && op.id === 'speak' && S.voice === 'andrey' && (S.vsrc[key()] || 'lib') === 'lib';
+  return `${modeSeg}${ops}${inputNote}${provs}${fields}${op.noai ? '' : advForm(mid)}
+    <div class="pricebar">${count}<span class="p" data-price="1">${esc(priceOf(mid, { count: op.count ? S.count : 1 }))}</span>
+      <button class="btn pri sm" data-act="run" ${block ? 'disabled title="Выберите голос, который умеет озвучивать текст"' : ''}>${ic('spark', 1)}${op.run}</button></div>`;
+}
+
+/* ===================== Лента ===================== */
+const VERS_A = [
+  { n: 1, what: 'Музыка · Песня · инструментал 20 с', by: 'Claude', prov: 'Локально · ACE-Step 1.5 XL', price: 'бесплатно', lic: '', len: 20, seed: 3 },
+  { n: 2, what: 'Обработка · Стемы · 4 стема', by: 'Андрей', prov: 'Локально · HTDemucs ft', price: 'бесплатно', lic: '', len: 20, seed: 3, stems: ['вокал', 'барабаны', 'бас', 'прочее'] },
+  { n: 3, what: 'Обработка · Обрезка и громкость · 0:02–0:18, затухание 2 с, −14 LUFS', by: 'Андрей', prov: 'Без ИИ', price: 'бесплатно', lic: '', len: 16, seed: 5 },
+];
+const VERS_B = [
+  { n: 1, what: 'Голос · Озвучить · голос «Аня»', by: 'Claude', prov: 'Локально · Qwen3-TTS 1.7B', price: 'бесплатно', len: 5.4, seed: 11 },
+  { n: 2, what: 'Обработка · Очистить шум', by: 'Андрей', prov: 'Локально · DeepFilterNet 3', price: 'бесплатно', len: 5.4, seed: 12 },
+];
+function stemsMixer(id, stems, len, seed) {
+  return `<div class="files">${stems.map((s, i) => {
+    const k = id + ':' + i, muted = S.mute[k] || (S.solo && S.solo !== k);
+    return `<div class="fr${muted ? ' dim' : ''}"><button class="ms m${S.mute[k] ? ' on' : ''}" data-act="mute:${k}" title="Заглушить">M</button><button class="ms s${S.solo === k ? ' on' : ''}" data-act="solo:${k}" title="Только эта дорожка">S</button><span class="nm" style="width:68px">${s}</span>${wave(id + 's' + i, seed + i * 7, len, { sm: true, n: 60 })}<button class="ib sm" title="Сохранить стем">${ic('dl', 1)}</button></div>`;
+  }).join('')}</div>
+  <div class="foot" style="margin-top:5px"><span class="hint grow">Сохранятся папкой <code>podcast-intro.stems/</code>. M — заглушить, S — слушать одну.</span><button class="btn xs" title="Без ИИ: свести звучащие дорожки в новую версию">Свести в версию</button></div>`;
+}
+function saveBtns() {
+  return personal()
+    ? `<button class="btn xs" title="В личном чате проекта нет — файл скачается">${ic('dl', 1)}Скачать</button>`
+    : `<button class="btn xs">${ic('save', 1)}Сохранить в проект</button><button class="btn xs ghost">Сохранить как…</button>`;
+}
+function procMenu(id) {
+  return S.menu === 'proc:' + id ? `<div class="menu" style="right:8px;bottom:36px">
+    ${opsOf('process').map(o => `<button class="mi" data-act="op:process:${o.id}">${o.id === 'trim' ? ic('scissors') : ic('wand')}<span>${o.label}</span></button>`).join('')}
+    <div class="msep"></div><button class="mi" data-act="op:voice:convert">${ic('mic')}<span>Сменить голос</span></button><button class="mi" data-act="op:music:cover">${ic('music')}<span>Кавер · Перегенерировать кусок…</span></button></div>` : '';
+}
+function threadCard(tid) {
+  const vers = tid === 'A' ? VERS_A : VERS_B, v = vers[S.ver[tid] - 1], fname = tid === 'A' ? 'podcast-intro.mp3' : 'greeting.wav';
+  const focus = tid === 'A';
+  const ab = tid === 'B' ? `<span class="ab"><div class="seg"><button class="${S.abB === 'A' ? 'on' : ''}" data-act="ab:A" title="Версия 1">A · в1</button><button class="${S.abB === 'B' ? 'on' : ''}" data-act="ab:B" title="Версия 2">B · в2</button></div><span class="hint">переключение не сбивает позицию</span></span>` : '';
+  const pv = tid === 'B' ? vers[S.abB === 'A' ? 0 : 1] : v;
+  return `<div class="acard${focus ? ' focus' : ''}" style="position:relative">
+    <div class="hd">${ic(tid === 'A' ? 'music' : 'mic', 1)}<span class="fname">${fname}</span>${focus ? '<span class="badge acc">в работе</span>' : ''}<span class="grow"></span>
+      <span class="stepnav"><button class="ib sm" data-act="ver:${tid}:-1" ${S.ver[tid] <= 1 ? 'disabled' : ''}>${ic('left', 1)}</button>версия ${S.ver[tid]} из ${vers.length}<button class="ib sm" data-act="ver:${tid}:1" ${S.ver[tid] >= vers.length ? 'disabled' : ''}>${ic('right', 1)}</button></span></div>
+    <div class="what">${v.what} · <span class="by">${v.by === 'Claude' ? ic('spark', 1) + 'Claude' : v.by}</span></div>
+    ${v.stems ? stemsMixer('A2', v.stems, v.len, v.seed) : player(tid + pv.n, pv.seed, pv.len, { sel: focus })}
+    ${focus && !v.stems ? `<div class="selinfo">${ic('scissors', 1)}Выделено ${mmss(S.sel.a)} – ${mmss(Math.min(S.sel.b, v.len))} · <button class="btn xs ghost" data-act="op:process:trim">Обрезать</button><button class="btn xs ghost" data-act="op:music:repaint">Перегенерировать кусок</button><button class="btn xs ghost" data-act="clearsel">Снять</button></div>` : ''}
+    ${ab ? `<div class="foot">${ab}</div>` : ''}
+    <div class="foot"><span class="meta">${v.prov} · ${v.price} · ${pv.len.toFixed(1).replace('.', ',')} с</span>
+      <button class="btn xs" data-act="menu:proc:${tid}">${ic('wand', 1)}Обработать ${ic('down', 1)}</button>${saveBtns()}</div>${procMenu(tid)}
+  </div>`;
+}
+function launchCard(kind) {
+  if (kind === 'music') return `<div class="launch"><div class="t">${ic('spark', 1)}Claude запустил · Музыка · Песня <span class="badge ok">готово</span></div><div class="hint">Локально · ACE-Step 1.5 XL · инструментал · 20 с · 100 bpm · A minor · бесплатно</div><div class="prompt">lo-fi hip hop intro, warm rhodes, vinyl crackle, soft drums, podcast opener</div></div>`;
+  return `<div class="launch"><div class="t">${ic('spark', 1)}Claude запустил · Голос · Озвучить <span class="badge ok">готово</span></div><div class="hint">Локально · Qwen3-TTS 1.7B · голос «Аня» из «Голосов» · русский · бесплатно</div><div class="prompt">Добро пожаловать в подкаст AI Home!</div></div>`;
+}
+function sceneCard() {
+  switch (S.scene) {
+    case 'running': return cardRunning();
+    case 'queue': return cardQueue();
+    case 'error': return cardError();
+    case 'limit': return cardLimit();
+  }
+  return '';
+}
+function cardRunning() {
+  return `<div class="acard"><div class="hd">${ic('mic', 1)}<span class="fname">greeting-en.mp3</span><span class="badge info">идёт · 40 %</span><span class="grow"></span><button class="btn xs ghost">${ic('x', 1)}Отменить</button></div>
+    <div class="what">Голос · Озвучить · fal · MiniMax Speech 2.8 HD · 2 варианта · ≈ $0.014</div><div class="prog"><i style="width:40%"></i></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px"><div class="skel" style="height:34px"></div><div class="skel" style="height:34px"></div></div><div class="hint" style="margin-top:4px">Варианты появятся здесь по мере готовности. Цена списана при приёме задачи.</div></div>`;
+}
+function cardQueue() {
+  return `<div class="acard"><div class="hd">${ic('cpu', 1)}<span class="fname">Андрей · модель RVC</span><span class="badge info">в очереди GPU · 2-я</span><span class="grow"></span><button class="btn xs ghost">${ic('x', 1)}Убрать из очереди</button></div>
+    <div class="what">Голос · Обучить голос · Локально · RVC (Applio) · 200 эпох · 2 записи, 21:45</div><div class="prog"><i style="width:0"></i></div>
+    <div class="hint">Тяжёлая задача: идёт одна за раз. Впереди — видео (≈ 3 мин). Своя работа ≈ 8 мин. Можно закрыть чат — пришлём уведомление.</div></div>`;
+}
+function cardError() {
+  return `<div class="acard"><div class="hd">${ic('music', 1)}<span class="fname">jingle.mp3</span><span class="badge dng">не вышло</span></div>
+    <div class="what">Музыка · Песня · fal · ElevenLabs Music v2.5 · 30 с</div>
+    <div class="box dng">${ic('alert', 1)}<div class="body"><b>fal не ответил за 5 минут.</b> Деньги не списаны. Можно повторить у fal или взять соседа с той же операцией — сами не переключаем.
+      <div class="acts"><button class="btn xs">${ic('refresh', 1)}Повторить у fal · ≈ $0.30</button><button class="btn xs">Взять fal · MiniMax Music 3 · ≈ $0.06</button><button class="btn xs">Взять Локально · ACE-Step · бесплатно</button></div></div></div></div>`;
+}
+function cardLimit() {
+  return `<div class="acard"><div class="hd">${ic('mic', 1)}<span class="fname">teaser.mp3</span><span class="badge warn">не запущено</span></div>
+    <div class="what">Голос · Озвучить · Higgsfield · Seed Audio 1.0</div>
+    <div class="box warn">${ic('alert', 1)}<div class="body"><b>Кредиты Higgsfield закончились</b> (нужно 0,3, осталось 0,1). Пополните на higgsfield.ai или возьмите другого поставщика.
+      <div class="acts"><button class="btn xs">Взять fal · MiniMax Speech 2.8 HD · ≈ $0.007</button><button class="btn xs">Взять Яндекс · ≈ 0,16 ₽</button></div></div></div>
+    <div class="box warn">${ic('clock', 1)}<div class="body">Другие отказы того же вида: «Уже идут 2 ваши задачи — дождитесь одной», «Claude не запускает больше двух генераций за ход», «Очередь GPU переполнена (4 задачи) — попробуйте позже или облако».</div></div></div>`;
+}
+function feed() {
+  if (S.scene === 'empty') {
+    return `<div class="feed"><div class="msg user">Хочу заставку для подкаста — музыку и приветствие голосом.</div>
+      <div class="msg bot"><div class="who">Claude</div>Могу сочинить музыку и озвучить приветствие. Выберите в полосе «Звук» режим и поставщика, или скажите, что нужно, — запущу сам.</div>
+      <div class="acard draft"><div class="empty" style="padding:18px 10px"><div class="ico">${ic('waves')}</div><div class="big">Звука в этом чате ещё нет</div>
+        Озвучьте текст, сочините трек или обработайте запись из проекта.<div class="foot" style="justify-content:center;margin-top:10px">
+        <button class="btn sm" data-act="shortcut:voice">${ic('mic', 1)}Озвучить текст</button><button class="btn sm" data-act="shortcut:music">${ic('music', 1)}Сочинить музыку</button><button class="btn sm ghost">${ic('file', 1)}Обработать файл…</button></div></div></div></div>`;
+  }
+  return `<div class="feed">
+    <div class="msg user">Сделай заставку для подкаста: музыка секунд на 20 и приветствие голосом Ани.</div>
+    <div class="msg bot"><div class="who">Claude</div>Запустил два задания: музыку и приветствие.${launchCard('music')}${launchCard('voice')}</div>
+    <div class="quiet">Андрей разделил музыку на стемы и обрезал до 16 с · <b>podcast-intro.mp3</b></div>
+    ${threadCard('A')}
+    <div class="quiet">Андрей очистил шум у приветствия · <b>greeting.wav</b> — сравните версии A/B</div>
+    ${threadCard('B')}
+    ${S.scene !== 'normal' ? `<div class="msg user">${{ running: 'Сделай ещё английскую версию приветствия, два варианта.', queue: 'Обучи мой голос на лекциях.', error: 'Сделай джингл на 30 секунд у ElevenLabs.', limit: 'Озвучь тизер через Higgsfield.' }[S.scene]}</div>${sceneCard()}` : ''}
+  </div>`;
+}
+function composer() {
+  const f = focusName(), aud = f && S.cmode === 'audio', op = curOp();
+  const ph = aud ? op.text : 'Сообщение Claude…';
+  const mob = S.dev === 'mobile';
+  return `<div class="composer${aud ? ' aud' : ''}">
+    ${aud ? `<div class="ptag">${ic('waves', 1)}Режим «Звук» · ${MODES[S.mode].label} → ${op.label} · текст уходит модели, не Claude</div>` : ''}
+    <div class="inrow">${f ? `<div class="mswitch"><button class="${S.cmode === 'chat' ? 'on' : ''}" data-act="cmode:chat" title="Чат: пишете Claude">${ic('chat', 1)}</button><button class="${aud ? 'on' : ''}" data-act="cmode:audio" title="Звук: текст уходит модели">${ic('waves', 1)}</button></div>` : ''}
+      <textarea rows="2" placeholder="${esc(ph)}" data-text="1">${aud && op.id === 'speak' ? esc(S.text) : ''}</textarea></div>
+    <div class="bar"><button class="ib sm" data-act="menu:plus" title="Добавить">${ic('plus', 1)}</button><span class="grow"></span>
+      ${aud ? `<button class="send" data-act="run" title="Запустить: ${op.run}">${ic('spark', 1)}${mob ? '' : op.run + ' · '}${esc(shortPrice())}</button>` : `<button class="send" title="Отправить">${ic('send', 1)}</button>`}</div>
+    ${S.menu === 'plus' ? `<div class="menu" style="left:8px;bottom:42px"><button class="mi">${ic('file')}<span>Прикрепить файл</span></button><div class="msep"></div>
+      <button class="mi" data-act="shortcut:voice">${ic('mic')}<span>Голос<small>озвучить текст, сменить голос, обучить</small></span></button>
+      <button class="mi" data-act="shortcut:music">${ic('music')}<span>Музыка<small>песня, кавер, звуковой эффект</small></span></button></div>` : ''}
+  </div>`;
+}
+
+/* ===================== Панель «Голоса» ===================== */
+function voicesPanel() {
+  if (personal()) return `<div class="empty"><div class="ico">${ic('lock')}</div><div class="big">«Голоса» живут в проекте</div>Библиотека хранится в папке <code>voices/</code> проекта. В личном чате можно озвучивать готовыми дикторами, по описанию и по образцу из файла.</div>`;
+  if (S.scene === 'empty') return `<div class="empty"><div class="ico">${ic('users')}</div><div class="big">Своих голосов пока нет</div>Голос — это записи человека и их расшифровка. Добавьте голос один раз, и его смогут взять все поставщики, которые умеют клонировать.<div style="margin-top:10px"><button class="btn sm pri" data-act="nv:samples">＋ Голос</button></div></div>${newVoice()}`;
+  return VOICES.map(v => {
+    const on = S.voiceOpen === v.slug;
+    const st = { ok: '<span class="badge ok">работает</span>', exp: '<span class="badge warn">клон удалён</span>', no: '<span class="badge mut">не умеет</span>', need: '<span class="badge mut">не создан</span>' };
+    return `<div class="voice${S.voice === v.slug ? ' on' : ''}"><div class="top" data-act="vopen:${v.slug}"><span class="vava lg">${v.name[0]}</span><span class="grow"><span class="nm">${v.name}</span><br><span class="hint">${v.kind} · ${esc(v.files)}</span></span>${v.prov.some(p => p[1] === 'exp') ? `<span title="У одного из поставщиков клон удалён">${ic('alert', 1)}</span>` : ''}${ic(on ? 'up' : 'down', 1)}</div>
+      ${on ? `${v.slug === 'anya' ? player('voice-anya', 21, 14.2, { sm: true }) + '<div class="hint" style="margin-top:4px">Образцы: anya-1.wav 0:18 · anya-2.wav 0:14 · anya-3.wav 0:10</div><div class="lbl2">Расшифровка</div><div class="preview">«Привет! Меня зовут Аня, я веду этот подкаст…»</div>' : ''}
+        ${v.slug === 'andrey' ? '<div class="files"><div class="fr">' + ic('file', 1) + '<span class="nm grow">voices/andrey/voice.pth</span><span class="hint">54 МБ</span></div><div class="fr">' + ic('file', 1) + '<span class="nm grow">voices/andrey/voice.index</span><span class="hint">31 МБ</span></div></div>' : ''}
+        <div class="lbl2">Где работает</div><table class="pv">${v.prov.map(p => `<tr><td>${p[0]}</td><td>${st[p[1]]}<div class="hint">${p[2]}${p[1] === 'exp' ? ' · <a href="#" data-act="noop">пересоздать за $1.5</a>' : ''}</div></td></tr>`).join('')}</table>
+        <div class="foot"><button class="btn xs${S.voice === v.slug ? '' : ' pri'}" data-act="voice:${v.slug}">${S.voice === v.slug ? ic('check', 1) + 'Подключён к работе' : 'Подключить к работе'}</button><button class="btn xs ghost">Переименовать</button><button class="btn xs ghost">Удалить</button></div>` : ''}</div>`;
+  }).join('') + `<button class="btn sm" style="width:100%;margin-top:4px" data-act="nv:samples">＋ Голос</button>${newVoice()}`;
+}
+function newVoice() {
+  if (!S.newVoice) return '';
+  const t = S.newVoice;
+  const body = t === 'samples'
+    ? `<div class="drop">${ic('upload', 1)} 1–5 записей по 5–60 с чистой речи · файлы проекта или версии нити</div><div class="fld-row"><div class="l">Расшифровка <button class="btn xs ghost" style="margin-left:auto">Распознать сами</button></div><textarea class="fld" rows="2" placeholder="Точный текст записей"></textarea></div><div class="hint">Голос сразу работает у локальных моделей и Seed-VC. У fal (MiniMax, Qwen3) и Higgsfield клон создаётся при первом запуске — цену покажем заранее.</div>`
+    : t === 'desc'
+      ? `<div class="fld-row"><div class="l">Описание</div><textarea class="fld" rows="2" placeholder="тёплый баритон диктора радио, спокойно"></textarea></div><div class="lbl2">Где создать</div><div class="opts"><button class="opt on"><span class="n">Только описание</span><span class="h">бесплатно · уходит в Qwen3-TTS при каждом запуске</span></button><button class="opt"><span class="n">fal · MiniMax voice-design</span><span class="h">$3 один раз · голос сохранится у MiniMax</span></button><button class="opt"><span class="n">fal · Qwen3 voice-design</span><span class="h">$0.09 / 1000 симв. превью</span></button></div>`
+      : `<div class="hint">Своя модель RVC учится на 2–30 минутах записей одного человека и меняет голос готовых записей, в том числе пение. Тяжёлая задача, минуты.</div><button class="btn sm" style="margin-top:6px" data-act="op:voice:train">Открыть «Обучить голос»</button>`;
+  return `<div class="voice on" style="margin-top:8px"><div class="top"><b>Новый голос</b><span class="grow"></span><button class="ib sm" data-act="nv:">${ic('x', 1)}</button></div>
+    <input class="fld" style="margin-top:6px" placeholder="Имя голоса"><div style="margin-top:6px">${segm('nv', [['samples', 'Из записей'], ['desc', 'По описанию'], ['rvc', 'Обучить RVC']], t)}</div><div style="margin-top:6px">${body}</div>
+    <div class="foot"><span class="grow"></span><button class="btn xs ghost" data-act="nv:">Отмена</button><button class="btn xs pri">Сохранить в voices/</button></div></div>`;
+}
+
+/* ===================== Раскладка ===================== */
+function app() {
+  const mob = S.dev === 'mobile';
+  const head = `<div class="ph">${mob ? `<button class="ib">${ic('back')}</button>` : ''}<span class="ttl">Заставка подкаста</span><span class="sub">${personal() ? 'Личный чат · вне проекта' : 'Проект «Подкаст AI Home»'}</span><span class="grow"></span>
+    ${mob ? `<button class="ib" title="Файлы">${ic('tree')}</button><button class="ib${S.sheet === 'voices' ? ' on' : ''}" data-act="sheet:voices" title="Голоса">${ic('users')}</button>` : ''}</div>`;
+  const main = `<div class="island main">${head}${feed()}${strip()}${composer()}</div>`;
+  const rail = mob ? '' : `<div class="rail"><button class="ri">${ic('chat')}</button><button class="ri">${ic('tree')}</button><button class="ri${S.panel ? ' on' : ''}" data-act="panel" title="Голоса">${ic('users')}<span class="new"></span></button><button class="ri" title="Персонажи">${ic('user')}</button></div>`;
+  const side = !mob && S.panel ? `<div class="island side"><div class="ph">${ic('users', 1)}<span class="ttl">Голоса</span><span class="sub">${personal() ? 'только в проекте' : 'voices/ · ' + (S.scene === 'empty' ? 0 : VOICES.length)}</span><span class="grow"></span>${personal() ? '' : `<button class="ib sm" data-act="nv:samples" title="Новый голос">${ic('plus', 1)}</button>`}<button class="ib sm" data-act="panel" title="Закрыть">${ic('x', 1)}</button></div><div class="pbody">${voicesPanel()}</div></div>` : '';
+  let sheet = '';
+  if (mob && S.open) sheet = `<div class="ovl" data-act="toggleSettings"></div><div class="sheet" data-stop="1"><div class="grab"></div><div class="ph" style="background:transparent;border:none">${ic('sliders', 1)}<span class="ttl">Настройки звука</span><span class="grow"></span><button class="ib" data-act="toggleSettings">${ic('x', 1)}</button></div><div class="sb">${settings()}</div></div>`;
+  if (mob && S.sheet === 'voices') sheet = `<div class="ovl" data-act="sheet:"></div><div class="sheet"><div class="grab"></div><div class="ph" style="background:transparent;border:none">${ic('users', 1)}<span class="ttl">Голоса</span><span class="grow"></span><button class="ib" data-act="sheet:">${ic('x', 1)}</button></div><div class="sb">${voicesPanel()}</div></div>`;
+  return `<div class="app${mob ? ' mobile' : ''}">${rail}${main}${side}${sheet}</div>`;
+}
+
+/* ===================== Галерея ===================== */
+function gallery() {
+  const cell = (h, sub, body) => `<div class="gcell"><h4>${h}</h4><div class="hint">${sub}</div>${body}</div>`;
+  const fileRows = rows => `<div class="files">${rows.map(r => `<div class="fr">${ic('file', 1)}<span class="nm grow">${r[0]}</span><span class="hint">${r[1]}</span><button class="ib sm" title="Скачать">${ic('dl', 1)}</button></div>`).join('')}</div>`;
+  const card = (icon, name, badges, what, inner, meta) => `<div class="acard"><div class="hd">${ic(icon, 1)}<span class="fname">${name}</span>${badges}<span class="grow"></span><span class="stepnav">версия 1 из 1</span></div><div class="what">${what}</div>${inner}<div class="foot"><span class="meta">${meta}</span>${saveBtns()}</div></div>`;
+  return [
+    cell('Песня + ноты (YuE2)', 'mp3 и score.abc в одной версии; значок лицензии на версии.',
+      card('music', 'anthem.mp3', lic('nc'), 'Музыка · Песня · со словами · 1:40', player('g1', 31, 100) + fileRows([['anthem.mp3', '1:40 · 3,2 МБ'], ['anthem.score.abc', 'партитура · 4 КБ']]) + `<div class="foot"><button class="btn xs" data-act="op:music:abc">${ic('music', 1)}Править ноты</button><span class="hint">Только некоммерческое использование (CC BY-NC).</span></div>`, 'Локально · YuE2-3B · бесплатно')),
+    cell('Транскрипция', 'txt + srt + lrc; превью текста с таймкодами.',
+      card('text', 'lecture.txt', '', 'Обработка · В текст · русский', player('g2', 41, 312, { n: 120 }) + `<div class="preview">1\n00:00:00,000 --> 00:00:04,200\nДобрый день, сегодня поговорим о звуке.\n\n2\n00:00:04,200 --> 00:00:09,800\nНачнём с того, как устроена волна…</div>` + fileRows([['lecture.txt', '2 340 слов'], ['lecture.srt', 'субтитры'], ['lecture.lrc', 'строки для караоке']]), 'Локально · Whisper large-v3-turbo · бесплатно · 5:12')),
+    cell('Модель голоса (RVC)', '.pth + .index; сразу кнопка «В Голоса».',
+      card('cpu', 'Андрей · модель RVC', '<span class="badge ok">обучена</span>', 'Голос · Обучить голос · 200 эпох · 21:45 записей', fileRows([['voice.pth', '54 МБ'], ['voice.index', '31 МБ']]) + `<div class="foot"><button class="btn xs pri" data-act="panel">${ic('users', 1)}Добавить в «Голоса»</button><button class="btn xs" data-act="op:voice:convert">Сменить голос записи…</button></div>`, 'Локально · RVC (Applio) · бесплатно · 7 мин 40 с')),
+    cell('Смена голоса (Seed-VC) и водяной знак', 'Лицензия модели — на версии; Chatterbox HD помечен водяным знаком.',
+      card('mic', 'vocals-anya.wav', lic('gpl'), 'Голос · Сменить голос · пение · −2 пт · вокал из стемов', player('g4', 51, 38), 'Локально · Seed-VC · бесплатно')
+      + card('mic', 'promo.mp3', lic('wm'), 'Голос · Озвучить · голос «Аня»', player('g5', 61, 9), 'fal · Chatterbox HD · $0.004')),
+    cell('Варианты одного запуска', 'N вариантов — N плееров; взять один = новая версия нити.',
+      `<div class="acard"><div class="hd">${ic('mic', 1)}<span class="fname">greeting-en.mp3</span><span class="badge ok">2 варианта</span></div><div class="what">Голос · Озвучить · fal · ElevenLabs v4 · ≈ $0.011</div>
+        ${[1, 2].map(i => `<div style="display:flex;align-items:center;gap:6px;margin-top:6px"><span class="badge mut">${i}</span><div style="flex:1;min-width:0">${player('gv' + i, 70 + i, 4.8, { sm: true })}</div><button class="btn xs${i === 1 ? ' pri' : ''}">${i === 1 ? ic('check', 1) + 'Взят' : 'Взять'}</button></div>`).join('')}</div>`),
+    cell('Идёт задача', 'Облако: процент и отмена.', cardRunning()),
+    cell('Очередь GPU', 'Тяжёлая локальная задача: позиция и ETA.', cardQueue()),
+    cell('Ошибка: сосед предлагается, а не подставляется', 'Явный выбор поставщика не подменяем.', cardError()),
+    cell('Отказ по лимиту', 'Кредиты, потолок задач, лимит запусков за ход.', cardLimit()),
+    cell('Выбор поставщика в личном чате', 'Локальные недоступны и объяснено почему; «Голоса» — только в проекте.',
+      (() => { const keep = { ...S, op: { ...S.op } }; S.scope = 'personal'; S.mode = 'voice'; S.op = { ...S.op, voice: 'speak' }; S.adv = false; const out = `<div class="scard">${settings()}</div>`; Object.assign(S, keep); return out; })()),
+    cell('Полоса: пустая и свёрнутая', 'Без выбранного звука и строка в 30 px.',
+      (() => { const keep = { ...S }; S.scene = 'empty'; S.open = false; S.menu = null; let out = strip(); S.scene = 'normal'; S.collapsed = true; out += strip(); Object.assign(S, keep); return out; })()),
+  ].join('');
+}
+
+/* ===================== Демо-панель и отрисовка ===================== */
+function demo() {
+  const g = (lbl, name, opts) => `<div class="grp"><span class="lbl">${lbl}</span>${opts.map(([k, l]) => `<button class="tbtn" aria-pressed="${S[name] === k}" data-demo="${name}:${k}">${l}</button>`).join('')}</div>`;
+  return g('Тема', 'theme', [['light', 'Светлая'], ['dark', 'Тёмная']]) + g('Ширина', 'dev', [['desktop', 'Десктоп'], ['mobile', 'Телефон 360']])
+    + g('Чат', 'scope', [['project', 'В проекте'], ['personal', 'Личный']])
+    + g('Сцена', 'scene', [['normal', 'Обычная'], ['empty', 'Пусто'], ['running', 'Идёт задача'], ['queue', 'Очередь GPU'], ['error', 'Ошибка'], ['limit', 'Лимит']])
+    + `<button class="tbtn" data-demo="reset:1">Сначала</button>`;
+}
+const CAPS = {
+  normal: 'Нить podcast-intro.mp3 в работе: версии ‹ ›, стемы с M/S на версии 2. У greeting.wav — A/B двух версий. Откройте «Настройки звука» кнопкой в полосе.',
+  empty: 'Пустое состояние: в чате нет звука, полоса предлагает «Новый звук», панель «Голоса» пуста.',
+  running: 'Идёт облачная задача: процент в полосе и в карточке, отмена.',
+  queue: 'Тяжёлая локальная задача ждёт GPU: позиция в очереди и время старта в полосе и в карточке.',
+  error: 'Ошибка поставщика: повтор или явный выбор соседа, сами не переключаем.',
+  limit: 'Отказ по лимиту: кончились кредиты, потолок задач, лимит запусков за ход.',
+};
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  document.getElementById('demo').innerHTML = demo();
+  document.getElementById('app').innerHTML = app();
+  document.getElementById('gallery').innerHTML = gallery();
+  document.getElementById('cap').textContent = CAPS[S.scene] + (S.scope === 'personal' ? ' Личный чат: только облачные поставщики, «Скачать» вместо «Сохранить в проект».' : '');
+}
+const INIT = JSON.parse(JSON.stringify(S));
+
+document.addEventListener('click', e => {
+  const d = e.target.closest('[data-demo]');
+  if (d) {
+    const [k, v] = d.dataset.demo.split(':');
+    if (k === 'reset') { Object.keys(S).forEach(x => delete S[x]); Object.assign(S, JSON.parse(JSON.stringify(INIT))); }
+    else { S[k] = v; S.menu = null; if (k === 'scene' || k === 'dev') { S.open = false; S.collapsed = false; S.sheet = null; } }
+    stopPlay(); render(); return;
+  }
+  const el = e.target.closest('[data-act]');
+  if (!el) { if (S.menu) { S.menu = null; render(); } return; }
+  e.stopPropagation();
+  const [a, b, c] = el.dataset.act.split(':');
+  const keepMenu = a === 'menu';
+  switch (a) {
+    case 'noop': break;
+    case 'menu': S.menu = S.menu === [b, c].filter(Boolean).join(':') ? null : [b, c].filter(Boolean).join(':') || null; break;
+    case 'toggleSettings': S.open = !S.open; break;
+    case 'collapse': S.collapsed = true; S.open = false; break;
+    case 'expand': S.collapsed = false; break;
+    case 'release': S.scene = 'empty'; S.open = false; break;
+    case 'newdraft': S.scene = 'normal'; break;
+    case 'mode': S.mode = b; S.adv = false; break;
+    case 'op': S.mode = b; S.op[b] = c; S.open = true; S.collapsed = false; S.adv = false; S.cmode = 'audio'; S.newVoice = null; break;
+    case 'shortcut': S.mode = b; S.open = true; S.collapsed = false; S.cmode = 'audio'; if (S.scene === 'empty') S.scene = 'normal'; break;
+    case 'prov': S.prov[key()] = b; break;
+    case 'model': S.model[key() + ':' + curProv()] = b; break;
+    case 'vsrc': S.vsrc[key()] = b; break;
+    case 'voice': S.voice = b; S.voiceOpen = b; break;
+    case 'vopen': S.voiceOpen = S.voiceOpen === b ? null : b; break;
+    case 'nv': S.newVoice = b || null; if (b && S.dev === 'desktop') S.panel = true; break;
+    case 'panel': if (S.dev === 'mobile') S.sheet = 'voices'; else S.panel = !S.panel || el.classList.contains('vava') || el.classList.contains('pri') || el.classList.contains('link'); break;
+    case 'sheet': S.sheet = b || null; break;
+    case 'adv': S.adv = !S.adv; break;
+    case 'cnt': S.count = Math.max(1, Math.min(4, S.count + Number(b))); break;
+    case 'instr': S.instr = b === '1'; break;
+    case 'cmode': S.cmode = b; break;
+    case 'ver': S.ver[b] = Math.max(1, Math.min((b === 'A' ? VERS_A : VERS_B).length, S.ver[b] + Number(c))); stopPlay(); break;
+    case 'ab': S.abB = b; if (S.play && S.play.id.startsWith('B')) { const t = S.play.t; S.play.id = 'B' + (b === 'A' ? 1 : 2); S.play.t = t; } break;
+    case 'mute': S.mute[b + ':' + c] = !S.mute[b + ':' + c]; break;
+    case 'solo': S.solo = S.solo === b + ':' + c ? null : b + ':' + c; break;
+    case 'trk': S.tracks[b] = !S.tracks[b]; break;
+    case 'addline': S.dlg.push(['Аня', '']); break;
+    case 'selall': S.sel.b = 20; break;
+    case 'clearsel': S.sel = { a: 0, b: 0 }; break;
+    case 'play': togglePlay(b, Number(c)); return;
+    case 'run': S.open = false; S.scene = curProv() === 'local' && curOp().heavy ? 'queue' : 'running'; break;
+    default: break;
+  }
+  if (!keepMenu) S.menu = null;
+  render();
+});
+document.addEventListener('input', e => {
+  if (e.target.dataset.text) { S.text = e.target.value || ' '; const p = document.querySelector('[data-price]'); if (p) p.textContent = priceOf(curModel(), { count: curOp().count ? S.count : 1 }); }
+  if (e.target.dataset.rng) {
+    const r = e.target, v = r.closest('.fld-row')?.querySelector('.v');
+    if (r.dataset.rng === 'dur') { S.dur = Number(r.value); const p = document.querySelector('[data-price]'); if (p) p.textContent = priceOf(curModel(), { count: curOp().count ? S.count : 1 }); }
+    if (v) v.textContent = String(r.value).replace('.', ',') + ({ dur: ' с', bpm: ' bpm', ps: ' пт', pitch: ' пт', gain: ' дБ', fi: ' с', fo: ' с', add: ' с' }[r.dataset.rng] || '');
+  }
+});
+
+/* Проигрывание (имитация) и выделение интервала на волне */
+let timer = null;
+function stopPlay() { clearInterval(timer); timer = null; S.play = null; }
+function togglePlay(id, len) {
+  if (S.play && S.play.id === id) { stopPlay(); render(); return; }
+  stopPlay(); S.play = { id, t: 0, len }; render();
+  timer = setInterval(() => {
+    S.play.t += 0.2;
+    if (S.play.t >= S.play.len) { stopPlay(); render(); return; }
+    document.querySelectorAll(`[data-wave="${S.play.id}"]`).forEach(w => {
+      const h = w.querySelector('.head'); if (h) h.style.left = (S.play.t / S.play.len * 100) + '%';
+      const n = w.querySelectorAll('rect'); n.forEach((r, i) => r.setAttribute('fill', i / n.length < S.play.t / S.play.len ? 'var(--c-accent)' : 'var(--c-track)'));
+    });
+    document.querySelectorAll(`[data-tm="${S.play.id}"]`).forEach(t => t.textContent = `${mmss(S.play.t)} / ${mmss(S.play.len)}`);
+  }, 200);
+}
+let drag = null;
+document.addEventListener('pointerdown', e => {
+  const w = e.target.closest('.wave[data-sel]'); if (!w) return;
+  const r = w.getBoundingClientRect(), len = Number(w.dataset.len);
+  drag = { w, r, len, a: Math.max(0, (e.clientX - r.left) / r.width * len) };
+  e.preventDefault();
+});
+document.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const x = Math.max(0, Math.min(drag.len, (e.clientX - drag.r.left) / drag.r.width * drag.len));
+  S.sel = { a: Math.min(drag.a, x), b: Math.max(drag.a, x) };
+  let s = drag.w.querySelector('.selb'); if (!s) { s = document.createElement('div'); s.className = 'selb'; drag.w.appendChild(s); }
+  s.style.left = (S.sel.a / drag.len * 100) + '%'; s.style.width = ((S.sel.b - S.sel.a) / drag.len * 100) + '%';
+});
+document.addEventListener('pointerup', () => { if (drag) { if (S.sel.b - S.sel.a < .3) S.sel = { a: drag.a, b: Math.min(drag.len, drag.a + 3) }; drag = null; render(); } });
+
+render();
+</script>
+</body>
+</html>

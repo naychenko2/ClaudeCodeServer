@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services.ImageEditor;
+namespace ClaudeHomeServer.Services.Higgsfield;
 
 // Шов к инстансной интеграции Higgsfield (ADR-017, раздел 1): реализация — адаптер над
 // HiggsfieldOAuthService в Main, драйвер редактора видит только этот интерфейс.

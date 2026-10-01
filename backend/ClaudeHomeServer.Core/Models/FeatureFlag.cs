@@ -75,6 +75,9 @@ public static class FeatureFlagKeys
     // Локальная модель по умолчанию для картинок и видео: при включённом local-media агент
     // рисует им без явной просьбы «локально». Гейтит хвостовую секцию промпта хода.
     public const string LocalMediaDefault = "local-media-default";
+    // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта, общая панель генерации.
+    // Гейтит и серверные ручки модуля audio-editor.
+    public const string AudioEditor = "audio-editor";
 }
 
 /// <summary>
@@ -196,6 +199,14 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.LocalMediaDefault,
             Title: "Локальная модель по умолчанию",
             Description: "Если у вас включены локальные модели, картинки и видео агент рисует ими сам, без отдельной просьбы. Если локальная сейчас недоступна, агент скажет об этом и предложит облако.",
+            Default: false,
+            Stage: "dev"),
+
+        // Модуль «Звук» (ADR-021): динамический модуль ClaudeHomeServer.AudioEditor.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.AudioEditor,
+            Title: "Звук",
+            Description: "Озвучка текста, музыка и правка звука прямо в проекте: результат ложится версиями рядом с исходником, оригинал не трогается.",
             Default: false,
             Stage: "dev"),
     ];

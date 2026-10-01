@@ -593,7 +593,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
 // Инстансное подключение Higgsfield (фаза 1.1): единый OAuth-вход админа, шарится всеми
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>();
 // Шов для драйвера Higgsfield редактора картинок (ADR-017): токен без AdminOwnerId
-builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IHiggsfieldAccess,
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Higgsfield.IHiggsfieldAccess,
     ClaudeHomeServer.Services.Mcp.HiggsfieldAccessAdapter>();
 // Запись модулей в ленту чата (ADR-019 §2): общий шов для подсистем, адаптер над SessionManager
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IChatFeed, ChatFeed>();

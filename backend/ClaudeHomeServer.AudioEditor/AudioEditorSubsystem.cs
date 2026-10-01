@@ -1,0 +1,42 @@
+using ClaudeHomeServer.Services.Composition;
+
+namespace ClaudeHomeServer.Services.AudioEditor;
+
+// Модуль «Звук» — динамический модуль (ADR-021 §1): грузится ModuleLoader'ом по записи
+// DynamicModules[audioeditor], Main его типов не видит. Выключается двумя способами:
+// DynamicModules[audioeditor].Enabled=false (dll не грузится) или
+// Subsystems:AudioEditor:Enabled=false (Register не вызывается). В обоих случаях ручек нет — 404.
+//
+// Модуль ссылается только на Core: всё внешнее — швы оттуда, реализации регистрируют другие сборки.
+// Пока ручек нет: регистрируются хранилища нитей и префов, рабочая папка, их жизненный цикл и драйверы.
+public sealed class AudioEditorSubsystem : IAppSubsystem
+{
+    public string Key => "audioeditor";
+
+    public string Title => "Звук";
+
+    public string Description => "Озвучка, музыка и правка звука проекта, версии файлов";
+
+    public void Register(IServiceCollection services, IConfiguration config)
+    {
+        // Нити звука и фокус чата (ADR-021 §2): data/audio-threads, живут и умирают вместе с чатом
+        // по событиям шины session/deleted и session/branched
+        services.AddSingleton(sp => Threads.AudioThreadStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        services.AddHostedService<Threads.AudioThreadLifecycle>();
+        // Запуск, оборванный перезапуском, не висит в «Генерируем…»: сверка при старте
+        services.AddHostedService<Threads.AudioThreadRecovery>();
+        // Префы режима области: data/audio-editor-prefs, их наследуют новые нити и цепочка запуска
+        services.AddSingleton(sp => Prefs.AudioPrefsStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        services.AddSingleton<Prefs.AudioPrefsService>();
+        // Рабочая папка задач (7 дней, вне бэкапа); файлы версий живых нитей чистка не трогает
+        services.AddSingleton(sp =>
+        {
+            var workspace = Jobs.AudioEditWorkspace.FromConfig(sp.GetRequiredService<IConfiguration>());
+            workspace.RetainedJobs = sp.GetRequiredService<Threads.AudioThreadStore>().ReferencedJobs;
+            return workspace;
+        });
+        // Драйверы поставщиков: шов local-media — от отключаемой вертикали Images, поэтому nullable
+        services.AddSingleton<IAudioEngine>(sp =>
+            new Engines.LocalAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ILocalAudioMedia>()));
+    }
+}

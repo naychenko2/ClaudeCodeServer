@@ -59,3 +59,7 @@ export type { CheckboxProps } from './Checkbox';
 export { Chip, ChipX } from './Chip';
 export { ProgressBar } from './ProgressBar';
 export type { ProgressTone } from './ProgressBar';
+export { Tabs } from './Tabs';
+export type { TabItem } from './Tabs';
+export { Stepper } from './Stepper';
+export { ResizeHandle } from './ResizeHandle';

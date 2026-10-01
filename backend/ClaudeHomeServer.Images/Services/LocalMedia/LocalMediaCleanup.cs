@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 

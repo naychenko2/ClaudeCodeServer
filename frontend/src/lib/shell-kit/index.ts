@@ -33,8 +33,13 @@ export {
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
-export { registerSubsystem, REVEAL_PANEL_EVENT } from '../subsystems/registryCore';
-export type { SubsystemManifest } from '../subsystems/registryCore';
+export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel } from '../subsystems/registryCore';
+export type { SubsystemManifest, RevealPanelDetail } from '../subsystems/registryCore';
+
+// ─── genPanelDismissed ───────────────────────────────────────────────────────
+// Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл
+// её в этом чате (ADR-021 §3)
+export { autoRevealGenerationPanel, markGenPanelDismissed } from '../genPanelDismissed';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
@@ -159,8 +164,8 @@ export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 // ─── composerStrips ──────────────────────────────────────────────────────────
 // Владелец полосы над композером просит показать её в чате и снимает запрос
 // (правило старшинства — в самом сторе, ADR-019 решение 3); notifyComposer — сигнал
-// композеру от владельца режима поля ввода
-export { requestStrip, releaseStrip, notifyComposer } from '../composerStrips';
+// композеру от владельца режима поля ввода, submitComposerMode — отправка режима извне
+export { requestStrip, releaseStrip, notifyComposer, submitComposerMode } from '../composerStrips';
 
 // ─── chatFollow ──────────────────────────────────────────────────────────────
 // Запуск по действию человека прокручивает ленту чата вниз, как своё сообщение
@@ -172,3 +177,9 @@ export { onMessage, onReconnected } from '../signalr';
 // ─── features/modelsSpend ────────────────────────────────────────────────────
 // Модалка ядра (её же открывает шапка хаба), а не код MF-модуля spend
 export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
+
+// ─── components/generation ───────────────────────────────────────────────────
+// Общий каркас панели генерации: «Картинки» и «Звук» видят хост только через кит (ADR-021 §3)
+export { GenerationPanel, GEN_PANEL_W, useGenerationSheet } from '../../components/generation/GenerationPanel';
+export type { GenerationFoot, GenerationPanelView } from '../../components/generation/GenerationPanel';
+export type { TabItem } from '../../components/ui';

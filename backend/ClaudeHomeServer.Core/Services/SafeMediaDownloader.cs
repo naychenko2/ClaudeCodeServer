@@ -12,7 +12,8 @@ public sealed record MediaDownloadResult(byte[]? Bytes, string? ContentType, str
 }
 
 /// <summary>
-/// Скачивание результата генерации по ссылке из ответа поставщика (fal, glif, Higgsfield).
+/// Скачивание результата генерации по ссылке из ответа поставщика (fal, glif, Higgsfield)
+/// и загрузка образца по выданной поставщиком ссылке (<see cref="UploadAsync"/>).
 /// Ссылка приходит извне, поэтому сервер не должен стать прокси во внутреннюю сеть:
 /// только https, хост проверяется <see cref="SsrfGuard"/> до запроса и ещё раз в
 /// <c>ConnectCallback</c> по адресу реального соединения (DNS rebinding), редиректы
@@ -50,10 +51,7 @@ public sealed class SafeMediaDownloader
         {
             for (var hop = 0; ; hop++)
             {
-                if (uri.Scheme != Uri.UriSchemeHttps) return MediaDownloadResult.Fail("not-https");
-                var check = await _hostCheck(uri, cts.Token);
-                if (check != SsrfGuard.AddressCheck.Public)
-                    return MediaDownloadResult.Fail(check == SsrfGuard.AddressCheck.DnsFailed ? "dns-failed" : "private-address");
+                if (await RefusalAsync(uri, cts.Token) is { } refused) return MediaDownloadResult.Fail(refused);
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, uri);
                 using var response = await _invoker.SendAsync(request, cts.Token);
@@ -82,6 +80,55 @@ public sealed class SafeMediaDownloader
         {
             return MediaDownloadResult.Fail("network");
         }
+    }
+
+    /// <summary>
+    /// Загрузка байтов PUT-ом по ссылке поставщика (подписанный адрес хранилища из ответа
+    /// media_upload): те же рубежи, что у скачивания, — https, адрес до запроса и в момент
+    /// соединения, без прокси. Редиректу не следуем: тело второй раз не отправляется, и 3xx —
+    /// отказ. null — загружено, иначе код отказа; до отказа по адресу байты не уходят.
+    /// </summary>
+    public async Task<string?> UploadAsync(string url, byte[] bytes, string contentType, CancellationToken ct)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return "bad-url";
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(Timeout);
+        try
+        {
+            if (await RefusalAsync(uri, cts.Token) is { } refused) return refused;
+
+            using var request = new HttpRequestMessage(HttpMethod.Put, uri) { Content = new ByteArrayContent(bytes) };
+            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+            using var response = await _invoker.SendAsync(request, cts.Token);
+            return response.IsSuccessStatusCode ? null : $"http-{(int)response.StatusCode}";
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return "timeout";
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        {
+            return "network";
+        }
+    }
+
+    /// <summary>
+    /// Проверка ссылки без скачивания — для ссылок поставщика, которые сервер не качает сам, а
+    /// передаёт дальше. null — ссылка годится, иначе код отказа, как у <see cref="DownloadAsync"/>.
+    /// </summary>
+    public async Task<string?> CheckAsync(string url, CancellationToken ct) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? await RefusalAsync(uri, ct) : "bad-url";
+
+    private async Task<string?> RefusalAsync(Uri uri, CancellationToken ct)
+    {
+        if (uri.Scheme != Uri.UriSchemeHttps) return "not-https";
+        return await _hostCheck(uri, ct) switch
+        {
+            SsrfGuard.AddressCheck.Public => null,
+            SsrfGuard.AddressCheck.DnsFailed => "dns-failed",
+            _ => "private-address",
+        };
     }
 
     private static bool IsRedirect(HttpStatusCode code) => (int)code is >= 300 and <= 399 and not 304;

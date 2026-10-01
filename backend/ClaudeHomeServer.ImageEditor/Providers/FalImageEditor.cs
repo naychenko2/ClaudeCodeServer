@@ -32,7 +32,7 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
     internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
 
     // Скачивание результата по ссылке fal; тесты подставляют фейковый транспорт
-    internal SafeMediaDownloader Downloader { get; set; } = SafeMediaDownloader.Shared;
+    internal SafeMediaDownloader Downloader { get; init; } = SafeMediaDownloader.Shared;
 
     public FalImageEditor(IHttpClientFactory http, IConfiguration config, ILogger<FalImageEditor> log)
     {

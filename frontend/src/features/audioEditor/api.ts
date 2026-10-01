@@ -219,6 +219,72 @@ export interface AudioJob {
   license: string;
 }
 
+// ── Схема «Дополнительно» (Contracts/AudioParamSchema.cs) ──
+
+export type AudioParamType = 'number' | 'integer' | 'boolean' | 'string' | 'array' | 'object' | 'any';
+
+export interface AudioParamField {
+  key: string;
+  type: AudioParamType;
+  title?: string | null;
+  description?: string | null;
+  default?: unknown;
+  min?: number | null;
+  max?: number | null;
+  maxLength?: number | null;
+  enum?: (string | number)[] | null;
+  items?: AudioParamField | null;
+  fields?: AudioParamField[] | null;
+  nullable?: boolean;
+  format?: string | null;
+  // false — движок параметр знает, но шов поставщика его пока не принимает
+  passed?: boolean;
+  notPassed?: string | null;
+}
+
+export interface AudioParamSchema {
+  provider: string;
+  model: string;
+  source: string;
+  fields: AudioParamField[];
+  reserved: string[];
+  stale?: boolean;
+}
+
+// ── Правка без ИИ и склейка (Controllers/AudioEditorDtos.cs) ──
+
+export type AudioFileFormat = 'wav' | 'mp3' | 'flac' | 'ogg';
+
+export interface AudioDspEditRequest {
+  op: 'trim' | 'gainFade' | 'normalize' | 'convert';
+  baseVersionId?: string | null;
+  startSec?: number | null;
+  endSec?: number | null;
+  fadeInSec?: number | null;
+  fadeOutSec?: number | null;
+  gainDb?: number | null;
+  targetLufs?: number | null;
+  format?: AudioFileFormat | null;
+  revision?: number | null;
+}
+
+export interface AudioDspVersion { threadId: string; versionId: string; number: number; jobId: string; state: AudioThreadsState }
+
+export type AudioJointKind = 'butt' | 'pause' | 'crossfade';
+export interface AudioJoint { kind: AudioJointKind; seconds: number }
+export interface AudioConcatPiece { threadId?: string | null; versionId?: string | null; projectFile?: string | null }
+
+export interface AudioConcatRequest {
+  pieces: AudioConcatPiece[];
+  joint?: AudioJoint | null;
+  joints?: (AudioJoint | null)[] | null;
+  normalizeLoudness?: boolean;
+  name?: string | null;
+  format?: AudioFileFormat | null;
+}
+
+export interface AudioConcatResult { threadId: string; versionId: string; jobId: string; name: string }
+
 export interface AudioSaveRequest { versionId?: string | null; mode?: 'nextVersion' | 'as'; folder?: string | null; fileName?: string | null }
 // path — главный файл, files — все записанные (стемы, субтитры) от корня проекта
 export interface AudioSaveResult { path: string; files: string[] }
@@ -349,6 +415,13 @@ export const audioApi = {
     json<AudioThreadsState>(`${threadUrl(scope, sessionId, threadId)}/settings`, { settings, revision }, 'PUT'),
   current: (scope: string, sessionId: string, threadId: string, versionId: string, revision: number) =>
     json<AudioThreadsState>(`${threadUrl(scope, sessionId, threadId)}/current`, { versionId, revision }, 'PUT'),
+  // Схема «Дополнительно»: ручка вне области, id модели fal содержит «/» — всё в query
+  schema: (provider: string, model: string, op: AudioOp) =>
+    request<AudioParamSchema>(`/audio-editor/schema?${new URLSearchParams({ provider, model, op })}`, { live: true }),
+  edit: (scope: string, sessionId: string, threadId: string, req: AudioDspEditRequest) =>
+    json<AudioDspVersion>(`${threadUrl(scope, sessionId, threadId)}/edit`, req, 'POST', 120_000),
+  concat: (scope: string, sessionId: string, req: AudioConcatRequest) =>
+    json<AudioConcatResult>(`${chatBase(scope, sessionId)}/concat`, req, 'POST', 300_000),
   // Сохранить в проект — только у проекта: у личного чата ручки нет, отказ до запроса
   save: (scope: string, sessionId: string, threadId: string, req: AudioSaveRequest) => {
     if (isPersonalScope(scope)) throw new Error('У личного чата нет проекта — версию можно только скачать');

@@ -11,7 +11,7 @@ import { MODE_LABEL, opInfo } from '../ops';
 import { audioScope } from '../scope';
 import { stripModel } from '../strip/SoundStrip';
 import { launchFromComposer } from '../thread/actions';
-import { getFocusedThread, getSoundModeRequest, SOUND_STRIP, useAudioThreads } from '../thread/threadStore';
+import { getFocusedThread, getSoundModeRequest, setComposerText, SOUND_STRIP, useAudioThreads } from '../thread/threadStore';
 
 function useModel(ctx: ComposerModeCtx) {
   const state = useAudioThreads(audioScope(ctx.projectId), ctx.sessionId);
@@ -59,6 +59,7 @@ export const soundMode: ComposerModeApi = {
   placeholder: ctx => soundPlaceholder(ctx.projectId, ctx.sessionId),
   submitLabel: ctx => <SubmitLabel ctx={ctx} />,
   hint: ctx => <Hint ctx={ctx} />,
+  onTextChange: (ctx, text) => { if (ctx.sessionId) setComposerText(ctx.sessionId, text); },
   onSubmit: async (ctx, text) => {
     const t = getFocusedThread(ctx.sessionId);
     if (!t || !ctx.sessionId) return;

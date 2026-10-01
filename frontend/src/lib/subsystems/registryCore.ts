@@ -277,6 +277,9 @@ export interface ComposerModeApi {
   hint?: (ctx: ComposerModeCtx) => ReactNode;
   // Отправка мимо агента; текст режима хранится отдельно от черновика чата
   onSubmit: (ctx: ComposerModeCtx, text: string) => Promise<void> | void;
+  // Текст поля режима после каждой правки: панель режима считает по нему цену и
+  // запускает с ним же свою кнопку («Звук»)
+  onTextChange?: (ctx: ComposerModeCtx, text: string) => void;
 }
 
 // Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).

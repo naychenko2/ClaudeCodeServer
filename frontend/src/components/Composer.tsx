@@ -623,6 +623,10 @@ export function Composer({
   // Режим пропал (условие стало ложным) — поле само возвращается в «Чат»
   const activeMode = slotModes.find(c => c.name === modeId)?.action ?? null;
   const [modeText, setModeText] = useState('');
+  useEffect(() => {
+    activeMode?.onTextChange?.(modeCtx, modeText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сообщаем только смену текста или режима
+  }, [modeText, modeId, sessionId]);
   // Затравка поля режима (например, промпт последнего запуска картинки) — правила в
   // nextPrefill. Считаем от значения поля этого рендера, а не в updater'е setModeText:
   // updater с записью в ref StrictMode зовёт дважды

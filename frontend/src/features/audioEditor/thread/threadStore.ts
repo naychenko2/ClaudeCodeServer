@@ -36,6 +36,8 @@ const _jobs = new Map<string, JobProgress>();
 // Режим, выбранный ярлыком «Голос» / «Музыка» в чате: по нему сводка без нити и новый звук
 const _shortcutMode = new Map<string, AudioMode>();
 const _modeRequests = new Map<string, number>();
+// Текст поля режима «Звук» по чатам: панель считает по нему цену и запускает с ним
+const _composerText = new Map<string, string>();
 let _version = 0;
 const _listeners = new Set<() => void>();
 let _unsub: (() => void) | null = null;
@@ -151,6 +153,12 @@ export function getFocusedThread(sessionId: string | null): AudioThread | null {
 export const getCatalog = (scope: string): AudioCatalog | null => _catalogs.get(scope) ?? null;
 export const getPrefs = (scope: string): AudioPrefs => _prefs.get(scope) ?? NO_PREFS;
 
+// Ответ PUT prefs — сразу в стор, не дожидаясь audio_prefs_changed
+export function setScopePrefs(scope: string, prefs: AudioPrefs) {
+  _prefs.set(scope, prefs);
+  emit();
+}
+
 // Идущие задачи нити (или чата, если нить не задана) — для бейджа очереди GPU
 export function getJobsOf(sessionId: string | null, threadId: string | null): JobProgress[] {
   if (!sessionId) return [];
@@ -211,6 +219,17 @@ export function getSoundModeRequest(sessionId: string | null): number {
   return (sessionId && _modeRequests.get(sessionId)) || 0;
 }
 
+export function getComposerText(sessionId: string | null): string {
+  return (sessionId && _composerText.get(sessionId)) || '';
+}
+
+export function setComposerText(sessionId: string, text: string) {
+  if ((_composerText.get(sessionId) ?? '') === text) return;
+  if (text) _composerText.set(sessionId, text);
+  else _composerText.delete(sessionId);
+  emit();
+}
+
 // Сброс — только для тестов
 export function __resetAudioStore() {
   _entries.clear();
@@ -219,6 +238,7 @@ export function __resetAudioStore() {
   _jobs.clear();
   _shortcutMode.clear();
   _modeRequests.clear();
+  _composerText.clear();
   emit();
 }
 

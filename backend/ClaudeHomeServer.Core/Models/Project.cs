@@ -4,7 +4,9 @@
 // обращения: в старом сторе им была растровая картинка (Image), enum лежит на диске
 // числом, и без явных номеров каждая старая запись молча стала бы «значковой» с пустым
 // значком. Ту же дисциплину обязан соблюдать любой, кто добавит сюда новое значение.
-public enum ProjectIconKind { Initials = 0, Glyph = 2 }
+// Image = 3 — картинка, загруженная владельцем (ревизия ADR-009 от 01.10.2026); номер 1
+// по-прежнему не используется: старая растровая запись не должна стать «новой картинкой».
+public enum ProjectIconKind { Initials = 0, Glyph = 2, Image = 3 }
 
 // Тег проекта — элемент реестра общих тегов (имя, порядок, цвет)
 public sealed class ProjectTag
@@ -14,8 +16,9 @@ public sealed class ProjectTag
     public string? Color { get; set; }
 }
 
-// Иконка проекта: инициалы+цвет по умолчанию, подобранный значок опционально.
-// Файлов у иконки больше нет — значок это данные записи, а не ассет (ADR-009 §6).
+// Иконка проекта: инициалы+цвет по умолчанию, подобранный значок или загруженная
+// владельцем картинка опционально. Значок — данные записи (ADR-009 §6), картинка —
+// файл в data/project-icon-images/{id}/ (ревизия ADR-009 от 01.10.2026).
 public class ProjectIcon
 {
     public ProjectIconKind Kind { get; set; } = ProjectIconKind.Initials;
@@ -23,6 +26,9 @@ public class ProjectIcon
     public string? Color { get; set; }
     // Подобранный значок; null — не подбирался. Заполнен ⇔ Kind может быть Glyph.
     public ProjectGlyph? Glyph { get; set; }
+    // Имя файла загруженной картинки (icon-{guid}.{ext}), оно же cache-buster у GET
+    // icon/image; null — картинку не загружали. Заполнен ⇔ Kind может быть Image.
+    public string? ImageFile { get; set; }
 }
 
 // Значок (ADR-009 §6): имя иконки из белого списка lucide. Рисованные моделью пути

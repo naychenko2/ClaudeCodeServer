@@ -43,6 +43,10 @@ public class ProjectManager : IProjectManager
     // В бэкап едут по общему правилу — исключений и своего способа копирования не требуют.
     public string BackgroundsDir => Path.Combine(Path.GetDirectoryName(_storePath)!, "project-backgrounds");
 
+    // Загруженные картинки иконок: data/project-icon-images/{id}/icon-{guid}.{ext}.
+    // НЕ project-icons: тот каталог сносит на старте миграция ADR-009 (ProjectIconMigration).
+    public string IconImagesDir => Path.Combine(Path.GetDirectoryName(_storePath)!, "project-icon-images");
+
     // Container-пользователь заперт в корне песочницы: путь вне него claude не увидит
     // (в контейнер монтируется только Sandbox:ProjectsRoot), а FileService увидел бы хост —
     // расхождение недопустимо
@@ -326,6 +330,28 @@ public class ProjectManager : IProjectManager
         return project;
     }
 
+    // Поставить загруженную картинку иконкой: байты уже проверены вызывающим
+    // (ProjectIconImage.Detect). Новый файл пишется под новым именем — оно же cache-buster,
+    // прежний удаляется после сохранения стора.
+    public Project SetIconImage(string id, byte[] content, string extension)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        var dir = Path.Combine(IconImagesDir, id);
+        Directory.CreateDirectory(dir);
+        var file = $"icon-{Guid.NewGuid():N}.{extension}";
+        File.WriteAllBytes(Path.Combine(dir, file), content);
+
+        var previous = project.Icon.ImageFile;
+        project.Icon.Kind = ProjectIconKind.Image;
+        project.Icon.ImageFile = file;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        if (!string.IsNullOrEmpty(previous))
+            try { File.Delete(Path.Combine(dir, previous)); } catch { /* не критично */ }
+        return project;
+    }
+
     // Установить значок фоновой миграцией (ADR-009 §10). Отличается от SetIconGlyph двумя
     // вещами: UpdatedAt НЕ трогаем — по нему сортируется список проектов, и массовая
     // миграция перетасовала бы его целиком (та же причина, что у методов фона ниже); а
@@ -336,7 +362,9 @@ public class ProjectManager : IProjectManager
         lock (_saveLock)
         {
             var project = _projects.GetValueOrDefault(id);
-            if (project is null || project.Icon.Glyph is not null) return false;
+            // Загруженная картинка — явный выбор владельца, значок поверх неё не ставим
+            if (project is null || project.Icon.Glyph is not null
+                || project.Icon.Kind == ProjectIconKind.Image) return false;
             project.Icon.Kind = ProjectIconKind.Glyph;
             project.Icon.Glyph = glyph;
             JsonFileStore.Save(_storePath, _projects.Values.ToList());
@@ -593,14 +621,17 @@ public class ProjectManager : IProjectManager
         var removed = _projects.TryRemove(id, out _);
         if (removed)
         {
-            // Ассетов у иконки больше нет (ADR-009 §6) — чистим только тайлы фона:
-            // осиротевших файлов не остаётся, сборщика сирот не требуется
-            try
+            // Тайлы фона и загруженная картинка иконки: осиротевших файлов не остаётся,
+            // сборщика сирот не требуется
+            foreach (var root in new[] { BackgroundsDir, IconImagesDir })
             {
-                var dir = Path.Combine(BackgroundsDir, id);
-                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+                try
+                {
+                    var dir = Path.Combine(root, id);
+                    if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+                }
+                catch { /* не критично */ }
             }
-            catch { /* не критично */ }
             Save();
         }
         return removed;

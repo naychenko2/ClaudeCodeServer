@@ -101,6 +101,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
             icon.Glyph.SetAt,
             V = GlyphVersion(icon.Glyph),
         },
+        // Имя файла своей картинки — оно же cache-buster у GET icon/image (ревизия 01.10.2026)
+        icon.ImageFile,
     };
 
     // Первые 8 hex от SHA-256 содержимого значка: меняется вместе со значком,
@@ -561,11 +563,10 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     // --- Значок проекта (ADR-009 §8) ---
-    // Растровый путь (caps/generate/candidate/set-image/upload/recrop/original/GET icon)
-    // удалён вместе с ассетами: значок — данные записи, разметку собирает сервер.
+    // Генерация растровых иконок удалена (ADR-009); своя картинка владельца вернулась
+    // ревизией 01.10.2026 — icon/upload и GET icon/image ниже, без кропа и генерации.
 
-    // Подобрать кандидатов значка: до четырёх вперемешку (имена из набора lucide +
-    // нарисованные пути). Стор НЕ меняется — принятие отдельным вызовом select. Любой
+    // Подобрать кандидатов значка: до четырёх имён из набора lucide. Стор НЕ меняется — принятие отдельным вызовом select. Любой
     // сбой (место не настроено, битый JSON, ни одного годного) = пустой набор с причиной:
     // проект остаётся на инициалах, это фолбэк, а не ошибка (ADR-009 §7).
     [HttpPost("{id}/icon/suggest")]
@@ -635,13 +636,57 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         {
             "initials" => ProjectIconKind.Initials,
             "glyph" => ProjectIconKind.Glyph,
+            "image" => ProjectIconKind.Image,
             _ => (ProjectIconKind?)null,
         };
-        if (kind is null) return BadRequest(new { error = "Режим должен быть 'initials' или 'glyph'" });
+        if (kind is null) return BadRequest(new { error = "Режим должен быть 'initials', 'glyph' или 'image'" });
         if (kind == ProjectIconKind.Glyph && p.Icon.Glyph is null)
             return BadRequest(new { error = "У проекта нет значка — сначала подберите его" });
+        if (kind == ProjectIconKind.Image && p.Icon.ImageFile is null)
+            return BadRequest(new { error = "У проекта нет картинки — сначала загрузите её" });
 
         return Ok(WithCount(projects.SetIconKind(id, kind.Value)));
+    }
+
+    // Загрузить свою картинку иконкой (ревизия ADR-009 от 01.10.2026): svg/png/jpg/webp/ico
+    // до 512 КБ, без кропа — плитка вписывает её как есть. Формат — по байтам
+    // (ProjectIconImage.Detect), имя и Content-Type от клиента не используются вовсе.
+    [HttpPost("{id}/icon/upload")]
+    [RequestSizeLimit(1_000_000)]
+    public async Task<ActionResult> UploadIconImage(string id, [FromForm] IFormFile? file)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (file is null || file.Length == 0) return BadRequest(new { error = "Файл не передан" });
+        if (file.Length > Services.ProjectIcons.ProjectIconImage.MaxBytes)
+            return BadRequest(new { error = "Картинка больше 512 КБ" });
+
+        using var buffer = new MemoryStream();
+        await file.CopyToAsync(buffer, HttpContext.RequestAborted);
+        var bytes = buffer.ToArray();
+        if (Services.ProjectIcons.ProjectIconImage.Detect(bytes) is not { } format)
+            return BadRequest(new { error = "Нужна картинка SVG, PNG, JPG, WebP или ICO" });
+
+        return Ok(WithCount(projects.SetIconImage(id, bytes, format.Extension)));
+    }
+
+    // Отдать загруженную картинку. access_token в query — запрос идёт из <img>, заголовок
+    // туда браузер не поставит. v — только cache-buster: имя файла берётся из стора, из
+    // запроса путь не строится никогда. CSP закрывает скрипты SVG при прямом открытии URL.
+    [HttpGet("{id}/icon/image")]
+    public IActionResult IconImage(string id)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId || p.Icon.ImageFile is not { } file) return NotFound();
+        var contentType = Services.ProjectIcons.ProjectIconImage.ContentTypeOf(file);
+        var full = Path.Combine(projects.IconImagesDir, id, file);
+        if (contentType is null || !System.IO.File.Exists(full)) return NotFound();
+
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        Response.Headers.ContentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'";
+        // Имя файла меняется при каждой загрузке, поэтому кеш безопасно долгий
+        Response.Headers.CacheControl = "private, max-age=604800, immutable";
+        return PhysicalFile(full, contentType);
     }
 }
 

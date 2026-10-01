@@ -45,8 +45,10 @@ public sealed class ProjectIconMigration(
     // гнать миграцию параллельно — каждая попытка это ход модели
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
-    /// <summary>Кандидат прогона — только проект, у которого значка нет (ADR-009 §10).</summary>
-    internal static bool IsCandidate(Project project) => project.Icon.Glyph is null;
+    /// <summary>Кандидат прогона — только проект, у которого значка нет (ADR-009 §10).
+    /// Проект с загруженной картинкой не кандидат: это явный выбор владельца.</summary>
+    internal static bool IsCandidate(Project project) =>
+        project.Icon.Glyph is null && project.Icon.Kind != ProjectIconKind.Image;
 
     // Каталог растровых иконок — тот же вывод DataDir, что у BackupContext.FromConfiguration
     // и ProjectManager.BackgroundsDir: все сторы живут рядом с projects.json

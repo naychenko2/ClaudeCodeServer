@@ -4139,6 +4139,10 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     var timeout = WatchdogFor(run);
                     var completed = await Task.WhenAny(pendingRead, Task.Delay(timeout, delayCts.Token));
+                    // Delay связан с ct: отмена сессии (dispose/рестарт) завершает его мгновенно и
+                    // выглядит как «тишина». Это не молчание модели — ошибку не шлём, уборку сделает finally
+                    if (completed != pendingRead && ct.IsCancellationRequested)
+                        break;
                     if (completed != pendingRead)
                     {
                         // Тишина дольше таймаута. Пока ждали, мог начаться same-process ход —

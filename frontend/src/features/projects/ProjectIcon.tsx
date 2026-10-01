@@ -46,12 +46,11 @@ function ProjectGlyph({ project, size }: { project: Project; size: number }) {
   );
 }
 
-// Загруженная владельцем картинка: светлая плитка, картинка вписана как есть (contain,
-// родные цвета, без кропа). Только <img> — разметку SVG в DOM не вставляем никогда:
-// скрипты внутри картинки так не выполнятся. Не загрузилась (файл пропал, офлайн) —
-// инициалы, пустой плитки не бывает (ADR-009 §7).
-const IMAGE_INSET = 0.1;
-
+// Загруженная владельцем картинка: занимает плитку целиком и обрезается её скруглением,
+// без своей подложки и полей — у иконок приложений подложка уже нарисована, и вторая
+// давала рамку в рамке. Вписана как есть (contain, родные цвета, без кропа). Только
+// <img> — разметку SVG в DOM не вставляем никогда: скрипты внутри картинки так не
+// выполнятся. Не загрузилась (файл пропал, офлайн) — инициалы (ADR-009 §7).
 function ProjectImageTile({ project, src, base, size, radius, muted }: {
   project: Project; src: string; base: React.CSSProperties; size: number; radius: number; muted?: boolean;
 }) {
@@ -60,14 +59,14 @@ function ProjectImageTile({ project, src, base, size, radius, muted }: {
     return <ProjectIcon project={{ ...project, icon: { ...project.icon!, kind: 'initials' } }}
       size={size} radius={radius} muted={muted} />;
   }
-  const pad = Math.round(size * IMAGE_INSET);
   return (
     <div
       aria-hidden
       style={{
         ...base,
-        background: C.bgWhite, border: `1px solid ${C.border}`, boxSizing: 'border-box',
-        padding: pad, opacity: muted ? 0.6 : 1, overflow: 'hidden',
+        overflow: 'hidden',
+        // Спящий ряд — монохром, как у инициалов и значка: цветной логотип не должен пестрить
+        ...(muted ? { filter: 'grayscale(1)', opacity: 0.6 } : null),
       }}
     >
       <img

@@ -96,7 +96,9 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
         + BandProviderRule + "; если стоит «по умолчанию» — " + ProviderLocalException + ". "
         + "Если блока нет — local_generate_image, правка по образцам — local_edit_image.\n"
         + "Видео: local_text_to_video, local_image_to_video, local_reference_to_video.\n"
-        + "Звук и музыка — как раньше: локальных моделей для них нет.\n"
+        + "Звук и музыка: озвучка — local_speech, песни — local_music_generate, правка трека — local_music_edit; "
+        + "обработка — local_audio_separate, local_audio_enhance, local_audio_to_midi, local_transcribe, "
+        + "local_voice_convert, local_voice_train.\n"
         + NoticeRule;
 
     // Личный чат: local-media здесь нет, локальная картинка — только драйвер local редактора
@@ -105,6 +107,6 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
         + "; если стоит «по умолчанию» или блока нет — " + ProviderLocalException
         + ". local-media в этом чате нет.\n"
         + PersonalNoVideoRule + "\n"
-        + "Звук и музыка — как раньше: локальных моделей для них нет.\n"
+        + "Звук и музыка: локальных моделей в этом чате нет — скажи прямо и предложи облако.\n"
         + NoticeRule;
 }

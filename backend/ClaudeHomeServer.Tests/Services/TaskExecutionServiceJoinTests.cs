@@ -37,6 +37,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
     private readonly TaskExecutionService _sut;
     private readonly UserStore _userStore;
     private readonly TestSessionBroadcaster _broadcaster;
+    private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
 
     public TaskExecutionServiceJoinTests()
     {
@@ -76,7 +77,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var sessions = CreateSessionManager(config, projectManager, userStore, appSettings, personas, knowledge, notesKb, broadcaster);
 
         _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notif,
-            NullLogger<TaskExecutionService>.Instance, config, kb: notesKb);
+            NullLogger<TaskExecutionService>.Instance, config, subagentRuns: _subagentRuns, kb: notesKb);
     }
 
     public void Dispose()
@@ -353,6 +354,42 @@ public class TaskExecutionServiceJoinTests : IDisposable
         _tasks.GetById(task.Id)!.CompletionDelivered.Should().BeFalse();
         (await CountNotificationsAsync(task.OwnerId!)).Should().Be(0);
     }
+
+    // ─── «Стоп» оборвал сабагентов: отметка не переживает прерванный ход ──────
+    // Случай 2026-10-01: «Стоп» оборвал двух scout'ов (паспорта Truncated, FinishedBy =
+    // interrupted), прерванный ход result не дал, и отметка «сабагент оборван» съела итог
+    // следующего успешного хода — ClaudeResult не встал, доклад постановщику не ушёл никогда.
+    [Fact]
+    public async Task OnSessionMessageAsync_ОбрывСабагентовСтопомВПрошломХоде_ДокладУходит()
+    {
+        var task = CreateTrackedTask();
+        var session = new Session { Id = "sess-1", OwnerId = task.OwnerId };
+
+        // Ход 1: «Стоп» — паспорта оборванных агентов пришли, result нет
+        _subagentRuns.Record(InterruptedPassport("scout-1"));
+        _subagentRuns.Record(InterruptedPassport("scout-2"));
+        await _sut.MarkStoppedByUserAsync("sess-1");
+
+        // Ход 2: исполнитель доделал и закрыл задачу (D), затем штатный result (R)
+        await _sut.ResumeAfterUserStopAsync("sess-1");
+        var tracked = _tasks.GetById(task.Id)!;
+        tracked.Status = TaskItemStatus.Done;
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+
+        var after = _tasks.GetById(task.Id)!;
+        after.ClaudeResult.Should().Be("success", "обрыв «Стопом» прошлого хода не делает этот ход оборванным");
+        after.CompletionDelivered.Should().BeTrue();
+        (await CountNotificationsAsync(task.OwnerId!)).Should().Be(1);
+    }
+
+    private static SubagentRunPassport InterruptedPassport(string agentId) =>
+        new(AgentId: agentId, AgentType: "scout", Description: "Разведка", SessionId: "sess-1",
+            ToolUseId: "toolu_" + agentId, StartedAt: DateTime.UtcNow.AddSeconds(-60),
+            LastActivityAt: DateTime.UtcNow, DurationSeconds: 60, ToolUses: 3,
+            AssistantMessages: 4, Prompts: 1, ContextTokens: 20_000, OutputTokens: 500,
+            LastStopReason: "tool_use", Truncated: true, LastTool: "Grep", Model: "claude-opus-5",
+            TranscriptBytes: 1024, NudgeAttempts: 0, Partial: false, FinishedBy: "interrupted",
+            RecordedAt: DateTime.UtcNow);
 
     // ─── (д) дедупликация: о факте завершения — ровно одно уведомление ──────
     // Постановщик-персона и владелец задачи — всегда один человек (персоны per-owner,

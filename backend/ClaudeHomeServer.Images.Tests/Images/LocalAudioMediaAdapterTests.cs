@@ -267,6 +267,35 @@ public class LocalAudioMediaAdapterTests
         _comfy.Prompts.Should().BeEmpty();
     }
 
+    // Отказы общей сборки графа доходят и до адаптера: проверки не живут только в local_* инструментах
+    [Fact]
+    public async Task Описание_стиля_ACE_по_общему_пределу()
+    {
+        var adapter = Build();
+
+        var over = await adapter.SubmitAsync(new LocalAudioRequest(LocalAudioOp.MusicEdit,
+            Prompt: new string('а', LocalMediaService.AceCaptionMaxChars + 1),
+            Args: new JsonObject { ["task"] = "cover" }, Audio: Wav(1)), default);
+
+        over.Error.Should().Be($"Описание стиля для ACE-Step — не длиннее {LocalMediaService.AceCaptionMaxChars} "
+            + $"символов, сейчас {LocalMediaService.AceCaptionMaxChars + 1}.");
+        _comfy.Uploads.Should().BeEmpty();
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SeedVC_speech_со_сдвигом_высоты_отказ()
+    {
+        var adapter = Build();
+
+        var over = await adapter.SubmitAsync(new LocalAudioRequest(LocalAudioOp.VoiceConvert,
+            Args: new JsonObject { ["pitch_shift"] = 3 }, Audio: Wav(1), Reference: Wav(1)), default);
+
+        over.Error.Should().StartWith("Seed-VC в режиме speech сдвиг высоты не применяет");
+        _comfy.Uploads.Should().BeEmpty();
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
     [Fact]
     public void ETA_по_общим_формулам_без_загрузок_в_ComfyUI()
     {

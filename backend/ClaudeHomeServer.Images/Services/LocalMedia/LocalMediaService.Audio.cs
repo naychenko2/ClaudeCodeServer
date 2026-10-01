@@ -18,6 +18,11 @@ public sealed partial class LocalMediaService
     // Образец голоса для клона: хватает 5–15 с чистой речи
     public const int MaxReferenceSeconds = 60;
 
+    // Описание стиля для ACE-Step: воркер правки (worker_acestep.py) молча режет prompt до 2000,
+    // поведение энкодера на большей длине не проверено — отказываем заранее на обоих путях ace.
+    // Сверку с воркером держит тест-сторож
+    public const int AceCaptionMaxChars = 2000;
+
     public static readonly IReadOnlyList<string> MusicEngines = ["ace", "yue2", "minimax"];
     public static readonly IReadOnlyList<string> MusicEditTasks = ["cover", "repaint", "extract", "lego", "complete"];
     public static readonly IReadOnlyList<string> AceTracks =
@@ -126,6 +131,7 @@ public sealed partial class LocalMediaService
                     return await BuildYuE2CoverAsync(a, job, inputs, prompt, task, seed, prefix, maxAudioInputSeconds, ct);
                 if (task is "cover" or "repaint" && prompt.Length == 0)
                     throw new LocalMediaInputException("Для cover и repaint нужен prompt — стиль и содержание результата.");
+                CheckAceCaption(prompt);
                 var (name, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 var p = new JsonObject { ["task"] = task, ["prompt"] = prompt, ["seed"] = seed };
                 if (Str(a, "lyrics") is { } lyrics) p["lyrics"] = Limit(lyrics, ComfyWorkflows.MaxLyricsLength, "lyrics");
@@ -163,12 +169,16 @@ public sealed partial class LocalMediaService
             case LocalMediaOps.VoiceConvert:
             {
                 var engine = OneOf(a, "engine", "seedvc", ["seedvc", "rvc"]);
-                var (source, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 var shift = (int)Range(a, "pitch_shift", 0, -24, 24);
+                var mode = engine == "seedvc" ? OneOf(a, "mode", "speech", ["speech", "singing"]) : null;
+                // Модель v2 режима speech сдвига высоты не умеет: молча отдать исходную высоту хуже отказа
+                if (mode == "speech" && shift != 0)
+                    throw new LocalMediaInputException("Seed-VC в режиме speech сдвиг высоты не применяет: уберите "
+                        + "pitch_shift или возьмите mode=singing / engine=rvc.");
+                var (source, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 job.Engine = engine;
-                if (engine == "seedvc")
+                if (mode != null)
                 {
-                    var mode = OneOf(a, "mode", "speech", ["speech", "singing"]);
                     var (target, _) = await AudioInputAsync(inputs, job, Required(a, "reference"), "ref", maxAudioInputSeconds, ct);
                     var p = new JsonObject { ["mode"] = mode, ["pitch_shift"] = shift };
                     return (ComfyWorkflows.AudioWorker("voice_convert", p, [source, target], job.Id, 30),
@@ -304,6 +314,7 @@ public sealed partial class LocalMediaService
         {
             case "ace":
             {
+                CheckAceCaption(prompt);
                 var language = Str(a, "language") ?? "unknown";
                 if (!ComfyWorkflows.AceLanguages.Contains(language))
                     throw new LocalMediaInputException("language — код языка вокала (ru, en, …) или unknown.");
@@ -324,6 +335,13 @@ public sealed partial class LocalMediaService
             default:
                 return (ComfyWorkflows.MiniMaxMusic(prompt, lyrics, seconds, seed, prefix), MiniMaxMusicEta(seconds));
         }
+    }
+
+    private static void CheckAceCaption(string prompt)
+    {
+        if (prompt.Length > AceCaptionMaxChars)
+            throw new LocalMediaInputException(
+                $"Описание стиля для ACE-Step — не длиннее {AceCaptionMaxChars} символов, сейчас {prompt.Length}.");
     }
 
     private static async Task<(JsonObject Graph, int? EtaSeconds)> BuildSpeechAsync(JsonObject a, AudioBuildInfo job,

@@ -25,7 +25,7 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
     private readonly string _url = config["Higgsfield:McpUrl"] ?? DefaultUrl;
     private int _rpcId;
 
-    // Скачивание результата по ссылке Higgsfield; тесты модулей подставляют фейковый транспорт при
+    // Скачивание результата и загрузка образца по ссылкам Higgsfield; тесты модулей подставляют фейковый транспорт при
     // создании клиента (клиент в Core, тесты в сборках вертикалей), а после создания загрузчик не
     // подменить: иначе любой код с доступом к singleton обошёл бы SsrfGuard
     public SafeMediaDownloader Downloader { get; init; } = SafeMediaDownloader.Shared;
@@ -83,20 +83,10 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
         return new HiggsfieldCall(!isError, false, body.ToString(), result["structuredContent"]);
     }
 
-    public async Task<bool> PutAsync(string url, byte[] bytes, string contentType, CancellationToken ct)
-    {
-        using var req = new HttpRequestMessage(HttpMethod.Put, url) { Content = new ByteArrayContent(bytes) };
-        req.Content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
-        try
-        {
-            using var resp = await Client().SendAsync(req, ct);
-            return resp.IsSuccessStatusCode;
-        }
-        catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException && !ct.IsCancellationRequested)
-        {
-            return false;
-        }
-    }
+    // Адрес загрузки приходит в ответе media_upload, то есть извне: PUT идёт тем же транспортом,
+    // что и скачивание (SsrfGuard до запроса и при соединении, без прокси), а не клиентом MCP
+    public async Task<bool> PutAsync(string url, byte[] bytes, string contentType, CancellationToken ct) =>
+        await Downloader.UploadAsync(url, bytes, contentType, ct) is null;
 
     // Результат поставщика: data:-ссылка разбирается на месте, внешняя — только через
     // SafeMediaDownloader (SSRF, потолок maxBytes задаёт вызывающий по виду медиа).

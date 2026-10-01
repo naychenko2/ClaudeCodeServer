@@ -343,6 +343,31 @@ public sealed class HiggsfieldAudioEngineTests
         media["value"]!.ToString().Should().Be(MediaId);
     }
 
+    // Адрес загрузки приходит в ответе media_upload, то есть извне: внутренний адрес — отказ,
+    // образец голоса туда не уходит, media_confirm и запуск не вызываются
+    [Theory]
+    [InlineData("https://169.254.169.254/latest/meta-data")]
+    [InlineData("https://127.0.0.1:9000/bucket/ref.wav")]
+    public async Task Run_Clone_UploadUrlToInternalNetwork_RefusedWithoutSendingBytes(string uploadUrl)
+    {
+        var http = new FakeHttp(c => FakeHttp.Tool(c) == "media_upload"
+            ? FakeHttp.McpText($"Upload URLs:\n- {MediaId}: run curl -X PUT --data-binary @reference.wav '{uploadUrl}'.")
+            : Happy(c));
+        // Загрузчик с настоящим SsrfGuard: адрес проверяется так же, как в бою
+        var engine = new HiggsfieldAudioEngine(FakeHttp.Client(http, downloader: new SafeMediaDownloader(http)))
+            { PollInterval = TimeSpan.Zero };
+        await engine.RefreshModelsAsync(CancellationToken.None);
+        var request = new AudioRequest(AudioOp.CloneVoice, "seed_audio", Scope, Text: "Скажи это моим голосом",
+            Reference: new AudioBytes([1, 2, 3], "audio/wav"));
+
+        var result = await engine.RunAsync(request, NoProgress, CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Unavailable);
+        http.Calls.Should().NotContain(c => c.Method == HttpMethod.Put);
+        http.Calls.Should().NotContain(c => FakeHttp.Tool(c) == "media_confirm" || c.Url == uploadUrl);
+        Launches(http).Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Run_CloneWithoutReference_Rejected()
     {

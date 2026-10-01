@@ -204,4 +204,69 @@ public class SafeMediaDownloaderTests
         result.Error.Should().Be("network");
         listener.Pending().Should().BeFalse("до цели не должно дойти ни одного соединения");
     }
+
+    // ── Загрузка PUT-ом по ссылке поставщика ─────────────────────────────────────
+
+    [Fact]
+    public async Task Загрузка_ВнешнийАдрес_PutСТеломИТипом()
+    {
+        HttpMethod? method = null;
+        byte[]? body = null;
+        string? type = null;
+        var http = new Route(r =>
+        {
+            method = r.Method;
+            body = r.Content!.ReadAsByteArrayAsync().Result;
+            type = r.Content.Headers.ContentType?.MediaType;
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+
+        var error = await new SafeMediaDownloader(http, LiteralsOnly).UploadAsync("https://s3.example/ref.wav", [1, 2, 3], "audio/wav", default);
+
+        error.Should().BeNull();
+        method.Should().Be(HttpMethod.Put);
+        body.Should().Equal(1, 2, 3);
+        type.Should().Be("audio/wav");
+    }
+
+    [Theory]
+    [InlineData("https://127.0.0.1/ref.wav", "private-address")]
+    [InlineData("https://169.254.169.254/latest/meta-data", "private-address")]
+    [InlineData("https://localhost/ref.wav", "private-address")]
+    [InlineData("http://s3.example/ref.wav", "not-https")]
+    [InlineData("не ссылка", "bad-url")]
+    public async Task Загрузка_НеПубличныйАдрес_Отказ_БезЗапроса(string url, string expected)
+    {
+        var http = new Route(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        // Проверка по умолчанию — настоящий SsrfGuard
+        var error = await new SafeMediaDownloader(http).UploadAsync(url, [1, 2, 3], "audio/wav", default);
+
+        error.Should().Be(expected);
+        http.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Загрузка_Редирект_Отказ_ТелоВторойРазНеУходит()
+    {
+        var http = new Route(_ => Redirect("https://10.0.0.1/ref.wav"));
+        var error = await new SafeMediaDownloader(http, LiteralsOnly).UploadAsync("https://s3.example/ref.wav", [1], "audio/wav", default);
+
+        error.Should().Be("http-302");
+        http.Calls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Загрузка_БоевойТранспорт_ПроверкаДоЗапросаОбойдена_СоединениеСЦельюНеОткрывается()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var handler = SafeMediaDownloader.CreateHandler();
+        var downloader = new SafeMediaDownloader(handler, (_, _) => Task.FromResult(SsrfGuard.AddressCheck.Public));
+
+        var error = await downloader.UploadAsync($"https://127.0.0.1:{port}/ref.wav", [1, 2, 3], "audio/wav", default);
+
+        error.Should().Be("network");
+        listener.Pending().Should().BeFalse("до цели не должно дойти ни одного соединения");
+    }
 }

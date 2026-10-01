@@ -64,26 +64,43 @@ public class PersonaLightContextTests : IDisposable
     }
 
     [Fact]
-    public void ЛокальнаяМодельСоСвоимПрофилем_ПрофильВсегда_НезависимоОтОпции()
+    public void ЛокальнаяМодельВыбранаЧеловеком_РешаетОпцияПерсоны()
     {
+        // Модель qwen выбрал человек (модель чата, персоны, слот) — переключатель персоны решает
+        // и здесь: выключенная опция = полный контекст со всеми серверами
         var registry = Registry();
 
-        registry.LightProfileFor("qwen3.8-27b", Persona(false))!.Source.Should().Be("local-qwen",
-            "полный контекст не влезает в окно локальной модели — опция персоны тут не решает");
-        registry.LightProfileFor("qwen3.8-27b", Persona(null))!.Source.Should().Be("local-qwen");
+        registry.LightProfileFor("qwen3.8-27b", Persona(false)).Should().BeNull(
+            "опция выключена, а модель выбрана человеком, не подменена фолбэком");
+        registry.LightProfileFor("qwen3.8-27b", Persona(null)).Should().BeNull();
         registry.LightProfileFor("qwen3.8-27b", Persona(true))!.Source.Should().Be("local-qwen");
     }
 
     [Fact]
-    public void Фолбэк_СменаМоделиСOpusНаQwen_ПриВыключеннойОпции_ДаётЛокальныйПрофиль()
+    public void ПодменаФолбэкомOpusНаQwen_ПриВыключеннойОпции_ДаётЛокальныйПрофиль()
     {
-        // Фолбэк по цепочке меняет модель хода мимо персоны: профиль резолвится заново по
-        // новой модели и обязан стать профилем local-qwen, а не остаться «полным» от Opus
+        // Фолбэк увёл ход на локальную модель без ведома человека — её облегчённый профиль
+        // включается принудительно, опция персоны тут не решает
         var registry = Registry();
         var persona = Persona(false);
 
         registry.LightProfileFor("opus", persona).Should().BeNull();
-        registry.LightProfileFor("qwen3.8-27b", persona)!.Source.Should().Be("local-qwen");
+        registry.LightProfileFor("qwen3.8-27b", persona, forcedBySubstitution: true)!.Source
+            .Should().Be("local-qwen");
+        registry.LightProfileFor("qwen3.8-27b", Persona(null), forcedBySubstitution: true)!.Source
+            .Should().Be("local-qwen");
+    }
+
+    [Fact]
+    public void ПодменаНаНелокальнуюМодель_ОпциюНеПереопределяет()
+    {
+        // Принудительно — только профиль ЛОКАЛЬНОГО провайдера: подмена на сторонний облачный
+        // с профилем или на Opus по-прежнему слушается опции
+        var registry = Registry();
+
+        registry.LightProfileFor("remote-bare-model", Persona(false), forcedBySubstitution: true)
+            .Should().BeNull();
+        registry.LightProfileFor("opus", Persona(false), forcedBySubstitution: true).Should().BeNull();
     }
 
     [Fact]

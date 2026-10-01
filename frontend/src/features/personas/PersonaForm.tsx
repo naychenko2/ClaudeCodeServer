@@ -165,8 +165,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [lightContext, setLightContext] = useState(persona?.lightContext ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Локальный провайдер среди явно заданных моделей персоны (ключ провайдера local-*):
-  // на нём сервер применяет облегчённый профиль всегда, переключатель влияет только на прочие модели
+  // Локальный провайдер среди явно заданных моделей персоны (ключ провайдера local-*): с выключенным
+  // переключателем предупреждение становится жёлтым. Модель чата и слот владельца здесь не видны —
+  // для них то же предупреждение звучит условно. Принудительно облегчение включается только на
+  // подмене фолбэком (сервер, LlmProviderRegistry.LightProfileFor)
   const usesLocalModel = [model, tierStrong, tierMedium, tierWeak]
     .some(m => !!m && modelProvider(m).startsWith('local'));
 
@@ -1213,12 +1215,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               заметки, базу знаний, других персон и генерацию медиа. Модель та же — урезается то, что
               ей подаётся.
             </div>
-            {usesLocalModel && (
-              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
-                На локальной модели облегчённый контекст включён всегда, независимо от переключателя:
-                полный CLAUDE.md не помещается в её окно.
+            {!lightContext && (
+              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: usesLocalModel ? C.warning : C.textMuted, lineHeight: 1.45 }}>
+                Если персона работает на локальной модели (своей, модели чата или слота), с выключенным
+                переключателем она получает полный CLAUDE.md и все MCP-серверы — ход станет заметно
+                медленнее. Для локальной модели облегчённый контекст лучше включить.
               </div>
             )}
+            <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+              Если ход на локальную модель уведёт подмена при сбое основной модели, облегчённый
+              контекст включится сам, независимо от переключателя.
+            </div>
             {isEdit && lightContext !== (persona?.lightContext ?? false) && (
               <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
                 После сохранения открытые чаты персоны перезапустятся.

@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -28,6 +29,7 @@ public class McpKeepToolsTests : IDisposable
     private const string FilteredModel = "keeptools-filtered-model";
     private const string PlainModel = "keeptools-plain-model";
     private const string UnknownModel = "keeptools-unknown-model";
+    private const string LocalModel = "keeptools-local-model";
 
     /// <summary>Тулсет-стенд: три инструмента и журнал фактических вызовов.</summary>
     private sealed class DemoToolset : IMcpStaticToolset
@@ -83,6 +85,13 @@ public class McpKeepToolsTests : IDisposable
                 ["LlmProviders:keeptools-unknown:Models:0:Id"] = UnknownModel,
                 [$"LlmProviders:keeptools-unknown:KeepMcpTools:{Server}:0"] = "demo_read",
                 [$"LlmProviders:keeptools-unknown:KeepMcpTools:{Server}:1"] = "demo_такого_нет",
+
+                // Локальный провайдер со своим профилем: опция персоны решает, пока модель
+                // выбрал человек, а на подмене фолбэком профиль включается принудительно
+                ["LlmProviders:keeptools-local:AnthropicBaseUrl"] = "http://127.0.0.1:18999",
+                ["LlmProviders:keeptools-local:IsLocal"] = "true",
+                ["LlmProviders:keeptools-local:Models:0:Id"] = LocalModel,
+                [$"LlmProviders:keeptools-local:KeepMcpTools:{Server}:0"] = "demo_read",
             },
         };
         _factory.ExtraServices = s => s.AddSingleton<IMcpToolset>(_toolset);
@@ -91,12 +100,14 @@ public class McpKeepToolsTests : IDisposable
     public void Dispose() => _factory.Dispose();
 
     // Чат владельца с заданной моделью: провайдер профиля резолвится из НЕЁ (свойство сессии)
-    private async Task<HttpClient> CallerAsync(string model)
+    private async Task<HttpClient> CallerAsync(string model) => (await CallerWithChatAsync(model, true)).Client;
+
+    private async Task<(HttpClient Client, string ChatId)> CallerWithChatAsync(string model, bool lightContext)
     {
         var client = _factory.CreateAuthenticatedClient();
         // Новый чат человека всегда с персоной, а у персоны профиль решает её опция «Облегчённый
         // контекст» (LlmProviderRegistry.LightProfileFor): включённая берёт профиль провайдера модели
-        var persona = await client.PostAsJsonAsync("/api/personas", new { name = "Облегчённая", lightContext = true });
+        var persona = await client.PostAsJsonAsync("/api/personas", new { name = "Облегчённая", lightContext });
         persona.EnsureSuccessStatusCode();
         var personaId = JsonSerializer.Deserialize<JsonElement>(await persona.Content.ReadAsStringAsync())
             .GetProperty("id").GetString();
@@ -106,8 +117,9 @@ public class McpKeepToolsTests : IDisposable
         chat.GetProperty("model").GetString().Should().Be(model,
             "профиль резолвится по модели чата — без неё тест проверял бы не то");
         // Заголовок сессии-вызывателя кладёт в конфиг хода ClaudeSession; здесь повторяем его руками
-        client.DefaultRequestHeaders.Add("X-Caller-Session-Id", chat.GetProperty("id").GetString()!);
-        return client;
+        var chatId = chat.GetProperty("id").GetString()!;
+        client.DefaultRequestHeaders.Add("X-Caller-Session-Id", chatId);
+        return (client, chatId);
     }
 
     private static async Task<JsonElement> RpcAsync(HttpClient client, string method, object? @params = null)
@@ -131,6 +143,29 @@ public class McpKeepToolsTests : IDisposable
         tools.Should().Equal("demo_read");
         tools.Should().NotContain("demo_write").And.NotContain("demo_delete",
             "не перечисленные в KeepMcpTools инструменты в состав не попадают");
+    }
+
+    /// <summary>
+    /// Подмена фолбэком на локальную модель видна и фильтру, а не только составу серверов в
+    /// ClaudeSession: признак берётся с живой сессии. Без него на подмене серверы были бы урезаны,
+    /// а инструменты внутри оставленных — нет (tasks_delete доступен локальной модели).
+    /// </summary>
+    [Fact]
+    public async Task ЛокальнаяМодель_ОпцияВыкл_ФильтрТолькоНаПодменеФолбэком()
+    {
+        var (client, chatId) = await CallerWithChatAsync(LocalModel, lightContext: false);
+
+        (await ToolsAsync(client)).Should().BeEquivalentTo(new[] { "demo_read", "demo_write", "demo_delete" },
+            "модель выбрана человеком, опция персоны выключена — сервер целиком");
+
+        var session = _factory.Services.GetRequiredService<SessionManager>().GetById(chatId)!;
+        session.FallbackSubstitution = true;
+        try
+        {
+            (await ToolsAsync(client)).Should().Equal(new[] { "demo_read" },
+                "ход на локальную модель увёл фолбэк — её профиль принудительно, вместе с фильтром");
+        }
+        finally { session.FallbackSubstitution = false; }
     }
 
     [Fact]

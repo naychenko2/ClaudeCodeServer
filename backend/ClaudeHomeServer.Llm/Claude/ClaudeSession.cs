@@ -47,9 +47,10 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Профиль облегчённого контекста сессии (единая точка — LlmProviderRegistry.LightProfileFor):
     // модель и персона — свойства СЕССИИ, не хода, поэтому состав MCP и сигнатура запуска
-    // стабильны. Тот же резолв в McpToolWhitelist (фильтр tools/list и tools/call).
+    // стабильны. Тот же резолв в McpToolWhitelist (фильтр tools/list и tools/call). Признак
+    // подмены фолбэком адаптер ставит вместе с подменённой Info.Model (см. LightProfileFor).
     private LightProfile? LightProfile =>
-        _providers?.LightProfileFor(EffectiveModel, _personaProvider?.Invoke());
+        _providers?.LightProfileFor(EffectiveModel, _personaProvider?.Invoke(), Info.FallbackSubstitution);
 
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;

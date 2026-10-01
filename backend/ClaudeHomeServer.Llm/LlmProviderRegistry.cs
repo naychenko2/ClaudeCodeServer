@@ -154,21 +154,25 @@ public class LlmProviderRegistry
     // идут ВСЕ потребители — состав MCP, обрезка серверов, карта и BareTools, хвостовой recall
     // (ClaudeSession) и фильтр инструментов McpToolWhitelist; рассинхрон между ними даёт
     // «No such tool available», поэтому своей копии этой логики не заводить.
+    //  • ход на локальную модель (IsLocal) со своим профилем увела подмена фолбэка
+    //    (forcedBySubstitution = Session.FallbackSubstitution) — её профиль принудительно: модель
+    //    сменили без ведома человека, и полный контекст на ней он не выбирал;
     //  • чат без персоны — как раньше, решает провайдер модели: у него свой профиль
     //    (BareMode/Trim/KeepMcpTools/RecallInTurnText) или его нет;
-    //  • локальная модель (IsLocal) со своим профилем — её профиль ВСЕГДА, опция персоны не
-    //    влияет: полный контекст не влезает в окно локальной модели, а модель хода меняют мимо
-    //    персоны (фолбэк, смена модели чата, исполнитель на слоте weak, шаблоны персон);
-    //  • иначе в чате с персоной решает Persona.LightContext: выкл → null; вкл → профиль
-    //    провайдера модели, а у модели без своего профиля (Opus/Sonnet) — общая секция LightProfile.
-    // Входы — свойства СЕССИИ (модель, персона), не хода: состав tools/list стабилен.
-    public LightProfile? LightProfileFor(string? model, Persona? persona)
+    //  • иначе в чате с персоной решает Persona.LightContext, в том числе на локальной модели,
+    //    выбранной человеком (модель чата, персоны, слот): выкл → null; вкл → профиль провайдера
+    //    модели, а у модели без своего профиля (Opus/Sonnet) — общая секция LightProfile.
+    // Входы — свойства СЕССИИ (модель, персона, признак подмены), не хода: состав tools/list
+    // стабилен в пределах прогона CLI. Признак подмены меняется только вместе с моделью, а смена
+    // модели и так пересобирает процесс попытки — лишнего перезапуска он не добавляет.
+    public LightProfile? LightProfileFor(string? model, Persona? persona, bool forcedBySubstitution = false)
     {
         var provider = ResolveByModel(model);
         var own = provider is { BareMode: true } or { TrimMcpServers: true } or { RecallInTurnText: true }
             or { KeepMcpTools.Count: > 0 }
             ? LightProfile.FromProvider(provider!) : null;
-        if (persona is null || (own is not null && provider!.IsLocal)) return own;
+        if (forcedBySubstitution && own is not null && provider!.IsLocal) return own;
+        if (persona is null) return own;
         return persona.LightContext == true ? own ?? _lightProfile : null;
     }
 

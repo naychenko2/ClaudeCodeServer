@@ -136,6 +136,30 @@ public class HiggsfieldImageEditorTests
         access.Calls.Should().BeGreaterThan(3);
     }
 
+    // Адрес загрузки приходит в ответе media_upload, то есть извне: внутренний адрес — отказ,
+    // байты картинки туда не уходят, media_confirm и запуск не вызываются
+    [Theory]
+    [InlineData("https://169.254.169.254/latest/meta-data")]
+    [InlineData("https://127.0.0.1:9000/bucket/a.png")]
+    public async Task Запуск_АдресЗагрузкиВоВнутреннююСеть_Отказ_БайтыНеУходят(string uploadUrl)
+    {
+        var http = new FakeHttp(c => FakeHttp.Tool(c) == "media_upload"
+            ? FakeHttp.McpText($"- a9ee96f2-1edc-47af-809a-395fdfd3f400: curl -X PUT --data-binary @probe.png '{uploadUrl}'.")
+            : HappyRoute(c));
+        // Загрузчик с настоящим SsrfGuard: адрес проверяется так же, как в бою
+        var client = new HiggsfieldMcpClient(http, TestImages.Config(("Higgsfield:McpUrl", "https://mcp.test/mcp")),
+            new FakeHiggsfieldAccess("admin-token")) { Downloader = new ClaudeHomeServer.Services.SafeMediaDownloader(http) };
+        var editor = new HiggsfieldImageEditor(client) { PollInterval = TimeSpan.Zero };
+        var png = TestImages.Png(8, 8);
+
+        var result = await editor.RunAsync(new ImageEditRequest(ImageEditOp.Edit, "лампа", new ImageBytes(png, "image/png"),
+            null, [], 1, null, null, HiggsfieldImageEditor.NanoBanana2, null), new SyncProgress(_ => { }), default);
+
+        result.Outcome.Should().Be(EditOutcome.Unavailable);
+        http.Calls.Should().NotContain(c => c.Method == HttpMethod.Put);
+        http.Calls.Should().NotContain(c => FakeHttp.Tool(c) == "media_confirm" || c.Url == uploadUrl);
+    }
+
     [Fact]
     public async Task Запуск_ОтказИнструмента_НехваткаКредитов()
     {

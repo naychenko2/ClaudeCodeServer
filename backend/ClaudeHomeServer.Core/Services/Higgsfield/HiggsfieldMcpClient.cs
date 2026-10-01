@@ -3,10 +3,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using ClaudeHomeServer.Services.Higgsfield;
-using ClaudeHomeServer.Services.ImageEditor;
 
-namespace ClaudeHomeServer.Services.ImageEditor;
+namespace ClaudeHomeServer.Services.Higgsfield;
 
 // Тонкий JSON-RPC-клиент бэкенда к mcp.higgsfield.ai/mcp (ADR-017, раздел 2а). REST API под
 // наш OAuth-токен у Higgsfield нет, MCP-эндпоинт и есть их API. Прокси хода
@@ -15,6 +13,10 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 //
 // Токен берётся через шов IHiggsfieldAccess на КАЖДЫЙ вызов: задача живёт минуты, а
 // обновление токена идёт само. null — интеграция отключена админом.
+//
+// Живёт в Core, а не в модуле картинок (ADR-021, §2): тот же транспорт нужен модулю «Звук», а
+// вертикаль на вертикаль не ссылается. Здесь только то, что не знает о картинках, — картиночное
+// скачивание лежит расширением в ImageEditor.
 public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration config, IHiggsfieldAccess? access = null)
 {
     public const string HttpClientName = "higgsfield-editor";
@@ -91,8 +93,32 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
         }
     }
 
-    public Task<EditedImage?> DownloadAsync(string url, CancellationToken ct) =>
-        ImageDownload.FetchAsync(Client(), url, null, ct);
+    // Результат поставщика: data:-ссылка разбирается на месте, наружу — только https.
+    // null — ссылка не годится или ответ неуспешный
+    public async Task<HiggsfieldDownload?> DownloadBytesAsync(string url, CancellationToken ct)
+    {
+        if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            var comma = url.IndexOf(',');
+            if (comma < 0) return null;
+            var type = url[5..comma].Split(';')[0];
+            try
+            {
+                return new HiggsfieldDownload(Convert.FromBase64String(url[(comma + 1)..]),
+                    string.IsNullOrEmpty(type) ? null : type);
+            }
+            catch (FormatException)
+            {
+                return null;
+            }
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps) return null;
+        using var resp = await Client().GetAsync(uri, ct);
+        if (!resp.IsSuccessStatusCode) return null;
+        var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+        return bytes.Length == 0 ? null : new HiggsfieldDownload(bytes, resp.Content.Headers.ContentType?.MediaType);
+    }
 
     // Ответ бывает и JSON, и SSE (строки data:)
     internal static JsonObject? ParseEnvelope(string text)
@@ -135,6 +161,9 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
         return client;
     }
 }
+
+// ContentType — null, если поставщик тип не назвал
+public sealed record HiggsfieldDownload(byte[] Bytes, string? ContentType);
 
 // Ok — tools/call прошёл и isError=false; NoAccess — поставщик недоступен (нет токена,
 // 401, сеть); иначе — содержательная ошибка инструмента в Text

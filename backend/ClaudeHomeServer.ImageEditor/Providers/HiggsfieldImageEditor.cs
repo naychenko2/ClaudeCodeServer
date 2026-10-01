@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.ImageEditor;

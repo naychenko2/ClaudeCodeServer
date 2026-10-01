@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using System.Net;
+using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;

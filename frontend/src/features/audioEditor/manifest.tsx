@@ -6,9 +6,11 @@
 import { AudioLines, Mic, Music } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
-  ChatItemToolCtx, ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SubsystemManifest,
+  ChatItemToolCtx, ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SlotContribution, SubsystemManifest,
   WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
+import { AudioConcatCard, AudioFocusLine, AudioLaunchCard, AudioPromptCard, AudioServiceLine } from './feed/AgentCards';
+import { AUDIO_TOOL } from './feed/parse';
 import { SoundChatWatcher } from './composer/SoundChatWatcher';
 import { SoundPanel } from './panel/SoundPanel';
 import { SoundSheet } from './panel/SoundSheet';
@@ -20,6 +22,21 @@ import { LaunchAnchor, ThreadAnchor } from './thread/ThreadCard';
 import { SOUND_PANEL, SOUND_STRIP } from './thread/threadStore';
 
 const enabled = () => getFlag(FLAGS.audioEditor);
+
+// Карточки ленты (module_record модуля): нить с версиями ‹ › и запуск ИИ с вариантами
+const THREAD_ANCHORS: SlotContribution<ChatItemToolCtx>[] = [
+  { name: recordKey(RECORD_THREAD), render: ctx => <ThreadAnchor ctx={ctx} /> },
+  { name: recordKey(RECORD_LAUNCH), render: ctx => <LaunchAnchor ctx={ctx} /> },
+];
+
+// Карточки вызовов агента audio_*: ключ — полное имя инструмента MCP-сервера audio-editor
+const FEED_CARDS: SlotContribution<ChatItemToolCtx>[] = [
+  { name: AUDIO_TOOL('audio_generate'), render: ctx => <AudioLaunchCard ctx={ctx} /> },
+  { name: AUDIO_TOOL('audio_concat'), render: ctx => <AudioConcatCard ctx={ctx} /> },
+  { name: AUDIO_TOOL('audio_suggest_prompt'), render: ctx => <AudioPromptCard ctx={ctx} /> },
+  ...['audio_focus', 'audio_new'].map(t => ({ name: AUDIO_TOOL(t), render: (ctx: ChatItemToolCtx) => <AudioFocusLine ctx={ctx} /> })),
+  ...['audio_state', 'audio_voices', 'audio_cancel'].map(t => ({ name: AUDIO_TOOL(t), render: (ctx: ChatItemToolCtx) => <AudioServiceLine ctx={ctx} /> })),
+];
 
 // Ярлыки «Голос» и «Музыка» в меню полос: полоса «Звук» и панель на «Настройках» в нужном режиме
 export function soundShortcuts({ sessionId }: { sessionId: string | null }): ComposerStripShortcut[] {
@@ -41,12 +58,10 @@ export const manifest: SubsystemManifest = {
   order: 96,
   noPill: true,
   slots: {
-    // Карточки ленты (module_record модуля): нить с версиями ‹ › и запуск ИИ с вариантами.
-    // Флаг проверяют сами карточки: без него — строка fallback записи
-    'chat-item-tool': [
-      { name: recordKey(RECORD_THREAD), render: (ctx: ChatItemToolCtx) => <ThreadAnchor ctx={ctx} /> },
-      { name: recordKey(RECORD_LAUNCH), render: (ctx: ChatItemToolCtx) => <LaunchAnchor ctx={ctx} /> },
-    ],
+    // Якоря нити (module_record модуля) флаг проверяют сами: без него — строка fallback записи.
+    // Карточки вызовов агента без флага не вкладываются вовсе — лента рисует вызовы как раньше.
+    // Геттер читается на каждом чтении слота: реестр пересчитывает вклады вместе со сторами
+    get 'chat-item-tool'() { return enabled() ? [...THREAD_ANCHORS, ...FEED_CARDS] : THREAD_ANCHORS; },
     // Полоса «Звук» над композером: выбор звука открывает её сам (стор нитей)
     'composer-strip': [
       {

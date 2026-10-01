@@ -11,7 +11,7 @@ import { MODE_LABEL, opInfo } from '../ops';
 import { audioScope } from '../scope';
 import { stripModel } from '../strip/SoundStrip';
 import { launchFromComposer } from '../thread/actions';
-import { getFocusedThread, getSoundModeRequest, setComposerText, SOUND_STRIP, useAudioThreads } from '../thread/threadStore';
+import { getFocusedThread, getSoundModeRequest, getSuggestedPrompt, setComposerText, SOUND_STRIP, useAudioThreads } from '../thread/threadStore';
 
 function useModel(ctx: ComposerModeCtx) {
   const state = useAudioThreads(audioScope(ctx.projectId), ctx.sessionId);
@@ -55,6 +55,11 @@ export const soundMode: ComposerModeApi = {
     if (!getFocusedThread(ctx.sessionId)) return null;
     const n = getSoundModeRequest(ctx.sessionId);
     return n ? `request:${n}` : null;
+  },
+  // Промпт, вставленный из карточки агента; повод — номер вставки
+  prefill: ctx => {
+    const s = getSuggestedPrompt(ctx.sessionId);
+    return s ? { key: `suggest:${s.n}`, text: s.text } : null;
   },
   placeholder: ctx => soundPlaceholder(ctx.projectId, ctx.sessionId),
   submitLabel: ctx => <SubmitLabel ctx={ctx} />,

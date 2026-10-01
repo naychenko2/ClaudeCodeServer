@@ -40,6 +40,8 @@ const _shortcutMode = new Map<string, AudioMode>();
 const _modeRequests = new Map<string, number>();
 // Текст поля режима «Звук» по чатам: панель считает по нему цену и запускает с ним
 const _composerText = new Map<string, string>();
+// Промпт из карточки агента «Вставить в промпт»: n — повод для затравки поля режима «Звук»
+const _suggested = new Map<string, { n: number; text: string }>();
 let _version = 0;
 const _listeners = new Set<() => void>();
 let _unsub: (() => void) | null = null;
@@ -281,6 +283,17 @@ export function setComposerText(sessionId: string, text: string) {
   emit();
 }
 
+// «Вставить в промпт» из карточки агента: текст ложится в поле режима «Звук» (затравка
+// soundMode.prefill — только в нетронутое поле), режим включается сам
+export function suggestPrompt(sessionId: string, text: string) {
+  _suggested.set(sessionId, { n: (_suggested.get(sessionId)?.n ?? 0) + 1, text });
+  requestSoundMode(sessionId);
+}
+
+export function getSuggestedPrompt(sessionId: string | null): { n: number; text: string } | null {
+  return (sessionId && _suggested.get(sessionId)) || null;
+}
+
 // Сброс — только для тестов
 export function __resetAudioStore() {
   _entries.clear();
@@ -293,6 +306,7 @@ export function __resetAudioStore() {
   _selections.clear();
   _pieceField.clear();
   _opRequests.clear();
+  _suggested.clear();
   emit();
 }
 

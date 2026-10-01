@@ -62,6 +62,16 @@ const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
   background: 'transparent', color: disabled ? C.border : C.textMuted,
 });
 
+// Опрос и рефетч после переподключения отдают весь список заново, обычно без изменений.
+// Новый массив перерисовал бы панель целиком — оставляем прежний, если по содержимому совпало.
+function keepIfSame(prev: Session[], next: Session[]): Session[] {
+  if (prev.length !== next.length) return next;
+  for (let i = 0; i < next.length; i++) {
+    if (JSON.stringify(prev[i]) !== JSON.stringify(next[i])) return next;
+  }
+  return prev;
+}
+
 export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onSessionsListChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
   // «Сохранить в заметки» доступно только при включённой подсистеме заметок — иначе
   // кнопка/пункт в ChatCard уйдёт в архив не сохранённой, а карточка не получит
@@ -225,7 +235,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
     init();
     const interval = setInterval(() => {
-      api.sessions.list(project.id).then(setSessions).catch(() => {});
+      api.sessions.list(project.id).then(list => setSessions(prev => keepIfSame(prev, list))).catch(() => {});
     }, 5000);
     return () => clearInterval(interval);
   }, [project.id]);
@@ -238,7 +248,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     onReconnected(() => {
       if (!mounted) return;
       api.sessions.list(project.id).then(list => {
-        if (mounted) setSessions(list);
+        if (mounted) setSessions(prev => keepIfSame(prev, list));
       }).catch(() => {});
     });
 

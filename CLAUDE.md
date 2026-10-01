@@ -192,28 +192,26 @@ one-shot действия и разговор с исполнителем «Ло
 Динамический модуль правки картинок проекта: fal, Higgsfield, локальные модели, правки без ИИ, чат картинки с агентом; за флагом `image-editor`.
 Инварианты и подробности — [backend/ClaudeHomeServer.ImageEditor/CLAUDE.md](backend/ClaudeHomeServer.ImageEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой.
 
+## Редактор звука (ClaudeHomeServer.AudioEditor)
+
+Динамический модуль озвучки, музыки и обработки звука в чате: fal, Higgsfield, Яндекс, локальные модели, монтаж и склейка без ИИ, «Голоса», агент; за флагом `audio-editor` ([ADR-021](docs/adr/ADR-021-audio-editor-and-generation-panel.md), [audio-editor.md](docs/features/audio-editor.md)).
+Инварианты и подробности — [backend/ClaudeHomeServer.AudioEditor/CLAUDE.md](backend/ClaudeHomeServer.AudioEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+
 ## Раздел «Видео» (Services/Video)
 
 Эфиры телеканалов и лента подписок YouTube за общим `IVideoProvider`; живой кадр рисуется оверлеем над страницами (панель, центральный остров, плавающее окно).
-
 Инварианты и подробности — [backend/ClaudeHomeServer.Video/CLAUDE.md](backend/ClaudeHomeServer.Video/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Значок проекта (Services/ProjectIcons)
 
-Иконка проекта — **не картинка**: модель отдаёт имя иконки из белого списка lucide
-(`LucideGlyphs`), разметки от модели не приходит никогда; любой сбой молча оставляет инициалы.
-Контракт ответа, двухходовая схема подбора, белый список и форма хранения —
-[ADR-009](docs/adr/ADR-009-project-icon-glyph.md); тексты интерфейса —
-[docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
+Иконка проекта — **не картинка**: модель отдаёт имя иконки из белого списка lucide (`LucideGlyphs`), разметки от модели не приходит никогда; любой сбой молча оставляет инициалы.
+Контракт ответа, двухходовая схема подбора, белый список и форма хранения — [ADR-009](docs/adr/ADR-009-project-icon-glyph.md); тексты интерфейса — [docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
 
 ## Уборка карты проекта (Services/Docs)
 
-Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые
-ссылки, вложенные карты) и предлагает, что прибрать; за флагом `project-map-hygiene`. Запись —
-только по явной отметке человека, а **вынос секции кнопкой не делается никогда** (цена ошибки —
-потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет. Устройство двух фаз —
-[docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план —
-[project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
+Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые ссылки, вложенные карты) и предлагает, что прибрать; за флагом `project-map-hygiene`.
+Запись — только по явной отметке человека, а **вынос секции кнопкой не делается никогда** (цена ошибки — потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет.
+Устройство двух фаз — [docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план — [project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
 
 ## Раздел «Архитектура» (Viaduct)
 

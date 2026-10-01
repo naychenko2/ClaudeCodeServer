@@ -44,7 +44,9 @@
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
 
-**features/** — [decision-history-import-texts.md](features/decision-history-import-texts.md)
+**features/** — [audio-editor.md](features/audio-editor.md) (редактор звука: режимы
+Голос / Музыка / Обработка, поставщики, нити и версии, «Голоса», склейка и монтаж, агент),
+[decision-history-import-texts.md](features/decision-history-import-texts.md)
 (тексты README ветки `ccs/dossiers/v1` и подписей импорта в панели «История решений»),
 [desktop-agent.md](features/desktop-agent.md) и
 [desktop-agent-client.md](features/desktop-agent-client.md) (исторические: руки ADR-008, удалены

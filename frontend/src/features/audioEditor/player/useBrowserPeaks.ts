@@ -1,17 +1,19 @@
 import { useEffect, useState } from 'react';
-import { computePeaks } from './peaks';
+import { computePeaks, lruGet, lruSet } from './peaks';
 
 export interface BrowserPeaks {
   peaks: number[];
   duration: number;
 }
 
-// Кэш на сессию вкладки: волна одной версии рисуется в ленте и в панели разом
+// Кэш на сессию вкладки: волна одной версии рисуется в ленте и в панели разом. Потолок —
+// длинная лента с десятками версий не должна держать их все в памяти
+const CACHE_MAX = 32;
 const cache = new Map<string, Promise<BrowserPeaks>>();
 
 function decode(url: string, count: number): Promise<BrowserPeaks> {
   const key = `${count}|${url}`;
-  let p = cache.get(key);
+  let p = lruGet(cache, key);
   if (!p) {
     p = (async () => {
       const res = await fetch(url);
@@ -23,7 +25,7 @@ function decode(url: string, count: number): Promise<BrowserPeaks> {
       const channels = Array.from({ length: audio.numberOfChannels }, (_, i) => audio.getChannelData(i));
       return { peaks: computePeaks(channels, count), duration: audio.duration };
     })();
-    cache.set(key, p);
+    lruSet(cache, key, p, CACHE_MAX);
     p.catch(() => cache.delete(key));
   }
   return p;

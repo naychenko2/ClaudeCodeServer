@@ -5,11 +5,15 @@
 
 import { AudioLines, Mic, Music } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
-import type { ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SubsystemManifest } from '../../lib/subsystems/registryCore';
+import type {
+  ChatItemToolCtx, ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SubsystemManifest,
+} from '../../lib/subsystems/registryCore';
 import { SoundChatWatcher } from './composer/SoundChatWatcher';
 import { soundMode } from './composer/soundMode';
 import { SoundStrip, soundStripStatus } from './strip/SoundStrip';
 import { openSoundShortcut } from './thread/actions';
+import { RECORD_LAUNCH, RECORD_THREAD, recordKey } from './thread/records';
+import { LaunchAnchor, ThreadAnchor } from './thread/ThreadCard';
 import { SOUND_STRIP } from './thread/threadStore';
 
 const enabled = () => getFlag(FLAGS.audioEditor);
@@ -34,6 +38,12 @@ export const manifest: SubsystemManifest = {
   order: 96,
   noPill: true,
   slots: {
+    // Карточки ленты (module_record модуля): нить с версиями ‹ › и запуск ИИ с вариантами.
+    // Флаг проверяют сами карточки: без него — строка fallback записи
+    'chat-item-tool': [
+      { name: recordKey(RECORD_THREAD), render: (ctx: ChatItemToolCtx) => <ThreadAnchor ctx={ctx} /> },
+      { name: recordKey(RECORD_LAUNCH), render: (ctx: ChatItemToolCtx) => <LaunchAnchor ctx={ctx} /> },
+    ],
     // Полоса «Звук» над композером: выбор звука открывает её сам (стор нитей)
     'composer-strip': [
       {

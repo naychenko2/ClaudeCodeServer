@@ -2,7 +2,10 @@
 // поля ввода (котировка → задача строго по quoteId, ADR-021 §2).
 
 import { requestStrip, revealWorkspacePanel, showToast } from 'aihome_shell/kit';
-import { audioApi, type AudioMode, type AudioThread } from '../api';
+import { audioApi, nameTakenSuggestion, type AudioMode, type AudioThread } from '../api';
+import type { MixPlan } from '../player/mix';
+import { isPersonalScope } from '../scope';
+import { mixRequest } from './model';
 import { opInfo } from '../ops';
 import { resolveLaunch } from '../strip/summary';
 import {
@@ -50,4 +53,54 @@ export async function launchFromComposer(scope: string, sessionId: string, threa
     showToast((e as Error).message || 'Звук не запущен', '', 'error');
     return false;
   }
+}
+
+// ── Карточка нити в ленте ──
+
+// «Взять» вариант / «Работать с этой»: версия становится текущей, нить — в работе (сервер ставит фокус сам)
+export const takeVersion = (scope: string, sessionId: string, thread: AudioThread, versionId: string) =>
+  mutate(scope, sessionId, rev => audioApi.current(scope, sessionId, thread.id, versionId, rev));
+
+// «Свести N из M в новую версию»: без ИИ, итог — новая версия той же нити
+export async function mixStems(scope: string, sessionId: string, thread: AudioThread, versionId: string, plan: MixPlan): Promise<boolean> {
+  if (!plan.canMix) return false;
+  const ok = await mutate(scope, sessionId, async rev =>
+    (await audioApi.mix(scope, sessionId, thread.id, mixRequest(plan, versionId, rev))).state);
+  if (ok) showToast(`Сведено: ${plan.description}`, 'Новая версия — в карточке нити', 'info');
+  return ok;
+}
+
+export type SaveOutcome =
+  | { ok: true; path: string }
+  // suggestion — свободное имя рядом (409 name_taken), его подставляет «Сохранить как…»
+  | { ok: false; error: string; suggestion: string | null };
+
+// «Сохранить в проект» — следующей версией рядом с исходником; as — «Сохранить как…» в папку и под имя.
+// В личном чате проекта нет: сюда не доходит, вместо кнопки — «Скачать»
+export async function saveVersion(
+  scope: string, sessionId: string, thread: AudioThread, versionId: string,
+  as?: { folder: string; fileName: string },
+): Promise<SaveOutcome> {
+  if (isPersonalScope(scope)) return { ok: false, error: 'У личного чата нет проекта — версию можно только скачать', suggestion: null };
+  try {
+    const r = await audioApi.save(scope, sessionId, thread.id, as
+      ? { versionId, mode: 'as', folder: as.folder, fileName: as.fileName }
+      : { versionId, mode: 'nextVersion' });
+    showToast(`Сохранено: ${r.path}`, r.files.length > 1 ? `файлов: ${r.files.length}` : '', 'info');
+    return { ok: true, path: r.path };
+  } catch (e) {
+    const suggestion = nameTakenSuggestion(e);
+    const error = (e as Error).message || 'Не удалось сохранить';
+    // Занятое имя показывает диалог рядом с полем; остальное — тостом
+    if (!suggestion) showToast(error, '', 'error');
+    return { ok: false, error, suggestion };
+  }
+}
+
+// «Скачать» файл версии: сервер отдаёт его с именем «intro.version3.vocals.mp3» (download=true)
+export function downloadFile(scope: string, sessionId: string, thread: AudioThread, versionId: string, role = 'main') {
+  const a = document.createElement('a');
+  a.href = audioApi.versionFileUrl(scope, sessionId, thread.id, versionId, role, true);
+  a.download = '';
+  a.click();
 }

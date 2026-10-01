@@ -1,7 +1,7 @@
 import { useMemo, useRef, type KeyboardEvent, type PointerEvent } from 'react';
-import { C, R } from 'aihome_shell/kit';
+import { C, R, SP } from 'aihome_shell/kit';
 import { resamplePeaks } from './peaks';
-import { keySelection, resolveEnd, selectionFromDrag, type AudioSelection } from './selection';
+import { fmtTime, keySelection, resolveEnd, selectionFromDrag, type AudioSelection } from './selection';
 
 // Порог, отделяющий клик-перемотку от протяжки-выделения, px
 const DRAG_PX = 3;
@@ -28,6 +28,9 @@ export interface AudioWaveProps {
 
 const FLAT = 0.08;
 
+// Высоты волны — из шкалы отступов: строка стема и крупный плеер
+export const WAVE_H = { sm: SP.xl, md: SP.xxl + SP.sm } as const;
+
 export function AudioWave({
   peaks, duration, position = 0, showCursor, onSeek, selection = null, onSelectionChange,
   size = 'md', bars, dim, ariaLabel = 'Волна',
@@ -35,7 +38,7 @@ export function AudioWave({
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; t: number; moved: boolean } | null>(null);
   const n = bars ?? (size === 'sm' ? 50 : 90);
-  const h = size === 'sm' ? 22 : 40;
+  const h = WAVE_H[size];
   const cols = useMemo(() => {
     const r = resamplePeaks(peaks, n);
     return r.length ? r.map(v => Math.max(FLAT, v)) : new Array<number>(n).fill(FLAT);
@@ -105,6 +108,7 @@ export function AudioWave({
       aria-valuemin={0}
       aria-valuemax={Math.round(len * 10) / 10}
       aria-valuenow={Math.round(position * 10) / 10}
+      aria-valuetext={len ? `${fmtTime(position)} из ${fmtTime(len)}` : 'длина ещё неизвестна'}
       title={selectable ? 'Протяните, чтобы выделить кусок; клик — перемотать' : 'Клик — перемотать'}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

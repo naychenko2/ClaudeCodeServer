@@ -54,7 +54,7 @@ public class OutpaintComposeTests
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         });
         var editor = new FalImageEditor(http, TestImages.Config(("Fal:ApiKey", "k"), ("Fal:QueueBase", Queue)),
-            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero };
+            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero, Downloader = http.Downloader() };
         var model = editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!;
         model.Id.Should().Be(FalImageEditor.BriaExpand);
 

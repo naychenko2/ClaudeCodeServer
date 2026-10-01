@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.Media;
 using Microsoft.Extensions.Configuration;
@@ -56,10 +57,18 @@ internal sealed class FakeHttp(Func<FakeHttp.Call, HttpResponseMessage> route) :
     public static JsonObject? Arguments(Call call) =>
         JsonNode.Parse(call.Body)?["params"]?["arguments"] as JsonObject;
 
-    public static HiggsfieldMcpClient Client(FakeHttp http, string? token = "admin-token") =>
+    // Загрузчик результата поверх этого же фейка: хосты *.test не резолвятся, проверку адреса пропускаем
+    public SafeMediaDownloader Downloader() =>
+        new(this, (_, _) => Task.FromResult(SsrfGuard.AddressCheck.Public));
+
+    public static HiggsfieldMcpClient Client(FakeHttp http, string? token = "admin-token",
+        SafeMediaDownloader? downloader = null) =>
         new(http, new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["Higgsfield:McpUrl"] = "https://mcp.test/mcp" })
-            .Build(), new FakeHiggsfieldAccess(token));
+            .Build(), new FakeHiggsfieldAccess(token))
+        {
+            Downloader = downloader ?? http.Downloader(),
+        };
 }
 
 internal sealed class FakeHiggsfieldAccess(string? token) : IHiggsfieldAccess

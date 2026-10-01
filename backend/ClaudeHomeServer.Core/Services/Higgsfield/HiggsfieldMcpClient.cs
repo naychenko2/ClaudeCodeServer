@@ -25,6 +25,10 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
     private readonly string _url = config["Higgsfield:McpUrl"] ?? DefaultUrl;
     private int _rpcId;
 
+    // Скачивание результата по ссылке Higgsfield; тесты модулей подставляют фейковый транспорт,
+    // поэтому init публичный — Core видит изнутри только ClaudeHomeServer.Tests
+    public SafeMediaDownloader Downloader { get; init; } = SafeMediaDownloader.Shared;
+
     public bool Available => Token() is not null;
 
     public async Task<HiggsfieldCall> CallToolAsync(string tool, JsonObject arguments, CancellationToken ct)
@@ -93,8 +97,9 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
         }
     }
 
-    // Результат поставщика: data:-ссылка разбирается на месте, наружу — только https.
-    // null — ссылка не годится или ответ неуспешный
+    // Результат поставщика: data:-ссылка разбирается на месте, внешняя ссылка — только через
+    // SafeMediaDownloader (SSRF, редиректы, потолок размера).
+    // null — ссылка не годится, адрес не публичный, тело больше потолка или ответ неуспешный
     public async Task<HiggsfieldDownload?> DownloadBytesAsync(string url, CancellationToken ct)
     {
         if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -113,11 +118,8 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
             }
         }
 
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps) return null;
-        using var resp = await Client().GetAsync(uri, ct);
-        if (!resp.IsSuccessStatusCode) return null;
-        var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-        return bytes.Length == 0 ? null : new HiggsfieldDownload(bytes, resp.Content.Headers.ContentType?.MediaType);
+        var download = await Downloader.DownloadAsync(url, SafeMediaDownloader.ImageMaxBytes, ct);
+        return download.Bytes is { } body ? new HiggsfieldDownload(body, download.ContentType) : null;
     }
 
     // Ответ бывает и JSON, и SSE (строки data:)

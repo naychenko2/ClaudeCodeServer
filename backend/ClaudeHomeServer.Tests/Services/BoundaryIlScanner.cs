@@ -4,7 +4,9 @@ using System.Reflection.Emit;
 namespace ClaudeHomeServer.Tests.Services;
 
 /// <summary>
-/// Общий IL-скан тел методов для сторожей границ вертикалей.
+/// Общий скан для сторожей границ вертикалей: IL тел методов плюс метаданные типа
+/// (поля, сигнатуры, базовый тип, интерфейсы, события, атрибуты — см.
+/// <see cref="TypesFromSignatures"/>).
 /// Перенесён из разведочного <c>IlBoundaryScanProbe.cs</c> (задача <c>cd6dd658</c>),
 /// включён в постоянные сторожа <see cref="SubsystemBoundaryTests"/> и
 /// <see cref="RootSubsystemBoundaryTests"/> (задача <c>8beee75e</c>, волна 1).
@@ -222,16 +224,134 @@ internal static class BoundaryIlScanner
         return methods;
     }
 
-    /// <summary>Единая точка сбора типов, упомянутых в IL тел всех методов типа
-    /// (включая nested-типы). Используется ОДНОВРЕМЕННО из Theory-сторожей
+    /// <summary>Типы, упомянутые в метаданных САМОГО типа (без тел методов и без
+    /// nested): базовый тип и интерфейсы, поля всех видимостей (включая backing-поля
+    /// свойств и событий), сигнатуры методов и конструкторов (возвращаемый тип,
+    /// параметры), свойства и индексаторы, события, атрибуты на типе и его членах
+    /// (тип атрибута и аргументы-<c>typeof</c>). Generic-аргументы разворачиваются
+    /// рекурсивно (<c>List&lt;Dictionary&lt;string, Foo&gt;&gt;</c> даёт и <c>Foo</c>).
+    /// Нужен потому, что поле или параметр конструктора, ни разу не тронутые в теле
+    /// метода, в IL-операндах не появляются вовсе.</summary>
+    public static IEnumerable<Type> TypesFromSignatures(Type t)
+    {
+        const BindingFlags F = BindingFlags.Public | BindingFlags.NonPublic
+                             | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+        var found = new List<Type>();
+        void Add(Type? x) { foreach (var e in Expand(x)) found.Add(e); }
+        void AddAttributes(Func<IList<CustomAttributeData>> get)
+        {
+            IList<CustomAttributeData> attrs;
+            try { attrs = get(); } catch { return; }
+            foreach (var a in attrs)
+            {
+                Add(a.AttributeType);
+                foreach (var arg in a.ConstructorArguments) AddAttributeArgument(arg);
+                foreach (var arg in a.NamedArguments) AddAttributeArgument(arg.TypedValue);
+            }
+        }
+        void AddAttributeArgument(CustomAttributeTypedArgument arg)
+        {
+            if (arg.Value is Type typeArg) Add(typeArg);
+            else if (arg.Value is IEnumerable<CustomAttributeTypedArgument> items)
+                foreach (var item in items) AddAttributeArgument(item);
+        }
+        void AddParameters(MethodBase m)
+        {
+            ParameterInfo[] ps;
+            try { ps = m.GetParameters(); } catch { return; }
+            foreach (var p in ps)
+            {
+                Add(p.ParameterType);
+                AddAttributes(p.GetCustomAttributesData);
+            }
+        }
+
+        try { Add(t.BaseType); } catch { }
+        try { foreach (var i in t.GetInterfaces()) Add(i); } catch { }
+        AddAttributes(t.GetCustomAttributesData);
+
+        try
+        {
+            foreach (var f in t.GetFields(F))
+            {
+                Add(f.FieldType);
+                AddAttributes(f.GetCustomAttributesData);
+            }
+        }
+        catch { }
+
+        try
+        {
+            foreach (var p in t.GetProperties(F))
+            {
+                Add(p.PropertyType);
+                foreach (var ip in p.GetIndexParameters()) Add(ip.ParameterType);
+                AddAttributes(p.GetCustomAttributesData);
+            }
+        }
+        catch { }
+
+        try
+        {
+            foreach (var e in t.GetEvents(F))
+            {
+                Add(e.EventHandlerType);
+                AddAttributes(e.GetCustomAttributesData);
+            }
+        }
+        catch { }
+
+        try
+        {
+            foreach (var m in t.GetMethods(F))
+            {
+                Add(m.ReturnType);
+                AddParameters(m);
+                AddAttributes(m.GetCustomAttributesData);
+            }
+        }
+        catch { }
+
+        try
+        {
+            foreach (var c in t.GetConstructors(F))
+            {
+                AddParameters(c);
+                AddAttributes(c.GetCustomAttributesData);
+            }
+        }
+        catch { }
+
+        return found;
+    }
+
+    /// <summary>Сам тип и все его nested-типы (рекурсивно).</summary>
+    private static IEnumerable<Type> SelfAndNested(Type t)
+    {
+        yield return t;
+        Type[] nested;
+        try { nested = t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic); }
+        catch { yield break; }
+        foreach (var n in nested)
+            foreach (var x in SelfAndNested(n)) yield return x;
+    }
+
+    /// <summary>Единая точка сбора типов, упомянутых типом (включая nested-типы):
+    /// IL тел всех методов (<see cref="TypesFromBody"/>) плюс метаданные — поля,
+    /// сигнатуры, базовые типы, интерфейсы, события, атрибуты
+    /// (<see cref="TypesFromSignatures"/>). Используется ОДНОВРЕМЕННО из Theory-сторожей
     /// (<see cref="SubsystemBoundaryTests"/>, <see cref="RootSubsystemBoundaryTests"/>)
     /// и из регрессии (<see cref="IlBoundaryRegressionTests"/>): если сбор здесь
-    /// сломать (например, вернуть к <c>GetMethods(DeclaredOnly)</c> без nested),
-    /// регрессия покраснеет — гейт не декоративен.</summary>
+    /// сломать (например, вернуть к <c>GetMethods(DeclaredOnly)</c> без nested или
+    /// убрать скан сигнатур), регрессия покраснеет — гейт не декоративен.</summary>
     public static IEnumerable<Type> CollectAllReferencedTypes(Type t)
     {
         foreach (var method in AllMethodsWithNested(t))
             foreach (var referenced in TypesFromBody(method))
+                yield return referenced;
+
+        foreach (var type in SelfAndNested(t))
+            foreach (var referenced in TypesFromSignatures(type))
                 yield return referenced;
     }
 }

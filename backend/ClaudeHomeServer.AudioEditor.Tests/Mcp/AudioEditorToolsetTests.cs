@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.AudioEditor;
+using ClaudeHomeServer.Services.AudioEditor.Engines;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Voices;
 using ClaudeHomeServer.Services.AudioEditor.Mcp;
@@ -61,7 +62,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
     }
 
     private AudioEditorToolset Toolset(IAudioEngine[]? engines = null, bool agentLaunch = true, bool withGate = true,
-        IAudioDsp? dsp = null, VoiceLibrary? library = null)
+        IAudioDsp? dsp = null, VoiceLibrary? library = null, bool withEdits = false)
     {
         engines ??= [new FakeEngine("fal")];
         var threads = new AudioJobThreads(_store, NullLogger<AudioJobThreads>.Instance);
@@ -81,7 +82,9 @@ public sealed class AudioEditorToolsetTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { [AudioEditorToolset.AgentLaunchKey] = agentLaunch ? "true" : "false" })
             .Build();
         return new AudioEditorToolset(accessor.Object, flags.Object, projects.Object, engines, threads, _jobs, _prefs,
-            _workspace, withGate ? _turnGate.Object : null, concat, library: library, events: _bus, config: config);
+            _workspace, withGate ? _turnGate.Object : null, concat,
+            edits: withEdits ? new AudioAgentEdits(new DspAudioEngine(threads, _workspace, NullLogger<DspAudioEngine>.Instance, dsp)) : null,
+            library: library, events: _bus, config: config);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -356,6 +359,76 @@ public sealed class AudioEditorToolsetTests : IDisposable
     }
 
     [Fact]
+    public async Task Монтаж_без_ИИ_обрезка_и_громкость_новые_версии_от_агента_без_траты_лимита()
+    {
+        var dsp = new FakeDsp();
+        var toolset = Toolset(dsp: dsp, withEdits: true);
+        var threadId = _store.Open(Owner, ChatId, "audio/intro.wav", null, null).Thread!.Id;
+
+        var trim = await Call(toolset, AudioEditorToolset.ToolGenerate, new JsonObject
+        {
+            ["threadId"] = threadId, ["op"] = "trim", ["range"] = new JsonObject { ["start"] = 1, ["end"] = 2.5 },
+        });
+        trim.IsError.Should().BeFalse(trim.Text);
+        var trimmed = Parse(trim)["versionId"]!.GetValue<string>();
+        dsp.Edit.Should().Be(new AudioEdit(1, 2.5, Format: AudioFormat.Wav));
+
+        var gain = await Call(toolset, AudioEditorToolset.ToolGenerate, new JsonObject
+        {
+            ["threadId"] = threadId, ["op"] = "gainFade",
+            ["params"] = new JsonObject { ["fadeInSeconds"] = 0.5, ["gainDb"] = -3, ["format"] = "mp3" },
+        });
+        gain.IsError.Should().BeFalse(gain.Text);
+        dsp.Edit.Should().Be(new AudioEdit(FadeInSeconds: 0.5, GainDb: -3, Format: AudioFormat.Mp3));
+
+        var thread = _store.Get(Owner, ChatId).Threads.Single(t => t.Id == threadId);
+        thread.Versions.Should().HaveCount(3);
+        thread.Version(Parse(gain)["versionId"]!.GetValue<string>())!.BaseVersionId.Should().Be(trimmed, "основа — текущая версия");
+        _store.Get(Owner, ChatId).Events.Where(e => e.Kind == AudioThreadEventKinds.Edited)
+            .Should().HaveCount(2).And.OnlyContain(e => e.Text.StartsWith("Ты "));
+        // Монтаж лимит платных запусков хода не тратит
+        (await Call(toolset, AudioEditorToolset.ToolGenerate, Gen(Draft()))).IsError.Should().BeFalse();
+        (await Call(toolset, AudioEditorToolset.ToolGenerate, Gen(Draft()))).IsError.Should().BeFalse();
+        await WaitIdleAsync();
+    }
+
+    [Fact]
+    public async Task Монтаж_без_ИИ_сведение_стемов_и_отказы_по_params()
+    {
+        var dsp = new FakeDsp();
+        var toolset = Toolset(dsp: dsp, withEdits: true);
+        var threadId = _store.Open(Owner, ChatId, "audio/intro.wav", null, null).Thread!.Id;
+        var jobId = Guid.NewGuid().ToString("N");
+        IReadOnlyList<AudioVersionFile> files = [.. new[] { "vocals", "drums" }.Select(name => new AudioVersionFile(
+            AudioFileRoles.Stem(name), _workspace.SaveFile(Owner, jobId, 1, AudioFileRoles.Stem(name), [7], ".wav")))];
+        _store.AddLaunch(Owner, ChatId, threadId,
+            new AudioThreadLaunch(jobId, AudioThreadVersion.OriginId, _store.Now(), AudioThreadLaunchStatus.Running, "human", null, null));
+        _store.FinishLaunch(Owner, ChatId, threadId, jobId, AudioThreadLaunchStatus.Done, [(1, files)]);
+
+        var unknown = await Call(toolset, AudioEditorToolset.ToolGenerate, new JsonObject
+        {
+            ["threadId"] = threadId, ["op"] = "normalize", ["params"] = new JsonObject { ["lufs"] = -14 },
+        });
+        unknown.IsError.Should().BeTrue();
+        unknown.Text.Should().Contain("lufs").And.Contain("targetLufs");
+        (await Call(toolset, AudioEditorToolset.ToolGenerate, new JsonObject { ["threadId"] = threadId, ["op"] = "mixStems" }))
+            .Text.Should().Contain("params.stems");
+
+        var mix = await Call(toolset, AudioEditorToolset.ToolGenerate, new JsonObject
+        {
+            ["threadId"] = threadId, ["op"] = "mixStems",
+            ["params"] = new JsonObject
+            {
+                ["stems"] = new JsonArray("vocals", new JsonObject { ["name"] = "drums", ["gainDb"] = -6 }),
+            },
+        });
+
+        mix.IsError.Should().BeFalse(mix.Text);
+        dsp.Stems.Select(s => s.GainDb).Should().Equal(0, -6);
+        _store.Get(Owner, ChatId).Threads.Single(t => t.Id == threadId).Versions.Should().HaveCount(3);
+    }
+
+    [Fact]
     public async Task Личный_чат_файлы_проекта_отказ_до_диска()
     {
         var toolset = Toolset();
@@ -495,6 +568,8 @@ public sealed class AudioEditorToolsetTests : IDisposable
     private sealed class FakeDsp : IAudioDsp
     {
         public bool Available => true;
+        public AudioEdit? Edit { get; private set; }
+        public IReadOnlyList<AudioStem> Stems { get; private set; } = [];
 
         public Task<AudioDspOutput> ConcatAsync(IReadOnlyList<byte[]> pieces, IReadOnlyList<AudioJoint> joints,
             double? normalizeLufs, AudioFormat format, CancellationToken ct) =>
@@ -502,12 +577,18 @@ public sealed class AudioEditorToolsetTests : IDisposable
 
         public Task<AudioDspInfo?> ProbeAsync(byte[] audio, CancellationToken ct) => throw new NotSupportedException();
         public Task<AudioPeaks> PeaksAsync(byte[] audio, int points, CancellationToken ct) => throw new NotSupportedException();
-        public Task<AudioDspOutput> TrimFadeGainAsync(byte[] audio, AudioEdit edit, CancellationToken ct, AudioDspInfo? known) =>
-            throw new NotSupportedException();
+        public Task<AudioDspOutput> TrimFadeGainAsync(byte[] audio, AudioEdit edit, CancellationToken ct, AudioDspInfo? known)
+        {
+            Edit = edit;
+            return Task.FromResult(new AudioDspOutput("EDIT"u8.ToArray(), edit.Format, null));
+        }
         public Task<AudioDspOutput> NormalizeAsync(byte[] audio, double targetLufs, AudioFormat format, CancellationToken ct,
             AudioDspInfo? known) => throw new NotSupportedException();
-        public Task<AudioDspOutput> MixAsync(IReadOnlyList<AudioStem> stems, AudioFormat format, CancellationToken ct) =>
-            throw new NotSupportedException();
+        public Task<AudioDspOutput> MixAsync(IReadOnlyList<AudioStem> stems, AudioFormat format, CancellationToken ct)
+        {
+            Stems = stems;
+            return Task.FromResult(new AudioDspOutput("MIX"u8.ToArray(), format, null));
+        }
         public Task<AudioDspOutput> ConvertAsync(byte[] audio, AudioFormat format, int? sampleRate, int? channels, CancellationToken ct) =>
             throw new NotSupportedException();
     }

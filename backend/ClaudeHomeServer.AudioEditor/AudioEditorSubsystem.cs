@@ -69,6 +69,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Правки без ИИ (обрезка, фейды, громкость, нормализация, формат, сведение стемов) — новые версии
         // нити, тот же необязательный шов IAudioDsp
         services.AddSingleton<Engines.DspAudioEngine>();
+        // Монтаж без ИИ у агента (audio_generate с op trim/gainFade/normalize/mixStems) — поверх того же движка
+        services.AddSingleton<Mcp.IAudioAgentEdits, Mcp.AudioAgentEdits>();
         // Библиотека «Голоса»: voices/<slug>/ серверного проекта, кеш id у поставщиков и признак
         // «клон MiniMax протух» по подменяемым часам
         services.AddSingleton(sp => new Voices.VoiceLibrary(sp.GetService<TimeProvider>()));

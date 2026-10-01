@@ -442,7 +442,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         });
     }
 
-    // Монтаж без ИИ: бесплатно и без GPU — лимит хода не расходует; реализация — этап правок без ИИ
+    // Монтаж без ИИ: бесплатно и без GPU — лимит хода не расходует; реализация — AudioAgentEdits
     private async Task<McpToolCallResult> EditAsync(JsonObject args, string ownerId, Session session, AudioEditScope scope,
         AudioThread thread, AudioThreadVersion? version, AudioOp op, CancellationToken ct)
     {
@@ -731,7 +731,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         args[name] is JsonValue v && v.TryGetValue<int>(out var i) ? i : null;
 
     // Число любого происхождения: из разобранного JSON и из кода (JsonValue<int>, <double>)
-    private static double? Num(JsonObject args, string name) =>
+    internal static double? Num(JsonObject args, string name) =>
         args[name] is JsonValue v && v.GetValueKind() == JsonValueKind.Number
         && double.TryParse(v.ToJsonString(), System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out var d)

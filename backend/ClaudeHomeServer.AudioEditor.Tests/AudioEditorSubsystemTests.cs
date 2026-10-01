@@ -28,4 +28,16 @@ public class AudioEditorSubsystemTests
         // local, Higgsfield, Яндекс, fal
         services.Count(d => d.ServiceType == typeof(IAudioEngine)).Should().Be(4);
     }
+
+    // Монтаж без ИИ у агента: шов тулсета заведён реализацией поверх движка «Без ИИ»
+    [Fact]
+    public void Регистрация_заводит_монтаж_без_ИИ_у_агента()
+    {
+        var services = new ServiceCollection();
+
+        new AudioEditorSubsystem().Register(services, new ConfigurationBuilder().Build());
+
+        services.Should().ContainSingle(d => d.ServiceType == typeof(ClaudeHomeServer.Services.AudioEditor.Mcp.IAudioAgentEdits)
+            && d.ImplementationType == typeof(ClaudeHomeServer.Services.AudioEditor.Mcp.AudioAgentEdits));
+    }
 }

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
+using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.AudioEditor;
 
@@ -64,5 +65,7 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         services.AddSingleton<Jobs.AudioConcatService>();
         // Инструменты агента (MCP audio-editor, ADR-021 §5): в ход их везёт Main, когда тулсет есть в реестре
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.AudioEditorToolset>();
+        // Блок хвоста хода «Звук в этом чате»: правило приоритета audio_* над прямыми local_*
+        services.AddPromptSectionContributor<Chats.AudioEditorStateContributor>();
     }
 }

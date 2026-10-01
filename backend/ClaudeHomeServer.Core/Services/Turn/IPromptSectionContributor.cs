@@ -73,6 +73,8 @@ public sealed record PromptSessionContext(
     // MCP-сервер редактора картинок (image_new/image_generate) доехал до хода: без него
     // TrimMcpServers или выключенный модуль оставляют ход без этих инструментов
     bool HasImageEditorMcp = false,
+    // MCP-сервер модуля «Звук» (audio_*) доехал до хода — по той же причине, что у картинок
+    bool HasAudioEditorMcp = false,
     // Живого человека у хода нет — см. TurnAudience.IsUnattended
     bool Unattended = false);
 

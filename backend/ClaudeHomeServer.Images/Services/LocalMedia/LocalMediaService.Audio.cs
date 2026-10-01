@@ -103,12 +103,16 @@ public sealed partial class LocalMediaService
             case LocalMediaOps.VoiceConvert:
             {
                 var engine = OneOf(a, "engine", "seedvc", ["seedvc", "rvc"]);
-                var (source, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
                 var shift = (int)Range(a, "pitch_shift", 0, -24, 24);
+                var mode = engine == "seedvc" ? OneOf(a, "mode", "speech", ["speech", "singing"]) : null;
+                // Модель v2 режима speech сдвига высоты не умеет: молча отдать исходную высоту хуже отказа
+                if (mode == "speech" && shift != 0)
+                    throw new LocalMediaInputException("Seed-VC в режиме speech сдвиг высоты не применяет: уберите "
+                        + "pitch_shift или возьмите mode=singing / engine=rvc.");
+                var (source, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
                 job.Engine = engine;
-                if (engine == "seedvc")
+                if (mode != null)
                 {
-                    var mode = OneOf(a, "mode", "speech", ["speech", "singing"]);
                     var (target, _) = await AudioInputAsync(request, job, root, Required(a, "reference"), "ref", options, ct);
                     var p = new JsonObject { ["mode"] = mode, ["pitch_shift"] = shift };
                     return (ComfyWorkflows.AudioWorker("voice_convert", p, [source, target], job.Id, 30),

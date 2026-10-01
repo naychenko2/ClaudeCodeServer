@@ -339,6 +339,33 @@ public class LocalMediaAudioTests : IDisposable
         second.Error.Should().Contain("тяжёлая");
     }
 
+    [Theory]
+    [InlineData("speech", 3, true)]
+    [InlineData("speech", 0, false)]
+    [InlineData("singing", 3, false)]
+    public async Task СменаГолоса_SeedVc_СдвигВысотыВSpeech_Отказ(string mode, int shift, bool refused)
+    {
+        var (service, _) = Build();
+        Put("src.wav", Wav(5));
+        Put("voice/ref.wav", Wav(6));
+
+        var result = await service.SubmitAsync(Audio(LocalMediaOps.VoiceConvert, new JsonObject
+        {
+            ["audio"] = "src.wav", ["reference"] = "voice/ref.wav", ["mode"] = mode, ["pitch_shift"] = shift,
+        }), default);
+
+        if (refused)
+        {
+            result.Error.Should().Contain("Seed-VC в режиме speech сдвиг высоты не применяет");
+            _comfy.Prompts.Should().BeEmpty();
+        }
+        else
+        {
+            result.Error.Should().BeNull();
+            WorkerParams()["pitch_shift"]!.GetValue<int>().Should().Be(shift);
+        }
+    }
+
     [Fact]
     public async Task СменаГолоса_Rvc_НеМодель_Отказ_МодельИИндекс_ВоВходах()
     {

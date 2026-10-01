@@ -119,7 +119,8 @@ public sealed partial class LocalMediaToolset
                 ["voice_model"] = Str("Только rvc: путь .pth в проекте или job_id задачи local_voice_train"),
                 ["voice_index"] = Str("Только rvc: путь .index в проекте или job_id той же задачи (необязательно, "
                     + "точнее тембр)"),
-                ["pitch_shift"] = Int(-24, 24, "Сдвиг высоты в полутонах (по умолчанию 0)"),
+                ["pitch_shift"] = Int(-24, 24, "Только singing и rvc: сдвиг высоты в полутонах (по умолчанию 0); "
+                    + "seedvc в режиме speech со сдвигом откажет"),
             }));
 
         yield return Tool("local_voice_train",

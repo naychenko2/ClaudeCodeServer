@@ -21,8 +21,10 @@ public class PersonalAudioEditorController(
     AudioEditJobService jobs,
     AudioJobThreads threads,
     AudioPrefsService prefs,
-    AudioEditWorkspace workspace)
-    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace)
+    AudioEditWorkspace workspace,
+    Engines.DspAudioEngine dsp,
+    AudioConcatService concat)
+    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat)
 {
     [HttpGet("state")]
     public IActionResult State(string sessionId) =>
@@ -31,6 +33,14 @@ public class PersonalAudioEditorController(
     [HttpGet("catalog")]
     public IActionResult Catalog(string sessionId) =>
         Gate(sessionId, out var scope, out var denied) ? CatalogIn(scope) : denied;
+
+    // Библиотека «Голоса» живёт только в проекте: у личного чата — честное пустое состояние, мутирующих
+    // ручек голосов здесь нет вовсе
+    [HttpGet("voices")]
+    public IActionResult Voices(string sessionId) =>
+        Gate(sessionId, out _, out var denied)
+            ? Ok(new { available = false, reason = AudioEditor.Voices.VoiceLibrary.ProjectOnlyReason, voices = Array.Empty<object>() })
+            : denied;
 
     [HttpGet("prefs")]
     public IActionResult GetPrefs(string sessionId) =>
@@ -87,6 +97,26 @@ public class PersonalAudioEditorController(
     public IActionResult VersionFile(string sessionId, string threadId, string versionId, string role,
         [FromQuery] bool download) =>
         Gate(sessionId, out var scope, out var denied) ? VersionFileIn(scope, sessionId, threadId, versionId, role, download) : denied;
+
+    [HttpPost("threads/{threadId}/edit")]
+    public async Task<IActionResult> Edit(string sessionId, string threadId, [FromBody] AudioDspEditRequest? req,
+        CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await EditIn(scope, sessionId, threadId, req, ct) : denied;
+
+    [HttpPost("threads/{threadId}/mix")]
+    public async Task<IActionResult> Mix(string sessionId, string threadId, [FromBody] AudioMixRequest? req,
+        CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await MixIn(scope, sessionId, threadId, req, ct) : denied;
+
+    [HttpGet("threads/{threadId}/versions/{versionId}/peaks")]
+    public async Task<IActionResult> Peaks(string sessionId, string threadId, string versionId,
+        [FromQuery] int points = 800, [FromQuery] string? role = null, CancellationToken ct = default) =>
+        Gate(sessionId, out var scope, out var denied) ? await PeaksIn(scope, sessionId, threadId, versionId, role, points, ct) : denied;
+
+    // Куски — только версии нитей этого чата: файлов проекта у личного чата нет
+    [HttpPost("concat")]
+    public async Task<IActionResult> Concat(string sessionId, [FromBody] AudioConcatRequest? req, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await ConcatIn(scope, sessionId, req, ct) : denied;
 
     private bool Gate(string sessionId, [NotNullWhen(true)] out AudioEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>

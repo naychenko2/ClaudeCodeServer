@@ -445,6 +445,29 @@ public class FfmpegAudioDspTests
         finally { File.Delete(stub); }
     }
 
+    [SkippableFact]
+    public async Task Stdout_сверх_потолка_сохраняет_уже_прочитанный_хвост_stderr()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "заглушка процесса — sh-скрипт");
+        // stderr закрыт до потока в stdout: его хвост дочитан раньше отказа по потолку
+        var stub = Stub("echo ПРИЧИНА-В-STDERR >&2; exec 2>&-; sleep 0.5; cat /dev/zero");
+        try
+        {
+            var capped = new FfmpegAudioDsp(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AudioDsp:FfmpegPath"] = stub,
+                ["AudioDsp:FfprobePath"] = stub,
+                ["AudioDsp:TimeoutSeconds"] = "60",
+            }).Build(), NullLogger<FfmpegAudioDsp>.Instance) { StdoutCapBytes = 1024 * 1024 };
+
+            var run = await capped.RunAsync(stub, ["-i", "x"], default);
+
+            run.Error.Should().Contain("слишком большой");
+            run.Stderr.Should().Contain("ПРИЧИНА-В-STDERR");
+        }
+        finally { File.Delete(stub); }
+    }
+
     [Fact]
     public void Images_регистрирует_шов_IAudioDsp()
     {

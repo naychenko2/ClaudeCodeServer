@@ -13,13 +13,20 @@ import { dropCharacter, putCharacter, reloadCharacters, useCharacters } from './
 
 const ic = (I: typeof Users, size: number = ICON_SIZE.sm) => <I size={size} strokeWidth={ICON_STROKE} />;
 
-type Editing = { kind: 'new' } | { kind: 'edit'; slug: string } | null;
+export type CharacterEditing = { kind: 'new' } | { kind: 'edit'; slug: string } | null;
 
-export function CharactersPanel({ projectId }: { projectId: string }) {
+// В панели «Картинки» форму держит хозяин (editing/onEditing): «＋ Персонаж» живёт в её
+// закреплённом низу, а не кнопкой над списком
+export function CharactersPanel({ projectId, editing: outer, onEditing }: {
+  projectId: string; editing?: CharacterEditing; onEditing?: (e: CharacterEditing) => void;
+}) {
   const api = useMemo(() => imageEditorApi(), []);
   const { list, error } = useCharacters(projectId);
   const prefs = usePrefs(projectId);
-  const [editing, setEditing] = useState<Editing>(null);
+  const [own, setOwn] = useState<CharacterEditing>(null);
+  const controlled = onEditing !== undefined;
+  const editing = controlled ? outer ?? null : own;
+  const setEditing = controlled ? onEditing : setOwn;
 
   const toggle = (c: ImageEditCharacter) => {
     if (prefs.characterSlug === c.slug) {
@@ -50,11 +57,13 @@ export function CharactersPanel({ projectId }: { projectId: string }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div style={{ flexShrink: 0, padding: SP.sm, borderBottom: `1px solid ${C.borderLight}` }}>
-        <Button size="sm" variant="dashed" fullWidth leftIcon={ic(UserPlus, ICON_SIZE.xs)} onClick={() => setEditing({ kind: 'new' })}>
-          Новый персонаж
-        </Button>
-      </div>
+      {!controlled && (
+        <div style={{ flexShrink: 0, padding: SP.sm, borderBottom: `1px solid ${C.borderLight}` }}>
+          <Button size="sm" variant="dashed" fullWidth leftIcon={ic(UserPlus, ICON_SIZE.xs)} onClick={() => setEditing({ kind: 'new' })}>
+            Новый персонаж
+          </Button>
+        </div>
+      )}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: SP.xxs, padding: SP.sm }}>
         {list === null && <div style={{ fontSize: FS.sm, color: C.textMuted, padding: SP.sm }}>Загружаем…</div>}
         {list?.length === 0 && (error

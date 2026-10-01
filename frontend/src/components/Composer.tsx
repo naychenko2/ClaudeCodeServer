@@ -36,7 +36,7 @@ import { showToast } from '../lib/toast';
 import { Button, IconButton, Modal, Notice } from './ui';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
-import { getComposerStripsVersion, subscribeComposerStrips } from '../lib/composerStrips';
+import { getComposerStripsVersion, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
 import { nextComposerMode, nextPrefill, type ComposerModeSeen, type PrefillState } from '../lib/composerModes';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
@@ -1144,6 +1144,19 @@ export function Composer({
     if (overrideText === undefined) resetInput();
     return true;
   };
+
+  // Внешний запуск режима поля ввода (низ панели «Картинки», submitComposerMode): тот же
+  // путь, что Enter. Пустое поле или другой режим — включаем режим и ставим фокус в поле
+  const submitModeRef = useRef<(mode: string) => void>(() => {});
+  useLayoutEffect(() => {
+    submitModeRef.current = mode => {
+      if (!slotModes.some(c => c.name === mode)) return;
+      if (modeId === mode && modeText.trim()) { void handleSend(); return; }
+      setModeId(mode);
+      textareaRef.current?.focus();
+    };
+  });
+  useEffect(() => registerComposerSubmit(sessionId, m => submitModeRef.current(m)), [sessionId]);
 
   // Хвост выхода из разговора. ДВЕ разновидности — прерывание хода в них НЕ одно и то же:
   // полный exitTalk — «человек явно сказал прекрати» (кнопка, голосовое «стоп»): прерываем

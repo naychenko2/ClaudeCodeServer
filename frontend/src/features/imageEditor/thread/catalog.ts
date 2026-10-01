@@ -21,7 +21,8 @@ export function loadCatalog(projectId: string): Promise<ImageEditCatalog | null>
 }
 
 export function useCatalog(projectId: string | null): ImageEditCatalog | null {
-  const [catalog, setCatalog] = useState<ImageEditCatalog | null>(null);
+  // Уже пришедший каталог — сразу, без кадра «Загружаем…»
+  const [catalog, setCatalog] = useState<ImageEditCatalog | null>(() => (projectId ? getCatalog(projectId) : null));
   useEffect(() => {
     if (!projectId) return;
     let alive = true;

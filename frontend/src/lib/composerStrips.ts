@@ -94,6 +94,23 @@ export function notifyComposer() {
   emit();
 }
 
+// Запуск режима поля ввода извне (кнопка закреплённого низа панели «Картинки»): композер чата
+// отправляет текст режима своим же путём — onSubmit вклада, как по Enter. Поле пустое или
+// режим не включён — композер включает режим и ставит фокус в поле. false — композера нет
+const _submitters = new Map<string, (mode: string) => void>();
+
+export function registerComposerSubmit(sessionId: string, fn: (mode: string) => void) {
+  _submitters.set(sessionId, fn);
+  return () => { if (_submitters.get(sessionId) === fn) _submitters.delete(sessionId); };
+}
+
+export function submitComposerMode(sessionId: string, mode: string): boolean {
+  const fn = _submitters.get(sessionId);
+  if (!fn) return false;
+  fn(mode);
+  return true;
+}
+
 // Полоса, которую запросил владелец, но человек ушёл с неё вручную: хост ставит
 // точку на «▾», чтобы выбор не потерялся из виду.
 export function getPendingFocus(sessionId: string): string | null {

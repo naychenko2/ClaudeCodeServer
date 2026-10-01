@@ -2,11 +2,13 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.AudioEditor.Tests.Schema;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.Engines;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
+using ClaudeHomeServer.Services.AudioEditor.Schema;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
@@ -433,6 +435,22 @@ public sealed class FalAudioEngineTests
         _clock.Advance(TimeSpan.FromMinutes(2));
         await engine.SchemaAsync(Model(endpoint), AudioOp.Sfx, CancellationToken.None);
         _fal.Requests.Count(r => r.Url == SchemaUrl(endpoint)).Should().Be(2);
+    }
+
+    // Поля-ссылки схемы (вебхук, колбэк, *_url) движок кладёт в Reserved: в форме их нет, params их не пустят
+    [Fact]
+    public async Task Schema_LinkFields_Reserved()
+    {
+        var endpoint = AudioCatalog.FalElevenSfx;
+        _fal.Respond(HttpMethod.Get, SchemaUrl(endpoint), HttpStatusCode.OK,
+            $$"""{"models":[{"endpoint_id":"{{endpoint}}","openapi":{{FalLiveSchemaTests.WithLinks()}}}],"has_more":false}""");
+
+        var schema = (await Engine().SchemaAsync(Model(endpoint), AudioOp.Sfx, CancellationToken.None)).Schema!;
+
+        schema.Reserved.Should().BeEquivalentTo(["text", "duration_seconds", .. FalLiveSchemaTests.LinkKeys]);
+        schema.Fields.Select(f => f.Key).Should().Equal("prompt_influence", "output_format", "loop", "extra");
+        AudioParamValidator.Validate(schema, new JsonObject { ["webhook_url"] = "https://evil.example/hook" })
+            .Should().Be("Параметр «webhook_url» задаётся общим полем запроса, а не в params");
     }
 
     [Fact]

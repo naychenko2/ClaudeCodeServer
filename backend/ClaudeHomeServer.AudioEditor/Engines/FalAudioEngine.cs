@@ -144,11 +144,15 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
         if (AudioCatalog.FindFal(model.Id) is not { } fal || !fal.Info.Caps.Ops.Contains(op))
             return AudioSchemaLookup.Fail("У fal.ai нет такой модели для этой операции");
 
-        var (endpoint, reserved) = fal.Next is { } next
-            ? (next.Info.Id, FalSchemaReader.Reserved(next.Fields, next.LinkTo))
-            : (fal.Info.Id, FalSchemaReader.Reserved(fal.Fields));
-        AudioParamSchema Schema(IReadOnlyList<AudioParamField> fields, bool stale) => new(ProviderKey, fal.Info.Id,
-            AudioSchemaSources.FalOpenApi, [.. fields.Where(f => !reserved.Contains(f.Key))], reserved, stale);
+        var (endpoint, catalogFields, linkTo) = fal.Next is { } next
+            ? (next.Info.Id, next.Fields, next.LinkTo)
+            : (fal.Info.Id, fal.Fields, (string?)null);
+        AudioParamSchema Schema(IReadOnlyList<AudioParamField> fields, bool stale)
+        {
+            var reserved = FalSchemaReader.Reserved(catalogFields, linkTo, fields);
+            return new(ProviderKey, fal.Info.Id, AudioSchemaSources.FalOpenApi,
+                [.. fields.Where(f => !reserved.Contains(f.Key))], reserved, stale);
+        }
 
         var now = Time.GetUtcNow();
         (IReadOnlyList<AudioParamField> Fields, DateTimeOffset At)? cached = _schemas.TryGetValue(endpoint, out var c) ? c : null;

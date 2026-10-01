@@ -18,13 +18,25 @@ internal static class FalSchemaReader
         return ObjectFields(openapi, input, 0) ?? [];
     }
 
-    // Поля, которыми владеют общие поля запроса и каталог: в params их не пускаем, в форме не рисуем
-    public static IReadOnlyList<string> Reserved(AudioCatalog.FalFields f, string? linkTo = null)
+    // Поля, которыми владеют общие поля запроса и каталог, плюс поля-ссылки верхнего уровня схемы: в params
+    // их не пускаем, в форме не рисуем
+    public static IReadOnlyList<string> Reserved(AudioCatalog.FalFields f, string? linkTo = null,
+        IReadOnlyList<AudioParamField>? fields = null)
     {
         var keys = new[] { f.Text, f.Prompt, f.Lyrics, f.Language, f.Duration, f.Start, f.End, f.Source, f.Reference, f.Seed, linkTo }
             .Where(k => k is not null).Select(k => k!)
-            .Concat(f.Fixed?.Keys ?? []);
+            .Concat(f.Fixed?.Keys ?? [])
+            .Concat(fields?.Where(x => IsLink(x.Key)).Select(x => x.Key) ?? []);
         return [.. keys.Distinct(StringComparer.Ordinal)];
+    }
+
+    // Поле, через которое fal пойдёт по адресу: вебхук, колбэк, любая ссылка. Адреса в запрос кладём только
+    // мы сами из входов (Source/Reference каталога) — из params ни один не принимаем
+    public static bool IsLink(string key)
+    {
+        var k = key.ToLowerInvariant();
+        return k.Contains("webhook") || k.StartsWith("callback", StringComparison.Ordinal)
+            || k is "url" or "urls" || k.EndsWith("_url", StringComparison.Ordinal) || k.EndsWith("_urls", StringComparison.Ordinal);
     }
 
     private static JsonElement? InputSchema(JsonElement openapi)
@@ -50,7 +62,11 @@ internal static class FalSchemaReader
     private static IReadOnlyList<AudioParamField>? ObjectFields(JsonElement root, JsonElement schema, int depth)
     {
         if (!schema.TryGetProperty("properties", out var props) || props.ValueKind != JsonValueKind.Object) return null;
-        var fields = props.EnumerateObject().Select(p => Field(root, p.Name, p.Value, depth)).ToList();
+        // Вложенные поля-ссылки выкидываем сразу: валидатор откажет им как неизвестным. Верхний уровень
+        // оставляем — его ссылки уходят в Reserved с внятной причиной отказа
+        var fields = props.EnumerateObject()
+            .Where(p => depth == 0 || !IsLink(p.Name))
+            .Select(p => Field(root, p.Name, p.Value, depth)).ToList();
 
         // Порядок полей — как в плейграунде fal
         if (schema.TryGetProperty("x-fal-order-properties", out var order) && order.ValueKind == JsonValueKind.Array)

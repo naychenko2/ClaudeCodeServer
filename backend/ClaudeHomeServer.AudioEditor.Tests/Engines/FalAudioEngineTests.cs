@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.AudioEditor.Tests.Schema;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.Engines;
@@ -37,8 +38,10 @@ public sealed class FalAudioEngineTests
         }).Build(), NullLogger<FalAudioEngine>.Instance)
     {
         PollInterval = TimeSpan.Zero,
-        // cdn.test — «публичный» хост, всё прочее не резолвится
-        Resolve = (host, _) => Task.FromResult(host == "cdn.test" ? [IPAddress.Parse("93.184.216.34")] : Array.Empty<IPAddress>()),
+        // Общий загрузчик поверх фейка: cdn.test — «публичный» хост, прочее — боевая проверка SsrfGuard
+        Downloader = new SafeMediaDownloader(_fal, (uri, ct) => uri.Host == "cdn.test"
+            ? Task.FromResult(SsrfGuard.AddressCheck.Public)
+            : SsrfGuard.CheckAsync(uri, ct)),
     };
 
     private static AudioModelInfo Model(string id) => AudioCatalog.FindFal(id)!.Info;

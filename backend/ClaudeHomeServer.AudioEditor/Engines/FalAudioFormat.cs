@@ -107,8 +107,8 @@ internal static class FalOutputs
     // Файлы результата или отказ значением (недопустимая ссылка, потолок размера, пустой файл)
     public sealed record Collected(IReadOnlyList<AudioFile> Files, string? Error);
 
-    public static async Task<Collected> CollectAsync(FalDownload download, FalOutputKind kind, JsonElement output,
-        CancellationToken ct)
+    public static async Task<Collected> CollectAsync(SafeMediaDownloader download, long maxBytes, FalOutputKind kind,
+        JsonElement output, CancellationToken ct)
     {
         if (output.ValueKind != JsonValueKind.Object) return new Collected([], null);
         switch (kind)
@@ -121,7 +121,7 @@ internal static class FalOutputs
                     if (FileOf(prop.Value) is not { } file) continue;
                     var role = AudioFileRoles.Stem(prop.Name);
                     if (!AudioFileRoles.IsValid(role)) continue;
-                    var (stem, error) = await DownloadAsync(download, file, role, ct);
+                    var (stem, error) = await DownloadAsync(download, maxBytes, file, role, ct);
                     if (error is not null) return new Collected([], error);
                     files.Add(stem!);
                 }
@@ -135,7 +135,7 @@ internal static class FalOutputs
                 var file = AudioFields.Select(f => output.TryGetProperty(f, out var v) ? FileOf(v) : null).FirstOrDefault(f => f is not null)
                            ?? output.EnumerateObject().Select(p => FileOf(p.Value)).FirstOrDefault(f => f is not null);
                 if (file is null) return new Collected([], null);
-                var (main, error) = await DownloadAsync(download, file.Value, AudioFileRoles.Main, ct);
+                var (main, error) = await DownloadAsync(download, maxBytes, file.Value, AudioFileRoles.Main, ct);
                 return error is not null ? new Collected([], error) : new Collected([main!], null);
             }
         }
@@ -150,18 +150,35 @@ internal static class FalOutputs
 
     private static string? Url(JsonElement value) => FileOf(value) is { } file ? FalAudioEngine.Str(file, "url") : null;
 
-    private static async Task<(AudioFile? File, string? Error)> DownloadAsync(FalDownload download, JsonElement file, string role,
-        CancellationToken ct)
+    private static async Task<(AudioFile? File, string? Error)> DownloadAsync(SafeMediaDownloader download, long maxBytes,
+        JsonElement file, string role, CancellationToken ct)
     {
-        var got = await download.GetAsync(FalAudioEngine.Str(file, "url")!, ct);
-        if (got.File is not { } fetched) return (null, got.Error);
+        var url = FalAudioEngine.Str(file, "url")!;
+        var got = await download.DownloadAsync(url, maxBytes, ct);
+        if (got.Bytes is not { } bytes) return (null, Explain(got.Error, maxBytes));
         var contentType = FalAudioEngine.Str(file, "content_type") is { Length: > 0 } declared && !declared.StartsWith("image/")
             ? declared
-            : fetched.ContentType ?? "application/octet-stream";
-        var extension = ExtensionOf(FalAudioEngine.Str(file, "file_name")) ?? ExtensionOf(fetched.Uri.AbsolutePath)
-                        ?? ExtensionByType(contentType);
-        return (new AudioFile(role, fetched.Bytes, contentType, extension), null);
+            : got.ContentType ?? "application/octet-stream";
+        var path = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.AbsolutePath : null;
+        var extension = ExtensionOf(FalAudioEngine.Str(file, "file_name")) ?? ExtensionOf(path) ?? ExtensionByType(contentType);
+        return (new AudioFile(role, bytes, contentType, extension), null);
     }
+
+    // Код отказа общего загрузчика — текстом для человека
+    internal static string Explain(string? code, long maxBytes) => code switch
+    {
+        "bad-url" => "ссылка на файл не разбирается",
+        "not-https" => "ссылка на файл не https",
+        "private-address" => "ссылка на файл ведёт на внутренний адрес",
+        "dns-failed" => "адрес файла не найден",
+        "bad-redirect" or "too-many-redirects" => "сервер файла перенаправляет неправильно",
+        "too-large" => $"файл результата больше {maxBytes / (1024 * 1024)} МБ",
+        "empty" => "пустой файл результата",
+        "timeout" => "сервер файла не ответил вовремя",
+        "network" => "сбой сети при скачивании файла",
+        { } http when http.StartsWith("http-") => $"сервер файла ответил {http[5..]}",
+        _ => "файл не скачан",
+    };
 
     private static string? ExtensionOf(string? name)
     {

@@ -26,7 +26,9 @@ import {
   Calendar, Share2, MessageCircle,
   Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug, ImageIcon } from 'lucide-react';
+import { GenerationPanel } from '../components/generation/GenerationPanel';
+import type { GenerationFoot } from '../components/generation/GenerationPanel';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
@@ -111,7 +113,8 @@ const BADGE_TONES: BadgeTone[] = ['neutral', 'accent', 'success', 'warning', 'da
 const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-viewport',   label: 'Замер экрана'      },
   { id: 'sec-toggles',    label: 'Переключатели'     },
-  { id: 'sec-gen-panel',  label: 'Панель генерации'  },
+  { id: 'sec-gen-panel',  label: 'Примитивы генерации' },
+  { id: 'sec-gen-scaffold', label: 'Панель генерации' },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
   { id: 'sec-buttons',    label: 'Кнопки'            },
@@ -211,6 +214,11 @@ export function UiKitPage() {
             {/* Примитивы панели генерации — Tabs, Stepper, ResizeHandle */}
             <div id="sec-gen-panel" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <GenPanelPrimitivesSection />
+            </div>
+
+            {/* Каркас GenerationPanel — четыре вида */}
+            <div id="sec-gen-scaffold" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <GenPanelScaffoldSection />
             </div>
 
             {/* Примитивы — оверлеи и меню */}
@@ -794,6 +802,126 @@ function GenPanelPrimitivesSection() {
             </div>
           </div>
         </SubBlock>
+      </div>
+    </Island>
+  );
+}
+
+// Каркас панели генерации (ADR-021 §3): колонка, корешок, шторка и опущенная шторка.
+// Виды заданы явно (layout, collapsed, peeked), чтобы витрина показывала все четыре
+// на любой ширине; шторка — contained, внутри своей рамки, а не во весь экран.
+type GenTab = 'settings' | 'characters';
+
+function GenPanelScaffoldSection() {
+  const [tab, setTab] = useState<GenTab>('settings');
+  const [count, setCount] = useState(2);
+  const [width, setWidth] = useState(380);
+  const [blocked, setBlocked] = useState(false);
+  const [queue, setQueue] = useState(false);
+
+  const tabs = [
+    { value: 'settings' as const, label: 'Настройки', icon: <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+    { value: 'characters' as const, label: 'Персонажи', icon: <Users size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, count: 2 },
+  ];
+  const foot: GenerationFoot = {
+    reason: blocked ? 'Нужен текст в поле ввода — модели нечего менять' : undefined,
+    queue: queue ? 'GPU: 2-я в очереди · старт ≈ через 1 мин' : undefined,
+    count, maxCount: 4, onCountChange: setCount,
+    price: [`≈ $${(count * 0.04).toFixed(2)}`, `${count} × $0.04 за картинку`],
+    runLabel: 'Изменить',
+    onRun: () => showToast('Запуск', 'Изменить · витрина'),
+  };
+  const common = {
+    title: 'Картинки',
+    subtitle: 'fal · FLUX Kontext',
+    icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+    tabs, tab, onTabChange: setTab,
+    context: tab === 'settings'
+      ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Работаем с: <b>cover.png</b> · версия 3</span>
+      : <span>Папка <code>characters/</code> проекта</span>,
+    foot,
+    peekSummary: 'Изменить · fal · FLUX Kontext · 2 варианта',
+    onClose: () => showToast('Панель закрыта', 'Сводка осталась в полосе'),
+  };
+  const body = tab === 'settings' ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, paddingTop: SP.sm }}>
+      {(['Операция', 'Поставщик', 'Модель'] as const).map((h, i) => (
+        <div key={h} style={{ display: 'flex', flexDirection: 'column', gap: SP.xs + 2 }}>
+          <div style={{ fontSize: FS.xs, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: C.textMuted }}>{h}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs + 1 }}>
+            {[['Изменить', 'Дорисовать', 'Убрать фон'], ['fal', 'Higgsfield', 'Локально'], ['Авто', 'Nano Banana 2', 'FLUX Kontext', 'FLUX Fill']][i]
+              .map((o, j) => <Chip key={o} selected={j === (i === 2 ? 2 : 0)}>{o}</Chip>)}
+          </div>
+        </div>
+      ))}
+      <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.5 }}>
+        Тело прокручивается само, низ с ценой и запуском закреплён под ним.
+        {Array.from({ length: 6 }, (_, k) => <p key={k} style={{ margin: `${SP.sm}px 0 0` }}>Строка-заполнитель {k + 1}: проверяем прокрутку тела.</p>)}
+      </div>
+    </div>
+  ) : (
+    <div style={{ paddingTop: SP.sm, fontSize: FS.sm, color: C.textSecondary }}>Аня · Борис — персонажи проекта.</div>
+  );
+  const charsFoot = tab === 'characters'
+    ? <div style={{ fontSize: FS.sm, color: C.textSecondary }}>Подключён: <b style={{ color: C.textHeading }}>Аня</b></div>
+    : undefined;
+  // Подложка «лента» под шторкой: видно, что опущенная шторка её не перекрывает
+  const feed = (
+    <div style={{ position: 'absolute', inset: 0, padding: SP.md, display: 'flex', flexDirection: 'column', gap: SP.sm, background: C.bgMain }}>
+      {[0, 1, 2].map(k => (
+        <div key={k} style={{ height: 52, borderRadius: R.lg, background: C.bgCard, border: `1px solid ${C.borderLight}` }} />
+      ))}
+    </div>
+  );
+  const frame = (h: number, children: React.ReactNode, justify: 'flex-end' | 'center' = 'flex-end') => (
+    <div style={{
+      position: 'relative', height: h, overflow: 'hidden', display: 'flex', justifyContent: justify,
+      border: `1px solid ${C.border}`, borderRadius: R.xxl, background: C.bgMain, padding: SP.sm,
+    }}>{children}</div>
+  );
+
+  return (
+    <Island>
+      <IslandHeader
+        icon={<Columns2 size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />}
+        title="Панель генерации — GenerationPanel"
+      />
+      <div style={{ padding: ISLAND.pad, display: 'flex', flexDirection: 'column', gap: ISLAND.gap }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.lg }}>
+          <ToggleRow label="причина: запуск невозможен"><Toggle checked={blocked} onChange={setBlocked} /></ToggleRow>
+          <ToggleRow label="очередь GPU"><Toggle checked={queue} onChange={setQueue} /></ToggleRow>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 420px), 1fr))', gap: SP.lg }}>
+          <SubBlock label={`Колонка — ${width} px, тянется за левый край (340–520)`}>
+            {frame(560, (
+              <GenerationPanel {...common} layout="column" collapsed={false} width={width} onWidthChange={setWidth}
+                footContent={charsFoot} style={{ maxWidth: '100%' }}>
+                {body}
+              </GenerationPanel>
+            ))}
+          </SubBlock>
+          <SubBlock label="Корешок — 44 px: развернуть, вкладки, запуск">
+            {frame(560, (
+              <GenerationPanel {...common} layout="column" collapsed footContent={charsFoot}>{body}</GenerationPanel>
+            ))}
+          </SubBlock>
+          <SubBlock label="Шторка телефона — 88 % высоты, тап по затемнению опускает">
+            {frame(560, (
+              <>
+                {feed}
+                <GenerationPanel {...common} layout="sheet" contained peeked={false} footContent={charsFoot}>{body}</GenerationPanel>
+              </>
+            ))}
+          </SubBlock>
+          <SubBlock label="Опущенная шторка — сводка и низ, лента доступна">
+            {frame(560, (
+              <>
+                {feed}
+                <GenerationPanel {...common} layout="sheet" contained peeked footContent={charsFoot}>{body}</GenerationPanel>
+              </>
+            ))}
+          </SubBlock>
+        </div>
       </div>
     </Island>
   );

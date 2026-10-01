@@ -172,3 +172,9 @@ export { onMessage, onReconnected } from '../signalr';
 // ─── features/modelsSpend ────────────────────────────────────────────────────
 // Модалка ядра (её же открывает шапка хаба), а не код MF-модуля spend
 export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
+
+// ─── components/generation ───────────────────────────────────────────────────
+// Общий каркас панели генерации: «Картинки» и «Звук» видят хост только через кит (ADR-021 §3)
+export { GenerationPanel, GEN_PANEL_W } from '../../components/generation/GenerationPanel';
+export type { GenerationFoot, GenerationPanelView } from '../../components/generation/GenerationPanel';
+export type { TabItem } from '../../components/ui';

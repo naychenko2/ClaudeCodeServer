@@ -6,6 +6,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.Prefs;
+using ClaudeHomeServer.Services.AudioEditor.Schema;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Spend;
@@ -26,6 +27,8 @@ namespace ClaudeHomeServer.Services.AudioEditor.Jobs;
 //   всегда, у local с нулём; в своей валюте (доллары, кредиты, рубли не складываются), в Label — модель и
 //   единица тарификации. Поставщик честно сказал «не списано» — компенсирующая запись с минусом;
 // - лицензия модели фиксируется в котировке и переходит в запуск и версии: каталог может поменяться;
+// - params проверяются по схеме модели и в котировке, и в запуске (ADR-021 §5): неизвестный ключ, общее
+//   поле в params, тип и границы — отказ invalid_request с именем поля, до денег и до очереди;
 // - чужая задача и чужая котировка неотличимы от несуществующих.
 public sealed class AudioEditJobService : IDisposable
 {
@@ -171,6 +174,8 @@ public sealed class AudioEditJobService : IDisposable
         }
 
         var fields = Merge(chain.Fields, request.Fields);
+        if (await CheckParamsAsync(engine, model, op, fields, ct) is { } badParams)
+            return Fail<AudioQuoteDto>(AudioEditErrorCodes.InvalidRequest, badParams);
         AudioPrice price;
         try
         {
@@ -215,6 +220,41 @@ public sealed class AudioEditJobService : IDisposable
         return new AudioEstimate(hint.Amount * units, hint.Unit, true, AudioEstimateSources.Catalog);
     }
 
+    // ── Схема параметров («Дополнительно») ─────────────────────────────────────
+
+    // Схема частных параметров модели каталога для автоформы. Модель вне каталога поставщика — отказ
+    public async Task<AudioEditCallResult<AudioParamSchema>> SchemaAsync(string provider, string model, string operation,
+        CancellationToken ct)
+    {
+        if (!TryParseOp(operation, out var op) || AudioOps.IsNoAi(op))
+            return Fail<AudioParamSchema>(AudioEditErrorCodes.InvalidRequest, $"Неизвестная операция: {operation}");
+        // Любой драйвер, даже не заведённый на машине: схема — данные каталога (local) или OpenAPI (fal)
+        var engine = _engines.FirstOrDefault(e => string.Equals(e.Key, provider?.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (engine is null)
+            return Fail<AudioParamSchema>(AudioEditErrorCodes.ProviderUnavailable, $"Поставщика «{provider}» нет");
+        if (IsAuto(model) || AudioCatalog.Resolve(engine.Models, op, model) is not { } info)
+            return Fail<AudioParamSchema>(AudioEditErrorCodes.InvalidRequest,
+                $"У поставщика «{engine.Label}» нет такой модели для этой операции");
+        if (engine is not IAudioParamSchemas schemas)
+            return Fail<AudioParamSchema>(AudioEditErrorCodes.ProviderUnavailable, $"У поставщика «{engine.Label}» нет схемы параметров");
+        var lookup = await schemas.SchemaAsync(info, op, ct);
+        return lookup.Schema is { } schema
+            ? AudioEditCallResult<AudioParamSchema>.Ok(schema)
+            : Fail<AudioParamSchema>(AudioEditErrorCodes.ProviderUnavailable, lookup.Error ?? "Схема параметров недоступна");
+    }
+
+    // Проверка params по схеме модели. Пустые params не проверяем (схема могла не прийти — запуску это не
+    // мешает); поставщик без схемы — тоже: проверять нечем. Схемы нет при непустых params — отказ
+    private static async Task<string?> CheckParamsAsync(IAudioEngine engine, AudioModelInfo model, AudioOp op,
+        JsonObject parameters, CancellationToken ct)
+    {
+        if (parameters.Count == 0 || engine is not IAudioParamSchemas schemas) return null;
+        var lookup = await schemas.SchemaAsync(model, op, ct);
+        return lookup.Schema is { } schema
+            ? AudioParamValidator.Validate(schema, parameters)
+            : (lookup.Error ?? "Схема параметров недоступна") + " — params проверить нечем";
+    }
+
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<AudioEditCallResult<AudioJobCreatedDto>> StartAsync(
@@ -231,6 +271,10 @@ public sealed class AudioEditJobService : IDisposable
             return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.ProviderUnavailable, $"Поставщик «{quote.Provider}» больше недоступен");
         if (engine.ScopeRefusal(scope) is { } refusal)
             return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.ProviderUnavailable, refusal);
+        // params запуска ложатся поверх полей котировки — проверяется итог, а не только добавка
+        var parameters = Merge(quote.Fields, input.Params);
+        if (await CheckParamsAsync(engine, quote.Model, quote.Op, parameters, ct) is { } badParams)
+            return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.InvalidRequest, badParams);
 
         Job job;
         lock (_startLock)
@@ -271,7 +315,7 @@ public sealed class AudioEditJobService : IDisposable
         }
 
         var request = new AudioRequest(quote.Op, quote.Model.Id, scope, input.Text, input.Prompt, input.Lyrics,
-            input.Language, input.DurationSec, input.StartSec, input.EndSec, Merge(quote.Fields, input.Params),
+            input.Language, input.DurationSec, input.StartSec, input.EndSec, parameters,
             input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed);
         job.Completion = Task.Run(() => RunAsync(job, engine, request));
 

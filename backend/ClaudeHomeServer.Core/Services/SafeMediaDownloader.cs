@@ -3,8 +3,11 @@ using System.Net.Sockets;
 
 namespace ClaudeHomeServer.Services;
 
-/// <summary>Итог скачивания: байты и тип либо причина отказа (<see cref="Error"/>).</summary>
-public sealed record MediaDownloadResult(byte[]? Bytes, string? ContentType, string? Error)
+/// <summary>
+/// Итог скачивания: байты и тип либо причина отказа (<see cref="Error"/>); <see cref="FinalUri"/> —
+/// адрес, с которого файл отдан после редиректов (по нему вызывающий узнаёт имя и расширение).
+/// </summary>
+public sealed record MediaDownloadResult(byte[]? Bytes, string? ContentType, string? Error, Uri? FinalUri = null)
 {
     public bool Ok => Bytes is not null;
 
@@ -53,10 +56,7 @@ public sealed class SafeMediaDownloader
         {
             for (var hop = 0; ; hop++)
             {
-                if (uri.Scheme != Uri.UriSchemeHttps) return MediaDownloadResult.Fail("not-https");
-                var check = await _hostCheck(uri, cts.Token);
-                if (check != SsrfGuard.AddressCheck.Public)
-                    return MediaDownloadResult.Fail(check == SsrfGuard.AddressCheck.DnsFailed ? "dns-failed" : "private-address");
+                if (await RefusalAsync(uri, cts.Token) is { } refused) return MediaDownloadResult.Fail(refused);
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, uri);
                 using var response = await _invoker.SendAsync(request, cts.Token);
@@ -74,7 +74,7 @@ public sealed class SafeMediaDownloader
                 var bytes = await ReadCappedAsync(response.Content, maxBytes, cts.Token);
                 if (bytes is null) return MediaDownloadResult.Fail("too-large");
                 if (bytes.Length == 0) return MediaDownloadResult.Fail("empty");
-                return new MediaDownloadResult(bytes, response.Content.Headers.ContentType?.MediaType, null);
+                return new MediaDownloadResult(bytes, response.Content.Headers.ContentType?.MediaType, null, uri);
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -85,6 +85,24 @@ public sealed class SafeMediaDownloader
         {
             return MediaDownloadResult.Fail("network");
         }
+    }
+
+    /// <summary>
+    /// Проверка ссылки без скачивания — для ссылок поставщика, которые сервер не качает сам, а
+    /// передаёт дальше. null — ссылка годится, иначе код отказа, как у <see cref="DownloadAsync"/>.
+    /// </summary>
+    public async Task<string?> CheckAsync(string url, CancellationToken ct) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? await RefusalAsync(uri, ct) : "bad-url";
+
+    private async Task<string?> RefusalAsync(Uri uri, CancellationToken ct)
+    {
+        if (uri.Scheme != Uri.UriSchemeHttps) return "not-https";
+        return await _hostCheck(uri, ct) switch
+        {
+            SsrfGuard.AddressCheck.Public => null,
+            SsrfGuard.AddressCheck.DnsFailed => "dns-failed",
+            _ => "private-address",
+        };
     }
 
     private static bool IsRedirect(HttpStatusCode code) => (int)code is >= 300 and <= 399 and not 304;

@@ -578,7 +578,9 @@ public record NotificationMessage(string Title, string Body, string? Url = null,
     // Атрибуция персоны (для аватара/лица в тосте, центре и web-push) и имя проекта.
     // Денормализуются в NotificationService по PersonaId/ProjectId — отправители шлют id.
     string? PersonaId = null, string? PersonaName = null, string? PersonaRole = null,
-    string? PersonaColor = null, bool PersonaHasAvatar = false, string? ProjectName = null)
+    string? PersonaColor = null, bool PersonaHasAvatar = false, string? ProjectName = null,
+    // Закреплённое: тост не гаснет сам, пока не прочитано (AppNotification.Sticky)
+    bool Sticky = false)
     : ServerMessage("notification");
 
 // Манифест recall (F3): что персона подтянула в ход из памяти/заметок/базы/команды — для

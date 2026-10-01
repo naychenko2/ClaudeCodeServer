@@ -54,6 +54,13 @@ export async function createNotification(req: CreateNotificationRequest) {
   });
 }
 
+// Непрочитанные закреплённые — для тостов при входе. Стор не трогает: иначе список
+// колокольчика подменился бы выборкой «только непрочитанные»
+export async function loadUnreadSticky(): Promise<NotificationItem[]> {
+  const result = await api<NotificationListResponse>(`${BASE}?limit=50&offset=0&unreadOnly=true`);
+  return result.items.filter(i => i.sticky);
+}
+
 export async function markRead(id: string) {
   await api(`${BASE}/${id}/read`, { method: 'PUT' });
   const n = items.find(i => i.id === id);

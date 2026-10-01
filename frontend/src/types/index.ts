@@ -1254,7 +1254,7 @@ export type ServerMessage = { sessionId: string } & (
   // (JoinPreviewLog), а не всем вкладкам пользователя. data — накопленное за тик
   // (~100 мс) сразу куском: построчная рассылка захлёбывалась на сборках
   | { type: 'preview_log'; serviceId: string; data: string }
-  | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
+  | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string; sticky?: boolean }
   | { type: 'recall_manifest'; items: RecallItem[] }
   // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка).
   // kind: 'user' — сообщение человека из «честной очереди» (рисуется карточкой «Вы» с
@@ -3065,6 +3065,8 @@ export interface NotificationItem {
   personaColor?: string;
   personaHasAvatar?: boolean;
   projectName?: string;
+  // Закреплённое: тост всплывает при каждом входе и не гаснет сам, пока не прочитано
+  sticky?: boolean;
   isRead: boolean;
   createdAt: string;
   readAt?: string;

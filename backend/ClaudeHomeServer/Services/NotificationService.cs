@@ -39,7 +39,8 @@ public class NotificationService(
             PersonaRole: item.PersonaRole,
             PersonaColor: item.PersonaColor,
             PersonaHasAvatar: item.PersonaHasAvatar,
-            ProjectName: item.ProjectName) { SessionId = item.SessionId ?? "" };
+            ProjectName: item.ProjectName,
+            Sticky: item.Sticky) { SessionId = item.SessionId ?? "" };
 
         // In-app тост (SignalR)
         await broadcaster.ToOwner(userId, msg);
@@ -70,6 +71,7 @@ public class NotificationService(
             TaskId = msg.TaskId,
             Source = msg.Source,
             Tag = msg.Tag,
+            Sticky = msg.Sticky,
         }, sendPush);
     }
 

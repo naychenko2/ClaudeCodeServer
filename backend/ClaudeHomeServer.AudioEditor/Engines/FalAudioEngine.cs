@@ -24,6 +24,8 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
 {
     public const string ProviderKey = "fal";
     private const string HttpClientName = "fal";
+    // Клиент скачивания результатов: без автоследования редиректов (каждый шаг проверяет FalDownload)
+    internal const string DownloadClientName = "fal-download";
     private static readonly TimeSpan PriceCacheTtl = TimeSpan.FromHours(24);
     // Схемы fal меняются редко, но меняются: раз в шесть часов перечитываем
     internal static readonly TimeSpan SchemaTtl = TimeSpan.FromHours(6);
@@ -46,6 +48,9 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
     internal TimeSpan Ceiling { get; set; } = JobCeiling;
     // Часы кеша схем; тесты двигают время
     internal TimeProvider Time { get; set; } = TimeProvider.System;
+    // Резолв имени хоста ссылки на файл; тесты подменяют, чтобы не ходить в DNS
+    internal Func<string, CancellationToken, Task<IPAddress[]>> Resolve { get; set; } = Dns.GetHostAddressesAsync;
+    internal long MaxDownloadBytes { get; set; } = FalDownload.DefaultMaxBytes;
 
     private static readonly IReadOnlyList<AudioModelInfo> FalModels = [.. AudioCatalog.Fal.Select(m => m.Info)];
 
@@ -217,6 +222,9 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
             // Второй прогон цепочки: ссылка на файл первого (эмбеддинг голоса) — полем второго запроса
             if (FalOutputs.FileUrl(output, next.LinkFrom) is not { } link)
                 return Charged(AudioResult.Fail(AudioOutcome.Failed, "fal.ai не вернул эмбеддинг голоса"), requestId);
+            // Ссылку скачивает уже fal, но и ей не доверяем: внутренний адрес — отказ до второго прогона
+            if (await Download().CheckAsync(link, timeout.Token) is { } refused)
+                return Charged(AudioResult.Fail(AudioOutcome.Failed, "fal.ai вернул недопустимую ссылку на эмбеддинг: " + refused), requestId);
             JsonObject nextBody;
             try
             {
@@ -237,7 +245,9 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
         progress.Report(new AudioProgress(AudioStage.Downloading));
         try
         {
-            var files = await FalOutputs.CollectAsync(Client(), model.Output, output, timeout.Token);
+            var (files, error) = await FalOutputs.CollectAsync(Download(), model.Output, output, timeout.Token);
+            if (error is not null)
+                return new AudioResult(AudioOutcome.Failed, [], null, true, requestId, "Не удалось скачать результат fal.ai: " + error);
             return files.Count == 0
                 ? new AudioResult(AudioOutcome.Failed, [], null, null, requestId, "fal.ai не вернул файлов")
                 : new AudioResult(AudioOutcome.Ok, files, null, true, requestId, null);
@@ -406,6 +416,14 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
         var client = _http.CreateClient(HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(120);
         return client;
+    }
+
+    private FalDownload Download()
+    {
+        var client = _http.CreateClient(DownloadClientName);
+        // Потолок 200 МБ на медленном канале не укладывается в две минуты; общий срок задачи держит Ceiling
+        client.Timeout = TimeSpan.FromMinutes(5);
+        return new FalDownload(client, Resolve) { MaxBytes = MaxDownloadBytes };
     }
 
     private void Authorize(HttpRequestMessage req) =>

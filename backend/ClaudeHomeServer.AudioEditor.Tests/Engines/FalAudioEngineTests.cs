@@ -32,7 +32,12 @@ public sealed class FalAudioEngineTests
             ["Fal:ApiKey"] = key ?? "",
             ["Fal:QueueBase"] = Queue,
             ["Fal:ApiBase"] = Api,
-        }).Build(), NullLogger<FalAudioEngine>.Instance) { PollInterval = TimeSpan.Zero };
+        }).Build(), NullLogger<FalAudioEngine>.Instance)
+    {
+        PollInterval = TimeSpan.Zero,
+        // cdn.test — «публичный» хост, всё прочее не резолвится
+        Resolve = (host, _) => Task.FromResult(host == "cdn.test" ? [IPAddress.Parse("93.184.216.34")] : Array.Empty<IPAddress>()),
+    };
 
     private static AudioModelInfo Model(string id) => AudioCatalog.FindFal(id)!.Info;
 
@@ -338,6 +343,39 @@ public sealed class FalAudioEngineTests
         {
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
+    }
+
+    // ── Скачивание результата ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Download_InternalUrlInResult_RefusedByValue_WithoutRequest()
+    {
+        var endpoint = AudioCatalog.FalMiniMaxHd;
+        _fal.Job(endpoint, "r7", ["COMPLETED"], """{"audio":{"url":"https://169.254.169.254/latest/meta-data"}}""");
+
+        var result = await Engine().RunAsync(new AudioRequest(AudioOp.Speak, endpoint, Personal, Text: "Привет"),
+            new Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Failed);
+        result.Charged.Should().BeTrue();
+        result.Error.Should().Contain("внутренний адрес");
+        _fal.Requests.Should().NotContain(r => r.Url.Contains("169.254"));
+    }
+
+    [Fact]
+    public async Task CloneChain_InternalEmbeddingLink_RefusedBeforeSecondRun()
+    {
+        _fal.Job(AudioCatalog.FalQwenClone, "c2", ["COMPLETED"],
+            """{"speaker_embedding":{"url":"https://10.0.0.1/voice.safetensors"}}""");
+
+        var result = await Engine().RunAsync(new AudioRequest(AudioOp.CloneVoice, AudioCatalog.FalQwenClone, Personal,
+                Text: "Привет", Reference: new AudioBytes([1, 2], "audio/wav")),
+            new Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Failed);
+        result.Charged.Should().BeTrue();
+        result.Error.Should().Contain("эмбеддинг");
+        _fal.Requests.Should().NotContain(r => r.Url.Contains(AudioCatalog.FalQwenTts));
     }
 
     // ── Подставки ────────────────────────────────────────────────────────────────

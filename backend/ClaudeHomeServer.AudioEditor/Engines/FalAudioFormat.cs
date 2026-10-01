@@ -104,10 +104,13 @@ internal static class FalOutputs
     public static string? FileUrl(JsonElement output, string field) =>
         output.ValueKind == JsonValueKind.Object && output.TryGetProperty(field, out var value) ? Url(value) : null;
 
-    public static async Task<IReadOnlyList<AudioFile>> CollectAsync(HttpClient client, FalOutputKind kind, JsonElement output,
+    // Файлы результата или отказ значением (недопустимая ссылка, потолок размера, пустой файл)
+    public sealed record Collected(IReadOnlyList<AudioFile> Files, string? Error);
+
+    public static async Task<Collected> CollectAsync(FalDownload download, FalOutputKind kind, JsonElement output,
         CancellationToken ct)
     {
-        if (output.ValueKind != JsonValueKind.Object) return [];
+        if (output.ValueKind != JsonValueKind.Object) return new Collected([], null);
         switch (kind)
         {
             case FalOutputKind.Stems:
@@ -118,18 +121,22 @@ internal static class FalOutputs
                     if (FileOf(prop.Value) is not { } file) continue;
                     var role = AudioFileRoles.Stem(prop.Name);
                     if (!AudioFileRoles.IsValid(role)) continue;
-                    files.Add(await DownloadAsync(client, file, role, ct));
+                    var (stem, error) = await DownloadAsync(download, file, role, ct);
+                    if (error is not null) return new Collected([], error);
+                    files.Add(stem!);
                 }
-                return files;
+                return new Collected(files, null);
             }
             case FalOutputKind.Transcript:
-                return Transcript(output);
+                return new Collected(Transcript(output), null);
             default:
             {
                 // Сначала известные имена поля звука, затем любое поле-файл
                 var file = AudioFields.Select(f => output.TryGetProperty(f, out var v) ? FileOf(v) : null).FirstOrDefault(f => f is not null)
                            ?? output.EnumerateObject().Select(p => FileOf(p.Value)).FirstOrDefault(f => f is not null);
-                return file is null ? [] : [await DownloadAsync(client, file.Value, AudioFileRoles.Main, ct)];
+                if (file is null) return new Collected([], null);
+                var (main, error) = await DownloadAsync(download, file.Value, AudioFileRoles.Main, ct);
+                return error is not null ? new Collected([], error) : new Collected([main!], null);
             }
         }
     }
@@ -143,19 +150,17 @@ internal static class FalOutputs
 
     private static string? Url(JsonElement value) => FileOf(value) is { } file ? FalAudioEngine.Str(file, "url") : null;
 
-    private static async Task<AudioFile> DownloadAsync(HttpClient client, JsonElement file, string role, CancellationToken ct)
+    private static async Task<(AudioFile? File, string? Error)> DownloadAsync(FalDownload download, JsonElement file, string role,
+        CancellationToken ct)
     {
-        var url = FalAudioEngine.Str(file, "url")!;
-        using var resp = await client.GetAsync(url, ct);
-        resp.EnsureSuccessStatusCode();
-        var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-        if (bytes.Length == 0) throw new HttpRequestException("пустой файл результата");
+        var got = await download.GetAsync(FalAudioEngine.Str(file, "url")!, ct);
+        if (got.File is not { } fetched) return (null, got.Error);
         var contentType = FalAudioEngine.Str(file, "content_type") is { Length: > 0 } declared && !declared.StartsWith("image/")
             ? declared
-            : resp.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
-        var extension = ExtensionOf(FalAudioEngine.Str(file, "file_name")) ?? ExtensionOf(new Uri(url).AbsolutePath)
+            : fetched.ContentType ?? "application/octet-stream";
+        var extension = ExtensionOf(FalAudioEngine.Str(file, "file_name")) ?? ExtensionOf(fetched.Uri.AbsolutePath)
                         ?? ExtensionByType(contentType);
-        return new AudioFile(role, bytes, contentType, extension);
+        return (new AudioFile(role, fetched.Bytes, contentType, extension), null);
     }
 
     private static string? ExtensionOf(string? name)

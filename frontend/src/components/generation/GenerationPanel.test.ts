@@ -8,6 +8,10 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
   matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
 }));
 
+// Запрос высоты у зоны — эффект, а SSR эффекты не исполняет: ловим сам вызов хука
+const fill = vi.hoisted(() => ({ calls: [] as boolean[] }));
+vi.mock('../../pages/workspace/panelFill', () => ({ useRequestPanelFill: (need: boolean) => { fill.calls.push(need); } }));
+
 const { GenerationPanel } = await import('./GenerationPanel');
 const { PanelHeaderSlotContext } = await import('../ui/panelHeaderSlotContext');
 
@@ -37,6 +41,25 @@ describe('шторка каркаса панели генерации', () => {
     expect(html).toContain('≈ $0.04');
     expect(html).not.toContain('тело');
     expect(html).not.toContain('height:88%');
+  });
+
+  it('опущенная стоит в потоке над полем ввода, а не поверх низа экрана', () => {
+    const html = renderToStaticMarkup(panel({ peeked: true }));
+    expect(html).toContain('data-gen-sheet="peek"');
+    expect(html).not.toContain('position:fixed');
+    // Поднятая — по-прежнему поверх, с затемнением
+    expect(renderToStaticMarkup(panel())).toContain('position:fixed');
+    // Витрина держит шторку в своей рамке и опущенной
+    expect(renderToStaticMarkup(panel({ peeked: true, contained: true }))).toContain('position:absolute');
+  });
+
+  it('внутри оболочки зоны каркас просит всю высоту колонки, вне её — нет', () => {
+    fill.calls.length = 0;
+    renderToStaticMarkup(inShell(panel()));
+    expect(fill.calls).toEqual([true]);
+    fill.calls.length = 0;
+    renderToStaticMarkup(panel());
+    expect(fill.calls).toEqual([false]);
   });
 
   it('внутри оболочки зоны шторки нет: одна шапка — оболочки, своей каркас не рисует', () => {

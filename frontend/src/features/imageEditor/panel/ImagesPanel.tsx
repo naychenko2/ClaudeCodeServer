@@ -9,25 +9,27 @@
 // телефона нет зоны панелей рабочей области.
 
 import { useEffect, useState } from 'react';
-import { Contact, Image as ImageIcon, SlidersHorizontal, Users, X } from 'lucide-react';
+import { Contact, Image as ImageIcon, Plus, SlidersHorizontal, Users, X } from 'lucide-react';
 import {
-  EmptyState, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE, showToast, submitComposerMode,
+  Button, EmptyState, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE, showToast, submitComposerMode,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
-import { CharactersPanel } from '../characters/CharactersPanel';
+import { CharactersPanel, type CharacterEditing } from '../characters/CharactersPanel';
 import { IMAGES_PANEL } from '../characters/panel';
 import { useCharacters } from '../characters/useCharacters';
+import { useCharacter } from '../strip/settings/CharacterSection';
 import { enterScope, isPersonalScope } from '../scope';
 import { ic } from '../strip/settings/primitives';
 import { SettingsSections } from '../strip/settings/SettingsSections';
 import { IMAGE_COMPOSER_MODE } from '../composer/imageMode';
 import { createDraft, releaseFocus } from '../thread/actions';
-import { focusLabel } from '../thread/model';
+import { focusLabel, isEmptyThread } from '../thread/model';
 import { useThreads } from '../thread/threadStore';
 import type { ImageThread } from '../thread/threadsApi';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 import { ONE_VARIANT_HINT } from './panelOp';
+import { useMarkImagesPanelShown } from './panelOpen';
 
 type Tab = 'settings' | 'characters';
 const isTab = (t: unknown): t is Tab => t === 'settings' || t === 'characters';
@@ -65,6 +67,9 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
   const L = useThreadLaunch(projectId, sessionId, thread);
   const { list } = useCharacters(personal ? null : projectId);
   const [tab, setTab] = useState<Tab>(() => takeWanted() ?? 'settings');
+  const [editing, setEditing] = useState<CharacterEditing>(null);
+  const { name: characterName } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
+  useMarkImagesPanelShown(layout === 'column');
 
   useEffect(() => {
     const on = () => { const t = takeWanted(); if (t) setTab(t); };
@@ -75,8 +80,10 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
   const subtitle = [L.provider?.label, L.model?.label].filter(Boolean).join(' · ');
   const release = () => { if (sessionId) void releaseFocus(projectId, sessionId, thread); };
 
+  // Черновик «Нарисовать новую» — ещё не картинка: строка говорит, куда ляжет результат
+  const draft = !thread || (!thread.file && isEmptyThread(thread));
   const context = tab === 'settings'
-    ? thread
+    ? thread && !draft
       ? (
         <>
           <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -85,7 +92,14 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
           <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>
         </>
       )
-      : <span>Новая картинка · результат ляжет в ленту новой карточкой</span>
+      : (
+        <>
+          <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <b style={{ color: C.textHeading }}>Новая картинка</b> · результат ляжет в ленту новой карточкой
+          </span>
+          {thread && <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>}
+        </>
+      )
     : personal ? undefined : <span>Папка <code>characters/</code> проекта · подключённый персонаж уходит в каждую генерацию</span>;
 
   let body;
@@ -93,7 +107,7 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
     body = personal
       ? <EmptyState compact icon={ic(Users, ICON_SIZE.sm)} title="Персонажи живут в проекте"
           subtitle="Персонажи хранятся в папке characters/ проекта. В личном чате лицо можно передать образцом с ролью «Лицо» на вкладке «Настройки»." />
-      : <CharactersPanel projectId={projectId} />;
+      : <CharactersPanel projectId={projectId} editing={editing} onEditing={setEditing} />;
   } else if (!L.catalog) {
     body = <div style={{ fontSize: FS.sm, color: C.textMuted, paddingTop: SP.sm }}>Загружаем…</div>;
   } else if (!L.catalog.providers.length) {
@@ -117,6 +131,18 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
     onRun: () => { if (sessionId) void panelRun(projectId, sessionId, thread, !!L.quickAction); },
   } : undefined;
 
+  // Свой низ «Персонажей»: кто подключён и «＋ Персонаж»; на время формы низа нет
+  const footContent = tab === 'characters' && !personal && !editing ? (
+    <div data-images-characters-foot="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.sm, color: C.textSecondary }}>
+      <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        Подключён: <b style={{ color: C.textHeading }}>{L.prefs.characterSlug ? characterName : 'никто'}</b>
+      </span>
+      <Button size="xs" variant="secondary" leftIcon={ic(Plus)} onClick={() => setEditing({ kind: 'new' })} style={{ flexShrink: 0 }}>
+        Персонаж
+      </Button>
+    </div>
+  ) : undefined;
+
   return (
     <GenerationPanel<Tab>
       title="Картинки"
@@ -124,13 +150,15 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
       icon={ic(ImageIcon, ICON_SIZE.sm)}
       tabs={[
         { value: 'settings', label: 'Настройки', icon: ic(SlidersHorizontal) },
-        { value: 'characters', label: 'Персонажи', icon: ic(Contact), count: personal ? undefined : list?.length },
+        { value: 'characters', label: 'Персонажи', icon: ic(Contact), count: personal || !list?.length ? undefined : list.length },
       ]}
       tab={tab}
       onTabChange={setTab}
       context={context}
       foot={foot}
-      peekSummary={[thread ? focusLabel(thread, true, personal) : 'Новая картинка', subtitle].filter(Boolean).join(' · ')}
+      footContent={footContent}
+      // Поставщик и модель уже в подзаголовке шапки строкой выше: в сводке — только выбор
+      peekSummary={thread && !draft ? focusLabel(thread, true, personal) : 'Новая картинка'}
       onClose={ctx.onClose}
       layout={layout}
     >

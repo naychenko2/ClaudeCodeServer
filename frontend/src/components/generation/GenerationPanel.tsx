@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CSSProperties, ReactNode } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Cpu, Sparkles, X } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP, Z } from '../../lib/design';
-import { useIsMobile } from '../../lib/breakpoints';
+import { GEN_PANEL_INLINE_MIN, useWindowWidth } from '../../lib/breakpoints';
+import { holdGenSheetRaised } from '../../lib/genSheet';
+import { useRequestPanelFill } from '../../pages/workspace/panelFill';
 import { Badge, Button, IconButton, PanelHeaderSlot, ResizeHandle, Stepper, Tabs, useHasPanelHeader } from '../ui';
 import type { TabItem } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -13,6 +16,8 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 // Образец разметки — genPanel() в docs/mockups/image-editor-v4-panel.html.
 // Внутри оболочки панели рабочей области (PanelShell зоны) шапку, закрытие и ширину держит
 // оболочка: каркас рисует только вкладки, тело и низ, подзаголовок уходит в её шапку.
+// Там каркас просит у зоны всю высоту колонки: низ с ценой и запуском закреплён у кромки
+// окна и не прыгает между вкладками и операциями.
 
 export const GEN_PANEL_W = { default: 380, min: 340, max: 520, spine: 44 } as const;
 const HEAD_H = 42;
@@ -39,13 +44,17 @@ export type GenerationFoot = {
   queue?: string;                   // очередь GPU у локальных моделей
   count: number;
   maxCountHint?: string;            // причина потолка: «Эта операция даёт один вариант»
-  price: [string, string];          // итог («≈ $0.08») и расшифровка («2 × $0.04 за картинку»)
+  price: [string, string];          // итог («≈ $0.08») и расшифровка («2 × $0.04»)
   runLabel: string;                 // глагол запуска: «Изменить», «Перегенерировать»
   onRun: () => void;
 } & (
   | { maxCount: 1; onCountChange?: (n: number) => void }
   | { maxCount: number; onCountChange: (n: number) => void }
 );
+
+// Уже GEN_PANEL_INLINE_MIN панели генерации нет места в зоне: её рисует шторкой вертикаль
+// у полосы над полем ввода (genPanelPlacement)
+export const useGenerationSheet = (): boolean => useWindowWidth() < GEN_PANEL_INLINE_MIN;
 
 // column — колонка справа, spine — свёрнута в корешок; sheet / peek — шторка телефона
 // (поднята / опущена до цены). auto выбирает колонку или шторку по ширине окна.
@@ -82,7 +91,7 @@ interface Props<T extends string> {
 const icon = (Ico: typeof X) => <Ico size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
 export function GenerationPanel<T extends string>(p: Props<T>) {
-  const isMobile = useIsMobile();
+  const narrow = useGenerationSheet();
   const inShell = useHasPanelHeader();
   const [ownCollapsed, setOwnCollapsed] = useState(false);
   const [ownPeeked, setOwnPeeked] = useState(false);
@@ -96,8 +105,15 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
   const setWidth = (w: number) => { setOwnWidth(w); p.onWidthChange?.(w); };
 
   // Внутри оболочки зоны вид держит оболочка: шторка там дала бы вторую шапку поверх её шапки
-  const sheet = !inShell && (p.layout === 'sheet' || (p.layout !== 'column' && isMobile));
+  const sheet = !inShell && (p.layout === 'sheet' || (p.layout !== 'column' && narrow));
   const view: GenerationPanelView = sheet ? (peeked ? 'peek' : 'sheet') : (collapsed ? 'spine' : 'column');
+  // Опущенная шторка встаёт в поток над полем ввода (там, где её рисует полоса): поверх
+  // низа экрана она закрывала бы композер, а смысл вида «до цены» — рабочие лента и поле
+  const peekInFlow = view === 'peek' && !p.contained;
+  const raised = view === 'sheet' && !p.contained;
+
+  useRequestPanelFill(inShell);
+  useEffect(() => (raised ? holdGenSheetRaised() : undefined), [raised]);
 
   if (view === 'spine' && !inShell) return <Spine {...p} onExpand={() => setCollapsed(false)} onTab={t => { p.onTabChange(t); setCollapsed(false); }} />;
 
@@ -187,18 +203,23 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
     // Опущенная — без затемнения: лента под ней остаётся рабочей.
     // Затемнение намеренно декоративное (aria-hidden, без фокуса): с клавиатуры шторку
     // опускают хват ниже и кнопка-шеврон в шапке.
-    return (
+    const node = (
       <>
         {view === 'sheet' && (
           <div aria-hidden onClick={() => setPeeked(true)} style={{
             position: pos, inset: 0, background: C.overlay, zIndex: Z.modal,
           }} />
         )}
-        <div role="dialog" aria-label={p.title} style={{
-          position: pos, left: 0, right: 0, bottom: 0, zIndex: Z.modal,
+        <div role="dialog" aria-label={p.title} data-gen-sheet={view} style={{
+          ...(peekInFlow
+            ? { position: 'relative', marginBottom: SP.xs, border: `1px solid ${C.border}`, borderRadius: R.xxl }
+            : {
+              position: pos, left: 0, right: 0, bottom: 0, zIndex: Z.modal,
+              borderRadius: `${R.sheet}px ${R.sheet}px 0 0`, boxShadow: SHADOW.sheet,
+            }),
           height: view === 'sheet' ? SHEET_H : undefined,
           display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: FONT.sans,
-          background: C.bgCard, borderRadius: `${R.sheet}px ${R.sheet}px 0 0`, boxShadow: SHADOW.sheet,
+          background: C.bgCard,
           ...p.style,
         }}>
           <button
@@ -218,6 +239,9 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
         </div>
       </>
     );
+    // Поднятая — порталом в body: внутри композера её слой локален контексту наложения
+    // полосы, и тосты оболочки ложились поверх шапки. Опущенная стоит в потоке на месте
+    return raised && typeof document !== 'undefined' ? createPortal(node, document.body) : node;
   }
 
   return (

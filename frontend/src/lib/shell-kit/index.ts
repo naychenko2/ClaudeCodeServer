@@ -180,6 +180,6 @@ export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
 
 // ─── components/generation ───────────────────────────────────────────────────
 // Общий каркас панели генерации: «Картинки» и «Звук» видят хост только через кит (ADR-021 §3)
-export { GenerationPanel, GEN_PANEL_W } from '../../components/generation/GenerationPanel';
+export { GenerationPanel, GEN_PANEL_W, useGenerationSheet } from '../../components/generation/GenerationPanel';
 export type { GenerationFoot, GenerationPanelView } from '../../components/generation/GenerationPanel';
 export type { TabItem } from '../../components/ui';

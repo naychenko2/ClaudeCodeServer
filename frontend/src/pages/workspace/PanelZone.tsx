@@ -37,6 +37,7 @@ import {
   isPanelKey, panelRivals, type PanelKey, type RailBadgeInfo, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
+import { compactStack, genPanelInZone } from './genPanelPlacement';
 import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, railSequence, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, PANEL_SPLIT_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
@@ -199,6 +200,8 @@ export function PanelZone({
   // есть контент (у сессионных он всегда есть).
   const keyAvailable = (k: PanelKey): boolean => {
     if (!allowedKeys.includes(k)) return false;
+    // Панель генерации на узком планшете рисует шторкой полоса над полем ввода
+    if (!genPanelInZone(k, !!compact, windowWidth)) return false;
     return content(k) != null;
   };
 
@@ -242,6 +245,11 @@ export function PanelZone({
       : layout.flat().filter(keyAvailable))
     : [];
   const openKeys = compact ? tabletKeys : columns.flatMap(c => c.keys);
+  // Стек в потоке или ящиком: открытость считается по tabletInline (выше), а рисуется по
+  // stackInline — панели генерации держат поток и там, где обычной панели места уже нет
+  const genStack = compactStack(windowWidth, width, tabletKeys);
+  const stackInline = tabletInline || genStack.inline;
+  const stackW = tabletInline ? width : genStack.width;
 
   // Колонка, ближайшая к ЦЕНТРУ экрана: у левой зоны это последняя (панели растут
   // от рельсы вправо), у правой — первая (порядок зеркальный).
@@ -672,7 +680,7 @@ export function PanelZone({
     return sum >= zoneH - 4;
   };
   const rightPanelOpen = !isLeft && (compact
-    ? (tabletKeys.length > 0 && tabletInline)
+    ? (tabletKeys.length > 0 && stackInline)
     : (!floating && columns.some((c, vi) => columnFull(c, vi))));
   // FAB ужимаем и при распахнутой панели, и при открытом в центре файле — в обоих случаях
   // места мало и крупный круг мешает.
@@ -1354,11 +1362,11 @@ export function PanelZone({
         ))}
       </div>
     );
-    if (tabletInline) {
+    if (stackInline) {
       return (
         <>
           {splitter}
-          <div style={{ width: width + GAP * 2, flexShrink: 0, display: 'flex', padding: `0 ${GAP}px`, boxSizing: 'border-box' }}>
+          <div style={{ width: stackW + GAP * 2, flexShrink: 0, display: 'flex', padding: `0 ${GAP}px`, boxSizing: 'border-box' }}>
             {stack}
           </div>
         </>

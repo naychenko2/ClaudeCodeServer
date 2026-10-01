@@ -208,10 +208,14 @@ export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
 // Правая зона раздела «Чаты»: панели сессии плюс панели генерации личного чата
 export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'images', 'sound'];
 
+// Панели генерации: справа одна за раз, а в планшетной зоне они держат поток до
+// GEN_PANEL_INLINE_MIN (genPanelPlacement)
+export const GEN_PANEL_KEYS: readonly PanelKey[] = ['images', 'sound'];
+
 // Наборы взаимоисключающих панелей: открытие одной закрывает остальные из её набора
 // в ЛЮБОЙ зоне, при любой ширине окна. «Справа одна панель генерации» (ADR-021 §3):
 // с прочими панелями картинки и звук соседствуют по обычной модели зоны.
-export const EXCLUSIVE_PANEL_SETS: readonly (readonly PanelKey[])[] = [['images', 'sound']];
+export const EXCLUSIVE_PANEL_SETS: readonly (readonly PanelKey[])[] = [GEN_PANEL_KEYS];
 
 // Соперники панели — те, кого её открытие закрывает
 export function panelRivals(k: PanelKey): PanelKey[] {

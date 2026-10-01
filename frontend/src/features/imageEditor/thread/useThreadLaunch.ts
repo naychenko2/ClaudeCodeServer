@@ -6,7 +6,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { api as appApi, followChat, showToast, FLAGS, useFeature } from 'aihome_shell/kit';
-import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditQuoteRequest } from '../api';
+import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditQuoteRequest } from '../api';
 import {
   effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, providerTitle, variantsWord,
 } from '../format';
@@ -247,17 +247,16 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
       hasMask: withMask, hasAnnotations: !fromScratch && hasAnnotations, references, hasCharacter: !!prefs.characterSlug,
       width: size?.w ?? null, height: size?.h ?? null,
     } : null;
-  const { quote, loading } = useQuote(api, projectId, quoteReq);
-  const unit = quote?.estimate.unit ?? pv?.priceUnit ?? 'usd';
+  const { quote, loading, stale } = useQuote(api, projectId, quoteReq);
   const hint = route ? route.priceHint : m?.priceHint ?? null;
-  // Пока котировка едет — ориентир из каталога, чтобы цена не мигала
-  const priceLabel = quote
-    ? priceText(quote.estimate.amount, unit, quote.estimate.approx, count, quote.estimate)
-    : hint ? priceText(hint.amount * count, hint.unit, true, count) : variantsWord(count);
-  const price = quote
-    ? priceSum(quote.estimate.amount, unit, quote.estimate.approx, quote.estimate)
-    : hint ? priceSum(hint.amount * count, hint.unit, true) : null;
-  const estimate = quote?.estimate ?? (hint ? { amount: hint.amount * count, unit: hint.unit, approx: true } : null);
+  // Пока котировка едет — прошлая цена той же модели, затем ориентир из каталога, чтобы цена
+  // не мигала «уточняется»
+  const estimate: Pick<ImageEditEstimate, 'amount' | 'unit' | 'approx' | 'etaSeconds' | 'queueLength'> | null =
+    quote?.estimate ?? stale ?? (hint ? { amount: hint.amount * count, unit: hint.unit, approx: true } : null);
+  const priceLabel = estimate
+    ? priceText(estimate.amount, estimate.unit, estimate.approx, count, estimate)
+    : variantsWord(count);
+  const price = estimate ? priceSum(estimate.amount, estimate.unit, estimate.approx, estimate) : null;
   const priceLines = footPrice(estimate, count);
   const queue = queueText(quote?.estimate ?? null);
 

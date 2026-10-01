@@ -6,21 +6,24 @@
 // «Размер оригинала». Свёрнутая — строка 30 px со сводкой, клик разворачивает.
 // В личном чате вне проекта (область personal) нет персонажа и образцов из проекта: их
 // источник — папки проекта.
-// С флагом image-editor-panel (десктоп) карточки нет: сводка открывает панель «Картинки»
-// на «Настройках», аватар — на «Персонажах» (panel/ImagesPanel). На телефоне с флагом
-// зоны панелей нет: ту же панель полоса рисует шторкой каркаса вместо Modal настроек,
-// и автооткрытие по выбору картинки (revealWorkspacePanel) поднимает её же.
+// С флагом image-editor-panel (окно от 800) карточки нет: сводка открывает панель «Картинки»
+// на «Настройках», аватар — на «Персонажах» (panel/ImagesPanel); пока панель стоит колонкой,
+// сводка подсвечена. Уже 800 панели нет места в зоне: ту же панель полоса рисует шторкой
+// каркаса вместо Modal настроек, и автооткрытие по выбору картинки (revealWorkspacePanel)
+// поднимает её же. Свёрнутая полоса с флагом открывает панель кликом по сводке.
 
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, SlidersHorizontal, Sparkles, User, X } from 'lucide-react';
 import {
   Button, Chip, IconButton, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, FLAGS, markGenPanelDismissed, useFeature,
+  useGenerationSheet,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import type { ImageEditCatalog } from '../api';
 import { CharactersPanel } from '../characters/CharactersPanel';
 import { CHARACTERS_PANEL, IMAGES_PANEL, revealWorkspacePanel } from '../characters/panel';
 import { ImagesPanel } from '../panel/ImagesPanel';
+import { useImagesPanelShown } from '../panel/panelOpen';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { enterScope, isPersonalScope } from '../scope';
 import { focusLabel } from '../thread/model';
@@ -30,6 +33,7 @@ import { activeSrc, launchSummaryParts, useThreadLaunch } from '../thread/useThr
 import { openCharacters, useCharacter } from './settings/CharacterSection';
 import { ic, type Launch } from './settings/primitives';
 import { SettingsSections } from './settings/SettingsSections';
+import { mobileSummary, settingsToggle, summaryOpensPanel, type SettingsPlace } from './settingsToggle';
 import { subscribeSheetReveal, takeSheetReveal } from './sheetReveal';
 import { stripSummary } from './summary';
 
@@ -75,11 +79,16 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const [charSheet, setCharSheet] = useState(false);
   const shell = useRef<HTMLDivElement>(null);
   const { current: character, photo } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
-  // Настройки — в панели «Картинки»: на десктопе в зоне панелей, на телефоне шторкой полосы
+  // Настройки — в панели «Картинки»: от 800 в зоне панелей, уже — шторкой полосы
   const panelFlag = useFeature(FLAGS.imageEditorPanel);
-  const inPanel = panelFlag && !isMobile;
-  const inSheet = panelFlag && isMobile;
+  const narrow = useGenerationSheet();
+  const inPanel = panelFlag && !narrow;
+  const inSheet = panelFlag && narrow;
+  const place: SettingsPlace = inPanel ? 'panel' : inSheet ? 'sheet' : 'card';
   const [sheet, setSheet] = useState(false);
+  const panelShown = useImagesPanelShown();
+  const toggle = settingsToggle(place, inPanel ? panelShown : inSheet ? sheet : open);
+  const openSettings = () => (inPanel ? revealWorkspacePanel(IMAGES_PANEL, 'settings') : inSheet ? setSheet(true) : setOpen(v => !v));
 
   useEffect(() => { setSheet(false); }, [sessionId]);
   // Показ панели извне (автооткрытие по выбору картинки, вкладка «Персонажи») на телефоне
@@ -147,7 +156,9 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
           }}>
           {title}
           <Thumb src={src} />
-          <span data-images-summary="" style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span data-images-summary="" title={summaryOpensPanel(place) ? toggle.title : undefined}
+            onClick={summaryOpensPanel(place) ? e => { e.stopPropagation(); openSettings(); } : undefined}
+            style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {stripSummary(parts)}
           </span>
           {thread && (
@@ -175,10 +186,11 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
       }}>
         {title}
         {thread ? (
-          <span style={{ display: 'inline-flex', minWidth: 72, flex: '0 1 auto' }}>
+          <span style={{ display: 'inline-flex', minWidth: isMobile ? 0 : 72, flex: '0 1 auto' }}>
+            {/* На телефоне чип — миниатюра без имени: место нужно сводке с ценой */}
             <Chip selected leading={src ? <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : ic(Sparkles)}
-              maxW="100%" title={personal ? 'Режим «Картинка» работает с этой версией. ✕ — снять выбор' : 'Режим «Картинка» и Claude работают с этой версией. ✕ — снять выбор'} onRemove={release}>
-              {!isMobile && 'Работаем с: '}<b>{focusLabel(thread, true, personal)}</b>
+              maxW="100%" title={`${focusLabel(thread, true, personal)} — ${personal ? 'режим «Картинка» работает с этой версией' : 'режим «Картинка» и Claude работают с этой версией'}. ✕ — снять выбор`} onRemove={release}>
+              {isMobile ? null : <>Работаем с: <b>{focusLabel(thread, true, personal)}</b></>}
             </Chip>
           </span>
         ) : (
@@ -197,12 +209,12 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
         ) : (
           <span data-images-settings-toggle="" style={{ display: 'inline-flex', minWidth: 0, flex: '0 1 auto' }}>
             <Button size="xs" variant="secondary"
-              leftIcon={ic(SlidersHorizontal)} title={inPanel ? 'Открыть настройки в панели «Картинки»' : 'Настройки генерации'}
-              onClick={() => (inPanel ? revealWorkspacePanel(IMAGES_PANEL, 'settings') : inSheet ? setSheet(true) : setOpen(v => !v))}
-              style={{ minWidth: 0, flex: '0 1 auto', height: 28, border: `1px solid ${open ? C.accent : C.border}`, background: C.bgWhite }}>
+              leftIcon={isMobile ? undefined : ic(SlidersHorizontal)} title={toggle.title}
+              onClick={openSettings}
+              style={{ minWidth: 0, flex: '0 1 auto', height: 28, border: `1px solid ${toggle.on ? C.accent : C.border}`, background: C.bgWhite }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
                 <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {isMobile ? `${L.count} вар.` : stripSummary(parts, true)}
+                  {isMobile ? mobileSummary(L.count, L.price ?? null) : stripSummary(parts, true)}
                 </span>
                 {L.blocked && <span style={{ display: 'inline-flex', color: C.warningText }}>{ic(AlertTriangle)}</span>}
                 {ic(inPanel ? ChevronRight : inSheet ? ChevronUp : ChevronDown)}
@@ -213,7 +225,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
         {!isMobile && !personal && (L.prefs.characterSlug
           ? (
             <IconButton size="sm" title={`Персонаж: ${character?.name ?? L.prefs.characterSlug} — фото уходят в запрос`}
-              ariaLabel="Персонаж" onClick={() => (inPanel ? revealWorkspacePanel(IMAGES_PANEL, 'characters') : revealWorkspacePanel(CHARACTERS_PANEL))}
+              ariaLabel="Персонаж" onClick={() => (panelFlag ? revealWorkspacePanel(IMAGES_PANEL, 'characters') : revealWorkspacePanel(CHARACTERS_PANEL))}
               style={{ padding: 0, borderRadius: R.full, border: `1.5px solid ${C.accent}`, overflow: 'hidden' }}>
               {photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} /> : ic(User)}
             </IconButton>

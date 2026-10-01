@@ -71,9 +71,9 @@ describe('операции и причины', () => {
 });
 
 describe('цена низа в две строки', () => {
-  it('платная: итог и расшифровка за картинку', () => {
-    expect(footPrice({ amount: 0.08, unit: 'usd', approx: true }, 2)).toEqual(['≈ $0.08', '2 × $0.04 за картинку']);
-    expect(footPrice({ amount: 4, unit: 'credits', approx: false }, 2)).toEqual(['4 кредита', '2 × 2 кредита за картинку']);
+  it('платная: итог и короткая расшифровка', () => {
+    expect(footPrice({ amount: 0.08, unit: 'usd', approx: true }, 2)).toEqual(['≈ $0.08', '2 × $0.04']);
+    expect(footPrice({ amount: 4, unit: 'credits', approx: false }, 2)).toEqual(['4 кредита', '2 × 2 кр.']);
   });
 
   it('бесплатная: время и очередь GPU; очередь бейджем, только непустая', () => {

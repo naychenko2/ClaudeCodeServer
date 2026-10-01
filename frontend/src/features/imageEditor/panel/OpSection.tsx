@@ -2,11 +2,22 @@
 // записка image-editor-v4-panel-proposal.md). «Авто» — нынешний pickOp, строка под пилюлями
 // называет фактическую операцию; режим подбора — только у модели «Авто».
 
+import type { CSSProperties } from 'react';
 import { Button, C, SP } from 'aihome_shell/kit';
 import { AUTO_MODEL } from '../api';
 import { OUTPAINT_RATIOS } from '../editorInputs';
 import { Label, Opt, type Launch } from '../strip/settings/primitives';
 import { EDIT_MODES, opBlockReason, opHint, PANEL_OPS, setPanelChoice } from './panelOp';
+
+// Недоступное — как .opt.off макета: пунктир и приглушённость
+const OFF_OPACITY = 0.55;
+
+// Пилюля выбора: невыбранная на фоне поверхности, выбранная — на accent-light
+export const pillStyle = (on: boolean, off = false): CSSProperties => ({
+  border: `1px ${off ? 'dashed' : 'solid'} ${on ? C.accent : C.border}`,
+  background: off ? 'transparent' : on ? C.accentLight : C.bgWhite,
+  ...(off ? { opacity: OFF_OPACITY } : null),
+});
 
 export function OpSection({ projectId, L }: { projectId: string; L: Launch }) {
   const { op, ratio } = L.choice;
@@ -21,7 +32,7 @@ export function OpSection({ projectId, L }: { projectId: string; L: Launch }) {
           return (
             <Button key={o.op} size="xs" pill variant={on ? 'ghostAccent' : 'secondary'}
               disabled={!!why} title={why || undefined}
-              style={{ border: `1px solid ${on ? C.accent : C.border}` }}
+              style={pillStyle(on, !!why)}
               onClick={() => setPanelChoice(projectId, { op: o.op })}>
               {o.label}
             </Button>
@@ -36,7 +47,7 @@ export function OpSection({ projectId, L }: { projectId: string; L: Launch }) {
           Дорисовать до пропорций:
           {OUTPAINT_RATIOS.map(r => (
             <Button key={r} size="xs" pill variant={r === ratio ? 'ghostAccent' : 'secondary'}
-              onClick={() => setPanelChoice(projectId, { ratio: r })}>{r}</Button>
+              style={pillStyle(r === ratio)} onClick={() => setPanelChoice(projectId, { ratio: r })}>{r}</Button>
           ))}
         </div>
       )}
@@ -57,5 +68,15 @@ export function ModeSection({ projectId, L }: { projectId: string; L: Launch }) 
         ))}
       </div>
     </>
+  );
+}
+
+// Секция «Персонаж и образцы» у операции без промпта: подпись вместо чипов
+export function NoSamplesSection({ title, hint }: { title: string; hint: string }) {
+  return (
+    <div data-image-no-samples="" style={{ opacity: OFF_OPACITY }}>
+      <Label>{title}</Label>
+      <div style={{ color: C.textMuted }}>{hint}</div>
+    </div>
   );
 }

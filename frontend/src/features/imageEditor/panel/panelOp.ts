@@ -33,6 +33,12 @@ export const PANEL_OPS: OpInfo[] = [
 ];
 
 const info = (op: PanelOp) => PANEL_OPS.find(o => o.op === op)!;
+export const opLabel = (op: PanelOp) => info(op).label;
+
+// Операция без промпта идёт своей моделью без канала образцов: секция персонажа и образцов
+// приглушена этой строкой (пусто — секция живая)
+export const noSamplesHint = (op: ImageEditOp, quick: boolean): string =>
+  quick ? `Для «${opLabel(op)}» образцы не нужны` : '';
 
 // [режим, название, подсказка]
 export const EDIT_MODES: [EditMode, string, string][] = [
@@ -88,7 +94,11 @@ export function footPrice(est: Pick<ImageEditEstimate, 'amount' | 'unit' | 'appr
     return ['Бесплатно', `${eta} · очередь GPU: ${est.queueLength ?? 0}`];
   }
   if (est.amount == null) return [priceSum(null, est.unit, est.approx), variantsWord(count)];
-  return [priceSum(est.amount, est.unit, est.approx), `${count} × ${money(est.amount / count, est.unit)} за картинку`];
+  // Расшифровка короткая («2 × 2 кр.», «2 × $0.04»): «2 × 2 кредита за картинку» резалась
+  // многоточием уже на штатной ширине колонки
+  const each = est.amount / count;
+  const eachText = est.unit === 'usd' ? money(each, est.unit) : `${Math.round(each * 100) / 100} кр.`;
+  return [priceSum(est.amount, est.unit, est.approx), `${count} × ${eachText}`];
 }
 
 // Очередь общей GPU у локальных моделей; пустая — строки нет

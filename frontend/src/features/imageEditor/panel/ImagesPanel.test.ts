@@ -81,14 +81,14 @@ describe('закреплённый низ', () => {
     expect(html).not.toContain('Эта операция даёт один вариант');
   });
 
-  it('модель с ценой: итог и расшифровка за картинку', () => {
+  it('модель с ценой: итог и короткая расшифровка', () => {
     __applyThreads('s1', 'p1', {
       focus: 't1', revision: 2,
       threads: [{ ...file, settings: { provider: 'fal', model: 'fal-ai/flux-pro/kontext', count: 2, matchSourceSize: true } }],
     });
     const html = render('p1');
     expect(html).toContain('≈ $0.08');
-    expect(html).toContain('2 × $0.04 за картинку');
+    expect(html).toContain('2 × $0.04');
   });
 
   it('«Убрать фон»: ровно один вариант, «+» заперт с причиной', () => {

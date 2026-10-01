@@ -138,8 +138,11 @@ public static class AudioThreadLaunchStatus
 }
 
 // Последние настройки нити: Mode — AudioModes.*, Operation — операция режима, Provider и Model —
-// выбор поставщика, Fields — поля операции (слова, голос, интервал…) как есть
-public sealed record AudioThreadSettings(string Mode, string? Operation, string? Provider, string? Model, JsonObject? Fields);
+// выбор поставщика, Fields — поля операции (слова, голос, интервал…) как есть, Count — число
+// вариантов. null у поля — нить его не задаёт, при запуске оно берётся из префов режима
+// (AudioPrefsResolver)
+public sealed record AudioThreadSettings(string Mode, string? Operation, string? Provider, string? Model, JsonObject? Fields,
+    int? Count = null);
 
 public static class AudioModes
 {

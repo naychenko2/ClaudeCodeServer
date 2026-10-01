@@ -8,7 +8,7 @@ namespace ClaudeHomeServer.Services.AudioEditor;
 // Subsystems:AudioEditor:Enabled=false (Register не вызывается). В обоих случаях ручек нет — 404.
 //
 // Модуль ссылается только на Core: всё внешнее — швы оттуда, реализации регистрируют другие сборки.
-// Пока это скелет: сервисов и ручек нет, регистрируется только сама подсистема.
+// Пока ручек нет: регистрируются хранилища нитей и префов, рабочая папка и их жизненный цикл.
 public sealed class AudioEditorSubsystem : IAppSubsystem
 {
     public string Key => "audioeditor";
@@ -19,5 +19,21 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
 
     public void Register(IServiceCollection services, IConfiguration config)
     {
+        // Нити звука и фокус чата (ADR-021 §2): data/audio-threads, живут и умирают вместе с чатом
+        // по событиям шины session/deleted и session/branched
+        services.AddSingleton(sp => Threads.AudioThreadStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        services.AddHostedService<Threads.AudioThreadLifecycle>();
+        // Запуск, оборванный перезапуском, не висит в «Генерируем…»: сверка при старте
+        services.AddHostedService<Threads.AudioThreadRecovery>();
+        // Префы режима области: data/audio-editor-prefs, их наследуют новые нити и цепочка запуска
+        services.AddSingleton(sp => Prefs.AudioPrefsStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        services.AddSingleton<Prefs.AudioPrefsService>();
+        // Рабочая папка задач (7 дней, вне бэкапа); файлы версий живых нитей чистка не трогает
+        services.AddSingleton(sp =>
+        {
+            var workspace = Jobs.AudioEditWorkspace.FromConfig(sp.GetRequiredService<IConfiguration>());
+            workspace.RetainedJobs = sp.GetRequiredService<Threads.AudioThreadStore>().ReferencedJobs;
+            return workspace;
+        });
     }
 }

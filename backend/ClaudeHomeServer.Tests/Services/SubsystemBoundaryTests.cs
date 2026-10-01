@@ -1777,6 +1777,9 @@ public class SubsystemBoundaryTests
         // операций растра.
         // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
         "ClaudeHomeServer.Services.ImageEditor",
+        // ADR-021 §2: имя рабочей папки модуля «Звук» для бэкапа (AudioEditorPaths) — Main
+        // типов динамического модуля не видит. Сам модуль — в ClaudeHomeServer.AudioEditor.
+        "ClaudeHomeServer.Services.AudioEditor",
         // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая
         // функция по сигнатуре байтов, нужна и модулю редактора, и LocalMedia в Images.
         "ClaudeHomeServer.Services.ImageEditor.Versioning",

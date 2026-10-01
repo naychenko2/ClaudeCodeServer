@@ -212,6 +212,94 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
         }
     }
 
+    // Чат удалён — нити уходят вместе с ним (подписчик session/deleted)
+    public void Delete(string ownerId, string sessionId)
+    {
+        lock (_gate)
+        {
+            var path = StatePath(ownerId, sessionId);
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    // Ветка чата получает копию нитей источника с теми же threadId и versionId: якоря в
+    // скопированном history.json ветки продолжают разрешаться. false — у источника нитей нет
+    public bool Copy(string ownerId, string fromSessionId, string toSessionId)
+    {
+        lock (_gate)
+        {
+            var from = StatePath(ownerId, fromSessionId);
+            if (!File.Exists(from)) return false;
+            var to = StatePath(ownerId, toSessionId);
+            Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+            File.Copy(from, to, overwrite: true);
+            return true;
+        }
+    }
+
+    // Все чаты с нитями: (владелец, чат) — для сверки после перезапуска
+    public IReadOnlyList<(string OwnerId, string SessionId)> Chats()
+    {
+        lock (_gate)
+        {
+            if (!Directory.Exists(Root)) return [];
+            return [.. Directory.EnumerateDirectories(Root).SelectMany(dir => Directory.EnumerateFiles(dir, "*.json")
+                .Select(file => (Path.GetFileName(dir), Path.GetFileNameWithoutExtension(file))))];
+        }
+    }
+
+    // После перезапуска: каждый запуск в статусе running — Interrupted с записью журнала для хода.
+    // Версии, уже ставшие версиями, остаются. null — снимать нечего (ничего не записано)
+    public AudioThreadsState? InterruptRunning(string ownerId, string sessionId,
+        Func<AudioThread, AudioThreadLaunch, AudioThreadEvent> log)
+    {
+        lock (_gate)
+        {
+            var current = Read(ownerId, sessionId);
+            var events = current.Events.ToList();
+            var changed = false;
+            var threads = current.Threads.Select(t =>
+            {
+                if (!t.HasRunningLaunch) return t;
+                changed = true;
+                foreach (var launch in t.Launches.Where(l => l.Status == AudioThreadLaunchStatus.Running))
+                    events.Add(log(t, launch));
+                return t with
+                {
+                    Launches = [.. t.Launches.Select(l => l.Status == AudioThreadLaunchStatus.Running
+                        ? l with { Status = AudioThreadLaunchStatus.Interrupted }
+                        : l)],
+                };
+            }).ToList();
+            if (!changed) return null;
+            var next = current with
+            {
+                Threads = threads,
+                Events = [.. events.TakeLast(MaxEvents)],
+                Revision = current.Revision + 1,
+            };
+            Save(ownerId, sessionId, next);
+            return next;
+        }
+    }
+
+    // Задачи, чьи файлы держат версии нитей владельца: рабочая папка их не чистит по TTL,
+    // версия живёт столько же, сколько нить (как шаги у картинок)
+    public IReadOnlySet<string> ReferencedJobs(string ownerId)
+    {
+        var jobs = new HashSet<string>(StringComparer.Ordinal);
+        lock (_gate)
+        {
+            var dir = Path.Combine(Root, Safe(ownerId));
+            if (!Directory.Exists(dir)) return jobs;
+            foreach (var file in Directory.EnumerateFiles(dir, "*.json"))
+                foreach (var thread in ReadFile(file).Threads)
+                    foreach (var version in thread.Versions)
+                        if (version.JobId is { } job) jobs.Add(job);
+        }
+        return jobs;
+    }
+
     public string StatePath(string ownerId, string sessionId) =>
         Path.Combine(Root, Safe(ownerId), Safe(sessionId) + ".json");
 

@@ -2,7 +2,7 @@
 // ImageEditorSubsystem.Key бэкенда: гейт слотов сверяется с активными подсистемами
 // из /api/auth/me. Фич-флаг владельца (image-editor) проверяют сами входы.
 
-import { Contact, Image as ImageIcon } from 'lucide-react';
+import { Image as ImageIcon } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
   SubsystemManifest, FileViewerToolbarCtx, ChatItemToolCtx, ComposerChipApi, ComposerChipCtx, ComposerStripCtx,
@@ -10,8 +10,7 @@ import type {
 } from '../../lib/subsystems/registryCore';
 import { isEditableImage } from './format';
 import { ImageFileMovedRow, ImageLaunchCard, ImageLaunchRow, ImagePromptCard } from './chat/cards';
-import { CharactersPanel } from './characters/CharactersPanel';
-import { CHARACTERS_PANEL, IMAGES_PANEL } from './characters/panel';
+import { IMAGES_PANEL } from './characters/panel';
 import { EditImageButton } from './entry/EditImageButton';
 import { openFromTree } from './entry/openFromTree';
 import { ImageComposerChip } from './composer/ComposerChip';
@@ -76,8 +75,7 @@ export const manifest: SubsystemManifest = {
         action: { beforeSend: takeMarksAttachment } satisfies ComposerChipApi as unknown as Record<string, unknown>,
       },
     ],
-    // Панель «Картинки» (флаг image-editor-panel): настройки и персонажи вкладками, в проекте
-    // и в правой колонке личного чата. С ней отдельной панели «Персонажи» нет
+    // Панель «Картинки»: настройки и персонажи вкладками, в проекте и в правой колонке личного чата
     'workspace-panel-def': [
       {
         name: IMAGES_PANEL,
@@ -85,18 +83,7 @@ export const manifest: SubsystemManifest = {
         action: {
           title: 'Картинки',
           icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-          isAvailable: () => getFlag(FLAGS.imageEditor) && getFlag(FLAGS.imageEditorPanel),
-        } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
-      },
-      // Панель «Персонажи» рабочей области проекта — пока панели «Картинки» нет
-      {
-        name: CHARACTERS_PANEL,
-        // Персонажи живут в папке проекта: в личном чате панели нет
-        render: (ctx: WorkspacePanelDefCtx) => (ctx.projectId ? <CharactersPanel projectId={ctx.projectId} /> : null),
-        action: {
-          title: 'Персонажи',
-          icon: <Contact size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-          isAvailable: (projectId: string | null) => projectId !== null && getFlag(FLAGS.imageEditor) && !getFlag(FLAGS.imageEditorPanel),
+          isAvailable: () => getFlag(FLAGS.imageEditor),
         } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],

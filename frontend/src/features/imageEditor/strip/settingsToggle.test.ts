@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mobileSummary, settingsToggle, summaryOpensPanel } from './settingsToggle';
+import { mobileSummary, settingsToggle } from './settingsToggle';
 
 describe('сводка полосы «Картинки»', () => {
   it('панель открыта колонкой — акцентная обводка и подсказка «открыты справа»', () => {
@@ -7,15 +7,9 @@ describe('сводка полосы «Картинки»', () => {
     expect(settingsToggle('panel', false)).toEqual({ on: false, title: 'Открыть настройки в панели «Картинки»' });
   });
 
-  it('без флага обводка — по открытой карточке', () => {
-    expect(settingsToggle('card', true).on).toBe(true);
-    expect(settingsToggle('card', false).on).toBe(false);
-  });
-
-  it('свёрнутая полоса: сводка открывает панель, без флага — разворачивает полосу', () => {
-    expect(summaryOpensPanel('panel')).toBe(true);
-    expect(summaryOpensPanel('sheet')).toBe(true);
-    expect(summaryOpensPanel('card')).toBe(false);
+  it('шторка: обводка — по открытой шторке', () => {
+    expect(settingsToggle('sheet', true)).toEqual({ on: true, title: 'Настройки генерации' });
+    expect(settingsToggle('sheet', false).on).toBe(false);
   });
 
   it('телефон: варианты и цена', () => {

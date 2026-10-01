@@ -5,7 +5,7 @@
 // отсюда же, чтобы полоса и кнопка не разошлись.
 
 import { useCallback, useMemo } from 'react';
-import { api as appApi, followChat, showToast, FLAGS, useFeature } from 'aihome_shell/kit';
+import { api as appApi, followChat, showToast } from 'aihome_shell/kit';
 import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditQuoteRequest } from '../api';
 import {
   effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, providerTitle, variantsWord,
@@ -214,9 +214,8 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   const hasImage = threadHasImage(thread);
   const hasMask = hasImage && hasMaskMark(marks);
   const hasAnnotations = hasImage && hasAnnotationMark(marks);
-  // Операция и режим панели «Картинки»; без флага — «Авто», ровно как раньше
+  // Операция и режим панели «Картинки»
   usePanelChoiceVersion();
-  useFeature(FLAGS.imageEditorPanel);
   const choice = activeChoice(projectId);
   const pr = panelRoute(choice, hasImage, hasMask);
   const quick = pr.quick ? quickAvailabilityFor(catalog, settings, pr.quick) : null;

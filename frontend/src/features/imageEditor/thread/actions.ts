@@ -2,7 +2,7 @@
 // сохранить в проект может только человек). Каждое — мутация с ревизией через стор;
 // тексты тостов — из записки v3, раздел «Тексты».
 
-import { autoRevealGenerationPanel, getFlag, showToast, FLAGS } from 'aihome_shell/kit';
+import { autoRevealGenerationPanel, showToast } from 'aihome_shell/kit';
 import { IMAGES_PANEL } from '../characters/panel';
 import { imageEditorApi, nameTakenSuggestion, type ImageEncodeFormat } from '../api';
 import { nameStem } from '../saveAs';
@@ -41,7 +41,7 @@ export function activeStepOf(t: ImageThread): string | null {
 // Выбор картинки человеком открывает панель «Картинки», пока её не закрыли в этом чате
 // (решения Андрея по v4, 2). Выбор агента (image_focus) приходит в стор с сервера и сюда не идёт
 function revealPanel(ok: boolean, sessionId: string): boolean {
-  if (ok && getFlag(FLAGS.imageEditorPanel)) autoRevealGenerationPanel(IMAGES_PANEL, sessionId);
+  if (ok) autoRevealGenerationPanel(IMAGES_PANEL, sessionId);
   return ok;
 }
 

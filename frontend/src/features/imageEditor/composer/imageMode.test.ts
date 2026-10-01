@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 (globalThis as unknown as { localStorage: Storage }).localStorage = {
   getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {}, key: () => null, length: 0,
 } as Storage;
+// Выбор картинки человеком открывает панель «Картинки» событием на window
+(globalThis as unknown as { window: EventTarget }).window = new EventTarget();
 import { nextComposerMode, type ComposerModeSeen } from '../../../lib/composerModes';
 import { __resetComposerStrips, getComposerStripsVersion } from '../../../lib/composerStrips';
 import { createDraft } from '../thread/actions';

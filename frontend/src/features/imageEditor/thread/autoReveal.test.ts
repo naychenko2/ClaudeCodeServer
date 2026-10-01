@@ -16,7 +16,6 @@ const win = Object.assign(new EventTarget(), {
 vi.stubGlobal('window', win);
 
 const { REVEAL_PANEL_EVENT } = await import('../../../lib/subsystems/registryCore');
-const { FLAGS, setFlagLocal } = await import('../../../lib/featureFlags');
 const { markGenPanelDismissed } = await import('../../../lib/genPanelDismissed');
 const { __applyThreads, __resetThreadStore } = await import('./threadStore');
 const { threadsApi } = await import('./threadsApi');
@@ -38,7 +37,6 @@ beforeEach(() => {
   vi.restoreAllMocks();
   __resetThreadStore();
   __applyThreads('s1', 'p1', { focus: null, revision: 1, threads: [thread] });
-  setFlagLocal(FLAGS.imageEditorPanel, true);
   for (const m of ['focus', 'current', 'create'] as const) vi.spyOn(threadsApi, m).mockResolvedValue(focused(2));
 });
 
@@ -72,10 +70,4 @@ describe('автооткрытие панели «Картинки»', () => {
     expect(reveals).toEqual([]);
   });
 
-  it('без флага image-editor-panel — как раньше: панель не открывается', async () => {
-    setFlagLocal(FLAGS.imageEditorPanel, false);
-    await workWith('p1', 's1', 't1');
-    await createDraft('p1', 's1', '');
-    expect(reveals).toEqual([]);
-  });
 });

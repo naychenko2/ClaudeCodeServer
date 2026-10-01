@@ -42,8 +42,6 @@ export const FLAGS = {
   localMediaDefault: 'local-media-default',
   // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта.
   audioEditor: 'audio-editor',
-  // Настройки картинок в боковой панели генерации (ADR-021 §3) вместо карточки над полосой.
-  imageEditorPanel: 'image-editor-panel',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

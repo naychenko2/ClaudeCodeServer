@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 

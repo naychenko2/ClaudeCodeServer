@@ -1756,9 +1756,9 @@ public class SubsystemBoundaryTests
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).
         "ClaudeHomeServer.Core.Telemetry",
-        // ADR-018 §10.1: швы модуля редактора картинок в спине — IHiggsfieldAccess,
-        // список авторазрешения тулсета агента (ImageEditorAgentTools), имя рабочей папки для
-        // бэкапа и записи операций растра.
+        // ADR-018 §10.1: швы модуля редактора картинок в спине — список авторазрешения
+        // тулсета агента (ImageEditorAgentTools), имя рабочей папки для бэкапа и записи
+        // операций растра.
         // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
         "ClaudeHomeServer.Services.ImageEditor",
         // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая
@@ -1767,6 +1767,11 @@ public class SubsystemBoundaryTests
         // ADR-018 §10.1: шов растра. Реализация (SkiaImageRaster) в Images, потребитель —
         // модуль редактора; namespace сохранён при переносе интерфейса из Images.
         "ClaudeHomeServer.Services.Images.Editing.Raster",
+        // ADR-021 §2: общие швы медиа-модулей (картинки и звук) под нейтральными именами —
+        // IHiggsfieldAccess (доступ к инстансной интеграции Higgsfield) и ProjectLinkGuard
+        // (запрет символических ссылок в путях проекта). Перенесены из Services.ImageEditor.
+        "ClaudeHomeServer.Services.Higgsfield",
+        "ClaudeHomeServer.Services.Media",
     ];
 
     /// <summary>

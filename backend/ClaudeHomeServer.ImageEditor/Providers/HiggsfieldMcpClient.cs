@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.ImageEditor;

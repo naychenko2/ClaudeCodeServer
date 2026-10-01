@@ -244,6 +244,10 @@ public class SubsystemBoundaryCoverageTests
             // вертикалям доступны как спина по сборке Core.
             // `ClaudeHomeServer.Services.ImageEditor` здесь больше нет: это модуль редактора
             // (ADR-018 §10.1) со своей строкой в Boundaries; его швы в Core проверяются тем же сторожем.
+            // Спина медиа-модулей (ADR-021 §2): швы, общие для картинок и звука, живут только
+            // в Core (CoreAllowedNamespaces) и своей вертикали не имеют.
+            "ClaudeHomeServer.Services.Higgsfield",   // IHiggsfieldAccess
+            "ClaudeHomeServer.Services.Media",        // ProjectLinkGuard
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

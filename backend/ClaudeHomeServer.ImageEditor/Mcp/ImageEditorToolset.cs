@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Mcp.Http;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Mcp;

@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.Media;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Controllers;

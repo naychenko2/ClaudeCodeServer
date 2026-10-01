@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.Spend;
 using Microsoft.Extensions.Configuration;
 

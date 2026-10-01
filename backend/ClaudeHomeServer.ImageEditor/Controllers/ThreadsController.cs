@@ -4,6 +4,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
+using ClaudeHomeServer.Services.Media;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 

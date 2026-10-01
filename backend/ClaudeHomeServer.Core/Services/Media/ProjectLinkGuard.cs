@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services.ImageEditor;
+namespace ClaudeHomeServer.Services.Media;
 
 // Граница проекта для путей редактора картинок (ADR-017, раздел 8). SafePath.Join
 // сравнивает строки и символическую ссылку наружу не видит: «refs» → /etc внутри проекта

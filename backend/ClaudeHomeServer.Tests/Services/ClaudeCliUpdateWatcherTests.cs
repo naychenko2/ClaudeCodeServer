@@ -55,6 +55,7 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
         push.Should().BeTrue();
         req.Type.Should().Be("claude_cli_update");
         req.Url.Should().Be("/models");
+        req.Sticky.Should().BeTrue();
         req.Body.Should().Contain("2.1.283").And.Contain("2.1.300");
         var status = w.GetStatus();
         (status.Current, status.Latest, status.UpdateAvailable).Should().Be(("2.1.283", "2.1.300", true));

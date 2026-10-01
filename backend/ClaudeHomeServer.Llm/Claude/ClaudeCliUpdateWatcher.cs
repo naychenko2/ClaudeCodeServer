@@ -289,6 +289,9 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
                     Url = "/models",
                     Tag = "Claude CLI",
                     Source = "Claude CLI",
+                    // Проверка идёт раз в сутки — живой тост легко пропустить; закреплённое
+                    // всплывает при входе, пока его не прочитают
+                    Sticky = true,
                 }, sendPush: true);
                 delivered++;
             }

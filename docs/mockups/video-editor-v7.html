@@ -419,6 +419,14 @@
   .stubimg { aspect-ratio: 16 / 9; border-radius: 9px; overflow: hidden; margin-top: 10px; border: 1px solid var(--c-border); }
   .gcell .gp.short { height: 330px; }
   .gcell .gp.spine { height: 300px; width: 44px; }
+
+  /* Панель следует за выбором в ленте */
+  .gp-agent { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; background: var(--c-accent-light); border-bottom: 1px solid var(--c-border-light); font-size: 11.5px; color: var(--c-text-primary); min-width: 0; }
+  .gp-agent .grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gp-agent b { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--c-text-heading); }
+  .qlink { border: none; background: transparent; cursor: pointer; padding: 2px 8px; border-radius: 6px; font: inherit; font-size: 11.5px; }
+  .qlink:hover { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .scard .mic3 { width: 72px; flex: 0 0 72px; aspect-ratio: 16 / 9; border-radius: 6px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; }
 </style>
 </head>
 <body>
@@ -536,7 +544,7 @@ const CLIP = ['video/клипы/водопад.mp4', 2, 6];
 /* ===================== Состояние ===================== */
 function mkScene(n, o = {}) {
   return Object.assign({ id: 's' + n, n, text: TEXTS[(n - 1) % TEXTS.length], A: { seed: n - 1, file: `кадр-${n}.png`, ver: 1 }, B: { seed: n, file: `кадр-${n + 1}.png`, ver: 1 },
-    vers: [], cur: 0, saved: [], st: 'idle', p: 0, hold: false, shot: null, by: {}, fch: false, dur: 8, prov: 'fal', model: 'veo', draft: false, cost: 0, job: null }, o);
+    vers: [], cur: 0, saved: [], st: 'idle', p: 0, hold: false, shot: null, by: {}, fch: false, dur: 8, prov: 'fal', model: 'veo', draft: false, cost: 0, job: null }, o, { base: o.base !== undefined ? o.base : (o.text !== undefined ? o.text : TEXTS[(n - 1) % TEXTS.length]) });
 }
 function shotScene(n, o = {}) {
   const sc = mkScene(n, o); sc.vers = [{ n: 1, by: 'Claude' }, { n: 2, by: 'Claude' }]; sc.cur = 1;
@@ -550,12 +558,14 @@ function fresh(state, keep = {}) {
   const S = { theme: keep.theme || 'light', dev: keep.dev || 'desktop', scope: keep.scope || 'project', state,
     panel: (keep.dev || 'desktop') === 'mobile' ? null : 'video', tabs: { video: 'scene', images: 'settings', sound: 'settings' }, spine: false, peek: false, collapsed: false, menu: null, big: null,
     cmode: 'chat', prov: 'fal', model: { fal: 'veo', hf: 'kling', local: 'h3' }, dur: 8, ratio: '16:9', sound: true, count: 2,
-    scenes: {}, sel: null, feed: [], films: {}, fid: null, spend: [], toast: null, trim: null, img: null, ret: null, treeHi: null, agent: null, byModel: false, seq: 1 };
+    scenes: {}, sel: null, feed: [], films: {}, fid: null, spend: [], toast: null, trim: null, img: null, ret: null, treeHi: null, agent: null, byModel: false, seq: 1,
+    // Выбор в ленте: cur — что выбрал человек последним (scene / film / image / sound), strip — раздел полосы, agentPick — что взял в работу Claude
+    cur: 'scene', strip: 'video', snd: null, agentPick: null };
   const put = sc => { S.scenes[sc.id] = sc; return sc; };
   const card = sc => S.feed.push({ t: 'scene', sid: sc.id });
   const user = text => S.feed.push({ t: 'user', text });
   const bot = (html, acts) => S.feed.push({ t: 'agent', html, acts });
-  const quiet = html => S.feed.push({ t: 'quiet', html });
+  const quiet = (html, fid) => S.feed.push({ t: 'quiet', html, film: fid });
   if (S.scope === 'personal') {
     const s1 = put(shotScene(1, { unsaved: true })), s2 = put(shotScene(2, { unsaved: true })), s3 = put(mkScene(3));
     s3.A = { ...s2.B }; s3.B = { seed: 3, file: 'гора-3.png', ver: 1 };
@@ -589,9 +599,11 @@ function fresh(state, keep = {}) {
   S.films.f2.items = OTHER_FILES.map(([file, seed, dur], i) => ({ id: 'o' + i, sid: null, file, seed, dur, trim: [0, dur], cut: { t: 'fade', s: 1 }, upd: false, claude: false, added: false, warn: false }));
   S.films.f2.build = { st: 'done', p: 1, ver: 1 };
   user('Сделай 4 сцены про утро в горах и собери фильм'); bot('Готово: 4 сцены по 8 с стоят в фильме «утро-в-горах», под ними музыка <code>music/утро.mp3</code>. Фильм собран — <code>film.mp4</code>.');
-  sc.forEach(card); quiet('Claude собрал фильм: <b>video/утро-в-горах/film.mp4</b> · 4 сцены · 0:32 · бесплатно');
+  sc.forEach(card); S.feed.push({ t: 'sound', file: 'music/утро.mp3' }); quiet('Claude собрал фильм: <b>video/утро-в-горах/film.mp4</b> · 4 сцены · 0:32 · бесплатно', 'f1');
   user('Добавь пятую: солнце над хребтом, камера отъезжает');
-  bot('Написал текст сцены 5 и поставил кадры: A — кадр B сцены 4, чтобы стык был без скачка. Снимайте из панели «Видео» — цена видна до запуска.');
+  bot('Написал текст сцены 5, нарисовал кадр B и поставил кадры: A — кадр B сцены 4, чтобы стык был без скачка. Снимайте из панели «Видео» — цена видна до запуска.',
+    [{ l: 'Перерисуй кадр B светлее', a: 'ag:take' }]);
+  S.feed.push({ t: 'image', sid: 's5', slot: 'B', file: 'кадр-6.png', seed: 2 });
   card(s5);
   S.sel = 's5';
   S.spend = [1, 2, 3, 4].map(n => [`Сцена ${n} · 2 варианта · Veo 3.1`, 3.2, 'Claude']).concat([['Кадры 5 и 6 · Nano Banana Pro', 0.2, 'Claude']]);
@@ -599,7 +611,7 @@ function fresh(state, keep = {}) {
   if (state === 'emptyFilm') { S.films.f3 = mkFilm('f3', 'новый-фильм', 'video/новый-фильм/', []); S.fid = 'f3'; S.tabs.video = 'film'; }
   if (state === 'running') { s5.st = 'shoot'; s5.p = 0.4; s5.hold = true; s5.job = { n: 2, by: 'Андрей', cost: 3.2, m: 'Veo 3.1' }; }
   if (state === 'queue') { S.prov = 'local'; S.dur = 10; s5.st = 'shoot'; s5.p = 0; s5.hold = true; s5.queue = 2; s5.job = { n: 2, by: 'Андрей', cost: 0, m: 'MiniMax H3' }; }
-  if (state === 'unbuilt') { film.build = { st: 'none', p: 0, ver: 0 }; film.music = null; S.tabs.video = 'film'; S.feed.splice(S.feed.findIndex(x => x.t === 'quiet'), 1); S.feed[1].html = 'Готово: 4 сцены по 8 с стоят в фильме «утро-в-горах». Собрать его можно во вкладке «Фильм» панели «Видео» — бесплатно.'; }
+  if (state === 'unbuilt') { film.build = { st: 'none', p: 0, ver: 0 }; film.music = null; S.tabs.video = 'film'; S.cur = 'film'; S.feed = S.feed.filter(x => x.t !== 'sound'); S.feed.splice(S.feed.findIndex(x => x.t === 'quiet'), 1); S.feed[1].html = 'Готово: 4 сцены по 8 с стоят в фильме «утро-в-горах». Собрать его можно во вкладке «Фильм» панели «Видео» — бесплатно.'; }
   return S;
 }
 let S = fresh('norm');
@@ -622,6 +634,9 @@ const savedNow = sc => sc.saved.length > 0 && lastSaved(sc).v === sc.cur;
 const textChanged = sc => sc.vers.length > 0 && sc.shot != null && sc.text.trim() !== sc.shot.trim();
 const stale = f => f && f.build.st === 'done' && f.changes.length > 0;
 function change(f, why) { if (f && !f.changes.includes(why)) f.changes.push(why); }
+// Черновик: текст сцены правлен и ещё не ушёл модели. Правка живёт у самой сцены, поэтому переход к другой карточке её не теряет
+const isDraft = sc => !!sc && sc.text.trim() !== (sc.base || '').trim();
+const draftPill = sc => `<span class="badge warn" data-draftpill="1" style="${isDraft(sc) ? '' : 'display:none'}" title="Текст сцены правлен и ещё не ушёл модели — правка хранится у этой сцены">черновик</span>`;
 
 /* ===================== Цена и причины ===================== */
 const curPv = () => PROVS.find(p => p.key === S.prov);
@@ -670,13 +685,26 @@ function switcherMenu() {
   if (S.menu !== 'switch') return '';
   return `<div class="menu" style="left:6px;bottom:calc(100% + 4px)">
     <button class="mi" data-act="noop">${ic('git')}<span>Git<small>feat/site-header · +42 −7</small></span></button>
-    <button class="mi" data-act="noop">${ic('img')}<span>Картинки<small>картинка не выбрана</small></span></button>
-    <button class="mi" data-act="noop">${ic('waves')}<span>Звук<small>звук не выбран</small></span></button>
-    <button class="mi on" data-act="menu:">${ic('video')}<span>Видео<small>${esc(sceneSum())}${film() ? ' · ' + esc(filmSum()) : ''}</small></span></button>
+    <button class="mi${S.strip === 'images' ? ' on' : ''}" data-act="${S.img ? 'strip:images' : 'noop'}">${ic('img')}<span>Картинки<small>${S.img ? esc(imgSum()) : 'картинка не выбрана'}</small></span></button>
+    <button class="mi${S.strip === 'sound' ? ' on' : ''}" data-act="${S.snd && S.snd.file ? 'strip:sound' : 'noop'}">${ic('waves')}<span>Звук<small>${S.snd && S.snd.file ? esc(sndSum()) : 'звук не выбран'}</small></span></button>
+    <button class="mi${S.strip === 'video' ? ' on' : ''}" data-act="strip:video">${ic('video')}<span>Видео<small>${esc(sceneSum())}${film() ? ' · ' + esc(filmSum()) : ''}</small></span></button>
     <div class="msep"></div><button class="mi" data-act="collapse">${ic('up')}<span>Свернуть полосу в строку</span></button></div>`;
+}
+// Картинка и звук, выбранные в ленте: данные для заглушек полосы и панели (состав — в «Картинках» v4 и «Звуке» v2)
+function imgFrame() { const im = S.img; if (!im) return null; const sc = S.scenes[im.sid], fr = sc && sc[im.slot]; if (!im.file) return fr; return { file: im.file, seed: im.seed, ver: fr && fr.file === im.file ? fr.ver : 1 }; }
+const imgSum = () => { const fr = imgFrame(); return fr ? `${fr.file} · v${fr.ver} · Nano Banana Pro · ≈ $0.04` : 'картинка не выбрана'; };
+const sndSum = () => `${base(S.snd.file)} · Музыка · Перегенерировать кусок · бесплатно`;
+function otherStrip(key) {
+  const open = S.panel === key, img = key === 'images', name = img ? 'Картинки' : 'Звук';
+  const sw = `<button class="swb" data-act="menu:switch" title="Сменить полосу над композером">${ic(img ? 'img' : 'waves', 1)}${mob() ? '' : name}${ic('down', 1)}</button>`;
+  const lead = img ? thumb(imgFrame().seed, 18, 0, 'st') : ic('music', 1);
+  return `<div class="strip">${sw}<button class="setb${open ? ' open' : ''}" data-act="openSec:${key}" title="${open ? `Настройки открыты в панели «${name}» справа` : `Открыть настройки в панели «${name}»`}">${lead}<span class="t">${esc(img ? imgSum() : sndSum())}</span>${ic(mob() ? 'up' : 'right', 1)}</button><span class="grow"></span>${switcherMenu()}</div>`;
 }
 const warnIc = () => `<span style="color:var(--c-warning-text);display:inline-flex">${ic('alert', 1)}</span>`;
 function strip() {
+  // Полоса следует за выбором в ленте, как и панель: выбрали картинку — сводка «Картинок»
+  if (S.strip === 'images' && imgFrame()) return otherStrip('images');
+  if (S.strip === 'sound' && S.snd && S.snd.file) return otherStrip('sound');
   const sc = curSc(), f = film(), open = S.panel === 'video';
   const sw = `<button class="swb" data-act="menu:switch" title="Сменить полосу над композером">${ic('video', 1)}${mob() ? '' : 'Видео'}${ic('down', 1)}</button>`;
   const sWarn = sceneWhy(sc) ? warnIc() : '';
@@ -723,7 +751,7 @@ function sceneBody() {
   if (sc.fch) h += `<div class="warnln">${ic('alert', 1)}Кадр изменён после съёмки — переснимите, чтобы клип его взял</div>`;
   h += `<div class="lbl2">Текст сцены${byMark(sc.by.text)}<button class="btn xs ghost" style="margin-left:auto" data-act="big:text" title="Редактор текста на всю высоту панели">${ic('expand', 1)}Развернуть</button></div>
     <textarea class="fld auto" data-text="1" data-keep="text" placeholder="Что происходит от кадра A к кадру B? Камера, движение, свет, звук. Реплики — в кавычках.">${esc(sc.text)}</textarea>
-    <div class="hint" style="display:flex;gap:6px;margin-top:3px"><span class="grow">${textChanged(sc) ? '<span style="color:var(--c-warning-text)">Текст изменён после съёмки — клип снят по прежнему</span>' : 'Текст уходит модели вместе с кадрами. Просьба из поля ввода добавится к нему.'}</span><span data-text-cnt="1">${sc.text.length} / 2000</span></div>`;
+    <div class="hint" style="display:flex;gap:6px;margin-top:3px"><span class="grow">${textChanged(sc) ? '<span style="color:var(--c-warning-text)">Текст изменён после съёмки — клип снят по прежнему</span>' : isDraft(sc) ? 'Черновик этой сцены: уйдёт модели при запуске и дождётся вас, если выбрать другую карточку.' : 'Текст уходит модели вместе с кадрами. Просьба из поля ввода добавится к нему.'}</span><span data-text-cnt="1">${sc.text.length} / 2000</span></div>`;
   h += `<div class="lbl2">Поставщик${byMark(S.byModel)}</div><div class="opts">${PROVS.map(p => opt(S.prov === p.key, p.label, p.hint, 'prov:' + p.key, personal() && p.key === 'local' ? 'Локальные модели работают только в чате проекта — результат ложится в его папку' : null)).join('')}</div>`;
   const hintOf = x => pv.unit === 'free' ? `бесплатно · ${minsTxt(x.mins[x.durs[0]])} на ${x.durs[0]} с · очередь GPU: ${queueN()}` : `${pv.unit === 'usd' ? usd(x.per) : x.per + ' кр'} за секунду · ${x.sound ? 'со звуком' : 'без звука'}${x.note ? ' · ' + x.note : ''}`;
   h += `<div class="lbl2">Модель · ${pv.label}</div><div class="opts">${pv.models.map(x => opt(x.id === m.id, x.label, hintOf(x), 'model:' + x.id, x.ratios.includes(S.ratio) ? null : `Не снимает в пропорциях ${S.ratio}`)).join('')}</div>`;
@@ -740,7 +768,7 @@ function bigText(sc) {
     <div class="fld-row" style="margin-top:0"><div class="l">Текст сцены ${sc.draft ? '(новая)' : sc.n}${byMark(sc.by.text)}<span class="v" data-text-cnt="1">${sc.text.length} / 2000</span></div></div>
     <div class="secs" style="margin:0 0 6px">${['Камера:', 'Свет:', 'Звук:', '«Реплика»'].map(s => `<button class="btn xs" data-act="ins:${s}">${s}</button>`).join('')}</div>
     <textarea class="fld" style="font-size:12.5px;line-height:1.6" data-text="1" data-keep="bigtext" placeholder="Что происходит от кадра A к кадру B…">${esc(sc.text)}</textarea>
-    <div class="hint" style="margin-top:6px">Правки сохраняются сразу — следующий запуск возьмёт их. Тексты всех сцен фильма разом — «Сценарий» во вкладке «Фильм».</div></div>`;
+    <div class="hint" style="margin-top:6px">Правка хранится черновиком у этой сцены — следующий запуск возьмёт её, переход к другой карточке не потеряет. Тексты всех сцен фильма разом — «Сценарий» во вкладке «Фильм».</div></div>`;
 }
 function sceneFoot() {
   const sc = curSc(), why = sceneWhy(sc), [p1, p2] = price(false);
@@ -875,8 +903,8 @@ function videoPanel(view) {
   let ctx;
   if (tab === 'scene') {
     const pos = filmPos(sc);
-    ctx = !sc || sc.draft ? `${ic('spark', 1)}<span class="grow">Новая сцена · результат ляжет в ленту новой карточкой</span>`
-      : `${thumb(sc.B.seed, 18, 0, 'cx')}<span class="grow" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Работаем со: <b>Сценой ${sc.n}</b>${personal() ? '' : pos ? ` · в фильме ${esc(f.name)}` : ' · не в фильме'}</span><button class="ib sm" data-act="release" title="Снять выбор — новая сцена">${ic('x', 1)}</button>`;
+    ctx = !sc || sc.draft ? `${ic('spark', 1)}<span class="grow">Новая сцена · результат ляжет в ленту новой карточкой</span>${sc ? draftPill(sc) : ''}`
+      : `${thumb(sc.B ? sc.B.seed : 9, 18, 0, 'cx')}<span class="grow" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Работаем со: <b>Сценой ${sc.n}</b>${personal() ? '' : pos ? ` · в фильме ${esc(f.name)}` : ' · не в фильме'}</span>${draftPill(sc)}<button class="ib sm" data-act="release" title="Снять выбор — новая сцена">${ic('x', 1)}</button>`;
   } else if (personal()) ctx = `${ic('lock', 1)}<span>Фильмы — только в проекте</span>`;
   else if (!f) ctx = `${ic('film', 1)}<span class="grow">Фильм не выбран</span>`;
   else ctx = `${ic('film', 1)}<button class="lnk" style="border:none;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1;justify-content:flex-start" data-act="menu:films" title="Фильмы проекта · новый фильм">Фильм: <b style="color:var(--c-text-heading)">${esc(f.name)}</b>&nbsp;<span class="mono hint">· ${esc(f.folder)}</span>${ic('down', 1)}</button><button class="spentb" data-act="menu:spent" title="Потрачено на фильм — по сценам">${ic('clock', 1)}<b>${spentTxt()}</b></button><button class="ib sm" data-act="closefilm" title="Закрыть фильм — он сохранён в проекте">${ic('x', 1)}</button>`;
@@ -890,10 +918,13 @@ function videoPanel(view) {
 }
 // Соседние панели — заглушки перехода: их состав живёт в макетах «Картинки» v4 и «Звук» v2
 function imagesStub(view) {
-  const im = S.img, sc = S.scenes[im.sid], fr = sc[im.slot];
+  const im = S.img, sc = S.scenes[im.sid], fr = imgFrame();
   const ctx = im.edit ? `${thumb(fr.seed, 18, 0, 'ix')}<span class="grow" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Работаем с: <b>${esc(fr.file)} · версия ${fr.ver}</b> · кадр ${im.slot} сцены ${sc.n}</span>`
     : `${ic('spark', 1)}<span class="grow">Новая картинка · станет кадром ${im.slot} сцены ${sc.draft ? '(новой)' : sc.n}</span>`;
-  const body = `<div class="box info">${ic('img', 1)}<div class="body">Это панель «Картинки» — состав вкладок в макете «Картинки v4». Пришли сюда из «Видео»: ${im.edit ? 'новая версия' : 'картинка'} сама станет кадром ${im.slot} сцены ${sc.draft ? '(новой)' : sc.n}${sc.vers.length ? ', а снятый клип получит «Кадр изменён — переснять»' : ''}.<div class="acts"><button class="btn xs" data-act="back">${ic('back', 1)}К сцене ${sc.draft ? '(новой)' : sc.n} — панель «Видео»</button></div></div></div>
+  const why = im.from === 'feed' ? `Панель следует за выбором: вы кликнули по карточке <code>${esc(fr.file)}</code> в ленте — открылись «Картинки → Настройки». Клик по карточке сцены вернёт «Видео → Сцена»; правка текста сцены дождётся там черновиком.`
+    : im.from === 'agent' ? `Claude взял <code>${esc(fr.file)}</code> в работу, а панель вы открыли сами — кнопкой «Открыть» в шапке. Клик по карточке сцены вернёт «Видео → Сцена».`
+    : `Пришли сюда из «Видео»: ${im.edit ? 'новая версия' : 'картинка'} сама станет кадром ${im.slot} сцены ${sc.draft ? '(новой)' : sc.n}${sc.vers.length ? ', а снятый клип получит «Кадр изменён — переснять»' : ''}.<div class="acts"><button class="btn xs" data-act="back">${ic('back', 1)}К сцене ${sc.draft ? '(новой)' : sc.n} — панель «Видео»</button></div>`;
+  const body = `<div class="box info">${ic('img', 1)}<div class="body">Это панель «Картинки» — состав вкладок в макете «Картинки v4». ${why}</div></div>
     ${im.edit ? `<div class="stubimg">${art(fr.seed, 16, 9, { k: 'stub', v: fr.ver - 1 })}</div>` : ''}
     <div class="lbl2">Операция</div><div class="opts">${['Авто', 'По тексту', 'Правка', 'По отмеченному'].map((o, i) => `<span class="opt op${i === 0 ? ' on' : ''}">${o}</span>`).join('')}</div>
     <div class="lbl2">Поставщик · модель</div><div class="opts"><span class="opt on"><span class="n">fal · Nano Banana Pro</span><span class="h">$0.04 за картинку</span></span></div>
@@ -903,6 +934,7 @@ function imagesStub(view) {
     ctx, body, foot: view === 'peek' ? `<div style="font-size:11.5px;color:var(--c-text-secondary);margin-bottom:6px">Кадр ${im.slot} · fal · 1 вар. · ≈ $0.04</div>${foot}` : foot, runTitle: `${im.edit ? 'Изменить' : 'Сгенерировать'} · ≈ $0.04` });
 }
 function soundStub(view) {
+  if (S.snd && S.snd.from === 'feed') return soundFeedStub(view);
   const f = film() || S.films.f1 || { name: 'без фильма', items: [] }, d = f.items.length ? fmtT(filmDur(f)) : '0:30';
   const ctx = `${ic('spark', 1)}<span class="grow">Новый звук · заготовка из «Видео»: под фильм «${esc(f.name)}»</span>`;
   const body = `<div class="box info">${ic('waves', 1)}<div class="body">Это панель «Звук» — состав вкладок в макете «Звук v2». «Видео» передало заготовку: длину фильма и настроение по текстам сцен. Готовый трек ляжет в <code>music/</code> и встанет музыкой фильма сам.<div class="acts"><button class="btn xs" data-act="back">${ic('back', 1)}К фильму «${esc(f.name)}» — панель «Видео»</button></div></div></div>
@@ -927,7 +959,28 @@ function filesPanel() {
   if (mob()) return `<div class="ovl" data-act="closePanel"></div><div class="sheet" style="height:70%"><div class="grab"></div>${head}${note}<div class="gp-body">${tree}</div></div>`;
   return `<div class="island side">${head}${note}<div class="pbody" style="padding:0">${tree}</div></div>`;
 }
-function panelFor(key, view) { return key === 'video' ? videoPanel(view) : key === 'images' ? imagesStub(view) : soundStub(view); }
+function soundFeedStub(view) {
+  const file = S.snd.file, f = S.films.f1;
+  const ctx = `${ic('music', 1)}<span class="grow" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Работаем с: <b>${esc(base(file))} · версия 1</b>${f ? ` · музыка фильма «${esc(f.name)}»` : ''}</span>`;
+  const body = `<div class="box info">${ic('waves', 1)}<div class="body">Это панель «Звук» — состав вкладок в макете «Звук v2». Панель следует за выбором: вы кликнули по карточке <code>${esc(base(file))}</code> в ленте — открылись «Звук → Настройки». Клик по карточке сцены вернёт «Видео → Сцена».</div></div>
+    <div class="lbl2">Режим</div><div class="seg full"><button>Голос</button><button class="on">Музыка</button><button>Обработка</button></div>
+    <div class="lbl2">Операция</div><div class="opts"><span class="opt op">Песня</span><span class="opt op on">Перегенерировать кусок</span><span class="opt op">Кавер</span></div>
+    <div class="hint" style="margin-top:8px">Какой кусок и как изменить — выделите на волне в карточке и напишите в поле ввода.</div>`;
+  const foot = `<div style="margin-bottom:6px"><span class="q">${ic('cpu', 1)}GPU: очередь пуста</span></div><div class="row"><span class="count"><button disabled>−</button><span>1</span><button>+</button></span><span class="p"><b>Бесплатно</b><br>~1 мин · очередь GPU: 0</span><button class="btn pri sm" data-act="noop">${ic('spark', 1)}Перегенерировать</button></div>`;
+  return genPanel({ key: 'sound', view, icon: 'waves', title: 'Звук', sub: 'Музыка · Перегенерировать кусок', tab: S.tabs.sound, tabs: [['settings', 'Настройки', undefined, 'sliders'], ['voices', 'Голоса', 3, 'mic']],
+    ctx, body, foot: view === 'peek' ? `<div style="font-size:11.5px;color:var(--c-text-secondary);margin-bottom:6px">${esc(sndSum())}</div>${foot}` : foot, runTitle: 'Перегенерировать · бесплатно' });
+}
+// Подсказка «Claude взял в работу» — вторая строка шапки. В каркасе это слот шапки; здесь вставлена обёрткой,
+// чтобы genPanel() оставался побайтной копией «Картинок» v4 до правки самого каркаса
+function agentShown(p) { return p.kind === 'image' && S.panel === 'images' && S.cur === 'image' && S.img && S.img.sid === p.sid && S.img.slot === p.slot; }
+function withAgentHint(html) {
+  const p = S.agentPick; if (!p || agentShown(p)) return html;
+  const i = html.indexOf('<div class="ph">'); if (i < 0) return html;
+  const j = html.indexOf('</div>', i) + 6;
+  const hint = `<div class="gp-agent" title="Claude сам выбрал этот элемент — панель не переключилась, чтобы не сбить вашу работу">${ic('spark', 1)}<span class="grow">Claude взял в работу: <b>${esc(p.file)}</b></span><button class="btn xs" data-act="agentOpen">Открыть</button><button class="ib sm" data-act="agentHide" title="Скрыть подсказку — Claude продолжит работу">${ic('x', 1)}</button></div>`;
+  return html.slice(0, j) + hint + html.slice(j);
+}
+function panelFor(key, view) { return withAgentHint(key === 'video' ? videoPanel(view) : key === 'images' ? imagesStub(view) : soundStub(view)); }
 
 /* ===================== Лента ===================== */
 function clipView(sc) {
@@ -944,8 +997,8 @@ function sceneCard(sc) {
   const meta = [sc.vers.length ? `версия ${sc.vers[sc.cur].n} из ${sc.vers.length}` : sc.st === 'shoot' ? `снимаем · ${Math.round(sc.p * 100)} %` : 'не снята', sc.saved.length ? lastSaved(sc).file : personal() && sc.vers.length ? 'не скачана' : null, pos ? `в фильме, место ${pos}` : null, sc.cost ? `потрачено ${usd(sc.cost)}` : null].filter(Boolean).join(' · ');
   if (!sel) {
     const wantFilm = !personal() && f && sc.saved.length && !pos;
-    return `<div class="scard compact" data-act="pick:${sc.id}" data-card="${sc.id}" title="Выбрать сцену ${sc.n} во вкладке «Сцена» панели «Видео»"><span class="cth">${art(sc.B.seed, 16, 9, { k: 'cc' + sc.id, v: sc.cur % 3 })}</span>
-      <div class="grow" style="min-width:0"><div class="t1">Сцена ${sc.n}${(textChanged(sc) || sc.fch) ? warnIc() : ''}</div><div class="t2">${esc(meta)}</div></div>
+    return `<div class="scard compact" data-act="pick:${sc.id}" data-card="${sc.id}" title="Выбрать сцену ${sc.n} во вкладке «Сцена» панели «Видео»"><span class="cth">${art(sc.B ? sc.B.seed : 9, 16, 9, { k: 'cc' + sc.id, v: sc.cur % 3 })}</span>
+      <div class="grow" style="min-width:0"><div class="t1">Сцена ${sc.n}${(textChanged(sc) || sc.fch) ? warnIc() : ''}${isDraft(sc) && !textChanged(sc) ? draftPill(sc) : ''}</div><div class="t2">${esc(meta)}</div></div>
       ${wantFilm ? `<button class="btn xs" data-act="tofilm:${sc.id}">${ic('film', 1)}В фильм →</button>` : sc.vers.length ? `<button class="btn xs ghost" data-act="reshoot:${sc.id}" title="Выбрать сцену во вкладке «Сцена» — переснять оттуда">${ic('refresh', 1)}Переснять</button>` : ''}</div>`;
   }
   const inTab = S.panel === 'video' && vtab() === 'scene';
@@ -967,15 +1020,31 @@ function sceneCard(sc) {
     : `<div class="acts2"><button class="btn xs" data-act="reshoot:${sc.id}">${ic('sliders', 1)}${inTab ? 'Открыта в панели' : 'Открыть в панели'}</button></div>`;
   const it = pos ? f.items[pos - 1] : null;
   const inFilm = pos ? `<div class="fnote">${ic('film', 1)}<span class="grow">В фильме <b>«${esc(f.name)}»</b> · место ${pos}${it.upd ? ` · фильм возьмёт <b>${esc(base(it.file))}</b>, у сцены точка «обновлена» — пересоберите` : ''}</span><button class="btn xs" data-act="gofilm">Открыть «Фильм» →</button></div>` : '';
-  return `<div class="scard${sel ? ' focus' : ''}" data-card="${sc.id}"><div class="hd">${ic('clapper', 1)}<b>Сцена ${sc.n}</b><span class="hint">· ${personal() ? 'личный чат' : esc((f || S.films.f1).folder)} · ${sc.dur} с</span>${inTab ? '<span class="badge acc">в панели</span>' : ''}${pos ? `<span class="badge mut">${ic('film', 1)}место ${pos}</span>` : ''}<span class="grow"></span><span class="hint">${sc.cost ? 'потрачено ' + usd(sc.cost) : ''}</span></div>
+  return `<div class="scard${sel && S.cur === 'scene' ? ' focus' : ''}" data-card="${sc.id}" data-act="pick:${sc.id}" title="Сцена ${sc.n} — во вкладке «Сцена» панели «Видео»"><div class="hd">${ic('clapper', 1)}<b>Сцена ${sc.n}</b><span class="hint">· ${personal() ? 'личный чат' : esc((f || S.films.f1).folder)} · ${sc.dur} с</span>${inTab ? '<span class="badge acc">в панели</span>' : ''}${isDraft(sc) && !textChanged(sc) ? draftPill(sc) : ''}${pos ? `<span class="badge mut">${ic('film', 1)}место ${pos}</span>` : ''}<span class="grow"></span><span class="hint">${sc.cost ? 'потрачено ' + usd(sc.cost) : ''}</span></div>
     <div class="sgrid"><div>${clipView(sc)}</div><div style="min-width:0">${side}${acts}</div></div>${inFilm}</div>`;
+}
+// Карточки картинки и звука в ленте — компактные строки; клик ведёт панель в свой раздел
+function imageCard(it) {
+  const sc = S.scenes[it.sid], fr = sc && sc[it.slot], ver = fr && fr.file === it.file ? fr.ver : 1;
+  const on = S.cur === 'image' && S.img && S.img.sid === it.sid && S.img.slot === it.slot, inPanel = on && S.panel === 'images';
+  const busy = S.agentPick && S.agentPick.file === it.file;
+  return `<div class="scard compact${on ? ' focus' : ''}" data-act="pickimg:${it.sid}:${it.slot}" data-card="img-${esc(it.file)}" title="Открыть в панели «Картинки» — вкладка «Настройки»"><span class="cth">${art(it.seed, 16, 9, { k: 'ic' + it.sid + it.slot, v: ver - 1 })}</span>
+    <div class="grow" style="min-width:0"><div class="t1">${ic('img', 1)}<span class="mono" style="font-size:11.5px">${esc(it.file)}</span>${inPanel ? '<span class="badge acc">в панели</span>' : ''}${busy ? '<span class="by2">✦ Claude работает</span>' : ''}</div><div class="t2">версия ${ver} · Nano Banana Pro · кадр ${it.slot} сцены ${sc ? sc.n : ''}</div></div></div>`;
+}
+function soundCard(it) {
+  const on = S.cur === 'sound' && S.snd && S.snd.file === it.file, inPanel = on && S.panel === 'sound';
+  return `<div class="scard compact${on ? ' focus' : ''}" data-act="picksnd:${esc(it.file)}" data-card="snd-${esc(it.file)}" title="Открыть в панели «Звук» — вкладка «Настройки»"><span class="mic3">${ic('music')}</span>
+    <div class="grow" style="min-width:0"><div class="t1">${ic('waves', 1)}<span class="mono" style="font-size:11.5px">${esc(base(it.file))}</span>${inPanel ? '<span class="badge acc">в панели</span>' : ''}</div><div class="t2">${esc(it.file)} · 0:32 · ACE-Step · музыка фильма «утро-в-горах»</div></div>
+    <button class="play sm" data-act="noop" title="Слушать">${ic('play', 1)}</button></div>`;
 }
 function feed() {
   return `<div class="feed" id="feed">${S.feed.map((it, idx) => {
     if (it.t === 'user') return `<div class="msg user">${esc(it.text)}</div>`;
     if (it.t === 'agent') return `<div class="msg bot"><div class="who">Claude</div>${it.html}${it.acts && !it.used ? `<div class="foot">${it.acts.map(a => `<button class="btn xs${a.acc ? ' pri' : ''}" data-act="${a.a}:${idx}">${esc(a.l)}</button>`).join('')}</div>` : ''}</div>`;
-    if (it.t === 'quiet') return `<div class="quiet">${it.html}</div>`;
+    if (it.t === 'quiet') return it.film && !personal() ? `<button class="quiet qlink" data-act="pickfilm:${it.film}" title="Открыть фильм в панели «Видео» — вкладка «Фильм»">${it.html}</button>` : `<div class="quiet">${it.html}</div>`;
     if (it.t === 'scene') return sceneCard(S.scenes[it.sid]);
+    if (it.t === 'image') return imageCard(it);
+    if (it.t === 'sound') return soundCard(it);
     return '';
   }).join('')}${S.typing ? '<div class="quiet">Claude пишет…</div>' : ''}</div>`;
 }
@@ -993,7 +1062,7 @@ function composer() {
 function app() {
   const w = S.dev === 'w1024' ? ' w1024' : S.dev === 'w800' ? ' w800' : '';
   const head = `<div class="ph">${mob() ? `<button class="ib">${ic('back')}</button>` : ''}<span class="ttl">Утро в горах</span><span class="sub">${personal() ? 'Личный чат · вне проекта' : 'Проект «Лендинг AI Home»'}</span><span class="grow"></span>
-    ${mob() ? `<button class="ib${S.panel === 'files' ? ' on' : ''}" data-act="tree:video/" title="Файлы">${ic('tree')}</button><button class="ib${S.panel === 'video' ? ' on' : ''}" data-act="togglePanel:video" title="Панель «Видео»">${ic('video')}</button>` : ''}</div>`;
+    ${mob() ? `<button class="ib${S.panel === 'files' ? ' on' : ''}" data-act="tree:video/" title="Файлы">${ic('tree')}</button>${(() => { const k = S.panel && S.panel !== 'files' ? S.panel : S.strip; const [icn, nm] = k === 'images' ? ['img', 'Картинки'] : k === 'sound' ? ['waves', 'Звук'] : ['video', 'Видео']; return `<button class="ib${S.panel === k ? ' on' : ''}" data-act="togglePanel:${k}" title="Панель «${nm}»">${ic(icn)}</button>`; })()}` : ''}</div>`;
   const main = `<div class="island main">${head}${feed()}${strip()}${composer()}${S.toast ? `<div class="toast">${ic('check', 1)}<span>${esc(S.toast)}</span></div>` : ''}</div>`;
   const ri = (k, icn, t) => `<button class="ri${S.panel === k ? ' on' : ''}" data-act="togglePanel:${k}" title="${t}">${ic(icn)}</button>`;
   const rail = mob() ? '' : `<div class="rail"><button class="ri">${ic('chat')}</button>${ri('files', 'tree', 'Файлы')}${ri('images', 'img', 'Картинки: настройки и персонажи')}${ri('sound', 'waves', 'Звук: настройки и голоса')}${ri('video', 'video', 'Видео: сцена и фильм')}</div>`;
@@ -1010,7 +1079,8 @@ function gallery() {
   const cell = (h, sub, body) => `<div class="gcell"><h4>${h}</h4><div class="hint">${sub}</div>${body}</div>`;
   const st = v => videoPanel('static');
   return [
-    cell('Пустая сцена', 'Кадров и текста нет: подсказка, пунктирные кадры, причина в закреплённом низу, «✦ Снять» неактивна.', withFresh('emptyScene', {}, () => st())),
+    cell('Подсказка агента и черновик', 'Claude взял кадр в работу — панель не переключилась, в шапке «Claude взял в работу · Открыть». Текст сцены 5 правлен и не ушёл модели — «черновик» в строке «Работаем с».', withFresh('norm', { agentPick: { kind: 'image', sid: 's5', slot: 'B', file: 'кадр-6.png' } }, () => { S.scenes.s5.text += ' Туман тает.'; return withAgentHint(st()); })),
+    cell('Пустая сцена','Кадров и текста нет: подсказка, пунктирные кадры, причина в закреплённом низу, «✦ Снять» неактивна.', withFresh('emptyScene', {}, () => st())),
     cell('Пустой фильм', 'Empty-state списка, «＋ Сцена из проекта / Готовый mp4 / Снять новую», «Собрать» неактивна с причиной.', withFresh('emptyFilm', {}, () => st())),
     cell('Текст сцены: «Развернуть»', 'Редактор на всю высоту тела; закреплённый низ с ценой и «✦ Снять» на месте.', withFresh('norm', { big: 'text' }, () => st())),
     cell('«Сценарий»: тексты всех сцен', 'Документ по порядку фильма; правка снятой сцены ставит «изменён — переснять».', withFresh('norm', { big: 'script', tabs: { video: 'film', images: 'settings', sound: 'settings' } }, () => { S.scenes.s3.text += ' Пар закручивается спиралью.'; return st(); })),
@@ -1040,7 +1110,19 @@ function ensureTick() {
 function quiet(html) { S.feed.push({ t: 'quiet', html }); }
 function toast(t) { S.toast = t; const k = t; setTimeout(() => { if (S.toast === k) { S.toast = null; render(); } }, 3600); }
 function loadSettings(sc) { if (!sc || sc.draft || !sc.vers.length) return; S.prov = sc.prov; S.model[sc.prov] = sc.model; S.dur = sc.dur; }
-function selectScene(id) { S.sel = id; loadSettings(S.scenes[id]); S.panel = 'video'; S.tabs.video = 'scene'; S.spine = false; S.big = null; S.menu = null; if (mob()) S.peek = true; }
+function selectScene(id) { S.sel = id; loadSettings(S.scenes[id]); S.panel = 'video'; S.tabs.video = 'scene'; S.cur = 'scene'; S.strip = 'video'; S.spine = false; S.big = null; S.menu = null; if (mob()) S.peek = true; }
+// Панель следует за выбором человека в ленте: открытая переключается на раздел и вкладку карточки
+// (корешок остаётся корешком, опущенная шторка — опущенной), закрытая не открывается — выбор уходит в полосу
+const FOLLOW = { scene: ['video', 'scene'], film: ['video', 'film'], image: ['images', 'settings'], sound: ['sound', 'settings'] };
+function follow(kind, apply) {
+  apply();
+  const [key, tab] = FOLLOW[kind];
+  S.cur = kind; S.strip = key; S.tabs[key] = tab; S.menu = null;
+  if (S.agentPick && agentShownAfter(kind)) S.agentPick = null;
+  if (S.panel && S.panel !== 'files') { S.panel = key; S.big = null; S.trim = null; }
+  else toast(S.panel === 'files' ? 'Выбор запомнен — «Файлы» остаются открытыми' : 'Панель закрыта — выбор запомнен, сводка в полосе');
+}
+const agentShownAfter = kind => kind === 'image' && S.agentPick.sid === S.img.sid && S.agentPick.slot === S.img.slot;
 function newDraft(A) { const n = Math.max(0, ...Object.values(S.scenes).map(s => s.n)) + 1; const d = mkScene(n, { A: A ? { ...A } : null, B: null, text: '', draft: true }); S.scenes[d.id] = d; Object.values(S.scenes).forEach(s => { if (s.draft && s.id !== d.id && !s.vers.length && s.st !== 'shoot') delete S.scenes[s.id]; }); S.scenes[d.id] = d; return d; }
 function startShoot(sc, by = 'Андрей', note = '') {
   if (sceneWhy(sc) || sc.st === 'shoot') return;
@@ -1048,7 +1130,7 @@ function startShoot(sc, by = 'Андрей', note = '') {
   sc.dur = d; sc.prov = pv.key; sc.model = m.id;
   const cost = pv.unit === 'usd' ? oneCost(m, d) * n : pv.unit === 'credits' ? `${oneCost(m, d) * n} кр` : 0;
   sc.job = { n, by, cost, m: m.label, note, pv: pv.label, unit: pv.unit };
-  sc.st = 'shoot'; sc.p = 0; sc.hold = false; sc.queue = 0;
+  sc.st = 'shoot'; sc.p = 0; sc.hold = false; sc.queue = 0; sc.base = sc.text;
   if (sc.draft) { sc.draft = false; S.feed.push({ t: 'scene', sid: sc.id }); }
   else { const i = S.feed.findIndex(x => x.t === 'scene' && x.sid === sc.id); if (i >= 0 && i < S.feed.length - 1) { S.feed.splice(i, 1); S.feed.push({ t: 'scene', sid: sc.id }); } }
   quiet(`${by === 'Claude' ? 'Claude снимает' : 'Вы запустили съёмку'} сцены ${sc.n} · ${pv.label} · ${m.label} · ${d} с · ${n} ${plural(n, 'вариант', 'варианта', 'вариантов')} · ${price(true)}${note ? ` · «${esc(note)}»` : ''}`);
@@ -1087,7 +1169,7 @@ function finishBuild(f) {
   const b = f.build; b.ver = b.prev ? b.ver + 1 : 1; b.st = 'done'; b.claude = b.by === 'Claude';
   const out = b.ver > 1 ? `film.v${b.ver}.mp4` : 'film.mp4';
   f.changes = []; f.items.forEach(it => { it.upd = false; it.added = false; });
-  quiet(`${b.by === 'Claude' ? 'Claude собрал' : 'Фильм собран'}: <b>${esc(f.folder + out)}</b> · ${filmSub(f)} · бесплатно${b.prev ? ' · прежний файл остался' : ''}`);
+  S.feed.push({ t: 'quiet', film: f.id, html: `${b.by === 'Claude' ? 'Claude собрал' : 'Фильм собран'}: <b>${esc(f.folder + out)}</b> · ${filmSub(f)} · бесплатно${b.prev ? ' · прежний файл остался' : ''}` });
 }
 function moveItem(f, from, to) {
   if (to < 0 || to >= f.items.length || from === to) return;
@@ -1115,7 +1197,10 @@ function agentAfter(sc) {
   render();
 }
 function startShootAs(sc) { const keep = [S.prov, S.count, S.model.fal, S.dur]; S.prov = 'fal'; S.count = 2; S.model.fal = 'veo'; S.dur = 8; startShoot(sc, 'Claude'); [S.prov, S.count, S.model.fal, S.dur] = keep; }
-function imgRun() { const im = S.img, s2 = S.scenes[im.sid]; if (im.edit) { s2[im.slot] = { ...s2[im.slot], ver: s2[im.slot].ver + 1 }; } else s2[im.slot] = { seed: s2.n + 3, file: `кадр-${s2.n}${im.slot.toLowerCase()}.png`, ver: 1 }; if (s2.vers.length) s2.fch = true; S.spend.push([`Кадр ${im.slot} сцены ${s2.n} · Nano Banana Pro`, 0.04, 'Андрей']); quiet(`${im.edit ? 'Новая версия кадра' : 'Новый кадр'} ${im.slot}: ${esc(s2[im.slot].file)}${im.edit ? ' · версия ' + s2[im.slot].ver : ''} — стал кадром ${im.slot} сцены ${s2.draft ? '(новой)' : s2.n}${s2.vers.length ? ' · клип помечен «Кадр изменён — переснять»' : ''}`); S.panel = 'video'; S.tabs.video = 'scene'; S.sel = s2.id; toast(`Кадр ${im.slot} обновлён — вернулись к сцене`);}
+function imgRun() { const im = S.img, s2 = S.scenes[im.sid]; if (im.edit) { s2[im.slot] = { ...s2[im.slot], ver: s2[im.slot].ver + 1 }; } else s2[im.slot] = { seed: s2.n + 3, file: `кадр-${s2.n}${im.slot.toLowerCase()}.png`, ver: 1 }; if (s2.vers.length) s2.fch = true; S.spend.push([`Кадр ${im.slot} сцены ${s2.n} · Nano Banana Pro`, 0.04, 'Андрей']); quiet(`${im.edit ? 'Новая версия кадра' : 'Новый кадр'} ${im.slot}: ${esc(s2[im.slot].file)}${im.edit ? ' · версия ' + s2[im.slot].ver : ''} — стал кадром ${im.slot} сцены ${s2.draft ? '(новой)' : s2.n}${s2.vers.length ? ' · клип помечен «Кадр изменён — переснять»' : ''}`);
+  // Пришли выбором в ленте — остаёмся в «Картинках»; пришли кнопкой из «Видео» — возвращаемся, как в v7
+  if (im.from) { toast(`Новая версия ${s2[im.slot].file} — в карточке`); return; }
+  S.panel = 'video'; S.tabs.video = 'scene'; S.sel = s2.id; S.cur = 'scene'; S.strip = 'video'; toast(`Кадр ${im.slot} обновлён — вернулись к сцене`);}
 function sndRun() { const ff = film() || S.films.f1; ff.music = { file: `music/${ff.name}.mp3`, vol: 60, fade: 4, made: true, claude: false }; change(ff, 'музыка'); quiet(`Трек сочинён: <b>music/${esc(ff.name)}.mp3</b> · ${fmtT(filmDur(ff))} · ACE-Step · бесплатно — встал музыкой фильма «${esc(ff.name)}»`); S.panel = 'video'; S.tabs.video = 'film'; toast('Трек готов и встал музыкой фильма');}
 function agentTarget() { return Object.values(S.scenes).filter(s => !s.vers.length && s.st !== 'shoot' && !s.draft).sort((a, b) => a.n - b.n)[0]; }
 
@@ -1128,7 +1213,7 @@ function demo() {
     + `<button class="tbtn" data-demo="reset:1">Сначала</button>`;
 }
 const CAPS = {
-  norm: 'Сценарий 1: чип «Сцена 5 …» → вкладка «Сцена» → «Развернуть» у текста → «✦ Снять» → варианты в карточке → «Сохранить сцену» → «В фильм →» → вкладка «Фильм», сцена 5 последней. Сценарий 2: клик по карточке сцены 3 → «✦ Переснять» → «Сохранить сцену» → во вкладке «Фильм» точка «обновлена» → «✦ Пересобрать». «Править кадр» в меню кадра ведёт в панель «Картинки».',
+  norm: 'Сценарий 1: чип «Сцена 5 …» → вкладка «Сцена» → «Развернуть» у текста → «✦ Снять» → варианты в карточке → «Сохранить сцену» → «В фильм →» → вкладка «Фильм», сцена 5 последней. Сценарий 2: клик по карточке сцены 3 → «✦ Переснять» → «Сохранить сцену» → во вкладке «Фильм» точка «обновлена» → «✦ Пересобрать». «Править кадр» в меню кадра ведёт в панель «Картинки». Сценарий 9 «панель следует за выбором»: допишите текст сцены 5 → клик по карточке кадр-6.png → «Картинки → Настройки» → клик по карточке сцены 5 → снова «Видео → Сцена», правка на месте с пометкой «черновик»; утро.mp3 ведёт в «Звук», строка «Claude собрал фильм» — во вкладку «Фильм». «Перерисуй кадр B светлее» в ответе Claude: он берёт кадр в работу, панель не двигается, в шапке — «Claude взял в работу · Открыть».',
   unbuilt: 'Сценарий 3: перетащите сцену за ⋮⋮, кликните по стыку и смените склейку, поставьте музыку → «✦ Собрать» → film.mp4 → «Показать в дереве». Сценарий 4: «Сочинить под фильм…» → панель «Звук» с заготовкой → «↩ К фильму».',
   emptyScene: 'Новая сцена без кадров и текста: подсказка, пунктирные кадры, причина в закреплённом низу. Выберите кадры в их меню — запуск оживёт.',
   emptyFilm: 'Пустой фильм «новый-фильм»: empty-state списка, «Собрать» неактивна. «＋ Сцена из проекта» наполняет список.',
@@ -1152,14 +1237,14 @@ function renderNow() {
   const fe2 = document.getElementById('feed'); if (fe2) fe2.scrollTop = atBottom || render.scrollDown ? fe2.scrollHeight : top; render.scrollDown = false;
   const pb2 = document.querySelector('#app .gp-body'); if (pb2) pb2.scrollTop = pTop;
   if (keep) { const el = document.querySelector(`#app [data-keep="${keep}"]`); if (el) { if (el.tagName === 'TEXTAREA' && sel[2] !== undefined && el.value !== sel[2]) el.value = sel[2]; el.focus(); try { el.setSelectionRange(sel[0], sel[1]); } catch (e) {} } }
-  const W = { desktop: '', w1024: ' Узкий десктоп: панель 340 px, лента не уже 440 px.', w800: ' Окно 800: панель 320 px, лента 420 px; «›» сворачивает панель в корешок. Уже 800 px — шторка.', mobile: ' Телефон: панель — шторка с вкладками «Сцена | Фильм», «⌄» опускает её до цены; полоса — одной строкой с двумя чипами. Откройте шторку чипом или значком «Видео» в шапке.' };
+  const W = { desktop: '', w1024: ' Узкий десктоп: панель 340 px, лента не уже 440 px.', w800: ' Окно 800: панель 320 px, лента 420 px; «›» сворачивает панель в корешок. Уже 800 px — шторка.', mobile: ' Телефон: панель — шторка с вкладками «Сцена | Фильм», «⌄» опускает её до цены; полоса — одной строкой с двумя чипами. Откройте шторку чипом или значком «Видео» в шапке. Клик по карточке в ленте при опущенной шторке меняет её содержимое, закрытую шторку не открывает.' };
   document.getElementById('cap').textContent = (personal() ? 'Личный чат: вкладка «Фильм» объясняет, что фильмы живут в проекте; кадры — с компьютера, локальные модели под замком, «Скачать» вместо «Сохранить сцену».' : CAPS[S.state]) + W[S.dev];
 }
 function reset(state) { const keep = { theme: S.theme, dev: S.dev, scope: S.scope }; if (TICK) { clearInterval(TICK); TICK = null; } S = fresh(state, keep); render.galleryDone = false; }
 
 document.addEventListener('input', e => {
   const t = e.target;
-  if (t.dataset.text) { const sc = curSc(); if (!sc) return; sc.text = t.value; sc.by.text = false; document.querySelectorAll('[data-text-cnt]').forEach(x => x.textContent = `${sc.text.length} / 2000`); }
+  if (t.dataset.text) { const sc = curSc(); if (!sc) return; sc.text = t.value; sc.by.text = false; document.querySelectorAll('[data-text-cnt]').forEach(x => x.textContent = `${sc.text.length} / 2000`); document.querySelectorAll('#app .gp-ctx [data-draftpill]').forEach(x => x.style.display = isDraft(sc) ? '' : 'none'); }
   if (t.dataset.stext) { const sc = S.scenes[t.dataset.stext]; sc.text = t.value; sc.by.text = false; }
   if (t.dataset.vol) { const f = film(); f.music.vol = Number(t.value); f.music.claude = false; change(f, 'музыка'); document.querySelectorAll('[data-vol-t]').forEach(x => x.textContent = `${t.value} %`); }
 });
@@ -1191,7 +1276,15 @@ document.addEventListener('click', e => {
   switch (a) {
     case 'noop': return;
     case 'menu': S.menu = S.menu === rest ? null : (rest || null); render(); return;
-    case 'openPanel': S.panel = 'video'; S.tabs.video = b; S.spine = false; S.peek = false; S.big = null; break;
+    case 'openPanel': S.panel = 'video'; S.tabs.video = b; S.cur = b === 'film' ? 'film' : 'scene'; S.spine = false; S.peek = false; S.big = null; break;
+    case 'openSec': S.panel = b; S.tabs[b] = 'settings'; S.cur = b === 'images' ? 'image' : 'sound'; S.spine = false; S.peek = false; break;
+    case 'strip': S.strip = b; break;
+    // Выбор в ленте: панель следует за ним
+    case 'pickimg': { const it = S.feed.find(x => x.t === 'image' && x.sid === b && x.slot === c); follow('image', () => { S.img = { sid: b, slot: c, edit: true, from: 'feed', file: it.file, seed: it.seed }; }); break; }
+    case 'picksnd': follow('sound', () => { S.snd = { from: 'feed', file: rest }; }); break;
+    case 'pickfilm': follow('film', () => { S.fid = b; }); break;
+    case 'agentOpen': { const p = S.agentPick; S.agentPick = null; S.img = { sid: p.sid, slot: p.slot, edit: true, from: 'agent', file: p.file, seed: S.scenes[p.sid][p.slot].seed }; S.cur = 'image'; S.strip = 'images'; S.panel = 'images'; S.tabs.images = 'settings'; S.big = null; break; }
+    case 'agentHide': S.agentPick = null; break;
     case 'togglePanel': S.panel = S.panel === b ? null : b; S.spine = false; S.peek = false; if (b === 'images' && !S.img) { const s0 = curSc() && curSc().B ? curSc() : sceneList().find(x => x.B); S.img = { sid: s0.id, slot: 'B', edit: true }; } break;
     case 'closePanel': S.panel = null; S.peek = false; break;
     case 'tab': S.tabs[S.panel || 'video'] = b; S.spine = false; S.peek = false; S.big = null; S.trim = null; break;
@@ -1207,7 +1300,7 @@ document.addEventListener('click', e => {
       else if (f && (stale(f) || f.build.st !== 'done')) startBuild(f);
       break;
     // Сцена
-    case 'pick': selectScene(b); break;
+    case 'pick': follow('scene', () => { if (S.sel !== b) loadSettings(S.scenes[b]); S.sel = b; }); break;
     case 'reshoot': selectScene(b); break;
     case 'release': { const dft = newDraft(null); S.sel = dft.id; S.big = null; break; }
     case 'frame': S.menu = S.menu === 'frame:' + b ? null : 'frame:' + b; break;
@@ -1217,7 +1310,7 @@ document.addEventListener('click', e => {
     case 'fagent': sc[b] = { seed: sc.n + (b === 'B' ? 2 : 0), file: `кадр-${sc.n}${b.toLowerCase()}.png`, ver: 1, by: true }; S.spend.push([`Кадр ${b} сцены ${sc.n} · Nano Banana Pro`, 0.04, 'Claude']); quiet(`Claude нарисовал кадр ${b} сцены ${sc.draft ? '(новой)' : sc.n} по её тексту · Nano Banana Pro · $0.04`); S.menu = null; break;
     case 'fedit': case 'fdraw': S.img = { sid: sc.id, slot: b, edit: a === 'fedit' }; S.ret = { key: 'video', tab: 'scene' }; S.panel = 'images'; S.tabs.images = 'settings'; S.menu = null; S.spine = false; toast(`Панель «Картинки» · кадр ${b} сцены ${sc.draft ? '(новой)' : sc.n}`); break;
     case 'imgrun': imgRun(); break;
-    case 'back': S.panel = 'video'; S.tabs.video = S.ret ? S.ret.tab : vtab(); S.spine = false; break;
+    case 'back': S.panel = 'video'; S.tabs.video = S.ret ? S.ret.tab : vtab(); S.cur = vtab() === 'film' ? 'film' : 'scene'; S.strip = 'video'; S.spine = false; break;
     case 'prov': S.prov = b; S.byModel = false; break;
     case 'model': S.model[curPv().key] = b; S.byModel = false; break;
     case 'dur': S.dur = Number(b); break;
@@ -1260,6 +1353,12 @@ document.addEventListener('click', e => {
     case 'send': { const ta = document.getElementById('ta'); const t = ta && ta.value.trim(); if (!t) return; S.feed.push({ t: 'user', text: t }); S.feed.push({ t: 'agent', html: 'Заготовка ответа: работаю по сценам и после каждой спрашиваю, снимать ли следующую. Правки фильма видны в панели меткой «✦ Claude».' }); render.scrollDown = true; break; }
     case 'ag': {
       const msg = S.feed[Number(c)]; if (msg) msg.used = true;
+      if (b === 'take') {
+        // Агент сам берёт картинку в работу: панель под рукой не двигается, в её шапке — подсказка «Открыть»
+        S.feed.push({ t: 'user', text: 'Перерисуй кадр B светлее' });
+        S.feed.push({ t: 'agent', html: 'Беру <code>кадр-6.png</code> в работу: перерисую светлее и покажу варианты в его карточке. Панель вам не переключаю — если захотите поправить сами, в её шапке есть «Открыть».' });
+        S.agentPick = { kind: 'image', sid: 's5', slot: 'B', file: S.scenes.s5.B.file }; render.scrollDown = true; break;
+      }
       if (b === 'stop') { S.feed.push({ t: 'agent', html: 'Остановился. Снятое — в ленте и в фильме, продолжить можно из панели «Видео».' }); break; }
       if (b === 'build') { startBuild(S.films[S.agent.film], 'Claude'); S.feed.push({ t: 'agent', html: 'Собираю фильм — прогресс в закреплённом низу вкладки «Фильм».' }); break; }
       if (b === 'all') S.agent.all = true;

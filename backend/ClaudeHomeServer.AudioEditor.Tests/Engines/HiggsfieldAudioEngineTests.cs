@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.AudioEditor.Tests.Fakes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.Engines;
@@ -417,6 +418,47 @@ public sealed class HiggsfieldAudioEngineTests
 
         result.Files.Single().Extension.Should().Be(".wav");
         result.Files.Single().ContentType.Should().Be("audio/wav");
+    }
+
+    // Ссылку на результат прислал поставщик: на внутренний адрес бэкенд не идёт вовсе
+    [Fact]
+    public async Task Run_ResultUrlPrivate_NotDownloaded()
+    {
+        var http = new FakeHttp(c => FakeHttp.Tool(c) == "jobs_wait"
+            ? FakeHttp.McpText($$"""{"jobs":[{"index":0,"job_id":"{{JobId}}","status":"completed","result_url":"https://127.0.0.1/out.mp3"}],"all_terminal":true}""")
+            : c.Url.StartsWith("https://127.0.0.1/") ? FakeHttp.Bytes(Mp3, "audio/mpeg") : Happy(c));
+        var engine = new HiggsfieldAudioEngine(FakeHttp.Client(http, downloader: new SafeMediaDownloader(http)))
+        {
+            PollInterval = TimeSpan.Zero,
+        };
+        await engine.RefreshModelsAsync(CancellationToken.None);
+
+        var result = await engine.RunAsync(Speak("seed_audio"), NoProgress, CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Failed);
+        result.Charged.Should().BeTrue();
+        result.Files.Should().BeEmpty();
+        http.Calls.Should().NotContain(c => c.Url.StartsWith("https://127.0.0.1/"));
+    }
+
+    // Потолок звука свой: больше картиночного проходит, больше звукового — нет
+    [Theory]
+    [InlineData(SafeMediaDownloader.ImageMaxBytes + 1, AudioOutcome.Ok)]
+    [InlineData(SafeMediaDownloader.AudioMaxBytes + 1, AudioOutcome.Failed)]
+    public async Task Run_ResultSize_AudioCeiling(long declaredLength, AudioOutcome expected)
+    {
+        var http = new FakeHttp(c =>
+        {
+            if (!c.Url.StartsWith("https://cdn.test/")) return Happy(c);
+            var response = FakeHttp.Bytes(Mp3, "audio/mpeg");
+            response.Content.Headers.ContentLength = declaredLength;
+            return response;
+        });
+        var engine = await Loaded(http);
+
+        var result = await engine.RunAsync(Speak("seed_audio"), NoProgress, CancellationToken.None);
+
+        result.Outcome.Should().Be(expected);
     }
 
     // ── Котировка ────────────────────────────────────────────────────────────────

@@ -137,6 +137,24 @@ public class HiggsfieldImageEditorTests
         access.Calls.Should().BeGreaterThan(3);
     }
 
+    // Потолок картинки держит общий загрузчик: заявленное тело больше него не читается
+    [Fact]
+    public async Task Запуск_РезультатБольшеПотолкаКартинки_НеСкачан()
+    {
+        var (editor, _, _) = Create(c =>
+        {
+            if (!c.Url.StartsWith("https://cdn.test/")) return HappyRoute(c);
+            var response = FakeHttp.Bytes(TestImages.Png(4, 4));
+            response.Content.Headers.ContentLength = ClaudeHomeServer.Services.SafeMediaDownloader.ImageMaxBytes + 1;
+            return response;
+        });
+
+        var result = await editor.RunAsync(new ImageEditRequest(ImageEditOp.Generate, "кот", null, null, [], 1, null, null,
+            HiggsfieldImageEditor.NanoBanana2, null), new SyncProgress(_ => { }), default);
+
+        result.Images.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Запуск_ОтказИнструмента_НехваткаКредитов()
     {

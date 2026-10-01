@@ -26,8 +26,8 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
     private int _rpcId;
 
     // Скачивание результата по ссылке Higgsfield; тесты модулей подставляют фейковый транспорт,
-    // поэтому init публичный — Core видит изнутри только ClaudeHomeServer.Tests
-    public SafeMediaDownloader Downloader { get; init; } = SafeMediaDownloader.Shared;
+    // поэтому сеттер открыт: клиент живёт в Core, а тесты — в сборках вертикалей
+    public SafeMediaDownloader Downloader { get; set; } = SafeMediaDownloader.Shared;
 
     public bool Available => Token() is not null;
 
@@ -97,10 +97,10 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
         }
     }
 
-    // Результат поставщика: data:-ссылка разбирается на месте, внешняя ссылка — только через
-    // SafeMediaDownloader (SSRF, редиректы, потолок размера).
-    // null — ссылка не годится, адрес не публичный, тело больше потолка или ответ неуспешный
-    public async Task<HiggsfieldDownload?> DownloadBytesAsync(string url, CancellationToken ct)
+    // Результат поставщика: data:-ссылка разбирается на месте, внешняя — только через
+    // SafeMediaDownloader (SSRF, потолок maxBytes задаёт вызывающий по виду медиа).
+    // null — ссылка не годится или скачать не вышло
+    public async Task<HiggsfieldDownload?> DownloadBytesAsync(string url, long maxBytes, CancellationToken ct)
     {
         if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
         {
@@ -118,8 +118,8 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
             }
         }
 
-        var download = await Downloader.DownloadAsync(url, SafeMediaDownloader.ImageMaxBytes, ct);
-        return download.Bytes is { } body ? new HiggsfieldDownload(body, download.ContentType) : null;
+        var download = await Downloader.DownloadAsync(url, maxBytes, ct);
+        return download.Bytes is { } bytes ? new HiggsfieldDownload(bytes, download.ContentType) : null;
     }
 
     // Ответ бывает и JSON, и SSE (строки data:)

@@ -205,7 +205,7 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
             }
 
             progress.Report(new AudioProgress(AudioStage.Downloading));
-            var download = await client.DownloadBytesAsync(url, token);
+            var download = await client.DownloadBytesAsync(url, SafeMediaDownloader.AudioMaxBytes, token);
             if (download is null)
                 return new AudioResult(AudioOutcome.Failed, [], actual, true, remoteId, "Не удалось скачать результат Higgsfield");
             var (contentType, extension) = Format(download.ContentType, url, args["format"]?.ToString());

@@ -64,6 +64,8 @@ public abstract class AudioEditorEndpoints(
         if (req.Count is { } count && (count < 1 || count > AudioModePrefs.MaxCount))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 $"Вариантов — от 1 до {AudioModePrefs.MaxCount}");
+        if (AudioOpInputs.Validate(req.Inputs, scope) is { } badInputs)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, badInputs);
         await prefs.SaveAsync(UserId, scope, mode, req);
         return Ok(PrefsOf(scope));
     }
@@ -180,7 +182,8 @@ public abstract class AudioEditorEndpoints(
             Clips: clips.Count > 0 ? clips : null,
             VoiceModel: voiceModel,
             VoiceIndex: voiceIndex,
-            Seed: form.Seed);
+            Seed: form.Seed,
+            Voice: form.Voice);
         return Map(await jobs.StartAsync(UserId, scope, input, ct), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
@@ -245,6 +248,8 @@ public abstract class AudioEditorEndpoints(
         if (settings.Count is { } count && (count < 1 || count > AudioModePrefs.MaxCount))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 $"Вариантов — от 1 до {AudioModePrefs.MaxCount}");
+        if (AudioOpInputs.Validate(settings.Inputs, scope) is { } badInputs)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, badInputs);
         return await ResultAsync(scope, sessionId, threads.Store.SetSettings(UserId, sessionId, threadId, settings, req.Revision));
     }
 
@@ -443,13 +448,18 @@ public abstract class AudioEditorEndpoints(
         var status = code switch
         {
             AudioEditErrorCodes.ProviderUnavailable or AudioEditErrorCodes.NameTaken
-                or AudioEditErrorCodes.RevisionConflict => StatusCodes.Status409Conflict,
+                or AudioEditErrorCodes.RevisionConflict or AudioEditErrorCodes.VoiceCloneStale
+                or AudioEditErrorCodes.VoiceCloneMissing => StatusCodes.Status409Conflict,
+            AudioEditErrorCodes.VoiceNotFound => StatusCodes.Status404NotFound,
             AudioEditErrorCodes.QuoteNotFound or AudioEditErrorCodes.JobNotFound or AudioEditErrorCodes.ThreadNotFound
                 or AudioEditErrorCodes.VersionNotFound or AudioEditErrorCodes.FileNotFound => StatusCodes.Status404NotFound,
             AudioEditErrorCodes.TooManyJobs or AudioEditErrorCodes.HeavyBusy => StatusCodes.Status429TooManyRequests,
             AudioEditErrorCodes.Unavailable or AudioEditErrorCodes.DspUnavailable => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         };
+        // Протухший клон: в отказе — котировка пересоздания, кнопка «Пересоздать» показывает её цену
+        if (result.Recreate is { } recreate)
+            return StatusCode(status, new { error = result.Error ?? "Запрос не выполнен", code, recreate });
         return Error(status, code, result.Error ?? "Запрос не выполнен");
     }
 }

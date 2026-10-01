@@ -140,6 +140,22 @@ public sealed class VoiceLibraryTests : IDisposable
             .Should().Be(AudioEditErrorCodes.InvalidRequest);
     }
 
+    // Сбой на N-м образце: уже записанные этим вызовом убираются, манифест прежний — отказ, а не полуфабрикат
+    [Fact]
+    public void AddSamples_FailureOnSecond_RollsBackFirst_ManifestUntouched()
+    {
+        var slug = Create("Аня", Wav).Slug;
+        var dir = VoiceDir(slug);
+        // Каталог на месте второго имени: запись в него падает
+        Directory.CreateDirectory(Path.Combine(dir, "sample-03.mp3"));
+
+        var result = _lib.AddSamples(_scope, slug, [new(Mp3), new(Mp3)])!;
+
+        result.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        File.Exists(Path.Combine(dir, "sample-02.mp3")).Should().BeFalse();
+        _lib.Get(_scope, slug)!.Samples.Select(s => s.File).Should().Equal("sample-01.wav");
+    }
+
     [Fact]
     public void Delete_RemovesOnlyVoiceFolder()
     {

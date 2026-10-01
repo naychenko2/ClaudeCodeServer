@@ -6,11 +6,13 @@ using ClaudeHomeServer.Services.AudioEditor.Threads;
 namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 
 // Каталог для полосы и панели: заведённые поставщики в порядке показа, у каждого — доступен ли он
-// В ЭТОЙ области и почему нет. Недоступный остаётся в списке серым с причиной, а не пропадает
+// В ЭТОЙ области и почему нет. Недоступный остаётся в списке серым с причиной, а не пропадает.
+// LibraryVoicesReason — почему поставщик не берёт голос из библиотеки «Голоса» (null — берёт)
 public sealed record AudioCatalogDto(IReadOnlyList<AudioProviderDto> Providers, string AutoModelId, int MaxCount);
 
 public sealed record AudioProviderDto(
-    string Key, string Label, string PriceUnit, bool Available, string? Reason, IReadOnlyList<AudioModelInfo> Models);
+    string Key, string Label, string PriceUnit, bool Available, string? Reason, IReadOnlyList<AudioModelInfo> Models,
+    string? LibraryVoicesReason = null);
 
 public static class AudioCatalogView
 {
@@ -20,7 +22,8 @@ public static class AudioCatalogView
         new([.. AudioCatalog.Registered(engines).Select(e =>
         {
             var reason = Safe(() => e.Enabled) ? Safe(() => e.ScopeRefusal(scope), UnavailableReason) : UnavailableReason;
-            return new AudioProviderDto(e.Key, e.Label, e.PriceUnit, reason is null, reason, e.Models);
+            return new AudioProviderDto(e.Key, e.Label, e.PriceUnit, reason is null, reason, e.Models,
+                Safe(() => e.LibraryVoicesRefusal, UnavailableReason));
         })], AudioCatalog.AutoModelId, AudioModePrefs.MaxCount);
 
     private static bool Safe(Func<bool> probe)
@@ -113,4 +116,6 @@ public sealed class AudioStartJobForm
     public List<string>? ClipPaths { get; set; }
     public string? VoiceModelPath { get; set; }
     public string? VoiceIndexPath { get; set; }
+    // Голос из библиотеки «Голоса»: voice:<slug>
+    public string? Voice { get; set; }
 }

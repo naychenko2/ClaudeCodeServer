@@ -32,12 +32,21 @@ public static class AudioEditErrorCodes
     // Голоса нет в библиотеке проекта (или slug не проходит белый список)
     public const string VoiceNotFound = "voice_not_found";
     public const string Unavailable = "unavailable";
+    // Голос из библиотеки у этой модели не работает (Яндекс, модель без клона, RVC не в смене голоса)
+    public const string VoiceUnavailable = "voice_unavailable";
+    // Клон MiniMax протух (7 дней без использования) или ещё не создан: запуск не идёт, в отказе —
+    // котировка пересоздания; пересоздаёт только человек кнопкой
+    public const string VoiceCloneStale = "voice_clone_stale";
+    public const string VoiceCloneMissing = "voice_clone_missing";
     // Обработка без ИИ недоступна: нет ffmpeg на хосте или выключена подсистема images (ADR-021 §2)
     public const string DspUnavailable = "dsp_unavailable";
 }
 
 public sealed record AudioEditCallResult<T>(T? Value, string? ErrorCode, string? Error)
 {
+    // Котировка пересоздания клона при отказе voice_clone_stale / voice_clone_missing
+    public AudioQuoteDto? Recreate { get; init; }
+
     public static AudioEditCallResult<T> Ok(T value) => new(value, null, null);
     public static AudioEditCallResult<T> Fail(string code, string error) => new(default, code, error);
 }
@@ -74,10 +83,13 @@ public sealed record AudioQuoteDto(
     AudioPrice Price,
     string License,
     bool Heavy,
-    DateTime ExpiresAt);
+    DateTime ExpiresAt,
+    // Котировка пересоздания клона: slug голоса из библиотеки
+    string? RecreateVoice = null);
 
 // Запуск по котировке: содержимое операции (текст, слова, входы). Params поверх полей из цепочки —
-// частные параметры модели. BaseVersionId — версия нити, от которой запускают (null — текущая)
+// частные параметры модели. BaseVersionId — версия нити, от которой запускают (null — текущая).
+// Voice — голос из библиотеки значением voice:<slug> (готовый диктор едет в Params)
 public sealed record AudioJobInput(
     string QuoteId,
     string? SessionId = null,
@@ -97,7 +109,8 @@ public sealed record AudioJobInput(
     IReadOnlyList<AudioBytes>? Clips = null,
     byte[]? VoiceModel = null,
     byte[]? VoiceIndex = null,
-    long? Seed = null);
+    long? Seed = null,
+    string? Voice = null);
 
 public sealed record AudioJobCreatedDto(string JobId);
 

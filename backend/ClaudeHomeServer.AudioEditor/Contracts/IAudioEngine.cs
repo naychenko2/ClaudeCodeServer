@@ -53,6 +53,18 @@ public interface IAudioEngine
     // Дикторы поставщика для выбора голоса (инструмент агента audio_voices). null — списка нет
     Task<IReadOnlyList<AudioVoiceInfo>?> ListVoicesAsync(string? model, string? language, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<AudioVoiceInfo>?>(null);
+
+    // Голоса из библиотеки «Голоса» (ADR-021 §5): причина, по которой поставщик не берёт их ни в одной
+    // модели (каталог показывает его серым для голоса); null — берёт
+    string? LibraryVoicesRefusal => $"Поставщик «{Label}» не умеет голоса из библиотеки";
+
+    // Причина, по которой модель не возьмёт этот голос в операции; null — возьмёт (голос едет в AudioRequest.Voice)
+    string? LibraryVoiceRefusal(AudioModelInfo model, AudioOp op, AudioVoiceUse voice) =>
+        LibraryVoicesRefusal ?? $"Модель «{model.Label}» не берёт голос из библиотеки";
+
+    // Клон, который живёт у поставщика ограниченно (MiniMax удаляет его через 7 дней) и создаётся только
+    // кнопкой человека с ценой: ключ кеша (VoiceProviders.*) или null. Creates — модель сама и создаёт клон
+    (string Key, bool Creates)? StoredClone(AudioModelInfo model, AudioOp op) => null;
 }
 
 // Диктор поставщика: Id — то, что передаётся в voice у audio_generate; Roles — амплуа (у Яндекса)
@@ -194,7 +206,8 @@ public sealed record AudioRequest(
     IReadOnlyList<AudioBytes>? Clips = null,
     byte[]? VoiceModel = null,
     byte[]? VoiceIndex = null,
-    long? Seed = null);
+    long? Seed = null,
+    AudioVoiceUse? Voice = null);
 
 // Role — роль файла версии (LocalAudioRoles.*); Extension — с точкой
 public sealed record AudioFile(string Role, byte[] Bytes, string ContentType, string Extension);
@@ -203,14 +216,16 @@ public sealed record AudioCost(double Amount, string Unit);
 
 public sealed record AudioProgress(AudioStage Stage, int? QueuePosition = null, int? EtaSeconds = null);
 
-// Charged: true — списано, false — точно не списано, null — неизвестно
+// Charged: true — списано, false — точно не списано, null — неизвестно. VoiceCache — привязки голоса из
+// библиотеки, созданные этим запуском (кешируются и при сбое: клон уже оплачен)
 public sealed record AudioResult(
     AudioOutcome Outcome,
     IReadOnlyList<AudioFile> Files,
     AudioCost? ActualCost,
     bool? Charged,
     string? RemoteId,
-    string? Error)
+    string? Error,
+    IReadOnlyList<AudioVoiceCacheEntry>? VoiceCache = null)
 {
     public static AudioResult Fail(AudioOutcome outcome, string error, bool? charged = false) =>
         new(outcome, [], null, charged, null, error);

@@ -14,6 +14,8 @@ namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 // переименование и расшифровка, образцы, удаление, модель RVC из версии нити обучения. Гейт — общий с
 // модулем (флаг, свой проект — иначе 404); локальный проект отсекает атрибут FileBound до тела ручки, а
 // VoiceLibrary ещё раз — до диска. У личного чата библиотеки нет: там только пустое состояние.
+// Пересоздание клона MiniMax — только этой ручкой, в две фазы: без quoteId — котировка с ценой, с quoteId
+// той котировки — задача (кнопка человека). Id клона наружу не уходит: только состояние голоса.
 [ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
@@ -23,6 +25,7 @@ public class AudioVoicesController(
     VoiceLibrary voices,
     AudioJobThreads threads,
     AudioEditWorkspace workspace,
+    AudioEditJobService jobs,
     IProjectFiles? files = null) : ControllerBase
 {
     private const string SubClaim = "sub";
@@ -131,6 +134,37 @@ public class AudioVoicesController(
         if (!Gate(projectId, out var scope, out var denied)) return denied;
         return voices.RemoveSample(scope, slug, file) is { } result ? Result(scope, result) : VoiceNotFound();
     }
+
+    [HttpPost("{slug}/recreate")]
+    public async Task<IActionResult> Recreate(string projectId, string slug, [FromQuery] string? provider,
+        [FromQuery] string? quoteId, CancellationToken ct)
+    {
+        if (!Gate(projectId, out var scope, out var denied)) return denied;
+        if (voices.Get(scope, slug) is null) return VoiceNotFound();
+        if (string.IsNullOrWhiteSpace(quoteId))
+        {
+            var quote = await jobs.QuoteVoiceCloneAsync(UserId, scope, slug, provider ?? "", ct);
+            return quote.Value is { } q ? Ok(q) : JobError(quote.ErrorCode, quote.Error);
+        }
+        // Запуск — только по котировке пересоздания ЭТОГО голоса
+        if (jobs.FindQuote(UserId, scope.Key, quoteId.Trim()) is not { } found || found.RecreateVoice != slug)
+            return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.QuoteNotFound, AudioEditJobService.QuoteExpiredText);
+        var started = await jobs.StartAsync(UserId, scope,
+            new AudioJobInput(quoteId.Trim(), Voice: AudioVoiceRefs.Prefix + slug), ct);
+        return started.Value is { } created
+            ? StatusCode(StatusCodes.Status202Accepted, created)
+            : JobError(started.ErrorCode, started.Error);
+    }
+
+    private ObjectResult JobError(string? code, string? error) => Error(code switch
+    {
+        AudioEditErrorCodes.QuoteNotFound or AudioEditErrorCodes.VoiceNotFound or AudioEditErrorCodes.FileNotFound
+            => StatusCodes.Status404NotFound,
+        AudioEditErrorCodes.ProviderUnavailable => StatusCodes.Status409Conflict,
+        AudioEditErrorCodes.TooManyJobs or AudioEditErrorCodes.HeavyBusy => StatusCodes.Status429TooManyRequests,
+        AudioEditErrorCodes.Unavailable => StatusCodes.Status503ServiceUnavailable,
+        _ => StatusCodes.Status400BadRequest,
+    }, code ?? AudioEditErrorCodes.InvalidRequest, error ?? "Запрос не выполнен");
 
     // Образец или файл модели для плеера и скачивания: только перечисленный в манифесте
     [HttpGet("{slug}/files/{file}")]

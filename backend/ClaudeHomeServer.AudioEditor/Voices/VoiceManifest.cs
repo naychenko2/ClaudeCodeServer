@@ -70,6 +70,8 @@ public sealed record VoiceSample(string File);
 // деньги — отдельный шаг и только кнопкой человека с ценой.
 //
 // - higgsfield: { elementId, createdAt } — элемент воркспейса Higgsfield;
+// - higgsfieldMedia: { mediaId, createdAt } — образец, загруженный в Higgsfield (audio_references): элемента
+//   инструментами Higgsfield не создать, поэтому первый запуск грузит образец, а дальше берёт его id;
 // - minimax: { customVoiceId, createdAt, lastUsedAt } — MiniMax удаляет клон через 7 дней без
 //   использования, поэтому по дате последнего использования голос получает признак «проверить»;
 // - falQwen: { embeddingUrl, createdAt } — эмбеддинг Qwen-клона fal;
@@ -77,6 +79,7 @@ public sealed record VoiceSample(string File);
 public static class VoiceProviders
 {
     public const string Higgsfield = "higgsfield";
+    public const string HiggsfieldMedia = "higgsfieldMedia";
     public const string MiniMax = "minimax";
     public const string FalQwen = "falQwen";
     public const string Rvc = "rvc";
@@ -97,6 +100,28 @@ public static class VoiceProviders
         entry["lastUsedAt"] = now;
         return true;
     }
+
+    public static void SetHiggsfieldMedia(JsonObject providers, string mediaId, DateTime now) =>
+        providers[HiggsfieldMedia] = new JsonObject { ["mediaId"] = mediaId, ["createdAt"] = now };
+
+    // Кеш id для запуска: ключ VoiceProviders.* → id. Только для драйверов, наружу не отдаётся
+    public static IReadOnlyDictionary<string, string> Ids(JsonObject providers)
+    {
+        var ids = new Dictionary<string, string>(StringComparer.Ordinal);
+        void Take(string key, string field)
+        {
+            if (providers[key] is JsonObject entry && Str(entry, field) is { } id) ids[key] = id;
+        }
+        Take(Higgsfield, "elementId");
+        Take(HiggsfieldMedia, "mediaId");
+        Take(MiniMax, "customVoiceId");
+        Take(FalQwen, "embeddingUrl");
+        return ids;
+    }
+
+    // Состояние клона MiniMax по тем же правилам, что States
+    public static string MiniMaxState(JsonObject providers, DateTime now) =>
+        States(providers, now).First(s => s.Provider == MiniMax).State;
 
     public static void SetFalQwen(JsonObject providers, string embeddingUrl, DateTime now) =>
         providers[FalQwen] = new JsonObject { ["embeddingUrl"] = embeddingUrl, ["createdAt"] = now };
@@ -122,7 +147,9 @@ public static class VoiceProviders
 
         return
         [
-            new(Higgsfield, Has(providers, Higgsfield, "elementId"), Date(providers[Higgsfield], "createdAt"), null),
+            Has(providers, Higgsfield, "elementId") == VoiceProviderStates.Ok
+                ? new(Higgsfield, VoiceProviderStates.Ok, Date(providers[Higgsfield], "createdAt"), null)
+                : new(Higgsfield, Has(providers, HiggsfieldMedia, "mediaId"), Date(providers[HiggsfieldMedia], "createdAt"), null),
             new(MiniMax, minimaxState, Date(minimax, "createdAt"), lastUsed),
             new(FalQwen, Has(providers, FalQwen, "embeddingUrl"), Date(providers[FalQwen], "createdAt"), null),
             new(Rvc, RvcPair(providers) is null ? VoiceProviderStates.None : VoiceProviderStates.Ok,

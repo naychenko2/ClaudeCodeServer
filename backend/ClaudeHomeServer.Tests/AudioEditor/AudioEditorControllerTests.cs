@@ -272,6 +272,42 @@ public class AudioEditorControllerTests : IDisposable
 
     // ── Отдача файла версии ────────────────────────────────────────────────────
 
+    // Входы операции хранятся на сервере в настройках нити и префах отдельно от параметров модели:
+    // читаются состоянием, неизвестный ключ и путь вне проекта — 400, у личного чата путей нет
+    [Fact]
+    public async Task Входы_операции_сохраняются_в_нити_и_префах_с_проверкой()
+    {
+        var chatUrl = Chat(await ProjectChat());
+        var threadId = await OpenFile(chatUrl);
+        var inputs = new { language = "ru", referencePath = "intro.mp3", startSec = 1.5, voice = "voice:anya" };
+
+        var saved = await _client.PutAsJsonAsync($"{chatUrl}/threads/{threadId}/settings",
+            new { settings = new { mode = "voice", operation = "speak", fields = new { speed = 1.2 }, inputs }, revision = await Revision(chatUrl) });
+        saved.StatusCode.Should().Be(HttpStatusCode.OK, await saved.Content.ReadAsStringAsync());
+        var state = await Json(await _client.GetAsync($"{chatUrl}/state"));
+        var settings = state.GetProperty("threads").GetProperty("threads").EnumerateArray()
+            .Single(t => t.GetProperty("id").GetString() == threadId).GetProperty("settings");
+        settings.GetProperty("inputs").GetProperty("referencePath").GetString().Should().Be("intro.mp3");
+        settings.GetProperty("fields").TryGetProperty("language", out _).Should().BeFalse();
+
+        foreach (var bad in new object[] { new { speed = 1 }, new { referencePath = "../secret.mp3" } })
+        {
+            var refused = await _client.PutAsJsonAsync($"{chatUrl}/threads/{threadId}/settings",
+                new { settings = new { mode = "voice", inputs = bad }, revision = await Revision(chatUrl) });
+            refused.StatusCode.Should().Be(HttpStatusCode.BadRequest, bad.ToString());
+            (await _client.PutAsJsonAsync($"{Root}/prefs/voice", new { inputs = bad })).StatusCode
+                .Should().Be(HttpStatusCode.BadRequest, bad.ToString());
+        }
+
+        (await _client.PutAsJsonAsync($"{Root}/prefs/voice", new { count = 2, inputs })).StatusCode.Should().Be(HttpStatusCode.OK);
+        var prefs = await Json(await _client.GetAsync($"{Root}/prefs"));
+        prefs.GetProperty("voice").GetProperty("inputs").GetProperty("language").GetString().Should().Be("ru");
+
+        var chat = await Sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный");
+        (await _client.PutAsJsonAsync($"/api/audio-editor/chats/{chat.Id}/prefs/voice", new { inputs })).StatusCode
+            .Should().Be(HttpStatusCode.BadRequest, "у личного чата путей проекта нет");
+    }
+
     [Fact]
     public async Task Файл_версии_отдаётся_с_Range_и_Content_Type()
     {

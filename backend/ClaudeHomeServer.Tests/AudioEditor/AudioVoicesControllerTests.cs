@@ -4,8 +4,10 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
+using ClaudeHomeServer.Services.AudioEditor.Voices;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -26,8 +28,41 @@ public class AudioVoicesControllerTests : IDisposable
 
     private static readonly byte[] Wav = [.. "RIFF"u8, 0, 0, 0, 0, .. "WAVE"u8, 7, 7];
 
+    private readonly MiniMaxCloner _cloner = new();
+
+    // Поставщик-подставка: единственная модель сама создаёт клон MiniMax; считает прогоны
+    private sealed class MiniMaxCloner : IAudioEngine
+    {
+        private int _runs;
+        public int Runs => _runs;
+        public string Key => "fake-clone";
+        public string Label => "Фейк-клон";
+        public string PriceUnit => AudioPriceUnits.Free;
+        public bool Enabled => true;
+
+        public IReadOnlyList<AudioModelInfo> Models =>
+        [
+            new("fake-mm-clone", "Клон", new AudioCaps([AudioOp.CloneVoice], ["ru"], [AudioVoiceKind.Clone], [AudioOutputs.Audio],
+                AudioLicenses.Commercial, AudioPriceUnits.Free), new AudioPriceHint(0, AudioPriceUnits.Free, "run")),
+        ];
+
+        public string? LibraryVoicesRefusal => null;
+        public string? LibraryVoiceRefusal(AudioModelInfo model, AudioOp op, AudioVoiceUse voice) => null;
+        public (string Key, bool Creates)? StoredClone(AudioModelInfo model, AudioOp op) => (VoiceProviders.MiniMax, true);
+
+        public Task<AudioResult> RunAsync(AudioRequest req, IProgress<AudioProgress> progress, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _runs);
+            return Task.FromResult(new AudioResult(AudioOutcome.Ok, [new AudioFile("main", [1], "audio/wav", ".wav")], null, false,
+                null, null, [new AudioVoiceCacheEntry(VoiceProviders.MiniMax, "mm-fresh")]));
+        }
+
+        public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
+    }
+
     public AudioVoicesControllerTests()
     {
+        _factory.ExtraServices = services => services.AddSingleton<IAudioEngine>(_cloner);
         var users = _factory.Services.GetRequiredService<UserStore>();
         var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
         _ownerId = user.Id;
@@ -211,5 +246,47 @@ public class AudioVoicesControllerTests : IDisposable
         body.GetProperty("voices").GetArrayLength().Should().Be(0);
         (await _client.PostAsync($"/api/audio-editor/chats/{chatId}/voices", Form("Аня"))).StatusCode
             .Should().BeOneOf(HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed);
+    }
+
+    // Пересоздание клона в две фазы: без quoteId — котировка с ценой и ничего не запущено; с quoteId — задача
+    // ровно по котировке ЭТОГО голоса. Котировка чужого голоса, повтор и выдуманный id — 404; чужой
+    // поставщик — 400; нет голоса — 404. Id клона в ответах нет
+    [Fact]
+    public async Task Recreate_ДвеФазы_И_МаршрутОшибок()
+    {
+        var slug = await CreateVoice();
+        var other = await CreateVoice("Борис");
+        var url = $"{Voices}/{slug}/recreate";
+
+        var quoted = await _client.PostAsync($"{url}?provider=minimax", null);
+        quoted.StatusCode.Should().Be(HttpStatusCode.OK, await quoted.Content.ReadAsStringAsync());
+        var quote = await Json(quoted);
+        quote.GetProperty("recreateVoice").GetString().Should().Be(slug);
+        var quoteId = quote.GetProperty("quoteId").GetString()!;
+        _cloner.Runs.Should().Be(0, "котировка ничего не запускает");
+
+        // Котировка выписана на другой голос — как несуществующая
+        var foreign = await _client.PostAsync($"{Voices}/{other}/recreate?quoteId={quoteId}", null);
+        foreign.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Json(foreign)).GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.QuoteNotFound);
+        (await _client.PostAsync($"{url}?quoteId=nope", null)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        _cloner.Runs.Should().Be(0);
+
+        var started = await _client.PostAsync($"{url}?quoteId={quoteId}", null);
+        started.StatusCode.Should().Be(HttpStatusCode.Accepted, await started.Content.ReadAsStringAsync());
+        var jobId = (await Json(started)).GetProperty("jobId").GetString()!;
+        var jobs = _factory.Services.GetRequiredService<AudioEditJobService>();
+        await jobs.WhenDone(jobId);
+        _cloner.Runs.Should().Be(1);
+        var voice = await Json(await _client.GetAsync($"{Voices}/{slug}"));
+        voice.GetProperty("providers").EnumerateArray().Single(p => p.GetProperty("provider").GetString() == "minimax")
+            .GetProperty("state").GetString().Should().Be("ok");
+        voice.ToString().Should().NotContain("mm-fresh");
+
+        // Котировка одноразовая
+        (await _client.PostAsync($"{url}?quoteId={quoteId}", null)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.PostAsync($"{url}?provider=higgsfield", null)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _client.PostAsync($"{Voices}/nobody/recreate?provider=minimax", null)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        _cloner.Runs.Should().Be(1);
     }
 }

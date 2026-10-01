@@ -20,8 +20,8 @@ namespace ClaudeHomeServer.AudioEditor.Tests.Engines;
 
 public sealed class FalAudioEngineTests
 {
-    private const string Queue = "https://q.test";
-    private const string Api = "https://api.test/v1";
+    internal const string Queue = "https://q.test";
+    internal const string Api = "https://api.test/v1";
 
     private static readonly AudioEditScope Personal = new(AudioEditScope.Personal, null);
 
@@ -382,7 +382,7 @@ public sealed class FalAudioEngineTests
 
     // ── Подставки ────────────────────────────────────────────────────────────────
 
-    private sealed class Recorder : IProgress<AudioProgress>
+    internal sealed class Recorder : IProgress<AudioProgress>
     {
         public List<AudioProgress> Values { get; } = [];
         public List<AudioStage> Stages => [.. Values.Select(v => v.Stage)];
@@ -395,7 +395,7 @@ public sealed class FalAudioEngineTests
         }
     }
 
-    private sealed class Factory(HttpMessageHandler handler) : IHttpClientFactory
+    internal sealed class Factory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
@@ -499,7 +499,7 @@ public sealed class FalAudioEngineTests
         public void Advance(TimeSpan by) => _now += by;
     }
 
-    private sealed class FakeFal : HttpMessageHandler
+    internal sealed class FakeFal : HttpMessageHandler
     {
         private readonly ConcurrentDictionary<(string, string), Queue<(HttpStatusCode, string, bool)>> _routes = new();
         private readonly ConcurrentDictionary<string, byte[]> _files = new();

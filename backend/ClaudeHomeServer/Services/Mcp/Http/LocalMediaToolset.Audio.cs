@@ -42,7 +42,8 @@ public sealed partial class LocalMediaToolset
             + "инструментал (только ace и minimax). Результат — mp3." + AudioTail,
             Obj(["prompt"], new JsonObject
             {
-                ["prompt"] = Str("Стиль: жанр, настроение, инструменты, голос, темп — по-английски модели понимают лучше"),
+                ["prompt"] = Str("Стиль: жанр, настроение, инструменты, голос, темп — по-английски модели понимают лучше; "
+                    + $"у ace — не длиннее {LocalMediaService.AceCaptionMaxChars} символов"),
                 ["lyrics"] = Str("Слова песни с секциями [Verse], [Chorus]…; пусто — инструментал"),
                 ["engine"] = Enum(LocalMediaService.MusicEngines, "ace (по умолчанию), yue2 или minimax"),
                 ["duration_seconds"] = Int(ComfyWorkflows.MinMusicSeconds, ComfyWorkflows.MaxMusicSeconds,
@@ -68,7 +69,8 @@ public sealed partial class LocalMediaToolset
                 ["audio"] = Str(AudioRefDescription),
                 ["task"] = Enum(LocalMediaService.MusicEditTasks, "cover, repaint, extract, lego или complete"),
                 ["engine"] = Enum(["ace", "yue2"], "ace (по умолчанию) или yue2 — только для cover, нужны lyrics"),
-                ["prompt"] = Str("Для cover и repaint — стиль и содержание результата; для lego — характер новой дорожки"),
+                ["prompt"] = Str("Для cover и repaint — стиль и содержание результата; для lego — характер новой дорожки; "
+                    + $"у ace — не длиннее {LocalMediaService.AceCaptionMaxChars} символов"),
                 ["lyrics"] = Str("Слова для перегенерируемого куска или кавера; у engine=yue2 обязательны"),
                 ["strength"] = Num(0, 1, "Только cover: 0 — свободно, 1 — близко к исходнику (по умолчанию 0,6)"),
                 ["start_seconds"] = Num(0, 600, "Только repaint: начало куска, с"),

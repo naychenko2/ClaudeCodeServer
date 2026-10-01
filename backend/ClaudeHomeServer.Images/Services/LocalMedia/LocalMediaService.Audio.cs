@@ -13,6 +13,11 @@ public sealed partial class LocalMediaService
     public const int MaxTrainClips = 20;
     public const int MaxAbcLength = 20000;
 
+    // Описание стиля для ACE-Step: воркер правки (worker_acestep.py) молча режет prompt до 2000,
+    // поведение энкодера на большей длине не проверено — отказываем заранее на обоих путях ace.
+    // Сверку с воркером держит тест-сторож
+    public const int AceCaptionMaxChars = 2000;
+
     public static readonly IReadOnlyList<string> MusicEngines = ["ace", "yue2", "minimax"];
     public static readonly IReadOnlyList<string> MusicEditTasks = ["cover", "repaint", "extract", "lego", "complete"];
     public static readonly IReadOnlyList<string> AceTracks =
@@ -66,6 +71,7 @@ public sealed partial class LocalMediaService
                     return await BuildYuE2CoverAsync(request, a, job, root, prompt, task, seed, prefix, options, ct);
                 if (task is "cover" or "repaint" && prompt.Length == 0)
                     throw new LocalMediaInputException("Для cover и repaint нужен prompt — стиль и содержание результата.");
+                CheckAceCaption(prompt);
                 var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
                 var p = new JsonObject { ["task"] = task, ["prompt"] = prompt, ["seed"] = seed };
                 if (Str(a, "lyrics") is { } lyrics) p["lyrics"] = Limit(lyrics, ComfyWorkflows.MaxLyricsLength, "lyrics");
@@ -241,6 +247,7 @@ public sealed partial class LocalMediaService
         {
             case "ace":
             {
+                CheckAceCaption(prompt);
                 var language = Str(a, "language") ?? "unknown";
                 if (!ComfyWorkflows.AceLanguages.Contains(language))
                     throw new LocalMediaInputException("language — код языка вокала (ru, en, …) или unknown.");
@@ -261,6 +268,13 @@ public sealed partial class LocalMediaService
             default:
                 return (ComfyWorkflows.MiniMaxMusic(prompt, lyrics, seconds, seed, prefix), MiniMaxMusicEta(seconds));
         }
+    }
+
+    private static void CheckAceCaption(string prompt)
+    {
+        if (prompt.Length > AceCaptionMaxChars)
+            throw new LocalMediaInputException(
+                $"Описание стиля для ACE-Step — не длиннее {AceCaptionMaxChars} символов, сейчас {prompt.Length}.");
     }
 
     private async Task<(JsonObject Graph, int? EtaSeconds)> BuildSpeechAsync(LocalMediaRequest request, JsonObject a,

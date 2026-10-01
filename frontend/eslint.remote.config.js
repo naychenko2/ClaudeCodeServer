@@ -1,12 +1,12 @@
-// Конфиг блокирующего шага CI «Lint remote guard» — сторож импортов MF-модуля
-// «Редактор картинок» отдельно от общего линта. Общий `npm run lint` в CI информационный
+// Конфиг блокирующего шага CI «Lint remote guard» — сторож импортов MF-модулей
+// «Редактор картинок» и «Звук» отдельно от общего линта. Общий `npm run lint` в CI информационный
 // из-за легаси-долга, и нарушение границы remote в его шуме не заметить. Правило общее с
 // eslint.config.js (импортируется, не дублируется).
 import { defineConfig, globalIgnores } from 'eslint/config'
 import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
-import { designPlugin, imageEditorImportGuard } from './eslint.config.js'
+import { audioEditorImportGuard, designPlugin, imageEditorImportGuard } from './eslint.config.js'
 
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),
@@ -24,4 +24,5 @@ export default defineConfig([
     },
   },
   imageEditorImportGuard,
+  audioEditorImportGuard,
 ])

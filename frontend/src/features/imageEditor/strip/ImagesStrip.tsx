@@ -13,7 +13,8 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, SlidersHorizontal, Sparkles, User, X } from 'lucide-react';
 import {
-  Button, Chip, IconButton, C, FS, R, SP, ICON_SIZE, markGenPanelDismissed, useGenerationSheet,
+  Button, Chip, IconButton, C, FS, R, SP, ICON_SIZE, REVEAL_PANEL_EVENT, isGenPanelKey, markGenPanelDismissed, useGenerationSheet,
+  type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import { IMAGES_PANEL, revealWorkspacePanel } from '../characters/panel';
@@ -66,6 +67,16 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
     check();
     return subscribeSheetReveal(check);
   }, [inSheet, sessionId]);
+  // Шторка соседнего раздела (клик по карточке звука) встаёт вместо этой
+  useEffect(() => {
+    if (!sheet) return;
+    const off = (e: Event) => {
+      const k = (e as CustomEvent<Partial<RevealPanelDetail>>).detail?.key;
+      if (k && k !== IMAGES_PANEL && isGenPanelKey(k)) setSheet(false);
+    };
+    window.addEventListener(REVEAL_PANEL_EVENT, off);
+    return () => window.removeEventListener(REVEAL_PANEL_EVENT, off);
+  }, [sheet]);
 
   const draw = async () => {
     if (!sessionId) return;

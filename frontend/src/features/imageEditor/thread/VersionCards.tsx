@@ -10,12 +10,12 @@ import {
   AlertTriangle, Download, Expand, RotateCcw, Save, Sparkles, Target, Undo2, X,
 } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, useIsMobile,
+  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useIsMobile,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { enterScope, isPersonalScope } from '../scope';
-import { continueFrom, saveToProject, versionSaved } from './actions';
+import { continueFrom, pickByHuman, saveToProject, versionSaved } from './actions';
 import { download, PERSONAL_DOWNLOAD_HINT } from './download';
 import {
   downloadName, findVersion, fromVersion, isEmptyThread, launchEndNote, launchOf, launchVersions, ORIGIN, saveFolder,
@@ -43,11 +43,14 @@ function Note({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{children}</div>;
 }
 
-function Shell({ current, mobile, solo, children, testId }: {
-  current: boolean; mobile: boolean; solo: boolean; children: ReactNode; testId?: string;
+function Shell({ current, mobile, solo, children, testId, onPick }: {
+  current: boolean; mobile: boolean; solo: boolean; children: ReactNode; testId?: string; onPick?: () => void;
 }) {
   return (
-    <div data-image-version={testId} data-current={current ? 'true' : 'false'} style={{
+    <div data-image-version={testId} data-current={current ? 'true' : 'false'}
+      // Клик по карточке, а не по её кнопке или картинке, — выбор человеком: панель следует за ним
+      onClick={onPick ? e => { if (isCardPick(e.target, e.currentTarget)) onPick(); } : undefined}
+      style={{
       width: cardWidth(mobile, solo), maxWidth: '100%', boxSizing: 'border-box', padding: SP.sm,
       display: 'flex', flexDirection: 'column', gap: SP.xs,
       background: C.bgCard, border: `1px solid ${current ? C.accent : C.border}`, borderRadius: R.xl,
@@ -100,7 +103,8 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const open = () => openEditor(sessionId, thread.id, version.id);
 
   return (
-    <Shell current={current} mobile={mobile} solo={solo} testId={String(version.number)}>
+    <Shell current={current} mobile={mobile} solo={solo} testId={String(version.number)}
+      onPick={() => { void pickByHuman(projectId, sessionId, thread.id, focused); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
         {current && <Badge size="xs" tone="accent" icon={ic(Target)}>в работе</Badge>}
         <span title={name} style={{

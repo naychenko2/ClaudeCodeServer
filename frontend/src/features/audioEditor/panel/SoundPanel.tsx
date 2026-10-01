@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AudioLines, Combine, Cpu, Lock, Mic, Scissors, SlidersHorizontal, X } from 'lucide-react';
 import {
   Badge, GenerationPanel, IconButton, SegmentedControl, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
+  clearGenDraft, followPeeked, noteGenDraft, useAgentPick,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
@@ -22,7 +23,7 @@ import { focusLabel, queueBadge } from '../strip/summary';
 import { releaseFocus } from '../thread/actions';
 import {
   focusThread, getCatalog, getComposerText, getJobsOf, getPrefs, getSelection, getShortcutMode, setPieceFieldOpen, setSelection,
-  SOUND_PANEL, useAudioStoreVersion, useAudioThreads,
+  soundDraftKey, SOUND_PANEL, useAudioStoreVersion, useAudioThreads,
 } from '../thread/threadStore';
 import { hasRvcModel, voicePickValue, pickedSlug } from '../voices/model';
 import { useLibraryVoice } from '../voices/useLibraryVoice';
@@ -97,7 +98,9 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const catalog = getCatalog(scope);
   const [tab, setTab] = useState<Tab>(() => takeWanted() ?? 'settings');
   // Опущенная шторка держит низ с ценой и запуском на любой вкладке: ради него её и опускают
-  const [peeked, setPeeked] = useState(false);
+  // Шторка, пришедшая на смену опущенной соседке по клику на карточку, тоже опущена
+  const [peeked, setPeeked] = useState(() => followPeeked(SOUND_PANEL));
+  const agentPick = useAgentPick(sessionId, SOUND_PANEL);
 
   useEffect(() => {
     const on = () => { const t = takeWanted(); if (t) setTab(t); };
@@ -108,7 +111,11 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // ── Настройки: цепочка нить → префы режима → умолчание, плюс несохранённый выбор ──
   const [pending, setPending] = useState<AudioThreadSettings | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Отложенное сохранение правки: уходит сразу, если звук сменили или панель закрыли раньше таймера
+  const flushLater = useRef<(() => void) | null>(null);
   const threadId = thread?.id ?? null;
+  // Черновик элемента «Работаем с» (genDrafts): правка поля его ставит, запуск снимает
+  const draftKey = threadId ? soundDraftKey(threadId) : null;
   useEffect(() => { setPending(null); }, [threadId, sessionId]);
   const eff = overlay(thread, getPrefs(scope), pending);
   const state: PanelState = resolvePanel(eff.thread, eff.prefs, catalog, pending?.mode ?? getShortcutMode(sessionId) ?? 'voice');
@@ -122,10 +129,22 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     const next = nextSettings(state, patch);
     setPending(next);
     if (timer.current) clearTimeout(timer.current);
-    if (debounced) timer.current = setTimeout(() => flush(next), SAVE_DELAY);
-    else flush(next);
+    timer.current = null;
+    flushLater.current = null;
+    if (debounced) {
+      flushLater.current = () => flush(next);
+      timer.current = setTimeout(() => { timer.current = null; flushLater.current = null; flush(next); }, SAVE_DELAY);
+    } else flush(next);
   };
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  // Клик по другой карточке не сбрасывает правку: недосохранённое уходит в СВОЮ нить (flush
+  // держит её в замыкании) до смены звука и при закрытии панели
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    const f = flushLater.current;
+    flushLater.current = null;
+    f?.();
+  }, [threadId, sessionId]);
 
   // ── Просьба карточки («Обрезать», «Перегенерировать кусок»): сперва её нить в работу, потом операция ──
   const opReq = pendingOperation(sessionId);
@@ -248,7 +267,10 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     if (v === undefined) delete fields[k];
     else fields[k] = v;
     change({ fields }, true);
+    noteGenDraft(draftKey);
   };
+  // Правка полей операции человеком — черновик элемента
+  const editInputs = (patch: Partial<PanelInputs>) => { setInputs(patch); noteGenDraft(draftKey); };
 
   // ── Котировка: цена, ETA и отказ поставщика ──
   const text = state.op === 'dialogue' ? dialogueText(inputs) : getComposerText(sessionId);
@@ -299,9 +321,11 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     if (!sessionId || busy || reason) return;
     setBusy(true);
     setRefusal(null);
-    await runPanel({
+    const ok = await runPanel({
       scope, sessionId, thread, state, fields: pruneFields(state.fields, schema.schema), inputs, reference, text, piece: pieceSel,
     }, setRefusal);
+    // Запуск забрал черновик — пометка «черновик» уходит
+    if (ok) clearGenDraft(draftKey);
     setBusy(false);
   };
   const foot: GenerationFoot = {
@@ -339,7 +363,6 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
         <span data-sound-context="" style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           Работаем с: <b style={{ color: C.textHeading }}>{focusLabel(thread)}</b> · операция возьмёт её на вход
         </span>
-        <IconButton size="xs" title="Снять выбор звука" ariaLabel="Снять выбор звука" onClick={release}>{ic(X)}</IconButton>
       </>
     );
   } else {
@@ -360,7 +383,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   } else {
     const pill = pillOf(state.op);
     const fieldsProps = {
-      state, personal, main, values: state.fields, setField, inputs, setInputs, reference, setReference,
+      state, personal, main, values: state.fields, setField, inputs, setInputs: editInputs, reference, setReference,
       onOp: (op: AudioOp) => change(op === 'transcribe' && state.mode !== 'process' ? { mode: 'process' } : { operation: op }),
       isMobile: ctx.isMobile, piece, onOpenVoices: () => setTab('voices'),
     };
@@ -426,7 +449,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
         {state.mode === 'voice' && <VoiceFields {...fieldsProps} />}
         {state.mode === 'process' && state.op !== 'concat' && <ProcessFields {...fieldsProps} />}
         {state.op === 'concat' && (
-          <ConcatFields c={inputs.concat} set={patch => setInputs({ concat: { ...inputs.concat, ...patch } })}
+          <ConcatFields c={inputs.concat} set={patch => editInputs({ concat: { ...inputs.concat, ...patch } })}
             threads={threads.threads} personal={personal} />
         )}
         {state.mode === 'music' && <MusicFields {...fieldsProps} />}
@@ -454,6 +477,12 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       tab={tab}
       onTabChange={setTab}
       context={context}
+      contextAction={tab === 'settings' && state.op !== 'concat' && thread
+        ? <IconButton size="xs" title="Снять выбор звука" ariaLabel="Снять выбор звука" onClick={release}>{ic(X)}</IconButton>
+        : undefined}
+      panelKey={SOUND_PANEL}
+      agentPick={agentPick}
+      draftKey={tab === 'settings' && state.op !== 'concat' ? draftKey : null}
       foot={tab === 'settings' || (peeked && ctx.isMobile) ? foot : undefined}
       peeked={peeked}
       onPeekedChange={setPeeked}

@@ -6,13 +6,13 @@
 import { useState, type ReactNode } from 'react';
 import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Combine, Download, Mic, Music, Save, Scissors, Sparkles, Target, Wand2, X } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, Menu, MenuItem, MenuSep, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, FLAGS, useFeature,
+  Badge, Button, Dot, IconButton, Menu, MenuItem, MenuSep, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, FLAGS, isCardPick, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { audioApi, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
 import { opInfo } from '../ops';
 import { audioScope, isPersonalScope } from '../scope';
-import { downloadFile, saveVersion, takeVersion } from './actions';
+import { downloadFile, saveVersion, selectThreadByHuman, takeVersion } from './actions';
 import {
   currentIndex, doneText, hasMain, launchEndNote, launchOf, launchVersions, licenseBadge, licenseBadgeOf, navText,
   orderedVersions, priceText, saveKind, threadName, type LicenseBadge,
@@ -31,9 +31,14 @@ function Note({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{children}</div>;
 }
 
-function Frame({ current, dashed, testId, children }: { current: boolean; dashed?: boolean; testId: string; children: ReactNode }) {
+function Frame({ current, dashed, testId, onPick, children }: {
+  current: boolean; dashed?: boolean; testId: string; onPick?: () => void; children: ReactNode;
+}) {
   return (
-    <div data-audio-card={testId} data-current={current ? 'true' : 'false'} style={{
+    <div data-audio-card={testId} data-current={current ? 'true' : 'false'}
+      // Клик по карточке, а не по её кнопке, — выбор человеком: панель следует за ним
+      onClick={onPick ? e => { if (isCardPick(e.target, e.currentTarget)) onPick(); } : undefined}
+      style={{
       display: 'flex', flexDirection: 'column', gap: SP.sm, padding: SP.md, width: '100%', maxWidth: 560, boxSizing: 'border-box',
       border: `1px ${dashed ? 'dashed' : 'solid'} ${current ? C.accent : C.border}`, borderRadius: R.xl,
       background: C.bgCard, boxShadow: current ? `${SHADOW.card}, 0 0 0 3px ${C.accentLight}` : SHADOW.card, minWidth: 0,
@@ -149,7 +154,7 @@ export function ThreadCard({ scope, sessionId, thread, focused, events }: {
   const Icon = modeIcon(thread);
 
   return (
-    <Frame current={working} testId={v.id}>
+    <Frame current={working} testId={v.id} onPick={() => { void selectThreadByHuman(scope, sessionId, thread.id, focused); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm, minWidth: 0 }}>
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(Icon, ICON_SIZE.sm)}</span>
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere', minWidth: 0 }}>{threadName(thread)}</span>

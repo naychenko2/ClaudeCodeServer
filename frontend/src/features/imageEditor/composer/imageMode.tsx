@@ -9,7 +9,7 @@ import { requestStrip, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/ki
 import type { ComposerModeApi, ComposerModeCtx } from '../../../lib/subsystems/registryCore';
 import { enterScope } from '../scope';
 import { currentVersion, isEmptyThread, isLegacyThread, lastLaunchPrompt, ORIGIN, threadName, versionName } from '../thread/model';
-import { getFocusedThread, getImageModeRequest, IMAGES_STRIP, useThreads } from '../thread/threadStore';
+import { getFocusedThread, getImageModeRequest, imageDraftKey, IMAGES_STRIP, useThreads } from '../thread/threadStore';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 
 function useFocused(ctx: ComposerModeCtx) {
@@ -62,6 +62,11 @@ export const imageMode: ComposerModeApi = {
   prefill: ctx => {
     const t = getFocusedThread(ctx.sessionId);
     return t ? { key: t.id, text: lastLaunchPrompt(t) || null } : null;
+  },
+  // Промпт — черновик выбранной картинки: клик по другой карточке уносит его с собой
+  draftKey: ctx => {
+    const t = getFocusedThread(ctx.sessionId);
+    return t ? imageDraftKey(t.id) : null;
   },
   placeholder: ctx => {
     const t = getFocusedThread(ctx.sessionId);

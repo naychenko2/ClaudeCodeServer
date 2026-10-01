@@ -6,7 +6,7 @@
 // полем ввода и не закрывает его нижний ряд.
 
 import { useEffect, useState } from 'react';
-import { FLAGS, REVEAL_PANEL_EVENT, markGenPanelDismissed, useFeature, useGenerationSheet, type RevealPanelDetail } from 'aihome_shell/kit';
+import { FLAGS, REVEAL_PANEL_EVENT, isGenPanelKey, markGenPanelDismissed, useFeature, useGenerationSheet, type RevealPanelDetail } from 'aihome_shell/kit';
 import type { ComposerChipCtx } from '../../../lib/subsystems/registryCore';
 import { SOUND_PANEL } from '../thread/threadStore';
 import { SoundPanel } from './SoundPanel';
@@ -37,6 +37,17 @@ export function SoundSheet({ ctx }: { ctx: ComposerChipCtx }) {
     subs.add(pull);
     return () => { subs.delete(pull); };
   }, [narrow]);
+
+  // Шторка соседнего раздела (клик по карточке картинки) встаёт вместо этой: две шторки разом не живут
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: Event) => {
+      const k = (e as CustomEvent<Partial<RevealPanelDetail>>).detail?.key;
+      if (k && k !== SOUND_PANEL && isGenPanelKey(k)) setOpen(false);
+    };
+    window.addEventListener(REVEAL_PANEL_EVENT, off);
+    return () => window.removeEventListener(REVEAL_PANEL_EVENT, off);
+  }, [open]);
 
   if (!on || !narrow || !open) return null;
   // Во всю ширину ряда чипов: опущенная шторка — блок над полем ввода, а не чип

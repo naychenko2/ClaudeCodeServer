@@ -2,7 +2,7 @@
 // сохранить в проект может только человек). Каждое — мутация с ревизией через стор;
 // тексты тостов — из записки v3, раздел «Тексты».
 
-import { autoRevealGenerationPanel, showToast } from 'aihome_shell/kit';
+import { autoRevealGenerationPanel, dropAgentPick, followSelection, revealWorkspacePanel, showToast } from 'aihome_shell/kit';
 import { IMAGES_PANEL } from '../characters/panel';
 import { imageEditorApi, nameTakenSuggestion, type ImageEncodeFormat } from '../api';
 import { nameStem } from '../saveAs';
@@ -11,7 +11,7 @@ import {
   chainOf, currentStack, currentVersion, hasRunningLaunch, isEmptyThread, isLegacyThread, ORIGIN, originFile, saveFolder,
   versionStep,
 } from './model';
-import { closeEditor, getEditor, getThreadsState, mutate, requestImageMode, setThreadMarks } from './threadStore';
+import { closeEditor, getEditor, getThreadsState, imageDraftKey, mutate, requestImageMode, setThreadMarks } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadTake, type ImageThreadVersion } from './threadsApi';
 
 // Шаг, который уже лежит в проекте файлом нити: версия «в проекте», а не «черновик»
@@ -45,9 +45,26 @@ function revealPanel(ok: boolean, sessionId: string): boolean {
   return ok;
 }
 
+// Кнопка («Работать с этой», «Продолжить от неё») — просьба открыть: панель «Картинки»
+// открывается и закрытая («Панель следует за выбором», правило 4)
+function openPanel(ok: boolean, sessionId: string, threadId: string): boolean {
+  if (!ok) return false;
+  dropAgentPick(sessionId, imageDraftKey(threadId));
+  revealWorkspacePanel(IMAGES_PANEL, 'settings', { sessionId, target: imageDraftKey(threadId) });
+  return true;
+}
+
+// Клик человека по карточке в ленте: картинка — в работу, открытая панель переключается на
+// «Картинки → Настройки», закрытая не открывается (правило 1)
+export async function pickByHuman(projectId: string, sessionId: string, threadId: string, focused: boolean): Promise<boolean> {
+  const ok = focused || await mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
+  if (ok) followSelection(IMAGES_PANEL, sessionId, imageDraftKey(threadId));
+  return ok;
+}
+
 // «Продолжить от неё» и «Работать с этой»: версия становится текущей, нить — в работе
 export const continueFrom = async (projectId: string, sessionId: string, t: ImageThread, versionId: string) =>
-  revealPanel(await mutate(projectId, sessionId, rev => threadsApi.current(projectId, sessionId, t.id, versionId, rev)), sessionId);
+  openPanel(await mutate(projectId, sessionId, rev => threadsApi.current(projectId, sessionId, t.id, versionId, rev)), sessionId, t.id);
 
 // Правка без ИИ: у нити с версиями — шаг текущей версии, у старой — «Взять» шага в стопку
 export const applyStep = (projectId: string, sessionId: string, t: ImageThread, stepId: string) =>
@@ -77,7 +94,7 @@ export async function rollbackTo(projectId: string, sessionId: string, t: ImageT
 // «Работать с этой»: фокус на существующую нить
 export async function workWith(projectId: string, sessionId: string, threadId: string | null) {
   const ok = await mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
-  if (threadId) revealPanel(ok, sessionId);
+  if (threadId) openPanel(ok, sessionId, threadId);
   return ok;
 }
 

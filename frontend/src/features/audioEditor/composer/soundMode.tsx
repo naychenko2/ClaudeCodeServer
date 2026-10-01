@@ -11,7 +11,9 @@ import { MODE_LABEL, opInfo } from '../ops';
 import { audioScope } from '../scope';
 import { stripModel } from '../strip/SoundStrip';
 import { launchFromComposer } from '../thread/actions';
-import { getFocusedThread, getSoundModeRequest, getSuggestedPrompt, setComposerText, SOUND_STRIP, useAudioThreads } from '../thread/threadStore';
+import {
+  getFocusedThread, getSoundModeRequest, getSuggestedPrompt, setComposerText, soundDraftKey, SOUND_STRIP, useAudioThreads,
+} from '../thread/threadStore';
 
 function useModel(ctx: ComposerModeCtx) {
   const state = useAudioThreads(audioScope(ctx.projectId), ctx.sessionId);
@@ -60,6 +62,11 @@ export const soundMode: ComposerModeApi = {
   prefill: ctx => {
     const s = getSuggestedPrompt(ctx.sessionId);
     return s ? { key: `suggest:${s.n}`, text: s.text } : null;
+  },
+  // Текст — черновик выбранного звука: клик по другой карточке уносит его с собой
+  draftKey: ctx => {
+    const t = getFocusedThread(ctx.sessionId);
+    return t ? soundDraftKey(t.id) : null;
   },
   placeholder: ctx => soundPlaceholder(ctx.projectId, ctx.sessionId),
   submitLabel: ctx => <SubmitLabel ctx={ctx} />,

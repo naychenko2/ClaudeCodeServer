@@ -39,7 +39,15 @@ export type { SubsystemManifest, RevealPanelDetail } from '../subsystems/registr
 // ─── genPanelDismissed ───────────────────────────────────────────────────────
 // Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл
 // её в этом чате (ADR-021 §3)
-export { autoRevealGenerationPanel, markGenPanelDismissed } from '../genPanelDismissed';
+export { autoRevealGenerationPanel, isGenPanelKey, markGenPanelDismissed } from '../genPanelDismissed';
+
+// ─── genPanelFollow / genDrafts / genPanelOpen ───────────────────────────────
+// Панель генерации следует за выбором: клик по карточке, подсказка выбора агентом,
+// черновики полей по ключу элемента
+export { followSelection, isCardPick, noteAgentPick, dropAgentPick, dropAgentPickOf, useAgentPick } from '../genPanelFollow';
+export type { GenerationAgentPick } from '../genPanelFollow';
+export { noteGenDraft, clearGenDraft, useGenDraft } from '../genDrafts';
+export { followPeeked } from '../genPanelOpen';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts

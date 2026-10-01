@@ -19,7 +19,9 @@ import { markGenPanelDismissed } from '../../../lib/genPanelDismissed';
 import { REVEAL_PANEL_EVENT } from '../../../lib/subsystems/registryCore';
 import { audioApi } from '../api';
 import { openSoundShortcut, selectThreadByHuman } from '../thread/actions';
-import { __applyThreads, __resetAudioStore, getShortcutMode } from '../thread/threadStore';
+import { __applyThreads, __resetAudioStore, getShortcutMode, handleEvent, soundDraftKey } from '../thread/threadStore';
+import { __resetGenPanelOpen, holdGenPanelOpen } from '../../../lib/genPanelOpen';
+import { __resetAgentPicks, dropAgentPick, getAgentPick } from '../../../lib/genPanelFollow';
 
 const reveals = () => dispatched.filter(d => d.type === REVEAL_PANEL_EVENT).map(d => d.detail);
 
@@ -27,6 +29,8 @@ beforeEach(() => {
   store.clear();
   dispatched.length = 0;
   __resetAudioStore();
+  __resetGenPanelOpen();
+  __resetAgentPicks();
   vi.restoreAllMocks();
 });
 
@@ -46,14 +50,28 @@ describe('автооткрытие панели «Звук» по действи
     expect(reveals()).toEqual([{ key: 'sound', tab: 'settings', sessionId: 's2' }]);
   });
 
-  it('выбор звука человеком открывает панель; отказ сервера — не открывает', async () => {
+  it('клик по карточке закрытую панель не открывает, открытую переключает на «Звук»', async () => {
     __applyThreads('s1', 'p1', { focus: null, revision: 1, threads: [] });
-    vi.spyOn(audioApi, 'focus').mockResolvedValueOnce({ focus: 't1', revision: 2, threads: [] });
+    vi.spyOn(audioApi, 'focus').mockResolvedValue({ focus: 't1', revision: 2, threads: [] });
     expect(await selectThreadByHuman('p1', 's1', 't1')).toBe(true);
-    expect(reveals()).toEqual([{ key: 'sound', tab: 'settings', sessionId: 's1' }]);
+    expect(reveals()).toEqual([]);
+    const off = holdGenPanelOpen('images', 'column');
+    expect(await selectThreadByHuman('p1', 's1', 't1', true)).toBe(true);
+    off();
+    expect(reveals()).toEqual([{ key: 'sound', tab: 'settings', sessionId: 's1', target: 'sound:t1', follow: true }]);
     dispatched.length = 0;
     vi.spyOn(audioApi, 'focus').mockRejectedValueOnce(new Error('нет'));
     expect(await selectThreadByHuman('p1', 's1', 't1')).toBe(false);
     expect(reveals()).toEqual([]);
+  });
+
+  it('выбор агентом (событие нитей) панель не двигает — подсказка в панели другого раздела', () => {
+    __applyThreads('s1', 'p1', { focus: null, revision: 1, threads: [] });
+    handleEvent({ type: 'audio_thread_changed', sessionId: 's1', scopeKey: 'p1', state: { focus: 't2', revision: 2, threads: [] } } as never);
+    expect(reveals()).toEqual([]);
+    expect(getAgentPick('s1')).toMatchObject({ panelKey: 'sound', target: 'sound:t2' });
+    // Свой клик по тому же звуку подсказку убирает
+    dropAgentPick('s1', soundDraftKey('t2'));
+    expect(getAgentPick('s1')).toBeNull();
   });
 });

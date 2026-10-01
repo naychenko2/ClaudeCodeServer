@@ -24,7 +24,8 @@ import { useVideoCenter, useVideoCenterSplit, useVideoPlaying, VIDEO_PANEL_EVENT
 import { useCenterSplit } from '../hooks/useCenterSplit';
 import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
-import { chatPanels } from './workspace/panelStackState';
+import { chatPanels, openKeysOf } from './workspace/panelStackState';
+import { followHost } from '../lib/genPanelFollow';
 import { CHAT_KEYS, CHAT_RIGHT_KEYS, isPanelKey, type PanelKey } from './workspace/panelCatalog';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
 import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
@@ -280,7 +281,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // При выходе/unmount флаг снимается — на мобильной ветке compact передаётся
   // безусловно, и isTablet там всегда false, так что эксклюзив десктопной веткой
   // не поднимается впустую.
-  const { setExclusive, markActive, closeCompactStack, reveal, close: closePanelKey } = chatPanels.use();
+  const { setExclusive, markActive, closeCompactStack, reveal, close: closePanelKey, replaceWith, zones: chatZones } = chatPanels.use();
+  const chatOpenKeys = useRef<string[]>([]);
+  chatOpenKeys.current = openKeysOf(chatZones);
   // Панели подсистем в правой зоне личного чата (слот workspace-panel-def): проекта
   // здесь нет, поэтому projectId = null — проектные вклады («Персонажи») отказываются
   // сами. Без вкладов контента нет, и рельса кнопок не показывает
@@ -302,14 +305,18 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   const [genZoneFor, setGenZoneFor] = useState<string | null>(null);
   useEffect(() => {
     const onReveal = (e: Event) => {
-      const key = (e as CustomEvent<Partial<RevealPanelDetail>>).detail?.key;
+      const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
+      const key = d?.key;
       if (!isPanelKey(key) || !CHAT_RIGHT_KEYS.includes(key)) return;
       if (isGenPanelKey(key)) setGenZoneFor(activeId);
-      reveal(key);
+      // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
+      const host = d?.follow ? followHost(chatOpenKeys.current, key) : null;
+      if (host && isPanelKey(host)) replaceWith(key, host);
+      else reveal(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
-  }, [reveal, activeId]);
+  }, [reveal, replaceWith, activeId]);
 
   useEffect(() => {
     setExclusive(isTablet);

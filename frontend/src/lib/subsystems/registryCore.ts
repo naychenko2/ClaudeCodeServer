@@ -17,6 +17,7 @@ import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
 import type { AuthState, ChatItem, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
 import { subscribeFlags } from '../featureFlags';
+import { noteReveal, openGenPanel } from '../genPanelOpen';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
 // Вклад в слот. Ровно два вида:
@@ -271,6 +272,10 @@ export interface ComposerModeApi {
   // подставляется один раз и только в нетронутое поле. key отдавать и без текста
   // (text: null): повод фиксируется с первого рендера, а не с появления текста
   prefill?: (ctx: ComposerModeCtx) => { key: string; text: string | null } | null;
+  // Ключ элемента, черновиком которого считается текст режима (genDrafts): смена выбора
+  // уносит набранное в черновик прежнего элемента и возвращает в поле черновик нового.
+  // null — черновиков у режима сейчас нет
+  draftKey?: (ctx: ComposerModeCtx) => string | null;
   placeholder: (ctx: ComposerModeCtx) => string;
   // Подпись кнопки отправки: «✦ Изменить · ≈ $0.15»
   submitLabel?: (ctx: ComposerModeCtx) => ReactNode;
@@ -312,15 +317,30 @@ export interface WorkspacePanelDefApi {
 // событие окна с detail = { key, tab? }; слушают страница проекта и раздел «Чаты»,
 // неизвестный ключ пропускается. tab — вкладка, которую панель покажет сама: хост её
 // не разбирает, панель слушает то же событие. sessionId — чат, ради которого просят показ
-// (автооткрытие по выбору картинки): телефонная шторка ждёт полосу именно этого чата
+// (автооткрытие по выбору картинки): телефонная шторка ждёт полосу именно этого чата.
+// follow — панель следует за выбором человека (клик по карточке): открытая панель
+// генерации уступает место запрошенной в том же виде, peek — шторка была опущена.
+// target — ключ выбранного элемента
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
-export interface RevealPanelDetail { key: string; tab?: string; sessionId?: string }
+export interface RevealPanelDetail { key: string; tab?: string; sessionId?: string; target?: string; follow?: boolean; peek?: boolean }
+// ifOpen — показать, только если панель генерации уже открыта: закрытую выбор не открывает
+export interface RevealPanelOptions { sessionId?: string; target?: string; ifOpen?: boolean }
 
-export function revealWorkspacePanel(key: string, tab?: string, sessionId?: string) {
+// true — запрос ушёл; false — ifOpen, а открытой панели генерации нет
+export function revealWorkspacePanel(key: string, tab?: string, opts: RevealPanelOptions = {}): boolean {
   const detail: RevealPanelDetail = { key };
   if (tab !== undefined) detail.tab = tab;
-  if (sessionId !== undefined) detail.sessionId = sessionId;
+  if (opts.sessionId !== undefined) detail.sessionId = opts.sessionId;
+  if (opts.target !== undefined) detail.target = opts.target;
+  if (opts.ifOpen) {
+    const open = openGenPanel();
+    if (!open) return false;
+    detail.follow = true;
+    if (open.view === 'peek') detail.peek = true;
+  }
+  noteReveal(key, !!detail.peek);
   window.dispatchEvent(new CustomEvent<RevealPanelDetail>(REVEAL_PANEL_EVENT, { detail }));
+  return true;
 }
 
 // ---- Хранилище ----

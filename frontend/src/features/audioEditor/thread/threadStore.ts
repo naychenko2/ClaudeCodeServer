@@ -5,7 +5,9 @@
 // «Звук» у стора полос ядра, снятие — отпускает (как у картинок).
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { notifyComposer, onReconnected, releaseStrip, requestStrip, revealWorkspacePanel, showToast } from 'aihome_shell/kit';
+import {
+  dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, revealWorkspacePanel, showToast,
+} from 'aihome_shell/kit';
 import {
   audioApi, conflictState, EMPTY_THREADS,
   type AudioCatalog, type AudioEvent, type AudioMode, type AudioOp, type AudioPrefs, type AudioStage, type AudioThread,
@@ -13,9 +15,12 @@ import {
 } from '../api';
 import type { AudioSelection } from '../player/selection';
 import type { ConcatPiece } from '../panel/inputs';
+import { threadName } from './model';
 
 export const SOUND_STRIP = 'sound';
 export const SOUND_PANEL = 'sound';
+// Ключ элемента для черновиков и выбора: панель + нить
+export const soundDraftKey = (threadId: string) => `${SOUND_PANEL}:${threadId}`;
 
 interface Entry { scope: string; state: AudioThreadsState; loaded: boolean; loading: boolean }
 
@@ -79,11 +84,22 @@ function apply(sessionId: string, scope: string, state: AudioThreadsState) {
   notifyComposer();
 }
 
+// Фокус сменился событием с сервера, а не ответом на свой клик, — его выбрал агент
+// (audio_focus): панель он не двигает, каркас покажет подсказку в панели другого раздела
+function noteAgentFocus(sessionId: string, prev: AudioThreadsState | null, next: AudioThreadsState) {
+  if (!prev || prev.focus === next.focus || next.revision < prev.revision) return;
+  if (!next.focus) { dropAgentPickOf(sessionId, SOUND_PANEL); return; }
+  const t = next.threads.find(x => x.id === next.focus);
+  noteAgentPick(sessionId, { panelKey: SOUND_PANEL, target: soundDraftKey(next.focus), label: t ? threadName(t) : 'звук', tab: 'settings' });
+}
+
 // Событие модуля → состояние. Нити — только у уже показанного чата: чужой чат догрузится сам при входе
 export function handleEvent(ev: AudioEvent) {
   switch (ev.type) {
     case 'audio_thread_changed': {
-      if (!_entries.has(ev.sessionId)) return;
+      const e = _entries.get(ev.sessionId);
+      if (!e) return;
+      noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
       apply(ev.sessionId, ev.scopeKey, ev.state);
       return;
     }

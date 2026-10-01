@@ -1,7 +1,9 @@
 // Действия полосы и композера «Звук»: новый звук, снять выбор, ярлыки режимов и запуск из
 // поля ввода (котировка → задача строго по quoteId, ADR-021 §2).
 
-import { autoRevealGenerationPanel, requestStrip, revealWorkspacePanel, showToast } from 'aihome_shell/kit';
+import {
+  autoRevealGenerationPanel, clearGenDraft, dropAgentPick, followSelection, requestStrip, revealWorkspacePanel, showToast,
+} from 'aihome_shell/kit';
 import { audioApi, nameTakenSuggestion, type AudioMode, type AudioOp, type AudioThread } from '../api';
 import type { MixPlan } from '../player/mix';
 import { isPersonalScope } from '../scope';
@@ -9,7 +11,7 @@ import { draftStem, mixRequest } from './model';
 import { opInfo } from '../ops';
 import { resolveLaunch } from '../strip/summary';
 import {
-  focusThread, getCatalog, getPrefs, getShortcutMode, mutate, requestSoundMode, setShortcutMode, SOUND_PANEL, SOUND_STRIP,
+  focusThread, getCatalog, getPrefs, getShortcutMode, mutate, requestSoundMode, setShortcutMode, soundDraftKey, SOUND_PANEL, SOUND_STRIP,
 } from './threadStore';
 
 // «✦ Новый звук»: черновик в корне, его настройки — копия префов режима; поле — в режим «Звук»
@@ -40,11 +42,12 @@ export function openSoundShortcut(sessionId: string | null, mode: AudioMode) {
   autoRevealGenerationPanel(SOUND_PANEL, sessionId, 'settings');
 }
 
-// Выбор звука человеком (карточка в ленте): фокус и автооткрытие панели. Выбор агентом
-// приходит событием нитей и сюда не попадает — панель сама не открывается
-export async function selectThreadByHuman(scope: string, sessionId: string, threadId: string): Promise<boolean> {
-  const ok = await focusThread(scope, sessionId, threadId);
-  if (ok) autoRevealGenerationPanel(SOUND_PANEL, sessionId, 'settings');
+// Клик человека по карточке в ленте: звук — в работу, открытая панель переключается на
+// «Звук → Настройки», закрытая не открывается («Панель следует за выбором», правило 1).
+// Выбор агентом приходит событием нитей и сюда не попадает — панель он не двигает
+export async function selectThreadByHuman(scope: string, sessionId: string, threadId: string, focused = false): Promise<boolean> {
+  const ok = focused || await focusThread(scope, sessionId, threadId);
+  if (ok) followSelection(SOUND_PANEL, sessionId, soundDraftKey(threadId));
   return ok;
 }
 
@@ -68,6 +71,8 @@ export async function launchFromComposer(
       text: field === 'text' ? trimmed : null,
       prompt: field === 'prompt' && trimmed ? trimmed : null,
     });
+    // Запуск забрал черновик элемента — пометка «черновик» уходит
+    clearGenDraft(soundDraftKey(thread.id));
     return true;
   } catch (e) {
     showToast((e as Error).message || 'Звук не запущен', '', 'error');
@@ -77,9 +82,16 @@ export async function launchFromComposer(
 
 // ── Карточка нити в ленте ──
 
-// «Взять» вариант / «Работать с этой»: версия становится текущей, нить — в работе (сервер ставит фокус сам)
-export const takeVersion = (scope: string, sessionId: string, thread: AudioThread, versionId: string) =>
-  mutate(scope, sessionId, rev => audioApi.current(scope, sessionId, thread.id, versionId, rev));
+// «Взять» вариант / «Работать с этой»: версия становится текущей, нить — в работе (сервер ставит фокус сам).
+// Кнопка — просьба открыть: панель «Звук» открывается и закрытая (правило 4)
+export async function takeVersion(scope: string, sessionId: string, thread: AudioThread, versionId: string): Promise<boolean> {
+  const ok = await mutate(scope, sessionId, rev => audioApi.current(scope, sessionId, thread.id, versionId, rev));
+  if (ok) {
+    dropAgentPick(sessionId, soundDraftKey(thread.id));
+    revealWorkspacePanel(SOUND_PANEL, 'settings', { sessionId, target: soundDraftKey(thread.id) });
+  }
+  return ok;
+}
 
 // «Свести N из M в новую версию»: без ИИ, итог — новая версия той же нити
 export async function mixStems(scope: string, sessionId: string, thread: AudioThread, versionId: string, plan: MixPlan): Promise<boolean> {

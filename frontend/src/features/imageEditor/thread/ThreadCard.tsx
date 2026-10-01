@@ -7,13 +7,13 @@
 import { useState, type ReactNode } from 'react';
 import { AlertTriangle, ChevronLeft, ChevronRight, Download, Image as ImageIcon, Pencil, RotateCcw, X } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, useIsMobile,
+  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, isCardPick, useIsMobile,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { imageEditorApi } from '../api';
 import { enterScope, isPersonalScope } from '../scope';
 import { isFreeUnit, money, variantsWord } from '../format';
-import { dismissJob, saveToProject, savedStepOf, takeVariant, workWith } from './actions';
+import { dismissJob, pickByHuman, saveToProject, savedStepOf, takeVariant, workWith } from './actions';
 import { download } from './download';
 import {
   chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isLegacyThread, ORIGIN, saveFolder,
@@ -28,13 +28,16 @@ import { OriginAnchor, VersionCard } from './VersionCards';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
-function Frame({ focused, stacked, dashed, dim, children }: {
-  focused: boolean; stacked: boolean; dashed?: boolean; dim?: boolean; children: ReactNode;
+function Frame({ focused, stacked, dashed, dim, onPick, children }: {
+  focused: boolean; stacked: boolean; dashed?: boolean; dim?: boolean; onPick?: () => void; children: ReactNode;
 }) {
   // Края стопки позади карточки — два сдвинутых контура той же карточки
   const edges = stacked ? `, 5px 5px 0 -1px ${C.bgCard}, 5px 5px 0 0 ${C.border}, 10px 10px 0 -1px ${C.bgCard}, 10px 10px 0 0 ${C.borderLight}` : '';
   return (
-    <div data-image-thread-card={focused ? 'focused' : 'idle'} style={{
+    <div data-image-thread-card={focused ? 'focused' : 'idle'}
+      // Клик по карточке, а не по её кнопке, — выбор человеком: панель следует за ним
+      onClick={onPick ? e => { if (isCardPick(e.target, e.currentTarget)) onPick(); } : undefined}
+      style={{
       display: 'flex', flexDirection: 'column', gap: SP.sm, padding: SP.md, maxWidth: 520,
       marginRight: stacked ? 10 : 0, marginBottom: stacked ? 10 : 0,
       border: `1px ${dashed ? 'dashed' : 'solid'} ${focused ? C.accent : C.border}`, borderRadius: R.xl,
@@ -227,7 +230,8 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
   const save = async () => { setSaving(true); await saveToProject(projectId, sessionId, thread); setSaving(false); };
 
   return (
-    <Frame focused={focused && isCurrent} stacked={chain.length > 1} dashed={draft} dim={!!stack?.old}>
+    <Frame focused={focused && isCurrent} stacked={chain.length > 1} dashed={draft} dim={!!stack?.old}
+      onPick={() => { void pickByHuman(projectId, sessionId, thread.id, focused); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm }}>
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ImageIcon, ICON_SIZE.sm)}</span>
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{threadName(thread)}</span>

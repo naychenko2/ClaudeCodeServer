@@ -5,6 +5,9 @@ import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Cpu, Sparkles, X }
 import { C, FONT, FS, R, SHADOW, SP, Z } from '../../lib/design';
 import { GEN_PANEL_INLINE_MIN, useWindowWidth } from '../../lib/breakpoints';
 import { holdGenSheetRaised } from '../../lib/genSheet';
+import { useGenDraft } from '../../lib/genDrafts';
+import { followPeeked, holdGenPanelOpen } from '../../lib/genPanelOpen';
+import type { GenerationAgentPick } from '../../lib/genPanelFollow';
 import { useRequestPanelFill } from '../../pages/workspace/panelFill';
 import { Badge, Button, IconButton, PanelHeaderSlot, ResizeHandle, Stepper, Tabs, useHasPanelHeader } from '../ui';
 import type { TabItem } from '../ui';
@@ -70,6 +73,14 @@ interface Props<T extends string> {
   tab: T;
   onTabChange: (t: T) => void;
   context?: ReactNode;              // строка «Работаем с: …» над телом
+  contextAction?: ReactNode;        // кнопка в конце строки контекста («Снять выбор» ✕)
+  // Ключ панели в рабочей области («images», «sound»): каркас отмечает её открытой, пока
+  // смонтирован, — по этому признаку клик по карточке переключает панель (genPanelFollow)
+  panelKey?: string;
+  // Подсказка «✦ Claude взял в работу: имя · Открыть · ✕» под шапкой
+  agentPick?: GenerationAgentPick;
+  // Ключ элемента «Работаем с»: есть черновик — в строке контекста пометка «черновик»
+  draftKey?: string | null;
   children: ReactNode;              // тело активной вкладки
   foot?: GenerationFoot;
   footContent?: ReactNode;          // свой низ вкладки (на «Персонажах» — «Подключён: Аня · ＋»)
@@ -96,7 +107,8 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
   const narrow = useGenerationSheet();
   const inShell = useHasPanelHeader();
   const [ownCollapsed, setOwnCollapsed] = useState(false);
-  const [ownPeeked, setOwnPeeked] = useState(false);
+  // Шторка, пришедшая на смену опущенной соседке по клику на карточку, тоже опущена
+  const [ownPeeked, setOwnPeeked] = useState(() => !!p.panelKey && followPeeked(p.panelKey));
   const [ownWidth, setOwnWidth] = useState<number>(GEN_PANEL_W.default);
 
   const collapsed = p.collapsed ?? ownCollapsed;
@@ -116,6 +128,9 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
 
   useRequestPanelFill(inShell);
   useEffect(() => (raised ? holdGenSheetRaised() : undefined), [raised]);
+  const openView = view === 'spine' ? null : view;
+  useEffect(() => (p.panelKey && openView ? holdGenPanelOpen(p.panelKey, openView) : undefined), [p.panelKey, openView]);
+  const draft = useGenDraft(p.draftKey ?? null);
 
   if (view === 'spine' && !inShell) return <Spine {...p} onExpand={() => setCollapsed(false)} onTab={t => { p.onTabChange(t); setCollapsed(false); }} />;
 
@@ -167,6 +182,7 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
     </div>
   );
 
+  const pick = p.agentPick && <AgentPickRow pick={p.agentPick} />;
   const content = (
     <>
       <Tabs ariaLabel={`Панель «${p.title}»`} value={p.tab} items={p.tabs} onChange={p.onTabChange} transparent={sheet} />
@@ -175,7 +191,11 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
           flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: PAD.row, minWidth: 0,
           padding: `${PAD.ctxY}px ${PAD.edge}px`, borderBottom: `1px solid ${C.borderLight}`,
           fontSize: FS.sm, color: C.textSecondary,
-        }}>{p.context}</div>
+        }}>
+          {p.context}
+          {draft && <span data-gen-draft="" style={{ flexShrink: 0 }}><Badge size="xs" tone="warning">черновик</Badge></span>}
+          {p.contextAction}
+        </div>
       )}
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: `${SP.xxs}px ${SP.md}px ${PAD.bodyB}px` }}>
         {p.children}
@@ -193,6 +213,7 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
             </span>
           </PanelHeaderSlot>
         )}
+        {pick}
         {content}
         {footBox}
       </div>
@@ -236,6 +257,7 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
             <span style={{ width: GRAB.barW, height: GRAB.barH, borderRadius: R.sm, background: C.track }} />
           </button>
           {head}
+          {view === 'sheet' && pick}
           {view === 'sheet' && content}
           {footBox}
         </div>
@@ -262,8 +284,27 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
         ariaLabel={`Ширина панели «${p.title}»`}
       />
       {head}
+      {pick}
       {content}
       {footBox}
+    </div>
+  );
+}
+
+// «✦ Claude взял в работу: кадр-6.png · Открыть · ✕» — выбор агента в другом разделе
+function AgentPickRow({ pick }: { pick: GenerationAgentPick }) {
+  return (
+    <div data-gen-agent-pick="" style={{
+      flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: PAD.row, minWidth: 0,
+      padding: `${SP.xxs}px ${PAD.row}px ${SP.xxs}px ${PAD.edge}px`, borderBottom: `1px solid ${C.borderLight}`,
+      background: C.accentLight, fontSize: FS.sm, color: C.textSecondary,
+    }}>
+      <span style={{ display: 'inline-flex', color: C.accent, flexShrink: 0 }}>{icon(Sparkles)}</span>
+      <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        Claude взял в работу: <b style={{ color: C.textHeading }}>{pick.label}</b>
+      </span>
+      <Button size="xs" variant="ghost" onClick={pick.onOpen} style={{ flexShrink: 0 }}>Открыть</Button>
+      <IconButton size="xs" title="Скрыть подсказку" ariaLabel="Скрыть подсказку" onClick={pick.onDismiss}>{icon(X)}</IconButton>
     </div>
   );
 }

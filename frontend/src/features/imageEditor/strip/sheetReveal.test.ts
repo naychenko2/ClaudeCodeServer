@@ -16,19 +16,19 @@ beforeEach(() => { __resetSheetReveal(); });
 
 describe('ожидаемое раскрытие шторки', () => {
   it('просьба до монтирования полосы не теряется: полоса того же чата забирает её один раз', () => {
-    revealWorkspacePanel('images', undefined, 's1');
+    revealWorkspacePanel('images', undefined, { sessionId: 's1' });
     expect(takeSheetReveal('s1')).toBe(true);
     expect(takeSheetReveal('s1')).toBe(false);
   });
 
   it('полоса другого чата просьбу не забирает — она ждёт свой чат', () => {
-    revealWorkspacePanel('images', undefined, 's2');
+    revealWorkspacePanel('images', undefined, { sessionId: 's2' });
     expect(takeSheetReveal('s1')).toBe(false);
     expect(takeSheetReveal('s2')).toBe(true);
   });
 
   it('просьба без чата (чип «Персонаж») — любой полосе; чужие панели пропускаются', () => {
-    revealWorkspacePanel('sound', undefined, 's1');
+    revealWorkspacePanel('sound', undefined, { sessionId: 's1' });
     expect(takeSheetReveal('s1')).toBe(false);
     revealWorkspacePanel('images', 'characters');
     expect(takeSheetReveal('s1')).toBe(true);
@@ -37,9 +37,9 @@ describe('ожидаемое раскрытие шторки', () => {
   it('смонтированная полоса узнаёт о просьбе через подписку', () => {
     let calls = 0;
     const off = subscribeSheetReveal(() => { calls++; });
-    revealWorkspacePanel('images', undefined, 's1');
+    revealWorkspacePanel('images', undefined, { sessionId: 's1' });
     off();
-    revealWorkspacePanel('images', undefined, 's1');
+    revealWorkspacePanel('images', undefined, { sessionId: 's1' });
     expect(calls).toBe(1);
   });
 });

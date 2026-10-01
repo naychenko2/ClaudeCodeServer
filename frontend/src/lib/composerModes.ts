@@ -42,3 +42,26 @@ export function nextPrefill(
   if (!untouched) return { state: { key: next.key, auto: null }, field };
   return { state: { key: next.key, auto: next.text }, field: next.text ?? '' };
 }
+
+// Текст поля режима — черновик выбранного элемента (ComposerModeApi.draftKey, «Панель
+// следует за выбором», правило 3). key — последний элемент, под которым набирали. Набранное
+// под ним уже лежит его черновиком (поле пишет его на каждой правке), поэтому при смене
+// элемента поле получает черновик нового или пустеет, а пустое заполняет затравка нового.
+// Нетронутую затравку (auto) и пустое поле не уносим: им нечего терять
+export interface ModeDraftState { key: string | null }
+
+export function nextModeDraft(
+  state: ModeDraftState, nextKey: string | null, field: string, auto: string | null,
+  draftOf: (key: string) => string | null,
+): { state: ModeDraftState; field: string } {
+  if (!nextKey || nextKey === state.key) return { state, field };
+  const own = draftOf(nextKey);
+  if (own !== null) return { state: { key: nextKey }, field: own };
+  const touched = !!field.trim() && field !== auto;
+  return { state: { key: nextKey }, field: state.key && touched ? '' : field };
+}
+
+// Что писать черновиком элемента по тексту поля: null — черновика нет (пусто или
+// нетронутая затравка)
+export const modeDraftText = (field: string, auto: string | null): string | null =>
+  field.trim() && field !== auto ? field : null;

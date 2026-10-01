@@ -37,7 +37,8 @@ import { Button, IconButton, Modal, Notice } from './ui';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
-import { nextComposerMode, nextPrefill, type ComposerModeSeen, type PrefillState } from '../lib/composerModes';
+import { modeDraftText, nextComposerMode, nextModeDraft, nextPrefill, type ComposerModeSeen, type ModeDraftState, type PrefillState } from '../lib/composerModes';
+import { getGenDraftText, setGenDraftText } from '../lib/genDrafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -633,12 +634,25 @@ export function Composer({
   const modePrefill = activeMode?.prefill?.(modeCtx) ?? null;
   const prefillKey = modePrefill ? `${modeId}:${modePrefill.key}` : null;
   const prefillRef = useRef<PrefillState>({ key: null, auto: null });
+  // Черновик элемента (draftKey режима): сперва смена элемента, затем затравка — одним
+  // эффектом, чтобы затравка видела уже подменённое поле (nextModeDraft)
+  const draftKey = activeMode?.draftKey?.(modeCtx) ?? null;
+  const draftRef = useRef<ModeDraftState>({ key: null });
   useEffect(() => {
-    const r = nextPrefill(prefillRef.current, prefillKey ? { key: prefillKey, text: modePrefill!.text } : null, modeText);
+    const d = nextModeDraft(draftRef.current, draftKey, modeText, prefillRef.current.auto, getGenDraftText);
+    draftRef.current = d.state;
+    const r = nextPrefill(prefillRef.current, prefillKey ? { key: prefillKey, text: modePrefill!.text } : null, d.field);
     prefillRef.current = r.state;
     if (r.field !== modeText) setModeText(r.field);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- подставляем только на новый повод
-  }, [prefillKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- подставляем только на новый повод или элемент
+  }, [prefillKey, draftKey]);
+  // Набранное — черновиком своего элемента на каждой правке. Кадр смены элемента пропускаем:
+  // в поле ещё текст прежнего, его подменит эффект выше
+  const draftWriteKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (draftWriteKey.current !== draftKey) { draftWriteKey.current = draftKey; return; }
+    setGenDraftText(draftKey, modeDraftText(modeText, prefillRef.current.auto));
+  }, [modeText, draftKey]);
   // Преднастройка из раздела «Заметки»: «Спросить Claude про это» кладёт контекст
   // заметки в sessionStorage — забираем при появлении композера и по событию
   // (на случай, если чат уже открыт и композер смонтирован).

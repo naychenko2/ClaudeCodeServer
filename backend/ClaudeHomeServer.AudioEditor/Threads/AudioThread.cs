@@ -38,6 +38,8 @@ public sealed record AudioThread(
     public string? CurrentVersionId { get; init; }
     public IReadOnlyList<AudioThreadLaunch> Launches { get; init; } = [];
     public AudioThreadSettings? Settings { get; init; }
+    // Имя, предложенное для файла черновика при сохранении (склейка: «podcast-full.mp3»); null — нет
+    public string? Name { get; init; }
 
     [JsonIgnore]
     public AudioThreadVersion? CurrentVersion => Version(CurrentVersionId);

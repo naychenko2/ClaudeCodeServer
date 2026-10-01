@@ -211,6 +211,106 @@ public class FfmpegAudioDspTests
         (await dsp.MixAsync([], AudioFormat.Wav, default)).Error.Should().NotBeNull();
     }
 
+    // Три синуса по 1, 1,5 и 2 с: встык — сумма, паузы добавляют, плавные переходы вычитают
+    [SkippableTheory]
+    [InlineData(AudioJointKind.Butt, 0.0, 4.5)]
+    [InlineData(AudioJointKind.Pause, 0.5, 5.5)]
+    [InlineData(AudioJointKind.Crossfade, 0.4, 3.7)]
+    public async Task Склейка_трёх_кусков_даёт_ожидаемую_длину(AudioJointKind kind, double seconds, double expected)
+    {
+        var dsp = Dsp();
+        var joint = new AudioJoint(kind, seconds);
+        var output = await dsp.ConcatAsync([Sine(1.0), Sine(1.5), Sine(2.0)], [joint, joint], null, AudioFormat.Wav, default);
+        var info = await ProbeOk(dsp, output);
+
+        info.Seconds.Should().BeApproximately(expected, 0.05);
+    }
+
+    [SkippableFact]
+    public async Task Склейка_пауза_ложится_тишиной_между_кусками()
+    {
+        var dsp = Dsp();
+        var output = await dsp.ConcatAsync([Sine(1.0, amplitude: 0.5), Sine(1.0, amplitude: 0.5)], [AudioJoint.Pause(1.0)],
+            null, AudioFormat.Wav, default);
+        output.Error.Should().BeNull();
+        var peaks = (await dsp.PeaksAsync(output.Audio!, 30, default)).Peaks!;
+
+        peaks[5].Should().BeApproximately(0.5f, 0.03f);
+        peaks[15].Should().BeLessThan(0.01f);
+        peaks[25].Should().BeApproximately(0.5f, 0.03f);
+    }
+
+    [SkippableFact]
+    public async Task Склейка_разные_стыки_на_каждом_месте()
+    {
+        var dsp = Dsp();
+        var output = await dsp.ConcatAsync([Sine(1.0), Sine(1.0), Sine(1.0), Sine(1.0)],
+            [AudioJoint.Butt, AudioJoint.Pause(0.5), AudioJoint.Crossfade(0.3)], null, AudioFormat.Wav, default);
+
+        (await ProbeOk(dsp, output)).Seconds.Should().BeApproximately(4.2, 0.05);
+    }
+
+    [SkippableFact]
+    public async Task Склейка_сводит_разные_частоты_и_каналы()
+    {
+        var dsp = Dsp();
+        var output = await dsp.ConcatAsync([Sine(1.0, rate: 22050), Sine(1.0, rate: 44100, channels: 2), Sine(1.0, rate: 16000)],
+            [AudioJoint.Butt, AudioJoint.Butt], null, AudioFormat.Wav, default);
+        var info = await ProbeOk(dsp, output);
+
+        info.SampleRate.Should().Be(44100);
+        info.Channels.Should().Be(2);
+        info.Seconds.Should().BeApproximately(3.0, 0.05);
+    }
+
+    // Тихий и громкий кусок: без выравнивания перепад восьмикратный, с выравниванием — уровни равны
+    [SkippableFact]
+    public async Task Склейка_выравнивает_громкость_кусков()
+    {
+        var dsp = Dsp();
+        byte[][] pieces = [Sine(3.0, amplitude: 0.04), Sine(3.0, amplitude: 0.32)];
+
+        var raw = await dsp.ConcatAsync(pieces, [AudioJoint.Butt], null, AudioFormat.Wav, default);
+        var rawPeaks = (await dsp.PeaksAsync(raw.Audio!, 6, default)).Peaks!;
+        (rawPeaks[4] / rawPeaks[1]).Should().BeApproximately(8f, 0.4f);
+
+        var leveled = await dsp.ConcatAsync(pieces, [AudioJoint.Butt], AudioDspLimits.ConcatLufs, AudioFormat.Wav, default);
+        leveled.Error.Should().BeNull();
+        var peaks = (await dsp.PeaksAsync(leveled.Audio!, 6, default)).Peaks!;
+        (peaks[4] / peaks[1]).Should().BeApproximately(1f, 0.1f);
+        (await dsp.MeasureLufsAsync(leveled.Audio!, default)).Should().BeApproximately(AudioDspLimits.ConcatLufs, 1);
+    }
+
+    [SkippableFact]
+    public async Task Склейка_тихий_кусок_не_мешает_выравниванию()
+    {
+        var dsp = Dsp();
+        var output = await dsp.ConcatAsync([Sine(1.0, amplitude: 0), Sine(1.0)], [AudioJoint.Butt],
+            AudioDspLimits.ConcatLufs, AudioFormat.Wav, default);
+
+        (await ProbeOk(dsp, output)).Seconds.Should().BeApproximately(2.0, 0.05);
+    }
+
+    [SkippableFact]
+    public async Task Склейка_отвергает_неверные_куски_и_стыки()
+    {
+        var dsp = Dsp();
+        (await dsp.ConcatAsync([Sine(1.0)], [], null, AudioFormat.Wav, default)).Error.Should().Contain("два куска");
+        (await dsp.ConcatAsync([], [], null, AudioFormat.Wav, default)).Error.Should().NotBeNull();
+        var many = Enumerable.Range(0, AudioDspLimits.MaxConcatPieces + 1).Select(_ => Sine(0.1)).ToList();
+        (await dsp.ConcatAsync(many, [.. Enumerable.Repeat(AudioJoint.Butt, many.Count - 1)], null, AudioFormat.Wav, default))
+            .Error.Should().NotBeNull();
+        (await dsp.ConcatAsync([Sine(1.0), Sine(1.0)], [], null, AudioFormat.Wav, default)).Error.Should().NotBeNull();
+        (await dsp.ConcatAsync([Sine(1.0), Sine(1.0)], [AudioJoint.Pause(0)], null, AudioFormat.Wav, default)).Error.Should().NotBeNull();
+        (await dsp.ConcatAsync([Sine(1.0), Sine(1.0)], [AudioJoint.Pause(9)], null, AudioFormat.Wav, default)).Error.Should().NotBeNull();
+        (await dsp.ConcatAsync([Sine(1.0), Sine(1.0)], [AudioJoint.Crossfade(double.NaN)], null, AudioFormat.Wav, default)).Error.Should().NotBeNull();
+        // Переход длиннее куска
+        (await dsp.ConcatAsync([Sine(0.5), Sine(2.0)], [AudioJoint.Crossfade(1.0)], null, AudioFormat.Wav, default)).Error.Should().NotBeNull();
+        (await dsp.ConcatAsync([Sine(1.0), Sine(1.0)], [AudioJoint.Butt], 100, AudioFormat.Wav, default)).Error.Should().NotBeNull();
+        (await dsp.ConcatAsync([Sine(1.0), "не звук"u8.ToArray()], [AudioJoint.Butt], null, AudioFormat.Wav, default))
+            .Error.Should().Contain("Кусок 2");
+    }
+
     [SkippableTheory]
     [InlineData(AudioFormat.Mp3, ".mp3")]
     [InlineData(AudioFormat.Flac, ".flac")]
@@ -263,6 +363,86 @@ public class FfmpegAudioDspTests
         (await dsp.NormalizeAsync(Sine(1.0), ct: default)).Error.Should().NotBeNull();
         (await dsp.MixAsync([new AudioStem(Sine(1.0))], AudioFormat.Wav, default)).Error.Should().NotBeNull();
         (await dsp.ConvertAsync(Sine(1.0), AudioFormat.Mp3, null, null, default)).Error.Should().NotBeNull();
+        (await dsp.ConcatAsync([Sine(1.0), Sine(1.0)], [AudioJoint.Butt], null, AudioFormat.Wav, default)).Error.Should().NotBeNull();
+    }
+
+    [SkippableFact]
+    public async Task Известная_длительность_не_зовёт_ffprobe_повторно()
+    {
+        Dsp();
+        Skip.If(OperatingSystem.IsWindows(), "заглушка процесса — sh-скрипт");
+        // ffprobe-заглушка отказывает на любом разборе: без known обрезка и нормализация упали бы
+        // на нём, с known идут сразу в настоящий ffmpeg
+        var probe = Stub("exit 1");
+        try
+        {
+            var dsp = Build(ffprobe: probe);
+            var known = new AudioDspInfo(2.0, 44100, 1, ".wav");
+            (await dsp.TrimFadeGainAsync(Sine(2.0), new AudioEdit(0.5, 1.5), default)).Error.Should().NotBeNull();
+
+            var trimmed = await dsp.TrimFadeGainAsync(Sine(2.0), new AudioEdit(0.5, 1.5), default, known);
+            var normalized = await dsp.NormalizeAsync(Sine(2.0), ct: default, known: known);
+
+            (await ProbeOk(Shared.Value, trimmed)).Seconds.Should().BeApproximately(1.0, 0.01);
+            (await ProbeOk(Shared.Value, normalized)).Seconds.Should().BeApproximately(2.0, 0.05);
+        }
+        finally { File.Delete(probe); }
+    }
+
+    // Процесс-заглушка вместо ffmpeg: на -version отвечает успехом, иначе печатает много мусора
+    // в stderr (или stdout) и завершается так, как велено
+    private static string Stub(string body)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ccs-ffmpeg-stub-{Guid.NewGuid():N}.sh");
+        File.WriteAllText(path, "#!/bin/sh\nif [ \"$1\" = \"-version\" ]; then exit 0; fi\n" + body + "\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return path;
+    }
+
+    [SkippableFact]
+    public async Task Большой_stderr_хранится_только_хвостом()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "заглушка процесса — sh-скрипт");
+        // 8 МБ мусора, затем причина отказа последней строкой
+        var stub = Stub("head -c 8000000 /dev/zero | tr '\\0' 'x' >&2; echo ПРИЧИНА-ОТКАЗА >&2; exit 1");
+        try
+        {
+            var dsp = Build(stub, stub);
+            dsp.Available.Should().BeTrue();
+
+            var run = await dsp.RunAsync(stub, ["-i", "x"], default);
+
+            run.Error.Should().NotBeNull();
+            run.Stderr.Length.Should().BeLessThanOrEqualTo(dsp.StderrCapBytes);
+            run.Stderr.TrimEnd().Should().EndWith("ПРИЧИНА-ОТКАЗА");
+        }
+        finally { File.Delete(stub); }
+    }
+
+    [SkippableFact]
+    public async Task Stdout_сверх_потолка_отказ_без_ожидания_таймаута()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "заглушка процесса — sh-скрипт");
+        // Бесконечный поток в stdout: без потолка память росла бы до таймаута
+        var stub = Stub("cat /dev/zero");
+        try
+        {
+            var dsp = new FfmpegAudioDsp(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AudioDsp:FfmpegPath"] = stub,
+                ["AudioDsp:FfprobePath"] = stub,
+                ["AudioDsp:TimeoutSeconds"] = "60",
+            }).Build(), NullLogger<FfmpegAudioDsp>.Instance) { StdoutCapBytes = 1024 * 1024 };
+
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var run = await dsp.RunAsync(stub, ["-i", "x"], default);
+
+            run.Error.Should().Contain("слишком большой");
+            run.Stdout.Should().BeEmpty();
+            watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(30));
+        }
+        finally { File.Delete(stub); }
     }
 
     [Fact]

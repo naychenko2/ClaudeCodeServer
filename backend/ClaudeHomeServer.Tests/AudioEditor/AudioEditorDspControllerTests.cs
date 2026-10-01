@@ -68,12 +68,12 @@ public class AudioEditorDspControllerTests : IDisposable
         body.GetProperty("jobId").GetString().Should().NotBeNullOrEmpty();
         body.GetProperty("number").GetInt32().Should().Be(1);
 
-        var peaks = await _client.GetAsync($"{chat}/threads/{threadId}/versions/{versionId}/peaks?points=3");
+        var peaks = await _client!.GetAsync($"{chat}/threads/{threadId}/versions/{versionId}/peaks?points=3");
         peaks.StatusCode.Should().Be(HttpStatusCode.OK, await peaks.Content.ReadAsStringAsync());
         (await Json(peaks)).GetProperty("peaks").GetArrayLength().Should().Be(3);
         _dsp.PeaksInput.Should().Be("TRIM:INTRO");
 
-        var concat = await _client.PostAsJsonAsync($"{chat}/concat", new
+        var concat = await _client!.PostAsJsonAsync($"{chat}/concat", new
         {
             pieces = new object[] { new { threadId, versionId }, new { projectFile = "intro.mp3" } },
             joint = new { kind = "pause", seconds = 0.5 },
@@ -93,9 +93,9 @@ public class AudioEditorDspControllerTests : IDisposable
         var responses = new[]
         {
             await _client!.PostAsJsonAsync($"{chat}/threads/{threadId}/edit", new { op = "normalize" }),
-            await _client.PostAsJsonAsync($"{chat}/threads/{threadId}/mix", new { stems = new[] { new { role = "stem:vocals" } } }),
-            await _client.GetAsync($"{chat}/threads/{threadId}/versions/origin/peaks"),
-            await _client.PostAsJsonAsync($"{chat}/concat", new
+            await _client!.PostAsJsonAsync($"{chat}/threads/{threadId}/mix", new { stems = new[] { new { role = "stem:vocals" } } }),
+            await _client!.GetAsync($"{chat}/threads/{threadId}/versions/origin/peaks"),
+            await _client!.PostAsJsonAsync($"{chat}/concat", new
             {
                 pieces = new object[] { new { projectFile = "intro.mp3" }, new { projectFile = "intro.mp3" } },
             }),
@@ -116,7 +116,7 @@ public class AudioEditorDspControllerTests : IDisposable
 
         (await _client!.PostAsJsonAsync($"{chat}/threads/{threadId}/edit", new { op = "reverse" }))
             .StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        var stale = await _client.PostAsJsonAsync($"{chat}/threads/{threadId}/edit", new { op = "trim", endSec = 1, revision = 0 });
+        var stale = await _client!.PostAsJsonAsync($"{chat}/threads/{threadId}/edit", new { op = "trim", endSec = 1, revision = 0 });
         stale.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await Json(stale)).GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.RevisionConflict);
     }

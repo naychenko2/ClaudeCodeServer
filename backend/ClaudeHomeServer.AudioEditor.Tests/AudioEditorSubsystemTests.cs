@@ -25,6 +25,7 @@ public class AudioEditorSubsystemTests
         new AudioEditorSubsystem().Register(services, new ConfigurationBuilder().Build());
 
         services.Should().Contain(d => d.ServiceType == typeof(FalAudioEngine));
-        services.Count(d => d.ServiceType == typeof(IAudioEngine)).Should().Be(2);
+        // local, Higgsfield, Яндекс, fal
+        services.Count(d => d.ServiceType == typeof(IAudioEngine)).Should().Be(4);
     }
 }

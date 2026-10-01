@@ -36,13 +36,13 @@ public abstract class AudioEditorEndpoints(
     // Потолок тела запуска: образец, до десятка записей для обучения голоса
     protected const long MaxJobBodyBytes = 500L * 1024 * 1024;
 
-    // Операции, которым нужен исходный звук: его даёт главный файл версии-основы нити
-    private static readonly HashSet<AudioOp> NeedsSource =
-    [
+    // Операции, которым нужен исходный звук: его даёт главный файл версии-основы нити (ручки и тулсет агента)
+    internal static readonly IReadOnlySet<AudioOp> NeedsSource = new HashSet<AudioOp>
+    {
         AudioOp.ConvertVoice, AudioOp.Cover, AudioOp.Repaint, AudioOp.Outpaint, AudioOp.Extract, AudioOp.Lego,
         AudioOp.Complete, AudioOp.Separate, AudioOp.Denoise, AudioOp.Upsample, AudioOp.Master, AudioOp.Transcribe,
         AudioOp.ToMidi, AudioOp.Align,
-    ];
+    };
 
     protected string UserId => User.FindFirstValue(SubClaim)!;
 

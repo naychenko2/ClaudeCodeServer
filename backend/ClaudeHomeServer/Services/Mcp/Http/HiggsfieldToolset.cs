@@ -101,6 +101,14 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
 
     private static readonly HashSet<string> WhitelistSet = new(Whitelist, StringComparer.Ordinal);
 
+    /// <summary>
+    /// Описание generate_audio от апстрима отсылает к list_voices и generate_audio_batch,
+    /// которых в белом списке нет. Текст постоянный: описания tools/list не зависят от хода.
+    /// </summary>
+    internal const string GenerateAudioNote =
+        "\n\nВ этом чате `list_voices` и `generate_audio_batch` недоступны: голос — известный preset id " +
+        "или element, варианты — отдельными вызовами по одному.";
+
     public string Name => ServerName;
     public string Version => "1.0.0";
 
@@ -347,9 +355,12 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
                     if (node is not JsonObject t) continue;
                     var name = t["name"] is JsonValue nv ? nv.ToString() : null;
                     if (name is null || !WhitelistSet.Contains(name)) continue;
+                    var description = t["description"] is JsonValue dv ? dv.ToString() : "";
+                    if (name == "generate_audio")
+                        description += GenerateAudioNote;
                     filtered.Add(new McpToolSchema(
                         name,
-                        t["description"] is JsonValue dv ? dv.ToString() : "",
+                        description,
                         t["inputSchema"] as JsonObject ?? new JsonObject()));
                 }
                 if (filtered.Count == 0)

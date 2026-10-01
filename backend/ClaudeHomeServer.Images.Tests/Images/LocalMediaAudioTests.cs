@@ -339,6 +339,81 @@ public class LocalMediaAudioTests : IDisposable
         second.Error.Should().Contain("тяжёлая");
     }
 
+    [Theory]
+    [InlineData("speech", 3, true)]
+    [InlineData("speech", 0, false)]
+    [InlineData("singing", 3, false)]
+    public async Task СменаГолоса_SeedVc_СдвигВысотыВSpeech_Отказ(string mode, int shift, bool refused)
+    {
+        var (service, _) = Build();
+        Put("src.wav", Wav(5));
+        Put("voice/ref.wav", Wav(6));
+
+        var result = await service.SubmitAsync(Audio(LocalMediaOps.VoiceConvert, new JsonObject
+        {
+            ["audio"] = "src.wav", ["reference"] = "voice/ref.wav", ["mode"] = mode, ["pitch_shift"] = shift,
+        }), default);
+
+        if (refused)
+        {
+            result.Error.Should().Contain("Seed-VC в режиме speech сдвиг высоты не применяет");
+            _comfy.Prompts.Should().BeEmpty();
+        }
+        else
+        {
+            result.Error.Should().BeNull();
+            WorkerParams()["pitch_shift"]!.GetValue<int>().Should().Be(shift);
+        }
+    }
+
+    // Лимит описания стиля ACE-Step живёт в двух местах: бэкенд и воркер правки, который молча
+    // режет prompt. Разошлись — хвост длинного описания снова теряется без предупреждения
+    [Fact]
+    public void AceCaption_ЛимитСовпадаетСВоркером()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        var worker = Path.Combine("deploy", "comfyui", "audio", "workers", "worker_acestep.py");
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, worker)))
+            dir = dir.Parent;
+        dir.Should().NotBeNull("воркер ACE-Step ищем вверх от каталога сборки");
+
+        var source = File.ReadAllText(Path.Combine(dir!.FullName, worker));
+        var match = System.Text.RegularExpressions.Regex.Match(source, @"job\.text\(\s*""prompt""\s*,\s*(\d+)");
+
+        match.Success.Should().BeTrue("воркер читает prompt через job.text(\"prompt\", N, …)");
+        int.Parse(match.Groups[1].Value).Should().Be(LocalMediaService.AceCaptionMaxChars);
+    }
+
+    [Theory]
+    [InlineData(LocalMediaOps.MusicGenerate, "ace", 2001, true)]
+    [InlineData(LocalMediaOps.MusicGenerate, "ace", 2000, false)]
+    [InlineData(LocalMediaOps.MusicGenerate, "yue2", 3000, false)]
+    [InlineData(LocalMediaOps.MusicGenerate, "minimax", 3000, false)]
+    [InlineData(LocalMediaOps.MusicEdit, "ace", 2001, true)]
+    [InlineData(LocalMediaOps.MusicEdit, "ace", 2000, false)]
+    [InlineData(LocalMediaOps.MusicEdit, "yue2", 3000, false)]
+    public async Task Музыка_ДлинныйПромптAce_Отказ_ДругиеДвижкиПропускают(string op, string engine, int length,
+        bool refused)
+    {
+        var (service, _) = Build();
+        Put("src.wav", Wav(5));
+        var args = new JsonObject { ["engine"] = engine, ["lyrics"] = "[Verse]\nla la" };
+        if (op == LocalMediaOps.MusicEdit) args["audio"] = "src.wav";
+
+        var result = await service.SubmitAsync(Audio(op, args, new string('a', length)), default);
+
+        if (refused)
+        {
+            result.Error.Should().Be($"Описание стиля для ACE-Step — не длиннее 2000 символов, сейчас {length}.");
+            _comfy.Prompts.Should().BeEmpty();
+        }
+        else
+        {
+            result.Error.Should().BeNull();
+            _comfy.Prompts.Should().ContainSingle();
+        }
+    }
+
     [Fact]
     public async Task СменаГолоса_Rvc_НеМодель_Отказ_МодельИИндекс_ВоВходах()
     {

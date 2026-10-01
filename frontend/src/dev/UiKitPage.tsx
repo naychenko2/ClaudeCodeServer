@@ -48,6 +48,7 @@ import {
   TextField, TextArea, IconField, Field, FieldLabel, Select,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
   Chip, ProgressBar,
+  Tabs, Stepper, ResizeHandle,
 } from '../components/ui';
 import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
@@ -110,6 +111,7 @@ const BADGE_TONES: BadgeTone[] = ['neutral', 'accent', 'success', 'warning', 'da
 const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-viewport',   label: 'Замер экрана'      },
   { id: 'sec-toggles',    label: 'Переключатели'     },
+  { id: 'sec-gen-panel',  label: 'Панель генерации'  },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
   { id: 'sec-buttons',    label: 'Кнопки'            },
@@ -204,6 +206,11 @@ export function UiKitPage() {
             {/* Примитивы — переключатели */}
             <div id="sec-toggles" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <TogglesSection />
+            </div>
+
+            {/* Примитивы панели генерации — Tabs, Stepper, ResizeHandle */}
+            <div id="sec-gen-panel" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <GenPanelPrimitivesSection />
             </div>
 
             {/* Примитивы — оверлеи и меню */}
@@ -699,6 +706,95 @@ function OverlaysSection() {
           onCancel={() => setConfirmOpen(false)}
         />
       )}
+    </Island>
+  );
+}
+
+// === Секция «Примитивы панели генерации» ===========================
+// Вкладки, счётчик «− N +» и ручка ширины общей боковой панели «Картинок» и «Звука»
+// (ADR-021 §3). Ручка показана на макете панели: ширина живая, 340–520 px.
+function GenPanelPrimitivesSection() {
+  const isMobile = useIsMobile();
+  const [tab, setTab] = useState<'settings' | 'characters'>('settings');
+  const [voiceTab, setVoiceTab] = useState<'settings' | 'voices'>('voices');
+  const [count, setCount] = useState(2);
+  const [single, setSingle] = useState(1);
+  const [width, setWidth] = useState(380);
+
+  return (
+    <Island>
+      <IslandHeader
+        icon={<Columns2 size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />}
+        title="Примитивы — панель генерации"
+      />
+      <div style={{ padding: ISLAND.pad, display: 'flex', flexDirection: 'column', gap: ISLAND.gap }}>
+        {/* Tabs: tablist/tab, стрелки ←/→ (и Home/End) двигают выбор по кругу */}
+        <SubBlock label="Tabs — вкладки панели (стрелки ←/→, счётчик)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, maxWidth: 420 }}>
+            <Tabs
+              ariaLabel="Панель «Картинки»"
+              value={tab}
+              onChange={setTab}
+              items={[
+                { value: 'settings', label: 'Настройки', icon: <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+                { value: 'characters', label: 'Персонажи', icon: <Users size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, count: 3 },
+              ]}
+            />
+            <Tabs
+              ariaLabel="Панель «Звук»"
+              value={voiceTab}
+              onChange={setVoiceTab}
+              items={[
+                { value: 'settings', label: 'Настройки' },
+                { value: 'voices', label: 'Голоса', count: 12 },
+              ]}
+            />
+          </div>
+        </SubBlock>
+
+        {/* Stepper: на потолке «+» гаснет и объясняет причину подсказкой */}
+        <SubBlock label="Stepper — «− N +», причина на недоступной «+»">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.lg, alignItems: 'center' }}>
+            <ToggleRow label={`вариантов: ${count} (1–4)`}>
+              <Stepper ariaLabel="Сколько вариантов" value={count} min={1} max={4} onChange={setCount} />
+            </ToggleRow>
+            <ToggleRow label="потолок: «Эта операция даёт один вариант»">
+              <Stepper ariaLabel="Сколько вариантов" value={single} min={1} max={1} onChange={setSingle} maxHint="Эта операция даёт один вариант" />
+            </ToggleRow>
+          </div>
+        </SubBlock>
+
+        {/* ResizeHandle: за левый край, мышь + клавиатура (←/→ по 16 px) */}
+        <SubBlock label={`ResizeHandle — ширина ${width} px (340–520), тяните левый край или фокус + ←/→`}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', overflow: 'hidden' }}>
+            <div style={{
+              position: 'relative', width: isMobile ? '100%' : width, maxWidth: '100%', flexShrink: 0,
+              height: 160, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.lg,
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            }}>
+              <ResizeHandle value={width} onChange={setWidth} />
+              <Tabs
+                value={tab}
+                onChange={setTab}
+                items={[
+                  { value: 'settings', label: 'Настройки' },
+                  { value: 'characters', label: 'Персонажи', count: 3 },
+                ]}
+              />
+              <div style={{ flex: 1, padding: SP.md, fontSize: FS.sm, color: C.textSecondary }}>
+                Тело панели. На мобиле панель — шторка, ширина не тянется.
+              </div>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px`,
+                borderTop: `1px solid ${C.borderLight}`,
+              }}>
+                <Stepper value={count} min={1} max={4} onChange={setCount} />
+                <span style={{ fontSize: FS.sm, color: C.textMuted }}>низ панели</span>
+              </div>
+            </div>
+          </div>
+        </SubBlock>
+      </div>
     </Island>
   );
 }

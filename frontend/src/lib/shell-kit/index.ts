@@ -39,7 +39,7 @@ export type { SubsystemManifest, RevealPanelDetail } from '../subsystems/registr
 // ─── genPanelDismissed ───────────────────────────────────────────────────────
 // Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл
 // её в этом чате (ADR-021 §3)
-export { autoRevealGenerationPanel } from '../genPanelDismissed';
+export { autoRevealGenerationPanel, markGenPanelDismissed } from '../genPanelDismissed';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
@@ -119,8 +119,9 @@ export {
   IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem,
   SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
   Island, EmptyState, Field, TextField, TextArea, IconField, ModalActions, Menu, SegmentedControl, Checkbox,
-  Chip, ChipX, ProgressBar, MetaChip,
+  Chip, ChipX, ProgressBar, MetaChip, Select,
 } from '../../components/ui';
+export type { SelectOption } from '../../components/ui';
 
 // ─── components/ui/icons ─────────────────────────────────────────────────────
 export { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';

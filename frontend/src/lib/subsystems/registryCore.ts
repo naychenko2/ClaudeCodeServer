@@ -16,6 +16,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
 import type { AuthState, ChatItem, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
+import { subscribeFlags } from '../featureFlags';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
 // Вклад в слот. Ровно два вида:
@@ -241,6 +242,17 @@ export interface ComposerStripApi {
   isAvailable?: (ctx: { projectId: string | null; sessionId: string | null }) => boolean;
   // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
   status?: (ctx: { projectId: string | null; sessionId: string | null }) => ReactNode;
+  // Ярлыки под списком полос в меню переключателя («Голос», «Музыка» у «Звука»): входы
+  // в полосу сразу в нужном режиме. Есть, только пока полоса доступна
+  shortcuts?: (ctx: { projectId: string | null; sessionId: string | null }) => ComposerStripShortcut[];
+}
+export interface ComposerStripShortcut {
+  key: string;
+  title: string;
+  // Подпись второй строкой: «озвучить текст, сменить голос, обучить»
+  hint?: string;
+  icon: ReactNode;
+  onSelect: () => void;
 }
 
 // Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.
@@ -266,6 +278,9 @@ export interface ComposerModeApi {
   hint?: (ctx: ComposerModeCtx) => ReactNode;
   // Отправка мимо агента; текст режима хранится отдельно от черновика чата
   onSubmit: (ctx: ComposerModeCtx, text: string) => Promise<void> | void;
+  // Текст поля режима после каждой правки: панель режима считает по нему цену и
+  // запускает с ним же свою кнопку («Звук»)
+  onTextChange?: (ctx: ComposerModeCtx, text: string) => void;
 }
 
 // Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).
@@ -361,6 +376,9 @@ export function getSlotAction<A = Record<string, unknown>>(slot: string, name: s
 // изменение стора подсистем поднимаем версию и оповещаем подписчиков — иначе
 // useSyncExternalStore вернул бы прежний снапшот и слот не перерисовался бы.
 subscribeSubsystems(emit);
+// Фич-флаги владельца — тоже: вклады, гейтящие себя флагом прямо в слоте (геттер в манифесте),
+// без этого не перерисовались бы на тумблер до перезагрузки
+subscribeFlags(emit);
 
 // Примитивы подписки — база хуков ниже. Экспортируются, чтобы тест мог проверить
 // пересчёт вкладов на смену тумблера без рендера React.

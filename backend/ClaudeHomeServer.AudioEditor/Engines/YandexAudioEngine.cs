@@ -70,6 +70,11 @@ public sealed class YandexAudioEngine(ITtsEngine? tts) : IAudioEngine, IAudioQuo
 
     public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
 
+    // Клонов у Яндекса нет: голос из библиотеки здесь недоступен, в каталоге — серым с этой причиной
+    public const string LibraryVoicesReason = "Яндекс не умеет клонировать голос — голос из библиотеки озвучит другой поставщик";
+
+    public string? LibraryVoicesRefusal => LibraryVoicesReason;
+
     // ── Параметры и дикторы ──────────────────────────────────────────────────────
 
     private static readonly IReadOnlySet<string> Params = new HashSet<string>(StringComparer.Ordinal) { "voice", "role", "speed" };

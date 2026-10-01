@@ -78,6 +78,7 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Библиотека «Голоса»: voices/<slug>/ серверного проекта, кеш id у поставщиков и признак
         // «клон MiniMax протух» по подменяемым часам
         services.AddSingleton(sp => new Voices.VoiceLibrary(sp.GetService<TimeProvider>()));
+        services.AddSingleton<Mcp.IAudioVoiceLibrary>(sp => sp.GetRequiredService<Voices.VoiceLibrary>());
         // Инструменты агента (MCP audio-editor, ADR-021 §5): в ход их везёт Main, когда тулсет есть в реестре
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.AudioEditorToolset>();
     }

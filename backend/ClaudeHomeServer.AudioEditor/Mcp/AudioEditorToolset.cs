@@ -363,10 +363,16 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             return Deny($"params: модель {q.Model} (поставщик {q.Provider}) не знает параметра «{unknown}». "
                 + (allowed.Count == 0 ? "Частных параметров у неё нет." : "Допустимые: " + string.Join(", ", allowed.Order()) + "."));
 
-        if (Str(args, "voice") is { } voice)
+        string? libraryVoice = null;
+        if (Str(args, "voice") is { } wanted
+            && _library?.List(ownerId, scope).FirstOrDefault(v => string.Equals(v.Slug, wanted, StringComparison.OrdinalIgnoreCase)) is { } fromLibrary)
         {
-            if (_library?.List(ownerId, scope).Any(v => string.Equals(v.Slug, voice, StringComparison.OrdinalIgnoreCase)) == true)
-                return Deny($"Голос «{voice}» — из библиотеки «Голоса»: запуск с ним пока делает только человек.");
+            // Голос из библиотеки разворачивает поставщик при запуске (ADR-021 §5); протухший клон MiniMax —
+            // отказ, пересоздаёт его только человек кнопкой с ценой
+            libraryVoice = AudioVoiceRefs.Prefix + fromLibrary.Slug;
+        }
+        else if (Str(args, "voice") is { } voice)
+        {
             if (engine.VoiceParams(model, q.Op, voice) is not { } voiceFields)
                 return Deny($"У модели {q.Model} в этой операции нет готовых дикторов — voice задать нельзя.");
             foreach (var (key, value) in voiceFields)
@@ -411,9 +417,12 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             DurationSec: Int(args, "durationSeconds"),
             StartSec: range.Start,
             EndSec: range.End,
-            Source: source);
+            Source: source,
+            Voice: libraryVoice);
         var started = await _jobs.StartAsync(ownerId, scope, input, ct);
-        if (started.Value is not { } created) return Fail(started.ErrorCode, started.Error);
+        if (started.Value is not { } created)
+            return Fail(started.ErrorCode, started.Recreate is null ? started.Error
+                : started.Error + ". Пересоздать клон может только человек — кнопкой «Пересоздать» у голоса в «Голосах».");
 
         return Json(new
         {

@@ -196,6 +196,33 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
         }
     }
 
+    // ── Голос из библиотеки ──────────────────────────────────────────────────────
+
+    // Образец уходит ссылкой (data: URI) в поле образца модели: клон Qwen (эмбеддинг кешируется — второй раз
+    // идёт сразу озвучка), Chatterbox, клон MiniMax. Озвучка MiniMax берёт custom_voice_id клона из кеша;
+    // сам клон MiniMax создаётся только кнопкой пересоздания (StoredClone.Creates)
+    public string? LibraryVoicesRefusal => null;
+
+    private static readonly HashSet<string> MiniMaxSpeech =
+        new([AudioCatalog.FalMiniMaxHd, AudioCatalog.FalMiniMaxTurbo], StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> SampleClones =
+        new([AudioCatalog.FalQwenClone, AudioCatalog.FalChatterbox, AudioCatalog.FalMiniMaxClone], StringComparer.OrdinalIgnoreCase);
+
+    public string? LibraryVoiceRefusal(AudioModelInfo model, AudioOp op, AudioVoiceUse voice)
+    {
+        if (voice.IsRvc) return "Голос-модель RVC работает только у локальных моделей";
+        if (voice.Sample is null) return "У голоса нет записей";
+        if (MiniMaxSpeech.Contains(model.Id) && op == AudioOp.Speak) return null;
+        if (SampleClones.Contains(model.Id) && model.Caps.Ops.Contains(op)) return null;
+        return $"Модель «{model.Label}» не берёт голос из библиотеки";
+    }
+
+    public (string Key, bool Creates)? StoredClone(AudioModelInfo model, AudioOp op) =>
+        MiniMaxSpeech.Contains(model.Id) ? (Voices.VoiceProviders.MiniMax, false)
+        : string.Equals(model.Id, AudioCatalog.FalMiniMaxClone, StringComparison.OrdinalIgnoreCase) ? (Voices.VoiceProviders.MiniMax, true)
+        : null;
+
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<AudioResult> RunAsync(AudioRequest req, IProgress<AudioProgress> progress, CancellationToken ct)
@@ -204,31 +231,63 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
         if (AudioCatalog.FindFal(req.Model) is not { } model || !model.Info.Caps.Ops.Contains(req.Op))
             return AudioResult.Fail(AudioOutcome.Failed, "У fal.ai нет такой модели для этой операции");
 
-        JsonObject body;
-        try
-        {
-            body = FalRequestBuilder.Build(model.Fields, req, withParams: model.Next is null);
-        }
-        catch (ArgumentException ex)
-        {
-            return AudioResult.Fail(AudioOutcome.Failed, ex.Message);
-        }
+        var voice = req.Voice;
+        if (voice?.Sample is { } sample && req.Reference is null) req = req with { Reference = sample };
+        var miniMaxId = voice?.CachedId(Voices.VoiceProviders.MiniMax);
+        if (voice is not null && MiniMaxSpeech.Contains(model.Info.Id) && miniMaxId is null)
+            return AudioResult.Fail(AudioOutcome.Rejected, "У голоса нет клона MiniMax — создайте его кнопкой «Пересоздать»");
+        // Эмбеддинг Qwen-клона из кеша: первый прогон цепочки не нужен
+        var embedding = model.Next is not null ? voice?.CachedId(Voices.VoiceProviders.FalQwen) : null;
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(Ceiling);
-        var first = await RunQueuedAsync(model.Info.Id, body, progress, ct, timeout.Token);
-        if (first.Failure is { } failed) return failed;
+        JsonElement output = default;
+        string? requestId = null;
+        List<AudioVoiceCacheEntry> created = [];
+        if (embedding is null)
+        {
+            JsonObject body;
+            try
+            {
+                body = FalRequestBuilder.Build(model.Fields, req, withParams: model.Next is null);
+            }
+            catch (ArgumentException ex)
+            {
+                return AudioResult.Fail(AudioOutcome.Failed, ex.Message);
+            }
+            if (miniMaxId is not null && MiniMaxSpeech.Contains(model.Info.Id))
+            {
+                // Клон MiniMax — voice_id в voice_setting; прочие настройки голоса из params сохраняются
+                var setting = body["voice_setting"] as JsonObject ?? new JsonObject();
+                setting["voice_id"] = miniMaxId;
+                body["voice_setting"] = setting;
+            }
 
-        var output = first.Output!.Value;
-        var requestId = first.RequestId!;
+            var first = await RunQueuedAsync(model.Info.Id, body, progress, ct, timeout.Token);
+            if (first.Failure is { } failed) return failed;
+            output = first.Output!.Value;
+            requestId = first.RequestId!;
+            if (voice is not null && string.Equals(model.Info.Id, AudioCatalog.FalMiniMaxClone, StringComparison.OrdinalIgnoreCase))
+            {
+                if (Str(output, "custom_voice_id") is not { Length: > 0 } customId)
+                    return Charged(AudioResult.Fail(AudioOutcome.Failed, "fal.ai не вернул id клона MiniMax"), requestId);
+                created.Add(new AudioVoiceCacheEntry(Voices.VoiceProviders.MiniMax, customId));
+            }
+        }
         if (model.Next is { } next)
         {
             // Второй прогон цепочки: ссылка на файл первого (эмбеддинг голоса) — полем второго запроса
-            if (FalOutputs.FileUrl(output, next.LinkFrom) is not { } link)
-                return Charged(AudioResult.Fail(AudioOutcome.Failed, "fal.ai не вернул эмбеддинг голоса"), requestId);
-            // Ссылку скачивает уже fal, но и ей не доверяем: внутренний адрес — отказ до второго прогона
-            if (await Download().CheckAsync(link, timeout.Token) is { } refused)
-                return Charged(AudioResult.Fail(AudioOutcome.Failed, "fal.ai вернул недопустимую ссылку на эмбеддинг: " + refused), requestId);
+            var link = embedding;
+            if (link is null)
+            {
+                if (FalOutputs.FileUrl(output, next.LinkFrom) is not { } fresh)
+                    return Charged(AudioResult.Fail(AudioOutcome.Failed, "fal.ai не вернул эмбеддинг голоса"), requestId!);
+                // Ссылку скачивает уже fal, но и ей не доверяем: внутренний адрес — отказ до второго прогона
+                if (await Download().CheckAsync(fresh, timeout.Token) is { } refused)
+                    return Charged(AudioResult.Fail(AudioOutcome.Failed, "fal.ai вернул недопустимую ссылку на эмбеддинг: " + refused), requestId!);
+                link = fresh;
+                if (voice is not null) created.Add(new AudioVoiceCacheEntry(Voices.VoiceProviders.FalQwen, fresh));
+            }
             JsonObject nextBody;
             try
             {
@@ -236,12 +295,14 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
             }
             catch (ArgumentException ex)
             {
-                return Charged(AudioResult.Fail(AudioOutcome.Failed, ex.Message), requestId);
+                return Cached(requestId is null ? AudioResult.Fail(AudioOutcome.Failed, ex.Message)
+                    : Charged(AudioResult.Fail(AudioOutcome.Failed, ex.Message), requestId), created);
             }
             nextBody[next.LinkTo] = link;
             var second = await RunQueuedAsync(next.Info.Id, nextBody, progress, ct, timeout.Token);
             // Первый прогон уже тарифицирован, что бы ни случилось со вторым
-            if (second.Failure is { } secondFailed) return Charged(secondFailed, requestId);
+            if (second.Failure is { } secondFailed)
+                return Cached(requestId is null ? secondFailed : Charged(secondFailed, requestId), created);
             output = second.Output!.Value;
             requestId = second.RequestId!;
         }
@@ -251,20 +312,23 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
         {
             var (files, error) = await FalOutputs.CollectAsync(Download(), model.Output, output, timeout.Token);
             if (error is not null)
-                return new AudioResult(AudioOutcome.Failed, [], null, true, requestId, "Не удалось скачать результат fal.ai: " + error);
-            return files.Count == 0
+                return Cached(new AudioResult(AudioOutcome.Failed, [], null, true, requestId, "Не удалось скачать результат fal.ai: " + error), created);
+            return Cached(files.Count == 0
                 ? new AudioResult(AudioOutcome.Failed, [], null, null, requestId, "fal.ai не вернул файлов")
-                : new AudioResult(AudioOutcome.Ok, files, null, true, requestId, null);
+                : new AudioResult(AudioOutcome.Ok, files, null, true, requestId, null), created);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return new AudioResult(AudioOutcome.Failed, [], null, true, requestId, "fal.ai не отдал файлы вовремя");
+            return Cached(new AudioResult(AudioOutcome.Failed, [], null, true, requestId, "fal.ai не отдал файлы вовремя"), created);
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException)
         {
-            return new AudioResult(AudioOutcome.Failed, [], null, true, requestId, "Не удалось скачать результат fal.ai: " + ex.Message);
+            return Cached(new AudioResult(AudioOutcome.Failed, [], null, true, requestId, "Не удалось скачать результат fal.ai: " + ex.Message), created);
         }
     }
+
+    private static AudioResult Cached(AudioResult result, List<AudioVoiceCacheEntry> created) =>
+        created.Count == 0 ? result : result with { VoiceCache = created };
 
     private static AudioResult Charged(AudioResult result, string remoteId) =>
         result with { Charged = true, RemoteId = result.RemoteId ?? remoteId };

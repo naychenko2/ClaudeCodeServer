@@ -147,13 +147,14 @@ public static partial class AudioCatalog
         return
         [
             // ── Голос: озвучка ────────────────────────────────────────────────────────
+            // MiniMax озвучивает и клоном голоса из библиотеки — по custom_voice_id из кеша голоса
             new(FalInfo(FalMiniMaxHd, "MiniMax Speech 2.8 HD",
-                    Voice([AudioOp.Speak], MiniMaxSpeechLanguages, [AudioVoiceKind.Preset], AudioLicenses.Commercial,
+                    Voice([AudioOp.Speak], MiniMaxSpeechLanguages, [AudioVoiceKind.Preset, AudioVoiceKind.Clone], AudioLicenses.Commercial,
                         AudioPriceUnits.Chars, MiniMaxChars), 0.0001),
                 new FalFields(Text: "prompt", Language: "language_boost", LanguageForm: FalLanguageForm.MiniMax,
                     Fixed: Json(("output_format", "url")))),
             new(FalInfo(FalMiniMaxTurbo, "MiniMax Speech 2.8 Turbo",
-                    Voice([AudioOp.Speak], MiniMaxSpeechLanguages, [AudioVoiceKind.Preset], AudioLicenses.Commercial,
+                    Voice([AudioOp.Speak], MiniMaxSpeechLanguages, [AudioVoiceKind.Preset, AudioVoiceKind.Clone], AudioLicenses.Commercial,
                         AudioPriceUnits.Chars, MiniMaxChars), 0.00006),
                 new FalFields(Text: "prompt", Language: "language_boost", LanguageForm: FalLanguageForm.MiniMax,
                     Fixed: Json(("output_format", "url")))),

@@ -41,6 +41,17 @@ public sealed class AudioJobThreads(
         return store.Get(ownerId, sessionId).Threads.Any(t => t.Id == threadId);
     }
 
+    // Свой чат своей области; без справочника чатов (тесты без DI) — любой непустой id: нити всё равно
+    // ложатся в хранилище этого владельца
+    public bool OwnChat(string ownerId, string scopeKey, string? sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId)) return false;
+        if (directory is null) return true;
+        return directory.GetById(sessionId) is { } session
+            && AudioEditScope.Of(session).Key == scopeKey
+            && directory.ResolveOwnerId(session) == ownerId;
+    }
+
     // Якорь нити в ленте — зовут ручки при заведении нити
     public Task AnchorAsync(string sessionId, AudioThread thread, CancellationToken ct) =>
         RecordAsync(sessionId, RecordTypes.Thread, $"Звук: {Name(thread)}",
@@ -156,5 +167,6 @@ public sealed class AudioJobThreads(
         }
     }
 
-    public static string Name(AudioThread thread) => thread.File is { Length: > 0 } file ? file : "новый звук";
+    public static string Name(AudioThread thread) =>
+        thread.File is { Length: > 0 } file ? file : thread.Name is { Length: > 0 } name ? name : "новый звук";
 }

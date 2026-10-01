@@ -44,10 +44,10 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
     }
 
     // Взять звук в работу: нить по этому файлу уже есть — фокус на неё (Existing), новую не плодим;
-    // черновик заводится всегда новый. settings — настройки новой нити, существующую они не трогают.
-    // revision = null — запись агента или сервера без сверки
+    // черновик заводится всегда новый. settings — настройки новой нити, существующую они не трогают;
+    // name — предложенное имя файла черновика. revision = null — запись агента или сервера без сверки
     public AudioThreadWrite Open(string ownerId, string sessionId, string? file, string? draftFolder, long? revision,
-        AudioThreadSettings? settings = null)
+        AudioThreadSettings? settings = null, string? name = null)
     {
         if ((file is null) == (draftFolder is null))
             throw new ArgumentException("Нужно ровно одно: звуковой файл или папка черновика");
@@ -67,7 +67,7 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
                 return new AudioThreadWrite(AudioThreadWriteStatus.Ok, focused) { Thread = existing, Existing = true };
             }
 
-            var thread = NewThread(file, draftFolder, settings);
+            var thread = NewThread(file, draftFolder, settings) with { Name = file is null ? name : null };
             var next = current with
             {
                 Threads = [.. current.Threads, thread],

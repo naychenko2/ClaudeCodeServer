@@ -30,6 +30,8 @@ public static class AudioEditErrorCodes
     public const string RevisionConflict = "revision_conflict";
     public const string NameTaken = "name_taken";
     public const string Unavailable = "unavailable";
+    // Обработка без ИИ недоступна: нет ffmpeg на хосте или выключена подсистема images (ADR-021 §2)
+    public const string DspUnavailable = "dsp_unavailable";
 }
 
 public sealed record AudioEditCallResult<T>(T? Value, string? ErrorCode, string? Error)

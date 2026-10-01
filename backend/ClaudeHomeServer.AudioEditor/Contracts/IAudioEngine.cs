@@ -36,7 +36,8 @@ public interface IAudioEngine
 }
 
 // Операции модуля. Операции без ИИ (Trim и дальше) — монтаж за швом IAudioDsp (этап 5):
-// новая версия, а не шаг версии; моделей у них нет, список — AudioOps.NoAi
+// новая версия, а не шаг версии; моделей у них нет, список — AudioOps.NoAi. Concat — склейка кусков
+// в новый файл: результат — новая нить, а не версия одного из кусков (AudioConcatService)
 public enum AudioOp
 {
     // Голос
@@ -46,13 +47,13 @@ public enum AudioOp
     // Обработка
     Separate, Denoise, Upsample, Master, Transcribe, ToMidi, Align,
     // Без ИИ
-    Trim, GainFade, Normalize, MixStems,
+    Trim, GainFade, Normalize, MixStems, Concat,
 }
 
 public static class AudioOps
 {
     public static readonly IReadOnlySet<AudioOp> NoAi =
-        new HashSet<AudioOp> { AudioOp.Trim, AudioOp.GainFade, AudioOp.Normalize, AudioOp.MixStems };
+        new HashSet<AudioOp> { AudioOp.Trim, AudioOp.GainFade, AudioOp.Normalize, AudioOp.MixStems, AudioOp.Concat };
 
     public static bool IsNoAi(AudioOp op) => NoAi.Contains(op);
 }

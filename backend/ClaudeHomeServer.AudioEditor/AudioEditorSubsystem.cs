@@ -45,5 +45,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         services.AddSingleton<Jobs.AudioEditJobService>();
         // Гейт ручек: флаг, свой проект, свой чат — иначе 404
         services.AddSingleton<Controllers.AudioEditScopeGate>();
+        // Склейка без ИИ: куски → новая нить. Шов IAudioDsp — от отключаемой вертикали Images, поэтому
+        // необязателен: без него операция отвечает dsp_unavailable
+        services.AddSingleton<Jobs.AudioConcatService>();
     }
 }

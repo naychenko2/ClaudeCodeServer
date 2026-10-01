@@ -112,7 +112,7 @@ public class AudioEditorControllerTests : IDisposable
     private async Task<string> Generate(string scopeUrl, string chatId, string threadId, string mode = "voice", string op = "speak")
     {
         var quote = await _client.PostAsJsonAsync($"{scopeUrl}/quote",
-            new { mode, operation = op, provider = "fake", model = "fake-model", count = 1 });
+            new { mode, operation = op, provider = "fake", model = "fake-model", count = 1, text = "Привет" });
         quote.StatusCode.Should().Be(HttpStatusCode.OK, await quote.Content.ReadAsStringAsync());
         var quoteId = (await Json(quote)).GetProperty("quoteId").GetString()!;
 

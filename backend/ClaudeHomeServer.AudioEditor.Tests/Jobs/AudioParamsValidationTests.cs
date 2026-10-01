@@ -48,20 +48,22 @@ public sealed class AudioParamsValidationTests : IDisposable
     }
 
     [Fact]
-    public async Task Start_ParamsOutOfRange_RefusedWithoutRun_ValidRuns()
+    public async Task Params_OutOfRange_RefusedAtQuote_LaunchCannotOverrideQuoted()
     {
         var engine = new SchemaEngine();
         var svc = Service(engine);
-        var bad = await svc.QuoteAsync(Owner, Scope, Speak(new JsonObject { ["speed"] = 1.0 }), CancellationToken.None);
+        var bad = await svc.QuoteAsync(Owner, Scope, Speak(new JsonObject { ["speed"] = 3 }), CancellationToken.None);
+        var quote = await svc.QuoteAsync(Owner, Scope, Speak(new JsonObject { ["speed"] = 1.5 }), CancellationToken.None);
 
-        // Котировку прошло 1.0, запуск добавил 3 поверх — проверяется итог
+        // Цена считана с 1.5: запуск поверх неё — отказ сверки, с теми же params — запуск
         var refused = await svc.StartAsync(Owner, Scope,
-            new AudioJobInput(bad.Value!.QuoteId, Params: new JsonObject { ["speed"] = 3 }), CancellationToken.None);
+            new AudioJobInput(quote.Value!.QuoteId, Params: new JsonObject { ["speed"] = 1.0 }), CancellationToken.None);
         var ok = await svc.StartAsync(Owner, Scope,
-            new AudioJobInput(bad.Value!.QuoteId, Params: new JsonObject { ["speed"] = 1.5 }), CancellationToken.None);
+            new AudioJobInput(quote.Value!.QuoteId, Params: new JsonObject { ["speed"] = 1.5 }), CancellationToken.None);
 
-        refused.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
-        refused.Error.Should().Be("Параметр «speed» — от 0.5 до 2");
+        bad.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        bad.Error.Should().Be("Параметр «speed» — от 0.5 до 2");
+        refused.Error.Should().Be(AudioEditJobService.QuoteMismatchText);
         ok.Error.Should().BeNull();
         await engine.Ran.Task.WaitAsync(TimeSpan.FromSeconds(10));
         engine.LastParams!["speed"]!.GetValue<double>().Should().Be(1.5);
@@ -87,7 +89,7 @@ public sealed class AudioParamsValidationTests : IDisposable
             NullLogger<AudioEditJobService>.Instance, threads);
 
         var quote = await svc.QuoteAsync(Owner, Scope,
-            new AudioQuoteRequest(AudioModes.Voice, SessionId: session, ThreadId: threadId), CancellationToken.None);
+            new AudioQuoteRequest(AudioModes.Voice, SessionId: session, ThreadId: threadId, Text: "привет"), CancellationToken.None);
         quote.Error.Should().BeNull();
         var started = await svc.StartAsync(Owner, Scope,
             new AudioJobInput(quote.Value!.QuoteId, SessionId: session, ThreadId: threadId, Text: "привет"), CancellationToken.None);

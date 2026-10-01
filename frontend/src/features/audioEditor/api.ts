@@ -166,7 +166,10 @@ export interface AudioQuoteRequest {
   voiceKind?: AudioVoiceKind | null;
   sessionId?: string | null;
   threadId?: string | null;
+  // text, prompt, lyrics, durationSec — то, от чего зависит цена: запуск обязан прийти с теми же
   text?: string | null;
+  prompt?: string | null;
+  lyrics?: string | null;
   durationSec?: number | null;
   fields?: Record<string, unknown> | null;
 }

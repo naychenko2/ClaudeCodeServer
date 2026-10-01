@@ -64,8 +64,13 @@ public sealed class AudioEditJobServiceTests : IDisposable
     private async Task<AudioEditCallResult<AudioJobCreatedDto>> LaunchAsync(AudioEditJobService svc, AudioQuoteRequest request,
         string owner = Owner, AudioJobInput? input = null)
     {
-        var quoteId = await QuoteAsync(svc, request, owner);
-        return await svc.StartAsync(owner, Scope, (input ?? new AudioJobInput("")) with { QuoteId = quoteId }, CancellationToken.None);
+        // Котировка несёт то же, от чего зависит цена запуска, — иначе запуск отказал бы сверкой
+        input ??= new AudioJobInput("");
+        var quoteId = await QuoteAsync(svc, request with
+        {
+            Text = input.Text, Prompt = input.Prompt, Lyrics = input.Lyrics, DurationSec = input.DurationSec,
+        }, owner);
+        return await svc.StartAsync(owner, Scope, input with { QuoteId = quoteId }, CancellationToken.None);
     }
 
     // ── Котировка ────────────────────────────────────────────────────────────────

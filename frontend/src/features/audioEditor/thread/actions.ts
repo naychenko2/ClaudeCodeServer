@@ -64,6 +64,7 @@ export async function launchFromComposer(
   try {
     const quote = await audioApi.quote(scope, sessionId, {
       mode: override?.mode ?? L.mode, sessionId, threadId: thread.id, text: field === 'text' ? trimmed : null,
+      prompt: field === 'prompt' && trimmed ? trimmed : null,
       ...(override ? { operation: override.operation, provider: override.provider, model: override.model } : {}),
     });
     await audioApi.startJob(scope, sessionId, {

@@ -76,11 +76,12 @@ public sealed class VoiceLaunchTests : IDisposable
     private async Task<AudioEditCallResult<AudioJobCreatedDto>> RunAsync(AudioEditJobService svc, string provider, string model,
         AudioOp op, AudioJobInput? input = null)
     {
+        input ??= new AudioJobInput("", Text: "Скажи это моим голосом", Voice: Voice);
         var quote = await svc.QuoteAsync(Owner, _scope, new AudioQuoteRequest(AudioModes.Voice, AudioEditJobService.OpName(op),
-            provider, model, Text: "Скажи это моим голосом"), CancellationToken.None);
+            provider, model, Text: input.Text, Prompt: input.Prompt, Lyrics: input.Lyrics, DurationSec: input.DurationSec),
+            CancellationToken.None);
         quote.Error.Should().BeNull();
-        var started = await svc.StartAsync(Owner, _scope, (input ?? new AudioJobInput("", Text: "Скажи это моим голосом", Voice: Voice))
-            with { QuoteId = quote.Value!.QuoteId }, CancellationToken.None);
+        var started = await svc.StartAsync(Owner, _scope, input with { QuoteId = quote.Value!.QuoteId }, CancellationToken.None);
         if (started.Value is { } created) await svc.WhenDone(created.JobId);
         return started;
     }

@@ -29,6 +29,10 @@ namespace ClaudeHomeServer.Services.AudioEditor.Jobs;
 // - лицензия модели фиксируется в котировке и переходит в запуск и версии: каталог может поменяться;
 // - params проверяются по схеме модели и в котировке, и в запуске (ADR-021 §5): неизвестный ключ, общее
 //   поле в params, тип и границы — отказ invalid_request с именем поля, до денег и до очереди;
+// - запуск обязан прийти с тем же, от чего зависит цена котировки: текст, подводка, слова, длительность и
+//   итог params. Расхождение — отказ QuoteMismatchText до поставщика: иначе котируют «а», а запускают
+//   5000 символов, и ключ платит полную цену при копейках в «Расходе». Подмены из котировки нет —
+//   запуск не должен молча озвучить не тот текст, что прислали;
 // - чужая задача и чужая котировка неотличимы от несуществующих;
 // - голос из библиотеки (voice:<slug>, ADR-021 §5) разворачивает драйвер; клон, который живёт у поставщика
 //   ограниченно (MiniMax), исполнитель не создаёт и не пересоздаёт сам: протух или не создан — отказ
@@ -47,6 +51,7 @@ public sealed class AudioEditJobService : IDisposable
         "На локальной видеокарте уже идёт тяжёлая задача (обучение голоса или разбор на дорожки) — " +
         "дождитесь её окончания или выберите облачного поставщика";
     public const string QuoteExpiredText = "Котировка устарела — запросите цену заново";
+    public const string QuoteMismatchText = "Котировка не соответствует запросу — запросите цену заново";
     public const string CloneByButtonText =
         "Клон MiniMax из библиотеки создаётся только кнопкой «Пересоздать» с ценой; для озвучки готовым клоном выберите MiniMax HD/Turbo";
 
@@ -90,10 +95,23 @@ public sealed class AudioEditJobService : IDisposable
     private sealed record Quote(
         string Id, string OwnerId, string ScopeKey, string Mode, AudioOp Op, string Provider, AudioModelInfo Model,
         int Count, AudioVoiceKind? VoiceKind, AudioPrice Price, JsonObject Fields, DateTime ExpiresAt,
-        string? RecreateVoice = null)
+        string? RecreateVoice = null, Billed? Input = null)
     {
+        public Billed Billed => Input ?? Billed.None;
         public bool Heavy => Model.Caps.IsHeavy(Op);
         public string License => Model.Caps.License.Label;
+    }
+
+    // Входы, от которых зависит цена: символы (текст, иначе слова, иначе подводка) и секунды. Пустая
+    // строка равна отсутствию — форма запуска пустых полей не шлёт
+    private sealed record Billed(string? Text, string? Prompt, string? Lyrics, int? DurationSec)
+    {
+        public static readonly Billed None = new(null, null, null, null);
+
+        public static Billed Of(string? text, string? prompt, string? lyrics, int? durationSec) =>
+            new(Norm(text), Norm(prompt), Norm(lyrics), durationSec);
+
+        private static string? Norm(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private sealed class Job(string id, string ownerId, AudioEditScope scope, Quote quote, CancellationTokenSource cts)
@@ -190,7 +208,7 @@ public sealed class AudioEditJobService : IDisposable
         try
         {
             price = await EstimateAsync(engine, model, new AudioRequest(op, model.Id, scope, Text: request.Text,
-                DurationSec: request.DurationSec, Params: fields), count, ct);
+                Prompt: request.Prompt, Lyrics: request.Lyrics, DurationSec: request.DurationSec, Params: fields), count, ct);
         }
         catch (AudioEngineUnavailableException ex)
         {
@@ -198,7 +216,7 @@ public sealed class AudioEditJobService : IDisposable
         }
 
         var quote = new Quote(NewId(), ownerId, scope.Key, request.Mode, op, engine.Key, model, count, voiceKind, price,
-            fields, Now() + QuoteTtl);
+            fields, Now() + QuoteTtl, Input: Billed.Of(request.Text, request.Prompt, request.Lyrics, request.DurationSec));
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return AudioEditCallResult<AudioQuoteDto>.Ok(ToDto(quote));
@@ -222,7 +240,7 @@ public sealed class AudioEditJobService : IDisposable
             return new AudioEstimate(null, engine.PriceUnit, true, AudioEstimateSources.Unknown);
         double? units = hint.Unit switch
         {
-            AudioPriceUnits.Chars => probe.Text?.Length,
+            AudioPriceUnits.Chars => (probe.Text ?? probe.Lyrics ?? probe.Prompt)?.Length,
             AudioPriceUnits.Sec => probe.DurationSec,
             AudioPriceUnits.Min => probe.DurationSec / 60.0,
             _ => 1,
@@ -281,8 +299,12 @@ public sealed class AudioEditJobService : IDisposable
             return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.ProviderUnavailable, $"Поставщик «{quote.Provider}» больше недоступен");
         if (engine.ScopeRefusal(scope) is { } refusal)
             return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.ProviderUnavailable, refusal);
-        // params запуска ложатся поверх полей котировки — проверяется итог, а не только добавка
+        // params запуска ложатся поверх полей котировки — проверяется итог, а не только добавка; итог обязан
+        // совпасть с котированным, как и входы, от которых считали цену
         var parameters = Merge(quote.Fields, input.Params);
+        if (Billed.Of(input.Text, input.Prompt, input.Lyrics, input.DurationSec) != quote.Billed
+            || !JsonNode.DeepEquals(parameters, quote.Fields))
+            return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.InvalidRequest, QuoteMismatchText);
         if (await CheckParamsAsync(engine, quote.Model, quote.Op, parameters, ct) is { } badParams)
             return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.InvalidRequest, badParams);
         var voice = await ResolveVoiceAsync(ownerId, scope, quote, engine, input.Voice, ct);
@@ -600,10 +622,12 @@ public sealed class AudioEditJobService : IDisposable
         {
             if (other.ScopeRefusal(job.Scope) is not null) continue;
             if (Pick(other, q.Op, AudioCatalog.AutoModelId, q.VoiceKind) is not { } model) continue;
-            var estimate = FromHint(other, model, new AudioRequest(q.Op, model.Id, job.Scope));
+            var b = q.Billed;
+            var estimate = FromHint(other, model, new AudioRequest(q.Op, model.Id, job.Scope, Text: b.Text, Prompt: b.Prompt,
+                Lyrics: b.Lyrics, DurationSec: b.DurationSec));
             var price = new AudioPrice(estimate.Amount * q.Count, estimate.Unit, estimate.Approx, estimate.Source, null, null);
             var retry = new Quote(NewId(), job.OwnerId, q.ScopeKey, q.Mode, q.Op, other.Key, model, q.Count, q.VoiceKind,
-                price, q.Fields.DeepClone().AsObject(), Now() + QuoteTtl);
+                price, q.Fields.DeepClone().AsObject(), Now() + QuoteTtl, Input: b);
             _quotes[retry.Id] = retry;
             return ToDto(retry);
         }

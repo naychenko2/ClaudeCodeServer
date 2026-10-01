@@ -116,10 +116,13 @@ export async function runPanel(a: RunArgs, onCloneRefusal?: (r: CloneRefusal) =>
       }
       return true;
     }
-    const quote = await audioApi.quote(scope, sessionId, quoteRequest({
-      ...a, text: s.op === 'dialogue' ? dialogueText(inputs) : a.text, durationSec: musicDuration(s, inputs),
-    }));
-    await audioApi.startJob(scope, sessionId, jobInput(a, quote.quoteId));
+    // Котировка несёт ровно то, от чего зависит цена запуска: иначе сервер откажет в запуске
+    const input = jobInput(a, '');
+    const quote = await audioApi.quote(scope, sessionId, {
+      ...quoteRequest({ ...a, durationSec: input.durationSec }),
+      text: input.text, prompt: input.prompt, lyrics: input.lyrics,
+    });
+    await audioApi.startJob(scope, sessionId, { ...input, quoteId: quote.quoteId });
     return true;
   } catch (e) {
     const clone = cloneRefusal(e);

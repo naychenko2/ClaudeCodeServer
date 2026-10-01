@@ -347,6 +347,12 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         // исполнитель по цепочке «настройки нити → выбор в полосе режима → умолчание каталога»
         mode ??= op is { } known ? ModeOf(known) : thread.Settings?.Mode ?? AudioModes.Voice;
         var text = Str(args, "text");
+        var lyrics = Str(args, "lyrics");
+        var duration = Int(args, "durationSeconds");
+        // Текст едет в поле операции: речь — Text, остальное — Prompt. Котировка обязана нести ровно то, что
+        // уйдёт в запуск (иначе отказ «Котировка не соответствует запросу»); op без явного — как речь,
+        // промах уточняет повторная котировка ниже
+        var spokenGuess = op is not { } guessed || SpokenText.Contains(guessed);
         var quoteRequest = new AudioQuoteRequest(mode,
             Operation: op is { } o ? AudioEditJobService.OpName(o) : null,
             Provider: Str(args, "provider"),
@@ -354,8 +360,10 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             Count: Int(args, "count"),
             SessionId: session.Id,
             ThreadId: thread.Id,
-            Text: text,
-            DurationSec: Int(args, "durationSeconds"));
+            Text: spokenGuess ? text : null,
+            DurationSec: duration,
+            Prompt: spokenGuess ? null : text,
+            Lyrics: lyrics);
         var quote = await _jobs.QuoteAsync(ownerId, scope, quoteRequest, ct);
         if (quote.Value is not { } q) return Fail(quote.ErrorCode, quote.Error);
 
@@ -387,7 +395,8 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
 
         // Параметры агента едут в котировку на той же паре: цена и проверка входа — с ними
         var final = q;
-        if (fields.Count > 0)
+        var spoken = SpokenText.Contains(q.Op);
+        if (fields.Count > 0 || spoken != spokenGuess)
         {
             var pinned = await _jobs.QuoteAsync(ownerId, scope, quoteRequest with
             {
@@ -395,7 +404,9 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
                 Provider = q.Provider,
                 Model = q.Model,
                 Count = q.Count,
-                Fields = fields,
+                Fields = fields.Count > 0 ? fields : quoteRequest.Fields,
+                Text = spoken ? text : null,
+                Prompt = spoken ? null : text,
             }, ct);
             if (pinned.Value is not { } p) return Fail(pinned.ErrorCode, pinned.Error);
             final = p;
@@ -410,7 +421,6 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         }
 
         var range = Range(args);
-        var spoken = SpokenText.Contains(final.Op);
         var input = new AudioJobInput(final.QuoteId,
             SessionId: session.Id,
             ThreadId: thread.Id,
@@ -418,9 +428,9 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             Initiator: AudioEditInitiator.Agent,
             Text: spoken ? text : null,
             Prompt: spoken ? null : text,
-            Lyrics: Str(args, "lyrics"),
+            Lyrics: lyrics,
             Language: Str(args, "language"),
-            DurationSec: Int(args, "durationSeconds"),
+            DurationSec: duration,
             StartSec: range.Start,
             EndSec: range.End,
             Source: source,

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Окружение node: localStorage и window — минимальные заглушки
 const store = new Map<string, string>();
@@ -15,7 +15,7 @@ const dispatched: Event[] = [];
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { AudioModelInfo, AudioOp, AudioParamField, AudioProvider, AudioThread } from '../api';
+import { audioApi, type AudioModelInfo, type AudioOp, type AudioParamField, type AudioProvider, type AudioQuote, type AudioThread } from '../api';
 import { TO_END } from '../player/selection';
 import { __resetAudioStore, getSelection, requestOperation, setSelection } from '../thread/threadStore';
 import { DEFAULT_INPUTS, type PanelInputs } from './inputs';
@@ -26,7 +26,7 @@ import type { OpFieldsProps } from './OpFields';
 import { __resetOperationRequests, pendingOperation, takeOperation } from './opRequest';
 import { commitPiece, pieceFromText, pieceText } from './piece';
 import { PieceField } from './PieceField';
-import { jobInput, trimSteps, trimWithPiece } from './run';
+import { jobInput, runPanel, trimSteps, trimWithPiece } from './run';
 
 const caps = (ops: AudioOp[], extra: Partial<AudioModelInfo['caps']> = {}): AudioModelInfo['caps'] => ({
   ops, languages: ['ru', 'en'], voiceKinds: [], producesFiles: ['audio'], license: { label: 'MIT', kind: 'permissive' },
@@ -240,5 +240,25 @@ describe('просьба карточки к панели', () => {
     expect(nextSettings(voice, { mode: 'process', operation: 'trim' })).toMatchObject({ mode: 'process', operation: 'trim' });
     // Чужая режиму операция не протаскивается
     expect(nextSettings(voice, { mode: 'music', operation: 'trim' })).toMatchObject({ mode: 'music', operation: 'song' });
+  });
+});
+
+describe('котировка запуска', () => {
+  // Сервер сверяет запуск с котировкой: подводка, слова и длительность обязаны совпасть, иначе отказ
+  it('песня котируется тем же, что уходит в задачу', async () => {
+    const quote = vi.spyOn(audioApi, 'quote').mockResolvedValue({ quoteId: 'q1' } as AudioQuote);
+    const start = vi.spyOn(audioApi, 'startJob').mockResolvedValue({ jobId: 'j1' });
+    const ok = await runPanel({
+      scope: 'p1', sessionId: 's1', thread: thread(), fields: {}, reference: null, text: ' synthwave ', piece: null,
+      state: st('song'), inputs: inputs({ lyrics: '[Verse]\nПривет', durationSec: 60 }),
+    });
+    expect(ok).toBe(true);
+    const q = quote.mock.calls[0][2];
+    const job = start.mock.calls[0][2];
+    expect(job.quoteId).toBe('q1');
+    expect({ text: q.text, prompt: q.prompt, lyrics: q.lyrics, durationSec: q.durationSec })
+      .toEqual({ text: job.text, prompt: job.prompt, lyrics: job.lyrics, durationSec: job.durationSec });
+    expect(q).toMatchObject({ prompt: 'synthwave', lyrics: '[Verse]\nПривет', durationSec: 60 });
+    vi.restoreAllMocks();
   });
 });

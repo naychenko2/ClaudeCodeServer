@@ -54,7 +54,8 @@ public sealed record AudioEditCallResult<T>(T? Value, string? ErrorCode, string?
 // Котировка. Mode — AudioModes.*; Operation, Provider, Model, Count, Fields не заданы — берутся по
 // цепочке «настройки нити → префы режима → умолчание каталога» (AudioPrefsResolver). ThreadId вместе с
 // SessionId — нить, чьи настройки идут первыми. VoiceKind — вид голоса запроса: по нему сверяется
-// модель и подбирается сосед при отказе. Text и DurationSec — для цены за символы и секунды
+// модель и подбирается сосед при отказе. Text, Prompt, Lyrics и DurationSec — то, от чего зависит цена
+// (символы, секунды): запуск обязан прийти с ТЕМИ ЖЕ значениями, иначе отказ (AudioEditJobService)
 public sealed record AudioQuoteRequest(
     string Mode,
     string? Operation = null,
@@ -66,7 +67,9 @@ public sealed record AudioQuoteRequest(
     string? ThreadId = null,
     string? Text = null,
     int? DurationSec = null,
-    JsonObject? Fields = null);
+    JsonObject? Fields = null,
+    string? Prompt = null,
+    string? Lyrics = null);
 
 // Цена: Amount в единицах Unit (AudioPriceUnits.*), null — станет известна после запуска.
 // Source — AudioEstimateSources.*, Eta — секунды на все варианты, QueueLength — очередь поставщика

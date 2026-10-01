@@ -293,6 +293,35 @@ public sealed class AudioEditorToolsetTests : IDisposable
         engine.LastRequest.Text.Should().Be("Привет");
     }
 
+    // Котировка агента несёт то же, что уйдёт в запуск (сверка «Котировка не соответствует запросу»):
+    // у песни текст — подводка, плюс слова и длительность; op из настроек нити — тоже
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Песня_со_словами_котируется_тем_же_что_запускается(bool explicitOp)
+    {
+        var engine = new FakeEngine("fal");
+        var toolset = Toolset([engine]);
+        var draft = Draft();
+        if (!explicitOp)
+            _store.SetSettings(Owner, ChatId, draft, new AudioThreadSettings(AudioModes.Music, "song", "fal", null, null), null);
+        var args = new JsonObject
+        {
+            ["threadId"] = draft, ["text"] = "весёлый поп", ["lyrics"] = "[Verse]\nла-ла", ["durationSeconds"] = 30,
+        };
+        if (explicitOp) args["op"] = "song";
+
+        var result = await Call(toolset, AudioEditorToolset.ToolGenerate, args);
+        await WaitIdleAsync();
+
+        result.IsError.Should().BeFalse(result.Text);
+        engine.LastRequest!.Op.Should().Be(AudioOp.Song);
+        engine.LastRequest.Text.Should().BeNull();
+        engine.LastRequest.Prompt.Should().Be("весёлый поп");
+        engine.LastRequest.Lyrics.Should().Be("[Verse]\nла-ла");
+        engine.LastRequest.DurationSec.Should().Be(30);
+    }
+
     // Голос из библиотеки агент передаёт slug'ом: тулсет не подменяет его диктором, а исполнитель
     // разворачивает его у поставщика (ADR-021 §5)
     [Fact]
@@ -550,6 +579,8 @@ public sealed class AudioEditorToolsetTests : IDisposable
         public IReadOnlyList<AudioModelInfo> Models =>
         [
             new("fake-speech", "Речь", new AudioCaps([AudioOp.Speak], ["ru"], [AudioVoiceKind.Preset], [AudioOutputs.Audio],
+                AudioLicenses.Mit, AudioPriceUnits.Free)),
+            new("fake-song", "Песня", new AudioCaps([AudioOp.Song], ["ru"], [], [AudioOutputs.Audio],
                 AudioLicenses.Mit, AudioPriceUnits.Free)),
         ];
 

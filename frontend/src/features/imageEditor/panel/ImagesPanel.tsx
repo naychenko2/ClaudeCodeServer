@@ -1,6 +1,6 @@
 // Панель «Картинки» рабочей области (ADR-021 §3, макет docs/mockups/image-editor-v4-panel.html)
-// на общем каркасе GenerationPanel, под флагом image-editor-panel. Вкладка «Настройки» — те же
-// секции, что у карточки над полосой (strip/settings), «Персонажи» — прежняя CharactersPanel.
+// на общем каркасе GenerationPanel. Вкладка «Настройки» — секции strip/settings, «Персонажи» —
+// CharactersPanel.
 // Живёт и в проекте, и в правой колонке личного чата (projectId = null → область personal):
 // там нет персонажей и образцов из проекта. Вверху «Настроек» — операция и режим подбора,
 // «− N +», цена и запуск — в закреплённом низу. Запуск идёт тем же путём, что композер: промпт
@@ -114,8 +114,7 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
     body = <EmptyState compact icon={ic(ImageIcon, ICON_SIZE.sm)} title="Рисовать нечем" subtitle="Поставщиков не настроил администратор" />;
   } else {
     body = (
-      <SettingsSections projectId={projectId} L={L} catalog={L.catalog} isMobile={layout === 'sheet'} thread={thread}
-        onCharacterSheet={() => setTab('characters')} onCharacters={() => setTab('characters')} panel />
+      <SettingsSections projectId={projectId} L={L} catalog={L.catalog} thread={thread} onCharacters={() => setTab('characters')} />
     );
   }
 

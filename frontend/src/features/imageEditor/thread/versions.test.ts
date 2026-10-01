@@ -10,6 +10,8 @@ const store = new Map<string, string>();
   key: () => null,
   length: 0,
 } as Storage;
+// Выбор картинки человеком открывает панель «Картинки» событием на window
+(globalThis as unknown as { window: EventTarget }).window = new EventTarget();
 import { imageEditorApi } from '../api';
 import { activeStepOf, applyStep, continueFrom, saveAsInThread, saveToProject, versionSaved } from './actions';
 import { downloadName, stackSaveState, versionPrimary } from './model';

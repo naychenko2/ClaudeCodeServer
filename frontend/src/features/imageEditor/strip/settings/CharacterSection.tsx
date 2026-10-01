@@ -3,9 +3,8 @@
 
 import { useRef, useState } from 'react';
 import { FolderOpen, Plus, Upload, User } from 'lucide-react';
-import { Button, Chip, Menu, MenuItem, Modal, C, SP, ICON_SIZE, FLAGS, getFlag, api as appApi } from 'aihome_shell/kit';
+import { Button, Chip, Menu, MenuItem, C, SP, ICON_SIZE, api as appApi } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditCatalog, type ReferenceRole } from '../../api';
-import { CHARACTERS_PANEL, IMAGES_PANEL, revealWorkspacePanel } from '../../characters/panel';
 import { useCharacters } from '../../characters/useCharacters';
 import { maxSamples, roleShort, SAMPLE_ROLES, type Sample } from '../../editorInputs';
 import { ProjectImagePicker } from '../../PanelSections';
@@ -22,18 +21,10 @@ export function useCharacter(projectId: string | null, slug: string | null) {
   return { current, photo, name: current?.name ?? slug };
 }
 
-// С панелью «Картинки» (флаг image-editor-panel) персонажи — её вкладка, а не своя панель
-export function openCharacters(isMobile: boolean, sheet: () => void) {
-  if (isMobile) sheet();
-  else if (getFlag(FLAGS.imageEditorPanel)) revealWorkspacePanel(IMAGES_PANEL, 'characters');
-  else revealWorkspacePanel(CHARACTERS_PANEL);
-}
-
 // Образцы: чипы с миниатюрой, клик — роль, «+ Образец» — с компьютера или из проекта
-// (у личной области — сразу с компьютера). В панели «Картинки» роль выбирают строкой прямо
-// под чипами (inlineRoles), в карточке над полосой — как раньше, модальным окном
-export function SampleChips({ projectId, max, inlineRoles, initialRoleFor = null }: {
-  projectId: string; max: number; inlineRoles?: boolean; initialRoleFor?: string | null;
+// (у личной области — сразу с компьютера). Роль выбирают строкой прямо под чипами
+export function SampleChips({ projectId, max, initialRoleFor = null }: {
+  projectId: string; max: number; initialRoleFor?: string | null;
 }) {
   const personal = isPersonalScope(projectId);
   const samples = getSamples(projectId);
@@ -54,9 +45,9 @@ export function SampleChips({ projectId, max, inlineRoles, initialRoleFor = null
       {samples.map(s => (
         <span key={s.id} data-sample={s.name} style={{ display: 'inline-flex' }}>
           <Chip leading={<img src={s.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />} maxW={170}
-            selected={inlineRoles && roleFor === s.id}
+            selected={roleFor === s.id}
             title={`Образец · ${roleShort(s.role).toLowerCase()} — нажмите, чтобы сменить роль`}
-            onClick={() => setRoleFor(inlineRoles && roleFor === s.id ? null : s.id)}
+            onClick={() => setRoleFor(roleFor === s.id ? null : s.id)}
             onRemove={() => setSamples(projectId, samples.filter(x => x.id !== s.id))}>
             {roleShort(s.role)} · {s.name}
           </Chip>
@@ -74,7 +65,7 @@ export function SampleChips({ projectId, max, inlineRoles, initialRoleFor = null
           <MenuItem icon={ic(FolderOpen, ICON_SIZE.sm)} label="Из файлов проекта…" onClick={() => { setAddAt(null); setPicker(true); }} />
         </Menu>
       )}
-      {roleOf && inlineRoles && (
+      {roleOf && (
         <div data-sample-roles={roleOf.name} role="group" aria-label={`Как модели использовать «${roleOf.name}»`}
           style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.xs, color: C.textMuted }}>
           <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -90,18 +81,6 @@ export function SampleChips({ projectId, max, inlineRoles, initialRoleFor = null
             );
           })}
         </div>
-      )}
-      {roleOf && !inlineRoles && (
-        <Modal title={`Как модели использовать «${roleOf.name}»`} width={380} onClose={() => setRoleFor(null)}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-            {SAMPLE_ROLES.map(([role, full]) => (
-              <Button key={role} size="sm" fullWidth variant={roleOf.role === role ? 'ghostAccent' : 'ghost'} style={{ justifyContent: 'flex-start' }}
-                onClick={() => pickRole(role)}>
-                {full}
-              </Button>
-            ))}
-          </div>
-        </Modal>
       )}
       {picker && !personal && (
         <ProjectImagePicker projectId={projectId}
@@ -122,13 +101,10 @@ export function SampleChips({ projectId, max, inlineRoles, initialRoleFor = null
   );
 }
 
-// Шторку персонажей на телефоне держит хозяин секции: onCharacterSheet её открывает.
-// onCharacters — свой показ персонажей (панель «Картинки» переключает вкладку)
-export function CharacterSection({ projectId, L, catalog, isMobile, onCharacterSheet, onCharacters, inlineRoles }: {
-  projectId: string; L: Launch; catalog: ImageEditCatalog; isMobile: boolean; onCharacterSheet: () => void;
-  onCharacters?: () => void; inlineRoles?: boolean;
+// onCharacters — показ персонажей (панель «Картинки» переключает вкладку)
+export function CharacterSection({ projectId, L, catalog, onCharacters }: {
+  projectId: string; L: Launch; catalog: ImageEditCatalog; onCharacters: () => void;
 }) {
-  const showCharacters = onCharacters ?? (() => openCharacters(isMobile, onCharacterSheet));
   const personal = isPersonalScope(projectId);
   const { current, photo, name } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
   const max = maxSamples(catalog.limits.maxReferences, L.model?.caps?.maxReferences);
@@ -138,12 +114,12 @@ export function CharacterSection({ projectId, L, catalog, isMobile, onCharacterS
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
         {personal ? null : L.prefs.characterSlug
           ? <Chip selected leading={photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : undefined}
-              maxW={160} title="Фото персонажа уходят в каждую генерацию" onClick={showCharacters}
+              maxW={160} title="Фото персонажа уходят в каждую генерацию" onClick={onCharacters}
               onRemove={() => setPrefs(projectId, { characterSlug: null })}>
               {current?.name ?? name}
             </Chip>
-          : <Chip dashed leading={ic(User)} title="Персонажи проекта" onClick={showCharacters}>Персонаж</Chip>}
-        {max > 0 && <SampleChips projectId={projectId} max={max} inlineRoles={inlineRoles} />}
+          : <Chip dashed leading={ic(User)} title="Персонажи проекта" onClick={onCharacters}>Персонаж</Chip>}
+        {max > 0 && <SampleChips projectId={projectId} max={max} />}
       </div>
     </>
   );

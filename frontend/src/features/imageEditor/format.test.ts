@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ImageEditProvider } from './api';
+import type { ImageEditOp, ImageEditProvider } from './api';
 import { freeSum, modelBlockReason, money, priceSum, priceText, providerHint, providerOps } from './format';
 
 describe('строка цены локальных моделей', () => {
@@ -39,5 +39,25 @@ describe('поставщик «Локальные модели» в выборе
     expect(modelBlockReason(local.models[2], true, false)).toBe('Запускается кнопкой «Улучшить лица» в быстрых действиях');
     expect(modelBlockReason(local.models[1], true, true)).toBe('');
     expect(providerHint(local)).toBe('бесплатно, на своей видеокарте');
+  });
+});
+
+describe('модели одной операции при правке без маски', () => {
+  const caps = (ops: ImageEditOp[], mask: 'native' | 'none') => ({ ops, mask, maxReferences: 0, maxCount: 1, faceByReferences: false });
+  const fill = { id: 'fal-ai/flux-pro/v1/fill', label: 'FLUX Pro Fill', caps: caps(['inpaint'], 'native') };
+  const expand = { id: 'fal-ai/bria/expand', label: 'Bria Expand', caps: caps(['outpaint'], 'none') };
+  const removeBg = { id: 'fal-ai/bria/background/remove', label: 'Bria: убрать фон', caps: caps(['removeBackground'], 'none') };
+
+  it('серые с причиной: сервер котировки ответил бы 400 «так не умеет»', () => {
+    expect(modelBlockReason(fill, true, false)).toBe('Правит только по маске — отметьте место кистью');
+    expect(modelBlockReason(expand, true, false)).toBe('Только дорисовывает за края — операция «Дорисовать за края»');
+    expect(modelBlockReason(removeBg, true, false)).toBe('Только убирает фон — операция «Убрать фон»');
+  });
+
+  it('своей операцией доступны: FLUX Fill — с маской, Bria — своими операциями', () => {
+    expect(modelBlockReason(fill, true, true)).toBe('');
+    expect(modelBlockReason(fill, true, true, 'edit')).toBe('');
+    expect(modelBlockReason(expand, true, false, 'outpaint')).toBe('');
+    expect(modelBlockReason(removeBg, true, false, 'removeBackground')).toBe('');
   });
 });

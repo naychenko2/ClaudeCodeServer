@@ -14,7 +14,6 @@ const win = Object.assign(new EventTarget(), { setTimeout, clearTimeout, setInte
 vi.stubGlobal('window', win);
 const toasts: string[] = [];
 win.addEventListener('cc-local-toast', e => toasts.push((e as CustomEvent<{ title: string }>).detail.title));
-import { setFlagLocal, FLAGS } from '../../../lib/featureFlags';
 import { __resetComposerStrips, registerComposerSubmit } from '../../../lib/composerStrips';
 import { imageEditorApi, type ImageEditQuoteRequest } from '../api';
 import { pickOp } from '../format';
@@ -94,7 +93,6 @@ describe('запуск: операция панели идёт общим launch
     __resetPrefs();
     __resetPanelChoice();
     __resetComposerStrips();
-    setFlagLocal(FLAGS.imageEditorPanel, true);
     quotes = [];
     started = 0;
     const api = imageEditorApi();
@@ -106,7 +104,6 @@ describe('запуск: операция панели идёт общим launch
   afterEach(() => {
     toasts.length = 0;
     vi.restoreAllMocks();
-    setFlagLocal(FLAGS.imageEditorPanel, false);
   });
 
   it.each(STATES.filter(([img]) => img))('«Авто» уходит операцией pickOp (отметки %s/%s)', async (_img, mask) => {
@@ -126,15 +123,6 @@ describe('запуск: операция панели идёт общим launch
     setPanelChoice(P, { mode: 'photoreal' });
     await launchThread(P, S, t, { kind: 'prompt', prompt: 'сделай небо розовым' });
     expect(quotes.at(-1)?.mode).toBe('photoreal');
-  });
-
-  it('без флага выбор панели не действует: запуск как раньше', async () => {
-    setFlagLocal(FLAGS.imageEditorPanel, false);
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    setPanelChoice(P, { op: 'removeBackground', mode: 'fast' });
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'сделай небо розовым' });
-    expect(quotes.at(-1)).toMatchObject({ op: 'edit', mode: 'auto' });
   });
 
   it('кнопка низа с «Убрать фон»: один вариант, без промпта, тем же launchThread', async () => {

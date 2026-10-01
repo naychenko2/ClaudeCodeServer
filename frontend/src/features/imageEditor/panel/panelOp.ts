@@ -1,10 +1,9 @@
 // Операция и режим подбора панели «Картинки» (ADR-021 §3, записка image-editor-v4-panel-proposal.md,
 // «Вкладка «Настройки»»). «Авто» — ровно нынешнее поведение pickOp. Выбор живёт в памяти вкладки
-// на проект и действует только при флаге image-editor-panel: без флага запуск идёт как раньше.
+// на проект.
 // Тексты, причины и цена низа — чистые функции, их держит panelOp.test.ts.
 
 import { useSyncExternalStore } from 'react';
-import { FLAGS, getFlag } from 'aihome_shell/kit';
 import { AUTO_MODEL, type EditMode, type ImageEditEstimate, type ImageEditModel, type ImageEditOp } from '../api';
 import { etaText, isFreeUnit, money, pickOp, priceSum, variantsWord } from '../format';
 import type { OutpaintRatio, QuickAction } from '../editorInputs';
@@ -125,9 +124,8 @@ export function setPanelChoice(projectId: string, patch: Partial<PanelChoice>) {
   _listeners.forEach(fn => fn());
 }
 
-// Выбор, с которым пойдёт запуск: без флага панели — всегда «Авто», как раньше
-export const activeChoice = (projectId: string): PanelChoice =>
-  getFlag(FLAGS.imageEditorPanel) ? getPanelChoice(projectId) : DEFAULT_CHOICE;
+// Выбор, с которым пойдёт запуск
+export const activeChoice = (projectId: string): PanelChoice => getPanelChoice(projectId);
 
 export function usePanelChoiceVersion() {
   return useSyncExternalStore(

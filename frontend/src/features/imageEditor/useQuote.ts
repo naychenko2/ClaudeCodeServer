@@ -19,6 +19,29 @@ export function staleEstimate(
 // Higgsfield считает цену препроверкой с загрузкой входов — ей дебаунс длиннее
 const debounceFor = (provider: string) => (provider === 'higgsfield' ? 800 : 300);
 
+// Одну котировку держат сразу несколько хозяев (полоса, панель, поле ввода, карточка ленты):
+// одинаковый запрос уходит на сервер один раз, остальные ждут тот же ответ. Готовый ответ
+// живёт ещё QUOTE_SHARE_MS — на разбег таймеров дебаунса у смонтированных хозяев
+const QUOTE_SHARE_MS = 2000;
+const _shared = new Map<string, { p: Promise<ImageEditQuote>; settled: number | null }>();
+
+export function sharedQuote(api: ImageEditorApi, projectId: string, req: ImageEditQuoteRequest): Promise<ImageEditQuote> {
+  const now = Date.now();
+  for (const [k, v] of _shared) if (v.settled !== null && now - v.settled >= QUOTE_SHARE_MS) _shared.delete(k);
+  const key = `${projectId}\n${JSON.stringify(req)}`;
+  const hit = _shared.get(key);
+  if (hit) return hit.p;
+  const entry: { p: Promise<ImageEditQuote>; settled: number | null } = { p: api.quote(projectId, req), settled: null };
+  _shared.set(key, entry);
+  // Ошибку не делим дальше её хозяев: следующий запрос пойдёт заново
+  entry.p.then(() => { entry.settled = Date.now(); }, () => { _shared.delete(key); });
+  return entry.p;
+}
+
+export function __resetSharedQuotes() {
+  _shared.clear();
+}
+
 export function useQuote(api: ImageEditorApi, projectId: string, req: ImageEditQuoteRequest | null) {
   const [state, setState] = useState<{ key: string; quote: ImageEditQuote | null; error: string | null }>(
     { key: '', quote: null, error: null });
@@ -29,7 +52,7 @@ export function useQuote(api: ImageEditorApi, projectId: string, req: ImageEditQ
     if (!req) return;
     let alive = true;
     const t = setTimeout(() => {
-      api.quote(projectId, req)
+      sharedQuote(api, projectId, req)
         .then(quote => { if (alive) { setState({ key, quote, error: null }); setLast({ req, quote }); } })
         .catch((e: Error) => { if (alive) setState({ key, quote: null, error: e.message }); });
     }, debounceFor(req.provider));

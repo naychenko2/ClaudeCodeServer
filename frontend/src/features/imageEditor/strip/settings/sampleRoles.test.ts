@@ -26,7 +26,7 @@ setSamples('p1', [{ id: 's1', source: 'project', name: 'palette.jpg', role: 'sty
 
 describe('роль образца в панели', () => {
   it('клик по чипу открывает выбор роли строкой под чипами: три роли, текущая отмечена', () => {
-    const html = renderToStaticMarkup(createElement(SampleChips, { projectId: 'p1', max: 4, inlineRoles: true, initialRoleFor: 's1' }));
+    const html = renderToStaticMarkup(createElement(SampleChips, { projectId: 'p1', max: 4, initialRoleFor: 's1' }));
     const group = html.slice(html.indexOf('data-sample-roles="palette.jpg"'));
     expect(group).toContain('role="group"');
     for (const r of ['Персонаж — сохранить лицо', 'Стиль', 'Предмет']) expect(group).toContain(r);
@@ -34,16 +34,9 @@ describe('роль образца в панели', () => {
   });
 
   it('пока чип не нажат, строки выбора нет', () => {
-    const html = renderToStaticMarkup(createElement(SampleChips, { projectId: 'p1', max: 4, inlineRoles: true }));
+    const html = renderToStaticMarkup(createElement(SampleChips, { projectId: 'p1', max: 4 }));
     expect(html).toContain('Стиль · palette.jpg');
     expect(html).not.toContain('data-sample-roles');
   });
 
-  it('без inlineRoles (карточка над полосой без флага) выбор роли открывает Modal, строки под чипами нет', () => {
-    const html = renderToStaticMarkup(createElement(SampleChips, { projectId: 'p1', max: 4, initialRoleFor: 's1' }));
-    const modal = html.slice(html.indexOf('data-modal="Как модели использовать «palette.jpg»"'));
-    expect(html).toContain('data-modal="Как модели использовать «palette.jpg»"');
-    for (const r of ['Персонаж — сохранить лицо', 'Стиль', 'Предмет']) expect(modal).toContain(r);
-    expect(html).not.toContain('data-sample-roles');
-  });
 });

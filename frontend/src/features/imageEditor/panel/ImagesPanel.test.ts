@@ -18,7 +18,6 @@ const win = Object.assign(new EventTarget(), {
 vi.stubGlobal('window', win);
 
 const { REVEAL_PANEL_EVENT } = await import('../../../lib/subsystems/registryCore');
-const { FLAGS, setFlagLocal } = await import('../../../lib/featureFlags');
 const { loadCatalog } = await import('../thread/catalog');
 const { __applyThreads, __resetThreadStore } = await import('../thread/threadStore');
 const { __resetPanelChoice, setPanelChoice } = await import('./panelOp');
@@ -32,7 +31,6 @@ const selected = (html: string) => html.match(/aria-selected="true"[^>]*>([^<]*<
 beforeEach(() => {
   __resetThreadStore();
   __resetPanelChoice();
-  setFlagLocal(FLAGS.imageEditorPanel, true);
 });
 
 describe('вкладка панели по событию revealWorkspacePanel', () => {
@@ -115,12 +113,6 @@ describe('закреплённый низ', () => {
       threads: [{ ...file, settings: { provider: 'fal', model: 'fal-ai/flux-pro/kontext', count: 2, matchSourceSize: true } }],
     });
     expect(render('p1')).not.toContain('Режим подбора');
-  });
-
-  it('без флага выбор операции не действует: низ считает «Авто»', () => {
-    setFlagLocal(FLAGS.imageEditorPanel, false);
-    setPanelChoice('p1', { op: 'removeBackground' });
-    expect(render('p1')).not.toContain('Больше: Эта операция даёт один вариант');
   });
 
   it('на телефоне — шторка каркаса: «опустить до цены», сводка опущенной — с чем работаем', () => {

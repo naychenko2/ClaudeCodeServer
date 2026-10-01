@@ -329,7 +329,30 @@ public class AudioEditorControllerTests : IDisposable
             .Should().BeEquivalentTo("intro.v2.stems/vocals.mp3", "intro.v2.stems/drums.mp3");
         File.ReadAllBytes(Path.Combine(_projectRoot, "intro.v2.stems", "vocals.mp3")).Should().Equal(Vocals);
         File.ReadAllBytes(Path.Combine(_projectRoot, "intro.v2.stems", "drums.mp3")).Should().Equal(Drums);
+        Thread(chatUrl, threadId).File.Should().Be("intro.v2.stems", "у версии из одних стемов нить идёт за папкой");
     }
+
+    [Fact]
+    public async Task После_сохранения_нить_идёт_за_файлом_проекта()
+    {
+        var (chatUrl, threadId, versionId) = await ProjectVersion();
+
+        var resp = await _client.PostAsJsonAsync($"{chatUrl}/threads/{threadId}/save", new { versionId });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        var thread = Thread(chatUrl, threadId);
+        thread.File.Should().Be("intro.v2.mp3");
+        thread.Lineage.Should().Equal("intro.mp3");
+        var state = await Json(await _client.GetAsync($"{chatUrl}/threads"));
+        state.GetProperty("events").EnumerateArray()
+            .Should().Contain(e => e.GetProperty("kind").GetString() == "saved" && e.GetProperty("threadId").GetString() == threadId);
+        // Открыть сохранённый файл — та же нить, а не новая
+        (await OpenFile(chatUrl, "intro.v2.mp3")).Should().Be(threadId);
+    }
+
+    private ClaudeHomeServer.Services.AudioEditor.Threads.AudioThread Thread(string chatUrl, string threadId) =>
+        _factory.Services.GetRequiredService<AudioJobThreads>().Store
+            .Get(_ownerId, chatUrl[(chatUrl.LastIndexOf('/') + 1)..]).Threads.Single(t => t.Id == threadId);
 
     [Fact]
     public async Task Сохранить_как_на_занятое_имя_409_с_подсказкой()

@@ -101,7 +101,7 @@ public class AudioEditorController(
     // Сохранить версию в проект: следующая версия рядом с исходником или «Сохранить как». Только
     // человек и только новыми файлами; занятое имя «Сохранить как» — 409 name_taken с подсказкой
     [HttpPost("sessions/{sessionId}/threads/{threadId}/save")]
-    public IActionResult Save(string projectId, string sessionId, string threadId, [FromBody] AudioSaveRequest req)
+    public async Task<IActionResult> Save(string projectId, string sessionId, string threadId, [FromBody] AudioSaveRequest req)
     {
         if (!ChatGate(projectId, sessionId, out var scope, out var denied)) return denied;
         var project = scope.Project!;
@@ -133,6 +133,8 @@ public class AudioEditorController(
                 saved.ErrorCode ?? AudioEditErrorCodes.InvalidRequest, saved.Error ?? "Не сохранено");
         // Новые файлы — обычная запись в проект: синк знаний и ватчеры узнают о них сразу
         foreach (var rel in result.Files) files?.NotifyMutated(project.RootPath, rel, FileMutationKind.Create);
+        // Нить помнит, что звук уже в проекте
+        await _threads.OnSavedAsync(UserId, scope.Key, sessionId, threadId, result.Path);
         return Ok(result);
     }
 

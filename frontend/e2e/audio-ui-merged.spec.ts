@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // Интерфейс звука после слияния веток: один личный чат — полоса «Звук», панель во всех режимах
-// и вкладка «Голоса», карточка нити, якоря запусков и карточки вызовов агента. Запуск, который
+// и вкладка «Голоса», карточки версий, якоря запусков и карточки вызовов агента. Запуск, который
 // нарисован якорем audio_launch_versions, второй карточкой audio_generate не дублируется.
 // Бэкенд не нужен: собранный dist (с remote «Звук») раздаётся статикой, /api/** и хаб — моки.
 //
@@ -89,7 +89,7 @@ const anchor = (jobId: string, provider: string, model: string) => record('audio
   threadId: T, jobId, mode: 'voice', op: 'speak', provider, model, count: jobId === 'job-done' ? 2 : 1,
   price: { amount: 0, unit: 'free', approx: false }, license: 'Apache-2.0', initiator: 'agent', baseVersionId: 'v1',
 }, `Claude запустил: озвучка · ${model}`);
-HISTORY.splice(1, 0, record('audio_thread', { threadId: T }, 'Звук: podcast-intro.mp3'));
+HISTORY.splice(1, 0, record('audio_thread', { threadId: T, versionId: 'origin' }, 'Звук: podcast-intro.mp3'));
 HISTORY.splice(HISTORY.length - 2, 0,
   anchor('job-done', 'local', 'qwen3-tts'), anchor('job-run', 'fal', 'fal-ai/minimax/speech-02-hd'), anchor('job-fail', 'fal', 'fal-ai/minimax/speech-02-hd'));
 
@@ -197,11 +197,11 @@ for (const vp of [{ name: 'w1440', width: 1440, height: 1000 }, { name: 'm360', 
       await page.screenshot({ path: path.join(SHOTS, `${vp.name}-${name}.png`) });
     };
 
-    // Карточка нити и якоря запусков
-    await expect(page.locator('[data-audio-card="thread"], [data-audio-nav]').first()).toBeVisible({ timeout: 30_000 });
+    // Карточка исходника и якоря запусков: у готового — карточка на каждый вариант
+    await expect(page.locator('[data-audio-card="origin"]')).toBeVisible({ timeout: 30_000 });
     await closeToasts(page);
     await expect(page.locator('[data-audio-launch]')).toHaveCount(3);
-    await expect(page.locator('[data-audio-launch="done"] [data-audio-variant]')).toHaveCount(2);
+    await expect(page.locator('[data-audio-launch="done"] [data-audio-card]')).toHaveCount(2);
 
     // Карточки агента на месте, а запуски, нарисованные якорями, второй карточкой не повторяются
     await expect(page.getByText('Claude взял в работу')).toBeVisible();

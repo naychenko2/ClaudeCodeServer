@@ -23,7 +23,7 @@ import { SOUND_PANEL, SOUND_STRIP } from './thread/threadStore';
 
 const enabled = () => getFlag(FLAGS.audioEditor);
 
-// Карточки ленты (module_record модуля): нить с версиями ‹ › и запуск ИИ с вариантами
+// Карточки ленты (module_record модуля): карточка версии и запуск ИИ — карточка на каждый вариант
 const THREAD_ANCHORS: SlotContribution<ChatItemToolCtx>[] = [
   { name: recordKey(RECORD_THREAD), render: ctx => <ThreadAnchor ctx={ctx} /> },
   { name: recordKey(RECORD_LAUNCH), render: ctx => <LaunchAnchor ctx={ctx} /> },

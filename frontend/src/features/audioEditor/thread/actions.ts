@@ -99,7 +99,7 @@ export async function mixStems(scope: string, sessionId: string, thread: AudioTh
   if (!plan.canMix) return false;
   const ok = await mutate(scope, sessionId, async rev =>
     (await audioApi.mix(scope, sessionId, thread.id, mixRequest(plan, versionId, rev))).state);
-  if (ok) showToast(`Сведено: ${plan.description}`, 'Новая версия — в карточке нити', 'info');
+  if (ok) showToast(`Сведено: ${plan.description}`, 'Новая версия — своей карточкой в ленте', 'info');
   return ok;
 }
 

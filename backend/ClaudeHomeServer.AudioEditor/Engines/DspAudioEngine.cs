@@ -225,8 +225,10 @@ public sealed class DspAudioEngine(
             };
         }
 
-        await threads.BroadcastAsync(ownerId, scope.Key, sessionId, written.State);
         var version = written.NewVersions[0];
+        // Своя карточка версии в ленте: каждая версия нити рисуется ровно одной карточкой
+        await threads.AnchorAsync(sessionId, thread, ct, version.Id);
+        await threads.BroadcastAsync(ownerId, scope.Key, sessionId, written.State);
         return AudioEditCallResult<AudioDspVersionDto>.Ok(
             new AudioDspVersionDto(thread.Id, version.Id, version.Number, jobId, written.State));
     }

@@ -165,6 +165,13 @@ export function versionMeta(t: ImageThread, v: ImageThreadVersion, model?: strin
   ].filter(Boolean).join(' · ');
 }
 
+// Что за запуск дал версию: «промпт» и кто запускал — в карточке версии, строки запуска над ней нет
+export function versionDone(t: ImageThread, v: ImageThreadVersion): string | null {
+  const launch = v.jobId ? launchOf(t, v.jobId) : null;
+  if (!launch) return null;
+  return [launch.prompt ? `«${launch.prompt}»` : null, launch.initiator === 'agent' ? 'Claude' : null].filter(Boolean).join(' · ') || null;
+}
+
 // Главная кнопка карточки версии (прототип полос): у версии в работе — «Сохранить в проект»,
 // пока она черновик (в личном чате вне проекта сохранять некуда — «Скачать»); у остальных
 // версий выбранной картинки — «Продолжить от неё»; у картинки, которая не в работе, —

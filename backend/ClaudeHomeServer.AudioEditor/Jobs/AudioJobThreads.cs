@@ -52,10 +52,11 @@ public sealed class AudioJobThreads(
             && directory.ResolveOwnerId(session) == ownerId;
     }
 
-    // Якорь нити в ленте — зовут ручки при заведении нити
-    public Task AnchorAsync(string sessionId, AudioThread thread, CancellationToken ct) =>
+    // Якорь нити в ленте — зовут ручки при заведении нити; versionId — карточка этой версии (правка
+    // без ИИ кладёт свою версию в ленту так же, как запуск — свои варианты)
+    public Task AnchorAsync(string sessionId, AudioThread thread, CancellationToken ct, string? versionId = null) =>
         RecordAsync(sessionId, RecordTypes.Thread, $"Звук: {Name(thread)}",
-            new { threadId = thread.Id, versionId = thread.CurrentVersionId }, ct);
+            new { threadId = thread.Id, versionId = versionId ?? thread.CurrentVersionId }, ct);
 
     // Задача принята: запуск в нити с лицензией модели на этот момент, последние настройки нити,
     // якорь запуска в ленте и журнал для хода

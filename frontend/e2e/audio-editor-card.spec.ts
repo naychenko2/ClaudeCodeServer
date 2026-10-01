@@ -3,12 +3,12 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Карточка нити звука в ленте (шаг 2.8б): версии ‹ ›, A/B без сброса позиции, выделение куска,
-// мини-микшер стемов со «Свести N из M» (живой ffmpeg), файлы версии, значок лицензии, вариант
-// запуска и «Взять», «Сохранить как…» с 409 name_taken, личный чат — «Скачать». Стенд — на
-// ВРЕМЕННОЙ data: нить, исходник и правка без ИИ — живыми ручками; версия запуска со стемами
-// (генерации на стенде нет) — фикстурой в файле нитей и рабочей папке задачи; якорь запуска в
-// ленте — подменой ответа истории.
+// Карточки звука в ленте: каждая версия — своя карточка (исходник, правка без ИИ, варианты
+// запуска, сведение), A/B без сброса позиции, выделение куска, мини-микшер стемов со «Свести N
+// из M» (живой ffmpeg), файлы версии, значок лицензии, «Работать с этой» у варианта, «Сохранить
+// как…» с 409 name_taken, личный чат — «Скачать». Стенд — на ВРЕМЕННОЙ data: нить, исходник и
+// правка без ИИ — живыми ручками; версия запуска со стемами (генерации на стенде нет) — фикстурой
+// в файле нитей и рабочей папке задачи; якорь запуска в ленте — подменой ответа истории.
 //
 //   AE_DATA_DIR=/tmp/audio-card-stand/data AE_PROJECT_ROOT=/tmp/audio-card-stand/proj \
 //     PLAYWRIGHT_BASE_URL=http://127.0.0.1:5098 AE_SHOTS_DIR=../.cc-attachments/audio-card \
@@ -23,7 +23,7 @@ const FILE = 'music/intro.mp3';
 const JOB = 'fxjob0001';
 const PJOB = 'fxjob0002';
 
-interface Ctx { token: string; projectId: string; sid: string; threadId: string; v1: string; psid: string }
+interface Ctx { token: string; projectId: string; sid: string; threadId: string; v1: string; psid: string; threadIdPersonal: string }
 let ctx: Ctx;
 
 async function login(request: APIRequestContext): Promise<string> {
@@ -118,6 +118,7 @@ test.beforeAll(async ({ playwright, baseURL }) => {
   const psid = (await (await request.post('/api/chats', { headers, data: { mode: 'auto', name: `Звук личный ${Date.now()}` } })).json()).id as string;
   const draft = await request.post(`/api/audio-editor/chats/${psid}/threads`, { headers, data: { draftFolder: '', mode: 'voice', revision: 0 } });
   expect(draft.ok(), `черновик личного чата: ${await draft.text()}`).toBeTruthy();
+  const threadIdPersonal = (await draft.json()).focus as string;
   const pjob = path.join(DATA, 'audio-editor', ownerOf(stateFile(psid)), PJOB);
   tone(path.join(pjob, '1/main.mp3'), 262, 5);
   fs.writeFileSync(path.join(pjob, '1/subtitles.srt'), '1\n00:00:00,000 --> 00:00:02,000\nПривет\n');
@@ -132,28 +133,31 @@ test.beforeAll(async ({ playwright, baseURL }) => {
   });
 
   await request.dispose();
-  ctx = { token, projectId, sid, threadId, v1, psid };
+  ctx = { token, projectId, sid, threadId, v1, psid, threadIdPersonal };
 });
 
-// Якорь запуска внизу ленты: генерации на стенде нет — дописываем запись в ответ истории
-async function withLaunchRecord(page: Page) {
-  await page.route(`**/sessions/${ctx.sid}/history**`, async r => {
+// Якорь запуска в ленте: генерации на стенде нет — дописываем запись в ответ истории
+const launchRecord = (threadId: string, jobId: string, data: Record<string, unknown>) => ({
+  kind: 'module_record', module: 'audioeditor', recordType: 'audio_launch_versions',
+  fallback: 'Вы запустили: «тёплый ламповый звук» · ACE-Step 1.5', timestamp: Date.now(),
+  data: { threadId, jobId, ...data },
+});
+
+async function withLaunchRecord(page: Page, history: string, rec: Record<string, unknown>) {
+  await page.route(history, async r => {
     const res = await r.fetch();
     const body = await res.json();
-    const rec = {
-      kind: 'module_record', module: 'audioeditor', recordType: 'audio_launch_versions',
-      fallback: 'Вы запустили: «тёплый ламповый звук» · ACE-Step 1.5', timestamp: Date.now(),
-      data: {
-        threadId: ctx.threadId, jobId: JOB, mode: 'music', op: 'cover', provider: 'local', model: 'ACE-Step 1.5', count: 2,
-        price: { amount: null, unit: 'free', approx: false, source: 'catalog', eta: null, queueLength: null },
-        license: 'CC BY-NC 4.0', initiator: 'human', baseVersionId: ctx.v1,
-      },
-    };
     if (Array.isArray(body)) body.push(rec);
     else if (Array.isArray(body?.messages)) body.messages.push(rec);
     await r.fulfill({ response: res, json: body });
   });
 }
+
+const projectLaunch = (page: Page) => withLaunchRecord(page, `**/sessions/${ctx.sid}/history**`, launchRecord(ctx.threadId, JOB, {
+  mode: 'music', op: 'cover', provider: 'local', model: 'ACE-Step 1.5', count: 2,
+  price: { amount: null, unit: 'free', approx: false, source: 'catalog', eta: null, queueLength: null },
+  license: 'CC BY-NC 4.0', initiator: 'human', baseVersionId: ctx.v1,
+}));
 
 async function open(page: Page, url: string, width: number, theme: 'light' | 'dark') {
   await page.setViewportSize({ width, height: width < 500 ? 780 : 900 });
@@ -185,17 +189,21 @@ const shot = async (page: Page, name: string) => {
   await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: false });
 };
 
-test('карточка нити: версии ‹ ›, A/B, выделение, сведение, вариант «Взять», «Сохранить как…» с 409', async ({ page }) => {
-  await withLaunchRecord(page);
+test('карточка на версию: A/B, выделение, сведение новой карточкой, «Работать с этой», «Сохранить как…» с 409', async ({ page }) => {
+  await projectLaunch(page);
   const peaks = page.waitForRequest(/\/versions\/[^/]+\/peaks\?/);
   await open(page, `/#/project/${ctx.projectId}/chat/${ctx.sid}`, 1280, 'light');
 
-  const card = page.locator('[data-audio-card]').first();
-  await expect(card).toBeVisible({ timeout: 20_000 });
+  // Исходник, правка без ИИ и два варианта запуска — по карточке, каждая на своей версии
+  const cards = page.locator('[data-audio-card]');
+  await expect(cards.first()).toBeVisible({ timeout: 20_000 });
   await closeToasts(page);
+  await expect.poll(() => cards.evaluateAll(els => els.map(e => e.getAttribute('data-audio-card'))))
+    .toEqual(['origin', ctx.v1, 'fxv2', 'fxv3']);
+  const card = page.locator('[data-audio-card="fxv2"]');
   // Волна — с сервера, а не декодом в браузере
   await peaks;
-  await expect(card.locator('[data-audio-nav]')).toHaveText('версия 2 из 3');
+  await expect(card.locator('[data-audio-nav]')).toHaveText('версия 2 · вариант 1 из 2');
   await expect(card.locator('[data-audio-license="CC BY-NC"]')).toBeVisible();
   await expect(card.getByText('в работе')).toBeVisible();
   await expect(card.locator('[data-stem-row]')).toHaveCount(3);
@@ -203,47 +211,46 @@ test('карточка нити: версии ‹ ›, A/B, выделение, 
   await expect(card.getByText('Сохранятся папкой')).toBeVisible();
   await shot(page, 'card-desktop-light');
 
-  // Выделение куска протяжкой по волне — у нити в работе
+  // Выделение куска протяжкой по волне — у своей карточки
   await dragOn(page, card.getByRole('slider', { name: /^Волна/ }).first(), 0.2, 0.6);
   await expect(card.getByText(/^Выделено /)).toBeVisible();
   await expect(card.getByRole('button', { name: 'Перегенерировать кусок' })).toBeVisible();
+  await expect(page.locator('[data-audio-card="fxv3"]').getByRole('button', { name: 'Перегенерировать кусок' })).toHaveCount(0);
 
-  // ‹ — версия 1 (правка без ИИ): A/B с исходником, переключение не сбивает позицию
-  await card.getByRole('button', { name: 'Предыдущая версия' }).click();
-  await expect(card.locator('[data-audio-nav]')).toHaveText('версия 1 из 3');
-  await expect(card.getByText(/^Без ИИ · /)).toBeVisible();
-  await expect(card.getByRole('button', { name: 'A · исх.' })).toBeVisible();
-  const wave1 = card.getByRole('slider', { name: /^Волна/ }).first();
+  // Версия 1 (правка без ИИ) — своя карточка: A/B с исходником, переключение не сбивает позицию
+  const edit = page.locator(`[data-audio-card="${ctx.v1}"]`);
+  await expect(edit.locator('[data-audio-nav]')).toHaveText('версия 1');
+  await expect(edit.getByText(/^Без ИИ · /)).toBeVisible();
+  await expect(edit.getByRole('button', { name: 'A · исх.' })).toBeVisible();
+  const wave1 = edit.getByRole('slider', { name: /^Волна/ }).first();
   await wave1.scrollIntoViewIfNeeded();
   const b1 = (await wave1.boundingBox())!;
   await page.mouse.click(b1.x + b1.width * 0.5, b1.y + b1.height / 2);
-  const time = card.locator('[data-player-time]').first();
+  const time = edit.locator('[data-player-time]').first();
   await expect(time).toHaveText(/^0:04\.0 \//);
-  await card.getByRole('button', { name: 'A · исх.' }).click();
+  await edit.getByRole('button', { name: 'A · исх.' }).click();
   await expect.poll(() => wave1.getAttribute('aria-valuenow')).toBe('4');
   await expect(time).toHaveText(/^0:04\.0 \//);
   await expect(wave1).toHaveAttribute('aria-valuetext', /0:04\.0 из 0:08\.0/);
 
-  // › — обратно к версии 2: заглушить барабаны и свести 2 из 3 живым ffmpeg
-  await card.getByRole('button', { name: 'Следующая версия' }).click();
-  await card.getByRole('button', { name: 'Заглушить drums' }).click();
+  // Сведение 2 из 3 живым ffmpeg — новая версия ложится в ленту своей карточкой
+  await card.getByRole('button', { name: 'Заглушить барабаны' }).click();
   const mix = card.getByRole('button', { name: 'Свести 2 из 3 в новую версию' });
   await expect(mix).toBeEnabled();
   await mix.click();
-  await expect(card.locator('[data-audio-nav]')).toHaveText('версия 4 из 4', { timeout: 30_000 });
-  await expect(card.getByText(/Свёл стемы \(vocals, bass\)/)).toBeVisible();
+  const mixed = cards.last();
+  await expect(mixed.locator('[data-audio-nav]')).toHaveText('версия 4', { timeout: 30_000 });
+  await expect(mixed.getByText(/Свёл стемы \(vocals, bass\)/)).toBeVisible();
+  await expect(mixed).toHaveAttribute('data-current', 'true');
 
-  // Запуск: два варианта, «Взять» второй
-  const launch = page.locator('[data-audio-launch="done"]');
-  await expect(launch).toBeVisible();
-  await expect(launch.getByText('бесплатно', { exact: false })).toBeVisible();
-  await expect(launch.locator('[data-audio-variant]')).toHaveCount(2);
-  await launch.locator('[data-audio-variant="2"]').getByRole('button', { name: 'Взять' }).click();
-  await expect(launch.locator('[data-audio-variant="2"]')).toHaveAttribute('data-current', 'true');
-  await expect(card.locator('[data-audio-nav]')).toHaveText('версия 3 из 4');
+  // Второй вариант запуска: «Работать с этой» — от его версии
+  const second = page.locator('[data-audio-card="fxv3"]');
+  await second.getByRole('button', { name: 'Работать с этой' }).click();
+  await expect(second).toHaveAttribute('data-current', 'true');
+  await expect(mixed).toHaveAttribute('data-current', 'false');
 
   // «Сохранить как…» на занятое имя: 409 name_taken, подсказка, «Взять», запись
-  await card.getByRole('button', { name: 'Сохранить как…' }).click();
+  await second.getByRole('button', { name: 'Сохранить как…' }).click();
   const dialog = page.locator('[data-audio-save-as]');
   await expect(dialog).toBeVisible();
   await dialog.getByRole('textbox').last().fill('hit');
@@ -258,18 +265,14 @@ test('карточка нити: версии ‹ ›, A/B, выделение, 
 });
 
 test('360 px, тёмная тема: карточка без горизонтального скролла, M/S — тач-цель 32 px', async ({ page }) => {
-  await withLaunchRecord(page);
+  await projectLaunch(page);
   await open(page, `/#/project/${ctx.projectId}/chat/${ctx.sid}`, 360, 'dark');
-  const card = page.locator('[data-audio-card]').first();
+  // Карточка с микшером — вариант 1 запуска (стемы)
+  const card = page.locator('[data-audio-card="fxv2"]');
   await expect(card).toBeVisible({ timeout: 20_000 });
   await closeToasts(page);
-  // Карточка с микшером — версия 2 (стемы): листаем назад от текущей
-  for (let i = 0; i < 4 && (await card.locator('[data-audio-nav]').textContent()) !== 'версия 2 из 4'; i++) {
-    await card.getByRole('button', { name: 'Предыдущая версия' }).click();
-  }
-  await expect(card.locator('[data-audio-nav]')).toHaveText('версия 2 из 4');
   await expect(card.locator('[data-stem-row]')).toHaveCount(3);
-  const m = (await card.getByRole('button', { name: 'Заглушить vocals' }).boundingBox())!;
+  const m = (await card.getByRole('button', { name: 'Заглушить вокал' }).boundingBox())!;
   expect(m.width).toBeGreaterThanOrEqual(32);
   expect(m.height).toBeGreaterThanOrEqual(32);
   const cardBox = (await card.boundingBox())!;
@@ -282,8 +285,11 @@ test('360 px, тёмная тема: карточка без горизонта�
 
 for (const theme of ['light', 'dark'] as const) {
   test(`личный чат, 360 px, ${theme}: «Скачать» вместо сохранения, субтитры и слова списком`, async ({ page }) => {
+    await withLaunchRecord(page, `**/chats/${ctx.psid}/history**`, launchRecord(ctx.threadIdPersonal, PJOB, {
+      mode: 'voice', op: 'speak', provider: 'local', model: 'Qwen3-TTS', count: 1, license: 'GPL-3.0', initiator: 'agent',
+    }));
     await open(page, `/#/chats/${ctx.psid}`, 360, theme);
-    const card = page.locator('[data-audio-card]').first();
+    const card = page.locator('[data-audio-card="pv1"]');
     await expect(card).toBeVisible({ timeout: 20_000 });
     await closeToasts(page);
     await expect(card.getByRole('button', { name: 'Скачать', exact: true })).toBeVisible();

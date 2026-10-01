@@ -113,8 +113,12 @@ RUN npm install -g @anthropic-ai/claude-code
 # вызов скачивает пакет, и «шум» загрузки может исказить первый разбор вывода.
 RUN npm install -g skills
 
-# Консольные утилиты для веб-терминала (Midnight Commander и т.п.)
-RUN apt-get update && apt-get install -y --no-install-recommends mc \
+# Консольные утилиты для веб-терминала (Midnight Commander и т.п.) и ffmpeg
+# для монтажа без ИИ в модуле «Звук» (ADR-021, этап 5): пики волны, обрезка,
+# фейды, громкость, нормализация LUFS, сведение стемов. Без него операции
+# корректно сереют (`503 dsp_unavailable`), но в контейнере тесты на монтаж
+# должны работать.
+RUN apt-get update && apt-get install -y --no-install-recommends mc ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
 # Непривилегированный пользователь; HOME под volume ~/.claude

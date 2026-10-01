@@ -42,6 +42,9 @@ function Hint({ ctx }: { ctx: ComposerModeCtx }) {
   );
 }
 
+// Имя вклада composer-mode: по нему низ панели «Картинки» просит поле ввода отправить текст
+export const IMAGE_COMPOSER_MODE = 'image';
+
 export const imageMode: ComposerModeApi = {
   title: 'Картинка',
   icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,

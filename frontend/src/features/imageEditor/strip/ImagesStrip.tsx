@@ -97,7 +97,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const src = thread ? activeSrc(projectId, thread) : null;
   const parts = {
     focus: thread ? focusLabel(thread, false, personal) : null, provider: L.provider?.label ?? null, model: L.model?.label ?? null,
-    count: L.settings.count, price: L.price ?? null, character: character?.name ?? null,
+    count: L.count, price: L.price ?? null, character: character?.name ?? null,
   };
   const title = switcher ?? (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
@@ -169,7 +169,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
             style={{ minWidth: 0, flex: '0 1 auto', height: 28, border: `1px solid ${open ? C.accent : C.border}`, background: C.bgWhite }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {isMobile ? `${L.settings.count} вар.` : stripSummary(parts, true)}
+                {isMobile ? `${L.count} вар.` : stripSummary(parts, true)}
               </span>
               {L.blocked && <span style={{ display: 'inline-flex', color: C.warningText }}>{ic(AlertTriangle)}</span>}
               {ic(inPanel ? ChevronRight : ChevronDown)}

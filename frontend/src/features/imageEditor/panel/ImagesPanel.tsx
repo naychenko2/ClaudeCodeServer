@@ -2,14 +2,15 @@
 // на общем каркасе GenerationPanel, под флагом image-editor-panel. Вкладка «Настройки» — те же
 // секции, что у карточки над полосой (strip/settings), «Персонажи» — прежняя CharactersPanel.
 // Живёт и в проекте, и в правой колонке личного чата (projectId = null → область personal):
-// там нет персонажей и образцов из проекта. Закреплённый низ с запуском, операция и режим
-// подбора — следующий шаг (1б.3): пока «Варианты и цена» остаются секцией тела.
+// там нет персонажей и образцов из проекта. Вверху «Настроек» — операция и режим подбора,
+// «− N +», цена и запуск — в закреплённом низу. Запуск идёт тем же путём, что композер: промпт
+// отправляет само поле ввода (submitComposerMode), операции без промпта — launchThread.
 
 import { useEffect, useState } from 'react';
 import { Contact, Image as ImageIcon, SlidersHorizontal, Users, X } from 'lucide-react';
 import {
-  EmptyState, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
-  type RevealPanelDetail,
+  EmptyState, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE, showToast, submitComposerMode,
+  type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
 import { CharactersPanel } from '../characters/CharactersPanel';
@@ -18,10 +19,13 @@ import { useCharacters } from '../characters/useCharacters';
 import { enterScope, isPersonalScope } from '../scope';
 import { ic } from '../strip/settings/primitives';
 import { SettingsSections } from '../strip/settings/SettingsSections';
-import { releaseFocus } from '../thread/actions';
+import { IMAGE_COMPOSER_MODE } from '../composer/imageMode';
+import { createDraft, releaseFocus } from '../thread/actions';
 import { focusLabel } from '../thread/model';
 import { useThreads } from '../thread/threadStore';
-import { useThreadLaunch } from '../thread/useThreadLaunch';
+import type { ImageThread } from '../thread/threadsApi';
+import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
+import { ONE_VARIANT_HINT } from './panelOp';
 
 type Tab = 'settings' | 'characters';
 const isTab = (t: unknown): t is Tab => t === 'settings' || t === 'characters';
@@ -38,6 +42,16 @@ if (typeof window !== 'undefined') {
     wanted = d.tab;
     subs.forEach(fn => fn());
   });
+}
+
+// Запуск из закреплённого низа. Без выбранной картинки — черновик «Новая картинка», как
+// «Нарисовать новую»: поле ввода само переходит в режим «Картинка», промпт пишут там.
+// Операция без промпта — тот же launchThread, что у композера (операцию он берёт из панели);
+// с промптом — отправка самим полем ввода, как по Enter
+export async function panelRun(projectId: string, sessionId: string, thread: ImageThread | null, noPrompt: boolean) {
+  if (!thread) { await createDraft(projectId, sessionId, ''); return; }
+  if (noPrompt) { await launchThread(projectId, sessionId, thread, { kind: 'prompt', prompt: '' }); return; }
+  if (!submitComposerMode(sessionId, IMAGE_COMPOSER_MODE)) showToast('Поле ввода не найдено — откройте чат', '', 'error');
 }
 
 export function ImagesPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
@@ -85,9 +99,21 @@ export function ImagesPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   } else {
     body = (
       <SettingsSections projectId={projectId} L={L} catalog={L.catalog} isMobile={false} thread={thread}
-        onCharacterSheet={() => setTab('characters')} onCharacters={() => setTab('characters')} />
+        onCharacterSheet={() => setTab('characters')} onCharacters={() => setTab('characters')} panel />
     );
   }
+
+  const foot: GenerationFoot | undefined = tab === 'settings' && L.catalog?.providers.length ? {
+    reason: !sessionId ? 'Откройте чат: результат ляжет в его ленту' : L.reason || undefined,
+    queue: L.queue,
+    count: L.count,
+    maxCount: L.maxCount,
+    maxCountHint: L.maxCount === 1 ? ONE_VARIANT_HINT : undefined,
+    onCountChange: n => L.setSettings({ count: n }),
+    price: L.priceLines,
+    runLabel: L.runLabel,
+    onRun: () => { if (sessionId) void panelRun(projectId, sessionId, thread, !!L.quickAction); },
+  } : undefined;
 
   return (
     <GenerationPanel<Tab>
@@ -101,6 +127,7 @@ export function ImagesPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       tab={tab}
       onTabChange={setTab}
       context={context}
+      foot={foot}
       onClose={ctx.onClose}
       layout="column"
     >

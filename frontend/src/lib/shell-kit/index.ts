@@ -164,8 +164,8 @@ export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 // ─── composerStrips ──────────────────────────────────────────────────────────
 // Владелец полосы над композером просит показать её в чате и снимает запрос
 // (правило старшинства — в самом сторе, ADR-019 решение 3); notifyComposer — сигнал
-// композеру от владельца режима поля ввода
-export { requestStrip, releaseStrip, notifyComposer } from '../composerStrips';
+// композеру от владельца режима поля ввода, submitComposerMode — отправка режима извне
+export { requestStrip, releaseStrip, notifyComposer, submitComposerMode } from '../composerStrips';
 
 // ─── chatFollow ──────────────────────────────────────────────────────────────
 // Запуск по действию человека прокручивает ленту чата вниз, как своё сообщение

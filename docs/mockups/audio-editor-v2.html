@@ -258,6 +258,28 @@
   .adv { margin-top: 12px; border: 1px solid var(--c-border-light); border-radius: 10px; background: var(--c-bg-panel); }
   .adv > .hd { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--c-text-heading); }
   .adv > .bd { padding: 0 10px 10px; }
+  /* Склейка: список кусков, стыки между ними */
+  .jlist { display: flex; flex-direction: column; }
+  .jrow { border: 1px solid var(--c-border-light); border-radius: 9px; background: var(--c-bg-card); padding: 5px 6px 6px; min-width: 0; }
+  .jrow.drag { opacity: .4; }
+  .jrow.over { border-color: var(--c-accent); box-shadow: 0 0 0 2px var(--c-accent-light); }
+  .jrow .player { margin-top: 3px; gap: 6px; }
+  .jtop { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 12px; }
+  .jgrip { cursor: grab; color: var(--c-text-muted); display: inline-grid; place-items: center; width: 16px; flex: 0 0 16px; }
+  .jname { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; color: var(--c-text-heading); font-weight: 600; }
+  .jseam { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 3px 0; position: relative; }
+  .jseam::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; border-left: 1px dashed var(--c-border); }
+  .jseam-b { position: relative; height: 22px; border-radius: 999px; border: 1px solid var(--c-border); background: var(--c-bg-white); font-size: 11px; color: var(--c-text-secondary); padding: 0 9px; cursor: pointer; display: inline-flex; gap: 4px; align-items: center; }
+  .jseam-b:hover { border-color: var(--c-accent-muted); }
+  .jseam-b.own { border-color: var(--c-accent); color: var(--c-accent); background: var(--c-accent-light); }
+  .jtop .ib[disabled] { opacity: .35; cursor: default; }
+  .jedit { border: 1px solid var(--c-border-light); border-radius: 9px; padding: 6px 8px; background: var(--c-bg-panel); margin: 0 0 4px; }
+  .jpick { border: 1px solid var(--c-border); border-radius: 9px; background: var(--c-bg-card); margin-top: 6px; overflow: hidden; }
+  .jpick button { display: flex; align-items: center; gap: 6px; width: 100%; border: none; border-top: 1px solid var(--c-border-light); background: transparent; padding: 5px 8px; font-size: 12px; color: var(--c-text-primary); cursor: pointer; text-align: left; min-width: 0; }
+  .jpick button:first-of-type { border-top: none; }
+  .jpick button:hover { background: var(--c-bg-selected); }
+  .jpick button[disabled] { opacity: .5; cursor: default; }
+  .jpick .jname { font-weight: 400; }
   .pricebar { position: sticky; bottom: -12px; margin: 12px -14px -12px; padding: 9px 14px; background: var(--c-bg-card); border-top: 1px solid var(--c-border-light); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .pricebar .p { flex: 1; min-width: 150px; font-size: 12px; color: var(--c-text-secondary); }
   .count { display: inline-flex; align-items: center; border: 1px solid var(--c-border); border-radius: 8px; height: 26px; background: var(--c-bg-white); }
@@ -319,7 +341,7 @@
 <body>
 <div class="page">
   <h1 class="doc">Раздел «Звук» v2: настройки в боковой панели</h1>
-  <p class="lead">Макет на согласование, код продукта не менялся. Главное отличие от v1: всплывающей карточки «Настройки звука» больше нет — настройки живут в боковой панели «Звук» с вкладками «Настройки» и «Голоса», и панель не закрывается, пока вы слушаете версии и выделяете кусок на волне. Полоса над полем ввода — сводка: клик открывает панель. Кнопка «Сценарий: кусок» в шапке ставит главный сценарий: протяните мышью по волне в карточке — поля «Кусок» в панели меняются вместе с выделением. Стемы теперь сводятся в новую версию без ИИ (версия 2 нити, ‹). Тексты и решения — в <code>audio-editor-v2-proposal.md</code>.</p>
+  <p class="lead">Макет на согласование, код продукта не менялся. Главное отличие от v1: всплывающей карточки «Настройки звука» больше нет — настройки живут в боковой панели «Звук» с вкладками «Настройки» и «Голоса», и панель не закрывается, пока вы слушаете версии и выделяете кусок на волне. Полоса над полем ввода — сводка: клик открывает панель. Кнопка «Сценарий: кусок» в шапке ставит главный сценарий: протяните мышью по волне в карточке — поля «Кусок» в панели меняются вместе с выделением. Стемы теперь сводятся в новую версию без ИИ (версия 2 нити, ‹). Дополнение: «Обработка → Склеить» собирает новый файл из кусков звука этого чата — кнопка «Сценарий: склейка». Тексты и решения — в <code>audio-editor-v2-proposal.md</code>.</p>
   <div class="demo" id="demo"></div>
   <div class="frame"><div id="app"></div></div>
   <p class="caption" id="cap"></p>
@@ -356,6 +378,8 @@ const IC = {
   scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/>',
   ab: '<path d="M4 18 8 6l4 12M5.3 14h5.4M15 6h3.5a3 3 0 0 1 0 6H15zM15 12h4a3 3 0 0 1 0 6h-4z"/>',
+  grip: '<circle cx="9" cy="6" r="1.3"/><circle cx="15" cy="6" r="1.3"/><circle cx="9" cy="12" r="1.3"/><circle cx="15" cy="12" r="1.3"/><circle cx="9" cy="18" r="1.3"/><circle cx="15" cy="18" r="1.3"/>',
+  fade: '<path d="M3 6c6 0 12 12 18 12M3 18c6 0 12-12 18-12"/>', join: '<path d="M3 12h7M14 12h7M10 8v8M14 8v8"/>',
   back: '<path d="m15 18-6-6 6-6"/>', send: '<path d="M12 19V5M5 12l7-7 7 7"/>', text: '<path d="M4 7V5h16v2M9 19h6M12 5v14"/>',
 };
 const ic = (n, s) => `<svg class="i${s ? ' s' : ''}" viewBox="0 0 24 24">${IC[n] || ''}</svg>`;
@@ -496,6 +520,7 @@ const M = {
   align: { label: 'ElevenLabs Forced Alignment', ru: 1, price: { u: 'run', v: 0.22 }, adv: [] },
   pitch: { label: 'Basic Pitch', ru: 1, price: { u: 'free', eta: '~5 с, на процессоре' }, adv: [A('onset_threshold', 'Порог начала ноты', 'range', { min: 0, max: 1, step: .05, def: .5 }), A('frame_threshold', 'Порог кадра', 'range', { min: 0, max: 1, step: .05, def: .3 }), A('min_note_ms', 'Короче — не нота, мс', 'num', { def: 58 })] },
   trim: { label: 'Обрезка и громкость', ru: 1, price: { u: 'none' }, adv: [] },
+  join: { label: 'Склеить', ru: 1, price: { u: 'none' }, adv: [] },
 };
 
 // Источники голоса для озвучки
@@ -552,6 +577,8 @@ const MODES = {
       models: { local: ['pitch'] }, why: { fal: 'Нет', higgsfield: 'Нет', yandex: 'Нет' }, fields: ['midihint'] },
     { id: 'trim', label: 'Обрезка и громкость', run: 'Применить', input: 1, text: 'Комментарий не нужен', noai: 1,
       models: { none: ['trim'] }, fields: ['interval', 'gain', 'norm', 'fades', 'conv'] },
+    { id: 'join', label: 'Склеить', run: 'Склеить', text: 'Комментарий не нужен — соберите куски в панели и нажмите «Склеить»', noai: 1,
+      models: { none: ['join'] }, fields: ['jparts', 'jseam', 'jout'] },
   ] },
 };
 const opsOf = m => MODES[m].ops;
@@ -580,6 +607,9 @@ const S = {
   instr: false, count: 2, voice: 'anya', voiceOpen: 'anya', newVoice: null, lyrics: '[Verse]\nСтроки кода в тишине\nЗвучат, как дождь в окне\n[Chorus]\nAI Home, AI Home…',
   dlg: [['Аня', 'Привет! Это подкаст AI Home.'], ['Тёплый баритон', 'А сегодня мы слушаем код.']],
   tracks: { drums: 1, bass: 1 }, panel: true,
+  // Склейка: куски по порядку ({t: нить, v: версия}), общий стык, свои стыки по номеру, итоговые новые файлы
+  join: { items: [{ t: 'A', v: 3 }, { t: 'B', v: 2 }], seam: { kind: 'pause', sec: 0.5 }, own: {}, edit: null, pick: false, name: 'podcast-full.mp3', noff: false },
+  joined: [],
 };
 const versA = () => VERS_A.concat(S.extraA);
 const key = () => `${S.mode}:${S.op[S.mode]}`;
@@ -656,6 +686,33 @@ function player(id, seed, len, o = {}) {
   return `<div class="player"><button class="play${o.sm ? ' sm' : ''}" data-act="play:${id}:${len}" title="${on ? 'Пауза' : 'Слушать'}">${ic(on ? 'pause' : 'play', o.sm)}</button>${wave(id, seed, len, o)}<span class="tm" data-tm="${id}">${on ? mmss(S.play.t) : '0:00.0'} / ${mmss(len)}</span></div>`;
 }
 
+/* ===================== Склейка ===================== */
+// Звук этого чата, из которого собирается склейка: нити с версиями и уже склеенные файлы
+function joinSources() {
+  return [{ t: 'A', name: 'podcast-intro.mp3', rate: 44.1, vers: versA() }, { t: 'B', name: 'greeting.wav', rate: 24, vers: VERS_B }]
+    .concat(S.joined.map((j, i) => ({ t: 'C' + i, name: j.name, rate: 44.1, vers: [j] })));
+}
+const jsrc = t => joinSources().find(x => x.t === t);
+function jpiece(it) { const s = jsrc(it.t), v = s && s.vers[it.v - 1]; return v ? { name: s.name, rate: s.rate, len: v.len, seed: v.seed } : null; }
+const jseamOf = i => S.join.own[i] || S.join.seam;
+const fsec = x => String(Math.round(x * 10) / 10).replace('.', ',');
+const jseamText = sm => sm.kind === 'none' ? 'встык' : (sm.kind === 'pause' ? 'пауза ' : 'плавно ') + fsec(sm.sec) + ' с';
+const jseamIcon = sm => ({ none: 'minus', pause: 'pause', fade: 'fade' }[sm.kind]);
+const plPieces = n => n % 10 === 1 && n % 100 !== 11 ? 'кусок' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'куска' : 'кусков';
+// Итог: сумма кусков, плюс паузы, минус плавные переходы (куски на переходе звучат внахлёст)
+function joinTotal() {
+  const ps = S.join.items.map(jpiece).filter(Boolean);
+  let t = ps.reduce((n, p) => n + p.len, 0);
+  for (let i = 0; i < ps.length - 1; i++) { const sm = jseamOf(i); if (sm.kind === 'pause') t += sm.sec; if (sm.kind === 'fade') t -= sm.sec; }
+  return Math.max(0, t);
+}
+function joinBlock() {
+  if (S.join.noff) return 'На сервере нет ffmpeg — склейка недоступна. Поставить его может администратор';
+  if (S.join.items.length < 2) return 'Нужно хотя бы два куска — добавьте ещё один';
+  return null;
+}
+const joinWhat = () => S.join.items.map((it, i) => `${jpiece(it).name} в${it.v}` + (i < S.join.items.length - 1 ? ` → ${jseamText(jseamOf(i))} → ` : '')).join('');
+
 /* ===================== Полоса «Звук» ===================== */
 function focusName() {
   if (S.scene === 'empty') return null;
@@ -664,7 +721,7 @@ function focusName() {
 function stripSummary(short) {
   const op = curOp(), p = curProv(), mid = curModel(), m = M[mid];
   const voice = S.mode === 'voice' && (S.vsrc[key()] || 'lib') === 'lib' && !personal() ? VOICES.find(v => v.slug === S.voice).name : null;
-  const parts = [MODES[S.mode].label + ' · ' + op.label, PROV[p].label, m.label, voice, op.count ? `${S.count} вар.` : null, shortPrice()];
+  const parts = [MODES[S.mode].label + ' · ' + op.label, PROV[p].label, m.label === op.label ? null : m.label, voice, op.count ? `${S.count} вар.` : null, shortPrice()];
   return parts.filter(Boolean).join(' · ');
 }
 function queueBadge() {
@@ -801,6 +858,39 @@ function renderField(f, mid) {
     case 'gain': return fieldRow('Громкость', range('gain', -20, 20, .5, 0), '0 дБ');
     case 'norm': return `<label class="fld-row" style="display:flex;gap:6px;align-items:center"><input type="checkbox" checked> Нормализовать до −14 LUFS</label>`;
     case 'fades': return `<div class="two">${fieldRow('Нарастание', range('fi', 0, 10, .5, 1), '1 с')}${fieldRow('Затухание', range('fo', 0, 10, .5, 2), '2 с')}</div>`;
+    case 'jparts': {
+      const n = S.join.items.length;
+      const rows = S.join.items.map((it, i) => {
+        const pc = jpiece(it); if (!pc) return '';
+        let html = `<div class="jrow" draggable="true" data-jrow="${i}"><div class="jtop"><span class="jgrip" data-grip="1" title="Потяните, чтобы переставить">${ic('grip', 1)}</span><span class="badge mut">${i + 1}</span><span class="jname" title="${esc(pc.name)} · версия ${it.v}">${esc(pc.name)} · версия ${it.v}</span>`
+          + `<button class="ib sm" data-act="jmove:${i}:-1" ${i === 0 ? 'disabled' : ''} title="Выше">${ic('up', 1)}</button><button class="ib sm" data-act="jmove:${i}:1" ${i === n - 1 ? 'disabled' : ''} title="Ниже">${ic('down', 1)}</button><button class="ib sm" data-act="jdel:${i}" title="Убрать кусок">${ic('x', 1)}</button></div>`
+          + `${player('J' + i + it.t + it.v, pc.seed, pc.len, { sm: true, n: 50 })}</div>`;
+        if (i < n - 1) {
+          const sm = jseamOf(i), own = !!S.join.own[i];
+          html += `<div class="jseam"><button class="jseam-b${own ? ' own' : ''}" data-act="jedit:${i}" title="${own ? 'Свой стык — нажмите, чтобы поправить' : 'Как у всех стыков — нажмите, чтобы задать этому стыку своё'}">${ic(jseamIcon(sm), 1)}${jseamText(sm)}${own ? ' · свой' : ''}</button></div>`;
+          if (S.join.edit === i) html += `<div class="jedit"><div class="hint" style="margin-bottom:4px">Стык ${i + 1} → ${i + 2}</div>${segm('jown:' + i, [['inherit', 'Как у всех'], ['none', 'Встык'], ['pause', 'Пауза'], ['fade', 'Плавно']], own ? sm.kind : 'inherit')}`
+            + (own && sm.kind !== 'none' ? `<div style="display:flex;align-items:center;gap:8px;margin-top:6px"><input type="range" min=".1" max="5" step=".1" value="${sm.sec}" data-jsec="${i}" style="flex:1"><span class="tm" data-jsec-v="${i}">${fsec(sm.sec)} с</span></div>` : '') + '</div>';
+        }
+        return html;
+      }).join('');
+      const pick = S.join.pick ? `<div class="jpick">${joinSources().map(sr => sr.vers.map((v, k) => `<button data-act="jadd:${sr.t}:${k + 1}">${ic(sr.t === 'B' ? 'mic' : sr.t === 'A' ? 'music' : 'join', 1)}<span class="jname">${esc(sr.name)} · версия ${k + 1}</span><span class="tm">${mmss(v.len)}</span></button>`).join('')).join('')}<div class="hint" style="padding:5px 8px;border-top:1px solid var(--c-border-light)">Звук этого чата: нити и их версии. Файл из проекта сначала откройте в ленте — «Обработать файл…».</div></div>` : '';
+      return fieldRow(`Куски · ${n}<span class="v" data-jtotal="1">итог ${mmss(joinTotal())}</span>`, `<div class="jlist">${rows}</div>${n ? '' : '<div class="hint">Кусков пока нет. Добавьте звук из этого чата — склеим по порядку сверху вниз.</div>'}
+        <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap"><button class="btn xs${S.join.pick ? ' pri' : ''}" data-act="jpick">${ic('plus', 1)}Кусок</button><span class="hint">Порядок — перетащите за ${ic('grip', 1)} или кнопками ↑ ↓</span></div>${pick}`);
+    }
+    case 'jseam': {
+      const sm = S.join.seam, nOwn = Object.keys(S.join.own).length;
+      return fieldRow('Между кусками', segm('jkind', [['none', 'Встык'], ['pause', 'Пауза'], ['fade', 'Плавный переход']], sm.kind)
+        + (sm.kind === 'none' ? '' : `<div style="display:flex;align-items:center;gap:8px;margin-top:6px"><input type="range" min=".1" max="5" step=".1" value="${sm.sec}" data-jsec="all" style="flex:1"><span class="tm" data-jsec-v="all">${fsec(sm.sec)} с</span></div>`)
+        + `<div class="hint" style="margin-top:4px">${sm.kind === 'fade' ? 'Конец куска плавно уходит, начало следующего плавно входит — итог короче на длину перехода. ' : sm.kind === 'pause' ? 'Тишина между кусками — для реплик и частей озвучки. ' : 'Куски идут вплотную. '}Действует на все стыки${nOwn ? `, кроме своих (${nOwn})` : ''}. Свой стык — нажмите на него в списке.</div>`);
+    }
+    case 'jout': {
+      const ps = S.join.items.map(jpiece).filter(Boolean), rates = [...new Set(ps.map(x => x.rate))];
+      const byName = [...new Map(ps.map(x => [x.name, x.rate])).entries()];
+      return (rates.length > 1 ? `<div class="box info">${ic('alert', 1)}<div class="body">Частоты у кусков разные: ${byName.map(([nm, r]) => `${esc(nm)} — ${String(r).replace('.', ',')} кГц`).join(', ')}. Сведём к ${String(Math.max(...rates)).replace('.', ',')} кГц сами — делать ничего не нужно.</div></div>` : '')
+        + `<label class="fld-row" style="display:flex;gap:6px;align-items:center"><input type="checkbox" checked> Выровнять громкость кусков <span class="muted">· −16 LUFS</span></label>`
+        + `<div class="two" style="grid-template-columns:1fr 88px">${fieldRow('Имя нового файла', `<input class="fld mono" data-jname="1" value="${esc(S.join.name)}">`)}${fieldRow('Формат', sel(['mp3', 'wav', 'flac']))}</div>`
+        + `<div class="hint" style="margin-top:4px">Результат — новый файл отдельной карточкой в ленте. Исходные куски не меняются.</div>`;
+    }
     case 'conv': return `<div class="two">${fieldRow('Формат', sel(['mp3', 'wav', 'flac', 'ogg']))}${fieldRow('Частота', sel(['как есть', '44,1 кГц', '48 кГц']))}</div>`;
   }
   return '';
@@ -823,6 +913,7 @@ function advForm(mid) {
 }
 function runBlock() {
   const op = curOp();
+  if (op.id === 'join') return joinBlock();
   if (S.mode === 'voice' && op.id === 'speak' && S.voice === 'andrey' && (S.vsrc[key()] || 'lib') === 'lib' && !personal()) return 'Выберите голос, который умеет озвучивать текст: «Андрей» — модель RVC';
   if (op.input && !focusName()) return 'Выберите звук в ленте — операция работает с готовой версией';
   if (op.id === 'repaint' && S.sel.b - S.sel.a < .3) return 'Выделите кусок на волне в карточке версии';
@@ -860,11 +951,12 @@ function settingsBody() {
 function settingsFoot() {
   const op = curOp(), mid = curModel(), why = runBlock();
   const count = op.count ? `<span class="count" title="Сколько вариантов"><button data-act="cnt:-1" ${S.count <= 1 ? 'disabled' : ''}>−</button><span>${S.count}</span><button data-act="cnt:1" ${S.count >= 4 ? 'disabled' : ''}>+</button></span>` : '';
-  const pr = priceOf(mid, { count: op.count ? S.count : 1 }).split(' · ');
+  const nj = S.join.items.length;
+  const pr = op.id === 'join' ? ['Бесплатно · без ИИ', `итог ${mmss(joinTotal())} · ${nj} ${plPieces(nj)} · мгновенно`] : priceOf(mid, { count: op.count ? S.count : 1 }).split(' · ');
   const q = queueBadge();
   return `${why ? `<div class="why">${ic('alert', 1)}<span>${esc(why)}</span></div>` : ''}${q ? `<div style="margin-bottom:6px">${q}</div>` : ''}
     <div class="row">${count}<span class="p" data-price="1"><b>${esc(pr[0])}</b>${pr.length > 1 ? '<br>' + esc(pr.slice(1).join(' · ')) : ''}</span>
-    <button class="btn pri sm" data-act="run" ${why ? `disabled title="${esc(why)}"` : `title="Текст из поля ввода уходит модели"`}>${ic('spark', 1)}${op.run}</button></div>`;
+    <button class="btn pri sm" data-act="run" ${why ? `disabled title="${esc(why)}"` : `title="${op.id === 'join' ? 'Новый файл ляжет в ленту отдельной карточкой' : 'Текст из поля ввода уходит модели'}"`}>${ic(op.id === 'join' ? 'join' : 'spark', 1)}${op.run}</button></div>`;
 }
 // Полноразмерный редактор длинного текста внутри панели: слова песни или реплики
 function bigEditor() {
@@ -910,7 +1002,9 @@ function saveBtns() {
 }
 function procMenu(id) {
   return S.menu === 'proc:' + id ? `<div class="menu" style="right:8px;bottom:36px">
-    ${opsOf('process').map(o => `<button class="mi" data-act="op:process:${o.id}">${o.id === 'trim' ? ic('scissors') : ic('wand')}<span>${o.label}</span></button>`).join('')}
+    ${opsOf('process').map(o => o.id === 'join'
+      ? `<button class="mi" data-act="joinfrom:${id}">${ic('join')}<span>Склеить с другим звуком<small>эта версия станет куском склейки</small></span></button>`
+      : `<button class="mi" data-act="op:process:${o.id}">${o.id === 'trim' ? ic('scissors') : ic('wand')}<span>${o.label}</span></button>`).join('')}
     <div class="msep"></div><button class="mi" data-act="op:voice:convert">${ic('mic')}<span>Сменить голос</span></button><button class="mi" data-act="op:music:cover">${ic('music')}<span>Кавер · Перегенерировать кусок…</span></button></div>` : '';
 }
 const linkedHere = () => S.panel && S.tab === 'settings' && curOp().fields.includes('interval');
@@ -930,7 +1024,16 @@ function threadCard(tid) {
       <button class="btn xs" data-act="menu:proc:${tid}">${ic('wand', 1)}Обработать ${ic('down', 1)}</button>${saveBtns()}</div>${procMenu(tid)}
   </div>`;
 }
+// Склейка — всегда новый файл (новая нить), а не версия одного из исходников
+function joinedCard(j, i) {
+  return `<div class="quiet">${j.by === 'Claude' ? 'Claude склеил' : 'Андрей склеил'} ${j.n} ${plPieces(j.n)} в новый файл · <b>${esc(j.name)}</b></div>
+  <div class="acard"><div class="hd">${ic('join', 1)}<span class="fname">${esc(j.name)}</span><span class="badge ok">новый файл</span><span class="grow"></span><span class="stepnav">версия 1 из 1</span></div>
+    <div class="what">${esc(j.what)} · <span class="by">${j.by === 'Claude' ? ic('spark', 1) + 'Claude' : j.by}</span></div>
+    ${player('C' + i, j.seed, j.len)}
+    <div class="foot"><span class="meta">Без ИИ · бесплатно · ${fsec(j.len)} с</span><button class="btn xs" data-act="menu:proc:C${i}">${ic('wand', 1)}Обработать ${ic('down', 1)}</button>${saveBtns()}</div>${procMenu('C' + i)}</div>`;
+}
 function launchCard(kind) {
+  if (kind === 'join') return `<div class="launch"><div class="t">${ic('spark', 1)}Claude запустил · Обработка · Склеить <span class="badge ok">готово</span></div><div class="hint">Без ИИ · 3 куска · пауза 0,5 с, перед отбивкой плавно 1,5 с · бесплатно · результат — новый файл</div><div class="prompt">podcast-intro.mp3 в3 → greeting.wav в2 → podcast-intro.mp3 в1</div></div>`;
   if (kind === 'music') return `<div class="launch"><div class="t">${ic('spark', 1)}Claude запустил · Музыка · Песня <span class="badge ok">готово</span></div><div class="hint">Локально · ACE-Step 1.5 XL · инструментал · 20 с · 100 bpm · A minor · бесплатно</div><div class="prompt">lo-fi hip hop intro, warm rhodes, vinyl crackle, soft drums, podcast opener</div></div>`;
   return `<div class="launch"><div class="t">${ic('spark', 1)}Claude запустил · Голос · Озвучить <span class="badge ok">готово</span></div><div class="hint">Локально · Qwen3-TTS 1.7B · голос «Аня» из «Голосов» · русский · бесплатно</div><div class="prompt">Добро пожаловать в подкаст AI Home!</div></div>`;
 }
@@ -981,6 +1084,7 @@ function feed() {
     ${threadCard('A')}
     <div class="quiet">Андрей очистил шум у приветствия · <b>greeting.wav</b> — сравните версии A/B</div>
     ${threadCard('B')}
+    ${S.joined.map(joinedCard).join('')}
     ${S.scene !== 'normal' ? `<div class="msg user">${{ running: 'Сделай ещё английскую версию приветствия, два варианта.', queue: 'Обучи мой голос на лекциях.', error: 'Сделай джингл на 30 секунд у ElevenLabs.', limit: 'Озвучь тизер через Higgsfield.' }[S.scene]}</div>${sceneCard()}` : ''}
   </div>`;
 }
@@ -1054,7 +1158,7 @@ function genPanel(o) {
 function soundPanel(view) {
   const f = focusName(), op = curOp();
   const ctx = S.tab === 'settings'
-    ? (f ? `${ic('waves', 1)}<span class="grow" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Работаем с: <b>${esc(f)}</b>${op.input ? ' · операция возьмёт её на вход' : ''}</span><button class="ib sm" data-act="release" title="Снять выбор">${ic('x', 1)}</button>`
+    ? (op.id === 'join' ? `${ic('join', 1)}<span class="grow">Куски — звук этого чата · результат — новый файл, исходники не меняются</span>` : f ? `${ic('waves', 1)}<span class="grow" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Работаем с: <b>${esc(f)}</b>${op.input ? ' · операция возьмёт её на вход' : ''}</span><button class="ib sm" data-act="release" title="Снять выбор">${ic('x', 1)}</button>`
        : `${ic('spark', 1)}<span class="grow">Новый звук · результат ляжет в ленту новой карточкой</span>`)
     : (personal() ? `${ic('lock', 1)}<span>Библиотека голосов — только в проекте</span>` : `${ic('users', 1)}<span class="grow">Папка <code>voices/</code> проекта · подключённый голос уходит в каждую озвучку</span>`);
   const body = S.tab === 'settings' ? settingsBody() : voicesPanel();
@@ -1111,6 +1215,16 @@ function gallery() {
       (() => { const keep = { ...S, op: { ...S.op } }; S.scope = 'project'; S.mode = 'music'; S.op = { ...S.op, music: 'song' }; S.tab = 'settings'; S.big = 'lyrics'; const out = soundPanel('static'); Object.assign(S, keep); return out; })()),
     cell('Реплики диалога: редактор на всю панель', 'Голос и текст каждой реплики, порядок, счётчик символов.',
       (() => { const keep = { ...S, op: { ...S.op } }; S.scope = 'project'; S.mode = 'voice'; S.op = { ...S.op, voice: 'dialog' }; S.tab = 'settings'; S.big = 'dialog'; const out = soundPanel('static'); Object.assign(S, keep); return out; })()),
+    cell('Склеить: панель', 'Куски из звука этого чата по порядку; общий стык для всех и свой у отдельного стыка (здесь — плавный переход перед отбивкой). Итог считается сразу.',
+      (() => { const keep = { ...S, op: { ...S.op } }; S.scope = 'project'; S.mode = 'process'; S.op = { ...S.op, process: 'join' }; S.tab = 'settings'; S.big = null; S.adv = false;
+        S.join = { ...S.join, items: [{ t: 'A', v: 3 }, { t: 'B', v: 2 }, { t: 'A', v: 1 }], own: { 1: { kind: 'fade', sec: 1.5 } }, edit: 1, pick: false, noff: false }; const out = soundPanel('static'); Object.assign(S, keep); return out; })()),
+    cell('Склеить: когда нельзя', 'Серая кнопка и причина в закреплённом низу. Разная частота кусков запуску не мешает — сведём сами.',
+      (() => { const keep = { ...S, op: { ...S.op } }; S.mode = 'process'; S.op = { ...S.op, process: 'join' };
+        const foot = j => { S.join = { ...keep.join, own: {}, ...j }; return `<div class="gp-foot" style="border:1px solid var(--c-border-light);border-radius:12px;margin-top:6px">${settingsFoot()}</div>`; };
+        const out = foot({ items: [{ t: 'B', v: 2 }] }) + foot({ noff: true }) + (() => { S.join = { ...keep.join }; return renderField('jout', 'join'); })();
+        Object.assign(S, keep); return out; })()),
+    cell('Склеить: результат и запуск агентом', 'Склейка — всегда новый файл новой карточкой, исходные нити не меняются. Claude склеивает тем же инструментом.',
+      launchCard('join') + joinedCard({ name: 'podcast-full.mp3', what: 'Обработка · Склеить · podcast-intro.mp3 в3 → пауза 0,5 с → greeting.wav в2 → плавно 1,5 с → podcast-intro.mp3 в1', by: 'Claude', len: 40.9, seed: 9, n: 3 }, 99)),
     cell('Полоса: пустая и свёрнутая', 'Без выбранного звука и строка в 30 px. Клик по сводке открывает панель.',
       (() => { const keep = { ...S }; S.scene = 'empty'; S.menu = null; let out = strip(); S.scene = 'normal'; S.collapsed = true; out += strip(); Object.assign(S, keep); return out; })()),
     cell('Телефон: шторка опущена до цены', 'Лента под шторкой доступна: выделяете кусок на волне, низ шторки показывает кусок, цену и запуск.',
@@ -1124,7 +1238,7 @@ function demo() {
   return g('Тема', 'theme', [['light', 'Светлая'], ['dark', 'Тёмная']]) + g('Ширина', 'dev', [['desktop', 'Десктоп'], ['w1024', 'Узкий 1024'], ['w800', 'Окно 800'], ['mobile', 'Телефон 360']])
     + g('Чат', 'scope', [['project', 'В проекте'], ['personal', 'Личный']])
     + g('Сцена', 'scene', [['normal', 'Обычная'], ['empty', 'Пусто'], ['running', 'Идёт задача'], ['queue', 'Очередь GPU'], ['error', 'Ошибка'], ['limit', 'Лимит']])
-    + `<button class="tbtn" data-demo="story:1" title="Музыка → Перегенерировать кусок, панель открыта">Сценарий: кусок</button><button class="tbtn" data-demo="reset:1">Сначала</button>`;
+    + `<button class="tbtn" data-demo="story:1" title="Музыка → Перегенерировать кусок, панель открыта">Сценарий: кусок</button><button class="tbtn" data-demo="story:join" title="Обработка → Склеить, панель открыта">Сценарий: склейка</button><button class="tbtn" data-demo="reset:1">Сначала</button>`;
 }
 const CAPS = {
   normal: 'Нить podcast-intro.mp3 в работе: версии ‹ ›, на версии 2 — стемы с громкостью и «Свести в новую версию». У greeting.wav — A/B двух версий. Настройки — в панели «Звук» справа; полоса над полем ввода — её сводка.',
@@ -1149,6 +1263,7 @@ document.addEventListener('click', e => {
   if (d) {
     const [k, v] = d.dataset.demo.split(':');
     if (k === 'reset') { Object.keys(S).forEach(x => delete S[x]); Object.assign(S, JSON.parse(JSON.stringify(INIT))); }
+    else if (k === 'story' && v === 'join') { S.scene = 'normal'; S.mode = 'process'; S.op.process = 'join'; S.panel = true; S.tab = 'settings'; S.spine = false; S.peek = false; S.big = null; S.collapsed = false; S.adv = false; }
     else if (k === 'story') { S.scene = 'normal'; S.mode = 'music'; S.op.music = 'repaint'; S.panel = true; S.tab = 'settings'; S.spine = false; S.peek = S.dev === 'mobile'; S.big = null; S.ver.A = 3; S.sel = { a: 6.2, b: 11.8 }; S.collapsed = false; S.adv = false; }
     else { S[k] = v; S.menu = null; if (k === 'scene' || k === 'dev') { S.collapsed = false; S.peek = false; S.spine = false; S.panel = v !== 'mobile'; } }
     stopPlay(); render(); return;
@@ -1200,12 +1315,35 @@ document.addEventListener('click', e => {
     case 'selall': S.sel.b = curLen(); break;
     case 'clearsel': S.sel = { a: 0, b: 0 }; break;
     case 'play': togglePlay(b, Number(c)); return;
-    case 'run': if (runBlock()) break; S.scene = curProv() === 'local' && curOp().heavy ? 'queue' : 'running'; break;
+    case 'jmove': { const i = Number(b), j = i + Number(c), it = S.join.items; if (j < 0 || j >= it.length) break; [it[i], it[j]] = [it[j], it[i]]; S.join.own = {}; S.join.edit = null; break; }
+    case 'jdel': S.join.items.splice(Number(b), 1); S.join.own = {}; S.join.edit = null; break;
+    case 'jpick': S.join.pick = !S.join.pick; break;
+    case 'jadd': S.join.items.push({ t: b, v: Number(c) }); S.join.pick = false; break;
+    case 'jedit': S.join.edit = S.join.edit === Number(b) ? null : Number(b); break;
+    case 'jkind': S.join.seam.kind = b; break;
+    case 'jown': if (c === 'inherit') delete S.join.own[b]; else S.join.own[b] = { kind: c, sec: (S.join.own[b] || S.join.seam).sec }; break;
+    case 'joinfrom': {
+      if (!jsrc(b)) break;
+      const v = b.startsWith('C') ? 1 : S.ver[b];
+      S.mode = 'process'; S.op.process = 'join'; S.panel = true; S.tab = 'settings'; S.spine = false; S.peek = false; S.big = null; S.collapsed = false; S.adv = false;
+      if (!S.join.items.some(x => x.t === b && x.v === v)) S.join.items.unshift({ t: b, v });
+      break;
+    }
+    case 'run':
+      if (curOp().id === 'join') {
+        if (joinBlock()) break;
+        S.joined.push({ name: S.join.name.trim() || 'joined.mp3', what: 'Обработка · Склеить · ' + joinWhat(), by: 'Андрей', len: joinTotal(), seed: 9 + S.joined.length, n: S.join.items.length });
+        S.join.name = `podcast-full-${S.joined.length + 1}.mp3`; S.peek = S.dev === 'mobile'; scrollFeed = true;
+        break;
+      }
+      if (runBlock()) break; S.scene = curProv() === 'local' && curOp().heavy ? 'queue' : 'running'; break;
     default: break;
   }
   if (!keepMenu) S.menu = null;
   render();
+  if (scrollFeed) { scrollFeed = false; const fd = document.querySelector('#app .feed'); if (fd) fd.scrollTop = fd.scrollHeight; }
 });
+let scrollFeed = false;
 function refreshPrice() {
   const p = document.querySelector('[data-price]'); if (!p) return;
   const pr = priceOf(curModel(), { count: curOp().count ? S.count : 1 }).split(' · ');
@@ -1230,10 +1368,18 @@ document.addEventListener('change', e => {
     render();
   }
   if (e.target.dataset.gain) render();
+  if (e.target.dataset.jsec) render();
 });
 document.addEventListener('input', e => {
   if (e.target.dataset.text) { S.text = e.target.value || ' '; refreshPrice(); }
   if (e.target.dataset.lyr) { S.lyrics = e.target.value; document.querySelectorAll('[data-lyr-cnt]').forEach(x => x.textContent = `${S.lyrics.length} / 5000`); }
+  if (e.target.dataset.jname) S.join.name = e.target.value;
+  if (e.target.dataset.jsec) {
+    const k = e.target.dataset.jsec, v = Number(e.target.value);
+    if (k === 'all') S.join.seam.sec = v; else S.join.own[k].sec = v;
+    document.querySelectorAll(`[data-jsec-v="${k}"]`).forEach(x => x.textContent = fsec(v) + ' с');
+    document.querySelectorAll('[data-jtotal]').forEach(x => x.textContent = 'итог ' + mmss(joinTotal()));
+  }
   if (e.target.dataset.dlg !== undefined) { S.dlg[Number(e.target.dataset.dlg)][1] = e.target.value; }
   if (e.target.dataset.gain) { const k = e.target.dataset.gain; S.gain[k] = Number(e.target.value); const d = document.querySelector(`[data-gain-v="${k}"]`); if (d) d.textContent = (S.gain[k] > 0 ? '+' : '') + S.gain[k]; }
   if (e.target.dataset.rng) {
@@ -1273,6 +1419,26 @@ document.addEventListener('pointermove', e => {
   syncSel(true);
 });
 document.addEventListener('pointerup', () => { if (drag) { if (S.sel.b - S.sel.a < .3) S.sel = { a: drag.a, b: Math.min(drag.len, drag.a + 3) }; drag = null; render(); } });
+
+/* Порядок кусков склейки: перетаскивание за ручку (на телефоне — кнопки ↑ ↓) */
+let jdrag = null, jgrip = false;
+document.addEventListener('pointerdown', e => { jgrip = !!e.target.closest('[data-grip]'); }, true);
+document.addEventListener('dragstart', e => {
+  const r = e.target.closest && e.target.closest('[data-jrow]'); if (!r) return;
+  if (!jgrip) { e.preventDefault(); return; }
+  jdrag = Number(r.dataset.jrow); r.classList.add('drag'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(jdrag));
+});
+document.addEventListener('dragover', e => {
+  const r = e.target.closest && e.target.closest('[data-jrow]'); if (jdrag === null || !r) return;
+  e.preventDefault(); document.querySelectorAll('.jrow.over').forEach(x => x !== r && x.classList.remove('over')); r.classList.add('over');
+});
+document.addEventListener('drop', e => {
+  const r = e.target.closest && e.target.closest('[data-jrow]'); if (jdrag === null || !r) return;
+  e.preventDefault(); const to = Number(r.dataset.jrow);
+  if (to !== jdrag) { const [x] = S.join.items.splice(jdrag, 1); S.join.items.splice(to, 0, x); S.join.own = {}; S.join.edit = null; }
+  jdrag = null; render();
+});
+document.addEventListener('dragend', () => { if (jdrag !== null) { jdrag = null; render(); } });
 
 render();
 </script>

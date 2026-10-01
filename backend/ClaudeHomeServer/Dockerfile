@@ -31,7 +31,8 @@ COPY deploy/agent-install/ ./deploy/agent-install/
 RUN dotnet publish backend/ClaudeHomeServer/ClaudeHomeServer.csproj \
     -c Release -r linux-x64 --self-contained false -o /app/publish /p:UseAppHost=false
 # Динамические модули ModuleLoader резолвит по пути — без них старт падает (как в publish-linux.sh)
-RUN for mod in notes/ClaudeHomeServer.Notes.dll spend/ClaudeHomeServer.Spend.dll image-editor/ClaudeHomeServer.ImageEditor.dll; do \
+RUN for mod in notes/ClaudeHomeServer.Notes.dll spend/ClaudeHomeServer.Spend.dll image-editor/ClaudeHomeServer.ImageEditor.dll \
+        audio-editor/ClaudeHomeServer.AudioEditor.dll; do \
       test -f "/app/publish/modules/$mod" || { echo "нет modules/$mod после publish" >&2; exit 1; }; \
     done
 # Свежесобранный фронт кладём в wwwroot (исходный wwwroot исключён в .dockerignore)

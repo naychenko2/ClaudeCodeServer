@@ -72,7 +72,7 @@ public class AudioCatalogTests
     [Fact]
     public void NoAiOps_MarkedSeparately()
     {
-        AudioOps.NoAi.Should().BeEquivalentTo([AudioOp.Trim, AudioOp.GainFade, AudioOp.Normalize, AudioOp.MixStems]);
+        AudioOps.NoAi.Should().BeEquivalentTo([AudioOp.Trim, AudioOp.GainFade, AudioOp.Normalize, AudioOp.MixStems, AudioOp.Concat]);
     }
 
     [Fact]

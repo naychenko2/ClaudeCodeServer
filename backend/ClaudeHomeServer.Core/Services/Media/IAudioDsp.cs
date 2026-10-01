@@ -4,8 +4,8 @@ namespace ClaudeHomeServer.Services.Media;
 // реализация — FfmpegAudioDsp в вертикали Images; нет подсистемы images — нет и регистрации.
 //
 // Шов байтовый: на входе байты WAV/MP3/FLAC/OGG, на выходе байты файла; в папку проекта он ничего
-// не пишет. Склейки (concat) нет намеренно — решение 3 ADR-021. Отказы — значением с причиной для
-// человека, а не исключением; отмена ct — OperationCanceledException, как обычно.
+// не пишет. Склейка (concat) добавлена решением Андрея от 01.10 поверх решения 3 ADR-021. Отказы —
+// значением с причиной для человека, а не исключением; отмена ct — OperationCanceledException, как обычно.
 public interface IAudioDsp
 {
     // ffmpeg и ffprobe нашлись на хосте. Проверка разовая, дальше кешируется
@@ -25,6 +25,12 @@ public interface IAudioDsp
 
     // Сведение стемов в один файл без автоприглушения: длина — по самому длинному звучащему стему
     Task<AudioDspOutput> MixAsync(IReadOnlyList<AudioStem> stems, AudioFormat format, CancellationToken ct);
+
+    // Склейка кусков по порядку в один файл. joints — стыки между соседями, ровно pieces.Count − 1.
+    // Частоту и каналы сводим сами: к наибольшей частоте, стерео — если хоть один кусок не моно.
+    // normalizeLufs — выровнять громкость каждого куска до этой цели перед склейкой (тихий кусок не трогаем)
+    Task<AudioDspOutput> ConcatAsync(IReadOnlyList<byte[]> pieces, IReadOnlyList<AudioJoint> joints,
+        double? normalizeLufs, AudioFormat format, CancellationToken ct);
 
     // sampleRate/channels — null: как у исходника
     Task<AudioDspOutput> ConvertAsync(byte[] audio, AudioFormat format, int? sampleRate, int? channels, CancellationToken ct);
@@ -60,6 +66,16 @@ public sealed record AudioEdit(
 
 public sealed record AudioStem(byte[] Audio, double GainDb = 0, bool Muted = false);
 
+// Встык; пауза тишиной Seconds; плавный переход — куски звучат внахлёст Seconds, итог на столько короче
+public enum AudioJointKind { Butt, Pause, Crossfade }
+
+public sealed record AudioJoint(AudioJointKind Kind, double Seconds = 0)
+{
+    public static readonly AudioJoint Butt = new(AudioJointKind.Butt);
+    public static AudioJoint Pause(double seconds) => new(AudioJointKind.Pause, seconds);
+    public static AudioJoint Crossfade(double seconds) => new(AudioJointKind.Crossfade, seconds);
+}
+
 public static class AudioDspLimits
 {
     public const double DefaultLufs = -14;
@@ -72,6 +88,14 @@ public static class AudioDspLimits
     public const int MinSampleRate = 8_000;
     public const int MaxSampleRate = 192_000;
     public const int MaxChannels = 8;
+
+    // Склейка: от двух до двадцати кусков, итог не длиннее часа, стык — до пяти секунд (ползунок
+    // макета 0,1–5 с). Громкость кусков по умолчанию выравнивается к −16 LUFS — уровень речи и подкастов
+    public const int MinConcatPieces = 2;
+    public const int MaxConcatPieces = 20;
+    public const double MaxConcatSeconds = 3600;
+    public const double MaxJointSeconds = 5;
+    public const double ConcatLufs = -16;
 }
 
 public static class AudioFormats

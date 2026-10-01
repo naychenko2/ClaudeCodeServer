@@ -21,6 +21,8 @@ public static class AudioEditErrorCodes
     public const string QuoteNotFound = "quote_not_found";
     public const string TooManyJobs = "too_many_jobs";
     public const string HeavyBusy = "heavy_busy";
+    // Обработка без ИИ недоступна: нет ffmpeg на хосте или выключена подсистема images (ADR-021 §2)
+    public const string DspUnavailable = "dsp_unavailable";
 }
 
 public sealed record AudioEditCallResult<T>(T? Value, string? ErrorCode, string? Error)

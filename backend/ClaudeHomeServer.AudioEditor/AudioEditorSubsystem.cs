@@ -43,5 +43,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
         services.AddSingleton<Jobs.AudioJobThreads>();
         services.AddSingleton<Jobs.AudioEditJobService>();
+        // Склейка без ИИ: куски → новая нить. Шов IAudioDsp — от отключаемой вертикали Images, поэтому
+        // необязателен: без него операция отвечает dsp_unavailable
+        services.AddSingleton<Jobs.AudioConcatService>();
     }
 }

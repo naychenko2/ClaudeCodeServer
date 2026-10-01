@@ -181,12 +181,15 @@ export interface Project {
 // (`kind === 'glyph'`, не `kind !== 'initials'`): старая запись с числовым Kind = 1
 // (бывший Image) должна тихо деградировать в инициалы, а не притворяться глифом.
 // color — ключ палитры AGENT_COLORS, красит плитку и глиф через currentColor.
+// image — картинка, загруженная владельцем (ревизия ADR-009 от 01.10.2026), в родных цветах.
 export interface ProjectIcon {
-  kind: 'initials' | 'glyph';
+  kind: 'initials' | 'glyph' | 'image';
   color?: string;
   // Имя lucide-значка. Проверка на клиенте: glyph присутствует и name непустой.
   // Иначе — рисуем инициалы (§7 ADR-009).
   glyph?: { name?: string | null } | null;
+  // Имя файла загруженной картинки — оно же cache-buster у api.projects.iconImageUrl
+  imageFile?: string | null;
 }
 
 // Колонка Kanban-доски проекта. category — семантическая категория статуса

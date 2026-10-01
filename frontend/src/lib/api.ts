@@ -808,10 +808,29 @@ export const api = {
       }),
     // Переключение режима отображения значка: буквы ↔ глиф. Файлов больше нет,
     // Glyph не стирается — «Вернуть значок» показывает его снова на той же плитке.
-    setIconMode: (id: string, kind: 'initials' | 'glyph') =>
+    setIconMode: (id: string, kind: 'initials' | 'glyph' | 'image') =>
       request<Project>(`/projects/${encodeURIComponent(id)}/icon/mode`, {
         method: 'POST', body: JSON.stringify({ kind }),
       }),
+    // Своя картинка иконкой (svg/png/jpg/webp/ico до 512 КБ): формат сервер определяет
+    // по байтам, имя файла роли не играет. Ответ — проект с icon.kind = 'image'.
+    uploadIconImage: (id: string, file: File) => {
+      const form = new FormData();
+      form.append('file', file, file.name || 'icon');
+      return request<Project>(`/projects/${encodeURIComponent(id)}/icon/upload`, {
+        method: 'POST', body: form, timeoutMs: 60_000,
+      });
+    },
+    // URL загруженной картинки для <img>: токен через ?access_token= (заголовок <img> не
+    // поставит), v — cache-buster по имени файла. null — картинку не загружали.
+    iconImageUrl: (project: Project): string | null => {
+      if (!project.icon?.imageFile) return null;
+      const token = readStoredToken();
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      params.set('v', project.icon.imageFile);
+      return `/api/projects/${encodeURIComponent(project.id)}/icon/image?${params}`;
+    },
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
     // --- Уборка карты проекта (CLAUDE.md), фронтовая часть (docs/research/project-map-hygiene-plan-2026-09.md) ---
     // Скан — мгновенно, без модели и без трат. Review/apply — за фич-флагом и закрыты

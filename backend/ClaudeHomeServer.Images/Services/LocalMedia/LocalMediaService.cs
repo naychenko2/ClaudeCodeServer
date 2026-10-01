@@ -480,9 +480,9 @@ public sealed partial class LocalMediaService(
         return await UploadAsync(job, input.Bytes, stem + input.Extension, ct);
     }
 
-    private enum MediaKind { Image, Video, Audio, VoiceModel, VoiceIndex }
+    internal enum MediaKind { Image, Video, Audio, VoiceModel, VoiceIndex }
 
-    private sealed record InputFile(byte[] Bytes, string Extension, MediaProbe.VideoInfo? Video);
+    internal sealed record InputFile(byte[] Bytes, string Extension, MediaProbe.VideoInfo? Video);
 
     // Вход — путь файла проекта или job_id прошлой задачи этого же владельца и проекта.
     // Только из проекта чата: SafePath + запрет символических ссылок (ProjectLinkGuard)
@@ -529,9 +529,19 @@ public sealed partial class LocalMediaService(
             ?? throw new LocalMediaInputException($"Путь «{value}» вне папки проекта.");
         var info = new FileInfo(full);
         if (!info.Exists) throw new LocalMediaInputException($"Файл «{value}» не найден в проекте.");
-        var limit = kind == MediaKind.Image ? MaxInputBytes : MaxMediaInputBytes;
-        if (info.Length > limit) throw new LocalMediaInputException($"Файл «{value}» больше {limit / 1024 / 1024} МБ.");
-        var bytes = File.ReadAllBytes(full);
+        if (info.Length > InputLimit(kind))
+            throw new LocalMediaInputException($"Файл «{value}» больше {InputLimit(kind) / 1024 / 1024} МБ.");
+        return CheckInput(File.ReadAllBytes(full), relative, value, kind);
+    }
+
+    private static int InputLimit(MediaKind kind) => kind == MediaKind.Image ? MaxInputBytes : MaxMediaInputBytes;
+
+    // Проверка содержимого входа: размер и формат по сигнатуре. name — имя файла (у .pth и .index
+    // решает и расширение), value — как вход назван в отказе
+    internal static InputFile CheckInput(byte[] bytes, string name, string value, MediaKind kind)
+    {
+        if (bytes.Length > InputLimit(kind))
+            throw new LocalMediaInputException($"Файл «{value}» больше {InputLimit(kind) / 1024 / 1024} МБ.");
 
         switch (kind)
         {
@@ -545,12 +555,12 @@ public sealed partial class LocalMediaService(
                 return new InputFile(bytes, audio, null);
             case MediaKind.VoiceModel:
                 // .pth торча — zip-архив
-                if (!relative.EndsWith(".pth", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'P' || bytes[1] != 'K')
+                if (!name.EndsWith(".pth", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'P' || bytes[1] != 'K')
                     throw new LocalMediaInputException($"Файл «{value}» — не модель голоса RVC (.pth из local_voice_train).");
                 return new InputFile(bytes, ".pth", null);
             case MediaKind.VoiceIndex:
                 // Индекс faiss начинается с четырёхбуквенного кода типа: I + три знака (IwFl у IVFFlat, IxF2, IxHN…)
-                if (!relative.EndsWith(".index", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'I'
+                if (!name.EndsWith(".index", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'I'
                     || !bytes.AsSpan(1, 3).ToArray().All(b => char.IsAsciiLetterOrDigit((char)b)))
                     throw new LocalMediaInputException($"Файл «{value}» — не индекс голоса RVC (.index из local_voice_train).");
                 return new InputFile(bytes, ".index", null);

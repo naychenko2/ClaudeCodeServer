@@ -1781,6 +1781,10 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.OutputRingBuffer",
         "ClaudeHomeServer.Services.JsonFileStore",
         "ClaudeHomeServer.Services.SsrfGuard",
+        // Скачивание результата генерации по ссылке поставщика поверх SsrfGuard: им пользуются
+        // и Images, и ImageEditor — вторая копия в вертикали снова открыла бы SSRF
+        "ClaudeHomeServer.Services.SafeMediaDownloader",
+        "ClaudeHomeServer.Services.MediaDownloadResult",
         "ClaudeHomeServer.Services.RuleRuntimeState",
         "ClaudeHomeServer.Services.ModelTiers",
         "ClaudeHomeServer.Services.SpecialtyDefaultBinding",

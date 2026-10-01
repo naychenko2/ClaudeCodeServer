@@ -16,7 +16,7 @@ public class FalImageEditorTests
 
     private static FalImageEditor Editor(FakeHttp http, string? key = "fal-key") =>
         new(http, TestImages.Config(("Fal:ApiKey", key), ("Fal:QueueBase", Queue), ("Fal:ApiBase", Api)),
-            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero };
+            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero, Downloader = http.Downloader() };
 
     private static ImageEditQuoteRequest QuoteRequest(int count, int? w = null, int? h = null) =>
         new("fal", "auto", EditMode.Fast, ImageEditOp.Edit, count, false, 0, false, w, h);

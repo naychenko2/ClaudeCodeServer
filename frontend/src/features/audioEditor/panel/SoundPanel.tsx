@@ -4,13 +4,14 @@
 //
 // «Настройки»: режим → операция → поставщик → модель → поля операции → «Дополнительно» по схеме
 // модели; закреплённый низ с «− N +», ценой из котировки и запуском. Настройки пишутся в нить
-// (без нити — в префы режима), входы вне схемы — в браузер на ту же нить (panel/inputs.ts).
-// «Голоса» — пока пустое состояние: библиотеку подключим отдельным шагом.
+// (без нити — в префы режима), входы операции — туда же отдельной частью inputs, остальное — в браузер
+// на ту же нить (panel/inputs.ts). «Голоса» — библиотека voices/ проекта; «Выбрать» ставит голос в
+// поле операции.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AudioLines, Cpu, Lock, Mic, SlidersHorizontal, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Cpu, Lock, Mic, SlidersHorizontal, X } from 'lucide-react';
 import {
-  Badge, EmptyState, GenerationPanel, IconButton, SegmentedControl, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
+  Badge, GenerationPanel, IconButton, SegmentedControl, C, FS, R, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
@@ -20,14 +21,20 @@ import { audioScope, isPersonalScope } from '../scope';
 import { focusLabel, queueBadge } from '../strip/summary';
 import { releaseFocus } from '../thread/actions';
 import {
-  focusThread, getCatalog, getComposerText, getJobsOf, getPrefs, getShortcutMode, setPieceFieldOpen, SOUND_PANEL,
-  useAudioStoreVersion, useAudioThreads,
+  focusThread, getCatalog, getComposerText, getJobsOf, getPrefs, getSelection, getShortcutMode, setPieceFieldOpen, setSelection,
+  SOUND_PANEL, useAudioStoreVersion, useAudioThreads,
 } from '../thread/threadStore';
+import { voicePickValue, pickedSlug } from '../voices/model';
+import { RecreateButton } from '../voices/RecreateButton';
+import { VoicesTab } from '../voices/VoicesTab';
 import { ConcatFields } from './ConcatFields';
-import { inputsKey, readInputs, saveSettings, writeInputs, type PanelInputs } from './inputs';
+import {
+  inputsKey, LIBRARY_VOICE_OPS, mergeInputs, migrateLocal, readInputs, saveSettings, serverPiece, toServerInputs, writeInputs,
+  type PanelInputs,
+} from './inputs';
 import {
   isNoAi, modelOptions, nextSettings, panelOps, pillOf, priceLines, providerOptions, pruneFields, resolvePanel, runReason,
-  splitSchema, type PanelState, type SettingsPatch,
+  splitSchema, voicePick, type PanelState, type SettingsPatch,
 } from './model';
 import { heavyWarning, licenseWarning } from './music';
 import { MusicFields } from './MusicFields';
@@ -37,7 +44,7 @@ import { readPiece } from './piece';
 import type { PieceBinding } from './PieceField';
 import { AdvancedForm } from './ParamField';
 import { Hint, ic, Label, Opt, Row } from './primitives';
-import { dialogueText, musicDuration, quoteRequest, runPanel } from './run';
+import { dialogueText, musicDuration, quoteRequest, runPanel, type CloneRefusal } from './run';
 import { useSchema } from './schema';
 
 type Tab = 'settings' | 'voices';
@@ -72,7 +79,7 @@ function overlay(thread: AudioThread | null, prefs: AudioPrefs, pending: AudioTh
       ...prefs,
       [pending.mode]: {
         operation: pending.operation, provider: pending.provider, model: pending.model, count: pending.count ?? null,
-        fields: pending.fields,
+        fields: pending.fields, inputs: pending.inputs ?? null,
       },
     },
   };
@@ -147,19 +154,69 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     return () => setPieceFieldOpen(sessionId, null);
   }, [sessionId, pieceOpen, threadId]);
 
-  // ── Входы вне схемы — на нить в браузере ──
+  // ── Входы: белый список — в настройках на сервере, остальное — на нить в браузере ──
   const key = inputsKey(scope, sessionId, threadId);
-  const [inputs, setInputsState] = useState<PanelInputs>(() => readInputs(key));
-  useEffect(() => { setInputsState(readInputs(key)); }, [key]);
+  const [local, setLocal] = useState<PanelInputs>(() => readInputs(key));
+  useEffect(() => { setLocal(readInputs(key)); }, [key]);
+  const inputs = mergeInputs(local, state.inputs, threads.threads);
+  // Кусок для сервера: выделение нити, а пока его не подняли из настроек — сохранённый
+  const pieceForServer = pieceSel ?? serverPiece(state.inputs);
+  // Отправляем, только когда серверная часть правда изменилась
+  const saveInputs = (next: PanelInputs, sel = pieceForServer) => {
+    const raw = toServerInputs(state.op, next, sel, personal);
+    if (JSON.stringify(raw) !== JSON.stringify(state.inputs ?? null)) change({ inputs: raw }, true);
+  };
   const setInputs = (patch: Partial<PanelInputs>) => {
-    setInputsState(cur => {
-      const next = { ...cur, ...patch };
-      writeInputs(key, next);
-      return next;
-    });
+    const next = { ...inputs, ...patch };
+    writeInputs(key, next);
+    setLocal(next);
+    saveInputs(next);
   };
   const [reference, setReference] = useState<File | null>(null);
   useEffect(() => { setReference(null); }, [key]);
+
+  // Разовый перенос старых входов из браузера: когда настройки нити (или префы) уже пришли
+  const migrated = useRef<string | null>(null);
+  const loaded = !!thread || !!catalog;
+  useEffect(() => {
+    if (!sessionId || !loaded || migrated.current === key) return;
+    migrated.current = key;
+    const moved = migrateLocal(key, state.inputs, state.op, personal);
+    setLocal(readInputs(key));
+    if (moved) change({ inputs: moved });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- раз на нить, как только есть что сверить
+  }, [key, loaded, sessionId]);
+
+  // Кусок из настроек на сервере поднимаем в выделение (после перезагрузки его видит и волна)
+  useEffect(() => {
+    if (!sessionId || !threadId || !versionId || getSelection(sessionId, threadId)) return;
+    const saved = serverPiece(state.inputs);
+    if (saved) setSelection(sessionId, threadId, { ...saved, versionId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- по смене нити или версии
+  }, [sessionId, threadId, versionId]);
+
+  // Правка куска (поле или волна) — в настройки; первая встреча с нитью ничего не пишет
+  const selSig = pieceSel ? `${pieceSel.start}|${pieceSel.end}` : '';
+  const seenSel = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = seenSel.current;
+    seenSel.current = `${threadId}#${selSig}`;
+    if (prev === null || !prev.startsWith(`${threadId}#`) || prev === seenSel.current) return;
+    saveInputs(inputs, pieceSel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- по смене выделения
+  }, [threadId, selSig]);
+
+  // ── Голос из библиотеки: «Выбрать» на вкладке «Голоса» ──
+  const pickVoice = (slug: string) => {
+    const pick = voicePick(state, inputs, voicePickValue(slug), personal);
+    if ('inputs' in pick) setInputs(pick.inputs);
+    else change(pick.patch);
+    setTab('settings');
+  };
+
+  // Отказ запуска «клон MiniMax протух или не создан» — до новой нити, операции или голоса
+  const [refusal, setRefusal] = useState<CloneRefusal | null>(null);
+  useEffect(() => { setRefusal(null); }, [threadId, state.op, inputs.voice]);
 
   // ── Схема модели: поля операции и «Дополнительно» ──
   const noAi = isNoAi(state.op);
@@ -205,10 +262,11 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   }, [canQuote, scope, sessionId, threadId, state.op, state.providerKey, state.modelId, state.count, fieldsKey, text.length, inputs.durationSec]);
 
   const [busy, setBusy] = useState(false);
+  const libraryVoice = LIBRARY_VOICE_OPS.has(state.op) && !personal && !!inputs.voice;
   const reason = runReason({
     sessionId, thread, state, provider: providerOpt, text,
-    hasReference: !!reference || !!inputs.referencePath.trim(),
-    hasVoiceModel: !!inputs.voiceModelPath.trim(),
+    hasReference: !!reference || !!inputs.referencePath.trim() || libraryVoice,
+    hasVoiceModel: !!inputs.voiceModelPath.trim() || libraryVoice,
     clips: inputs.clipPaths.filter(p => p.trim()).length,
     replicas: inputs.replicas.filter(r => r.text.trim()).length,
     trimReady: trimReady(inputs.trim, pieceSel),
@@ -223,9 +281,10 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const run = async () => {
     if (!sessionId || busy || reason) return;
     setBusy(true);
+    setRefusal(null);
     await runPanel({
       scope, sessionId, thread, state, fields: pruneFields(state.fields, schema.schema), inputs, reference, text, piece: pieceSel,
-    });
+    }, setRefusal);
     setBusy(false);
   };
   const foot: GenerationFoot = {
@@ -272,11 +331,11 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
 
   let body;
   if (tab === 'voices') {
-    body = personal
-      ? <EmptyState compact icon={ic(Mic, ICON_SIZE.sm)} title="«Голоса» живут в проекте"
-          subtitle="Библиотека хранится в папке voices/ проекта. В личном чате можно озвучивать готовыми дикторами, по описанию и по образцу из файла." />
-      : <EmptyState compact icon={ic(Mic, ICON_SIZE.sm)} title="Своих голосов пока нет"
-          subtitle="Голос — это записи человека и их расшифровка. Добавьте голос один раз, и его смогут взять все поставщики, которые умеют клонировать. Библиотека появится здесь следующим шагом." />;
+    body = (
+      <div style={{ paddingTop: SP.sm }}>
+        <VoicesTab scope={scope} sessionId={sessionId} selected={pickedSlug(inputs.voice)} onPick={pickVoice} />
+      </div>
+    );
   } else if (!catalog) {
     body = <div style={{ fontSize: FS.sm, color: C.textMuted, paddingTop: SP.sm }}>Загружаем…</div>;
   } else {
@@ -284,7 +343,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     const fieldsProps = {
       state, personal, main, values: state.fields, setField, inputs, setInputs, reference, setReference,
       onOp: (op: AudioOp) => change(op === 'transcribe' && state.mode !== 'process' ? { mode: 'process' } : { operation: op }),
-      isMobile: ctx.isMobile, piece,
+      isMobile: ctx.isMobile, piece, onOpenVoices: () => setTab('voices'),
     };
     const license = noAi ? null : licenseWarning(state.model);
     const heavy = noAi ? null : heavyWarning(state.op, state.model);
@@ -352,6 +411,21 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
             threads={threads.threads} personal={personal} />
         )}
         {state.mode === 'music' && <MusicFields {...fieldsProps} />}
+
+        {refusal && (
+          <div data-clone-refusal={refusal.slug} style={{
+            display: 'flex', flexDirection: 'column', gap: SP.xs, marginTop: SP.sm, fontSize: FS.sm, lineHeight: 1.45,
+            color: C.warningText, background: C.warningBg, borderRadius: R.md, padding: `${SP.sm}px ${SP.md}px`,
+          }}>
+            <span style={{ display: 'flex', gap: SP.xs, alignItems: 'flex-start' }}>
+              <span style={{ display: 'inline-flex', marginTop: 2 }}>{ic(AlertTriangle)}</span>
+              <span>{refusal.message}</span>
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+              <RecreateButton scope={scope} slug={refusal.slug} quote={refusal.quote} />
+            </span>
+          </div>
+        )}
 
         {!noAi && state.model && (
           <AdvancedForm schema={schema.schema} fields={extra}

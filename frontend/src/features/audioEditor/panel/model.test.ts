@@ -87,7 +87,7 @@ describe('цепочка настроек', () => {
 
   it('смена режима, операции, поставщика и модели сбрасывает зависимое', () => {
     const cur = resolvePanel(thread({ mode: 'voice', operation: 'speak', provider: 'local', model: 'qwen', fields: { speaker: 'Eric' }, count: 3 }), NO_PREFS, CATALOG, 'voice');
-    expect(nextSettings(cur, { mode: 'process' })).toEqual({ mode: 'process', operation: 'separate', provider: null, model: null, fields: {}, count: 3 });
+    expect(nextSettings(cur, { mode: 'process' })).toEqual({ mode: 'process', operation: 'separate', provider: null, model: null, fields: {}, count: 3, inputs: null });
     expect(nextSettings(cur, { operation: 'designVoice' })).toMatchObject({ operation: 'designVoice', provider: 'local', model: null, fields: {} });
     expect(nextSettings(cur, { provider: 'fal' })).toMatchObject({ provider: 'fal', model: null, fields: {} });
     expect(nextSettings(cur, { model: 'auto' })).toMatchObject({ model: 'auto', fields: {} });

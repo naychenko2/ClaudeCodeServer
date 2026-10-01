@@ -45,7 +45,7 @@ describe('настройки помнятся на нить', () => {
   });
 
   it('без нити — в префы режима области, режим запоминается за чатом', async () => {
-    const saved: AudioPrefs = { ...NO_PREFS, voice: { operation: 'speak', provider: 'local', model: 'qwen', count: 2, fields: { speaker: 'Eric' } } };
+    const saved: AudioPrefs = { ...NO_PREFS, voice: { operation: 'speak', provider: 'local', model: 'qwen', count: 2, fields: { speaker: 'Eric' }, inputs: null } };
     const prefs = vi.spyOn(audioApi, 'putPrefs').mockResolvedValue(saved);
     const put = vi.spyOn(audioApi, 'settings');
     expect(await saveSettings('p1', 's1', null, SETTINGS)).toBe(true);
@@ -62,11 +62,12 @@ describe('настройки помнятся на нить', () => {
     expect([b.mode, b.op, b.fields]).toEqual(['process', 'denoise', {}]);
   });
 
-  it('входы вне схемы — в браузере на свою нить', () => {
+  it('входы вне белого списка сервера — в браузере на свою нить, входы из списка — нет', () => {
     const ka = inputsKey('p1', 's1', 'a');
     const kb = inputsKey('p1', 's1', 'b');
-    writeInputs(ka, { ...DEFAULT_INPUTS, language: 'ru', trim: { ...DEFAULT_INPUTS.trim, start: 3 } });
-    expect(readInputs(ka).language).toBe('ru');
+    writeInputs(ka, { ...DEFAULT_INPUTS, language: 'ru', voiceModelPath: 'v.pth', trim: { ...DEFAULT_INPUTS.trim, start: 3 } });
+    expect(readInputs(ka).language).toBe('');
+    expect(readInputs(ka).voiceModelPath).toBe('v.pth');
     expect(readInputs(ka).trim).toEqual({ ...DEFAULT_INPUTS.trim, start: 3 });
     expect(readInputs(kb)).toEqual(DEFAULT_INPUTS);
     expect(inputsKey('p1', 's1', null)).not.toBe(inputsKey('p1', 's2', null));

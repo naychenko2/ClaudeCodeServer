@@ -3,11 +3,12 @@
 // и склейка (ручка concat, итог — новая нить).
 
 import { showToast } from 'aihome_shell/kit';
-import { audioApi, type AudioDspEditRequest, type AudioJobInput, type AudioQuoteRequest, type AudioThread } from '../api';
+import { audioApi, cloneRefusal, type AudioDspEditRequest, type AudioJobInput, type AudioQuote, type AudioQuoteRequest, type AudioThread } from '../api';
 import { opInfo } from '../ops';
 import { TO_END, type AudioSelection } from '../player/selection';
 import { mutate } from '../thread/threadStore';
-import type { PanelInputs, TrimInputs } from './inputs';
+import { pickedSlug } from '../voices/model';
+import { LIBRARY_VOICE_OPS, type PanelInputs, type TrimInputs } from './inputs';
 import type { PanelState } from './model';
 import { durationRange, lyricsToSend } from './music';
 import { pieceSeconds } from './piece';
@@ -68,7 +69,9 @@ export function jobInput(a: RunArgs, quoteId: string): AudioJobInput {
   const field = opInfo(s.op)?.field ?? 'prompt';
   const text = s.op === 'dialogue' ? dialogueText(a.inputs) : a.text.trim();
   const i = a.inputs;
-  const usesRef = s.op === 'cloneVoice' || s.op === 'convertVoice' || s.op === 'master';
+  // Голос из библиотеки заменяет образец и модель RVC: всё нужное сервер возьмёт из voices/
+  const voice = LIBRARY_VOICE_OPS.has(s.op) && i.voice ? i.voice : null;
+  const usesRef = !voice && (s.op === 'cloneVoice' || s.op === 'convertVoice' || s.op === 'master');
   return {
     quoteId, sessionId: a.sessionId, threadId: a.thread?.id ?? null,
     text: field === 'text' ? text || null : null,
@@ -77,16 +80,20 @@ export function jobInput(a: RunArgs, quoteId: string): AudioJobInput {
     reference: usesRef ? a.reference : null,
     referencePath: usesRef && !a.reference ? i.referencePath.trim() || null : null,
     clipPaths: s.op === 'trainVoice' ? i.clipPaths.map(p => p.trim()).filter(Boolean) : undefined,
-    voiceModelPath: s.op === 'convertVoice' ? i.voiceModelPath.trim() || null : null,
-    voiceIndexPath: s.op === 'convertVoice' ? i.voiceIndexPath.trim() || null : null,
+    voiceModelPath: s.op === 'convertVoice' && !voice ? i.voiceModelPath.trim() || null : null,
+    voiceIndexPath: s.op === 'convertVoice' && !voice ? i.voiceIndexPath.trim() || null : null,
+    voice,
     lyrics: s.mode === 'music' ? lyricsToSend(s.op, s.model, i) : null,
     durationSec: musicDuration(s, i),
     ...(s.op === 'repaint' ? pieceSeconds(a.piece) : {}),
   };
 }
 
-// true — запущено; причина отказа показана тостом
-export async function runPanel(a: RunArgs): Promise<boolean> {
+// Отказ «клон MiniMax протух или не создан»: панель показывает причину и «Пересоздать · цена»
+export interface CloneRefusal { message: string; slug: string; quote: AudioQuote | null }
+
+// true — запущено; отказ клона уходит в onCloneRefusal, прочие причины — тостом
+export async function runPanel(a: RunArgs, onCloneRefusal?: (r: CloneRefusal) => void): Promise<boolean> {
   const { scope, sessionId, thread, state: s, inputs } = a;
   try {
     if (s.op === 'concat') {
@@ -115,6 +122,12 @@ export async function runPanel(a: RunArgs): Promise<boolean> {
     await audioApi.startJob(scope, sessionId, jobInput(a, quote.quoteId));
     return true;
   } catch (e) {
+    const clone = cloneRefusal(e);
+    const slug = clone?.recreate?.recreateVoice ?? pickedSlug(inputs.voice);
+    if (clone && slug && onCloneRefusal) {
+      onCloneRefusal({ message: clone.message, slug, quote: clone.recreate });
+      return false;
+    }
     showToast((e as Error).message || 'Звук не запущен', '', 'error');
     return false;
   }

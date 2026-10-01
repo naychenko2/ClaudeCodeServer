@@ -15,9 +15,10 @@ import { isPersonalScope } from '../scope';
 import { voicesApi, MAX_VOICE_SAMPLE_MB, MAX_VOICE_SAMPLES, type AudioVoice, type VoicesList } from './api';
 import {
   EMPTY_TEXT, EMPTY_TITLE, MINIMAX_TTL_TEXT, PERSONAL_TEXT, PERSONAL_TITLE,
-  canAddSamples, isStale, newVoiceProblem, recreateAction, sampleRemoval, samplesProblem,
+  canAddSamples, isStale, newVoiceProblem, sampleRemoval, samplesProblem,
   voicesView, voiceSubtitle, whereWorks, type WhereStatus,
 } from './model';
+import { RecreateButton } from './RecreateButton';
 import { EMPTY_SAMPLES, SamplesPicker, toDraft, type SamplesValue } from './SamplesPicker';
 
 export interface VoicesTabProps {
@@ -177,7 +178,6 @@ function VoiceDetails({ scope, voice: v, picked, onPick, onChanged, onDeleted }:
   const removal = sampleRemoval(v);
   const rows = whereWorks(v);
   const stale = rows.find(r => r.status === 'stale');
-  const recreate = recreateAction(null);
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -287,8 +287,7 @@ function VoiceDetails({ scope, voice: v, picked, onPick, onChanged, onDeleted }:
             <span>{MINIMAX_TTL_TEXT}. {stale.note}.</span>
           </span>
           <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-            <Button size="sm" variant="secondary" disabled={recreate.disabled} title={recreate.hint ?? undefined}>{recreate.label}</Button>
-            {recreate.hint && <span style={{ fontSize: FS.xs }}>{recreate.hint}</span>}
+            <RecreateButton scope={scope} slug={v.slug} />
           </span>
         </div>
       )}

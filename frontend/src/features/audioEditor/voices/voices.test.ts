@@ -6,9 +6,9 @@ vi.mock('aihome_shell/kit', () => ({
   readStoredToken: () => 'tok',
 }));
 
-const { voicesApi, MINIMAX_RECREATE_READY } = await import('./api');
+const { voicesApi } = await import('./api');
 const {
-  EMPTY_TITLE, PERSONAL_TITLE, RECREATE_PENDING_HINT, isStale, newVoiceProblem, pickedSlug, recreateAction,
+  EMPTY_TITLE, PERSONAL_TITLE, isStale, newVoiceProblem, pickedSlug, quotePrice, recreateAction,
   sampleRemoval, samplesProblem, voicePickValue, voicesView, voiceSubtitle, whereWorks,
 } = await import('./model');
 type AudioVoice = import('./api').AudioVoice;
@@ -120,11 +120,26 @@ describe('протухший клон MiniMax', () => {
     expect(isStale(voice())).toBe(false);
   });
 
-  it('«Пересоздать» неактивна, пока ручки нет; с ручкой и ценой — активна', () => {
-    expect(MINIMAX_RECREATE_READY).toBe(false);
-    expect(recreateAction('$1.5')).toEqual({ label: 'Пересоздать · $1.5', disabled: true, hint: RECREATE_PENDING_HINT });
-    expect(recreateAction('$1.5', true)).toEqual({ label: 'Пересоздать · $1.5', disabled: false, hint: null });
-    expect(recreateAction(null, true).disabled).toBe(true);
+  it('«Пересоздать» активна только с ценой; отказ котировки — подсказкой', () => {
+    expect(recreateAction('$1.5')).toEqual({ label: 'Пересоздать · $1.5', disabled: false, hint: null });
+    expect(recreateAction(null)).toEqual({ label: 'Пересоздать', disabled: true, hint: 'Считаем цену…' });
+    expect(recreateAction(null, 'Голос не найден')).toEqual({ label: 'Пересоздать', disabled: true, hint: 'Голос не найден' });
+    const q = (amount: number | null, approx = false) =>
+      ({ price: { amount, unit: 'usd', approx, source: '', eta: null, queueLength: null } }) as import('../api').AudioQuote;
+    expect(quotePrice(q(0.6))).toBe('$0.6');
+    expect(quotePrice(q(0.6, true))).toBe('≈ $0.6');
+    expect(quotePrice(q(null))).toBe('цена у поставщика');
+    expect(quotePrice(null)).toBeNull();
+  });
+
+  it('пересоздание в две фазы: котировка без quoteId, задача — с ним', async () => {
+    calls.length = 0;
+    await voicesApi.recreateQuote('p1', 'anya');
+    await voicesApi.recreate('p1', 'anya', 'q 1');
+    expect(calls.map(c => [c.url, c.options?.method])).toEqual([
+      ['/projects/p1/audio-editor/voices/anya/recreate?provider=minimax', 'POST'],
+      ['/projects/p1/audio-editor/voices/anya/recreate?provider=minimax&quoteId=q+1', 'POST'],
+    ]);
   });
 });
 
@@ -135,11 +150,11 @@ describe('личный чат', () => {
     expect(PERSONAL_TITLE).toBe('«Голоса» живут в проекте');
   });
 
-  it('список — по ручке чата, мутации отказывают до запроса', async () => {
-    await voicesApi.list('personal', 's1');
-    expect(calls[0].url).toBe('/audio-editor/chats/s1/voices');
+  it('список — без сети (сервер всё равно ответил бы available:false), мутации отказывают до запроса', async () => {
+    expect(await voicesApi.list('personal', 's1')).toEqual({ available: false, voices: [] });
+    expect(() => voicesApi.recreateQuote('personal', 'anya')).toThrow();
     expect(() => voicesApi.create('personal', { name: 'Аня' })).toThrow('Библиотека «Голоса» живёт в проекте');
     expect(() => voicesApi.remove('personal', 'anya')).toThrow();
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
 });

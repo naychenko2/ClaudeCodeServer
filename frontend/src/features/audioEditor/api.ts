@@ -65,6 +65,8 @@ export interface AudioModePrefs {
   model: string | null;
   count: number | null;
   fields: Record<string, unknown> | null;
+  // Входы операции (AudioOpInputs бэкенда); в params не уходят
+  inputs?: AudioOpInputs | null;
 }
 
 export interface AudioPrefs { voice: AudioModePrefs | null; music: AudioModePrefs | null; process: AudioModePrefs | null }
@@ -77,6 +79,25 @@ export interface AudioThreadSettings {
   model: string | null;
   fields: Record<string, unknown> | null;
   count?: number | null;
+  // Входы операции. PUT заменяет их целиком: не переданы — сервер их стирает
+  inputs?: AudioOpInputs | null;
+}
+
+// Входы операции в настройках нити и префах (белый список AudioOpInputs бэкенда): их только
+// подставляет панель, запуск их не читает. Пути — от корня проекта; у личного чата путей нет
+export interface AudioOpPieceRef { threadId?: string; versionId?: string; projectFile?: string }
+
+export interface AudioOpInputs {
+  language?: string;
+  referencePath?: string;
+  startSec?: number;
+  endSec?: number;
+  // voice:<slug> из библиотеки «Голоса»
+  voice?: string;
+  pieces?: AudioOpPieceRef[];
+  joint?: AudioJoint;
+  joints?: (AudioJoint | null)[];
+  dialogue?: { text: string; voice?: string }[];
 }
 
 // ── Нити ──
@@ -171,6 +192,8 @@ export interface AudioQuote {
   license: string;
   heavy: boolean;
   expiresAt: string;
+  // Котировка пересоздания клона: slug голоса
+  recreateVoice?: string | null;
 }
 
 export interface AudioJobInput {
@@ -193,6 +216,8 @@ export interface AudioJobInput {
   clipPaths?: string[];
   voiceModelPath?: string | null;
   voiceIndexPath?: string | null;
+  // Голос из библиотеки значением voice:<slug>
+  voice?: string | null;
 }
 
 export interface AudioCost { amount: number; unit: string }
@@ -392,6 +417,7 @@ export function jobForm(input: AudioJobInput): FormData {
   input.clipPaths?.forEach(p => form.append('clipPaths', p));
   put('voiceModelPath', input.voiceModelPath);
   put('voiceIndexPath', input.voiceIndexPath);
+  put('voice', input.voice);
   return form;
 }
 
@@ -478,4 +504,16 @@ export function conflictState(e: unknown): AudioThreadsState | null {
   if (err?.status !== 409) return null;
   const st = err.body?.state as AudioThreadsState | undefined;
   return st && Array.isArray(st.threads) ? st : null;
+}
+
+export const CLONE_REFUSAL_CODES: ReadonlySet<string> = new Set(['voice_clone_stale', 'voice_clone_missing']);
+
+// Отказ запуска «клон MiniMax протух или не создан» (409): текст и котировка пересоздания; другой — null
+export function cloneRefusal(e: unknown): { code: string; message: string; recreate: AudioQuote | null } | null {
+  const err = e as { status?: unknown; message?: unknown; body?: { code?: unknown; error?: unknown; recreate?: unknown } } | null;
+  const code = err?.body?.code;
+  if (err?.status !== 409 || typeof code !== 'string' || !CLONE_REFUSAL_CODES.has(code)) return null;
+  const message = typeof err.body?.error === 'string' ? err.body.error : typeof err.message === 'string' ? err.message : 'Клон голоса недоступен';
+  const r = err.body?.recreate as AudioQuote | undefined;
+  return { code, message, recreate: r && typeof r.quoteId === 'string' ? r : null };
 }

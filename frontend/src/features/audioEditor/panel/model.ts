@@ -4,11 +4,12 @@
 
 import type {
   AudioCatalog, AudioMode, AudioModelInfo, AudioOp, AudioParamField, AudioParamSchema, AudioPrefs, AudioProvider,
-  AudioQuote, AudioThread, AudioThreadSettings,
+  AudioOpInputs, AudioQuote, AudioThread, AudioThreadSettings,
 } from '../api';
 import { defaultOp, OPS, opInfo, type OpInfo } from '../ops';
 import { resolveLaunch, type ResolvedLaunch } from '../strip/summary';
 import type { AudioSelection } from '../player/selection';
+import { LIBRARY_VOICE_OPS, projectInputs, toServerInputs, type PanelInputs } from './inputs';
 import { musicReason, type MusicInputs } from './music';
 
 // Правки без ИИ: поставщика и модели у них нет, бегут ffmpeg на сервере
@@ -46,6 +47,8 @@ export interface PanelState extends ResolvedLaunch {
   providerKey: string | null;
   modelId: string;
   fields: Record<string, unknown>;
+  // Входы операции на сервере: у нити с настройками — её, иначе — префов режима
+  inputs: AudioOpInputs | null;
 }
 
 // Цепочка «настройки нити → префы режима → умолчание», как AudioPrefsResolver на бэкенде
@@ -60,28 +63,35 @@ export function resolvePanel(
     providerKey: own?.provider ?? p?.provider ?? null,
     modelId: own?.model ?? p?.model ?? catalog?.autoModelId ?? 'auto',
     fields: { ...(p?.fields ?? {}), ...(own?.fields ?? {}) },
+    inputs: (own ? own.inputs : p?.inputs) ?? null,
   };
 }
 
 export type SettingsPatch = Partial<Pick<AudioThreadSettings, 'mode' | 'operation' | 'provider' | 'model' | 'count'>> & {
   fields?: Record<string, unknown>;
+  // undefined — как были (при смене операции — только нужные новой); null — снять
+  inputs?: AudioOpInputs | null;
 };
 
 // Следующие настройки нити. Смена режима, операции, поставщика или модели сбрасывает то, что от них
-// зависит: иначе поля чужой модели ушли бы в params и сервер отказал бы «неизвестный параметр»
+// зависит: иначе поля чужой модели ушли бы в params и сервер отказал бы «неизвестный параметр».
+// Входы едут всегда (PUT их заменяет), при смене операции — только те, что нужны новой
 export function nextSettings(cur: PanelState, patch: SettingsPatch): AudioThreadSettings {
   const base: AudioThreadSettings = {
     mode: cur.mode, operation: cur.op, provider: cur.providerKey, model: cur.modelId, fields: cur.fields, count: cur.count,
+    inputs: cur.inputs,
   };
+  const inputsFor = (op: AudioOp) => projectInputs(patch.inputs !== undefined ? patch.inputs : cur.inputs, op);
   if (patch.mode && patch.mode !== cur.mode) {
     // Операция вместе с режимом — просьба карточки («Перегенерировать кусок» из режима «Голос»)
     const operation = patch.operation && opInfo(patch.operation)?.mode === patch.mode ? patch.operation : defaultOp(patch.mode);
-    return { mode: patch.mode, operation, provider: null, model: null, fields: {}, count: cur.count };
+    return { mode: patch.mode, operation, provider: null, model: null, fields: {}, count: cur.count, inputs: inputsFor(operation) };
   }
   const next = { ...base, ...patch };
   if (patch.operation && patch.operation !== cur.op) {
     next.model = null;
     next.fields = {};
+    next.inputs = inputsFor(patch.operation);
   }
   if (patch.provider !== undefined && patch.provider !== cur.providerKey) {
     next.model = null;
@@ -89,6 +99,17 @@ export function nextSettings(cur: PanelState, patch: SettingsPatch): AudioThread
   }
   if (patch.model !== undefined && patch.model !== cur.modelId && !patch.fields) next.fields = {};
   return next;
+}
+
+// «Выбрать» на вкладке «Голоса»: голос встаёт в поле текущей операции, а если она голос из
+// библиотеки не берёт — панель переходит на «Озвучить по образцу» уже с этим голосом
+export function voicePick(
+  cur: PanelState, inputs: PanelInputs, value: string, personal: boolean,
+): { inputs: Partial<PanelInputs> } | { patch: SettingsPatch } {
+  if (LIBRARY_VOICE_OPS.has(cur.op)) return { inputs: { voice: value } };
+  return {
+    patch: { mode: 'voice', operation: 'cloneVoice', inputs: toServerInputs('cloneVoice', { ...inputs, voice: value }, null, personal) },
+  };
 }
 
 // ── Поставщики и модели ──

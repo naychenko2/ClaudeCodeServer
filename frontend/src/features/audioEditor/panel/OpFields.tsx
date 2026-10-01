@@ -4,14 +4,15 @@
 
 import { useRef } from 'react';
 import type { ReactNode } from 'react';
-import { ArrowDown, ArrowUp, Plus, Upload, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Mic, Plus, Upload, X } from 'lucide-react';
 import {
   Button, Checkbox, IconButton, SegmentedControl, Select, TextArea, TextField, C, FS, SP,
 } from 'aihome_shell/kit';
 import type { AudioFileFormat, AudioOp, AudioParamField } from '../api';
 import { opInfo } from '../ops';
 import type { AudioSelection } from '../player/selection';
-import type { PanelInputs, Replica, TrimInputs } from './inputs';
+import { pickedSlug } from '../voices/model';
+import { LIBRARY_VOICE_OPS, type PanelInputs, type Replica, type TrimInputs } from './inputs';
 import { SOURCE_LABEL, SPEAK_SOURCES, type PanelState } from './model';
 import { ParamField } from './ParamField';
 import { PieceField, type PieceBinding } from './PieceField';
@@ -38,6 +39,8 @@ export interface OpFieldsProps {
   isMobile: boolean;
   // Кусок нити (обрезка, «Перегенерировать кусок»); null — нити нет
   piece: PieceBinding | null;
+  // Открыть вкладку «Голоса» — выбрать голос из библиотеки
+  onOpenVoices?: () => void;
 }
 
 export function SchemaFields({ fields, values, setField, only }: {
@@ -85,6 +88,26 @@ function Reference({ title, hint, file, setFile, path, setPath, personal }: {
         </div>
       )}
       {hint && <Hint>{hint}</Hint>}
+    </div>
+  );
+}
+
+// Голос из библиотеки «Голоса»: выбирается на вкладке, здесь — что выбрано и как снять
+function LibraryVoice({ value, onClear, onOpen }: { value: string; onClear: () => void; onOpen?: () => void }) {
+  const slug = pickedSlug(value);
+  return (
+    <div data-field="library-voice" style={{ marginBottom: SP.sm }}>
+      <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.xxs }}>Голос из библиотеки</div>
+      {slug ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textPrimary }}>
+          {ic(Mic)}
+          <span data-picked-voice={slug} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slug}</span>
+          {onOpen && <Button size="xs" variant="ghost" onClick={onOpen}>Сменить</Button>}
+          <IconButton size="xs" title="Не брать голос из библиотеки" ariaLabel="Не брать голос из библиотеки" onClick={onClear}>{ic(X)}</IconButton>
+        </div>
+      ) : (
+        onOpen && <Button size="xs" variant="secondary" leftIcon={ic(Mic)} onClick={onOpen}>Выбрать в «Голосах»</Button>
+      )}
     </div>
   );
 }
@@ -146,7 +169,9 @@ export function VoiceFields(p: OpFieldsProps) {
   const { state: s, inputs, setInputs } = p;
   const op = s.op;
   const caps = s.model?.caps ?? null;
-  const ref = (title: string, hint?: ReactNode) => (
+  const library = LIBRARY_VOICE_OPS.has(op) && !p.personal;
+  const picked = library && !!pickedSlug(inputs.voice);
+  const ref = (title: string, hint?: ReactNode) => !picked && (
     <Reference title={title} hint={hint} file={p.reference} setFile={p.setReference} personal={p.personal}
       path={inputs.referencePath} setPath={v => setInputs({ referencePath: v })} />
   );
@@ -161,10 +186,11 @@ export function VoiceFields(p: OpFieldsProps) {
         </>
       )}
       <Label>Поля операции · {opInfo(op)?.label}</Label>
+      {library && <LibraryVoice value={inputs.voice} onClear={() => setInputs({ voice: '' })} onOpen={p.onOpenVoices} />}
       {op === 'cloneVoice' && ref('Образец голоса', 'Чистая речь 5–60 с; длиннее обрежем до 15 с')}
       {op === 'dialogue' && <Replicas list={inputs.replicas} onChange={r => setInputs({ replicas: r })} />}
       {op === 'convertVoice' && caps?.voiceKinds.includes('clone') && ref('Чей голос', 'Образец 1–30 с')}
-      {op === 'convertVoice' && caps?.voiceKinds.includes('rvc') && !p.personal && (
+      {op === 'convertVoice' && caps?.voiceKinds.includes('rvc') && !p.personal && !picked && (
         <div data-field="voice-model" style={{ marginBottom: SP.sm }}>
           <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.xxs }}>Модель голоса</div>
           <TextField value={inputs.voiceModelPath} placeholder="voices/andrey/voice.pth" onChange={v => setInputs({ voiceModelPath: v })} />

@@ -3,9 +3,11 @@
 // Компонент только рисует то, что отдают эти функции, — так поведение проверяется без DOM.
 
 import {
-  MAX_VOICE_SAMPLE_MB, MAX_VOICE_SAMPLES, MINIMAX_RECREATE_READY,
+  MAX_VOICE_SAMPLE_MB, MAX_VOICE_SAMPLES,
   type AudioVoice, type VoiceProviderState, type VoicesList,
 } from './api';
+import type { AudioQuote } from '../api';
+import { money } from '../panel/model';
 
 // Значение поля «Голос» панели «Звук» для голоса из библиотеки
 export const VOICE_PICK_PREFIX = 'voice:';
@@ -20,7 +22,6 @@ export const EMPTY_TITLE = 'Голосов пока нет';
 export const EMPTY_TEXT =
   'Добавьте запись 5–15 секунд чистой речи. Голос — это записи человека и их расшифровка: его смогут взять все поставщики, которые умеют клонировать.';
 export const MINIMAX_TTL_TEXT = 'MiniMax удаляет клон через 7 дней без использования';
-export const RECREATE_PENDING_HINT = 'Пересоздание клона появится в следующем обновлении';
 
 export type VoicesView =
   | { kind: 'loading' }
@@ -114,12 +115,21 @@ export function whereWorks(v: AudioVoice, now = new Date()): WhereRow[] {
 
 export const isStale = (v: AudioVoice) => v.needsAttention || v.providers.some(p => p.state === 'stale');
 
-// Кнопка «Пересоздать · цена»: активна, только когда ручка есть и цена известна
-export function recreateAction(price: string | null, ready = MINIMAX_RECREATE_READY): { label: string; disabled: boolean; hint: string | null } {
+// Кнопка «Пересоздать · цена»: активна, только когда цена известна — платно, человек видит сумму
+// до нажатия. error — котировка не получилась
+export function recreateAction(price: string | null, error: string | null = null): { label: string; disabled: boolean; hint: string | null } {
   const label = price ? `Пересоздать · ${price}` : 'Пересоздать';
-  if (!ready) return { label, disabled: true, hint: RECREATE_PENDING_HINT };
+  if (error) return { label, disabled: true, hint: error };
   if (!price) return { label, disabled: true, hint: 'Считаем цену…' };
   return { label, disabled: false, hint: null };
+}
+
+// Цена котировки для кнопки: «$0.6», «≈ 3 кред.»; сумма неизвестна — «цена у поставщика»
+export function quotePrice(q: AudioQuote | null): string | null {
+  if (!q) return null;
+  const p = q.price;
+  if (p.amount === null) return 'цена у поставщика';
+  return `${p.approx ? '≈ ' : ''}${money(p.amount, p.unit)}`;
 }
 
 // Последний образец убрать нельзя — голос без записей не клонируется; удаляется голос целиком

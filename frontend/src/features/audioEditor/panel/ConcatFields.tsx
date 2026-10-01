@@ -30,12 +30,16 @@ export function chatPieces(threads: AudioThread[]): ConcatPiece[] {
 // Перестановка или удаление сбрасывают свои стыки на общий
 const resetJoints = (n: number): (AudioJoint | null)[] => Array.from({ length: Math.max(n - 1, 0) }, () => null);
 
+// Стыки под n кусков: мест n − 1, свои стыки прежних мест сохраняются
+export const jointsFor = (n: number, joints: (AudioJoint | null)[]): (AudioJoint | null)[] =>
+  resetJoints(n).map((x, k) => joints[k] ?? x);
+
 export function ConcatFields({ c, set, threads, personal }: {
   c: ConcatInputs; set: (patch: Partial<ConcatInputs>) => void; threads: AudioThread[]; personal: boolean;
 }) {
   const [file, setFile] = useState('');
   const options = chatPieces(threads);
-  const add = (p: ConcatPiece) => set({ pieces: [...c.pieces, p], joints: [...c.joints, null].slice(0, c.pieces.length) });
+  const add = (p: ConcatPiece) => set({ pieces: [...c.pieces, p], joints: jointsFor(c.pieces.length + 1, c.joints) });
   const move = (i: number, d: number) => {
     const next = [...c.pieces];
     [next[i], next[i + d]] = [next[i + d], next[i]];
@@ -46,7 +50,7 @@ export function ConcatFields({ c, set, threads, personal }: {
     set({ pieces: next, joints: resetJoints(next.length) });
   };
   const setJoint = (i: number, j: AudioJoint | null) => {
-    const joints = [...resetJoints(c.pieces.length).map((x, k) => c.joints[k] ?? x)];
+    const joints = jointsFor(c.pieces.length, c.joints);
     joints[i] = j;
     set({ joints });
   };

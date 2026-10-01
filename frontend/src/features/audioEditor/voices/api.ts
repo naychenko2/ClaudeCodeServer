@@ -1,10 +1,11 @@
 // Клиент библиотеки «Голоса» (ADR-021 §2): ручки AudioVoicesController
 // (/projects/{projectId}/audio-editor/voices) и единственная ручка личного чата
-// (/audio-editor/chats/{sessionId}/voices — всегда available:false). Типы — зеркало
-// VoiceDto и VoiceProviderState бэкенда (Voices/VoiceManifest.cs). Мутирующих ручек у личного
-// чата нет вовсе: отказ — до запроса.
+// (/audio-editor/chats/{sessionId}/voices — всегда available:false, поэтому в сеть не ходим).
+// Типы — зеркало VoiceDto и VoiceProviderState бэкенда (Voices/VoiceManifest.cs). Мутирующих ручек
+// у личного чата нет вовсе: отказ — до запроса.
 
 import { readStoredToken, request } from 'aihome_shell/kit';
+import type { AudioQuote } from '../api';
 import { audioBase, isPersonalScope } from '../scope';
 
 export type VoiceKind = 'samples' | 'rvc';
@@ -45,10 +46,6 @@ export interface NewVoiceInput {
 export const MAX_VOICE_SAMPLES = 5;
 export const MAX_VOICE_SAMPLE_MB = 50;
 
-// Пересоздание клона MiniMax за деньги — ручка бэкенда в работе (задача 7.2). Пока её нет,
-// кнопка «Пересоздать» неактивна с подсказкой; появится ручка — включить флаг и сверить маршрут
-export const MINIMAX_RECREATE_READY = false;
-
 const projectOnly = () => new Error('Библиотека «Голоса» живёт в проекте — в личном чате её нет');
 
 function voicesBase(scope: string): string {
@@ -68,9 +65,11 @@ export function samplesForm(input: Partial<NewVoiceInput>): FormData {
 }
 
 export const voicesApi = {
-  // Личный чат — честный пустой ответ сервера (available:false), не ошибка
-  list: (scope: string, sessionId: string | null) =>
-    request<VoicesList>(`${audioBase(scope, sessionId)}/voices`, { live: true }),
+  // Личный чат — тот же ответ, что дал бы сервер (available:false), без запроса
+  list: (scope: string, sessionId: string | null): Promise<VoicesList> =>
+    isPersonalScope(scope)
+      ? Promise.resolve({ available: false, voices: [] })
+      : request<VoicesList>(`${audioBase(scope, sessionId)}/voices`, { live: true }),
   create: (scope: string, input: NewVoiceInput) =>
     request<AudioVoice>(voicesBase(scope), { method: 'POST', body: samplesForm(input), timeoutMs: 300_000 }),
   update: (scope: string, slug: string, patch: { name?: string; transcript?: string }) =>
@@ -81,9 +80,13 @@ export const voicesApi = {
     request<AudioVoice>(`${voiceUrl(scope, slug)}/samples`, { method: 'POST', body: samplesForm(input), timeoutMs: 300_000 }),
   removeSample: (scope: string, slug: string, file: string) =>
     request<AudioVoice>(`${voiceUrl(scope, slug)}/samples/${encodeURIComponent(file)}`, { method: 'DELETE' }),
-  // Пересоздать клон MiniMax по образцам; цену человек видит на кнопке до нажатия
-  recreateMiniMax: (scope: string, slug: string) =>
-    request<AudioVoice>(`${voiceUrl(scope, slug)}/providers/minimax/recreate`, { method: 'POST', timeoutMs: 120_000 }),
+  // Пересоздание клона MiniMax в две фазы: без quoteId — котировка с ценой (денег не тратит),
+  // с quoteId той котировки — задача. Вторую фазу зовёт только кнопка человека
+  recreateQuote: (scope: string, slug: string) =>
+    request<AudioQuote>(`${voiceUrl(scope, slug)}/recreate?provider=minimax`, { method: 'POST', timeoutMs: 60_000 }),
+  recreate: (scope: string, slug: string, quoteId: string) =>
+    request<{ jobId: string }>(`${voiceUrl(scope, slug)}/recreate?${new URLSearchParams({ provider: 'minimax', quoteId })}`,
+      { method: 'POST', timeoutMs: 120_000 }),
   // URL образца для <audio src>: токен через ?access_token=, тег заголовков не шлёт
   fileUrl: (scope: string, slug: string, file: string) => {
     const url = `/api${voiceUrl(scope, slug)}/files/${encodeURIComponent(file)}`;

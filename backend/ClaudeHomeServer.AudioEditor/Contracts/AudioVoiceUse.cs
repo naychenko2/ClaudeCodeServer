@@ -18,7 +18,8 @@ public sealed record AudioVoiceUse(
     public string? CachedId(string key) => Cached.TryGetValue(key, out var id) ? id : null;
 }
 
-// Привязка, созданная поставщиком в этом запуске: Provider — ключ кеша (VoiceProviders.*), Id — значение
+// Привязка, созданная поставщиком в этом запуске: Provider — ключ кеша (VoiceProviders.*), Id — значение.
+// Пустой Id — привязка протухла у поставщика: запись кеша вычищается
 public sealed record AudioVoiceCacheEntry(string Provider, string Id);
 
 public static class AudioVoiceRefs

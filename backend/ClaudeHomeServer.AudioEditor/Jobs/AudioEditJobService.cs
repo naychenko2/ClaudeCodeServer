@@ -47,6 +47,8 @@ public sealed class AudioEditJobService : IDisposable
         "На локальной видеокарте уже идёт тяжёлая задача (обучение голоса или разбор на дорожки) — " +
         "дождитесь её окончания или выберите облачного поставщика";
     public const string QuoteExpiredText = "Котировка устарела — запросите цену заново";
+    public const string CloneByButtonText =
+        "Клон MiniMax из библиотеки создаётся только кнопкой «Пересоздать» с ценой; для озвучки готовым клоном выберите MiniMax HD/Turbo";
 
     private readonly IEnumerable<IAudioEngine> _engines;
     private readonly AudioEditWorkspace _workspace;
@@ -445,10 +447,11 @@ public sealed class AudioEditJobService : IDisposable
         {
             var (code, text) = state switch
             {
+                // Модель сама создаёт клон: обычным запуском её не зовём ни при каком состоянии кеша
+                _ when clone.Creates => (state == Voices.VoiceProviderStates.Stale
+                    ? AudioEditErrorCodes.VoiceCloneStale : AudioEditErrorCodes.VoiceCloneMissing, CloneByButtonText),
                 Voices.VoiceProviderStates.Stale => (AudioEditErrorCodes.VoiceCloneStale,
                     "Клон MiniMax этого голоса мог быть удалён: им не пользовались 7 дней. Пересоздайте клон кнопкой — это платно"),
-                Voices.VoiceProviderStates.Ok => (AudioEditErrorCodes.VoiceCloneMissing,
-                    "Клон MiniMax у этого голоса уже есть — пересоздаётся он только кнопкой «Пересоздать» с ценой"),
                 _ => (AudioEditErrorCodes.VoiceCloneMissing,
                     "У этого голоса ещё нет клона MiniMax. Создайте его кнопкой «Пересоздать» — это платно"),
             };
@@ -505,7 +508,9 @@ public sealed class AudioEditJobService : IDisposable
         try { _voices?.Remember(job.Scope, voice.Slug, entries); }
         catch (Exception ex) { _log.LogWarning(ex, "Звук: кеш голоса {Slug} не записан", voice.Slug); }
         var cached = voice.Cached.ToDictionary(p => p.Key, p => p.Value);
-        foreach (var e in entries) cached[e.Provider] = e.Id;
+        foreach (var e in entries)
+            if (string.IsNullOrEmpty(e.Id)) cached.Remove(e.Provider);
+            else cached[e.Provider] = e.Id;
         return voice with { Cached = cached };
     }
 

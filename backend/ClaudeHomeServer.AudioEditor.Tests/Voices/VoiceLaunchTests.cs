@@ -164,8 +164,57 @@ public sealed class VoiceLaunchTests : IDisposable
         speak.Recreate.Should().NotBeNull();
         // Клон MiniMax обычной котировкой не создаётся — только кнопкой пересоздания
         clone.ErrorCode.Should().Be(AudioEditErrorCodes.VoiceCloneMissing);
+        clone.Error.Should().Be(AudioEditJobService.CloneByButtonText);
         clone.Recreate!.RecreateVoice.Should().Be(_slug);
         Posts().Should().BeEmpty();
+    }
+
+    // Модель, создающая клон, обычным запуском не зовётся и при живом клоне: текст ведёт к кнопке и к HD/Turbo
+    [Fact]
+    public async Task FalMiniMaxClone_WithLiveClone_RefusedWithButtonText()
+    {
+        SetMiniMax("mm-voice-1");
+
+        var clone = await RunAsync(Service(Fal()), "fal", AudioCatalog.FalMiniMaxClone, AudioOp.CloneVoice);
+
+        clone.ErrorCode.Should().Be(AudioEditErrorCodes.VoiceCloneMissing);
+        clone.Error.Should().Be(AudioEditJobService.CloneByButtonText);
+        clone.Recreate.Should().NotBeNull();
+        Posts().Should().BeEmpty();
+    }
+
+    // Образец едет data: URI внутри JSON: больше потолка — отказ с причиной до запроса, а не таймаут
+    [Theory]
+    [InlineData(AudioCatalog.FalMiniMaxClone)]
+    [InlineData(AudioCatalog.FalChatterbox)]
+    public async Task FalSampleClone_SampleOverCap_RejectedBeforeRequest(string model)
+    {
+        var big = new byte[FalAudioEngine.MaxDataUriSampleBytes + 1];
+        Wav.CopyTo(big, 0);
+        var voice = new AudioVoiceUse(_slug, new AudioBytes(big, "audio/wav"), null, null, null, new Dictionary<string, string>());
+
+        var result = await Fal().RunAsync(new AudioRequest(AudioOp.CloneVoice, model, _scope, Text: "Привет", Voice: voice),
+            new FalAudioEngineTests.Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Rejected);
+        result.Charged.Should().BeFalse();
+        result.Error.Should().Be(FalAudioEngine.SampleTooLargeText);
+        Posts().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task FalSampleClone_SampleAtCap_GoesToProvider()
+    {
+        var atCap = new byte[FalAudioEngine.MaxDataUriSampleBytes];
+        Wav.CopyTo(atCap, 0);
+        _fal.Job(AudioCatalog.FalChatterbox, "ch1", ["COMPLETED"], """{"audio":{"url":"https://cdn.test/ch.mp3"}}""");
+        _fal.File("https://cdn.test/ch.mp3", [5]);
+
+        var result = await Fal().RunAsync(new AudioRequest(AudioOp.CloneVoice, AudioCatalog.FalChatterbox, _scope, Text: "Привет",
+            Reference: new AudioBytes(atCap, "audio/wav")), new FalAudioEngineTests.Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Ok);
+        Posts().Should().ContainSingle();
     }
 
     [Fact]
@@ -319,6 +368,71 @@ public sealed class VoiceLaunchTests : IDisposable
             .Should().Be(VoiceProviderStates.Ok);
     }
 
+    private const string StaleMedia = "stale-media-id";
+
+    private static bool Refers(FakeHttp.Call c, string mediaId) =>
+        Launch(c)?["medias"]?[0]?["value"]?.GetValue<string>() == mediaId;
+
+    // Протухший mediaId из кеша: запуск не принят → кеш вычищен, образец загружен заново, повтор один раз
+    [Fact]
+    public async Task Higgsfield_StaleCachedMedia_ReuploadedAndRetriedOnce()
+    {
+        _lib.UpdateProviders(_scope, _slug, (p, now) => VoiceProviders.SetHiggsfieldMedia(p, StaleMedia, now));
+        var http = new FakeHttp(c => Refers(c, StaleMedia)
+            ? FakeHttp.McpText("Media not found: " + StaleMedia, isError: true)
+            : HiggsfieldAudioEngineTests.Happy(c));
+        var svc = Service(new HiggsfieldAudioEngine(FakeHttp.Client(http), _time) { PollInterval = TimeSpan.Zero });
+
+        var started = await RunAsync(svc, "higgsfield", "seed_audio", AudioOp.Speak);
+
+        started.Error.Should().BeNull();
+        var job = svc.Get(Owner, _scope.Key, started.Value!.JobId)!;
+        job.Status.Should().Be(AudioEditJobStatus.Completed);
+        http.Calls.Count(c => FakeHttp.Tool(c) == "media_upload").Should().Be(1);
+        http.Calls.Select(Launch).OfType<JsonObject>().Select(a => a["medias"]![0]!["value"]!.GetValue<string>())
+            .Should().Equal(StaleMedia, HiggsfieldAudioEngineTests.MediaId);
+        Manifest().Providers[VoiceProviders.HiggsfieldMedia]!["mediaId"]!.GetValue<string>()
+            .Should().Be(HiggsfieldAudioEngineTests.MediaId);
+    }
+
+    // Заново загруженный образец тоже не найден: честная ошибка, не списано, кеш пуст, третьей попытки нет
+    [Fact]
+    public async Task Higgsfield_StaleMedia_ReuploadNotHelping_HonestErrorNotCharged()
+    {
+        _lib.UpdateProviders(_scope, _slug, (p, now) => VoiceProviders.SetHiggsfieldMedia(p, StaleMedia, now));
+        var http = new FakeHttp(c => Launch(c) is not null
+            ? FakeHttp.McpText("HTTP 404: media does not exist", isError: true)
+            : HiggsfieldAudioEngineTests.Happy(c));
+        var svc = Service(new HiggsfieldAudioEngine(FakeHttp.Client(http), _time) { PollInterval = TimeSpan.Zero });
+
+        var started = await RunAsync(svc, "higgsfield", "seed_audio", AudioOp.Speak);
+
+        var job = svc.Get(Owner, _scope.Key, started.Value!.JobId)!;
+        job.Status.Should().Be(AudioEditJobStatus.Failed);
+        job.Error.Should().Be(HiggsfieldAudioEngine.MediaLostText);
+        job.Charged.Should().BeFalse();
+        http.Calls.Count(c => FakeHttp.Tool(c) == "media_upload").Should().Be(1);
+        http.Calls.Select(Launch).OfType<JsonObject>().Should().HaveCount(2);
+        Manifest().Providers.ContainsKey(VoiceProviders.HiggsfieldMedia).Should().BeFalse();
+    }
+
+    // Отказ, не связанный с образцом, не повторяется и кеш не трогает
+    [Fact]
+    public async Task Higgsfield_CachedMedia_OtherRefusal_NoRetry()
+    {
+        _lib.UpdateProviders(_scope, _slug, (p, now) => VoiceProviders.SetHiggsfieldMedia(p, StaleMedia, now));
+        var http = new FakeHttp(c => Launch(c) is not null
+            ? FakeHttp.McpText("Rate limit exceeded", isError: true)
+            : HiggsfieldAudioEngineTests.Happy(c));
+        var svc = Service(new HiggsfieldAudioEngine(FakeHttp.Client(http), _time) { PollInterval = TimeSpan.Zero });
+
+        await RunAsync(svc, "higgsfield", "seed_audio", AudioOp.Speak);
+
+        http.Calls.Should().NotContain(c => FakeHttp.Tool(c) == "media_upload");
+        http.Calls.Select(Launch).OfType<JsonObject>().Should().ContainSingle();
+        Manifest().Providers[VoiceProviders.HiggsfieldMedia]!["mediaId"]!.GetValue<string>().Should().Be(StaleMedia);
+    }
+
     [Fact]
     public async Task Higgsfield_CachedElement_VoiceTypeElement_NoUpload()
     {
@@ -423,11 +537,19 @@ public sealed class VoiceLaunchTests : IDisposable
     public async Task ProviderIds_NeverLeakToDtos()
     {
         SetMiniMax("mm-secret-id");
-        _lib.UpdateProviders(_scope, _slug, (p, now) => VoiceProviders.SetFalQwen(p, "https://cdn.test/secret.safetensors", now));
+        _lib.UpdateProviders(_scope, _slug, (p, now) =>
+        {
+            VoiceProviders.SetFalQwen(p, "https://cdn.test/secret.safetensors", now);
+            VoiceProviders.SetHiggsfield(p, "hf-secret-element", now);
+            VoiceProviders.SetHiggsfieldMedia(p, "hf-secret-media", now);
+        });
         var quote = await Service(Fal()).QuoteVoiceCloneAsync(Owner, _scope, _slug, "minimax", CancellationToken.None);
 
         var json = System.Text.Json.JsonSerializer.Serialize(new object[] { _lib.Get(_scope, _slug)!, quote.Value! });
 
-        json.Should().NotContain("mm-secret-id").And.NotContain("secret.safetensors");
+        json.Should().NotContain("mm-secret-id").And.NotContain("secret.safetensors")
+            .And.NotContain("hf-secret-element").And.NotContain("hf-secret-media");
+        // Список голосов идёт тем же DTO — и в нём id нет
+        System.Text.Json.JsonSerializer.Serialize(_lib.List(_scope)).Should().NotContain("hf-secret");
     }
 }

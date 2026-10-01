@@ -173,9 +173,11 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
         List<AudioVoiceCacheEntry> created = [];
         try
         {
+            var fromCache = false;
             if (element is null && (req.Op == AudioOp.CloneVoice || voice is not null))
             {
                 var mediaId = voice?.CachedId(Voices.VoiceProviders.HiggsfieldMedia);
+                fromCache = mediaId is not null;
                 if (mediaId is null)
                 {
                     var (uploaded, failure) = await UploadAsync(req.Reference!, token);
@@ -185,7 +187,20 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
                 }
                 args["medias"] = new JsonArray(new JsonObject { ["role"] = "audio_references", ["value"] = mediaId });
             }
-            var result = await LaunchAsync(args, progress, token);
+            var (result, mediaMissing) = await LaunchAsync(args, progress, token);
+            if (fromCache && mediaMissing)
+            {
+                // Образец из кеша Higgsfield уже не знает, а запуск не принят — списания не было. Кеш
+                // вычищаем, образец грузим заново и повторяем ровно один раз
+                created.Add(new AudioVoiceCacheEntry(Voices.VoiceProviders.HiggsfieldMedia, ""));
+                var (uploaded, failure) = await UploadAsync(voice!.Sample ?? req.Reference!, token);
+                if (failure is not null) return failure with { VoiceCache = created };
+                args["medias"] = new JsonArray(new JsonObject { ["role"] = "audio_references", ["value"] = uploaded! });
+                (result, mediaMissing) = await LaunchAsync(args, progress, token);
+                if (mediaMissing)
+                    return AudioResult.Fail(AudioOutcome.Failed, MediaLostText) with { VoiceCache = created };
+                created[^1] = new AudioVoiceCacheEntry(Voices.VoiceProviders.HiggsfieldMedia, uploaded!);
+            }
             return created.Count == 0 ? result : result with { VoiceCache = created };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -209,8 +224,10 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
     private static bool TakesElement(HiggsfieldAudioCatalog.Model entry) =>
         !entry.IsDialogue && entry.Params.ContainsKey("voice_type") && entry.Params.ContainsKey("voice_id");
 
-    // Запуск собранных аргументов: цена, generate_audio, ожидание, скачивание
-    private async Task<AudioResult> LaunchAsync(JsonObject args, IProgress<AudioProgress> progress, CancellationToken token)
+    // Запуск собранных аргументов: цена, generate_audio, ожидание, скачивание. MediaMissing — Higgsfield
+    // не принял запуск, потому что не знает образца из medias: задание не создано, кредиты не списаны
+    private async Task<(AudioResult Result, bool MediaMissing)> LaunchAsync(JsonObject args, IProgress<AudioProgress> progress,
+        CancellationToken token)
     {
         // Точная цена этого запуска — ею трата догоняет котировку без суммы
         var preflight = args.DeepClone().AsObject();
@@ -219,26 +236,26 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
         var credits = cost.Unavailable ? null : ParseCredits(cost);
 
         var started = await client.CallToolAsync("generate_audio", Params(args), token);
-        if (started.Unavailable) return AudioResult.Fail(AudioOutcome.Unavailable, started.Text);
+        if (started.Unavailable) return (AudioResult.Fail(AudioOutcome.Unavailable, started.Text), false);
         if (IsUnlimChoice(started))
         {
             // Сервер спросил, чем платить: отвечаем «бесплатными» тем же запросом
             args["use_unlim"] = true;
             started = await client.CallToolAsync("generate_audio", Params(args), token);
-            if (started.Unavailable) return AudioResult.Fail(AudioOutcome.Unavailable, started.Text);
+            if (started.Unavailable) return (AudioResult.Fail(AudioOutcome.Unavailable, started.Text), false);
             if (IsUnlimChoice(started))
-                return AudioResult.Fail(AudioOutcome.Failed,
-                    "Higgsfield так и не принял выбор оплаты — запуск не выполнен, кредиты не списаны");
+                return (AudioResult.Fail(AudioOutcome.Failed,
+                    "Higgsfield так и не принял выбор оплаты — запуск не выполнен, кредиты не списаны"), false);
             credits = 0;
         }
         if (!started.Ok)
         {
             var outcome = Classify(started.Text);
-            return AudioResult.Fail(outcome, Explain(outcome, started.Text));
+            return (AudioResult.Fail(outcome, Explain(outcome, started.Text)), IsMediaMissing(started.Text));
         }
 
         var jobIds = JobIds(started.Json());
-        if (jobIds.Count == 0) return AudioResult.Fail(AudioOutcome.Failed, "Higgsfield не вернул id задания");
+        if (jobIds.Count == 0) return (AudioResult.Fail(AudioOutcome.Failed, "Higgsfield не вернул id задания"), false);
 
         // Задание принято — кредиты админа ушли
         var remoteId = string.Join(",", jobIds);
@@ -249,17 +266,17 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
         if (url is null)
         {
             var outcome = error is null ? AudioOutcome.Failed : Classify(error);
-            return new AudioResult(outcome, [], actual, true, remoteId,
-                error is null ? "Higgsfield не вернул звука" : Explain(outcome, error));
+            return (new AudioResult(outcome, [], actual, true, remoteId,
+                error is null ? "Higgsfield не вернул звука" : Explain(outcome, error)), false);
         }
 
         progress.Report(new AudioProgress(AudioStage.Downloading));
         var download = await client.DownloadBytesAsync(url, token);
         if (download is null)
-            return new AudioResult(AudioOutcome.Failed, [], actual, true, remoteId, "Не удалось скачать результат Higgsfield");
+            return (new AudioResult(AudioOutcome.Failed, [], actual, true, remoteId, "Не удалось скачать результат Higgsfield"), false);
         var (contentType, extension) = Format(download.ContentType, url, args["format"]?.ToString());
-        return new AudioResult(AudioOutcome.Ok, [new AudioFile(AudioOutputs.Audio, download.Bytes, contentType, extension)],
-            actual, true, remoteId, null);
+        return (new AudioResult(AudioOutcome.Ok, [new AudioFile(AudioOutputs.Audio, download.Bytes, contentType, extension)],
+            actual, true, remoteId, null), false);
     }
 
     // Отмены у Higgsfield нет: работа у поставщика идёт дальше, кредиты, скорее всего, списаны
@@ -438,6 +455,20 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
         if (ids.Count == 0 && json?["job_id"]?.ToString() is { Length: > 0 } single) ids.Add(single);
         return ids;
     }
+
+    public const string MediaLostText =
+        "Образец голоса у Higgsfield не найден, загрузили заново — не помогло. Попробуйте позже или выберите другого поставщика";
+
+    // «Не знаю такого образца»: media not found, 404/410. Спрашивается только про отказ в запуске
+    internal static bool IsMediaMissing(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        return lower.Contains("media") && (lower.Contains("not found") || lower.Contains("not exist") || lower.Contains("expired"))
+            || MissingStatusPattern().IsMatch(text);
+    }
+
+    [GeneratedRegex(@"\b(404|410)\b")]
+    private static partial Regex MissingStatusPattern();
 
     internal static AudioOutcome Classify(string text)
     {

@@ -120,6 +120,11 @@ public sealed class VoiceLibrary(TimeProvider? time = null) : Mcp.IAudioVoiceLib
         {
             foreach (var e in entries)
             {
+                if (string.IsNullOrEmpty(e.Id))
+                {
+                    p.Remove(e.Provider);
+                    continue;
+                }
                 switch (e.Provider)
                 {
                     case VoiceProviders.Higgsfield: VoiceProviders.SetHiggsfield(p, e.Id, now); break;

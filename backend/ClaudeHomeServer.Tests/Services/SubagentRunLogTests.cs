@@ -68,6 +68,27 @@ public class SubagentRunLogTests
     }
 
     [Fact]
+    public void TakeTruncated_ОбрывСтопомНеСтавитОтметку()
+    {
+        // Случай 2026-10-01: «Стоп» оборвал сабагентов, отметка пережила прерванный ход и
+        // отбросила итог следующего успешного хода исполнителя — доклад не ушёл никогда
+        var log = new SubagentRunLog();
+        log.Record(Passport("a1", truncated: true) with { FinishedBy = "interrupted" });
+
+        log.TakeTruncated("sess-1").Should().BeNull();
+    }
+
+    [Fact]
+    public void TakeTruncated_ОбрывСтопомСнимаетПрежнююОтметку()
+    {
+        var log = new SubagentRunLog();
+        log.Record(Passport("a1", truncated: true));
+        log.Record(Passport("a2", truncated: true) with { FinishedBy = "interrupted" });
+
+        log.TakeTruncated("sess-1").Should().BeNull();
+    }
+
+    [Fact]
     public void TakeTruncated_ОтметкаНеУтекаетВЧужойЧат()
     {
         var log = new SubagentRunLog();

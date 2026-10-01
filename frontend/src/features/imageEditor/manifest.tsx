@@ -79,11 +79,12 @@ export const manifest: SubsystemManifest = {
     'workspace-panel-def': [
       {
         name: CHARACTERS_PANEL,
-        render: (ctx: WorkspacePanelDefCtx) => <CharactersPanel projectId={ctx.projectId} />,
+        // Персонажи живут в папке проекта: в личном чате панели нет
+        render: (ctx: WorkspacePanelDefCtx) => (ctx.projectId ? <CharactersPanel projectId={ctx.projectId} /> : null),
         action: {
           title: 'Персонажи',
           icon: <Contact size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-          isAvailable: () => getFlag(FLAGS.imageEditor),
+          isAvailable: (projectId: string | null) => projectId !== null && getFlag(FLAGS.imageEditor),
         } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],

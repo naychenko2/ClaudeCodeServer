@@ -2016,7 +2016,7 @@ const windowWidth = useWindowWidth();
             video: <VideoPanel />,
             ...Object.fromEntries(panelDefs.flatMap(d => (
               d.name && isPanelKey(d.name) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
-                ? [[d.name, d.render({ projectId: project.id, isMobile: false, onClose: () => closePanelKey(d.name as PanelKey) })]]
+                ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => closePanelKey(d.name as PanelKey) })]]
                 : []
             ))),
           }}

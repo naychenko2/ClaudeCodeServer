@@ -34,7 +34,7 @@ import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth, MOBILE_MAX, PANEL_INLINE_MAX_SHARE, TABLET_MAX } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
-  isPanelKey, type PanelKey, type RailBadgeInfo, type Zone,
+  isPanelKey, panelRivals, type PanelKey, type RailBadgeInfo, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
 import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, railSequence, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, PANEL_SPLIT_MIN_H, type PanelZonesStore } from './panelStackState';
@@ -427,7 +427,9 @@ export function PanelZone({
       // стек живёт мимо стора; закрывает signal смены чата и эксклюзив сторон
       // (см. эффекты ниже). На широком планшете inline идём общим путём —
       // openIn через стор, раскладка живёт между перемонтажами.
-      setTabletPanels(cur => [...cur.filter(x => x !== k), k].slice(-2));
+      // Соперник по EXCLUSIVE_PANEL_SETS (картинки ↔ звук) уходит сразу, не дожидаясь FIFO
+      const rivals = panelRivals(k);
+      setTabletPanels(cur => [...cur.filter(x => x !== k && !rivals.includes(x)), k].slice(-2));
       // Человек сам собрал сторону заново — отложенный набор устарел. Иначе он
       // всплыл бы поверх позже, при первом же возврате активности сюда.
       setTabletStash([]);

@@ -13,6 +13,11 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
   innerWidth: 1440, innerHeight: 900,
   matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
 }));
+// Modal рисуется порталом, которого у renderToStaticMarkup нет: подменяем узлом с заголовком
+vi.mock('aihome_shell/kit', async orig => ({
+  ...await orig<Record<string, unknown>>(),
+  Modal: ({ title, children }: { title: string; children: unknown }) => createElement('div', { 'data-modal': title }, children as never),
+}));
 
 const { setSamples } = await import('../../thread/threadStore');
 const { SampleChips } = await import('./CharacterSection');
@@ -31,6 +36,14 @@ describe('роль образца в панели', () => {
   it('пока чип не нажат, строки выбора нет', () => {
     const html = renderToStaticMarkup(createElement(SampleChips, { projectId: 'p1', max: 4, inlineRoles: true }));
     expect(html).toContain('Стиль · palette.jpg');
+    expect(html).not.toContain('data-sample-roles');
+  });
+
+  it('без inlineRoles (карточка над полосой без флага) выбор роли открывает Modal, строки под чипами нет', () => {
+    const html = renderToStaticMarkup(createElement(SampleChips, { projectId: 'p1', max: 4, initialRoleFor: 's1' }));
+    const modal = html.slice(html.indexOf('data-modal="Как модели использовать «palette.jpg»"'));
+    expect(html).toContain('data-modal="Как модели использовать «palette.jpg»"');
+    for (const r of ['Персонаж — сохранить лицо', 'Стиль', 'Предмет']) expect(modal).toContain(r);
     expect(html).not.toContain('data-sample-roles');
   });
 });

@@ -14,8 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, SlidersHorizontal, Sparkles, User, X } from 'lucide-react';
 import {
-  Button, Chip, IconButton, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, FLAGS, REVEAL_PANEL_EVENT, markGenPanelDismissed, useFeature,
-  type RevealPanelDetail,
+  Button, Chip, IconButton, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, FLAGS, markGenPanelDismissed, useFeature,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import type { ImageEditCatalog } from '../api';
@@ -31,6 +30,7 @@ import { activeSrc, launchSummaryParts, useThreadLaunch } from '../thread/useThr
 import { openCharacters, useCharacter } from './settings/CharacterSection';
 import { ic, type Launch } from './settings/primitives';
 import { SettingsSections } from './settings/SettingsSections';
+import { subscribeSheetReveal, takeSheetReveal } from './sheetReveal';
 import { stripSummary } from './summary';
 
 function Thumb({ src, round }: { src: string | null; round?: boolean }) {
@@ -83,15 +83,15 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
 
   useEffect(() => { setSheet(false); }, [sessionId]);
   // Показ панели извне (автооткрытие по выбору картинки, вкладка «Персонажи») на телефоне
-  // поднимает шторку; вкладку панель забирает из того же события сама
+  // поднимает шторку; вкладку панель забирает из того же события сама. Просьба, пришедшая
+  // до монтирования полосы или до смены чата, ждёт в буфере (sheetReveal). Эффект стоит
+  // после сброса по смене чата — иначе тот гасил бы только что поднятую шторку
   useEffect(() => {
     if (!inSheet) return;
-    const on = (e: Event) => {
-      if ((e as CustomEvent<Partial<RevealPanelDetail>>).detail?.key === IMAGES_PANEL) setSheet(true);
-    };
-    window.addEventListener(REVEAL_PANEL_EVENT, on);
-    return () => window.removeEventListener(REVEAL_PANEL_EVENT, on);
-  }, [inSheet]);
+    const check = () => { if (takeSheetReveal(sessionId ?? null)) setSheet(true); };
+    check();
+    return subscribeSheetReveal(check);
+  }, [inSheet, sessionId]);
 
   // Карточка настроек закрывается кликом мимо полосы и Esc
   useEffect(() => {

@@ -52,6 +52,6 @@ export function markGenPanelDismissed(sessionId: string | null | undefined, pane
 // true — панель запрошена
 export function autoRevealGenerationPanel(panelKey: string, sessionId: string | null | undefined, tab?: string): boolean {
   if (!sessionId || !isGenPanelKey(panelKey) || isGenPanelDismissed(sessionId, panelKey)) return false;
-  revealWorkspacePanel(panelKey, tab);
+  revealWorkspacePanel(panelKey, tab, sessionId);
   return true;
 }

@@ -296,12 +296,15 @@ export interface WorkspacePanelDefApi {
 // Показать панель рабочей области извне (например, пунктирный чип «Персонаж» в полосе):
 // событие окна с detail = { key, tab? }; слушают страница проекта и раздел «Чаты»,
 // неизвестный ключ пропускается. tab — вкладка, которую панель покажет сама: хост её
-// не разбирает, панель слушает то же событие
+// не разбирает, панель слушает то же событие. sessionId — чат, ради которого просят показ
+// (автооткрытие по выбору картинки): телефонная шторка ждёт полосу именно этого чата
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
-export interface RevealPanelDetail { key: string; tab?: string }
+export interface RevealPanelDetail { key: string; tab?: string; sessionId?: string }
 
-export function revealWorkspacePanel(key: string, tab?: string) {
-  const detail: RevealPanelDetail = tab === undefined ? { key } : { key, tab };
+export function revealWorkspacePanel(key: string, tab?: string, sessionId?: string) {
+  const detail: RevealPanelDetail = { key };
+  if (tab !== undefined) detail.tab = tab;
+  if (sessionId !== undefined) detail.sessionId = sessionId;
   window.dispatchEvent(new CustomEvent<RevealPanelDetail>(REVEAL_PANEL_EVENT, { detail }));
 }
 

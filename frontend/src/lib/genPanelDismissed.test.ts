@@ -26,12 +26,12 @@ beforeEach(() => {
 describe('genPanelDismissed', () => {
   it('без признака панель открывается', () => {
     expect(autoRevealGenerationPanel('images', 's1')).toBe(true);
-    expect(dispatched).toEqual([{ type: REVEAL_PANEL_EVENT, detail: { key: 'images' } }]);
+    expect(dispatched).toEqual([{ type: REVEAL_PANEL_EVENT, detail: { key: 'images', sessionId: 's1' } }]);
   });
 
   it('вкладка едет в detail события', () => {
     autoRevealGenerationPanel('sound', 's1', 'music');
-    expect(dispatched[0].detail).toEqual({ key: 'sound', tab: 'music' });
+    expect(dispatched[0].detail).toEqual({ key: 'sound', tab: 'music', sessionId: 's1' });
   });
 
   it('при признаке «закрыта» в этом чате — отказ', () => {

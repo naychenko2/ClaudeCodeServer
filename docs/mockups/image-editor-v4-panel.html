@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Картинки v4 — настройки в боковой панели</title>
+<style>
+  /* Токены — копия theme.css (значения обеих тем), чтобы макет был самодостаточным */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42); --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F; --c-danger-border: #F5C6BF;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    --c-skeleton: #E4DCCC;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #454037;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-success: #7CB86A; --c-success-bg: #1F2B1C; --c-success-text: #8FC47E;
+    --c-warning: #E0A955; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72; --c-danger-border: #5A302A;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+    --c-skeleton: #38332D;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+  button, textarea, input, select { font: inherit; color: inherit; }
+  .page { max-width: 1540px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; color: var(--c-text-heading); margin: 0 0 6px; }
+  h2.doc { font-family: 'PT Serif', Georgia, serif; font-size: 19px; color: var(--c-text-heading); margin: 28px 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 10px; max-width: 980px; line-height: 1.55; }
+  code, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  code { font-size: 11.5px; background: var(--c-bg-selected); border-radius: 4px; padding: 0 4px; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 90; background: var(--c-bg-main); display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 0 12px; }
+  .demo .grp { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .demo .lbl { font-size: 11px; color: var(--c-text-muted); margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--c-border); background: var(--c-bg-card); border-radius: 10px; padding: 5px 10px; }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+
+  .frame { background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; box-shadow: var(--shadow-card); overflow-x: auto; }
+  .app { position: relative; margin: 0 auto; height: 860px; display: flex; gap: 8px; }
+  .app.mobile { width: 360px; height: 760px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; gap: 0; }
+  .caption { font-size: 11px; color: var(--c-text-muted); margin: 8px 0 0; }
+
+  .rail { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; }
+  .ri { position: relative; width: 36px; height: 36px; border-radius: 10px; border: none; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .ri:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ri.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .ri[disabled] { opacity: .4; cursor: default; }
+  .ri .new { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--c-accent); }
+
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; position: relative; }
+  .island.main { flex: 1; min-width: 420px; }
+  .island.side { width: 330px; flex: 0 0 330px; }
+  .app.mobile .island { border-radius: 0; border: none; box-shadow: none; min-width: 0; }
+  .ph { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); }
+  .ph .ttl { font-size: 13px; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; }
+  .ph .sub { font-size: 11px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .pbody { flex: 1; overflow: auto; min-height: 0; padding: 10px; }
+  .grow { flex: 1; min-width: 0; }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 10px;
+    border: 1px solid var(--c-border); background: var(--c-bg-card); cursor: pointer; font-size: 13px; white-space: nowrap; }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn:focus-visible, .ib:focus-visible, .chip:focus-visible, .opt:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); font-weight: 600; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.sm { height: 28px; padding: 0 9px; font-size: 12px; border-radius: 8px; }
+  .btn.xs { height: 24px; padding: 0 8px; font-size: 11px; border-radius: 7px; }
+  .btn[disabled] { opacity: .5; cursor: default; box-shadow: none; }
+  .ib { width: 30px; height: 30px; border-radius: 8px; border: none; background: transparent; color: var(--c-text-muted); display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto; padding: 0; }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .ib.sm { width: 24px; height: 24px; }
+  svg.i { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+  svg.i.s { width: 13px; height: 13px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); cursor: pointer; font-size: 12px; white-space: nowrap; max-width: 100%; min-width: 0; }
+  .chip > span.t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .chip:hover { border-color: var(--c-accent-muted); }
+  .chip.acc { border-color: var(--c-accent); color: var(--c-accent); background: var(--c-accent-light); }
+  .chip.dash { border-style: dashed; color: var(--c-text-secondary); flex: 0 0 auto; }
+  .chip .x { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; color: var(--c-text-muted); }
+  .seg { display: inline-flex; background: var(--c-bg-inset); border-radius: 10px; padding: 2px; gap: 2px; flex-wrap: wrap; }
+  .seg button { border: none; background: transparent; color: var(--c-text-secondary); height: 26px; padding: 0 10px; border-radius: 8px; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); font-weight: 600; }
+  .seg button[disabled] { opacity: .45; cursor: default; }
+  .seg.full { display: flex; } .seg.full button { flex: 1; justify-content: center; }
+  .muted { color: var(--c-text-muted); } .sec { color: var(--c-text-secondary); }
+  .hint { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.45; }
+  .lbl2 { font-size: 11px; font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .04em; margin: 12px 0 6px; display: flex; align-items: center; gap: 6px; }
+  input.fld, textarea.fld, select.fld { width: 100%; border: 1.5px solid var(--c-border); background: var(--c-bg-white); border-radius: 8px; padding: 6px 9px; outline: none; font-size: 12.5px; }
+  textarea.fld { resize: vertical; line-height: 1.45; }
+  input.fld:focus, textarea.fld:focus, select.fld:focus { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  input[type=range] { accent-color: var(--c-accent); width: 100%; }
+  input[type=checkbox] { accent-color: var(--c-accent); width: 15px; height: 15px; }
+  .badge { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: 6px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+  .badge.ok { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.acc { background: var(--c-accent-light); color: var(--c-accent); }
+  .badge.info { background: var(--c-info-bg); color: var(--c-info); }
+  .badge.dng { background: var(--c-danger-bg); color: var(--c-danger-text); }
+  .badge.mut { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+
+  /* Лента */
+  .feed { flex: 1; overflow: auto; padding: 14px 18px 8px; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+  .app.mobile .feed { padding: 10px 10px 6px; }
+  .msg { max-width: 640px; line-height: 1.55; }
+  .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 8px 12px; max-width: 480px; }
+  .msg.bot .who { font-size: 11px; font-weight: 600; color: var(--c-accent); margin-bottom: 2px; }
+  .quiet { align-self: center; font-size: 11.5px; color: var(--c-text-muted); text-align: center; max-width: 600px; line-height: 1.45; }
+  .quiet b { color: var(--c-text-secondary); }
+
+  /* Карточка запуска агентом */
+  .launch { max-width: 540px; border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-bg-card); padding: 9px 12px; margin-top: 6px; }
+  .launch .t { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--c-text-heading); font-size: 12.5px; flex-wrap: wrap; }
+  .launch .prompt { font-size: 12px; line-height: 1.5; background: var(--c-bg-inset); border-radius: 8px; padding: 6px 9px; white-space: pre-wrap; margin-top: 6px; }
+  .by { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; color: var(--c-accent); }
+
+  /* Карточка нити (общие классы с макетом «Звук») */
+  .acard { position: relative; max-width: 560px; width: 100%; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; padding: 9px 10px; margin-top: 6px; }
+  .acard.focus { border-color: var(--c-accent); box-shadow: 0 0 0 3px var(--c-accent-light); }
+  .acard.draft { border-style: dashed; }
+  .acard .hd { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; flex-wrap: wrap; }
+  .acard .fname { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-weight: 600; }
+  .stepnav { display: inline-flex; align-items: center; gap: 1px; font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .what { font-size: 11.5px; color: var(--c-text-secondary); margin: 3px 0 0; }
+  .player { display: flex; align-items: center; gap: 8px; margin-top: 7px; min-width: 0; }
+  .play { width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; cursor: pointer; flex: 0 0 34px; }
+  .play.sm { width: 24px; height: 24px; flex-basis: 24px; }
+  .play svg.i { fill: currentColor; }
+  .tm { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--c-text-muted); white-space: nowrap; }
+  .wave { position: relative; flex: 1; min-width: 0; height: 40px; cursor: crosshair; user-select: none; touch-action: none; }
+  .wave.sm { height: 22px; }
+  .wave svg { width: 100%; height: 100%; display: block; }
+  .wave .selb { position: absolute; top: -2px; bottom: -2px; background: rgba(217,119,87,.16); border-left: 2px solid var(--c-accent); border-right: 2px solid var(--c-accent); pointer-events: none; }
+  .wave .head { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--c-text-heading); pointer-events: none; }
+  .selinfo { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--c-text-secondary); margin-top: 4px; }
+  .foot { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .foot .meta { flex: 1; min-width: 160px; font-size: 10.5px; color: var(--c-text-muted); font-family: 'JetBrains Mono', monospace; }
+  .ab { display: inline-flex; align-items: center; gap: 4px; }
+  .files { border: 1px solid var(--c-border-light); border-radius: 9px; margin-top: 7px; overflow: hidden; }
+  .files .fr { display: flex; align-items: center; gap: 7px; padding: 5px 8px; font-size: 12px; border-top: 1px solid var(--c-border-light); min-width: 0; }
+  .files .fr:first-child { border-top: none; }
+  .files .fr .nm { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .ms { width: 22px; height: 20px; border-radius: 5px; border: 1px solid var(--c-border); background: var(--c-bg-white); font-size: 10px; font-weight: 700; cursor: pointer; color: var(--c-text-secondary); padding: 0; }
+  .ms.on.m { background: var(--c-warning-bg); color: var(--c-warning-text); border-color: var(--c-warning); }
+  .ms.on.s { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .fr.dim .wave, .fr.dim .nm { opacity: .35; }
+  .preview { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--c-bg-inset); border-radius: 7px; padding: 6px 8px; margin-top: 6px; white-space: pre-wrap; line-height: 1.5; color: var(--c-text-secondary); max-height: 110px; overflow: auto; }
+  .prog { height: 4px; border-radius: 4px; background: var(--c-track); overflow: hidden; margin: 7px 0 3px; }
+  .prog > i { display: block; height: 100%; background: var(--c-accent); }
+  .skel { background: var(--c-skeleton); border-radius: 6px; animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  .box { border-radius: 9px; padding: 8px 10px; font-size: 12px; line-height: 1.45; display: flex; gap: 8px; align-items: flex-start; margin-top: 7px; }
+  .box.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .box.dng { background: var(--c-danger-bg); color: var(--c-danger-text); border: 1px solid var(--c-danger-border); }
+  .box.info { background: var(--c-info-bg); color: var(--c-info); }
+  .box .body { flex: 1; min-width: 0; } .box .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+  /* Полоса «Звук» над композером */
+  .strip { position: relative; margin: 8px 14px 6px; background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 16px; height: 48px; padding: 0 8px; display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .app.mobile .strip { margin: 6px 8px; height: 42px; padding: 0 6px; gap: 5px; }
+  .strip.mini { height: 30px; border-radius: 10px; cursor: pointer; padding: 0 6px 0 4px; }
+  .strip .sum { font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+  .swb { display: inline-flex; align-items: center; gap: 5px; border: none; background: transparent; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--c-text-heading); padding: 0 4px; height: 28px; border-radius: 8px; flex: 0 0 auto; }
+  .swb:hover { background: var(--c-bg-selected); }
+  .setb { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--c-border); background: var(--c-bg-white); cursor: pointer; font-size: 12px; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+  .setb.open { border-color: var(--c-accent); }
+  .setb .t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .q { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--c-info); background: var(--c-info-bg); height: 22px; padding: 0 7px; border-radius: 7px; white-space: nowrap; flex: 0 0 auto; }
+  .vava { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--c-on-accent); background: var(--c-accent); flex: 0 0 26px; border: none; cursor: pointer; }
+  .vava.lg { width: 34px; height: 34px; flex-basis: 34px; font-size: 13px; }
+  .vava.off { background: transparent; color: var(--c-text-muted); border: 1.5px dashed var(--c-dashed); }
+  .menu { position: absolute; z-index: 60; min-width: 250px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--shadow-dropdown); padding: 4px; }
+  .mi { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; border: none; background: transparent; padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 12.5px; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi.on { color: var(--c-accent); }
+  .mi small { display: block; font-size: 11px; color: var(--c-text-muted); }
+  .msep { height: 1px; background: var(--c-divider); margin: 4px 6px; }
+
+  /* Карточка настроек звука */
+  /* ===== Общий каркас панели генерации (один и тот же у «Звука» и «Картинок») ===== */
+  .gp { width: 380px; flex: 0 0 380px; min-width: 340px; max-width: 520px; display: flex; flex-direction: column; background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-island); overflow: hidden; position: relative; min-height: 0; }
+  .gp .rsz { position: absolute; left: 0; top: 0; bottom: 0; width: 5px; cursor: col-resize; z-index: 3; }
+  .gp .rsz:hover { background: var(--c-accent-muted); }
+  .gp-tabs { flex: 0 0 auto; padding: 6px 10px 0; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border-light); display: flex; gap: 2px; }
+  .gp-tabs button { border: none; background: transparent; height: 32px; padding: 0 12px; font-size: 12.5px; color: var(--c-text-secondary); cursor: pointer; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 6px; }
+  .gp-tabs button.on { color: var(--c-accent); border-bottom-color: var(--c-accent); font-weight: 600; }
+  .gp-tabs .cnt { font-size: 10.5px; color: var(--c-text-muted); background: var(--c-bg-selected); border-radius: 6px; padding: 0 5px; font-weight: 600; }
+  .gp-ctx { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--c-border-light); font-size: 11.5px; color: var(--c-text-secondary); min-width: 0; }
+  .gp-body { flex: 1; overflow: auto; min-height: 0; padding: 2px 12px 14px; }
+  .gp-foot { flex: 0 0 auto; border-top: 1px solid var(--c-border-light); background: var(--c-bg-card); padding: 8px 12px 10px; }
+  .gp-foot .row { display: flex; align-items: center; gap: 8px; }
+  .gp-foot .p { flex: 1; min-width: 0; font-size: 12px; color: var(--c-text-secondary); line-height: 1.35; }
+  .gp-foot .p b { color: var(--c-text-heading); }
+  .gp-foot .why { font-size: 11.5px; color: var(--c-warning-text); margin-bottom: 6px; display: flex; gap: 6px; align-items: flex-start; }
+  .gp.spine { width: 44px; flex-basis: 44px; min-width: 44px; align-items: center; padding: 6px 0; gap: 4px; }
+  .flash { animation: flash .6s ease-out; }
+  @keyframes flash { 0% { background: var(--c-accent-light); } 100% { background: transparent; } }
+  .linked { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--c-accent); background: var(--c-accent-light); border-radius: 6px; padding: 0 6px; height: 18px; white-space: nowrap; }
+  .nums { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; align-items: end; margin-top: 6px; }
+  .nums label { font-size: 11px; color: var(--c-text-muted); display: flex; flex-direction: column; gap: 2px; }
+  .bigedit { display: flex; flex-direction: column; min-height: 100%; }
+  .bigedit textarea { flex: 1; min-height: 340px; }
+  textarea.auto { min-height: 92px; max-height: 260px; field-sizing: content; }
+  .gain { display: flex; align-items: center; gap: 4px; width: 92px; flex: 0 0 92px; }
+  .gain input { width: 60px; }
+  .gain .db { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--c-text-muted); width: 30px; text-align: right; }
+  .opts { display: flex; flex-wrap: wrap; gap: 5px; }
+  .opt { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 1px solid var(--c-border); background: var(--c-bg-white); border-radius: 9px; padding: 4px 8px; cursor: pointer; text-align: left; font-size: 12px; max-width: 100%; }
+  .opt:hover { border-color: var(--c-accent-muted); }
+  .opt.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .opt.on .n { color: var(--c-accent); }
+  .opt .n { font-weight: 600; display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .opt .h { font-size: 10.5px; color: var(--c-text-muted); }
+  .opt.off { opacity: .55; cursor: not-allowed; background: transparent; border-style: dashed; }
+  .opt.off .h { color: var(--c-text-secondary); }
+  .opt.op { flex-direction: row; align-items: center; gap: 5px; padding: 0 9px; height: 28px; border-radius: 999px; }
+  .opt.op.link { border-style: dashed; color: var(--c-text-secondary); }
+  .ru { font-size: 9.5px; font-weight: 700; color: var(--c-success-text); background: var(--c-success-bg); border-radius: 4px; padding: 0 4px; }
+  .nru { font-size: 9.5px; font-weight: 700; color: var(--c-text-muted); background: var(--c-bg-selected); border-radius: 4px; padding: 0 4px; }
+  .fld-row { margin-top: 9px; }
+  .fld-row > .l { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--c-text-heading); margin-bottom: 4px; }
+  .fld-row > .l .v { margin-left: auto; font-weight: 400; color: var(--c-text-secondary); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .fld-row > .l .code { font-family: 'JetBrains Mono', monospace; font-weight: 400; font-size: 10.5px; color: var(--c-text-muted); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .adv { margin-top: 12px; border: 1px solid var(--c-border-light); border-radius: 10px; background: var(--c-bg-panel); }
+  .adv > .hd { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--c-text-heading); }
+  .adv > .bd { padding: 0 10px 10px; }
+  .pricebar { position: sticky; bottom: -12px; margin: 12px -14px -12px; padding: 9px 14px; background: var(--c-bg-card); border-top: 1px solid var(--c-border-light); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pricebar .p { flex: 1; min-width: 150px; font-size: 12px; color: var(--c-text-secondary); }
+  .count { display: inline-flex; align-items: center; border: 1px solid var(--c-border); border-radius: 8px; height: 26px; background: var(--c-bg-white); }
+  .count button { border: none; background: transparent; width: 22px; height: 24px; cursor: pointer; color: var(--c-text-secondary); }
+  .count span { min-width: 16px; text-align: center; font-size: 12px; font-weight: 600; }
+  .secs { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .dlg { display: grid; grid-template-columns: 110px 1fr 24px; gap: 5px; align-items: start; margin-top: 5px; }
+  .clips { display: flex; flex-direction: column; gap: 4px; }
+  .clip { display: flex; align-items: center; gap: 6px; font-size: 11.5px; background: var(--c-bg-white); border: 1px solid var(--c-border-light); border-radius: 7px; padding: 3px 6px; }
+  .drop { border: 1.5px dashed var(--c-dashed); border-radius: 9px; padding: 9px; text-align: center; color: var(--c-text-muted); font-size: 11.5px; cursor: pointer; }
+
+  /* Композер */
+  .composer { margin: 0 14px 12px; background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 16px; padding: 8px 8px 6px 10px; box-shadow: var(--shadow-card); position: relative; }
+  .app.mobile .composer { margin: 0 8px 8px; }
+  .composer.aud { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .composer .inrow { display: flex; align-items: flex-start; gap: 8px; }
+  .composer textarea { flex: 1; min-width: 0; border: none; outline: none; resize: none; background: transparent; min-height: 40px; line-height: 1.5; font-size: 13.5px; }
+  .composer .bar { display: flex; align-items: center; gap: 6px; }
+  .composer .ptag { font-size: 11px; color: var(--c-text-muted); margin-bottom: 3px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .mswitch { display: flex; gap: 2px; padding: 2px; background: var(--c-bg-inset); border-radius: 8px; flex: 0 0 auto; margin-top: 2px; }
+  .mswitch button { width: 26px; height: 20px; border: none; border-radius: 6px; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .mswitch button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); }
+  .send { height: 32px; min-width: 32px; padding: 0 10px; border-radius: 10px; border: none; background: var(--c-accent); color: var(--c-on-accent); display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+
+  /* Панель «Голоса» */
+  .voice { border: 1px solid var(--c-border-light); background: var(--c-bg-card); border-radius: 11px; padding: 8px; margin-bottom: 7px; }
+  .voice.on { border-color: var(--c-accent); }
+  .voice .top { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .voice .nm { font-weight: 600; color: var(--c-text-heading); font-size: 12.5px; }
+  .pv { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 4px; }
+  .pv td { padding: 4px 3px; border-top: 1px solid var(--c-border-light); vertical-align: top; }
+  .pv td:first-child { color: var(--c-text-secondary); width: 48%; }
+  .empty { text-align: center; padding: 26px 14px; color: var(--c-text-muted); line-height: 1.55; }
+  .empty .big { font-size: 14px; color: var(--c-text-heading); font-weight: 600; margin-bottom: 4px; }
+  .empty .ico { width: 44px; height: 44px; border-radius: 50%; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; margin: 0 auto 8px; }
+
+  /* Шторка (телефон) */
+  .ovl { position: absolute; inset: 0; background: var(--c-overlay); z-index: 69; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 88%; background: var(--c-bg-card); border-radius: 18px 18px 0 0; box-shadow: var(--shadow-sheet); z-index: 70; display: flex; flex-direction: column; }
+  .sheet .grab { width: 40px; height: 4px; border-radius: 4px; background: var(--c-track); margin: 7px auto 0; flex: 0 0 auto; }
+  .sheet .sb { overflow: auto; padding: 0 12px 12px; position: relative; }
+  .sheet .pricebar { margin: 12px -12px -12px; padding: 9px 12px; bottom: -12px; }
+
+  /* Галерея карточек */
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; align-items: start; }
+  .gcell { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; padding: 10px 12px 12px; min-width: 0; }
+  .gcell h4 { margin: 0 0 2px; font-size: 13px; color: var(--c-text-heading); }
+  .gcell .acard { max-width: none; }
+  .gcell .gp { width: auto; max-width: none; min-width: 0; height: 620px; margin-top: 6px; }
+  .app.w1024 { width: 1024px; } .app.w800 { width: 800px; }
+  .app.w1024 .island.main { min-width: 440px; } .app.w800 .island.main { min-width: 420px; }
+  .app.w1024 .gp { width: 340px; flex-basis: 340px; } .app.w800 .gp:not(.spine) { width: 320px; flex-basis: 320px; min-width: 320px; }
+  .sheet.peek { max-height: none; }
+  .sheet .gp-tabs { background: transparent; }
+  .sheet .gp-foot { border-radius: 0; }
+  .gcell .strip { margin: 6px 0 0; }
+</style>
+<style>
+  /* Карточки версий картинки */
+  .vcard { display: flex; gap: 10px; max-width: 560px; width: 100%; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; padding: 8px; }
+  .vcard.focus { border-color: var(--c-accent); box-shadow: 0 0 0 3px var(--c-accent-light); }
+  .vcard .img { width: 168px; flex: 0 0 168px; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden; background: var(--c-bg-inset); }
+  .vcard .vb { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .vcard .hd { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12.5px; color: var(--c-text-heading); }
+  .vcard .foot { margin-top: auto; padding-top: 6px; }
+  .app.mobile .vcard { flex-direction: column; } .app.mobile .vcard .img { width: 100%; flex-basis: auto; }
+  .opts .chip { cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="doc">Картинки v4: настройки в боковой панели</h1>
+  <p class="lead">Макет на согласование, код продукта не менялся. Всплывающая карточка «Настройки генерации» над полосой и отдельная панель «Персонажи» сливаются в одну боковую панель «Картинки» с вкладками «Настройки» и «Персонажи». Каркас панели — тот же, что у «Звука» v2: шапка, вкладки, строка «Работаем с», прокрутка, закреплённый низ с вариантами, ценой и запуском. Полоса над полем ввода — сводка, клик открывает панель. Кликабельно почти всё: операции, поставщики, модели, режим подбора, образцы и их роли, персонажи, «− N +». Тексты и решения — в <code>image-editor-v4-panel-proposal.md</code>.</p>
+  <div class="demo" id="demo"></div>
+  <div class="frame"><div id="app"></div></div>
+  <p class="caption" id="cap"></p>
+
+  <h2 class="doc">Вкладки и состояния</h2>
+  <p class="lead">Те же панели, что живут справа от ленты, — по отдельности.</p>
+  <div class="gallery" id="gallery"></div>
+</div>
+
+<script>
+/* ===================== Иконки ===================== */
+const IC = {
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  wand: '<path d="m15 4-1 1M20 9l-1 1M18 2v3M22 6h-3M3 21l12-12 2 2L5 23z"/>',
+  waves: '<path d="M2 12h2M6 8v8M10 4v16M14 7v10M18 10v4M22 12h0"/>',
+  play: '<path d="M7 4.5v15l12-7.5z"/>', pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  down: '<path d="m6 9 6 6 6-6"/>', up: '<path d="m18 15-6-6-6 6"/>', left: '<path d="m15 18-6-6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  tree: '<path d="M3 5h6l2 2h10v12H3z"/>', img: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  git: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+  dl: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5M12 3v12"/>',
+  alert: '<path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"/><path d="M12 9v4M12 17h.01"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', minus: '<path d="M5 12h14"/>', more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/>',
+  ab: '<path d="M4 18 8 6l4 12M5.3 14h5.4M15 6h3.5a3 3 0 0 1 0 6H15zM15 12h4a3 3 0 0 1 0 6h-4z"/>',
+  back: '<path d="m15 18-6-6 6-6"/>', send: '<path d="M12 19V5M5 12l7-7 7 7"/>', text: '<path d="M4 7V5h16v2M9 19h6M12 5v14"/>',
+};
+const ic = (n, s) => `<svg class="i${s ? ' s' : ''}" viewBox="0 0 24 24">${IC[n] || ''}</svg>`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+
+/* ===================== Общий каркас панели генерации ===================== */
+// Один шаблон на «Звук» и «Картинки»: шапка, вкладки, строка «Работаем с», прокручиваемое тело,
+// закреплённый низ с ценой и запуском. Виды: dock — колонка справа (380, на узком окне 340 и 320),
+// spine — свёрнута в корешок 44 px, sheet / peek — шторка телефона (полная / опущенная до низа), static — галерея.
+function genPanel(o) {
+  const tabs = `<div class="gp-tabs" role="tablist">${o.tabs.map(([k, l, n, ico]) => `<button role="tab" aria-selected="${k === o.tab}" class="${k === o.tab ? 'on' : ''}" data-act="tab:${k}">${ic(ico, 1)}${l}${n !== undefined ? `<span class="cnt">${n}</span>` : ''}</button>`).join('')}</div>`;
+  if (o.view === 'spine') {
+    return `<div class="gp spine" data-panel="${o.key}"><button class="ib on" data-act="spine:0" title="Развернуть панель «${o.title}»">${ic(o.icon)}</button><div class="msep" style="width:24px"></div>
+      ${o.tabs.map(([k, l, n, ico]) => `<button class="ib${k === o.tab ? ' on' : ''}" data-act="tab:${k}" title="${l}">${ic(ico)}</button>`).join('')}<span class="grow"></span>
+      <button class="ib" style="background:var(--c-accent);color:var(--c-on-accent)" data-act="run" title="${esc(o.runTitle)}">${ic('spark')}</button></div>`;
+  }
+  const head = `<div class="ph">${ic(o.icon, 1)}<span class="ttl">${o.title}</span><span class="sub">${o.sub}</span><span class="grow"></span>
+    ${o.view === 'sheet' || o.view === 'peek' ? `<button class="ib sm" data-act="peek" title="${o.view === 'peek' ? 'Поднять шторку' : 'Опустить до цены — лента станет доступна'}">${ic(o.view === 'peek' ? 'up' : 'down', 1)}</button>`
+      : o.view === 'static' ? '' : `<button class="ib sm" data-act="spine:1" title="Свернуть в корешок">${ic('right', 1)}</button>`}
+    ${o.view === 'static' ? '' : `<button class="ib sm" data-act="closePanel" title="Закрыть панель — сводка останется в полосе">${ic('x', 1)}</button>`}</div>`;
+  const ctx = o.ctx ? `<div class="gp-ctx">${o.ctx}</div>` : '';
+  const foot = o.foot ? `<div class="gp-foot">${o.foot}</div>` : '';
+  if (o.view === 'peek') return `<div class="sheet peek" data-panel="${o.key}"><div class="grab" data-act="peek"></div>${head}${foot}</div>`;
+  const inner = `${o.view === 'sheet' ? '<div class="grab" data-act="peek"></div>' : ''}${head}${tabs}${ctx}<div class="gp-body">${o.body}</div>${foot}`;
+  if (o.view === 'sheet') return `<div class="sheet" data-panel="${o.key}" style="height:88%">${inner}</div>`;
+  return `<div class="gp" data-panel="${o.key}">${o.view === 'static' ? '' : '<div class="rsz" title="Потяните, чтобы изменить ширину: 340–520 px"></div>'}${inner}</div>`;
+}
+
+
+/* ===================== Данные: поставщики и модели картинок ===================== */
+// Состав — как каталог редактора (api.ts, MOCK_PROVIDERS): «Авто» у каждого поставщика плюс отобранные модели
+const ALL_EDIT = ['generate', 'edit', 'inpaint', 'outpaint', 'removeBackground', 'upscale'];
+const AUTO = { id: 'auto', label: 'Авто', ops: ALL_EDIT, note: 'подберём модель под задачу', modes: 1 };
+const PROVS = [
+  { key: 'fal', label: 'fal', unit: 'usd', hint: 'облако · цена в $', models: [
+    { ...AUTO, price: 0.04 },
+    { id: 'nb2', label: 'Nano Banana 2', ops: ALL_EDIT, price: 0.04, refs: 4 },
+    { id: 'kontext', label: 'FLUX Kontext', ops: ALL_EDIT, price: 0.04, refs: 4, mask: 'none' },
+    { id: 'fill', label: 'FLUX Fill', ops: ['inpaint', 'outpaint', 'edit'], price: 0.05, refs: 4, mask: 'native' },
+  ] },
+  { key: 'higgsfield', label: 'Higgsfield', unit: 'credits', hint: 'облако · кредиты', models: [
+    { ...AUTO, price: 2 },
+    { id: 'gpt25', label: 'GPT Image 2.5', ops: ALL_EDIT, price: 2, refs: 4, mask: 'native' },
+    { id: 'soul', label: 'Soul', ops: ['generate', 'edit'], price: 3, refs: 4 },
+    { id: 'nbh', label: 'Nano Banana', ops: ALL_EDIT, price: 1, refs: 4 },
+  ] },
+  { key: 'local', label: 'Локальные модели', unit: 'free', hint: 'своя видеокарта · бесплатно, очередь GPU', models: [
+    { ...AUTO, price: 0, ops: ['generate', 'edit', 'inpaint', 'enhanceFaces'] },
+    { id: 'qwen', label: 'Qwen-Image 2.1', ops: ['generate', 'edit', 'inpaint'], price: 0, refs: 4, mask: 'asReference' },
+    { id: 'faces', label: 'Улучшить лица', ops: ['enhanceFaces'], price: 0, refs: 0, count: 1 },
+  ] },
+];
+const ADMIN = 'fal';
+// Операции: «Авто» — как сейчас, по картинке и отметкам; остальные — явный выбор (раньше часть из них жила только в «Быстрых действиях» редактора)
+const OPS = [
+  { id: 'auto', label: 'Авто', hint: 'По тексту, правка или по отмеченному — решим по картинке и отметкам, как сейчас' },
+  { id: 'generate', label: 'По тексту', run: 'Сгенерировать' },
+  { id: 'edit', label: 'Правка', run: 'Изменить', needImage: 1 },
+  { id: 'inpaint', label: 'По отмеченному', run: 'Изменить отмеченное', needImage: 1, needMask: 1 },
+  { id: 'outpaint', label: 'Дорисовать за края', run: 'Дорисовать', needImage: 1, noPrompt: 1 },
+  { id: 'removeBackground', label: 'Убрать фон', run: 'Убрать фон', needImage: 1, noPrompt: 1, one: 1 },
+  { id: 'upscale', label: 'Улучшить качество', run: 'Улучшить', needImage: 1, noPrompt: 1, one: 1 },
+  { id: 'enhanceFaces', label: 'Улучшить лица', run: 'Улучшить лица', needImage: 1, noPrompt: 1, one: 1 },
+];
+const MODES_IMG = [['auto', 'Авто', 'модель решает сама'], ['fast', 'Быстро', 'дешевле и быстрее'], ['precise', 'Точно', 'точнее следует правке'], ['photoreal', 'Фотореализм', 'для фото людей и мест']];
+const CHARS = [
+  { slug: 'anya', name: 'Аня', photos: 6, hue: 18 },
+  { slug: 'boris', name: 'Борис', photos: 4, hue: 200 },
+];
+const ROLES = { character: 'Лицо', style: 'Стиль', object: 'Предмет' };
+
+/* ===================== Состояние ===================== */
+const S = {
+  theme: 'light', dev: 'desktop', scope: 'project', scene: 'sel',
+  panel: true, tab: 'settings', spine: false, peek: false, collapsed: false, menu: null, cmode: 'image',
+  prov: 'settings', model: {}, op: 'auto', mode: 'auto', count: 2, matchSize: true,
+  character: 'anya', samples: [{ id: 's1', name: 'palette.jpg', role: 'style', hue: 280 }], roleFor: null, addMenu: false,
+  newChar: false, ratio: '16:9', ver: 2,
+};
+const personal = () => S.scope === 'personal';
+const hasImage = () => S.scene !== 'empty';
+const hasMask = () => S.scene === 'mask';
+const provDown = k => S.scene === 'down' && k === 'fal';
+const curPv = () => PROVS.find(p => p.key === (S.prov === 'settings' ? ADMIN : S.prov));
+function curModel() {
+  const pv = curPv(), id = S.model[pv.key];
+  const m = pv.models.find(x => x.id === id);
+  return m && !modelWhy(m) ? m : pv.models.find(x => !modelWhy(x)) || pv.models[0];
+}
+const effOp = () => S.op === 'auto' ? (!hasImage() ? 'generate' : hasMask() ? 'inpaint' : 'edit') : S.op;
+function opWhy(o) {
+  if (o.needImage && !hasImage()) return 'Сначала выберите картинку в ленте или загрузите её';
+  if (o.needMask && !hasMask()) return 'Отметьте место кистью в редакторе картинки';
+  return null;
+}
+function modelWhy(m) {
+  const op = effOp();
+  if (m.id === 'faces' && op !== 'enhanceFaces') return 'Только «Улучшить лица»';
+  if (!m.ops.includes(op)) return `Не умеет «${OPS.find(o => o.id === op).label}»`;
+  if (op !== 'generate' && !hasImage() && !m.ops.includes('generate')) return 'Только правит готовую картинку — сначала загрузите её';
+  return null;
+}
+const maxCount = () => (OPS.find(o => o.id === effOp()).one || curModel().count === 1) ? 1 : 4;
+const cnt = () => Math.min(S.count, maxCount());
+function price(short) {
+  const pv = curPv(), m = curModel(), n = cnt();
+  if (pv.unit === 'free') return short ? 'бесплатно' : ['Бесплатно', `~${15 * n} с · очередь GPU: ${S.scene === 'queue' ? 2 : 0}`];
+  if (pv.unit === 'usd') return short ? `≈ $${(m.price * n).toFixed(2)}` : [`≈ $${(m.price * n).toFixed(2)}`, `${n} × $${m.price.toFixed(2)} за картинку`];
+  const c = m.price * n; return short ? `${c} кр.` : [`${c} ${c === 1 ? 'кредит' : c < 5 ? 'кредита' : 'кредитов'}`, `${n} × ${m.price} за картинку`];
+}
+const runLabel = () => { const o = OPS.find(x => x.id === effOp()); return o.run; };
+function runWhy() {
+  const o = OPS.find(x => x.id === S.op);
+  if (opWhy(o)) return opWhy(o);
+  if (S.op === 'auto' && !hasImage()) return null;
+  return null;
+}
+const focusName = () => hasImage() ? `hero.png · версия ${S.ver}` : null;
+const charOf = () => CHARS.find(c => c.slug === S.character);
+
+/* ===================== Картинки-заглушки ===================== */
+// Рисуем «картинку» градиентом и силуэтом — макет без сети
+function art(seed, w, h, o = {}) {
+  const hues = [[22, 38], [200, 260], [150, 190], [300, 340], [40, 15]][seed % 5];
+  const id = 'g' + seed + (o.k || '');
+  return `<svg viewBox="0 0 160 ${Math.round(160 * h / w)}" style="width:100%;height:100%;display:block" preserveAspectRatio="xMidYMid slice"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${hues[0]},62%,72%)"/><stop offset="1" stop-color="hsl(${hues[1]},48%,42%)"/></linearGradient></defs>
+    <rect width="160" height="200" fill="url(#${id})"/><circle cx="118" cy="30" r="13" fill="hsla(48,90%,88%,.85)"/><path d="M0 ${80 + seed % 3 * 6} L40 ${58} L76 ${82} L112 ${52} L160 ${78} V200 H0Z" fill="hsla(${hues[1]},40%,24%,.55)"/>
+    <circle cx="70" cy="${70 + seed % 2 * 4}" r="11" fill="hsla(20,40%,86%,.95)"/><path d="M52 112 q18 -30 36 0 v20 h-36z" fill="hsla(${hues[0] + 180},35%,40%,.9)"/>${o.mask ? '<ellipse cx="70" cy="72" rx="20" ry="17" fill="rgba(217,119,87,.35)" stroke="#D97757" stroke-dasharray="3 2"/><rect x="112" y="40" width="34" height="26" rx="4" fill="rgba(217,119,87,.30)" stroke="#D97757" stroke-dasharray="3 2"/>' : ''}</svg>`;
+}
+const thumb = (seed, sz = 20, round) => `<span style="display:inline-block;width:${sz}px;height:${sz}px;border-radius:${round ? '50%' : '5px'};overflow:hidden;flex:0 0 ${sz}px;vertical-align:middle">${art(seed, 1, 1, { k: 't' + sz })}</span>`;
+
+/* ===================== Полоса «Картинки» ===================== */
+function stripSummary(short) {
+  const pv = curPv(), m = curModel();
+  if (short) return [pv.label, m.label, `${cnt()} вар.`, price(true)].join(' · ');
+  return [focusName() ? 'Работаем с: ' + focusName() : 'Картинка не выбрана', pv.label + ' · ' + m.label, OPS.find(o => o.id === S.op).label === 'Авто' ? null : OPS.find(o => o.id === S.op).label, `${cnt()} вар.`, price(true), !personal() && charOf() ? charOf().name : null].filter(Boolean).join(' · ');
+}
+function switcherMenu() {
+  if (S.menu !== 'switch') return '';
+  return `<div class="menu" style="left:6px;bottom:calc(100% + 4px)">
+    <button class="mi" data-act="noop">${ic('git')}<span>Git<small>feat/landing · +4 −1</small></span></button>
+    <button class="mi on" data-act="menu:">${ic('img')}<span>Картинки<small>${esc(stripSummary())}</small></span></button>
+    <button class="mi" data-act="noop">${ic('waves')}<span>Звук<small>звук не выбран</small></span></button>
+    <div class="msep"></div><button class="mi" data-act="collapse">${ic('up')}<span>Свернуть полосу в строку</span></button></div>`;
+}
+function strip() {
+  const mob = S.dev === 'mobile', f = focusName();
+  const sw = `<button class="swb" data-act="menu:switch" title="Сменить полосу над композером">${ic('img', 1)}Картинки${ic('down', 1)}</button>`;
+  if (S.collapsed) return `<div class="strip mini" data-act="expand" title="Развернуть полосу «Картинки»">${sw}${f ? thumb(1) : ''}<span class="sum" data-act="openPanel:settings" title="Открыть настройки в панели «Картинки»">${esc(stripSummary())}</span>${f ? `<button class="ib sm" data-act="release" title="Снять выбор картинки">${ic('x', 1)}</button>` : ''}${ic('down', 1)}${switcherMenu()}</div>`;
+  const chip = f
+    ? `<span class="chip acc" title="Режим «Картинка» и Claude работают с этой версией. ✕ — снять выбор">${thumb(1, 18)}<span class="t">${mob ? '' : 'Работаем с: '}<b>${esc(f)}</b></span><span class="x" data-act="release">${ic('x', 1)}</span></span>`
+    : `<span class="chip dash" data-act="newdraft" title="Карточка «Новая картинка» в ленте, поле — в режим «Картинка»">${ic('spark', 1)}Нарисовать новую</span>`;
+  const ch = !personal() && !mob ? (charOf()
+    ? `<button class="vava" style="padding:0;overflow:hidden;border:1.5px solid var(--c-accent)" data-act="openPanel:characters" title="Персонаж: ${charOf().name} — фото уходят в запрос">${thumb(charOf().hue % 5 + 3, 26, 1)}</button>`
+    : `<button class="ib sm" data-act="openPanel:characters" title="Подключить персонажа">${ic('user', 1)}</button>`) : '';
+  return `<div class="strip">${sw}${chip}<span class="grow"></span>
+    <button class="setb${S.panel && S.tab === 'settings' ? ' open' : ''}" data-act="openPanel:settings" title="${S.panel && S.tab === 'settings' ? 'Настройки открыты в панели «Картинки» справа' : 'Открыть настройки в панели «Картинки»'}">${ic('sliders', 1)}<span class="t">${mob ? `${cnt()} вар. · ${price(true)}` : esc(stripSummary(true))}</span>${runWhyStrip()}${ic(mob ? 'up' : 'right', 1)}</button>
+    ${ch}<button class="ib sm" data-act="collapse" title="Свернуть полосу в строку">${ic('up', 1)}</button>${switcherMenu()}</div>`;
+}
+const runWhyStrip = () => runWhy() || provDown(curPv().key) ? `<span style="color:var(--c-warning-text);display:inline-flex">${ic('alert', 1)}</span>` : '';
+
+/* ===================== Вкладка «Настройки» ===================== */
+const opt = (on, name, hint, act, why) => `<button class="opt${on ? ' on' : ''}${why ? ' off' : ''}" ${why ? `title="${esc(why)}"` : `data-act="${act}"`}><span class="n">${name}</span>${hint ? `<span class="h">${hint}</span>` : ''}</button>`;
+function settingsBody() {
+  const pv = curPv(), m = curModel(), op = effOp();
+  const ops = `<div class="lbl2">Операция</div><div class="opts">${OPS.map(o => `<button class="opt op${S.op === o.id ? ' on' : ''}${opWhy(o) ? ' off' : ''}" ${opWhy(o) ? `title="${esc(opWhy(o))}"` : `data-act="op:${o.id}"`}>${o.label}</button>`).join('')}</div>`
+    + `<div class="hint" style="margin-top:5px">${S.op === 'auto' ? `Сейчас это <b>${OPS.find(o => o.id === op).label.toLowerCase()}</b>: ${!hasImage() ? 'картинки ещё нет' : hasMask() ? 'в редакторе отмечено место' : 'картинка выбрана, отметок нет'}. Так ведёт себя полоса сейчас.` : OPS.find(o => o.id === S.op).noPrompt ? 'Текст в поле ввода не нужен — достаточно нажать кнопку внизу.' : 'Что сделать — напишите в поле ввода.'}</div>`;
+  const admin = PROVS.find(p => p.key === ADMIN);
+  const provs = `<div class="lbl2">Поставщик</div><div class="opts">${opt(S.prov === 'settings', 'Как в настройках', `сейчас ${admin.label}${provDown(ADMIN) ? ' · <span style="color:var(--c-warning-text)">не отвечает</span>' : ''}`, 'prov:settings')}${PROVS.map(p => opt(S.prov === p.key, p.label, `${provDown(p.key) ? '<span style="color:var(--c-warning-text)">не отвечает · </span>' : ''}${p.hint}`, 'prov:' + p.key)).join('')}</div>`
+    + (provDown(pv.key) ? `<div class="box warn">${ic('alert', 1)}<div class="body">fal сейчас не отвечает — запуск, скорее всего, не пройдёт. Сами на другого поставщика не переключаем: выберите его выше.</div></div>` : '');
+  const money = x => pv.unit === 'free' ? 'бесплатно' : pv.unit === 'usd' ? `$${x.price.toFixed(2)}` : `${x.price} кр.`;
+  const models = `<div class="lbl2">Модель · ${pv.label}</div><div class="opts">${pv.models.map(x => opt(x.id === m.id, x.label, modelWhy(x) || (x.id === 'auto' ? x.note : `${money(x)} за картинку`), 'model:' + x.id, modelWhy(x))).join('')}</div>`;
+  const mode = m.modes ? `<div class="lbl2">Режим подбора</div>${`<div class="seg full">${MODES_IMG.map(([k, l, h]) => `<button class="${S.mode === k ? 'on' : ''}" data-act="mode:${k}" title="${h}">${l}</button>`).join('')}</div>`}<div class="hint" style="margin-top:4px">${MODES_IMG.find(x => x[0] === S.mode)[2]} · только у модели «Авто»</div>` : '';
+  let fields = '';
+  if (op === 'outpaint') fields += `<div class="lbl2">Дорисовать до пропорций</div>${`<div class="seg">${['1:1', '16:9', '9:16'].map(r => `<button class="${S.ratio === r ? 'on' : ''}" data-act="ratio:${r}">${r}</button>`).join('')}</div>`}`;
+  if (op === 'inpaint') fields += `<div class="lbl2">Отмеченное</div><div class="clip">${ic('scissors', 1)}<span class="grow">2 области отмечены в редакторе${m.mask === 'asReference' ? ' · модель возьмёт отметки образцом' : ''}</span><button class="btn xs ghost">Открыть редактор</button></div>`;
+  const maxRefs = m.refs ?? 4;
+  let refs = '';
+  if (!OPS.find(o => o.id === op).noPrompt || op === 'outpaint') {
+    refs = `<div class="lbl2">${personal() ? 'Образцы' : 'Персонаж и образцы'} <span class="hint" style="text-transform:none;letter-spacing:0;font-weight:400">${maxRefs ? `до ${maxRefs} у ${m.label}` : ''}</span></div>`;
+    if (!personal()) refs += charOf()
+      ? `<div class="clip" style="margin-bottom:6px">${thumb(charOf().hue % 5 + 3, 26, 1)}<span class="grow"><b>${charOf().name}</b> · ${charOf().photos} фото уходят в каждую генерацию</span><button class="btn xs ghost" data-act="tab:characters">Сменить</button><button class="ib sm" data-act="char:" title="Отключить">${ic('x', 1)}</button></div>`
+      : `<button class="chip dash" style="margin-bottom:6px" data-act="tab:characters">${ic('user', 1)}Персонаж</button>`;
+    refs += maxRefs ? `<div class="opts">${S.samples.map(s => `<span class="chip" data-act="role:${s.id}" title="Образец · ${ROLES[s.role].toLowerCase()} — нажмите, чтобы сменить роль">${thumb(s.hue % 5, 18)}<span class="t">${ROLES[s.role]} · ${s.name}</span><span class="x" data-act="rm:${s.id}" title="Убрать">${ic('x', 1)}</span></span>`).join('')}
+        ${S.samples.length < maxRefs ? `<span class="chip dash" data-act="add" title="Картинка-пример для модели: лицо, стиль или предмет">${ic('plus', 1)}Образец</span>` : ''}</div>
+        ${S.addMenu ? `<div class="menu" style="position:static;margin-top:4px;min-width:0"><button class="mi" data-act="addS:up">${ic('upload')}<span>С компьютера</span></button>${personal() ? '' : `<button class="mi" data-act="addS:proj">${ic('tree')}<span>Из файлов проекта…</span></button>`}</div>` : ''}
+        ${S.roleFor ? `<div class="menu" style="position:static;margin-top:4px;min-width:0"><div class="hint" style="padding:4px 8px">Как модели использовать «${S.samples.find(s => s.id === S.roleFor).name}»</div>${Object.entries({ character: 'Персонаж — сохранить лицо', style: 'Стиль', object: 'Предмет' }).map(([k, l]) => `<button class="mi${S.samples.find(s => s.id === S.roleFor).role === k ? ' on' : ''}" data-act="setrole:${k}">${l}</button>`).join('')}</div>` : ''}`
+      : `<div class="hint">${m.label} образцы не берёт.</div>`;
+  } else refs = `<div class="lbl2">Образцы</div><div class="hint">Для «${OPS.find(o => o.id === op).label}» образцы не нужны.</div>`;
+  const size = hasImage() ? `<div class="lbl2">Размер</div><label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" ${S.matchSize ? 'checked' : ''} data-act="msize"> Вернуть в размере оригинала</label><div class="hint" style="margin-top:3px">Если пропорции результата совпадают с исходником.</div>` : '';
+  return `${ops}${provs}${models}${mode}${fields}${refs}${size}`;
+}
+function settingsFoot() {
+  const why = runWhy(), [p1, p2] = price(false), mc = maxCount();
+  const count = `<span class="count" title="Сколько вариантов"><button data-act="cnt:-1" ${cnt() <= 1 ? 'disabled' : ''}>−</button><span>${cnt()}</span><button data-act="cnt:1" ${cnt() >= mc ? 'disabled' : ''} ${mc === 1 ? 'title="Эта операция даёт один вариант"' : ''}>+</button></span>`;
+  const q = curPv().unit === 'free' && S.scene === 'queue' ? `<div style="margin-bottom:6px"><span class="q">${ic('cpu', 1)}GPU: 2-я в очереди · старт ≈ через 1 мин</span></div>` : '';
+  return `${why ? `<div class="why">${ic('alert', 1)}<span>${esc(why)}</span></div>` : ''}${q}<div class="row">${count}<span class="p"><b>${p1}</b><br>${p2}</span>
+    <button class="btn pri sm" data-act="run" ${why ? `disabled title="${esc(why)}"` : `title="${OPS.find(o => o.id === effOp()).noPrompt ? 'Текст из поля не нужен' : 'Текст из поля ввода уходит модели'}"`}>${ic('spark', 1)}${runLabel()}</button></div>`;
+}
+
+/* ===================== Вкладка «Персонажи» ===================== */
+function charsBody() {
+  if (personal()) return `<div class="empty"><div class="ico">${ic('lock')}</div><div class="big">Персонажи живут в проекте</div>Персонажи хранятся в папке <code>characters/</code> проекта. В личном чате лицо можно передать образцом с ролью «Лицо» на вкладке «Настройки».</div>`;
+  if (S.newChar) return `<div class="voice on" style="margin-top:10px"><div class="top"><b>Новый персонаж</b><span class="grow"></span><button class="ib sm" data-act="newChar:0">${ic('x', 1)}</button></div>
+    <input class="fld" style="margin-top:6px" placeholder="Имя, например «Аня»"><div class="drop" style="margin-top:6px">${ic('upload', 1)} 3–10 фото лица · с компьютера или из файлов проекта</div><div class="hint" style="margin-top:4px">Чем разнообразнее ракурсы и свет, тем лучше модель держит лицо.</div>
+    <div class="foot"><span class="grow"></span><button class="btn xs ghost" data-act="newChar:0">Отмена</button><button class="btn xs pri">Сохранить в characters/</button></div></div>`;
+  if (S.scene === 'nochars') return `<div class="empty"><div class="ico">${ic('users')}</div><div class="big">Персонажей пока нет</div>Персонаж — 3–10 фото лица. Подключённый персонаж уходит в каждую генерацию картинки.<div style="margin-top:10px"><button class="btn sm pri" data-act="newChar:1">＋ Новый персонаж</button></div></div>`;
+  return `<div style="margin-top:10px">${CHARS.map(c => {
+    const on = S.character === c.slug;
+    return `<div class="voice${on ? ' on' : ''}" data-character="${c.slug}"><div class="top">${thumb(c.hue % 5 + 3, 36, 1)}<span class="grow"><span class="nm">${c.name}</span><br><span class="hint">${c.photos} фото · characters/${c.slug}/</span></span>
+      <button class="btn xs${on ? '' : ' pri'}" data-act="char:${on ? '' : c.slug}">${on ? 'Отключить' : 'Подключить к работе'}</button><button class="ib sm" title="Изменить «${c.name}»">${ic('sliders', 1)}</button></div></div>`;
+  }).join('')}<button class="btn sm" style="width:100%;margin-top:4px;border-style:dashed" data-act="newChar:1">${ic('plus', 1)}Новый персонаж</button></div>`;
+}
+
+/* ===================== Панель «Картинки» ===================== */
+function imagesPanel(view) {
+  const f = focusName();
+  const ctx = S.tab === 'settings'
+    ? (f ? `${thumb(1, 18)}<span class="grow" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Работаем с: <b>${esc(f)}</b>${hasMask() ? ' · отмечено 2 области' : ''}</span><button class="ib sm" data-act="release" title="Снять выбор картинки">${ic('x', 1)}</button>`
+       : `${ic('spark', 1)}<span class="grow">Новая картинка · результат ляжет в ленту новой карточкой</span>`)
+    : (personal() ? `${ic('lock', 1)}<span>Персонажи — только в проекте</span>` : `${ic('users', 1)}<span class="grow">Папка <code>characters/</code> проекта · подключённый персонаж уходит в каждую генерацию</span>`);
+  const foot = S.tab === 'settings' ? settingsFoot()
+    : (personal() ? '' : `<div class="row"><span class="p">Подключён: <b>${charOf() ? charOf().name : 'никто'}</b></span><button class="btn sm" data-act="newChar:1">＋ Персонаж</button></div>`);
+  return genPanel({ key: 'images', view, icon: 'img', title: 'Картинки', sub: `${curPv().label} · ${curModel().label}`, tab: S.tab,
+    tabs: [['settings', 'Настройки', undefined, 'sliders'], ['characters', 'Персонажи', personal() ? undefined : (S.scene === 'nochars' ? 0 : CHARS.length), 'users']],
+    ctx, body: S.tab === 'settings' ? settingsBody() : charsBody(),
+    foot: view === 'peek' ? `<div style="font-size:11.5px;color:var(--c-text-secondary);margin-bottom:6px">${esc(stripSummary())}</div>${settingsFoot()}` : foot,
+    runTitle: `${runLabel()} · ${price(true)}` });
+}
+
+/* ===================== Лента ===================== */
+function versionCard(n, k, of, on, seed, what) {
+  return `<div class="vcard${on ? ' focus' : ''}"><div class="img">${art(seed, 16, 10, { mask: on && hasMask(), k: 'v' + n + k })}</div>
+    <div class="vb"><div class="hd"><b>Версия ${n}</b><span class="hint">вариант ${k} из ${of} · от версии ${n - 1}</span>${on ? '<span class="badge acc">в работе</span>' : ''}</div>
+    <div class="what">${what}</div><div class="foot">${on ? `<button class="btn xs">${ic('wand', 1)}Редактор</button>${personal() ? `<button class="btn xs">${ic('dl', 1)}Скачать</button>` : `<button class="btn xs">${ic('save', 1)}Сохранить в проект</button>`}` : `<button class="btn xs ghost">Открыть</button><button class="btn xs ghost" data-act="take:${n}">Продолжить от неё</button>`}</div></div></div>`;
+}
+function feed() {
+  if (S.scene === 'empty') return `<div class="feed"><div class="msg user">Нужна обложка для лендинга: Аня в кафе у окна.</div>
+    <div class="msg bot"><div class="who">Claude</div>Могу нарисовать сам или откройте панель «Картинки» — выберите поставщика и модель, цена видна до запуска.</div>
+    <div class="acard draft"><div class="empty" style="padding:18px 10px"><div class="ico">${ic('img')}</div><div class="big">Картинок в этом чате ещё нет</div>Нарисуйте новую или откройте картинку из проекта в редакторе.<div class="foot" style="justify-content:center;margin-top:10px"><button class="btn sm" data-act="newdraft">${ic('spark', 1)}Нарисовать новую</button><button class="btn sm ghost">${ic('tree', 1)}Из проекта…</button></div></div></div></div>`;
+  return `<div class="feed">
+    <div class="msg user">Нарисуй обложку: Аня в кафе у окна, тёплый вечерний свет.</div>
+    <div class="msg bot"><div class="who">Claude</div>Готово — версия 1. Дальше правьте в режиме «Картинка» или скажите мне.</div>
+    <div class="quiet">Андрей · «добавь чашку кофе и гирлянду» · ${esc(curPv().label)} · ${esc(curModel().label)} · 2 варианта</div>
+    ${versionCard(2, 1, 2, true, 1, 'Правка · «добавь чашку кофе и гирлянду» · персонаж Аня, образец «стиль»')}
+    ${versionCard(2, 2, 2, false, 3, 'Правка · тот же запуск, второй вариант')}
+    ${S.scene === 'running' ? `<div class="acard"><div class="hd">${ic('img', 1)}<span class="fname">hero.png</span><span class="badge info">идёт · 40 %</span><span class="grow"></span><button class="btn xs ghost">${ic('x', 1)}Отменить</button></div><div class="what">Правка · fal · FLUX Kontext · 2 варианта · ≈ $0.08</div><div class="prog"><i style="width:40%"></i></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px"><div class="skel" style="height:80px"></div><div class="skel" style="height:80px"></div></div></div>` : ''}
+  </div>`;
+}
+function composer() {
+  const f = focusName(), img = f && S.cmode === 'image', mob = S.dev === 'mobile';
+  const o = OPS.find(x => x.id === effOp());
+  return `<div class="composer${img ? ' aud' : ''}">
+    ${img ? `<div class="ptag">${ic('img', 1)}<b style="color:var(--c-accent);font-weight:600">Промпт модели</b> · уходит прямо в ${esc(curModel().label)}, без агента</div>` : ''}
+    <div class="inrow">${f ? `<div class="mswitch"><button class="${S.cmode === 'chat' ? 'on' : ''}" data-act="cmode:chat" title="Чат: пишете Claude">${ic('chat', 1)}</button><button class="${img ? 'on' : ''}" data-act="cmode:image" title="Картинка: текст уходит модели">${ic('img', 1)}</button></div>` : ''}
+      <textarea rows="2" placeholder="${img ? (o.noPrompt ? 'Текст не нужен — нажмите «' + o.run + '»' : 'Что изменить в версии 2? Опишите словами или отметьте место в редакторе') : 'Сообщение Claude…'}"></textarea></div>
+    <div class="bar"><button class="ib sm" title="Добавить">${ic('plus', 1)}</button><span class="grow"></span>
+      ${img ? `<button class="send" data-act="run" ${runWhy() ? 'disabled style="opacity:.5"' : ''}>${ic('spark', 1)}${mob ? '' : runLabel() + ' · '}${price(true)}</button>` : `<button class="send">${ic('send', 1)}</button>`}</div></div>`;
+}
+
+/* ===================== Раскладка ===================== */
+function app() {
+  const mob = S.dev === 'mobile', w = S.dev === 'w1024' ? ' w1024' : S.dev === 'w800' ? ' w800' : '';
+  const head = `<div class="ph">${mob ? `<button class="ib">${ic('back')}</button>` : ''}<span class="ttl">Обложка лендинга</span><span class="sub">${personal() ? 'Личный чат · вне проекта' : 'Проект «Лендинг AI Home»'}</span><span class="grow"></span>
+    ${mob ? `<button class="ib" title="Файлы">${ic('tree')}</button><button class="ib${S.panel ? ' on' : ''}" data-act="openPanel:${S.tab}" title="Панель «Картинки»">${ic('img')}</button>` : ''}</div>`;
+  const main = `<div class="island main">${head}${feed()}${strip()}${composer()}</div>`;
+  const rail = mob ? '' : `<div class="rail"><button class="ri">${ic('chat')}</button><button class="ri" title="Файлы">${ic('tree')}</button><button class="ri" title="Звук: настройки и голоса">${ic('waves')}</button><button class="ri${S.panel ? ' on' : ''}" data-act="togglePanel" title="Картинки: настройки и персонажи (было «Персонажи»)">${ic('img')}</button></div>`;
+  let side = '';
+  if (!mob && S.panel) side = imagesPanel(S.spine ? 'spine' : 'dock');
+  if (mob && S.panel) side = S.peek ? imagesPanel('peek') : `<div class="ovl" data-act="peek" title="Опустить шторку"></div>${imagesPanel('sheet')}`;
+  return `<div class="app${mob ? ' mobile' : ''}${w}">${rail}${main}${side}</div>`;
+}
+
+/* ===================== Галерея ===================== */
+function withS(patch, fn) { const keep = JSON.parse(JSON.stringify(S)); Object.assign(S, patch); const out = fn(); Object.keys(S).forEach(k => delete S[k]); Object.assign(S, keep); return out; }
+function gallery() {
+  const cell = (h, sub, body) => `<div class="gcell"><h4>${h}</h4><div class="hint">${sub}</div>${body}</div>`;
+  return [
+    cell('Вкладка «Персонажи»', 'Бывшая отдельная панель «Персонажи»: список, «Подключить к работе», новый персонаж.', withS({ tab: 'characters', scope: 'project', scene: 'sel' }, () => imagesPanel('static'))),
+    cell('Новый персонаж — форма в той же вкладке', 'Имя и 3–10 фото; сохраняется в characters/ проекта.', withS({ tab: 'characters', newChar: true, scope: 'project' }, () => imagesPanel('static'))),
+    cell('Личный чат: «Настройки»', 'Персонажа нет, образцы — только с компьютера. Локальные модели доступны, как и сейчас.', withS({ tab: 'settings', scope: 'personal', scene: 'sel', prov: 'local' }, () => imagesPanel('static'))),
+    cell('Личный чат: «Персонажи»', 'Вкладка остаётся — с объяснением, где живут персонажи.', withS({ tab: 'characters', scope: 'personal' }, () => imagesPanel('static'))),
+    cell('Картинка не выбрана', 'Операции над готовой картинкой серые с причиной; запуск — «Сгенерировать».', withS({ tab: 'settings', scene: 'empty', scope: 'project' }, () => imagesPanel('static'))),
+    cell('Убрать фон: один вариант, без образцов', 'Быстрое действие редактора как операция панели: «− N +» упирается в 1, текст не нужен.', withS({ tab: 'settings', op: 'removeBackground', scope: 'project', scene: 'sel', prov: 'fal' }, () => imagesPanel('static'))),
+    cell('Полоса: пустая и свёрнутая', 'Клик по сводке открывает панель на вкладке «Настройки».', withS({ scene: 'empty', menu: null }, () => strip()) + withS({ collapsed: true, menu: null }, () => strip())),
+    cell('Телефон: шторка опущена до цены', 'Лента доступна: видно, что и за сколько запустится.', `<div style="position:relative;height:150px;overflow:hidden;border-radius:14px;border:1px solid var(--c-border)">${imagesPanel('peek')}</div>`),
+  ].join('');
+}
+
+/* ===================== Демо-панель и отрисовка ===================== */
+function demo() {
+  const g = (lbl, name, opts) => `<div class="grp"><span class="lbl">${lbl}</span>${opts.map(([k, l]) => `<button class="tbtn" aria-pressed="${S[name] === k}" data-demo="${name}:${k}">${l}</button>`).join('')}</div>`;
+  return g('Тема', 'theme', [['light', 'Светлая'], ['dark', 'Тёмная']]) + g('Ширина', 'dev', [['desktop', 'Десктоп'], ['w1024', 'Узкий 1024'], ['w800', 'Окно 800'], ['mobile', 'Телефон 360']])
+    + g('Чат', 'scope', [['project', 'В проекте'], ['personal', 'Личный']])
+    + g('Сцена', 'scene', [['sel', 'Картинка выбрана'], ['mask', 'Отмечено в редакторе'], ['empty', 'Не выбрана'], ['running', 'Идёт генерация'], ['queue', 'Очередь GPU'], ['down', 'fal не отвечает'], ['nochars', 'Нет персонажей']])
+    + `<button class="tbtn" data-demo="reset:1">Сначала</button>`;
+}
+const CAPS = {
+  sel: 'Выбрана версия 2 нити hero.png. Настройки — в панели «Картинки» справа; полоса над полем ввода — её сводка, клик по ней открывает панель.',
+  mask: 'В редакторе отмечены две области: операция «Авто» стала «По отмеченному», доступна «По отмеченному».',
+  empty: 'Картинка не выбрана: «Авто» = «По тексту», операции над готовой картинкой серые.',
+  running: 'Идёт генерация: панель остаётся открытой, можно готовить следующий запуск.',
+  queue: 'Локальная модель ждёт GPU: позиция в очереди — в закреплённом низу панели (выберите «Локальные модели»).',
+  down: 'Поставщик не отвечает: пометка у поставщика и предупреждение; сами на другого не переключаем.',
+  nochars: 'Персонажей в проекте нет: пустое состояние вкладки «Персонажи».',
+};
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  document.getElementById('demo').innerHTML = demo();
+  document.getElementById('app').innerHTML = app();
+  document.getElementById('gallery').innerHTML = gallery();
+  const W = { desktop: '', w1024: ' Узкий десктоп: панель 340 px, лента не уже 440 px.', w800: ' Окно 800: панель 320 px, лента 420 px; «›» сворачивает панель в корешок. Уже 800 px — шторка.', mobile: ' Телефон: панель — шторка с вкладками; «⌄» опускает её до цены.' };
+  document.getElementById('cap').textContent = CAPS[S.scene] + W[S.dev] + (personal() ? ' Личный чат: персонажей нет, образцы — с компьютера, «Скачать» вместо «Сохранить в проект».' : '');
+}
+const INIT = JSON.parse(JSON.stringify(S));
+
+document.addEventListener('click', e => {
+  const d = e.target.closest('[data-demo]');
+  if (d) {
+    const [k, v] = d.dataset.demo.split(':');
+    if (k === 'reset') { Object.keys(S).forEach(x => delete S[x]); Object.assign(S, JSON.parse(JSON.stringify(INIT))); }
+    else { S[k] = v; S.menu = null; if (k === 'scene' && v === 'nochars') { S.tab = 'characters'; S.panel = true; } if (k === 'scene' && v === 'queue') S.prov = 'local'; if (k === 'dev') { S.collapsed = false; S.peek = false; S.spine = false; S.panel = v !== 'mobile'; } }
+    render(); return;
+  }
+  const el = e.target.closest('[data-act]');
+  if (!el) { if (S.menu) { S.menu = null; render(); } return; }
+  e.stopPropagation();
+  const [a, b] = el.dataset.act.split(':');
+  switch (a) {
+    case 'menu': S.menu = S.menu === b ? null : (b || null); render(); return;
+    case 'openPanel': S.panel = true; S.tab = b || 'settings'; S.spine = false; S.peek = false; break;
+    case 'togglePanel': S.panel = !S.panel; S.spine = false; break;
+    case 'closePanel': S.panel = false; S.peek = false; break;
+    case 'tab': S.tab = b; S.spine = false; S.peek = false; S.newChar = false; break;
+    case 'spine': S.spine = b === '1'; break;
+    case 'peek': S.peek = !S.peek; break;
+    case 'collapse': S.collapsed = true; break;
+    case 'expand': S.collapsed = false; break;
+    case 'release': S.scene = 'empty'; S.cmode = 'chat'; break;
+    case 'newdraft': S.scene = 'sel'; S.cmode = 'image'; break;
+    case 'op': S.op = b; break;
+    case 'prov': S.prov = b; break;
+    case 'model': S.model[curPv().key] = b; break;
+    case 'mode': S.mode = b; break;
+    case 'ratio': S.ratio = el.dataset.act.slice(6); break;
+    case 'cnt': S.count = Math.max(1, Math.min(maxCount(), cnt() + Number(b))); break;
+    case 'msize': S.matchSize = !S.matchSize; break;
+    case 'char': S.character = b || null; break;
+    case 'newChar': S.newChar = b === '1'; S.tab = 'characters'; S.panel = true; break;
+    case 'add': S.addMenu = !S.addMenu; S.roleFor = null; break;
+    case 'addS': S.samples.push({ id: 's' + Date.now(), name: b === 'up' ? 'face-ref.png' : 'brand/moodboard.png', role: b === 'up' ? 'character' : 'style', hue: 120 + S.samples.length * 40 }); S.addMenu = false; break;
+    case 'rm': S.samples = S.samples.filter(s => s.id !== b); S.roleFor = null; break;
+    case 'role': S.roleFor = S.roleFor === b ? null : b; S.addMenu = false; break;
+    case 'setrole': S.samples.find(s => s.id === S.roleFor).role = b; S.roleFor = null; break;
+    case 'cmode': S.cmode = b; break;
+    case 'take': break;
+    case 'run': if (!runWhy()) S.scene = curPv().unit === 'free' ? 'queue' : 'running'; break;
+    default: break;
+  }
+  if (a !== 'menu') S.menu = null;
+  render();
+});
+render();
+
+</script>
+</body>
+</html>

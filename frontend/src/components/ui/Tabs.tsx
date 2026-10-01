@@ -22,11 +22,12 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-tab-style'))
   document.head.appendChild(el);
 }
 
-export function Tabs<T extends string>({ value, items, onChange, ariaLabel }: {
+export function Tabs<T extends string>({ value, items, onChange, ariaLabel, transparent }: {
   value: T;
   items: TabItem<T>[];
   onChange: (v: T) => void;
   ariaLabel?: string;
+  transparent?: boolean;   // без своей подложки: на карточке шторки bgInset читается полосой
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -50,7 +51,7 @@ export function Tabs<T extends string>({ value, items, onChange, ariaLabel }: {
       aria-label={ariaLabel}
       style={{
         display: 'flex', gap: SP.xxs, padding: `${SP.xs}px ${SP.sm}px 0`,
-        background: C.bgInset, borderBottom: `1px solid ${C.borderLight}`,
+        background: transparent ? 'transparent' : C.bgInset, borderBottom: `1px solid ${C.borderLight}`,
         overflowX: 'auto',
       }}
     >

@@ -818,6 +818,7 @@ function GenPanelScaffoldSection() {
   const [width, setWidth] = useState(380);
   const [blocked, setBlocked] = useState(false);
   const [queue, setQueue] = useState(false);
+  const [longVerb, setLongVerb] = useState(false);
 
   const tabs = [
     { value: 'settings' as const, label: 'Настройки', icon: <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
@@ -828,8 +829,8 @@ function GenPanelScaffoldSection() {
     queue: queue ? 'GPU: 2-я в очереди · старт ≈ через 1 мин' : undefined,
     count, maxCount: 4, onCountChange: setCount,
     price: [`≈ $${(count * 0.04).toFixed(2)}`, `${count} × $0.04 за картинку`],
-    runLabel: 'Изменить',
-    onRun: () => showToast('Запуск', 'Изменить · витрина'),
+    runLabel: longVerb ? 'Перегенерировать' : 'Изменить',
+    onRun: () => showToast('Запуск', `${longVerb ? 'Перегенерировать' : 'Изменить'} · витрина`),
   };
   const common = {
     title: 'Картинки',
@@ -873,9 +874,11 @@ function GenPanelScaffoldSection() {
       ))}
     </div>
   );
-  const frame = (h: number, children: React.ReactNode, justify: 'flex-end' | 'center' = 'flex-end') => (
+  // scroll — рамка уже панели прокручивается вбок: колонка не ужимается ниже своего минимума
+  const frame = (h: number, children: React.ReactNode, scroll = false) => (
     <div style={{
-      position: 'relative', height: h, overflow: 'hidden', display: 'flex', justifyContent: justify,
+      position: 'relative', height: h, display: 'flex',
+      overflowX: scroll ? 'auto' : 'hidden', overflowY: 'hidden', justifyContent: scroll ? 'flex-start' : 'flex-end',
       border: `1px solid ${C.border}`, borderRadius: R.xxl, background: C.bgMain, padding: SP.sm,
     }}>{children}</div>
   );
@@ -890,15 +893,16 @@ function GenPanelScaffoldSection() {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.lg }}>
           <ToggleRow label="причина: запуск невозможен"><Toggle checked={blocked} onChange={setBlocked} /></ToggleRow>
           <ToggleRow label="очередь GPU"><Toggle checked={queue} onChange={setQueue} /></ToggleRow>
+          <ToggleRow label="длинный глагол"><Toggle checked={longVerb} onChange={setLongVerb} /></ToggleRow>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 420px), 1fr))', gap: SP.lg }}>
-          <SubBlock label={`Колонка — ${width} px, тянется за левый край (340–520)`}>
+          <SubBlock label={`Колонка — ${width} px, тянется за левый край (340–520); рамка уже — прокрутка вбок`}>
             {frame(560, (
               <GenerationPanel {...common} layout="column" collapsed={false} width={width} onWidthChange={setWidth}
-                footContent={charsFoot} style={{ maxWidth: '100%' }}>
+                footContent={charsFoot}>
                 {body}
               </GenerationPanel>
-            ))}
+            ), true)}
           </SubBlock>
           <SubBlock label="Корешок — 44 px: развернуть, вкладки, запуск">
             {frame(560, (

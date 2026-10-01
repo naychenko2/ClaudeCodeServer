@@ -14,21 +14,36 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 
 export const GEN_PANEL_W = { default: 380, min: 340, max: 520, spine: 44 } as const;
 const HEAD_H = 42;
+// Разовые отступы макета вне шкалы SP: имена вместо «SP.xs + 2» по месту
+const PAD = {
+  row: SP.xs + 2,       // зазор в строках шапки, контекста, низа и корешка
+  edge: SP.sm + 2,      // левый край шапки и строки контекста, низ подвала
+  ctxY: SP.xs + 3,      // вертикаль строки контекста
+  bodyB: SP.md + 2,     // низ прокручиваемого тела
+} as const;
+// Хват шторки: зона нажатия шире видимой полоски
+const GRAB = { hitW: 64, barW: 40, barH: 4 } as const;
+const QUEUE_ICON = 11;  // значок в бейдже очереди — мельче ICON_SIZE.xs, по макету
+const SPINE_DIVIDER_W = 24;
+const SPINE_RUN = 32;   // круглая кнопка запуска в корешке
 // Шторка телефона занимает 88 % высоты: над ней остаётся видна полоса ленты
 const SHEET_H = '88%';
 
 // Контракт закреплённого низа — ровно из макета (ADR-021 §3)
-export interface GenerationFoot {
+// Счётчик: при maxCount: 1 колбэк не нужен (кнопки ± заперты), при любом другом
+// потолке тип требует onCountChange — иначе «+» кликался бы молча впустую
+export type GenerationFoot = {
   reason?: string;                  // почему запуск невозможен; задана — кнопка гаснет
   queue?: string;                   // очередь GPU у локальных моделей
   count: number;
-  maxCount: number;
-  onCountChange?: (n: number) => void;
   maxCountHint?: string;            // причина потолка: «Эта операция даёт один вариант»
   price: [string, string];          // итог («≈ $0.08») и расшифровка («2 × $0.04 за картинку»)
   runLabel: string;                 // глагол запуска: «Изменить», «Перегенерировать»
   onRun: () => void;
-}
+} & (
+  | { maxCount: 1; onCountChange?: (n: number) => void }
+  | { maxCount: number; onCountChange: (n: number) => void }
+);
 
 // column — колонка справа, spine — свёрнута в корешок; sheet / peek — шторка телефона
 // (поднята / опущена до цены). auto выбирает колонку или шторку по ширине окна.
@@ -84,8 +99,8 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
 
   const head = (
     <div style={{
-      height: HEAD_H, flex: `0 0 ${HEAD_H}px`, display: 'flex', alignItems: 'center', gap: SP.xs + 2,
-      padding: `0 ${SP.xs + 2}px 0 ${SP.sm + 2}px`, minWidth: 0,
+      height: HEAD_H, flex: `0 0 ${HEAD_H}px`, display: 'flex', alignItems: 'center', gap: PAD.row,
+      padding: `0 ${PAD.row}px 0 ${PAD.edge}px`, minWidth: 0,
       borderBottom: `1px solid ${C.borderLight}`, background: sheet ? 'transparent' : C.bgInset,
     }}>
       <span style={{ display: 'inline-flex', color: C.accent, flexShrink: 0 }}>{p.icon}</span>
@@ -118,11 +133,11 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
   const footBox = foot && (
     <div style={{
       flex: '0 0 auto', borderTop: `1px solid ${C.borderLight}`, background: C.bgCard,
-      padding: `${SP.sm}px ${SP.md}px ${SP.sm + 2}px`,
+      padding: `${SP.sm}px ${SP.md}px ${PAD.edge}px`,
     }}>
       {view === 'peek' && p.peekSummary && (
         <div style={{
-          fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.xs + 2,
+          fontSize: FS.sm, color: C.textSecondary, marginBottom: PAD.row,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{p.peekSummary}</div>
       )}
@@ -132,15 +147,15 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
 
   const content = (
     <>
-      <Tabs ariaLabel={`Панель «${p.title}»`} value={p.tab} items={p.tabs} onChange={p.onTabChange} />
+      <Tabs ariaLabel={`Панель «${p.title}»`} value={p.tab} items={p.tabs} onChange={p.onTabChange} transparent={sheet} />
       {p.context && (
         <div style={{
-          flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: SP.xs + 2, minWidth: 0,
-          padding: `${SP.xs + 3}px ${SP.sm + 2}px`, borderBottom: `1px solid ${C.borderLight}`,
+          flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: PAD.row, minWidth: 0,
+          padding: `${PAD.ctxY}px ${PAD.edge}px`, borderBottom: `1px solid ${C.borderLight}`,
           fontSize: FS.sm, color: C.textSecondary,
         }}>{p.context}</div>
       )}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: `${SP.xxs}px ${SP.md}px ${SP.md + 2}px` }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: `${SP.xxs}px ${SP.md}px ${PAD.bodyB}px` }}>
         {p.children}
       </div>
     </>
@@ -150,6 +165,8 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
     const pos = p.contained ? 'absolute' : 'fixed';
     // Шторка: grab-хват поднимает и опускает её; тап по затемнению опускает, а не закрывает.
     // Опущенная — без затемнения: лента под ней остаётся рабочей.
+    // Затемнение намеренно декоративное (aria-hidden, без фокуса): с клавиатуры шторку
+    // опускают хват ниже и кнопка-шеврон в шапке.
     return (
       <>
         {view === 'sheet' && (
@@ -170,10 +187,10 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
             onClick={() => setPeeked(!peeked)}
             style={{
               flex: '0 0 auto', alignSelf: 'center', display: 'flex', justifyContent: 'center',
-              width: 64, padding: `${SP.sm}px 0 ${SP.xxs}px`, border: 'none', background: 'transparent', cursor: 'pointer',
+              width: GRAB.hitW, padding: `${SP.sm}px 0 ${SP.xxs}px`, border: 'none', background: 'transparent', cursor: 'pointer',
             }}
           >
-            <span style={{ width: 40, height: 4, borderRadius: R.sm, background: C.track }} />
+            <span style={{ width: GRAB.barW, height: GRAB.barH, borderRadius: R.sm, background: C.track }} />
           </button>
           {head}
           {view === 'sheet' && content}
@@ -211,7 +228,7 @@ function Foot({ foot: f }: { foot: GenerationFoot }) {
     <>
       {f.reason && (
         <div style={{
-          display: 'flex', alignItems: 'flex-start', gap: SP.xs + 2, marginBottom: SP.xs + 2,
+          display: 'flex', alignItems: 'flex-start', gap: PAD.row, marginBottom: PAD.row,
           fontSize: FS.sm, color: C.warningText,
         }}>
           <span style={{ display: 'inline-flex', marginTop: 1, flexShrink: 0 }}>{icon(AlertTriangle)}</span>
@@ -219,8 +236,8 @@ function Foot({ foot: f }: { foot: GenerationFoot }) {
         </div>
       )}
       {f.queue && (
-        <div style={{ marginBottom: SP.xs + 2 }}>
-          <Badge tone="info" icon={<Cpu size={11} strokeWidth={ICON_STROKE} />}>{f.queue}</Badge>
+        <div style={{ marginBottom: PAD.row }}>
+          <Badge tone="info" icon={<Cpu size={QUEUE_ICON} strokeWidth={ICON_STROKE} />}>{f.queue}</Badge>
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
@@ -232,11 +249,16 @@ function Foot({ foot: f }: { foot: GenerationFoot }) {
           maxHint={f.maxCountHint}
           onChange={n => f.onCountChange?.(n)}
         />
-        <span style={{ flex: 1, minWidth: 0, fontSize: FS.sm, lineHeight: 1.35, color: C.textSecondary }}>
-          <b style={{ color: C.textHeading }}>{f.price[0]}</b><br />{f.price[1]}
+        {/* Цена ровно в две строки: строки не переносятся, а режутся многоточием */}
+        <span title={`${f.price[0]} · ${f.price[1]}`} style={{
+          flex: 1, minWidth: 0, fontSize: FS.sm, lineHeight: 1.35, color: C.textSecondary,
+          whiteSpace: 'nowrap',
+        }}>
+          <b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', color: C.textHeading }}>{f.price[0]}</b>
+          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.price[1]}</span>
         </span>
         <Button
-          size="sm"
+          size="xs"
           disabled={!!f.reason}
           title={f.reason}
           leftIcon={icon(Sparkles)}
@@ -256,12 +278,12 @@ function Spine<T extends string>(p: Props<T> & { onExpand: () => void; onTab: (t
   return (
     <div role="complementary" aria-label={p.title} style={{
       width: GEN_PANEL_W.spine, flex: `0 0 ${GEN_PANEL_W.spine}px`, minHeight: 0,
-      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.xs, padding: `${SP.xs + 2}px 0`,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.xs, padding: `${PAD.row}px 0`,
       background: C.bgPanel, border: `1px solid ${C.borderLight}`, borderRadius: R.xxl, boxShadow: SHADOW.island,
       ...p.style,
     }}>
       <IconButton active title={`Развернуть панель «${p.title}»`} onClick={p.onExpand}>{p.icon}</IconButton>
-      <span style={{ width: 24, height: 1, background: C.divider, margin: `${SP.xxs}px 0` }} />
+      <span style={{ width: SPINE_DIVIDER_W, height: 1, background: C.divider, margin: `${SP.xxs}px 0` }} />
       {p.tabs.map(t => (
         <IconButton key={t.value} active={t.value === p.tab} title={t.label} onClick={() => p.onTab(t.value)}>
           {t.icon}
@@ -275,7 +297,7 @@ function Spine<T extends string>(p: Props<T> & { onExpand: () => void; onTab: (t
           disabled={!!f.reason}
           title={f.reason ?? `${f.runLabel} · ${f.price[0]}`}
           onClick={f.onRun}
-          style={{ width: 32, height: 32, minHeight: 32, padding: 0 }}
+          style={{ width: SPINE_RUN, height: SPINE_RUN, minHeight: SPINE_RUN, padding: 0 }}
         >
           {icon(Sparkles)}
         </Button>

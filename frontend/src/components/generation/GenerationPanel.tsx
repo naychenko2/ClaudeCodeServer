@@ -46,6 +46,8 @@ export type GenerationFoot = {
   maxCountHint?: string;            // причина потолка: «Эта операция даёт один вариант»
   price: [string, string];          // итог («≈ $0.08») и расшифровка («2 × $0.04»)
   runLabel: string;                 // глагол запуска: «Изменить», «Перегенерировать»
+  runIcon?: ReactNode;              // значок запуска; без него ✦ — значок ИИ
+  noCount?: boolean;                // правка без ИИ: один результат, «− N +» не рисуем
   onRun: () => void;
 } & (
   | { maxCount: 1; onCountChange?: (n: number) => void }
@@ -285,14 +287,14 @@ function Foot({ foot: f }: { foot: GenerationFoot }) {
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
-        <Stepper
+        {!f.noCount && <Stepper
           ariaLabel="Сколько вариантов"
           value={f.count}
           min={1}
           max={f.maxCount}
           maxHint={f.maxCountHint}
           onChange={n => f.onCountChange?.(n)}
-        />
+        />}
         {/* Цена ровно в две строки: строки не переносятся, а режутся многоточием */}
         <span title={`${f.price[0]} · ${f.price[1]}`} style={{
           flex: 1, minWidth: 0, fontSize: FS.sm, lineHeight: 1.35, color: C.textSecondary,
@@ -305,7 +307,7 @@ function Foot({ foot: f }: { foot: GenerationFoot }) {
           size="xs"
           disabled={!!f.reason}
           title={f.reason}
-          leftIcon={icon(Sparkles)}
+          leftIcon={f.runIcon ?? icon(Sparkles)}
           onClick={f.onRun}
           style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
         >
@@ -343,7 +345,7 @@ function Spine<T extends string>(p: Props<T> & { onExpand: () => void; onTab: (t
           onClick={f.onRun}
           style={{ width: SPINE_RUN, height: SPINE_RUN, minHeight: SPINE_RUN, padding: 0 }}
         >
-          {icon(Sparkles)}
+          {f.runIcon ?? icon(Sparkles)}
         </Button>
       )}
     </div>

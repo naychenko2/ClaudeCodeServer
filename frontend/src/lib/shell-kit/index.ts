@@ -116,7 +116,7 @@ export { useContainerWidth } from '../../hooks/useContainerWidth';
 // ─── components/ui ───────────────────────────────────────────────────────────
 export {
   Button, IconButton, Badge, Modal, ConfirmDialog, BackButton,
-  IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem,
+  IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem, MenuSep,
   SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
   Island, EmptyState, Field, TextField, TextArea, IconField, ModalActions, Menu, SegmentedControl, Checkbox,
   Chip, ChipX, ProgressBar, MetaChip, Select,

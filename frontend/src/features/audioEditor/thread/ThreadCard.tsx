@@ -4,9 +4,9 @@
 // «Взять». Всё содержимое — живьём из стора нитей. Всё за флагом audio-editor: без него — строка fallback.
 
 import { useState, type ReactNode } from 'react';
-import { AudioLines, ChevronLeft, ChevronRight, Download, Mic, Music, Save, Sparkles, Target, X } from 'lucide-react';
+import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Combine, Download, Mic, Music, Save, Scissors, Sparkles, Target, Wand2, X } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, FLAGS, useFeature,
+  Badge, Button, Dot, IconButton, Menu, MenuItem, MenuSep, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { audioApi, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
@@ -19,7 +19,8 @@ import {
 } from './model';
 import { recordOf, str } from './records';
 import { SaveAsDialog } from './SaveAsDialog';
-import { getJobsOf, useAudioThreads, type JobProgress } from './threadStore';
+import { procMenuItems, versionPiece, type ProcMenuItem } from './procMenu';
+import { getJobsOf, requestOperation, useAudioThreads, type JobProgress } from './threadStore';
 import { VersionBody } from './VersionBody';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -85,6 +86,39 @@ function SaveActions({ scope, sessionId, thread, version }: {
 
 // ── Карточка нити ──
 
+// «Обработать ▾»: пункт ставит эту версию в работу и открывает панель «Звук» на операции
+function ProcessMenu({ scope, sessionId, thread, version }: {
+  scope: string; sessionId: string; thread: AudioThread; version: AudioThreadVersion;
+}) {
+  const [at, setAt] = useState<DOMRect | null>(null);
+  const items = procMenuItems();
+  const pick = async (it: ProcMenuItem) => {
+    setAt(null);
+    if (version.id !== thread.currentVersionId) await takeVersion(scope, sessionId, thread, version.id);
+    requestOperation(sessionId, thread.id, it.op, it.op === 'concat' ? versionPiece(thread, version.id) : undefined);
+  };
+  const icon = (op: AudioOp) => ic(op === 'concat' ? Combine : op === 'trim' ? Scissors : op === 'convertVoice' ? Mic : op === 'cover' || op === 'repaint' ? Music : Wand2, ICON_SIZE.sm);
+  const row = (it: ProcMenuItem) => <MenuItem key={it.op} icon={icon(it.op)} label={it.label} onClick={() => { void pick(it); }} />;
+  return (
+    <>
+      <span data-audio-process="" style={{ display: 'inline-flex' }}>
+        <Button size="sm" variant="secondary" leftIcon={ic(Wand2)}
+          title="Операции над этой версией — откроются в панели «Звук»"
+          onClick={e => setAt(at ? null : (e.currentTarget as HTMLElement).getBoundingClientRect())}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xxs }}>Обработать{ic(ChevronDown)}</span>
+        </Button>
+      </span>
+      {at && (
+        <Menu anchor={at} minWidth={240} maxHeight={480} onClose={() => setAt(null)}>
+          {items.filter(i => i.group === 'process').map(row)}
+          <MenuSep />
+          {items.filter(i => i.group === 'other').map(row)}
+        </Menu>
+      )}
+    </>
+  );
+}
+
 function DraftBox({ thread, focused }: { thread: AudioThread; focused: boolean }) {
   return (
     <Frame current={focused} dashed testId="draft">
@@ -138,13 +172,15 @@ export function ThreadCard({ scope, sessionId, thread, focused, events }: {
       <VersionBody key={v.id} scope={scope} sessionId={sessionId} thread={thread} version={v} selectable={working} />
 
       <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* Не primary: акцент в ленте — у ▶ и главного действия, а не у каждой карточки */}
         {!working && (
-          <Button size="sm" variant="primary" leftIcon={ic(Target)} loading={busy}
+          <Button size="sm" variant="secondary" leftIcon={ic(Target)} loading={busy}
             title="Полоса «Звук» и следующий запуск пойдут от этой версии"
             onClick={() => { setBusy(true); void takeVersion(scope, sessionId, thread, v.id).finally(() => setBusy(false)); }}>
             Работать с этой
           </Button>
         )}
+        {hasMain(v) && <ProcessMenu scope={scope} sessionId={sessionId} thread={thread} version={v} />}
         <SaveActions scope={scope} sessionId={sessionId} thread={thread} version={v} />
       </div>
     </Frame>

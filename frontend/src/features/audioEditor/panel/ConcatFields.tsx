@@ -107,7 +107,7 @@ export function ConcatFields({ c, set, threads, personal }: {
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.xs }}>
           <input type="range" min={0.1} max={5} step={0.1} value={c.joint.seconds} aria-label="Длина стыка, с"
             onChange={e => set({ joint: { ...c.joint, seconds: Number(e.target.value) } })}
-            style={{ flex: 1, minWidth: 0, accentColor: C.accent }} />
+            style={{ flex: 1, minWidth: 0, accentColor: C.textSecondary }} />
           <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: 40, textAlign: 'right' }}>{String(c.joint.seconds).replace('.', ',')} с</span>
         </div>
       )}

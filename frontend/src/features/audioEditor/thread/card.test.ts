@@ -20,7 +20,7 @@ import { dropNode } from '../player/StemMixer';
 import { mixStems, saveVersion, takeVersion } from './actions';
 import {
   abSides, currentIndex, doneText, extraFiles, launchEndNote, licenseBadge, navText, orderedVersions, priceText, saveKind,
-  splitSuggestion, versionStems,
+  splitSuggestion, stemsFolder, versionStems,
 } from './model';
 import { __peaksCacheSize, __resetPeaksCache, CACHE_MAX, loadPeaks } from './serverPeaks';
 import {
@@ -94,7 +94,7 @@ describe('карточка: файлы версии', () => {
         { role: 'index', path: 'w/voice.index' },
       ],
     });
-    expect(versionStems(v)).toEqual([{ id: 'stem:vocals', name: 'vocals', path: 'w/vocals.mp3' }]);
+    expect(versionStems(v)).toEqual([{ id: 'stem:vocals', name: 'вокал', path: 'w/vocals.mp3' }]);
     expect(extraFiles(v).map(f => `${f.role}:${f.ext}`)).toEqual(['text:txt', 'subtitles:srt', 'score:abc', 'model:pth', 'index:index']);
   });
 });
@@ -175,6 +175,17 @@ describe('карточка: сохранение', () => {
     expect(dispatched.some(e => e.type === 'cc-local-toast')).toBe(false);
     expect(splitSuggestion('music/hit.v2.mp3')).toEqual({ folder: 'music', fileName: 'hit.v2.mp3' });
     expect(splitSuggestion('hit.v2.mp3')).toEqual({ folder: '', fileName: 'hit.v2.mp3' });
+  });
+
+  it('черновик без файла сохраняется под именем нити: стемы песни — в «anthem.stems/», не в «audio.stems/»', async () => {
+    const save = vi.spyOn(audioApi, 'save').mockResolvedValue({ path: 'anthem.mp3', files: ['anthem.mp3'] });
+    const draft = { ...t, file: null, name: 'anthem.mp3' };
+    await saveVersion('p1', 's1', draft, 'v2');
+    expect(save).toHaveBeenCalledWith('p1', 's1', 't1', { versionId: 'v2', mode: 'nextVersion', fileName: 'anthem' });
+    expect(stemsFolder(draft)).toBe('anthem.stems/');
+    expect(stemsFolder({ ...draft, name: 'Песня: черновик' })).toBe('Песня- черновик.stems/');
+    expect(stemsFolder({ ...draft, name: '' })).toBe('audio.stems/');
+    expect(stemsFolder(t)).toBe('intro.stems/');
   });
 
   it('другой 409 подсказкой не считается', async () => {

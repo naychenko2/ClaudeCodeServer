@@ -2,10 +2,10 @@
 // поля ввода (котировка → задача строго по quoteId, ADR-021 §2).
 
 import { autoRevealGenerationPanel, requestStrip, revealWorkspacePanel, showToast } from 'aihome_shell/kit';
-import { audioApi, nameTakenSuggestion, type AudioMode, type AudioThread } from '../api';
+import { audioApi, nameTakenSuggestion, type AudioMode, type AudioOp, type AudioThread } from '../api';
 import type { MixPlan } from '../player/mix';
 import { isPersonalScope } from '../scope';
-import { mixRequest } from './model';
+import { draftStem, mixRequest } from './model';
 import { opInfo } from '../ops';
 import { resolveLaunch } from '../strip/summary';
 import {
@@ -50,13 +50,18 @@ export async function selectThreadByHuman(scope: string, sessionId: string, thre
 
 // Запуск из композера: настройки сервер разрешает сам по цепочке нити, текст — в поле операции.
 // false — не запущено (причина уже показана тостом)
-export async function launchFromComposer(scope: string, sessionId: string, thread: AudioThread, text: string): Promise<boolean> {
+// override — явный запуск не по полосе (карточка «Текст для звука» с режимом и моделью агента)
+export async function launchFromComposer(
+  scope: string, sessionId: string, thread: AudioThread, text: string,
+  override?: { mode: AudioMode; operation: AudioOp; provider: string | null; model: string | null } | null,
+): Promise<boolean> {
   const L = resolveLaunch(thread, getPrefs(scope), getCatalog(scope), getShortcutMode(sessionId) ?? 'voice');
-  const field = opInfo(L.op)?.field ?? 'prompt';
+  const field = opInfo(override?.operation ?? L.op)?.field ?? 'prompt';
   const trimmed = text.trim();
   try {
     const quote = await audioApi.quote(scope, sessionId, {
-      mode: L.mode, sessionId, threadId: thread.id, text: field === 'text' ? trimmed : null,
+      mode: override?.mode ?? L.mode, sessionId, threadId: thread.id, text: field === 'text' ? trimmed : null,
+      ...(override ? { operation: override.operation, provider: override.provider, model: override.model } : {}),
     });
     await audioApi.startJob(scope, sessionId, {
       quoteId: quote.quoteId, sessionId, threadId: thread.id,
@@ -100,7 +105,7 @@ export async function saveVersion(
   try {
     const r = await audioApi.save(scope, sessionId, thread.id, as
       ? { versionId, mode: 'as', folder: as.folder, fileName: as.fileName }
-      : { versionId, mode: 'nextVersion' });
+      : { versionId, mode: 'nextVersion', ...(thread.file ? {} : { fileName: draftStem(thread) }) });
     showToast(`Сохранено: ${r.path}`, r.files.length > 1 ? `файлов: ${r.files.length}` : '', 'info');
     return { ok: true, path: r.path };
   } catch (e) {

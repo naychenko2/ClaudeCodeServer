@@ -55,3 +55,7 @@ export const MODE_LABEL: Record<AudioMode, string> = { voice: 'Голос', musi
 export const opInfo = (op: AudioOp | null | undefined): OpInfo | null => OPS.find(o => o.op === op) ?? null;
 
 export const defaultOp = (mode: AudioMode): AudioOp => OPS.find(o => o.mode === mode)!.op;
+
+// Правки без ИИ: ffmpeg на сервере, один результат, бесплатно и мгновенно
+export const NO_AI_OPS: ReadonlySet<AudioOp> = new Set(['trim', 'gainFade', 'normalize', 'mixStems', 'concat']);
+export const isNoAi = (op: AudioOp) => NO_AI_OPS.has(op);

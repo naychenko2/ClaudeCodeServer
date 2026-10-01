@@ -13,11 +13,12 @@ import type { ChatItem, Persona } from '../../../types';
 import { audioApi, type AudioCatalog, type AudioThread } from '../api';
 import { MODE_LABEL } from '../ops';
 import { audioScope } from '../scope';
-import { stripModel } from '../strip/SoundStrip';
 import { launchFromComposer } from '../thread/actions';
 import {
-  focusThread, getCatalog, getFocusedThread, getJobsOf, mutate, suggestPrompt, useAudioThreads, type JobProgress,
+  focusThread, getCatalog, getFocusedThread, getJobsOf, getPrefs, getShortcutMode, mutate, suggestPrompt, useAudioThreads,
+  type JobProgress,
 } from '../thread/threadStore';
+import { promptLaunch, promptRunLabel } from './promptLaunch';
 import { launchOf, launchVersions } from '../thread/model';
 import {
   asMode, cancelLine, opTitle, parseDenial, parseFocus, parseLaunch, parseReady, priceText, stateLine, str, voicesLine,
@@ -261,7 +262,10 @@ export function AudioPromptCard({ ctx }: { ctx: ChatItemToolCtx }) {
   const scope = audioScope(ctx.projectId);
   useAudioThreads(scope, ctx.sessionId);
   const thread = getFocusedThread(ctx.sessionId);
-  const price = thread ? stripModel(ctx.projectId, ctx.sessionId, thread).launch.price : null;
+  // Запуск — по режиму и модели карточки, если агент их назвал, иначе по полосе; цена — того, что пойдёт
+  const planned = thread
+    ? promptLaunch(thread, getPrefs(scope), getCatalog(scope), getShortcutMode(ctx.sessionId) ?? 'voice', { mode, model: str(input.model) })
+    : null;
   const [busy, setBusy] = useState(false);
   const [launched, setLaunched] = useState(false);
 
@@ -271,7 +275,7 @@ export function AudioPromptCard({ ctx }: { ctx: ChatItemToolCtx }) {
   const generate = async () => {
     if (!thread || !ctx.sessionId) return;
     setBusy(true);
-    const ok = await launchFromComposer(scope, ctx.sessionId, thread, prompt);
+    const ok = await launchFromComposer(scope, ctx.sessionId, thread, prompt, planned?.override);
     setBusy(false);
     if (ok) setLaunched(true);
   };
@@ -292,7 +296,7 @@ export function AudioPromptCard({ ctx }: { ctx: ChatItemToolCtx }) {
           </Button>
           <Button size="sm" variant="primary" loading={busy} disabled={busy || launched}
             leftIcon={launched ? ic(Check) : ic(Sparkles)} onClick={() => { void generate(); }}>
-            {launched ? 'Запущено' : price ? `Сгенерировать · ${price}` : 'Сгенерировать'}
+            {launched ? 'Запущено' : planned ? promptRunLabel(planned) : 'Сгенерировать'}
           </Button>
         </Acts>
       ) : (

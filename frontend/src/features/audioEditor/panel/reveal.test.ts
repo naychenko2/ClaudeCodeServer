@@ -33,7 +33,7 @@ beforeEach(() => {
 describe('автооткрытие панели «Звук» по действию человека', () => {
   it('ярлык «Голос» открывает панель на «Настройках», пока её в чате не закрывали', () => {
     openSoundShortcut('s1', 'voice');
-    expect(reveals()).toEqual([{ key: 'sound', tab: 'settings' }]);
+    expect(reveals()).toEqual([{ key: 'sound', tab: 'settings', sessionId: 's1' }]);
     expect(getShortcutMode('s1')).toBe('voice');
   });
 
@@ -43,14 +43,14 @@ describe('автооткрытие панели «Звук» по действи
     expect(reveals()).toEqual([]);
     expect(getShortcutMode('s1')).toBe('music');
     openSoundShortcut('s2', 'voice');
-    expect(reveals()).toEqual([{ key: 'sound', tab: 'settings' }]);
+    expect(reveals()).toEqual([{ key: 'sound', tab: 'settings', sessionId: 's2' }]);
   });
 
   it('выбор звука человеком открывает панель; отказ сервера — не открывает', async () => {
     __applyThreads('s1', 'p1', { focus: null, revision: 1, threads: [] });
     vi.spyOn(audioApi, 'focus').mockResolvedValueOnce({ focus: 't1', revision: 2, threads: [] });
     expect(await selectThreadByHuman('p1', 's1', 't1')).toBe(true);
-    expect(reveals()).toEqual([{ key: 'sound', tab: 'settings' }]);
+    expect(reveals()).toEqual([{ key: 'sound', tab: 'settings', sessionId: 's1' }]);
     dispatched.length = 0;
     vi.spyOn(audioApi, 'focus').mockRejectedValueOnce(new Error('нет'));
     expect(await selectThreadByHuman('p1', 's1', 't1')).toBe(false);

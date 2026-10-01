@@ -12,6 +12,7 @@ import {
   type AudioThreadsState,
 } from '../api';
 import type { AudioSelection } from '../player/selection';
+import type { ConcatPiece } from '../panel/inputs';
 
 export const SOUND_STRIP = 'sound';
 export const SOUND_PANEL = 'sound';
@@ -216,7 +217,8 @@ const _selections = new Map<string, ThreadSelection>();
 const _pieceField = new Map<string, string>();
 // Просьба карточки к панели переключить операцию («Обрезать», «Перегенерировать кусок»); seq растёт
 // на каждую просьбу — панель отрабатывает каждую ровно раз
-export interface OperationRequest { threadId: string; op: AudioOp; seq: number }
+// piece — у склейки «с другим звуком»: этот звук встаёт первым куском
+export interface OperationRequest { threadId: string; op: AudioOp; seq: number; piece?: ConcatPiece }
 const _opRequests = new Map<string, OperationRequest>();
 
 export function getSelection(sessionId: string | null, threadId: string | null): ThreadSelection | null {
@@ -242,9 +244,9 @@ export function setPieceFieldOpen(sessionId: string, threadId: string | null) {
 export const getPieceFieldOpen = (sessionId: string | null): string | null => (sessionId && _pieceField.get(sessionId)) || null;
 
 // Кнопка под выделением: панель «Звук» на «Настройках», операция — по просьбе
-export function requestOperation(sessionId: string, threadId: string, op: AudioOp) {
+export function requestOperation(sessionId: string, threadId: string, op: AudioOp, piece?: ConcatPiece) {
   const seq = (_opRequests.get(sessionId)?.seq ?? 0) + 1;
-  _opRequests.set(sessionId, { threadId, op, seq });
+  _opRequests.set(sessionId, { threadId, op, seq, ...(piece ? { piece } : {}) });
   emit();
   revealWorkspacePanel(SOUND_PANEL, 'settings');
 }

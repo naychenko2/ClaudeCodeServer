@@ -142,7 +142,7 @@ function StemRow({
           type="range" min={GAIN_MIN_DB} max={GAIN_MAX_DB} step={1} value={gain}
           aria-label={`Громкость стема ${stem.name}, дБ`} title="Громкость стема в сведении"
           onChange={e => onGain(Number(e.target.value))}
-          style={{ width: 80, accentColor: C.accent }}
+          style={{ width: 80, accentColor: C.textSecondary }}
         />
         <span style={{ width: 26, textAlign: 'right', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary }}>
           {gain > 0 ? `+${gain}` : gain < 0 ? `−${-gain}` : '0'}

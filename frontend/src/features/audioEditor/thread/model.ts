@@ -82,8 +82,18 @@ export interface ExtraFile { role: string; label: string; ext: string; name: str
 
 export const isStem = (f: AudioVersionFile) => f.role.startsWith(STEM_PREFIX);
 
+// Подпись стема в интерфейсе — по-русски; роль (stem:vocals) и имя файла остаются латиницей:
+// по роли сводит сервер и обращается агент
+const STEM_LABEL: Record<string, string> = {
+  vocals: 'вокал', lead_vocals: 'основной вокал', lead: 'основной вокал', backing_vocals: 'бэк-вокал', backing: 'бэк-вокал',
+  instrumental: 'минус', accompaniment: 'минус', no_vocals: 'минус', other: 'прочее', drums: 'барабаны', bass: 'бас',
+  guitar: 'гитара', piano: 'пианино', keyboard: 'клавишные', percussion: 'перкуссия', strings: 'струнные',
+  synth: 'синтезатор', fx: 'эффекты', brass: 'медные', woodwinds: 'деревянные духовые', music: 'музыка', speech: 'речь',
+};
+export const stemLabel = (name: string): string => STEM_LABEL[name.toLowerCase()] ?? name;
+
 export const versionStems = (v: AudioThreadVersion): StemFile[] =>
-  v.files.filter(isStem).map(f => ({ id: f.role, name: f.role.slice(STEM_PREFIX.length), path: f.path }));
+  v.files.filter(isStem).map(f => ({ id: f.role, name: stemLabel(f.role.slice(STEM_PREFIX.length)), path: f.path }));
 
 const EXTRA_LABEL: Record<string, string> = {
   score: 'Ноты ABC',
@@ -106,9 +116,19 @@ export function extraFiles(v: AudioThreadVersion): ExtraFile[] {
 }
 const rank = (role: string) => { const i = EXTRA_ORDER.indexOf(role); return i < 0 ? EXTRA_ORDER.length : i; };
 
+// Имя файла черновика без файла при «Сохранить в проект» — по имени нити («anthem.mp3» → «anthem»):
+// без него сервер звал группу «audio», и стемы песни ложились в «audio.stems/». Запрещённые в
+// имени файла символы заменяем, пустое имя — «audio», как у сервера
+export function draftStem(thread: AudioThread): string {
+  const raw = (thread.name ?? '').trim();
+  const noExt = /\.[A-Za-z0-9]{1,5}$/.test(raw) ? raw.slice(0, raw.lastIndexOf('.')) : raw;
+  const clean = noExt.replace(/[<>:"/\\|?*]/g, '-').replace(/^\.+/, '').trim();
+  return clean || 'audio';
+}
+
 // Папка стемов при сохранении в проект: «podcast-intro.stems/»
 export function stemsFolder(thread: AudioThread): string {
-  return `${thread.file ? stemOf(thread.file) : 'audio'}.stems/`;
+  return `${thread.file ? stemOf(thread.file) : draftStem(thread)}.stems/`;
 }
 
 // ── Лицензия ──

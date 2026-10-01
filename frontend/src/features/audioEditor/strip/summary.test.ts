@@ -22,7 +22,7 @@ import type { AudioCatalog, AudioPrefs, AudioThread } from '../api';
 import { soundShortcuts } from '../manifest';
 import { __applyThreads, __resetAudioStore, __setScopeData, getShortcutMode, handleEvent, SOUND_STRIP } from '../thread/threadStore';
 import { soundStripStatus, stripModel } from './SoundStrip';
-import { queueBadge, resolveLaunch, soundSummary } from './summary';
+import { queueBadge, resolveLaunch, soundSummary, soundSummaryMobile } from './summary';
 
 const CAPS = { languages: ['ru'], voiceKinds: [], producesFiles: ['main'], license: { label: 'Apache-2.0', kind: 'permissive' as const } };
 const CATALOG: AudioCatalog = {
@@ -56,6 +56,12 @@ beforeEach(() => {
 });
 
 describe('сводка полосы «Звук»', () => {
+  it('правка без ИИ — без поставщика, модели и вариантов: «Обработка · Склеить · без ИИ»', () => {
+    const L = resolveLaunch(thread({ settings: { mode: 'process', operation: 'concat', provider: null, model: null, fields: null } }), PREFS, CATALOG, 'voice');
+    expect(soundSummary({ focus: null, launch: L }, true)).toBe('Обработка · Склеить · без ИИ');
+    expect(soundSummaryMobile(L)).toBe('Обработка · без ИИ');
+  });
+
   it('без настроек — режим ярлыка, первая операция, первый доступный поставщик и «Авто»', () => {
     const L = resolveLaunch(null, PREFS, CATALOG, 'voice');
     expect(soundSummary({ focus: null, launch: L }, true)).toBe('Голос · Озвучить · Локально · Qwen3-TTS 1.7B · 1 вар. · бесплатно');
@@ -111,7 +117,7 @@ describe('полоса «Звук» по стору', () => {
     music.onSelect();
     expect(getShortcutMode('s1')).toBe('music');
     expect(getActiveStrip('s1', ['git', SOUND_STRIP])).toBe(SOUND_STRIP);
-    expect(dispatched).toEqual([expect.objectContaining({ type: 'cc-reveal-panel', init: { detail: { key: 'sound', tab: 'settings' } } })]);
+    expect(dispatched).toEqual([expect.objectContaining({ type: 'cc-reveal-panel', init: { detail: { key: 'sound', tab: 'settings', sessionId: 's1' } } })]);
     expect(soundStripStatus('p1', 's1')).toBe('Звук не выбран · Музыка · Песня · Локально · ACE-Step 1.5 XL · 1 вар. · бесплатно');
   });
 });

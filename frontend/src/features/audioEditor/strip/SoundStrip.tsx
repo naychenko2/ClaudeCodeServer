@@ -9,7 +9,7 @@ import { useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { AudioLines, ChevronDown, ChevronRight, ChevronUp, Cpu, Sparkles, X } from 'lucide-react';
 import type { User } from 'lucide-react';
-import { Button, Chip, IconButton, C, FS, R, SP, ICON_SIZE, ICON_STROKE, revealWorkspacePanel } from 'aihome_shell/kit';
+import { Button, Chip, IconButton, C, FS, R, SP, ICON_SIZE, ICON_STROKE, revealWorkspacePanel, useGenerationSheet } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import { audioScope, isPersonalScope } from '../scope';
 import { createDraft, releaseFocus } from '../thread/actions';
@@ -63,6 +63,8 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const thread = state.focus ? state.threads.find(t => t.id === state.focus) ?? null : null;
   const m = stripModel(ctx.projectId, sessionId, thread);
   const [drafting, setDrafting] = useState(false);
+  // Уже 800 панель встаёт шторкой над полем ввода, а не колонкой справа
+  const narrow = useGenerationSheet();
 
   const openSettings = () => revealWorkspacePanel(SOUND_PANEL, 'settings');
   const draft = async () => {
@@ -136,13 +138,13 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
         </span>
       ) : (
         <span data-sound-settings-toggle="" style={{ display: 'inline-flex', minWidth: 0, flex: '0 1 auto' }}>
-          <Button size="xs" variant="secondary" title="Настройки открываются в панели «Звук» справа" onClick={openSettings}
+          <Button size="xs" variant="secondary" title={narrow ? 'Открыть настройки панели «Звук»' : 'Настройки открываются в панели «Звук» справа'} onClick={openSettings}
             style={{ minWidth: 0, flex: '0 1 auto', height: 28, border: `1px solid ${C.border}`, background: C.bgWhite }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {isMobile ? soundSummaryMobile(m.launch) : soundSummary({ focus: m.focus, launch: m.launch }, true)}
               </span>
-              {ic(isMobile ? ChevronUp : ChevronRight)}
+              {ic(narrow ? ChevronUp : ChevronRight)}
             </span>
           </Button>
         </span>

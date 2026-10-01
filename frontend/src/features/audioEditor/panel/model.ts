@@ -6,15 +6,14 @@ import type {
   AudioCatalog, AudioMode, AudioModelInfo, AudioOp, AudioParamField, AudioParamSchema, AudioPrefs, AudioProvider,
   AudioOpInputs, AudioQuote, AudioThread, AudioThreadSettings,
 } from '../api';
-import { defaultOp, OPS, opInfo, type OpInfo } from '../ops';
+import { defaultOp, isNoAi, NO_AI_OPS, OPS, opInfo, type OpInfo } from '../ops';
 import { resolveLaunch, type ResolvedLaunch } from '../strip/summary';
 import type { AudioSelection } from '../player/selection';
 import { LIBRARY_VOICE_OPS, projectInputs, toServerInputs, type PanelInputs } from './inputs';
 import { musicReason, type MusicInputs } from './music';
 
 // Правки без ИИ: поставщика и модели у них нет, бегут ffmpeg на сервере
-export const NO_AI_OPS: ReadonlySet<AudioOp> = new Set(['trim', 'gainFade', 'normalize', 'mixStems', 'concat']);
-export const isNoAi = (op: AudioOp) => NO_AI_OPS.has(op);
+export { NO_AI_OPS, isNoAi };
 
 // Громкость, затухание и нормализация живут внутри «Обрезки и громкости», сведение стемов — в карточке
 const HIDDEN_OPS: ReadonlySet<AudioOp> = new Set(['gainFade', 'normalize', 'mixStems']);

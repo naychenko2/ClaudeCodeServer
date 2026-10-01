@@ -203,7 +203,7 @@ export function AudioPlayer({
             <input
               type="range" min={0} max={100} step={1} value={Math.round(volume * 100)} aria-label="Громкость"
               onChange={e => { setVolume(Number(e.target.value) / 100); setMuted(false); }}
-              style={{ width: 96, accentColor: C.accent }}
+              style={{ width: 96, accentColor: C.textSecondary }}
             />
           </div>
         </div>

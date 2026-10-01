@@ -6,7 +6,7 @@
 // AudioPrefsResolver на бэкенде. Режим задаёт нить; без её настроек — ярлык «Голос» / «Музыка».
 
 import type { AudioCatalog, AudioMode, AudioModelInfo, AudioOp, AudioPrefs, AudioProvider, AudioThread } from '../api';
-import { defaultOp, MODE_LABEL, opInfo } from '../ops';
+import { defaultOp, isNoAi, MODE_LABEL, opInfo } from '../ops';
 import type { JobProgress } from '../thread/threadStore';
 
 export interface ResolvedLaunch {
@@ -86,16 +86,19 @@ export interface SoundSummaryParts {
 }
 
 // short — кнопка-сводка: «Голос · Озвучить · Локально · Qwen3-TTS 1.7B · Аня · 2 вар. · бесплатно»;
-// иначе — строка целиком: «Работаем с: intro.mp3 · версия 3 · …» / «Звук не выбран · …»
+// иначе — строка целиком: «Работаем с: intro.mp3 · версия 3 · …» / «Звук не выбран · …».
+// У правок без ИИ поставщика, модели и вариантов нет: «Обработка · Склеить · без ИИ»
 export function soundSummary({ focus, launch: L }: SoundSummaryParts, short = false): string {
   const model = L.model?.label ?? (L.auto ? 'Авто' : null);
-  const body = [MODE_LABEL[L.mode], opInfo(L.op)?.label, L.provider?.label, model, L.voice, `${L.count} вар.`, L.price];
+  const body = isNoAi(L.op)
+    ? [MODE_LABEL[L.mode], opInfo(L.op)?.label, 'без ИИ']
+    : [MODE_LABEL[L.mode], opInfo(L.op)?.label, L.provider?.label, model, L.voice, `${L.count} вар.`, L.price];
   if (short) return body.filter(Boolean).join(' · ');
   return [focus ? `Работаем с: ${focus}` : 'Звук не выбран', ...body].filter(Boolean).join(' · ');
 }
 
 // Телефон: «Голос · бесплатно»
-export const soundSummaryMobile = (L: ResolvedLaunch) => [MODE_LABEL[L.mode], L.price].filter(Boolean).join(' · ');
+export const soundSummaryMobile = (L: ResolvedLaunch) => [MODE_LABEL[L.mode], isNoAi(L.op) ? 'без ИИ' : L.price].filter(Boolean).join(' · ');
 
 const eta = (sec: number) => (sec < 60 ? `${sec} с` : `${Math.round(sec / 60)} мин`);
 

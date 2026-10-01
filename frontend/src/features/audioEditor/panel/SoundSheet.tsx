@@ -1,11 +1,12 @@
-// Шторка панели «Звук» на телефоне (макет audio-editor-v2-proposal.md, «Телефон 360 px»).
-// Рабочей области справа на телефоне нет, и хост панели workspace-panel-def там не рисует, поэтому
+// Шторка панели «Звук» в узком окне (макет audio-editor-v2-proposal.md, «Телефон 360 px»).
+// Уже GEN_PANEL_INLINE_MIN панели генерации нет места в зоне (genPanelPlacement), поэтому
 // вклад composer-chip (смонтирован в каждом чате, какая бы полоса ни была выбрана) поднимает ту же
 // SoundPanel шторкой по тому же запросу показа панели: кнопка-сводка, ярлык, «Новый звук».
+// Портала здесь нет: поднятую шторку каркас сам уносит в body, а опущенная стоит в потоке над
+// полем ввода и не закрывает его нижний ряд.
 
 import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { FLAGS, REVEAL_PANEL_EVENT, markGenPanelDismissed, useFeature, type RevealPanelDetail } from 'aihome_shell/kit';
+import { FLAGS, REVEAL_PANEL_EVENT, markGenPanelDismissed, useFeature, useGenerationSheet, type RevealPanelDetail } from 'aihome_shell/kit';
 import type { ComposerChipCtx } from '../../../lib/subsystems/registryCore';
 import { SOUND_PANEL } from '../thread/threadStore';
 import { SoundPanel } from './SoundPanel';
@@ -25,23 +26,26 @@ if (typeof window !== 'undefined') {
 export function SoundSheet({ ctx }: { ctx: ComposerChipCtx }) {
   const on = useFeature(FLAGS.audioEditor);
   const [open, setOpen] = useState(false);
-  const { isMobile, sessionId } = ctx;
+  const { sessionId } = ctx;
+  const narrow = useGenerationSheet();
   // Смена чата закрывает шторку; эффект стоит первым, чтобы при монтировании не погасить запрос
   useEffect(() => { setOpen(false); }, [sessionId]);
   useEffect(() => {
-    // На десктопе запрос забирает рабочая область — здесь его только гасим
-    const pull = () => { if (take() && isMobile) setOpen(true); };
+    // В широком окне запрос забирает рабочая область — здесь его только гасим
+    const pull = () => { if (take() && narrow) setOpen(true); };
     pull();
     subs.add(pull);
     return () => { subs.delete(pull); };
-  }, [isMobile]);
+  }, [narrow]);
 
-  if (!on || !isMobile || !open || typeof document === 'undefined') return null;
-  return createPortal(
-    <SoundPanel ctx={{
-      projectId: ctx.projectId, sessionId, isMobile: true,
-      onClose: () => { markGenPanelDismissed(sessionId, SOUND_PANEL); setOpen(false); },
-    }} />,
-    document.body,
+  if (!on || !narrow || !open) return null;
+  // Во всю ширину ряда чипов: опущенная шторка — блок над полем ввода, а не чип
+  return (
+    <div data-sound-sheet="" style={{ flexBasis: '100%', minWidth: 0 }}>
+      <SoundPanel ctx={{
+        projectId: ctx.projectId, sessionId, isMobile: true,
+        onClose: () => { markGenPanelDismissed(sessionId, SOUND_PANEL); setOpen(false); },
+      }} />
+    </div>
   );
 }

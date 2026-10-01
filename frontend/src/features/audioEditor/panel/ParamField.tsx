@@ -52,7 +52,7 @@ export function ParamField({ field, value, onChange, label }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
         <input type="range" min={field.min!} max={field.max!} step={step} value={cur} disabled={off} aria-label={title}
           onChange={e => onChange(integer ? Math.round(Number(e.target.value)) : Number(e.target.value))}
-          style={{ flex: 1, minWidth: 0, accentColor: C.accent }} />
+          style={{ flex: 1, minWidth: 0, accentColor: C.textSecondary }} />
         <span style={{ fontSize: FS.sm, color: value === undefined ? C.textMuted : C.textPrimary, minWidth: 36, textAlign: 'right' }}>
           {Math.round(cur * 100) / 100}
         </span>

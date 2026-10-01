@@ -9,7 +9,7 @@
 // поле операции.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AudioLines, Cpu, Lock, Mic, SlidersHorizontal, X } from 'lucide-react';
+import { AudioLines, Combine, Cpu, Lock, Mic, Scissors, SlidersHorizontal, X } from 'lucide-react';
 import {
   Badge, GenerationPanel, IconButton, SegmentedControl, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
   type GenerationFoot, type RevealPanelDetail,
@@ -41,6 +41,7 @@ import { heavyWarning, licenseWarning } from './music';
 import { MusicFields } from './MusicFields';
 import { ProcessFields, trimReady, VoiceFields } from './OpFields';
 import { pendingOperation, takeOperation } from './opRequest';
+import { withFirstPiece } from '../thread/procMenu';
 import { readPiece } from './piece';
 import type { PieceBinding } from './PieceField';
 import { AdvancedForm } from './ParamField';
@@ -95,6 +96,8 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const thread = threads.focus ? threads.threads.find(t => t.id === threads.focus) ?? null : null;
   const catalog = getCatalog(scope);
   const [tab, setTab] = useState<Tab>(() => takeWanted() ?? 'settings');
+  // Опущенная шторка держит низ с ценой и запуском на любой вкладке: ради него её и опускают
+  const [peeked, setPeeked] = useState(false);
 
   useEffect(() => {
     const on = () => { const t = takeWanted(); if (t) setTab(t); };
@@ -140,7 +143,15 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     if (!r) return;
     setTab('settings');
     const mode = opInfo(r.op)?.mode;
-    if (mode && (r.op !== state.op || mode !== state.mode)) change({ mode, operation: r.op });
+    // «Склеить с другим звуком»: эта версия — первым куском, одним сохранением с операцией
+    if (mode && r.piece) {
+      // Входы — из хранилища самой нити: local ещё может держать прежнюю, фокус только что сменился
+      const cur = mergeInputs(readInputs(key), state.inputs, threads.threads);
+      const next = { ...cur, concat: withFirstPiece(cur.concat, r.piece) };
+      writeInputs(key, next);
+      setLocal(next);
+      change({ mode, operation: r.op, inputs: toServerInputs(r.op, next, pieceForServer, personal) });
+    } else if (mode && (r.op !== state.op || mode !== state.mode)) change({ mode, operation: r.op });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- отрабатываем по новой просьбе или смене нити
   }, [opReq?.seq, threadId, sessionId]);
 
@@ -302,6 +313,8 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       pieces: inputs.concat.pieces.length,
     }),
     runLabel: busy ? 'Запускаем…' : opInfo(state.op)?.run ?? 'Запустить',
+    // Правка без ИИ: значок самой правки вместо ✦ и без «− N +» — результат всегда один
+    ...(noAi ? { runIcon: ic(state.op === 'concat' ? Combine : Scissors), noCount: true } : {}),
     onRun: () => { void run(); },
     ...(single
       ? { maxCount: 1 as const, maxCountHint: 'Правка без ИИ даёт один результат' }
@@ -441,8 +454,11 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       tab={tab}
       onTabChange={setTab}
       context={context}
-      foot={tab === 'settings' ? foot : undefined}
-      peekSummary={[subtitle, state.provider?.label, state.model?.label].filter(Boolean).join(' · ')}
+      foot={tab === 'settings' || (peeked && ctx.isMobile) ? foot : undefined}
+      peeked={peeked}
+      onPeekedChange={setPeeked}
+      // Подзаголовок уже в шапке опущенной шторки: в сводке — с чем работаем и чем
+      peekSummary={[thread ? focusLabel(thread) : 'Новый звук', noAi ? null : state.provider?.label, noAi ? null : state.model?.label].filter(Boolean).join(' · ')}
       onClose={ctx.onClose}
       layout={ctx.isMobile ? 'sheet' : 'column'}
     >

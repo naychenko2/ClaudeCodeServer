@@ -12,8 +12,9 @@ local-media — [ADR-020](../../docs/adr/ADR-020-local-media-audio.md).
 **Форма — динамический модуль, как ImageEditor**: Main ссылается с `ReferenceOutputAssembly="false"`,
 dll копируется в `modules/audio-editor/` двумя целями (`Build` и `Publish`), `ModuleLoader` грузит её по
 записи `DynamicModules` с ключом `audioeditor`. Ссылка — **только на Core**, своих пакетов нет
-(`DynamicModulePackagesGuardTests`). Фронта у модуля пока нет: в хосте заведён только ключ панели
-`sound` (`panelCatalog.ts`); MF-remote `frontend/modules/audio-editor` — отдельный этап ADR-021.
+(`DynamicModulePackagesGuardTests`). Фронт — MF-remote `frontend/modules/audio-editor` (манифест
+подсистемы), код фичи — `frontend/src/features/audioEditor` (полоса, панель `sound`, «Голоса»); ручки —
+раздел звука в [api.md](../../docs/architecture/api.md).
 
 Состав: `Controllers/` (проектные `api/projects/{id}/audio-editor/*`, личные
 `api/audio-editor/chats/{sessionId}/*`, схема «Дополнительно» `api/audio-editor/schema`, «Голоса»;
@@ -43,7 +44,9 @@ dll копируется в `modules/audio-editor/` двумя целями (`Bu
   «поставщик + модель»; отказ возвращает `RetryQuote` соседа с той же операцией и тем же видом голоса,
   запускает его только человек. Клон у одного поставщика — не клон у другого: клон MiniMax соседом на
   Qwen-клон не заменяется.
-- **Деньги — только quote → job**: котировка живёт 10 минут, `params` проверяются и в котировке, и в
+- **Деньги — только quote → job**: котировка живёт 10 минут и хранит всё, от чего зависит цена (текст,
+  подводка, слова, длительность, итог `params`); запуск с другими значениями — отказ «Котировка не
+  соответствует запросу» до поставщика. `params` проверяются и в котировке, и в
   запуске (неизвестный ключ, общее поле в `params`, тип, границы — `invalid_request` с именем поля до
   денег и очереди). Трата пишется в момент принятия задачи поставщиком, на владельца, в своей валюте
   (`CostUsd` fal, `CostCredits` Higgsfield, `CostRub` Яндекс с источником `tts`; не складываются), у local

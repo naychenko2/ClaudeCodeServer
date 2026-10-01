@@ -99,6 +99,7 @@ public sealed class AudioEditJobService : IDisposable
         public string? ThreadId { get; set; }
         public AudioEditInitiator Initiator { get; init; }
         public string SpendLabel { get; init; } = "";
+        public string SpendSource { get; init; } = "";
         public AudioEditJobStatus Status { get; set; } = AudioEditJobStatus.Queued;
         public int Variant { get; set; } = 1;
         public int? QueuePosition { get; set; }
@@ -155,6 +156,7 @@ public sealed class AudioEditJobService : IDisposable
                 return Fail<AudioQuoteDto>(AudioEditErrorCodes.ProviderUnavailable, $"Поставщик «{engine.Label}» сейчас недоступен");
             if (engine.ScopeRefusal(scope) is { } refusal)
                 return Fail<AudioQuoteDto>(AudioEditErrorCodes.ProviderUnavailable, refusal);
+            await RefreshModelsQuietly(engine, ct);
             model = Pick(engine, op, modelId, voiceKind);
             if (model is null)
                 return Fail<AudioQuoteDto>(AudioEditErrorCodes.InvalidRequest,
@@ -162,8 +164,9 @@ public sealed class AudioEditJobService : IDisposable
         }
         else
         {
-            (engine, model) = AudioCatalog.Available(_engines)
-                .Where(e => e.ScopeRefusal(scope) is null)
+            var candidates = AudioCatalog.Available(_engines).Where(e => e.ScopeRefusal(scope) is null).ToList();
+            foreach (var candidate in candidates) await RefreshModelsQuietly(candidate, ct);
+            (engine, model) = candidates
                 .Select(e => (Engine: e, Model: Pick(e, op, modelId, voiceKind)))
                 .FirstOrDefault(p => p.Model is not null);
             if (engine is null || model is null)
@@ -291,6 +294,7 @@ public sealed class AudioEditJobService : IDisposable
                 CreatedAt = Now(),
                 Initiator = input.Initiator,
                 SpendLabel = SpendLabelOf(quote, input),
+                SpendSource = engine.SpendSource,
             };
             _jobs[job.Id] = job;
         }
@@ -545,7 +549,7 @@ public sealed class AudioEditJobService : IDisposable
                 Initiator = job.Initiator == AudioEditInitiator.Agent ? SpendInitiators.Agent : SpendInitiators.Human,
                 Provider = job.Quote.Provider,
                 Model = job.Quote.Model.Id,
-                Source = job.Quote.Provider,
+                Source = job.SpendSource,
                 CostUsd = unit is AudioPriceUnits.Credits or AudioPriceUnits.Rub ? null : amount,
                 CostCredits = unit == AudioPriceUnits.Credits ? amount : null,
                 CostRub = unit == AudioPriceUnits.Rub ? amount : null,
@@ -676,7 +680,8 @@ public sealed class AudioEditJobService : IDisposable
     // Модель поставщика под операцию и вид голоса: «Авто» — первая подходящая, явная — только она
     private static AudioModelInfo? Pick(IAudioEngine engine, AudioOp op, string? modelId, AudioVoiceKind? kind)
     {
-        bool Fits(AudioModelInfo m) => m.Caps.Ops.Contains(op) && (kind is null || m.Caps.VoiceKinds.Contains(kind.Value));
+        bool Fits(AudioModelInfo m) =>
+            m.DisabledReason is null && m.Caps.Ops.Contains(op) && (kind is null || m.Caps.VoiceKinds.Contains(kind.Value));
         return AudioCatalog.IsAuto(modelId)
             ? engine.Models.FirstOrDefault(Fits)
             : engine.Models.FirstOrDefault(m => string.Equals(m.Id, modelId!.Trim(), StringComparison.OrdinalIgnoreCase) && Fits(m));
@@ -684,6 +689,16 @@ public sealed class AudioEditJobService : IDisposable
 
     private static bool IsAuto(string? provider) =>
         string.IsNullOrWhiteSpace(provider) || string.Equals(provider.Trim(), AudioCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase);
+
+    // Живой каталог поставщика: сбой обновления — не отказ котировки, остаётся прежний список
+    private async Task RefreshModelsQuietly(IAudioEngine engine, CancellationToken ct)
+    {
+        try { await engine.RefreshModelsAsync(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogDebug(ex, "Звук: каталог поставщика {Provider} не обновился", engine.Key);
+        }
+    }
 
     private static bool SafeEnabled(IAudioEngine engine)
     {

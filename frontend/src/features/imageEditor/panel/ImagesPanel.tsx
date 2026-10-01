@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react';
 import { Contact, Image as ImageIcon, Plus, SlidersHorizontal, Users, X } from 'lucide-react';
 import {
-  Button, EmptyState, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE, showToast, submitComposerMode,
+  Button, EmptyState, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE, showToast, submitComposerMode, useAgentPick,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
@@ -25,7 +25,7 @@ import { SettingsSections } from '../strip/settings/SettingsSections';
 import { IMAGE_COMPOSER_MODE } from '../composer/imageMode';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { focusLabel, isEmptyThread } from '../thread/model';
-import { useThreads } from '../thread/threadStore';
+import { imageDraftKey, useThreads } from '../thread/threadStore';
 import type { ImageThread } from '../thread/threadsApi';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 import { ONE_VARIANT_HINT } from './panelOp';
@@ -70,6 +70,7 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
   const [editing, setEditing] = useState<CharacterEditing>(null);
   const { name: characterName } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
   useMarkImagesPanelShown(layout === 'column');
+  const agentPick = useAgentPick(sessionId, IMAGES_PANEL);
 
   useEffect(() => {
     const on = () => { const t = takeWanted(); if (t) setTab(t); };
@@ -89,7 +90,6 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
           <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             Работаем с: <b style={{ color: C.textHeading }}>{focusLabel(thread, true, personal)}</b>
           </span>
-          <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>
         </>
       )
       : (
@@ -97,7 +97,6 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
           <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             <b style={{ color: C.textHeading }}>Новая картинка</b> · результат ляжет в ленту новой карточкой
           </span>
-          {thread && <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>}
         </>
       )
     : personal ? undefined : <span>Папка <code>characters/</code> проекта · подключённый персонаж уходит в каждую генерацию</span>;
@@ -154,6 +153,12 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
       tab={tab}
       onTabChange={setTab}
       context={context}
+      contextAction={tab === 'settings' && thread
+        ? <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>
+        : undefined}
+      panelKey={IMAGES_PANEL}
+      agentPick={agentPick}
+      draftKey={thread ? imageDraftKey(thread.id) : null}
       foot={foot}
       footContent={footContent}
       // Поставщик и модель уже в подзаголовке шапки строкой выше: в сводке — только выбор

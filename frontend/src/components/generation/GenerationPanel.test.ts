@@ -69,4 +69,12 @@ describe('шторка каркаса панели генерации', () => {
     expect(html).not.toContain('Опустить до цены');
     expect(html).toContain('тело');
   });
+
+  it('правка без ИИ: без «− N +» и со своим значком запуска вместо ✦', () => {
+    const plain = renderToStaticMarkup(panel({ layout: 'column' }));
+    expect(plain).toContain('Сколько вариантов');
+    const html = renderToStaticMarkup(panel({ layout: 'column', foot: { ...foot, noCount: true, runIcon: createElement('i', { 'data-run-icon': '' }) } }));
+    expect(html).not.toContain('Сколько вариантов');
+    expect(html).toContain('data-run-icon');
+  });
 });

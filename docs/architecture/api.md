@@ -165,6 +165,75 @@ initiator, baseVersionId } }` — один на запуск; его верси�
 `save` — только человек: у агента такого MCP-инструмента нет (ADR-019, решение 1). Ручек чата
 картинки v2 (`image-editor/chats*`) больше нет.
 
+## Редактор звука (модуль `audioeditor`)
+
+Ручки модуля [ClaudeHomeServer.AudioEditor](../../backend/ClaudeHomeServer.AudioEditor/CLAUDE.md),
+решения — [ADR-021](../adr/ADR-021-audio-editor-and-generation-panel.md). Гейт один на все
+(`AudioEditScopeGate`): флаг `audio-editor` выключен, проект или чат чужой — `404`; модуль выключен
+конфигом — ручек нет (`404`). Ошибки — `{ error, code }`; коды: `invalid_request` — 400,
+`provider_unavailable`, `name_taken`, `revision_conflict`, `voice_clone_stale`, `voice_clone_missing` —
+409 (у протухшего клона ещё `recreate` — котировка пересоздания), `quote_not_found`, `thread_not_found`,
+`version_not_found`, `file_not_found`, `voice_not_found` — 404, `too_many_jobs`, `heavy_busy` — 429,
+`unavailable`, `dsp_unavailable` — 503.
+
+Области две, тела ручек общие (`AudioEditorEndpoints`): проект — база
+`/api/projects/{id}/audio-editor`, чат проекта — `…/sessions/{sid}`; личный чат вне проекта — база
+`/api/audio-editor/chats/{sid}` с теми же хвостами. У личной области нет сохранения в проект, «Голосов»,
+local и путей файлов проекта — отказ до диска.
+
+```
+GET                 …/catalog                          → поставщики, модели, caps, причины серых
+GET                 …/prefs                            → { voice, music, process } — выбор в полосе по режимам
+PUT                 …/prefs/{mode}                     { operation, provider, model, count, fields, inputs } → audio_prefs_changed
+POST                …/quote                            { mode, operation?, provider?, model?, count?, voiceKind?, sessionId?, threadId?,
+                                                       text?, prompt?, lyrics?, durationSec?, fields? } → котировка на 10 минут
+POST                …/jobs                             multipart: quoteId, sessionId? + threadId? [+ baseVersionId?], text, prompt,
+                                                       lyrics, language, durationSec, startSec, endSec, seed, params, reference |
+                                                       referencePath, clips | clipPaths, voiceModelPath, voiceIndexPath, voice
+                                                       (voice:<slug>) → 202 задача; тело до 500 МиБ
+GET/DELETE          …/jobs/{jobId}                     → задача / отмена
+GET                 /api/audio-editor/schema?provider=&model=&op=   → схема «Дополнительно» модели
+```
+
+Запуск — только по котировке и ровно на её паре «поставщик + модель». Текст, подводка, слова,
+длительность и итог `params` запуска обязаны совпасть с котированными: иначе `400 invalid_request`
+«Котировка не соответствует запросу — запросите цену заново», котировка при этом не сгорает.
+
+**Нити чата** (база чата: `…/sessions/{sid}` у проекта, `/api/audio-editor/chats/{sid}` у личного).
+Мутации несут `revision`: устарела — `409 revision_conflict`; ответ мутации — полное состояние.
+
+```
+GET                 …/state                            → { threads, catalog, prefs } одним запросом
+GET                 …/threads                          → { focus, revision, threads[] }
+POST                …/threads                          { file? | draftFolder?, mode?, revision } — взять звук в работу
+PUT                 …/threads/focus                    { threadId | null, revision }
+DELETE              …/threads/{threadId}?revision=     убрать нить без версий и идущих запусков
+PUT                 …/threads/{threadId}/settings      { settings, revision } — режим, операция, поставщик, модель, поля, входы
+PUT                 …/threads/{threadId}/current       { versionId, revision } — версия «в работе»
+GET                 …/threads/{threadId}/versions/{versionId}/files/{role}[?download=true]   файл версии по роли (Range)
+GET                 …/threads/{threadId}/versions/{versionId}/peaks                          пики волны
+POST                …/threads/{threadId}/edit          правка без ИИ (trim | gainFade | normalize | convert) → новая версия
+POST                …/threads/{threadId}/mix           { stems[], baseVersionId?, format?, revision? } — свести стемы → новая версия
+POST                …/concat                           { pieces[], joint?, joints?, normalizeLoudness?, name?, format? } → новая нить
+POST                …/threads/{threadId}/save          { versionId, mode?, folder?, fileName? } — только проект; занятое имя — 409 name_taken
+```
+
+**«Голоса»** — только серверный проект, база `/api/projects/{id}/audio-editor/voices`:
+
+```
+GET/POST            …/voices                           → список / создать из образцов (multipart, до 5 по 50 МБ)
+POST                …/voices/rvc                       создать из пары RVC проекта
+GET/PATCH/DELETE    …/voices/{slug}
+POST                …/voices/{slug}/samples            добавить образцы; DELETE …/samples/{file} — убрать
+POST                …/voices/{slug}/recreate?provider=minimax[&quoteId=]   две фазы: без quoteId — котировка, с ним — 202 задача
+GET                 …/voices/{slug}/files/{file}       образец или файл модели из манифеста
+```
+
+События в группу владельца: `audio_edit_progress`, `audio_edit_completed`, `audio_edit_failed` (у отказа —
+`retryQuote` соседа), `audio_thread_changed`, `audio_prefs_changed`. Агенту — MCP-сервер `audio-editor`:
+`audio_state`, `audio_focus`, `audio_new`, `audio_voices`, `audio_suggest_prompt`, а при
+`AudioEditor:AgentLaunch` ещё `audio_generate`, `audio_concat`, `audio_cancel`; сохранения у агента нет.
+
 ## SignalR-хаб `/hubs/session`
 
 Вторая половина контракта с фронтом: REST отдаёт состояние, хаб — живой ход. Источник правды —

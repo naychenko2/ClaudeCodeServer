@@ -33,11 +33,13 @@ import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
-import { Button, IconButton, Modal, Notice } from './ui';
+import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
+import { plusButtonTitle, useStripShortcuts } from './chat/ComposerStripHost';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
-import { nextComposerMode, nextPrefill, type ComposerModeSeen, type PrefillState } from '../lib/composerModes';
+import { modeDraftText, nextComposerMode, nextModeDraft, nextPrefill, type ComposerModeSeen, type ModeDraftState, type PrefillState } from '../lib/composerModes';
+import { getGenDraftText, setGenDraftText } from '../lib/genDrafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -610,6 +612,16 @@ export function Composer({
   const slotModes = useSlot<ComposerModeCtx, ComposerModeApi>(SLOT_COMPOSER_MODE)
     .filter(c => c.name && c.action && c.action.isAvailable(modeCtx));
   const slotChips = useSlot<ComposerChipCtx>(SLOT_COMPOSER_CHIP);
+  // Ярлыки полос («Голос», «Музыка») превращают «＋» в меню; без них «＋» прикрепляет сразу
+  const stripShortcuts = useStripShortcuts(project?.id ?? null, sessionId);
+  const [plusMenu, setPlusMenu] = useState<DOMRect | null>(null);
+  // Меню с якорем само Esc не ловит — как у переключателя полос
+  useEffect(() => {
+    if (!plusMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlusMenu(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [plusMenu]);
   const [modeId, setModeId] = useState<string | null>(null);
   // Самовключение режима по поводу от владельца (черновик, «Редактировать»): считаем по
   // состоянию, а не по клику — фокус картинки приходит и от агента, и после перезагрузки
@@ -623,18 +635,35 @@ export function Composer({
   // Режим пропал (условие стало ложным) — поле само возвращается в «Чат»
   const activeMode = slotModes.find(c => c.name === modeId)?.action ?? null;
   const [modeText, setModeText] = useState('');
+  useEffect(() => {
+    activeMode?.onTextChange?.(modeCtx, modeText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сообщаем только смену текста или режима
+  }, [modeText, modeId, sessionId]);
   // Затравка поля режима (например, промпт последнего запуска картинки) — правила в
   // nextPrefill. Считаем от значения поля этого рендера, а не в updater'е setModeText:
   // updater с записью в ref StrictMode зовёт дважды
   const modePrefill = activeMode?.prefill?.(modeCtx) ?? null;
   const prefillKey = modePrefill ? `${modeId}:${modePrefill.key}` : null;
   const prefillRef = useRef<PrefillState>({ key: null, auto: null });
+  // Черновик элемента (draftKey режима): сперва смена элемента, затем затравка — одним
+  // эффектом, чтобы затравка видела уже подменённое поле (nextModeDraft)
+  const draftKey = activeMode?.draftKey?.(modeCtx) ?? null;
+  const draftRef = useRef<ModeDraftState>({ key: null });
   useEffect(() => {
-    const r = nextPrefill(prefillRef.current, prefillKey ? { key: prefillKey, text: modePrefill!.text } : null, modeText);
+    const d = nextModeDraft(draftRef.current, draftKey, modeText, prefillRef.current.auto, getGenDraftText);
+    draftRef.current = d.state;
+    const r = nextPrefill(prefillRef.current, prefillKey ? { key: prefillKey, text: modePrefill!.text } : null, d.field);
     prefillRef.current = r.state;
     if (r.field !== modeText) setModeText(r.field);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- подставляем только на новый повод
-  }, [prefillKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- подставляем только на новый повод или элемент
+  }, [prefillKey, draftKey]);
+  // Набранное — черновиком своего элемента на каждой правке. Кадр смены элемента пропускаем:
+  // в поле ещё текст прежнего, его подменит эффект выше
+  const draftWriteKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (draftWriteKey.current !== draftKey) { draftWriteKey.current = draftKey; return; }
+    setGenDraftText(draftKey, modeDraftText(modeText, prefillRef.current.auto));
+  }, [modeText, draftKey]);
   // Преднастройка из раздела «Заметки»: «Спросить Claude про это» кладёт контекст
   // заметки в sessionStorage — забираем при появлении композера и по событию
   // (на случай, если чат уже открыт и композер смонтирован).
@@ -1491,10 +1520,31 @@ export function Composer({
 
   // --- Контролы (переиспользуются в обеих раскладках) ---
 
+  const closePlus = () => setPlusMenu(null);
+  const plusItems = (
+    <>
+      <MenuItem icon={<Paperclip size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} isMobile={isMobile}
+        label="Прикрепить файл" onClick={() => { closePlus(); onAttach(); }} />
+      <MenuSep />
+      {stripShortcuts.map(sc => (
+        <MenuItem key={sc.key} icon={sc.icon} isMobile={isMobile}
+          label={
+            <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span>{sc.title}</span>
+              {sc.hint && <span style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 1 }}>{sc.hint}</span>}
+            </span>
+          }
+          onClick={() => { closePlus(); sc.onSelect(); }} />
+      ))}
+    </>
+  );
   const attachButton = (
     <button
-      onClick={onAttach}
-      title="Прикрепить файл"
+      onClick={stripShortcuts.length > 0
+        ? (e) => setPlusMenu((e.currentTarget as HTMLElement).getBoundingClientRect())
+        : onAttach}
+      title={plusButtonTitle(stripShortcuts)}
+      aria-haspopup={stripShortcuts.length > 0 ? 'menu' : undefined}
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
@@ -1504,6 +1554,10 @@ export function Composer({
       <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   );
+  // Меню «＋»: на десктопе карточка у кнопки, на телефоне шторка — как у переключателя полос
+  const plusMenuNode = plusMenu && (isMobile
+    ? <Modal title="Добавить" onClose={closePlus}><div style={{ display: 'flex', flexDirection: 'column' }}>{plusItems}</div></Modal>
+    : <Menu anchor={plusMenu} onClose={closePlus} minWidth={260} maxWidth={340} maxHeight={260}>{plusItems}</Menu>);
 
   const slashButton = skills.length > 0 ? (
     <button
@@ -2714,6 +2768,8 @@ export function Composer({
     )}
 
     {phrasesEditOpen && <QuickPhrasesDialog onClose={() => setPhrasesEditOpen(false)} />}
+
+    {plusMenuNode}
 
     {pendingMode && (
       <DangerModeConfirm

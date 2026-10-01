@@ -16,6 +16,8 @@ import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
 import type { AuthState, ChatItem, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
+import { subscribeFlags } from '../featureFlags';
+import { noteReveal, openGenPanel } from '../genPanelOpen';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
 // Вклад в слот. Ровно два вида:
@@ -241,6 +243,17 @@ export interface ComposerStripApi {
   isAvailable?: (ctx: { projectId: string | null; sessionId: string | null }) => boolean;
   // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
   status?: (ctx: { projectId: string | null; sessionId: string | null }) => ReactNode;
+  // Ярлыки под списком полос в меню переключателя («Голос», «Музыка» у «Звука»): входы
+  // в полосу сразу в нужном режиме. Есть, только пока полоса доступна
+  shortcuts?: (ctx: { projectId: string | null; sessionId: string | null }) => ComposerStripShortcut[];
+}
+export interface ComposerStripShortcut {
+  key: string;
+  title: string;
+  // Подпись второй строкой: «озвучить текст, сменить голос, обучить»
+  hint?: string;
+  icon: ReactNode;
+  onSelect: () => void;
 }
 
 // Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.
@@ -259,6 +272,10 @@ export interface ComposerModeApi {
   // подставляется один раз и только в нетронутое поле. key отдавать и без текста
   // (text: null): повод фиксируется с первого рендера, а не с появления текста
   prefill?: (ctx: ComposerModeCtx) => { key: string; text: string | null } | null;
+  // Ключ элемента, черновиком которого считается текст режима (genDrafts): смена выбора
+  // уносит набранное в черновик прежнего элемента и возвращает в поле черновик нового.
+  // null — черновиков у режима сейчас нет
+  draftKey?: (ctx: ComposerModeCtx) => string | null;
   placeholder: (ctx: ComposerModeCtx) => string;
   // Подпись кнопки отправки: «✦ Изменить · ≈ $0.15»
   submitLabel?: (ctx: ComposerModeCtx) => ReactNode;
@@ -266,6 +283,9 @@ export interface ComposerModeApi {
   hint?: (ctx: ComposerModeCtx) => ReactNode;
   // Отправка мимо агента; текст режима хранится отдельно от черновика чата
   onSubmit: (ctx: ComposerModeCtx, text: string) => Promise<void> | void;
+  // Текст поля режима после каждой правки: панель режима считает по нему цену и
+  // запускает с ним же свою кнопку («Звук»)
+  onTextChange?: (ctx: ComposerModeCtx, text: string) => void;
 }
 
 // Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).
@@ -297,15 +317,30 @@ export interface WorkspacePanelDefApi {
 // событие окна с detail = { key, tab? }; слушают страница проекта и раздел «Чаты»,
 // неизвестный ключ пропускается. tab — вкладка, которую панель покажет сама: хост её
 // не разбирает, панель слушает то же событие. sessionId — чат, ради которого просят показ
-// (автооткрытие по выбору картинки): телефонная шторка ждёт полосу именно этого чата
+// (автооткрытие по выбору картинки): телефонная шторка ждёт полосу именно этого чата.
+// follow — панель следует за выбором человека (клик по карточке): открытая панель
+// генерации уступает место запрошенной в том же виде, peek — шторка была опущена.
+// target — ключ выбранного элемента
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
-export interface RevealPanelDetail { key: string; tab?: string; sessionId?: string }
+export interface RevealPanelDetail { key: string; tab?: string; sessionId?: string; target?: string; follow?: boolean; peek?: boolean }
+// ifOpen — показать, только если панель генерации уже открыта: закрытую выбор не открывает
+export interface RevealPanelOptions { sessionId?: string; target?: string; ifOpen?: boolean }
 
-export function revealWorkspacePanel(key: string, tab?: string, sessionId?: string) {
+// true — запрос ушёл; false — ifOpen, а открытой панели генерации нет
+export function revealWorkspacePanel(key: string, tab?: string, opts: RevealPanelOptions = {}): boolean {
   const detail: RevealPanelDetail = { key };
   if (tab !== undefined) detail.tab = tab;
-  if (sessionId !== undefined) detail.sessionId = sessionId;
+  if (opts.sessionId !== undefined) detail.sessionId = opts.sessionId;
+  if (opts.target !== undefined) detail.target = opts.target;
+  if (opts.ifOpen) {
+    const open = openGenPanel();
+    if (!open) return false;
+    detail.follow = true;
+    if (open.view === 'peek') detail.peek = true;
+  }
+  noteReveal(key, !!detail.peek);
   window.dispatchEvent(new CustomEvent<RevealPanelDetail>(REVEAL_PANEL_EVENT, { detail }));
+  return true;
 }
 
 // ---- Хранилище ----
@@ -364,6 +399,9 @@ export function getSlotAction<A = Record<string, unknown>>(slot: string, name: s
 // изменение стора подсистем поднимаем версию и оповещаем подписчиков — иначе
 // useSyncExternalStore вернул бы прежний снапшот и слот не перерисовался бы.
 subscribeSubsystems(emit);
+// Фич-флаги владельца — тоже: вклады, гейтящие себя флагом прямо в слоте (геттер в манифесте),
+// без этого не перерисовались бы на тумблер до перезагрузки
+subscribeFlags(emit);
 
 // Примитивы подписки — база хуков ниже. Экспортируются, чтобы тест мог проверить
 // пересчёт вкладов на смену тумблера без рендера React.

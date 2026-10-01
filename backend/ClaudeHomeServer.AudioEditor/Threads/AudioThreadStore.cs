@@ -44,10 +44,10 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
     }
 
     // Взять звук в работу: нить по этому файлу уже есть — фокус на неё (Existing), новую не плодим;
-    // черновик заводится всегда новый. settings — настройки новой нити, существующую они не трогают.
-    // revision = null — запись агента или сервера без сверки
+    // черновик заводится всегда новый. settings — настройки новой нити, существующую они не трогают;
+    // name — предложенное имя файла черновика. revision = null — запись агента или сервера без сверки
     public AudioThreadWrite Open(string ownerId, string sessionId, string? file, string? draftFolder, long? revision,
-        AudioThreadSettings? settings = null)
+        AudioThreadSettings? settings = null, string? name = null)
     {
         if ((file is null) == (draftFolder is null))
             throw new ArgumentException("Нужно ровно одно: звуковой файл или папка черновика");
@@ -67,7 +67,7 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
                 return new AudioThreadWrite(AudioThreadWriteStatus.Ok, focused) { Thread = existing, Existing = true };
             }
 
-            var thread = NewThread(file, draftFolder, settings);
+            var thread = NewThread(file, draftFolder, settings) with { Name = file is null ? name : null };
             var next = current with
             {
                 Threads = [.. current.Threads, thread],
@@ -178,17 +178,21 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
             return Replace(state, after, log) with { NewVersions = added };
         });
 
-    // Правка без ИИ (обрезка, фейды, громкость, сведение стемов) — новая версия от текущей, она же
-    // становится текущей. License — у правки без ИИ своей лицензии нет, наследуется от основы:
-    // обрезанный трек YuE2 остаётся CC BY-NC
+    // Правка без ИИ (обрезка, фейды, громкость, сведение стемов) — новая версия от основы (null —
+    // от текущей), она же становится текущей. jobId — папка рабочей области с файлами версии: по нему
+    // её держит чистка по TTL и находит склейка. License — у правки без ИИ своей лицензии нет,
+    // наследуется от основы: обрезанный трек YuE2 остаётся CC BY-NC
     public AudioThreadWrite AddEditVersion(string ownerId, string sessionId, string threadId,
-        IReadOnlyList<AudioVersionFile> files, long? revision, AudioThreadEvent? log = null) =>
+        IReadOnlyList<AudioVersionFile> files, long? revision, AudioThreadEvent? log = null,
+        string? jobId = null, string? baseVersionId = null) =>
         Mutate(ownerId, sessionId, threadId, revision, (state, thread) =>
         {
             if (!ValidFiles(files))
                 return new AudioThreadWrite(AudioThreadWriteStatus.Invalid, state);
-            var basis = thread.CurrentVersion;
-            var version = new AudioThreadVersion(NewId(), NextNumber(thread), null, null, basis?.Id, files,
+            var basis = baseVersionId is null ? thread.CurrentVersion : thread.Version(baseVersionId);
+            if (baseVersionId is not null && basis is null)
+                return new AudioThreadWrite(AudioThreadWriteStatus.VersionNotFound, state);
+            var version = new AudioThreadVersion(NewId(), NextNumber(thread), jobId, null, basis?.Id, files,
                 basis?.License, Now());
             return Replace(state, thread with
             {
@@ -196,6 +200,24 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
                 CurrentVersionId = version.Id,
             }, log) with { NewVersions = [version] };
         });
+
+    // Версию сохранили в проект: нить идёт за новым путём (черновик перестаёт быть черновиком), прежний
+    // путь уходит в Lineage. Версии не трогает: исходник остаётся тем файлом, от которого начинали
+    public AudioThreadWrite MoveToFile(string ownerId, string sessionId, string threadId, string path,
+        AudioThreadEvent? log = null) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) => Replace(state, thread with
+        {
+            File = path,
+            DraftFolder = null,
+            Lineage = thread.File is { } old && old != path ? [.. thread.Lineage, old] : thread.Lineage,
+        }, log));
+
+    // Сохранили версию без основного звука (только стемы): нить остаётся при своём файле, черновик
+    // получает имя группы вместо «Новый звук». Журнал пишется в любом случае
+    public AudioThreadWrite NameDraft(string ownerId, string sessionId, string threadId, string name,
+        AudioThreadEvent? log = null) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+            Replace(state, thread.File is null ? thread with { Name = name } : thread, log));
 
     // Состояние для блока хода и записи журнала, ещё не показанные ходу; курсор сдвигается.
     // Ревизию не трогает: сборка хода — не правка состояния

@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.AudioEditor.Engines;
 // Только серверный проект: результат local-media — файлы на диске сервера, а в личной области проекта
 // нет, у локального проекта (ADR-016) файлы живут на устройстве. Отказ — ScopeRefusal до чтения входов и
 // до обращения к шву; локальность — только через ProjectCapabilities.
-public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IAudioQuoter
+public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IAudioQuoter, IAudioParamSchemas
 {
     public const string ProviderKey = "local";
 
@@ -45,6 +45,12 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
         if (scope.IsPersonal || scope.Project is not { } project) return PersonalScopeReason;
         return ProjectCapabilities.FilesOnServer(project) ? null : DeviceProjectReason;
     }
+
+    // Схема «Дополнительно» — описание движка в каталоге: сети и GPU не нужно
+    public Task<AudioSchemaLookup> SchemaAsync(AudioModelInfo model, AudioOp op, CancellationToken ct) =>
+        Task.FromResult(AudioCatalog.LocalSchema(model.Id, op) is { } schema
+            ? AudioSchemaLookup.Ok(schema)
+            : AudioSchemaLookup.Fail("Локальные модели так не умеют"));
 
     // ── Котировка ────────────────────────────────────────────────────────────────
 
@@ -128,6 +134,43 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
     public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) =>
         media is null ? Task.FromResult(false) : media.CancelAsync(remoteId, ct);
 
+    // ── Параметры и дикторы ──────────────────────────────────────────────────────
+
+    public IReadOnlySet<string>? ParamNames(AudioModelInfo model, AudioOp op) =>
+        AudioCatalog.FindLocal(model.Id) is { } local && local.Bindings.TryGetValue(op, out var binding)
+            ? AudioCatalog.LocalParamNames(binding.Op)
+            : null;
+
+    // Готовые дикторы есть только у Qwen3-TTS в озвучке
+    public JsonObject? VoiceParams(AudioModelInfo model, AudioOp op, string voice) =>
+        HasSpeakers(model.Id, op) ? new JsonObject { ["speaker"] = voice } : null;
+
+    public Task<IReadOnlyList<AudioVoiceInfo>?> ListVoicesAsync(string? model, string? language, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<AudioVoiceInfo>?>(model is null || HasSpeakers(model, AudioOp.Speak)
+            ? [.. AudioCatalog.QwenSpeakers.Select(s => new AudioVoiceInfo(s, s.Replace('_', ' ')))]
+            : null);
+
+    // ── Голос из библиотеки ──────────────────────────────────────────────────────
+
+    // Образец — reference у моделей с клоном (речь, клон, смена голоса Seed-VC), расшифровка — reference_text
+    // у Qwen3-TTS; модель RVC — voice_model/voice_index у смены голоса движком rvc
+    public string? LibraryVoicesRefusal => null;
+
+    public string? LibraryVoiceRefusal(AudioModelInfo model, AudioOp op, AudioVoiceUse voice)
+    {
+        if (voice.IsRvc)
+            return op == AudioOp.ConvertVoice && model.Caps.VoiceKinds.Contains(AudioVoiceKind.Rvc)
+                ? null
+                : "Голос-модель RVC работает только в смене голоса моделью RVC";
+        if (voice.Sample is null) return "У голоса нет записей";
+        return op is AudioOp.Speak or AudioOp.CloneVoice or AudioOp.ConvertVoice && model.Caps.VoiceKinds.Contains(AudioVoiceKind.Clone)
+            ? null
+            : $"Модель «{model.Label}» не клонирует голос по образцу";
+    }
+
+    private static bool HasSpeakers(string model, AudioOp op) =>
+        op == AudioOp.Speak && string.Equals(model, AudioCatalog.QwenTts, StringComparison.OrdinalIgnoreCase);
+
     // Запрос шва: привязка модели к операции из каталога, поверх неё — поля запроса под именами
     // инструментов local-media. Фиксированные аргументы привязки (engine, task, mode) Params не
     // перебивают; белые списки и пределы проверяет адаптер шва. null — модель операцию не умеет
@@ -137,6 +180,9 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
             return null;
 
         var args = req.Params?.DeepClone().AsObject() ?? new JsonObject();
+        if (req.Voice is { Transcript: { } transcript } && !args.ContainsKey("reference_text")
+            && string.Equals(model.Info.Id, AudioCatalog.QwenTts, StringComparison.OrdinalIgnoreCase))
+            args["reference_text"] = transcript;
         if (req.Text is not null) args["text"] = req.Text;
         if (req.Lyrics is not null) args["lyrics"] = req.Lyrics;
         if (req.Language is not null) args["language"] = req.Language;
@@ -147,10 +193,10 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
 
         return new LocalAudioRequest(binding.Op, req.Prompt, args,
             Audio: req.Source?.Bytes,
-            Reference: req.Reference?.Bytes,
+            Reference: (req.Reference ?? req.Voice?.Sample)?.Bytes,
             Clips: req.Clips?.Select(c => c.Bytes).ToList(),
-            VoiceModel: req.VoiceModel,
-            VoiceIndex: req.VoiceIndex,
+            VoiceModel: req.VoiceModel ?? req.Voice?.RvcModel,
+            VoiceIndex: req.VoiceIndex ?? req.Voice?.RvcIndex,
             Seed: req.Seed);
     }
 

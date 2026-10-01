@@ -5,7 +5,7 @@
 // отсюда же, чтобы полоса и кнопка не разошлись.
 
 import { useCallback, useMemo } from 'react';
-import { api as appApi, followChat, showToast } from 'aihome_shell/kit';
+import { api as appApi, clearGenDraft, followChat, showToast } from 'aihome_shell/kit';
 import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditQuoteRequest } from '../api';
 import {
   effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, providerTitle, variantsWord,
@@ -26,7 +26,7 @@ import { getCatalog, loadCatalog, useCatalog } from './catalog';
 import { effectiveSettings, getPrefs, setPrefs, usePrefs } from './prefs';
 import { activeStepOf } from './actions';
 import { currentVersion, isLegacyThread, originFile, versionHasImage, versionStep } from './model';
-import { getSamples, getThreadMarks, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
+import { getSamples, getThreadMarks, imageDraftKey, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadSettings, type ImageThreadVersion } from './threadsApi';
 
 // Картинка позиции нити: шаг — из рабочей папки редактора, исходник — файл проекта
@@ -193,6 +193,8 @@ export async function launchThread(
     });
     // Пометки ушли с запуском
     if (withMarks || withMask) setThreadMarks(thread.id, [], null);
+    // Запуск забрал черновик элемента — пометка «черновик» уходит
+    clearGenDraft(imageDraftKey(thread.id));
     // Запуск здесь всегда от человека (агент запускает через MCP мимо фронта): строка
     // запуска и новые версии ложатся внизу — лента едет к ним и держит низ
     followChat(sessionId);

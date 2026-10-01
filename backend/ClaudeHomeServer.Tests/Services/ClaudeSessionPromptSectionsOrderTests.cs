@@ -420,6 +420,48 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         section.Should().BeNull($"{why}: image_new/image_generate у хода нет («No such tool available»)");
     }
 
+    // Блок «Звук в этом чате» (ADR-021 §5): признак HasAudioEditorMcp ClaudeSession собирает сам из
+    // доставки сервера audio-editor в конфиг хода; секция едет хвостом, в системный блок не попадает
+    private static readonly AudioEditorMcpContext AudioEditorMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+
+    private async Task<(string SystemPrompt, PromptSectionDto? Section)> AudioEditorStateSectionAsync(
+        bool recallInTurnText, Func<LlmSessionContext, LlmSessionContext> tweak,
+        Dictionary<string, string?>? providerConfig = null)
+    {
+        var contributor = new ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor(new AllFlags());
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            ProjectChat(), tweak, providerConfig);
+        return (systemPrompt, sections.SingleOrDefault(s => s.Key == "audio-editor-state"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AudioEditorState_СерверДоставлен_ХвостомХода(bool recallInTurnText)
+    {
+        var (systemPrompt, section) = await AudioEditorStateSectionAsync(recallInTurnText,
+            c => c with { AudioEditorMcp = AudioEditorMcp });
+
+        section.Should().NotBeNull("сервер audio-editor доехал до хода — блок «Звук» обязан прийти");
+        section!.Kind.Should().Be("turn", "блок едет вклейкой в текст хода");
+        section.Text.Should().Contain(ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor.PriorityRule);
+        systemPrompt.Should().NotContain("## Звук в этом чате",
+            "блок меняется от хода к ходу и в системный блок не попадает ни при какой настройке провайдера");
+    }
+
+    [Theory]
+    [InlineData("модуль звука выключен")]
+    [InlineData("TrimMcpServers без audio-editor")]
+    public async Task AudioEditorState_СервераНетУХода_БлокаНет(string why)
+    {
+        var (_, section) = why == "модуль звука выключен"
+            ? await AudioEditorStateSectionAsync(false, c => c)
+            : await AudioEditorStateSectionAsync(false, c => c with { AudioEditorMcp = AudioEditorMcp }, TrimToTasks);
+
+        section.Should().BeNull($"{why}: audio_* у хода нет («No such tool available»)");
+    }
+
     private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {
         public bool IsEnabled(string userId, string key) => true;

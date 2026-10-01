@@ -1,9 +1,10 @@
 // Признак «человек закрыл панель генерации в этом чате» (ADR-021 §3).
 //
-// Выбор картинки или звука человеком открывает панель сам — но только пока в этом
-// чате её не закрыли: ✕ в шапке и закрытие пунктом рельсы ставят признак, а сводка в
-// полосе и пункт рельсы открывают панель всегда и признак НЕ снимают (закрыл — дальше
-// только руками). Выбор, сделанный агентом, autoReveal не зовёт вовсе.
+// «✦ Новый звук», «Нарисовать новую», ярлыки и «Редактировать» из дерева открывают панель
+// сами — но только пока в этом чате её не закрыли: ✕ в шапке и закрытие пунктом рельсы
+// ставят признак, а сводка в полосе и пункт рельсы открывают панель всегда и признак НЕ
+// снимают (закрыл — дальше только руками). Клик по карточке в ленте закрытую панель не
+// открывает вовсе (genPanelFollow), выбор агентом autoReveal не зовёт.
 //
 // Это настройка вида, как ширина панели: живёт в localStorage, серверных префов и
 // UpdatedAt чата не трогает. Ключ — `{sessionId}:{panelKey}`, общий список на все
@@ -52,6 +53,6 @@ export function markGenPanelDismissed(sessionId: string | null | undefined, pane
 // true — панель запрошена
 export function autoRevealGenerationPanel(panelKey: string, sessionId: string | null | undefined, tab?: string): boolean {
   if (!sessionId || !isGenPanelKey(panelKey) || isGenPanelDismissed(sessionId, panelKey)) return false;
-  revealWorkspacePanel(panelKey, tab, sessionId);
+  revealWorkspacePanel(panelKey, tab, { sessionId });
   return true;
 }

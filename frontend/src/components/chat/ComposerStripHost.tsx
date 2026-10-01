@@ -15,8 +15,8 @@ import { Check, ChevronDown } from 'lucide-react';
 import { C, FS, SP } from '../../lib/design';
 import { useComposerStrip } from '../../lib/composerStrips';
 import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
-import type { ComposerStripApi, ComposerStripCtx, SlotContribution } from '../../lib/subsystems/registry';
-import { Button, Dot, Menu, MenuItem, Modal } from '../ui';
+import type { ComposerStripApi, ComposerStripCtx, ComposerStripShortcut, SlotContribution } from '../../lib/subsystems/registry';
+import { Button, Dot, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_STROKE } from '../ui/icons';
 
 export type ComposerStripContribution = SlotContribution<ComposerStripCtx, ComposerStripApi>;
@@ -33,6 +33,24 @@ function ItemLabel({ title, status }: { title: string; status: ReactNode }) {
       )}
     </span>
   );
+}
+
+// Ярлыки доступных полос реестра («Голос», «Музыка» у «Звука») — для других входов
+// каркаса: меню «＋» композера и пустой ленты (ADR-021 п.1). Хост полос берёт их сам
+export function useStripShortcuts(projectId: string | null, sessionId: string | null): ComposerStripShortcut[] {
+  const fromSlot = useSlot<ComposerStripCtx, ComposerStripApi>(SLOT_COMPOSER_STRIP);
+  const avail = { projectId, sessionId };
+  return fromSlot
+    .filter(c => c.name && c.action && (c.action.isAvailable?.(avail) ?? true))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .flatMap(c => c.action!.shortcuts?.(avail) ?? []);
+}
+
+// Подсказка кнопки «＋»: «Прикрепить файл, голос, музыка…» — из ярлыков, а не зашитой строкой
+export function plusButtonTitle(shortcuts: Pick<ComposerStripShortcut, 'title'>[]): string {
+  if (shortcuts.length === 0) return 'Прикрепить файл';
+  const titles = shortcuts.map(s => s.title.charAt(0).toLocaleLowerCase('ru') + s.title.slice(1));
+  return `Прикрепить файл, ${titles.join(', ')}…`;
 }
 
 // projectId = null — личный чат вне проекта: полосы сами решают, доступны ли они без проекта
@@ -64,6 +82,8 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
   if (!current) return null;
 
   const close = () => { setMenu(null); setSheet(false); };
+  // Ярлыки полос («Голос», «Музыка») — под списком, отделены чертой
+  const shortcuts = strips.flatMap(s => s.action!.shortcuts?.(avail) ?? []);
 
   const items = (
     <>
@@ -81,6 +101,16 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
             </span>
           }
           onClick={() => { close(); select(s.name!); }}
+        />
+      ))}
+      {shortcuts.length > 0 && <MenuSep />}
+      {shortcuts.map(sc => (
+        <MenuItem
+          key={`shortcut:${sc.key}`}
+          icon={sc.icon}
+          isMobile={isMobile}
+          label={<ItemLabel title={sc.title} status={sc.hint} />}
+          onClick={() => { close(); sc.onSelect(); }}
         />
       ))}
     </>
@@ -117,7 +147,7 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
       </span>
       <span style={{ width: 1, height: collapsed ? 16 : 22, background: C.divider, flexShrink: 0 }} />
       {menu && (
-        <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={290} maxWidth={360} maxHeight={200}>
+        <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={290} maxWidth={360} maxHeight={320}>
           {items}
         </Menu>
       )}

@@ -4,12 +4,17 @@
 // полосы: фокус просит полосу «Картинки» у стора полос ядра, снятие — отпускает.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
+import { dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
 import type { Sample } from '../editorInputs';
 import type { Mark } from '../marks';
 import { conflictState, EMPTY_THREADS, threadsApi, type ImageThread, type ImageThreadsState } from './threadsApi';
+import { threadName } from './model';
 
 export const IMAGES_STRIP = 'images';
+// Ключ панели «Картинки» в рабочей области — тот же, что IMAGES_PANEL в characters/panel
+const PANEL = 'images';
+// Ключ элемента для черновиков и выбора: панель + нить
+export const imageDraftKey = (threadId: string) => `${PANEL}:${threadId}`;
 
 interface Entry { projectId: string; state: ImageThreadsState; loaded: boolean; loading: boolean }
 
@@ -57,10 +62,21 @@ function apply(sessionId: string, projectId: string, state: ImageThreadsState) {
   notifyComposer();
 }
 
+// Фокус сменился событием с сервера, а не ответом на свой клик, — его выбрал агент
+// (image_focus): панель он не двигает, каркас покажет подсказку в панели другого раздела
+function noteAgentFocus(sessionId: string, prev: ImageThreadsState | null, next: ImageThreadsState) {
+  if (!prev || prev.focus === next.focus || next.revision < prev.revision) return;
+  if (!next.focus) { dropAgentPickOf(sessionId, PANEL); return; }
+  const t = next.threads.find(x => x.id === next.focus);
+  noteAgentPick(sessionId, { panelKey: PANEL, target: imageDraftKey(next.focus), label: t ? threadName(t) : 'картинка', tab: 'settings' });
+}
+
 function ensureLive() {
   if (_unsub) return;
   const offEvents = threadsApi.subscribe(ev => {
-    if (!_entries.has(ev.sessionId)) return;
+    const e = _entries.get(ev.sessionId);
+    if (!e) return;
+    noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
     apply(ev.sessionId, ev.projectId, ev.state);
   });
   // После обрыва события могли потеряться — перечитываем всё, что показано

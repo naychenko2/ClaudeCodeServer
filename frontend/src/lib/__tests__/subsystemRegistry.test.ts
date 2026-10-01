@@ -5,6 +5,7 @@ import {
 } from '../subsystems/registryCore';
 import type { SubsystemManifest } from '../subsystems/registryCore';
 import { setAllSubsystems, __resetSubsystems } from '../subsystems';
+import { setAllFlags, setFlagLocal } from '../featureFlags';
 
 // Реестр не умеет снимать регистрацию (в проде она статична), поэтому тестовый
 // манифест регистрируем один раз на модуль, а между кейсами сбрасываем лишь
@@ -48,6 +49,30 @@ describe('реестр подсистем: read-time гейт по включё�
     // Выключение — та же реакция: вклады снова пусты, подписчик оповещён.
     setAllSubsystems([]);
     expect(getSlotContributions('demo-render')).toHaveLength(0);
+    unsub();
+  });
+});
+
+describe('реестр подсистем: вклады за фич-флагом', () => {
+  // Вклад гейтит себя флагом прямо в слоте (геттер, как chat-item-tool у «Звука»)
+  registerSubsystem({
+    key: 'test-flagged', title: 'Флажная', order: 2,
+    slots: { get 'demo-flagged'() { return getFlagged() ? [{ name: 'f', render: () => 'ok' }] : []; } },
+  });
+  let flagged = false;
+  function getFlagged() { return flagged; }
+
+  beforeEach(() => { __resetSubsystems(); setAllSubsystems(['test-flagged']); setAllFlags({}); flagged = false; });
+
+  it('тумблер флага поднимает версию реестра и оповещает подписчика — слот перечитывается без перезагрузки', () => {
+    let calls = 0;
+    const unsub = subscribeRegistry(() => { calls += 1; });
+    const before = getRegistryVersion();
+    flagged = true;
+    setFlagLocal('demo-flag', true);
+    expect(calls).toBeGreaterThan(0);
+    expect(getRegistryVersion()).toBeGreaterThan(before);
+    expect(getSlotContributions('demo-flagged')).toHaveLength(1);
     unsub();
   });
 });

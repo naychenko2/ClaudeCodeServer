@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import type { ChatItem } from '../types';
 import { onChatFollow } from '../lib/chatFollow';
+import { stickAfterScroll } from '../lib/chatStick';
 
 // Позиция чтения живёт ровно один reload: пишется только при выгрузке страницы
 // (pagehide), в sessionStorage (умирает вместе с вкладкой) и потребляется первым же
@@ -37,14 +38,17 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   const composerWrapRef = useRef<HTMLDivElement>(null);
   const [composerH, setComposerH] = useState(_lastComposerH);
   // Прилипание к низу: автоскролл при новых сообщениях, пока лента «приклеена» к концу.
-  // ГЛАВНЫЙ ИНВАРИАНТ: отклеивает ленту ТОЛЬКО жест пользователя (колесо, тач, клавиши,
-  // перетаскивание полосы). Программные сдвиги геометрии — composer домерил свою высоту
+  // ГЛАВНЫЙ ИНВАРИАНТ: отклеивает ленту жест пользователя (колесо, тач, клавиши,
+  // перетаскивание полосы) либо сдвиг вверх мимо низа (scrollIntoView, фокус по Tab —
+  // lib/chatStick). Программные сдвиги геометрии — composer домерил свою высоту
   // (96 → 181px, лента ужалась) или лента дорендерилась (подсветка кода, картинки, mermaid) —
   // прилипание не снимают. Раньше снимали: первый же такой сдвиг ронял флаг в false, и весь
   // дальнейший дорендер (в тяжёлом чате — десятки тысяч px) шёл мимо, а лента замирала там,
   // где её застал первый кадр, то есть у начала.
   const atBottomRef = useRef(true);
   const userGestureRef = useRef(false);
+  // scrollTop прошлого события: сдвиг вверх мимо низа отклеивает и без жеста (lib/chatStick)
+  const lastTopRef = useRef(0);
   // Восстановление позиции чтения после reload: храним позицию + высоту ленты per-session.
   const scrollKey = `cc-scroll-${sessionId}`;
   const pendingRestoreRef = useRef<{ top: number; h: number } | null>(null);
@@ -83,6 +87,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     // перезапустится, и лента осталась бы там, где её отлистали.
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+    lastTopRef.current = el?.scrollTop ?? 0;
     if (saved == null) return;
     // Запись одноразовая: она валидна ровно для первого открытия чата после reload,
     // дальше чат должен открываться в конце ленты. Стираем макротаском, а не сразу —
@@ -127,9 +132,11 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_EPS;
-    // Отклеиваем от низа только по живому жесту; приклеиваем обратно сразу, как пользователь
-    // сам довёл ленту до конца.
-    if (atBottom || userGestureRef.current) atBottomRef.current = atBottom;
+    // Отклеиваем от низа живым жестом или сдвигом вверх; приклеиваем обратно сразу, как
+    // ленту довели до конца.
+    const movedUp = el.scrollTop < lastTopRef.current - 1;
+    lastTopRef.current = el.scrollTop;
+    atBottomRef.current = stickAfterScroll(atBottomRef.current, { atBottom, gesture: userGestureRef.current, movedUp });
     setShowScrollDown(!atBottom);
     setScrolled(el.scrollTop > 2);
   }, []);

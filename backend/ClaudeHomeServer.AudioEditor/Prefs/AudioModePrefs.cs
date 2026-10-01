@@ -1,22 +1,29 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Prefs;
 
 // Выбор человека для режима (AudioModes.*) в области: операция, поставщик, модель, число вариантов
 // и поля по умолчанию. Запись на режим отдельная: выбор в «Музыке» не трогает «Голос».
 // null у поля — режим его не задаёт, берётся умолчание каталога. Добавлять поля только аддитивно:
-// файл живёт в бэкапе
+// файл живёт в бэкапе. Fields — параметры модели (идут в params по цепочке), Inputs — входы операции
+// (AudioOpInputs): их только подставляет панель, в params и запуск они не попадают
 public sealed record AudioModePrefs(string? Operation, string? Provider, string? Model, int? Count, JsonObject? Fields)
 {
     public const int MaxCount = 4;
 
     public static AudioModePrefs Empty { get; } = new(null, null, null, null, null);
 
+    public JsonObject? Inputs { get; init; }
+
     // Настройки новой нити режима — копия префов: поля нити правятся отдельно от префов
     public AudioThreadSettings ToThreadSettings(string mode) =>
-        new(mode, Operation, Provider, Model, Fields?.DeepClone().AsObject(), Count);
+        new(mode, Operation, Provider, Model, Fields?.DeepClone().AsObject(), Count)
+        {
+            Inputs = Inputs?.DeepClone().AsObject(),
+        };
 }
 
 // Итог цепочки для запуска: всё разрешено, Count в пределах 1..MaxCount
@@ -126,13 +133,23 @@ public sealed class AudioPrefsStore(string root)
 }
 
 // Префы области и цепочка запуска поверх хранилища. Область — уже своя: владение проверяет
-// вызывающий (ручка, тулсет)
-public sealed class AudioPrefsService(AudioPrefsStore store)
+// вызывающий (ручка, тулсет). Запись рассылает владельцу audio_prefs_changed: другие вкладки
+// перерисовывают панель
+public sealed class AudioPrefsService(AudioPrefsStore store, ISessionBroadcaster? broadcaster = null)
 {
     public AudioModePrefs? Get(string ownerId, AudioEditScope scope, string mode) => store.Get(ownerId, scope.Key, mode);
 
     public void Save(string ownerId, AudioEditScope scope, string mode, AudioModePrefs prefs) =>
         store.Save(ownerId, scope.Key, mode, prefs);
+
+    // Запись с событием; потерянное событие фронт догоняет чтением префов
+    public async Task SaveAsync(string ownerId, AudioEditScope scope, string mode, AudioModePrefs prefs)
+    {
+        store.Save(ownerId, scope.Key, mode, prefs);
+        if (broadcaster is null) return;
+        try { await broadcaster.ToOwner(ownerId, new Jobs.AudioPrefsChangedMessage(scope.Key, mode, prefs)); }
+        catch (Exception) { }
+    }
 
     // Настройки новой нити режима — последние префы этого режима; префов нет — null, нить
     // тогда при запуске целиком идёт на умолчание каталога

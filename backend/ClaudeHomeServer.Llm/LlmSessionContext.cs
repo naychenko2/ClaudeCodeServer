@@ -169,6 +169,11 @@ public sealed record HiggsfieldMcpContext(string ApiUrl, Func<string> TokenFacto
 // AutoAllowTools — инструменты сервера, которые DecidePermission пропускает без карточки.
 public sealed record ImageEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
     IReadOnlyList<string>? AutoAllowTools = null);
+// Контекст MCP-сервера модуля «Звук» (ADR-021 §5) — как у редактора картинок: тулсет живёт в модуле,
+// сессия едет хвостом URL (/mcp/audio-editor/{sessionId}), в любом чате владельца. null — флаг
+// audio-editor у владельца выключен или модуль не загружен. Свойства сессии, владельца и процесса, не хода.
+public sealed record AudioEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
+    IReadOnlyList<string>? AutoAllowTools = null);
 // Контекст MCP-сервера локальной генерации (local-media: ComfyUI на своей GPU). null — чат без
 // владельца или вне проекта, тумблер LocalMedia:Enabled выключен, подсистема images выключена,
 // проект локальный или персона ReadOnly (сервер пишет файлы в проект). Всё это — свойства
@@ -410,4 +415,6 @@ public sealed record LlmSessionContext(
     // NormalizeToolInputArrays: его ответ чинит нормализатор шлюза (ADR-016 §2, серверный ход).
     // null — серверный режим шлюза не применяется: у локального проекта шлюз ходу ставит
     // раннер устройства, а тесты без SessionManager идут напрямую, как раньше.
-    string? LlmGatewayApiUrl = null);
+    string? LlmGatewayApiUrl = null,
+    // MCP-сервер модуля «Звук» (ADR-021 §5): null — флаг audio-editor выключен или модуль не загружен
+    AudioEditorMcpContext? AudioEditorMcp = null);

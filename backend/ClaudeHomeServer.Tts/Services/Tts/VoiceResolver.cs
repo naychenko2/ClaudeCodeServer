@@ -17,8 +17,8 @@ namespace ClaudeHomeServer.Services.Tts;
 public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, ILogger<VoiceResolver> logger)
 {
     // Границы SpeechKit: вне их запрос отвергается с 400
-    private const double MinSpeed = 0.1;
-    private const double MaxSpeed = 3.0;
+    internal const double MinSpeed = 0.1;
+    internal const double MaxSpeed = 3.0;
 
     // Дефолты инстанса читаются один раз: сервис Singleton, поэтому предупреждение об
     // опечатке в конфиге печатается на старте, а не на каждую фразу

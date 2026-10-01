@@ -3,8 +3,11 @@ using System.Net.Sockets;
 
 namespace ClaudeHomeServer.Services;
 
-/// <summary>Итог скачивания: байты и тип либо причина отказа (<see cref="Error"/>).</summary>
-public sealed record MediaDownloadResult(byte[]? Bytes, string? ContentType, string? Error)
+/// <summary>
+/// Итог скачивания: байты и тип либо причина отказа (<see cref="Error"/>); <see cref="FinalUri"/> —
+/// адрес, с которого файл отдан после редиректов (по нему вызывающий узнаёт имя и расширение).
+/// </summary>
+public sealed record MediaDownloadResult(byte[]? Bytes, string? ContentType, string? Error, Uri? FinalUri = null)
 {
     public bool Ok => Bytes is not null;
 
@@ -23,6 +26,9 @@ public sealed record MediaDownloadResult(byte[]? Bytes, string? ContentType, str
 public sealed class SafeMediaDownloader
 {
     public const long ImageMaxBytes = 32L * 1024 * 1024;
+    // Самый длинный звук поставщиков — песня ElevenLabs до 10 минут: WAV 48 кГц/24 бит/стерео за
+    // 10 минут ≈ 173 МБ, потолок оставляет запас на такой файл и не пускает в память больше
+    public const long AudioMaxBytes = 200L * 1024 * 1024;
     public const int MaxRedirects = 3;
 
     public static SafeMediaDownloader Shared { get; } = new(CreateHandler());
@@ -69,7 +75,7 @@ public sealed class SafeMediaDownloader
                 var bytes = await ReadCappedAsync(response.Content, maxBytes, cts.Token);
                 if (bytes is null) return MediaDownloadResult.Fail("too-large");
                 if (bytes.Length == 0) return MediaDownloadResult.Fail("empty");
-                return new MediaDownloadResult(bytes, response.Content.Headers.ContentType?.MediaType, null);
+                return new MediaDownloadResult(bytes, response.Content.Headers.ContentType?.MediaType, null, uri);
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)

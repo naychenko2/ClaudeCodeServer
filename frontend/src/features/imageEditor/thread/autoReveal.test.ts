@@ -54,12 +54,12 @@ describe('автооткрытие панели «Картинки»', () => {
     expect(reveals).toEqual([]);
   });
 
-  it('человек закрыл панель в этом чате — выбор её больше не открывает, в соседнем чате открывает', async () => {
+  it('человек закрыл панель в этом чате — «Нарисовать новую» её больше не открывает, кнопка «Работать с этой» открывает', async () => {
     markGenPanelDismissed('s1', 'images');
-    await workWith('p1', 's1', 't1');
+    await createDraft('p1', 's1', '');
     expect(reveals).toEqual([]);
-    __applyThreads('s2', 'p1', { focus: null, revision: 1, threads: [thread] });
-    await workWith('p1', 's2', 't1');
+    // Кнопка — просьба открыть, а не выбор («Панель следует за выбором», правило 4)
+    await workWith('p1', 's1', 't1');
     expect(reveals).toEqual(['images']);
   });
 

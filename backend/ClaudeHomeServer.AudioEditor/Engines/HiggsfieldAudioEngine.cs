@@ -460,12 +460,13 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
         "Образец голоса у Higgsfield не найден, загрузили заново — не помогло. Попробуйте позже или выберите другого поставщика";
 
     // «Не знаю такого образца»: media not found, 404/410. Спрашивается только про отказ в запуске
-    internal static bool IsMediaMissing(string text)
-    {
-        var lower = text.ToLowerInvariant();
-        return lower.Contains("media") && (lower.Contains("not found") || lower.Contains("not exist") || lower.Contains("expired"))
-            || MissingStatusPattern().IsMatch(text);
-    }
+    // Фраза якорится целиком: «media» и «not found» порознь (голос не найден рядом со словом media)
+    // дали бы лишнюю перезаливку образца
+    internal static bool IsMediaMissing(string text) =>
+        MissingMediaPattern().IsMatch(text) || MissingStatusPattern().IsMatch(text);
+
+    [GeneratedRegex(@"\bmedia\s+(not\s+found|(does\s+)?not\s+exist|(has\s+)?expired)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex MissingMediaPattern();
 
     [GeneratedRegex(@"\b(404|410)\b")]
     private static partial Regex MissingStatusPattern();

@@ -223,14 +223,15 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
 
     // Потолок образца, который едет data: URI внутри JSON. 20 МБ — предел файла клона у самого MiniMax
     // (запись 10 с – 5 мин); base64 раздувает его до ~27 МБ тела, и больше этого запрос не доезжает, а
-    // висит до таймаута. Chatterbox берёт короткий образец, ему хватает того же потолка с запасом.
+    // висит до таймаута. Chatterbox и Qwen-клон берут короткий образец, им хватает того же потолка с
+    // запасом: отдельного предела у них fal не объявляет, а упираются они в тот же размер тела запроса.
     // 60 секунд в подсказке — WAV 16 бит 44,1 кГц стерео (~10 МБ), с запасом до потолка
     public const int MaxDataUriSampleBytes = 20 * 1024 * 1024;
     public const string SampleTooLargeText =
         "Образец слишком большой для этой модели (больше 20 МБ) — укоротите его до 60 секунд";
 
     private static readonly HashSet<string> DataUriCapped =
-        new([AudioCatalog.FalMiniMaxClone, AudioCatalog.FalChatterbox], StringComparer.OrdinalIgnoreCase);
+        new([AudioCatalog.FalMiniMaxClone, AudioCatalog.FalChatterbox, AudioCatalog.FalQwenClone], StringComparer.OrdinalIgnoreCase);
 
     public (string Key, bool Creates)? StoredClone(AudioModelInfo model, AudioOp op) =>
         MiniMaxSpeech.Contains(model.Id) ? (Voices.VoiceProviders.MiniMax, false)
@@ -247,13 +248,15 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
 
         var voice = req.Voice;
         if (voice?.Sample is { } sample && req.Reference is null) req = req with { Reference = sample };
-        if (req.Reference is { } reference && DataUriCapped.Contains(model.Info.Id) && reference.Bytes.Length > MaxDataUriSampleBytes)
-            return AudioResult.Fail(AudioOutcome.Rejected, SampleTooLargeText);
         var miniMaxId = voice?.CachedId(Voices.VoiceProviders.MiniMax);
         if (voice is not null && MiniMaxSpeech.Contains(model.Info.Id) && miniMaxId is null)
             return AudioResult.Fail(AudioOutcome.Rejected, "У голоса нет клона MiniMax — создайте его кнопкой «Пересоздать»");
         // Эмбеддинг Qwen-клона из кеша: первый прогон цепочки не нужен
         var embedding = model.Next is not null ? voice?.CachedId(Voices.VoiceProviders.FalQwen) : null;
+        // С эмбеддингом из кеша образец никуда не едет — и потолок ему не нужен
+        if (embedding is null && req.Reference is { } reference && DataUriCapped.Contains(model.Info.Id)
+            && reference.Bytes.Length > MaxDataUriSampleBytes)
+            return AudioResult.Fail(AudioOutcome.Rejected, SampleTooLargeText);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(Ceiling);

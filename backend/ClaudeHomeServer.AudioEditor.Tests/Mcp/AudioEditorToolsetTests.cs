@@ -392,6 +392,30 @@ public sealed class AudioEditorToolsetTests : IDisposable
         await WaitIdleAsync();
     }
 
+    // Монтаж пишет версию — делегированному ходу он закрыт так же, как запуск и склейка
+    [Theory]
+    [InlineData("trim")]
+    [InlineData("gainFade")]
+    [InlineData("normalize")]
+    [InlineData("mixStems")]
+    public async Task Монтаж_без_ИИ_делегированный_ход_отказ_fail_closed(string op)
+    {
+        var dsp = new FakeDsp();
+        var threadId = _store.Open(Owner, ChatId, "audio/intro.wav", null, null).Thread!.Id;
+        var args = new JsonObject { ["threadId"] = threadId, ["op"] = op };
+
+        var noGate = await Call(Toolset(dsp: dsp, withGate: false, withEdits: true), AudioEditorToolset.ToolGenerate, args.DeepClone().AsObject());
+        noGate.IsError.Should().BeTrue();
+        noGate.Text.Should().Contain("отказ по построению");
+
+        _turnGate.Setup(g => g.Deny(Owner, ChatId, It.IsAny<string>())).Returns("Делегированный ход не запускает");
+        (await Call(Toolset(dsp: dsp, withEdits: true), AudioEditorToolset.ToolGenerate, args.DeepClone().AsObject()))
+            .Text.Should().Be("Делегированный ход не запускает");
+
+        _store.Get(Owner, ChatId).Threads.Single(t => t.Id == threadId).Versions.Should().HaveCount(1);
+        dsp.Edit.Should().BeNull();
+    }
+
     [Fact]
     public async Task Монтаж_без_ИИ_сведение_стемов_и_отказы_по_params()
     {

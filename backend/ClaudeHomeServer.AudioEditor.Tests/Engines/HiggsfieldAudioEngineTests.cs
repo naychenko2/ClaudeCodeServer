@@ -540,4 +540,16 @@ public sealed class HiggsfieldAudioEngineTests
         voices.Should().Equal(new HiggsfieldVoice("v-1", "Anna", "ru", null), new HiggsfieldVoice("v-2", "Bob", null, null));
         FakeHttp.Arguments(http.Calls.Single())!["model"]!.ToString().Should().Be("seed_audio");
     }
+
+    // Перезаливка образца — только на отказ про сам образец, а не на любое «not found» рядом со словом media
+    [Theory]
+    [InlineData("Media not found: 1b2c", true)]
+    [InlineData("media does not exist", true)]
+    [InlineData("Media has expired", true)]
+    [InlineData("HTTP 410 Gone", true)]
+    [InlineData("voice not found for media upload", false)]
+    [InlineData("media upload ok, model not found", false)]
+    [InlineData("media expiredAt field is invalid", false)]
+    public void IsMediaMissing_AnchorsWholePhrase(string text, bool expected) =>
+        HiggsfieldAudioEngine.IsMediaMissing(text).Should().Be(expected);
 }

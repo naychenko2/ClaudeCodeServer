@@ -485,6 +485,8 @@ builder.Services.AddSingleton<PersonaAgentFileSync>();
 // реконсайлера error-документов Dify, не собственность Memory.
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.Configuration);
+// Разовое решение «Облегчённого контекста» для персон из стора (по прежней логике провайдера)
+builder.Services.AddGatedHostedService<PersonaLightContextMigration>(builder.Configuration);
 // Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai) —
 // gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
 // Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).

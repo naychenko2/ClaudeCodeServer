@@ -13,6 +13,9 @@ public class LlmProviderRegistry
 {
     public const string Section = "LlmProviders";
 
+    // Служебный ключ секции: общий профиль облегчённого контекста, а не провайдер
+    public const string LightProfileKey = "LightProfile";
+
     // Заглушка токена для локального провайдера (vLLM/llama.cpp). Локальный сервер
     // авторизацию игнорирует, но claude CLI требует непустой ANTHROPIC_AUTH_TOKEN —
     // иначе отбивает «Not logged in» ещё до запроса. Говорящее значение: при разборе
@@ -22,6 +25,8 @@ public class LlmProviderRegistry
     internal const string LocalNoAuthToken = "local-no-auth";
 
     private readonly Dictionary<string, LlmProviderConfig> _providers;
+    // Общий профиль облегчённого контекста для моделей без собственного (секция LightProfile)
+    private readonly LightProfile _lightProfile;
     // Папка изолированных профилей CLI (CLAUDE_CONFIG_DIR) — по одному на провайдера
     private readonly string _profilesDir;
     // Пользовательский профиль CLI (~/.claude) — источник общих настроек для профилей
@@ -37,11 +42,18 @@ public class LlmProviderRegistry
         _providers = new Dictionary<string, LlmProviderConfig>(StringComparer.OrdinalIgnoreCase);
         foreach (var child in config.GetSection(Section).GetChildren())
         {
+            if (string.Equals(child.Key, LightProfileKey, StringComparison.OrdinalIgnoreCase)) continue;
             var cfg = child.Get<LlmProviderConfig>();
             if (cfg is null) continue;
             cfg.Key = child.Key.ToLowerInvariant();
             _providers[cfg.Key] = cfg;
         }
+
+        _lightProfile = config.GetSection($"{Section}:{LightProfileKey}").Get<LightProfile>()
+            ?? new LightProfile { KeepMcpServers = ["tasks", "memory", "codegraph", "websearch", "watch"] };
+        _lightProfile.Source = "light";
+        _lightProfile.BareMode = true;
+        _lightProfile.TrimMcpServers = true;
 
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -136,6 +148,28 @@ public class LlmProviderRegistry
                     bestLen = prefix.Length;
                 }
         return best;
+    }
+
+    // ЕДИНАЯ точка правды облегчённого контекста: профиль или null (полный контекст). Через неё
+    // идут ВСЕ потребители — состав MCP, обрезка серверов, карта и BareTools, хвостовой recall
+    // (ClaudeSession) и фильтр инструментов McpToolWhitelist; рассинхрон между ними даёт
+    // «No such tool available», поэтому своей копии этой логики не заводить.
+    //  • чат без персоны — как раньше, решает провайдер модели: у него свой профиль
+    //    (BareMode/Trim/KeepMcpTools/RecallInTurnText) или его нет;
+    //  • локальная модель (IsLocal) со своим профилем — её профиль ВСЕГДА, опция персоны не
+    //    влияет: полный контекст не влезает в окно локальной модели, а модель хода меняют мимо
+    //    персоны (фолбэк, смена модели чата, исполнитель на слоте weak, шаблоны персон);
+    //  • иначе в чате с персоной решает Persona.LightContext: выкл → null; вкл → профиль
+    //    провайдера модели, а у модели без своего профиля (Opus/Sonnet) — общая секция LightProfile.
+    // Входы — свойства СЕССИИ (модель, персона), не хода: состав tools/list стабилен.
+    public LightProfile? LightProfileFor(string? model, Persona? persona)
+    {
+        var provider = ResolveByModel(model);
+        var own = provider is { BareMode: true } or { TrimMcpServers: true } or { RecallInTurnText: true }
+            or { KeepMcpTools.Count: > 0 }
+            ? LightProfile.FromProvider(provider!) : null;
+        if (persona is null || (own is not null && provider!.IsLocal)) return own;
+        return persona.LightContext == true ? own ?? _lightProfile : null;
     }
 
     // Wire-токен провайдера модели ("claude" | key) — для guard смены провайдера и фронта

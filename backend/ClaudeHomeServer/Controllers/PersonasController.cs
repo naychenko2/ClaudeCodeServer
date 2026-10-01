@@ -1693,7 +1693,10 @@ public record CreatePersonaRequest(
     // Свои модели по уровням (ADR-007 §2): id модели ИЛИ "preset:{id}"; null/"" — не задана
     string? TierStrong = null,
     string? TierMedium = null,
-    string? TierWeak = null);
+    string? TierWeak = null,
+    // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
+    // (при создании — выключен)
+    bool? LightContext = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -1727,7 +1730,10 @@ public record UpdatePersonaRequest(
     // Свои модели по уровням (ADR-007 §2): null — не менять, "" — сбросить, иначе id/preset:{id}
     string? TierStrong = null,
     string? TierMedium = null,
-    string? TierWeak = null);
+    string? TierWeak = null,
+    // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
+    // (при создании — выключен)
+    bool? LightContext = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

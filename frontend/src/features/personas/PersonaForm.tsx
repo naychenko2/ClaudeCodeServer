@@ -161,8 +161,14 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [disallowedText, setDisallowedText] = useState(
     (persona?.disallowedTools ?? []).join(', '));
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
+  // Облегчённый контекст: переключатель Вкл/Выкл без «Авто» (решение владельца)
+  const [lightContext, setLightContext] = useState(persona?.lightContext ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Локальный провайдер среди явно заданных моделей персоны (ключ провайдера local-*):
+  // на нём сервер применяет облегчённый профиль всегда, переключатель влияет только на прочие модели
+  const usesLocalModel = [model, tierStrong, tierMedium, tierWeak]
+    .some(m => !!m && modelProvider(m).startsWith('local'));
 
   // Смена специальности: подставляет права и инструменты из эффективного шаблона,
   // дальше они правятся вручную. Если текущие поля уже отличаются от нового шаблона —
@@ -481,7 +487,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     model, modelTier, effort, scope,
     tierStrong, tierMedium, tierWeak,
     projectId: scope === 'project' ? projectId : '',
-    color, greeting: greeting.trim(), memoryEnabled,
+    color, greeting: greeting.trim(), memoryEnabled, lightContext,
     tools: [...tools].sort(),
     access,
     specialty,
@@ -516,6 +522,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       color: persona?.avatar?.color ?? 'orange',
       greeting: (persona?.greeting ?? '').trim(),
       memoryEnabled: persona?.memoryEnabled ?? false,
+      lightContext: persona?.lightContext ?? false,
       tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
       access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
       specialty: persona ? (persona.specialty ?? 'none') : (initial?.specialty ?? 'none'),
@@ -571,6 +578,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       color,
       greeting: greeting.trim() || undefined,
       memoryEnabled,
+      lightContext,
       // Всегда явный список: полный набор бэкенд нормализует в «без ограничений»
       tools,
       // Профиль доступа: свой список запретов уходит только при custom
@@ -1189,6 +1197,35 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />
           </Field>
         )}
+
+        <Field label="Облегчённый контекст">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+                {lightContext ? 'Включён' : 'Выключен'}
+              </span>
+              <Toggle checked={lightContext} onChange={setLightContext} />
+            </div>
+            <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+              Персона получает краткую карту проекта вместо полного CLAUDE.md, сокращённый набор
+              инструментов и только базовые MCP-серверы: задачи, память, граф кода, веб-поиск, сторожа.
+              Ход быстрее и дешевле по токенам, но персона хуже знает устройство проекта и не видит
+              заметки, базу знаний, других персон и генерацию медиа. Модель та же — урезается то, что
+              ей подаётся.
+            </div>
+            {usesLocalModel && (
+              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+                На локальной модели облегчённый контекст включён всегда, независимо от переключателя:
+                полный CLAUDE.md не помещается в её окно.
+              </div>
+            )}
+            {isEdit && lightContext !== (persona?.lightContext ?? false) && (
+              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+                После сохранения открытые чаты персоны перезапустятся.
+              </div>
+            )}
+          </div>
+        </Field>
 
         <Field label="Зона">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

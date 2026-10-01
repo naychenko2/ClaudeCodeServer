@@ -146,6 +146,12 @@ public class Persona
     // регламент не правил (нетронута) и её можно авто-обновлять вместе с каталогом
     public string? TemplateInstructionsHash { get; set; }
     public bool MemoryEnabled { get; set; } = true;
+    // Облегчённый контекст: краткая карта проекта вместо полного CLAUDE.md, урезанные
+    // инструменты и набор MCP (LlmProviderRegistry.LightProfileFor). null — решение ещё не
+    // принято (персона из стора до появления поля): разовая миграция выставляет true тем,
+    // чья модель уходит в провайдер с облегчённым профилем, остальным false; в рантайме
+    // null читается как false.
+    public bool? LightContext { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

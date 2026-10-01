@@ -2766,6 +2766,9 @@ export interface Persona {
   voice?: PersonaVoice | null; // личный голос; null/отсутствие — голос инстанса
   greeting?: string;          // приветствие персоны в начале чата
   memoryEnabled: boolean;     // долгая память (этап 2)
+  // Облегчённый контекст: краткая карта вместо полного CLAUDE.md, урезанные инструменты и MCP.
+  // null/отсутствие — решение не принято (читается как «выкл»)
+  lightContext?: boolean | null;
   // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
   specialty?: PersonaSpecialty;
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
@@ -2932,6 +2935,7 @@ export interface CreatePersonaDto {
   color?: string;             // ключ палитры AGENT_COLORS для аватара-инициалов
   greeting?: string;
   memoryEnabled?: boolean;
+  lightContext?: boolean;
   // Возможности (tasks/notes/web); полный набор бэкенд нормализует в «без ограничений»
   tools?: string[];
   // Профиль доступа (P6): full | readOnly | custom

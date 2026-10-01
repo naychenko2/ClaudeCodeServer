@@ -34,7 +34,7 @@ import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
 import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
-import { useStripShortcuts } from './chat/ComposerStripHost';
+import { plusButtonTitle, useStripShortcuts } from './chat/ComposerStripHost';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
@@ -1543,7 +1543,7 @@ export function Composer({
       onClick={stripShortcuts.length > 0
         ? (e) => setPlusMenu((e.currentTarget as HTMLElement).getBoundingClientRect())
         : onAttach}
-      title={stripShortcuts.length > 0 ? 'Прикрепить файл, голос, музыка…' : 'Прикрепить файл'}
+      title={plusButtonTitle(stripShortcuts)}
       aria-haspopup={stripShortcuts.length > 0 ? 'menu' : undefined}
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',

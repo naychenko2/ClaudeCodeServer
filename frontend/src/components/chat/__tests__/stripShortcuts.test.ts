@@ -10,7 +10,7 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
 
 const { registerSubsystem, SLOT_COMPOSER_STRIP } = await import('../../../lib/subsystems/registryCore');
 const { ChatEmptyState } = await import('../EmptyState');
-const { useStripShortcuts } = await import('../ComposerStripHost');
+const { plusButtonTitle, useStripShortcuts } = await import('../ComposerStripHost');
 
 // Полоса-вклад с ярлыками «Голос» / «Музыка»; доступность — рычагом теста
 const lever = { available: true };
@@ -58,5 +58,17 @@ describe('ярлыки полос вне меню полосы (ADR-021 п.1)', 
     lever.available = true;
     expect(titles('p1')).toEqual(['Голос', 'Музыка']);
     expect(titles(null)).toEqual(['Голос', 'Музыка']);
+  });
+});
+
+describe('подсказка кнопки «＋»', () => {
+  it('собирается из ярлыков полос, без ярлыков — только файл', () => {
+    lever.available = true;
+    let shortcuts: { title: string }[] = [];
+    const Probe = () => { shortcuts = useStripShortcuts('p1', 's1'); return null; };
+    renderToStaticMarkup(createElement(Probe));
+    expect(plusButtonTitle(shortcuts)).toBe('Прикрепить файл, голос, музыка…');
+    expect(plusButtonTitle([{ title: 'Видео' }])).toBe('Прикрепить файл, видео…');
+    expect(plusButtonTitle([])).toBe('Прикрепить файл');
   });
 });

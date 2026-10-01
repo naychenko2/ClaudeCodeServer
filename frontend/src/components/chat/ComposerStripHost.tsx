@@ -46,6 +46,13 @@ export function useStripShortcuts(projectId: string | null, sessionId: string | 
     .flatMap(c => c.action!.shortcuts?.(avail) ?? []);
 }
 
+// Подсказка кнопки «＋»: «Прикрепить файл, голос, музыка…» — из ярлыков, а не зашитой строкой
+export function plusButtonTitle(shortcuts: Pick<ComposerStripShortcut, 'title'>[]): string {
+  if (shortcuts.length === 0) return 'Прикрепить файл';
+  const titles = shortcuts.map(s => s.title.charAt(0).toLocaleLowerCase('ru') + s.title.slice(1));
+  return `Прикрепить файл, ${titles.join(', ')}…`;
+}
+
 // projectId = null — личный чат вне проекта: полосы сами решают, доступны ли они без проекта
 export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [] }: {
   projectId: string | null;

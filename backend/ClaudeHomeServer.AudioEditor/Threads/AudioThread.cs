@@ -140,11 +140,16 @@ public static class AudioThreadLaunchStatus
 }
 
 // Последние настройки нити: Mode — AudioModes.*, Operation — операция режима, Provider и Model —
-// выбор поставщика, Fields — поля операции (слова, голос, интервал…) как есть, Count — число
+// выбор поставщика, Fields — параметры модели (ключи её схемы, идут в params), Count — число
 // вариантов. null у поля — нить его не задаёт, при запуске оно берётся из префов режима
-// (AudioPrefsResolver)
+// (AudioPrefsResolver). Inputs — входы операции (язык, образец, кусок, куски склейки, голос из
+// библиотеки, реплики; белый список AudioOpInputs): их только подставляет панель, в params и запуск
+// они не попадают — входы задачи едут в запросе запуска. У старых записей Inputs нет — null
 public sealed record AudioThreadSettings(string Mode, string? Operation, string? Provider, string? Model, JsonObject? Fields,
-    int? Count = null);
+    int? Count = null)
+{
+    public JsonObject? Inputs { get; init; }
+}
 
 public static class AudioModes
 {

@@ -324,8 +324,9 @@ public sealed class AudioEditJobService : IDisposable
             job.ThreadId = threadId;
             await _threads.OnLaunchedAsync(ownerId, scope.Key, sessionId, threadId, job.Id, ToDto(quote),
                 input.Prompt ?? input.Text, baseVersion, input.Initiator,
+                // Входы операции запуск не пишет: их держит панель, запуск не должен их затирать
                 new AudioThreadSettings(quote.Mode, OpName(quote.Op), quote.Provider, quote.Model.Id,
-                    quote.Fields.DeepClone().AsObject(), quote.Count), ct);
+                    quote.Fields.DeepClone().AsObject(), quote.Count) { Inputs = thread.Settings?.Inputs?.DeepClone().AsObject() }, ct);
         }
 
         var request = new AudioRequest(quote.Op, quote.Model.Id, scope, input.Text, input.Prompt, input.Lyrics,

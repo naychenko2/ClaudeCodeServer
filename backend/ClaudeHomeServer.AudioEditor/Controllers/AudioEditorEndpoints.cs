@@ -64,6 +64,8 @@ public abstract class AudioEditorEndpoints(
         if (req.Count is { } count && (count < 1 || count > AudioModePrefs.MaxCount))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 $"Вариантов — от 1 до {AudioModePrefs.MaxCount}");
+        if (AudioOpInputs.Validate(req.Inputs, scope) is { } badInputs)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, badInputs);
         await prefs.SaveAsync(UserId, scope, mode, req);
         return Ok(PrefsOf(scope));
     }
@@ -246,6 +248,8 @@ public abstract class AudioEditorEndpoints(
         if (settings.Count is { } count && (count < 1 || count > AudioModePrefs.MaxCount))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 $"Вариантов — от 1 до {AudioModePrefs.MaxCount}");
+        if (AudioOpInputs.Validate(settings.Inputs, scope) is { } badInputs)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, badInputs);
         return await ResultAsync(scope, sessionId, threads.Store.SetSettings(UserId, sessionId, threadId, settings, req.Revision));
     }
 

@@ -67,6 +67,38 @@ public sealed class AudioParamsValidationTests : IDisposable
         engine.LastParams!["speed"]!.GetValue<double>().Should().Be(1.5);
     }
 
+    // Входы операции из настроек нити (язык, голос, кусок) в params модели не попадают: со схемой из
+    // одного speed они дали бы «неизвестный параметр». Запуск пишет настройки нити, но входы не затирает
+    [Fact]
+    public async Task ThreadInputs_NotInParams_AndSurviveLaunch()
+    {
+        const string session = "chat-1";
+        var store = new AudioThreadStore(Path.Combine(_root, "threads"));
+        var threads = new AudioJobThreads(store, NullLogger<AudioJobThreads>.Instance);
+        var threadId = store.Open(Owner, session, null, "", null).Thread!.Id;
+        var inputs = new JsonObject { ["language"] = "ru", ["voice"] = "voice:anya", ["startSec"] = 1.5 };
+        store.SetSettings(Owner, session, threadId,
+            new AudioThreadSettings(AudioModes.Voice, "speak", "fal", SchemaEngine.SpeakModel, new JsonObject { ["speed"] = 1.2 })
+            {
+                Inputs = inputs,
+            }, null).Status.Should().Be(AudioThreadWriteStatus.Ok);
+        var engine = new SchemaEngine();
+        var svc = new AudioEditJobService([engine], new AudioEditWorkspace(Path.Combine(_root, "work")),
+            NullLogger<AudioEditJobService>.Instance, threads);
+
+        var quote = await svc.QuoteAsync(Owner, Scope,
+            new AudioQuoteRequest(AudioModes.Voice, SessionId: session, ThreadId: threadId), CancellationToken.None);
+        quote.Error.Should().BeNull();
+        var started = await svc.StartAsync(Owner, Scope,
+            new AudioJobInput(quote.Value!.QuoteId, SessionId: session, ThreadId: threadId, Text: "привет"), CancellationToken.None);
+        started.Error.Should().BeNull();
+        await engine.Ran.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        engine.LastParams!.Select(p => p.Key).Should().Equal("speed");
+        var settings = store.Get(Owner, session).Threads.Single(t => t.Id == threadId).Settings!;
+        settings.Inputs!.ToJsonString().Should().Be(inputs.ToJsonString());
+    }
+
     [Fact]
     public async Task SchemaDown_EmptyParamsPass_NonEmptyRefused()
     {

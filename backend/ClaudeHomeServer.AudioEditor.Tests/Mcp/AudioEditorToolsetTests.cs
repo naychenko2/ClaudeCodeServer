@@ -357,6 +357,22 @@ public sealed class AudioEditorToolsetTests : IDisposable
     }
 
     [Fact]
+    public async Task Фокус_с_несуществующей_версией_отказ_с_версиями_нити()
+    {
+        var toolset = Toolset();
+        var thread = Parse(await Call(toolset, AudioEditorToolset.ToolFocus, new JsonObject { ["file"] = "audio/intro.wav" }))
+            ["focus"]!.GetValue<string>();
+        var before = _store.Get(Owner, ChatId);
+
+        var refused = await Call(toolset, AudioEditorToolset.ToolFocus,
+            new JsonObject { ["threadId"] = thread, ["versionId"] = "v-нет" });
+
+        refused.IsError.Should().BeTrue();
+        refused.Text.Should().Contain("нет версии v-нет").And.Contain($"{AudioThreadVersion.OriginId} (исходник)");
+        _store.Get(Owner, ChatId).Revision.Should().Be(before.Revision);
+    }
+
+    [Fact]
     public async Task Отмена_чужой_задачи_отказ()
     {
         var engine = new FakeEngine("fal") { Hold = true };

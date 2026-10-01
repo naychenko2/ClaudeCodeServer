@@ -162,6 +162,12 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             return Deny("Укажи что-то одно: threadId звука этого чата или file — путь звукового файла проекта.");
         if (versionId is not null && threadId is null)
             return Deny("versionId — версия звука threadId: укажи и threadId.");
+        // Ранняя проверка, как у картинок: отказ сразу называет версии нити, а не только шлёт в audio_state
+        if (versionId is not null
+            && Store.Get(ownerId, session.Id).Threads.FirstOrDefault(t => t.Id == threadId) is { } target
+            && target.Version(versionId) is null)
+            return Deny($"У звука {threadId} нет версии {versionId}. Версии этого звука: "
+                + string.Join(", ", target.Versions.Select(v => $"{v.Id} ({AudioThread.Label(v)})")) + ".");
 
         AudioThreadWrite written;
         if (file is not null)

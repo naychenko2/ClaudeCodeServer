@@ -11,10 +11,11 @@ import type {
 import { isEditableImage } from './format';
 import { ImageFileMovedRow, ImageLaunchCard, ImageLaunchRow, ImagePromptCard } from './chat/cards';
 import { CharactersPanel } from './characters/CharactersPanel';
-import { CHARACTERS_PANEL } from './characters/panel';
+import { CHARACTERS_PANEL, IMAGES_PANEL } from './characters/panel';
 import { EditImageButton } from './entry/EditImageButton';
 import { openFromTree } from './entry/openFromTree';
 import { ImageComposerChip } from './composer/ComposerChip';
+import { ImagesPanel } from './panel/ImagesPanel';
 import { imageMode } from './composer/imageMode';
 import { takeMarksAttachment } from './composer/marksAttachment';
 import { ImagesStrip, imagesStripStatus } from './strip/ImagesStrip';
@@ -75,8 +76,19 @@ export const manifest: SubsystemManifest = {
         action: { beforeSend: takeMarksAttachment } satisfies ComposerChipApi as unknown as Record<string, unknown>,
       },
     ],
-    // Панель «Персонажи» рабочей области проекта
+    // Панель «Картинки» (флаг image-editor-panel): настройки и персонажи вкладками, в проекте
+    // и в правой колонке личного чата. С ней отдельной панели «Персонажи» нет
     'workspace-panel-def': [
+      {
+        name: IMAGES_PANEL,
+        render: (ctx: WorkspacePanelDefCtx) => <ImagesPanel ctx={ctx} />,
+        action: {
+          title: 'Картинки',
+          icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          isAvailable: () => getFlag(FLAGS.imageEditor) && getFlag(FLAGS.imageEditorPanel),
+        } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
+      },
+      // Панель «Персонажи» рабочей области проекта — пока панели «Картинки» нет
       {
         name: CHARACTERS_PANEL,
         // Персонажи живут в папке проекта: в личном чате панели нет
@@ -84,7 +96,7 @@ export const manifest: SubsystemManifest = {
         action: {
           title: 'Персонажи',
           icon: <Contact size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-          isAvailable: (projectId: string | null) => projectId !== null && getFlag(FLAGS.imageEditor),
+          isAvailable: (projectId: string | null) => projectId !== null && getFlag(FLAGS.imageEditor) && !getFlag(FLAGS.imageEditorPanel),
         } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],

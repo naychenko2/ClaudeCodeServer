@@ -3,9 +3,9 @@
 
 import { useRef, useState } from 'react';
 import { FolderOpen, Plus, Upload, User } from 'lucide-react';
-import { Button, Chip, Menu, MenuItem, Modal, SP, ICON_SIZE, api as appApi } from 'aihome_shell/kit';
+import { Button, Chip, Menu, MenuItem, Modal, SP, ICON_SIZE, FLAGS, getFlag, api as appApi } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditCatalog, type ReferenceRole } from '../../api';
-import { CHARACTERS_PANEL, revealWorkspacePanel } from '../../characters/panel';
+import { CHARACTERS_PANEL, IMAGES_PANEL, revealWorkspacePanel } from '../../characters/panel';
 import { useCharacters } from '../../characters/useCharacters';
 import { maxSamples, roleShort, SAMPLE_ROLES, type Sample } from '../../editorInputs';
 import { ProjectImagePicker } from '../../PanelSections';
@@ -22,8 +22,10 @@ export function useCharacter(projectId: string | null, slug: string | null) {
   return { current, photo, name: current?.name ?? slug };
 }
 
+// С панелью «Картинки» (флаг image-editor-panel) персонажи — её вкладка, а не своя панель
 export function openCharacters(isMobile: boolean, sheet: () => void) {
   if (isMobile) sheet();
+  else if (getFlag(FLAGS.imageEditorPanel)) revealWorkspacePanel(IMAGES_PANEL, 'characters');
   else revealWorkspacePanel(CHARACTERS_PANEL);
 }
 
@@ -95,10 +97,13 @@ function SampleChips({ projectId, max }: { projectId: string; max: number }) {
   );
 }
 
-// Шторку персонажей на телефоне держит хозяин секции: onCharacterSheet её открывает
-export function CharacterSection({ projectId, L, catalog, isMobile, onCharacterSheet }: {
+// Шторку персонажей на телефоне держит хозяин секции: onCharacterSheet её открывает.
+// onCharacters — свой показ персонажей (панель «Картинки» переключает вкладку)
+export function CharacterSection({ projectId, L, catalog, isMobile, onCharacterSheet, onCharacters }: {
   projectId: string; L: Launch; catalog: ImageEditCatalog; isMobile: boolean; onCharacterSheet: () => void;
+  onCharacters?: () => void;
 }) {
+  const showCharacters = onCharacters ?? (() => openCharacters(isMobile, onCharacterSheet));
   const personal = isPersonalScope(projectId);
   const { current, photo, name } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
   const max = maxSamples(catalog.limits.maxReferences, L.model?.caps?.maxReferences);
@@ -108,11 +113,11 @@ export function CharacterSection({ projectId, L, catalog, isMobile, onCharacterS
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
         {personal ? null : L.prefs.characterSlug
           ? <Chip selected leading={photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : undefined}
-              maxW={160} title="Фото персонажа уходят в каждую генерацию" onClick={() => openCharacters(isMobile, onCharacterSheet)}
+              maxW={160} title="Фото персонажа уходят в каждую генерацию" onClick={showCharacters}
               onRemove={() => setPrefs(projectId, { characterSlug: null })}>
               {current?.name ?? name}
             </Chip>
-          : <Chip dashed leading={ic(User)} title="Персонажи проекта" onClick={() => openCharacters(isMobile, onCharacterSheet)}>Персонаж</Chip>}
+          : <Chip dashed leading={ic(User)} title="Персонажи проекта" onClick={showCharacters}>Персонаж</Chip>}
         {max > 0 && <SampleChips projectId={projectId} max={max} />}
       </div>
     </>

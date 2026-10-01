@@ -6,25 +6,25 @@
 // «Размер оригинала». Свёрнутая — строка 30 px со сводкой, клик разворачивает.
 // В личном чате вне проекта (область personal) нет персонажа и образцов из проекта: их
 // источник — папки проекта.
+// С флагом image-editor-panel (десктоп) карточки нет: сводка открывает панель «Картинки»
+// на «Настройках», аватар — на «Персонажах» (panel/ImagesPanel).
 
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, Image as ImageIcon, SlidersHorizontal, Sparkles, User, X } from 'lucide-react';
-import { Button, Chip, IconButton, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE } from 'aihome_shell/kit';
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, SlidersHorizontal, Sparkles, User, X } from 'lucide-react';
+import { Button, Chip, IconButton, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, FLAGS, useFeature } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import type { ImageEditCatalog } from '../api';
 import { CharactersPanel } from '../characters/CharactersPanel';
-import { CHARACTERS_PANEL, revealWorkspacePanel } from '../characters/panel';
+import { CHARACTERS_PANEL, IMAGES_PANEL, revealWorkspacePanel } from '../characters/panel';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { enterScope, isPersonalScope } from '../scope';
 import { focusLabel } from '../thread/model';
 import { getFocusedThread, useThreads } from '../thread/threadStore';
 import type { ImageThread } from '../thread/threadsApi';
 import { activeSrc, launchSummaryParts, useThreadLaunch } from '../thread/useThreadLaunch';
-import { CharacterSection, openCharacters, useCharacter } from './settings/CharacterSection';
-import { CountSection } from './settings/CountSection';
+import { openCharacters, useCharacter } from './settings/CharacterSection';
 import { ic, type Launch } from './settings/primitives';
-import { ModelSection, ProviderSection } from './settings/ProviderSection';
-import { BlockedNotice, SizeSection } from './settings/SizeSection';
+import { SettingsSections } from './settings/SettingsSections';
 import { stripSummary } from './summary';
 
 function Thumb({ src, round }: { src: string | null; round?: boolean }) {
@@ -36,8 +36,8 @@ function Thumb({ src, round }: { src: string | null; round?: boolean }) {
   );
 }
 
-// Карточка настроек генерации — над полосой на десктопе и шторкой на телефоне; секции общие
-// с боковой панелью генерации (settings/*)
+// Карточка настроек генерации — над полосой на десктопе и шторкой на телефоне; тело общее
+// с боковой панелью генерации (settings/SettingsSections)
 function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
   projectId: string; L: Launch; catalog: ImageEditCatalog; isMobile: boolean; thread: ImageThread | null;
 }) {
@@ -45,19 +45,15 @@ function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
   const personal = isPersonalScope(projectId);
 
   return (
-    <div data-image-settings="" style={{ fontSize: FS.sm }}>
-      <ProviderSection L={L} catalog={catalog} />
-      <ModelSection L={L} catalog={catalog} />
-      <CountSection L={L} catalog={catalog} />
-      <CharacterSection projectId={projectId} L={L} catalog={catalog} isMobile={isMobile} onCharacterSheet={() => setCharSheet(true)} />
-      <SizeSection L={L} thread={thread} />
-      <BlockedNotice L={L} />
+    <>
+      <SettingsSections projectId={projectId} L={L} catalog={catalog} isMobile={isMobile} thread={thread}
+        onCharacterSheet={() => setCharSheet(true)} />
       {charSheet && !personal && (
         <Modal title="Персонажи" onClose={() => setCharSheet(false)}>
           <CharactersPanel projectId={projectId} />
         </Modal>
       )}
-    </div>
+    </>
   );
 }
 
@@ -73,6 +69,8 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const [charSheet, setCharSheet] = useState(false);
   const shell = useRef<HTMLDivElement>(null);
   const { current: character, photo } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
+  // Настройки в боковой панели — только на десктопе: на телефоне карточка-шторка как была
+  const inPanel = useFeature(FLAGS.imageEditorPanel) && !isMobile;
 
   // Карточка настроек закрывается кликом мимо полосы и Esc
   useEffect(() => {
@@ -166,15 +164,15 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
       ) : (
         <span data-images-settings-toggle="" style={{ display: 'inline-flex', minWidth: 0, flex: '0 1 auto' }}>
           <Button size="xs" variant="secondary"
-            leftIcon={ic(SlidersHorizontal)} title="Настройки генерации"
-            onClick={() => setOpen(v => !v)}
+            leftIcon={ic(SlidersHorizontal)} title={inPanel ? 'Открыть настройки в панели «Картинки»' : 'Настройки генерации'}
+            onClick={() => (inPanel ? revealWorkspacePanel(IMAGES_PANEL, 'settings') : setOpen(v => !v))}
             style={{ minWidth: 0, flex: '0 1 auto', height: 28, border: `1px solid ${open ? C.accent : C.border}`, background: C.bgWhite }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {isMobile ? `${L.settings.count} вар.` : stripSummary(parts, true)}
               </span>
               {L.blocked && <span style={{ display: 'inline-flex', color: C.warningText }}>{ic(AlertTriangle)}</span>}
-              {ic(ChevronDown)}
+              {ic(inPanel ? ChevronRight : ChevronDown)}
             </span>
           </Button>
         </span>
@@ -182,7 +180,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
       {!isMobile && !personal && (L.prefs.characterSlug
         ? (
           <IconButton size="sm" title={`Персонаж: ${character?.name ?? L.prefs.characterSlug} — фото уходят в запрос`}
-            ariaLabel="Персонаж" onClick={() => revealWorkspacePanel(CHARACTERS_PANEL)}
+            ariaLabel="Персонаж" onClick={() => (inPanel ? revealWorkspacePanel(IMAGES_PANEL, 'characters') : revealWorkspacePanel(CHARACTERS_PANEL))}
             style={{ padding: 0, borderRadius: R.full, border: `1.5px solid ${C.accent}`, overflow: 'hidden' }}>
             {photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} /> : ic(User)}
           </IconButton>
@@ -195,7 +193,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
         {ic(ChevronUp, ICON_SIZE.sm)}
       </IconButton>
 
-      {open && settings && !isMobile && (
+      {open && settings && !isMobile && !inPanel && (
         <div data-images-settings-card="" style={{
           position: 'absolute', right: 0, bottom: 'calc(100% + 6px)', width: 380, maxWidth: 'calc(100vw - 40px)', zIndex: Z.dropdown,
           boxSizing: 'border-box', padding: `${SP.xs}px ${SP.lg}px ${SP.md}px`, cursor: 'default',

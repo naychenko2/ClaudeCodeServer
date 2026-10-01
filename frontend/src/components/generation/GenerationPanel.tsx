@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Cpu, Sparkles, X } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP, Z } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
-import { Badge, Button, IconButton, ResizeHandle, Stepper, Tabs } from '../ui';
+import { Badge, Button, IconButton, PanelHeaderSlot, ResizeHandle, Stepper, Tabs, useHasPanelHeader } from '../ui';
 import type { TabItem } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 
@@ -11,6 +11,8 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 // Каркас рисует шапку, вкладки, строку контекста, прокручиваемое тело, закреплённый низ,
 // корешок и шторку; вертикаль отдаёт только содержимое вкладок и данные низа.
 // Образец разметки — genPanel() в docs/mockups/image-editor-v4-panel.html.
+// Внутри оболочки панели рабочей области (PanelShell зоны) шапку, закрытие и ширину держит
+// оболочка: каркас рисует только вкладки, тело и низ, подзаголовок уходит в её шапку.
 
 export const GEN_PANEL_W = { default: 380, min: 340, max: 520, spine: 44 } as const;
 const HEAD_H = 42;
@@ -81,6 +83,7 @@ const icon = (Ico: typeof X) => <Ico size={ICON_SIZE.xs} strokeWidth={ICON_STROK
 
 export function GenerationPanel<T extends string>(p: Props<T>) {
   const isMobile = useIsMobile();
+  const inShell = useHasPanelHeader();
   const [ownCollapsed, setOwnCollapsed] = useState(false);
   const [ownPeeked, setOwnPeeked] = useState(false);
   const [ownWidth, setOwnWidth] = useState<number>(GEN_PANEL_W.default);
@@ -95,7 +98,7 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
   const sheet = p.layout === 'sheet' || (p.layout !== 'column' && isMobile);
   const view: GenerationPanelView = sheet ? (peeked ? 'peek' : 'sheet') : (collapsed ? 'spine' : 'column');
 
-  if (view === 'spine') return <Spine {...p} onExpand={() => setCollapsed(false)} onTab={t => { p.onTabChange(t); setCollapsed(false); }} />;
+  if (view === 'spine' && !inShell) return <Spine {...p} onExpand={() => setCollapsed(false)} onTab={t => { p.onTabChange(t); setCollapsed(false); }} />;
 
   const head = (
     <div style={{
@@ -160,6 +163,22 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
       </div>
     </>
   );
+
+  if (inShell && !sheet) {
+    return (
+      <div role="complementary" aria-label={p.title} style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', fontFamily: FONT.sans, ...p.style }}>
+        {p.subtitle && (
+          <PanelHeaderSlot side="left">
+            <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+              {p.subtitle}
+            </span>
+          </PanelHeaderSlot>
+        )}
+        {content}
+        {footBox}
+      </div>
+    );
+  }
 
   if (sheet) {
     const pos = p.contained ? 'absolute' : 'fixed';

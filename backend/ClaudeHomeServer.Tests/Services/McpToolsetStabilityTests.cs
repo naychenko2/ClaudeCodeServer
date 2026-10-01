@@ -586,8 +586,13 @@ public class McpToolsetStabilityTests
 
         code.Should().Contain("GetOwned(",
             "профиль резолвится по сессии-вызывателю, изолированной по владельцу токена");
-        code.Should().Contain("ResolveByModel(",
-            "провайдер выводится из эффективной модели сессии — той же формулой, что в бою");
+        code.Should().Contain("LightProfileFor(",
+            "профиль выводится из эффективной модели И персоны сессии — единой точкой резолва, "
+            + "той же, что у ClaudeSession (иначе состав MCP и фильтр разъедутся)");
+        code.Should().Contain("personas.Get(",
+            "признак «Облегчённый контекст» — свойство персоны СЕССИИ, а не хода");
+        code.Should().NotContain("ResolveByModel(",
+            "своей копии резолва профиля здесь быть не должно");
         code.Should().NotContain("GetActiveTurnDelegation",
             "глубина делегирования — свойство ХОДА: гейт делегирования живёт отдельно");
         code.Should().NotContain("TurnDelegation",

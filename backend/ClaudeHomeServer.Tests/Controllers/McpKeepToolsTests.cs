@@ -94,7 +94,13 @@ public class McpKeepToolsTests : IDisposable
     private async Task<HttpClient> CallerAsync(string model)
     {
         var client = _factory.CreateAuthenticatedClient();
-        var created = await client.PostAsJsonAsync("/api/chats", new { mode = "auto", model });
+        // Новый чат человека всегда с персоной, а у персоны профиль решает её опция «Облегчённый
+        // контекст» (LlmProviderRegistry.LightProfileFor): включённая берёт профиль провайдера модели
+        var persona = await client.PostAsJsonAsync("/api/personas", new { name = "Облегчённая", lightContext = true });
+        persona.EnsureSuccessStatusCode();
+        var personaId = JsonSerializer.Deserialize<JsonElement>(await persona.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString();
+        var created = await client.PostAsJsonAsync("/api/chats", new { mode = "auto", model, personaId });
         created.EnsureSuccessStatusCode();
         var chat = JsonSerializer.Deserialize<JsonElement>(await created.Content.ReadAsStringAsync());
         chat.GetProperty("model").GetString().Should().Be(model,

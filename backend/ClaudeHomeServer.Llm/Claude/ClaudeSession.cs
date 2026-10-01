@@ -45,6 +45,12 @@ public class ClaudeSession : ILlmSessionAdapter
             ? LlmProviderRegistry.StripClaudeWindowAlias(model)
             : _subscriptionPool.LaunchModel(model, Info.Provider);
 
+    // Профиль облегчённого контекста сессии (единая точка — LlmProviderRegistry.LightProfileFor):
+    // модель и персона — свойства СЕССИИ, не хода, поэтому состав MCP и сигнатура запуска
+    // стабильны. Тот же резолв в McpToolWhitelist (фильтр tools/list и tools/call).
+    private LightProfile? LightProfile =>
+        _providers?.LightProfileFor(EffectiveModel, _personaProvider?.Invoke());
+
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
     // цепочка нужна оркестратору, чтобы при сбое шагать по ней, а не автоподбирать. Без резолвера
@@ -1086,11 +1092,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // (на local-qwen по умолчанию ["tasks"]), остальные гасятся выборочно. Пустой список
         // = прежнее «всё или ничего» (гасится всё). Родной Claude и облачные
         // провайдеры не задеты (TrimMcpServers=false по умолчанию).
-        var provider = _providers?.ResolveByModel(EffectiveModel);
-        var trimMcp = provider is { TrimMcpServers: true };
+        var light = LightProfile;
+        var trimMcp = light is { TrimMcpServers: true };
         if (trimMcp)
         {
-            bool Keep(string key) => provider!.KeepMcpServers
+            bool Keep(string key) => light!.KeepMcpServers
                 .Contains(key, StringComparer.OrdinalIgnoreCase);
             hasTasks = hasTasks && Keep("tasks");
             hasNotes = hasNotes && Keep("notes");
@@ -1994,9 +2000,9 @@ public class ClaudeSession : ILlmSessionAdapter
             // новый блок, добавленный без индивидуальной проверки Keep. Без этого
             // однократная забывчивость навсегда оставляет лишний сервер в конфиге
             // хода и пожирает контекст локальной модели.
-            if (trimMcp && provider is not null)
+            if (trimMcp && light is not null)
             {
-                var allowed = new HashSet<string>(provider.KeepMcpServers, StringComparer.OrdinalIgnoreCase);
+                var allowed = new HashSet<string>(light.KeepMcpServers, StringComparer.OrdinalIgnoreCase);
                 var removed = new List<string>();
                 foreach (var key in servers.Select(kv => kv.Key).ToList())
                 {
@@ -2008,8 +2014,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 if (removed.Count > 0)
                 {
                     _log?.LogWarning(
-                        "TrimMcpServers: у провайдера {Provider} отрезаны серверы {Servers} (нет в KeepMcpServers)",
-                        provider.Key, string.Join(",", removed));
+                        "TrimMcpServers: у профиля {Provider} отрезаны серверы {Servers} (нет в KeepMcpServers)",
+                        light.Source, string.Join(",", removed));
                 }
             }
 
@@ -2884,22 +2890,26 @@ public class ClaudeSession : ILlmSessionAdapter
         // раньше --bare ломал OAuth-авторизацию, и BareMode был безопасен «структурно» —
         // включался только для не-родных провайдеров. Переменной окружения этот риск не
         // грозит, но проверку в коде пока НЕ снимаем (лишняя работа для этой задачи).
+        // Провайдер модели остаётся нужен тем осям, что привязаны к нему, а не к режиму
+        // (подсказки следующего сообщения ниже); карта и BareTools — от профиля облегчённого контекста.
         var bareProvider = _providers?.ResolveByModel(EffectiveModel);
-        if (bareProvider is { BareMode: true })
+        var bareLight = LightProfile;
+        if (bareLight is { BareMode: true })
         {
             try
             {
                 var bareArgs = BuildBareModeArgs(
                     _rootPath, _serverContentRoot,
-                    bareProvider.SystemPromptFile ?? "",
-                    bareProvider.BareTools,
+                    bareLight.SystemPromptFile ?? "",
+                    bareLight.BareTools,
                     _launcher.Paths,
                     // BareMode-диагностика — под категорией ClaudeSession, не фабрики
                     // (см. поле _sessionLog). Тесты без DI передают null — fallback на _log.
                     _sessionLog ?? (ILogger?)_log,
                     out var bareWarning,
                     out _lastBareModeApplied,
-                    out _lastBareModeMapBytes);
+                    out _lastBareModeMapBytes,
+                    bareLight.ServerMapFallback);
                 if (bareWarning is not null)
                     Console.Error.WriteLine($"[ClaudeSession] {bareWarning}");
                 args.AddRange(bareArgs);
@@ -2933,8 +2943,8 @@ public class ClaudeSession : ILlmSessionAdapter
             if (!_lastBareModeApplied)
             {
                 Console.Error.WriteLine(
-                    $"[ClaudeSession] BareMode НЕ применён (провайдер {bareProvider.Key}, " +
-                    $"SystemPromptFile={bareProvider.SystemPromptFile ?? "<empty>"}). " +
+                    $"[ClaudeSession] BareMode НЕ применён (профиль {bareLight.Source}, " +
+                    $"SystemPromptFile={bareLight.SystemPromptFile ?? "<empty>"}). " +
                     $"CLI получит полную CLAUDE.md проекта — локальный исполнитель может " +
                     $"не уложиться в окно. Проверьте наличие файла карты в поставке.");
             }
@@ -3049,7 +3059,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // побайтово неизменным, иначе prefix cache движка рвёт кэш всей истории), а
         // копятся здесь и уезжают хвостом — вклейкой в текст хода. Признак берём от
         // провайдера СЕССИИ, как BareMode: сигнатура запуска остаётся стабильной.
-        var recallInTurnText = _providers?.ResolveByModel(EffectiveModel) is { RecallInTurnText: true };
+        var recallInTurnText = LightProfile is { RecallInTurnText: true };
         List<PromptSectionDto> turnRecallSections = [];
         // Секции PromptSection.InTurnTail: хвостом при любом провайдере, ближе всего к тексту хода
         List<PromptSectionDto> alwaysTailSections = [];
@@ -4832,11 +4842,27 @@ public class ClaudeSession : ILlmSessionAdapter
         ILogger? logger,
         out string? warning,
         out bool bareModeEffective,
-        out long mapBytes)
+        out long mapBytes,
+        bool serverMapFallback = true)
     {
         warning = null;
         bareModeEffective = false;
         mapBytes = 0;
+        // Профиль без серверной карты (общий LightProfile персоны): серверный SystemPromptFile —
+        // карта НАШЕГО репозитория, для персоны в чужом проекте это неверный контекст. Нет
+        // собственной docs/CLAUDE-local.md проекта — ход идёт БЕЗ карты, но автозагрузка
+        // CLAUDE.md всё равно отключена и инструменты урезаны: облегчение не зависит от карты.
+        if (!serverMapFallback)
+        {
+            var projectMap = Path.Combine(projectRoot, "docs", "CLAUDE-local.md");
+            if (File.Exists(projectMap) && new FileInfo(projectMap).Length <= ProjectMapSizeLimit)
+                return BuildBareModeArgs(projectRoot, serverContentRoot, projectMap, bareTools,
+                    paths, logger, out warning, out bareModeEffective, out mapBytes);
+            logger?.LogInformation(
+                "BareMode: у проекта нет docs/CLAUDE-local.md, серверная карта не подставляется — ход без карты");
+            bareModeEffective = true;
+            return bareTools is { Length: > 0 } ? BuildToolsArg(bareTools) : [];
+        }
         // BareMode без файла карты: --system-prompt-file без карты оставил бы модель
         // БЕЗ явной карты проекта. Асимметрия с веткой «файл не найден» ниже
         // (она снимает всё с warning) была неоправданна — модель идёт без

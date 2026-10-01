@@ -20,7 +20,8 @@ import { audioScope, isPersonalScope } from '../scope';
 import { focusLabel, queueBadge } from '../strip/summary';
 import { releaseFocus } from '../thread/actions';
 import {
-  getCatalog, getComposerText, getJobsOf, getPrefs, getShortcutMode, SOUND_PANEL, useAudioStoreVersion, useAudioThreads,
+  focusThread, getCatalog, getComposerText, getJobsOf, getPrefs, getShortcutMode, setPieceFieldOpen, SOUND_PANEL,
+  useAudioStoreVersion, useAudioThreads,
 } from '../thread/threadStore';
 import { ConcatFields } from './ConcatFields';
 import { inputsKey, readInputs, saveSettings, writeInputs, type PanelInputs } from './inputs';
@@ -28,10 +29,15 @@ import {
   isNoAi, modelOptions, nextSettings, panelOps, pillOf, priceLines, providerOptions, pruneFields, resolvePanel, runReason,
   splitSchema, type PanelState, type SettingsPatch,
 } from './model';
+import { heavyWarning, licenseWarning } from './music';
+import { MusicFields } from './MusicFields';
 import { ProcessFields, trimReady, VoiceFields } from './OpFields';
+import { pendingOperation, takeOperation } from './opRequest';
+import { readPiece } from './piece';
+import type { PieceBinding } from './PieceField';
 import { AdvancedForm } from './ParamField';
 import { Hint, ic, Label, Opt, Row } from './primitives';
-import { quoteRequest, runPanel, dialogueText } from './run';
+import { dialogueText, musicDuration, quoteRequest, runPanel } from './run';
 import { useSchema } from './schema';
 
 type Tab = 'settings' | 'voices';
@@ -110,6 +116,37 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   };
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
+  // ── Просьба карточки («Обрезать», «Перегенерировать кусок»): сперва её нить в работу, потом операция ──
+  const opReq = pendingOperation(sessionId);
+  const focusing = useRef(0);
+  useEffect(() => {
+    if (!sessionId || !opReq) return;
+    if (opReq.threadId !== threadId) {
+      if (focusing.current !== opReq.seq) {
+        focusing.current = opReq.seq;
+        void focusThread(scope, sessionId, opReq.threadId);
+      }
+      return;
+    }
+    const r = takeOperation(sessionId);
+    if (!r) return;
+    setTab('settings');
+    const mode = opInfo(r.op)?.mode;
+    if (mode && (r.op !== state.op || mode !== state.mode)) change({ mode, operation: r.op });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- отрабатываем по новой просьбе или смене нити
+  }, [opReq?.seq, threadId, sessionId]);
+
+  // ── Кусок: выделение нити, общее с волной карточки ──
+  const versionId = thread?.currentVersionId ?? null;
+  const piece: PieceBinding | null = sessionId && threadId && versionId ? { sessionId, threadId, versionId } : null;
+  const pieceSel = readPiece(sessionId, threadId);
+  const pieceOpen = tab === 'settings' && (state.op === 'repaint' || state.op === 'trim') && !!piece;
+  useEffect(() => {
+    if (!sessionId) return;
+    setPieceFieldOpen(sessionId, pieceOpen ? threadId : null);
+    return () => setPieceFieldOpen(sessionId, null);
+  }, [sessionId, pieceOpen, threadId]);
+
   // ── Входы вне схемы — на нить в браузере ──
   const key = inputsKey(scope, sessionId, threadId);
   const [inputs, setInputsState] = useState<PanelInputs>(() => readInputs(key));
@@ -156,14 +193,16 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     if (!canQuote || !sessionId) return;
     let alive = true;
     const t = setTimeout(() => {
-      audioApi.quote(scope, sessionId, quoteRequest({ scope, sessionId, thread, state, fields: state.fields, text })).then(
+      audioApi.quote(scope, sessionId, quoteRequest({
+        scope, sessionId, thread, state, fields: state.fields, text, durationSec: musicDuration(state, inputs),
+      })).then(
         q => { if (alive) setQuote(q); },
         (e: Error) => { if (alive) setQuoteError(e.message || 'Котировка не получилась'); },
       );
     }, QUOTE_DELAY);
     return () => { alive = false; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- пересчёт по смыслу настроек, а не по ссылкам
-  }, [canQuote, scope, sessionId, threadId, state.op, state.providerKey, state.modelId, state.count, fieldsKey, text.length]);
+  }, [canQuote, scope, sessionId, threadId, state.op, state.providerKey, state.modelId, state.count, fieldsKey, text.length, inputs.durationSec]);
 
   const [busy, setBusy] = useState(false);
   const reason = runReason({
@@ -172,9 +211,11 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     hasVoiceModel: !!inputs.voiceModelPath.trim(),
     clips: inputs.clipPaths.filter(p => p.trim()).length,
     replicas: inputs.replicas.filter(r => r.text.trim()).length,
-    trimReady: trimReady(inputs.trim),
+    trimReady: trimReady(inputs.trim, pieceSel),
     pieces: inputs.concat.pieces.length,
     quoteError,
+    music: inputs,
+    piece: pieceSel,
   });
   const running = !!thread?.launches.some(l => l.status === 'running');
   const queue = noAi ? null : queueBadge(getJobsOf(sessionId, threadId), running, state);
@@ -182,7 +223,9 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const run = async () => {
     if (!sessionId || busy || reason) return;
     setBusy(true);
-    await runPanel({ scope, sessionId, thread, state, fields: pruneFields(state.fields, schema.schema), inputs, reference, text });
+    await runPanel({
+      scope, sessionId, thread, state, fields: pruneFields(state.fields, schema.schema), inputs, reference, text, piece: pieceSel,
+    });
     setBusy(false);
   };
   const foot: GenerationFoot = {
@@ -241,8 +284,10 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     const fieldsProps = {
       state, personal, main, values: state.fields, setField, inputs, setInputs, reference, setReference,
       onOp: (op: AudioOp) => change(op === 'transcribe' && state.mode !== 'process' ? { mode: 'process' } : { operation: op }),
-      isMobile: ctx.isMobile,
+      isMobile: ctx.isMobile, piece,
     };
+    const license = noAi ? null : licenseWarning(state.model);
+    const heavy = noAi ? null : heavyWarning(state.op, state.model);
     body = (
       <div data-sound-settings="">
         <div style={{ height: SP.sm }} />
@@ -295,6 +340,8 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
                 </Row>
               </>
             )}
+            {license && <div data-sound-license=""><Hint warn>{license}</Hint></div>}
+            {heavy && <div data-sound-heavy=""><Hint warn>{heavy}</Hint></div>}
           </>
         )}
 
@@ -304,10 +351,10 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
           <ConcatFields c={inputs.concat} set={patch => setInputs({ concat: { ...inputs.concat, ...patch } })}
             threads={threads.threads} personal={personal} />
         )}
-        {state.mode === 'music' && <Hint>Поля музыки появятся следующим шагом — сейчас стиль пишется в поле ввода, остальное — в «Дополнительно»</Hint>}
+        {state.mode === 'music' && <MusicFields {...fieldsProps} />}
 
         {!noAi && state.model && (
-          <AdvancedForm schema={schema.schema} fields={state.mode === 'music' ? [...main, ...extra] : extra}
+          <AdvancedForm schema={schema.schema} fields={extra}
             values={state.fields} error={schema.error} loading={schema.loading}
             onChange={setField} onReset={() => change({ fields: {} })} />
         )}

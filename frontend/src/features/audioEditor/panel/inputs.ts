@@ -6,6 +6,7 @@
 //   со схемой, поэтому туда идут ТОЛЬКО ключи схемы;
 // - входы запуска, которых в схеме нет (язык, образец, записи, реплики, кусок обрезки, куски склейки), —
 //   в localStorage браузера на ту же нить: в params они дали бы отказ «задаётся общим полем».
+//   Кусок (начало и конец) сюда не пишется: он общий с выделением на волне и живёт в сторе.
 // Загруженный файл образца в localStorage не ложится — живёт до перезагрузки страницы.
 
 import type { AudioFileFormat, AudioJoint, AudioMode, AudioModePrefs, AudioThread, AudioThreadSettings } from '../api';
@@ -43,6 +44,10 @@ export interface PanelInputs {
   voiceIndexPath: string;
   clipPaths: string[];
   replicas: Replica[];
+  // Музыка: слова с секциями, «Инструментал», длительность результата (null — как у модели)
+  lyrics: string;
+  instrumental: boolean;
+  durationSec: number | null;
   trim: TrimInputs;
   concat: ConcatInputs;
 }
@@ -54,6 +59,7 @@ export const DEFAULT_CONCAT: ConcatInputs = {
 
 export const DEFAULT_INPUTS: PanelInputs = {
   language: '', referencePath: '', voiceModelPath: '', voiceIndexPath: '', clipPaths: [], replicas: [],
+  lyrics: '', instrumental: false, durationSec: null,
   trim: DEFAULT_TRIM, concat: DEFAULT_CONCAT,
 };
 

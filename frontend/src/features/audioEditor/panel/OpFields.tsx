@@ -10,9 +10,11 @@ import {
 } from 'aihome_shell/kit';
 import type { AudioFileFormat, AudioOp, AudioParamField } from '../api';
 import { opInfo } from '../ops';
+import type { AudioSelection } from '../player/selection';
 import type { PanelInputs, Replica, TrimInputs } from './inputs';
 import { SOURCE_LABEL, SPEAK_SOURCES, type PanelState } from './model';
 import { ParamField } from './ParamField';
+import { PieceField, type PieceBinding } from './PieceField';
 import { Hint, ic, Label } from './primitives';
 
 const LANG: Record<string, string> = {
@@ -34,16 +36,18 @@ export interface OpFieldsProps {
   setReference: (f: File | null) => void;
   onOp: (op: AudioOp) => void;
   isMobile: boolean;
+  // Кусок нити (обрезка, «Перегенерировать кусок»); null — нити нет
+  piece: PieceBinding | null;
 }
 
-function SchemaFields({ fields, values, setField, only }: {
+export function SchemaFields({ fields, values, setField, only }: {
   fields: AudioParamField[]; values: Record<string, unknown>; setField: (k: string, v: unknown) => void; only?: string[];
 }) {
   const list = only ? fields.filter(f => only.includes(f.key)) : fields;
   return <>{list.map(f => <ParamField key={f.key} field={f} value={values[f.key]} onChange={v => setField(f.key, v)} />)}</>;
 }
 
-function Language({ languages, value, onChange, auto }: {
+export function Language({ languages, value, onChange, auto }: {
   languages: string[]; value: string; onChange: (v: string) => void; auto: string;
 }) {
   if (!languages.length) return null;
@@ -197,18 +201,9 @@ export const FORMATS: { value: AudioFileFormat; label: string }[] = [
   { value: 'flac', label: 'FLAC' }, { value: 'ogg', label: 'OGG' },
 ];
 
-const sec = (v: number | null) => (v === null ? '' : String(v));
-const parseSec = (s: string): number | null => {
-  const t = s.trim().replace(',', '.');
-  if (!t) return null;
-  // «1:06.2» → 66.2
-  const m = /^(\d+):(\d+(?:\.\d+)?)$/.exec(t);
-  const n = m ? Number(m[1]) * 60 + Number(m[2]) : Number(t);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-};
-
-export const trimReady = (t: TrimInputs) =>
-  t.start !== null || t.end !== null || t.gainDb !== 0 || t.fadeIn > 0 || t.fadeOut > 0 || t.normalize;
+// Кусок обрезки — выделение нити, а не поле входов (panel/piece.ts)
+export const trimReady = (t: TrimInputs, piece: AudioSelection | null) =>
+  piece !== null || t.gainDb !== 0 || t.fadeIn > 0 || t.fadeOut > 0 || t.normalize;
 
 function NumRow({ label, value, onChange, unit }: { label: string; value: string; onChange: (s: string) => void; unit?: string }) {
   return (
@@ -219,16 +214,11 @@ function NumRow({ label, value, onChange, unit }: { label: string; value: string
   );
 }
 
-function TrimFields({ t, set }: { t: TrimInputs; set: (patch: Partial<TrimInputs>) => void }) {
+function TrimFields({ t, set, piece }: { t: TrimInputs; set: (patch: Partial<TrimInputs>) => void; piece: PieceBinding | null }) {
   const n = (s: string) => Number(s.replace(',', '.')) || 0;
   return (
     <div data-op-fields="trim">
-      <Label aside="без ИИ · каждая правка — новая версия">Кусок</Label>
-      <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
-        <NumRow label="Начало" unit="с" value={sec(t.start)} onChange={s => set({ start: parseSec(s) })} />
-        <NumRow label="Конец" unit="с" value={sec(t.end)} onChange={s => set({ end: parseSec(s) })} />
-      </div>
-      <Hint>Можно «1:06.2». Пусто — от начала или до конца</Hint>
+      {piece && <PieceField binding={piece} aside="без ИИ · каждая правка — новая версия" />}
       <Label>Громкость</Label>
       <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
         <NumRow label="Громкость" unit="дБ" value={t.gainDb ? String(t.gainDb) : ''} onChange={s => set({ gainDb: n(s) })} />
@@ -248,7 +238,7 @@ function TrimFields({ t, set }: { t: TrimInputs; set: (patch: Partial<TrimInputs
 export function ProcessFields(p: OpFieldsProps) {
   const { state: s, inputs, setInputs } = p;
   const op = s.op;
-  if (op === 'trim') return <TrimFields t={inputs.trim} set={patch => setInputs({ trim: { ...inputs.trim, ...patch } })} />;
+  if (op === 'trim') return <TrimFields t={inputs.trim} piece={p.piece} set={patch => setInputs({ trim: { ...inputs.trim, ...patch } })} />;
   const caps = s.model?.caps ?? null;
   return (
     <div data-op-fields={op}>

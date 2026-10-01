@@ -117,5 +117,8 @@ export function downloadFile(scope: string, sessionId: string, thread: AudioThre
   const a = document.createElement('a');
   a.href = audioApi.versionFileUrl(scope, sessionId, thread.id, versionId, role, true);
   a.download = '';
+  // Firefox кликает только по ссылке в документе; после клика она не нужна
+  document.body.appendChild(a);
   a.click();
+  a.remove();
 }

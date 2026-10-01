@@ -8,6 +8,8 @@ import type {
 } from '../api';
 import { defaultOp, OPS, opInfo, type OpInfo } from '../ops';
 import { resolveLaunch, type ResolvedLaunch } from '../strip/summary';
+import type { AudioSelection } from '../player/selection';
+import { musicReason, type MusicInputs } from './music';
 
 // Правки без ИИ: поставщика и модели у них нет, бегут ffmpeg на сервере
 export const NO_AI_OPS: ReadonlySet<AudioOp> = new Set(['trim', 'gainFade', 'normalize', 'mixStems', 'concat']);
@@ -72,7 +74,9 @@ export function nextSettings(cur: PanelState, patch: SettingsPatch): AudioThread
     mode: cur.mode, operation: cur.op, provider: cur.providerKey, model: cur.modelId, fields: cur.fields, count: cur.count,
   };
   if (patch.mode && patch.mode !== cur.mode) {
-    return { mode: patch.mode, operation: defaultOp(patch.mode), provider: null, model: null, fields: {}, count: cur.count };
+    // Операция вместе с режимом — просьба карточки («Перегенерировать кусок» из режима «Голос»)
+    const operation = patch.operation && opInfo(patch.operation)?.mode === patch.mode ? patch.operation : defaultOp(patch.mode);
+    return { mode: patch.mode, operation, provider: null, model: null, fields: {}, count: cur.count };
   }
   const next = { ...base, ...patch };
   if (patch.operation && patch.operation !== cur.op) {
@@ -230,6 +234,9 @@ export interface ReasonInput {
   trimReady: boolean;
   pieces: number;
   quoteError: string | null;
+  // Режим «Музыка»: слова, инструментал, длительность и кусок (repaint)
+  music?: MusicInputs;
+  piece?: AudioSelection | null;
 }
 
 export function runReason(r: ReasonInput): string | null {
@@ -256,6 +263,10 @@ export function runReason(r: ReasonInput): string | null {
     if (kinds.includes('clone') && !r.hasReference) return 'Выберите, чей голос: загрузите образец';
   }
   if (op === 'trainVoice' && r.clips < 1) return 'Добавьте записи голоса — от 2 до 30 минут';
+  if (r.state.mode === 'music' && r.music) {
+    const why = musicReason({ op, model: r.state.model, inputs: r.music, piece: r.piece ?? null, fields: r.state.fields });
+    if (why) return why;
+  }
   return r.quoteError;
 }
 
@@ -281,6 +292,13 @@ export const OP_FIELD_LABELS: Record<string, string> = {
   loudness_rate: 'Громкость',
   emotion: 'Эмоция',
   remove_background_noise: 'Убрать фоновый шум',
+  // Музыка
+  bpm: 'Темп, BPM',
+  key: 'Тональность',
+  strength: 'Близость к исходнику',
+  track: 'Дорожка',
+  tracks: 'Инструменты',
+  abc: 'Партитура ABC',
 };
 
 export function splitSchema(schema: AudioParamSchema | null): { main: AudioParamField[]; extra: AudioParamField[] } {

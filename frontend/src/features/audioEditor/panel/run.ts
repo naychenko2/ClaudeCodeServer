@@ -5,9 +5,12 @@
 import { showToast } from 'aihome_shell/kit';
 import { audioApi, type AudioDspEditRequest, type AudioJobInput, type AudioQuoteRequest, type AudioThread } from '../api';
 import { opInfo } from '../ops';
+import { TO_END, type AudioSelection } from '../player/selection';
 import { mutate } from '../thread/threadStore';
 import type { PanelInputs, TrimInputs } from './inputs';
 import type { PanelState } from './model';
+import { durationRange, lyricsToSend } from './music';
+import { pieceSeconds } from './piece';
 
 export interface RunArgs {
   scope: string;
@@ -18,16 +21,19 @@ export interface RunArgs {
   inputs: PanelInputs;
   reference: File | null;
   text: string;
+  // Кусок нити — общий с выделением на волне (обрезка и «Перегенерировать кусок»)
+  piece: AudioSelection | null;
 }
 
 // Запрос котировки: явный выбор человека и поля модели поверх цепочки нити
-export function quoteRequest(a: Omit<RunArgs, 'inputs' | 'reference'>): AudioQuoteRequest {
+export function quoteRequest(a: Omit<RunArgs, 'inputs' | 'reference' | 'piece'> & { durationSec?: number | null }): AudioQuoteRequest {
   const s = a.state;
   const field = opInfo(s.op)?.field ?? 'prompt';
   return {
     mode: s.mode, operation: s.op, provider: s.providerKey, model: s.modelId, count: s.count,
     sessionId: a.sessionId, threadId: a.thread?.id ?? null,
     text: field === 'text' ? a.text.trim() || null : null,
+    durationSec: a.durationSec ?? null,
     fields: a.fields,
   };
 }
@@ -42,6 +48,16 @@ export function trimSteps(t: TrimInputs): AudioDspEditRequest[] {
   }
   if (t.normalize) steps.push({ op: 'normalize', format });
   return steps;
+}
+
+// Кусок обрезки — из выделения: «до конца» обрезке не нужен, это просто отсутствие конца
+export function trimWithPiece(t: TrimInputs, piece: AudioSelection | null): TrimInputs {
+  return { ...t, start: piece ? piece.start : null, end: piece && piece.end !== TO_END ? piece.end : null };
+}
+
+// Длительность уходит только операциям, где её задают, и только в пределах модели
+export function musicDuration(s: PanelState, inputs: PanelInputs): number | null {
+  return durationRange(s.op, s.model) && inputs.durationSec !== null ? inputs.durationSec : null;
 }
 
 export const dialogueText = (inputs: PanelInputs) =>
@@ -63,6 +79,9 @@ export function jobInput(a: RunArgs, quoteId: string): AudioJobInput {
     clipPaths: s.op === 'trainVoice' ? i.clipPaths.map(p => p.trim()).filter(Boolean) : undefined,
     voiceModelPath: s.op === 'convertVoice' ? i.voiceModelPath.trim() || null : null,
     voiceIndexPath: s.op === 'convertVoice' ? i.voiceIndexPath.trim() || null : null,
+    lyrics: s.mode === 'music' ? lyricsToSend(s.op, s.model, i) : null,
+    durationSec: musicDuration(s, i),
+    ...(s.op === 'repaint' ? pieceSeconds(a.piece) : {}),
   };
 }
 
@@ -84,13 +103,15 @@ export async function runPanel(a: RunArgs): Promise<boolean> {
     }
     if (s.op === 'trim') {
       if (!thread) return false;
-      for (const step of trimSteps(inputs.trim)) {
+      for (const step of trimSteps(trimWithPiece(inputs.trim, a.piece))) {
         const ok = await mutate(scope, sessionId, async rev => (await audioApi.edit(scope, sessionId, thread.id, { ...step, revision: rev })).state);
         if (!ok) return false;
       }
       return true;
     }
-    const quote = await audioApi.quote(scope, sessionId, quoteRequest({ ...a, text: s.op === 'dialogue' ? dialogueText(inputs) : a.text }));
+    const quote = await audioApi.quote(scope, sessionId, quoteRequest({
+      ...a, text: s.op === 'dialogue' ? dialogueText(inputs) : a.text, durationSec: musicDuration(s, inputs),
+    }));
     await audioApi.startJob(scope, sessionId, jobInput(a, quote.quoteId));
     return true;
   } catch (e) {

@@ -27,7 +27,7 @@ export function SettingsSections({ projectId, L, catalog, isMobile, thread, onCh
       {panel && <ModeSection projectId={projectId} L={L} />}
       {!panel && <CountSection L={L} catalog={catalog} />}
       <CharacterSection projectId={projectId} L={L} catalog={catalog} isMobile={isMobile}
-        onCharacterSheet={onCharacterSheet} onCharacters={onCharacters} />
+        onCharacterSheet={onCharacterSheet} onCharacters={onCharacters} inlineRoles={panel} />
       <SizeSection L={L} thread={thread} />
       <BlockedNotice L={L} />
     </div>

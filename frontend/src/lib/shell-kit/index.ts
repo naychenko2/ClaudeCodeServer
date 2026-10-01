@@ -39,7 +39,7 @@ export type { SubsystemManifest, RevealPanelDetail } from '../subsystems/registr
 // ─── genPanelDismissed ───────────────────────────────────────────────────────
 // Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл
 // её в этом чате (ADR-021 §3)
-export { autoRevealGenerationPanel } from '../genPanelDismissed';
+export { autoRevealGenerationPanel, markGenPanelDismissed } from '../genPanelDismissed';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts

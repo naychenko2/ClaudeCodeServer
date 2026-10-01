@@ -122,4 +122,11 @@ describe('закреплённый низ', () => {
     setPanelChoice('p1', { op: 'removeBackground' });
     expect(render('p1')).not.toContain('Больше: Эта операция даёт один вариант');
   });
+
+  it('на телефоне — шторка каркаса: «опустить до цены», сводка опущенной — с чем работаем', () => {
+    const html = renderToStaticMarkup(createElement(ImagesPanel, { ctx: ctx('p1'), layout: 'sheet' }));
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('Опустить до цены — лента станет доступна');
+    expect(html).toContain('Работаем с:');
+  });
 });

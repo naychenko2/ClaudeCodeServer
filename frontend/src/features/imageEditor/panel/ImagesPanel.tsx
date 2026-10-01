@@ -5,6 +5,8 @@
 // там нет персонажей и образцов из проекта. Вверху «Настроек» — операция и режим подбора,
 // «− N +», цена и запуск — в закреплённом низу. Запуск идёт тем же путём, что композер: промпт
 // отправляет само поле ввода (submitComposerMode), операции без промпта — launchThread.
+// На телефоне панель рисует сама полоса «Картинки» шторкой каркаса (layout="sheet"): у
+// телефона нет зоны панелей рабочей области.
 
 import { useEffect, useState } from 'react';
 import { Contact, Image as ImageIcon, SlidersHorizontal, Users, X } from 'lucide-react';
@@ -54,7 +56,7 @@ export async function panelRun(projectId: string, sessionId: string, thread: Ima
   if (!submitComposerMode(sessionId, IMAGE_COMPOSER_MODE)) showToast('Поле ввода не найдено — откройте чат', '', 'error');
 }
 
-export function ImagesPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
+export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDefCtx; layout?: 'column' | 'sheet' }) {
   const { sessionId } = ctx;
   const projectId = enterScope(ctx.projectId, sessionId);
   const personal = isPersonalScope(projectId);
@@ -98,7 +100,7 @@ export function ImagesPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     body = <EmptyState compact icon={ic(ImageIcon, ICON_SIZE.sm)} title="Рисовать нечем" subtitle="Поставщиков не настроил администратор" />;
   } else {
     body = (
-      <SettingsSections projectId={projectId} L={L} catalog={L.catalog} isMobile={false} thread={thread}
+      <SettingsSections projectId={projectId} L={L} catalog={L.catalog} isMobile={layout === 'sheet'} thread={thread}
         onCharacterSheet={() => setTab('characters')} onCharacters={() => setTab('characters')} panel />
     );
   }
@@ -128,8 +130,9 @@ export function ImagesPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       onTabChange={setTab}
       context={context}
       foot={foot}
+      peekSummary={[thread ? focusLabel(thread, true, personal) : 'Новая картинка', subtitle].filter(Boolean).join(' · ')}
       onClose={ctx.onClose}
-      layout="column"
+      layout={layout}
     >
       {body}
     </GenerationPanel>

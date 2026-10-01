@@ -95,7 +95,8 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
   const width = p.width ?? ownWidth;
   const setWidth = (w: number) => { setOwnWidth(w); p.onWidthChange?.(w); };
 
-  const sheet = p.layout === 'sheet' || (p.layout !== 'column' && isMobile);
+  // Внутри оболочки зоны вид держит оболочка: шторка там дала бы вторую шапку поверх её шапки
+  const sheet = !inShell && (p.layout === 'sheet' || (p.layout !== 'column' && isMobile));
   const view: GenerationPanelView = sheet ? (peeked ? 'peek' : 'sheet') : (collapsed ? 'spine' : 'column');
 
   if (view === 'spine' && !inShell) return <Spine {...p} onExpand={() => setCollapsed(false)} onTab={t => { p.onTabChange(t); setCollapsed(false); }} />;
@@ -164,7 +165,7 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
     </>
   );
 
-  if (inShell && !sheet) {
+  if (inShell) {
     return (
       <div role="complementary" aria-label={p.title} style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', fontFamily: FONT.sans, ...p.style }}>
         {p.subtitle && (

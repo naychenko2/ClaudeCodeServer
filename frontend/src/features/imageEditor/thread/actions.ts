@@ -2,7 +2,8 @@
 // сохранить в проект может только человек). Каждое — мутация с ревизией через стор;
 // тексты тостов — из записки v3, раздел «Тексты».
 
-import { showToast } from 'aihome_shell/kit';
+import { autoRevealGenerationPanel, getFlag, showToast, FLAGS } from 'aihome_shell/kit';
+import { IMAGES_PANEL } from '../characters/panel';
 import { imageEditorApi, nameTakenSuggestion, type ImageEncodeFormat } from '../api';
 import { nameStem } from '../saveAs';
 import { isPersonalScope } from '../scope';
@@ -37,9 +38,16 @@ export function activeStepOf(t: ImageThread): string | null {
   return v ? versionStep(t, v) : t.currentStepId;
 }
 
+// Выбор картинки человеком открывает панель «Картинки», пока её не закрыли в этом чате
+// (решения Андрея по v4, 2). Выбор агента (image_focus) приходит в стор с сервера и сюда не идёт
+function revealPanel(ok: boolean, sessionId: string): boolean {
+  if (ok && getFlag(FLAGS.imageEditorPanel)) autoRevealGenerationPanel(IMAGES_PANEL, sessionId);
+  return ok;
+}
+
 // «Продолжить от неё» и «Работать с этой»: версия становится текущей, нить — в работе
-export const continueFrom = (projectId: string, sessionId: string, t: ImageThread, versionId: string) =>
-  mutate(projectId, sessionId, rev => threadsApi.current(projectId, sessionId, t.id, versionId, rev));
+export const continueFrom = async (projectId: string, sessionId: string, t: ImageThread, versionId: string) =>
+  revealPanel(await mutate(projectId, sessionId, rev => threadsApi.current(projectId, sessionId, t.id, versionId, rev)), sessionId);
 
 // Правка без ИИ: у нити с версиями — шаг текущей версии, у старой — «Взять» шага в стопку
 export const applyStep = (projectId: string, sessionId: string, t: ImageThread, stepId: string) =>
@@ -67,19 +75,22 @@ export async function rollbackTo(projectId: string, sessionId: string, t: ImageT
 }
 
 // «Работать с этой»: фокус на существующую нить
-export const workWith = (projectId: string, sessionId: string, threadId: string | null) =>
-  mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
+export async function workWith(projectId: string, sessionId: string, threadId: string | null) {
+  const ok = await mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
+  if (threadId) revealPanel(ok, sessionId);
+  return ok;
+}
 
 // Файл проекта в работу: сервер найдёт его нить или заведёт новую с якорем в ленте
-export const workWithFile = (projectId: string, sessionId: string, file: string) =>
-  mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { file, revision: rev }));
+export const workWithFile = async (projectId: string, sessionId: string, file: string) =>
+  revealPanel(await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { file, revision: rev })), sessionId);
 
 // «✦ Нарисовать новую»: карточка-черновик «Новая картинка» и фокус на неё. Черновик завёл
 // человек — это и есть просьба о режиме «Картинка»; черновик агента режим не меняет
 export async function createDraft(projectId: string, sessionId: string, folder: string) {
   const ok = await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { draftFolder: folder, revision: rev }));
   if (ok) requestImageMode(sessionId);
-  return ok;
+  return revealPanel(ok, sessionId);
 }
 
 // ✕ на чипе: снять выбор; пустая нить (черновик или файл без шагов) уходит из ленты целиком

@@ -3,7 +3,7 @@
 // владельца (audio-editor) проверяют сами входы — каждый вклад через isAvailable с
 // getFlag(FLAGS.audioEditor).
 
-import { AudioLines, Mic, Music } from 'lucide-react';
+import { AudioLines } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
   ChatItemToolCtx, ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SlotContribution, SubsystemManifest,
@@ -38,18 +38,13 @@ const FEED_CARDS: SlotContribution<ChatItemToolCtx>[] = [
   ...['audio_state', 'audio_voices', 'audio_cancel'].map(t => ({ name: AUDIO_TOOL(t), render: (ctx: ChatItemToolCtx) => <AudioServiceLine ctx={ctx} /> })),
 ];
 
-// Ярлыки «Голос» и «Музыка» в меню полос: полоса «Звук» и панель на «Настройках» в нужном режиме
+// Ярлык «Звук» («＋» композера, пустая лента; в меню полос — сам пункт полосы, ключ совпадает):
+// полоса «Звук» и панель на «Настройках» в последнем выбранном режиме — режим выбирают в панели
 export function soundShortcuts({ sessionId }: { sessionId: string | null }): ComposerStripShortcut[] {
-  return [
-    {
-      key: 'sound-voice', title: 'Голос', hint: 'озвучить текст, сменить голос, обучить',
-      icon: <Mic size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, onSelect: () => openSoundShortcut(sessionId, 'voice'),
-    },
-    {
-      key: 'sound-music', title: 'Музыка', hint: 'песня, кавер, звуковой эффект',
-      icon: <Music size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, onSelect: () => openSoundShortcut(sessionId, 'music'),
-    },
-  ];
+  return [{
+    key: SOUND_STRIP, title: 'Звук', hint: 'голос, музыка, обработка',
+    icon: <AudioLines size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, onSelect: () => openSoundShortcut(sessionId),
+  }];
 }
 
 export const manifest: SubsystemManifest = {

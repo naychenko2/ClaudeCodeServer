@@ -215,6 +215,10 @@ for (const vp of [{ name: 'w1440', width: 1440, height: 1000 }, { name: 'm360', 
     await page.locator('[data-audio-launch="done"]').scrollIntoViewIfNeeded();
     await shot('feed');
 
+    // «＋» композера: один ярлык «Звук» вместо «Голос» и «Музыка» — подсказка собирается из него
+    await expect(page.locator('[title="Прикрепить файл, звук…"]')).toHaveCount(1);
+    await expect(page.locator('[title*="голос, музыка"]')).toHaveCount(0);
+
     // Полоса «Звук» над полем ввода
     const strip = page.locator('[data-composer-strip="sound"]');
     await expect(strip).toBeVisible();

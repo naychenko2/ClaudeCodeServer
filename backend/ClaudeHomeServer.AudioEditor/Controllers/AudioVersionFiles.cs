@@ -7,8 +7,8 @@ namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 // Где на диске лежит файл версии нити (ADR-021 §2). Исходник — файл проекта: только через
 // ProjectLinkGuard.ResolveInside и только у области проекта. Версия запуска — файл рабочей папки
 // задачи владельца: путь из нити сверяется с папкой задачи, чтобы испорченный или подменённый файл
-// нитей не вывел за неё. Версия без задачи (монтаж без ИИ, этап 5) пока своих файлов на диске не
-// имеет — null. null всегда значит «нет такого файла», причину наружу не выдаём.
+// нитей не вывел за неё; правка без ИИ тоже лежит в папке своей задачи (DspAudioEngine). Версия без
+// задачи файла на диске не имеет — null. null всегда значит «нет такого файла», причину наружу не выдаём.
 public static class AudioVersionFiles
 {
     public static string? Resolve(AudioEditWorkspace workspace, string ownerId, AudioEditScope scope,

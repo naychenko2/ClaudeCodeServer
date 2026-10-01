@@ -48,5 +48,11 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Склейка без ИИ: куски → новая нить. Шов IAudioDsp — от отключаемой вертикали Images, поэтому
         // необязателен: без него операция отвечает dsp_unavailable
         services.AddSingleton<Jobs.AudioConcatService>();
+        // Правки без ИИ (обрезка, фейды, громкость, нормализация, формат, сведение стемов) — новые версии
+        // нити, тот же необязательный шов IAudioDsp
+        services.AddSingleton<Engines.DspAudioEngine>();
+        // Библиотека «Голоса»: voices/<slug>/ серверного проекта, кеш id у поставщиков и признак
+        // «клон MiniMax протух» по подменяемым часам
+        services.AddSingleton(sp => new Voices.VoiceLibrary(sp.GetService<TimeProvider>()));
     }
 }

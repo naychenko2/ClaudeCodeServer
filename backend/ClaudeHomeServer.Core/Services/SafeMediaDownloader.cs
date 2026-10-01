@@ -3,8 +3,11 @@ using System.Net.Sockets;
 
 namespace ClaudeHomeServer.Services;
 
-/// <summary>Итог скачивания: байты и тип либо причина отказа (<see cref="Error"/>).</summary>
-public sealed record MediaDownloadResult(byte[]? Bytes, string? ContentType, string? Error)
+/// <summary>
+/// Итог скачивания: байты и тип либо причина отказа (<see cref="Error"/>); <see cref="FinalUri"/> —
+/// адрес, с которого файл отдан после редиректов (по нему вызывающий узнаёт имя и расширение).
+/// </summary>
+public sealed record MediaDownloadResult(byte[]? Bytes, string? ContentType, string? Error, Uri? FinalUri = null)
 {
     public bool Ok => Bytes is not null;
 
@@ -71,7 +74,7 @@ public sealed class SafeMediaDownloader
                 var bytes = await ReadCappedAsync(response.Content, maxBytes, cts.Token);
                 if (bytes is null) return MediaDownloadResult.Fail("too-large");
                 if (bytes.Length == 0) return MediaDownloadResult.Fail("empty");
-                return new MediaDownloadResult(bytes, response.Content.Headers.ContentType?.MediaType, null);
+                return new MediaDownloadResult(bytes, response.Content.Headers.ContentType?.MediaType, null, uri);
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)

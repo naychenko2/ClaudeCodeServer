@@ -159,7 +159,8 @@ internal static class FalOutputs
         var contentType = FalAudioEngine.Str(file, "content_type") is { Length: > 0 } declared && !declared.StartsWith("image/")
             ? declared
             : got.ContentType ?? "application/octet-stream";
-        var path = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.AbsolutePath : null;
+        // Расширение — по адресу после редиректов: исходная ссылка бывает обезличенной
+        var path = got.FinalUri?.AbsolutePath;
         var extension = ExtensionOf(FalAudioEngine.Str(file, "file_name")) ?? ExtensionOf(path) ?? ExtensionByType(contentType);
         return (new AudioFile(role, bytes, contentType, extension), null);
     }

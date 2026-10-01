@@ -25,9 +25,10 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
     private readonly string _url = config["Higgsfield:McpUrl"] ?? DefaultUrl;
     private int _rpcId;
 
-    // Скачивание результата по ссылке Higgsfield; тесты модулей подставляют фейковый транспорт,
-    // поэтому сеттер открыт: клиент живёт в Core, а тесты — в сборках вертикалей
-    public SafeMediaDownloader Downloader { get; set; } = SafeMediaDownloader.Shared;
+    // Скачивание результата по ссылке Higgsfield; тесты модулей подставляют фейковый транспорт при
+    // создании клиента (клиент в Core, тесты в сборках вертикалей), а после создания загрузчик не
+    // подменить: иначе любой код с доступом к singleton обошёл бы SsrfGuard
+    public SafeMediaDownloader Downloader { get; init; } = SafeMediaDownloader.Shared;
 
     public bool Available => Token() is not null;
 

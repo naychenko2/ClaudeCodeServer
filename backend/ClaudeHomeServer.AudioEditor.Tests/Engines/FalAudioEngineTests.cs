@@ -103,6 +103,24 @@ public sealed class FalAudioEngineTests
     }
 
     [Fact]
+    public async Task Download_RedirectToOtherExtension_ExtensionFromFinalAddress()
+    {
+        var endpoint = AudioCatalog.FalMiniMaxHd;
+        // Ни file_name, ни content_type: расширение решает только адрес, а он после редиректа другой
+        _fal.Job(endpoint, "r1", ["COMPLETED"], """{"audio":{"url":"https://cdn.test/r/speech.wav"}}""");
+        _fal.Redirect("https://cdn.test/r/speech.wav", "https://cdn.test/r/speech.flac");
+        _fal.File("https://cdn.test/r/speech.flac", [5, 5]);
+
+        var result = await Engine().RunAsync(new AudioRequest(AudioOp.Speak, endpoint, Personal, Text: "Привет"),
+            new Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Ok);
+        var file = result.Files.Should().ContainSingle().Subject;
+        file.Bytes.Should().Equal(5, 5);
+        file.Extension.Should().Be(".flac");
+    }
+
+    [Fact]
     public async Task Separate_DownloadsEveryStem_SourceAsDataUri()
     {
         var endpoint = AudioCatalog.FalDemucs;
@@ -506,6 +524,7 @@ public sealed class FalAudioEngineTests
     {
         private readonly ConcurrentDictionary<(string, string), Queue<(HttpStatusCode, string, bool)>> _routes = new();
         private readonly ConcurrentDictionary<string, byte[]> _files = new();
+        private readonly ConcurrentDictionary<string, string> _redirects = new();
 
         public List<(HttpMethod Method, string Url, string? Body, string? Auth)> Requests { get; } = [];
         public bool Throw { get; set; }
@@ -534,6 +553,8 @@ public sealed class FalAudioEngineTests
 
         public void File(string url, byte[] bytes) => _files[url] = bytes;
 
+        public void Redirect(string from, string to) => _redirects[from] = to;
+
         public void Price(string endpoint, double price, string unit) =>
             Respond(HttpMethod.Get, $"{Api}/models/pricing?endpoint_id={Uri.EscapeDataString(endpoint)}", HttpStatusCode.OK,
                 $$"""{"prices":[{"endpoint_id":"{{endpoint}}","unit_price":{{price.ToString(System.Globalization.CultureInfo.InvariantCulture)}},"unit":"{{unit}}","currency":"USD"}]}""",
@@ -547,6 +568,8 @@ public sealed class FalAudioEngineTests
             lock (Requests) Requests.Add((request.Method, url, body, request.Headers.Authorization?.ToString()));
             if (Throw) throw new HttpRequestException("connection refused");
 
+            if (request.Method == HttpMethod.Get && _redirects.TryGetValue(url, out var target))
+                return new HttpResponseMessage(HttpStatusCode.Found) { Headers = { Location = new Uri(target) } };
             if (request.Method == HttpMethod.Get && _files.TryGetValue(url, out var bytes))
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
             if (_routes.TryGetValue((request.Method.Method, url), out var queue))

@@ -49,8 +49,8 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
     // Скачивание файлов результата: ссылка из ответа fal — внешняя, качаем только общим безопасным
     // загрузчиком (SSRF, редиректы, потолок). Срок шире, чем у картинок: 200 МБ на медленном канале
     // за минуту не скачать, а общий срок задачи всё равно держит Ceiling. Тесты подставляют фейк
-    internal SafeMediaDownloader Downloader { get; set; } = SharedDownloader;
-    internal long MaxDownloadBytes { get; set; } = SafeMediaDownloader.AudioMaxBytes;
+    internal SafeMediaDownloader Downloader { get; init; } = SharedDownloader;
+    internal long MaxDownloadBytes { get; init; } = SafeMediaDownloader.AudioMaxBytes;
 
     private static readonly SafeMediaDownloader SharedDownloader =
         new(SafeMediaDownloader.CreateHandler()) { Timeout = TimeSpan.FromMinutes(5) };

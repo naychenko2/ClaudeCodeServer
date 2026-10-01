@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import type { ImageEditQuote, ImageEditQuoteRequest } from './api';
-import { staleEstimate } from './useQuote';
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { ImageEditorApi, ImageEditQuote, ImageEditQuoteRequest } from './api';
+import { __resetSharedQuotes, sharedQuote, staleEstimate } from './useQuote';
 
 const req = (patch: Partial<ImageEditQuoteRequest> = {}): ImageEditQuoteRequest => ({
   provider: 'higgsfield', model: 'auto', mode: 'auto', op: 'generate', count: 2,
@@ -26,5 +26,37 @@ describe('цена, пока котировка едет заново', () => {
     expect(staleEstimate({ req: req(), quote: quote(4) }, req({ provider: 'fal' }))).toBeNull();
     expect(staleEstimate({ req: req(), quote: quote(null) }, req())).toBeNull();
     expect(staleEstimate(null, req())).toBeNull();
+  });
+});
+
+describe('одинаковая котировка у нескольких хозяев', () => {
+  const api = (calls: ImageEditQuoteRequest[]) =>
+    ({ quote: (_p: string, r: ImageEditQuoteRequest) => { calls.push(r); return Promise.resolve(quote(4)); } }) as unknown as ImageEditorApi;
+
+  beforeEach(() => __resetSharedQuotes());
+
+  it('полоса, панель, поле ввода и карточка спросили одно и то же — на сервер один запрос', async () => {
+    const calls: ImageEditQuoteRequest[] = [];
+    const a = api(calls);
+    const all = await Promise.all([1, 2, 3, 4].map(() => sharedQuote(a, 'p1', req())));
+    expect(calls).toHaveLength(1);
+    expect(all.every(q => q.estimate.amount === 4)).toBe(true);
+    await sharedQuote(a, 'p1', req());
+    expect(calls).toHaveLength(1);
+  });
+
+  it('другой запрос или другой проект — свой запрос', async () => {
+    const calls: ImageEditQuoteRequest[] = [];
+    const a = api(calls);
+    await Promise.all([sharedQuote(a, 'p1', req()), sharedQuote(a, 'p1', req({ count: 3 })), sharedQuote(a, 'p2', req())]);
+    expect(calls).toHaveLength(3);
+  });
+
+  it('ошибка не запоминается: следующий запрос идёт заново', async () => {
+    let n = 0;
+    const a = { quote: () => (++n === 1 ? Promise.reject(new Error('сеть')) : Promise.resolve(quote(4))) } as unknown as ImageEditorApi;
+    await expect(sharedQuote(a, 'p1', req())).rejects.toThrow('сеть');
+    await expect(sharedQuote(a, 'p1', req())).resolves.toMatchObject({ quoteId: 'q1' });
+    expect(n).toBe(2);
   });
 });

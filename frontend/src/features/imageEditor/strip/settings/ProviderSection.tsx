@@ -53,7 +53,8 @@ export function ModelSection({ L, catalog }: { L: Launch; catalog: ImageEditCata
       <Label>Модель</Label>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
         {pv.models.map(m => {
-          const why = modelBlockReason(m, L.hasImage, L.hasMask);
+          // Входы как у блокировки запуска: «По тексту» картинку не берёт, маска — только инпейнту
+          const why = modelBlockReason(m, L.op !== 'generate' && L.hasImage, L.op === 'inpaint' && L.hasMask, L.op);
           return (
             <Opt key={m.id} on={m.id === L.model?.id} name={m.label} disabled={!!why} title={why || undefined}
               hint={why || (m.id === AUTO_MODEL ? 'подберём под задачу' : undefined)}

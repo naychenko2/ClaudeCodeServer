@@ -16,7 +16,7 @@ import { C, FS, SP } from '../../lib/design';
 import { useComposerStrip } from '../../lib/composerStrips';
 import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
 import type { ComposerStripApi, ComposerStripCtx, SlotContribution } from '../../lib/subsystems/registry';
-import { Button, Dot, Menu, MenuItem, Modal } from '../ui';
+import { Button, Dot, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_STROKE } from '../ui/icons';
 
 export type ComposerStripContribution = SlotContribution<ComposerStripCtx, ComposerStripApi>;
@@ -64,6 +64,8 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
   if (!current) return null;
 
   const close = () => { setMenu(null); setSheet(false); };
+  // Ярлыки полос («Голос», «Музыка») — под списком, отделены чертой
+  const shortcuts = strips.flatMap(s => s.action!.shortcuts?.(avail) ?? []);
 
   const items = (
     <>
@@ -81,6 +83,16 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
             </span>
           }
           onClick={() => { close(); select(s.name!); }}
+        />
+      ))}
+      {shortcuts.length > 0 && <MenuSep />}
+      {shortcuts.map(sc => (
+        <MenuItem
+          key={`shortcut:${sc.key}`}
+          icon={sc.icon}
+          isMobile={isMobile}
+          label={<ItemLabel title={sc.title} status={sc.hint} />}
+          onClick={() => { close(); sc.onSelect(); }}
         />
       ))}
     </>
@@ -117,7 +129,7 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
       </span>
       <span style={{ width: 1, height: collapsed ? 16 : 22, background: C.divider, flexShrink: 0 }} />
       {menu && (
-        <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={290} maxWidth={360} maxHeight={200}>
+        <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={290} maxWidth={360} maxHeight={320}>
           {items}
         </Menu>
       )}

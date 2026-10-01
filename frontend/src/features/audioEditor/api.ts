@@ -1,0 +1,380 @@
+// Клиент REST модуля «Звук» (ADR-021 §2): ручки AudioEditorController (проект,
+// /projects/{projectId}/audio-editor) и PersonalAudioEditorController (личный чат,
+// /audio-editor/chats/{sessionId}), плюс SignalR-события audio_*. Типы — зеркало
+// записей бэкенда (Controllers/AudioEditorDtos.cs, Jobs/AudioEditContracts.cs,
+// Threads/AudioThread.cs); enum'ы приходят строками в camelCase, кроме статуса задачи
+// и инициатора — у них свой конвертер без политики имён («Running», «Human»).
+
+import { onMessage, readStoredToken, request } from 'aihome_shell/kit';
+import { audioBase, chatBase, isPersonalScope } from './scope';
+
+export type AudioMode = 'voice' | 'music' | 'process';
+
+export type AudioOp =
+  | 'speak' | 'designVoice' | 'cloneVoice' | 'convertVoice' | 'trainVoice' | 'dialogue'
+  | 'song' | 'cover' | 'repaint' | 'outpaint' | 'extract' | 'lego' | 'complete' | 'sfx'
+  | 'separate' | 'denoise' | 'upsample' | 'master' | 'transcribe' | 'toMidi' | 'align'
+  | 'trim' | 'gainFade' | 'normalize' | 'mixStems' | 'concat';
+
+export type AudioVoiceKind = 'preset' | 'description' | 'clone' | 'element' | 'rvc';
+export type AudioOutcome = 'ok' | 'failed' | 'insufficientCredits' | 'rejected' | 'cancelled' | 'unavailable';
+export type AudioStage = 'queued' | 'running' | 'downloading';
+export type AudioLicenseKind = 'permissive' | 'nonCommercial' | 'copyleft' | 'watermark' | 'unknown';
+export type AudioJobStatus = 'Queued' | 'Running' | 'Downloading' | 'Completed' | 'Failed' | 'Cancelled';
+export type AudioInitiator = 'Human' | 'Agent';
+
+// ── Каталог ──
+
+export interface AudioCaps {
+  ops: AudioOp[];
+  languages: string[];
+  voiceKinds: AudioVoiceKind[];
+  producesFiles: string[];
+  license: { label: string; kind: AudioLicenseKind };
+  priceUnit: string;
+  maxTextChars?: number | null;
+  minDurationSec?: number | null;
+  maxDurationSec?: number | null;
+  inputMaxSec?: number | null;
+  languageNeutral?: boolean;
+  heavyOps?: AudioOp[] | null;
+}
+
+export interface AudioPriceHint { amount: number; unit: string; per: string }
+
+export interface AudioModelInfo { id: string; label: string; caps: AudioCaps; priceHint?: AudioPriceHint | null }
+
+export interface AudioProvider {
+  key: string;
+  label: string;
+  priceUnit: string;
+  // Недоступный остаётся в списке серым с причиной
+  available: boolean;
+  reason: string | null;
+  models: AudioModelInfo[];
+}
+
+export interface AudioCatalog { providers: AudioProvider[]; autoModelId: string; maxCount: number }
+
+// ── Префы и настройки нити ──
+
+// Выбор человека для режима области; null у поля — режим его не задаёт
+export interface AudioModePrefs {
+  operation: AudioOp | null;
+  provider: string | null;
+  model: string | null;
+  count: number | null;
+  fields: Record<string, unknown> | null;
+}
+
+export interface AudioPrefs { voice: AudioModePrefs | null; music: AudioModePrefs | null; process: AudioModePrefs | null }
+
+// Последние настройки нити — старше префов режима (решение 2026-10-01: настройки на каждый файл)
+export interface AudioThreadSettings {
+  mode: AudioMode;
+  operation: AudioOp | null;
+  provider: string | null;
+  model: string | null;
+  fields: Record<string, unknown> | null;
+  count?: number | null;
+}
+
+// ── Нити ──
+
+export interface AudioVersionFile { role: string; path: string }
+
+export interface AudioThreadVersion {
+  // 'origin' у исходника
+  id: string;
+  number: number;
+  jobId: string | null;
+  variant: number | null;
+  baseVersionId: string | null;
+  files: AudioVersionFile[];
+  license: string | null;
+  createdAt: string;
+}
+
+export type AudioLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+
+export interface AudioThreadLaunch {
+  jobId: string;
+  baseVersionId: string | null;
+  at: string;
+  status: AudioLaunchStatus;
+  initiator: 'human' | 'agent';
+  prompt: string | null;
+  license: string | null;
+}
+
+export interface AudioThread {
+  id: string;
+  // Путь от корня проекта; null — черновик «Новый звук»
+  file: string | null;
+  lineage: string[];
+  draftFolder: string | null;
+  createdAt: string;
+  versions: AudioThreadVersion[];
+  currentVersionId: string | null;
+  launches: AudioThreadLaunch[];
+  settings: AudioThreadSettings | null;
+  name?: string | null;
+}
+
+export interface AudioThreadEvent { at: string; kind: string; text: string; threadId?: string | null; jobId?: string | null }
+
+export interface AudioThreadsState {
+  focus: string | null;
+  revision: number;
+  threads: AudioThread[];
+  events?: AudioThreadEvent[];
+}
+
+export const EMPTY_THREADS: AudioThreadsState = { focus: null, revision: 0, threads: [] };
+
+export interface AudioState { threads: AudioThreadsState; catalog: AudioCatalog; prefs: AudioPrefs }
+
+// ── Котировка и задачи ──
+
+export interface AudioQuoteRequest {
+  mode: AudioMode;
+  operation?: AudioOp | null;
+  provider?: string | null;
+  model?: string | null;
+  count?: number | null;
+  voiceKind?: AudioVoiceKind | null;
+  sessionId?: string | null;
+  threadId?: string | null;
+  text?: string | null;
+  durationSec?: number | null;
+  fields?: Record<string, unknown> | null;
+}
+
+export interface AudioPrice {
+  amount: number | null;
+  unit: string;
+  approx: boolean;
+  source: string;
+  eta: number | null;
+  queueLength: number | null;
+}
+
+export interface AudioQuote {
+  quoteId: string;
+  mode: AudioMode;
+  op: AudioOp;
+  provider: string;
+  model: string;
+  count: number;
+  voiceKind: AudioVoiceKind | null;
+  price: AudioPrice;
+  license: string;
+  heavy: boolean;
+  expiresAt: string;
+}
+
+export interface AudioJobInput {
+  quoteId: string;
+  sessionId?: string | null;
+  threadId?: string | null;
+  baseVersionId?: string | null;
+  text?: string | null;
+  prompt?: string | null;
+  lyrics?: string | null;
+  language?: string | null;
+  durationSec?: number | null;
+  startSec?: number | null;
+  endSec?: number | null;
+  params?: Record<string, unknown> | null;
+  seed?: number | null;
+  reference?: File | null;
+  referencePath?: string | null;
+  clips?: File[];
+  clipPaths?: string[];
+  voiceModelPath?: string | null;
+  voiceIndexPath?: string | null;
+}
+
+export interface AudioCost { amount: number; unit: string }
+
+export interface AudioJob {
+  jobId: string;
+  scopeKey: string;
+  status: AudioJobStatus;
+  provider: string;
+  model: string;
+  op: AudioOp;
+  count: number;
+  variants: { variant: number; files: AudioVersionFile[] }[];
+  cost: AudioCost | null;
+  outcome: AudioOutcome | null;
+  charged: boolean | null;
+  error: string | null;
+  queuePosition: number | null;
+  etaSeconds: number | null;
+  createdAt: string;
+  chatSessionId: string | null;
+  threadId: string | null;
+  initiator: AudioInitiator;
+  license: string;
+}
+
+export interface AudioSaveRequest { versionId?: string | null; mode?: 'nextVersion' | 'as'; folder?: string | null; fileName?: string | null }
+// path — главный файл, files — все записанные (стемы, субтитры) от корня проекта
+export interface AudioSaveResult { path: string; files: string[] }
+
+// ── События SignalR (Jobs/AudioEditEvents.cs); базовый sessionId — чат события ──
+
+interface AudioEventBase { sessionId: string; scopeKey: string }
+
+export interface AudioProgressEvent extends AudioEventBase {
+  type: 'audio_edit_progress';
+  jobId: string;
+  stage: AudioStage;
+  queuePosition: number | null;
+  etaSeconds: number | null;
+  variant: number;
+  count: number;
+  chatSessionId: string | null;
+  threadId: string | null;
+  initiator: AudioInitiator;
+}
+
+export interface AudioCompletedEvent extends AudioEventBase {
+  type: 'audio_edit_completed';
+  jobId: string;
+  variants: number[];
+  cost: AudioCost | null;
+  error: string | null;
+  chatSessionId: string | null;
+  threadId: string | null;
+  initiator: AudioInitiator;
+}
+
+export interface AudioFailedEvent extends AudioEventBase {
+  type: 'audio_edit_failed';
+  jobId: string;
+  outcome: AudioOutcome;
+  charged: boolean | null;
+  error: string | null;
+  retryQuote: AudioQuote | null;
+  chatSessionId: string | null;
+  threadId: string | null;
+  initiator: AudioInitiator;
+}
+
+export interface AudioThreadChangedEvent extends AudioEventBase {
+  type: 'audio_thread_changed';
+  revision: number;
+  state: AudioThreadsState;
+}
+
+export interface AudioPrefsChangedEvent extends AudioEventBase {
+  type: 'audio_prefs_changed';
+  mode: AudioMode;
+  prefs: AudioModePrefs;
+}
+
+export type AudioEvent =
+  | AudioProgressEvent | AudioCompletedEvent | AudioFailedEvent | AudioThreadChangedEvent | AudioPrefsChangedEvent;
+
+export const AUDIO_EVENTS: ReadonlySet<string> = new Set([
+  'audio_edit_progress', 'audio_edit_completed', 'audio_edit_failed', 'audio_thread_changed', 'audio_prefs_changed',
+]);
+
+// ── Запросы ──
+
+const json = <T>(url: string, body: unknown, method = 'POST', timeoutMs?: number) =>
+  request<T>(url, { method, body: JSON.stringify(body), ...(timeoutMs ? { timeoutMs } : {}) });
+
+const threadUrl = (scope: string, sessionId: string, threadId: string) =>
+  `${chatBase(scope, sessionId)}/threads/${encodeURIComponent(threadId)}`;
+
+export function jobForm(input: AudioJobInput): FormData {
+  const form = new FormData();
+  const put = (key: string, v: string | number | null | undefined) => {
+    if (v !== null && v !== undefined && v !== '') form.append(key, String(v));
+  };
+  put('quoteId', input.quoteId);
+  put('sessionId', input.sessionId);
+  put('threadId', input.threadId);
+  put('baseVersionId', input.baseVersionId);
+  put('text', input.text);
+  put('prompt', input.prompt);
+  put('lyrics', input.lyrics);
+  put('language', input.language);
+  put('durationSec', input.durationSec);
+  put('startSec', input.startSec);
+  put('endSec', input.endSec);
+  put('seed', input.seed);
+  if (input.params) form.append('params', JSON.stringify(input.params));
+  if (input.reference) form.append('reference', input.reference);
+  put('referencePath', input.referencePath);
+  input.clips?.forEach(f => form.append('clips', f));
+  input.clipPaths?.forEach(p => form.append('clipPaths', p));
+  put('voiceModelPath', input.voiceModelPath);
+  put('voiceIndexPath', input.voiceIndexPath);
+  return form;
+}
+
+// scope — ключ области (audioScope), sessionId — чат: личной области он нужен в каждом маршруте
+export const audioApi = {
+  state: (scope: string, sessionId: string) =>
+    request<AudioState>(`${chatBase(scope, sessionId)}/state`, { live: true }),
+  catalog: (scope: string, sessionId: string | null) =>
+    request<AudioCatalog>(`${audioBase(scope, sessionId)}/catalog`, { live: true }),
+  prefs: (scope: string, sessionId: string | null) =>
+    request<AudioPrefs>(`${audioBase(scope, sessionId)}/prefs`, { live: true }),
+  putPrefs: (scope: string, sessionId: string | null, mode: AudioMode, prefs: AudioModePrefs) =>
+    json<AudioPrefs>(`${audioBase(scope, sessionId)}/prefs/${mode}`, prefs, 'PUT'),
+  quote: (scope: string, sessionId: string | null, req: AudioQuoteRequest) =>
+    json<AudioQuote>(`${audioBase(scope, sessionId)}/quote`, req, 'POST', 60_000),
+  startJob: (scope: string, sessionId: string | null, input: AudioJobInput) =>
+    request<{ jobId: string }>(`${audioBase(scope, sessionId)}/jobs`, { method: 'POST', body: jobForm(input), timeoutMs: 300_000 }),
+  getJob: (scope: string, sessionId: string | null, jobId: string) =>
+    request<AudioJob>(`${audioBase(scope, sessionId)}/jobs/${encodeURIComponent(jobId)}`, { live: true }),
+  cancelJob: (scope: string, sessionId: string | null, jobId: string) =>
+    request<AudioJob>(`${audioBase(scope, sessionId)}/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
+
+  threads: (scope: string, sessionId: string) =>
+    request<AudioThreadsState>(`${chatBase(scope, sessionId)}/threads`, { live: true }),
+  // Ровно одно из file и draftFolder; mode — режим новой нити: её настройки — копия префов режима
+  open: (scope: string, sessionId: string, body: { file?: string; draftFolder?: string; mode?: AudioMode; revision: number }) =>
+    json<AudioThreadsState>(`${chatBase(scope, sessionId)}/threads`, body),
+  focus: (scope: string, sessionId: string, threadId: string | null, revision: number) =>
+    json<AudioThreadsState>(`${chatBase(scope, sessionId)}/threads/focus`, { threadId, revision }, 'PUT'),
+  remove: (scope: string, sessionId: string, threadId: string, revision: number) =>
+    request<AudioThreadsState>(`${threadUrl(scope, sessionId, threadId)}?revision=${revision}`, { method: 'DELETE' }),
+  settings: (scope: string, sessionId: string, threadId: string, settings: AudioThreadSettings, revision: number) =>
+    json<AudioThreadsState>(`${threadUrl(scope, sessionId, threadId)}/settings`, { settings, revision }, 'PUT'),
+  current: (scope: string, sessionId: string, threadId: string, versionId: string, revision: number) =>
+    json<AudioThreadsState>(`${threadUrl(scope, sessionId, threadId)}/current`, { versionId, revision }, 'PUT'),
+  // Сохранить в проект — только у проекта: у личного чата ручки нет, отказ до запроса
+  save: (scope: string, sessionId: string, threadId: string, req: AudioSaveRequest) => {
+    if (isPersonalScope(scope)) throw new Error('У личного чата нет проекта — версию можно только скачать');
+    return json<AudioSaveResult>(`${threadUrl(scope, sessionId, threadId)}/save`, req);
+  },
+  // URL файла версии для <audio src>: токен через ?access_token=, тег заголовков не шлёт
+  versionFileUrl: (scope: string, sessionId: string, threadId: string, versionId: string, role = 'main', download = false) => {
+    const url = `/api${threadUrl(scope, sessionId, threadId)}/versions/${encodeURIComponent(versionId)}/files/${encodeURIComponent(role)}`;
+    const q = new URLSearchParams();
+    if (download) q.set('download', 'true');
+    const token = readStoredToken();
+    if (token) q.set('access_token', token);
+    const qs = q.toString();
+    return qs ? `${url}?${qs}` : url;
+  },
+
+  subscribe: (handler: (e: AudioEvent) => void) => onMessage(msg => {
+    const m = msg as unknown as { type?: string };
+    if (m.type && AUDIO_EVENTS.has(m.type)) handler(m as unknown as AudioEvent);
+  }),
+};
+
+// Актуальное состояние из тела 409 revision_conflict — перечитывать не нужно
+export function conflictState(e: unknown): AudioThreadsState | null {
+  const err = e as { status?: unknown; body?: { state?: unknown } } | null;
+  if (err?.status !== 409) return null;
+  const st = err.body?.state as AudioThreadsState | undefined;
+  return st && Array.isArray(st.threads) ? st : null;
+}

@@ -241,6 +241,17 @@ export interface ComposerStripApi {
   isAvailable?: (ctx: { projectId: string | null; sessionId: string | null }) => boolean;
   // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
   status?: (ctx: { projectId: string | null; sessionId: string | null }) => ReactNode;
+  // Ярлыки под списком полос в меню переключателя («Голос», «Музыка» у «Звука»): входы
+  // в полосу сразу в нужном режиме. Есть, только пока полоса доступна
+  shortcuts?: (ctx: { projectId: string | null; sessionId: string | null }) => ComposerStripShortcut[];
+}
+export interface ComposerStripShortcut {
+  key: string;
+  title: string;
+  // Подпись второй строкой: «озвучить текст, сменить голос, обучить»
+  hint?: string;
+  icon: ReactNode;
+  onSelect: () => void;
 }
 
 // Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.

@@ -78,6 +78,8 @@ public static class FeatureFlagKeys
     // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта, общая панель генерации.
     // Гейтит и серверные ручки модуля audio-editor.
     public const string AudioEditor = "audio-editor";
+    // Настройки картинок в боковой панели генерации (ADR-021 §3) вместо карточки над полосой.
+    public const string ImageEditorPanel = "image-editor-panel";
 }
 
 /// <summary>
@@ -207,6 +209,15 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.AudioEditor,
             Title: "Звук",
             Description: "Озвучка текста, музыка и правка звука прямо в проекте: результат ложится версиями рядом с исходником, оригинал не трогается.",
+            Default: false,
+            Stage: "dev"),
+
+        // Настройки картинок в боковой панели генерации (ADR-021 §3): пока выключен, работает
+        // прежняя всплывающая карточка над полосой «Картинки».
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ImageEditorPanel,
+            Title: "Настройки картинок в боковой панели",
+            Description: "Поставщик, модель, число вариантов, персонаж и образцы для картинок настраиваются в боковой панели генерации, а не во всплывающей карточке над полем ввода.",
             Default: false,
             Stage: "dev"),
     ];

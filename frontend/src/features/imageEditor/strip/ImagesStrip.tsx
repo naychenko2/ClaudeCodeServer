@@ -7,33 +7,25 @@
 // В личном чате вне проекта (область personal) нет персонажа и образцов из проекта: их
 // источник — папки проекта.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import {
-  AlertTriangle, ChevronDown, ChevronUp, FolderOpen, Image as ImageIcon, Minus, Plus, SlidersHorizontal, Sparkles, Upload, User, X,
-} from 'lucide-react';
-import {
-  Button, Checkbox, Chip, IconButton, Menu, MenuItem, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, ICON_STROKE, api as appApi,
-} from 'aihome_shell/kit';
+import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, ChevronDown, ChevronUp, Image as ImageIcon, SlidersHorizontal, Sparkles, User, X } from 'lucide-react';
+import { Button, Chip, IconButton, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
-import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ReferenceRole } from '../api';
+import type { ImageEditCatalog } from '../api';
 import { CharactersPanel } from '../characters/CharactersPanel';
 import { CHARACTERS_PANEL, revealWorkspacePanel } from '../characters/panel';
-import { useCharacters } from '../characters/useCharacters';
-import { maxSamples, roleShort, SAMPLE_ROLES, type Sample } from '../editorInputs';
-import { effectiveProvider, modelBlockReason, providerHint, unavailableMark, variantsWord } from '../format';
-import { ProjectImagePicker } from '../PanelSections';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { enterScope, isPersonalScope } from '../scope';
 import { focusLabel } from '../thread/model';
-import { setPrefs } from '../thread/prefs';
-import { getFocusedThread, getSamples, setSamples, useThreads } from '../thread/threadStore';
+import { getFocusedThread, useThreads } from '../thread/threadStore';
 import type { ImageThread } from '../thread/threadsApi';
-import { activeSrc, launchSummaryParts, threadHasImage, useThreadLaunch } from '../thread/useThreadLaunch';
+import { activeSrc, launchSummaryParts, useThreadLaunch } from '../thread/useThreadLaunch';
+import { CharacterSection, openCharacters, useCharacter } from './settings/CharacterSection';
+import { CountSection } from './settings/CountSection';
+import { ic, type Launch } from './settings/primitives';
+import { ModelSection, ProviderSection } from './settings/ProviderSection';
+import { BlockedNotice, SizeSection } from './settings/SizeSection';
 import { stripSummary } from './summary';
-
-const ic = (I: typeof User, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
-
-type Launch = ReturnType<typeof useThreadLaunch>;
 
 function Thumb({ src, round }: { src: string | null; round?: boolean }) {
   if (!src) return null;
@@ -44,207 +36,22 @@ function Thumb({ src, round }: { src: string | null; round?: boolean }) {
   );
 }
 
-function Label({ children }: { children: ReactNode }) {
-  return (
-    <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4, margin: `${SP.md}px 0 ${SP.xs}px` }}>
-      {children}
-    </div>
-  );
-}
-
-// Выбор в карточке настроек: имя и подсказка в две строки
-function Opt({ on, name, hint, disabled, title, onClick }: {
-  on: boolean; name: string; hint?: ReactNode; disabled?: boolean; title?: string; onClick: () => void;
-}) {
-  return (
-    <Button size="sm" variant={on ? 'ghostAccent' : 'secondary'} disabled={disabled} title={title} onClick={onClick}
-      style={{ height: 'auto', padding: `${SP.xs}px ${SP.md}px`, border: `1px solid ${on ? C.accent : C.border}`, textAlign: 'left' }}>
-      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, fontWeight: 400 }}>
-        <span>{name}</span>
-        {hint && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{hint}</span>}
-      </span>
-    </Button>
-  );
-}
-
-// projectId = null — личная область: персонажей нет, запросов к проекту тоже
-function useCharacter(projectId: string | null, slug: string | null) {
-  const { list } = useCharacters(projectId);
-  const current = projectId && slug ? list?.find(c => c.slug === slug) ?? null : null;
-  const photo = projectId && current?.photos[0] ? imageEditorApi().characterPhotoUrl(projectId, current.slug, current.photos[0].file) : null;
-  return { current, photo, name: current?.name ?? slug };
-}
-
-function openCharacters(isMobile: boolean, sheet: () => void) {
-  if (isMobile) sheet();
-  else revealWorkspacePanel(CHARACTERS_PANEL);
-}
-
-// Образцы: чипы с миниатюрой, клик — роль, «+ Образец» — с компьютера или из проекта
-// (у личной области — сразу с компьютера)
-function SampleChips({ projectId, max }: { projectId: string; max: number }) {
-  const personal = isPersonalScope(projectId);
-  const samples = getSamples(projectId);
-  const [roleFor, setRoleFor] = useState<string | null>(null);
-  const [addAt, setAddAt] = useState<DOMRect | null>(null);
-  const [picker, setPicker] = useState(false);
-  const input = useRef<HTMLInputElement>(null);
-  const id = () => `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  const add = (more: Sample[]) => setSamples(projectId, [...samples, ...more].slice(0, max));
-  const roleOf = roleFor ? samples.find(s => s.id === roleFor) ?? null : null;
-
-  return (
-    <>
-      {samples.map(s => (
-        <span key={s.id} data-sample={s.name} style={{ display: 'inline-flex' }}>
-          <Chip leading={<img src={s.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />} maxW={170}
-            title={`Образец · ${roleShort(s.role).toLowerCase()} — нажмите, чтобы сменить роль`}
-            onClick={() => setRoleFor(s.id)}
-            onRemove={() => setSamples(projectId, samples.filter(x => x.id !== s.id))}>
-            {roleShort(s.role)} · {s.name}
-          </Chip>
-        </span>
-      ))}
-      {samples.length < max && (
-        <span style={{ display: 'inline-flex' }}
-          onClick={e => { if (personal) input.current?.click(); else setAddAt((e.currentTarget as HTMLElement).getBoundingClientRect()); }}>
-          <Chip dashed leading={ic(Plus)} title="Картинка-пример для модели: лицо, стиль или предмет">Образец</Chip>
-        </span>
-      )}
-      {addAt && (
-        <Menu anchor={addAt} minWidth={230} onClose={() => setAddAt(null)}>
-          <MenuItem icon={ic(Upload, ICON_SIZE.sm)} label="С компьютера" onClick={() => { setAddAt(null); input.current?.click(); }} />
-          <MenuItem icon={ic(FolderOpen, ICON_SIZE.sm)} label="Из файлов проекта…" onClick={() => { setAddAt(null); setPicker(true); }} />
-        </Menu>
-      )}
-      {roleOf && (
-        <Modal title={`Как модели использовать «${roleOf.name}»`} width={380} onClose={() => setRoleFor(null)}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-            {SAMPLE_ROLES.map(([role, full]) => (
-              <Button key={role} size="sm" fullWidth variant={roleOf.role === role ? 'ghostAccent' : 'ghost'} style={{ justifyContent: 'flex-start' }}
-                onClick={() => { setSamples(projectId, samples.map(x => (x.id === roleOf.id ? { ...x, role: role as ReferenceRole } : x))); setRoleFor(null); }}>
-                {full}
-              </Button>
-            ))}
-          </div>
-        </Modal>
-      )}
-      {picker && !personal && (
-        <ProjectImagePicker projectId={projectId}
-          taken={samples.flatMap(s => (s.source === 'project' ? [s.path] : []))}
-          onPick={path => {
-            add([{ id: id(), source: 'project', name: path.split('/').pop() ?? path, role: 'style', path, url: appApi.files.fileUrl(projectId, path) }]);
-            setPicker(false);
-          }}
-          onClose={() => setPicker(false)} />
-      )}
-      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden
-        onChange={e => {
-          const files = [...(e.target.files ?? [])];
-          e.target.value = '';
-          if (files.length) add(files.map(f => ({ id: id(), source: 'upload', name: f.name, role: 'style', file: f, url: URL.createObjectURL(f) })));
-        }} />
-    </>
-  );
-}
-
-// Подсказка с пометкой лежащего поставщика отдельным span цвета предупреждения
-function joinHint(hint: string, warn: string, warnFirst: boolean): ReactNode {
-  if (!warn) return hint;
-  const w = <span key="w" style={{ color: C.warningText }}>{warn}</span>;
-  if (!hint) return w;
-  return warnFirst ? <>{w} · {hint}</> : <>{hint} · {w}</>;
-}
-
-// Лежащий поставщик выбирается как обычный — пометка лишь предупреждает заранее
-export function ProviderOpts({ catalog, choice, onPick }: {
-  catalog: ImageEditCatalog; choice: string; onPick: (provider: string | null) => void;
-}) {
-  const admin = catalog.providers.find(p => p.key === catalog.default.provider);
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
-      {admin && (
-        <Opt on={choice === 'settings'} name="Как в настройках"
-          hint={joinHint(`сейчас ${admin.label}`, unavailableMark(admin), false)}
-          onClick={() => onPick(null)} />
-      )}
-      {catalog.providers.map(p => (
-        <Opt key={p.key} on={choice === p.key} name={p.label}
-          hint={joinHint(providerHint(p), unavailableMark(p), true)}
-          onClick={() => onPick(p.key)} />
-      ))}
-    </div>
-  );
-}
-
-// Карточка настроек генерации — над полосой на десктопе и шторкой на телефоне
+// Карточка настроек генерации — над полосой на десктопе и шторкой на телефоне; секции общие
+// с боковой панелью генерации (settings/*)
 function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
   projectId: string; L: Launch; catalog: ImageEditCatalog; isMobile: boolean; thread: ImageThread | null;
 }) {
   const [charSheet, setCharSheet] = useState(false);
-  const choice = L.settings.provider ?? 'settings';
-  const pv = effectiveProvider(catalog, choice);
-  const count = L.settings.count;
-  const maxCount = L.model?.caps?.maxCount ?? catalog.limits.maxCount ?? 4;
   const personal = isPersonalScope(projectId);
-  const { current, photo, name } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
-  const max = maxSamples(catalog.limits.maxReferences, L.model?.caps?.maxReferences);
 
   return (
     <div data-image-settings="" style={{ fontSize: FS.sm }}>
-      <Label>Поставщик</Label>
-      <ProviderOpts catalog={catalog} choice={choice} onPick={provider => L.setSettings({ provider, model: null })} />
-      {pv && (
-        <>
-          <Label>Модель</Label>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
-            {pv.models.map(m => {
-              const why = modelBlockReason(m, L.hasImage, L.hasMask);
-              return (
-                <Opt key={m.id} on={m.id === L.model?.id} name={m.label} disabled={!!why} title={why || undefined}
-                  hint={why || (m.id === AUTO_MODEL ? 'подберём под задачу' : undefined)}
-                  onClick={() => L.setSettings({ model: m.id })} />
-              );
-            })}
-          </div>
-        </>
-      )}
-      <Label>Варианты и цена</Label>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgWhite }}>
-          <IconButton size="xs" title="Меньше вариантов" ariaLabel="Меньше вариантов" disabled={count <= 1}
-            onClick={() => L.setSettings({ count: count - 1 })}>{ic(Minus)}</IconButton>
-          <span data-image-count="" style={{ minWidth: 14, textAlign: 'center', fontWeight: 600, color: C.textPrimary }}>{count}</span>
-          <IconButton size="xs" title="Больше вариантов" ariaLabel="Больше вариантов" disabled={count >= maxCount}
-            onClick={() => L.setSettings({ count: count + 1 })}>{ic(Plus)}</IconButton>
-        </span>
-        <span data-image-price="" style={{ color: C.textSecondary }}>{variantsWord(count)} · {L.price ?? L.priceLabel}</span>
-      </div>
-      {(!personal || max > 0) && <Label>{personal ? 'Образцы' : 'Персонаж и образцы'}</Label>}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
-        {personal ? null : L.prefs.characterSlug
-          ? <Chip selected leading={photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : undefined}
-              maxW={160} title="Фото персонажа уходят в каждую генерацию" onClick={() => openCharacters(isMobile, () => setCharSheet(true))}
-              onRemove={() => setPrefs(projectId, { characterSlug: null })}>
-              {current?.name ?? name}
-            </Chip>
-          : <Chip dashed leading={ic(User)} title="Персонажи проекта" onClick={() => openCharacters(isMobile, () => setCharSheet(true))}>Персонаж</Chip>}
-        {max > 0 && <SampleChips projectId={projectId} max={max} />}
-      </div>
-      {thread && threadHasImage(thread) && (
-        <>
-          <Label>Размер</Label>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, cursor: 'pointer', color: C.textPrimary }}>
-            <Checkbox checked={L.settings.matchSourceSize} onChange={v => L.setSettings({ matchSourceSize: v })} ariaLabel="Размер оригинала" />
-            Вернуть в размере оригинала
-          </label>
-        </>
-      )}
-      {L.blocked && L.model && (
-        <div style={{ display: 'flex', gap: SP.xs, alignItems: 'flex-start', marginTop: SP.md, padding: `${SP.xs}px ${SP.sm}px`, background: C.warningBg, color: C.warningText, borderRadius: R.md }}>
-          {ic(AlertTriangle)}<span>{L.model.label}: {L.blocked.charAt(0).toLowerCase() + L.blocked.slice(1)}</span>
-        </div>
-      )}
+      <ProviderSection L={L} catalog={catalog} />
+      <ModelSection L={L} catalog={catalog} />
+      <CountSection L={L} catalog={catalog} />
+      <CharacterSection projectId={projectId} L={L} catalog={catalog} isMobile={isMobile} onCharacterSheet={() => setCharSheet(true)} />
+      <SizeSection L={L} thread={thread} />
+      <BlockedNotice L={L} />
       {charSheet && !personal && (
         <Modal title="Персонажи" onClose={() => setCharSheet(false)}>
           <CharactersPanel projectId={projectId} />

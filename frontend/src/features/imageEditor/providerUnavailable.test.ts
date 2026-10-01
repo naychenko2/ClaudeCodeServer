@@ -5,7 +5,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ImageEditCatalog, ImageEditProvider } from './api';
 import { ProviderItems } from './ProviderModelPicker';
-import { ProviderOpts } from './strip/ImagesStrip';
+import { ProviderOpts } from './strip/settings/ProviderSection';
 import { providerTitle, unavailableMark } from './format';
 
 const FAL: ImageEditProvider = { key: 'fal', label: 'fal', priceUnit: 'usd', models: [{ id: 'auto', label: 'Авто' }] };

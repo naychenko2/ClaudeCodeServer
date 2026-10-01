@@ -25,6 +25,8 @@ public static class LocalMediaRegistration
         services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.ILocalImageMedia, LocalImageMediaAdapter>();
         // Шов локальных аудио-моделей для модуля «Звук» (ADR-021)
         services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalAudioMedia, LocalAudioMediaAdapter>();
+        // Шов обработки звука без ИИ (ffmpeg на хосте) для модуля «Звук» (ADR-021)
+        services.AddSingleton<ClaudeHomeServer.Services.Media.IAudioDsp, FfmpegAudioDsp>();
         services.AddSingleton<LocalMediaCleanup>();
         services.AddGatedHostedService<LocalMediaCollector>(config, "images");
         return services;

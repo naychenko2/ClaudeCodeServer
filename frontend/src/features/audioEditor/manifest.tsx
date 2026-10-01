@@ -5,7 +5,11 @@
 
 import { AudioLines, Mic, Music } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
-import type { ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SubsystemManifest } from '../../lib/subsystems/registryCore';
+import type {
+  ChatItemToolCtx, ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SlotContribution, SubsystemManifest,
+} from '../../lib/subsystems/registryCore';
+import { AudioConcatCard, AudioFocusLine, AudioLaunchCard, AudioPromptCard, AudioServiceLine } from './feed/AgentCards';
+import { AUDIO_TOOL } from './feed/parse';
 import { SoundChatWatcher } from './composer/SoundChatWatcher';
 import { soundMode } from './composer/soundMode';
 import { SoundStrip, soundStripStatus } from './strip/SoundStrip';
@@ -13,6 +17,15 @@ import { openSoundShortcut } from './thread/actions';
 import { SOUND_STRIP } from './thread/threadStore';
 
 const enabled = () => getFlag(FLAGS.audioEditor);
+
+// Карточки вызовов агента audio_*: ключ — полное имя инструмента MCP-сервера audio-editor
+const FEED_CARDS: SlotContribution<ChatItemToolCtx>[] = [
+  { name: AUDIO_TOOL('audio_generate'), render: ctx => <AudioLaunchCard ctx={ctx} /> },
+  { name: AUDIO_TOOL('audio_concat'), render: ctx => <AudioConcatCard ctx={ctx} /> },
+  { name: AUDIO_TOOL('audio_suggest_prompt'), render: ctx => <AudioPromptCard ctx={ctx} /> },
+  ...['audio_focus', 'audio_new'].map(t => ({ name: AUDIO_TOOL(t), render: (ctx: ChatItemToolCtx) => <AudioFocusLine ctx={ctx} /> })),
+  ...['audio_state', 'audio_voices', 'audio_cancel'].map(t => ({ name: AUDIO_TOOL(t), render: (ctx: ChatItemToolCtx) => <AudioServiceLine ctx={ctx} /> })),
+];
 
 // Ярлыки «Голос» и «Музыка» в меню полос: полоса «Звук» и панель на «Настройках» в нужном режиме
 export function soundShortcuts({ sessionId }: { sessionId: string | null }): ComposerStripShortcut[] {
@@ -34,6 +47,9 @@ export const manifest: SubsystemManifest = {
   order: 96,
   noPill: true,
   slots: {
+    // Без флага вкладов нет вовсе — лента рисует вызовы как раньше. Геттер читается на каждом
+    // чтении слота: реестр пересчитывает вклады вместе со стором подсистем, флаги приходят раньше
+    get 'chat-item-tool'() { return enabled() ? FEED_CARDS : []; },
     // Полоса «Звук» над композером: выбор звука открывает её сам (стор нитей)
     'composer-strip': [
       {

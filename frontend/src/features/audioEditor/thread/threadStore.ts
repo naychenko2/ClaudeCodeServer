@@ -36,6 +36,8 @@ const _jobs = new Map<string, JobProgress>();
 // Режим, выбранный ярлыком «Голос» / «Музыка» в чате: по нему сводка без нити и новый звук
 const _shortcutMode = new Map<string, AudioMode>();
 const _modeRequests = new Map<string, number>();
+// Промпт из карточки агента «Вставить в промпт»: n — повод для затравки поля режима «Звук»
+const _suggested = new Map<string, { n: number; text: string }>();
 let _version = 0;
 const _listeners = new Set<() => void>();
 let _unsub: (() => void) | null = null;
@@ -211,6 +213,17 @@ export function getSoundModeRequest(sessionId: string | null): number {
   return (sessionId && _modeRequests.get(sessionId)) || 0;
 }
 
+// «Вставить в промпт» из карточки агента: текст ложится в поле режима «Звук» (затравка
+// soundMode.prefill — только в нетронутое поле), режим включается сам
+export function suggestPrompt(sessionId: string, text: string) {
+  _suggested.set(sessionId, { n: (_suggested.get(sessionId)?.n ?? 0) + 1, text });
+  requestSoundMode(sessionId);
+}
+
+export function getSuggestedPrompt(sessionId: string | null): { n: number; text: string } | null {
+  return (sessionId && _suggested.get(sessionId)) || null;
+}
+
 // Сброс — только для тестов
 export function __resetAudioStore() {
   _entries.clear();
@@ -219,6 +232,7 @@ export function __resetAudioStore() {
   _jobs.clear();
   _shortcutMode.clear();
   _modeRequests.clear();
+  _suggested.clear();
   emit();
 }
 

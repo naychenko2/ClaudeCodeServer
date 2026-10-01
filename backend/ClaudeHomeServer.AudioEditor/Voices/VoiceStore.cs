@@ -72,7 +72,7 @@ public static partial class VoiceStore
             };
             try
             {
-                var written = WriteSamples(root, slug, manifest, samples);
+                var written = WriteSamples(root, slug, manifest, samples, []);
                 WriteManifest(root, slug, manifest, createNew: true);
                 written.Add(Rel(slug, ManifestFile));
                 return AudioEditCallResult<VoiceChange>.Ok(new VoiceChange(manifest, written, []));
@@ -143,10 +143,20 @@ public static partial class VoiceStore
             if (samples.Count == 0) return Invalid("Нет записей");
             if (manifest.Samples.Count + samples.Count > MaxSamples) return Invalid($"У голоса не больше {MaxSamples} записей");
             if (CheckSamples(samples) is { } bad) return Invalid(bad);
-            var written = WriteSamples(root, slug, manifest, samples);
-            WriteManifest(root, slug, manifest, createNew: false);
-            written.Add(Rel(slug, ManifestFile));
-            return AudioEditCallResult<VoiceChange>.Ok(new VoiceChange(manifest, written, []));
+            var files = new List<string>();
+            try
+            {
+                var written = WriteSamples(root, slug, manifest, samples, files);
+                WriteManifest(root, slug, manifest, createNew: false);
+                written.Add(Rel(slug, ManifestFile));
+                return AudioEditCallResult<VoiceChange>.Ok(new VoiceChange(manifest, written, []));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Всё или ничего: записанные этим вызовом образцы убираем, манифест на диске прежний
+                foreach (var file in files) TryDeleteFile(file);
+                return Invalid("Записи не добавлены: путь вне проекта или ошибка записи");
+            }
         }
     }
 
@@ -249,8 +259,9 @@ public static partial class VoiceStore
         return IsValidSlug(slug) ? slug : "voice";
     }
 
+    // files — полные пути созданных файлов: по ним вызывающий откатывает запись при сбое
     private static List<string> WriteSamples(string root, string slug, VoiceManifest manifest,
-        IReadOnlyList<VoiceSampleUpload> samples)
+        IReadOnlyList<VoiceSampleUpload> samples, List<string> files)
     {
         var written = new List<string>();
         var next = NextIndex(manifest);
@@ -265,7 +276,11 @@ public static partial class VoiceStore
                 full = FileIn(root, slug, file) ?? throw new UnauthorizedAccessException("Путь записи вне папки голоса");
             }
             while (File.Exists(full));
-            using (var stream = new FileStream(full, FileMode.CreateNew, FileAccess.Write)) stream.Write(sample.Bytes);
+            using (var stream = new FileStream(full, FileMode.CreateNew, FileAccess.Write))
+            {
+                files.Add(full);
+                stream.Write(sample.Bytes);
+            }
             manifest.Samples.Add(new VoiceSample(file));
             written.Add(Rel(slug, file));
         }
@@ -331,6 +346,11 @@ public static partial class VoiceStore
     private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string Rel(string slug, string file) => $"{Folder}/{slug}/{file}";
+
+    private static void TryDeleteFile(string file)
+    {
+        try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
 
     private static void TryDeleteDir(string dir)
     {

@@ -29,6 +29,8 @@ public static class AudioEditErrorCodes
     public const string FileNotFound = "file_not_found";
     public const string RevisionConflict = "revision_conflict";
     public const string NameTaken = "name_taken";
+    // Голоса нет в библиотеке проекта (или slug не проходит белый список)
+    public const string VoiceNotFound = "voice_not_found";
     public const string Unavailable = "unavailable";
     // Обработка без ИИ недоступна: нет ffmpeg на хосте или выключена подсистема images (ADR-021 §2)
     public const string DspUnavailable = "dsp_unavailable";

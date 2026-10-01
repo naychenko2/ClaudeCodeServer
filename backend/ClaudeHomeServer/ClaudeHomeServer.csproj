@@ -178,6 +178,26 @@
           SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
   </Target>
 
+  <!-- Динамический модуль «Звук» (ADR-021 §1): тот же паттерн, что ImageEditor.
+       ReferenceOutputAssembly="false" — Main не видит типов модуля, швы живут в Core. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.AudioEditor\ClaudeHomeServer.AudioEditor.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyAudioEditorModuleBuild" AfterTargets="Build">
+    <ItemGroup>
+      <AudioEditorModuleFiles Include="..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AudioEditorModuleFiles)" DestinationFolder="$(OutDir)modules\audio-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll')" />
+  </Target>
+  <Target Name="CopyAudioEditorModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <AudioEditorModuleFiles Include="..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AudioEditorModuleFiles)" DestinationFolder="$(PublishDir)modules\audio-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll')" />
+  </Target>
+
   <!-- Динамический модуль Architecture (раздел «Архитектура», Viaduct 10.2): тот же паттерн,
        что Notes. ReferenceOutputAssembly="false" — Main не видит типы вертикали на компиляции;
        швы (IArchitectureCodeSource, IStaticBranchContributor, McpEndpoints.ArchitectureName)

@@ -115,6 +115,9 @@ public class SubsystemBoundaryTests
         // ImageEditor — динамический модуль (ADR-018 §10.1): Main на него не ссылается,
         // без форс-загрузки сторож прошёл бы по нему вакуумно.
         _ = typeof(ClaudeHomeServer.Services.ImageEditor.ImageEditorSubsystem).Assembly;
+        // AudioEditor — динамический модуль «Звук» (ADR-021): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.AudioEditor.AudioEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): форс-загрузка нужна,
         // чтобы сторож видел типы Prompts (OmoPrompts, SubagentPrompts, OmcPersonaRouting)
         // и проверял границы по Prompts.dll.
@@ -276,6 +279,19 @@ public class SubsystemBoundaryTests
                 "ClaudeHomeServer.Services.ImageEditor",
                 SharedAllowedPrefixes
                     .Concat(new[] { "ClaudeHomeServer.Services.ImageEditor" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // AudioEditor — динамический модуль «Звук» (ADR-021 §1). Только общая спинка: Higgsfield,
+        // локальные модели и DSP — швы Core в нейтральных namespace. Ссылка на сборку ImageEditor
+        // (а не на Core) — нарушение, так и проверяется мутацией.
+        new object[]
+        {
+            new VerticalBoundary(
+                "AudioEditor",
+                "ClaudeHomeServer.Services.AudioEditor",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.AudioEditor" })
                     .ToArray(),
                 Array.Empty<string>()),
         },

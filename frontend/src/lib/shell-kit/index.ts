@@ -33,8 +33,13 @@ export {
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
-export { registerSubsystem, REVEAL_PANEL_EVENT } from '../subsystems/registryCore';
-export type { SubsystemManifest } from '../subsystems/registryCore';
+export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel } from '../subsystems/registryCore';
+export type { SubsystemManifest, RevealPanelDetail } from '../subsystems/registryCore';
+
+// ─── genPanelDismissed ───────────────────────────────────────────────────────
+// Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл
+// её в этом чате (ADR-021 §3)
+export { autoRevealGenerationPanel } from '../genPanelDismissed';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts

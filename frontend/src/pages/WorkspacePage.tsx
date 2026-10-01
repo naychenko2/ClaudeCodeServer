@@ -23,7 +23,8 @@ import { api } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
-import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem } from '../lib/subsystems/registry';
+import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem, type RevealPanelDetail } from '../lib/subsystems/registry';
+import { markGenPanelDismissed } from '../lib/genPanelDismissed';
 import type { WorkspacePanelDefApi, WorkspacePanelDefCtx, WorkspacePanelNotesCtx, WorkspacePanelArchCtx, WorkspaceCenterDocCtx } from '../lib/subsystems/registryCore';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
@@ -383,10 +384,11 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // же точкой входа, что «Открыть изменения» у ProjectGitBar и тумблер «Оглавление»
   // у FileViewer (правим раскладку напрямую через стор зон)
   const { reveal: revealPanelKey, close: closePanelKey } = wsPanels.use();
-  // Показ панели по просьбе подсистемы (пунктирный чип «Персонаж» в полосе «Картинки»)
+  // Показ панели по просьбе подсистемы (пунктирный чип «Персонаж» в полосе «Картинки»,
+  // автооткрытие панели генерации). Вкладку detail.tab панель разбирает сама
   useEffect(() => {
     const onReveal = (e: Event) => {
-      const key = (e as CustomEvent<{ key?: unknown }>).detail?.key;
+      const key = (e as CustomEvent<Partial<RevealPanelDetail>>).detail?.key;
       if (isPanelKey(key)) revealPanelKey(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
@@ -1964,6 +1966,7 @@ const windowWidth = useWindowWidth();
           personaCreating={personaCreating}
           onOpenPersonaChat={handleOpenPersonaChat}
           availableChatIds={availableSessionIds}
+          onPanelUserClose={k => markGenPanelDismissed(activeSessionId, k)}
           onPersonaSelectAfterCreate={handlePersonaSelectAfterCreate}
           onPersonaCleared={handlePersonaCleared}
           teamCenterOpen={teamCenterOpen}
@@ -2016,7 +2019,7 @@ const windowWidth = useWindowWidth();
             video: <VideoPanel />,
             ...Object.fromEntries(panelDefs.flatMap(d => (
               d.name && isPanelKey(d.name) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
-                ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => closePanelKey(d.name as PanelKey) })]]
+                ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => { markGenPanelDismissed(activeSessionId, d.name!); closePanelKey(d.name as PanelKey); } })]]
                 : []
             ))),
           }}

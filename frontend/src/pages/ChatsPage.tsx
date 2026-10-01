@@ -26,8 +26,9 @@ import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
 import { CHAT_KEYS, CHAT_RIGHT_KEYS, isPanelKey, type PanelKey } from './workspace/panelCatalog';
-import { SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
-import type { WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
+import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
+import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
+import { isGenPanelKey, markGenPanelDismissed } from '../lib/genPanelDismissed';
 import { plural } from '../lib/plural';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
@@ -292,6 +293,23 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     window.addEventListener(VIDEO_PANEL_EVENT, show);
     return () => window.removeEventListener(VIDEO_PANEL_EVENT, show);
   }, [reveal]);
+  // Показ панели правой зоны по просьбе подсистемы (revealWorkspacePanel): чужие
+  // ключи — проектные панели вроде «Персонажей» — здесь пропускаются. Вкладку
+  // detail.tab панель разбирает сама.
+  // Правая зона пустого чата скрыта (см. right ниже), но запрошенная панель генерации
+  // обязана появиться и в нём («＋» → Звук/Картинка в новом чате): запрос держит
+  // зону на экране до смены чата
+  const [genZoneFor, setGenZoneFor] = useState<string | null>(null);
+  useEffect(() => {
+    const onReveal = (e: Event) => {
+      const key = (e as CustomEvent<Partial<RevealPanelDetail>>).detail?.key;
+      if (!isPanelKey(key) || !CHAT_RIGHT_KEYS.includes(key)) return;
+      if (isGenPanelKey(key)) setGenZoneFor(activeId);
+      reveal(key);
+    };
+    window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
+    return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
+  }, [reveal, activeId]);
 
   useEffect(() => {
     setExclusive(isTablet);
@@ -561,12 +579,13 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // (контент есть лишь у неё), и уехавшая сюда панель «Чаты» пропадала бы
           // с экрана целиком. Набор ключей это запрещает — и заодно чинит
           // раскладку, сохранённую до появления правила.
-          right={activeChat && activeChat.messageCount > 0 ? (
+          right={activeChat && (activeChat.messageCount > 0 || genZoneFor === activeChat.id) ? (
             <PanelZone
               side="right" allowedKeys={CHAT_RIGHT_KEYS} hideWhenEmpty panelStack={chatPanels}
+              onUserClose={k => markGenPanelDismissed(activeChat.id, k)}
               panels={Object.fromEntries(panelDefs.flatMap(d => (
                 d.name && isPanelKey(d.name) && CHAT_RIGHT_KEYS.includes(d.name) && d.render && (d.action?.isAvailable?.(null) ?? true)
-                  ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => closePanelKey(d.name as PanelKey) })]]
+                  ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => { markGenPanelDismissed(activeChat.id, d.name!); closePanelKey(d.name as PanelKey); } })]]
                   : []
               )))}
               sessionPanels={sessionPanels} compact={isTablet}

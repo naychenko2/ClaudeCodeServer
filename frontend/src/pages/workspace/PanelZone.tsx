@@ -105,12 +105,15 @@ interface Props {
   // Открыт ли файл в центральной области — тоже ужимает FAB AI-хаба (как распахнутая
   // панель): места в центре мало, крупный круг мешает. Знает только правая зона.
   centerFileOpen?: boolean;
+  // Человек закрыл панель — крестиком в шапке или повторным кликом по рельсе. Хост
+  // ставит по нему признак «закрыта в этом чате» панели генерации (ADR-021 §3)
+  onUserClose?: (k: PanelKey) => void;
 }
 
 export function PanelZone({
   side, panels, railBadges, panelStack,
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, compact, sessionPanels,
-  railFooter, floating, centerFileOpen,
+  railFooter, floating, centerFileOpen, onUserClose,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, openIn, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, markActive, releaseCompactSide, registerOpener, moveTo, registerZoneKeys, zoneKeys } = usePanels();
@@ -921,8 +924,9 @@ export function PanelZone({
       setPinned(peek === k ? k : null);
       // Показанную панель клик закрывает, закрытую — открывает по общему правилу
       // (placeHere): своей копии правила у клика больше нет.
-      if (!openKeys.includes(k)) placeHere(k);
-      else if (compactOverlay) closeCompact(k);
+      if (!openKeys.includes(k)) { placeHere(k); return; }
+      onUserClose?.(k);
+      if (compactOverlay) closeCompact(k);
       // Закрытие: вместимость и порядок кнопок ни при чём — togglePanelIn видит
       // панель в этой зоне и просто закрывает её. На широком планшете inline
       // открытость уже в сторе, и toggle идёт общим путём десктопа.
@@ -940,7 +944,11 @@ export function PanelZone({
     const stretched = vi === undefined
       ? multiInCol || !!fillWanted[k]
       : panelStretched(k, vi, multiInCol ? 2 : 1);
-    const onCloseThis = compactOverlay ? () => closeCompact(k) : () => closeTo(side, k);
+    const onCloseThis = () => {
+      onUserClose?.(k);
+      if (compactOverlay) closeCompact(k);
+      else closeTo(side, k);
+    };
     const shell = (
       <PanelShell
         icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}

@@ -294,8 +294,16 @@ export interface WorkspacePanelDefApi {
   isAvailable?: (projectId: string | null) => boolean;
 }
 // Показать панель рабочей области извне (например, пунктирный чип «Персонаж» в полосе):
-// событие окна с detail = { key }; слушает страница проекта, неизвестный ключ пропускается
+// событие окна с detail = { key, tab? }; слушают страница проекта и раздел «Чаты»,
+// неизвестный ключ пропускается. tab — вкладка, которую панель покажет сама: хост её
+// не разбирает, панель слушает то же событие
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
+export interface RevealPanelDetail { key: string; tab?: string }
+
+export function revealWorkspacePanel(key: string, tab?: string) {
+  const detail: RevealPanelDetail = tab === undefined ? { key } : { key, tab };
+  window.dispatchEvent(new CustomEvent<RevealPanelDetail>(REVEAL_PANEL_EVENT, { detail }));
+}
 
 // ---- Хранилище ----
 const _manifests: SubsystemManifest[] = [];

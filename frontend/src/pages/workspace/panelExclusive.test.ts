@@ -71,6 +71,19 @@ describe('взаимоисключение images/sound', () => {
     expect(z.right.layout).toEqual([['files', 'sound']]);
   });
 
+  it('дроп звука на нейтральную панель: картинки в другой колонке закрываются', () => {
+    const z = replacePanelWith(zones([], [['images'], ['files']]), 'sound', 'files');
+    expect(zoneOf(z, 'images')).toBeNull();
+    expect(z.right.layout).toEqual([['sound']]);
+  });
+
+  it('дроп звука на нейтральную панель: картинки в соседней зоне закрываются', () => {
+    const z = replacePanelWith(zones([['images']], [['files']]), 'sound', 'files');
+    expect(zoneOf(z, 'images')).toBeNull();
+    expect(zoneOf(z, 'sound')).toBe('right');
+    expect(zoneOf(z, 'files')).toBeNull();
+  });
+
   it('соперник уходит и из спрятанного набора — разворот не вернёт его вторым', () => {
     const z = openPanelIn(zones([], [['files']], { left: [['sound']] }), 'right', 'images');
     expect(z.left.stash.flat()).not.toContain('sound');

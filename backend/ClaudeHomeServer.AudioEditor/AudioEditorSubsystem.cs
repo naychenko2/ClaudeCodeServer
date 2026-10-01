@@ -53,6 +53,16 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Яндекс: шов ITtsEngine — от отключаемой вертикали Tts, поэтому nullable
         services.AddSingleton<IAudioEngine>(sp =>
             new Engines.YandexAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ITtsEngine>()));
+        // fal: ключ инстанса Fal:ApiKey (или FAL_KEY), тихий HTTP-клиент "fal" заводит Main; нет ключа — Enabled=false
+        services.AddSingleton<Engines.FalAudioEngine>();
+        // Скачивание результатов fal — свой клиент без автоследования редиректов: ссылка из ответа
+        // поставщика проверяется на каждом шаге (Engines/FalDownload), системный прокси сохраняется
+        services.AddQuietHttpClient(Engines.FalAudioEngine.DownloadClientName, new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.AudioEditor.FalDownload",
+                Subject: "файлами результатов fal.ai",
+                Consequence: "Результат задачи «Звук» не скачан."))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        services.AddSingleton<IAudioEngine>(sp => sp.GetRequiredService<Engines.FalAudioEngine>());
         // Исполнитель задач: котировка → запуск по quoteId, потолки, траты, события audio_edit_*, итог
         // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
         services.AddSingleton<Jobs.AudioJobThreads>();

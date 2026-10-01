@@ -3,10 +3,10 @@ using ClaudeHomeServer.Services.Media;
 namespace ClaudeHomeServer.Services.AudioEditor.Catalog;
 
 // Каталог модуля «Звук» (ADR-021 §2) — данные, а не код: отобранные модели поставщиков с AudioCaps и
-// их привязка к операциям поставщика. Сейчас здесь только локальные модели (local-media); fal,
+// их привязка к операциям поставщика. Здесь локальные модели (local-media), fal — в AudioCatalog.Fal.cs;
 // Higgsfield и Яндекс добавятся строками на этапах 3–4. Лицензии и языки — по docs/features/local-media.md
 // и белым спискам LocalMediaService.Audio: меняются там — правится и здесь.
-public static class AudioCatalog
+public static partial class AudioCatalog
 {
     public const string AutoModelId = "auto";
     public const string AutoModelLabel = "Авто";

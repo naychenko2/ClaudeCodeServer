@@ -22,6 +22,12 @@ public static class AudioProjectSaver
 
     private static readonly char[] ForbiddenChars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
     private static readonly Regex VersionSuffix = new(@"^(.+)\.v\d+$", RegexOptions.Compiled);
+    // Звуковые расширения, которые человек мог вписать сам: «intro.wav» у mp3-версии — это intro.mp3,
+    // а не intro.wav.mp3
+    private static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp3", ".wav", ".flac", ".ogg", ".oga", ".opus", ".m4a", ".aac", ".aif", ".aiff", ".wma", ".webm",
+    };
     private const string DefaultStem = "audio";
     private const string StemsSuffix = ".stems";
     private const int MaxStemLength = 200;
@@ -30,7 +36,9 @@ public static class AudioProjectSaver
     // Source — абсолютный путь файла версии, уже проверенный вызывающим
     public sealed record Item(string Role, string Source);
 
-    public sealed record Saved(string Path, IReadOnlyList<string> Files);
+    // Name — имя группы без расширения («demo»); HasAudio — записан ли основной звук: версия из одних
+    // стемов звука не даёт, и нить за папкой стемов не идёт
+    public sealed record Saved(string Path, IReadOnlyList<string> Files, string Name, bool HasAudio);
 
     public sealed record Outcome(Saved? Value, string? ErrorCode, string? Error, string? Suggestion = null);
 
@@ -152,8 +160,8 @@ public static class AudioProjectSaver
 
         var files = plan.Where(t => !t.IsDir).Select(t => t.Rel).ToList();
         // Основной путь ответа — звук; у версии из одних стемов — папка стемов
-        var primary = plan.FirstOrDefault(t => t.Item?.Role == AudioFileRoles.Main) ?? plan[0];
-        return new Outcome(new Saved(primary.Rel, files), null, null);
+        var main = plan.FirstOrDefault(t => t.Item?.Role == AudioFileRoles.Main);
+        return new Outcome(new Saved((main ?? plan[0]).Rel, files, stem, main is not null), null, null);
     }
 
     private static string? SuggestFree(string root, string dirRel, string stem, IReadOnlyList<Item> items, int from)
@@ -193,7 +201,7 @@ public static class AudioProjectSaver
     }
 
     // null — имя годится. Имя обязано быть именем, а не путём; вписанное расширение основного файла
-    // срезается — его ставит сервер
+    // или любое другое звуковое срезается — настоящее ставит сервер по формату версии
     private static string? ValidateName(string? input, string ext, out string stem)
     {
         stem = "";
@@ -202,8 +210,10 @@ public static class AudioProjectSaver
         if (Path.GetFileName(name) != name || name.IndexOfAny(ForbiddenChars) >= 0 || name.Any(char.IsControl))
             return "Имя файла — без папок и символов < > : \" / \\ | ? *";
         if (name.StartsWith('.')) return "Имя файла не может начинаться с точки";
-        if (ext.Length > 1 && name.Length > ext.Length && name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
-            name = name[..^ext.Length].TrimEnd();
+        var typed = Path.GetExtension(name);
+        if (typed.Length > 1 && name.Length > typed.Length
+            && (typed.Equals(ext, StringComparison.OrdinalIgnoreCase) || AudioExtensions.Contains(typed)))
+            name = name[..^typed.Length].TrimEnd();
         if (name.Length == 0 || name.EndsWith('.')) return "Недопустимое имя файла";
         if (name.Length > MaxStemLength) return $"Имя файла длиннее {MaxStemLength} символов";
         stem = name;

@@ -212,6 +212,13 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
             Lineage = thread.File is { } old && old != path ? [.. thread.Lineage, old] : thread.Lineage,
         }, log));
 
+    // Сохранили версию без основного звука (только стемы): нить остаётся при своём файле, черновик
+    // получает имя группы вместо «Новый звук». Журнал пишется в любом случае
+    public AudioThreadWrite NameDraft(string ownerId, string sessionId, string threadId, string name,
+        AudioThreadEvent? log = null) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+            Replace(state, thread.File is null ? thread with { Name = name } : thread, log));
+
     // Состояние для блока хода и записи журнала, ещё не показанные ходу; курсор сдвигается.
     // Ревизию не трогает: сборка хода — не правка состояния
     public (AudioThreadsState State, IReadOnlyList<AudioThreadEvent> Fresh) TakeForTurn(string ownerId, string sessionId)

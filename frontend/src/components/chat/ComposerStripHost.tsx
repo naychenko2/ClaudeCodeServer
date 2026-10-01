@@ -15,7 +15,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import { C, FS, SP } from '../../lib/design';
 import { useComposerStrip } from '../../lib/composerStrips';
 import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
-import type { ComposerStripApi, ComposerStripCtx, SlotContribution } from '../../lib/subsystems/registry';
+import type { ComposerStripApi, ComposerStripCtx, ComposerStripShortcut, SlotContribution } from '../../lib/subsystems/registry';
 import { Button, Dot, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_STROKE } from '../ui/icons';
 
@@ -33,6 +33,17 @@ function ItemLabel({ title, status }: { title: string; status: ReactNode }) {
       )}
     </span>
   );
+}
+
+// Ярлыки доступных полос реестра («Голос», «Музыка» у «Звука») — для других входов
+// каркаса: меню «＋» композера и пустой ленты (ADR-021 п.1). Хост полос берёт их сам
+export function useStripShortcuts(projectId: string | null, sessionId: string | null): ComposerStripShortcut[] {
+  const fromSlot = useSlot<ComposerStripCtx, ComposerStripApi>(SLOT_COMPOSER_STRIP);
+  const avail = { projectId, sessionId };
+  return fromSlot
+    .filter(c => c.name && c.action && (c.action.isAvailable?.(avail) ?? true))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .flatMap(c => c.action!.shortcuts?.(avail) ?? []);
 }
 
 // projectId = null — личный чат вне проекта: полосы сами решают, доступны ли они без проекта

@@ -365,7 +365,50 @@ public class AudioEditorControllerTests : IDisposable
             .Should().BeEquivalentTo("intro.v2.stems/vocals.mp3", "intro.v2.stems/drums.mp3");
         File.ReadAllBytes(Path.Combine(_projectRoot, "intro.v2.stems", "vocals.mp3")).Should().Equal(Vocals);
         File.ReadAllBytes(Path.Combine(_projectRoot, "intro.v2.stems", "drums.mp3")).Should().Equal(Drums);
-        Thread(chatUrl, threadId).File.Should().Be("intro.v2.stems", "у версии из одних стемов нить идёт за папкой");
+        Thread(chatUrl, threadId).File.Should().Be("intro.mp3", "версия из одних стемов звука не даёт — нить не идёт за папкой");
+    }
+
+    // Приёмка m1: «Сохранить как demo.mp3» у версии со стемами — папка demo.stems, а нить остаётся звуком
+    [Fact]
+    public async Task Сохранить_как_со_стемами_не_перепривязывает_нить_к_папке()
+    {
+        var (chatUrl, threadId, versionId) = await ProjectVersion("process", "separate");
+
+        var resp = await _client.PostAsJsonAsync($"{chatUrl}/threads/{threadId}/save",
+            new { versionId, mode = "as", fileName = "demo.mp3" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        var body = await Json(resp);
+        body.GetProperty("path").GetString().Should().Be("demo.stems");
+        body.GetProperty("name").GetString().Should().Be("demo");
+        body.GetProperty("hasAudio").GetBoolean().Should().BeFalse();
+        Directory.Exists(Path.Combine(_projectRoot, "demo.stems")).Should().BeTrue();
+        var thread = Thread(chatUrl, threadId);
+        thread.File.Should().Be("intro.mp3");
+        thread.Lineage.Should().BeEmpty();
+        var state = await Json(await _client.GetAsync($"{chatUrl}/threads"));
+        state.GetProperty("events").EnumerateArray()
+            .Should().Contain(e => e.GetProperty("kind").GetString() == "saved" && e.GetProperty("threadId").GetString() == threadId);
+    }
+
+    // Приёмка m2: вписанное человеком чужое звуковое расширение заменяется настоящим, а не дописывается
+    [Theory]
+    [InlineData("theme.wav")]
+    [InlineData("theme.WAV")]
+    [InlineData("theme.flac")]
+    [InlineData("theme.mp3")]
+    public async Task Сохранить_как_с_чужим_расширением_берёт_расширение_версии(string fileName)
+    {
+        var (chatUrl, threadId, versionId) = await ProjectVersion();
+
+        var resp = await _client.PostAsJsonAsync($"{chatUrl}/threads/{threadId}/save",
+            new { versionId, mode = "as", fileName });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        var body = await Json(resp);
+        body.GetProperty("path").GetString().Should().Be("theme.mp3");
+        body.GetProperty("files").EnumerateArray().Select(f => f.GetString()).Should().BeEquivalentTo("theme.mp3", "theme.abc");
+        File.Exists(Path.Combine(_projectRoot, $"{fileName}.mp3")).Should().BeFalse();
     }
 
     [Fact]

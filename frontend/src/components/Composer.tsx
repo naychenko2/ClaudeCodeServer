@@ -33,7 +33,8 @@ import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
-import { Button, IconButton, Modal, Notice } from './ui';
+import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
+import { useStripShortcuts } from './chat/ComposerStripHost';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
@@ -611,6 +612,16 @@ export function Composer({
   const slotModes = useSlot<ComposerModeCtx, ComposerModeApi>(SLOT_COMPOSER_MODE)
     .filter(c => c.name && c.action && c.action.isAvailable(modeCtx));
   const slotChips = useSlot<ComposerChipCtx>(SLOT_COMPOSER_CHIP);
+  // Ярлыки полос («Голос», «Музыка») превращают «＋» в меню; без них «＋» прикрепляет сразу
+  const stripShortcuts = useStripShortcuts(project?.id ?? null, sessionId);
+  const [plusMenu, setPlusMenu] = useState<DOMRect | null>(null);
+  // Меню с якорем само Esc не ловит — как у переключателя полос
+  useEffect(() => {
+    if (!plusMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlusMenu(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [plusMenu]);
   const [modeId, setModeId] = useState<string | null>(null);
   // Самовключение режима по поводу от владельца (черновик, «Редактировать»): считаем по
   // состоянию, а не по клику — фокус картинки приходит и от агента, и после перезагрузки
@@ -1509,10 +1520,31 @@ export function Composer({
 
   // --- Контролы (переиспользуются в обеих раскладках) ---
 
+  const closePlus = () => setPlusMenu(null);
+  const plusItems = (
+    <>
+      <MenuItem icon={<Paperclip size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} isMobile={isMobile}
+        label="Прикрепить файл" onClick={() => { closePlus(); onAttach(); }} />
+      <MenuSep />
+      {stripShortcuts.map(sc => (
+        <MenuItem key={sc.key} icon={sc.icon} isMobile={isMobile}
+          label={
+            <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span>{sc.title}</span>
+              {sc.hint && <span style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 1 }}>{sc.hint}</span>}
+            </span>
+          }
+          onClick={() => { closePlus(); sc.onSelect(); }} />
+      ))}
+    </>
+  );
   const attachButton = (
     <button
-      onClick={onAttach}
-      title="Прикрепить файл"
+      onClick={stripShortcuts.length > 0
+        ? (e) => setPlusMenu((e.currentTarget as HTMLElement).getBoundingClientRect())
+        : onAttach}
+      title={stripShortcuts.length > 0 ? 'Прикрепить файл, голос, музыка…' : 'Прикрепить файл'}
+      aria-haspopup={stripShortcuts.length > 0 ? 'menu' : undefined}
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
@@ -1522,6 +1554,10 @@ export function Composer({
       <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   );
+  // Меню «＋»: на десктопе карточка у кнопки, на телефоне шторка — как у переключателя полос
+  const plusMenuNode = plusMenu && (isMobile
+    ? <Modal title="Добавить" onClose={closePlus}><div style={{ display: 'flex', flexDirection: 'column' }}>{plusItems}</div></Modal>
+    : <Menu anchor={plusMenu} onClose={closePlus} minWidth={260} maxWidth={340} maxHeight={260}>{plusItems}</Menu>);
 
   const slashButton = skills.length > 0 ? (
     <button
@@ -2732,6 +2768,8 @@ export function Composer({
     )}
 
     {phrasesEditOpen && <QuickPhrasesDialog onClose={() => setPhrasesEditOpen(false)} />}
+
+    {plusMenuNode}
 
     {pendingMode && (
       <DangerModeConfirm

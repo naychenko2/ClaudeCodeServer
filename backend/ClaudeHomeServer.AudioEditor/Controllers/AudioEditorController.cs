@@ -157,8 +157,9 @@ public class AudioEditorController(
                 saved.ErrorCode ?? AudioEditErrorCodes.InvalidRequest, saved.Error ?? "Не сохранено");
         // Новые файлы — обычная запись в проект: синк знаний и ватчеры узнают о них сразу
         foreach (var rel in result.Files) files?.NotifyMutated(project.RootPath, rel, FileMutationKind.Create);
-        // Нить помнит, что звук уже в проекте
-        await _threads.OnSavedAsync(UserId, scope.Key, sessionId, threadId, result.Path);
+        // Нить помнит, что звук уже в проекте; версия из одних стемов звука не даёт — нить остаётся при своём
+        await _threads.OnSavedAsync(UserId, scope.Key, sessionId, threadId, result.Path,
+            result.HasAudio ? null : result.Name);
         return Ok(result);
     }
 

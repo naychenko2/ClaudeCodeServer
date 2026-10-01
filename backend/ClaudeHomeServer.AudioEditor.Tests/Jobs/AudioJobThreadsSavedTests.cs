@@ -63,6 +63,28 @@ public sealed class AudioJobThreadsSavedTests : IDisposable
         thread.Lineage.Should().BeEmpty();
     }
 
+    // Версия из одних стемов: нить с файлом остаётся при своём звуке, черновик получает имя группы
+    [Fact]
+    public async Task Стемы_без_звука_не_перепривязывают_нить_а_черновику_дают_имя()
+    {
+        var fileThread = _store.Open(Owner, Session, "music/song.mp3", null, null).Thread!.Id;
+        var draft = _store.Open(Owner, Session, null, "drafts", null).Thread!.Id;
+
+        await _threads.OnSavedAsync(Owner, ScopeKey, Session, fileThread, "music/demo.stems", stemsOnlyName: "demo");
+        await _threads.OnSavedAsync(Owner, ScopeKey, Session, draft, "drafts/demo.stems", stemsOnlyName: "demo");
+
+        var state = _store.Get(Owner, Session);
+        var file = state.Threads.Single(t => t.Id == fileThread);
+        file.File.Should().Be("music/song.mp3");
+        file.Lineage.Should().BeEmpty();
+        file.Name.Should().BeNull();
+        var named = state.Threads.Single(t => t.Id == draft);
+        named.File.Should().BeNull();
+        named.DraftFolder.Should().Be("drafts");
+        named.Name.Should().Be("demo");
+        state.Events.Count(e => e.Kind == AudioThreadEventKinds.Saved).Should().Be(2);
+    }
+
     [Fact]
     public async Task Чужая_нить_молча_пропускается()
     {

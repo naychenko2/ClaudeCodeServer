@@ -137,12 +137,17 @@ public sealed class AudioJobThreads(
     // Человек сохранил версию в проект: нить идёт за сохранённым — основным звуком, а у версии из одних
     // стемов за папкой стемов (её путь и отдаёт сохранение). Файл уже в проекте, поэтому сбой следа
     // ответ ручки не портит
-    public async Task OnSavedAsync(string ownerId, string scopeKey, string sessionId, string threadId, string path)
+    // stemsOnlyName — сохранена версия без основного звука (только стемы, папкой path): нить к папке не
+    // перепривязывается, черновик лишь получает имя группы
+    public async Task OnSavedAsync(string ownerId, string scopeKey, string sessionId, string threadId, string path,
+        string? stemsOnlyName = null)
     {
         try
         {
-            var written = store.MoveToFile(ownerId, sessionId, threadId, path,
-                new AudioThreadEvent(store.Now(), AudioThreadEventKinds.Saved, $"Человек сохранил звук в проект: {path}", threadId));
+            var log = new AudioThreadEvent(store.Now(), AudioThreadEventKinds.Saved, $"Человек сохранил звук в проект: {path}", threadId);
+            var written = stemsOnlyName is null
+                ? store.MoveToFile(ownerId, sessionId, threadId, path, log)
+                : store.NameDraft(ownerId, sessionId, threadId, stemsOnlyName, log);
             if (written.Status == AudioThreadWriteStatus.Ok)
                 await BroadcastAsync(ownerId, scopeKey, sessionId, written.State);
         }

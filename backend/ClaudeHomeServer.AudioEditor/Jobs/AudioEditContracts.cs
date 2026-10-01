@@ -21,6 +21,15 @@ public static class AudioEditErrorCodes
     public const string QuoteNotFound = "quote_not_found";
     public const string TooManyJobs = "too_many_jobs";
     public const string HeavyBusy = "heavy_busy";
+    // Коды ручек: чужое неотличимо от несуществующего
+    public const string ChatNotFound = "chat_not_found";
+    public const string ThreadNotFound = "thread_not_found";
+    public const string VersionNotFound = "version_not_found";
+    public const string JobNotFound = "job_not_found";
+    public const string FileNotFound = "file_not_found";
+    public const string RevisionConflict = "revision_conflict";
+    public const string NameTaken = "name_taken";
+    public const string Unavailable = "unavailable";
     // Обработка без ИИ недоступна: нет ffmpeg на хосте или выключена подсистема images (ADR-021 §2)
     public const string DspUnavailable = "dsp_unavailable";
 }

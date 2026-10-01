@@ -540,6 +540,13 @@ public sealed class AudioEditJobService : IDisposable
 
     // ── Чтение и отмена ──────────────────────────────────────────────────────────
 
+    // Живая котировка владельца в области — ручке запуска нужна её операция, чтобы собрать входы
+    // до запуска. Чужая, устаревшая и несуществующая неотличимы
+    public AudioQuoteDto? FindQuote(string ownerId, string scopeKey, string quoteId) =>
+        _quotes.TryGetValue(quoteId, out var q) && q.OwnerId == ownerId && q.ScopeKey == scopeKey && q.ExpiresAt >= Now()
+            ? ToDto(q)
+            : null;
+
     public AudioJobDto? Get(string ownerId, string scopeKey, string jobId) =>
         Find(ownerId, scopeKey, jobId) is { } job ? ToDto(job) : null;
 

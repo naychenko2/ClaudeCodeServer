@@ -9,8 +9,8 @@ namespace ClaudeHomeServer.Services.AudioEditor;
 // Subsystems:AudioEditor:Enabled=false (Register не вызывается). В обоих случаях ручек нет — 404.
 //
 // Модуль ссылается только на Core: всё внешнее — швы оттуда, реализации регистрируют другие сборки.
-// Пока ручек нет: регистрируются хранилища нитей и префов, рабочая папка, их жизненный цикл, драйверы
-// и исполнитель задач.
+// Регистрируются хранилища нитей и префов, рабочая папка, их жизненный цикл, драйверы, исполнитель
+// задач и гейт ручек; сами ручки — Controllers/ (проект и личный чат).
 public sealed class AudioEditorSubsystem : IAppSubsystem
 {
     public string Key => "audioeditor";
@@ -57,6 +57,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
         services.AddSingleton<Jobs.AudioJobThreads>();
         services.AddSingleton<Jobs.AudioEditJobService>();
+        // Гейт ручек: флаг, свой проект, свой чат — иначе 404
+        services.AddSingleton<Controllers.AudioEditScopeGate>();
         // Склейка без ИИ: куски → новая нить. Шов IAudioDsp — от отключаемой вертикали Images, поэтому
         // необязателен: без него операция отвечает dsp_unavailable
         services.AddSingleton<Jobs.AudioConcatService>();

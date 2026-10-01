@@ -5,11 +5,13 @@
 // «Звук» у стора полос ядра, снятие — отпускает (как у картинок).
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
+import { notifyComposer, onReconnected, releaseStrip, requestStrip, revealWorkspacePanel, showToast } from 'aihome_shell/kit';
 import {
   audioApi, conflictState, EMPTY_THREADS,
-  type AudioCatalog, type AudioEvent, type AudioMode, type AudioPrefs, type AudioStage, type AudioThread, type AudioThreadsState,
+  type AudioCatalog, type AudioEvent, type AudioMode, type AudioOp, type AudioPrefs, type AudioStage, type AudioThread,
+  type AudioThreadsState,
 } from '../api';
+import type { AudioSelection } from '../player/selection';
 
 export const SOUND_STRIP = 'sound';
 export const SOUND_PANEL = 'sound';
@@ -199,6 +201,55 @@ export async function mutate(
 export const focusThread = (scope: string, sessionId: string, threadId: string | null) =>
   mutate(scope, sessionId, rev => audioApi.focus(scope, sessionId, threadId, rev));
 
+// ── Выделение куска: волна в ленте ↔ поле «Кусок» панели ──
+// Одно выделение на нить (макет v2, «Поле «Кусок» и волна в ленте»): карточка в ленте и панель
+// читают и пишут его здесь, подписка — через useAudioStoreVersion. versionId — версия, по волне
+// которой выделяли: перелистнули версию — выделение обрезается по её длине у того, кто рисует волну.
+
+export interface ThreadSelection extends AudioSelection { versionId: string }
+
+const selKey = (sessionId: string, threadId: string) => `${sessionId}\n${threadId}`;
+const _selections = new Map<string, ThreadSelection>();
+// Нить, у которой в панели открыта операция с полем «Кусок»: карточка пишет «= «Кусок» в панели»
+const _pieceField = new Map<string, string>();
+// Просьба карточки к панели переключить операцию («Обрезать», «Перегенерировать кусок»); seq растёт
+// на каждую просьбу — панель отрабатывает каждую ровно раз
+export interface OperationRequest { threadId: string; op: AudioOp; seq: number }
+const _opRequests = new Map<string, OperationRequest>();
+
+export function getSelection(sessionId: string | null, threadId: string | null): ThreadSelection | null {
+  return (sessionId && threadId && _selections.get(selKey(sessionId, threadId))) || null;
+}
+
+export function setSelection(sessionId: string, threadId: string, sel: ThreadSelection | null) {
+  const k = selKey(sessionId, threadId);
+  const prev = _selections.get(k) ?? null;
+  if (prev === sel || (prev && sel && prev.start === sel.start && prev.end === sel.end && prev.versionId === sel.versionId)) return;
+  if (sel) _selections.set(k, sel);
+  else _selections.delete(k);
+  emit();
+}
+
+export function setPieceFieldOpen(sessionId: string, threadId: string | null) {
+  if ((_pieceField.get(sessionId) ?? null) === threadId) return;
+  if (threadId) _pieceField.set(sessionId, threadId);
+  else _pieceField.delete(sessionId);
+  emit();
+}
+
+export const getPieceFieldOpen = (sessionId: string | null): string | null => (sessionId && _pieceField.get(sessionId)) || null;
+
+// Кнопка под выделением: панель «Звук» на «Настройках», операция — по просьбе
+export function requestOperation(sessionId: string, threadId: string, op: AudioOp) {
+  const seq = (_opRequests.get(sessionId)?.seq ?? 0) + 1;
+  _opRequests.set(sessionId, { threadId, op, seq });
+  emit();
+  revealWorkspacePanel(SOUND_PANEL, 'settings');
+}
+
+export const getOperationRequest = (sessionId: string | null): OperationRequest | null =>
+  (sessionId && _opRequests.get(sessionId)) || null;
+
 // ── Режим ярлыков и поля ввода ──
 
 export function getShortcutMode(sessionId: string | null): AudioMode | null {
@@ -239,6 +290,9 @@ export function __resetAudioStore() {
   _shortcutMode.clear();
   _modeRequests.clear();
   _composerText.clear();
+  _selections.clear();
+  _pieceField.clear();
+  _opRequests.clear();
   emit();
 }
 

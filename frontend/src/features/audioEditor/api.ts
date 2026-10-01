@@ -289,6 +289,18 @@ export interface AudioSaveRequest { versionId?: string | null; mode?: 'nextVersi
 // path — главный файл, files — все записанные (стемы, субтитры) от корня проекта
 export interface AudioSaveResult { path: string; files: string[] }
 
+// ── Без ИИ: пики волны и сведение стемов (Engines/DspAudioEngine.cs) ──
+
+// Пики 0…1 по точкам и длина файла, с
+export interface AudioPeaks { peaks: number[]; seconds: number }
+
+// role — «stem:<имя>»; muted — в сведение не идёт
+export interface AudioMixStem { role: string; gainDb: number; muted?: boolean }
+
+export interface AudioMixRequest { stems: AudioMixStem[]; baseVersionId?: string | null; format?: string | null; revision?: number | null }
+
+export interface AudioDspVersion { threadId: string; versionId: string; number: number; jobId: string; state: AudioThreadsState }
+
 // ── События SignalR (Jobs/AudioEditEvents.cs); базовый sessionId — чат события ──
 
 interface AudioEventBase { sessionId: string; scopeKey: string }
@@ -437,12 +449,28 @@ export const audioApi = {
     const qs = q.toString();
     return qs ? `${url}?${qs}` : url;
   },
+  // role null — главный файл
+  peaks: (scope: string, sessionId: string, threadId: string, versionId: string, points: number, role: string | null = null) => {
+    const q = new URLSearchParams({ points: String(points) });
+    if (role) q.set('role', role);
+    return request<AudioPeaks>(`${threadUrl(scope, sessionId, threadId)}/versions/${encodeURIComponent(versionId)}/peaks?${q}`, { timeoutMs: 60_000 });
+  },
+  // Ждёт итог прямо в запросе: ffmpeg на хосте, без очереди
+  mix: (scope: string, sessionId: string, threadId: string, req: AudioMixRequest) =>
+    json<AudioDspVersion>(`${threadUrl(scope, sessionId, threadId)}/mix`, req, 'POST', 300_000),
 
   subscribe: (handler: (e: AudioEvent) => void) => onMessage(msg => {
     const m = msg as unknown as { type?: string };
     if (m.type && AUDIO_EVENTS.has(m.type)) handler(m as unknown as AudioEvent);
   }),
 };
+
+// Свободное имя из тела 409 name_taken у «Сохранить как…»; другой отказ — null
+export function nameTakenSuggestion(e: unknown): string | null {
+  const err = e as { status?: unknown; body?: { code?: unknown; suggestion?: unknown } } | null;
+  if (err?.status !== 409 || err.body?.code !== 'name_taken') return null;
+  return typeof err.body.suggestion === 'string' && err.body.suggestion ? err.body.suggestion : null;
+}
 
 // Актуальное состояние из тела 409 revision_conflict — перечитывать не нужно
 export function conflictState(e: unknown): AudioThreadsState | null {

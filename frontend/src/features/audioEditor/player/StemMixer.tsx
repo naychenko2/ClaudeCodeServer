@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AudioWaveform, Download, Pause, Play } from 'lucide-react';
-import { Button, IconButton, C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
+import { Button, IconButton, C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE, useIsMobile } from 'aihome_shell/kit';
 import { AudioWave } from './AudioWave';
 import {
   EMPTY_MIXER, GAIN_MAX_DB, GAIN_MIN_DB, dbToGain, isAudible, mixPlan, setGain, toggleMute, toggleSolo,
@@ -111,6 +111,8 @@ function StemRow({
 }) {
   const decoded = useBrowserPeaks(stem.peaks ? null : stem.url, 50);
   const peaks = stem.peaks ?? decoded?.peaks ?? [];
+  // На телефоне M/S и «скачать» — тач-цель 32 px, на десктопе плотнее
+  const btn = useIsMobile() ? 'md' : 'xs';
   const msStyle = { fontSize: FS.xs, fontWeight: 700, border: `1px solid ${C.border}` } as const;
   return (
     <div data-stem-row={stem.id} style={{
@@ -119,11 +121,11 @@ function StemRow({
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flex: '1 1 200px', minWidth: 0 }}>
         <IconButton
-          size="xs" title="Заглушить: в сведение не попадёт" active={muted} onClick={onMute}
+          size={btn} title="Заглушить: в сведение не попадёт" ariaLabel={`Заглушить ${stem.name}`} active={muted} onClick={onMute}
           style={muted ? { ...msStyle, background: C.warningBg, color: C.warningText, borderColor: C.warning } : msStyle}
         >M</IconButton>
         <IconButton
-          size="xs" title="Слушать одну: сводим только её" active={solo} onClick={onSolo}
+          size={btn} title="Слушать одну: сводим только её" ariaLabel={`Слушать одну: ${stem.name}`} active={solo} onClick={onSolo}
           style={solo ? { ...msStyle, background: C.accent, color: C.onAccent, borderColor: C.accent } : msStyle}
         >S</IconButton>
         <span style={{
@@ -146,7 +148,7 @@ function StemRow({
           {gain > 0 ? `+${gain}` : gain < 0 ? `−${-gain}` : '0'}
         </span>
         {onDownload && (
-          <IconButton size="xs" title="Сохранить стем" onClick={onDownload}>
+          <IconButton size={btn} title="Скачать стем" ariaLabel={`Скачать стем ${stem.name}`} onClick={onDownload}>
             <Download size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         )}
@@ -155,22 +157,49 @@ function StemRow({
   );
 }
 
+interface StemNode { el: HTMLAudioElement; gain: GainNode; source: MediaElementAudioSourceNode; url: string }
+
+// Снять узел стема: тишина, отключение от графа и освобождение файла
+export function dropNode(n: Pick<StemNode, 'el' | 'gain' | 'source'>) {
+  n.el.pause();
+  n.el.removeAttribute('src');
+  n.el.load();
+  n.source.disconnect();
+  n.gain.disconnect();
+}
+
 // Прослушка сведения: стемы играют синхронно, у каждого свой GainNode — так слышно
 // и M/S, и громкость выше 0 дБ, которую HTMLAudioElement.volume дать не может.
 function useStemPlayback(stems: Stem[], st: MixerState) {
   const ctxRef = useRef<AudioContext | null>(null);
-  const nodes = useRef(new Map<string, { el: HTMLAudioElement; gain: GainNode }>());
+  const nodes = useRef(new Map<string, StemNode>());
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const playable = stems.filter(s => s.url);
   const canPlay = playable.length > 0;
 
   useEffect(() => () => {
-    nodes.current.forEach(n => { n.el.pause(); n.el.src = ''; });
+    nodes.current.forEach(dropNode);
     nodes.current.clear();
     void ctxRef.current?.close();
     ctxRef.current = null;
   }, []);
+
+  // Стемы сменились (другая версия, файл переехал) — узлы ушедших снимаем из графа сразу,
+  // иначе их звук продолжил бы играть в общем AudioContext
+  const stemsKey = playable.map(s => `${s.id}\n${s.url}`).join('\n');
+  useEffect(() => {
+    const keep = new Map(playable.map(s => [s.id, s.url]));
+    let dropped = false;
+    nodes.current.forEach((n, id) => {
+      if (keep.get(id) === n.url) return;
+      dropNode(n);
+      nodes.current.delete(id);
+      dropped = true;
+    });
+    if (dropped && nodes.current.size === 0) setPlaying(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stemsKey]);
 
   useEffect(() => {
     nodes.current.forEach((n, id) => { n.gain.gain.value = isAudible(id, st) ? dbToGain(st.gain[id] ?? 0) : 0; });
@@ -200,9 +229,10 @@ function useStemPlayback(stems: Stem[], st: MixerState) {
       el.preload = 'auto';
       el.currentTime = position;
       const gain = ctx.createGain();
-      ctx.createMediaElementSource(el).connect(gain).connect(ctx.destination);
+      const source = ctx.createMediaElementSource(el);
+      source.connect(gain).connect(ctx.destination);
       gain.gain.value = isAudible(s.id, st) ? dbToGain(st.gain[s.id] ?? 0) : 0;
-      nodes.current.set(s.id, { el, gain });
+      nodes.current.set(s.id, { el, gain, source, url: s.url! });
     }
     return ctx;
   };

@@ -66,6 +66,20 @@ export function AudioPlayer({
     return () => { cancel(); };
   }, [url]);
 
+  // Карточка ушла из ленты — звук не должен доигрывать, а браузер — держать соединение с файлом
+  useEffect(() => {
+    const el = audioRef.current;
+    return () => {
+      if (!el) return;
+      el.pause();
+      // src = '' браузер понял бы как адрес страницы и попробовал загрузить — снимаем атрибут
+      el.removeAttribute('src');
+      el.load();
+      // StrictMode монтирует заново: источник надо поставить снова
+      loadedUrl.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;

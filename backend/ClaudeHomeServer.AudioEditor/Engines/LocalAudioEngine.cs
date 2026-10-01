@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.AudioEditor.Engines;
 // Только серверный проект: результат local-media — файлы на диске сервера, а в личной области проекта
 // нет, у локального проекта (ADR-016) файлы живут на устройстве. Отказ — ScopeRefusal до чтения входов и
 // до обращения к шву; локальность — только через ProjectCapabilities.
-public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IAudioQuoter
+public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IAudioQuoter, IAudioParamSchemas
 {
     public const string ProviderKey = "local";
 
@@ -45,6 +45,12 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
         if (scope.IsPersonal || scope.Project is not { } project) return PersonalScopeReason;
         return ProjectCapabilities.FilesOnServer(project) ? null : DeviceProjectReason;
     }
+
+    // Схема «Дополнительно» — описание движка в каталоге: сети и GPU не нужно
+    public Task<AudioSchemaLookup> SchemaAsync(AudioModelInfo model, AudioOp op, CancellationToken ct) =>
+        Task.FromResult(AudioCatalog.LocalSchema(model.Id, op) is { } schema
+            ? AudioSchemaLookup.Ok(schema)
+            : AudioSchemaLookup.Fail("Локальные модели так не умеют"));
 
     // ── Котировка ────────────────────────────────────────────────────────────────
 

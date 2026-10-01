@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
+using ClaudeHomeServer.Services.AudioEditor.Schema;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Engines;
 
@@ -15,13 +16,17 @@ namespace ClaudeHomeServer.Services.AudioEditor.Engines;
 // Fal:ApiKey (или FAL_KEY) и тот же тихий HTTP-клиент "fal", что у картинок; нет ключа — Enabled=false.
 // Отобранные эндпоинты и раскладка общих полей запроса на поля fal — каталог (AudioCatalog.Fal). Входной
 // звук уходит data: URI. Цена до запуска — прайс /v1/models/pricing с кешем на сутки в единицах fal как
-// есть (за 1000 символов, секунду, минуту, запуск); нет ответа — ориентир каталога. Работает в любой
+// есть (за 1000 символов, секунду, минуту, запуск); нет ответа — ориентир каталога. Схема входа для
+// «Дополнительно» и проверки params — OpenAPI эндпоинта из /v1/models с кешем на инстанс (SchemaTtl);
+// fal не ответил — последняя удачная схема с пометкой Stale, без неё — отказ значением. Работает в любой
 // области: файлы проекта ему не нужны, результат возвращается байтами.
-public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter
+public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSchemas
 {
     public const string ProviderKey = "fal";
     private const string HttpClientName = "fal";
     private static readonly TimeSpan PriceCacheTtl = TimeSpan.FromHours(24);
+    // Схемы fal меняются редко, но меняются: раз в шесть часов перечитываем
+    internal static readonly TimeSpan SchemaTtl = TimeSpan.FromHours(6);
     // Песня ElevenLabs до 10 минут плюс очередь
     private static readonly TimeSpan JobCeiling = TimeSpan.FromMinutes(15);
 
@@ -33,10 +38,14 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter
     private readonly ConcurrentDictionary<string, (double Price, string Unit, DateTime At)> _prices = new();
     // cancel_url задач в работе: отмена у fal идёт по нему, а не по request_id
     private readonly ConcurrentDictionary<string, string> _cancelUrls = new();
+    // Поля входа эндпоинта и время чтения; запись остаётся и после истечения TTL — на случай, если fal не ответит
+    private readonly ConcurrentDictionary<string, (IReadOnlyList<AudioParamField> Fields, DateTimeOffset At)> _schemas = new();
 
     // Пауза опроса статуса; тесты ставят ноль
     internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
     internal TimeSpan Ceiling { get; set; } = JobCeiling;
+    // Часы кеша схем; тесты двигают время
+    internal TimeProvider Time { get; set; } = TimeProvider.System;
 
     private static readonly IReadOnlyList<AudioModelInfo> FalModels = [.. AudioCatalog.Fal.Select(m => m.Info)];
 
@@ -118,6 +127,63 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter
         {
             _log.LogDebug(ex, "fal: прайс {Endpoint} недоступен, беру ориентир каталога", endpoint);
             return null;
+        }
+    }
+
+    // ── Схема входа («Дополнительно») ──────────────────────────────────────────
+
+    // У цепочки (клон Qwen) params идут во второй прогон — схема его эндпоинта; первый берёт только образец
+    public async Task<AudioSchemaLookup> SchemaAsync(AudioModelInfo model, AudioOp op, CancellationToken ct)
+    {
+        if (!Enabled) return AudioSchemaLookup.Fail("fal.ai не настроен: нет ключа");
+        if (AudioCatalog.FindFal(model.Id) is not { } fal || !fal.Info.Caps.Ops.Contains(op))
+            return AudioSchemaLookup.Fail("У fal.ai нет такой модели для этой операции");
+
+        var (endpoint, reserved) = fal.Next is { } next
+            ? (next.Info.Id, FalSchemaReader.Reserved(next.Fields, next.LinkTo))
+            : (fal.Info.Id, FalSchemaReader.Reserved(fal.Fields));
+        AudioParamSchema Schema(IReadOnlyList<AudioParamField> fields, bool stale) => new(ProviderKey, fal.Info.Id,
+            AudioSchemaSources.FalOpenApi, [.. fields.Where(f => !reserved.Contains(f.Key))], reserved, stale);
+
+        var now = Time.GetUtcNow();
+        (IReadOnlyList<AudioParamField> Fields, DateTimeOffset At)? cached = _schemas.TryGetValue(endpoint, out var c) ? c : null;
+        if (cached is { } fresh && now - fresh.At < SchemaTtl) return AudioSchemaLookup.Ok(Schema(fresh.Fields, false));
+
+        var (read, error) = await FetchSchemaAsync(endpoint, ct);
+        if (read is not null)
+        {
+            _schemas[endpoint] = (read, now);
+            return AudioSchemaLookup.Ok(Schema(read, false));
+        }
+        return cached is { } stale
+            ? AudioSchemaLookup.Ok(Schema(stale.Fields, true))
+            : AudioSchemaLookup.Fail("Схема модели fal.ai недоступна: " + error);
+    }
+
+    private async Task<(IReadOnlyList<AudioParamField>? Fields, string? Error)> FetchSchemaAsync(string endpoint, CancellationToken ct)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get,
+                $"{_apiBase}/models?endpoint_id={Uri.EscapeDataString(endpoint)}&expand=openapi-3.0");
+            Authorize(req);
+            using var resp = await Client().SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode) return (null, $"fal.ai ответил {(int)resp.StatusCode}");
+            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+            if (!json.TryGetProperty("models", out var models) || models.ValueKind != JsonValueKind.Array)
+                return (null, "в ответе нет моделей");
+            foreach (var m in models.EnumerateArray())
+            {
+                if (Str(m, "endpoint_id") is { } id && !string.Equals(id, endpoint, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!m.TryGetProperty("openapi", out var openapi) || openapi.ValueKind != JsonValueKind.Object) continue;
+                if (FalSchemaReader.Read(openapi) is { } fields) return (fields, null);
+            }
+            return (null, "в OpenAPI нет схемы входа");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            _log.LogDebug(ex, "fal: схема {Endpoint} недоступна", endpoint);
+            return (null, ex.Message);
         }
     }
 

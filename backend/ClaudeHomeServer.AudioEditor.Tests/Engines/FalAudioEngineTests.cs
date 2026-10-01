@@ -361,6 +361,88 @@ public sealed class FalAudioEngineTests
     }
 
     // fal по сценарию: очередь (submit → статусы → результат), файлы CDN, прайс; всё прочее — 404
+    // ── Схема входа («Дополнительно») ───────────────────────────────────────────
+
+    private readonly Clock _clock = new();
+
+    private static string SchemaUrl(string endpoint) =>
+        $"{Api}/models?endpoint_id={Uri.EscapeDataString(endpoint)}&expand=openapi-3.0";
+
+    private static string ModelsBody(string endpoint) =>
+        $$"""{"models":[{"endpoint_id":"{{endpoint}}","openapi":{{ClaudeHomeServer.AudioEditor.Tests.Schema.AudioSchemaTests.OpenApi}}}],"has_more":false}""";
+
+    [Fact]
+    public async Task Schema_CachedWithinTtl_RefetchedAfter_CommonFieldsReserved()
+    {
+        var endpoint = AudioCatalog.FalElevenSfx;
+        _fal.Respond(HttpMethod.Get, SchemaUrl(endpoint), HttpStatusCode.OK, ModelsBody(endpoint), repeat: true);
+        var engine = Engine();
+        engine.Time = _clock;
+
+        var first = await engine.SchemaAsync(Model(endpoint), AudioOp.Sfx, CancellationToken.None);
+        _clock.Advance(FalAudioEngine.SchemaTtl - TimeSpan.FromMinutes(1));
+        await engine.SchemaAsync(Model(endpoint), AudioOp.Sfx, CancellationToken.None);
+
+        _fal.Requests.Count(r => r.Url == SchemaUrl(endpoint)).Should().Be(1);
+        _fal.Requests.Single(r => r.Url == SchemaUrl(endpoint)).Auth.Should().Be("Key fal-key");
+        var schema = first.Schema!;
+        schema.Source.Should().Be(AudioSchemaSources.FalOpenApi);
+        schema.Stale.Should().BeFalse();
+        // text и duration_seconds — общие поля (описание звука и длительность): в форме и в params их нет
+        schema.Reserved.Should().BeEquivalentTo(["text", "duration_seconds"]);
+        schema.Fields.Select(f => f.Key).Should().Equal("prompt_influence", "voice_setting", "output_format");
+
+        _clock.Advance(TimeSpan.FromMinutes(2));
+        await engine.SchemaAsync(Model(endpoint), AudioOp.Sfx, CancellationToken.None);
+        _fal.Requests.Count(r => r.Url == SchemaUrl(endpoint)).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Schema_FalDown_LastGoodStale_OtherwiseRefusalByValue()
+    {
+        var endpoint = AudioCatalog.FalElevenSfx;
+        _fal.Respond(HttpMethod.Get, SchemaUrl(endpoint), HttpStatusCode.OK, ModelsBody(endpoint));
+        _fal.Respond(HttpMethod.Get, SchemaUrl(endpoint), HttpStatusCode.InternalServerError, "{}", repeat: true);
+        var engine = Engine();
+        engine.Time = _clock;
+
+        (await engine.SchemaAsync(Model(endpoint), AudioOp.Sfx, CancellationToken.None)).Schema!.Stale.Should().BeFalse();
+        _clock.Advance(FalAudioEngine.SchemaTtl + TimeSpan.FromMinutes(1));
+        var stale = await engine.SchemaAsync(Model(endpoint), AudioOp.Sfx, CancellationToken.None);
+
+        stale.Schema!.Stale.Should().BeTrue();
+        stale.Schema.Fields.Should().NotBeEmpty();
+
+        var cold = await Engine().SchemaAsync(Model(endpoint), AudioOp.Sfx, CancellationToken.None);
+        cold.Schema.Should().BeNull();
+        cold.Error.Should().Be("Схема модели fal.ai недоступна: fal.ai ответил 500");
+
+        _fal.Throw = true;
+        var down = await Engine().SchemaAsync(Model(endpoint), AudioOp.Sfx, CancellationToken.None);
+        down.Error.Should().StartWith("Схема модели fal.ai недоступна:");
+    }
+
+    [Fact]
+    public async Task Schema_Chain_TakesSecondEndpoint_NoKey_Refused()
+    {
+        _fal.Respond(HttpMethod.Get, SchemaUrl(AudioCatalog.FalQwenTts), HttpStatusCode.OK, ModelsBody(AudioCatalog.FalQwenTts));
+
+        var chain = await Engine().SchemaAsync(Model(AudioCatalog.FalQwenClone), AudioOp.CloneVoice, CancellationToken.None);
+        var noKey = await Engine(key: null).SchemaAsync(Model(AudioCatalog.FalQwenClone), AudioOp.CloneVoice, CancellationToken.None);
+
+        chain.Schema!.Model.Should().Be(AudioCatalog.FalQwenClone);
+        chain.Schema.Reserved.Should().Contain("speaker_voice_embedding_file_url");
+        _fal.Requests.Should().ContainSingle(r => r.Url == SchemaUrl(AudioCatalog.FalQwenTts));
+        noKey.Error.Should().Be("fal.ai не настроен: нет ключа");
+    }
+
+    private sealed class Clock : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
     private sealed class FakeFal : HttpMessageHandler
     {
         private readonly ConcurrentDictionary<(string, string), Queue<(HttpStatusCode, string, bool)>> _routes = new();

@@ -8,8 +8,8 @@ namespace ClaudeHomeServer.Services.AudioEditor;
 // Subsystems:AudioEditor:Enabled=false (Register не вызывается). В обоих случаях ручек нет — 404.
 //
 // Модуль ссылается только на Core: всё внешнее — швы оттуда, реализации регистрируют другие сборки.
-// Пока ручек нет: регистрируются хранилища нитей и префов, рабочая папка, их жизненный цикл, драйверы
-// и исполнитель задач.
+// Регистрируются хранилища нитей и префов, рабочая папка, их жизненный цикл, драйверы и исполнитель
+// задач; из ручек пока одна — схема «Дополнительно» (Controllers/AudioSchemaController).
 public sealed class AudioEditorSubsystem : IAppSubsystem
 {
     public string Key => "audioeditor";

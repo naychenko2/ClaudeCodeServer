@@ -36,8 +36,11 @@ internal static class FalSchemaReader
     {
         var k = key.ToLowerInvariant();
         return k.Contains("webhook") || k.StartsWith("callback", StringComparison.Ordinal)
-            || k is "url" or "urls" || k.EndsWith("_url", StringComparison.Ordinal) || k.EndsWith("_urls", StringComparison.Ordinal);
+            || LinkNouns.Any(n => k == n || k.EndsWith("_" + n, StringComparison.Ordinal));
     }
+
+    // Существительные адреса — сами по себе и хвостом через «_» (redirect_uri, upload_endpoints)
+    private static readonly string[] LinkNouns = ["url", "urls", "uri", "uris", "endpoint", "endpoints"];
 
     private static JsonElement? InputSchema(JsonElement openapi)
     {

@@ -162,6 +162,12 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             return Deny("Укажи что-то одно: threadId звука этого чата или file — путь звукового файла проекта.");
         if (versionId is not null && threadId is null)
             return Deny("versionId — версия звука threadId: укажи и threadId.");
+        // Ранняя проверка, как у картинок: отказ сразу называет версии нити, а не только шлёт в audio_state
+        if (versionId is not null
+            && Store.Get(ownerId, session.Id).Threads.FirstOrDefault(t => t.Id == threadId) is { } target
+            && target.Version(versionId) is null)
+            return Deny($"У звука {threadId} нет версии {versionId}. Версии этого звука: "
+                + string.Join(", ", target.Versions.Select(v => $"{v.Id} ({AudioThread.Label(v)})")) + ".");
 
         AudioThreadWrite written;
         if (file is not null)
@@ -436,7 +442,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         });
     }
 
-    // Монтаж без ИИ: бесплатно и без GPU — лимит хода не расходует; реализация — этап правок без ИИ
+    // Монтаж без ИИ: бесплатно и без GPU — лимит хода не расходует; реализация — AudioAgentEdits
     private async Task<McpToolCallResult> EditAsync(JsonObject args, string ownerId, Session session, AudioEditScope scope,
         AudioThread thread, AudioThreadVersion? version, AudioOp op, CancellationToken ct)
     {
@@ -725,7 +731,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         args[name] is JsonValue v && v.TryGetValue<int>(out var i) ? i : null;
 
     // Число любого происхождения: из разобранного JSON и из кода (JsonValue<int>, <double>)
-    private static double? Num(JsonObject args, string name) =>
+    internal static double? Num(JsonObject args, string name) =>
         args[name] is JsonValue v && v.GetValueKind() == JsonValueKind.Number
         && double.TryParse(v.ToJsonString(), System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out var d)

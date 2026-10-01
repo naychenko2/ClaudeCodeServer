@@ -24,8 +24,6 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
 {
     public const string ProviderKey = "fal";
     private const string HttpClientName = "fal";
-    // Клиент скачивания результатов: без автоследования редиректов (каждый шаг проверяет FalDownload)
-    internal const string DownloadClientName = "fal-download";
     private static readonly TimeSpan PriceCacheTtl = TimeSpan.FromHours(24);
     // Схемы fal меняются редко, но меняются: раз в шесть часов перечитываем
     internal static readonly TimeSpan SchemaTtl = TimeSpan.FromHours(6);
@@ -48,9 +46,14 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
     internal TimeSpan Ceiling { get; set; } = JobCeiling;
     // Часы кеша схем; тесты двигают время
     internal TimeProvider Time { get; set; } = TimeProvider.System;
-    // Резолв имени хоста ссылки на файл; тесты подменяют, чтобы не ходить в DNS
-    internal Func<string, CancellationToken, Task<IPAddress[]>> Resolve { get; set; } = Dns.GetHostAddressesAsync;
-    internal long MaxDownloadBytes { get; set; } = FalDownload.DefaultMaxBytes;
+    // Скачивание файлов результата: ссылка из ответа fal — внешняя, качаем только общим безопасным
+    // загрузчиком (SSRF, редиректы, потолок). Срок шире, чем у картинок: 200 МБ на медленном канале
+    // за минуту не скачать, а общий срок задачи всё равно держит Ceiling. Тесты подставляют фейк
+    internal SafeMediaDownloader Downloader { get; init; } = SharedDownloader;
+    internal long MaxDownloadBytes { get; init; } = SafeMediaDownloader.AudioMaxBytes;
+
+    private static readonly SafeMediaDownloader SharedDownloader =
+        new(SafeMediaDownloader.CreateHandler()) { Timeout = TimeSpan.FromMinutes(5) };
 
     private static readonly IReadOnlyList<AudioModelInfo> FalModels = [.. AudioCatalog.Fal.Select(m => m.Info)];
 
@@ -220,14 +223,15 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
 
     // Потолок образца, который едет data: URI внутри JSON. 20 МБ — предел файла клона у самого MiniMax
     // (запись 10 с – 5 мин); base64 раздувает его до ~27 МБ тела, и больше этого запрос не доезжает, а
-    // висит до таймаута. Chatterbox берёт короткий образец, ему хватает того же потолка с запасом.
+    // висит до таймаута. Chatterbox и Qwen-клон берут короткий образец, им хватает того же потолка с
+    // запасом: отдельного предела у них fal не объявляет, а упираются они в тот же размер тела запроса.
     // 60 секунд в подсказке — WAV 16 бит 44,1 кГц стерео (~10 МБ), с запасом до потолка
     public const int MaxDataUriSampleBytes = 20 * 1024 * 1024;
     public const string SampleTooLargeText =
         "Образец слишком большой для этой модели (больше 20 МБ) — укоротите его до 60 секунд";
 
     private static readonly HashSet<string> DataUriCapped =
-        new([AudioCatalog.FalMiniMaxClone, AudioCatalog.FalChatterbox], StringComparer.OrdinalIgnoreCase);
+        new([AudioCatalog.FalMiniMaxClone, AudioCatalog.FalChatterbox, AudioCatalog.FalQwenClone], StringComparer.OrdinalIgnoreCase);
 
     public (string Key, bool Creates)? StoredClone(AudioModelInfo model, AudioOp op) =>
         MiniMaxSpeech.Contains(model.Id) ? (Voices.VoiceProviders.MiniMax, false)
@@ -244,13 +248,15 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
 
         var voice = req.Voice;
         if (voice?.Sample is { } sample && req.Reference is null) req = req with { Reference = sample };
-        if (req.Reference is { } reference && DataUriCapped.Contains(model.Info.Id) && reference.Bytes.Length > MaxDataUriSampleBytes)
-            return AudioResult.Fail(AudioOutcome.Rejected, SampleTooLargeText);
         var miniMaxId = voice?.CachedId(Voices.VoiceProviders.MiniMax);
         if (voice is not null && MiniMaxSpeech.Contains(model.Info.Id) && miniMaxId is null)
             return AudioResult.Fail(AudioOutcome.Rejected, "У голоса нет клона MiniMax — создайте его кнопкой «Пересоздать»");
         // Эмбеддинг Qwen-клона из кеша: первый прогон цепочки не нужен
         var embedding = model.Next is not null ? voice?.CachedId(Voices.VoiceProviders.FalQwen) : null;
+        // С эмбеддингом из кеша образец никуда не едет — и потолок ему не нужен
+        if (embedding is null && req.Reference is { } reference && DataUriCapped.Contains(model.Info.Id)
+            && reference.Bytes.Length > MaxDataUriSampleBytes)
+            return AudioResult.Fail(AudioOutcome.Rejected, SampleTooLargeText);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(Ceiling);
@@ -296,8 +302,9 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
                 if (FalOutputs.FileUrl(output, next.LinkFrom) is not { } fresh)
                     return Charged(AudioResult.Fail(AudioOutcome.Failed, "fal.ai не вернул эмбеддинг голоса"), requestId!);
                 // Ссылку скачивает уже fal, но и ей не доверяем: внутренний адрес — отказ до второго прогона
-                if (await Download().CheckAsync(fresh, timeout.Token) is { } refused)
-                    return Charged(AudioResult.Fail(AudioOutcome.Failed, "fal.ai вернул недопустимую ссылку на эмбеддинг: " + refused), requestId!);
+                if (await Downloader.CheckAsync(fresh, timeout.Token) is { } refused)
+                    return Charged(AudioResult.Fail(AudioOutcome.Failed,
+                        "fal.ai вернул недопустимую ссылку на эмбеддинг: " + FalOutputs.Explain(refused, MaxDownloadBytes)), requestId!);
                 link = fresh;
                 if (voice is not null) created.Add(new AudioVoiceCacheEntry(Voices.VoiceProviders.FalQwen, fresh));
             }
@@ -323,7 +330,7 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
         progress.Report(new AudioProgress(AudioStage.Downloading));
         try
         {
-            var (files, error) = await FalOutputs.CollectAsync(Download(), model.Output, output, timeout.Token);
+            var (files, error) = await FalOutputs.CollectAsync(Downloader, MaxDownloadBytes, model.Output, output, timeout.Token);
             if (error is not null)
                 return Cached(new AudioResult(AudioOutcome.Failed, [], null, true, requestId, "Не удалось скачать результат fal.ai: " + error), created);
             return Cached(files.Count == 0
@@ -497,14 +504,6 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
         var client = _http.CreateClient(HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(120);
         return client;
-    }
-
-    private FalDownload Download()
-    {
-        var client = _http.CreateClient(DownloadClientName);
-        // Потолок 200 МБ на медленном канале не укладывается в две минуты; общий срок задачи держит Ceiling
-        client.Timeout = TimeSpan.FromMinutes(5);
-        return new FalDownload(client, Resolve) { MaxBytes = MaxDownloadBytes };
     }
 
     private void Authorize(HttpRequestMessage req) =>

@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.AudioEditor.Tests.Fakes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.Engines;
@@ -342,6 +343,31 @@ public sealed class HiggsfieldAudioEngineTests
         media["value"]!.ToString().Should().Be(MediaId);
     }
 
+    // Адрес загрузки приходит в ответе media_upload, то есть извне: внутренний адрес — отказ,
+    // образец голоса туда не уходит, media_confirm и запуск не вызываются
+    [Theory]
+    [InlineData("https://169.254.169.254/latest/meta-data")]
+    [InlineData("https://127.0.0.1:9000/bucket/ref.wav")]
+    public async Task Run_Clone_UploadUrlToInternalNetwork_RefusedWithoutSendingBytes(string uploadUrl)
+    {
+        var http = new FakeHttp(c => FakeHttp.Tool(c) == "media_upload"
+            ? FakeHttp.McpText($"Upload URLs:\n- {MediaId}: run curl -X PUT --data-binary @reference.wav '{uploadUrl}'.")
+            : Happy(c));
+        // Загрузчик с настоящим SsrfGuard: адрес проверяется так же, как в бою
+        var engine = new HiggsfieldAudioEngine(FakeHttp.Client(http, downloader: new SafeMediaDownloader(http)))
+            { PollInterval = TimeSpan.Zero };
+        await engine.RefreshModelsAsync(CancellationToken.None);
+        var request = new AudioRequest(AudioOp.CloneVoice, "seed_audio", Scope, Text: "Скажи это моим голосом",
+            Reference: new AudioBytes([1, 2, 3], "audio/wav"));
+
+        var result = await engine.RunAsync(request, NoProgress, CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Unavailable);
+        http.Calls.Should().NotContain(c => c.Method == HttpMethod.Put);
+        http.Calls.Should().NotContain(c => FakeHttp.Tool(c) == "media_confirm" || c.Url == uploadUrl);
+        Launches(http).Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Run_CloneWithoutReference_Rejected()
     {
@@ -419,6 +445,47 @@ public sealed class HiggsfieldAudioEngineTests
         result.Files.Single().ContentType.Should().Be("audio/wav");
     }
 
+    // Ссылку на результат прислал поставщик: на внутренний адрес бэкенд не идёт вовсе
+    [Fact]
+    public async Task Run_ResultUrlPrivate_NotDownloaded()
+    {
+        var http = new FakeHttp(c => FakeHttp.Tool(c) == "jobs_wait"
+            ? FakeHttp.McpText($$"""{"jobs":[{"index":0,"job_id":"{{JobId}}","status":"completed","result_url":"https://127.0.0.1/out.mp3"}],"all_terminal":true}""")
+            : c.Url.StartsWith("https://127.0.0.1/") ? FakeHttp.Bytes(Mp3, "audio/mpeg") : Happy(c));
+        var engine = new HiggsfieldAudioEngine(FakeHttp.Client(http, downloader: new SafeMediaDownloader(http)))
+        {
+            PollInterval = TimeSpan.Zero,
+        };
+        await engine.RefreshModelsAsync(CancellationToken.None);
+
+        var result = await engine.RunAsync(Speak("seed_audio"), NoProgress, CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Failed);
+        result.Charged.Should().BeTrue();
+        result.Files.Should().BeEmpty();
+        http.Calls.Should().NotContain(c => c.Url.StartsWith("https://127.0.0.1/"));
+    }
+
+    // Потолок звука свой: больше картиночного проходит, больше звукового — нет
+    [Theory]
+    [InlineData(SafeMediaDownloader.ImageMaxBytes + 1, AudioOutcome.Ok)]
+    [InlineData(SafeMediaDownloader.AudioMaxBytes + 1, AudioOutcome.Failed)]
+    public async Task Run_ResultSize_AudioCeiling(long declaredLength, AudioOutcome expected)
+    {
+        var http = new FakeHttp(c =>
+        {
+            if (!c.Url.StartsWith("https://cdn.test/")) return Happy(c);
+            var response = FakeHttp.Bytes(Mp3, "audio/mpeg");
+            response.Content.Headers.ContentLength = declaredLength;
+            return response;
+        });
+        var engine = await Loaded(http);
+
+        var result = await engine.RunAsync(Speak("seed_audio"), NoProgress, CancellationToken.None);
+
+        result.Outcome.Should().Be(expected);
+    }
+
     // ── Котировка ────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -473,4 +540,16 @@ public sealed class HiggsfieldAudioEngineTests
         voices.Should().Equal(new HiggsfieldVoice("v-1", "Anna", "ru", null), new HiggsfieldVoice("v-2", "Bob", null, null));
         FakeHttp.Arguments(http.Calls.Single())!["model"]!.ToString().Should().Be("seed_audio");
     }
+
+    // Перезаливка образца — только на отказ про сам образец, а не на любое «not found» рядом со словом media
+    [Theory]
+    [InlineData("Media not found: 1b2c", true)]
+    [InlineData("media does not exist", true)]
+    [InlineData("Media has expired", true)]
+    [InlineData("HTTP 410 Gone", true)]
+    [InlineData("voice not found for media upload", false)]
+    [InlineData("media upload ok, model not found", false)]
+    [InlineData("media expiredAt field is invalid", false)]
+    public void IsMediaMissing_AnchorsWholePhrase(string text, bool expected) =>
+        HiggsfieldAudioEngine.IsMediaMissing(text).Should().Be(expected);
 }

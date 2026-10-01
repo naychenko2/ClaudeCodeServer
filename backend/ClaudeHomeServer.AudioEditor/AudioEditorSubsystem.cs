@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
+using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.AudioEditor;
 
@@ -55,13 +56,6 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
             new Engines.YandexAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ITtsEngine>()));
         // fal: ключ инстанса Fal:ApiKey (или FAL_KEY), тихий HTTP-клиент "fal" заводит Main; нет ключа — Enabled=false
         services.AddSingleton<Engines.FalAudioEngine>();
-        // Скачивание результатов fal — свой клиент без автоследования редиректов: ссылка из ответа
-        // поставщика проверяется на каждом шаге (Engines/FalDownload), системный прокси сохраняется
-        services.AddQuietHttpClient(Engines.FalAudioEngine.DownloadClientName, new QuietHttpClientProfile(
-                Category: "ClaudeHomeServer.AudioEditor.FalDownload",
-                Subject: "файлами результатов fal.ai",
-                Consequence: "Результат задачи «Звук» не скачан."))
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         services.AddSingleton<IAudioEngine>(sp => sp.GetRequiredService<Engines.FalAudioEngine>());
         // Исполнитель задач: котировка → запуск по quoteId, потолки, траты, события audio_edit_*, итог
         // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
@@ -75,11 +69,15 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Правки без ИИ (обрезка, фейды, громкость, нормализация, формат, сведение стемов) — новые версии
         // нити, тот же необязательный шов IAudioDsp
         services.AddSingleton<Engines.DspAudioEngine>();
+        // Монтаж без ИИ у агента (audio_generate с op trim/gainFade/normalize/mixStems) — поверх того же движка
+        services.AddSingleton<Mcp.IAudioAgentEdits, Mcp.AudioAgentEdits>();
         // Библиотека «Голоса»: voices/<slug>/ серверного проекта, кеш id у поставщиков и признак
         // «клон MiniMax протух» по подменяемым часам
         services.AddSingleton(sp => new Voices.VoiceLibrary(sp.GetService<TimeProvider>()));
         services.AddSingleton<Mcp.IAudioVoiceLibrary>(sp => sp.GetRequiredService<Voices.VoiceLibrary>());
         // Инструменты агента (MCP audio-editor, ADR-021 §5): в ход их везёт Main, когда тулсет есть в реестре
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.AudioEditorToolset>();
+        // Блок хвоста хода «Звук в этом чате»: правило приоритета audio_* над прямыми local_*
+        services.AddPromptSectionContributor<Chats.AudioEditorStateContributor>();
     }
 }

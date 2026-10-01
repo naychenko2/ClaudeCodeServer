@@ -111,7 +111,7 @@ public class FalImageService : IImageGenerator
                 // content_type из ответа — запасной вариант, если storage не проставил заголовок
                 // (у векторного recraft это image/svg+xml, и молча считать его png нельзя)
                 var declared = img.TryGetProperty("content_type", out var c) ? c.GetString() : null;
-                var (bytes, contentType) = await DownloadAsync(client, url, declared, ct);
+                var (bytes, contentType) = await DownloadAsync(url, declared, ct);
                 if (bytes is not null) result.Add(new GeneratedImage(bytes, contentType));
             }
             return result;
@@ -160,8 +160,9 @@ public class FalImageService : IImageGenerator
     // 1024×1024: у "square" сторона 512, и такая иконка в UI выглядит мылом
     private const string SquareSize = "square_hd";
 
+    // Ссылка пришла от fal — качаем только через SafeMediaDownloader (SSRF, потолок размера)
     private static async Task<(byte[]? Bytes, string ContentType)> DownloadAsync(
-        HttpClient client, string url, string? declaredType, CancellationToken ct)
+        string url, string? declaredType, CancellationToken ct)
     {
         var fallback = string.IsNullOrWhiteSpace(declaredType) ? "image/png" : declaredType.Trim();
 
@@ -177,10 +178,7 @@ public class FalImageService : IImageGenerator
             catch { return (null, contentType); }
         }
 
-        using var resp = await client.GetAsync(url, ct);
-        if (!resp.IsSuccessStatusCode) return (null, fallback);
-        var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-        var ct2 = resp.Content.Headers.ContentType?.MediaType ?? fallback;
-        return (bytes, ct2);
+        var download = await SafeMediaDownloader.Shared.DownloadAsync(url, SafeMediaDownloader.ImageMaxBytes, ct);
+        return (download.Bytes, download.ContentType ?? fallback);
     }
 }

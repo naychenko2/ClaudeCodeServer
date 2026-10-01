@@ -128,7 +128,7 @@ public sealed class FalLiveSchemaTests
     {
         var root = JsonNode.Parse(LiveOpenApi("fal-elevenlabs-sound-effects-v2.json").GetRawText())!;
         var props = root["components"]!["schemas"]!["ElevenlabsSoundEffectsV2Input"]!["properties"]!.AsObject();
-        foreach (var key in new[] { "webhook", "webhook_url", "fal_webhook", "callback_url", "callbackUrl", "image_url", "mask_urls" })
+        foreach (var key in LinkKeys)
             props[key] = new JsonObject { ["type"] = "string" };
         props["extra"] = new JsonObject
         {
@@ -138,13 +138,15 @@ public sealed class FalLiveSchemaTests
                 ["gain"] = new JsonObject { ["type"] = "number" },
                 ["url"] = new JsonObject { ["type"] = "string" },
                 ["notify_webhook"] = new JsonObject { ["type"] = "string" },
+                ["source_uri"] = new JsonObject { ["type"] = "string" },
             },
         };
         return root.ToJsonString();
     }
 
     internal static readonly string[] LinkKeys =
-        ["webhook", "webhook_url", "fal_webhook", "callback_url", "callbackUrl", "image_url", "mask_urls"];
+        ["webhook", "webhook_url", "fal_webhook", "callback_url", "callbackUrl", "image_url", "mask_urls", "redirect_uri",
+         "upload_endpoint"];
 
     [Theory]
     [InlineData("webhook", true)]
@@ -155,6 +157,17 @@ public sealed class FalLiveSchemaTests
     [InlineData("audio_url", true)]
     [InlineData("image_urls", true)]
     [InlineData("url", true)]
+    [InlineData("uri", true)]
+    [InlineData("uris", true)]
+    [InlineData("redirect_uri", true)]
+    [InlineData("Redirect_URI", true)]
+    [InlineData("source_uris", true)]
+    [InlineData("endpoint", true)]
+    [InlineData("endpoints", true)]
+    [InlineData("upload_endpoint", true)]
+    [InlineData("upload_endpoints", true)]
+    [InlineData("curiosity", false)]
+    [InlineData("endpointless", false)]
     [InlineData("output_format", false)]
     [InlineData("curly", false)]
     [InlineData("prompt_influence", false)]

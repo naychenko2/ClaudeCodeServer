@@ -15,25 +15,29 @@ public class LocalMediaDefaultContributorTests
         public bool IsEnabled(string userId, string key) => on.Contains(key);
     }
 
-    private static readonly string[] AllFlags = [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor];
+    private static readonly string[] AllFlags =
+        [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor, FeatureFlagKeys.AudioEditor];
 
     private static LocalMediaDefaultContributor Contributor(
-        string[]? flags = null, bool localMedia = true, bool images = true, bool agentLaunch = true) =>
+        string[]? flags = null, bool localMedia = true, bool images = true, bool agentLaunch = true,
+        bool audioAgentLaunch = true) =>
         new(new Flags(flags ?? AllFlags), new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["LocalMedia:Enabled"] = localMedia ? "true" : "false",
             ["Subsystems:images:Enabled"] = images ? "true" : "false",
             ["ImageEditor:AgentLaunch"] = agentLaunch ? "true" : "false",
+            ["AudioEditor:AgentLaunch"] = audioAgentLaunch ? "true" : "false",
         }).Build());
 
     private static PromptSessionContext Project(bool hasLocalMediaMcp = true, bool unattended = false,
-        Session? session = null) =>
+        Session? session = null, bool hasAudioEditorMcp = false) =>
         new(session ?? new Session { ProjectId = "p1", OwnerId = "u1" }, "u1", null, "/root",
-            HasLocalMediaMcp: hasLocalMediaMcp, Unattended: unattended);
+            HasLocalMediaMcp: hasLocalMediaMcp, HasAudioEditorMcp: hasAudioEditorMcp, Unattended: unattended);
 
-    private static PromptSessionContext Personal(bool unattended = false, bool hasImageEditorMcp = true) =>
+    private static PromptSessionContext Personal(bool unattended = false, bool hasImageEditorMcp = true,
+        bool hasAudioEditorMcp = false) =>
         new(new Session { OwnerId = "u1" }, "u1", null, null,
-            HasImageEditorMcp: hasImageEditorMcp, Unattended: unattended);
+            HasImageEditorMcp: hasImageEditorMcp, HasAudioEditorMcp: hasAudioEditorMcp, Unattended: unattended);
 
     [Fact]
     public void Проект_с_local_media_и_флагом_видит_правило() =>
@@ -188,5 +192,51 @@ public class LocalMediaDefaultContributorTests
 
         project.Should().Contain("local_speech").And.Contain("local_music_generate");
         personal.Should().Contain("локальных моделей в этом чате нет");
+    }
+
+    // ADR-021 §5, вопрос 1: модуль «Звук» доехал до хода — звук идёт через audio_* с provider local,
+    // прямые local_* — только по прямой просьбе; картинки и видео те же
+    [Fact]
+    public async Task Проект_с_модулем_звука_звук_через_audio_generate()
+    {
+        var text = (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true), "озвучь"))!.Sections[0].Text;
+
+        text.Should().Be(LocalMediaDefaultContributor.ProjectRuleWithAudioEditor)
+            .And.Contain("audio_generate передавай с provider local")
+            .And.Contain("Прямые local_* для звука — только если человек явно попросил сделать напрямую")
+            .And.NotContain("озвучка — local_speech");
+        text.Should().StartWith(LocalMediaDefaultContributor.ProjectRule[..LocalMediaDefaultContributor.ProjectRule.IndexOf("Звук и музыка", StringComparison.Ordinal)],
+            "картинки и видео модуль звука не трогает");
+    }
+
+    [Fact]
+    public async Task Личный_чат_с_модулем_звука_облако_через_audio_generate()
+    {
+        var text = (await Contributor().BuildAsync(Personal(hasAudioEditorMcp: true), "озвучь"))!.Sections[0].Text;
+
+        text.Should().Be(LocalMediaDefaultContributor.PersonalRuleWithAudioEditor)
+            .And.Contain("локальных моделей в этом чате нет").And.Contain("audio_generate")
+            .And.NotContain("Прямые local_*", "в личной области локального звука нет вовсе");
+    }
+
+    // Без доставленного сервера, без флага модуля или без audio_generate — прежние варианты
+    [Theory]
+    [InlineData("сервер не доставлен")]
+    [InlineData("флаг audio-editor выключен")]
+    [InlineData("AudioEditor:AgentLaunch=false")]
+    public async Task Без_модуля_звука_прежние_тексты(string why)
+    {
+        var contributor = why switch
+        {
+            "флаг audio-editor выключен" => Contributor(flags: [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor]),
+            "AudioEditor:AgentLaunch=false" => Contributor(audioAgentLaunch: false),
+            _ => Contributor(),
+        };
+        var audio = why != "сервер не доставлен";
+
+        (await contributor.BuildAsync(Project(hasAudioEditorMcp: audio), null))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.ProjectRule, why);
+        (await contributor.BuildAsync(Personal(hasAudioEditorMcp: audio), null))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.PersonalRule, why);
     }
 }

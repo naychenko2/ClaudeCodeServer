@@ -31,6 +31,9 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
     // Пауза опроса статуса; тесты ставят ноль
     internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
 
+    // Скачивание результата по ссылке fal; тесты подставляют фейковый транспорт
+    internal SafeMediaDownloader Downloader { get; init; } = SafeMediaDownloader.Shared;
+
     public FalImageEditor(IHttpClientFactory http, IConfiguration config, ILogger<FalImageEditor> log)
     {
         _http = http;
@@ -252,7 +255,7 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
                 return Fail(ClassifyHttp(rresp.StatusCode, rtext), false, ticket.RequestId, ErrorText(rtext, rresp.StatusCode));
 
             progress.Report(new EditProgress(EditStage.Downloading));
-            var images = await DownloadAllAsync(client, rtext, token);
+            var images = await DownloadAllAsync(Downloader, rtext, token);
             if (images.Count == 0)
                 return Fail(EditOutcome.Failed, null, ticket.RequestId, "fal.ai не вернул картинок");
             return new ImageEditResult(EditOutcome.Ok, images, null, true, ticket.RequestId, null);
@@ -368,7 +371,7 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
             Str(json, "cancel_url") ?? baseUrl + "/cancel");
     }
 
-    private static async Task<IReadOnlyList<EditedImage>> DownloadAllAsync(HttpClient client, string text, CancellationToken ct)
+    private static async Task<IReadOnlyList<EditedImage>> DownloadAllAsync(SafeMediaDownloader downloader, string text, CancellationToken ct)
     {
         var json = JsonDocument.Parse(text).RootElement;
         var items = new List<JsonElement>();
@@ -381,7 +384,7 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
         foreach (var item in items)
         {
             if (Str(item, "url") is not { Length: > 0 } url) continue;
-            if (await ImageDownload.FetchAsync(client, url, Str(item, "content_type"), ct) is { } img)
+            if (await ImageDownload.FetchAsync(downloader, url, Str(item, "content_type"), ct) is { } img)
                 result.Add(img);
         }
         return result;

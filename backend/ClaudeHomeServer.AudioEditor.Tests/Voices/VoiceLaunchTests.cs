@@ -1,8 +1,8 @@
-using System.Net;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.AudioEditor.Tests.Engines;
 using ClaudeHomeServer.AudioEditor.Tests.Fakes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.Controllers;
@@ -65,7 +65,10 @@ public sealed class VoiceLaunchTests : IDisposable
         }).Build(), NullLogger<FalAudioEngine>.Instance)
     {
         PollInterval = TimeSpan.Zero,
-        Resolve = (host, _) => Task.FromResult(host == "cdn.test" ? [IPAddress.Parse("93.184.216.34")] : Array.Empty<IPAddress>()),
+        // Общий загрузчик поверх фейка: cdn.test — «публичный» хост, прочее — боевая проверка SsrfGuard
+        Downloader = new SafeMediaDownloader(_fal, (uri, ct) => uri.Host == "cdn.test"
+            ? Task.FromResult(SsrfGuard.AddressCheck.Public)
+            : SsrfGuard.CheckAsync(uri, ct)),
     };
 
     private string Voice => AudioVoiceRefs.Prefix + _slug;
@@ -187,6 +190,7 @@ public sealed class VoiceLaunchTests : IDisposable
     [Theory]
     [InlineData(AudioCatalog.FalMiniMaxClone)]
     [InlineData(AudioCatalog.FalChatterbox)]
+    [InlineData(AudioCatalog.FalQwenClone)]
     public async Task FalSampleClone_SampleOverCap_RejectedBeforeRequest(string model)
     {
         var big = new byte[FalAudioEngine.MaxDataUriSampleBytes + 1];
@@ -200,6 +204,24 @@ public sealed class VoiceLaunchTests : IDisposable
         result.Charged.Should().BeFalse();
         result.Error.Should().Be(FalAudioEngine.SampleTooLargeText);
         Posts().Should().BeEmpty();
+    }
+
+    // С эмбеддингом из кеша образец не едет вовсе — большой образец не повод отказывать
+    [Fact]
+    public async Task FalQwenClone_SampleOverCap_CachedEmbedding_SkipsCloneAndSpeaks()
+    {
+        var big = new byte[FalAudioEngine.MaxDataUriSampleBytes + 1];
+        Wav.CopyTo(big, 0);
+        var voice = new AudioVoiceUse(_slug, new AudioBytes(big, "audio/wav"), null, null, null,
+            new Dictionary<string, string> { [VoiceProviders.FalQwen] = "https://cdn.test/e/voice.safetensors" });
+        _fal.Job(AudioCatalog.FalQwenTts, "t1", ["COMPLETED"], """{"audio":{"url":"https://cdn.test/e/out1.mp3"}}""");
+        _fal.File("https://cdn.test/e/out1.mp3", [9]);
+
+        var result = await Fal().RunAsync(new AudioRequest(AudioOp.CloneVoice, AudioCatalog.FalQwenClone, _scope, Text: "Привет", Voice: voice),
+            new FalAudioEngineTests.Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Ok);
+        Posts().Select(p => p.Url).Should().Equal($"{Queue}/{AudioCatalog.FalQwenTts}");
     }
 
     [Fact]

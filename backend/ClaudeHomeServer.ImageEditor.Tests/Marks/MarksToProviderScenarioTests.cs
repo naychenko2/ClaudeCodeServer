@@ -38,7 +38,7 @@ public class MarksToProviderScenarioTests
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         });
         var editor = new FalImageEditor(http, TestImages.Config(("Fal:ApiKey", "k"), ("Fal:QueueBase", Queue)),
-            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero };
+            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero, Downloader = http.Downloader() };
 
         // Ровно то, что шлёт фронт в котировку
         var hasAnnotations = drawn.Length > 0;
@@ -173,7 +173,7 @@ public class MarksToProviderScenarioTests
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         });
         var editor = new FalImageEditor(http, TestImages.Config(("Fal:ApiKey", "k"), ("Fal:QueueBase", Queue)),
-            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero };
+            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero, Downloader = http.Downloader() };
 
         var removal = EditIntent.IsRemoval(prompt);
         var model = editor.PickModel(ImageEditOp.Inpaint, EditMode.Auto, new EditTraits(true, 0, false, true, removal))!;

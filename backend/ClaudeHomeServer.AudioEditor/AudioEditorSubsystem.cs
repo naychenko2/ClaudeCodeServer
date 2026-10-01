@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Http;
 
 namespace ClaudeHomeServer.Services.AudioEditor;
 
@@ -39,6 +40,19 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Драйверы поставщиков: шов local-media — от отключаемой вертикали Images, поэтому nullable
         services.AddSingleton<IAudioEngine>(sp =>
             new Engines.LocalAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ILocalAudioMedia>()));
+        // Higgsfield: свой экземпляр Core-клиента; шов доступа регистрирует Main, нет его — Enabled=false
+        services.AddQuietHttpClient(ClaudeHomeServer.Services.Higgsfield.HiggsfieldMcpClient.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.AudioEditor.Higgsfield",
+                Subject: "Higgsfield из модуля «Звук»",
+                Consequence: "Озвучка через Higgsfield недоступна — остальные поставщики работают."));
+        services.AddSingleton(sp => new Engines.HiggsfieldAudioEngine(new ClaudeHomeServer.Services.Higgsfield.HiggsfieldMcpClient(
+            sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<IConfiguration>(),
+            sp.GetService<ClaudeHomeServer.Services.Higgsfield.IHiggsfieldAccess>())));
+        services.AddSingleton<IAudioEngine>(sp => sp.GetRequiredService<Engines.HiggsfieldAudioEngine>());
+        // Яндекс: шов ITtsEngine — от отключаемой вертикали Tts, поэтому nullable
+        services.AddSingleton<IAudioEngine>(sp =>
+            new Engines.YandexAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ITtsEngine>()));
         // Исполнитель задач: котировка → запуск по quoteId, потолки, траты, события audio_edit_*, итог
         // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
         services.AddSingleton<Jobs.AudioJobThreads>();

@@ -33,6 +33,13 @@ public interface IAudioEngine
 
     // Отмена у поставщика — лучшее усилие
     Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct);
+
+    // Поставщик с живым каталогом (Higgsfield) подтягивает его здесь; исполнитель зовёт до подбора модели.
+    // Сбой не бросает: остаётся прежний список
+    ValueTask RefreshModelsAsync(CancellationToken ct) => ValueTask.CompletedTask;
+
+    // Источник траты в общем учёте (SpendSources): по умолчанию ключ поставщика
+    string SpendSource => Key;
 }
 
 // Операции модуля. Операции без ИИ (Trim и дальше) — монтаж за швом IAudioDsp (этап 5):
@@ -135,7 +142,9 @@ public sealed record AudioCaps(
 // Ориентир цены для каталога; точная сумма — только в котировке
 public sealed record AudioPriceHint(double Amount, string Unit, string Per);
 
-public sealed record AudioModelInfo(string Id, string Label, AudioCaps Caps, AudioPriceHint? PriceHint = null);
+// DisabledReason — модель видна в каталоге серой с этой причиной, но не подбирается и не запускается
+public sealed record AudioModelInfo(string Id, string Label, AudioCaps Caps, AudioPriceHint? PriceHint = null,
+    string? DisabledReason = null);
 
 public sealed record AudioBytes(byte[] Bytes, string ContentType);
 

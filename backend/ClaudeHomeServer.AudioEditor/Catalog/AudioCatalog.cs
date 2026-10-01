@@ -25,12 +25,13 @@ public static class AudioCatalog
         string.IsNullOrWhiteSpace(model) || string.Equals(model.Trim(), AutoModelId, StringComparison.OrdinalIgnoreCase);
 
     // Разворот «Авто» в модель поставщика: первая модель каталога, умеющая операцию; явный id — как
-    // есть, если он у поставщика есть. null — поставщик операцию не умеет или модели такой нет
+    // есть, если он у поставщика есть. null — поставщик операцию не умеет или модели такой нет.
+    // Серая модель (DisabledReason) не разворачивается никогда
     public static AudioModelInfo? Resolve(IReadOnlyList<AudioModelInfo> models, AudioOp op, string? model) =>
         IsAuto(model)
-            ? models.FirstOrDefault(m => m.Caps.Ops.Contains(op))
+            ? models.FirstOrDefault(m => m.DisabledReason is null && m.Caps.Ops.Contains(op))
             : models.FirstOrDefault(m => string.Equals(m.Id, model!.Trim(), StringComparison.OrdinalIgnoreCase)
-                                         && m.Caps.Ops.Contains(op));
+                                         && m.DisabledReason is null && m.Caps.Ops.Contains(op));
 
     // Доступные поставщики в порядке показа
     public static IReadOnlyList<IAudioEngine> Available(IEnumerable<IAudioEngine> engines) =>

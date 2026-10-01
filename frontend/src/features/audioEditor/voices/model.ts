@@ -113,6 +113,9 @@ export function whereWorks(v: AudioVoice, now = new Date()): WhereRow[] {
   ];
 }
 
+// Пара .pth и .index на месте — голос годится смене голоса моделью RVC
+export const hasRvcModel = (v: AudioVoice) => v.providers.some(p => p.provider === 'rvc' && p.state === 'ok');
+
 export const isStale = (v: AudioVoice) => v.needsAttention || v.providers.some(p => p.state === 'stale');
 
 // Кнопка «Пересоздать · цена»: активна, только когда цена известна — платно, человек видит сумму

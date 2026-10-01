@@ -89,15 +89,47 @@ export function readInputs(key: string): PanelInputs {
   }
 }
 
-// В браузер ложатся только входы вне белого списка сервера
+// В браузер ложатся только входы вне белого списка сервера — плюс старые входы белого списка,
+// которые ещё ждут переезда на сервер (их операция у нити не выбрана, см. migrateLocal)
 export function writeInputs(key: string, value: PanelInputs) {
-  try { localStorage.setItem(key, JSON.stringify(localPart(value))); } catch { /* квота — входы не критичны */ }
+  storeLocal(key, localPart(value), waitingPart(readRaw(key)));
+}
+
+function storeLocal(key: string, local: Partial<PanelInputs>, waiting: Partial<PanelInputs>) {
+  const value = { ...local, ...waiting, concat: { ...local.concat, ...waiting.concat } };
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* квота — входы не критичны */ }
+}
+
+function readRaw(key: string): Partial<PanelInputs> | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) ?? 'null') as Partial<PanelInputs> | null;
+    return raw && typeof raw === 'object' ? raw : null;
+  } catch {
+    return null;
+  }
 }
 
 function localPart(v: PanelInputs): Partial<PanelInputs> {
   const { language: _l, referencePath: _r, voice: _v, replicas: _d, concat, ...rest } = v;
   const { pieces: _p, joint: _j, joints: _js, ...concatRest } = concat;
   return { ...rest, concat: concatRest as ConcatInputs };
+}
+
+// Входы белого списка из сырого localStorage, которые операция op не берёт (без op — все): на
+// сервер их сейчас не отправить, стереть — потерять. concat — только серверная половина склейки
+function waitingPart(raw: Partial<PanelInputs> | null, op?: AudioOp): Partial<PanelInputs> {
+  if (!raw) return {};
+  const waits = (k: keyof AudioOpInputs) => !op || !KEYS_OF[k](op);
+  const out: Partial<PanelInputs> = {};
+  if (raw.language && waits('language')) out.language = raw.language;
+  if (raw.referencePath && waits('referencePath')) out.referencePath = raw.referencePath;
+  if (raw.voice && waits('voice')) out.voice = raw.voice;
+  if (raw.replicas?.length && waits('dialogue')) out.replicas = raw.replicas;
+  if (raw.concat?.pieces?.length && waits('pieces')) {
+    const { pieces, joint, joints } = raw.concat;
+    out.concat = { pieces, ...(joint ? { joint } : {}), ...(joints ? { joints } : {}) } as ConcatInputs;
+  }
+  return out;
 }
 
 // ── Входы на сервере ──
@@ -190,20 +222,16 @@ export function serverPiece(raw: AudioOpInputs | null | undefined): AudioSelecti
   return { start: raw.startSec, end: typeof raw.endSec === 'number' ? raw.endSec : TO_END };
 }
 
-// Разовый перенос старых входов из браузера: на сервере пусто, а в localStorage что-то есть — отдаём
-// их для отправки; локальную копию серверных ключей стираем в любом случае (правда теперь на сервере)
+// Перенос старых входов из браузера: на сервере пусто, а в localStorage что-то есть — отдаём их для
+// отправки. Локальную копию входов, которые берёт операция op, стираем в любом случае (правда теперь
+// на сервере); входы чужих операций (куски склейки при озвучке) остаются ждать своей операции
 export function migrateLocal(key: string, server: AudioOpInputs | null | undefined, op: AudioOp, personal: boolean): AudioOpInputs | null {
-  let raw: Partial<PanelInputs> | null;
-  try {
-    raw = JSON.parse(localStorage.getItem(key) ?? 'null') as Partial<PanelInputs> | null;
-  } catch {
-    return null;
-  }
-  if (!raw || typeof raw !== 'object') return null;
+  const raw = readRaw(key);
+  if (!raw) return null;
   const legacy = raw.language || raw.referencePath || raw.voice || raw.replicas?.length || raw.concat?.pieces?.length;
   if (!legacy) return null;
   const old = readInputs(key);
-  writeInputs(key, old);
+  storeLocal(key, localPart(old), waitingPart(raw, op));
   const empty = !server || Object.keys(server).length === 0;
   return empty ? toServerInputs(op, old, null, personal) : null;
 }

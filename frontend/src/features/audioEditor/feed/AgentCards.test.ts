@@ -19,11 +19,11 @@ import type { ChatItem } from '../../../types';
 import { getSlotItem, registerSubsystem, type ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { setAllSubsystems } from '../../../lib/subsystems';
 import { setAllFlags } from '../../../lib/featureFlags';
-import type { AudioCatalog, AudioJob, AudioThread } from '../api';
+import type { AudioCatalog, AudioThread } from '../api';
 import { soundMode } from '../composer/soundMode';
 import { manifest } from '../manifest';
 import { __applyThreads, __resetAudioStore, __setScopeData, suggestPrompt } from '../thread/threadStore';
-import { AudioConcatCard, AudioFocusLine, AudioLaunchCard, AudioPromptCard, AudioServiceLine, failText } from './AgentCards';
+import { AudioConcatCard, AudioFocusLine, AudioLaunchCard, AudioPromptCard, AudioServiceLine } from './AgentCards';
 import { AUDIO_TOOL } from './parse';
 
 const P = 'p1';
@@ -101,13 +101,6 @@ describe('audio_generate', () => {
     withThreads(thread('running'));
     const other = LAUNCH.replace('"j1"', '"j2"');
     expect(html(AudioLaunchCard, tool('audio_generate', { threadId: 't1' }, other))).toContain('Claude — запуск: Озвучить');
-  });
-
-  it('причина сбоя — текст задачи и деньги', () => {
-    expect(failText({ outcome: 'failed', error: 'таймаут', charged: false } as AudioJob))
-      .toBe('Поставщик не справился. таймаут. Деньги не списаны.');
-    expect(failText({ outcome: 'insufficientCredits', error: null, charged: null } as AudioJob))
-      .toBe('У поставщика закончились средства.');
   });
 
   it('звук удалён', () => {

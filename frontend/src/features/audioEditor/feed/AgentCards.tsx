@@ -3,14 +3,14 @@
 // запуск — карточкой со статусом задачи из стора нитей, предложенный текст — с кнопками
 // «Вставить в промпт» и «Сгенерировать», служебные вызовы — короткой строкой без JSON.
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   AlertTriangle, AudioLines, Check, Eye, ListMusic, Mic, PencilLine, Plus, Scissors, Sparkles, Square, X,
 } from 'lucide-react';
 import { Button, Dot, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, personaLabel, showToast } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import type { ChatItem, Persona } from '../../../types';
-import { audioApi, type AudioCatalog, type AudioJob, type AudioThread } from '../api';
+import { audioApi, type AudioCatalog, type AudioThread } from '../api';
 import { MODE_LABEL } from '../ops';
 import { audioScope } from '../scope';
 import { stripModel } from '../strip/SoundStrip';
@@ -121,20 +121,17 @@ export function launchMeta(L: LaunchView, catalog: AudioCatalog | null): string 
 
 // ── Статус запуска из стора нити ──
 
-export type LaunchPhase = 'run' | 'done' | 'failed' | 'cancelled' | 'interrupted' | 'gone';
-
-// Нет нити в чате (удалена) — 'gone'; запуск ещё не записан в нить — идёт
 // Запуск, который нить уже знает, целиком рисует якорь audio_launch_versions карточки нити:
 // строка запуска, прогресс, «Отменить», версии. Своя карточка тут — второй блок на запуск
 export const launchOwned = (thread: AudioThread | undefined, jobId: string): boolean =>
   !!thread && (!!launchOf(thread, jobId) || launchVersions(thread, jobId).length > 0);
 
-export function launchPhase(thread: AudioThread | undefined, jobId: string, loaded: boolean): LaunchPhase {
-  if (!thread) return loaded ? 'gone' : 'run';
-  const l = thread.launches.find(x => x.jobId === jobId);
-  if (!l || l.status === 'running') return 'run';
-  return l.status === 'done' ? 'done' : l.status;
-}
+// Своей карточке остаются два вида: нить ещё не знает запуск — идёт; нити в чате нет — 'gone'.
+// Итог запуска (готово, сбой, отмена, обрыв) пишется в нить, и запуск сразу уходит якорю
+export type LaunchPhase = 'run' | 'gone';
+
+export const launchPhase = (thread: AudioThread | undefined, loaded: boolean): LaunchPhase =>
+  !thread && loaded ? 'gone' : 'run';
 
 // «GPU: 2-я в очереди», «вариант 1 из 2 · ещё ≈ 40 с»
 export function progressText(p: JobProgress | undefined): string | null {
@@ -149,37 +146,10 @@ export function progressText(p: JobProgress | undefined): string | null {
   return eta ? `${of} · ещё ≈ ${eta}` : of;
 }
 
-// Причина сбоя по задаче: текст поставщика и что с деньгами
-export function failText(job: AudioJob | null): string {
-  const base = job?.outcome === 'insufficientCredits' ? 'У поставщика закончились средства.'
-    : job?.outcome === 'unavailable' ? 'Поставщик недоступен.'
-    : job?.outcome === 'rejected' ? 'Поставщик отклонил запрос.'
-    : 'Поставщик не справился.';
-  const reason = str(job?.error);
-  const money = job?.charged === false ? ' Деньги не списаны.' : job?.charged === true ? ' Поставщик уже списал оплату.' : '';
-  const full = reason ? `${base} ${/[.!?…]$/.test(reason) ? reason : `${reason}.`}` : base;
-  return `${full}${money}`;
-}
-
 // Выбрать версию: она станет текущей, звук — в работе (полоса «Звук», без панели)
 async function pickVersion(scope: string, sessionId: string, threadId: string, versionId: string) {
   const ok = await mutate(scope, sessionId, rev => audioApi.current(scope, sessionId, threadId, versionId, rev));
   if (ok && getFocusedThread(sessionId)?.id !== threadId) await focusThread(scope, sessionId, threadId);
-}
-
-function VersionLinks({ scope, sessionId, thread, jobId }: { scope: string; sessionId: string | null; thread: AudioThread; jobId: string }) {
-  const versions = thread.versions.filter(v => v.jobId === jobId);
-  if (!versions.length || !sessionId) return null;
-  return (
-    <Acts>
-      {versions.map(v => (
-        <Button key={v.id} size="sm" variant={v.id === thread.currentVersionId ? 'primary' : 'ghost'} leftIcon={ic(AudioLines)}
-          onClick={() => { void pickVersion(scope, sessionId, thread.id, v.id); }}>
-          Версия {v.number}
-        </Button>
-      ))}
-    </Acts>
-  );
 }
 
 // ── audio_generate ──
@@ -195,17 +165,7 @@ export function AudioLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   const threadId = launch?.threadId ?? ready?.threadId ?? str(input.threadId);
   const thread = threadId ? state.threads.find(t => t.id === threadId) : undefined;
   const loaded = state.revision > 0 || state.threads.length > 0;
-  const phase = launch ? launchPhase(thread, launch.jobId, loaded) : null;
-  const [job, setJob] = useState<AudioJob | null>(null);
   const [cancelling, setCancelling] = useState(false);
-
-  // Причину сбоя знает только задача: нить хранит лишь статус запуска
-  useEffect(() => {
-    if (phase !== 'failed' || !launch || job) return;
-    let alive = true;
-    audioApi.getJob(scope, ctx.sessionId, launch.jobId).then(j => { if (alive) setJob(j); }).catch(() => { /* причина останется общей */ });
-    return () => { alive = false; };
-  }, [phase, launch?.jobId, scope, ctx.sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const title = opTitle(launch?.op ?? (str(input.op) as never), asMode(input.mode));
   if (launch && launchOwned(thread, launch.jobId)) return null;
@@ -232,16 +192,10 @@ export function AudioLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   }
 
   const L = launch!;
+  const phase = launchPhase(thread, loaded);
   const meta = launchMeta(L, catalog);
   const progress = progressText(getJobsOf(ctx.sessionId, threadId).find(j => j.jobId === L.jobId));
-  const head = {
-    run: { icon: <Dot color={C.accent} />, title: `${who(ctx.persona)} — запуск: ${title}`, color: undefined },
-    done: { icon: ic(Check), title: `Готово: ${title}`, color: C.successText },
-    failed: { icon: ic(AlertTriangle), title: `Не получилось: ${title}`, color: C.dangerText },
-    cancelled: { icon: ic(X), title: `Отменено: ${title}`, color: undefined },
-    interrupted: { icon: ic(AlertTriangle), title: `Прервалось: ${title}`, color: undefined },
-    gone: { icon: ic(AudioLines), title: `${who(ctx.persona)} — запуск: ${title}`, color: undefined },
-  }[phase!];
+  const icon = phase === 'run' ? <Dot color={C.accent} /> : ic(AudioLines);
   const cancel = async () => {
     setCancelling(true);
     try { await audioApi.cancelJob(scope, ctx.sessionId, L.jobId); }
@@ -250,14 +204,11 @@ export function AudioLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   };
 
   return (
-    <Card kind="launch" tone={phase === 'done' ? 'ok' : phase === 'run' ? undefined : 'off'}>
-      <CardHead icon={head.icon} title={head.title} meta={meta || null} color={head.color} />
+    <Card kind="launch" tone={phase === 'run' ? undefined : 'off'}>
+      <CardHead icon={icon} title={`${who(ctx.persona)} — запуск: ${title}`} meta={meta || null} />
       {L.baseLabel && <Note>От: {L.baseLabel}</Note>}
       {phase === 'run' && <Note>{progress ?? 'идёт'}</Note>}
-      {phase === 'failed' && <Note>{failText(job)}</Note>}
-      {phase === 'interrupted' && <Note>Сервер перезапускался, задача не сохранилась. Проверьте траты в «Модели и расход».</Note>}
       {phase === 'gone' && <Note>Этого звука в чате уже нет.</Note>}
-      {phase === 'done' && thread && <VersionLinks scope={scope} sessionId={ctx.sessionId} thread={thread} jobId={L.jobId} />}
       {phase === 'run' && (
         <Acts>
           <Button size="sm" variant="secondary" leftIcon={ic(Square)} loading={cancelling} disabled={cancelling}

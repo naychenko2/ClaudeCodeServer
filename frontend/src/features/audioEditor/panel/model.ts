@@ -250,6 +250,8 @@ export interface ReasonInput {
   text: string;
   hasReference: boolean;
   hasVoiceModel: boolean;
+  // Голос из библиотеки в смене голоса: есть ли у него модель RVC; null — голос не выбран или ещё не знаем
+  libraryRvc?: boolean | null;
   clips: number;
   replicas: number;
   trimReady: boolean;
@@ -280,7 +282,10 @@ export function runReason(r: ReasonInput): string | null {
   }
   if (op === 'convertVoice') {
     const kinds = r.state.model.caps.voiceKinds;
-    if (kinds.includes('rvc') && !kinds.includes('clone') && !r.hasVoiceModel) return 'Укажите модель голоса .pth из проекта';
+    if (kinds.includes('rvc') && !kinds.includes('clone')) {
+      if (r.libraryRvc === false) return 'У этого голоса нет модели RVC — выберите голос с моделью или другую модель смены голоса';
+      if (!r.hasVoiceModel) return 'Укажите модель голоса .pth из проекта';
+    }
     if (kinds.includes('clone') && !r.hasReference) return 'Выберите, чей голос: загрузите образец';
   }
   if (op === 'trainVoice' && r.clips < 1) return 'Добавьте записи голоса — от 2 до 30 минут';

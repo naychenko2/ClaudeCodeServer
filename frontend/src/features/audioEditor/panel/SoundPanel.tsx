@@ -9,9 +9,9 @@
 // поле операции.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, AudioLines, Cpu, Lock, Mic, SlidersHorizontal, X } from 'lucide-react';
+import { AudioLines, Cpu, Lock, Mic, SlidersHorizontal, X } from 'lucide-react';
 import {
-  Badge, GenerationPanel, IconButton, SegmentedControl, C, FS, R, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
+  Badge, GenerationPanel, IconButton, SegmentedControl, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
@@ -24,9 +24,10 @@ import {
   focusThread, getCatalog, getComposerText, getJobsOf, getPrefs, getSelection, getShortcutMode, setPieceFieldOpen, setSelection,
   SOUND_PANEL, useAudioStoreVersion, useAudioThreads,
 } from '../thread/threadStore';
-import { voicePickValue, pickedSlug } from '../voices/model';
-import { RecreateButton } from '../voices/RecreateButton';
+import { hasRvcModel, voicePickValue, pickedSlug } from '../voices/model';
+import { useLibraryVoice } from '../voices/useLibraryVoice';
 import { VoicesTab } from '../voices/VoicesTab';
+import { CloneRefusalNote } from './CloneRefusalNote';
 import { ConcatFields } from './ConcatFields';
 import {
   inputsKey, LIBRARY_VOICE_OPS, mergeInputs, migrateLocal, readInputs, saveSettings, serverPiece, toServerInputs, writeInputs,
@@ -175,17 +176,19 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const [reference, setReference] = useState<File | null>(null);
   useEffect(() => { setReference(null); }, [key]);
 
-  // Разовый перенос старых входов из браузера: когда настройки нити (или префы) уже пришли
+  // Перенос старых входов из браузера: когда настройки нити (или префы) уже пришли — раз на нить и
+  // операцию, чтобы входы чужой операции (куски склейки) переехали, когда её выберут
   const migrated = useRef<string | null>(null);
   const loaded = !!thread || !!catalog;
   useEffect(() => {
-    if (!sessionId || !loaded || migrated.current === key) return;
-    migrated.current = key;
+    const at = `${key}|${state.op}`;
+    if (!sessionId || !loaded || migrated.current === at) return;
+    migrated.current = at;
     const moved = migrateLocal(key, state.inputs, state.op, personal);
     setLocal(readInputs(key));
     if (moved) change({ inputs: moved });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- раз на нить, как только есть что сверить
-  }, [key, loaded, sessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- раз на нить и операцию, как только есть что сверить
+  }, [key, loaded, sessionId, state.op]);
 
   // Кусок из настроек на сервере поднимаем в выделение (после перезагрузки его видит и волна)
   useEffect(() => {
@@ -263,10 +266,13 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
 
   const [busy, setBusy] = useState(false);
   const libraryVoice = LIBRARY_VOICE_OPS.has(state.op) && !personal && !!inputs.voice;
+  // Вид голоса из библиотеки нужен только смене голоса: модель RVC берёт лишь голос с парой .pth и .index
+  const libVoice = useLibraryVoice(scope, sessionId, state.op === 'convertVoice' && libraryVoice ? pickedSlug(inputs.voice) : null, tab);
   const reason = runReason({
     sessionId, thread, state, provider: providerOpt, text,
     hasReference: !!reference || !!inputs.referencePath.trim() || libraryVoice,
     hasVoiceModel: !!inputs.voiceModelPath.trim() || libraryVoice,
+    libraryRvc: libVoice ? hasRvcModel(libVoice) : null,
     clips: inputs.clipPaths.filter(p => p.trim()).length,
     replicas: inputs.replicas.filter(r => r.text.trim()).length,
     trimReady: trimReady(inputs.trim, pieceSel),
@@ -412,20 +418,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
         )}
         {state.mode === 'music' && <MusicFields {...fieldsProps} />}
 
-        {refusal && (
-          <div data-clone-refusal={refusal.slug} style={{
-            display: 'flex', flexDirection: 'column', gap: SP.xs, marginTop: SP.sm, fontSize: FS.sm, lineHeight: 1.45,
-            color: C.warningText, background: C.warningBg, borderRadius: R.md, padding: `${SP.sm}px ${SP.md}px`,
-          }}>
-            <span style={{ display: 'flex', gap: SP.xs, alignItems: 'flex-start' }}>
-              <span style={{ display: 'inline-flex', marginTop: 2 }}>{ic(AlertTriangle)}</span>
-              <span>{refusal.message}</span>
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-              <RecreateButton scope={scope} slug={refusal.slug} quote={refusal.quote} />
-            </span>
-          </div>
-        )}
+        {refusal && <CloneRefusalNote scope={scope} refusal={refusal} onCleared={() => setRefusal(null)} />}
 
         {!noAi && state.model && (
           <AdvancedForm schema={schema.schema} fields={extra}

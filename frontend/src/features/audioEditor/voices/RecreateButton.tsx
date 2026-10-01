@@ -10,6 +10,19 @@ import { quotePrice, recreateAction } from './model';
 
 const errText = (e: unknown) => (e as Error)?.message || 'Запрос не выполнен';
 
+// Нажатие «Пересоздать»: задача ушла — onStarted (отказ запуска больше не правда), нет — тост и false
+export async function recreateClone(scope: string, slug: string, quoteId: string, onStarted?: () => void): Promise<boolean> {
+  try {
+    await voicesApi.recreate(scope, slug, quoteId);
+  } catch (e) {
+    showToast(errText(e), '', 'error');
+    return false;
+  }
+  showToast('Пересоздаём клон MiniMax', 'Задача видна в очереди звука', 'info');
+  onStarted?.();
+  return true;
+}
+
 export function RecreateButton({ scope, slug, quote: given = null, onStarted }: {
   scope: string;
   slug: string;
@@ -38,18 +51,11 @@ export function RecreateButton({ scope, slug, quote: given = null, onStarted }: 
   const press = async () => {
     if (!quote || busy) return;
     setBusy(true);
-    try {
-      await voicesApi.recreate(scope, slug, quote.quoteId);
-      setStarted(true);
-      showToast('Пересоздаём клон MiniMax', 'Задача видна в очереди звука', 'info');
-      onStarted?.();
-    } catch (e) {
-      showToast(errText(e), '', 'error');
-      // Котировка истекла или израсходована — берём новую, цена снова будет на кнопке
-      load();
-    } finally {
-      setBusy(false);
-    }
+    const ok = await recreateClone(scope, slug, quote.quoteId, onStarted);
+    setBusy(false);
+    if (ok) setStarted(true);
+    // Котировка истекла или израсходована — берём новую, цена снова будет на кнопке
+    else load();
   };
   return (
     <span data-recreate={slug} style={{ display: 'contents' }}>

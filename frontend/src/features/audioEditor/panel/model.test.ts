@@ -148,6 +148,19 @@ describe('причина запуска', () => {
     expect(runReason(base({ state: st({ mode: 'process', op: 'trim' }), trimReady: true }))).toBeNull();
     expect(runReason(base({ state: st({ mode: 'process', op: 'concat' }), pieces: 1, thread: null }))).toBe('Нужно хотя бы два куска — добавьте ещё один');
   });
+  it('смена голоса моделью только RVC: голос из библиотеки без модели RVC — причина до сервера', () => {
+    const rvc = { ...LOCAL.models[0], caps: { ...LOCAL.models[0].caps, ops: ['convertVoice' as const], voiceKinds: ['rvc' as const] } };
+    const s = st({ op: 'convertVoice', model: rvc });
+    const lib = { state: s, hasVoiceModel: true, hasReference: true };
+    expect(runReason(base({ ...lib, libraryRvc: false })))
+      .toBe('У этого голоса нет модели RVC — выберите голос с моделью или другую модель смены голоса');
+    expect(runReason(base({ ...lib, libraryRvc: true }))).toBeNull();
+    // Вид голоса ещё не знаем — не держим, решит сервер
+    expect(runReason(base({ ...lib, libraryRvc: null }))).toBeNull();
+    // Модель с клоном возьмёт образец голоса — RVC ей не нужна
+    const both = { ...rvc, caps: { ...rvc.caps, voiceKinds: ['rvc' as const, 'clone' as const] } };
+    expect(runReason(base({ ...lib, state: st({ op: 'convertVoice', model: both }), libraryRvc: false }))).toBeNull();
+  });
   it('отказ котировки — последняя причина', () => {
     expect(runReason(base({ quoteError: 'Параметр «x» — число' }))).toBe('Параметр «x» — число');
   });

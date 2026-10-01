@@ -15,7 +15,7 @@ import { TO_END } from '../player/selection';
 import { __applyThreads, __resetAudioStore } from '../thread/threadStore';
 import { jointsFor } from './ConcatFields';
 import {
-  DEFAULT_INPUTS, inputsKey, mergeInputs, migrateLocal, projectInputs, readInputs, saveSettings, serverPiece, toServerInputs,
+  DEFAULT_INPUTS, inputsKey, mergeInputs, migrateLocal, projectInputs, readInputs, saveSettings, serverPiece, toServerInputs, writeInputs,
   type PanelInputs,
 } from './inputs';
 import { nextSettings, resolvePanel, voicePick } from './model';
@@ -121,6 +121,28 @@ describe('перенос из localStorage', () => {
     localStorage.setItem(key, JSON.stringify(legacy));
     expect(migrateLocal(key, { language: 'en' }, 'cloneVoice', false)).toBeNull();
     expect(JSON.parse(localStorage.getItem(key)!).language).toBeUndefined();
+  });
+
+  it('куски склейки при чужой операции не стираются и переезжают, когда выбрана склейка', () => {
+    const pieces = [{ threadId: 'a', versionId: 'v1', label: 'a' }, { threadId: 'b', label: 'b' }];
+    const joint = { kind: 'pause', seconds: 1 };
+    const joints = [{ kind: 'pause', seconds: 2 }];
+    localStorage.setItem(key, JSON.stringify({ ...legacy, concat: { ...DEFAULT_INPUTS.concat, pieces, joint, joints, name: 'итог' } }));
+    expect(migrateLocal(key, null, 'cloneVoice', false)).toEqual({ language: 'ru', referencePath: 'voices/a.wav' });
+    const left = JSON.parse(localStorage.getItem(key)!);
+    expect(left.language).toBeUndefined();
+    expect(left.concat).toMatchObject({ pieces, joint, joints, name: 'итог' });
+    // Правка браузерных входов ждущие куски не теряет
+    writeInputs(key, { ...readInputs(key), voiceModelPath: 'w.pth' });
+    expect(JSON.parse(localStorage.getItem(key)!).concat.pieces).toEqual(pieces);
+    // Выбрали склейку — куски уехали на сервер и из браузера ушли, имя склейки осталось
+    expect(migrateLocal(key, null, 'concat', false)).toEqual({
+      pieces: [{ threadId: 'a', versionId: 'v1' }, { threadId: 'b' }], joint, joints,
+    });
+    const after = JSON.parse(localStorage.getItem(key)!);
+    expect(after.concat.pieces).toBeUndefined();
+    expect(after.concat.name).toBe('итог');
+    expect(readInputs(key).voiceModelPath).toBe('w.pth');
   });
 
   it('нечего переносить — ничего не трогаем', () => {

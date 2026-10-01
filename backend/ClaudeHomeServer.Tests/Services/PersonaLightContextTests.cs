@@ -43,6 +43,10 @@ public class PersonaLightContextTests : IDisposable
             ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
             ["LlmProviders:deepseek:ApiKey"] = "sk-test",
             ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro",
+            ["LlmProviders:remote-bare:AnthropicBaseUrl"] = "https://example.invalid",
+            ["LlmProviders:remote-bare:ApiKey"] = "sk-test",
+            ["LlmProviders:remote-bare:BareMode"] = "true",
+            ["LlmProviders:remote-bare:Models:0:Id"] = "remote-bare-model",
             ["LlmProviders:LightProfile:KeepMcpServers:0"] = "memory",
             ["LlmProviders:LightProfile:SystemPromptFile"] = "SystemPrompts/CLAUDE-local.md",
         }).Build());
@@ -60,16 +64,35 @@ public class PersonaLightContextTests : IDisposable
     }
 
     [Fact]
-    public void СПерсоной_РешаетТолькоЕёОпция_ДажеНаЛокальнойМодели()
+    public void ЛокальнаяМодельСоСвоимПрофилем_ПрофильВсегда_НезависимоОтОпции()
     {
         var registry = Registry();
 
-        registry.LightProfileFor("qwen3.8-27b", Persona(false)).Should().BeNull(
-            "выключенная опция персоны сильнее провайдера: полный контекст — осознанный выбор");
-        registry.LightProfileFor("qwen3.8-27b", Persona(null)).Should().BeNull(
-            "null — решение не принято, в рантайме читается как выкл (его проставляет миграция)");
-        registry.LightProfileFor("qwen3.8-27b", Persona(true))!.Source.Should().Be("local-qwen",
-            "у провайдера со своим профилем персона берёт ЕГО профиль");
+        registry.LightProfileFor("qwen3.8-27b", Persona(false))!.Source.Should().Be("local-qwen",
+            "полный контекст не влезает в окно локальной модели — опция персоны тут не решает");
+        registry.LightProfileFor("qwen3.8-27b", Persona(null))!.Source.Should().Be("local-qwen");
+        registry.LightProfileFor("qwen3.8-27b", Persona(true))!.Source.Should().Be("local-qwen");
+    }
+
+    [Fact]
+    public void Фолбэк_СменаМоделиСOpusНаQwen_ПриВыключеннойОпции_ДаётЛокальныйПрофиль()
+    {
+        // Фолбэк по цепочке меняет модель хода мимо персоны: профиль резолвится заново по
+        // новой модели и обязан стать профилем local-qwen, а не остаться «полным» от Opus
+        var registry = Registry();
+        var persona = Persona(false);
+
+        registry.LightProfileFor("opus", persona).Should().BeNull();
+        registry.LightProfileFor("qwen3.8-27b", persona)!.Source.Should().Be("local-qwen");
+    }
+
+    [Fact]
+    public void НелокальныйПровайдерСоСвоимПрофилем_РешаетОпцияПерсоны()
+    {
+        var registry = Registry();
+
+        registry.LightProfileFor("remote-bare-model", Persona(false)).Should().BeNull();
+        registry.LightProfileFor("remote-bare-model", Persona(true))!.Source.Should().Be("remote-bare");
     }
 
     [Fact]
@@ -140,6 +163,35 @@ public class PersonaLightContextTests : IDisposable
         old.LightContext.Should().BeTrue();
         decided.LightContext.Should().BeFalse("уже принятое решение миграция не трогает");
         manager.MigrateLightContext(p => true).Should().Be(0, "идемпотентна");
+    }
+
+    private sealed class NoTierModels : ITierModelResolver
+    {
+        public string? TierModel(ModelTier tier) => null;
+    }
+
+    [Fact]
+    public async Task Миграция_ПерсонеНаЛокальнойМодели_ВключаетОпцию_ОстальнымВыключает()
+    {
+        var path = Path.Combine(_root, "personas-migration.json");
+        var manager = new PersonaManager(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["PersonasPath"] = path }).Build());
+        var onQwen = manager.Create("u", "Кузьма", null, null, null, null, null, PersonaScope.Global,
+            null, null, null, true);
+        onQwen.Model = "qwen3.8-27b";
+        onQwen.LightContext = null;
+        var onOpus = manager.Create("u", "Александр", null, null, null, null, null, PersonaScope.Global,
+            null, null, null, true);
+        onOpus.Model = "opus";
+        onOpus.LightContext = null;
+
+        var migration = new PersonaLightContextMigration(manager,
+            new ModelAssignmentResolver(new NoTierModels()), Registry(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<PersonaLightContextMigration>.Instance);
+        await migration.StartAsync(CancellationToken.None);
+
+        onQwen.LightContext.Should().BeTrue("провайдер модели персоны со своим облегчённым профилем");
+        onOpus.LightContext.Should().BeFalse();
     }
 }
 

@@ -156,7 +156,10 @@ public class LlmProviderRegistry
     // «No such tool available», поэтому своей копии этой логики не заводить.
     //  • чат без персоны — как раньше, решает провайдер модели: у него свой профиль
     //    (BareMode/Trim/KeepMcpTools/RecallInTurnText) или его нет;
-    //  • чат с персоной — решает только Persona.LightContext: выкл → null; вкл → профиль
+    //  • локальная модель (IsLocal) со своим профилем — её профиль ВСЕГДА, опция персоны не
+    //    влияет: полный контекст не влезает в окно локальной модели, а модель хода меняют мимо
+    //    персоны (фолбэк, смена модели чата, исполнитель на слоте weak, шаблоны персон);
+    //  • иначе в чате с персоной решает Persona.LightContext: выкл → null; вкл → профиль
     //    провайдера модели, а у модели без своего профиля (Opus/Sonnet) — общая секция LightProfile.
     // Входы — свойства СЕССИИ (модель, персона), не хода: состав tools/list стабилен.
     public LightProfile? LightProfileFor(string? model, Persona? persona)
@@ -165,7 +168,7 @@ public class LlmProviderRegistry
         var own = provider is { BareMode: true } or { TrimMcpServers: true } or { RecallInTurnText: true }
             or { KeepMcpTools.Count: > 0 }
             ? LightProfile.FromProvider(provider!) : null;
-        if (persona is null) return own;
+        if (persona is null || (own is not null && provider!.IsLocal)) return own;
         return persona.LightContext == true ? own ?? _lightProfile : null;
     }
 

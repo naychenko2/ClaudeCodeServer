@@ -166,7 +166,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Локальный провайдер среди явно заданных моделей персоны (ключ провайдера local-*):
-  // для него выключенный облегчённый контекст — полный CLAUDE.md в окно маленькой модели
+  // на нём сервер применяет облегчённый профиль всегда, переключатель влияет только на прочие модели
   const usesLocalModel = [model, tierStrong, tierMedium, tierWeak]
     .some(m => !!m && modelProvider(m).startsWith('local'));
 
@@ -1213,10 +1213,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               заметки, базу знаний, других персон и генерацию медиа. Модель та же — урезается то, что
               ей подаётся.
             </div>
-            {!lightContext && usesLocalModel && (
-              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.warning, lineHeight: 1.45 }}>
-                У локальной модели полный CLAUDE.md занимает около 95 тысяч токенов — ход станет заметно
-                медленнее. Для локальной модели облегчённый контекст лучше оставить включённым.
+            {usesLocalModel && (
+              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+                На локальной модели облегчённый контекст включён всегда, независимо от переключателя:
+                полный CLAUDE.md не помещается в её окно.
               </div>
             )}
             {isEdit && lightContext !== (persona?.lightContext ?? false) && (

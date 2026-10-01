@@ -8,7 +8,8 @@ namespace ClaudeHomeServer.Services.AudioEditor;
 // Subsystems:AudioEditor:Enabled=false (Register не вызывается). В обоих случаях ручек нет — 404.
 //
 // Модуль ссылается только на Core: всё внешнее — швы оттуда, реализации регистрируют другие сборки.
-// Пока ручек нет: регистрируются хранилища нитей и префов, рабочая папка, их жизненный цикл и драйверы.
+// Пока ручек нет: регистрируются хранилища нитей и префов, рабочая папка, их жизненный цикл, драйверы
+// и исполнитель задач.
 public sealed class AudioEditorSubsystem : IAppSubsystem
 {
     public string Key => "audioeditor";
@@ -38,5 +39,9 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Драйверы поставщиков: шов local-media — от отключаемой вертикали Images, поэтому nullable
         services.AddSingleton<IAudioEngine>(sp =>
             new Engines.LocalAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ILocalAudioMedia>()));
+        // Исполнитель задач: котировка → запуск по quoteId, потолки, траты, события audio_edit_*, итог
+        // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
+        services.AddSingleton<Jobs.AudioJobThreads>();
+        services.AddSingleton<Jobs.AudioEditJobService>();
     }
 }

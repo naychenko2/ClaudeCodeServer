@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Prefs;
 
@@ -126,13 +127,23 @@ public sealed class AudioPrefsStore(string root)
 }
 
 // Префы области и цепочка запуска поверх хранилища. Область — уже своя: владение проверяет
-// вызывающий (ручка, тулсет)
-public sealed class AudioPrefsService(AudioPrefsStore store)
+// вызывающий (ручка, тулсет). Запись рассылает владельцу audio_prefs_changed: другие вкладки
+// перерисовывают панель
+public sealed class AudioPrefsService(AudioPrefsStore store, ISessionBroadcaster? broadcaster = null)
 {
     public AudioModePrefs? Get(string ownerId, AudioEditScope scope, string mode) => store.Get(ownerId, scope.Key, mode);
 
     public void Save(string ownerId, AudioEditScope scope, string mode, AudioModePrefs prefs) =>
         store.Save(ownerId, scope.Key, mode, prefs);
+
+    // Запись с событием; потерянное событие фронт догоняет чтением префов
+    public async Task SaveAsync(string ownerId, AudioEditScope scope, string mode, AudioModePrefs prefs)
+    {
+        store.Save(ownerId, scope.Key, mode, prefs);
+        if (broadcaster is null) return;
+        try { await broadcaster.ToOwner(ownerId, new Jobs.AudioPrefsChangedMessage(scope.Key, mode, prefs)); }
+        catch (Exception) { }
+    }
 
     // Настройки новой нити режима — последние префы этого режима; префов нет — null, нить
     // тогда при запуске целиком идёт на умолчание каталога

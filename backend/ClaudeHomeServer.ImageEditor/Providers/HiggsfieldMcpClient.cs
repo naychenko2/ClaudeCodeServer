@@ -22,6 +22,9 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
     private readonly string _url = config["Higgsfield:McpUrl"] ?? DefaultUrl;
     private int _rpcId;
 
+    // Скачивание результата по ссылке Higgsfield; тесты подставляют фейковый транспорт
+    internal SafeMediaDownloader Downloader { get; set; } = SafeMediaDownloader.Shared;
+
     public bool Available => Token() is not null;
 
     public async Task<HiggsfieldCall> CallToolAsync(string tool, JsonObject arguments, CancellationToken ct)
@@ -91,7 +94,7 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
     }
 
     public Task<EditedImage?> DownloadAsync(string url, CancellationToken ct) =>
-        ImageDownload.FetchAsync(Client(), url, null, ct);
+        ImageDownload.FetchAsync(Downloader, url, null, ct);
 
     // Ответ бывает и JSON, и SSE (строки data:)
     internal static JsonObject? ParseEnvelope(string text)

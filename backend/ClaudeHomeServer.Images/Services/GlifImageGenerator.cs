@@ -116,7 +116,7 @@ public sealed class GlifImageGenerator : IImageGenerator
             foreach (var url in urls)
             {
                 if (result.Count >= count) break;
-                var image = await ImageDownload.FetchAsync(client, url, token);
+                var image = await ImageDownload.FetchAsync(url, token);
                 if (image is not null) result.Add(image);
             }
             return result;
@@ -215,10 +215,11 @@ public sealed class GlifImageGenerator : IImageGenerator
 }
 
 // Скачивание медиа в байты: обычный URL и data:-URL. Логика повторяет
-// FalImageService.DownloadAsync — тот драйвер переедет сюда отдельной волной.
+// FalImageService.DownloadAsync — тот драйвер переедет сюда отдельной волной. Ссылка
+// пришла от поставщика — качаем только через SafeMediaDownloader (SSRF, потолок размера).
 internal static class ImageDownload
 {
-    public static async Task<GeneratedImage?> FetchAsync(HttpClient client, string url, CancellationToken ct)
+    public static async Task<GeneratedImage?> FetchAsync(string url, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
 
@@ -234,11 +235,7 @@ internal static class ImageDownload
             catch (FormatException) { return null; }
         }
 
-        using var resp = await client.GetAsync(url, ct);
-        if (!resp.IsSuccessStatusCode) return null;
-        var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-        if (bytes.Length == 0) return null;
-        var type = resp.Content.Headers.ContentType?.MediaType ?? "image/png";
-        return new GeneratedImage(bytes, type);
+        var download = await SafeMediaDownloader.Shared.DownloadAsync(url, SafeMediaDownloader.ImageMaxBytes, ct);
+        return download.Bytes is { } bytes ? new GeneratedImage(bytes, download.ContentType ?? "image/png") : null;
     }
 }

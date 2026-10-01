@@ -30,7 +30,10 @@ public class HiggsfieldImageEditorTests
     {
         var access = new FakeHiggsfieldAccess(token);
         var http = new FakeHttp(route ?? HappyRoute);
-        var client = new HiggsfieldMcpClient(http, TestImages.Config(("Higgsfield:McpUrl", "https://mcp.test/mcp")), access);
+        var client = new HiggsfieldMcpClient(http, TestImages.Config(("Higgsfield:McpUrl", "https://mcp.test/mcp")), access)
+        {
+            Downloader = http.Downloader(),
+        };
         return (new HiggsfieldImageEditor(client) { PollInterval = TimeSpan.Zero }, http, access);
     }
 

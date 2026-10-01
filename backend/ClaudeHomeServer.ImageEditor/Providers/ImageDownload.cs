@@ -1,12 +1,13 @@
-using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Скачивание результата поставщика бэкендом (ADR-017, раздел 8): внешние ссылки fal и
 // Higgsfield наружу не уходят, варианты отдаются только своей ручкой из рабочей папки.
+// Ссылка пришла от поставщика — качаем только через SafeMediaDownloader (SSRF, потолок размера).
 internal static class ImageDownload
 {
-    public static async Task<EditedImage?> FetchAsync(HttpClient client, string url, string? declaredType, CancellationToken ct)
+    public static async Task<EditedImage?> FetchAsync(SafeMediaDownloader downloader, string url, string? declaredType, CancellationToken ct)
     {
         var fallback = string.IsNullOrWhiteSpace(declaredType) ? "image/png" : declaredType.Trim();
 
@@ -26,10 +27,7 @@ internal static class ImageDownload
             }
         }
 
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps) return null;
-        using var resp = await client.GetAsync(uri, ct);
-        if (!resp.IsSuccessStatusCode) return null;
-        var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-        return bytes.Length == 0 ? null : new EditedImage(bytes, resp.Content.Headers.ContentType?.MediaType ?? fallback);
+        var download = await downloader.DownloadAsync(url, SafeMediaDownloader.ImageMaxBytes, ct);
+        return download.Bytes is { } bytes ? new EditedImage(bytes, download.ContentType ?? fallback) : null;
     }
 }

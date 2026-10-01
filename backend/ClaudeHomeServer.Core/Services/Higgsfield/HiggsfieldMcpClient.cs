@@ -25,6 +25,10 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
     private readonly string _url = config["Higgsfield:McpUrl"] ?? DefaultUrl;
     private int _rpcId;
 
+    // Скачивание результата по ссылке Higgsfield; тесты модулей подставляют фейковый транспорт,
+    // поэтому сеттер открыт: клиент живёт в Core, а тесты — в сборках вертикалей
+    public SafeMediaDownloader Downloader { get; set; } = SafeMediaDownloader.Shared;
+
     public bool Available => Token() is not null;
 
     public async Task<HiggsfieldCall> CallToolAsync(string tool, JsonObject arguments, CancellationToken ct)
@@ -93,9 +97,10 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
         }
     }
 
-    // Результат поставщика: data:-ссылка разбирается на месте, наружу — только https.
-    // null — ссылка не годится или ответ неуспешный
-    public async Task<HiggsfieldDownload?> DownloadBytesAsync(string url, CancellationToken ct)
+    // Результат поставщика: data:-ссылка разбирается на месте, внешняя — только через
+    // SafeMediaDownloader (SSRF, потолок maxBytes задаёт вызывающий по виду медиа).
+    // null — ссылка не годится или скачать не вышло
+    public async Task<HiggsfieldDownload?> DownloadBytesAsync(string url, long maxBytes, CancellationToken ct)
     {
         if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
         {
@@ -113,11 +118,8 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
             }
         }
 
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps) return null;
-        using var resp = await Client().GetAsync(uri, ct);
-        if (!resp.IsSuccessStatusCode) return null;
-        var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-        return bytes.Length == 0 ? null : new HiggsfieldDownload(bytes, resp.Content.Headers.ContentType?.MediaType);
+        var download = await Downloader.DownloadAsync(url, maxBytes, ct);
+        return download.Bytes is { } bytes ? new HiggsfieldDownload(bytes, download.ContentType) : null;
     }
 
     // Ответ бывает и JSON, и SSE (строки data:)

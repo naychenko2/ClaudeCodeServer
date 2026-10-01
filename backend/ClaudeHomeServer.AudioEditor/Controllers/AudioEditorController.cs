@@ -22,8 +22,10 @@ public class AudioEditorController(
     AudioJobThreads threads,
     AudioPrefsService prefs,
     AudioEditWorkspace workspace,
+    Engines.DspAudioEngine dsp,
+    AudioConcatService concat,
     IProjectFiles? files = null)
-    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace)
+    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat)
 {
     private readonly AudioJobThreads _threads = threads;
     private readonly AudioEditWorkspace _workspace = workspace;
@@ -98,10 +100,32 @@ public class AudioEditorController(
             ? VersionFileIn(scope, sessionId, threadId, versionId, role, download)
             : denied;
 
+    [HttpPost("sessions/{sessionId}/threads/{threadId}/edit")]
+    public async Task<IActionResult> Edit(string projectId, string sessionId, string threadId,
+        [FromBody] AudioDspEditRequest? req, CancellationToken ct) =>
+        ChatGate(projectId, sessionId, out var scope, out var denied) ? await EditIn(scope, sessionId, threadId, req, ct) : denied;
+
+    [HttpPost("sessions/{sessionId}/threads/{threadId}/mix")]
+    public async Task<IActionResult> Mix(string projectId, string sessionId, string threadId,
+        [FromBody] AudioMixRequest? req, CancellationToken ct) =>
+        ChatGate(projectId, sessionId, out var scope, out var denied) ? await MixIn(scope, sessionId, threadId, req, ct) : denied;
+
+    [HttpGet("sessions/{sessionId}/threads/{threadId}/versions/{versionId}/peaks")]
+    public async Task<IActionResult> Peaks(string projectId, string sessionId, string threadId, string versionId,
+        [FromQuery] int points = 800, [FromQuery] string? role = null, CancellationToken ct = default) =>
+        ChatGate(projectId, sessionId, out var scope, out var denied)
+            ? await PeaksIn(scope, sessionId, threadId, versionId, role, points, ct)
+            : denied;
+
+    [HttpPost("sessions/{sessionId}/concat")]
+    public async Task<IActionResult> Concat(string projectId, string sessionId, [FromBody] AudioConcatRequest? req,
+        CancellationToken ct) =>
+        ChatGate(projectId, sessionId, out var scope, out var denied) ? await ConcatIn(scope, sessionId, req, ct) : denied;
+
     // Сохранить версию в проект: следующая версия рядом с исходником или «Сохранить как». Только
     // человек и только новыми файлами; занятое имя «Сохранить как» — 409 name_taken с подсказкой
     [HttpPost("sessions/{sessionId}/threads/{threadId}/save")]
-    public IActionResult Save(string projectId, string sessionId, string threadId, [FromBody] AudioSaveRequest req)
+    public async Task<IActionResult> Save(string projectId, string sessionId, string threadId, [FromBody] AudioSaveRequest req)
     {
         if (!ChatGate(projectId, sessionId, out var scope, out var denied)) return denied;
         var project = scope.Project!;
@@ -133,6 +157,8 @@ public class AudioEditorController(
                 saved.ErrorCode ?? AudioEditErrorCodes.InvalidRequest, saved.Error ?? "Не сохранено");
         // Новые файлы — обычная запись в проект: синк знаний и ватчеры узнают о них сразу
         foreach (var rel in result.Files) files?.NotifyMutated(project.RootPath, rel, FileMutationKind.Create);
+        // Нить помнит, что звук уже в проекте
+        await _threads.OnSavedAsync(UserId, scope.Key, sessionId, threadId, result.Path);
         return Ok(result);
     }
 

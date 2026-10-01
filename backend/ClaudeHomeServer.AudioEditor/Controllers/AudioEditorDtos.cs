@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
+using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Prefs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 
@@ -53,6 +54,39 @@ public sealed record AudioThreadCurrentRequest(string? VersionId, long Revision)
 
 // Сохранение версии в проект: Mode — nextVersion (по умолчанию) или as; VersionId не задан — текущая
 public sealed record AudioSaveRequest(string? VersionId, string? Mode, string? Folder, string? FileName);
+
+// Правка без ИИ: Op — trim | gainFade | normalize | convert, Format — wav | mp3 | flac | ogg (null —
+// как у исходного файла). Поля читаются по операции (AudioDspEditInput); BaseVersionId null — текущая
+public sealed record AudioDspEditRequest(
+    string? Op,
+    string? BaseVersionId = null,
+    double? StartSec = null,
+    double? EndSec = null,
+    double? FadeInSec = null,
+    double? FadeOutSec = null,
+    double? GainDb = null,
+    double? TargetLufs = null,
+    string? Format = null,
+    int? SampleRate = null,
+    int? Channels = null,
+    long? Revision = null);
+
+// Сведение N из M стемов версии-основы: Stems — роли «stem:<имя>» с громкостью и выключением
+public sealed record AudioMixRequest(
+    IReadOnlyList<Engines.AudioMixStemInput>? Stems, string? BaseVersionId = null, string? Format = null, long? Revision = null);
+
+// Стык склейки: Kind — butt | pause | crossfade
+public sealed record AudioJointRequest(string? Kind, double Seconds = 0);
+
+// Склейка кусков в новый файл (AudioConcatInput): куски — версии нитей этого чата и файлы проекта
+public sealed record AudioConcatRequest(
+    IReadOnlyList<AudioConcatPiece>? Pieces,
+    AudioJointRequest? Joint = null,
+    IReadOnlyList<AudioJointRequest?>? Joints = null,
+    bool? NormalizeLoudness = null,
+    string? Name = null,
+    string? Format = null,
+    string? Folder = null);
 
 // Поля multipart запуска. Исходный звук сервер берёт сам — главный файл версии-основы нити
 // (BaseVersionId, не задана — текущая). Образец голоса или эталон мастеринга — загрузкой Reference

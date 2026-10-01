@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.AudioEditor.Engines;
 // Только серверный проект: результат local-media — файлы на диске сервера, а в личной области проекта
 // нет, у локального проекта (ADR-016) файлы живут на устройстве. Отказ — ScopeRefusal до чтения входов и
 // до обращения к шву; локальность — только через ProjectCapabilities.
-public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IAudioQuoter
+public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IAudioQuoter, IAudioParamSchemas
 {
     public const string ProviderKey = "local";
 
@@ -45,6 +45,12 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
         if (scope.IsPersonal || scope.Project is not { } project) return PersonalScopeReason;
         return ProjectCapabilities.FilesOnServer(project) ? null : DeviceProjectReason;
     }
+
+    // Схема «Дополнительно» — описание движка в каталоге: сети и GPU не нужно
+    public Task<AudioSchemaLookup> SchemaAsync(AudioModelInfo model, AudioOp op, CancellationToken ct) =>
+        Task.FromResult(AudioCatalog.LocalSchema(model.Id, op) is { } schema
+            ? AudioSchemaLookup.Ok(schema)
+            : AudioSchemaLookup.Fail("Локальные модели так не умеют"));
 
     // ── Котировка ────────────────────────────────────────────────────────────────
 
@@ -127,6 +133,25 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
 
     public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) =>
         media is null ? Task.FromResult(false) : media.CancelAsync(remoteId, ct);
+
+    // ── Параметры и дикторы ──────────────────────────────────────────────────────
+
+    public IReadOnlySet<string>? ParamNames(AudioModelInfo model, AudioOp op) =>
+        AudioCatalog.FindLocal(model.Id) is { } local && local.Bindings.TryGetValue(op, out var binding)
+            ? AudioCatalog.LocalParamNames(binding.Op)
+            : null;
+
+    // Готовые дикторы есть только у Qwen3-TTS в озвучке
+    public JsonObject? VoiceParams(AudioModelInfo model, AudioOp op, string voice) =>
+        HasSpeakers(model.Id, op) ? new JsonObject { ["speaker"] = voice } : null;
+
+    public Task<IReadOnlyList<AudioVoiceInfo>?> ListVoicesAsync(string? model, string? language, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<AudioVoiceInfo>?>(model is null || HasSpeakers(model, AudioOp.Speak)
+            ? [.. AudioCatalog.QwenSpeakers.Select(s => new AudioVoiceInfo(s, s.Replace('_', ' ')))]
+            : null);
+
+    private static bool HasSpeakers(string model, AudioOp op) =>
+        op == AudioOp.Speak && string.Equals(model, AudioCatalog.QwenTts, StringComparison.OrdinalIgnoreCase);
 
     // Запрос шва: привязка модели к операции из каталога, поверх неё — поля запроса под именами
     // инструментов local-media. Фиксированные аргументы привязки (engine, task, mode) Params не

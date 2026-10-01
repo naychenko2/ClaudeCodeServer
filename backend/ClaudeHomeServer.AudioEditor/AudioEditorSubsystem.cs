@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Http;
 
 namespace ClaudeHomeServer.Services.AudioEditor;
 
@@ -39,6 +40,29 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Драйверы поставщиков: шов local-media — от отключаемой вертикали Images, поэтому nullable
         services.AddSingleton<IAudioEngine>(sp =>
             new Engines.LocalAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ILocalAudioMedia>()));
+        // Higgsfield: свой экземпляр Core-клиента; шов доступа регистрирует Main, нет его — Enabled=false
+        services.AddQuietHttpClient(ClaudeHomeServer.Services.Higgsfield.HiggsfieldMcpClient.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.AudioEditor.Higgsfield",
+                Subject: "Higgsfield из модуля «Звук»",
+                Consequence: "Озвучка через Higgsfield недоступна — остальные поставщики работают."));
+        services.AddSingleton(sp => new Engines.HiggsfieldAudioEngine(new ClaudeHomeServer.Services.Higgsfield.HiggsfieldMcpClient(
+            sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<IConfiguration>(),
+            sp.GetService<ClaudeHomeServer.Services.Higgsfield.IHiggsfieldAccess>())));
+        services.AddSingleton<IAudioEngine>(sp => sp.GetRequiredService<Engines.HiggsfieldAudioEngine>());
+        // Яндекс: шов ITtsEngine — от отключаемой вертикали Tts, поэтому nullable
+        services.AddSingleton<IAudioEngine>(sp =>
+            new Engines.YandexAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ITtsEngine>()));
+        // fal: ключ инстанса Fal:ApiKey (или FAL_KEY), тихий HTTP-клиент "fal" заводит Main; нет ключа — Enabled=false
+        services.AddSingleton<Engines.FalAudioEngine>();
+        // Скачивание результатов fal — свой клиент без автоследования редиректов: ссылка из ответа
+        // поставщика проверяется на каждом шаге (Engines/FalDownload), системный прокси сохраняется
+        services.AddQuietHttpClient(Engines.FalAudioEngine.DownloadClientName, new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.AudioEditor.FalDownload",
+                Subject: "файлами результатов fal.ai",
+                Consequence: "Результат задачи «Звук» не скачан."))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        services.AddSingleton<IAudioEngine>(sp => sp.GetRequiredService<Engines.FalAudioEngine>());
         // Исполнитель задач: котировка → запуск по quoteId, потолки, траты, события audio_edit_*, итог
         // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
         services.AddSingleton<Jobs.AudioJobThreads>();
@@ -48,5 +72,13 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Склейка без ИИ: куски → новая нить. Шов IAudioDsp — от отключаемой вертикали Images, поэтому
         // необязателен: без него операция отвечает dsp_unavailable
         services.AddSingleton<Jobs.AudioConcatService>();
+        // Правки без ИИ (обрезка, фейды, громкость, нормализация, формат, сведение стемов) — новые версии
+        // нити, тот же необязательный шов IAudioDsp
+        services.AddSingleton<Engines.DspAudioEngine>();
+        // Библиотека «Голоса»: voices/<slug>/ серверного проекта, кеш id у поставщиков и признак
+        // «клон MiniMax протух» по подменяемым часам
+        services.AddSingleton(sp => new Voices.VoiceLibrary(sp.GetService<TimeProvider>()));
+        // Инструменты агента (MCP audio-editor, ADR-021 §5): в ход их везёт Main, когда тулсет есть в реестре
+        services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.AudioEditorToolset>();
     }
 }

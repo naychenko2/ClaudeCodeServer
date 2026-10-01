@@ -429,6 +429,64 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Сервер модуля «Звук» (ADR-021 §5) — по тем же правилам, что image-editor: свойства сессии,
+    /// владельца и процесса (флаг audio-editor, тулсет в реестре), а не хода, фокуса, режима и нитей.
+    /// </summary>
+    [SkippableFact]
+    public void СерверЗвука_ГейтитсяПоФлагуИРеестру()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "internal AudioEditorMcpContext? BuildAudioEditorContext");
+
+        body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
+        body.Should().NotContain("Thread", "фокус и нити звука не влияют на состав серверов");
+        body.Should().Contain("FeatureFlagKeys.AudioEditor", "флаг владельца гейтит сервер");
+        body.Should().Contain("McpEndpoints.AudioEditorName",
+            "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
+        body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
+        body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync тулсета");
+        body.Should().NotContain("IsBusy", "идущий ход не должен влиять на состав серверов");
+    }
+
+    /// <summary>
+    /// Сервер audio-editor едет и в личные чаты: контекст обязаны собирать ВСЕ три точки сборки
+    /// LlmSessionContext — иначе после перезапуска процесса личный чат теряет сервер («No such tool available»).
+    /// </summary>
+    [SkippableFact]
+    public void СерверЗвука_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var source = File.ReadAllText(path!);
+
+        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
+        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
+        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
+        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
+        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
+
+        var points = new Dictionary<string, string>
+        {
+            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
+            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
+            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
+        };
+        foreach (var (name, body) in points)
+        {
+            body.Should().Contain("BuildAudioEditorContext(", $"{name} обязан собирать контекст audio-editor");
+            body.Should().Contain("AudioEditorMcp: audioEditorMcp", $"{name} обязан передать его в LlmSessionContext");
+            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
+            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
+            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+            body[active..activeEnd].Should().Contain("audioEditorMcp",
+                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
+        }
+    }
+
+    /// <summary>
     /// Провайдер сабагентов-консультантов (pmem-серверы + --add-dir) гейтится тем же
     /// ConsultantsEnabled, а не собственной копией правила.
     /// </summary>
@@ -460,10 +518,14 @@ public class McpToolsetStabilityTests
         // Тулсеты модулей живут в своих сборках (ADR-018 §10.2) — их тела проверяются тем же правилом
         var imageEditor = FindDirIn("ClaudeHomeServer.ImageEditor", "Mcp");
         imageEditor.Should().NotBeNull("тулсет редактора картинок обязан попасть в проверку тел ToolsFor");
+        var audioEditor = FindDirIn("ClaudeHomeServer.AudioEditor", "Mcp");
+        audioEditor.Should().NotBeNull("тулсет модуля «Звук» обязан попасть в проверку тел ToolsFor");
         var files = Directory.GetFiles(dir!.FullName, "*.cs")
             .Concat(Directory.GetFiles(imageEditor!.FullName, "*.cs"))
+            .Concat(Directory.GetFiles(audioEditor!.FullName, "*.cs"))
             .ToList();
         files.Should().Contain(f => Path.GetFileName(f) == "ImageEditorToolset.cs");
+        files.Should().Contain(f => Path.GetFileName(f) == "AudioEditorToolset.cs");
 
         var checkedAny = false;
         foreach (var file in files)

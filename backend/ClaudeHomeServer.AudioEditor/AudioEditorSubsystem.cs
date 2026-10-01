@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Http;
 
 namespace ClaudeHomeServer.Services.AudioEditor;
 
@@ -9,7 +10,7 @@ namespace ClaudeHomeServer.Services.AudioEditor;
 //
 // Модуль ссылается только на Core: всё внешнее — швы оттуда, реализации регистрируют другие сборки.
 // Регистрируются хранилища нитей и префов, рабочая папка, их жизненный цикл, драйверы, исполнитель
-// задач и гейт ручек; сами ручки — Controllers/ (проект и личный чат).
+// задач и гейт ручек; сами ручки — Controllers/ (проект и личный чат, схема «Дополнительно»).
 public sealed class AudioEditorSubsystem : IAppSubsystem
 {
     public string Key => "audioeditor";
@@ -39,6 +40,16 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Драйверы поставщиков: шов local-media — от отключаемой вертикали Images, поэтому nullable
         services.AddSingleton<IAudioEngine>(sp =>
             new Engines.LocalAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ILocalAudioMedia>()));
+        // fal: ключ инстанса Fal:ApiKey (или FAL_KEY), тихий HTTP-клиент "fal" заводит Main; нет ключа — Enabled=false
+        services.AddSingleton<Engines.FalAudioEngine>();
+        // Скачивание результатов fal — свой клиент без автоследования редиректов: ссылка из ответа
+        // поставщика проверяется на каждом шаге (Engines/FalDownload), системный прокси сохраняется
+        services.AddQuietHttpClient(Engines.FalAudioEngine.DownloadClientName, new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.AudioEditor.FalDownload",
+                Subject: "файлами результатов fal.ai",
+                Consequence: "Результат задачи «Звук» не скачан."))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        services.AddSingleton<IAudioEngine>(sp => sp.GetRequiredService<Engines.FalAudioEngine>());
         // Исполнитель задач: котировка → запуск по quoteId, потолки, траты, события audio_edit_*, итог
         // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
         services.AddSingleton<Jobs.AudioJobThreads>();

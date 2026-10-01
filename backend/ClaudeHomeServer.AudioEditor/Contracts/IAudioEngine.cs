@@ -80,11 +80,18 @@ public static class AudioLicenses
     public static readonly AudioLicense CcByNc4 = new("CC BY-NC 4.0", AudioLicenseKind.NonCommercial);
     public static readonly AudioLicense Gpl3 = new("GPL-3.0", AudioLicenseKind.Copyleft);
     public static readonly AudioLicense NotStated = new("не указана", AudioLicenseKind.Unknown);
+    // Закрытая модель за API поставщика: результат можно использовать коммерчески по его условиям
+    public static readonly AudioLicense Commercial = new("коммерческая · условия поставщика", AudioLicenseKind.Permissive);
+    public static readonly AudioLicense CommercialWatermark = new("коммерческая · водяной знак", AudioLicenseKind.Watermark);
+    public static readonly AudioLicense MitWatermark = new("MIT · водяной знак Perth", AudioLicenseKind.Watermark);
+    public static readonly AudioLicense SynthId = new("коммерческая · водяной знак SynthID", AudioLicenseKind.Watermark);
 }
 
-// Единицы цены: за символ, секунду, минуту, запуск; кредиты Higgsfield, рубли Яндекса, бесплатно
+// Единицы цены: за символ, секунду, минуту, запуск; кредиты Higgsfield, рубли Яндекса, бесплатно.
+// Usd — единица поставщика с ценой в долларах и разной единицей у моделей (fal)
 public static class AudioPriceUnits
 {
+    public const string Usd = "usd";
     public const string Chars = "chars";
     public const string Sec = "sec";
     public const string Min = "min";

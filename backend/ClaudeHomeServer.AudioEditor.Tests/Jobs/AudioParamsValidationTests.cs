@@ -1,0 +1,134 @@
+using System.Text.Json.Nodes;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.AudioEditor;
+using ClaudeHomeServer.Services.AudioEditor.Jobs;
+using ClaudeHomeServer.Services.AudioEditor.Threads;
+using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace ClaudeHomeServer.AudioEditor.Tests.Jobs;
+
+// params проверяются по схеме модели и в котировке, и в запуске — до денег и до очереди (ADR-021 §5)
+public sealed class AudioParamsValidationTests : IDisposable
+{
+    private const string Owner = "owner-1";
+    private static readonly AudioEditScope Scope = AudioEditScope.Of(new Project { Id = "p-1", RootPath = "/srv/p" });
+
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "audio-params-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
+    }
+
+    private AudioEditJobService Service(IAudioEngine engine) =>
+        new([engine], new AudioEditWorkspace(_root), NullLogger<AudioEditJobService>.Instance);
+
+    private static AudioQuoteRequest Speak(JsonObject? fields = null) =>
+        new(AudioModes.Voice, "speak", "fal", SchemaEngine.SpeakModel, Fields: fields);
+
+    [Fact]
+    public async Task Quote_UnknownKey_RefusedWithName_BeforePrice()
+    {
+        var engine = new SchemaEngine();
+        var quote = await Service(engine).QuoteAsync(Owner, Scope, Speak(new JsonObject { ["temperature"] = 1 }),
+            CancellationToken.None);
+
+        quote.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        quote.Error.Should().Be($"Неизвестный параметр «temperature» у модели {SchemaEngine.SpeakModel}");
+    }
+
+    [Fact]
+    public async Task Quote_CommonFieldInParams_Refused()
+    {
+        var quote = await Service(new SchemaEngine()).QuoteAsync(Owner, Scope, Speak(new JsonObject { ["text"] = "привет" }),
+            CancellationToken.None);
+
+        quote.Error.Should().Be("Параметр «text» задаётся общим полем запроса, а не в params");
+    }
+
+    [Fact]
+    public async Task Start_ParamsOutOfRange_RefusedWithoutRun_ValidRuns()
+    {
+        var engine = new SchemaEngine();
+        var svc = Service(engine);
+        var bad = await svc.QuoteAsync(Owner, Scope, Speak(new JsonObject { ["speed"] = 1.0 }), CancellationToken.None);
+
+        // Котировку прошло 1.0, запуск добавил 3 поверх — проверяется итог
+        var refused = await svc.StartAsync(Owner, Scope,
+            new AudioJobInput(bad.Value!.QuoteId, Params: new JsonObject { ["speed"] = 3 }), CancellationToken.None);
+        var ok = await svc.StartAsync(Owner, Scope,
+            new AudioJobInput(bad.Value!.QuoteId, Params: new JsonObject { ["speed"] = 1.5 }), CancellationToken.None);
+
+        refused.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        refused.Error.Should().Be("Параметр «speed» — от 0.5 до 2");
+        ok.Error.Should().BeNull();
+        await engine.Ran.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        engine.LastParams!["speed"]!.GetValue<double>().Should().Be(1.5);
+    }
+
+    [Fact]
+    public async Task SchemaDown_EmptyParamsPass_NonEmptyRefused()
+    {
+        var engine = new SchemaEngine { Down = true };
+        var svc = Service(engine);
+
+        (await svc.QuoteAsync(Owner, Scope, Speak(), CancellationToken.None)).Error.Should().BeNull();
+        var withParams = await svc.QuoteAsync(Owner, Scope, Speak(new JsonObject { ["speed"] = 1 }), CancellationToken.None);
+
+        withParams.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        withParams.Error.Should().Be("схема лежит — params проверить нечем");
+    }
+
+    [Fact]
+    public async Task SchemaForUi_OnlyCatalogModels()
+    {
+        var svc = Service(new SchemaEngine());
+
+        var ok = await svc.SchemaAsync("fal", SchemaEngine.SpeakModel, "speak", CancellationToken.None);
+        var foreign = await svc.SchemaAsync("fal", "fal-ai/not-in-catalog", "speak", CancellationToken.None);
+        var auto = await svc.SchemaAsync("fal", "auto", "speak", CancellationToken.None);
+        var noProvider = await svc.SchemaAsync("yandex", SchemaEngine.SpeakModel, "speak", CancellationToken.None);
+
+        ok.Value!.Fields.Should().ContainSingle(f => f.Key == "speed");
+        foreign.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        auto.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        noProvider.ErrorCode.Should().Be(AudioEditErrorCodes.ProviderUnavailable);
+    }
+
+    private sealed class SchemaEngine : IAudioEngine, IAudioParamSchemas
+    {
+        public const string SpeakModel = "schema-speech";
+
+        public bool Down { get; init; }
+        public TaskCompletionSource Ran { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public JsonObject? LastParams { get; private set; }
+
+        public string Key => "fal";
+        public string Label => "fal";
+        public string PriceUnit => AudioPriceUnits.Free;
+        public bool Enabled => true;
+
+        public IReadOnlyList<AudioModelInfo> Models =>
+        [
+            new(SpeakModel, "Речь", new AudioCaps([AudioOp.Speak], ["ru"], [AudioVoiceKind.Preset], [AudioOutputs.Audio],
+                AudioLicenses.Apache2, AudioPriceUnits.Free), new AudioPriceHint(0, AudioPriceUnits.Free, "run")),
+        ];
+
+        public Task<AudioSchemaLookup> SchemaAsync(AudioModelInfo model, AudioOp op, CancellationToken ct) =>
+            Task.FromResult(Down
+                ? AudioSchemaLookup.Fail("схема лежит")
+                : AudioSchemaLookup.Ok(new AudioParamSchema(Key, model.Id, AudioSchemaSources.FalOpenApi,
+                    [new AudioParamField("speed", AudioParamTypes.Number, Min: 0.5, Max: 2)], ["text"])));
+
+        public Task<AudioResult> RunAsync(AudioRequest req, IProgress<AudioProgress> progress, CancellationToken ct)
+        {
+            LastParams = req.Params;
+            Ran.TrySetResult();
+            return Task.FromResult(new AudioResult(AudioOutcome.Ok, [new AudioFile("main", [1], "audio/wav", ".wav")],
+                null, false, "r", null));
+        }
+
+        public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
+    }
+}

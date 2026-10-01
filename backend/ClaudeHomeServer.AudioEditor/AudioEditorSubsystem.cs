@@ -39,6 +39,9 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Драйверы поставщиков: шов local-media — от отключаемой вертикали Images, поэтому nullable
         services.AddSingleton<IAudioEngine>(sp =>
             new Engines.LocalAudioEngine(sp.GetService<ClaudeHomeServer.Services.Media.ILocalAudioMedia>()));
+        // fal: ключ инстанса Fal:ApiKey (или FAL_KEY), тихий HTTP-клиент "fal" заводит Main; нет ключа — Enabled=false
+        services.AddSingleton<Engines.FalAudioEngine>();
+        services.AddSingleton<IAudioEngine>(sp => sp.GetRequiredService<Engines.FalAudioEngine>());
         // Исполнитель задач: котировка → запуск по quoteId, потолки, траты, события audio_edit_*, итог
         // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
         services.AddSingleton<Jobs.AudioJobThreads>();

@@ -3,6 +3,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
+using ClaudeHomeServer.Services.AudioEditor.Voices;
 using ClaudeHomeServer.Services.AudioEditor.Mcp;
 using ClaudeHomeServer.Services.AudioEditor.Prefs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
@@ -60,11 +61,12 @@ public sealed class AudioEditorToolsetTests : IDisposable
     }
 
     private AudioEditorToolset Toolset(IAudioEngine[]? engines = null, bool agentLaunch = true, bool withGate = true,
-        IAudioDsp? dsp = null)
+        IAudioDsp? dsp = null, VoiceLibrary? library = null)
     {
         engines ??= [new FakeEngine("fal")];
         var threads = new AudioJobThreads(_store, NullLogger<AudioJobThreads>.Instance);
-        _jobs = new AudioEditJobService(engines, _workspace, NullLogger<AudioEditJobService>.Instance, threads, _prefs);
+        _jobs = new AudioEditJobService(engines, _workspace, NullLogger<AudioEditJobService>.Instance, threads, _prefs,
+            voices: library);
         _services.Add(_jobs);
         var concat = new AudioConcatService(threads, _workspace, NullLogger<AudioConcatService>.Instance, dsp);
 
@@ -79,7 +81,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { [AudioEditorToolset.AgentLaunchKey] = agentLaunch ? "true" : "false" })
             .Build();
         return new AudioEditorToolset(accessor.Object, flags.Object, projects.Object, engines, threads, _jobs, _prefs,
-            _workspace, withGate ? _turnGate.Object : null, concat, events: _bus, config: config);
+            _workspace, withGate ? _turnGate.Object : null, concat, library: library, events: _bus, config: config);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -288,6 +290,30 @@ public sealed class AudioEditorToolsetTests : IDisposable
         engine.LastRequest.Text.Should().Be("Привет");
     }
 
+    // Голос из библиотеки агент передаёт slug'ом: тулсет не подменяет его диктором, а исполнитель
+    // разворачивает его у поставщика (ADR-021 §5)
+    [Fact]
+    public async Task Голос_из_библиотеки_доезжает_до_поставщика()
+    {
+        var library = new VoiceLibrary();
+        var scope = AudioEditScope.Of(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
+        byte[] wav = [.. "RIFF"u8, 0, 0, 0, 0, .. "WAVE"u8, 1];
+        var slug = library.CreateFromSamples(scope, "Аня", "текст", [new VoiceSampleUpload(wav)]).Value!.Manifest.Slug;
+        var engine = new FakeEngine("fal") { TakesLibraryVoices = true };
+        var toolset = Toolset([engine], library: library);
+
+        var result = await Call(toolset, AudioEditorToolset.ToolGenerate, new JsonObject
+        {
+            ["threadId"] = Draft(), ["text"] = "Привет", ["voice"] = slug,
+        });
+        await WaitIdleAsync();
+
+        result.IsError.Should().BeFalse(result.Text);
+        engine.LastRequest!.Voice!.Slug.Should().Be(slug);
+        engine.LastRequest.Voice.Sample!.Bytes.Should().Equal(wav);
+        engine.LastRequest.Params?.ContainsKey("voice").Should().NotBe(true);
+    }
+
     // ── Сохранения у агента нет ────────────────────────────────────────────────
 
     [Fact]
@@ -411,7 +437,12 @@ public sealed class AudioEditorToolsetTests : IDisposable
         private int _runs;
 
         public bool Hold { get; init; }
+        public bool TakesLibraryVoices { get; init; }
         public int Runs => _runs;
+
+        public string? LibraryVoicesRefusal => TakesLibraryVoices ? null : "не умеет";
+
+        public string? LibraryVoiceRefusal(AudioModelInfo model, AudioOp op, AudioVoiceUse voice) => LibraryVoicesRefusal;
         public AudioRequest? LastRequest { get; private set; }
 
         public string Key => key;

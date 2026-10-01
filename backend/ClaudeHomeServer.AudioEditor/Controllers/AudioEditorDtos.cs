@@ -1,15 +1,18 @@
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
+using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Prefs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 
 // Каталог для полосы и панели: заведённые поставщики в порядке показа, у каждого — доступен ли он
-// В ЭТОЙ области и почему нет. Недоступный остаётся в списке серым с причиной, а не пропадает
+// В ЭТОЙ области и почему нет. Недоступный остаётся в списке серым с причиной, а не пропадает.
+// LibraryVoicesReason — почему поставщик не берёт голос из библиотеки «Голоса» (null — берёт)
 public sealed record AudioCatalogDto(IReadOnlyList<AudioProviderDto> Providers, string AutoModelId, int MaxCount);
 
 public sealed record AudioProviderDto(
-    string Key, string Label, string PriceUnit, bool Available, string? Reason, IReadOnlyList<AudioModelInfo> Models);
+    string Key, string Label, string PriceUnit, bool Available, string? Reason, IReadOnlyList<AudioModelInfo> Models,
+    string? LibraryVoicesReason = null);
 
 public static class AudioCatalogView
 {
@@ -19,7 +22,8 @@ public static class AudioCatalogView
         new([.. AudioCatalog.Registered(engines).Select(e =>
         {
             var reason = Safe(() => e.Enabled) ? Safe(() => e.ScopeRefusal(scope), UnavailableReason) : UnavailableReason;
-            return new AudioProviderDto(e.Key, e.Label, e.PriceUnit, reason is null, reason, e.Models);
+            return new AudioProviderDto(e.Key, e.Label, e.PriceUnit, reason is null, reason, e.Models,
+                Safe(() => e.LibraryVoicesRefusal, UnavailableReason));
         })], AudioCatalog.AutoModelId, AudioModePrefs.MaxCount);
 
     private static bool Safe(Func<bool> probe)
@@ -54,6 +58,39 @@ public sealed record AudioThreadCurrentRequest(string? VersionId, long Revision)
 // Сохранение версии в проект: Mode — nextVersion (по умолчанию) или as; VersionId не задан — текущая
 public sealed record AudioSaveRequest(string? VersionId, string? Mode, string? Folder, string? FileName);
 
+// Правка без ИИ: Op — trim | gainFade | normalize | convert, Format — wav | mp3 | flac | ogg (null —
+// как у исходного файла). Поля читаются по операции (AudioDspEditInput); BaseVersionId null — текущая
+public sealed record AudioDspEditRequest(
+    string? Op,
+    string? BaseVersionId = null,
+    double? StartSec = null,
+    double? EndSec = null,
+    double? FadeInSec = null,
+    double? FadeOutSec = null,
+    double? GainDb = null,
+    double? TargetLufs = null,
+    string? Format = null,
+    int? SampleRate = null,
+    int? Channels = null,
+    long? Revision = null);
+
+// Сведение N из M стемов версии-основы: Stems — роли «stem:<имя>» с громкостью и выключением
+public sealed record AudioMixRequest(
+    IReadOnlyList<Engines.AudioMixStemInput>? Stems, string? BaseVersionId = null, string? Format = null, long? Revision = null);
+
+// Стык склейки: Kind — butt | pause | crossfade
+public sealed record AudioJointRequest(string? Kind, double Seconds = 0);
+
+// Склейка кусков в новый файл (AudioConcatInput): куски — версии нитей этого чата и файлы проекта
+public sealed record AudioConcatRequest(
+    IReadOnlyList<AudioConcatPiece>? Pieces,
+    AudioJointRequest? Joint = null,
+    IReadOnlyList<AudioJointRequest?>? Joints = null,
+    bool? NormalizeLoudness = null,
+    string? Name = null,
+    string? Format = null,
+    string? Folder = null);
+
 // Поля multipart запуска. Исходный звук сервер берёт сам — главный файл версии-основы нити
 // (BaseVersionId, не задана — текущая). Образец голоса или эталон мастеринга — загрузкой Reference
 // или путём ReferencePath в проекте; записи для обучения голоса — Clips и ClipPaths; модель RVC —
@@ -79,4 +116,6 @@ public sealed class AudioStartJobForm
     public List<string>? ClipPaths { get; set; }
     public string? VoiceModelPath { get; set; }
     public string? VoiceIndexPath { get; set; }
+    // Голос из библиотеки «Голоса»: voice:<slug>
+    public string? Voice { get; set; }
 }

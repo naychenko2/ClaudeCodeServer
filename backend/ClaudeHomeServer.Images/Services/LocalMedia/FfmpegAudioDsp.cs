@@ -399,13 +399,15 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
             {
                 try { p.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
                 ct.ThrowIfCancellationRequested();
+                // stderr мог дочитаться раньше отказа — его хвост и есть причина, не теряем
+                var tail = errTask.IsCompletedSuccessfully ? errTask.Result : "";
                 if (tooLarge)
                 {
                     log.LogWarning("{Exe} выдал больше {Cap} байт результата", exe, StdoutCapBytes);
-                    return new Run([], "", "Не удалось обработать звук: результат слишком большой.");
+                    return new Run([], tail, "Не удалось обработать звук: результат слишком большой.");
                 }
                 log.LogWarning("{Exe} не уложился в {Timeout}", exe, Timeout);
-                return new Run([], "", $"Обработка звука не уложилась в {Timeout.TotalSeconds:0} с.");
+                return new Run([], tail, $"Обработка звука не уложилась в {Timeout.TotalSeconds:0} с.");
             }
             var stderr = errTask.Result;
             if (p.ExitCode != 0)

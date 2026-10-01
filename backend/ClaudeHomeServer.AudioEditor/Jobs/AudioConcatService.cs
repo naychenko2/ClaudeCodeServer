@@ -140,8 +140,9 @@ public sealed class AudioConcatService(
 
         // Исходник — файл проекта: те же правила, что у куска-файла
         if (version.IsOrigin) return await ReadProjectAsync(scope, main.Path, label, version.License, ct);
-        // Версия правки без ИИ пока без своей папки задачи — её склейка появится вместе с ручками правки
-        if (version.JobId is not { } jobId) return (null, "эту версию пока нельзя склеить");
+        // Версия запуска и правки без ИИ (DspAudioEngine) — файл в папке своей задачи. Без jobId — только
+        // старые записи до этапа 5: файла на диске у них нет
+        if (version.JobId is not { } jobId) return (null, "у этой версии нет файла на сервере");
         var full = ProjectLinkGuard.ResolveInside(workspace.JobDir(ownerId, jobId), main.Path);
         return await ReadAsync(full, label, version.License, ct);
     }

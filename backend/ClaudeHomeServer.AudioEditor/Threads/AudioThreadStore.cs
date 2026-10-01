@@ -178,17 +178,21 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
             return Replace(state, after, log) with { NewVersions = added };
         });
 
-    // Правка без ИИ (обрезка, фейды, громкость, сведение стемов) — новая версия от текущей, она же
-    // становится текущей. License — у правки без ИИ своей лицензии нет, наследуется от основы:
-    // обрезанный трек YuE2 остаётся CC BY-NC
+    // Правка без ИИ (обрезка, фейды, громкость, сведение стемов) — новая версия от основы (null —
+    // от текущей), она же становится текущей. jobId — папка рабочей области с файлами версии: по нему
+    // её держит чистка по TTL и находит склейка. License — у правки без ИИ своей лицензии нет,
+    // наследуется от основы: обрезанный трек YuE2 остаётся CC BY-NC
     public AudioThreadWrite AddEditVersion(string ownerId, string sessionId, string threadId,
-        IReadOnlyList<AudioVersionFile> files, long? revision, AudioThreadEvent? log = null) =>
+        IReadOnlyList<AudioVersionFile> files, long? revision, AudioThreadEvent? log = null,
+        string? jobId = null, string? baseVersionId = null) =>
         Mutate(ownerId, sessionId, threadId, revision, (state, thread) =>
         {
             if (!ValidFiles(files))
                 return new AudioThreadWrite(AudioThreadWriteStatus.Invalid, state);
-            var basis = thread.CurrentVersion;
-            var version = new AudioThreadVersion(NewId(), NextNumber(thread), null, null, basis?.Id, files,
+            var basis = baseVersionId is null ? thread.CurrentVersion : thread.Version(baseVersionId);
+            if (baseVersionId is not null && basis is null)
+                return new AudioThreadWrite(AudioThreadWriteStatus.VersionNotFound, state);
+            var version = new AudioThreadVersion(NewId(), NextNumber(thread), jobId, null, basis?.Id, files,
                 basis?.License, Now());
             return Replace(state, thread with
             {

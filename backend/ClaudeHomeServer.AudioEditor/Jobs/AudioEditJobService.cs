@@ -29,7 +29,11 @@ namespace ClaudeHomeServer.Services.AudioEditor.Jobs;
 // - лицензия модели фиксируется в котировке и переходит в запуск и версии: каталог может поменяться;
 // - params проверяются по схеме модели и в котировке, и в запуске (ADR-021 §5): неизвестный ключ, общее
 //   поле в params, тип и границы — отказ invalid_request с именем поля, до денег и до очереди;
-// - чужая задача и чужая котировка неотличимы от несуществующих.
+// - чужая задача и чужая котировка неотличимы от несуществующих;
+// - голос из библиотеки (voice:<slug>, ADR-021 §5) разворачивает драйвер; клон, который живёт у поставщика
+//   ограниченно (MiniMax), исполнитель не создаёт и не пересоздаёт сам: протух или не создан — отказ
+//   voice_clone_stale / voice_clone_missing с котировкой пересоздания, ДО вызова поставщика. Пересоздание —
+//   только по котировке QuoteVoiceCloneAsync, то есть кнопкой человека с ценой.
 public sealed class AudioEditJobService : IDisposable
 {
     public const int MaxJobsPerOwner = 2;
@@ -43,6 +47,8 @@ public sealed class AudioEditJobService : IDisposable
         "На локальной видеокарте уже идёт тяжёлая задача (обучение голоса или разбор на дорожки) — " +
         "дождитесь её окончания или выберите облачного поставщика";
     public const string QuoteExpiredText = "Котировка устарела — запросите цену заново";
+    public const string CloneByButtonText =
+        "Клон MiniMax из библиотеки создаётся только кнопкой «Пересоздать» с ценой; для озвучки готовым клоном выберите MiniMax HD/Turbo";
 
     private readonly IEnumerable<IAudioEngine> _engines;
     private readonly AudioEditWorkspace _workspace;
@@ -50,6 +56,7 @@ public sealed class AudioEditJobService : IDisposable
     private readonly AudioPrefsService? _prefs;
     private readonly ISpendCollector? _spend;
     private readonly ISessionBroadcaster? _broadcaster;
+    private readonly Voices.VoiceLibrary? _voices;
     private readonly ILogger<AudioEditJobService> _log;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, Quote> _quotes = new();
@@ -66,7 +73,8 @@ public sealed class AudioEditJobService : IDisposable
         AudioPrefsService? prefs = null,
         ISpendCollector? spend = null,
         ISessionBroadcaster? broadcaster = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        Voices.VoiceLibrary? voices = null)
     {
         _engines = engines;
         _workspace = workspace;
@@ -76,11 +84,13 @@ public sealed class AudioEditJobService : IDisposable
         _spend = spend;
         _broadcaster = broadcaster;
         _time = time ?? TimeProvider.System;
+        _voices = voices;
     }
 
     private sealed record Quote(
         string Id, string OwnerId, string ScopeKey, string Mode, AudioOp Op, string Provider, AudioModelInfo Model,
-        int Count, AudioVoiceKind? VoiceKind, AudioPrice Price, JsonObject Fields, DateTime ExpiresAt)
+        int Count, AudioVoiceKind? VoiceKind, AudioPrice Price, JsonObject Fields, DateTime ExpiresAt,
+        string? RecreateVoice = null)
     {
         public bool Heavy => Model.Caps.IsHeavy(Op);
         public string License => Model.Caps.License.Label;
@@ -275,6 +285,9 @@ public sealed class AudioEditJobService : IDisposable
         var parameters = Merge(quote.Fields, input.Params);
         if (await CheckParamsAsync(engine, quote.Model, quote.Op, parameters, ct) is { } badParams)
             return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.InvalidRequest, badParams);
+        var voice = await ResolveVoiceAsync(ownerId, scope, quote, engine, input.Voice, ct);
+        if (voice.ErrorCode is not null)
+            return new AudioEditCallResult<AudioJobCreatedDto>(null, voice.ErrorCode, voice.Error) { Recreate = voice.Recreate };
 
         Job job;
         lock (_startLock)
@@ -298,6 +311,9 @@ public sealed class AudioEditJobService : IDisposable
             };
             _jobs[job.Id] = job;
         }
+        // Клон MiniMax ушёл в запуск — отсчёт 7 дней заново; отказ потолком выше клон не «освежает»
+        if (voice.Value is { } used && quote.RecreateVoice is null && engine.StoredClone(quote.Model, quote.Op) is { Creates: false })
+            _voices?.TouchMiniMax(scope, used.Slug);
 
         // Запуск ложится в нить до старта: итог задачи обязан застать идущий запуск
         if (_threads is not null && _threads.OwnThread(ownerId, scope.Key, input.SessionId, input.ThreadId))
@@ -310,13 +326,14 @@ public sealed class AudioEditJobService : IDisposable
             job.ThreadId = threadId;
             await _threads.OnLaunchedAsync(ownerId, scope.Key, sessionId, threadId, job.Id, ToDto(quote),
                 input.Prompt ?? input.Text, baseVersion, input.Initiator,
+                // Входы операции запуск не пишет: их держит панель, запуск не должен их затирать
                 new AudioThreadSettings(quote.Mode, OpName(quote.Op), quote.Provider, quote.Model.Id,
-                    quote.Fields.DeepClone().AsObject(), quote.Count), ct);
+                    quote.Fields.DeepClone().AsObject(), quote.Count) { Inputs = thread.Settings?.Inputs?.DeepClone().AsObject() }, ct);
         }
 
         var request = new AudioRequest(quote.Op, quote.Model.Id, scope, input.Text, input.Prompt, input.Lyrics,
             input.Language, input.DurationSec, input.StartSec, input.EndSec, parameters,
-            input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed);
+            input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed, voice.Value);
         job.Completion = Task.Run(() => RunAsync(job, engine, request));
 
         _workspace.Sweep(Now());
@@ -350,6 +367,8 @@ public sealed class AudioEditJobService : IDisposable
                     result = AudioResult.Fail(AudioOutcome.Failed, "Сбой поставщика: " + ex.Message, charged: null);
                 }
 
+                // Созданная привязка нужна уже следующему варианту: второй клон за задачу не создаём
+                if (RememberVoice(job, request.Voice, result) is { } cached) request = request with { Voice = cached };
                 if (result.Outcome == AudioOutcome.Cancelled || job.Cts.IsCancellationRequested)
                 {
                     cancelled = true;
@@ -388,6 +407,111 @@ public sealed class AudioEditJobService : IDisposable
                 job.Error = "Не удалось сохранить результат";
             }
         }
+    }
+
+    // ── Голос из библиотеки ─────────────────────────────────────────────────────
+
+    // Голос запуска: voice:<slug> из запроса или голос котировки пересоздания. Value null без ошибки — голоса нет
+    private async Task<AudioEditCallResult<AudioVoiceUse>> ResolveVoiceAsync(string ownerId, AudioEditScope scope,
+        Quote quote, IAudioEngine engine, string? voiceRef, CancellationToken ct)
+    {
+        var slug = AudioVoiceRefs.SlugOf(voiceRef);
+        if (!string.IsNullOrWhiteSpace(voiceRef) && slug is null)
+            return Fail<AudioVoiceUse>(AudioEditErrorCodes.InvalidRequest,
+                "Голос — только из библиотеки значением voice:<slug>; готовый диктор задаётся в params");
+        if (quote.RecreateVoice is { } recreating)
+        {
+            if (slug is not null && slug != recreating)
+                return Fail<AudioVoiceUse>(AudioEditErrorCodes.InvalidRequest, "Котировка пересоздания выписана на другой голос");
+            slug = recreating;
+        }
+        if (slug is null) return AudioEditCallResult<AudioVoiceUse>.Ok(null!);
+        if (_voices is null)
+            return Fail<AudioVoiceUse>(AudioEditErrorCodes.Unavailable, "Библиотека «Голоса» на этом сервере не подключена");
+
+        var loaded = await _voices.ForLaunchAsync(scope, slug, ct);
+        if (loaded.Value is not { } voice) return loaded;
+        if (engine.LibraryVoiceRefusal(quote.Model, quote.Op, voice) is { } refusal)
+            return Fail<AudioVoiceUse>(AudioEditErrorCodes.VoiceUnavailable, refusal);
+
+        if (engine.StoredClone(quote.Model, quote.Op) is not { } clone) return loaded;
+        if (quote.RecreateVoice is not null)
+            // Пересоздание: прежний id не передаём — драйвер создаст клон заново
+            return AudioEditCallResult<AudioVoiceUse>.Ok(voice with
+            {
+                Cached = voice.Cached.Where(p => p.Key != clone.Key).ToDictionary(p => p.Key, p => p.Value),
+            });
+
+        var state = _voices.MiniMaxState(scope, slug);
+        if (clone.Creates || state != Voices.VoiceProviderStates.Ok)
+        {
+            var (code, text) = state switch
+            {
+                // Модель сама создаёт клон: обычным запуском её не зовём ни при каком состоянии кеша
+                _ when clone.Creates => (state == Voices.VoiceProviderStates.Stale
+                    ? AudioEditErrorCodes.VoiceCloneStale : AudioEditErrorCodes.VoiceCloneMissing, CloneByButtonText),
+                Voices.VoiceProviderStates.Stale => (AudioEditErrorCodes.VoiceCloneStale,
+                    "Клон MiniMax этого голоса мог быть удалён: им не пользовались 7 дней. Пересоздайте клон кнопкой — это платно"),
+                _ => (AudioEditErrorCodes.VoiceCloneMissing,
+                    "У этого голоса ещё нет клона MiniMax. Создайте его кнопкой «Пересоздать» — это платно"),
+            };
+            var recreate = await QuoteVoiceCloneAsync(ownerId, scope, slug, Voices.VoiceProviders.MiniMax, ct);
+            return new AudioEditCallResult<AudioVoiceUse>(null, code, text) { Recreate = recreate.Value };
+        }
+        return loaded;
+    }
+
+    // Котировка пересоздания клона голоса у поставщика (кнопка «Пересоздать» с ценой). Запуск — обычный
+    // StartAsync по этой котировке: id клона ляжет в кеш голоса
+    public async Task<AudioEditCallResult<AudioQuoteDto>> QuoteVoiceCloneAsync(string ownerId, AudioEditScope scope,
+        string slug, string provider, CancellationToken ct)
+    {
+        if (!string.Equals(provider?.Trim(), Voices.VoiceProviders.MiniMax, StringComparison.OrdinalIgnoreCase))
+            return Fail<AudioQuoteDto>(AudioEditErrorCodes.InvalidRequest,
+                $"Пересоздать можно только клон MiniMax, а не «{provider}»: остальные клоны создаются при первом запуске");
+        if (_voices is null)
+            return Fail<AudioQuoteDto>(AudioEditErrorCodes.Unavailable, "Библиотека «Голоса» на этом сервере не подключена");
+        var loaded = await _voices.ForLaunchAsync(scope, slug, ct);
+        if (loaded.Value is not { } voice) return Fail<AudioQuoteDto>(loaded.ErrorCode!, loaded.Error!);
+
+        // Клон MiniMax создаёт тот поставщик, у которого есть модель, создающая этот клон
+        foreach (var engine in AudioCatalog.Available(_engines).Where(e => e.ScopeRefusal(scope) is null))
+        {
+            var model = engine.Models.FirstOrDefault(m => m.DisabledReason is null && m.Caps.Ops.Contains(AudioOp.CloneVoice)
+                && engine.StoredClone(m, AudioOp.CloneVoice) is { Creates: true, Key: Voices.VoiceProviders.MiniMax });
+            if (model is null) continue;
+            if (engine.LibraryVoiceRefusal(model, AudioOp.CloneVoice, voice) is { } refusal)
+                return Fail<AudioQuoteDto>(AudioEditErrorCodes.VoiceUnavailable, refusal);
+            AudioPrice price;
+            try
+            {
+                price = await EstimateAsync(engine, model, new AudioRequest(AudioOp.CloneVoice, model.Id, scope), 1, ct);
+            }
+            catch (AudioEngineUnavailableException ex)
+            {
+                return Fail<AudioQuoteDto>(AudioEditErrorCodes.ProviderUnavailable, ex.Message);
+            }
+            var quote = new Quote(NewId(), ownerId, scope.Key, AudioModes.Voice, AudioOp.CloneVoice, engine.Key, model, 1,
+                AudioVoiceKind.Clone, price, new JsonObject(), Now() + QuoteTtl, RecreateVoice: slug);
+            PruneQuotes();
+            _quotes[quote.Id] = quote;
+            return AudioEditCallResult<AudioQuoteDto>.Ok(ToDto(quote));
+        }
+        return Fail<AudioQuoteDto>(AudioEditErrorCodes.ProviderUnavailable, "Сейчас нет поставщика, который создаёт клон MiniMax");
+    }
+
+    // Привязки, созданные прогоном, — в кеш голоса (и при сбое: клон уже оплачен). Итог — голос с
+    // обновлённым кешем для следующих вариантов; null — прогон ничего не создал
+    private AudioVoiceUse? RememberVoice(Job job, AudioVoiceUse? voice, AudioResult result)
+    {
+        if (voice is null || result.VoiceCache is not { Count: > 0 } entries) return null;
+        try { _voices?.Remember(job.Scope, voice.Slug, entries); }
+        catch (Exception ex) { _log.LogWarning(ex, "Звук: кеш голоса {Slug} не записан", voice.Slug); }
+        var cached = voice.Cached.ToDictionary(p => p.Key, p => p.Value);
+        foreach (var e in entries)
+            if (string.IsNullOrEmpty(e.Id)) cached.Remove(e.Provider);
+            else cached[e.Provider] = e.Id;
+        return voice with { Cached = cached };
     }
 
     // Файлы варианта в рабочую папку; роль, которую нить не примет, отбрасывается. null — ничего годного
@@ -730,7 +854,8 @@ public sealed class AudioEditJobService : IDisposable
     private static AudioCost? EstimateCost(Quote q) => q.Price.Amount is { } a ? new AudioCost(a, q.Price.Unit) : null;
 
     private static AudioQuoteDto ToDto(Quote q) =>
-        new(q.Id, q.Mode, q.Op, q.Provider, q.Model.Id, q.Count, q.VoiceKind, q.Price, q.License, q.Heavy, q.ExpiresAt);
+        new(q.Id, q.Mode, q.Op, q.Provider, q.Model.Id, q.Count, q.VoiceKind, q.Price, q.License, q.Heavy, q.ExpiresAt,
+            q.RecreateVoice);
 
     private static AudioJobDto ToDto(Job j)
     {

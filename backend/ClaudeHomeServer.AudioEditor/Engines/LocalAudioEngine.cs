@@ -150,6 +150,24 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
             ? [.. AudioCatalog.QwenSpeakers.Select(s => new AudioVoiceInfo(s, s.Replace('_', ' ')))]
             : null);
 
+    // ── Голос из библиотеки ──────────────────────────────────────────────────────
+
+    // Образец — reference у моделей с клоном (речь, клон, смена голоса Seed-VC), расшифровка — reference_text
+    // у Qwen3-TTS; модель RVC — voice_model/voice_index у смены голоса движком rvc
+    public string? LibraryVoicesRefusal => null;
+
+    public string? LibraryVoiceRefusal(AudioModelInfo model, AudioOp op, AudioVoiceUse voice)
+    {
+        if (voice.IsRvc)
+            return op == AudioOp.ConvertVoice && model.Caps.VoiceKinds.Contains(AudioVoiceKind.Rvc)
+                ? null
+                : "Голос-модель RVC работает только в смене голоса моделью RVC";
+        if (voice.Sample is null) return "У голоса нет записей";
+        return op is AudioOp.Speak or AudioOp.CloneVoice or AudioOp.ConvertVoice && model.Caps.VoiceKinds.Contains(AudioVoiceKind.Clone)
+            ? null
+            : $"Модель «{model.Label}» не клонирует голос по образцу";
+    }
+
     private static bool HasSpeakers(string model, AudioOp op) =>
         op == AudioOp.Speak && string.Equals(model, AudioCatalog.QwenTts, StringComparison.OrdinalIgnoreCase);
 
@@ -162,6 +180,9 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
             return null;
 
         var args = req.Params?.DeepClone().AsObject() ?? new JsonObject();
+        if (req.Voice is { Transcript: { } transcript } && !args.ContainsKey("reference_text")
+            && string.Equals(model.Info.Id, AudioCatalog.QwenTts, StringComparison.OrdinalIgnoreCase))
+            args["reference_text"] = transcript;
         if (req.Text is not null) args["text"] = req.Text;
         if (req.Lyrics is not null) args["lyrics"] = req.Lyrics;
         if (req.Language is not null) args["language"] = req.Language;
@@ -172,10 +193,10 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
 
         return new LocalAudioRequest(binding.Op, req.Prompt, args,
             Audio: req.Source?.Bytes,
-            Reference: req.Reference?.Bytes,
+            Reference: (req.Reference ?? req.Voice?.Sample)?.Bytes,
             Clips: req.Clips?.Select(c => c.Bytes).ToList(),
-            VoiceModel: req.VoiceModel,
-            VoiceIndex: req.VoiceIndex,
+            VoiceModel: req.VoiceModel ?? req.Voice?.RvcModel,
+            VoiceIndex: req.VoiceIndex ?? req.Voice?.RvcIndex,
             Seed: req.Seed);
     }
 

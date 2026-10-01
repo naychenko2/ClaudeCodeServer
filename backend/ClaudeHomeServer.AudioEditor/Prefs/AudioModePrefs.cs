@@ -8,16 +8,22 @@ namespace ClaudeHomeServer.Services.AudioEditor.Prefs;
 // Выбор человека для режима (AudioModes.*) в области: операция, поставщик, модель, число вариантов
 // и поля по умолчанию. Запись на режим отдельная: выбор в «Музыке» не трогает «Голос».
 // null у поля — режим его не задаёт, берётся умолчание каталога. Добавлять поля только аддитивно:
-// файл живёт в бэкапе
+// файл живёт в бэкапе. Fields — параметры модели (идут в params по цепочке), Inputs — входы операции
+// (AudioOpInputs): их только подставляет панель, в params и запуск они не попадают
 public sealed record AudioModePrefs(string? Operation, string? Provider, string? Model, int? Count, JsonObject? Fields)
 {
     public const int MaxCount = 4;
 
     public static AudioModePrefs Empty { get; } = new(null, null, null, null, null);
 
+    public JsonObject? Inputs { get; init; }
+
     // Настройки новой нити режима — копия префов: поля нити правятся отдельно от префов
     public AudioThreadSettings ToThreadSettings(string mode) =>
-        new(mode, Operation, Provider, Model, Fields?.DeepClone().AsObject(), Count);
+        new(mode, Operation, Provider, Model, Fields?.DeepClone().AsObject(), Count)
+        {
+            Inputs = Inputs?.DeepClone().AsObject(),
+        };
 }
 
 // Итог цепочки для запуска: всё разрешено, Count в пределах 1..MaxCount

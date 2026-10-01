@@ -56,7 +56,7 @@ public sealed class HiggsfieldAudioEngineTests
         """;
 
     private const string JobId = "8c516bb9-f774-4523-9777-d9f5cb2ca3bf";
-    private const string MediaId = "a9ee96f2-1edc-47af-809a-395fdfd3f400";
+    internal const string MediaId = "a9ee96f2-1edc-47af-809a-395fdfd3f400";
 
     private const string UploadFixture =
         $"Upload URLs:\n- {MediaId}: run curl -X PUT -H 'Content-Type: audio/wav' " +
@@ -71,7 +71,7 @@ public sealed class HiggsfieldAudioEngineTests
     private static FakeHttp.Call[] Launches(FakeHttp http) =>
         [.. http.Calls.Where(c => FakeHttp.Tool(c) == "generate_audio" && !IsCost(c))];
 
-    private static HttpResponseMessage Happy(FakeHttp.Call c) => c switch
+    internal static HttpResponseMessage Happy(FakeHttp.Call c) => c switch
     {
         _ when c.Method == HttpMethod.Put => new HttpResponseMessage(HttpStatusCode.OK),
         _ when c.Url.StartsWith("https://cdn.test/") => FakeHttp.Bytes(Mp3, "audio/mpeg"),

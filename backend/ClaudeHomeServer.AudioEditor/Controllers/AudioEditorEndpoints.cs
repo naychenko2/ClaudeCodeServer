@@ -22,7 +22,9 @@ public abstract class AudioEditorEndpoints(
     AudioEditJobService jobs,
     AudioJobThreads threads,
     AudioPrefsService prefs,
-    AudioEditWorkspace workspace) : ControllerBase
+    AudioEditWorkspace workspace,
+    Engines.DspAudioEngine dsp,
+    AudioConcatService concat) : ControllerBase
 {
     // Владелец — claim sub сервисного JWT. Константой, а не JwtRegisteredClaimNames: своих пакетов у
     // модуля нет (DynamicModulePackagesGuardTests)
@@ -62,6 +64,8 @@ public abstract class AudioEditorEndpoints(
         if (req.Count is { } count && (count < 1 || count > AudioModePrefs.MaxCount))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 $"Вариантов — от 1 до {AudioModePrefs.MaxCount}");
+        if (AudioOpInputs.Validate(req.Inputs, scope) is { } badInputs)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, badInputs);
         await prefs.SaveAsync(UserId, scope, mode, req);
         return Ok(PrefsOf(scope));
     }
@@ -178,7 +182,8 @@ public abstract class AudioEditorEndpoints(
             Clips: clips.Count > 0 ? clips : null,
             VoiceModel: voiceModel,
             VoiceIndex: voiceIndex,
-            Seed: form.Seed);
+            Seed: form.Seed,
+            Voice: form.Voice);
         return Map(await jobs.StartAsync(UserId, scope, input, ct), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
@@ -243,6 +248,8 @@ public abstract class AudioEditorEndpoints(
         if (settings.Count is { } count && (count < 1 || count > AudioModePrefs.MaxCount))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 $"Вариантов — от 1 до {AudioModePrefs.MaxCount}");
+        if (AudioOpInputs.Validate(settings.Inputs, scope) is { } badInputs)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, badInputs);
         return await ResultAsync(scope, sessionId, threads.Store.SetSettings(UserId, sessionId, threadId, settings, req.Revision));
     }
 
@@ -311,6 +318,79 @@ public abstract class AudioEditorEndpoints(
         };
     }
 
+    // ── Без ИИ: правка, сведение, пики, склейка ──────────────────────────────────
+    // Ждут итог прямо в запросе: ffmpeg на хосте, без очереди и денег. Нет шва — 503 dsp_unavailable
+
+    protected async Task<IActionResult> EditIn(AudioEditScope scope, string sessionId, string threadId,
+        AudioDspEditRequest? req, CancellationToken ct)
+    {
+        if (req is null || !Enum.TryParse<Engines.AudioDspEditOp>(req.Op, ignoreCase: true, out var op) || !Enum.IsDefined(op))
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
+                "Операция правки — trim, gainFade, normalize или convert");
+        if (!TryFormat(req.Format, out var format)) return UnknownFormat();
+        var input = new Engines.AudioDspEditInput(sessionId, threadId, op, req.BaseVersionId, req.StartSec, req.EndSec,
+            req.FadeInSec ?? 0, req.FadeOutSec ?? 0, req.GainDb ?? 0, req.TargetLufs, format, req.SampleRate, req.Channels,
+            req.Revision);
+        return Map(await dsp.EditAsync(UserId, scope, input, ct), Ok);
+    }
+
+    protected async Task<IActionResult> MixIn(AudioEditScope scope, string sessionId, string threadId,
+        AudioMixRequest? req, CancellationToken ct)
+    {
+        if (req?.Stems is not { } stems)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Выберите хотя бы один стем");
+        if (!TryFormat(req.Format, out var format)) return UnknownFormat();
+        return Map(await dsp.MixAsync(UserId, scope,
+            new Engines.AudioMixInput(sessionId, threadId, stems, req.BaseVersionId, format, req.Revision), ct), Ok);
+    }
+
+    protected async Task<IActionResult> PeaksIn(AudioEditScope scope, string sessionId, string threadId, string versionId,
+        string? role, int points, CancellationToken ct) =>
+        Map(await dsp.PeaksAsync(UserId, scope, sessionId, threadId, versionId, role, points, ct), Ok);
+
+    protected async Task<IActionResult> ConcatIn(AudioEditScope scope, string sessionId, AudioConcatRequest? req,
+        CancellationToken ct)
+    {
+        if (req?.Pieces is not { } pieces)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Нужно хотя бы два куска — добавьте ещё один");
+        if (!TryFormat(req.Format, out var format)) return UnknownFormat();
+        if (!TryJoint(req.Joint, out var joint)) return UnknownJoint();
+        var joints = new List<AudioJoint?>();
+        foreach (var j in req.Joints ?? [])
+        {
+            if (!TryJoint(j, out var parsed)) return UnknownJoint();
+            joints.Add(parsed);
+        }
+        var input = new AudioConcatInput(sessionId, pieces, joint, req.Joints is null ? null : joints,
+            req.NormalizeLoudness ?? true, req.Name, format ?? AudioFormat.Wav, req.Folder);
+        return Map(await concat.ConcatAsync(UserId, scope, input, ct), Ok);
+    }
+
+    // null — формат не задан; незнакомое имя — false
+    private static bool TryFormat(string? value, out AudioFormat? format)
+    {
+        format = null;
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        if (!Enum.TryParse<AudioFormat>(value.Trim(), ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed)) return false;
+        format = parsed;
+        return true;
+    }
+
+    private static bool TryJoint(AudioJointRequest? value, out AudioJoint? joint)
+    {
+        joint = null;
+        if (value is null) return true;
+        if (!Enum.TryParse<AudioJointKind>(value.Kind?.Trim(), ignoreCase: true, out var kind) || !Enum.IsDefined(kind)) return false;
+        joint = new AudioJoint(kind, value.Seconds);
+        return true;
+    }
+
+    private IActionResult UnknownFormat() =>
+        Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Формат — wav, mp3, flac или ogg");
+
+    private IActionResult UnknownJoint() =>
+        Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Стык — butt, pause или crossfade");
+
     // ── Помощники ────────────────────────────────────────────────────────────────
 
     // Файл проекта для входа запуска: у личной области — 400 до диска, путь — только ResolveInside
@@ -367,13 +447,19 @@ public abstract class AudioEditorEndpoints(
         var code = result.ErrorCode ?? AudioEditErrorCodes.InvalidRequest;
         var status = code switch
         {
-            AudioEditErrorCodes.ProviderUnavailable or AudioEditErrorCodes.NameTaken => StatusCodes.Status409Conflict,
+            AudioEditErrorCodes.ProviderUnavailable or AudioEditErrorCodes.NameTaken
+                or AudioEditErrorCodes.RevisionConflict or AudioEditErrorCodes.VoiceCloneStale
+                or AudioEditErrorCodes.VoiceCloneMissing => StatusCodes.Status409Conflict,
+            AudioEditErrorCodes.VoiceNotFound => StatusCodes.Status404NotFound,
             AudioEditErrorCodes.QuoteNotFound or AudioEditErrorCodes.JobNotFound or AudioEditErrorCodes.ThreadNotFound
                 or AudioEditErrorCodes.VersionNotFound or AudioEditErrorCodes.FileNotFound => StatusCodes.Status404NotFound,
             AudioEditErrorCodes.TooManyJobs or AudioEditErrorCodes.HeavyBusy => StatusCodes.Status429TooManyRequests,
-            AudioEditErrorCodes.Unavailable => StatusCodes.Status503ServiceUnavailable,
+            AudioEditErrorCodes.Unavailable or AudioEditErrorCodes.DspUnavailable => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         };
+        // Протухший клон: в отказе — котировка пересоздания, кнопка «Пересоздать» показывает её цену
+        if (result.Recreate is { } recreate)
+            return StatusCode(status, new { error = result.Error ?? "Запрос не выполнен", code, recreate });
         return Error(status, code, result.Error ?? "Запрос не выполнен");
     }
 }

@@ -62,5 +62,7 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // Склейка без ИИ: куски → новая нить. Шов IAudioDsp — от отключаемой вертикали Images, поэтому
         // необязателен: без него операция отвечает dsp_unavailable
         services.AddSingleton<Jobs.AudioConcatService>();
+        // Инструменты агента (MCP audio-editor, ADR-021 §5): в ход их везёт Main, когда тулсет есть в реестре
+        services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.AudioEditorToolset>();
     }
 }

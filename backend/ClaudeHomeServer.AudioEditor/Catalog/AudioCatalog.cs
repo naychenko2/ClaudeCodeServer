@@ -253,4 +253,26 @@ public static class AudioCatalog
 
     public static LocalModel? FindLocal(string modelId) =>
         Local.FirstOrDefault(m => string.Equals(m.Info.Id, modelId, StringComparison.OrdinalIgnoreCase));
+
+    // Готовые дикторы Qwen3-TTS (LocalMediaService.Audio.QwenSpeakers): меняются там — правится и здесь
+    public static readonly IReadOnlyList<string> QwenSpeakers =
+        ["Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee"];
+
+    // Частные параметры операций local-media под именами её инструментов — то, что адаптер шва читает
+    // из аргументов сверх общих полей запроса (текст, слова, язык, длительность, кусок). Фиксированные
+    // аргументы привязки (engine, task, mode у разбора и улучшения) сюда не входят: их Params не перебивают
+    private static readonly IReadOnlyDictionary<LocalAudioOp, IReadOnlySet<string>> LocalParams =
+        new Dictionary<LocalAudioOp, IReadOnlySet<string>>
+        {
+            [LocalAudioOp.Speech] = new HashSet<string>(StringComparer.Ordinal) { "speaker", "voice", "reference_text", "expressiveness" },
+            [LocalAudioOp.VoiceConvert] = new HashSet<string>(StringComparer.Ordinal) { "mode", "pitch_shift" },
+            [LocalAudioOp.VoiceTrain] = new HashSet<string>(StringComparer.Ordinal) { "epochs" },
+            [LocalAudioOp.MusicGenerate] = new HashSet<string>(StringComparer.Ordinal) { "bpm", "key", "abc" },
+            [LocalAudioOp.MusicEdit] = new HashSet<string>(StringComparer.Ordinal) { "strength", "track", "tracks" },
+            [LocalAudioOp.Separate] = new HashSet<string>(StringComparer.Ordinal) { "format" },
+            [LocalAudioOp.Enhance] = new HashSet<string>(StringComparer.Ordinal) { "model" },
+        };
+
+    public static IReadOnlySet<string> LocalParamNames(LocalAudioOp op) =>
+        LocalParams.TryGetValue(op, out var names) ? names : new HashSet<string>();
 }

@@ -86,6 +86,31 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
         return voices;
     }
 
+    // ── Параметры и дикторы для агента ───────────────────────────────────────────
+
+    // Схема — живая схема модели без параметров, которые задаёт сам драйвер
+    public IReadOnlySet<string>? ParamNames(AudioModelInfo model, AudioOp op) =>
+        Find(model.Id) is { } entry
+            ? entry.Params.Keys.Where(k => !HiggsfieldAudioCatalog.Reserved.Contains(k)).ToHashSet(StringComparer.Ordinal)
+            : null;
+
+    public JsonObject? VoiceParams(AudioModelInfo model, AudioOp op, string voice)
+    {
+        if (Find(model.Id) is not { } entry) return null;
+        if (entry.Params.ContainsKey("voice_type") && entry.Params.ContainsKey("voice_id"))
+            return new JsonObject { ["voice_type"] = "preset", ["voice_id"] = voice };
+        return entry.Params.ContainsKey("voice") ? new JsonObject { ["voice"] = voice } : null;
+    }
+
+    async Task<IReadOnlyList<AudioVoiceInfo>?> IAudioEngine.ListVoicesAsync(string? model, string? language, CancellationToken ct)
+    {
+        if (!client.Available) return null;
+        var voices = await ListVoicesAsync(model, ct);
+        return [.. voices
+            .Where(v => language is null || v.Language is null || v.Language.StartsWith(language, StringComparison.OrdinalIgnoreCase))
+            .Select(v => new AudioVoiceInfo(v.Id, v.Name, v.Language, v.Gender))];
+    }
+
     // ── Котировка ────────────────────────────────────────────────────────────────
 
     public int? ExpectedSeconds(AudioModelInfo model, AudioRequest request) => 20;

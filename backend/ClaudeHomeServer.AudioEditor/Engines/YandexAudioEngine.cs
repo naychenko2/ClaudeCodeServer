@@ -70,6 +70,20 @@ public sealed class YandexAudioEngine(ITtsEngine? tts) : IAudioEngine, IAudioQuo
 
     public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
 
+    // ── Параметры и дикторы ──────────────────────────────────────────────────────
+
+    private static readonly IReadOnlySet<string> Params = new HashSet<string>(StringComparer.Ordinal) { "voice", "role", "speed" };
+
+    public IReadOnlySet<string>? ParamNames(AudioModelInfo model, AudioOp op) => op == AudioOp.Speak ? Params : null;
+
+    public JsonObject? VoiceParams(AudioModelInfo model, AudioOp op, string voice) =>
+        op == AudioOp.Speak ? new JsonObject { ["voice"] = voice } : null;
+
+    public Task<IReadOnlyList<AudioVoiceInfo>?> ListVoicesAsync(string? model, string? language, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<AudioVoiceInfo>?>(tts is null || (language is not null && language != "ru")
+            ? null
+            : [.. tts.Voices.Select(v => new AudioVoiceInfo(v.Voice, v.Label, "ru", Roles: v.Roles))]);
+
     private sealed record Choice(string Text, string Voice, string? Role, double Speed);
 
     private (Choice? Choice, string? Error) Validate(AudioRequest req, bool requireText)

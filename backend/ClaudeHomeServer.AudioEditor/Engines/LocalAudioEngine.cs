@@ -128,6 +128,25 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
     public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) =>
         media is null ? Task.FromResult(false) : media.CancelAsync(remoteId, ct);
 
+    // ── Параметры и дикторы ──────────────────────────────────────────────────────
+
+    public IReadOnlySet<string>? ParamNames(AudioModelInfo model, AudioOp op) =>
+        AudioCatalog.FindLocal(model.Id) is { } local && local.Bindings.TryGetValue(op, out var binding)
+            ? AudioCatalog.LocalParamNames(binding.Op)
+            : null;
+
+    // Готовые дикторы есть только у Qwen3-TTS в озвучке
+    public JsonObject? VoiceParams(AudioModelInfo model, AudioOp op, string voice) =>
+        HasSpeakers(model.Id, op) ? new JsonObject { ["speaker"] = voice } : null;
+
+    public Task<IReadOnlyList<AudioVoiceInfo>?> ListVoicesAsync(string? model, string? language, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<AudioVoiceInfo>?>(model is null || HasSpeakers(model, AudioOp.Speak)
+            ? [.. AudioCatalog.QwenSpeakers.Select(s => new AudioVoiceInfo(s, s.Replace('_', ' ')))]
+            : null);
+
+    private static bool HasSpeakers(string model, AudioOp op) =>
+        op == AudioOp.Speak && string.Equals(model, AudioCatalog.QwenTts, StringComparison.OrdinalIgnoreCase);
+
     // Запрос шва: привязка модели к операции из каталога, поверх неё — поля запроса под именами
     // инструментов local-media. Фиксированные аргументы привязки (engine, task, mode) Params не
     // перебивают; белые списки и пределы проверяет адаптер шва. null — модель операцию не умеет

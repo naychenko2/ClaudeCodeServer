@@ -40,7 +40,24 @@ public interface IAudioEngine
 
     // Источник траты в общем учёте (SpendSources): по умолчанию ключ поставщика
     string SpendSource => Key;
+
+    // Ключи частных параметров (Params), которые модель принимает в операции: по ним тулсет агента
+    // отказывает на неизвестном ключе с именем поля (ADR-021 §2). Значения проверяет сам драйвер.
+    // null — схемы нет: частных параметров у модели нет
+    IReadOnlySet<string>? ParamNames(AudioModelInfo model, AudioOp op) => null;
+
+    // Готовый диктор в параметры модели (у каждого поставщика свои имена: speaker, voice, voice_id).
+    // null — у модели в этой операции готовых дикторов нет
+    JsonObject? VoiceParams(AudioModelInfo model, AudioOp op, string voice) => null;
+
+    // Дикторы поставщика для выбора голоса (инструмент агента audio_voices). null — списка нет
+    Task<IReadOnlyList<AudioVoiceInfo>?> ListVoicesAsync(string? model, string? language, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<AudioVoiceInfo>?>(null);
 }
+
+// Диктор поставщика: Id — то, что передаётся в voice у audio_generate; Roles — амплуа (у Яндекса)
+public sealed record AudioVoiceInfo(string Id, string Name, string? Language = null, string? Gender = null,
+    IReadOnlyList<string>? Roles = null);
 
 // Операции модуля. Операции без ИИ (Trim и дальше) — монтаж за швом IAudioDsp (этап 5):
 // новая версия, а не шаг версии; моделей у них нет, список — AudioOps.NoAi. Concat — склейка кусков

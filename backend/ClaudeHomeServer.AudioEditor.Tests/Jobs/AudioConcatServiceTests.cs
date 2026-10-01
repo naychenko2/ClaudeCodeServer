@@ -245,8 +245,9 @@ public sealed class AudioConcatServiceTests : IDisposable
 
         public Task<AudioDspInfo?> ProbeAsync(byte[] audio, CancellationToken ct) => throw new NotSupportedException();
         public Task<AudioPeaks> PeaksAsync(byte[] audio, int points, CancellationToken ct) => throw new NotSupportedException();
-        public Task<AudioDspOutput> TrimFadeGainAsync(byte[] audio, AudioEdit edit, CancellationToken ct) => throw new NotSupportedException();
-        public Task<AudioDspOutput> NormalizeAsync(byte[] audio, double targetLufs, AudioFormat format, CancellationToken ct) =>
+        public Task<AudioDspOutput> TrimFadeGainAsync(byte[] audio, AudioEdit edit, CancellationToken ct, AudioDspInfo? known) => throw new NotSupportedException();
+        public Task<AudioDspOutput> NormalizeAsync(byte[] audio, double targetLufs, AudioFormat format, CancellationToken ct,
+            AudioDspInfo? known) =>
             throw new NotSupportedException();
         public Task<AudioDspOutput> MixAsync(IReadOnlyList<AudioStem> stems, AudioFormat format, CancellationToken ct) =>
             throw new NotSupportedException();

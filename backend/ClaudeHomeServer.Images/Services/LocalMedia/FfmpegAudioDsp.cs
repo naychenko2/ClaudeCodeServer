@@ -88,7 +88,8 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
         return new AudioPeaks(peaks, samples / (double)PeaksRate, null);
     }
 
-    public async Task<AudioDspOutput> TrimFadeGainAsync(byte[] audio, AudioEdit edit, CancellationToken ct)
+    public async Task<AudioDspOutput> TrimFadeGainAsync(byte[] audio, AudioEdit edit, CancellationToken ct,
+        AudioDspInfo? known = null)
     {
         if (!Available) return AudioDspOutput.Fail(Unavailable);
         if (!Finite(edit.StartSeconds) || !Finite(edit.EndSeconds) || !double.IsFinite(edit.FadeInSeconds)
@@ -96,7 +97,7 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
             return AudioDspOutput.Fail("Параметры правки должны быть числами.");
         if (GainError(edit.GainDb) is { } gainError) return AudioDspOutput.Fail(gainError);
         if (edit.FadeInSeconds < 0 || edit.FadeOutSeconds < 0) return AudioDspOutput.Fail("Длина фейда не может быть отрицательной.");
-        if (await ProbeAsync(audio, ct) is not { } info) return AudioDspOutput.Fail(NotAudio);
+        if ((known ?? await ProbeAsync(audio, ct)) is not { } info) return AudioDspOutput.Fail(NotAudio);
 
         var start = edit.StartSeconds ?? 0;
         var end = Math.Min(edit.EndSeconds ?? info.Seconds, info.Seconds);
@@ -113,12 +114,12 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
     }
 
     public async Task<AudioDspOutput> NormalizeAsync(byte[] audio, double targetLufs = AudioDspLimits.DefaultLufs,
-        AudioFormat format = AudioFormat.Wav, CancellationToken ct = default)
+        AudioFormat format = AudioFormat.Wav, CancellationToken ct = default, AudioDspInfo? known = null)
     {
         if (!Available) return AudioDspOutput.Fail(Unavailable);
         if (!double.IsFinite(targetLufs) || targetLufs is < AudioDspLimits.MinLufs or > AudioDspLimits.MaxLufs)
             return AudioDspOutput.Fail($"Целевая громкость — от {AudioDspLimits.MinLufs} до {AudioDspLimits.MaxLufs} LUFS.");
-        if (await ProbeAsync(audio, ct) is not { } info) return AudioDspOutput.Fail(NotAudio);
+        if ((known ?? await ProbeAsync(audio, ct)) is not { } info) return AudioDspOutput.Fail(NotAudio);
 
         var measured = await MeasureLoudnessAsync(audio, $"I={Num(targetLufs)}:TP=-1:LRA=11", ct);
         if (measured.Error is not null) return AudioDspOutput.Fail(measured.Error);
@@ -350,10 +351,17 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
         }
     }
 
-    private sealed record Run(byte[] Stdout, string Stderr, string? Error);
+    internal sealed record Run(byte[] Stdout, string Stderr, string? Error);
+
+    // Потолки вывода процесса в памяти. От stderr храним только хвост: на битом входе ffmpeg пишет
+    // предупреждение на каждый кадр, а нужен нам лишь конец (причина отказа и отчёт loudnorm).
+    // stdout — это результат (JSON ffprobe или сэмплы пиков): час звука для пиков — 8 000 Гц × 4 байта
+    // × 3 600 с ≈ 110 МБ, больше — отказ, а не рост памяти до таймаута
+    internal int StderrCapBytes { get; init; } = 64 * 1024;
+    internal long StdoutCapBytes { get; init; } = 128L * 1024 * 1024;
 
     // ArgumentList, не Arguments: каждый аргумент уходит отдельно, без разбора оболочкой
-    private async Task<Run> RunAsync(string exe, IReadOnlyList<string> args, CancellationToken ct)
+    internal async Task<Run> RunAsync(string exe, IReadOnlyList<string> args, CancellationToken ct)
     {
         var psi = new ProcessStartInfo(exe)
         {
@@ -378,8 +386,11 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
         using (p)
         {
             var stdout = new MemoryStream();
-            var outTask = p.StandardOutput.BaseStream.CopyToAsync(stdout, timeout.Token);
-            var errTask = p.StandardError.ReadToEndAsync(timeout.Token);
+            // Переполнение stdout гасит процесс сразу, а не ждёт таймаута
+            var tooLarge = false;
+            var outTask = ReadCappedAsync(p.StandardOutput.BaseStream, stdout, StdoutCapBytes,
+                () => { tooLarge = true; timeout.Cancel(); }, timeout.Token);
+            var errTask = ReadTailAsync(p.StandardError.BaseStream, StderrCapBytes, timeout.Token);
             try
             {
                 await Task.WhenAll(outTask, errTask, p.WaitForExitAsync(timeout.Token));
@@ -388,6 +399,11 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
             {
                 try { p.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
                 ct.ThrowIfCancellationRequested();
+                if (tooLarge)
+                {
+                    log.LogWarning("{Exe} выдал больше {Cap} байт результата", exe, StdoutCapBytes);
+                    return new Run([], "", "Не удалось обработать звук: результат слишком большой.");
+                }
                 log.LogWarning("{Exe} не уложился в {Timeout}", exe, Timeout);
                 return new Run([], "", $"Обработка звука не уложилась в {Timeout.TotalSeconds:0} с.");
             }
@@ -399,6 +415,52 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
             }
             return new Run(stdout.ToArray(), stderr, null);
         }
+    }
+
+    // Весь поток в target, но не больше cap байт: на превышении зовёт overflow и бросает чтение
+    private static async Task ReadCappedAsync(Stream source, MemoryStream target, long cap, Action overflow, CancellationToken ct)
+    {
+        var buffer = new byte[81920];
+        int read;
+        while ((read = await source.ReadAsync(buffer, ct)) > 0)
+        {
+            if (target.Length + read > cap)
+            {
+                overflow();
+                ct.ThrowIfCancellationRequested();
+                return;
+            }
+            target.Write(buffer, 0, read);
+        }
+    }
+
+    // Только последние cap байт потока: начало отбрасываем по мере чтения, память не растёт
+    private static async Task<string> ReadTailAsync(Stream source, int cap, CancellationToken ct)
+    {
+        var tail = new byte[cap * 2];
+        var length = 0;
+        var buffer = new byte[16384];
+        int read;
+        while ((read = await source.ReadAsync(buffer, ct)) > 0)
+        {
+            if (read >= cap)
+            {
+                // Порция сама не меньше потолка — прежнее целиком вытесняется
+                Buffer.BlockCopy(buffer, read - cap, tail, 0, cap);
+                length = cap;
+                continue;
+            }
+            if (length + read > tail.Length)
+            {
+                // Сдвигаем к началу последние cap байт прочитанного — места хватит и на новую порцию
+                Buffer.BlockCopy(tail, length - cap, tail, 0, cap);
+                length = cap;
+            }
+            Buffer.BlockCopy(buffer, 0, tail, length, read);
+            length += read;
+        }
+        var from = Math.Max(0, length - cap);
+        return Encoding.UTF8.GetString(tail, from, length - from);
     }
 
     private static bool Detect(IConfiguration config, ILogger log)

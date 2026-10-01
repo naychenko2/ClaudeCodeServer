@@ -17,11 +17,13 @@ public interface IAudioDsp
     // Пики волны для плеера: points значений 0..1 — максимум модуля сэмпла в своём отрезке
     Task<AudioPeaks> PeaksAsync(byte[] audio, int points, CancellationToken ct);
 
-    Task<AudioDspOutput> TrimFadeGainAsync(byte[] audio, AudioEdit edit, CancellationToken ct);
+    // known — результат ProbeAsync этих же байтов, если он уже есть у вызывающего: без него разбор
+    // идёт заново отдельным процессом ffprobe
+    Task<AudioDspOutput> TrimFadeGainAsync(byte[] audio, AudioEdit edit, CancellationToken ct, AudioDspInfo? known = null);
 
     // Нормализация громкости по EBU R128 (два прохода loudnorm), истинный пик не выше −1 dBTP
     Task<AudioDspOutput> NormalizeAsync(byte[] audio, double targetLufs = AudioDspLimits.DefaultLufs,
-        AudioFormat format = AudioFormat.Wav, CancellationToken ct = default);
+        AudioFormat format = AudioFormat.Wav, CancellationToken ct = default, AudioDspInfo? known = null);
 
     // Сведение стемов в один файл без автоприглушения: длина — по самому длинному звучащему стему
     Task<AudioDspOutput> MixAsync(IReadOnlyList<AudioStem> stems, AudioFormat format, CancellationToken ct);

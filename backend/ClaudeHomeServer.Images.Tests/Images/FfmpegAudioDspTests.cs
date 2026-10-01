@@ -366,6 +366,85 @@ public class FfmpegAudioDspTests
         (await dsp.ConcatAsync([Sine(1.0), Sine(1.0)], [AudioJoint.Butt], null, AudioFormat.Wav, default)).Error.Should().NotBeNull();
     }
 
+    [SkippableFact]
+    public async Task Известная_длительность_не_зовёт_ffprobe_повторно()
+    {
+        Dsp();
+        Skip.If(OperatingSystem.IsWindows(), "заглушка процесса — sh-скрипт");
+        // ffprobe-заглушка отказывает на любом разборе: без known обрезка и нормализация упали бы
+        // на нём, с known идут сразу в настоящий ffmpeg
+        var probe = Stub("exit 1");
+        try
+        {
+            var dsp = Build(ffprobe: probe);
+            var known = new AudioDspInfo(2.0, 44100, 1, ".wav");
+            (await dsp.TrimFadeGainAsync(Sine(2.0), new AudioEdit(0.5, 1.5), default)).Error.Should().NotBeNull();
+
+            var trimmed = await dsp.TrimFadeGainAsync(Sine(2.0), new AudioEdit(0.5, 1.5), default, known);
+            var normalized = await dsp.NormalizeAsync(Sine(2.0), ct: default, known: known);
+
+            (await ProbeOk(Shared.Value, trimmed)).Seconds.Should().BeApproximately(1.0, 0.01);
+            (await ProbeOk(Shared.Value, normalized)).Seconds.Should().BeApproximately(2.0, 0.05);
+        }
+        finally { File.Delete(probe); }
+    }
+
+    // Процесс-заглушка вместо ffmpeg: на -version отвечает успехом, иначе печатает много мусора
+    // в stderr (или stdout) и завершается так, как велено
+    private static string Stub(string body)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ccs-ffmpeg-stub-{Guid.NewGuid():N}.sh");
+        File.WriteAllText(path, "#!/bin/sh\nif [ \"$1\" = \"-version\" ]; then exit 0; fi\n" + body + "\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return path;
+    }
+
+    [SkippableFact]
+    public async Task Большой_stderr_хранится_только_хвостом()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "заглушка процесса — sh-скрипт");
+        // 8 МБ мусора, затем причина отказа последней строкой
+        var stub = Stub("head -c 8000000 /dev/zero | tr '\\0' 'x' >&2; echo ПРИЧИНА-ОТКАЗА >&2; exit 1");
+        try
+        {
+            var dsp = Build(stub, stub);
+            dsp.Available.Should().BeTrue();
+
+            var run = await dsp.RunAsync(stub, ["-i", "x"], default);
+
+            run.Error.Should().NotBeNull();
+            run.Stderr.Length.Should().BeLessThanOrEqualTo(dsp.StderrCapBytes);
+            run.Stderr.TrimEnd().Should().EndWith("ПРИЧИНА-ОТКАЗА");
+        }
+        finally { File.Delete(stub); }
+    }
+
+    [SkippableFact]
+    public async Task Stdout_сверх_потолка_отказ_без_ожидания_таймаута()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "заглушка процесса — sh-скрипт");
+        // Бесконечный поток в stdout: без потолка память росла бы до таймаута
+        var stub = Stub("cat /dev/zero");
+        try
+        {
+            var dsp = new FfmpegAudioDsp(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AudioDsp:FfmpegPath"] = stub,
+                ["AudioDsp:FfprobePath"] = stub,
+                ["AudioDsp:TimeoutSeconds"] = "60",
+            }).Build(), NullLogger<FfmpegAudioDsp>.Instance) { StdoutCapBytes = 1024 * 1024 };
+
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var run = await dsp.RunAsync(stub, ["-i", "x"], default);
+
+            run.Error.Should().Contain("слишком большой");
+            run.Stdout.Should().BeEmpty();
+            watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(30));
+        }
+        finally { File.Delete(stub); }
+    }
+
     [Fact]
     public void Images_регистрирует_шов_IAudioDsp()
     {

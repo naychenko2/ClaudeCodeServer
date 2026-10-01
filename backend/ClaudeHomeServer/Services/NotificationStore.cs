@@ -106,6 +106,7 @@ public class NotificationStore
             PersonaColor = req.PersonaColor,
             PersonaHasAvatar = req.PersonaHasAvatar,
             ProjectName = req.ProjectName,
+            Sticky = req.Sticky,
         };
 
         var all = await GetAllAsync(userId);
@@ -326,6 +327,7 @@ public class NotificationStore
         PersonaColor = n.PersonaColor,
         PersonaHasAvatar = n.PersonaHasAvatar,
         ProjectName = n.ProjectName,
+        Sticky = n.Sticky,
         IsRead = n.IsRead,
         CreatedAt = n.CreatedAt,
         ReadAt = n.ReadAt,

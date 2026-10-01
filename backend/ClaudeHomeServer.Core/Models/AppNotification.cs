@@ -40,6 +40,11 @@ public class AppNotification
     // Денормализованное имя проекта (по ProjectId) — для контекста уведомления
     public string? ProjectName { get; set; }
 
+    // Закреплённое: всплывашка показывается при каждом входе и не гаснет сама, пока
+    // уведомление не прочитано (клик или ✕ помечают прочитанным). Для редких, но важных
+    // событий, которые нельзя пропустить (обновление claude CLI)
+    public bool Sticky { get; set; }
+
     public bool IsRead { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime? ReadAt { get; set; }
@@ -65,6 +70,8 @@ public class CreateNotificationRequest
     public string? PersonaColor { get; set; }
     public bool PersonaHasAvatar { get; set; }
     public string? ProjectName { get; set; }
+    // Закреплённое — см. AppNotification.Sticky
+    public bool Sticky { get; set; }
 }
 
 // DTO для списка (без лишних деталей)
@@ -87,6 +94,7 @@ public class NotificationListItem
     public string? PersonaColor { get; init; }
     public bool PersonaHasAvatar { get; init; }
     public string? ProjectName { get; init; }
+    public bool Sticky { get; init; }
     public bool IsRead { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime? ReadAt { get; init; }

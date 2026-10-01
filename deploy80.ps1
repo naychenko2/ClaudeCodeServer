@@ -177,14 +177,15 @@ dotnet publish $csproj -c Release -r win-x64 --self-contained false -o $PublishD
 if ($LASTEXITCODE -ne 0) { throw "Публикация бэка упала (exit $LASTEXITCODE)" }
 
 # Проверка динамических модулей: ModuleLoader резолвит их по пути из appsettings.json
-# (modules/notes, modules/spend и modules/image-editor). Если csproj потеряет копию при publish — INoteSemanticIndex
+# (modules/notes, modules/spend, modules/image-editor и modules/audio-editor). Если csproj потеряет копию при publish — INoteSemanticIndex
 # и ISpendCollector не зарегистрируются, форвардер Knowledge роняет старт, /api/spend/*
 # отдаёт 404. Раньше отлавливалось уже в продакшене (задача H4). Ловим здесь, пока сервер
 # ещё не тронут: падаем с понятным сообщением, а не выкатываем мёртвый хост.
 foreach ($mod in @(
     @{ Name = 'notes'; Dll = 'ClaudeHomeServer.Notes.dll' },
     @{ Name = 'spend'; Dll = 'ClaudeHomeServer.Spend.dll' },
-    @{ Name = 'image-editor'; Dll = 'ClaudeHomeServer.ImageEditor.dll' })) {
+    @{ Name = 'image-editor'; Dll = 'ClaudeHomeServer.ImageEditor.dll' },
+    @{ Name = 'audio-editor'; Dll = 'ClaudeHomeServer.AudioEditor.dll' })) {
     $dllPath = Join-Path $PublishDir "modules\$($mod.Name)\$($mod.Dll)"
     if (-not (Test-Path $dllPath)) {
         Write-Host ''

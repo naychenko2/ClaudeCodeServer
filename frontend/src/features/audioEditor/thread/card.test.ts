@@ -19,7 +19,7 @@ import { lruGet, lruSet, normalizeJoint } from '../player/peaks';
 import { dropNode } from '../player/StemMixer';
 import { mixStems, saveVersion, takeVersion } from './actions';
 import {
-  abSides, doneText, extraFiles, launchEndNote, licenseBadge, orderedVersions, priceText, saveKind,
+  abSides, doneText, extraFiles, launchEndNote, licenseBadge, midiFileOf, orderedVersions, priceText, saveKind,
   splitSuggestion, stemsFolder, versionStems, versionTag,
 } from './model';
 import { __peaksCacheSize, __resetPeaksCache, CACHE_MAX, loadPeaks } from './serverPeaks';
@@ -97,6 +97,13 @@ describe('карточка: файлы версии', () => {
     });
     expect(versionStems(v)).toEqual([{ id: 'stem:vocals', name: 'вокал', path: 'w/vocals.mp3' }]);
     expect(extraFiles(v).map(f => `${f.role}:${f.ext}`)).toEqual(['text:txt', 'subtitles:srt', 'score:abc', 'model:pth', 'index:index']);
+  });
+
+  it('версия «в MIDI» — только midi без главного звука', () => {
+    const midi = { role: 'midi', path: 'w/anthem.mid' };
+    expect(midiFileOf(ver('v1', 1, { files: [midi] }))).toEqual(midi);
+    expect(midiFileOf(ver('v2', 2, { files: [{ role: 'main', path: 'w/anthem.mp3' }, midi] }))).toBeNull();
+    expect(midiFileOf(ver('v3', 3, { files: [{ role: 'score', path: 'w/anthem.abc' }] }))).toBeNull();
   });
 });
 

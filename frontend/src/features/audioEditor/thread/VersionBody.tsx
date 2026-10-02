@@ -2,16 +2,19 @@
 // сведением без ИИ и список остальных файлов версии (.abc, .txt/.srt/.lrc, .mid, .pth/.index)
 // со скачиванием. Выделение куска — у каждой карточки своё: волна показывает его, только если
 // выделяли на этой версии; операция над куском сперва ставит эту версию в работу.
+// Версия «в MIDI» (без основного звука) под флагом midi-editor показывает ноты просмотрщиком кита.
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { Download, FileText } from 'lucide-react';
-import { Button, IconButton, C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE, useIsMobile } from 'aihome_shell/kit';
+import {
+  Button, IconButton, MidiEditor, Modal, C, FLAGS, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE, useFeature, useIsMobile,
+} from 'aihome_shell/kit';
 import { audioApi, type AudioThread, type AudioThreadVersion } from '../api';
 import { AudioPlayer, StemMixer, type AudioSource, type Stem } from '../player';
 import { normalizeJoint } from '../player/peaks';
 import { isPersonalScope } from '../scope';
 import { downloadFile, mixStems, takeVersion } from './actions';
-import { abSides, extraFiles, hasMain, stemsFolder, versionLabel, versionStems } from './model';
+import { abSides, extraFiles, hasMain, type ExtraFile, midiFileOf, stemsFolder, versionLabel, versionStems } from './model';
 import { useServerPeaks } from './serverPeaks';
 import {
   getPieceFieldOpen, getSelection, requestOperation, setSelection, useAudioStoreVersion,
@@ -28,14 +31,61 @@ interface Props {
   version: AudioThreadVersion;
 }
 
+// Строки «остальных файлов»: когда ноты показывает просмотрщик (со своим «Скачать»), строку .mid
+// не дублируем; без флага или у версии с главным звуком .mid остаётся в списке
+export function shownExtraFiles(v: AudioThreadVersion, midiOn: boolean): ExtraFile[] {
+  const files = extraFiles(v);
+  return midiOn && midiFileOf(v) ? files.filter(f => f.role !== 'midi') : files;
+}
+
 export function VersionBody(p: Props) {
   const stems = versionStems(p.version);
+  const midiOn = useFeature(FLAGS.midiEditor);
   return (
     <>
       {hasMain(p.version) && <PlayerBlock {...p} />}
+      {midiOn && midiFileOf(p.version) && <MidiBlock {...p} />}
       {stems.length > 0 && <StemsBlock {...p} />}
-      <ExtraFiles {...p} />
+      <ExtraFiles {...p} files={shownExtraFiles(p.version, midiOn)} />
     </>
+  );
+}
+
+const midiLoading = (
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: SP.sm, padding: SP.sm, color: C.textMuted, fontSize: FS.base }}>
+    <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2.5px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.7s linear infinite' }} />
+    Загрузка нот…
+  </div>
+);
+
+function MidiBlock({ scope, sessionId, thread, version }: Props) {
+  const [full, setFull] = useState(false);
+  const file = midiFileOf(version);
+  if (!file) return null;
+  const name = file.path.split('/').pop() ?? file.path;
+  const load = () => fetch(audioApi.versionFileUrl(scope, sessionId, thread.id, version.id, 'midi')).then(r => {
+    if (!r.ok) throw new Error('Не удалось загрузить MIDI');
+    return r.arrayBuffer();
+  });
+  const download = () => downloadFile(scope, sessionId, thread, version.id, 'midi');
+  return (
+    <div data-audio-midi="">
+      {/* Пока открыта модалка, встроенную ленту не держим: иначе позиция перерисовывает обе */}
+      {!full && (
+        <Suspense fallback={midiLoading}>
+          <MidiEditor load={load} fileName={name} variant="inline" onExpand={() => setFull(true)} onDownload={download} />
+        </Suspense>
+      )}
+      {full && (
+        <Modal size="fullscreen" title={name} subtitle={versionLabel(version)} onClose={() => setFull(false)}>
+          <div style={{ height: '100%', padding: SP.sm }}>
+            <Suspense fallback={midiLoading}>
+              <MidiEditor load={load} fileName={name} variant="full" onDownload={download} />
+            </Suspense>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }
 
@@ -121,9 +171,8 @@ function StemsBlock({ scope, sessionId, thread, version }: Props) {
   );
 }
 
-function ExtraFiles({ scope, sessionId, thread, version }: Props) {
+function ExtraFiles({ scope, sessionId, thread, version, files }: Props & { files: ExtraFile[] }) {
   const mobile = useIsMobile();
-  const files = extraFiles(version);
   if (!files.length) return null;
   return (
     <div data-audio-files={files.length} style={{ border: `1px solid ${C.borderLight}`, borderRadius: R.lg, overflow: 'hidden' }}>

@@ -42,6 +42,8 @@ export const FLAGS = {
   localMediaDefault: 'local-media-default',
   // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта.
   audioEditor: 'audio-editor',
+  // MIDI-просмотрщик: ноты из .mid в файлах и в редакторе звука.
+  midiEditor: 'midi-editor',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

@@ -17,7 +17,9 @@ namespace ClaudeHomeServer.Controllers;
 ///   и МОЛЧА прячет инструменты от модели;
 /// - авторизация — обычный заголовок Authorization, туда ложится сервисный JWT владельца
 ///   (как у fal-ai/glif), поэтому здесь стандартный [Authorize] и владелец из claims;
-/// - SSE не нужен: GET по маршруту отдаёт 405 (роутинг сам, метод не разрешён) — CLI это переживает;
+/// - отдельный SSE-канал (GET) не нужен: GET по маршруту отдаёт 405 — CLI это переживает. SSE
+///   бывает только ОТВЕТОМ на долгий tools/call (Streamable HTTP): пульс notifications/progress
+///   держит сторож простоя CLI, иначе вызов дольше 300 с тишины обрывается;
 /// - нестандартный server/discover, которым CLI зондирует сервер перед initialize, получает
 ///   -32601 и на работу не влияет.
 /// </summary>
@@ -26,8 +28,12 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 public sealed class McpTransportController(McpToolsetRegistry registry,
     McpToolWhitelist whitelist,
-    ILogger<McpTransportController> logger) : ControllerBase
+    ILogger<McpTransportController> logger,
+    // Тайминги потоковой ветки; в тестах — укороченные, в бою — умолчание
+    McpStreamTiming? timing = null) : ControllerBase
 {
+    private readonly McpStreamTiming _timing = timing ?? McpStreamTiming.Default;
+
     // Потолок тела запроса: аргументы инструментов несопоставимо меньше (html виджета ≤64 КБ,
     // 1 МБ — запас на фазу 2), а дефолт Kestrel в 30 МБ ReadToEndAsync прочитает в память целиком
     private const long MaxBodyBytes = 1024 * 1024;
@@ -119,7 +125,16 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
             return JsonRpc(Error(null, -32600, "Ожидался объект JSON-RPC"));
 
         NameCallForLog(toolset, request);
-        var result = await DispatchAsync(toolset, request, context, ct);
+        var dispatch = DispatchAsync(toolset, request, context, ct);
+        // Долгий вызов — потоком SSE с пульсом прогресса, иначе сторож простоя CLI оборвёт его
+        // через 300 с тишины (см. McpStreamTiming). Быстрый ответ остаётся обычным JSON
+        if (ProgressTokenOf(request) is { } progressToken && AcceptsEventStream()
+            && !await CompletesWithinAsync(dispatch, _timing.SwitchAfter))
+        {
+            await StreamAsync(dispatch, progressToken, ct);
+            return new EmptyResult();
+        }
+        var result = await dispatch;
         // Уведомление (без id) ответа не имеет — CLI шлёт notifications/initialized сразу
         // после рукопожатия и ждёт именно 202, а не тело с null-id
         return result is null ? Accepted() : JsonRpc(result);
@@ -230,7 +245,8 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
                     var args = parms?["arguments"]?.DeepClone() as JsonObject ?? [];
                     try
                     {
-                        var result = await toolset.CallAsync(toolName, args, context, ct);
+                        var result = await toolset.CallAsync(toolName, args,
+                            context with { ToolUseId = ToolUseIdOf(parms) }, ct);
                         return Ok(id, ToolContent(result.Text, result.IsError));
                     }
                     catch (Exception ex)
@@ -314,6 +330,94 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
     private static bool IsMethodShape(string v) =>
         v.Length <= 64 && v.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.' or '/');
 
+    /// <summary>
+    /// id карточки вызова из <c>params._meta["claudecode/toolUseId"]</c> (так его шлёт CLI). Это
+    /// внешняя строка из тела, дальше она уходит ключом в событие ленты: форма как у id
+    /// инструментов Anthropic (буквы, цифры, «_», «-», до 128), иначе null — прогресса не будет.
+    /// </summary>
+    internal static string? ToolUseIdOf(JsonObject? parms) =>
+        parms?["_meta"] is JsonObject meta
+        && meta["claudecode/toolUseId"] is JsonValue v && v.TryGetValue<string>(out var id)
+        && id.Length is > 0 and <= 128
+        && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-')
+            ? id : null;
+
+    /// <summary>
+    /// progressToken из <c>params._meta</c> (CLI шлёт его в каждом tools/call). Спецификация MCP:
+    /// строка или целое; уходит эхом в notifications/progress, поэтому форму держим узкой.
+    /// </summary>
+    internal static JsonNode? ProgressTokenOf(JsonObject request) =>
+        request["method"] is JsonValue m && m.TryGetValue<string>(out var method) && method == "tools/call"
+        && request["params"] is JsonObject parms && parms["_meta"] is JsonObject meta
+        && meta["progressToken"] is JsonValue token
+        && (token.TryGetValue<long>(out _)
+            || (token.TryGetValue<string>(out var s) && s.Length is > 0 and <= 128 && !s.Any(char.IsControl)))
+            ? token.DeepClone()
+            : null;
+
+    // Ответ потоком клиент принимает только сам: Streamable HTTP требует text/event-stream в Accept
+    private bool AcceptsEventStream() =>
+        Request.Headers.Accept.Any(a => a?.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase) == true);
+
+    /// <summary>
+    /// Ответ на долгий tools/call потоком SSE: сразу и затем каждые Heartbeat — событие
+    /// notifications/progress (счётчик растёт строго, как требует спецификация), в конце —
+    /// сам ответ JSON-RPC. Свой прогресс инструменты шлют в ленту мимо CLI; здесь только пульс
+    /// для сторожа простоя CLI. Обрыв клиента («Стоп») отменяет ct — вызов гасится тулсетом.
+    /// </summary>
+    private async Task StreamAsync(Task<JsonObject?> dispatch, JsonNode progressToken, CancellationToken ct)
+    {
+        HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()?.DisableBuffering();
+        Response.StatusCode = StatusCodes.Status200OK;
+        Response.ContentType = "text/event-stream";
+        Response.Headers.CacheControl = "no-cache";
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var tick = 0;
+        try
+        {
+            do
+            {
+                tick++;
+                await WriteEventAsync(new JsonObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["method"] = "notifications/progress",
+                    ["params"] = new JsonObject
+                    {
+                        ["progressToken"] = progressToken.DeepClone(),
+                        ["progress"] = tick,
+                        ["message"] = $"выполняется {(int)watch.Elapsed.TotalSeconds} с",
+                    },
+                }, ct);
+            } while (!await CompletesWithinAsync(dispatch, _timing.Heartbeat, ct));
+
+            if (await dispatch is { } answer) await WriteEventAsync(answer, ct);
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException)
+        {
+            // Клиент ушёл: писать некому, вызов отменён тем же ct. Ждём, пока тулсет фактически
+            // остановится (гасит процессы), но с пределом: иначе журнал MCP закрыл бы вызов
+            // «завершён» раньше настоящей остановки
+            await CompletesWithinAsync(dispatch, _timing.AbortGrace);
+        }
+    }
+
+    // Ждёт задачу не дольше wait (или до отмены ct). Таймер гасится сразу по исходу: иначе
+    // каждый быстрый вызов оставлял бы висеть 20-секундную задержку, а пульс — 25-секундную
+    private static async Task<bool> CompletesWithinAsync(Task task, TimeSpan wait, CancellationToken ct = default)
+    {
+        using var timer = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var completed = await Task.WhenAny(task, Task.Delay(wait, timer.Token)) == task;
+        timer.Cancel();
+        return completed;
+    }
+
+    private async Task WriteEventAsync(JsonNode payload, CancellationToken ct)
+    {
+        await Response.WriteAsync($"event: message\ndata: {payload.ToJsonString()}\n\n", ct);
+        await Response.Body.FlushAsync(ct);
+    }
+
     private static JsonObject ToolContent(string text, bool isError)
     {
         var result = new JsonObject
@@ -345,4 +449,19 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
     // приложения (camelCase и прочее переписали бы ключи JSON Schema инструментов)
     private ContentResult JsonRpc(JsonNode payload) =>
         Content(payload.ToJsonString(), "application/json");
+}
+
+/// <summary>
+/// Тайминги потокового ответа на tools/call. SwitchAfter — сколько ждать обычного JSON-ответа,
+/// прежде чем перейти на SSE (быстрые вызовы потока не видят вовсе); Heartbeat — шаг пульса
+/// прогресса. Сторож простоя CLI — 300 с по умолчанию, минимум 30 с (замер на CLI 2.1.287):
+/// пульс 25 с укладывается в любой его порог, даже урезанный до минимума. AbortGrace — сколько
+/// после обрыва клиента ждать фактической остановки вызова (run_tests гасит дерево процессов:
+/// до 10 с на выход и 10 с на потоки).
+/// </summary>
+public sealed record McpStreamTiming(TimeSpan SwitchAfter, TimeSpan Heartbeat)
+{
+    public TimeSpan AbortGrace { get; init; } = TimeSpan.FromSeconds(30);
+
+    public static McpStreamTiming Default { get; } = new(TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(25));
 }

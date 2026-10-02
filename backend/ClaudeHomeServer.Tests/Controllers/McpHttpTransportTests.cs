@@ -32,6 +32,33 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
         return JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
     }
 
+    // id карточки вызова: CLI кладёт его в params._meta (тело живого tools/call по http:
+    // {"name":…,"arguments":{},"_meta":{"claudecode/toolUseId":"toolu_…","progressToken":2}}).
+    // Строка внешняя и уходит ключом в событие ленты — негодная форма даёт null, а не прогресс
+    [Theory]
+    [InlineData("""{"name":"x","_meta":{"claudecode/toolUseId":"toolu_01REifwHiyZSRmWHsCRkoEbY","progressToken":2}}""", "toolu_01REifwHiyZSRmWHsCRkoEbY")]
+    [InlineData("""{"name":"x"}""", null)]
+    [InlineData("""{"name":"x","_meta":{"claudecode/toolUseId":"toolu<script>"}}""", null)]
+    [InlineData("""{"name":"x","_meta":{"claudecode/toolUseId":42}}""", null)]
+    [InlineData("""{"name":"x","_meta":"toolu_1"}""", null)]
+    public void ToolUseIdOf_БерётIdКарточкиИзMeta_ТолькоГоднойФормы(string parms, string? expected)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(parms)!.AsObject();
+
+        ClaudeHomeServer.Controllers.McpTransportController.ToolUseIdOf(node).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ToolUseIdOf_СлишкомДлинный_Null()
+    {
+        var node = new System.Text.Json.Nodes.JsonObject
+        {
+            ["_meta"] = new System.Text.Json.Nodes.JsonObject { ["claudecode/toolUseId"] = new string('a', 129) },
+        };
+
+        ClaudeHomeServer.Controllers.McpTransportController.ToolUseIdOf(node).Should().BeNull();
+    }
+
     [Fact]
     public async Task Initialize_ОтдаётИмяСервераИЭхоВерсииПротокола()
     {
@@ -481,6 +508,143 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
             "CRLF-вброс не должен попадать в записи лога");
         entries.Should().OnlyContain(e => e.Text.Length <= 2_000,
             "имя в сотни КБ не должно раздувать записи лога");
+    }
+
+    // progressToken — эхом в notifications/progress: строка или целое, всё прочее — нет пульса
+    [Theory]
+    [InlineData("""{"method":"tools/call","params":{"_meta":{"progressToken":2}}}""", "2")]
+    [InlineData("""{"method":"tools/call","params":{"_meta":{"progressToken":"abc"}}}""", "\"abc\"")]
+    [InlineData("""{"method":"tools/call","params":{"_meta":{}}}""", null)]
+    [InlineData("""{"method":"tools/list","params":{"_meta":{"progressToken":2}}}""", null)]
+    [InlineData("""{"method":"tools/call","params":{"_meta":{"progressToken":{"x":1}}}}""", null)]
+    [InlineData("""{"method":"tools/call","params":{"_meta":{"progressToken":"a\nb"}}}""", null)]
+    public void ProgressTokenOf_ТолькоСтрокаИлиЦелоеВToolsCall(string request, string? expected)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(request)!.AsObject();
+
+        ClaudeHomeServer.Controllers.McpTransportController.ProgressTokenOf(node)?.ToJsonString()
+            .Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Бой 2026-10-02: run_tests с холодной сборкой молчал дольше 300 с, и сторож простоя CLI
+    /// обрывал вызов. Долгий tools/call уходит потоком SSE: пульс notifications/progress с
+    /// токеном вызова и строго растущим progress, в конце — сам ответ с id запроса (на живом
+    /// CLI 2.1.287 проверено: пульс держит вызов дольше порога простоя).
+    /// </summary>
+    [Fact]
+    public async Task ДолгийВызов_ПотокSSE_ПульсПрогрессаИОтвет()
+    {
+        using var factory = SlowFactory(TimeSpan.FromMilliseconds(1500));
+        using var client = factory.CreateAuthenticatedClient();
+
+        var resp = await client.SendAsync(SlowCall(eventStream: true));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        resp.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
+        var events = (await resp.Content.ReadAsStringAsync())
+            .Split("\n\n", StringSplitOptions.RemoveEmptyEntries)
+            .Select(e => e.Split('\n'))
+            .Select(lines => JsonSerializer.Deserialize<JsonElement>(lines.Single(l => l.StartsWith("data: "))[6..]))
+            .ToList();
+
+        var pulses = events.Where(e => e.TryGetProperty("method", out var m)
+            && m.GetString() == "notifications/progress").ToList();
+        pulses.Should().HaveCountGreaterThanOrEqualTo(2, "пульс — сразу при переходе и дальше по шагу");
+        pulses.Should().OnlyContain(p => p.GetProperty("params").GetProperty("progressToken").GetInt32() == 7);
+        pulses.Select(p => p.GetProperty("params").GetProperty("progress").GetInt32())
+            .Should().BeInAscendingOrder().And.OnlyHaveUniqueItems();
+
+        var last = events[^1];
+        last.GetProperty("id").GetInt32().Should().Be(42);
+        last.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString().Should().Be("готово");
+    }
+
+    // Без text/event-stream в Accept поток недопустим (Streamable HTTP) — тот же вызов отвечает JSON
+    [Fact]
+    public async Task ДолгийВызов_КлиентБезSSE_ОбычныйJson()
+    {
+        using var factory = SlowFactory(TimeSpan.FromMilliseconds(600));
+        using var client = factory.CreateAuthenticatedClient();
+
+        var resp = await client.SendAsync(SlowCall(eventStream: false));
+
+        resp.Content.Headers.ContentType!.MediaType.Should().Be("application/json");
+        var payload = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        payload.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString().Should().Be("готово");
+    }
+
+    /// <summary>
+    /// «Стоп» посреди потока: клиент рвёт соединение после первого пульса — тулсет обязан
+    /// получить ОТМЕНЁННЫЙ ct (run_tests по нему гасит дерево процессов), а не доработать молча.
+    /// </summary>
+    [Fact]
+    public async Task ДолгийВызов_ОбрывКлиентаПосредиПотока_ТулсетПолучилОтмену()
+    {
+        var toolset = new SlowToolset(TimeSpan.FromMinutes(5));
+        using var factory = SlowFactory(toolset);
+        using var client = factory.CreateAuthenticatedClient();
+
+        var resp = await client.SendAsync(SlowCall(eventStream: true), HttpCompletionOption.ResponseHeadersRead);
+        resp.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
+        var stream = await resp.Content.ReadAsStreamAsync();
+        var reader = new StreamReader(stream);
+        (await reader.ReadLineAsync()).Should().StartWith("event: message", "поток пошёл — первый пульс получен");
+
+        // Обрыв клиента: TestServer переводит закрытие тела ответа в RequestAborted
+        resp.Dispose();
+
+        var cancelled = await toolset.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cancelled.Should().BeTrue("обрыв клиента отменяет вызов тулсета тем же ct");
+    }
+
+    private static TestWebApplicationFactory SlowFactory(TimeSpan delay) => SlowFactory(new SlowToolset(delay));
+
+    private static TestWebApplicationFactory SlowFactory(SlowToolset toolset) => new()
+    {
+        ExtraServices = services =>
+        {
+            services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset>(toolset);
+            services.AddSingleton(new ClaudeHomeServer.Controllers.McpStreamTiming(
+                TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(300)));
+        },
+    };
+
+    private static HttpRequestMessage SlowCall(bool eventStream)
+    {
+        var message = new HttpRequestMessage(HttpMethod.Post, "/mcp/slow")
+        {
+            Content = new StringContent(
+                """{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"wait","arguments":{},"_meta":{"progressToken":7}}}""",
+                Encoding.UTF8, "application/json"),
+        };
+        message.Headers.Accept.ParseAdd("application/json");
+        if (eventStream) message.Headers.Accept.ParseAdd("text/event-stream");
+        return message;
+    }
+
+    // Тулсет, отвечающий через заданную паузу: долгий вызов без собственного прогресса
+    private sealed class SlowToolset(TimeSpan delay) : ClaudeHomeServer.Services.Mcp.Http.IMcpStaticToolset
+    {
+        public string Name => "slow";
+        public string Version => "0.0.1";
+        public IReadOnlyList<ClaudeHomeServer.Services.Mcp.Http.McpToolSchema> Tools => [];
+
+        // Вызов оборван отменой ct (а не доработал до конца)
+        public TaskCompletionSource<bool> Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<ClaudeHomeServer.Services.Mcp.Http.McpToolCallResult> CallAsync(string tool,
+            System.Text.Json.Nodes.JsonObject arguments,
+            ClaudeHomeServer.Services.Mcp.Http.McpToolCallContext context, CancellationToken ct)
+        {
+            try { await Task.Delay(delay, ct); }
+            catch (OperationCanceledException)
+            {
+                Cancelled.TrySetResult(true);
+                throw;
+            }
+            return new("готово", IsError: false);
+        }
     }
 
     // Сборщик записей лога: у TestServer нет консольного вывода, а проверить нужно сам текст,

@@ -33,6 +33,9 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
 ([разрез](../../docs/research/image-editor-personal-chats-cut-2026-09.md), ADR-019 «Изменение 29.09»).
 Инварианты:
 
+- **Результат прямого `local_generate_image` / `local_edit_image` усыновляется** (`ILocalMediaAdopter` в Core,
+  `Threads/LocalImageAdopter`): картинка результата получает нить по файлу и якорь `image_thread` — та же карточка, что
+  у `image_generate`; выбор человека не трогаем, второго якоря на тот же файл нет.
 - **Ключ области — константа `personal`, одна на владельца, а не на чат**: ветвление копирует нити
   с шагами, и ключ «на чат» потерял бы в ветке все версии. Изоляцию держат владелец в путях
   хранилищ и гейт личного маршрута, а не ключ.

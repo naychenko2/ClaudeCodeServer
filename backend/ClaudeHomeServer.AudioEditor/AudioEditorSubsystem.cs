@@ -77,6 +77,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         services.AddSingleton<Mcp.IAudioVoiceLibrary>(sp => sp.GetRequiredService<Voices.VoiceLibrary>());
         // Инструменты агента (MCP audio-editor, ADR-021 §5): в ход их везёт Main, когда тулсет есть в реестре
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.AudioEditorToolset>();
+        // Агент позвал local_* напрямую: звук результата получает ту же карточку, что запуск через audio_*
+        services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalMediaAdopter, Threads.LocalAudioAdopter>();
         // Блок хвоста хода «Звук в этом чате»: правило приоритета audio_* над прямыми local_*
         services.AddPromptSectionContributor<Chats.AudioEditorStateContributor>();
     }

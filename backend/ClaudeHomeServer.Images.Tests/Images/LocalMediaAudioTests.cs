@@ -33,7 +33,8 @@ public class LocalMediaAudioTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private (LocalMediaService Service, LocalMediaJobStore Store) Build(bool audio = true, int maxAudioSeconds = 600)
+    private (LocalMediaService Service, LocalMediaJobStore Store) Build(bool audio = true, int maxAudioSeconds = 600,
+        params ClaudeHomeServer.Services.Media.ILocalMediaAdopter[] adopters)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -46,7 +47,7 @@ public class LocalMediaAudioTests : IDisposable
         }).Build();
         var store = new LocalMediaJobStore(config);
         var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
-        return (new LocalMediaService(client, store, _projects, config, NullLogger<LocalMediaService>.Instance), store);
+        return (new LocalMediaService(client, store, _projects, config, NullLogger<LocalMediaService>.Instance, adopters), store);
     }
 
     private static LocalMediaRequest Audio(string op, JsonObject args, string? prompt = null) =>
@@ -287,6 +288,64 @@ public class LocalMediaAudioTests : IDisposable
         File.ReadAllBytes(Path.Combine(_root, view.Job.Outputs[0].Path)).Should().Equal(mp3);
         File.ReadAllText(Path.Combine(_root, view.Job.Outputs[1].Path)).Should().Be("X:1\nK:Am\nABcd|");
         view.Job.Outputs[1].Path.Should().EndWith($"{job.Id}-score.abc");
+    }
+
+    // Агент звал local_* напрямую: собранный результат отдаётся усыновителям модулей — оттуда карточка в ленте
+    [Fact]
+    public async Task Сбор_РезультатОтдаётсяУсыновителям_ВместеСЧатомИФайлами()
+    {
+        var adopter = new RecordingAdopter();
+        var (service, _) = Build(adopters: [new ThrowingAdopter(), adopter]);
+        var submitted = await service.SubmitAsync(Audio(LocalMediaOps.MusicGenerate, new JsonObject
+        {
+            ["engine"] = "yue2", ["lyrics"] = "[Verse]\nла-ла",
+        }, prompt: "hard rock"), default);
+        var job = submitted.View!.Job;
+        _comfy.CompleteAudio(job.PromptId, ["X:1"], ($"{job.Id}_00001_.mp3", Encoding.ASCII.GetBytes("ID3")));
+
+        var view = await service.GetAsync(Owner, job.Id, default);
+        await service.GetAsync(Owner, job.Id, default);
+
+        view!.Job.Status.Should().Be(LocalMediaStatuses.Completed, "сбой первого усыновителя результат не портит");
+        var got = adopter.Got.Should().ContainSingle("повторный опрос готовой задачи не усыновляет заново").Subject;
+        got.OwnerId.Should().Be(Owner);
+        got.ProjectId.Should().Be(ProjectId);
+        got.SessionId.Should().Be("session-1");
+        got.Files.Select(f => f.ContentType).Should().Equal("audio/mpeg", "text/plain");
+    }
+
+    [Fact]
+    public async Task Сбор_ЗадачаБезЧата_НеУсыновляется()
+    {
+        var adopter = new RecordingAdopter();
+        var (service, _) = Build(adopters: [adopter]);
+        var submitted = await service.SubmitAsync(Audio(LocalMediaOps.MusicGenerate, new JsonObject
+        {
+            ["engine"] = "yue2", ["lyrics"] = "[Verse]\nла-ла",
+        }, prompt: "pop") with { SessionId = null }, default);
+        var job = submitted.View!.Job;
+        _comfy.CompleteAudio(job.PromptId, [], ($"{job.Id}_00001_.mp3", Encoding.ASCII.GetBytes("ID3")));
+
+        await service.GetAsync(Owner, job.Id, default);
+
+        adopter.Got.Should().BeEmpty();
+    }
+
+    private sealed class RecordingAdopter : ClaudeHomeServer.Services.Media.ILocalMediaAdopter
+    {
+        public List<ClaudeHomeServer.Services.Media.LocalMediaAdoption> Got { get; } = [];
+
+        public Task AdoptAsync(ClaudeHomeServer.Services.Media.LocalMediaAdoption adoption, CancellationToken ct)
+        {
+            Got.Add(adoption);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingAdopter : ClaudeHomeServer.Services.Media.ILocalMediaAdopter
+    {
+        public Task AdoptAsync(ClaudeHomeServer.Services.Media.LocalMediaAdoption adoption, CancellationToken ct) =>
+            throw new InvalidOperationException("сбой усыновителя");
     }
 
     [Fact]

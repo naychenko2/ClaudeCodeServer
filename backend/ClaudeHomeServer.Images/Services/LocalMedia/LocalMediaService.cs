@@ -56,7 +56,9 @@ public sealed partial class LocalMediaService(
     LocalMediaJobStore store,
     ILocalMediaProjectAccess projects,
     IConfiguration config,
-    ILogger<LocalMediaService> log)
+    ILogger<LocalMediaService> log,
+    // Усыновители результата (карточка в ленте у модулей «Звук» и «Картинки»); без них — как раньше
+    IEnumerable<ClaudeHomeServer.Services.Media.ILocalMediaAdopter>? adopters = null)
 {
     // Папка результатов в проекте: скрыта из дерева, из синка знаний и из git
     public const string ResultsFolder = ".cc-attachments/local-media";
@@ -725,7 +727,7 @@ public sealed partial class LocalMediaService(
                 ? (LatentPath(history.Latents, "_video_"), LatentPath(history.Latents, "_audio_"))
                 : (null, null);
 
-            return store.Update(current.Id, current.OwnerId, j =>
+            var completed = store.Update(current.Id, current.OwnerId, j =>
             {
                 j.Status = LocalMediaStatuses.Completed;
                 j.Outputs = outputs;
@@ -735,6 +737,8 @@ public sealed partial class LocalMediaService(
                 j.FinishedAt = DateTime.UtcNow;
                 ApplyRunStats(j, history);
             }) ?? current;
+            await AdoptAsync(completed, ct);
+            return completed;
         }
         catch (UnauthorizedAccessException)
         {
@@ -748,6 +752,24 @@ public sealed partial class LocalMediaService(
         finally
         {
             _collectGate.Release();
+        }
+    }
+
+    // Результат собран — отдать файлы усыновителям. Задача без чата-вызывателя (прямой вызов вне чата)
+    // и сбой усыновителя результат не портят: файлы в проекте уже лежат
+    private async Task AdoptAsync(LocalMediaJob job, CancellationToken ct)
+    {
+        if (adopters is null || string.IsNullOrWhiteSpace(job.SessionId) || job.Status != LocalMediaStatuses.Completed)
+            return;
+        var adoption = new ClaudeHomeServer.Services.Media.LocalMediaAdoption(job.OwnerId, job.ProjectId, job.SessionId,
+            job.Op, [.. job.Outputs.Select(o => new ClaudeHomeServer.Services.Media.LocalMediaAdoptedFile(o.Path, o.ContentType))]);
+        foreach (var adopter in adopters)
+        {
+            try { await adopter.AdoptAsync(adoption, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.LogWarning(ex, "Результат задачи {JobId} не усыновлён ({Adopter})", job.Id, adopter.GetType().Name);
+            }
         }
     }
 

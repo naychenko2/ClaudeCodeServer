@@ -166,6 +166,28 @@ public sealed class ImageThreadService(
         }
     }
 
+    // Агент позвал local_* напрямую, мимо image_*: картинка легла файлом в проект. Нить по файлу и якорь в
+    // ленте дают ту же карточку, что запуск через редактор. Выбор человека не трогаем (Open отдаёт фокус
+    // новой нити — возвращаем прежний), тихой строки «взял в работу» нет: Claude картинку не выбирал.
+    // Нить по этому файлу уже есть — второго якоря нет
+    public async Task AdoptFileAsync(string ownerId, string projectId, string sessionId, string file, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < AgentAttempts; attempt++)
+        {
+            var before = store.Get(ownerId, sessionId);
+            var written = store.Open(ownerId, sessionId, file, null, before.Revision, NewThreadSettings(ownerId, projectId));
+            if (written.Status == ImageThreadWriteStatus.Conflict) continue;
+            if (written is not { Status: ImageThreadWriteStatus.Ok, Thread: { } thread }) return;
+            if (!written.Existing) await AnchorAsync(sessionId, thread, ct);
+            var state = written.State;
+            if (before.Focus is not null && state.Focus != before.Focus
+                && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
+                state = back.State;
+            await BroadcastAsync(ownerId, projectId, sessionId, state);
+            return;
+        }
+    }
+
     // Новая нить (от человека и от агента) начинает с выбора человека в полосе «Картинки» проекта
     private ImageThreadSettings? NewThreadSettings(string ownerId, string projectId) =>
         prefs?.SettingsFor(ownerId, projectId);

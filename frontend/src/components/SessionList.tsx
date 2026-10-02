@@ -62,6 +62,9 @@ const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
   background: 'transparent', color: disabled ? C.border : C.textMuted,
 });
 
+// Порция архива: столько карточек рисуется при входе в «Архивные» и добавляется кнопкой
+const ARCHIVE_PAGE = 40;
+
 // Опрос и рефетч после переподключения отдают весь список заново, обычно без изменений.
 // Новый массив перерисовал бы панель целиком — оставляем прежний, если по содержимому совпало.
 function keepIfSame(prev: Session[], next: Session[]): Session[] {
@@ -427,8 +430,27 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useSanitizePersonaFilter(filters, patch, personaIdsInList, sessions.length > 0);
 
   // Применение фильтров (единый предикат — общий с глобальным списком чатов)
-  const isVisible = matchChatFilter(filters);
-  const filteredSessions = sessions.filter(isVisible);
+  const matchesFilters = matchChatFilter(filters);
+  const filteredSessions = sessions.filter(matchesFilters);
+  // Архив рисуется порциями: в большом проекте там полторы сотни чатов, и монтирование
+  // всех карточек разом подвешивало переключение «Архивные». Порция — первые по
+  // текущей сортировке; счётчики «скрыто фильтрами» считаются по полному набору
+  const [archiveLimit, setArchiveLimit] = useState(ARCHIVE_PAGE);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс порции при входе в архив и смене проекта
+  useEffect(() => { setArchiveLimit(ARCHIVE_PAGE); }, [filters.archivedOnly, project.id]);
+  const archiveRest = filters.archivedOnly ? Math.max(0, filteredSessions.length - archiveLimit) : 0;
+  const archiveCut = archiveRest > 0;
+  const archiveShownIds = useMemo(
+    () => archiveCut
+      ? new Set(sortChatsFlat(filteredSessions, sortOrder).slice(0, archiveLimit).map(s => s.id))
+      : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- filteredSessions пересобирается каждый рендер, его исходные данные покрывают sessions и filters
+    [archiveCut, archiveLimit, sessions, filters, sortOrder],
+  );
+  const isVisible = archiveShownIds
+    ? (s: Session) => matchesFilters(s) && archiveShownIds.has(s.id)
+    : matchesFilters;
+  const shownSessions = archiveShownIds ? filteredSessions.filter(s => archiveShownIds.has(s.id)) : filteredSessions;
   // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
   // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому
   // подмножеству: в режиме архива бейдж иначе врал бы на весь список проекта,
@@ -470,15 +492,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Секции: плоский список — из отфильтрованных чатов; дерево — из корней
   const dayGroups = treeSegments
     ? (groupBy === 'days' ? groupChats(treeSegments.map(x => x.rootChat), sortOrder) : [])
-    : (groupBy === 'days' ? groupChats(filteredSessions, sortOrder) : []);
+    : (groupBy === 'days' ? groupChats(shownSessions, sortOrder) : []);
   // Режим «Теги»: секции по реестру (+ сироты, + хвост «Без тегов»); корень дерева
   // с несколькими тегами дублируется в каждой своей секции
   const tagGroups = groupBy === 'tags'
-    ? groupByTags(treeSegments ? treeSegments.map(x => x.rootChat) : filteredSessions, registry, sortOrder)
+    ? groupByTags(treeSegments ? treeSegments.map(x => x.rootChat) : shownSessions, registry, sortOrder)
     : null;
   // Без группировки: единый список (порядок дерева — pin+maxActivity, плоского — pin+дата)
   const flatList = groupBy === 'none' && !treeSegments
-    ? sortChatsFlat(filteredSessions, sortOrder)
+    ? sortChatsFlat(shownSessions, sortOrder)
     : null;
 
   // leadingInset — место под контрол ветки в дереве (в плоском списке 0)
@@ -717,6 +739,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             {g.items.map(c => renderCard(c))}
           </div>
         ))}
+        {archiveRest > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '6px 0 2px' }}>
+            <Button variant="ghost" size="sm" onClick={() => setArchiveLimit(n => n + ARCHIVE_PAGE)}>
+              Показать ещё {Math.min(archiveRest, ARCHIVE_PAGE)} из {archiveRest}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Меню маркировки чата общими тегами (fixed по якорю кнопки на карточке) */}

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { Blend, Folder, ImageIcon, Layers, Mic, Music, Pencil, SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
 import { Island, IslandHeader, Toggle, InlineSegmented, IconButton } from '../components/ui';
 import { C, FS, ISLAND, R, SP } from '../lib/design';
@@ -54,6 +54,7 @@ export function GenSharedKitSection() {
   const [execOpen, setExecOpen] = useState(true);
   const undo = useReleaseUndo<{ focus: string; mode: ImgMode }>();
   const narrow = width === 'narrow';
+  const bar = useRef<HTMLDivElement>(null);
 
   const imgModes: GenerationModeOption<ImgMode>[] = [
     { value: 'create', label: 'Создать', icon: Sparkles },
@@ -68,7 +69,11 @@ export function GenSharedKitSection() {
   const rows: GenerationPickRow[] = emptyChat ? [] : pickRows(CHAT_IMAGES, { lastId: lastEdited, excludeId: focus })
     .map(r => ({ id: r.id, name: r.name, sub: r.sub, thumb: r.thumb, icon: <ImageIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, mark: r.last ? 'правили последней' : undefined }));
   const pick = (id: string) => { setFocus(id); setLastEdited(id); setMode('edit'); setMenuAt(null); undo.dismiss(); };
-  const openMenu = (anchor: DOMRect) => setMenuAt(narrow ? 'inline' : anchor);
+  // Якорь меню — x сегмента и y полосы: меню встаёт над полосой от левого края сегмента
+  const openMenu = (seg: DOMRect, inBar = false) => {
+    const b = inBar ? bar.current?.getBoundingClientRect() : undefined;
+    setMenuAt(narrow ? 'inline' : b ? new DOMRect(seg.left, b.top, seg.width, b.height) : seg);
+  };
   const release = (byHuman: boolean) => {
     if (!focus) return;
     undo.release({ snapshot: { focus, mode }, text: 'Картинка снята — дальше рисуем новую' }, byHuman);
@@ -122,11 +127,11 @@ export function GenSharedKitSection() {
             {/* Полоса над полем ввода: плашка «Вернуть» встаёт над ней, меню — над полосой */}
             <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: SP.xs }}>
               {undo.offer && <ReleaseNotice text={undo.offer.text} onUndo={restore} isMobile={narrow} />}
-              <div style={{
+              <div ref={bar} style={{
                 display: 'flex', alignItems: 'center', gap: SP.sm, padding: SP.sm, minWidth: 0,
                 border: `1px solid ${C.borderLight}`, borderRadius: R.lg, background: C.bgCard,
               }}>
-                <GenerationModeSwitch value={mode} options={imgModes} onChange={setMode} onMutedClick={(_, a) => openMenu(a)}
+                <GenerationModeSwitch value={mode} options={imgModes} onChange={setMode} onMutedClick={(_, a) => openMenu(a, true)}
                   compact={narrow} quiet={narrow} isMobile={narrow} />
                 <span style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {focus ? <>Работаем с: <b style={{ color: C.textHeading }}>{focus}.png</b></> : 'Новая картинка'}
@@ -146,7 +151,8 @@ export function GenSharedKitSection() {
           </Block>
 
           <Block label={`ExecutorSummaryRow + ExecutorList — «${create ? 'Создать' : 'Править'}»: серые с причиной`}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+            {/* В продукте «Исполнитель» живёт в колонке 380 — витрина показывает ту же ширину */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, width: 380, maxWidth: '100%' }}>
               <ExecutorSummaryRow
                 name={cur.name}
                 parts={cur.group === 'auto' ? ['локально', create ? 'Qwen-Image 2.1' : 'Qwen-Image Edit'] : [cur.group === 'local' ? 'локально' : 'облако']}

@@ -139,7 +139,9 @@ function ExecutorRowView({ row, on, onPick, isMobile }: { row: ExecutorRow; on: 
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: on ? 600 : 400 }}>{row.name}</span>
           {row.badges?.map(b => <Badge key={b.label} size="xs" tone={b.tone ?? 'neutral'}>{b.label}</Badge>)}
         </span>
-        {sub && <span style={{ fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</span>}
+        {/* Подпись и причина переносятся, а не режутся: в хвосте смысл («при отказе — облако
+            с вашего согласия»), а на таче title нет */}
+        {sub && <span style={{ fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>{sub}</span>}
       </span>
       <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap' }}>{off ? '—' : row.price}</span>
     </button>

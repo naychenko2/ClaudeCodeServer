@@ -67,8 +67,10 @@ export function GenerationModeSwitch<T extends string>({ value, options, onChang
           onChange={click}
           quiet={quiet}
           persistKey={persistKey}
+          // Телефон: сегменты 40×40 — главный контрол полосы, палец не должен промахиваться
+          size={isMobile ? 'lg' : 'sm'}
           options={options.map(({ value: v, label, icon: Icon, muted, title }) => ({
-            value: v, label, muted, title, icon: <Icon size={14} strokeWidth={ICON_STROKE} />,
+            value: v, label, muted, title, icon: <Icon size={isMobile ? 18 : 14} strokeWidth={ICON_STROKE} />,
           }))}
         />
       ) : (

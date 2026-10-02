@@ -29,8 +29,8 @@ describe('без новых пропов разметка прежняя', () =>
   });
   it('IconSegmented', () => {
     const opts = ab.map(o => ({ ...o, icon: createElement('i') }));
-    expect(html(createElement(IconSegmented<string>, { value: 'a', options: opts, onChange: noop }))).toMatchInlineSnapshot(`"<span style="position:relative;display:flex;flex-shrink:0;gap:2px;padding:2px;background:var(--c-track);border-radius:8px"><span aria-hidden="true" style="position:absolute;top:2px;left:2px;width:28px;height:20px;border-radius:6px;background:var(--c-bg-white);box-shadow:var(--shadow-thumb);transform:translateX(0px);transition:transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)"></span><button title="Альфа" style="position:relative;width:28px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:6px;cursor:default;background:transparent;color:var(--c-text-secondary);transition:background 0.12s"><i></i></button><button title="Бета" style="position:relative;width:28px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:6px;cursor:pointer;background:transparent;color:var(--c-text-secondary);transition:background 0.12s"><i></i></button></span>"`);
-    expect(html(createElement(IconSegmented<string>, { value: 'b', options: opts, onChange: noop, quiet: true }))).toMatchInlineSnapshot(`"<span style="position:relative;display:flex;flex-shrink:0;gap:2px;padding:2px;background:transparent;border-radius:8px"><span aria-hidden="true" style="position:absolute;top:2px;left:2px;width:28px;height:20px;border-radius:6px;background:var(--c-bg-selected);box-shadow:none;transform:translateX(30px);transition:transform 0.32s cubic-bezier(.32,.72,0,1)"></span><button title="Альфа" style="position:relative;width:28px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:6px;cursor:pointer;background:transparent;color:var(--c-text-muted);transition:background 0.12s, color 0.2s"><i></i></button><button title="Бета" style="position:relative;width:28px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:6px;cursor:default;background:transparent;color:var(--c-text-heading);transition:background 0.12s, color 0.2s"><i></i></button></span>"`);
+    expect(html(createElement(IconSegmented<string>, { value: 'a', options: opts, onChange: noop }))).toMatchInlineSnapshot(`"<span style="position:relative;display:flex;flex-shrink:0;gap:2px;padding:2px;background:var(--c-track);border-radius:8px"><span aria-hidden="true" style="position:absolute;top:2px;left:2px;width:28px;height:20px;border-radius:6px;background:var(--c-bg-white);box-shadow:var(--shadow-thumb);transform:translateX(0px);transition:transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)"></span><button aria-pressed="true" title="Альфа" style="position:relative;width:28px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:6px;cursor:default;background:transparent;color:var(--c-text-secondary);transition:background 0.12s"><i></i></button><button aria-pressed="false" title="Бета" style="position:relative;width:28px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:6px;cursor:pointer;background:transparent;color:var(--c-text-secondary);transition:background 0.12s"><i></i></button></span>"`);
+    expect(html(createElement(IconSegmented<string>, { value: 'b', options: opts, onChange: noop, quiet: true }))).toMatchInlineSnapshot(`"<span style="position:relative;display:flex;flex-shrink:0;gap:2px;padding:2px;background:transparent;border-radius:8px"><span aria-hidden="true" style="position:absolute;top:2px;left:2px;width:28px;height:20px;border-radius:6px;background:var(--c-bg-selected);box-shadow:none;transform:translateX(30px);transition:transform 0.32s cubic-bezier(.32,.72,0,1)"></span><button aria-pressed="false" title="Альфа" style="position:relative;width:28px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:6px;cursor:pointer;background:transparent;color:var(--c-text-muted);transition:background 0.12s, color 0.2s"><i></i></button><button aria-pressed="true" title="Бета" style="position:relative;width:28px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:6px;cursor:default;background:transparent;color:var(--c-text-heading);transition:background 0.12s, color 0.2s"><i></i></button></span>"`);
   });
   it('Select', () => {
     expect(html(createElement(Select<string>, {
@@ -177,5 +177,54 @@ describe('вторая строка у MenuItem', () => {
   it('hint — отдельной строкой под подписью, приглушённым цветом, обе строки с многоточием', () => {
     const s = html(createElement(MenuItem, { label: 'Песня про кота', hint: '2:14 · агент · 3 мин назад', onClick: noop }));
     expect(s).toMatch(/flex-direction:column[^>]*><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Песня про кота<\/span><span style="[^"]*color:var\(--c-text-muted\)[^"]*">2:14 · агент · 3 мин назад<\/span>/);
+  });
+});
+
+describe('крупный IconSegmented и aria-pressed', () => {
+  const io = [{ value: 'a', label: 'А', icon: createElement('i') }, { value: 'b', label: 'Б', icon: createElement('i') }];
+  it('size="lg": кнопки и ползунок 40×40, шаг ползунка 42', () => {
+    const s = html(createElement(IconSegmented<string>, { value: 'b', options: io, onChange: noop, size: 'lg' }));
+    expect(s.match(/<button[^>]*width:40px;height:40px/g)).toHaveLength(2);
+    expect(s).toMatch(/aria-hidden="true" style="[^"]*width:40px;height:40px[^"]*translateX\(42px\)/);
+  });
+  it('aria-pressed — только у выбранного сегмента', () => {
+    const s = html(createElement(IconSegmented<string>, { value: 'b', options: io, onChange: noop }));
+    expect(s.match(/aria-pressed="(true|false)"/g)).toEqual(['aria-pressed="false"', 'aria-pressed="true"']);
+  });
+});
+
+describe('выравнивание Menu по началу якоря', () => {
+  const anchor = { top: 400, bottom: 440, left: 90, right: 150 } as DOMRect;
+  const card = (props: Record<string, unknown>) => {
+    vi.stubGlobal('document', { body: null });
+    const s = html(createElement(Menu, { onClose: noop, anchor, minWidth: 300, ...props }, 'пункт'));
+    vi.stubGlobal('document', undefined);
+    return s.slice(s.lastIndexOf('<div'));
+  };
+  it('по умолчанию — правый край у правого края якоря, вниз, раз снизу влезает', () => {
+    const c = card({});
+    expect(c).toContain('left:8px');
+    expect(c).toContain('top:446px');
+  });
+  it('anchorAlign="start" + preferUp: левый край у левого края якоря, вверх над ним', () => {
+    const c = card({ anchorAlign: 'start', preferUp: true });
+    expect(c).toContain('left:90px');
+    expect(c).toContain('bottom:506px');
+  });
+  it('preferUp без места сверху открывается вниз', () => {
+    vi.stubGlobal('document', { body: null });
+    const s = html(createElement(Menu, { onClose: noop, anchor: { ...anchor, top: 100, bottom: 140 } as DOMRect, preferUp: true, maxHeight: 300 }, 'п'));
+    vi.stubGlobal('document', undefined);
+    expect(s.slice(s.lastIndexOf('<div'))).toContain('top:146px');
+  });
+});
+
+describe('плитка иконки и перенос второй строки у MenuItem', () => {
+  it('iconTile — плитка C.bgInset размером iconSize; hintWrap — без многоточия', () => {
+    const s = html(createElement(MenuItem, { icon: createElement('i'), iconSize: 26, iconTile: true, label: 'logo.png', hint: 'версия 2 · правили последней', hintWrap: true, onClick: noop }));
+    expect(s).toMatch(/width:26px;height:26px;[^"]*background:var\(--c-bg-inset\)/);
+    const hint = s.slice(s.lastIndexOf('<span'));
+    expect(hint).toContain('overflow-wrap:anywhere');
+    expect(hint).not.toContain('nowrap');
   });
 });

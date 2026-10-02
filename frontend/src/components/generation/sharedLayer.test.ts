@@ -99,6 +99,29 @@ describe('GenerationPickMenu', () => {
     expect(out).toContain('src="/t/hero.png"');
     expect(out).toContain('width:26px;height:26px');
   });
+
+  it('плитка 26×26 на bg-inset у всех строк — с миниатюрой, без неё и у доп. пунктов; кромка прямая; мета переносится', () => {
+    const out = html(createElement(GenerationPickMenu, {
+      ...base,
+      rows: [
+        { id: 'hero', name: 'hero.png', thumb: '/t/hero.png' },
+        { id: 'logo', name: 'logo.png', sub: 'версия 2', icon: createElement('i'), mark: 'правили последней' },
+      ],
+      extras: [{ key: 'up', label: 'С компьютера…', icon: createElement('i'), onClick: noop }],
+    }));
+    expect(out.match(/width:26px;height:26px;flex-shrink:0;[^"]*background:var\(--c-bg-inset\)/g)).toHaveLength(3);
+    expect(out).toMatch(/box-shadow:inset 3px 0 0 var\(--c-accent\)"/);
+    expect(out).toContain('overflow-wrap:anywhere');
+  });
+
+  it('якорь — левый край сегмента, меню над ним', () => {
+    vi.stubGlobal('document', { body: null });
+    const out = html(createElement(GenerationPickMenu, { ...base, rows: [], anchor: { top: 700, bottom: 740, left: 90, right: 150 } as DOMRect }));
+    vi.stubGlobal('document', undefined);
+    const card = out.slice(out.indexOf('<div', out.indexOf('<div') + 1));
+    expect(card).toContain('left:90px');
+    expect(card).toContain('bottom:206px');
+  });
 });
 
 describe('createReleaseUndo — таймер плашки «Вернуть»', () => {
@@ -203,6 +226,13 @@ describe('GenerationModeSwitch — клик по сегменту', () => {
     expect(narrow).toContain('title="Создать"');
     expect(narrow).toContain('title="Править — сначала выберите картинку"');
   });
+
+  it('на телефоне сегменты 40×40, вне телефона — прежние 28×20', () => {
+    const phone = html(createElement(GenerationModeSwitch<'create' | 'edit'>, { value: 'create', options, onChange: noop, compact: true, isMobile: true }));
+    expect(phone.match(/<button[^>]*width:40px;height:40px/g)).toHaveLength(2);
+    const desk = html(createElement(GenerationModeSwitch<'create' | 'edit'>, { value: 'create', options, onChange: noop, compact: true }));
+    expect(desk.match(/<button[^>]*width:28px;height:20px/g)).toHaveLength(2);
+  });
 });
 
 describe('ExecutorList — группы и строки', () => {
@@ -236,6 +266,13 @@ describe('ExecutorList — группы и строки', () => {
     expect(out).toContain('сейчас Qwen');
   });
 
+  it('подпись и причина переносятся, а не режутся многоточием', () => {
+    const out = html(createElement(ExecutorList, { rows, value: 'auto', onChange: noop }));
+    const reason = out.match(/<span style="([^"]*)">не умеет/)![1];
+    expect(reason).toContain('overflow-wrap:anywhere');
+    expect(reason).not.toContain('nowrap');
+  });
+
   it('сводка «Чем: Авто · локально · модель · цена»', () => {
     const out = html(createElement(ExecutorSummaryRow, { name: 'Авто', parts: ['локально', 'Qwen-Image Edit'], price: { label: 'бесплатно', tone: 'success' }, open: false, onToggle: noop }));
     expect(out).toContain('>Чем<');
@@ -252,5 +289,11 @@ describe('ReleaseNotice', () => {
     expect(out).toContain('Картинка снята — дальше рисуем новую');
     expect(out).toContain('>Вернуть<');
     expect(out).toContain('flex:1');
+  });
+
+  it('на телефоне «Вернуть» высотой от 40, на широком — компактная', () => {
+    const btn = (isMobile: boolean) => html(createElement(ReleaseNotice, { text: 'т', onUndo: noop, isMobile })).match(/<button[^>]*>/)![0];
+    expect(btn(true)).toContain('min-height:40px');
+    expect(btn(false)).toContain('height:24px');
   });
 });

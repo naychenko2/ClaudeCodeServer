@@ -12,7 +12,7 @@ const store = new Map<string, string>();
 } as Storage;
 
 import {
-  __resetComposerStrips, forgetComposerSession, getActiveStrip, getPendingFocus,
+  __resetComposerStrips, forgetComposerSession, forgetComposerOnChatDeleted, getActiveStrip, getPendingFocus,
   getRememberedStrip, getShownStrip, releaseStrip, requestStrip, reportShownStrip,
   resetComposerMemory, resolveStrip, selectStrip, stripStorageKey,
 } from './composerStrips';
@@ -128,6 +128,16 @@ describe('свёрнутость полос (прототип полос, вар
 
 describe('чистка памяти полос и режима', () => {
   beforeEach(() => { localStorage.clear(); __resetComposerStrips(); });
+
+  it('событие chat_deleted чистит память чата, чужие события и чужие чаты — нет', () => {
+    for (const id of ['A', 'B']) { selectStrip(id, 'images'); composerModeMemory(id).seen = { image: 'x' }; }
+    forgetComposerOnChatDeleted({ type: 'status_changed', sessionId: 'A' });
+    expect(getRememberedStrip('A')).toBe('images');
+    forgetComposerOnChatDeleted({ type: 'chat_deleted', sessionId: 'A' });
+    expect(getRememberedStrip('A')).toBeNull();
+    expect(composerModeMemory('A').seen).toEqual({});
+    expect(getRememberedStrip('B')).toBe('images');
+  });
 
   it('удаление чата чистит его записи и не трогает соседний чат', () => {
     for (const id of ['A', 'B']) {

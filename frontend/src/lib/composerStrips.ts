@@ -219,6 +219,12 @@ export function forgetComposerSession(sessionId: string) {
   emit();
 }
 
+// Серверное событие `chat_deleted` (удаление в другой вкладке, истёкший временный чат):
+// локальный api.delete до этой вкладки не доходит, память чата чистим по событию
+export function forgetComposerOnChatDeleted(msg: { type: string; sessionId?: string }) {
+  if (msg.type === 'chat_deleted' && msg.sessionId) forgetComposerSession(msg.sessionId);
+}
+
 // Выход из аккаунта: полный сброс памяти вкладки (выбрано вместо ключа по владельцу — один вызов
 // у обоих logout, а ключ `${ownerId}:…` пришлось бы протаскивать во все читатели сторов).
 // localStorage не трогаем: он принадлежит устройству, а id чатов глобально уникальны

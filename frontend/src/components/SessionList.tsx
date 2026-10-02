@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react';
 import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive } from 'lucide-react';
 import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
+import { forgetComposerOnChatDeleted } from '../lib/composerStrips';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -247,6 +248,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       // Сессия удалена на сервере (в т.ч. авто-удаление временной) — убираем из списка;
       // если была открыта — переключаемся на первую оставшуюся
       if (msg.type === 'chat_deleted') {
+        forgetComposerOnChatDeleted(msg);
         setSessions(prev => {
           const updated = prev.filter(s => s.id !== msg.sessionId);
           if (activeRef.current?.id === msg.sessionId) {

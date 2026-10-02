@@ -50,6 +50,8 @@ public sealed class VideoContractExamplesTests
         [nameof(FilmStateDto)] = typeof(FilmStateDto),
         [nameof(FilmPatch)] = typeof(FilmPatch),
         [nameof(FilmBuildStatusDto)] = typeof(FilmBuildStatusDto),
+        [nameof(FilmMusicRequest)] = typeof(FilmMusicRequest),
+        [nameof(FilmMusicDraftDto)] = typeof(FilmMusicDraftDto),
         [nameof(VideoThreadChangedMessage)] = typeof(VideoThreadChangedMessage),
         [nameof(VideoFilmChangedMessage)] = typeof(VideoFilmChangedMessage),
     };

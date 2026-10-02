@@ -517,6 +517,18 @@ JSON ниже — единственное описание формы для ф
 { "state": "waiting", "progress": 0.5, "file": "video/утро/film.mp4", "error": "нет", "startedAt": "2026-10-02T16:00:00Z" }
 ```
 
+#### FilmMusicRequest
+
+```json
+{ "sessionId": "s-1" }
+```
+
+#### FilmMusicDraftDto
+
+```json
+{ "threadId": "t-1" }
+```
+
 #### VideoThreadChangedMessage
 
 ```json

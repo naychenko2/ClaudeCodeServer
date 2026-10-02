@@ -89,6 +89,12 @@ public static class FilmPatchOps
     public const string Music = "music";
 }
 
+// «Сочинить под фильм…»: SessionId — чат, в ленте которого заводится черновик музыки в «Звуке». Ответ —
+// нить звука: фильм ждёт из неё музыку, первая готовая версия сама ляжет в music/<фильм>.mp3 и станет музыкой фильма
+public sealed record FilmMusicRequest(string SessionId);
+
+public sealed record FilmMusicDraftDto(string ThreadId);
+
 // State — waiting (ждём слот сборки) | running | done | failed | cancelled; Progress 0..1
 public sealed record FilmBuildStatusDto(string State, double Progress, string? File, string? Error, DateTime? StartedAt);
 

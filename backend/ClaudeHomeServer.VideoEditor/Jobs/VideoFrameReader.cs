@@ -7,7 +7,7 @@ namespace ClaudeHomeServer.Services.VideoEditor.Jobs;
 // проекта и только через ProjectLinkGuard (символическая ссылка наружу — отказ); у личной области проекта
 // нет — отказ ДО диска. Кадр из «Картинок» (image) берётся ТОЛЬКО швом IImageFrameSource: хранилища нитей
 // картинок модуль не читает. Нет шва (редактор картинок выключен) или версии нет — frame_unavailable.
-public sealed class VideoFrameReader(IImageFrameSource? images = null)
+public sealed class VideoFrameReader(IImageFrameSource? images = null, VideoEditWorkspace? workspace = null)
 {
     public const long MaxFrameBytes = 20L * 1024 * 1024;
 
@@ -24,7 +24,7 @@ public sealed class VideoFrameReader(IImageFrameSource? images = null)
         if (frame.Kind != FrameRef.KindFile || string.IsNullOrWhiteSpace(frame.Path))
             return Frame.Fail("Неизвестный вид кадра");
         if (scope.Project is not { } project)
-            return Frame.Fail("Кадры-файлы есть только у чата проекта");
+            return await ReadPersonalFileAsync(ownerId, frame.Path, ct);
 
         if (ProjectLinkGuard.ResolveInside(project.RootPath, frame.Path) is not { } full || !File.Exists(full))
             return Frame.Fail($"Кадр «{frame.Path}» не найден в проекте");
@@ -32,6 +32,16 @@ public sealed class VideoFrameReader(IImageFrameSource? images = null)
         if (contentType is null) return Frame.Fail($"Кадр «{frame.Path}» — не png, jpg или webp");
         var info = new FileInfo(full);
         if (info.Length > MaxFrameBytes) return Frame.Fail($"Кадр «{frame.Path}» больше 20 МБ");
+        return new Frame(new VideoFrameBytes(await File.ReadAllBytesAsync(full, ct), contentType), null, null);
+    }
+
+    // Личный чат: кадр лежит в рабочей папке владельца (загрузка «С компьютера»), не в проекте
+    private async Task<Frame> ReadPersonalFileAsync(string ownerId, string path, CancellationToken ct)
+    {
+        if (workspace?.FindFrame(ownerId, path) is not { } full) return Frame.Fail($"Кадр «{path}» не найден");
+        var contentType = ContentTypeOf(full);
+        if (contentType is null) return Frame.Fail($"Кадр «{path}» — не png, jpg или webp");
+        if (new FileInfo(full).Length > MaxFrameBytes) return Frame.Fail($"Кадр «{path}» больше 20 МБ");
         return new Frame(new VideoFrameBytes(await File.ReadAllBytesAsync(full, ct), contentType), null, null);
     }
 

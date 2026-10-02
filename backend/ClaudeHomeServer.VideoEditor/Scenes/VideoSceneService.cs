@@ -117,8 +117,13 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
                     return Call.Refuse(VideoEditorErrors.InvalidRequest, "У кадра из «Картинок» нужны нить и версия");
                 case FrameRef.KindFile:
                     if (scope.Project is not { } project)
-                        return Call.Refuse(VideoEditorErrors.InvalidRequest,
-                            "У чата вне проекта нет файлов проекта: кадр-файл недоступен");
+                    {
+                        // Личный чат: только загруженный «С компьютера» кадр рабочей папки; наличие файла проверит съёмка
+                        if (!VideoEditWorkspace.IsFrameRef(frame.Path))
+                            return Call.Refuse(VideoEditorErrors.InvalidRequest,
+                                "У чата вне проекта нет файлов проекта: загрузите кадр «С компьютера»");
+                        break;
+                    }
                     if (string.IsNullOrWhiteSpace(frame.Path)
                         || ClaudeHomeServer.Services.Media.ProjectLinkGuard.ResolveInside(project.RootPath, frame.Path) is not { } full
                         || !File.Exists(full))

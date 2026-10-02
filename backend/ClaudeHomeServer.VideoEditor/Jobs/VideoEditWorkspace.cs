@@ -47,6 +47,32 @@ public sealed class VideoEditWorkspace(string root)
             ? e.ToLowerInvariant()
             : ".mp4";
 
+    // ── Кадры «С компьютера» личного чата: {ownerId}/frames/{id}.{png|jpg|webp} ────────────────
+    // Относительный путь кадра (его хранит FrameRef вида file) — frames/<32 hex>.<ext>; иное имя не принимается,
+    // поэтому ".." и чужие папки отсекаются шаблоном, а не чисткой строки
+    public const string FramesDirName = "frames";
+    private static readonly System.Text.RegularExpressions.Regex FrameRefPattern =
+        new(@"^frames/[0-9a-f]{32}\.(png|jpg|webp)$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    public static bool IsFrameRef(string? path) => path is not null && FrameRefPattern.IsMatch(path);
+
+    public string SaveFrame(string ownerId, byte[] bytes, string extension)
+    {
+        var dir = Path.Combine(Root, Safe(ownerId), FramesDirName);
+        Directory.CreateDirectory(dir);
+        var name = Guid.NewGuid().ToString("N") + extension;
+        File.WriteAllBytes(Path.Combine(dir, name), bytes);
+        return $"{FramesDirName}/{name}";
+    }
+
+    // Полный путь кадра владельца; путь не по шаблону или файла нет — null
+    public string? FindFrame(string ownerId, string? relative)
+    {
+        if (!IsFrameRef(relative)) return null;
+        var full = Path.Combine(Root, Safe(ownerId), FramesDirName, relative!["frames/".Length..]);
+        return File.Exists(full) ? full : null;
+    }
+
     // Чистка задач старше TTL, кроме удержанных нитями; ошибки файловой системы не мешают запуску
     public void Sweep(DateTime nowUtc)
     {
@@ -58,6 +84,11 @@ public sealed class VideoEditWorkspace(string root)
                 IReadOnlySet<string>? keep = null;
                 foreach (var job in Directory.EnumerateDirectories(owner))
                 {
+                    if (Path.GetFileName(job) == FramesDirName)
+                    {
+                        SweepFrames(job, nowUtc);
+                        continue;
+                    }
                     if (nowUtc - Directory.GetLastWriteTimeUtc(job) <= Ttl) continue;
                     keep ??= RetainedJobs?.Invoke(Path.GetFileName(owner)) ?? new HashSet<string>();
                     if (!keep.Contains(Path.GetFileName(job))) Directory.Delete(job, recursive: true);
@@ -65,6 +96,13 @@ public sealed class VideoEditWorkspace(string root)
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    // Кадр живёт, пока на него может ссылаться сцена: в десять раз дольше клипов
+    private static void SweepFrames(string dir, DateTime nowUtc)
+    {
+        foreach (var file in Directory.EnumerateFiles(dir))
+            if (nowUtc - File.GetLastWriteTimeUtc(file) > Ttl * 10) File.Delete(file);
     }
 
     private static string Safe(string segment)

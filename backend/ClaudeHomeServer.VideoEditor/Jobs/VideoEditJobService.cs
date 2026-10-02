@@ -82,7 +82,7 @@ public sealed class VideoEditJobService : IDisposable
         _broadcaster = broadcaster;
         _time = time ?? TimeProvider.System;
         _flags = flags;
-        _frames = frames ?? new VideoFrameReader();
+        _frames = frames ?? new VideoFrameReader(null, workspace);
     }
 
     // «Авто» сначала пробует локальные модели — по флагу владельца local-media-default. Явно

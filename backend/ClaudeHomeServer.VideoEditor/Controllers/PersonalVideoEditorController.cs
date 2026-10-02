@@ -89,6 +89,25 @@ public class PersonalVideoEditorController(
     public IActionResult VersionFile(string sessionId, string sceneId, string versionId, [FromQuery] bool download) =>
         Gate(sessionId, out _, out var denied) ? VersionFileIn(sessionId, sceneId, versionId, download) : denied;
 
+    // «С компьютера»: в личном чате проекта нет, кадр ложится в рабочую папку владельца; FrameRef — готов для
+    // настроек сцены. В проектном чате ручки нет: фронт кладёт файл через files/upload в video/<фильм>/кадры/
+    [HttpPost(VideoEditorRoutes.FrameUpload)]
+    public async Task<IActionResult> UploadFrame(string sessionId, IFormFile? file, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out _, out var denied)) return denied;
+        if (file is null || file.Length == 0)
+            return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Файл не передан");
+        if (file.Length > VideoFrameReader.MaxFrameBytes)
+            return Error(StatusCodes.Status413PayloadTooLarge, VideoEditorErrors.InvalidRequest, "Кадр больше 20 МБ");
+        await using var stream = file.OpenReadStream();
+        using var buffer = new MemoryStream((int)file.Length);
+        await stream.CopyToAsync(buffer, ct);
+        var bytes = buffer.ToArray();
+        if (VideoFrameFiles.ExtensionBySignature(bytes) is not { } extension)
+            return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Кадр — png, jpg или webp");
+        return Ok(FrameRef.File(workspace.SaveFrame(UserId, bytes, extension)));
+    }
+
     private bool Gate(string sessionId, [NotNullWhen(true)] out VideoEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>
         gate.TryPersonalChat(UserId, sessionId, out scope, out denied);

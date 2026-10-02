@@ -32,6 +32,7 @@ import { useAssistantName } from './chat/contexts';
 import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
+import { dativeName } from '../lib/russianName';
 import { showToast } from '../lib/toast';
 import { Button, IconButton, Modal, Notice } from './ui';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
@@ -598,6 +599,7 @@ export function Composer({
   executorTask = null,
 }: ComposerProps) {
   const asstName = useAssistantName();
+  const addressee = dativeName(asstName);
   // Черновик per-session. Composer смонтирован с key={sessionId} (см. ChatPanel), поэтому
   // смена чата = полное перемонтирование, и text заново инициализируется из getDraft(sessionId).
   // Здесь — только write-through: сохраняем набранный текст в стор черновиков этого чата,
@@ -1735,7 +1737,7 @@ export function Composer({
         // полный сегмент, иначе (например, другие подсистемы заведут свои режимы) —
         // оставляем только кнопку «Чат», чтобы высота композера не менялась
         <div data-composer-modes="" style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginRight: SP.xs }}>
-          <IconButton size="sm" active={!activeMode} title={`Чат — сообщение ${asstName}`} ariaLabel="Режим «Чат»"
+          <IconButton size="sm" active={!activeMode} title={addressee ? `Чат — написать ${addressee}` : 'Чат'} ariaLabel="Режим «Чат»"
             onClick={() => setModeId(null)}>
             <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </IconButton>
@@ -1775,7 +1777,8 @@ export function Composer({
         onInput={autoResize}
         onPaste={handlePaste}
         // Пока видна ghost-подсказка, обычный плейсхолдер прячем — тексты бы наложились
-        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : executorTask ? 'Напишите исполнителю…' : `Спросите ${asstName}…`}
+        // «Написать Вере…»: имя в дательном; не склоняется однозначно — фраза без имени
+        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : executorTask ? 'Написать исполнителю…' : addressee ? `Написать ${addressee}…` : 'Написать сообщение…'}
         rows={1}
         style={{
           flex: 1,

@@ -35,6 +35,8 @@ import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
+import { toolLiveness, isToolGroupDone } from '../lib/toolTiming';
+import { RUN_TESTS_TOOL } from '../lib/toolLabels';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, sanitizeForSpeech, splitSentences, type StreamSpeech } from '../lib/tts';
@@ -59,7 +61,7 @@ import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
-import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
@@ -1520,6 +1522,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const showWaiting =
     items.length > 0
     && sessionBusy;
+  // Живые и оборванные карточки инструментов (таймер «идёт M:SS» и пометка «прервано»).
+  // Значение контекста меняется только вместе с составом множеств, а не на каждую дельту
+  // стрима: иначе каждая карточка ленты перерисовывалась бы на каждый токен
+  const livenessRaw = useMemo(() => toolLiveness(items, sessionBusy), [items, sessionBusy]);
+  const livenessKey = `${[...livenessRaw.live].join(',')}|${[...livenessRaw.dead].join(',')}`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- пересчёт по составу множеств (livenessKey), а не по ссылке
+  const toolLivenessCtx = useMemo(() => livenessRaw, [livenessKey]);
   // Ждёт ответа от пользователя (permission_request / ask_question) — для режима текста
   const awaitingResponse = items.some(it =>
     (it.kind === 'permission_request' || it.kind === 'ask_question') && !it.resolved
@@ -2272,7 +2281,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           it.kind === 'tool_use' && !it.isError && isWidgetShow(it.name);
         // Карточка подсистемы (запуск генерации агентом, «✦ Промпт») — визуальный результат, в свёртку не прячется
         const isOwnCardEntry = (it: ChatItem) => it.kind === 'tool_use' && ownToolNames.has(it.name);
-        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it) || isOwnCardEntry(it);
+        // Прогон тестов — итог хода, который ищут глазами: карточка «Тесты · vitest» с исходом
+        // остаётся видна и в свёрнутой группе
+        const isTestRunEntry = (it: ChatItem) => it.kind === 'tool_use' && it.name === RUN_TESTS_TOOL;
+        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it) || isOwnCardEntry(it) || isTestRunEntry(it);
         const toolCount = slice.filter(([it]) => it.kind === 'tool_use' && !isPinnedEntry(it)).length;
         // Группа завершена, как только после неё появился следующий видимый элемент
         // (текст ассистента, запрос разрешения, result, error…) — конца хода не ждём.
@@ -2283,7 +2295,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // Последняя группа сворачивается и когда после неё ещё нет видимого элемента,
         // но ход уже завершён (сессия не работает): иначе действия последнего диалога
         // оставались бы раскрытыми в отличие от всех предыдущих групп.
-        const isGroupDone = after < display.length || !sessionBusy;
+        // Живой или ждущий разрешения вызов держит группу раскрытой, даже если карточка
+        // разрешения уже встала после неё (ждущей считается неотвеченная карточка дальше в ленте)
+        const isGroupDone = isToolGroupDone({
+          entries: slice.map(([it]) => it),
+          liveness: toolLivenessCtx,
+          hasVisibleAfter: after < display.length,
+          busy: sessionBusy,
+          awaitingPermission: display.some((it, k) => k >= i && it.kind === 'permission_request' && !it.resolved),
+        });
         // Изменения файлов не теряются при сворачивании: в свёрнутой шапке — те же плашки
         // (дедуп по пути, +N/−N событий суммируются), при раскрытии они на своих местах
         const fileAgg = new Map<string, Extract<ChatItem, { kind: 'file_changed' }>>();
@@ -2415,7 +2435,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
+  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, toolLivenessCtx, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
 
   // Прыжок из баннера к карточке: лента режется окном (WINDOW_FIRST=50), и нужный
   // узел за пределами видимой области физически отсутствует в DOM — простой
@@ -2692,7 +2712,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           </>
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}><SpeakingItemContext.Provider value={speakingItem}>{visibleNodes}</SpeakingItemContext.Provider></TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}><SpeakingItemContext.Provider value={speakingItem}><ToolLivenessContext.Provider value={toolLivenessCtx}>{visibleNodes}</ToolLivenessContext.Provider></SpeakingItemContext.Provider></TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {/* Карточка «Готовит план…»: стадия планирования идёт минутами (потолок
             планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).

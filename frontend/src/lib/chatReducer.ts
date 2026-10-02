@@ -6,6 +6,7 @@
 import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
 import { handsStatusFeedLine } from './localHands';
 import { isBgLaunchResult } from './agentTail';
+import { RUN_TESTS_TOOL, testRunKindLabel } from './toolLabels';
 
 // Live-состояние режима «Командная реализация» из REST-гидратации (Session.teamImplement):
 // та же нормализация полей, что у события team_implement в редьюсере. Освежение по REST
@@ -231,6 +232,13 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
       const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
       items.push({ ...rest, ...(timestamp !== undefined ? { ts: timestamp } : {}) } as unknown as ChatItem);
     }
+    // У незавершённого вызова сервер пишет "result": null (и null-отметки времени), а лента
+    // считает «нет результата» отсутствием поля: null-поля карточки отбрасываем, иначе после
+    // F5 идущий или прерванный инструмент читался бы завершённым («готово» без времени)
+    else if (m.kind === 'tool_use') {
+      const entries = Object.entries(m as unknown as Record<string, unknown>).filter(([, v]) => v !== null);
+      items.push(Object.fromEntries(entries) as unknown as ChatItem);
+    }
     else if (m.kind === 'branched_from') {
       // Плашка «Ветка от …» (фича chat-branch): запись истории с sourceSessionId/sourceName,
       // ts перекладываем так же, как у text/user_message — без этого дата в ленте потеряется
@@ -334,6 +342,31 @@ function lastKnownModel(items: ChatItem[]): string | null {
     if (it.kind === 'session_started' && it.model) return it.model;
   }
   return null;
+}
+
+// Вид прогона последнего вызова run_tests внутри сабагента agentId; вызова нет — undefined
+function lastRunTestsKind(items: ChatItem[], agentId: string): string | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === 'tool_use' && it.parentToolUseId === agentId && it.name === RUN_TESTS_TOOL)
+      return testRunKindLabel(it.input);
+  }
+  return undefined;
+}
+
+// Вид прогона в подписи сабагента — производное от его детей, а не снимок на момент
+// tool_progress: CLI шлёт прогресс «сейчас тесты» РАНЬШЕ, чем вызов run_tests с аргументами
+// доезжает в ленту (FAIL Киры: при одном вызове вид не появлялся весь прогон). Поэтому вид
+// пересчитывается и при приходе прогресса, и при приходе вызова run_tests внутри сабагента
+function withRunTestsKind(items: ChatItem[], agentId: string): ChatItem[] {
+  const idx = items.findIndex(it => it.kind === 'tool_use' && it.id === agentId);
+  const agent = idx >= 0 ? items[idx] as Extract<ChatItem, { kind: 'tool_use' }> : undefined;
+  if (!agent?.progress || agent.result != null || agent.progress.lastTool !== RUN_TESTS_TOOL) return items;
+  const kind = lastRunTestsKind(items, agentId);
+  if (kind === (agent.progress.lastToolKind ?? undefined)) return items;
+  const next = [...items];
+  next[idx] = { ...agent, progress: { ...agent.progress, lastToolKind: kind } };
+  return next;
 }
 
 // Внеходовая вставка — строка, попавшая в ленту НЕ из потока текущего хода: правка файла,
@@ -545,16 +578,41 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       if (idx >= 0) {
         const next = [...prev.items];
         const ex = next[idx] as Extract<ChatItem, { kind: 'tool_use' }>;
-        next[idx] = { ...ex, name: msg.name, input: msg.input, streamingArg: undefined, parentToolUseId: msg.parentToolUseId ?? ex.parentToolUseId };
-        return withItems(next);
+        // Старт сдвигается на финальный tool_use — так же делает история (TurnAccumulator.OnToolUse)
+        next[idx] = { ...ex, name: msg.name, input: msg.input, streamingArg: undefined, parentToolUseId: msg.parentToolUseId ?? ex.parentToolUseId, startedAt: msg.startedAt ?? ex.startedAt };
+        const parent = msg.parentToolUseId ?? ex.parentToolUseId;
+        return withItems(msg.name === RUN_TESTS_TOOL && parent ? withRunTestsKind(next, parent) : next);
       }
-      return withItems([...prev.items, { kind: 'tool_use', id: msg.id, name: msg.name, input: msg.input, parentToolUseId: msg.parentToolUseId }]);
+      const added: ChatItem[] = [...prev.items, { kind: 'tool_use', id: msg.id, name: msg.name, input: msg.input, parentToolUseId: msg.parentToolUseId, ...(msg.startedAt !== undefined ? { startedAt: msg.startedAt } : {}) }];
+      return withItems(msg.name === RUN_TESTS_TOOL && msg.parentToolUseId ? withRunTestsKind(added, msg.parentToolUseId) : added);
     }
 
     case 'tool_input_delta':
       return withItems(prev.items.map(it =>
         it.kind === 'tool_use' && it.id === msg.toolUseId ? { ...it, streamingArg: msg.partialJson } : it
       ));
+
+    // Фактический старт (task_started): результат уже есть — старт опоздал, не трогаем
+    case 'tool_started': {
+      // typeof, а не === undefined: старт null не должен затирать уже известный
+      const startedAt = msg.startedAt;
+      if (typeof startedAt !== 'number') return prev;
+      return withItems(prev.items.map(it =>
+        it.kind === 'tool_use' && it.id === msg.toolUseId && it.result == null ? { ...it, startedAt, started: true } : it
+      ));
+    }
+
+    // Живой прогресс (сабагент, локальная генерация): только идущей карточке — опоздавший
+    // после результата снимок «готово» не перебивает
+    case 'tool_progress': {
+      const { type: _t, toolUseId, sessionId: _s, ...rest } = msg;
+      // Сабагент гоняет тесты: CLI присылает только имя инструмента, вид прогона берём из
+      // аргумента kind его последнего вызова run_tests — подпись «сейчас «тесты · vitest»».
+      // Вызова ещё нет в ленте — вид дорисует его приход (withRunTestsKind в tool_use)
+      return withItems(withRunTestsKind(prev.items.map(it =>
+        it.kind === 'tool_use' && it.id === toolUseId && it.result == null ? { ...it, progress: rest } : it
+      ), toolUseId));
+    }
 
     case 'tool_result':
       // streamingArg сбрасываем и здесь: результат пришёл — стрим аргументов точно кончился.
@@ -571,7 +629,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           try { input = JSON.parse(item.streamingArg); }
           catch { /* неполный json — оставляем как было */ }
         }
-        return { ...item, input, result: msg.content, isError: msg.isError, streamingArg: undefined };
+        return { ...item, input, result: msg.content, isError: msg.isError, streamingArg: undefined, ...(msg.finishedAt !== undefined ? { finishedAt: msg.finishedAt } : {}) };
       }));
 
     // Ожидающие карточки сервер РЕПЛЕИТ при JoinSession (реконнект, пока CLI ждёт ответа) —

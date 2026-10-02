@@ -295,6 +295,16 @@ body {
   flex-shrink: 0;
 }
 
+/* === Неопределённая полоса ProgressBar (indeterminate): отрезок бежит по дорожке === */
+@keyframes cc-progress-run {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
+}
+.cc-progress-run { animation: cc-progress-run 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .cc-progress-run { animation: none; width: 100% !important; opacity: 0.5; }
+}
+
 /* === Индикатор ожидания ответа (WaitingIndicator) === */
 @keyframes cc-pulse-ring {
   0%   { box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.45); }

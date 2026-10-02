@@ -1,17 +1,59 @@
 import { memo, useState, useEffect, useMemo, useContext } from 'react';
 import { Plug, Eye, SquarePen, Terminal, Globe, CircleUser, Sparkles, SquareCheck, Wrench } from 'lucide-react';
 import type { ChatItem } from '../../types';
-import { C, FONT } from '../../lib/design';
+import { C, FONT, FS, SP } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
-import { ChatProjectContext, FalCostContext, GlifCostContext } from './contexts';
+import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
+import { ProgressBar } from '../ui';
+import { PROGRESS_H } from '../ui/ProgressBar';
+import { awaitsToolStart, formatClock, isQueued, shownFor, tickShownClock, toolClockMs, toolProgressPercent, toolProgressText, TOOL_TIMER_MIN_MS, type ShownClock } from '../../lib/toolTiming';
+import { toolLabel, toolWord, toolCardLabel, testRunArg, localJobsWaitArg, RUN_TESTS_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
+import { useIsMobile } from '../../lib/breakpoints';
 import { CodeBlockFrame } from './CodeCopyButton';
 import { MediaBlock, extractMediaMeta, mediaLabel } from './MediaBlock';
 import { useVisibleMedia } from './mediaDedup';
 
 // Спиннер для выполняющегося инструмента
+// Живой отсчёт «идёт M:SS» раз в секунду. Значение привязано к своему startedAt
+// (tickShownClock): сдвиг старта начинает отсчёт заново, а не тащит старый максимум в итог.
+// null — до первого тика: короче порога таймер всё равно не показывается. После остановки
+// возвращает последнее показанное — итог «готово» не должен оказаться меньше него
+function useRunningElapsed(startedAt: number | undefined, running: boolean): number | null {
+  const [clock, setClock] = useState<ShownClock | null>(null);
+  useEffect(() => {
+    if (!running || typeof startedAt !== 'number') return;
+    const tick = () => setClock(prev => tickShownClock(prev, startedAt, Date.now()));
+    const first = setTimeout(tick, 0);
+    const t = setInterval(tick, 1000);
+    return () => { clearTimeout(first); clearInterval(t); };
+  }, [startedAt, running]);
+  return shownFor(clock, startedAt);
+}
+
+// Высота строки подписи прогресса под шапкой (мобила): фиксированная, чтобы приход
+// и смена текста не двигали ленту
+const CAPTION_LINE_H = 16;
+
+// Спиннер карточки: кольцо — заметной дорожкой прогресса (на тёмном фоне кольцо цвета
+// границы почти не читалось). Ширина места под него — SPINNER_W: у готовой карточки
+// остаётся пустое место той же ширины, и шапка при завершении не прыгает вбок.
+// По высоте кольцо в раскладку не входит (отрицательные поля на половину размера, центр
+// остаётся на месте): оно выше строки текста, и на пороге 2 с, когда спиннер сменяется
+// полосой, шапка теряла бы 3 px
+const SPINNER_W = 18;
 function ToolSpinner() {
-  return <div className="tool-spinner" />;
+  return <div className="tool-spinner" style={{ borderColor: C.progressTrack, borderTopColor: C.accent, margin: `${-SPINNER_W / 2}px 0` }} />;
+}
+function SpinnerSlot() {
+  return <span aria-hidden style={{ width: SPINNER_W, flexShrink: 0 }} />;
+}
+
+// «упало K» — единственный тревожный сигнал живой карточки: выделен цветом ошибки
+const FAILED_RE = /(упало [1-9]\d*)/;
+function ProgressCaption({ text }: { text: string }) {
+  return <>{text.split(FAILED_RE).map((part, i) =>
+    i % 2 ? <span key={i} style={{ color: C.dangerText }}>{part}</span> : part)}</>;
 }
 
 // Иконка и цвет по типу инструмента — чтобы read/edit/bash/web/mcp различались с первого взгляда
@@ -44,42 +86,9 @@ const TASK_STATUS_RU: Record<string, string> = {
   cancelled: 'отменена', deleted: 'удалена',
 };
 
-// Русские названия инструментов для ленты чата
-const TOOL_LABELS: Record<string, string> = {
-  read: 'Чтение', edit: 'Правка', write: 'Запись', multiedit: 'Правки',
-  notebookedit: 'Правка ноутбука', bash: 'Команда', bashoutput: 'Вывод команды',
-  glob: 'Поиск файлов', grep: 'Поиск', ls: 'Список', task: 'Субагент', agent: 'Субагент',
-  websearch: 'Веб-поиск', webfetch: 'Загрузка страницы', skill: 'Навык',
-  todowrite: 'План задач', exitplanmode: 'План', toolsearch: 'Поиск инструментов',
-  taskcreate: 'Задача', taskupdate: 'Задача', tasklist: 'Список задач', taskget: 'Задача',
-  killshell: 'Остановка команды',
-};
-// Русские подписи MCP-инструментов по полному имени (mcp__server__tool) —
-// без них лента показывала бы сырое «glif · compose_project»
-const MCP_TOOL_LABELS: Record<string, string> = {
-  mcp__glif__compose_project: 'Генерация медиа glif',
-  mcp__glif__get_job_status: 'Статус генерации glif',
-  mcp__glif__view_media: 'Показ медиа glif',
-  mcp__glif__upload_file: 'Загрузка файла glif',
-  mcp__glif__get_project: 'Проекты glif',
-  mcp__glif__list_projects: 'Проекты glif',
-  mcp__glif__list_user_skills: 'Скиллы glif',
-  mcp__glif__get_user_skill: 'Скиллы glif',
-  mcp__glif__whoami: 'Аккаунт glif',
-};
-// Имя инструмента для показа: MCP — по карте, иначе «server · tool»; известные — по-русски, прочее — как есть
-export function toolLabel(name: string): string {
-  if (name.startsWith('mcp__')) return MCP_TOOL_LABELS[name] ?? name.slice(5).replace(/__/g, ' · ');
-  return TOOL_LABELS[name.toLowerCase()] ?? name;
-}
-
-// Склонение слова «действие»
-export function toolWord(n: number): string {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return 'действие';
-  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'действия';
-  return 'действий';
-}
+// Подписи инструментов живут в lib (ими же подписан живой прогресс); реэкспорт — для
+// прежних импортёров из этого файла
+export { toolLabel, toolWord };
 
 // Inline-diff для Edit/MultiEdit/Write: удалённые строки красным, добавленные зелёным
 function DiffBody({ hunks }: { hunks: Array<{ old?: string; new?: string }> }) {
@@ -134,9 +143,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // glob-шаблонах вырезаем абсолютный корень из текста (там путь — часть строки).
   const pathVal = inp.file_path ?? inp.path ?? inp.notebook_path;
   // Человекочитаемый аргумент для todo-задач: TaskCreate — тема, TaskUpdate — «#id → статус»
+  // Прогон тестов — цель, файлы и фильтр (вид прогона — в имени шапки)
   const taskArg = n === 'taskcreate' && typeof inp.subject === 'string' ? inp.subject
     : n === 'taskupdate' && inp.taskId != null
       ? `#${inp.taskId}${typeof inp.status === 'string' ? ` → ${TASK_STATUS_RU[inp.status] ?? inp.status}` : ''}`
+      : item.name === RUN_TESTS_TOOL ? testRunArg(inp)
+      : item.name === LOCAL_JOBS_WAIT_TOOL ? localJobsWaitArg(inp)
       : null;
   const toolArg = item.streamingArg ?? taskArg ?? String(
     (inp.command != null ? stripRoot(String(inp.command), project?.rootPath) : null)
@@ -145,8 +157,8 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
     ?? inp.query ?? inp.url ?? inp.description ?? inp.prompt ?? '');
   // Аргумент-путь (Read/Edit/…) — на мобиле обрезаем слева, чтобы было видно имя файла
   const argIsPath = inp.command == null && pathVal != null && item.streamingArg == null;
-  // Имя инструмента по-русски (MCP → «server · tool»)
-  const displayName = toolLabel(item.name);
+  // Имя инструмента по-русски (MCP → «server · tool»); у прогона тестов — с видом («Тесты · vitest»)
+  const displayName = toolCardLabel(item.name, item.input);
   // Inline-diff из input (доступен сразу, не дожидаясь tool_result)
   const editHunks: Array<{ old?: string; new?: string }> =
     n === 'edit' && (typeof inp.old_string === 'string' || typeof inp.new_string === 'string')
@@ -216,13 +228,45 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // Остальные (Read/Grep/Glob/MCP и пр.) → светлая «панель вывода», чтобы текст/код не давил тёмным фоном.
   const isConsole = n.startsWith('bash') || n.includes('shell');
 
+  // Таймер: пока нет результата — тикает раз в секунду (только в живом ходе, см.
+  // ToolLivenessContext), после результата — итоговая длительность. Короче порога не
+  // показываем. Результата нет — через `== null`: из истории приходит "result": null.
+  // Оборванный ход (Стоп, ошибка, падение) результата не пришлёт — карточка «прервано»
+  // Bash и агенты до tool_started «идёт» не показывают (см. awaitsToolStart)
+  const liveness = useContext(ToolLivenessContext);
+  const settled = item.result != null;
+  const aborted = !settled && liveness?.dead.has(item.id) === true;
+  const running = !settled && !aborted && (liveness?.live.has(item.id) ?? true) && typeof item.startedAt === 'number';
+  const shownElapsed = useRunningElapsed(item.startedAt, running && !awaitsToolStart(item));
+  // «прервано» тоже с длительностью: до момента обрыва (ToolLiveness.abortedAt)
+  const elapsed = toolClockMs(item, running, shownElapsed, aborted ? liveness?.abortedAt?.get(item.id) : null);
+  const showClock = elapsed != null && elapsed >= TOOL_TIMER_MIN_MS;
+  // Живой прогресс поверх таймера (tool_progress: сабагент, локальная генерация) — подпись
+  // и, если источник даёт оценку, определённая полоса вместо бегущей
+  const progressText = running ? toolProgressText(item.progress) : null;
+  const progressPct = running ? toolProgressPercent(item.progress) : null;
+  // Ожидание в очереди: ничего не выполняется — вместо бегущей полосы пустая дорожка
+  const queued = running && isQueued(item.progress);
+  const barShown = running && (progressPct != null || showClock);
+  // Один индикатор «идёт» за раз: до порога — спиннер, с порога — полоса и время
+  const spinning = !settled && !aborted && !(running && (showClock || barShown));
+  // На мобиле подпись прогресса и итог — отдельной строкой под шапкой у ВСЕХ карточек
+  // (шапка остаётся описанию, итог у всех стоит на одном месте). Строка держится с начала
+  // выполнения, поэтому завершение ленту не сдвигает
+  const isMobile = useIsMobile();
+  const captionBelow = isMobile;
+  // Итог завершённой или оборванной карточки — в шапке либо (мобила) строкой подписи
+  const statusText = `${item.isError ? 'ошибка' : item.bgAborted || aborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово'}`
+    + (showClock ? ` · ${formatClock(elapsed)}` : '');
+  const statusColor = item.isError || item.bgAborted || aborted ? C.dangerText : C.textMuted;
+
   return (
     <div>
       <div
         style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
         onClick={() => hasBody && setOpen(o => !o)}
       >
-        {item.result === undefined && <ToolSpinner />}
+        {spinning ? <ToolSpinner /> : <SpinnerSlot />}
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: meta.color }}>
           {meta.icon}
           <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>{displayName}</span>
@@ -258,15 +302,55 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
               );
             })()
           : <span style={{ flex: 1 }} />}
-        {item.result !== undefined && (
-          <span style={{ fontSize: 11, color: item.isError || item.bgAborted ? C.dangerText : C.textMuted, flexShrink: 0 }}>
-            {item.isError ? 'ошибка' : item.bgAborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово'}
+        {progressText && !captionBelow && (
+          <span title={progressText} style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            <ProgressCaption text={progressText} />
+          </span>
+        )}
+        {running && showClock && (
+          <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+            идёт {formatClock(elapsed)}
+          </span>
+        )}
+        {(settled || aborted) && !captionBelow && (
+          <span style={{ fontSize: FS.xs, color: statusColor, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+            {statusText}
           </span>
         )}
         {hasBody && (
           <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
         )}
       </div>
+      {/* Сколько осталось, неизвестно (CLI прогресса не отдаёт) — неопределённая полоса;
+          есть оценка из tool_progress — определённая, приглушённая (это прогноз, не факт).
+          Место под неё держим всё время, пока инструмент идёт, а не с порога в 2 с:
+          иначе строка прыгала бы посреди выполнения */}
+      {running && (
+        <div style={{ margin: `${SP.xxs}px 0 ${SP.xs}px` }}>
+          {/* Строка подписи держится с начала выполнения, пустая до первого прогресса */}
+          {captionBelow && (
+            <div title={progressText ?? undefined} style={{ height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+              {progressText && <ProgressCaption text={progressText} />}
+            </div>
+          )}
+          <div style={{ height: PROGRESS_H.thin }}>
+            {/* Очередь — пустая неподвижная дорожка (ничего не выполняется); настоящие шаги
+                ComfyUI (exact) — сплошная заливка, оценка по ETA — пунктир */}
+            {barShown && (queued
+              ? <ProgressBar value={0} size="thin" label={progressText ?? 'В очереди'} />
+              : progressPct != null
+                ? <ProgressBar value={progressPct} estimate={item.progress?.exact !== true} size="thin" transition="width .5s linear" label={progressText ?? undefined} />
+                : <ProgressBar value={0} indeterminate size="thin" />)}
+          </div>
+        </div>
+      )}
+      {/* Мобила: итог «готово · M:SS» встаёт на место строки подписи той же высоты — при
+          завершении уходит только полоса, как на десктопе, а лента не прыгает вверх */}
+      {captionBelow && (settled || aborted) && (
+        <div style={{ margin: `${SP.xxs}px 0 0`, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: statusColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+          {statusText}
+        </div>
+      )}
       {/* Медиа (изображения + видео) — сразу под шапкой, без клика */}
       {hasMedia && (
         <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>

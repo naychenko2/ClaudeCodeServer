@@ -1107,9 +1107,14 @@ export type ServerMessage = { sessionId: string } & (
   // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
   | { type: 'agent_text'; parentToolUseId: string; text: string }
   | { type: 'agent_thinking'; parentToolUseId: string; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string }
+  // startedAt/finishedAt — Unix-мс по часам сервера (таймер карточки инструмента)
+  | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string; startedAt?: number }
   | { type: 'tool_input_delta'; toolUseId: string; partialJson: string }
-  | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
+  // Фактический старт инструмента (task_started CLI: Bash, агенты) — сдвигает отсчёт таймера
+  | { type: 'tool_started'; toolUseId: string; startedAt?: number }
+  // Живой прогресс идущего инструмента поверх таймера карточки (ToolProgress)
+  | ({ type: 'tool_progress'; toolUseId: string } & ToolProgress)
+  | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean; finishedAt?: number }
   // Фоновые агенты (Agent run_in_background / Workflow) реально завершились — единственный
   // достоверный сигнал «ответ готов» (по task-notification CLI). aborted=true — агенты
   // умерли вместе с процессом (Стоп/несовместимый ход), не доработав
@@ -1973,6 +1978,27 @@ export interface TeamEscalation {
   resolutionNote?: string | null;
 }
 
+// Живой прогресс идущего инструмента (событие tool_progress, ToolProgressMessage на бэке).
+// percent — оценка с потолком 95, «готово» — только результат; exact — процент по настоящим
+// шагам семплера ComfyUI (потолок 99), полоса сплошная, а не пунктир оценки.
+// Сабагент: stage 'working', label — описание, lastTool/toolUses/durationMs.
+// Локальная генерация (local_jobs_wait): stage 'queued' | 'running', queuePosition, percent,
+// exact, etaSeconds; label — «шаг N из M» и/или «K из N» задач
+export interface ToolProgress {
+  stage?: string | null;
+  label?: string | null;
+  percent?: number | null;
+  exact?: boolean | null;
+  queuePosition?: number | null;
+  etaSeconds?: number | null;
+  lastTool?: string | null;
+  // Клиентское: вид прогона, когда lastTool — run_tests («vitest»); ставит редьюсер по
+  // вложенному вызову сабагента, сервер это поле не шлёт
+  lastToolKind?: string | null;
+  toolUses?: number | null;
+  durationMs?: number | null;
+}
+
 // Элементы чата
 export type ChatItem =
   // viaAgent — сообщение прислано не человеком, а агентом из другой сессии (chats_send);
@@ -2006,8 +2032,11 @@ export type ChatItem =
   | { kind: 'text'; text: string; personaId?: string; parentToolUseId?: string; model?: string; ts?: number; delegationTaskId?: string }
   | { kind: 'thinking'; text: string; expanded: boolean; parentToolUseId?: string }
   // bgDone/bgAborted — завершение фонового агента (bg_agent_done / bgDone из истории);
-  // workflowAborted — workflow восстановлен из истории прерванным (агенты уже не завершатся)
-  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean; workflowAborted?: boolean; bgDone?: boolean; bgAborted?: boolean }
+  // workflowAborted — workflow восстановлен из истории прерванным (агенты уже не завершатся);
+  // startedAt/finishedAt — Unix-мс по часам сервера, нет у старых историй;
+  // started — пришёл tool_started (фактический старт Bash/агента), startedAt уже сдвинут на него;
+  // progress — последний tool_progress (только живая лента, в историю не пишется)
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean; workflowAborted?: boolean; bgDone?: boolean; bgAborted?: boolean; startedAt?: number; finishedAt?: number; started?: boolean; progress?: ToolProgress }
   // decision — вердикт пользователя (только живая лента: permission_request в history не персистится)
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean; decision?: 'allowed' | 'denied' | 'always' }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }

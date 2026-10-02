@@ -452,7 +452,7 @@ export function ActivitySection({ activity, running, accent, online, onOpenFile,
   const open = userOpen ?? running;
   // «Действия» — только вызовы инструментов; текст/thinking считать действиями странно
   const toolCount = activity.filter(e => e.item.kind === 'tool_use').length;
-  const label = toolCount === 1 ? '1 действие' : `${toolCount} действий`;
+  const label = `${toolCount} ${toolWord(toolCount)}`;
 
   return (
     <div style={{ borderBottom: `1px solid ${C.divider}` }}>

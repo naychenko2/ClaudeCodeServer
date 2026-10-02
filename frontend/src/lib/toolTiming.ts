@@ -1,0 +1,230 @@
+// Время выполнения инструмента на карточке ленты: «идёт 0:42» пока работает и итоговая
+// длительность после результата. Отметки startedAt/finishedAt ставит сервер своими часами
+// (Unix-мс) — поэтому отсчёт после F5 продолжается с того же места.
+//
+// «Нет результата» везде проверяется через `== null`: в истории сервера у незавершённого
+// вызова лежит `"result": null`, и строгое `=== undefined` принимало его за результат —
+// после F5 карточка идущего или прерванного инструмента показывала «готово» без времени.
+
+import { isBgLaunchResult } from './agentTail';
+import { RUN_TESTS_TOOL, toolLabel, toolWord } from './toolLabels';
+import type { ToolProgress } from '../types';
+
+// Имя инструмента внутри подписи «сейчас …». Русское — со строчной: это середина фразы.
+// Незнакомый MCP — в кавычках: его «server · tool» иначе сливался с разделителями подписи
+// («сейчас notes · notes_create · 3 действия» читалось как три пункта). Сырое английское имя
+// незнакомого инструмента — как есть: «lSP» и «taskOutput» были бы искажением, а не стилем
+// Прогон тестов с известным видом — тоже в кавычках: «тесты · vitest»
+function inlineToolName(name: string, kind?: string | null): string {
+  if (name === RUN_TESTS_TOOL && kind) return `«${inlineToolName(name)} · ${kind}»`;
+  const label = toolLabel(name);
+  if (name.startsWith('mcp__') && label === name.slice(5).replace(/__/g, ' · ')) return `«${label}»`;
+  if (label === name) return label;
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
+// Подпись живого прогресса (tool_progress) рядом с таймером «идёт M:SS». null — нечего сказать.
+// Сабагент: что делает сейчас и сколько действий (его описание и так в шапке карточки);
+// имя инструмента — по-русски, как в остальной ленте.
+// Локальная генерация: место в очереди либо процент и сколько осталось. Процент по настоящим
+// шагам ComfyUI (exact) — без «≈», шаг — в label; оценка по ETA — с «≈»
+export function toolProgressText(p: ToolProgress | null | undefined): string | null {
+  if (!p) return null;
+  const parts: string[] = [];
+  if (p.stage === 'working') {
+    if (p.lastTool) parts.push(`сейчас ${inlineToolName(p.lastTool, p.lastToolKind)}`);
+    if (typeof p.toolUses === 'number' && p.toolUses > 0) parts.push(`${p.toolUses} ${toolWord(p.toolUses)}`);
+  } else {
+    if (p.label) parts.push(p.label);
+    // Подпись очереди от сервера («ждёт очереди сборок») уже говорит про очередь — общее
+    // «в очереди» к ней не дописываем; место в очереди — дописываем всегда, это новая цифра
+    if (p.stage === 'queued') {
+      if (typeof p.queuePosition === 'number' && p.queuePosition > 0) parts.push(`${p.queuePosition}-я в очереди`);
+      else if (!p.label) parts.push('в очереди');
+    }
+    if (typeof p.percent === 'number') parts.push(`${p.exact ? '' : '≈'}${Math.round(p.percent)}%`);
+    if (typeof p.etaSeconds === 'number' && p.etaSeconds > 0) parts.push(`осталось ~${formatClock(p.etaSeconds * 1000)}`);
+  }
+  return parts.length ? parts.join(' · ') : null;
+}
+
+// Процент для полосы; null — полоса остаётся неопределённой. Потолок: у оценки 95, у настоящих
+// шагов 99 — «готово» в обоих случаях говорит только результат
+export function toolProgressPercent(p: ToolProgress | null | undefined): number | null {
+  return typeof p?.percent === 'number' ? Math.max(0, Math.min(p.exact ? 99 : 95, p.percent)) : null;
+}
+
+// Ожидание в очереди (очередь сборок, local-media «N-я в очереди»): ничего не выполняется,
+// поэтому бегущей полосы нет — только пустая дорожка на её месте
+export function isQueued(p: ToolProgress | null | undefined): boolean {
+  return p?.stage === 'queued';
+}
+
+// Короткие вызовы (Read, Grep) таймером не шумят: полоса и время появляются с этого порога
+export const TOOL_TIMER_MIN_MS = 2000;
+
+// M:SS, с часа — H:MM:SS
+export function formatClock(ms: number): string {
+  const total = Math.floor(Math.max(0, ms) / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
+// Сколько уже идёт (результата нет) либо сколько шёл (есть finishedAt). null — отметок нет
+// (история до этих полей) либо результат есть, а конца нет: врать длительностью не будем.
+// Итоговая длительность считается целиком по часам сервера и точна. «Идёт» — разность
+// часов браузера и сервера: расхождение часов сдвигает его на ту же величину в обе
+// стороны (у синхронизированных по NTP машин — доли секунды); к нулю прижат только
+// уход в минус, когда часы браузера отстают.
+export function toolElapsedMs(
+  item: { startedAt?: number | null; finishedAt?: number | null; result?: string | null },
+  now: number,
+): number | null {
+  if (typeof item.startedAt !== 'number') return null;
+  if (item.result == null) return Math.max(0, now - item.startedAt);
+  return typeof item.finishedAt === 'number' ? Math.max(0, item.finishedAt - item.startedAt) : null;
+}
+
+// Bash и агенты получают фактический старт (tool_started) — до него «идёт» не показываем
+// вовсе: отсчёт от tool_use включал бы ожидание разрешения, и после «Разрешить» цифра
+// замирала бы, пока честный отсчёт от фактического старта её не догонит. У остальных
+// инструментов tool_started не бывает — у них отсчёт от tool_use.
+export function awaitsToolStart(item: { name: string; started?: boolean }): boolean {
+  const n = item.name.toLowerCase();
+  return (n === 'bash' || n === 'task' || n === 'agent') && item.started !== true;
+}
+
+// Показанное «идёт» привязано к своему startedAt. Сдвиг старта (финальный tool_use после
+// ранней карточки со стрима аргументов, tool_started) начинает отсчёт заново: иначе максимум
+// перенёс бы в итог время генерации аргументов — «готово · 0:30» при 50 мс работы, а после
+// F5 то же «готово» без времени. В пределах одного старта значение не убывает.
+export interface ShownClock { startedAt: number; value: number }
+
+export function tickShownClock(prev: ShownClock | null, startedAt: number, now: number): ShownClock {
+  const value = Math.max(0, now - startedAt);
+  return prev?.startedAt === startedAt ? { startedAt, value: Math.max(prev.value, value) } : { startedAt, value };
+}
+
+// Показанное для текущего старта; отсчёт от прежнего старта не в счёт
+export function shownFor(clock: ShownClock | null, startedAt: number | null | undefined): number | null {
+  return clock != null && clock.startedAt === startedAt ? clock.value : null;
+}
+
+// Что показать часами карточки. running — инструмент идёт в живом ходе; shown — последнее
+// значение живого отсчёта «идёт» (держится и после остановки). Итог «готово» по часам
+// сервера не меньше уже показанного «идёт»: иначе расхождение часов браузера дало бы откат.
+// abortedAt — момент обрыва хода (ToolLiveness.abortedAt): «прервано» тоже показывает, сколько
+// успело проработать. Нет отметки — последнее показанное «идёт» (обрыв на глазах)
+export function toolClockMs(
+  item: { name: string; started?: boolean; startedAt?: number | null; finishedAt?: number | null; result?: string | null },
+  running: boolean,
+  shown: number | null,
+  abortedAt?: number | null,
+): number | null {
+  if (running) return awaitsToolStart(item) ? null : shown;
+  const final = item.result != null ? toolElapsedMs(item, 0)
+    : typeof abortedAt === 'number' && !awaitsToolStart(item) ? toolElapsedMs({ ...item, result: '', finishedAt: abortedAt }, 0)
+    : null;
+  if (final == null) return shown;
+  return shown != null ? Math.max(final, shown) : final;
+}
+
+// Какие карточки инструментов без результата ещё идут, а какие оборваны.
+// live — вызовы без результата в ЖИВОМ ходе или внутри ещё работающего фонового агента:
+// только им тикает таймер. Гейт «чат занят»
+// на весь чат не годится: карточка оборванного хода ожила бы на следующем ходу («идёт 47:12»).
+// dead — вызовы, чей ход закончился без результата для них: после «Стопа», ошибки или
+// аварийного выхода (interrupted / error / session_ended) — все; после штатного result —
+// только верхнего уровня, а вызовы внутри сабагентов (parentToolUseId) могут честно
+// доработать после конца хода (доживающий фоновый агент). Такая карточка — «прервано».
+// Вложенный вызов мёртв и тогда, когда закрыт его родитель: у обычного агента есть
+// результат, у фонового — bgDone/bgAborted/workflowDone. Иначе внутренний Bash агента,
+// не дождавшийся tool_result (CLI не дослал, процесс перезапущен штатным exited), тикал бы
+// на каждом следующем ходу: ни result, ни session_ended его не закрывают.
+// abortedAt — момент обрыва (ts пометки «прервано»/ошибки) для оборванных вызовов: по нему
+// «прервано» показывает, сколько вызов успел проработать. Отметки нет (штатный result,
+// session_ended, закрытый родитель) — вызова в карте нет
+export interface ToolLiveness {
+  live: ReadonlySet<string>;
+  dead: ReadonlySet<string>;
+  abortedAt?: ReadonlyMap<string, number>;
+}
+
+type LivenessItem = {
+  kind: string; id?: string; result?: string | null; parentToolUseId?: string | null;
+  bgDone?: boolean; bgAborted?: boolean; workflowDone?: boolean; ts?: number;
+};
+
+// Родитель закрыт — его вложенные вызовы уже не доработают. Результат фонового запуска —
+// лишь квитанция, а не конец: у такого родителя конец только по bgDone/bgAborted/workflowDone
+function parentClosed(p: LivenessItem): boolean {
+  if (p.bgDone === true || p.bgAborted === true || p.workflowDone === true) return true;
+  return p.result != null && !isBgLaunchResult(p.result);
+}
+
+export function toolLiveness(items: readonly LivenessItem[], busy: boolean): ToolLiveness {
+  let open: LivenessItem[] = [];
+  const dead = new Set<string>();
+  const abortedAt = new Map<string, number>();
+  const byId = new Map<string, LivenessItem>();
+  for (const it of items) {
+    if (it.kind === 'tool_use') {
+      if (it.id) byId.set(it.id, it);
+      if (it.result == null && it.id) open.push(it);
+    } else if (it.kind === 'interrupted' || it.kind === 'error' || it.kind === 'session_ended') {
+      for (const o of open) {
+        dead.add(o.id!);
+        if (typeof it.ts === 'number') abortedAt.set(o.id!, it.ts);
+      }
+      open = [];
+    } else if (it.kind === 'result') {
+      for (const o of open) if (!o.parentToolUseId) dead.add(o.id!);
+      open = open.filter(o => o.parentToolUseId);
+    }
+  }
+  // Цепочка вверх: вызов внутри агента, вложенного в закрытый или мёртвый агент, тоже мёртв
+  const isClosed = (id: string, depth = 0): boolean => {
+    const p = byId.get(id);
+    if (!p || depth > 16) return false;
+    if (dead.has(id) || parentClosed(p)) return true;
+    return !!p.parentToolUseId && isClosed(p.parentToolUseId, depth + 1);
+  };
+  open = open.filter(o => {
+    if (!o.parentToolUseId || !isClosed(o.parentToolUseId)) return true;
+    dead.add(o.id!);
+    return false;
+  });
+  // Ход закончился, а фоновый агент ещё работает: его внутренние вызовы тикают и без «чат
+  // занят». Закрытые и мёртвые предки уже отсеяны выше, так что квитанция запуска в цепочке
+  // означает живого агента. Прочие открытые вызовы вне хода не оживают
+  const inLiveBgAgent = (id: string, depth = 0): boolean => {
+    const p = byId.get(id);
+    if (!p || depth > 16) return false;
+    if (p.result != null && isBgLaunchResult(p.result)) return true;
+    return !!p.parentToolUseId && inLiveBgAgent(p.parentToolUseId, depth + 1);
+  };
+  const live = busy ? open : open.filter(o => !!o.parentToolUseId && inLiveBgAgent(o.parentToolUseId));
+  return { live: new Set(live.map(o => o.id!)), dead, abortedAt };
+}
+
+// Пройдена ли группа «N действий» (сворачивать ли её). Обычно — как только после неё встал
+// видимый элемент или ход кончился. Но пока в группе есть вызов без результата, который ещё
+// идёт (live) или ждёт разрешения, группа не пройдена: карточка разрешения встаёт в ленте
+// ПОСЛЕ группы и свернула бы её вместе с живой карточкой и таймером. Оборванный вызов
+// (dead, «прервано») не держит — такая группа сворачивается как раньше
+export function isToolGroupDone(opts: {
+  entries: readonly LivenessItem[];
+  liveness: ToolLiveness | null;
+  hasVisibleAfter: boolean;
+  busy: boolean;
+  awaitingPermission: boolean;
+}): boolean {
+  const { entries, liveness, hasVisibleAfter, busy, awaitingPermission } = opts;
+  const pending = entries.some(it => it.kind === 'tool_use' && it.result == null && !!it.id
+    && liveness?.dead.has(it.id) !== true
+    && (liveness?.live.has(it.id) === true || awaitingPermission));
+  if (pending) return false;
+  return hasVisibleAfter || !busy;
+}

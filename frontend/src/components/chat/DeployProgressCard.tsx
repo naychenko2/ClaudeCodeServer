@@ -255,12 +255,16 @@ export const DeployProgressCard = memo(function DeployProgressCard({ item, sessi
     : 0;
   const totalMs = plan?.totalMs ?? 0;
   const doneMs = rows.reduce((a, r) => a + (r.ms ?? 0), 0);
+  // Сервер молчит — ничего не движется, и полоса тоже: замираем на моменте потери связи
+  const pctElapsed = state === 'dead' && deadSince !== null && startedAt !== null
+    ? Math.max(0, deadSince - startedAt)
+    : elapsed;
   const pct = totalMs > 0
     ? (state === 'succeeded' || state === 'rolled_back'
         ? 100
         : terminal
           ? Math.min(100, Math.round(doneMs / totalMs * 100))
-          : Math.min(92, Math.round(elapsed / totalMs * 100)))
+          : Math.min(92, Math.round(pctElapsed / totalMs * 100)))
     : 0;
 
   const curGroup: DeployGroup = state === 'dead'
@@ -504,11 +508,12 @@ export const DeployProgressCard = memo(function DeployProgressCard({ item, sessi
   );
 });
 
-// «идёт 3:07 · ≈ 2 мин» — секундомер и прогноз по прошлым выкаткам
+// «идёт 3:07 · ≈ 2 мин» — секундомер и прогноз по прошлым выкаткам. Сервер молчит — «ждём»:
+// ничего не идёт, полоса замерла
 function runningHint(state: CardState, elapsed: number, totalMs: number): string {
+  if (state === 'dead') return `ждём ${clockLabel(elapsed)} · по оценке`;
   const base = `идёт ${clockLabel(elapsed)}`;
   if (state === 'queued') return base;
-  if (state === 'dead') return `${base} · по оценке`;
   if (elapsed > totalMs) return `${base} · дольше обычного`;
   return `${base} · ${etaLabel(Math.max(0, totalMs - elapsed))}`;
 }
@@ -564,7 +569,9 @@ function ProgressRow({ pct, state, estimate, right }: { pct: number; state: Card
         : 'accent';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', rowGap: SP.xs }}>
-      <ProgressBar value={pct} tone={tone} estimate={estimate} style={{ flex: 1, minWidth: 120 }} />
+      {/* Оценка здесь бывает только у «сервер перезапускается»: ничего не идёт, мы ждём.
+          Яркий пунктир читался бы как «идёт» — приглушаем полосу целиком */}
+      <ProgressBar value={pct} tone={tone} estimate={estimate} style={{ flex: 1, minWidth: 120, opacity: estimate ? 0.5 : undefined }} />
       {right && (
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
           {right}

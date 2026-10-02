@@ -2,14 +2,25 @@
 // Регрессия: карточка обычного (не персоны) фонового агента, остановленного пользователем,
 // показывала «готово», как будто задача успешно завершена, — bgAborted нигде не читался.
 // Рендерим статикой через react-dom/server — как соседний TeamEscalationView.test.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
 import { ToolUseView } from '../ToolUseView';
 import { PersonaConsultCard } from '../PersonaTaskView';
+import { ToolLivenessContext } from '../contexts';
+import { normalizeHistory } from '../../../lib/chatReducer';
+import { toolLiveness } from '../../../lib/toolTiming';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool_use' }>;
+
+// Мобила переключается флагом: статический рендер window не видит, а раскладка карточки
+// на мобиле своя (подпись прогресса — строкой под шапкой)
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock('../../../lib/breakpoints', async (orig) => ({
+  ...(await orig<typeof import('../../../lib/breakpoints')>()),
+  useIsMobile: () => viewport.mobile,
+}));
 
 // Квитанция фонового запуска (isAsyncLaunchAck): tool_result приходит мгновенно,
 // завершение агента отслеживается по bgDone/bgAborted, а не по этому тексту
@@ -147,5 +158,188 @@ describe('PersonaConsultCard — ход координатора (statusLine)', 
     expect(h).toContain('var(--c-bg-card)');
     expect(h).not.toContain('var(--c-bg-white)');
     expect(h).toContain('role="button"');
+  });
+});
+
+// Таймер карточки после F5 (регресс QA, сценарий 2): в истории сервера у незавершённого
+// вызова лежит "result": null, и карточка принимала null за результат — «готово» без
+// времени у идущего инструмента и у прерванного «Стопом». Плюс гейт по ходу (ревью):
+// карточка оборванного хода не оживает, когда в том же чате начался следующий ход.
+describe('ToolUseView — таймер и статус после F5', () => {
+  const renderIn = (raw: unknown[], id: string, busy: boolean) => {
+    const items = normalizeHistory(raw);
+    const item = items.find(it => it.kind === 'tool_use' && it.id === id) as ToolItem;
+    return renderToStaticMarkup(createElement(ToolLivenessContext.Provider, { value: toolLiveness(items, busy) },
+      createElement(ToolUseView, { item, online: true })));
+  };
+  const user = (text: string) => ({ kind: 'user_message', text, timestamp: 1 });
+  const bash = (id: string, over: Record<string, unknown> = {}) =>
+    ({ kind: 'tool_use', id, name: 'Bash', input: { command: 'sleep 20' }, result: null, isError: false, parentToolUseId: null, bgDone: null, startedAt: 1_000, finishedAt: null, ...over });
+
+  it('идущий инструмент с "result": null — крутится, а не «готово»', () => {
+    const html = renderIn([user('в'), bash('t1')], 't1', true);
+    expect(html).toContain('tool-spinner');
+    expect(html).not.toContain('готово');
+    expect(html).not.toContain('прервано');
+  });
+
+  it('прерванный «Стопом» с "result": null — «прервано», без спиннера', () => {
+    const html = renderIn([user('в'), bash('t1', { bgDone: true }), { kind: 'interrupted', timestamp: 2 }], 't1', false);
+    expect(html).toContain('прервано');
+    expect(html).not.toContain('готово');
+    expect(html).not.toContain('tool-spinner');
+  });
+
+  it('оборванный ход + следующий ход: старая карточка «прервано» и не тикает, новая идёт', () => {
+    const raw = [user('в'), bash('t1'), { kind: 'interrupted', timestamp: 2 }, user('ещё'), bash('t2', { startedAt: 5_000 })];
+    const old = renderIn(raw, 't1', true);
+    expect(old).toContain('прервано');
+    expect(old).not.toContain('идёт');
+    expect(old).not.toContain('progressbar');
+    expect(renderIn(raw, 't2', true)).toContain('tool-spinner');
+  });
+
+  it('завершённый — «готово» с длительностью по отметкам сервера', () => {
+    const html = renderIn([user('в'), bash('t1', { result: 'ok', finishedAt: 16_000 })], 't1', false);
+    expect(html).toContain('готово · 0:15');
+  });
+});
+
+// Регресс QA (Кира, сценарий 2): на мобиле при завершении карточка сжималась 70 → 43 px —
+// уходили строка подписи и полоса разом, лента прыгала вверх. Теперь итог встаёт на место
+// строки подписи той же высоты, уходит только полоса
+describe('ToolUseView — мобила: строка подписи переживает завершение', () => {
+  afterEach(() => { viewport.mobile = false; });
+  const wait = (over: Partial<ToolItem> = {}): ToolItem => ({
+    kind: 'tool_use', id: 'w1', name: 'mcp__local-media__local_jobs_wait', input: { job_ids: ['lm_x'] },
+    startedAt: 1_000, ...over,
+  });
+  const render = (item: ToolItem, busy: boolean) =>
+    renderToStaticMarkup(createElement(ToolLivenessContext.Provider, { value: toolLiveness([item], busy) },
+      createElement(ToolUseView, { item, online: true })));
+  // Строки высотой со строку подписи (16px) — под шапкой
+  const captionLines = (html: string) => html.match(/height:16px;line-height:16px/g)?.length ?? 0;
+
+  it('идёт: строка подписи и полоса; завершён: та же строка с «готово · M:SS», полосы нет', () => {
+    viewport.mobile = true;
+    const running = render(wait({ progress: { stage: 'running', label: 'шаг 3 из 20', percent: 15, exact: true } }), true);
+    expect(captionLines(running)).toBe(1);
+    expect(running).toContain('шаг 3 из 20');
+    expect(running).toContain('progressbar');
+
+    const done = render(wait({ result: '{"all_done":true}', finishedAt: 16_000 }), false);
+    expect(captionLines(done)).toBe(1);
+    expect(done).toContain('готово · 0:15');
+    expect(done).not.toContain('progressbar');
+  });
+
+  it('десктоп: итог остаётся в шапке, отдельной строки нет', () => {
+    const done = render(wait({ result: '{"all_done":true}', finishedAt: 16_000 }), false);
+    expect(captionLines(done)).toBe(0);
+    expect(done).toContain('готово · 0:15');
+  });
+
+  it('настоящие шаги ComfyUI — сплошная заливка, оценка по ETA — пунктир', () => {
+    const exact = render(wait({ progress: { stage: 'running', percent: 40, exact: true } }), true);
+    expect(exact).not.toContain('repeating-linear-gradient');
+    const estimate = render(wait({ progress: { stage: 'running', percent: 40 } }), true);
+    expect(estimate).toContain('repeating-linear-gradient');
+  });
+});
+
+// Просьба Гриши: вид прогона тестов виден на карточке — «Тесты · dotnet/vitest/Playwright»,
+// цель и фильтр — в описании шапки
+describe('ToolUseView — прогон тестов (run_tests)', () => {
+  afterEach(() => { viewport.mobile = false; });
+  const run = (input: Record<string, unknown>, over: Partial<ToolItem> = {}): ToolItem => ({
+    kind: 'tool_use', id: 'rt1', name: 'mcp__tests__run_tests', input, startedAt: 1_000, ...over,
+  });
+
+  it.each([
+    [{ target: 'backend/App.Tests', filter: 'FullyQualifiedName~X' }, 'Тесты · dotnet', 'backend/App.Tests · FullyQualifiedName~X'],
+    [{ kind: 'vitest', target: 'frontend', files: ['frontend/src/lib/a.test.ts'] }, 'Тесты · vitest', 'frontend · frontend/src/lib/a.test.ts'],
+    [{ kind: 'playwright', target: 'frontend', filter: 'офлайн' }, 'Тесты · Playwright', 'frontend · офлайн'],
+  ])('вид и описание в шапке: %j', (input, title, arg) => {
+    const html = renderTool(run(input, { result: 'vitest: все тесты прошли', finishedAt: 5_000 }));
+    expect(html).toContain(title);
+    expect(html).toContain(arg);
+    expect(html).not.toContain('tests · run_tests');
+  });
+
+  it('несколько файлов — числом, а не списком', () => {
+    const html = renderTool(run({ kind: 'vitest', files: ['a.test.ts', 'b.test.ts', 'c.test.ts'] }, { result: 'ok' }));
+    expect(html).toContain('3 файла');
+  });
+
+  it('мобила: прогресс прогона строкой под шапкой — вид и цель в шапке не вытесняются', () => {
+    viewport.mobile = true;
+    const item = run({ kind: 'vitest', target: 'frontend' }, { progress: { stage: 'running', label: '87 из 171 файла · упало 2', percent: 50, exact: true } });
+    const html = renderToStaticMarkup(createElement(ToolLivenessContext.Provider, { value: toolLiveness([item], true) },
+      createElement(ToolUseView, { item, online: true })));
+    expect(html.match(/height:16px;line-height:16px/g)?.length ?? 0).toBe(1);
+    expect(html).toContain('Тесты · vitest');
+    expect(html).toContain('87 из 171 файла · ');
+    expect(html).toContain('упало 2');
+  });
+});
+
+// Правки по витрине Веры (пункты 2–9)
+describe('ToolUseView — витрина Веры', () => {
+  afterEach(() => { viewport.mobile = false; });
+  const render = (item: ToolItem, items: unknown[] = [item], busy = true) =>
+    renderToStaticMarkup(createElement(ToolLivenessContext.Provider, { value: toolLiveness(items as ToolItem[], busy) },
+      createElement(ToolUseView, { item, online: true })));
+  const wait = (over: Partial<ToolItem> = {}): ToolItem => ({
+    kind: 'tool_use', id: 'w1', name: 'mcp__local-media__local_jobs_wait', input: { job_ids: ['lm_x', 'lm_y'] }, startedAt: 1_000, ...over,
+  });
+  // Пустое место под спиннер у карточки без спиннера
+  const SLOT = 'aria-hidden="true" style="width:18px;flex-shrink:0"';
+
+  it('п. 2: у готовой карточки место под спиннер держится той же ширины', () => {
+    const done = render(wait({ result: '{"all_done":true}', finishedAt: 16_000 }), undefined, false);
+    expect(done).not.toContain('tool-spinner');
+    expect(done).toContain(SLOT);
+  });
+
+  it('п. 3: полоса уже видна — спиннер убран, остаётся только место под него', () => {
+    const html = render(wait({ progress: { stage: 'running', percent: 40, exact: true } }));
+    expect(html).toContain('progressbar');
+    expect(html).not.toContain('tool-spinner');
+    expect(html).toContain(SLOT);
+    // До порога и без полосы — только спиннер
+    expect(render(wait())).toContain('tool-spinner');
+  });
+
+  it('п. 4: ожидание в очереди — неподвижная пустая дорожка, а не бегущий отрезок', () => {
+    const html = render(wait({ progress: { stage: 'queued', queuePosition: 2, percent: 0 } }));
+    expect(html).toContain('progressbar');
+    expect(html).not.toContain('cc-progress-run');
+    expect(html).toContain('2-я в очереди');
+  });
+
+  it('п. 5: «упало K» выделено цветом ошибки, «упало» без цифры — нет', () => {
+    const html = render(wait({ progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true } }));
+    expect(html).toContain('<span style="color:var(--c-danger-text)">упало 2</span>');
+  });
+
+  it('п. 6: local-media по-русски, описание — сколько задач ждём', () => {
+    const html = render(wait({ result: '{}', finishedAt: 2_000 }), undefined, false);
+    expect(html).toContain('Локальная генерация');
+    expect(html).toContain('ожидание 2 задач');
+    expect(html).not.toContain('local_jobs_wait');
+  });
+
+  it('п. 8: мобила — итог строкой под шапкой у любой карточки, и у Bash', () => {
+    viewport.mobile = true;
+    const bash: ToolItem = { kind: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'ls' }, startedAt: 1_000, started: true, result: 'ok', finishedAt: 16_000 };
+    const html = render(bash, undefined, false);
+    expect(html.match(/height:16px;line-height:16px/g)?.length ?? 0).toBe(1);
+    expect(html).toContain('готово · 0:15');
+  });
+
+  it('п. 9: «прервано» — с длительностью до обрыва', () => {
+    const bash: ToolItem = { kind: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'sleep 99' }, startedAt: 1_000, started: true };
+    const html = render(bash, [bash, { kind: 'interrupted', ts: 71_000 }], false);
+    expect(html).toContain('прервано · 1:10');
   });
 });

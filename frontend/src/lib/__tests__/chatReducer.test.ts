@@ -204,6 +204,103 @@ describe('applyServerMessage: инструменты', () => {
     expect(next.items[1]).not.toHaveProperty('result', 'ok');
   });
 
+  it('таймер: tool_use ставит старт, tool_started сдвигает его, tool_result пишет конец', () => {
+    const next = run([
+      { type: 'tool_use', id: 't1', name: 'Bash', input: {}, startedAt: 1000 },
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'sleep 20' }, startedAt: 2000 },
+      { type: 'tool_started', toolUseId: 't1', startedAt: 5000 },
+      { type: 'tool_result', toolUseId: 't1', content: 'ok', isError: false, finishedAt: 25000 },
+      // опоздавший старт после результата длительность не портит
+      { type: 'tool_started', toolUseId: 't1', startedAt: 30000 },
+    ]);
+    expect(next.items[0]).toMatchObject({ id: 't1', startedAt: 5000, finishedAt: 25000 });
+  });
+
+  it('таймер переживает F5: startedAt выполняющегося инструмента приходит из истории', () => {
+    const items = normalizeHistory([{ kind: 'tool_use', id: 't1', name: 'Bash', input: {}, startedAt: 5000 }]);
+    expect(items[0]).toMatchObject({ kind: 'tool_use', id: 't1', startedAt: 5000 });
+    expect(items[0]).not.toHaveProperty('result');
+  });
+
+  it('F5: "result": null и null-отметки из истории не становятся полями карточки', () => {
+    const items = normalizeHistory([{ kind: 'tool_use', id: 't1', name: 'Bash', input: {}, result: null, isError: false, parentToolUseId: null, bgDone: null, startedAt: 5000, finishedAt: null }]);
+    expect(items[0]).toMatchObject({ kind: 'tool_use', id: 't1', startedAt: 5000, isError: false });
+    expect(items[0]).not.toHaveProperty('result');
+    expect(items[0]).not.toHaveProperty('finishedAt');
+    expect(items[0]).not.toHaveProperty('parentToolUseId');
+  });
+
+  it('tool_started помечает фактический старт (started) — живьём и из истории после F5', () => {
+    const before = run([{ type: 'tool_use', id: 't1', name: 'Bash', input: {}, startedAt: 1000 }]);
+    expect(before.items[0]).not.toHaveProperty('started');
+    const after = run([{ type: 'tool_started', toolUseId: 't1', startedAt: 5000 }], before);
+    expect(after.items[0]).toMatchObject({ startedAt: 5000, started: true });
+    const items = normalizeHistory([{ kind: 'tool_use', id: 't1', name: 'Bash', input: {}, startedAt: 5000, started: true }]);
+    expect(items[0]).toMatchObject({ started: true });
+  });
+
+  it('tool_progress ложится на свою идущую карточку, а после результата — нет', () => {
+    const initial = state({ items: [toolUse('t1'), toolUse('t2')] });
+    const next = run([
+      { type: 'tool_progress', toolUseId: 't1', stage: 'working', lastTool: 'Bash', toolUses: 3, durationMs: 12000 },
+    ], initial);
+    expect(next.items[0]).toMatchObject({ id: 't1', progress: { stage: 'working', lastTool: 'Bash', toolUses: 3, durationMs: 12000 } });
+    expect(next.items[0]).not.toHaveProperty('progress.type');
+    expect(next.items[0]).not.toHaveProperty('progress.toolUseId');
+    expect(next.items[1]).not.toHaveProperty('progress');
+
+    const late = run([
+      { type: 'tool_result', toolUseId: 't1', content: 'ok', isError: false },
+      { type: 'tool_progress', toolUseId: 't1', stage: 'working', toolUses: 9 },
+    ], next);
+    expect(late.items[0]).toMatchObject({ progress: { toolUses: 3 } });
+  });
+
+  it('tool_progress сабагента на run_tests: вид прогона из его последнего вызова run_tests', () => {
+    const initial = state({ items: [
+      toolUse('agent', { name: 'Task' }),
+      toolUse('rt1', { name: 'mcp__tests__run_tests', input: { kind: 'playwright' }, parentToolUseId: 'agent', result: 'ok' }),
+      toolUse('rt2', { name: 'mcp__tests__run_tests', input: { kind: 'vitest' }, parentToolUseId: 'agent' }),
+      toolUse('other', { name: 'mcp__tests__run_tests', input: { kind: 'dotnet' }, parentToolUseId: 'другой' }),
+    ] });
+    const next = run([{ type: 'tool_progress', toolUseId: 'agent', stage: 'working', lastTool: 'mcp__tests__run_tests', toolUses: 1 }], initial);
+    expect(next.items[0]).toMatchObject({ progress: { lastTool: 'mcp__tests__run_tests', lastToolKind: 'vitest' } });
+
+    // Последний инструмент — не тесты: вид не ставится
+    const bash = run([{ type: 'tool_progress', toolUseId: 'agent', stage: 'working', lastTool: 'Bash', toolUses: 2 }], initial);
+    expect(bash.items[0]).not.toHaveProperty('progress.lastToolKind');
+  });
+
+  // FAIL Киры: при ОДНОМ вызове run_tests прогресс «сейчас тесты» приходит раньше, чем вызов
+  // с аргументами доезжает в ленту, — вид не появлялся весь прогон
+  it('tool_progress раньше вызова run_tests: вид дорисовывается приходом вызова', () => {
+    const initial = state({ items: [toolUse('agent', { name: 'Task' })] });
+    const early = run([{ type: 'tool_progress', toolUseId: 'agent', stage: 'working', lastTool: 'mcp__tests__run_tests', toolUses: 1 }], initial);
+    expect(early.items[0]).not.toHaveProperty('progress.lastToolKind');
+
+    const next = run([{ type: 'tool_use', id: 'rt1', name: 'mcp__tests__run_tests', input: { kind: 'vitest' }, parentToolUseId: 'agent' }], early);
+    expect(next.items[0]).toMatchObject({ progress: { lastTool: 'mcp__tests__run_tests', lastToolKind: 'vitest', toolUses: 1 } });
+
+    // Ранняя карточка без аргументов, затем финальный tool_use с ними — вид по финальному
+    const streamed = run([
+      { type: 'tool_use', id: 'rt2', name: 'mcp__tests__run_tests', input: {}, parentToolUseId: 'agent' },
+      { type: 'tool_use', id: 'rt2', name: 'mcp__tests__run_tests', input: { kind: 'playwright' }, parentToolUseId: 'agent' },
+    ], early);
+    expect(streamed.items[0]).toMatchObject({ progress: { lastToolKind: 'Playwright' } });
+
+    // Вызов run_tests ДРУГОГО сабагента чужую подпись не трогает
+    const foreign = run([{ type: 'tool_use', id: 'rt3', name: 'mcp__tests__run_tests', input: { kind: 'vitest' }, parentToolUseId: 'другой' }], early);
+    expect(foreign.items[0]).not.toHaveProperty('progress.lastToolKind');
+  });
+
+  it('tool_started со startedAt: null не затирает известный старт', () => {
+    const next = run([
+      { type: 'tool_use', id: 't1', name: 'Bash', input: {}, startedAt: 1000 },
+      { type: 'tool_started', toolUseId: 't1', startedAt: null as unknown as number },
+    ]);
+    expect(next.items[0]).toMatchObject({ startedAt: 1000 });
+  });
+
   it('workflow_progress обновляет агентов своей карточки', () => {
     const initial = state({ items: [toolUse('t1')] });
     const agents = [{ id: 'a1', prompt: 'сделай' }];

@@ -313,7 +313,7 @@ function ensureHandler() {
     if (msg.type === 'exited' && (_sending.has(sid) || _preempted.has(sid))) {
       const s = getState(sid);
       if (s.isWaiting && !turnAlreadyEnded(s.items))
-        touch(sid, { ...s, items: [...s.items, { kind: 'interrupted' }] });
+        touch(sid, { ...s, items: [...s.items, { kind: 'interrupted', ts: Date.now() }] });
     }
     // Ход, который прерывали, закончился — флаг отработал. Гасим и на result: если перебой
     // не состоялся (409, гонка), ход дошёл до конца сам, и держать флаг дальше нельзя —
@@ -535,7 +535,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     setState(sessionId, prev => {
       if (turnAlreadyEnded(prev.items)) return prev;
       added = true;
-      return { ...prev, items: [...prev.items, { kind: 'interrupted' }] };
+      return { ...prev, items: [...prev.items, { kind: 'interrupted', ts: Date.now() }] };
     });
     try { await api.sessions.preemptForPending(sessionId); }
     catch (e) {
@@ -593,7 +593,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
         _preempted.add(sessionId);
         setState(sessionId, prev => turnAlreadyEnded(prev.items)
           ? prev
-          : { ...prev, items: [...prev.items, { kind: 'interrupted' }] });
+          : { ...prev, items: [...prev.items, { kind: 'interrupted', ts: Date.now() }] });
       }
     } catch (err) {
       // JoinSession мог упасть потому, что чат удалён на сервере или у нас нет к нему
@@ -709,6 +709,8 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     if (!sessionId) return;
     interruptSession(sessionId);
     // Оптимистично помечаем ход как остановленный пользователем; подсказка прерванного хода неактуальна.
+    // Время пометки — момент обрыва для «прервано · M:SS» (toolLiveness.abortedAt): без него
+    // длительность держалась бы только в состоянии карточки и терялась при перемонтировании
     // Закончившийся ход не помечаем: сервер пишет ту же отметку в историю только на идущем
     // ходу, и лишний персистентный элемент в ленте навсегда перевесил бы историю при сверке
     setState(sessionId, prev => ({
@@ -717,7 +719,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       promptSuggestion: null,
       items: turnAlreadyEnded(prev.items)
         ? prev.items
-        : [...prev.items, { kind: 'interrupted' }],
+        : [...prev.items, { kind: 'interrupted', ts: Date.now() }],
     }));
   }, [sessionId]);
 

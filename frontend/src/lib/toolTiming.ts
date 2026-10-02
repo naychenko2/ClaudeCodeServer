@@ -7,7 +7,7 @@
 // после F5 карточка идущего или прерванного инструмента показывала «готово» без времени.
 
 import { isBgLaunchResult } from './agentTail';
-import { RUN_TESTS_TOOL, toolCardLabel, toolLabel, toolWord } from './toolLabels';
+import { RUN_TESTS_TOOL, isConsoleTool, toolCardLabel, toolLabel, toolWord } from './toolLabels';
 import type { ToolProgress, ToolRunTotals, ToolStage } from '../types';
 
 // Имя инструмента внутри подписи «сейчас …». Русское — со строчной: это середина фразы.
@@ -303,10 +303,20 @@ export function pickActiveTool<T extends ActiveToolItem>(items: readonly T[], li
   return null;
 }
 
-// Подпись активного инструмента: русское description от модели, иначе имя по-русски
+// Подпись активного инструмента: русское description от модели, иначе имя по-русски.
+// description берём только у консоли (признак тот же, что у consoleCaption) и у Task/Agent —
+// там это короткая подпись действия; у MCP и прочих (tasks_create, TaskCreate, Workflow)
+// description — содержимое, нередко длинный markdown, в строку ожидания ему нельзя
+function hasCaptionDescription(name: string): boolean {
+  if (name === 'Task' || name === 'Agent') return true;
+  return isConsoleTool(name) && !name.startsWith('mcp__');
+}
+
 export function activeToolLabel(item: { name: string; input?: unknown }): string {
   const d = (item.input as { description?: unknown } | null | undefined)?.description;
-  return typeof d === 'string' && d.trim() ? d.trim() : toolCardLabel(item.name, item.input);
+  return hasCaptionDescription(item.name) && typeof d === 'string' && d.trim()
+    ? d.trim()
+    : toolCardLabel(item.name, item.input);
 }
 
 // Время рядом с подписью индикатора — словами, как в строке ожидания: «52 с», «1 мин 12 с»,

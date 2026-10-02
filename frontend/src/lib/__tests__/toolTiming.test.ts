@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { activeToolLabel, awaitsToolStart, formatClock, formatWaitClock, isQueued, isToolGroupDone, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption } from '../toolTiming';
+import { toolCardLabel } from '../toolLabels';
 
 // Дефект Киры: карточка разрешения встаёт ПОСЛЕ группы и сворачивала её в «N действий»
 // вместе с живым Bash и таймером
@@ -360,6 +361,24 @@ describe('activeToolLabel', () => {
       .toBe('Синхронизирую транскрипты');
     expect(activeToolLabel({ name: 'Bash', input: { command: 'x' } })).toBe('Команда');
     expect(activeToolLabel({ name: 'mcp__tests__run_tests', input: { kind: 'vitest' } })).toBe('Тесты · vitest');
+  });
+
+  it('description у Task/Agent — подпись, как у консоли', () => {
+    expect(activeToolLabel({ name: 'Task', input: { description: 'Разведка по коду', prompt: '...' } })).toBe('Разведка по коду');
+    expect(activeToolLabel({ name: 'Agent', input: { description: 'Ревью диффа' } })).toBe('Ревью диффа');
+  });
+
+  it('у MCP и прочих description — содержимое, а не подпись: показываем имя', () => {
+    const markdown = '# Правки по ревью\n\n## Сделать\n1. **Длинный** пункт с `кодом`\n2. Ещё пункт';
+    expect(activeToolLabel({ name: 'mcp__tasks__tasks_create', input: { title: 'X', description: markdown } }))
+      .toBe(toolCardLabel('mcp__tasks__tasks_create', {}));
+    expect(activeToolLabel({ name: 'mcp__dify__create_dataset', input: { name: 'X', description: markdown } }))
+      .toBe(toolCardLabel('mcp__dify__create_dataset', {}));
+    expect(activeToolLabel({ name: 'TaskCreate', input: { subject: 'X', description: markdown } })).toBe(toolCardLabel('TaskCreate', {}));
+    expect(activeToolLabel({ name: 'Workflow', input: { description: markdown } })).toBe(toolCardLabel('Workflow', {}));
+    // MCP с «shell» в имени — не консоль: признак тот же, что у consoleCaption
+    expect(activeToolLabel({ name: 'mcp__box__run_shell', input: { command: 'ls', description: markdown } }))
+      .toBe(toolCardLabel('mcp__box__run_shell', {}));
   });
 });
 

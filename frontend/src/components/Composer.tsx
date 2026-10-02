@@ -38,7 +38,7 @@ import { plusButtonTitle, useStripShortcuts } from './chat/ComposerStripHost';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
-import { modeDraftText, nextComposerMode, nextModeDraft, nextPrefill, type ComposerModeSeen, type ModeDraftState, type PrefillState } from '../lib/composerModes';
+import { modeDraftText, modeSubmitButton, nextComposerMode, nextModeDraft, nextPrefill, type ComposerModeSeen, type ModeDraftState, type PrefillState } from '../lib/composerModes';
 import { getGenDraftText, setGenDraftText } from '../lib/genDrafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
@@ -2181,6 +2181,12 @@ export function Composer({
   // (работают по текущему диффу/контексту)
   const canSend = hasText || attachments.length > 0
     || teamMech === 'qa' || teamMech === 'review' || teamMech === 'redteam';
+  // Кнопка строки режима: при пустом поле — запуск вклада emptySubmit, если он есть
+  const modeSubmit = activeMode ? modeSubmitButton(activeMode, modeCtx, hasText, execBlocked) : null;
+  // Отказ вклада (исключение) причину уже показал сам — поле не трогаем
+  const runEmptySubmit = async (run: () => Promise<void> | void) => {
+    try { await run(); } catch { /* причина уже показана вкладом */ }
+  };
   const stopButton = (
     <button
       type="button"
@@ -2646,10 +2652,10 @@ export function Composer({
         <div data-composer-mode-bar="" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: `0 ${SP.xxs}px ${SP.xxs}px` }}>
           {modesSeg}
           <span style={{ flex: 1 }} />
-          <span data-composer-send="" style={{ display: 'inline-flex', minWidth: 0, flexShrink: 1 }}>
-            <Button size="sm" pill variant="primary" disabled={!hasText || execBlocked}
-              onClick={() => void handleSend()} style={{ minWidth: 0 }}>
-              {activeMode.submitLabel ? activeMode.submitLabel(modeCtx) : <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+          <span data-composer-send={modeSubmit!.kind === 'empty' ? 'empty' : ''} style={{ display: 'inline-flex', minWidth: 0, flexShrink: 1 }}>
+            <Button size="sm" pill variant="primary" disabled={modeSubmit!.disabled}
+              onClick={() => { if (modeSubmit!.run) void runEmptySubmit(modeSubmit!.run); else void handleSend(); }} style={{ minWidth: 0 }}>
+              {modeSubmit!.label ?? <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
             </Button>
           </span>
         </div>

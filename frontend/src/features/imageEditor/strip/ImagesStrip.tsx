@@ -9,24 +9,29 @@
 // Уже 800 панели нет места в зоне: ту же панель полоса рисует шторкой каркаса, и автооткрытие
 // по выбору картинки (revealWorkspacePanel) поднимает её же. Свёрнутая полоса открывает панель
 // кликом по сводке.
+// С флагом image-panel-v5 (макет image-panel-v5, вариант 1): зеркало «Создать / Править» после
+// заголовка, без выбранной картинки — пунктир «Новая картинка», над полосой — плашка «Вернуть»
+// после снятия картинки в «Править»; на телефоне сводка сжата до «▴», свёрнутая строка
+// показывает иконку режима.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, SlidersHorizontal, Sparkles, User, X } from 'lucide-react';
 import {
-  Button, Chip, IconButton, C, FS, R, SP, ICON_SIZE, REVEAL_PANEL_EVENT, isGenPanelKey, markGenPanelDismissed, useGenerationSheet,
-  type RevealPanelDetail,
+  Button, Chip, IconButton, ReleaseNotice, C, FS, R, SP, ICON_SIZE, REVEAL_PANEL_EVENT, isGenPanelKey, markGenPanelDismissed,
+  useGenerationSheet, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import { IMAGES_PANEL, revealWorkspacePanel } from '../characters/panel';
 import { ImagesPanel } from '../panel/ImagesPanel';
 import { useImagesPanelShown } from '../panel/panelOpen';
-import { createDraft, releaseFocus } from '../thread/actions';
+import { createDraft, imageReleaseUndo, releaseFocus, undoImageRelease } from '../thread/actions';
 import { enterScope, isPersonalScope } from '../scope';
 import { focusLabel } from '../thread/model';
 import { getFocusedThread, useThreads } from '../thread/threadStore';
 import { activeSrc, launchSummaryParts, useThreadLaunch } from '../thread/useThreadLaunch';
 import { useCharacter } from './settings/CharacterSection';
 import { ic } from './settings/primitives';
+import { ImageModeSwitch, MODE_ICON, MODE_LABEL } from './ImageModeSwitch';
 import { mobileSummary, settingsToggle } from './settingsToggle';
 import { subscribeSheetReveal, takeSheetReveal } from './sheetReveal';
 import { stripSummary } from './summary';
@@ -47,7 +52,12 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const state = useThreads(projectId, sessionId);
   const thread = state.focus ? state.threads.find(t => t.id === state.focus) ?? null : null;
   const L = useThreadLaunch(projectId, sessionId, thread);
+  // Режим «Создать / Править» — только с флагом image-panel-v5
+  const v5mode = L.imageMode;
   const [drafting, setDrafting] = useState(false);
+  const bar = useRef<HTMLDivElement>(null);
+  const offer = useSyncExternalStore(imageReleaseUndo.subscribe, imageReleaseUndo.current, imageReleaseUndo.current);
+  const undo = v5mode && offer && offer.snapshot.sessionId === sessionId ? offer : null;
   const { current: character, photo } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
   // Настройки — в панели «Картинки»: от 800 в зоне панелей, уже — шторкой полосы
   const inSheet = useGenerationSheet();
@@ -116,6 +126,14 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
             background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
           }}>
           {title}
+          {v5mode && (() => {
+            const ModeIcon = MODE_ICON[v5mode];
+            return (
+              <span data-images-mini-mode={v5mode} title={`Режим: ${MODE_LABEL[v5mode]}`} style={{ display: 'inline-flex', color: C.textSecondary, flexShrink: 0 }}>
+                {ic(ModeIcon, ICON_SIZE.sm)}
+              </span>
+            );
+          })()}
           <Thumb src={src} />
           <span data-images-summary="" title={toggle.title}
             onClick={e => { e.stopPropagation(); openSettings(); }}
@@ -138,18 +156,37 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
 
   return (
     <>
-      <div data-composer-strip="images" data-images-strip="full" style={{
+      {/* Плашка «Вернуть» встаёт над полосой и не сдвигает поле ввода */}
+      {undo && (
+        <div style={{ position: 'relative', height: 0 }}>
+          <div data-images-release="" style={{ position: 'absolute', left: 0, right: 0, bottom: SP.xs }}>
+            <ReleaseNotice text={undo.text} onUndo={() => { void undoImageRelease(); }} isMobile={isMobile} />
+          </div>
+        </div>
+      )}
+      <div ref={bar} data-composer-strip="images" data-images-strip="full" style={{
         position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 8, boxSizing: 'border-box', minWidth: 0,
         height: isMobile ? 44 : 51, margin: isMobile ? '6px 0' : '10px 0 8px', padding: isMobile ? '0 6px' : '0 8px',
         background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
       }}>
         {title}
+        {v5mode && (
+          <ImageModeSwitch projectId={projectId} sessionId={sessionId ?? null} mode={v5mode} thread={thread} threads={state.threads}
+            isMobile={isMobile} compact={isMobile} quiet={isMobile} bar={bar} />
+        )}
         {thread ? (
           <span style={{ display: 'inline-flex', minWidth: isMobile ? 0 : 72, flex: '0 1 auto' }}>
             {/* На телефоне чип — миниатюра без имени: место нужно сводке с ценой */}
             <Chip selected leading={src ? <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : ic(Sparkles)}
               maxW="100%" title={`${focusLabel(thread, true, personal)} — ${personal ? 'режим «Картинка» работает с этой версией' : 'режим «Картинка» и Claude работают с этой версией'}. ✕ — снять выбор`} onRemove={release}>
               {isMobile ? null : <>Работаем с: <b>{focusLabel(thread, true, personal)}</b></>}
+            </Chip>
+          </span>
+        ) : v5mode ? (
+          // «Создать» без черновика: первая отправка из поля ввода сама заведёт карточку
+          <span data-images-chip="new" style={{ display: 'inline-flex', flexShrink: 0 }}>
+            <Chip dashed leading={ic(Sparkles)} title="Новая картинка: опишите её в поле ввода — карточка ляжет в ленту">
+              {isMobile ? 'Новая' : 'Новая картинка'}
             </Chip>
           </span>
         ) : (
@@ -164,6 +201,13 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
         {noProviders ? (
           <span style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             Рисовать нечем: поставщиков не настроил администратор
+          </span>
+        ) : v5mode && isMobile ? (
+          // Телефон: место нужно переключателю, цена уже на кнопке поля ввода — от сводки остаётся «▴»
+          <span data-images-settings-toggle="" style={{ display: 'inline-flex', flexShrink: 0 }}>
+            <IconButton size="md" title="Открыть настройки панели «Картинки»" ariaLabel="Открыть настройки панели «Картинки»" onClick={openSettings}>
+              {ic(ChevronUp, ICON_SIZE.sm)}
+            </IconButton>
           </span>
         ) : (
           <span data-images-settings-toggle="" style={{ display: 'inline-flex', minWidth: 0, flex: '0 1 auto' }}>
@@ -193,9 +237,12 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
             <IconButton size="sm" title="Подключить персонажа" ariaLabel="Подключить персонажа"
               onClick={() => revealWorkspacePanel(IMAGES_PANEL, 'characters')}>{ic(User)}</IconButton>
           ))}
-        <IconButton size="sm" title="Свернуть полосу в строку" ariaLabel="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
-          {ic(ChevronUp, ICON_SIZE.sm)}
-        </IconButton>
+        {/* Телефон v5: вторая «▴» рядом со сводкой путалась бы с ней (как у «Звука») */}
+        {!(v5mode && isMobile) && (
+          <IconButton size="sm" title="Свернуть полосу в строку" ariaLabel="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
+            {ic(ChevronUp, ICON_SIZE.sm)}
+          </IconButton>
+        )}
 
       </div>
       {sheetEl}

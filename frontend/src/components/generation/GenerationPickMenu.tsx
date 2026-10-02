@@ -92,7 +92,8 @@ export function GenerationPickMenu({
       })}
       {extras.length > 0 && <MenuSep />}
       {extras.map(x => (
-        <MenuItem key={x.key} icon={x.icon} iconSize={THUMB} iconTile label={x.label} hint={x.hint} hintWrap disabled={x.disabled} onClick={x.onClick} isMobile={isMobile} />
+        <MenuItem key={x.key} icon={x.icon} iconSize={THUMB} iconTile label={x.label} hint={x.hint} hintWrap disabled={x.disabled} onClick={x.onClick} isMobile={isMobile}
+          wrapper={rowH ? { style: { minHeight: rowH } } : undefined} />
       ))}
       {footer && (
         <div style={{ padding: `${SP.xs + 2}px ${SP.md - 2}px ${SP.sm}px`, fontSize: FS.xs, color: C.textMuted }}>{footer}</div>

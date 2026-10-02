@@ -125,8 +125,11 @@ function SampleMenuLabel({ title, hint }: { title: string; hint: string }) {
 }
 
 // «Из файлов проекта…»: все картинки проекта сеткой, поиск по имени
-export function ProjectImagePicker({ projectId, taken, onPick, onClose, pickOnClick = false }: {
+export function ProjectImagePicker({ projectId, taken, onPick, onClose, pickOnClick = false, title = 'Образец из файлов проекта', confirmLabel = 'Добавить образец' }: {
   projectId: string;
+  // «Что править?» берёт картинку в работу, а не образцом — свои заголовок и кнопка
+  title?: string;
+  confirmLabel?: string;
   // Уже добавленные пути — повторно не предлагаем
   taken: string[];
   onPick: (path: string) => void;
@@ -153,8 +156,8 @@ export function ProjectImagePicker({ projectId, taken, onPick, onClose, pickOnCl
   }, [files, q, taken]);
 
   return (
-    <Modal title="Образец из файлов проекта" width={560} onClose={onClose}
-      footer={<ModalActions confirmLabel="Добавить образец" confirmDisabled={!sel} onCancel={onClose} onConfirm={() => { if (sel) onPick(sel); }} />}>
+    <Modal title={title} width={560} onClose={onClose}
+      footer={<ModalActions confirmLabel={confirmLabel} confirmDisabled={!sel} onCancel={onClose} onConfirm={() => { if (sel) onPick(sel); }} />}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
         <IconField icon={ic(Search, ICON_SIZE.sm)} value={q} onChange={setQ} placeholder="Поиск по имени" height={38} radius={R.lg} fontSize={14} />
         {error && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{error}</div>}

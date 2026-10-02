@@ -300,8 +300,8 @@ test.describe('сценарии v5, 1440', () => {
     await open(page, { width: 1440, height: 900 }, 'light', null, 'edit');
     await expect(page.locator('[data-images-strip="full"]')).toBeVisible({ timeout: 30_000 });
     const c = new Counter();
-    // «Создать» в полосе — шаг И2; до него ту же роль играет «Нарисовать новую»
-    await c.click('b', page.locator('[data-images-strip="full"]').getByText('Нарисовать новую'));
+    // «Создать» в полосе (шаг И2): черновик заведёт первая отправка из поля ввода
+    await c.click('b', page.locator('[data-images-strip="full"] [data-images-mode-switch] button').nth(0));
     await c.click('p', summary(page));
     await expect(panel(page).locator('[data-image-body="create"]')).toBeVisible();
     await c.click('p', panel(page).locator('[data-image-character-pick]'));

@@ -24,9 +24,9 @@ import {
 import { useQuote } from '../useQuote';
 import { getCatalog, loadCatalog, useCatalog } from './catalog';
 import { effectiveSettings, getPrefs, modeSettings, setModeSettings, setPrefs, usePrefs, type ProjectPrefs } from './prefs';
-import { effectiveImageMode, getStoredImageMode, modeAware, useImageModeVersion, type ImageMode } from './modeState';
+import { effectiveImageMode, getStoredImageMode, modeAware, noteLastEdited, useImageModeVersion, type ImageMode } from './modeState';
 import { activeStepOf } from './actions';
-import { currentVersion, isLegacyThread, originFile, versionHasImage, versionStep } from './model';
+import { currentVersion, isLegacyThread, originFile, threadHasImage, versionStep } from './model';
 import { getSamples, getThreadMarks, imageDraftKey, isWholeImage, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadSettings, type ImageThreadVersion } from './threadsApi';
 
@@ -51,11 +51,7 @@ export function activeSrc(projectId: string, t: ImageThread): string | null {
   return v ? versionSrc(projectId, t, v) : imageSrc(projectId, t, t.currentStepId);
 }
 
-export function threadHasImage(t: ImageThread | null): boolean {
-  if (!t) return false;
-  const v = isLegacyThread(t) ? null : currentVersion(t);
-  return v ? versionHasImage(t, v) : !!t.currentStepId || !!t.file;
-}
+export { threadHasImage } from './model';
 
 // Поставщик и модель по настройкам: модель не выбрана — умолчание админа у его поставщика
 function resolveModel(catalog: ImageEditCatalog | null, settings: ImageThreadSettings) {
@@ -213,6 +209,8 @@ export async function launchThread(
     });
     // Пометки ушли с запуском
     if (withMarks || withMask) setThreadMarks(thread.id, [], null);
+    // Правили эту картинку — отметка «правили последней» в меню «Что править?»
+    if (!fromScratch) noteLastEdited(sessionId, thread.id);
     // Запуск забрал черновик элемента — пометка «черновик» уходит
     clearGenDraft(imageDraftKey(thread.id));
     // Запуск здесь всегда от человека (агент запускает через MCP мимо фронта): строка

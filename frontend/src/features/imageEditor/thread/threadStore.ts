@@ -9,7 +9,7 @@ import type { Sample } from '../editorInputs';
 import type { Mark, Tool } from '../marks';
 import { conflictState, EMPTY_THREADS, threadsApi, type ImageThread, type ImageThreadsState } from './threadsApi';
 import { threadName } from './model';
-import { noteImageMode } from './modeState';
+import { modeAware, noteImageMode } from './modeState';
 
 export const IMAGES_STRIP = 'images';
 // Ключ панели «Картинки» в рабочей области — тот же, что IMAGES_PANEL в characters/panel
@@ -51,10 +51,12 @@ function subscribe(fn: () => void) {
 }
 const getVersion = () => _version;
 
-// Фокус меняет полосу над композером: выбрали картинку — «Картинки», сняли — прежняя
+// Фокус меняет полосу над композером: выбрали картинку — «Картинки», сняли — прежняя.
+// С флагом image-panel-v5 снятие полосу не уводит: дальше рисуем новую («Создать»), над
+// полосой — плашка «Вернуть»
 function syncStrip(sessionId: string, prev: string | null, next: string | null) {
   if (next && next !== prev) requestStrip(sessionId, IMAGES_STRIP);
-  else if (!next && prev) releaseStrip(sessionId, IMAGES_STRIP);
+  else if (!next && prev && !modeAware()) releaseStrip(sessionId, IMAGES_STRIP);
 }
 
 function apply(sessionId: string, projectId: string, state: ImageThreadsState) {

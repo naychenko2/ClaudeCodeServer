@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextComposerMode, nextPrefill, type ComposerModeEntry, type ComposerModeSeen, type PrefillState } from './composerModes';
+import { modeSubmitButton, nextComposerMode, nextPrefill, type ComposerModeEntry, type ComposerModeSeen, type PrefillState } from './composerModes';
 import type { ComposerModeApi } from './subsystems/registryCore';
 
 const EMPTY: PrefillState = { key: null, auto: null };
@@ -113,5 +113,43 @@ describe('самовключение режима поля', () => {
     seen = viaB.seen;
     active = 'a';
     expect(nextComposerMode([a, b], CTX, seen, null).modeId).toBeNull();
+  });
+});
+
+describe('кнопка строки режима и слот emptySubmit', () => {
+  const ctx = { projectId: 'p', sessionId: 's' };
+  const base: ComposerModeApi = {
+    title: 'Картинка', icon: null, isAvailable: () => true, placeholder: () => '', onSubmit: () => {},
+    submitLabel: () => 'Изменить',
+  };
+  const again = { label: 'Ещё 2', run: () => {} };
+
+  it('без вклада emptySubmit — прежнее поведение: подпись режима, на пустом поле кнопка гаснет', () => {
+    expect(modeSubmitButton(base, ctx, false, false)).toEqual({ kind: 'text', disabled: true, label: 'Изменить', run: null });
+    expect(modeSubmitButton(base, ctx, true, false)).toEqual({ kind: 'text', disabled: false, label: 'Изменить', run: null });
+    expect(modeSubmitButton(base, ctx, true, true).disabled).toBe(true);
+    // Без submitLabel — стрелка ядра (label null)
+    expect(modeSubmitButton({ ...base, submitLabel: undefined }, ctx, true, false).label).toBeNull();
+  });
+
+  it('вклад вернул null — как без вклада', () => {
+    expect(modeSubmitButton({ ...base, emptySubmit: () => null }, ctx, false, false))
+      .toEqual({ kind: 'text', disabled: true, label: 'Изменить', run: null });
+  });
+
+  it('пустое поле и вклад есть — его подпись и запуск, кнопка активна', () => {
+    const b = modeSubmitButton({ ...base, emptySubmit: () => again }, ctx, false, false);
+    expect(b).toEqual({ kind: 'empty', disabled: false, label: 'Ещё 2', run: again.run });
+  });
+
+  it('с текстом вклад не спрашивается: отправка набранного', () => {
+    let asked = 0;
+    const b = modeSubmitButton({ ...base, emptySubmit: () => { asked++; return again; } }, ctx, true, false);
+    expect(b.kind).toBe('text');
+    expect(asked).toBe(0);
+  });
+
+  it('ход недоступен — и «Ещё» гаснет', () => {
+    expect(modeSubmitButton({ ...base, emptySubmit: () => again }, ctx, false, true).disabled).toBe(true);
   });
 });

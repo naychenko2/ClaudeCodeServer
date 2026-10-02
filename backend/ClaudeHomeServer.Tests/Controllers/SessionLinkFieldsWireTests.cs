@@ -125,4 +125,20 @@ public class SessionLinkFieldsWireTests(TestWebApplicationFactory factory)
         chat.GetProperty("parentSessionId").ValueKind.Should().Be(JsonValueKind.Null);
         chat.GetProperty("taskDone").GetBoolean().Should().BeFalse();
     }
+
+    [Fact]
+    public async Task ПометкиКоммита_НаWireНеУходят()
+    {
+        // CommittedFilePaths — серверная атрибуция правок: в sessions.json живёт, на фронт
+        // не едет (в списке чатов давала около трети веса ответа)
+        var id = await CreateChatAsync();
+        factory.Services.GetRequiredService<SessionManager>().GetById(id)!
+            .CommittedFilePaths = ["src/a.ts"];
+
+        var resp = await _client.GetAsync($"/api/chats/{id}");
+        resp.EnsureSuccessStatusCode();
+
+        Json(await resp.Content.ReadAsStringAsync())
+            .TryGetProperty("committedFilePaths", out _).Should().BeFalse();
+    }
 }

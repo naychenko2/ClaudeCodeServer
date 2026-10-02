@@ -28,9 +28,11 @@ interface Props extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
   // Жирная первая строка; без неё плашка — одна строка текста
   title?: ReactNode;
   children?: ReactNode;
+  // Действие справа от текста (кнопка «Вернуть»); текст тогда занимает остаток строки
+  action?: ReactNode;
 }
 
-export function Notice({ tone = 'warning', icon: Icon, title, children, style, ...rest }: Props) {
+export function Notice({ tone = 'warning', icon: Icon, title, children, action, style, ...rest }: Props) {
   const t = TONE[tone];
   return (
     <div
@@ -45,10 +47,11 @@ export function Notice({ tone = 'warning', icon: Icon, title, children, style, .
       }}
     >
       <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: SP.xxs, color: t.icon }} />
-      <div style={{ minWidth: 0 }}>
+      <div style={action ? { minWidth: 0, flex: 1 } : { minWidth: 0 }}>
         {title && <div style={{ fontWeight: 600 }}>{title}</div>}
         {children}
       </div>
+      {action}
     </div>
   );
 }

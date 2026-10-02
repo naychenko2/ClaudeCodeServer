@@ -56,10 +56,21 @@ function prefsPatch(p: Partial<VideoSceneSettings>): VideoPrefs {
   return o;
 }
 
-// Отправить стоящую правку сейчас (смена сцены, закрытие панели, запуск)
-export async function flushSettings(scope: string, sessionId: string): Promise<boolean> {
+const _flushing = new Map<string, Promise<boolean>>();
+
+// Отправить стоящую правку сейчас (смена сцены, закрытие панели, запуск). Отправки одного чата идут
+// строго друг за другом: две записи с одной ревизией дали бы 409 на второй
+export function flushSettings(scope: string, sessionId: string): Promise<boolean> {
   const t = _timers.get(sessionId);
   if (t) { clearTimeout(t); _timers.delete(sessionId); }
+  const prev = _flushing.get(sessionId) ?? Promise.resolve(true);
+  const next = prev.then(() => flushNow(scope, sessionId));
+  _flushing.set(sessionId, next);
+  void next.finally(() => { if (_flushing.get(sessionId) === next) _flushing.delete(sessionId); });
+  return next;
+}
+
+async function flushNow(scope: string, sessionId: string): Promise<boolean> {
   const pend = getPendingAny(sessionId);
   if (!pend) return true;
   await ensureVideoThreads(scope, sessionId);
@@ -73,7 +84,7 @@ export async function flushSettings(scope: string, sessionId: string): Promise<b
   }
   if (Object.keys(pend.patch).some(k => CONTENT_KEYS.includes(k))) {
     const settings = settingsOf(resolveScene(null, pend.patch, getPrefs(scope), getCatalog(scope)));
-    const ok = await mutate(scope, sessionId, rev => videoApi.addScene(scope, sessionId, { settings, revision: rev }));
+    const ok = await mutate(scope, sessionId, rev => videoApi.addScene(scope, sessionId, { settings, revision: rev }), true);
     if (ok) dropIf(sessionId, pend);
     return ok;
   }
@@ -97,7 +108,7 @@ export async function createScene(scope: string, sessionId: string, opts: { fram
     ...settingsOf(resolveScene(null, null, getPrefs(scope), getCatalog(scope))),
     ...(opts.frameA ? { frameA: opts.frameA } : {}),
   };
-  return mutate(scope, sessionId, rev => videoApi.addScene(scope, sessionId, { settings, ...(opts.name ? { name: opts.name } : {}), revision: rev }));
+  return mutate(scope, sessionId, rev => videoApi.addScene(scope, sessionId, { settings, ...(opts.name ? { name: opts.name } : {}), revision: rev }), true);
 }
 
 // Кадр B прошлой сцены → кадр A новой (стык без скачка)
@@ -180,7 +191,7 @@ export async function stopJob(scope: string, sessionId: string, jobId: string) {
 
 // «Продолжить от версии»
 export const takeVersion = (scope: string, sessionId: string, sceneId: string, versionId: string) =>
-  mutate(scope, sessionId, rev => videoApi.current(scope, sessionId, sceneId, versionId, rev));
+  mutate(scope, sessionId, rev => videoApi.current(scope, sessionId, sceneId, versionId, rev), true);
 
 // «Сохранить сцену» в проект (блок 2 бэкенда)
 export async function saveScene(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined): Promise<SaveSceneResult | null> {

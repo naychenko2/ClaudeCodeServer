@@ -79,8 +79,8 @@ export function useFilmPanel(projectId: string | null, sessionId: string | null)
   };
   let foot: GenerationFoot = base;
   const resultActions = (file: string) => [
-    { label: 'Открыть', onClick: () => { if (!openProjectFile(file)) showToast('Файл открывается в проекте', '', 'info'); } },
-    { label: 'Показать в дереве', onClick: () => { openProjectFile(file, true); } },
+    { label: 'Открыть', onClick: () => { void openProjectFile(file).then(ok => { if (!ok) showToast('Файл открывается в проекте', '', 'info'); }); } },
+    { label: 'Показать в дереве', onClick: () => { void openProjectFile(file, true); } },
   ];
   if (v.kind === 'waiting') {
     foot = { ...base, progress: { label: 'Ждём очередь сборки…', onCancel: () => { void cancelBuild(scope, sessionId, path); } } };
@@ -149,7 +149,7 @@ function FilmContext({ scope, sessionId, path, f }: { scope: string; sessionId: 
           ))}
           {films.length > 0 && <MenuSep />}
           <MenuItem icon={ic(FilePlus2)} label="Новый фильм" onClick={() => { setMenuAt(null); setNewFilm(sessionId); }} />
-          <MenuItem icon={ic(FolderTree)} label="Показать в дереве" onClick={() => { setMenuAt(null); openProjectFile(path, true); }} />
+          <MenuItem icon={ic(FolderTree)} label="Показать в дереве" onClick={() => { setMenuAt(null); void openProjectFile(path, true); }} />
         </Menu>
       )}
     </span>
@@ -282,7 +282,7 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     onTrim: (i, trim) => { void patch([{ op: 'trim', index: i, trim }]); },
     onCut: (i, type, sec) => { void patch([{ op: 'cut', index: i, cutType: type, ...(type === 'butt' ? {} : { sec }) }]); },
     onReshoot: reshoot,
-    onReveal: i => { openProjectFile(doc.items[i].file, true); },
+    onReveal: i => { void openProjectFile(doc.items[i].file, true); },
   };
   const addFile = (file: string, scene?: VideoScene | null) => {
     setPicking(null);
@@ -300,7 +300,7 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   }
 
   const music = doc.music;
-  const composing = isComposing(sessionId, path);
+  const composing = isComposing(path, music?.file);
   return (
     <div data-video-film-tab="">
       {f.build?.state === 'failed' && (
@@ -380,7 +380,7 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       )}
       <div style={{ marginTop: SP.sm }}>
         <Button size="sm" variant="secondary" leftIcon={ic(Sparkles)} disabled={composing}
-          onClick={() => composeForFilm(scope, sessionId, filmName(path), f)}>
+          onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f); }}>
           {composing ? 'Сочиняем в «Звуке»…' : 'Сочинить под фильм…'}
         </Button>
         <Hint>

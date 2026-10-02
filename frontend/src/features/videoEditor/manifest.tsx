@@ -5,11 +5,10 @@
 import { Clapperboard } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
-  ChatItemToolCtx, ComposerChipCtx, FileViewerToolbarCtx, SlotContribution, ComposerStripCtx, ComposerStripShortcut, SubsystemManifest, WorkspacePanelDefApi, WorkspacePanelDefCtx,
+  ChatItemToolCtx, ComposerChipCtx, SlotContribution, ComposerStripCtx, ComposerStripShortcut, SubsystemManifest, WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
 import { sceneMode } from './composer/sceneMode';
 import { VideoChatWatcher } from './composer/VideoChatWatcher';
-import { FilmFileOpener } from './film/FilmFileOpener';
 import { LaunchAnchor, QuietLine, SceneAnchor } from './feed/SceneCard';
 import { recordKey } from './feed/records';
 import { RECORD } from './api';
@@ -47,10 +46,6 @@ export const manifest: SubsystemManifest = {
     // Режим поля ввода «Сцена» — только при выбранной сцене
     'composer-mode': [
       { name: 'scene', order: 30, action: sceneMode as unknown as Record<string, unknown> },
-    ],
-    // Клик по .film в дереве: просмотр файла открывается, а панель «Видео» встаёт на «Фильм»
-    'file-viewer-toolbar': [
-      { name: 'video-editor-film', order: 20, render: (ctx: FileViewerToolbarCtx) => <FilmFileOpener path={ctx.filePath} /> },
     ],
     // Полоса «Видео» над композером: выбор сцены открывает её сам (стор нитей)
     'composer-strip': [

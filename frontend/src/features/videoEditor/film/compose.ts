@@ -1,57 +1,31 @@
-// «Сочинить под фильм…» → панель «Звук» с заготовкой и возвратом. Первый готовый трек в music/
-// встаёт музыкой фильма сам; остальные варианты — «Сменить». «Звук» о видео не знает: связь держит
-// этот модуль по событию нитей звука (публичному, как его видит панель «Звук»).
+// «Сочинить под фильм…» (ADR-022, контракт films/music): сервер заводит черновик звука в этом чате и
+// ждёт его первую версию — она встанет музыкой фильма сама, кто бы ни запустил (человек или агент).
+// Здесь — запрос черновика и панель «Звук» на нём с заготовкой и возвратом; остальные варианты — «Сменить».
 
-import { onMessage, revealWorkspacePanel, showToast } from 'aihome_shell/kit';
-import type { FilmState } from '../api';
-import { VIDEO_PANEL, patchFilm } from '../store/videoStore';
+import { revealWorkspacePanel, showToast } from 'aihome_shell/kit';
+import { errorText, videoApi, type FilmState } from '../api';
+import { VIDEO_PANEL } from '../store/videoStore';
 import { soundPreset } from './model';
 
-interface AudioThreadLite { id: string; file: string | null; versions?: unknown[] }
-interface Pending { scope: string; path: string; name: string; at: number; known: Set<string> | null }
+// Фильм → музыка до запроса: новая музыка после него — «из «Звука»»
+const _pending = new Map<string, string | null>();
 
-const _pending = new Map<string, Pending>();
-const _fromSound = new Set<string>();
-let _off: (() => void) | null = null;
-
-const MUSIC_RE = /^music\/.+\.(mp3|wav|flac|ogg|m4a)$/i;
-
-// Первый новый звук с файлом в music/ — музыка фильма
-export function pickNewTrack(threads: AudioThreadLite[], known: Set<string> | null): string | null {
-  for (const t of threads) {
-    if (known?.has(t.id)) continue;
-    if (t.file && MUSIC_RE.test(t.file)) return t.file;
-  }
-  return null;
-}
-
-function ensure() {
-  if (_off) return;
-  _off = onMessage(msg => {
-    const m = msg as unknown as { type?: string; sessionId?: string; state?: { threads?: AudioThreadLite[] } };
-    if (m.type !== 'audio_thread_changed' || !m.sessionId || !m.state?.threads) return;
-    const p = _pending.get(m.sessionId);
-    if (!p) return;
-    // Первое событие после запроса — снимок того, что уже было: новыми считаются только звуки сверх него
-    if (!p.known) { p.known = new Set(m.state.threads.filter(t => t.file).map(t => t.id)); return; }
-    const file = pickNewTrack(m.state.threads, p.known);
-    if (!file) return;
-    _pending.delete(m.sessionId);
-    _fromSound.add(`${p.path}\n${file}`);
-    void patchFilm(p.scope, m.sessionId, p.path, [{ op: 'music', music: { file, volume: 60, fadeOut: 2 } }]).then(ok => {
-      if (ok) showToast(`Трек сочинён: ${file} — встал музыкой фильма «${p.name}»`, '', 'info');
+export async function composeForFilm(scope: string, sessionId: string, name: string, f: FilmState): Promise<boolean> {
+  try {
+    const draft = await videoApi.composeMusic(scope, sessionId, f.path);
+    _pending.set(f.path, f.document.music?.file ?? null);
+    revealWorkspacePanel('sound', 'settings', {
+      sessionId, preset: { ...soundPreset(name, f), thread: draft.threadId },
+      returnTo: { key: VIDEO_PANEL, tab: 'film', target: f.path, label: `К фильму «${name}» — панель «Видео»` },
     });
-  });
+    return true;
+  } catch (e) {
+    showToast(errorText(e, 'Не удалось завести звук под фильм'), '', 'error');
+    return false;
+  }
 }
 
-export function composeForFilm(scope: string, sessionId: string, name: string, f: FilmState) {
-  ensure();
-  _pending.set(sessionId, { scope, path: f.path, name, at: Date.now(), known: null });
-  revealWorkspacePanel('sound', 'settings', {
-    sessionId, preset: soundPreset(name, f),
-    returnTo: { key: VIDEO_PANEL, tab: 'film', target: f.path, label: `К фильму «${name}» — панель «Видео»` },
-  });
-}
+export const isComposing = (path: string, music: string | null | undefined) =>
+  _pending.has(path) && (_pending.get(path) ?? null) === (music ?? null);
 
-export const isFromSound = (path: string, file: string) => _fromSound.has(`${path}\n${file}`);
-export const isComposing = (sessionId: string | null, path: string) => !!sessionId && _pending.get(sessionId)?.path === path;
+export const isFromSound = (path: string, file: string) => _pending.has(path) && _pending.get(path) !== file;

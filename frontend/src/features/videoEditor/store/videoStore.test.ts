@@ -23,7 +23,7 @@ import { videoApi } from '../api';
 import { CATALOG, film, FILM_PATH, PREFS, scene, threads } from '../mocks';
 import { selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
 import {
-  __applyThreads, __resetVideoStore, __setFilm, ensureVideoThreads, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent,
+  __applyThreads, __resetVideoStore, __setFilm, ensureVideoThreads, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent, mutate,
   patchFilm, sceneDraftKey, VIDEO_PANEL, VIDEO_STRIP,
 } from './videoStore';
 
@@ -72,6 +72,23 @@ describe('агент не двигает панель', () => {
     handleEvent(changed(2, threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' })));
     expect(reveals()).toEqual([]);
     expect(getAgentPick('c1')).toMatchObject({ panelKey: VIDEO_PANEL, target: sceneDraftKey('s2'), label: 'Сцена 2', tab: 'scene' });
+  });
+
+  it('выбор агента не переключает полосу: на телефоне это закрыло бы шторку соседнего раздела', () => {
+    __applyThreads('c1', 'p1', threads(1, [scene('s1')], {}));
+    handleEvent(changed(2, threads(2, [scene('s1')], { sceneId: 's1' })));
+    expect(getActiveStrip('c1', AVAIL)).not.toBe(VIDEO_STRIP);
+    expect(getAgentPick('c1')?.tab).toBe('scene');
+  });
+
+  it('правка настроек в полёте не глушит выбор агента — глушит только свой выбор', async () => {
+    __applyThreads('c1', 'p1', threads(1, [scene('s1'), scene('s2')], { sceneId: 's1' }));
+    vi.spyOn(videoApi, 'settings').mockImplementation(async () => {
+      handleEvent(changed(2, threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' })));
+      return threads(3, [scene('s1'), scene('s2')], { sceneId: 's2' });
+    });
+    await mutate('p1', 'c1', rev => videoApi.settings('p1', 'c1', 's1', scene('s1').settings, rev));
+    expect(getAgentPick('c1')?.target).toBe(sceneDraftKey('s2'));
   });
 
   it('фильм, открытый агентом, — подсказка на вкладку «Фильм»', () => {

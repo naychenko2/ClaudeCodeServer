@@ -68,21 +68,23 @@ function syncStrip(sessionId: string, prev: VideoFocus | undefined, next: VideoF
   else if (!hasFocus(next) && hasFocus(prev)) releaseStrip(sessionId, VIDEO_STRIP);
 }
 
-function apply(sessionId: string, scope: string, state: VideoThreadsState) {
+// byAgent — фокус сменил агент: полосу не переключаем (на телефоне смена полосы закрыла бы шторку
+// соседнего раздела — агент панель не двигает)
+function apply(sessionId: string, scope: string, state: VideoThreadsState, byAgent = false) {
   const e = _entries.get(sessionId);
   // Событие старше того, что уже знаем, — пропускаем
   if (e?.loaded && e.state.revision > state.revision) return;
   const prevFocus = e?.loaded ? e.state.focus : undefined;
   _entries.set(sessionId, { scope, state, loaded: true, loading: false });
-  syncStrip(sessionId, prevFocus, state.focus);
+  if (!byAgent) syncStrip(sessionId, prevFocus, state.focus);
   emit();
   notifyComposer();
 }
 
 // Фокус сменился событием с сервера, а не ответом на свой клик, — его выбрал агент: панель он не
 // двигает (никакого reveal), а каркас покажет подсказку «Claude взял в работу». Вкладка — явная
-export function noteAgentFocus(sessionId: string, prev: VideoThreadsState | null, next: VideoThreadsState) {
-  if (!prev || next.revision < prev.revision || (_own.get(sessionId) ?? 0) > 0) return;
+export function noteAgentFocus(sessionId: string, prev: VideoThreadsState | null, next: VideoThreadsState): boolean {
+  if (!prev || next.revision < prev.revision || (_own.get(sessionId) ?? 0) > 0) return false;
   const was = prev.focus;
   const now = next.focus;
   if (was.sceneId !== now.sceneId) {
@@ -91,11 +93,13 @@ export function noteAgentFocus(sessionId: string, prev: VideoThreadsState | null
       const scene = next.scenes.find(s => s.sceneId === now.sceneId);
       noteAgentPick(sessionId, { panelKey: VIDEO_PANEL, target: sceneDraftKey(now.sceneId), label: scene?.name ?? 'сцена', tab: 'scene' });
     }
-    return;
+    return true;
   }
   if (was.filmPath !== now.filmPath && now.filmPath) {
     noteAgentPick(sessionId, { panelKey: VIDEO_PANEL, target: filmTarget(now.filmPath), label: filmName(now.filmPath), tab: 'film' });
+    return true;
   }
+  return false;
 }
 
 // «video/утро/утро.film» → «утро»
@@ -122,8 +126,8 @@ export function handleEvent(ev: VideoEvent) {
     case 'video_thread_changed': {
       const e = _entries.get(ev.sessionId);
       if (!e) return;
-      noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
-      apply(ev.sessionId, ev.scopeKey, ev.state);
+      const byAgent = noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
+      apply(ev.sessionId, ev.scopeKey, ev.state, byAgent);
       return;
     }
     case 'video_film_changed':
@@ -232,8 +236,11 @@ export function useVideoStoreVersion(): number {
 export async function mutate(
   scope: string, sessionId: string,
   run: (revision: number) => Promise<VideoThreadsState>,
+  // Мутация меняет фокус (выбор сцены, фильма, новая сцена): пока она в полёте, событие с тем же
+  // фокусом — эхо своего клика, а не выбор агента
+  ownFocus = false,
 ): Promise<boolean> {
-  _own.set(sessionId, (_own.get(sessionId) ?? 0) + 1);
+  if (ownFocus) _own.set(sessionId, (_own.get(sessionId) ?? 0) + 1);
   try {
     apply(sessionId, scope, await run(getThreadsState(sessionId).revision));
     return true;
@@ -247,9 +254,11 @@ export async function mutate(
     }
     return false;
   } finally {
-    const n = (_own.get(sessionId) ?? 1) - 1;
-    if (n <= 0) _own.delete(sessionId);
-    else _own.set(sessionId, n);
+    if (ownFocus) {
+      const n = (_own.get(sessionId) ?? 1) - 1;
+      if (n <= 0) _own.delete(sessionId);
+      else _own.set(sessionId, n);
+    }
   }
 }
 
@@ -257,14 +266,14 @@ export const focusScene = (scope: string, sessionId: string, sceneId: string | n
   mutate(scope, sessionId, rev => {
     const f = getThreadsState(sessionId).focus;
     return videoApi.focus(scope, sessionId, { ...(sceneId ? { sceneId } : {}), ...(f.filmPath ? { filmPath: f.filmPath } : {}) }, rev);
-  });
+  }, true);
 
 // Открыть фильм (путь .film) или закрыть (null): сцена в фокусе остаётся
 export const focusFilm = (scope: string, sessionId: string, filmPath: string | null) =>
   mutate(scope, sessionId, rev => {
     const f = getThreadsState(sessionId).focus;
     return videoApi.focus(scope, sessionId, { ...(f.sceneId ? { sceneId: f.sceneId } : {}), ...(filmPath ? { filmPath } : {}) }, rev);
-  });
+  }, true);
 
 // ── Фильмы (блок 2) ──
 

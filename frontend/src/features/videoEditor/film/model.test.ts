@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { film, FILM_PATH, scene } from '../mocks';
 import { filmChip, filmDuration, staleFilm } from '../strip/summary';
-import { pickNewTrack } from './compose';
 import {
   buildView, clampTrim, cutLabel, newFilmPath, sceneOfItem, snapshotOf, soundPreset, spentText, staleReasons, trimLabel,
 } from './model';
@@ -50,11 +49,6 @@ describe('сборка и «обновлена»', () => {
 describe('стыки с соседями', () => {
   it('заготовка «Звука»: длина фильма, песня, инструментал, привязка к .film', () => {
     expect(soundPreset('утро', film())).toMatchObject({ mode: 'music', op: 'song', duration: 22, instrumental: true, bindTo: FILM_PATH, from: 'под фильм «утро»' });
-  });
-  it('первый новый трек в music/ — музыка фильма, прежние звуки не в счёт', () => {
-    const known = new Set(['old']);
-    expect(pickNewTrack([{ id: 'old', file: 'music/a.mp3' }, { id: 'n1', file: null }, { id: 'n2', file: 'music/утро.mp3' }], known)).toBe('music/утро.mp3');
-    expect(pickNewTrack([{ id: 'n3', file: 'voice/речь.mp3' }], known)).toBeNull();
   });
   it('снимок сцены для строки фильма — только файлы-кадры', () => {
     const s = scene('s1', { settings: { ...scene('s1').settings, frameB: { kind: 'image', threadId: 't', versionId: 'v' } } });

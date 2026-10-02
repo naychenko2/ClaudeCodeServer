@@ -246,6 +246,8 @@ export type FilmPatchOp =
 
 export interface FilmPatch { expectedRevision: string; ops: FilmPatchOp[] }
 
+export interface FilmMusicDraft { threadId: string }
+
 export interface SaveSceneRequest { sessionId: string; sceneId: string; versionId?: string; folder?: string; fileName?: string }
 export interface SaveSceneResult { path: string; framePaths: string[]; addedToFilm: boolean }
 
@@ -379,19 +381,23 @@ export const videoApi = {
     return json<SaveSceneResult>(`${sceneUrl(scope, sessionId, sceneId)}/save`, { ...req, sessionId, sceneId });
   },
 
-  // Фильмы — только у проекта (блок 2); личный чат — personal_scope_no_films
+  // Фильмы — ручки проекта, не чата (FilmController); личный чат — personal_scope_no_films
   films: (scope: string, sessionId: string) =>
-    request<FilmSummary[]>(`${chatBase(scope, sessionId)}/films`, { live: true }),
+    request<FilmSummary[]>(`${videoBase(scope, sessionId)}/films`, { live: true }),
   filmState: (scope: string, sessionId: string, path: string) =>
-    request<FilmState>(`${chatBase(scope, sessionId)}/films/state?${new URLSearchParams({ path })}`, { live: true }),
+    request<FilmState>(`${videoBase(scope, sessionId)}/films/state?${new URLSearchParams({ path })}`, { live: true }),
   patchFilm: (scope: string, sessionId: string, path: string, patch: FilmPatch) =>
-    json<FilmState>(`${chatBase(scope, sessionId)}/films?${new URLSearchParams({ path })}`, patch, 'PATCH'),
+    json<FilmState>(`${videoBase(scope, sessionId)}/films?${new URLSearchParams({ path })}`, patch, 'PATCH'),
   buildFilm: (scope: string, sessionId: string, path: string) =>
-    json<FilmBuildStatus>(`${chatBase(scope, sessionId)}/films/build?${new URLSearchParams({ path })}`, {}),
+    json<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${new URLSearchParams({ path })}`, {}),
   buildStatus: (scope: string, sessionId: string, path: string) =>
-    request<FilmBuildStatus>(`${chatBase(scope, sessionId)}/films/build?${new URLSearchParams({ path })}`, { live: true }),
+    request<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${new URLSearchParams({ path })}`, { live: true }),
   cancelBuild: (scope: string, sessionId: string, path: string) =>
-    request<FilmBuildStatus>(`${chatBase(scope, sessionId)}/films/build?${new URLSearchParams({ path })}`, { method: 'DELETE' }),
+    request<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${new URLSearchParams({ path })}`, { method: 'DELETE' }),
+  // «Сочинить под фильм…»: сервер заводит черновик звука в чате и ждёт его первую версию — она встанет
+  // музыкой фильма сама (FilmMusicComposer), и при запуске человеком, и агентом
+  composeMusic: (scope: string, sessionId: string, path: string) =>
+    json<FilmMusicDraft>(`${videoBase(scope, sessionId)}/films/music?${new URLSearchParams({ path })}`, { sessionId }),
 
   subscribe: (handler: (e: VideoEvent) => void) => onMessage(msg => {
     const m = msg as unknown as { type?: string };

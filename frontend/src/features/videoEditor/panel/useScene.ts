@@ -103,9 +103,15 @@ export function useScene(projectId: string | null, sessionId: string | null): Sc
     // eslint-disable-next-line react-hooks/exhaustive-deps -- по сцене и котировке
   }, [sessionId, scene?.sceneId, quote]);
 
+  // Цена ещё в пути (клик сразу после правки) — котировку берём тут же: запуск всё равно строго по ней
   const run = async (extra = '') => {
-    if (!sessionId || !scene || !quote || reason) return false;
-    return runScene({ scope, sessionId, scene, r, quote }, extra);
+    if (!sessionId || !scene || reason) return false;
+    const q = quote ?? await videoApi.quote(scope, sessionId, {
+      sessionId, sceneId: scene.sceneId, ...(providerKey && modelId ? { provider: providerKey, model: modelId } : {}),
+      count: r.count, durationSec: r.durationSec, aspect: r.aspect, sound: r.sound,
+    }).catch((e: Error) => { setQuoteError(e.message || 'Котировка не получилась'); return null; });
+    if (!q) return false;
+    return runScene({ scope, sessionId, scene, r, quote: q }, extra);
   };
 
   const prog = progressLabel(scene, jobs, r.count);

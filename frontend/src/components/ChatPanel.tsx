@@ -2765,7 +2765,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 activeToolTimer={activeToolTimed}
               />
             </div>
-            <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex' }}>
+            {/* Пилюле — не больше половины строки: иначе на 320px её 300px съедали всё, и у
+                индикатора не оставалось места даже под аватар и время. Половина — потолок,
+                а не ширина: на широкой колонке пилюля упирается в свой maxWidth раньше */}
+            <div style={{ marginLeft: 'auto', minWidth: 0, maxWidth: '50%', display: 'flex' }}>
               <TurnPlanPill todos={taskTodos} />
             </div>
           </div>

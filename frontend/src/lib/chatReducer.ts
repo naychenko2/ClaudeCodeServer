@@ -598,8 +598,12 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // typeof, а не === undefined: старт null не должен затирать уже известный
       const startedAt = msg.startedAt;
       if (typeof startedAt !== 'number') return prev;
+      // appearedAt — момент появления вызова (прежний startedAt, первый из всех стартов): от
+      // него индикатор считает порог показа, чтобы подпись не мигала глаголами на старте
       return withItems(prev.items.map(it =>
-        it.kind === 'tool_use' && it.id === msg.toolUseId && it.result == null ? { ...it, startedAt, started: true } : it
+        it.kind === 'tool_use' && it.id === msg.toolUseId && it.result == null
+          ? { ...it, startedAt, started: true, appearedAt: it.appearedAt ?? it.startedAt }
+          : it
       ));
     }
 

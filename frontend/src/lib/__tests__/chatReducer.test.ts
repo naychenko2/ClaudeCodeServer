@@ -234,7 +234,10 @@ describe('applyServerMessage: инструменты', () => {
     const before = run([{ type: 'tool_use', id: 't1', name: 'Bash', input: {}, startedAt: 1000 }]);
     expect(before.items[0]).not.toHaveProperty('started');
     const after = run([{ type: 'tool_started', toolUseId: 't1', startedAt: 5000 }], before);
-    expect(after.items[0]).toMatchObject({ startedAt: 5000, started: true });
+    expect(after.items[0]).toMatchObject({ startedAt: 5000, started: true, appearedAt: 1000 });
+    // Повторный старт момент появления не двигает: порог индикатора один на вызов
+    const again = run([{ type: 'tool_started', toolUseId: 't1', startedAt: 6000 }], after);
+    expect(again.items[0]).toMatchObject({ startedAt: 6000, appearedAt: 1000 });
     const items = normalizeHistory([{ kind: 'tool_use', id: 't1', name: 'Bash', input: {}, startedAt: 5000, started: true }]);
     expect(items[0]).toMatchObject({ started: true });
   });

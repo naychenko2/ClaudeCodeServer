@@ -16,7 +16,7 @@ public sealed record VideoQuoteRequest(
     string? Aspect,
     bool? Sound);
 
-// Price.Unit — usd | credits | local-seconds; Amount null — цена станет известна после запуска
+// Price.Unit — usd | credits | free (local бесплатен); Amount null — цена станет известна после запуска
 public sealed record VideoPriceDto(double? Amount, string Unit, bool Approx, string Source, int? Eta, int? QueueLength);
 
 public sealed record VideoQuoteResponse(

@@ -22,4 +22,18 @@ public static class VideoEditorErrors
     public const string FilmInvalid = "film_invalid";
     // 422: неизвестная схема .film — только чтение
     public const string FilmSchemaUnsupported = "film_schema_unsupported";
+
+    // Общие коды исполнителя и ручек сцен (добавлены после КТ-1)
+    public const string InvalidRequest = "invalid_request";
+    public const string ProviderUnavailable = "provider_unavailable";
+    public const string QuoteNotFound = "quote_not_found";
+    public const string TooManyJobs = "too_many_jobs";
+    public const string HeavyBusy = "heavy_busy";
+    public const string ChatNotFound = "chat_not_found";
+    public const string SceneNotFound = "scene_not_found";
+    public const string VersionNotFound = "version_not_found";
+    public const string JobNotFound = "job_not_found";
+    public const string FileNotFound = "file_not_found";
+    // Кадр сцены прочитать нельзя: файла нет, он вне проекта или кадр из «Картинок» ещё не подключён швом
+    public const string FrameUnavailable = "frame_unavailable";
 }

@@ -164,12 +164,14 @@ JSON ниже — единственное описание формы для ф
 (в скобках — вариант примера). Даты — UTC, `camelCase`, `null` не выводится. Правка после КТ-1 — отдельным
 коммитом `refactor(videoEditor): контракт …` и строкой в доклад.
 
-Маршруты (`VideoEditorRoutes`): проектные `api/projects/{projectId}/video-editor/sessions/{sessionId}/…` и общие
+Маршруты (`VideoEditorRoutes`; `Price.Unit` — `usd` | `credits` | `free`): проектные `api/projects/{projectId}/video-editor/sessions/{sessionId}/…` и общие
 `…/catalog`, `…/prefs`, `…/quote`, `…/jobs`; личные `api/video-editor/chats/{sessionId}/…`. Хвосты: `state`,
 `scenes`, `scenes/focus`, `scenes/{sceneId}/settings|current|save`, `scenes/{sceneId}/versions/{versionId}/file|poster`,
 `films`, `films/state?path=`, `films/build?path=`. Коды ошибок (`VideoEditorErrors`): `name_taken`,
 `revision_conflict`, `dsp_unavailable`, `personal_scope_no_films`, `local_unavailable_personal`,
-`project_local_unsupported`, `outside_allowed_folders`, `film_invalid`, `film_schema_unsupported`.
+`project_local_unsupported`, `outside_allowed_folders`, `film_invalid`, `film_schema_unsupported`, а также общие
+`invalid_request`, `provider_unavailable`, `quote_not_found`, `too_many_jobs`, `heavy_busy`, `chat_not_found`,
+`scene_not_found`, `version_not_found`, `job_not_found`, `file_not_found`, `frame_unavailable`.
 События: `video_thread_changed`, `video_film_changed`, `video_edit_progress|completed|failed`.
 `recordType` ленты: `video_scene`, `video_launch_versions`, `video_saved`, `video_film_built`, `video_note`.
 
@@ -343,6 +345,41 @@ JSON ниже — единственное описание формы для ф
   "threads": { "focus": { "sceneId": "scene-1", "filmPath": "video/утро/утро.film" }, "revision": 1, "scenes": [] },
   "catalog": { "providers": [], "autoModelId": "auto", "maxCount": 4, "autoProviders": ["fal"] },
   "prefs": { "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": false, "count": 1 }
+}
+```
+
+#### VideoSceneCreateRequest
+
+```json
+{ "folder": "video/утро", "settings": { "frameA": { "kind": "file", "path": "a.png" }, "frameB": { "kind": "file", "path": "b.png" }, "text": "т", "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": true, "count": 1 }, "name": "Сцена 7", "revision": 3 }
+```
+
+#### VideoSceneFocusRequest
+
+```json
+{ "focus": { "sceneId": "scene-1", "filmPath": "video/утро/утро.film" }, "revision": 3 }
+```
+
+#### VideoSceneSettingsRequest
+
+```json
+{ "settings": { "frameA": { "kind": "file", "path": "a.png" }, "frameB": { "kind": "file", "path": "b.png" }, "text": "т", "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": true, "count": 1 }, "revision": 3 }
+```
+
+#### VideoSceneCurrentRequest
+
+```json
+{ "versionId": "ver-1", "revision": 3 }
+```
+
+#### VideoJobDto
+
+```json
+{
+  "jobId": "job-7", "scopeKey": "p-1", "status": "completed", "provider": "fal", "model": "veo-3.1", "count": 2,
+  "variants": [1, 2], "cost": { "currency": "usd", "amount": 3.2 }, "outcome": "ok", "charged": true, "error": "нет",
+  "queuePosition": 1, "etaSeconds": 120, "createdAt": "2026-10-02T15:00:00Z", "chatSessionId": "s-1", "sceneId": "scene-1",
+  "initiator": "human", "license": "watermark"
 }
 ```
 

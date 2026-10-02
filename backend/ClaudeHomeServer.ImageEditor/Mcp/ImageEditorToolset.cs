@@ -206,10 +206,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     {
         if (_prefs is null) return null;
         var prefs = _prefs.Get(ownerId, scope);
-        var settings = state.Threads.FirstOrDefault(t => t.Id == state.Focus)?.Settings ?? prefs.ToThreadSettings();
+        var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus)?.Settings;
         return new
         {
-            text = Chats.ImageEditorStateContributor.ChoiceText(settings, prefs.CharacterSlug),
+            text = Chats.ImageEditorStateContributor.ChoiceText(prefs, focused),
             rule = Chats.ImageEditorStateContributor.ChoiceRule,
         };
     }
@@ -272,17 +272,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private async Task<McpToolCallResult> LaunchAsync(JsonObject args, string ownerId, Session session,
         ImageEditScope scope, ImageThread thread, ImageThreadVersion version, CancellationToken ct)
     {
-        // Что не передано — выбор человека: настройки нити, иначе полосы «Картинки» области, а
-        // поставщик по умолчанию — как у каталога. Персонаж — подключённый в полосе проекта (у
-        // личной области его нет)
         var prefs = _prefs?.Get(ownerId, scope);
-        var settings = thread.Settings ?? prefs?.ToThreadSettings();
-        var provider = Str(args, "provider") ?? settings?.Provider ?? DefaultProvider();
-        if (provider is null)
-            return Deny("Поставщик рисования не настроен. Обратитесь к администратору.");
         var mode = Enum<EditMode>(args, "mode") ?? EditMode.Auto;
         var prompt = Str(args, "prompt") ?? "";
-        var matchSourceSize = Bool(args, "matchSourceSize") ?? settings?.MatchSourceSize ?? true;
         var references = ReferencesArg(args);
         // Проектные аргументы в личном чате — отказ до котировки (сборщик отказал бы тоже, но позже)
         if (scope.Project is null && (references.Count > 0 || Str(args, "character") is not null))
@@ -311,12 +303,27 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             return Deny("Картинки ещё нет: это новая картинка. Сначала нарисуй её — op generate или без op.");
         if (prompt.Length == 0 && op is ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint)
             return Deny("Пустой промпт: опиши, что нарисовать или поправить.");
+
+        // Что не передано — выбор человека по операции: генерация по тексту — режим «Создать»,
+        // правка — настройки нити, иначе «Править»; поставщик по умолчанию — как у каталога.
+        // Пока «Создать» не сохраняли (старый фронт), генерация берёт настройки нити, как раньше.
+        // Явный provider агента не подменяется. Персонаж — подключённый в полосе проекта (у
+        // личной области его нет)
+        var settings = op == ImageEditOp.Generate && prefs is { Create: not null }
+            ? prefs.CreateSettings()
+            : thread.Settings ?? prefs?.EditSettings();
+        var provider = Str(args, "provider") ?? settings?.Provider ?? DefaultProvider();
+        if (provider is null)
+            return Deny("Поставщик рисования не настроен. Обратитесь к администратору.");
+        var matchSourceSize = Bool(args, "matchSourceSize") ?? settings?.MatchSourceSize ?? true;
         var size = source is null ? null : ImageDimensions.Read(source.Bytes);
 
         // Операции со своей моделью — как у человека: из выбора в полосе не наследуются ни
         // модель, ни число вариантов, ни персонаж. Явные аргументы агента остаются как есть
         var own = ImageEditCatalog.OwnModelOps.Contains(op);
-        var model = Str(args, "model") ?? (own ? null : settings?.Model) ?? ImageEditCatalog.AutoModelId;
+        // Модель выбора человека — только вместе с его поставщиком: у явного чужого provider она не годится
+        var foreign = settings?.Provider is { } chosen && chosen != provider;
+        var model = Str(args, "model") ?? (own || foreign ? null : settings?.Model) ?? ImageEditCatalog.AutoModelId;
         var count = Int(args, "count") ?? (!own && settings is { Count: > 0 } s ? s.Count : 1);
         var character = Str(args, "character") ?? (own ? null : prefs?.CharacterSlug);
 

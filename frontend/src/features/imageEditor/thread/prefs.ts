@@ -11,8 +11,26 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { onMessage, onReconnected, request, showToast } from 'aihome_shell/kit';
 import { scopeBase } from '../scope';
 import type { ImageThreadSettings } from './threadsApi';
+import type { EditMode, ImageEditOp } from '../api';
+import type { OutpaintRatio } from '../editorInputs';
 
-export interface ProjectPrefs extends ImageThreadSettings { characterSlug: string | null }
+// Выбор режимов «Создать» и «Править» панели v5; null в полях — берётся плоское поле. Сервер
+// сливает PUT: нет режима в теле — сохранённый остаётся
+export interface ImageCreatePrefs { provider: string | null; model: string | null; count: number | null }
+export interface ImageEditPrefs {
+  provider: string | null;
+  model: string | null;
+  count: number | null;
+  op: Exclude<ImageEditOp, 'generate'> | null;
+  editMode: EditMode | null;
+  ratio: OutpaintRatio | null;
+}
+
+export interface ProjectPrefs extends ImageThreadSettings {
+  characterSlug: string | null;
+  create?: ImageCreatePrefs | null;
+  edit?: ImageEditPrefs | null;
+}
 
 // Событие SignalR владельцу на каждую запись prefs проекта
 export interface ImagePrefsChangedEvent { type: 'image_prefs_changed'; projectId: string; prefs: ProjectPrefs }

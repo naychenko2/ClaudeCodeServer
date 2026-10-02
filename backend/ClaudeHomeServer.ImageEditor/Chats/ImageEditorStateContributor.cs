@@ -96,7 +96,7 @@ public sealed class ImageEditorStateContributor(
         if (prefs is not null)
         {
             var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus);
-            sb.AppendLine(ChoiceText(focused?.Settings ?? prefs.ToThreadSettings(), prefs.CharacterSlug));
+            sb.AppendLine(ChoiceText(prefs, focused?.Settings));
             sb.AppendLine(ChoiceRule);
         }
         if (priorityRule) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
@@ -130,7 +130,7 @@ public sealed class ImageEditorStateContributor(
         var sb = new StringBuilder();
         sb.AppendLine("## Картинки в этом чате");
         sb.AppendLine("В работе: ничего не выбрано");
-        sb.AppendLine(ChoiceText(prefs.ToThreadSettings(), prefs.CharacterSlug));
+        sb.AppendLine(ChoiceText(prefs, null));
         sb.AppendLine(ChoiceRule);
         if (priorityRule) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
         return sb.ToString().TrimEnd();
@@ -213,11 +213,26 @@ public sealed class ImageEditorStateContributor(
 
     // «Выбор человека в полосе «Картинки»: поставщик fal, модель auto, вариантов 2, персонаж anya»
     public static string ChoiceText(ImageThreadSettings settings, string? character) =>
-        "Выбор человека в полосе «Картинки»: "
-        + $"поставщик {settings.Provider ?? "по умолчанию"}, "
+        "Выбор человека в полосе «Картинки»: " + SettingsText(settings) + $", персонаж {character ?? "не подключён"}";
+
+    // С выбором по режимам — оба: «Создать» берёт генерация по тексту, «Править» — правка (у
+    // картинки в работе — её настройки). Без режимов — прежняя строка, как у старого фронта
+    public static string ChoiceText(Prefs.ImageProjectPrefs prefs, ImageThreadSettings? focused)
+    {
+        if (!prefs.HasModes)
+            return ChoiceText(focused ?? prefs.EditSettings(), prefs.CharacterSlug);
+        var edit = SettingsText(focused ?? prefs.EditSettings());
+        var op = prefs.Edit?.Op is { } o ? $", операция {o}" : "";
+        return "Выбор человека в полосе «Картинки»: "
+            + $"новая картинка (генерация по тексту) — {SettingsText(prefs.CreateSettings())}; "
+            + $"правка{(focused is null ? "" : " картинки в работе")} — {edit}{op}; "
+            + $"персонаж {prefs.CharacterSlug ?? "не подключён"}";
+    }
+
+    private static string SettingsText(ImageThreadSettings settings) =>
+        $"поставщик {settings.Provider ?? "по умолчанию"}, "
         + $"модель {settings.Model ?? ImageEditCatalog.AutoModelId}, "
-        + $"вариантов {settings.Count}, "
-        + $"персонаж {character ?? "не подключён"}";
+        + $"вариантов {settings.Count}";
 
     public static string DraftFolderText(string? folder) =>
         string.IsNullOrEmpty(folder) ? "корень проекта" : $"папку {folder}";

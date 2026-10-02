@@ -85,6 +85,47 @@ public class ImagePrefsEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task PUT_старого_фронта_без_режимов_не_затирает_выбор_режимов()
+    {
+        var withModes = new
+        {
+            provider = "fal", model = (string?)null, count = 2, matchSourceSize = true, characterSlug = (string?)null,
+            create = new { provider = "local", model = "qwen-image-2.1", count = 1 },
+            edit = new { provider = "higgsfield", model = (string?)null, count = 3, op = "removeBackground", editMode = "fast", ratio = "16:9" },
+        };
+        (await _client.PutAsJsonAsync(Prefs(), withModes)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Старый бандл: без режимов вовсе и с режимами, явно равными null (эхо прошлого GET)
+        (await _client.PutAsJsonAsync(Prefs(), Body(provider: "higgsfield"))).StatusCode.Should().Be(HttpStatusCode.OK);
+        var echoed = new { provider = "fal", model = "m1", count = 4, matchSourceSize = false, characterSlug = (string?)null,
+            create = (object?)null, edit = (object?)null };
+        (await _client.PutAsJsonAsync(Prefs(), echoed)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var got = await Json(await _client.GetAsync(Prefs()));
+        got.GetProperty("count").GetInt32().Should().Be(4);
+        got.GetProperty("create").GetProperty("provider").GetString().Should().Be("local");
+        got.GetProperty("create").GetProperty("count").GetInt32().Should().Be(1);
+        var edit = got.GetProperty("edit");
+        edit.GetProperty("provider").GetString().Should().Be("higgsfield");
+        edit.GetProperty("op").GetString().Should().Be("removeBackground");
+        edit.GetProperty("editMode").GetString().Should().Be("fast");
+        edit.GetProperty("ratio").GetString().Should().Be("16:9");
+    }
+
+    [Fact]
+    public async Task Недопустимая_операция_правки_400_без_записи()
+    {
+        var resp = await _client.PutAsJsonAsync(Prefs(), new
+        {
+            provider = "fal", model = (string?)null, count = 2, matchSourceSize = true, characterSlug = (string?)null,
+            edit = new { op = "generate" },
+        });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await Json(await _client.GetAsync(Prefs()))).GetProperty("provider").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
     public async Task Неверное_число_вариантов_400_без_записи()
     {
         var resp = await _client.PutAsJsonAsync(Prefs(), Body(count: 9));

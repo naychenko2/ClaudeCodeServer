@@ -65,6 +65,8 @@ export interface TerminalInfo {
   name: string
   status: string
   shell: string | null
+  // false — упрощённый терминал без псевдоконсоли (мост не найден): нет цветов и очистки экрана
+  pty: boolean
 }
 
 // Хаб, в котором живёт терминал проекта: подключённый, с ожиданием связи

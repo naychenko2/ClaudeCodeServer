@@ -139,6 +139,8 @@ interface Props {
   // Нужно ChatPanel для плашки «Ветка от …» — определять, жив ли оригинал ветки.
   // Не задано — fallback к ссылке (старое поведение)
   availableChatIds?: Set<string>;
+  // Человек закрыл панель (крестик или рельса) — для признака автооткрытия генерации
+  onPanelUserClose?: (k: PanelKey) => void;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -433,6 +435,7 @@ export function DesktopWorkspace(p: Props) {
         panels={zonePanels}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
+        onUserClose={p.onPanelUserClose}
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
           // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
@@ -604,6 +607,7 @@ export function DesktopWorkspace(p: Props) {
         panels={zonePanels}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
+        onUserClose={p.onPanelUserClose}
         centerFileOpen={!!p.openFile}
       />
     </div>

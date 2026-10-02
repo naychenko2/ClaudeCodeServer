@@ -90,6 +90,14 @@
 | Тулбар экрана | `Toolbar` (+ `ToolbarOverflowMenu`), геометрия из `TB` | `components/Toolbar` |
 | Пустое состояние | `EmptyState` | `components/EmptyState` |
 | Спиннер ожидания | `WaitingIndicator` | `ui/WaitingIndicator` |
+| Чип фильтра / выбранного объекта | `Chip` (soft / toggle; `leading`, `maxW`, `onRemove`) + `ChipX` | `ui/Chip` |
+| Полоса прогресса | `ProgressBar` (тоны accent / success / warning / danger, `estimate`) | `ui/ProgressBar` |
+| Рабочее окно во весь экран | `Modal size="fullscreen"` | `ui/Modal` |
+
+Полосы над композером, режим поля ввода «Картинка» и чипы подсистем над полем (слоты
+`composer-strip` / `composer-mode` / `composer-chip`, переключатель «Git ▾», правило
+старшинства полос) и правила трёх примитивов выше —
+[composer-strips-and-modes.md](composer-strips-and-modes.md).
 
 ## Контролы в шапке панели
 

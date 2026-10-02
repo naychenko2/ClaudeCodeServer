@@ -24,8 +24,17 @@ WORKDIR /src
 COPY backend/ClaudeHomeServer/ClaudeHomeServer.csproj backend/ClaudeHomeServer/
 RUN dotnet restore backend/ClaudeHomeServer/ClaudeHomeServer.csproj
 COPY backend/ ./backend/
+# Скрипты установки агента устройства встраиваются в сборку ресурсом (AgentDownloadsController)
+COPY deploy/agent-install/ ./deploy/agent-install/
+# RID обязателен: без него SkiaSharp (растр редактора) кладёт в runtimes/ нативку под все
+# платформы, ~0,4 ГБ. Рантайм-образ — glibc x64, поэтому linux-x64
 RUN dotnet publish backend/ClaudeHomeServer/ClaudeHomeServer.csproj \
-    -c Release -o /app/publish /p:UseAppHost=false
+    -c Release -r linux-x64 --self-contained false -o /app/publish /p:UseAppHost=false
+# Динамические модули ModuleLoader резолвит по пути — без них старт падает (как в publish-linux.sh)
+RUN for mod in notes/ClaudeHomeServer.Notes.dll spend/ClaudeHomeServer.Spend.dll image-editor/ClaudeHomeServer.ImageEditor.dll \
+        audio-editor/ClaudeHomeServer.AudioEditor.dll; do \
+      test -f "/app/publish/modules/$mod" || { echo "нет modules/$mod после publish" >&2; exit 1; }; \
+    done
 # Свежесобранный фронт кладём в wwwroot (исходный wwwroot исключён в .dockerignore)
 COPY --from=frontend /src/frontend/dist /app/publish/wwwroot
 
@@ -105,8 +114,12 @@ RUN npm install -g @anthropic-ai/claude-code
 # вызов скачивает пакет, и «шум» загрузки может исказить первый разбор вывода.
 RUN npm install -g skills
 
-# Консольные утилиты для веб-терминала (Midnight Commander и т.п.)
-RUN apt-get update && apt-get install -y --no-install-recommends mc \
+# Консольные утилиты для веб-терминала (Midnight Commander и т.п.) и ffmpeg
+# для монтажа без ИИ в модуле «Звук» (ADR-021, этап 5): пики волны, обрезка,
+# фейды, громкость, нормализация LUFS, сведение стемов. Без него операции
+# корректно сереют (`503 dsp_unavailable`), но в контейнере тесты на монтаж
+# должны работать.
+RUN apt-get update && apt-get install -y --no-install-recommends mc ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
 # Непривилегированный пользователь; HOME под volume ~/.claude

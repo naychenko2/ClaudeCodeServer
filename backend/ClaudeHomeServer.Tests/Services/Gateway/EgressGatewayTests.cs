@@ -3,7 +3,7 @@ using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -115,6 +115,19 @@ public sealed class EgressGatewayTests : IDisposable
         (await response.Content.ReadAsStringAsync()).Should().Contain("Egress:Enabled");
     }
 
+    // Токен серверного хода провайдера (ADR-016 §2) годится только LLM-шлюзу: туннель наружу —
+    // строго за устройствами
+    [Fact]
+    public async Task Токен_серверного_хода_провайдера_401()
+    {
+        var factory = Factory();
+        var server = factory.Services.GetRequiredService<TurnTokenService>().Issue("owner-1", "chat-1", null,
+            new GatewayRoute(GatewayUpstreamKind.Provider, "m", ProviderKey: "minimax"), TurnTokenLifetime.Process);
+
+        (await factory.CreateClient().SendAsync(Request(server, "example.com", 443, null)))
+            .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
     [Fact]
     public async Task Без_учётки_устройства_или_с_чужим_устройством_401()
     {
@@ -156,7 +169,7 @@ public sealed class EgressGatewayTests : IDisposable
         var ws = ((TestServer)factory.Server).CreateWebSocketClient();
         ws.ConfigureRequest = r =>
         {
-            r.Headers["Authorization"] = DesktopDeviceAuthHandler.TokenPrefix + device.Token;
+            r.Headers["Authorization"] = DeviceAuthHandler.TokenPrefix + device.Token;
             r.Headers[TurnTokenEndpointFilter.DeviceFingerprintHeader] = GatewayTestDevice.Fingerprint;
             r.Headers[TurnTokenEndpointFilter.HeaderName] = turn.Token;
         };
@@ -291,7 +304,7 @@ public sealed class EgressGatewayTests : IDisposable
         var ws = ((TestServer)factory.Server).CreateWebSocketClient();
         ws.ConfigureRequest = r =>
         {
-            r.Headers["Authorization"] = DesktopDeviceAuthHandler.TokenPrefix + device.Token;
+            r.Headers["Authorization"] = DeviceAuthHandler.TokenPrefix + device.Token;
             r.Headers[TurnTokenEndpointFilter.DeviceFingerprintHeader] = GatewayTestDevice.Fingerprint;
             r.Headers[TurnTokenEndpointFilter.HeaderName] = turn.Token;
         };

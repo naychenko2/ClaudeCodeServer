@@ -1,5 +1,5 @@
-using System.Runtime.Versioning;
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Tests.Exec;
 
@@ -38,28 +38,102 @@ public class KillTreeTests
         }
     }
 
+    /// <summary>
+    /// Руки видят и трогают любые окна (ADR-016 §7), но по концу хода гаснет только дерево хода:
+    /// программа, которую открыл человек, в группу хода не входит и остаётся живой.
+    /// </summary>
     [SkippableFact]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Unix_конец_хода_гасит_только_своё_дерево_чужой_процесс_жив()
+    {
+        Skip.If(OperatingSystem.IsWindows());
+        Skip.If(UnixGroupProcess.FindSetsid() is null, "нет setsid");
+        var dir = Directory.CreateTempSubdirectory("kill-unix-foreign-").FullName;
+        using var foreign = Process.Start(new ProcessStartInfo("/bin/sleep", "600") { UseShellExecute = false })!;
+        try
+        {
+            var cli = FakeUnixCli.Write(dir);
+            using var process = TurnProcess.Start(new TurnLaunch(cli, [], dir, UnixEnv(dir)));
+            var grandchild = await ReadPidAsync(Path.Combine(dir, "grandchild.pid"));
+
+            process.KillTree();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await WaitAsync(() => !UnixGroupProcess.IsAlive(grandchild));
+
+            UnixGroupProcess.IsAlive(grandchild).Should().BeFalse("окно, открытое ходом, закрывается вместе с ним");
+            foreign.HasExited.Should().BeFalse("программу человека ход не открывал и не гасит");
+        }
+        finally
+        {
+            foreign.Kill();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [SkippableFact]
+    [SupportedOSPlatform("windows")]
+    public async Task Windows_конец_хода_гасит_только_свой_Job_чужой_процесс_жив()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "ветка Windows: Job Object");
+        var dir = Directory.CreateTempSubdirectory("kill-win-foreign-").FullName;
+        var ping = Path.Combine(Environment.SystemDirectory, "PING.EXE");
+        using var foreign = Process.Start(new ProcessStartInfo(ping, "-n 600 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true })!;
+        try
+        {
+            var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            var script = "ping -n 2 127.0.0.1 >nul & ping -n 600 127.0.0.1 >nul";
+            using var process = TurnProcess.Start(new TurnLaunch(cmd, ["/d", "/c", script], dir, WindowsEnv()));
+            process.Process.StandardInput.Close();
+            var own = await WaitForChildrenAsync(process.Id, "ping.exe", count: 1, () => "cmd хода не породил ping");
+
+            process.KillTree();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await WaitAsync(() => own.All(pid => !WindowsIsAlive(pid)));
+
+            own.Should().OnlyContain(pid => !WindowsIsAlive(pid), "процесс хода в Job хода");
+            WindowsIsAlive(foreign.Id).Should().BeTrue("чужой процесс вне Job хода");
+        }
+        finally
+        {
+            try { foreign.Kill(); } catch (InvalidOperationException) { }
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [SkippableFact]
+    [SupportedOSPlatform("windows")]
     public async Task Windows_Job_Object_убивает_CLI_и_внука()
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "ветка Windows: Job Object");
         var dir = Directory.CreateTempSubdirectory("kill-win-").FullName;
         try
         {
-            var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
-            var pidFile = Path.Combine(dir, "grandchild.pid");
-            // Сын — powershell, внук — ping на 10 минут; сын ждёт, пока его не убьют
-            var script = $"$p = Start-Process -FilePath ping.exe -ArgumentList '-n','600','127.0.0.1' -PassThru -WindowStyle Hidden; " +
-                         $"Set-Content -Path '{pidFile}' -Value $p.Id; Start-Sleep -Seconds 600";
-            using var process = TurnProcess.Start(new TurnLaunch(powershell, ["-NoProfile", "-Command", script], dir, WindowsEnv()));
-            var grandchild = await ReadPidAsync(pidFile);
-            WindowsIsAlive(grandchild).Should().BeTrue();
+            // Сын — cmd, внуки — ping на 10 минут: фоновый (start /b) и передний, на котором cmd
+            // ждёт, пока его не убьют. Первый короткий ping — пауза, чтобы внуки родились уже
+            // после посадки cmd в job. PowerShell не берём: на раннере CI он молчал дольше 30 с.
+            var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            var script = "ping -n 2 127.0.0.1 >nul & start /b ping -n 600 127.0.0.1 >nul & ping -n 600 127.0.0.1 >nul";
+            using var process = TurnProcess.Start(new TurnLaunch(cmd, ["/d", "/c", script], dir, WindowsEnv()));
+            process.Process.StandardInput.Close();
+            var log = new System.Text.StringBuilder();
+            process.Process.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (log) log.AppendLine(e.Data); };
+            process.Process.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (log) log.AppendLine("err: " + e.Data); };
+            process.Process.BeginOutputReadLine();
+            process.Process.BeginErrorReadLine();
+
+            var grandchildren = await WaitForChildrenAsync(process.Id, "ping.exe", count: 2, () =>
+            {
+                var state = process.Process.HasExited ? $"вышел с кодом {process.ExitCode}" : "жив";
+                lock (log) return $"cmd {state}; вывод:\n{log}";
+            });
+            grandchildren.Should().OnlyContain(pid => WindowsIsAlive(pid));
 
             process.KillTree();
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-            await WaitAsync(() => !WindowsIsAlive(grandchild));
+            await WaitAsync(() => grandchildren.All(pid => !WindowsIsAlive(pid)));
             WindowsIsAlive(process.Id).Should().BeFalse();
-            WindowsIsAlive(grandchild).Should().BeFalse("внук в том же Job Object");
+            grandchildren.Should().OnlyContain(pid => !WindowsIsAlive(pid), "внуки в том же Job Object");
         }
         finally
         {
@@ -103,12 +177,27 @@ public class KillTreeTests
 
     private static async Task<int> ReadPidAsync(string file)
     {
-        for (var i = 0; i < 200; i++)
+        for (var i = 0; i < 600; i++)
         {
             if (File.Exists(file) && int.TryParse((await File.ReadAllTextAsync(file)).Trim(), out var pid)) return pid;
             await Task.Delay(50);
         }
         throw new TimeoutException($"фейковый CLI не записал {file}");
+    }
+
+    // Внуков ищем снимком процессов по pid родителя, а не файлом от самого фейкового CLI
+    [SupportedOSPlatform("windows")]
+    private static async Task<int[]> WaitForChildrenAsync(int parentPid, string exeName, int count, Func<string> diagnostics)
+    {
+        int[] found = [];
+        for (var i = 0; i < 600; i++)
+        {
+            // Только живые: паузный ping — тоже потомок cmd и может ещё висеть в снимке
+            found = WindowsSnapshot.ChildrenOf(parentPid, exeName).Where(WindowsIsAlive).ToArray();
+            if (found.Length >= count) return found;
+            await Task.Delay(50);
+        }
+        throw new TimeoutException($"у фейкового CLI {found.Length} из {count} потомков {exeName}; {diagnostics()}");
     }
 
     private static async Task WaitAsync(Func<bool> condition)

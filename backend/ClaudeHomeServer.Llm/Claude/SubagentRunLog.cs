@@ -113,7 +113,10 @@ public sealed class SubagentRunLog
 
             if (passport.SessionId is { Length: > 0 } sid)
             {
-                if (passport.Truncated) _truncatedBySession[sid] = passport;
+                // Обрыв «Стопом» человека — не сигнал «ждём продолжения»: мёртвых агентов никто
+                // не добивает, а прерванный ход не даёт result, и отметка съела бы итог
+                // СЛЕДУЮЩЕГО хода (то же условие, что в SessionManager.HandleSubagentRunCompleted)
+                if (passport.Truncated && passport.FinishedBy != "interrupted") _truncatedBySession[sid] = passport;
                 else _truncatedBySession.Remove(sid);
             }
         }

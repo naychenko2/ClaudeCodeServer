@@ -28,10 +28,25 @@ public class ChatsWindow1MDropTests(TestWebApplicationFactory factory)
     private static SessionManager SessionsOf(TestWebApplicationFactory f) =>
         f.Services.GetRequiredService<SessionManager>();
 
+    // Модель родного Claude хранится семейством: суффикс окна при записи не сохраняется,
+    // окно дописывает сервер при запуске. Суффикс может остаться только в данных до миграции
+    // (ClaudeModelFamilyMigration) — такой чат эндпоинт по-прежнему переводит на базовый алиас.
+    private static void SeedLegacyWindowModel(TestWebApplicationFactory f, string id) =>
+        SessionsOf(f).GetById(id)!.Model = "opus[1m]";
+
+    [Fact]
+    public async Task СозданиеЧата_СуффиксОкнаНеСохраняется()
+    {
+        var id = await CreateChatAsync("opus[1m]");
+
+        SessionsOf(factory).GetById(id)!.Model.Should().Be("opus");
+    }
+
     [Fact]
     public async Task ЧатНаОкне1M_СуффиксСнят_ОстаётсяБазовыйАлиас()
     {
-        var id = await CreateChatAsync("opus[1m]");
+        var id = await CreateChatAsync("opus");
+        SeedLegacyWindowModel(factory, id);
 
         var resp = await _client.PostAsync($"/api/chats/{id}/window-1m/drop", null);
 
@@ -71,7 +86,8 @@ public class ChatsWindow1MDropTests(TestWebApplicationFactory factory)
     public async Task ПроектныйЧатНаОкне1M_СуффиксСнят_ОстаётсяБазовыйАлиас()
     {
         var projectId = await CreateProjectAsync();
-        var chatId = await CreateProjectSessionAsync(projectId, "opus[1m]");
+        var chatId = await CreateProjectSessionAsync(projectId, "opus");
+        SeedLegacyWindowModel(factory, chatId);
 
         var resp = await _client.PostAsync($"/api/chats/{chatId}/window-1m/drop", null);
 

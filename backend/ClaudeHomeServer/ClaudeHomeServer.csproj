@@ -35,6 +35,14 @@
        Этап 5, волна C, шаг 2: перенесён в `ClaudeHomeServer.ProjectIcons.csproj`
        вместе с вертикалью (EmbeddedResource едет со сборкой, в которой живёт). -->
 
+  <!-- Скрипты установки агента устройства (agent-distribution Р10): раздаются анонимно по
+       /agent/install.ps1 и /agent/install.sh, поэтому встроены в сборку и с диска по пути из
+       запроса не читаются никогда. LogicalName — короткое имя, по нему читает контроллер. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\deploy\agent-install\install.ps1" LogicalName="AgentInstall.install.ps1" />
+    <EmbeddedResource Include="..\..\deploy\agent-install\install.sh" LogicalName="AgentInstall.install.sh" />
+  </ItemGroup>
+
   <!-- Хостовый publish: встроенные MCP-серверы и дефолты CLI кладём рядом с exe —
        TasksServerLocator и синк workflows ищут их от AppContext.BaseDirectory
        (в контейнере это делала копия в /app из Dockerfile) -->
@@ -149,6 +157,80 @@
           SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
   </Target>
 
+  <!-- Динамический модуль редактора картинок (ADR-018 §10.1): тот же паттерн, что Notes и Spend.
+       ReferenceOutputAssembly="false" — Main не видит типов редактора, швы живут в Core.
+       Две цели (Build/Publish): при одной `dotnet publish -o` молча терял dll модуля. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyImageEditorModuleBuild" AfterTargets="Build">
+    <ItemGroup>
+      <ImageEditorModuleFiles Include="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ImageEditorModuleFiles)" DestinationFolder="$(OutDir)modules\image-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
+  </Target>
+  <Target Name="CopyImageEditorModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <ImageEditorModuleFiles Include="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ImageEditorModuleFiles)" DestinationFolder="$(PublishDir)modules\image-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
+  </Target>
+
+  <!-- Динамический модуль «Звук» (ADR-021 §1): тот же паттерн, что ImageEditor.
+       ReferenceOutputAssembly="false" — Main не видит типов модуля, швы живут в Core. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.AudioEditor\ClaudeHomeServer.AudioEditor.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyAudioEditorModuleBuild" AfterTargets="Build">
+    <ItemGroup>
+      <AudioEditorModuleFiles Include="..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AudioEditorModuleFiles)" DestinationFolder="$(OutDir)modules\audio-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll')" />
+  </Target>
+  <Target Name="CopyAudioEditorModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <AudioEditorModuleFiles Include="..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AudioEditorModuleFiles)" DestinationFolder="$(PublishDir)modules\audio-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll')" />
+  </Target>
+
+  <!-- Динамический модуль Architecture (раздел «Архитектура», Viaduct 10.2): тот же паттерн,
+       что Notes. ReferenceOutputAssembly="false" — Main не видит типы вертикали на компиляции;
+       швы (IArchitectureCodeSource, IStaticBranchContributor, McpEndpoints.ArchitectureName)
+       живут в Core. Копия dll — на Build И Publish: без Publish деплой терял бы модуль, и раздел
+       молча пропадал бы на бою (грабля Notes). -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <PropertyGroup>
+    <ArchitectureModuleDll>..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll</ArchitectureModuleDll>
+  </PropertyGroup>
+  <Target Name="CopyArchitectureModule" AfterTargets="Build">
+    <Copy SourceFiles="$(ArchitectureModuleDll)" DestinationFolder="$(OutDir)modules\architecture"
+          SkipUnchangedFiles="true" Condition="Exists('$(ArchitectureModuleDll)')" />
+  </Target>
+  <Target Name="CopyArchitectureModuleOnPublish" AfterTargets="Publish">
+    <!-- На Publish тихий пропуск недопустим: бой остался бы без модуля, раздел пропал бы молча -->
+    <Error Condition="!Exists('$(ArchitectureModuleDll)')"
+           Text="Модуль Architecture не собран: нет $(ArchitectureModuleDll) — публикация без него потеряла бы раздел «Архитектура»" />
+    <Copy SourceFiles="$(ArchitectureModuleDll)" DestinationFolder="$(PublishDir)modules\architecture"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Нативный libSkiaSharp.pdb из SkiaSharp.NativeAssets.Win32 весит ~84 МБ и в выкладке не
+       нужен: без этой цели публикация win-x64 вырастает почти на 0,1 ГБ (ADR-018 §9, размер
+       публикации). Символы остаются в пакете NuGet, если понадобится разбор дампа. -->
+  <Target Name="DropSkiaNativePdb" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Filename)%(Extension)' == 'libSkiaSharp.pdb'" />
+    </ItemGroup>
+  </Target>
+
   <!-- === Модульность (Этап 3+, Этап 5)
        Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Personas/Spend/Knowledge/
        Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds
@@ -159,7 +241,7 @@
        До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
        от спинки» соблюдался логически; теперь он держится физически — вертикаль не
        может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет.
-       Notes и Spend — исключения (динамические модули, см. CopyNotesModule/CopySpendModule),
+       Notes, Spend, ImageEditor и Architecture — исключения (динамические модули, см. Copy*Module выше),
        не прямые референсы. -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
@@ -171,7 +253,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Changelog\ClaudeHomeServer.Changelog.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Deploy\ClaudeHomeServer.Deploy.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Diagnostics\ClaudeHomeServer.Diagnostics.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Desktop\ClaudeHomeServer.Desktop.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Devices\ClaudeHomeServer.Devices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Docs\ClaudeHomeServer.Docs.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Execution\ClaudeHomeServer.Execution.csproj" />

@@ -280,6 +280,261 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         }
     }
 
+    // Сторож хвоста хода (ADR-018 §10.4, риск 1 плана v2): секция InTurnTail (состояние редактора
+    // картинки) уезжает хвостом хода ПРИ ЛЮБОЙ настройке RecallInTurnText и в системный блок не
+    // попадает никогда. Иначе у провайдера без ручки она обнуляла бы prefix cache всей истории:
+    // системный блок чата картинки обязан быть одинаков на ходах с разным состоянием.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InTurnTail_ВсегдаХвостомХода_СистемныйБлокНеЗависитОтСостояния(bool recallInTurnText)
+    {
+        var first = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ промпт «лампа»");
+        var second = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ промпт «окно», 3 варианта");
+
+        first.SystemPrompt.Should().NotContain("МАРКЕР_СОСТОЯНИЯ",
+            "блок состояния редактора не должен попадать в системный блок ни при какой настройке провайдера");
+        first.SystemPrompt.Should().Be(second.SystemPrompt,
+            "системный блок чата картинки одинаков на ходах с разным состоянием редактора — prefix cache жив");
+
+        var tail = first.Sections.Should().ContainSingle(s => s.Key == "image-editor-state").Subject;
+        tail.Kind.Should().Be("turn", "секция едет вклейкой в текст хода");
+        tail.Title.Should().Be("Состояние редактора");
+        tail.Text.Should().Contain("«лампа»");
+    }
+
+    // Порядок хвоста (шаг 3 «локальная по умолчанию»): правило local-media-default едет хвостом
+    // сразу после блока «Картинки в этом чате» и ссылается на него; в системный блок не попадает
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalMediaDefault_ХвостомПослеБлокаКартинок(bool recallInTurnText)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LocalMedia:Enabled"] = "true",
+        }).Build();
+        var contributor = new ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor(
+            new AllFlags(), config);
+
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            new Session { Model = "qwen-test-27b", OwnerId = "u1" },
+            context => context with { ImageEditorMcp = ImageEditorMcp });
+
+        // Название секции статично упомянуто в BuiltInSystemPrompt (ссылка на правило хвоста), поэтому
+        // ищем заголовок и тело самой секции
+        systemPrompt.Should().NotContain("## Картинки и видео: локальная модель по умолчанию",
+                "правило едет хвостом хода и в системный блок не попадает ни при какой настройке провайдера")
+            .And.NotContain(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.NoticeRule);
+        sections.Where(s => s.Kind == "turn").Select(s => s.Key).Should().ContainInOrder(
+            "image-editor-state", "local-media-default");
+        sections.Single(s => s.Key == "local-media-default").Text
+            .Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule);
+    }
+
+    // Проводка контекста секции (находки A и B финального ревью 33571541): поля HasLocalMediaMcp,
+    // HasImageEditorMcp и Unattended собирает сам ClaudeSession из факта доставки MCP в конфиг хода и
+    // признаков хода — тест руками их не задаёт. Без этих ходов замена проводки на false оставалась
+    // зелёной во всех наборах
+    private static readonly LocalMediaMcpContext LocalMediaMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+    private static readonly ImageEditorMcpContext ImageEditorMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+
+    // Провайдер урезает набор MCP до tasks, как local-qwen по умолчанию
+    private static readonly Dictionary<string, string?> TrimToTasks = new()
+    {
+        ["LlmProviders:test-local:TrimMcpServers"] = "true",
+        ["LlmProviders:test-local:KeepMcpServers:0"] = "tasks",
+    };
+
+    private async Task<PromptSectionDto?> LocalMediaDefaultSectionAsync(Session info,
+        Func<LlmSessionContext, LlmSessionContext> tweak, Dictionary<string, string?>? providerConfig = null,
+        int agentDepth = 0)
+    {
+        var contributor = new ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor(
+            new AllFlags(), new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["LocalMedia:Enabled"] = "true",
+            }).Build());
+        var (_, sections) = await RunTailTurnAsync(false, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            info, tweak, providerConfig, agentDepth);
+        return sections.SingleOrDefault(s => s.Key == "local-media-default");
+    }
+
+    private static Session ProjectChat() => new() { Model = "qwen-test-27b", OwnerId = "u1", ProjectId = "p1" };
+    private static Session PersonalChat() => new() { Model = "qwen-test-27b", OwnerId = "u1" };
+
+    [Fact]
+    public async Task LocalMediaDefault_ПроектныйЧат_LocalMediaДоставлен_ПравилоПроекта()
+    {
+        var section = await LocalMediaDefaultSectionAsync(ProjectChat(), c => c with { LocalMediaMcp = LocalMediaMcp });
+
+        section.Should().NotBeNull("local-media доехал до хода — проектный вариант правила обязан прийти хвостом");
+        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ProjectRule);
+    }
+
+    [Fact]
+    public async Task LocalMediaDefault_ПровайдерОтрезалLocalMedia_ПравилаНет()
+    {
+        var section = await LocalMediaDefaultSectionAsync(ProjectChat(), c => c with { LocalMediaMcp = LocalMediaMcp },
+            TrimToTasks);
+
+        section.Should().BeNull("TrimMcpServers отрезал local-media — правило звало бы инструменты, которых у хода нет");
+    }
+
+    [Theory]
+    [InlineData("TaskExecution")]
+    [InlineData("AutomationRuleId")]
+    [InlineData("AgentDepth=1")]
+    public async Task LocalMediaDefault_ХодБезЧеловека_ПравилаНет(string source)
+    {
+        var info = ProjectChat();
+        if (source == "TaskExecution") info.TaskExecution = true;
+        if (source == "AutomationRuleId") info.AutomationRuleId = "r1";
+
+        var section = await LocalMediaDefaultSectionAsync(info, c => c with { LocalMediaMcp = LocalMediaMcp },
+            agentDepth: source == "AgentDepth=1" ? 1 : 0);
+
+        section.Should().BeNull($"{source}: ход без человека не должен занимать общую GPU по умолчанию");
+    }
+
+    [Fact]
+    public async Task LocalMediaDefault_ЛичныйЧат_РедакторДоставлен_ЛичноеПравило()
+    {
+        var section = await LocalMediaDefaultSectionAsync(PersonalChat(), c => c with { ImageEditorMcp = ImageEditorMcp });
+
+        section.Should().NotBeNull("сервер редактора доехал до хода — личный вариант правила обязан прийти");
+        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule);
+    }
+
+    [Theory]
+    [InlineData("TrimMcpServers без image-editor")]
+    [InlineData("модуль редактора выключен")]
+    public async Task LocalMediaDefault_ЛичныйЧат_РедактораНетУХода_ПравилаНет(string why)
+    {
+        var section = why == "модуль редактора выключен"
+            ? await LocalMediaDefaultSectionAsync(PersonalChat(), c => c)
+            : await LocalMediaDefaultSectionAsync(PersonalChat(), c => c with { ImageEditorMcp = ImageEditorMcp }, TrimToTasks);
+
+        section.Should().BeNull($"{why}: image_new/image_generate у хода нет («No such tool available»)");
+    }
+
+    // Блок «Звук в этом чате» (ADR-021 §5): признак HasAudioEditorMcp ClaudeSession собирает сам из
+    // доставки сервера audio-editor в конфиг хода; секция едет хвостом, в системный блок не попадает
+    private static readonly AudioEditorMcpContext AudioEditorMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+
+    private async Task<(string SystemPrompt, PromptSectionDto? Section)> AudioEditorStateSectionAsync(
+        bool recallInTurnText, Func<LlmSessionContext, LlmSessionContext> tweak,
+        Dictionary<string, string?>? providerConfig = null)
+    {
+        var contributor = new ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor(new AllFlags());
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            ProjectChat(), tweak, providerConfig);
+        return (systemPrompt, sections.SingleOrDefault(s => s.Key == "audio-editor-state"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AudioEditorState_СерверДоставлен_ХвостомХода(bool recallInTurnText)
+    {
+        var (systemPrompt, section) = await AudioEditorStateSectionAsync(recallInTurnText,
+            c => c with { AudioEditorMcp = AudioEditorMcp });
+
+        section.Should().NotBeNull("сервер audio-editor доехал до хода — блок «Звук» обязан прийти");
+        section!.Kind.Should().Be("turn", "блок едет вклейкой в текст хода");
+        section.Text.Should().Contain(ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor.PriorityRule);
+        systemPrompt.Should().NotContain("## Звук в этом чате",
+            "блок меняется от хода к ходу и в системный блок не попадает ни при какой настройке провайдера");
+    }
+
+    [Theory]
+    [InlineData("модуль звука выключен")]
+    [InlineData("TrimMcpServers без audio-editor")]
+    public async Task AudioEditorState_СервераНетУХода_БлокаНет(string why)
+    {
+        var (_, section) = why == "модуль звука выключен"
+            ? await AudioEditorStateSectionAsync(false, c => c)
+            : await AudioEditorStateSectionAsync(false, c => c with { AudioEditorMcp = AudioEditorMcp }, TrimToTasks);
+
+        section.Should().BeNull($"{why}: audio_* у хода нет («No such tool available»)");
+    }
+
+    private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => true;
+    }
+
+    private async Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTailTurnAsync(
+        bool recallInTurnText, string stateText, Action<TurnEventBus>? extra = null, Session? info = null,
+        Func<LlmSessionContext, LlmSessionContext>? tweak = null, Dictionary<string, string?>? providerConfig = null,
+        int agentDepth = 0)
+    {
+        var clis = new ConcurrentDictionary<int, Process>();
+        var argsCaptured = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var snapshot = new TaskCompletionSource<IReadOnlyList<PromptSectionDto>>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var bus = new TurnEventBus();
+        bus.OnFilter<PromptAssembling>(100, (e, next) =>
+        {
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection("dossier-trailer", "МАРКЕР_DOSSIER_TRAILER"));
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "image-editor-state", stateText, "Состояние редактора", InTurnTail: true));
+            return next();
+        }, "Test.ImageEditorState");
+        extra?.Invoke(bus);
+        bus.OnNotification<PromptAssembled>(e =>
+        {
+            if (e.Snapshot?.Draft is { } draft) snapshot.TrySetResult(draft.Sections);
+            return Task.CompletedTask;
+        }, "Test.Snapshot");
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LlmProviders:test-local:DisplayName"] = "Тестовый локальный",
+            ["LlmProviders:test-local:AnthropicBaseUrl"] = "http://127.0.0.1:65535",
+            ["LlmProviders:test-local:IsLocal"] = "true",
+            ["LlmProviders:test-local:RecallInTurnText"] = recallInTurnText ? "true" : "false",
+            ["LlmProviders:test-local:Models:0:Id"] = "qwen-test-27b",
+            ["LlmProviders:test-local:Models:0:DisplayName"] = "Qwen Test",
+        }).AddInMemoryCollection(providerConfig ?? []).Build();
+
+        var context = new LlmSessionContext(
+            RootPath: _root,
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null,
+            Launcher: new CapturingLauncher(clis, argsCaptured),
+            Events: bus);
+        if (tweak is not null) context = tweak(context);
+
+        try
+        {
+            var session = new ClaudeSession(info ?? new Session { Model = "qwen-test-27b" }, context,
+                providers: new LlmProviderRegistry(config));
+            await using var _ = session;
+            await session.SendMessageAsync("привет", agentDepth: agentDepth);
+
+            var args = await WhenAnyAsync(argsCaptured.Task, TimeSpan.FromSeconds(15));
+            var idx = args.ToList().IndexOf("--append-system-prompt");
+            idx.Should().BeGreaterThanOrEqualTo(0, "стабильная секция непустая — аргумент обязан присутствовать");
+            var done = await Task.WhenAny(snapshot.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+            done.Should().Be(snapshot.Task, "снимок промпта хода обязан быть опубликован");
+            return (args[idx + 1], await snapshot.Task);
+        }
+        finally
+        {
+            foreach (var p in clis.Values)
+            {
+                try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
+                p.Dispose();
+            }
+        }
+    }
+
     private static async Task<IReadOnlyList<string>> WhenAnyAsync(
         Task<IReadOnlyList<string>> task, TimeSpan timeout)
     {

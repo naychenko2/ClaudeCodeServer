@@ -37,19 +37,25 @@
 [knowledge.md](architecture/knowledge.md) (заметки и Dify),
 [file-watching.md](architecture/file-watching.md) (наблюдение за деревом файлов),
 [device-agent-local-api.md](architecture/device-agent-local-api.md) (localhost-API агента устройства и модель угроз),
+[device-agent-distribution.md](architecture/device-agent-distribution.md) (раздача,
+самообновление и супервизор агента устройства),
 [personas.md](architecture/personas.md),
 [onboarding-intro.md](architecture/onboarding-intro.md) (знакомство: личное и проектное v2),
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
 
-**features/** — [decision-history-import-texts.md](features/decision-history-import-texts.md)
+**features/** — [audio-editor.md](features/audio-editor.md) (редактор звука: режимы
+Голос / Музыка / Обработка, поставщики, нити и версии, «Голоса», склейка и монтаж, агент),
+[decision-history-import-texts.md](features/decision-history-import-texts.md)
 (тексты README ветки `ccs/dossiers/v1` и подписей импорта в панели «История решений»),
-[desktop-agent.md](features/desktop-agent.md) (десктопный агент: что сделано серверной
-половиной первой волны, эндпоинты и чего ещё нет),
-[desktop-agent-client.md](features/desktop-agent-client.md) (десктопный клиент второй волны:
-устройство решения, сопряжение и токен, фазы вызова в канале, запуск и отладка),
+[desktop-agent.md](features/desktop-agent.md) и
+[desktop-agent-client.md](features/desktop-agent-client.md) (исторические: руки ADR-008, удалены
+2026-09-30),
 [image-generation.md](features/image-generation.md) (выбор генератора картинок:
-иконка проекта, аватар персоны), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
+иконка проекта, аватар персоны), [image-editor.md](features/image-editor.md) (редактор
+картинок v2: поставщики, чат картинки, агент, правки без ИИ),
+[midi-editor.md](features/midi-editor.md) (просмотрщик нот: нотная лента, проигрывание через
+Tone.js, где встроен, инварианты ленивой загрузки), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
 [model-providers-rework.md](features/model-providers-rework.md),
 [model-route-format-validation.md](features/model-route-format-validation.md),
 [project-backgrounds.md](features/project-backgrounds.md),
@@ -60,7 +66,9 @@
 [video-panel.md](features/video-panel.md) (видео: эфиры телеканалов и лента
 подписок YouTube — почему СМОТРИМ, а не Rutube, и почему плеер всегда анонимен),
 [voice-barge-in.md](features/voice-barge-in.md) (перебивание голосом в разговоре:
-устройство, ограничения, критерии снятия флага).
+устройство, ограничения, критерии снятия флага),
+[architecture-section.md](features/architecture-section.md) (раздел «Архитектура»: C4-модель
+проекта файлом под git, мост с Viaduct, сборка из кода, тулсет `arch_*`, ограничения).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
 [audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),
@@ -73,7 +81,8 @@
 [llm-channel.md](modules/llm-channel.md)) ссылаются на него.
 
 **operations/** — [docker.md](operations/docker.md) (сборка и запуск в контейнере),
-[remote-access.md](operations/remote-access.md) (Tailscale + HTTPS).
+[remote-access.md](operations/remote-access.md) (Tailscale + HTTPS),
+[viaduct-module.md](operations/viaduct-module.md) (сборка, раздача и выкатка редактора Viaduct).
 
 **design/** — [guidelines.md](design/guidelines.md) (обязательна для правок UI),
 [target-devices.md](design/target-devices.md) (приоритетные устройства и их ширины
@@ -90,8 +99,8 @@
 [ADR-007](adr/ADR-007-model-preset-chains.md) (пресет как именованная цепочка моделей),
 [ADR-008](adr/ADR-008-project-background-generation.md) (фон проекта: контракт генерации
 без разметки, серверная сборка тайла и форма хранения),
-[ADR-008-desktop-agent](adr/ADR-008-desktop-agent.md) (десктопный агент: авторизация канала,
-сеанс рук, форма снапшота — номер совпал с фоном проекта, это разные решения),
+[ADR-008-desktop-agent](adr/ADR-008-desktop-agent.md) (десктопный агент, заменён ADR-016 §7,
+код удалён 2026-09-30 — номер совпал с фоном проекта, это разные решения),
 [ADR-009](adr/ADR-009-project-icon-glyph.md) (значок проекта: контракт ответа модели,
 белый список lucide и форма хранения),
 [ADR-009-local-action-route-format](adr/ADR-009-local-action-route-format.md) (контракт формата
@@ -115,10 +124,22 @@
 пилот Video, правило зависимостей между вертикалями),
 [ADR-015](adr/ADR-015-cli-profile-sync-zones.md) (зоны профилей CLI и правила синхронизации:
 кто источник истины для каждой зоны, удаление только по манифесту доставки),
+[ADR-016](adr/ADR-016-viaduct-architecture-section.md) (раздел «Архитектура» на встроенном
+Viaduct Community без форка; лицензионные рамки BUSL-1.1 — только для своих);
 [ADR-016](adr/ADR-016-local-projects.md) (локальные проекты: харнес на устройстве, секреты
 только на сервере, набор функций по матрице возможностей проекта);
 [ADR-017](adr/ADR-017-image-editor.md) (редактор картинок в проекте: контракт правки
-`IImageEditor`, котировка вместо тихого фолбэка, сохранение новым файлом, персонажи — черновик);
+`IImageEditor`, котировка вместо тихого фолбэка, сохранение новым файлом, персонажи — черновик),
+[ADR-018](adr/ADR-018-image-editor-v2.md) (редактор v2: чат картинки вместо «Обсудить», генерация
+агентом через MCP-сервер `image-editor`, «Сохранить как…», правки без ИИ на ImageSharp — черновик),
+[ADR-019](adr/ADR-019-image-editor-v3-in-chat.md) (редактор v3: работа с картинкой в основном чате
+проекта — нити и фокус в хранилище модуля, швы ядра `IChatFeed`, `module_record` и события
+жизненного цикла чата, чаты v2 уходят в архив, реестр полос над композером),
+[ADR-020](adr/ADR-020-local-media-audio.md) (аудио в local-media: музыка нативными нодами ComfyUI,
+голос, стемы и реставрация — venv-воркерами через узел `CcsAudioWorker` в общей очереди GPU1),
+[ADR-021](adr/ADR-021-audio-editor-and-generation-panel.md) (модуль «Звук» отдельной сборкой и
+MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.Media`, общий каркас панели
+генерации и перенос настроек картинок в неё, тулсет `audio_*`, этапы — черновик);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение
@@ -150,11 +171,17 @@ CLI-провайдер: проверенная конфигурация стен
 [team-di-migration-2026-09.md](research/team-di-migration-2026-09.md)
 (что реально снимается при переводе штаба на DI: 17 обёрток против 10 фасадных,
 почему Team не выносится отдельным `.csproj`),
+[viaduct-embed-plan.md](research/viaduct-embed-plan.md)
+(разведка Viaduct Community и план встраивания разделом «Архитектура»: формат стора,
+вердикт по шиму localStorage в sandbox-iframe, серия задач 2–9). Читать как «так было тогда».
 [local-projects-spike-2026-09.md](research/local-projects-spike-2026-09.md) (спайк
 ADR-016: CLI на устройстве через LLM-шлюз и сайдкар без секретов на клиенте, условия
 Anthropic для OAuth подписки через прокси),
 [local-projects-plan-2026-09.md](research/local-projects-plan-2026-09.md) (план этапов 1–5
 ADR-016: задачи с владением файлами, сторожа, развилка по фоновой автоматике офлайн),
+[browser-hands-spike-2026-09.md](research/browser-hands-spike-2026-09.md) (браузерная рука
+локальных проектов: изолированный профиль по CDP-pipe против настоящего Chrome, размеры,
+холодный старт, инварианты ADR-016; пункты для Windows — чек-листом),
 [chat-branching-2026-09.md](research/chat-branching-2026-09.md) (архитектурный разрез
 «Ветвления чата»: ветка как обычный чат с префиксом транскрипта, почему обход по
 `parentUuid` ломает контекст и почему граница ищется текстовым якорем — с замерами

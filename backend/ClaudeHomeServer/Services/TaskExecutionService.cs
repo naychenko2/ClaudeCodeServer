@@ -145,6 +145,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // штабных хуков, уехавших в TeamCoordinator (шаг 2г-4): те ставила и читала одна и та
         // же вертикаль, а этот ставит чужая сторона.
         _sessions.HasLiveDelegatedTasks = HasLiveDelegatedTask;
+        // Старт хода в чате исполнителя: «Стоп» человека не терминален для задачи —
+        // продолжение работы снимает пометку interrupted_by_user (см. ResumeAfterUserStopAsync)
+        _sessions.TurnStarting = ResumeAfterUserStopAsync;
         // Резолв названия задачи по id для подписи карточки эскалации (волна 1
         // team-blocker-honest, дефект 1430b732): та же причина — SessionManager не знает
         // TaskManager, штаб читает через Func-канал. null для удалённой задачи не ошибка:
@@ -953,6 +956,34 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     private string? TakeTurnError(string sessionId) =>
         _turnErrors.TryRemove(sessionId, out var text) ? text : null;
 
+    // «Стоп» человека у исполнителя задачи (доска агентов): прерванный ход приходит exited без
+    // result, поэтому ClaudeResult не встаёт никогда, и задача навсегда числилась бы в работе
+    // (Д3 регресса 2026-09-27: плашка «Агент собирает» вечно running). Ставим ту же пометку
+    // остановки, что у терминального отказа, — она же гасит страховку-оклик (ClassifyStall).
+    // Уведомление и доклад постановщику не шлём: остановил сам человек, он в курсе.
+    public async Task<TaskItem?> MarkStoppedByUserAsync(string sessionId)
+    {
+        var task = FindTracked(sessionId);
+        if (task is null || task.Status == TaskItemStatus.Done) return null;
+        var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.InterruptedByUserReason);
+        if (stopped is null) return null;
+        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
+        return stopped;
+    }
+
+    // Новый ход в отслеживаемой сессии задачи после «Стоп»: работа продолжается, задача снова
+    // живая (HasLiveDelegatedTask, плашка доски). Снимаем только пометку interrupted_by_user —
+    // терминальные отказы (401, лимит) снимает лишь перезапуск исполнителя (MarkClaudeStarted).
+    // internal — для юнит-тестов (вызов напрямую, без живого хода).
+    internal async Task ResumeAfterUserStopAsync(string sessionId)
+    {
+        var task = FindTracked(sessionId);
+        if (task is null || task.ExecutorStopReason != ExecutorStopClassifier.InterruptedByUserReason) return;
+        var resumed = _tasks.ClearExecutorStopped(task.Id, ExecutorStopClassifier.InterruptedByUserReason);
+        if (resumed is null) return;
+        await _broadcaster.ToOwner(resumed.OwnerId!, new TaskChangedMessage("updated", resumed));
+    }
+
     // Исполнитель встал насовсем: пометка на задаче + уведомление владельцу + (если задачу
     // ставила персона) доклад ей с пробуждением. Перезапуск НЕ делаем: причина терминальная,
     // повтор упёрся бы в неё же и дал серию одинаковых уведомлений.
@@ -1075,6 +1106,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // заблокирован. Nudge не отправляем: окликать того, кто уже ждёт ответа — лишний
         // расход хода и спам в ленте исполнителя.
         AlertWaitingForBlocker,
+        // Задача закрыта (сигнал D), а итог хода (сигнал R) не встал и уже не встанет: ход
+        // кончился без result (обрыв процесса, «Стоп» после tasks_complete) или его итог
+        // отбросили. Доклад иначе не ушёл бы никогда — доставляем по одному сигналу D.
+        DeliverCompletion,
     }
 
     // Успешный ход задачу не закрывает: сделать это обязан сам исполнитель вызовом
@@ -1093,8 +1128,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     internal static ExecutorStallAction ClassifyStall(TaskItem task, Session? session,
         DateTime nowUtc, TimeSpan staleAfter, bool hasOpenBlocker = false)
     {
-        // Задача закрыта либо доклад по ней уже ушёл — страховать нечего
-        if (task.Status == TaskItemStatus.Done || task.CompletionDelivered) return ExecutorStallAction.None;
+        if (task.CompletionDelivered) return ExecutorStallAction.None;
+        if (task.Status == TaskItemStatus.Done) return ClassifyUndeliveredDone(task, session, nowUtc, staleAfter);
         // Исполнителя не запускали, ход ещё идёт (ClaudeResult null) либо он провалился:
         // провал уведомляет сам (BuildResultNotification), дублировать его не надо
         if (task.ClaudeStartedAt is null || task.ClaudeResult != "success") return ExecutorStallAction.None;
@@ -1133,6 +1168,25 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         return ExecutorStallAction.Nudge;
     }
 
+    // Задача закрыта, а доклад не ушёл. Ждать R бессмысленно, если ход точно не идёт: чат
+    // не занят и молчит дольше порога. Остановка исполнителя (терминальный отказ или «Стоп»
+    // до закрытия) — своё уведомление уже ушло либо человек в курсе. Окно свежести то же,
+    // что у оклика: на первом тике после обновления давно закрытые задачи не должны разом
+    // разослать доклады.
+    private static ExecutorStallAction ClassifyUndeliveredDone(TaskItem task, Session? session,
+        DateTime nowUtc, TimeSpan staleAfter)
+    {
+        if (task.ClaudeStartedAt is null || task.ClaudeResult is not null || task.ExecutorStoppedAt is not null)
+            return ExecutorStallAction.None;
+        if (session is not null && session.Status is SessionStatus.Starting or SessionStatus.Working
+            or SessionStatus.Waiting)
+            return ExecutorStallAction.None;
+        var idle = nowUtc - (session?.UpdatedAt ?? task.UpdatedAt);
+        return idle >= staleAfter && idle <= NudgeWindow
+            ? ExecutorStallAction.DeliverCompletion
+            : ExecutorStallAction.None;
+    }
+
     // Окно свежести оклика: чат молчит дольше — сразу к человеку, без платного автохода
     internal static readonly TimeSpan NudgeWindow = TimeSpan.FromHours(24);
 
@@ -1169,7 +1223,23 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             case ExecutorStallAction.AlertWaitingForBlocker:
                 await AlertStaleTaskAsync(task, nowUtc, waitingForBlocker: true);
                 break;
+            case ExecutorStallAction.DeliverCompletion:
+                await DeliverOrphanedCompletionAsync(task);
+                break;
         }
+    }
+
+    // R не встал, но задача закрыта исполнителем и ход не идёт: ставим итог по факту
+    // закрытия и проходим обычный join — CAS в нём не даст задвоить доклад, если R всё же
+    // догонит.
+    private async Task DeliverOrphanedCompletionAsync(TaskItem task)
+    {
+        var updated = _tasks.MarkClaudeResult(task.Id, "success");
+        if (updated is null) return;
+        _log.LogWarning("Задача {TaskId} «{Title}» закрыта, а итог хода не пришёл (сессия {SessionId}) — " +
+            "доставляю доклад по сигналу D", updated.Id, updated.Title, updated.LinkedSessionId);
+        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await TryDeliverCompletionAsync(updated);
     }
 
     // Крючок «открыт ли блокер по задаче»: ставится штабом (TeamWaveService) на старте режима,
@@ -1541,11 +1611,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             _sessions.SetPersona(targetSessionId, task.OwnerId!, delegator.Id);
 
         // ШАГ 2: постановщик реагирует ВСЕГДА — платный авто-ход с контекстом отчёта.
-        // MAJOR 1: tasks_run_executor запрещён на этом ходу — A может отреагировать и даже
-        // создать новую задачу (tasks_create), но не самозапустить её. Без запрета A по
-        // промпту «продолжи работу» мог бы tasks_create+tasks_run_executor → новая задача
-        // глубины 0 → новый доклад → новая реакция → бесконечный платный цикл A↔B
-        // (гард DelegationDepth<3 цепочку исполнителей ловит, а не переделегирование A).
+        // suppressTasksExecute помечает ход как реакцию на доклад: действия, учитывающие этот
+        // признак, на нём запрещены. Запуск задач (tasks_run_executor) его больше не учитывает —
+        // запрет мешал ставить следующую задачу; цикл «доклад → запуск → доклад» гасит «Стоп».
         // Чат постановщика может быть занят своим ходом — тогда реакция встаёт в очередь
         // сессии и уйдёт после него. Раньше ход полагался на неявную очередь семафора
         // в адаптере: она невидима и молча теряет ходы при Interrupt. Гостевая реплика

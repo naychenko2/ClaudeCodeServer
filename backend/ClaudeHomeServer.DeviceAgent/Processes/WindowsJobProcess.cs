@@ -34,7 +34,7 @@ internal sealed class WindowsJobProcess : TurnProcess
         if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"на Windows запускается только .exe напрямую, а не «{name}»: cmd /c не проксирует stdin");
 
-        var job = CreateKillOnCloseJob();
+        var job = CreateKillOnCloseJob(launch.JobName);
         var psi = BaseStartInfo(launch.ExecutablePath, launch);
         foreach (var arg in launch.Args) psi.ArgumentList.Add(arg);
 
@@ -102,10 +102,17 @@ internal sealed class WindowsJobProcess : TurnProcess
         base.Dispose();
     }
 
-    private static SafeJobHandle CreateKillOnCloseJob()
+    /// <param name="name">Имя Job хода с руками: мост открывает его на чтение и спрашивает членство
+    /// процесса окна. Имя уже занято — отказ, а не чужой Job под нашим именем.</param>
+    private static SafeJobHandle CreateKillOnCloseJob(string? name = null)
     {
-        var job = CreateJobObjectW(IntPtr.Zero, null);
+        var job = CreateJobObjectW(IntPtr.Zero, name);
         if (job.IsInvalid) throw new Win32Exception(Marshal.GetLastPInvokeError(), "Job Object не создан");
+        if (name is not null && Marshal.GetLastPInvokeError() == ErrorAlreadyExists)
+        {
+            job.Dispose();
+            throw new InvalidOperationException($"Job Object «{name}» уже существует — ход с руками не запущен");
+        }
 
         var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION
         {
@@ -143,6 +150,7 @@ internal sealed class WindowsJobProcess : TurnProcess
     }
 
     private const int JobObjectExtendedLimitInformation = 9;
+    private const int ErrorAlreadyExists = 183;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
 
     [StructLayout(LayoutKind.Sequential)]

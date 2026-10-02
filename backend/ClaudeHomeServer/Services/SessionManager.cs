@@ -106,6 +106,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // systemDirective в идущий процесс слать нельзя) — она уезжает префиксом ближайшего
         // хода, см. BuildCliTurnText. null — пометки нет либо она уже уехала.
         public volatile Llm.SubagentRunPassport? TruncatedBgNote;
+        // Прошлый ход остановил человек («Стоп» в чате или в трее рук): пометка едет префиксом
+        // ближайшего хода (BuildCliTurnText). Транскрипт CLI убитого хода обрывается молча, и
+        // без неё модель принимает обрыв за сбой и доделывает прерванное. Одноразовая.
+        public volatile bool UserStopNote;
         // Сколько добиваний подряд отправлено ЗА ОДНОГО агента (потолок — MaxSubagentNudges).
         // Обнуляется штатным отчётом ТОГО ЖЕ агента и любым ходом человека: две попытки — на серию.
         public int SubagentNudges;
@@ -467,11 +471,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     }
 
     // Результат AppendIfNotDuplicateStoredNoLockAsync для дисковой ветки публикаций:
-    // Added — запись добавлена; Duplicate — предикат уже видел такую запись; NoKey —
-    // у чата ещё нет ClaudeSessionId (история не заведена). NoKey отделён от Duplicate
-    // специально: при нём дисковой записи нет, но учёт и broadcast должны пройти
-    // (раньше оба случая мапились в duplicate=true и аналитика терялась).
-    private enum AppendResult { Added, Duplicate, NoKey }
+    // Added — запись добавлена; Duplicate — предикат уже видел такую запись.
+    private enum AppendResult { Added, Duplicate }
+
+    // Ключ history.json чата: транскрипт CLI, а до первого ответа агента — id самого чата.
+    // Тот же ключ берут EnsureAccumulatorAsync и локальный голосовой ход, поэтому записи,
+    // сделанные до первого ответа (карточки нитей картинок, ADR-019), аккумулятор первого хода
+    // поднимает с диска и дальше сохраняет уже под ClaudeSessionId — ничего не теряется.
+    private static string HistoryKeyOf(Session info) => info.ClaudeSessionId ?? info.Id;
 
     // Дедуп-then-append: общий шов публикаций fal/glif и AppendStoredAsync на
     // дисковой ветке. КОНТРАКТ: вызывающий ОБЯЗАН держать _falPersistLock — иначе
@@ -485,7 +492,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Func<StoredMessage, bool> isDuplicate,
         Func<StoredMessage> factory)
     {
-        if (entry.Info.ClaudeSessionId is not string key) return AppendResult.NoKey;
+        var key = HistoryKeyOf(entry.Info);
         var stored = await _history.LoadAsync(key);
         if (stored.Any(isDuplicate)) return AppendResult.Duplicate;
         stored.Add(factory());
@@ -509,8 +516,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly Llm.ModelAssignmentResolver _assignments;
     private readonly UserStore _users;
     private readonly JwtService _jwt;
-    // Токены грани десктопа (ADR-008): кеш по чату поверх _jwt, отдельный от сервисных
-    private readonly Desktop.DesktopCapabilityTokenService _desktopTokens;
     private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
     private readonly IConfiguration _config;
     // Копии транскриптов заархивированных чатов (data/archived-transcripts) — шаг 0 плана
@@ -575,6 +580,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public event Action<Session>? OnSessionDeleted;
 
     private readonly FeatureFlagService _flags;
+    private readonly IServiceProvider? _services;
+    private Services.Mcp.Http.McpToolsetRegistry? _mcpToolsets;
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _bindings;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
@@ -591,6 +598,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Фабрика логгеров для вертикали (волна В): TeamPlanService получает собственный
     // типизированный ILogger. null — в тестах без DI, TeamPlanService работает на NullLogger.
     private readonly ILoggerFactory? _loggerFactory;
+    // Снимок загруженных подсистем: гейт объявления arch_* по факту загрузки модуля
+    private readonly Composition.SubsystemStateStore? _subsystemStates;
     // Драйверы среды исполнения владельцев (local / docker-песочница)
     private readonly Execution.ILauncherFactory _launchers;
     private readonly Execution.SandboxManager _sandbox;
@@ -750,9 +759,17 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // TeamPlanService работает на NullLogger.
         ILoggerFactory? loggerFactory = null,
         // Опционально (в тестах не передаётся): готовность устройства локального проекта
-        Execution.IProjectDeviceGate? deviceGate = null)
+        Execution.IProjectDeviceGate? deviceGate = null,
+        // Корень DI: реестр MCP-тулсетов резолвится лениво (BuildImageEditorContext) — прямая
+        // зависимость дала бы цикл SessionManager → реестр → тулсеты → SessionManager
+        IServiceProvider? services = null,
+        // Опционально (в тестах не передаётся): снимок загруженных подсистем — факт загрузки
+        // динамических модулей (Architecture). Без него сервер arch_* ходу не объявляется.
+        Composition.SubsystemStateStore? subsystemStates = null)
     {
         _deviceGate = deviceGate;
+        _services = services;
+        _subsystemStates = subsystemStates;
         _turnEvents = turnEvents;
         _loggerFactory = loggerFactory;
         _taskLookup = tasks is null ? null : new Composition.TaskLookupAdapter(tasks);
@@ -839,7 +856,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         _assignments = assignments ?? new Llm.ModelAssignmentResolver(appSettings);
         _users = users;
         _jwt = jwt;
-        _desktopTokens = new Desktop.DesktopCapabilityTokenService(jwt);
         _server = server;
         _config = config;
         // Копии транскриптов архивных чатов (шаг 0 плана «Архив чатов»): стор файловый и
@@ -1064,6 +1080,25 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new WebSearchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }
 
+    // Контекст MCP-сервера архитектуры (arch_*: C4-модель проекта). Все оси — свойства
+    // владельца/сессии/процесса, не хода (инвариант стабильности состава ADR-012): чат
+    // проекта, модуль Architecture реально загружен (динамическая сборка, Viaduct 10.2: без
+    // dll тулсета нет в реестре, и ход объявил бы CLI мёртвый сервер — урок форвардера
+    // Knowledge у Notes) и не выключен вторым замком Subsystems:architecture:Enabled, плюс
+    // Off-привязка персоны tool:architecture. Фич-флага у раздела нет (решение 2026-09-26):
+    // включение — только конфигом модуля. Тулсет перепроверяет то же на каждом вызове.
+    private ArchitectureMcpContext? BuildArchitectureContext(string? ownerId, string? projectId, Persona? persona)
+    {
+        if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
+        // Локальный проект (ADR-016): модели и графа кода на сервере нет — тулсету не с чем работать
+        if (_projects.GetById(projectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) return null;
+        if (_subsystemStates?.ActiveKeys().Contains(McpEndpoints.ArchitectureName, StringComparer.OrdinalIgnoreCase) != true) return null;
+        if (!Composition.SubsystemGate.IsEnabled(_config, McpEndpoints.ArchitectureName)) return null;
+        if (!_bindings.ServerToolEnabled(ownerId, persona, "architecture")) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new ArchitectureMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
     // MCP-сервер Higgsfield: инстансное OAuth-подключение (единый вход админа, шарится
     // всеми владельцами). Узел присутствует в конфиге хода только когда:
     //   1) инстанс подключён (EnsureFresh() ≠ null) — иначе прокси некому ретранслировать
@@ -1080,6 +1115,57 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         if (_higgsfieldOAuth.EnsureFresh() is null) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new HiggsfieldMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
+    }
+
+    // MCP-сервер редактора картинок (ADR-019 §4): в любом чате владельца — проектном и личном,
+    // при флаге image-editor и загруженном модуле. Контекст собирается во ВСЕХ трёх точках
+    // (StartNewSessionAsync и обе ветки EnsureProcessCoreAsync) — иначе состав прыгает между
+    // первым ходом и перезапуском процесса (сторож в McpToolsetStabilityTests). Последнее — наличие тулсета в реестре: модуль выключен, а
+    // контекст собран — CLI получил бы сервер, отвечающий 404, и «fetch failed» у всех
+    // инструментов хода. Все условия — свойства сессии, владельца и процесса; от хода, фокуса и
+    // нитей картинок состав не зависит (McpToolsetStabilityTests).
+    internal ImageEditorMcpContext? BuildImageEditorContext(string? ownerId, Session session)
+    {
+        if (ownerId is null) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.ImageEditorName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new ImageEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
+            ImageEditor.ImageEditorAgentTools.AutoAllowTools);
+    }
+
+    // MCP-сервер модуля «Звук» (ADR-021 §5) — по тем же правилам, что image-editor: любой чат владельца,
+    // флаг audio-editor, тулсет в реестре (модуль загружен), все три точки сборки контекста. От хода,
+    // фокуса, режима и нитей звука состав не зависит (McpToolsetStabilityTests).
+    internal AudioEditorMcpContext? BuildAudioEditorContext(string? ownerId, Session session)
+    {
+        if (ownerId is null) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.AudioEditor)) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.AudioEditorName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new AudioEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
+            AudioEditor.AudioEditorAgentTools.AutoAllowTools);
+    }
+
+    // MCP-сервер локальной генерации (ComfyUI на своей GPU). Узел есть в конфиге хода, только когда:
+    //   1) включён машинный тумблер LocalMedia:Enabled и подсистема images (там живёт движок);
+    //   2) чат проекта, чьи файлы на сервере: результат пишется в папку проекта
+    //      (локальный проект ADR-016 — отказ через ProjectCapabilities);
+    //   3) персона НЕ ReadOnly — сервер пишет файлы (тот же RO-гейт, что у higgsfield).
+    // Всё это — свойства инстанса, сессии и персоны; тумблер читается живьём, но его поворот
+    // штатно меняет сигнатуру запуска, как правка ключа у websearch. Гейты тулсета на вызове
+    // повторяют проверки (defense-in-depth).
+    internal LocalMediaMcpContext? BuildLocalMediaContext(string? ownerId, string? projectId, Persona? persona)
+    {
+        if (ownerId is null || projectId is null) return null;
+        if (!Images.LocalMedia.LocalMediaOptions.IsEnabled(_config)) return null;
+        if (!Composition.SubsystemGate.IsEnabled(_config, "images")) return null;
+        if (persona is { Access: PersonaAccess.ReadOnly }) return null;
+        if (_projects.GetById(projectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new LocalMediaMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
     }
 
     // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
@@ -1121,13 +1207,17 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
         WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null,
-        HiggsfieldMcpContext? higgsfield = null) =>
-        widgets is { UseHttp: true } || memory is { UseHttp: true }
+        HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null,
+        LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null,
+        AudioEditorMcpContext? audioEditor = null) =>
+        architecture is { UseHttp: true }
+        || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
         || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
         || watch is { UseHttp: true } || webSearch is { UseHttp: true }
-        || higgsfield is { UseHttp: true };
+        || higgsfield is { UseHttp: true } || imageEditor is { UseHttp: true }
+        || localMedia is { UseHttp: true } || audioEditor is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -1153,6 +1243,21 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             () => GetServiceToken(ownerId), UseHttp: HttpEndpointUsable(apiUrl));
     }
 
+    // Руки локального проекта (ADR-016 §7) — свойство чата, а не хода: матрица
+    // ProjectCapabilities.HandsRefusal (локальный проект, hands у устройства,
+    // тумблер проекта). Провайдер хода не сужает ни руки, ни фолбэк (решение владельца
+    // 2026-09-27): снимки окон отсекает зрение провайдера в ClaudeSession.
+    // Канал устройства резолвится лениво: прямая зависимость замкнула бы граф синглтонов.
+    private bool HandsFor(string? projectId)
+    {
+        if (projectId is null || _projects.GetById(projectId) is not { OwnerId: { } ownerId } project) return false;
+        var device = ProjectCapabilities.IsDeviceBound(project)
+            ? _services?.GetService<Execution.IDeviceExecChannel>()?.GetStatus(ownerId, project.DeviceId!)
+            : null;
+        var refusal = ProjectCapabilities.HandsRefusal(project, device, project.HandsEnabled);
+        return refusal is null;
+    }
+
     // Работает ли у проекта чата группа «нужен контент на сервере» (ADR-016 §4). Чат вне
     // проекта — да: его папка серверная
     private bool ServerContentFor(string? projectId) =>
@@ -1163,6 +1268,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // «транскрипта нет» там, где он просто на другой машине. Чат вне проекта — серверный.
     private bool TranscriptOnServer(Session info) =>
         info.ProjectId is null || _projects.GetById(info.ProjectId) is not { } p || ProjectCapabilities.TranscriptOnServer(p);
+
+    // Адрес шлюза LLM для серверного процесса CLI (ADR-016 §2, серверный ход провайдера с
+    // NormalizeToolInputArrays) — тот же, что у MCP-серверов хода, у песочницы это мост хоста.
+    // У чата проекта, привязанного к устройству, — null: CLI там живёт на устройстве, и шлюз
+    // ходу ставит раннер устройства.
+    private string? LlmGatewayApiUrlFor(Session info, string? ownerId) =>
+        info.ProjectId is not null && _projects.GetById(info.ProjectId) is { } p && ProjectCapabilities.IsDeviceBound(p)
+            ? null
+            : ResolveTasksApiUrl(ownerId);
 
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
@@ -1181,44 +1295,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new CodeGraphMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId, sessionId, rootPath,
             UseHttp: HttpEndpointUsable(apiUrl));
-    }
-
-    // Право чата на десктопную грань по СУЩНОСТИ чата — единая точка правды (ADR-008:
-    // «Грань не доставляется в ходы исполнения задач, отложенные и регулярные чаты,
-    // групповые чаты»), никаких дублей-предикатов рядом. internal static — чистая функция,
-    // тестируется напрямую (DesktopTurnEligibleTests).
-    internal static bool DesktopTurnEligible(Session session) =>
-        // Десктопный ли чат (тип чата «Десктопный») — свойство конфигурации чата, а не хода
-        session.DesktopChat
-        // Чат-исполнитель задачи (в том числе отложенной и регулярной — их создаёт
-        // TaskExecutionService по расписанию, человека у машины в этот момент нет) и чат
-        // правила проактивности: Origin выводится из TaskId/AutomationRuleId (Session.Origin)
-        && session.Origin == ChatOrigin.Manual
-        && !session.TaskExecution
-        // Групповой чат: руки одного устройства на несколько собеседников не делятся.
-        // Participants заполняется ТОЛЬКО у групповых (ValidateParticipants: 2–8 персон);
-        // чат с одной персоной хранит её в PersonaId — поэтому «есть участники» == «групповой».
-        // Проверяем Count > 0, а не Count > 1: если валидацию состава когда-нибудь ослабят
-        // до одиночных участников, грань не должна молча поехать в чат с чужой персоной.
-        && session.Participants is not { Count: > 0 };
-
-    // Контекст MCP-сервера десктопной грани (ADR-008, «Два уровня, которые нельзя смешивать»):
-    // состав грани решает КОНФИГУРАЦИЯ на момент запуска CLI — тип чата «Десктопный» плюс
-    // включение грани в проекте, — и никогда состояние хода. Право на каждый конкретный вызов
-    // проверяет бэкенд (DesktopAccessGate), поэтому здесь нет ни сеанса рук, ни устройства:
-    // их появление и исчезновение не должно менять tools/list и перезапускать процесс CLI.
-    // Право чата по его сущности — DesktopTurnEligible (единственная точка правды);
-    // персона может отказаться от грани Off-привязкой tool:desktop, как от codegraph/widgets.
-    private DesktopMcpContext? BuildDesktopContext(string? ownerId, Session session, Persona? persona)
-    {
-        if (ownerId is null || string.IsNullOrEmpty(session.ProjectId)) return null;
-        if (!DesktopTurnEligible(session)) return null;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.DesktopAgent)) return null;
-        if (_projects.GetById(session.ProjectId!)?.DesktopAgentEnabled != true) return null;
-        if (!_bindings.ServerToolEnabled(ownerId, persona, "desktop")) return null;
-        // Capability-токен чата, а не сервисный JWT владельца: /api/devices/* его не принимают
-        return new DesktopMcpContext(ResolveTasksApiUrl(ownerId),
-            _desktopTokens.TokenFor(ownerId, session.Id), session.Id);
     }
 
     // Контекст MCP-сервера памяти персоны (та же фабрика сервисного токена, что у tasks/notes).
@@ -1649,10 +1725,40 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
+    // Разовая миграция чатов картинки v2 на v3 (ADR-019, решение 2): чат уходит в архив
+    // (ArchivedAt, UpdatedAt не трогаем — по общему правилу IsArchived) и получает маркер
+    // SessionImageChat.MigratedAt. Идемпотентна: чат с маркером пропускается — и тот, что
+    // человек вернул из архива сам, повторно не архивируется. Уже архивный чат получает только
+    // маркер. ArchivedAt не раньше UpdatedAt: иначе чат с меткой из будущего остался бы в списке.
+    // Транскрипт копируется в архив, как при ручной архивации, --resume не ломается.
+    // Возвращает число мигрированных чатов; 0 — sessions.json не переписывается.
+    public int ArchiveLegacyImageChats(DateTime nowUtc)
+    {
+        var migrated = 0;
+        foreach (var entry in _sessions.Values)
+        {
+            if (entry.Info.ImageChat is not { MigratedAt: null } chat) continue;
+            if (!entry.Info.IsArchived)
+            {
+                entry.Info.ArchivedAt = entry.Info.UpdatedAt > nowUtc ? entry.Info.UpdatedAt : nowUtc;
+                entry.Info.ArchivedBy = LegacyImageChatArchivedBy;
+                entry.Info.ArchiveBatchId = null;
+                ArchiveTranscriptCopy(entry.Info);
+            }
+            chat.MigratedAt = nowUtc;
+            migrated++;
+        }
+        if (migrated > 0) SaveSessions();
+        return migrated;
+    }
+
+    // Кто архивировал: не "user" и не "rule" — откат прохода автоправила такие чаты не вернёт
+    public const string LegacyImageChatArchivedBy = "image-editor-v3";
+
     // Копия транскрипта при архивации: источники — ВСЕ корни профилей, как у уборки при
     // удалении (DeleteTranscript): за время жизни чат мог мигрировать между профилями и
     // рабочими папками, а миграции исходники не удаляют. Сам стор валидирует csid белым
-    // списком и гейтит десктопные чаты; best-effort — сбой не имеет права ронять архивацию.
+    // списком; best-effort — сбой не имеет права ронять архивацию.
     private void ArchiveTranscriptCopy(Session info)
     {
         try
@@ -1661,7 +1767,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             // Локальный проект: транскрипт на устройстве, копировать с диска сервера нечего —
             // поиск по своему пути нашёл бы разве что чужой файл
             if (!TranscriptOnServer(info)) return;
-            _archivedTranscripts.Archive(csid, info.DesktopChat, TranscriptSearchRoots(info), TryResolveCwd(info));
+            _archivedTranscripts.Archive(csid, TranscriptSearchRoots(info), TryResolveCwd(info));
         }
         catch (Exception ex)
         {
@@ -1811,6 +1917,25 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
+    // Запись модуля в ленту вне хода (ADR-019 §2, шов IChatFeed): история + живая пара
+    // module_record. Активность, как тихие строки v2: UpdatedAt двигается, чат выходит из
+    // архива. Timestamp ставит сервер, если модуль его не задал. false — чата нет.
+    public async Task<bool> AppendModuleRecordAsync(string sessionId, StoredModuleRecord record)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        var ts = record.Timestamp ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var stored = new StoredModuleRecord
+        {
+            Module = record.Module, RecordType = record.RecordType, Data = record.Data,
+            Fallback = record.Fallback, Timestamp = ts,
+        };
+        await AppendStoredAsync(sessionId, stored,
+            new ModuleRecordMessage(stored.Module, stored.RecordType, stored.Data, stored.Fallback, ts));
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return true;
+    }
+
     // Заглушить/включить уведомления по чату (браузерные «нужно решение» / «ход завершён»).
     // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
     public Session? SetNotificationsMuted(string sessionId, bool muted)
@@ -1890,12 +2015,16 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // заменяется, всё остальное — включая незнакомые модели и «preset:{id}» — остаётся как есть.
     // Возвращает число изменённых чатов; 0 — стор на диск не переписывается.
     // Идёт через живой реестр, а не файл: иначе первый же SaveSessions вернул бы старые id.
-    public int RemapModels(IReadOnlyDictionary<string, string> map)
+    public int RemapModels(IReadOnlyDictionary<string, string> map) =>
+        RemapModels(id => map.TryGetValue(id, out var next) ? next : null);
+
+    // То же с произвольным сведением: map(id) → новое значение или null (не менять).
+    public int RemapModels(Func<string, string?> map)
     {
         var changed = 0;
         foreach (var info in _sessions.Values.Select(e => e.Info))
         {
-            if (info.Model is null || !map.TryGetValue(info.Model.Trim(), out var next)) continue;
+            if (info.Model is null || map(info.Model.Trim()) is not { } next || next == info.Model) continue;
             info.Model = next;
             changed++;
         }
@@ -1933,8 +2062,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Подставляется, только когда модель НЕ задана явно и это НЕ resume: у транскрипта
     // resumed-сессии уже зафиксированы своя модель и провайдер, и подмена здесь сменила бы
     // провайдер и упёрлась в guard смены провайдера (400).
+    // Родной Claude сводится к семейству и тут: модель чата — точка записи.
     private string? ResolveDefaultModel(string usageKey, string? model, string? resumeSessionId, string? ownerId) =>
-        !string.IsNullOrEmpty(resumeSessionId) ? model : _assignments.Resolve(usageKey, model, ownerId);
+        _llmProviders.CanonicalizeModel(
+            !string.IsNullOrEmpty(resumeSessionId) ? model : _assignments.Resolve(usageKey, model, ownerId));
 
     // Место применения по признакам сессии — тот же порядок, что у ClaudeSession.UsageKey:
     // исполнитель задач специфичнее персоны, персона специфичнее обычного чата.
@@ -2364,20 +2495,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (GetOwned(sessionId, ownerId) is null || !_sessions.TryGetValue(sessionId, out var entry))
             throw new KeyNotFoundException("Чат не найден");
 
-        var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+        var newModel = _llmProviders.CanonicalizeModel(string.IsNullOrWhiteSpace(model) ? null : model.Trim());
 
         var target = _llmProviders.ResolveByModel(newModel);
-        // Десктопный чат стороннему вендору не отдаём (ADR-008): в его транскрипте оседают
-        // кадры рабочего стола (desktop_screen пишет base64 в .jsonl), а миграция — это копия
-        // файла в чужой профиль плюс --resume с чужим ANTHROPIC_BASE_URL. Автоматический
-        // фолбэк то же правило держит обрезкой цепочки (TrimChainForDesktop); здесь — второй
-        // шлюз, на единственной точке РУЧНОЙ смены провайдера: и настройки чата (UpdateAsync),
-        // и кнопка «Продолжить на …» карточки provider_limit. Ротация внутри пула подписок
-        // Claude (target is null) правилом не затронута — эндпоинт и владелец данных те же.
-        if (entry.Info.DesktopChat && target is not null)
-            throw new InvalidOperationException(
-                "Десктопный чат нельзя перевести на стороннего провайдера: в его истории есть "
-                + "кадры рабочего стола. Останьтесь на Claude или заведите обычный чат");
         if (target is { Enabled: false })
             throw new InvalidOperationException(
                 $"Провайдер «{target.DisplayName}» не настроен: задай LlmProviders:{target.Key}:ApiKey");
@@ -2557,12 +2677,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // §9.2 — нет ClaudeSessionId: на экране история есть, в памяти модели — нет
         if (source.ClaudeSessionId is not string csid)
             throw new InvalidOperationException("Чат ещё не обращался к модели: ветвить нечего");
-
-        // §9.3 — десктопный чат (ADR-008): его транскрипт с кадрами рабочего стола наружу
-        // не отдаём. DesktopChatGuard.Refuse тут не работает (ищет по совпадению
-        // resumeSessionId с чужим ClaudeSessionId, а у ветки id новый) — берём только текст.
-        if (source.DesktopChat)
-            throw new InvalidOperationException(Controllers.DesktopChatGuard.ResumeFromDesktop);
 
         // §9.6 — групповой чат и режим штаба: их состояние волн/спикеров живёт в Session,
         // а не в транскрипте — ветка унаследовала бы ленту без состояния
@@ -2785,6 +2899,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             branchSession = b;
         }
 
+        // Подсистемы со своим состоянием по sessionId (нити редактора картинок) копируют его под
+        // ветку (ADR-019 §2). Notification: сбой подписчика ветвление не роняет
+        await TurnEvents.PublishAsync(new SessionBranched(
+            new TurnContext(branchSession.Id, ownerId, 0, 0, branchSession.ProjectId), sessionId));
+
         return new ChatBranchResult(branchSession, draft);
     }
 
@@ -2909,7 +3028,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, bool desktopChat = false)
+        string? onboardingKind = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -2931,9 +3050,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
             TaskId = taskId,
-            // Тип чата «Десктопный» (ADR-008): задаётся при СОЗДАНИИ и дальше не меняется —
-            // состав грани фиксируется на момент запуска CLI
-            DesktopChat = desktopChat,
             // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
             OnboardingKind = onboardingKind,
         };
@@ -3192,6 +3308,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 return null;
             }
         };
+    }
+
+    // Руки — свойство чата (LlmSessionContext.HandsEnabled): тумблер проекта или список
+    // провайдеров владельца поменялся — адаптеры его живых чатов пересоздаются при следующем
+    // сообщении. Уборка ленивая, как у персоны: активный ход и доживающих агентов не рвём.
+    // projectId null — все проектные чаты владельца (правка списка провайдеров).
+    public void InvalidateHandsSessions(string ownerId, string? projectId)
+    {
+        foreach (var entry in _sessions.Values.Where(e => e.Info.ProjectId is not null
+                     && (projectId is null ? ResolveOwnerId(e.Info) == ownerId : e.Info.ProjectId == projectId)))
+            if (entry.Process is not null) entry.AdapterStale = true;
     }
 
     // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
@@ -3899,10 +4026,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             throw new InvalidOperationException(
                 "Недопустимый resumeSessionId: разрешены только буквы, цифры, дефис и подчеркивание");
 
-        var existingHistory = session.ClaudeSessionId != null
-            ? await _history.LoadAsync(session.ClaudeSessionId)
-            : [];
-        var accumulator = new TurnAccumulator(existingHistory, session.ClaudeSessionId);
+        // Ключ истории до первого ответа агента — id чата (HistoryKeyOf): иначе внеходовые
+        // записи в свежий чат (карточки нитей картинок) жили бы только в памяти
+        var historyKey = HistoryKeyOf(session);
+        var accumulator = new TurnAccumulator(await _history.LoadAsync(historyKey), historyKey);
 
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
         _sessions[session.Id] = entry;
@@ -3928,6 +4055,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var watchMcp = BuildWatchContext(ownerId);
         var webSearchMcp = BuildWebSearchContext(ownerId, persona.Persona);
         var higgsfieldMcp = BuildHiggsfieldContext(ownerId, persona.Persona);
+        var imageEditorMcp = BuildImageEditorContext(ownerId, session);
+        var audioEditorMcp = BuildAudioEditorContext(ownerId, session);
+        var localMediaMcp = BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
             ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
@@ -3936,7 +4066,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var personasMcp = BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona);
         var notificationsMcp = BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona);
         var codeGraphMcp = BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona);
+        var architectureMcp = BuildArchitectureContext(ownerId, session.ProjectId, persona.Persona);
         var difyMcp = BuildDifyContext(ownerId);
+        var hands = HandsFor(session.ProjectId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, ProjectManager.BuiltInSystemPrompt, permissionRules,
@@ -3959,7 +4091,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             WidgetsMcp: widgetsMcp,
             CodeGraphMcp: codeGraphMcp,
             DifyMcp: difyMcp,
-            DesktopMcp: BuildDesktopContext(ownerId, session, persona.Persona),
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
             ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
@@ -3967,8 +4098,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp),
+                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
+                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
+            ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
             // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
             ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null,
@@ -3976,12 +4109,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             WatchMcp: watchMcp,
             WebSearchMcp: webSearchMcp,
             HiggsfieldMcp: higgsfieldMcp,
+            ImageEditorMcp: imageEditorMcp,
+            AudioEditorMcp: audioEditorMcp,
+            LocalMediaMcp: localMediaMcp,
             // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
             // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
             // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
             MainRootPath: projectRoot,
             ServerContent: ServerContentFor(session.ProjectId),
-            TranscriptOnServer: TranscriptOnServer(session)));
+            TranscriptOnServer: TranscriptOnServer(session),
+            HandsEnabled: hands,
+            LlmGatewayApiUrl: LlmGatewayApiUrlFor(session, ownerId)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4165,6 +4303,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             sessionId, deliverySrc, effectiveCause, senderOrigin ?? "-", mode ?? "-",
             (text.Length > 60 ? text[..60] : text).Replace('\n', ' '));
 
+        if (TurnStarting is { } onTurnStarting)
+        {
+            try { await onTurnStarting(sessionId); }
+            catch (Exception ex) { _log.LogWarning(ex, "Хук старта хода {Session} упал", sessionId); }
+        }
+
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
         // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).
@@ -4325,6 +4469,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Превью чата для карточки списка: первые 100 символов сообщения
     internal static string ChatPreview(string text) => text.Length > 100 ? text[..100] + "…" : text;
 
+    // Сигнал модели после «Стоп» человека — общий для кнопки в чате и в трее рук
+    internal const string UserStopNoteText =
+        "[Ход остановлен человеком (кнопка «Стоп»). Прерванное молча не доделывай: продолжай его, " +
+        "только если об этом просят ниже.]";
+
     // Текст хода для CLI: исходное сообщение + обвязки.
     // Протокол цикла «до готово» — пока Session.WorkLoop активен. Своей вставки ultrawork
     // больше нет: слова ultrawork/ulw ловит keyword-detector плагина oh-my-claudecode.
@@ -4340,6 +4489,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             entry.TruncatedBgNote = null;
             result = SubagentPrompts.TruncatedBgAgent(cutBgAgent) + "\n\n" + result;
+        }
+
+        if (entry.UserStopNote)
+        {
+            entry.UserStopNote = false;
+            result = UserStopNoteText + "\n\n" + result;
         }
 
         if (entry.Info.WorkLoop is { } loop)
@@ -5350,9 +5505,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         await WithFalPersistLockAsync(async () =>
         {
             if (entry.Accumulator is not null) return;
-            var key = entry.Info.ClaudeSessionId ?? entry.Info.Id.ToString();
+            // Ключ сохранения — тот же, что у чтения: до первого ответа агента это id чата, иначе
+            // внеходовая запись в свежий чат (AppendStoredAsync) не легла бы на диск вовсе.
+            // Ответ CLI переключит ключ на ClaudeSessionId (SessionStartedMessage → SetSaveKey)
+            var key = HistoryKeyOf(entry.Info);
             var existingHistory = await _history.LoadAsync(key);
-            entry.Accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
+            entry.Accumulator = new TurnAccumulator(existingHistory, key);
         });
     }
 
@@ -5410,6 +5568,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var watchMcp = BuildWatchContext(entry.Info.OwnerId);
             var webSearchMcp = BuildWebSearchContext(entry.Info.OwnerId, persona.Persona);
             var higgsfieldMcp = BuildHiggsfieldContext(entry.Info.OwnerId, persona.Persona);
+            var imageEditorMcp = BuildImageEditorContext(entry.Info.OwnerId, entry.Info);
+            var audioEditorMcp = BuildAudioEditorContext(entry.Info.OwnerId, entry.Info);
             var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
             var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
@@ -5445,14 +5605,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, dify: difyMcp, watch: watchMcp, webSearch: webSearchMcp,
-                    higgsfield: higgsfieldMcp),
+                    higgsfield: higgsfieldMcp, imageEditor: imageEditorMcp, audioEditor: audioEditorMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
                 WebSearchMcp: webSearchMcp,
                 HiggsfieldMcp: higgsfieldMcp,
+                ImageEditorMcp: imageEditorMcp,
+                AudioEditorMcp: audioEditorMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
-                MainRootPath: null);
+                MainRootPath: null,
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId));
                 // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается
         }
         else
@@ -5470,6 +5633,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var watchMcp = BuildWatchContext(project.OwnerId);
             var webSearchMcp = BuildWebSearchContext(project.OwnerId, persona.Persona);
             var higgsfieldMcp = BuildHiggsfieldContext(project.OwnerId, persona.Persona);
+            var imageEditorMcp = BuildImageEditorContext(project.OwnerId, entry.Info);
+            var audioEditorMcp = BuildAudioEditorContext(project.OwnerId, entry.Info);
+            var localMediaMcp = BuildLocalMediaContext(project.OwnerId, project.Id, persona.Persona);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null;
@@ -5478,7 +5644,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var personasMcp = BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona);
             var notificationsMcp = BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona);
             var codeGraphMcp = BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona);
+            var architectureMcp = BuildArchitectureContext(project.OwnerId, project.Id, persona.Persona);
             var difyMcp = BuildDifyContext(project.OwnerId);
+            var hands = HandsFor(project.Id);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
@@ -5499,7 +5667,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 WidgetsMcp: widgetsMcp,
                 CodeGraphMcp: codeGraphMcp,
                 DifyMcp: difyMcp,
-                DesktopMcp: BuildDesktopContext(project.OwnerId, entry.Info, persona.Persona),
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona),
@@ -5507,18 +5674,25 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp),
+                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
+                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
+                ArchitectureMcp: architectureMcp,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
                 WebSearchMcp: webSearchMcp,
                 HiggsfieldMcp: higgsfieldMcp,
+                ImageEditorMcp: imageEditorMcp,
+                AudioEditorMcp: audioEditorMcp,
+                LocalMediaMcp: localMediaMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).
                 MainRootPath: projectRoot,
                 ServerContent: ProjectCapabilities.ServerContentEnabled(project),
-                TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project));
+                TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project),
+                HandsEnabled: hands,
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, project.OwnerId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -5805,7 +5979,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         if (model is not null)
         {
-            var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+            // Родной Claude храним семейством (opus/fable…): версию выбирает CLI, окно — сервер
+            var newModel = _llmProviders.CanonicalizeModel(string.IsNullOrWhiteSpace(model) ? null : model.Trim());
             // Провайдера резолвим по ЭФФЕКТИВНЫМ моделям: пустая означает «по назначению места»,
             // а назначение может указывать на модель стороннего провайдера. По сырому null
             // возврат glm-чата к «По умолчанию» (при назначении на glm) выглядел бы как переезд
@@ -6050,7 +6225,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Отметка в историю — только когда было что останавливать (чат занят, в том числе
             // зависший: человек нажал «Стоп» и видит отметку в живой ленте)
             if (byUser && entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting)
+            {
                 RecordUserInterrupt(sessionId, entry);
+                // Пометка модели — только когда прерывается живой ход: у зависшего чата ход уже
+                // мёртв, и «Стоп» лишь реанимирует его
+                if (!stuck) entry.UserStopNote = true;
+            }
             // «Стоп» замораживает очередь (не чистит): сообщения остаются ждать возобновления,
             // а последнее пользовательское возвращается в композер (composer_restore).
             // При реанимации не замораживаем: размораживающего конца хода уже не будет,
@@ -6362,15 +6542,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (enabled && entry.Info.TeamImplement is not null)
             throw new SessionModeConflictException(
                 "Автопилот недоступен в чате «Командной реализации» — здесь работа идёт через задачи исполнителям.");
-
-        // ADR-008 («Два уровня, которые нельзя смешивать»): автопродолжение work-loop
-        // в десктопном чате запрещено. Цикл ведёт агента по итерациям без человека, а вся
-        // модель грани держится на том, что человек подтверждает каждое действие на
-        // устройстве. Выключение не запрещаем — вернуть false всегда можно.
-        if (enabled && entry.Info.DesktopChat)
-            throw new SessionModeConflictException(
-                "Цикл «до готово» недоступен в десктопном чате: агент не должен действовать на " +
-                "вашем компьютере без подтверждения каждого действия.");
 
         var wasEnabled = entry.Info.WorkLoop is not null;
         // Присвоение WorkLoop и очистку буфера хода держим под одним локом: иначе обнуление
@@ -6836,6 +7007,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // в вертикали Services.Tasks, и прямая ссылка на него из спины уронила бы сторож границ.
     // null — признак не задан (тесты, либо стора задач нет): ждать нечего.
     public Func<string, bool>? HasLiveDelegatedTasks { get; set; }
+
+    // Старт нового хода в сессии (любой источник: человек, очередь, авто-ход). Вешает
+    // TaskExecutionService — по тем же причинам, что HasLiveDelegatedTasks: продолжение в чате
+    // исполнителя после «Стоп» снимает пометку остановки, иначе задача числилась бы мёртвой.
+    // Сбой хука ход не роняет. null — хук не задан (тесты без стора задач).
+    public Func<string, Task>? TurnStarting { get; set; }
 
     // Резолв названия задачи по id (волна 1 team-blocker-honest, дефект 1430b732): штаб
     // публикует карточку остановки с TaskId, и подпись диалога снятия должна показать
@@ -8466,6 +8643,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
         SaveSessions();
         try { OnSessionDeleted?.Invoke(entry.Info); } catch { /* наблюдатель не должен ронять удаление */ }
+        // Подсистемы сносят своё состояние чата (ADR-019 §2); сбой подписчика шина гасит сама
+        await TurnEvents.PublishAsync(new SessionDeleted(
+            new TurnContext(sessionId, ResolveOwnerId(entry.Info), 0, 0, entry.Info.ProjectId)));
         await BroadcastChatDeletedAsync(sessionId, entry.Info);
     }
 
@@ -8552,10 +8732,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         IReadOnlyList<StoredMessage> list;
         if (entry.Accumulator != null)
             list = entry.Accumulator.GetAll();
-        else if (entry.Info.ClaudeSessionId != null)
-            list = await _history.LoadAsync(entry.Info.ClaudeSessionId);
         else
-            list = [];
+            list = await _history.LoadAsync(HistoryKeyOf(entry.Info));
 
         // Догоняем стоимость старых fal-генераций, у которых её ещё нет (фоном, дедуп внутри)
         BackfillFalCosts(sessionId, list);

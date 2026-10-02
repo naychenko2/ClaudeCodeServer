@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;

@@ -1,4 +1,6 @@
+using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.Backup;
+using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 
@@ -125,6 +127,29 @@ public class BackupPathsTests
     }
 
     [Fact]
+    public void РедакторКартинок_СостояниеЧатовКартинкиИсключено()
+    {
+        // Состояние редактора чата картинки (ADR-018 §2) — TTL-кеш рядом с вариантами; имена
+        // берём из констант Core, которые читает и сам модуль редактора
+        var dir = $"{ImageEditorPaths.WorkspaceDirName}/user-1/{ImageEditorPaths.ChatsDirName}";
+        BackupPaths.ShouldInclude($"{dir}/0f3c9a.json").Should().BeFalse();
+        BackupPaths.ShouldInclude($"{dir}/0f3c9a.mask.png").Should().BeFalse();
+    }
+
+    [Fact]
+    public void МодульЗвук_РабочаяПапкаИсключена_НитиИПрефыЕдут()
+    {
+        // Файлы вариантов задач — кеш на 7 дней (ADR-021 §2); имя из константы Core, её же
+        // читает модуль «Звук»
+        var job = $"{AudioEditorPaths.WorkspaceDirName}/user-1/job-1";
+        BackupPaths.ShouldInclude($"{job}/v1.mp3").Should().BeFalse();
+        BackupPaths.ShouldInclude($"{job}/stems/vocals.wav").Should().BeFalse();
+        // Нити и префы — другие корни: карточка в ленте живёт бессрочно, выбор человека тоже
+        BackupPaths.ShouldInclude("audio-threads/user-1/session-1.json").Should().BeTrue();
+        BackupPaths.ShouldInclude("audio-editor-prefs/user-1/personal.json").Should().BeTrue();
+    }
+
+    [Fact]
     public void СтатусыMcpСерверов_Исключены()
     {
         // Наблюдение, а не настройка: восстановленное из архива, оно описывает состояние
@@ -174,6 +199,23 @@ public class BackupPathsTests
     {
         // А вот сам graph.json невосстановим без перестроения Roslyn — его бэкапим
         BackupPaths.ShouldInclude("code-graphs/ab12cd/graph.json").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("modules/viaduct/dist/index.html")]
+    [InlineData("modules/viaduct/dist/assets/index-x81WCr2c.js")]
+    [InlineData("modules/Viaduct/dist/.viaduct-build.json")]
+    public void СборкаViaduct_Исключена(string path)
+    {
+        // Воспроизводимый кеш build-viaduct.ps1 — пересобирается скриптом, не данные
+        BackupPaths.ShouldInclude(path).Should().BeFalse();
+    }
+
+    [Fact]
+    public void МанифестВнешнегоМодуля_ПопадаетВАрхив()
+    {
+        // Исключение узкое: соседние modules/{id}/module.json — настройка, её бэкапим
+        BackupPaths.ShouldInclude("modules/echo/module.json").Should().BeTrue();
     }
 
     [Theory]

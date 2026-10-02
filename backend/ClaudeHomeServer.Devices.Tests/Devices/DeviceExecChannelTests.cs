@@ -1,0 +1,507 @@
+using System.Text;
+using System.Text.Json;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Devices;
+using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace ClaudeHomeServer.Tests.Services.Devices;
+
+// Возможности устройства и канал исполнения (ADR-016, задача 2.1): сведения агента из Hello,
+// вердикт «харнес не готов» по версии управляемой копии CLI и отказ хода СРАЗУ, с причиной,
+// до попытки открыть канал; кадровка канала исполнения.
+public class DeviceExecChannelTests : IDisposable
+{
+    private const string Owner = "owner-1";
+    private const string Conn = "conn-1";
+    private const string RequiredCli = "2.1.281";
+
+    private readonly string _dataDir = Path.Combine(Path.GetTempPath(), "ccs_devexec_" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_dataDir)) Directory.Delete(_dataDir, recursive: true);
+    }
+
+    private sealed class CountingOpener : IDeviceExecOpenSender
+    {
+        public int Calls;
+        public DeviceExecOpenCommand? Last;
+
+        public Task SendExecOpenAsync(string connectionId, DeviceExecOpenCommand command, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref Calls);
+            Last = command;
+            return Task.CompletedTask;
+        }
+    }
+
+    // Таймеры срабатывают сразу: ожидание подключения устройства истекает без реальных 10 с
+    private sealed class ImmediateTime : TimeProvider
+    {
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (dueTime != Timeout.InfiniteTimeSpan) ThreadPool.QueueUserWorkItem(_ => callback(state));
+            return new NoopTimer();
+        }
+
+        private sealed class NoopTimer : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+            public void Dispose() { }
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed record Rig(DeviceRegistry Registry, DeviceConnectionRegistry Router, DeviceExecChannel Channel, CountingOpener Opener, DesktopDevice Device);
+
+    private Rig NewRig(string? requiredCli = RequiredCli, AgentReleaseCatalog? releases = null)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { [DeviceHarnessPolicy.CliVersionKey] = requiredCli })
+            .Build();
+        var registry = new DeviceRegistry(_dataDir);
+        var router = new DeviceConnectionRegistry([], NullLogger<DeviceConnectionRegistry>.Instance);
+        var opener = new CountingOpener();
+        var channel = new DeviceExecChannel(registry, router, new DeviceHarnessPolicy(config), opener,
+            NullLogger<DeviceExecChannel>.Instance, new ImmediateTime(), releases);
+        var (device, _) = registry.Register(Owner, "home", MachineFingerprint.Of("device-machine"));
+        return new Rig(registry, router, channel, opener, device);
+    }
+
+    private static DeviceHello AgentHello(string? cliVersion, params string[] capabilities) =>
+        new(DesktopProtocol.Version, null, "agent-1.0", "linux-x64", DeviceAgentCompatibility.MinVersion, cliVersion,
+            capabilities.Length == 0 ? [DeviceCapabilities.Exec] : capabilities);
+
+    private static async Task<DeviceHelloAck> ConnectAsync(Rig rig, DeviceHello hello)
+    {
+        rig.Router.RegisterConnection(Conn, Owner, rig.Device.Id);
+        return await rig.Channel.HelloAsync(Conn, Owner, rig.Device.Id, hello);
+    }
+
+    // ---------- раздача агента в ack (agent-distribution AD-3, Р9) ----------
+
+    [Theory]
+    [InlineData("linux-x64")]
+    [InlineData("win-x64")]
+    public async Task Ack_НесётРелизПодRidУстройства(string rid)
+    {
+        using var rel = new AgentReleaseFixture();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { Rid = rid });
+
+        var (file, bytes) = rid == "win-x64"
+            ? (AgentReleaseFixture.WinFile, rel.WinBytes)
+            : (AgentReleaseFixture.LinuxFile, rel.LinuxBytes);
+        ack.AgentLatestVersion.Should().Be(AgentReleaseFixture.Version);
+        ack.AgentMinVersion.Should().Be(DeviceAgentCompatibility.MinVersion);
+        ack.AgentArchiveSha256.Should().Be(AgentReleaseFixture.Sha(bytes));
+        ack.AgentArchiveSize.Should().Be(bytes.Length);
+        ack.AgentArchivePath.Should().Be($"{AgentReleaseFixture.Version}/{rid}/{file}");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("osx-arm64")]
+    [InlineData("../win-x64")]
+    public async Task Ack_RidНеНаш_ВерсияЕстьАрхиваНет(string? rid)
+    {
+        using var rel = new AgentReleaseFixture();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { Rid = rid });
+
+        ack.AgentLatestVersion.Should().Be(AgentReleaseFixture.Version);
+        ack.AgentArchiveSha256.Should().BeNull();
+        ack.AgentArchiveSize.Should().BeNull();
+        ack.AgentArchivePath.Should().BeNull();
+    }
+
+    // Компонент рук (ADR-016 §7): архив ТОЙ ЖЕ версии, что у агента, — по каналу устройства
+    // Реальная сборка шлёт InformationalVersion с хвостом +sha, а ключ каталога — канонический
+    [Fact]
+    public async Task Ack_ДесктопВыключен_ТолькоМинимальнаяВерсия()
+    {
+        var rig = NewRig(releases: null);
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { Rid = "win-x64" });
+
+        ack.AgentMinVersion.Should().Be(DeviceAgentCompatibility.MinVersion);
+        ack.AgentLatestVersion.Should().BeNull();
+        ack.AgentArchivePath.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Ack_КлиентРукБезВерсииАгента_ПолейРаздачиНет()
+    {
+        using var rel = new AgentReleaseFixture();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, new DeviceHello(DesktopProtocol.Version, ["click"], "1.0.0", Rid: "win-x64"));
+
+        ack.AgentMinVersion.Should().BeNull();
+        ack.AgentLatestVersion.Should().BeNull();
+        ack.AgentArchiveSha256.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Hello_СостояниеОбновленияСохраняетсяНормализованным()
+    {
+        var rig = NewRig();
+
+        await ConnectAsync(rig, AgentHello(RequiredCli) with
+        {
+            AgentUpdate = new DeviceAgentUpdate(" Waiting-Idle ", "1.201.0+abc", "  открыт терминал  "),
+        });
+
+        var stored = new DeviceRegistry(_dataDir).Get(Owner, rig.Device.Id)!.AgentUpdate;
+        stored.Should().Be(new DeviceAgentUpdate(DeviceAgentUpdateStates.WaitingIdle, "1.201.0", "открыт терминал"));
+    }
+
+    [Fact]
+    public async Task Hello_НезнакомоеСостояниеОбновления_НеХранится()
+    {
+        var rig = NewRig();
+
+        await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentUpdate = new DeviceAgentUpdate("rm -rf", "../1.0.0", null) });
+
+        rig.Registry.Get(Owner, rig.Device.Id)!.AgentUpdate.Should().BeNull();
+    }
+
+    // ---------- «харнес не готов»: ход отказывает сразу, с причиной ----------
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("2.0.1")]
+    public async Task HelloСПустойИлиЧужойВерсиейCli_ХарнесНеГотов_ХодОтказываетСразу(string? cliVersion)
+    {
+        var rig = NewRig();
+
+        var ack = await ConnectAsync(rig, AgentHello(cliVersion));
+
+        ack.RequiredCliVersion.Should().Be(RequiredCli, "в ответ на Hello сервер сообщает требуемую версию CLI");
+        ack.HarnessReady.Should().BeFalse();
+        ack.HarnessProblem.Should().StartWith(DeviceHarnessPolicy.NotReadyPrefix);
+
+        var status = rig.Channel.GetStatus(Owner, rig.Device.Id)!;
+        status.Online.Should().BeTrue();
+        status.HarnessReady.Should().BeFalse();
+        status.CanExec.Should().BeFalse();
+
+        var open = () => rig.Channel.OpenAsync(Owner, rig.Device.Id);
+        var refused = await open.Should().ThrowAsync<DeviceExecRefusedException>();
+        refused.Which.Reason.Should().Be(DeviceExecRefusal.HarnessNotReady);
+        refused.Which.Message.Should().Contain(DeviceHarnessPolicy.NotReadyPrefix).And.Contain(RequiredCli);
+        rig.Opener.Calls.Should().Be(0, "до устройства команда открытия не доходит — отказ случается раньше");
+    }
+
+    [Fact]
+    public async Task ВерсияCliСовпала_ХарнесГотов_КаналОткрываетсяКомандойУстройству()
+    {
+        var rig = NewRig();
+
+        var ack = await ConnectAsync(rig, AgentHello("2.1.281 (Claude Code)"));
+
+        ack.HarnessReady.Should().BeTrue();
+        ack.HarnessProblem.Should().BeNull();
+        ack.ExecProtocolVersion.Should().Be(DeviceExecProtocol.Version);
+        rig.Channel.GetStatus(Owner, rig.Device.Id)!.CanExec.Should().BeTrue();
+
+        // Устройство не подключилось к WebSocket — отказ «не ответило», но команда ушла
+        var open = () => rig.Channel.OpenAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoResponse);
+        rig.Opener.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ТребуемаяВерсияНаСервереНеЗадана_ХарнесНеГотов()
+    {
+        var rig = NewRig(requiredCli: "");
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli));
+
+        ack.RequiredCliVersion.Should().BeNull();
+        ack.HarnessReady.Should().BeFalse();
+        ack.HarnessProblem.Should().Contain(DeviceHarnessPolicy.CliVersionKey);
+    }
+
+    [Fact]
+    public async Task ПовторныйHelloПослеУстановкиCli_ХарнесГотов()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(null));
+
+        var ack = await rig.Channel.HelloAsync(Conn, Owner, rig.Device.Id, AgentHello(RequiredCli));
+
+        ack.HarnessReady.Should().BeTrue();
+        rig.Channel.GetStatus(Owner, rig.Device.Id)!.CanExec.Should().BeTrue();
+    }
+
+    // ---------- устаревший агент (agent-distribution AD-6): отказ до открытия канала ----------
+
+    [Fact]
+    public async Task АгентНижеМинимума_ХодОтказываетAgentOutdatedДоОткрытияКанала()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentVersion = "0.9.0" });
+
+        var status = rig.Channel.GetStatus(Owner, rig.Device.Id)!;
+        status.HarnessReady.Should().BeTrue("харнес в порядке — отказывает именно версия агента");
+        status.CanExec.Should().BeFalse();
+
+        var open = () => rig.Channel.OpenAsync(Owner, rig.Device.Id);
+        var refused = await open.Should().ThrowAsync<DeviceExecRefusedException>();
+        refused.Which.Reason.Should().Be(DeviceExecRefusal.AgentOutdated);
+        refused.Which.Message.Should().Contain(DeviceHarnessPolicy.NotReadyPrefix).And.Contain("0.9.0")
+            .And.Contain(DeviceAgentCompatibility.MinVersion);
+        rig.Opener.Calls.Should().Be(0, "до устройства команда открытия не доходит — отказ случается раньше");
+    }
+
+    [Fact]
+    public async Task АгентРовноМинимальнойВерсии_КаналОткрывается()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentVersion = DeviceAgentCompatibility.MinVersion + "+0a1b2c3d" });
+
+        rig.Channel.GetStatus(Owner, rig.Device.Id)!.CanExec.Should().BeTrue();
+        var open = () => rig.Channel.OpenAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoResponse);
+        rig.Opener.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task АгентНижеМинимумаОбновляется_СтатусНесётОбновлениеИПричинуОжидания()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli) with
+        {
+            AgentVersion = "0.9.0",
+            AgentUpdate = new DeviceAgentUpdate(DeviceAgentUpdateStates.Downloading, "1.207.0"),
+        });
+
+        var status = rig.Channel.GetStatus(Owner, rig.Device.Id)!;
+        status.AgentUpdate!.State.Should().Be(DeviceAgentUpdateStates.Downloading);
+        status.AgentProblem.Should().Contain("агент обновляется").And.Contain("1.207.0");
+    }
+
+    [Fact]
+    public async Task Ретранслятор_АгентНижеМинимума_ОтказAgentOutdated()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(null, DeviceCapabilities.Relay) with { AgentVersion = "0.9.0" });
+
+        var open = () => rig.Channel.OpenRelayAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.AgentOutdated);
+        rig.Opener.Calls.Should().Be(0);
+    }
+
+    // ---------- ретранслятор чтения (задача 5.1): тот же канал, другое назначение ----------
+
+    [Fact]
+    public async Task Ретранслятор_Офлайн_ОтказСразу()
+    {
+        var rig = NewRig();
+        rig.Registry.UpdateAgentInfo(Owner, rig.Device.Id, AgentHello(RequiredCli, DeviceCapabilities.Relay));
+
+        var open = () => rig.Channel.OpenRelayAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.Offline);
+        rig.Opener.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Ретранслятор_АгентБезRelay_ОтказСразу()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli, DeviceCapabilities.Exec, DeviceCapabilities.Files));
+
+        var open = () => rig.Channel.OpenRelayAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoRelayCapability);
+        rig.Opener.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Ретранслятор_ХарнесНеНужен_КомандаОткрытияСНазначениемRelay()
+    {
+        var rig = NewRig();
+        // Копии CLI нет — ход бы отказал, а чтению харнес не нужен
+        await ConnectAsync(rig, AgentHello(null, DeviceCapabilities.Relay));
+
+        var open = () => rig.Channel.OpenRelayAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoResponse);
+        rig.Opener.Calls.Should().Be(1);
+        rig.Opener.Last!.Purpose.Should().Be(DeviceExecPurposes.Relay);
+    }
+
+    // ---------- выдача папки проекта (решение владельца 2026-09-27): своё назначение ----------
+
+    [Fact]
+    public async Task ВыдачаПапки_АгентБезВозможности_ОтказСразу()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli, DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay));
+
+        var open = () => rig.Channel.OpenBindFolderAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoBindFolderCapability);
+        rig.Opener.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ВыдачаПапки_КомандаОткрытияСНазначениемBindFolder()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(null, DeviceCapabilities.BindFolder));
+
+        var open = () => rig.Channel.OpenBindFolderAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoResponse);
+        rig.Opener.Calls.Should().Be(1);
+        rig.Opener.Last!.Purpose.Should().Be(DeviceExecPurposes.BindFolder);
+    }
+
+    [Fact]
+    public async Task Офлайн_ОтказСразу()
+    {
+        var rig = NewRig();
+        rig.Registry.UpdateAgentInfo(Owner, rig.Device.Id, AgentHello(RequiredCli));
+
+        rig.Channel.GetStatus(Owner, rig.Device.Id)!.Online.Should().BeFalse();
+        var open = () => rig.Channel.OpenAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.Offline);
+        rig.Opener.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task БезВозможностиExec_ОтказСразу()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli, DeviceCapabilities.Files));
+
+        var open = () => rig.Channel.OpenAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoExecCapability);
+    }
+
+    [Fact]
+    public void ЧужоеИлиОтозванноеУстройство_СтатусаНет()
+    {
+        var rig = NewRig();
+
+        rig.Channel.GetStatus("чужой", rig.Device.Id).Should().BeNull();
+        rig.Registry.Revoke(Owner, rig.Device.Id);
+        rig.Channel.GetStatus(Owner, rig.Device.Id).Should().BeNull();
+    }
+
+    // ---------- сведения агента в devices.json ----------
+
+    [Fact]
+    public async Task СведенияАгента_ПереживаютПерезагрузкуРеестра()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli, "EXEC", "relay", "неизвестная", "exec"));
+
+        var reloaded = new DeviceRegistry(_dataDir).Get(Owner, rig.Device.Id)!;
+
+        reloaded.Platform.Should().Be("linux-x64");
+        reloaded.AgentVersion.Should().Be(DeviceAgentCompatibility.MinVersion);
+        reloaded.CliVersion.Should().Be(RequiredCli);
+        reloaded.Capabilities.Should().Equal(DeviceCapabilities.Exec, DeviceCapabilities.Relay);
+    }
+
+    [Fact]
+    public async Task HelloБезПолейАгента_СведенийАгентаНеЗатирает()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli));
+
+        await rig.Channel.HelloAsync(Conn, Owner, rig.Device.Id,
+            new DeviceHello(DesktopProtocol.Version, [], "1.0"));
+
+        var device = rig.Registry.Get(Owner, rig.Device.Id)!;
+        device.CliVersion.Should().Be(RequiredCli);
+        device.Capabilities.Should().Equal(DeviceCapabilities.Exec);
+    }
+
+    [Fact]
+    public void ЗаписьДоAdr016_ЧитаетсяСПустымиПолямиАгента()
+    {
+        Directory.CreateDirectory(_dataDir);
+        File.WriteAllText(Path.Combine(_dataDir, DeviceRegistry.FileName), """
+            [{ "Id": "d1", "OwnerId": "owner-1", "Name": "home", "TokenHash": "", "TokenVersion": 1,
+               "MachineFingerprint": "", "ClientVersion": "1.0", "Revoked": false }]
+            """);
+
+        var device = new DeviceRegistry(_dataDir).Get(Owner, "d1")!;
+
+        device.AgentVersion.Should().BeNull();
+        device.CliVersion.Should().BeNull();
+        device.Capabilities.Should().BeEmpty();
+    }
+
+    // ---------- версия CLI ----------
+
+    [Theory]
+    [InlineData("2.1.281 (Claude Code)", "2.1.281")]
+    [InlineData(" v2.1.281 ", "2.1.281")]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    public void НормализацияВерсииCli(string? raw, string? expected) =>
+        DeviceHarnessPolicy.Normalize(raw).Should().Be(expected);
+
+    // ---------- кадры ----------
+
+    [Fact]
+    public void Кадр_ТудаИОбратно()
+    {
+        var bytes = DeviceExecFrames.Encode(DeviceExecFrameChannel.Stdout, 42, "привет"u8);
+
+        bytes.Should().HaveCount(DeviceExecProtocol.HeaderBytes + "привет"u8.Length);
+        DeviceExecFrames.TryDecode(bytes, out var frame).Should().BeTrue();
+        frame.Channel.Should().Be(DeviceExecFrameChannel.Stdout);
+        frame.Sequence.Should().Be(42);
+        Encoding.UTF8.GetString(frame.Payload.Span).Should().Be("привет");
+    }
+
+    [Fact]
+    public void БитыеКадры_НеРазбираются()
+    {
+        var good = DeviceExecFrames.Encode(DeviceExecFrameChannel.Stdin, 1, "abc"u8);
+
+        DeviceExecFrames.TryDecode(good.AsMemory(0, good.Length - 1), out _).Should().BeFalse("длина не совпала с данными");
+        DeviceExecFrames.TryDecode(good.AsMemory(0, 5), out _).Should().BeFalse("заголовок неполный");
+
+        var unknownChannel = (byte[])good.Clone();
+        unknownChannel[0] = 77;
+        DeviceExecFrames.TryDecode(unknownChannel, out _).Should().BeFalse("неизвестный канал");
+
+        var ackWithData = (byte[])good.Clone();
+        ackWithData[0] = (byte)DeviceExecFrameChannel.Ack;
+        DeviceExecFrames.TryDecode(ackWithData, out _).Should().BeFalse("у подтверждения нет данных");
+
+        DeviceExecFrames.TryDecode(DeviceExecFrames.Ack(7), out var ack).Should().BeTrue();
+        ack.Sequence.Should().Be(7);
+    }
+
+    [Fact]
+    public void КадрБольшеПотолка_НеКодируется()
+    {
+        var act = () => DeviceExecFrames.Encode(DeviceExecFrameChannel.Stdout, 1, new byte[DeviceExecProtocol.MaxPayloadBytes + 1]);
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void AckСервераНаHello_СовместимСКлиентомРук()
+    {
+        // Клиент рук ADR-008 разбирает ack своей копией контракта из четырёх полей:
+        // новые поля — только хвостом, прежние имена и порядок не трогаем
+        var json = JsonSerializer.Serialize(new DeviceHelloAck(1, 2, 3, 4, RequiredCli, true));
+        var old = JsonSerializer.Deserialize<JsonElement>(json);
+
+        old.GetProperty("ProtocolVersion").GetInt32().Should().Be(1);
+        old.GetProperty("MaxBatchSteps").GetInt32().Should().Be(4);
+        old.GetProperty("RequiredCliVersion").GetString().Should().Be(RequiredCli);
+    }
+}

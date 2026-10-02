@@ -8,11 +8,14 @@ namespace ClaudeHomeServer.Services.Execution;
 // необязателен: без него проект на устройстве получает раннер, который честно отказывает при старте.
 // Шлюз хода (шов IDeviceTurnGateway, реализует Llm) так же необязателен: без него раннер
 // устройства откажет при старте текстом шлюза, до открытия канала.
-// Канал и шлюз резолвятся лениво, при первом проекте на устройстве: прямая зависимость в конструкторе
+// Шов «Стоп человека на устройстве» (IHumanTurnStop, реализует Main поверх SessionManager)
+// тоже необязателен: без него остановка из трея гасит ход, но сервер узнаёт о ней лишь по смерти CLI.
+// Канал, шлюз и шов резолвятся лениво, при первом проекте на устройстве: прямая зависимость в конструкторе
 // замыкала граф синглтонов (канал → маршрутизатор Desktop → … → SessionManager → фабрика),
 // и хост зависал на старте.
 public sealed class LauncherFactory(IUserStore users, SandboxManager sandbox,
-    Func<IDeviceExecChannel?>? deviceExec = null, Func<IDeviceTurnGateway?>? deviceGateway = null) : ILauncherFactory
+    Func<IDeviceExecChannel?>? deviceExec = null, Func<IDeviceTurnGateway?>? deviceGateway = null,
+    Func<IHumanTurnStop?>? humanStop = null) : ILauncherFactory
 {
     private readonly ConcurrentDictionary<string, DockerProcessRunner> _sandboxed = new();
     private readonly ConcurrentDictionary<(string Owner, string Device), RemoteProcessRunner> _remote = new();
@@ -29,7 +32,7 @@ public sealed class LauncherFactory(IUserStore users, SandboxManager sandbox,
         var channel = project.OwnerId is null ? UnavailableChannel.Instance : deviceExec?.Invoke() ?? UnavailableChannel.Instance;
         var gateway = deviceGateway?.Invoke() ?? UnavailableGateway.Instance;
         return _remote.GetOrAdd((project.OwnerId ?? "", project.DeviceId!),
-            key => new RemoteProcessRunner(channel, gateway, key.Owner, key.Device));
+            key => new RemoteProcessRunner(channel, gateway, key.Owner, key.Device, humanStop: humanStop?.Invoke()));
     }
 
     private IProcessLauncher OwnerEnvironment(string? ownerId)

@@ -24,7 +24,14 @@ public sealed record PromptSectionContribution(
 //
 // Этап 5, шаг 6: record-тип переехал в Core (из Services/Turn/TurnEvents.cs) по той же
 // причине — контрибьюторы в чужих вертикалях ссылаются на Core-DTO, Turn-импорт не нужен.
-public sealed record PromptSection(string Key, string Text);
+//
+// InTurnTail — секция уходит ХВОСТОМ ХОДА (вклейкой в текст хода) всегда, независимо от
+// RecallInTurnText провайдера, и в системный блок не попадает никогда. Для секций, которые
+// меняются от хода к ходу по самой своей природе (состояние редактора картинки, ADR-018 §2):
+// в системном блоке они обнуляли бы prefix cache всей истории у любого провайдера. Такую
+// секцию ClaudeSession подхватывает сам, без явной проводки ключа; Title — её заголовок в
+// снимке «что ушло модели».
+public sealed record PromptSection(string Key, string Text, string? Title = null, bool InTurnTail = false);
 
 // Контекст сессии, который шина кладёт в PromptAssembling для контрибьюторов.
 // Намеренно лёгкий: ровно то, что нужно для гейта IsEnabled и для вызова сервисов
@@ -59,7 +66,25 @@ public sealed record PromptSessionContext(
     IReadOnlyList<string>? WorkspaceSections = null,
     // Группа «нужен контент проекта на сервере» работает (ADR-016 §4); false — локальный
     // проект, контрибьюторы CodeGraph и досье молчат
-    bool ServerContent = true);
+    bool ServerContent = true,
+    // MCP-сервер local-media доехал до хода (в нём уже учтены чат проекта, файлы на
+    // сервере, не ADR-016 и не ReadOnly-персона)
+    bool HasLocalMediaMcp = false,
+    // MCP-сервер редактора картинок (image_new/image_generate) доехал до хода: без него
+    // TrimMcpServers или выключенный модуль оставляют ход без этих инструментов
+    bool HasImageEditorMcp = false,
+    // MCP-сервер модуля «Звук» (audio_*) доехал до хода — по той же причине, что у картинок
+    bool HasAudioEditorMcp = false,
+    // Живого человека у хода нет — см. TurnAudience.IsUnattended
+    bool Unattended = false);
+
+public static class TurnAudience
+{
+    // Ход без живого человека: исполнитель задачи, ход правила автоматизации персоны или
+    // делегированный ход (Task() из другого чата). Единственная точка этого признака.
+    public static bool IsUnattended(Session session, int agentDepth) =>
+        session.TaskExecution || session.AutomationRuleId is not null || agentDepth >= 1;
+}
 
 // Контракт контрибьютора секции системного промпта (этап 2 плана «Шина событий хода»,
 // ADR-013). Реестр собирается Filter-событием prompt/assembling; регистрация — через

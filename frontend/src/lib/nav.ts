@@ -11,6 +11,9 @@ export interface NavSnapshot {
   chatId?: string;                // активный чат: screen === 'chats' — глобальный, screen === 'project' — проектный
   view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
   file?: string | null;          // открытый файл (путь) или null
+  // «Показать в дереве» (редактор картинок): вместе с файлом открыть панель файлов.
+  // Живёт только в history.state, в адрес не попадает
+  revealInTree?: boolean;
   task?: string | null;          // открытая задача (id) или null
   board?: boolean;               // режим Kanban-доски проекта (screen === 'project')
   note?: string | null;          // открытая заметка (id) или null (screen === 'notes')
@@ -83,6 +86,7 @@ export interface HashTarget {
   telemetryIncidents?: boolean;
   history?: boolean; // #/history — открыть overlay «Что нового» (поверх дашборда)
   intro?: boolean;   // #/intro — открыть overlay знакомства
+  modelsSpend?: boolean; // #/models — открыть «Модели и расход» на вкладке «Расход» (уведомление об обновлении claude CLI)
 }
 
 export function parseHash(hash: string = window.location.hash): HashTarget | null {
@@ -97,6 +101,8 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
     case 'history': return { screen: 'home', history: true };
     // Overlay знакомства: открывается поверх дашборда (App диспатчит событие открытия)
     case 'intro': return { screen: 'home', intro: true };
+    // Модалка «Модели и расход» поверх текущего экрана (уведомление об обновлении claude CLI)
+    case 'models': return { screen: 'home', modelsSpend: true };
     case 'chats': {
       const target: HashTarget = { screen: 'chats' };
       // #/chats/{id} — диплинк на конкретный чат (уведомления проактивных персон)

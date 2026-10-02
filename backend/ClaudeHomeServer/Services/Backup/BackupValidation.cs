@@ -74,7 +74,7 @@ public static class BackupValidation
         // BackupSchema.Version НЕ инкрементируем: добавление нового файла-стора ломающим
         // изменением формата не является — старый код просто не знает о нём, а новый читает
         // отсутствующий файл штатно (см. комментарий у BackupSchema.Version).
-        CheckList<DesktopDevice>(problems, dataDir, Services.Desktop.DeviceRegistry.FileName, CaseInsensitiveOpts);
+        CheckList<DesktopDevice>(problems, dataDir, Services.Devices.DeviceRegistry.FileName, CaseInsensitiveOpts);
 
         // graph.json не входит в fatal-список намеренно: он регенерируется из кода
         // проекта, и один битый файл не должен блокировать восстановление всей data.

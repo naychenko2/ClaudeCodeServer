@@ -264,6 +264,8 @@ public sealed partial class PersonasToolset
             Tool("personas_update",
                 "Изменить персону: поля как при создании, передавай только изменяемые. "
                 + "Пустая строка очищает role/effort/color/greeting (specialty — \"none\"). "
+                + "Слоты характера (character/tone/mustDo/mustNot/outputFormat/speechExamples) правятся "
+                + "по одному: не переданный слот остаётся как был, пустая строка / пустой массив — очистка. "
                 + "Смена scope на \"project\" требует projectId."
                 + " bindings — ПОЛНАЯ замена набора привязок (свои собственные менять нельзя).",
                 Obj(updateProps, "id")),

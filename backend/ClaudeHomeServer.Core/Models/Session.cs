@@ -316,6 +316,26 @@ public static class SessionContextTypes
     public static bool IsKnown(string? value) => value is File or Url or Task;
 }
 
+// Привязка чата картинки v2 к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/».
+// С v3 (ADR-019) поле только для чтения: новых чатов картинки нет, а старые sessions.json
+// обязаны читаться. Удалять класс и поле Session.ImageChat нельзя.
+public sealed class SessionImageChat
+{
+    // Файл, с которым чат связан сейчас. null — черновик «Нарисовать картинку»: файла ещё нет,
+    // первое сохранение с этим чатом выставит путь. Записи без поля читаются черновиком
+    public string? CurrentPath { get; set; }
+    // Папка, куда сохранится новая картинка черновика ("" — корень проекта). Только у
+    // черновика: первое сохранение её снимает. У чатов по файлу и старых записей — null
+    public string? DraftFolder { get; set; }
+    // Прежние пути, старые первыми (hero.png, hero.v2.png…): по ним поиск отдаёт «разговор
+    // продолжился на новой версии»
+    public List<string> Lineage { get; set; } = [];
+    // Когда чат ушёл в архив миграцией на v3 (ADR-019, решение 2); null — ещё не мигрирован.
+    // Аддитивное поле: BackupSchema.Version не растёт, восстановленный старый бэкап мигрирует
+    // при старте тем же кодом. Чат, который человек вернул из архива, повторно не архивируется
+    public DateTime? MigratedAt { get; set; }
+}
+
 public class Session
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
@@ -329,6 +349,13 @@ public class Session
     public ClaudeMode Mode { get; set; } = ClaudeMode.AcceptEdits;
     // Псевдоним или полный id модели для флага --model. null → дефолтная модель CLI
     public string? Model { get; set; }
+    // Модель хода сейчас подменена фолбэком (FallbackLlmSessionAdapter), а не выбрана человеком.
+    // Ставит адаптер вместе с подменённой Info.Model и снимает в finally хода; читают
+    // LlmProviderRegistry.LightProfileFor через ClaudeSession и McpToolWhitelist — на подмене
+    // на локальную модель её облегчённый профиль включается принудительно. Живёт только в
+    // памяти: подмена не переживает ход, а в sessions.json и ответы API ей нечего делать.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool FallbackSubstitution { get; set; }
     // Уровень reasoning effort для флага --effort (low/medium/high/xhigh/max). null → дефолт CLI
     public string? Effort { get; set; }
     public SessionStatus Status { get; set; } = SessionStatus.Starting;
@@ -418,27 +445,12 @@ public class Session
     // в data/sessions.json (он же едет в бэкапы) и в ответы API.
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsVoiceDigest => VoiceMode && VoiceStyle == VoiceStyles.Digest;
-    // Тип чата «Десктопный» (ADR-008 о десктопном агенте, флаг desktop-agent): половина оси
-    // выдачи грани desktop_* — вторая половина Project.DesktopAgentEnabled. Тип задаётся при
-    // СОЗДАНИИ чата и дальше не меняется: состав инструментов фиксируется на момент запуска CLI
-    // (BuildLaunchSignature), а переключение на живом чате перезапустило бы процесс со всеми
-    // MCP-серверами.
-    // ИНВАРИАНТ (ADR, «Последствия»): у десктопного чата собственный ClaudeSessionId — его
-    // нельзя создать из resumeSessionId и нельзя продолжить из него. Причина не в гигиене:
-    // кадры рабочего стола оседают в транскрипте CLI (.jsonl с base64), и ветвление разговора
-    // растащило бы их по чужим чатам. Само правило применяют контроллеры создания/резюма
-    // чата — здесь только признак.
-    // Второе правило — НАЖИТЫЙ транскрипт с кадрами чужому вендору не отдаём: автоматический
-    // фолбэк режет цепочку хода до пула Claude (FallbackLlmSessionAdapter.TrimChainForDesktop),
-    // ручная смена провайдера отказывает (SessionManager.MigrateProviderAsync). А вот выбор
-    // стороннего провайдера при СОЗДАНИИ чата сейчас не гейтится вовсе: явная модель в
-    // POST /api/projects/{id}/sessions, назначение места chat-new/chat-persona (фабрика
-    // адаптеров сама переписывает Provider) и смена собеседника до первого хода проводят
-    // десктопный чат на стороннего провайдера. Это известная дыра, закрывается отдельной
-    // задачей — писать здесь «стороннего провайдера у такого чата нет вовсе» было бы враньём.
-    // Дефолт false: старые записи sessions.json читаются штатно, BackupSchema.Version не
-    // двигается (аддитивное поле с дефолтом формат не ломает).
-    public bool DesktopChat { get; set; }
+    // Чат картинки (ADR-018 §1, флаг image-editor): null — обычный чат. Тип фиксируется при
+    // СОЗДАНИИ: от него зависит MCP-сервер image-editor, а значит сигнатура запуска CLI. Меняется только путь внутри (редактор ушёл на новую
+    // версию файла), и такая смена — настройка, UpdatedAt она не двигает.
+    // Аддитивное nullable-поле: старые записи sessions.json читаются с null,
+    // BackupSchema.Version не двигается.
+    public SessionImageChat? ImageChat { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
     // Сообщения, ждущие устройство локального проекта (ADR-016, вариант А плана §5): фоновые

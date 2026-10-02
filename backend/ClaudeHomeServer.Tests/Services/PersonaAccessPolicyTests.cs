@@ -84,34 +84,6 @@ public class PersonaAccessPolicyTests
         PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.Custom)).Should().BeNull();
     }
 
-    [Fact]
-    public void ReadOnly_ДесктопнаяГрань_МутацииЗапрещены_ЧтениеСвободно()
-    {
-        var result = PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.ReadOnly));
-
-        // Меняющее чужой рабочий стол — под запретом (ADR-008: desktop_* вносятся в ReadOnly)
-        result.Should().Contain([
-            "mcp__desktop__desktop_act", "mcp__desktop__desktop_open", "mcp__desktop__desktop_run"]);
-        // Читающие инструменты персоне «только чтение» остаются
-        result.Should().NotContain("mcp__desktop__desktop_devices")
-            .And.NotContain("mcp__desktop__desktop_screen")
-            .And.NotContain("mcp__desktop__desktop_ui");
-    }
-
-    [Fact]
-    public void ДесктопныеЗапреты_ТолькоИменаMcp_НеВстроенные()
-    {
-        // Класс дефектов MultiEdit (ClaudeSession.BuiltInTaskTools): имя БЕЗ префикса mcp__
-        // в deny-списке — это неизвестное встроенное имя, и CLI на него ругается. Deny-имена
-        // ReadOnly-персоны уезжают в --disallowedTools КАЖДОЙ сессии — включая ходы, где грань
-        // не доставлена (чат не десктопный, грань выключена в проекте). Поэтому каждое
-        // desktop-имя обязано быть именем MCP-инструмента mcp__desktop__*. Живой прогон CLI
-        // с этим списком — DesktopMcpToolsetStabilityTests.DenyИменаДесктопа_НеРоняютЗапускCli.
-        foreach (var name in PersonaAccessPolicy.ReadOnlyDisallowed.Where(t => t.Contains("desktop")))
-            name.Should().StartWith("mcp__desktop__",
-                "голое имя без префикса mcp__ — это неизвестное встроенное имя, класс MultiEdit");
-    }
-
     // ---------- Рабочее пространство (wsp) в профиле «Только чтение» (волна 3.1) ----------
 
     // До волны 3.1 шапка WorkspaceToolset и ADR-012 утверждали, что write-инструменты wsp
@@ -138,6 +110,29 @@ public class PersonaAccessPolicyTests
             "mcp__wsp__files_read", "mcp__wsp__files_tree", "mcp__wsp__git_status",
             "mcp__wsp__git_log", "mcp__wsp__search_unified", "mcp__wsp__projects_list",
             "mcp__wsp__chats_send", "mcp__wsp__chats_report_up", "mcp__wsp__chats_history"]);
+    }
+
+    // Пишущие инструменты C4-модели: список запретов в Main пишется строками (вертикаль —
+    // динамический модуль, ссылки на неё у Main нет), поэтому соответствие сверяем здесь:
+    // новый пишущий arch_* без строки в ReadOnlyDisallowed — дыра профиля «Только чтение»
+    [Fact]
+    public void ReadOnly_ОтрезаетВсеПишущиеИнструментыАрхитектуры()
+    {
+        var result = PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.ReadOnly));
+        var catalog = ClaudeHomeServer.Services.Architecture.ArchitectureToolset.AllTools.Select(t => t.Name).ToHashSet();
+        var writes = ClaudeHomeServer.Services.Architecture.ArchitectureToolset.WriteTools;
+
+        writes.Should().Contain(["arch_create_element", "arch_delete_element"]);
+        // Обратная сторона: всё, что не чтение, обязано быть в WriteTools — иначе новый
+        // пишущий инструмент прошёл бы мимо обоих гейтов «Только чтение»
+        catalog.Except(["arch_context", "arch_search", "arch_get_element"]).Should().BeEquivalentTo(writes);
+        foreach (var tool in writes)
+        {
+            catalog.Should().Contain(tool, "запрет на несуществующее имя — тихо неработающий гейт");
+            result.Should().Contain("mcp__architecture__" + tool);
+        }
+        result.Should().NotContain(["mcp__architecture__arch_context", "mcp__architecture__arch_get_element",
+            "mcp__architecture__arch_search"]);
     }
 
     // Список запретов wsp живёт в PersonaAccessPolicy, каталог инструментов — в

@@ -117,10 +117,33 @@ public sealed class WorkbenchTests : IAsyncLifetime
         var terminal = await hub.InvokeAsync<JsonElement>("CreateTerminal", "p1", 80, 24, null);
         var id = terminal.GetProperty("id").GetString()!;
         _launchers.TrackedCount.Should().Be(1, "терминал живёт группой/Job Object, как ход");
-        await hub.InvokeAsync("TerminalInput", id, "pwd; echo agent-$((40+2))\n");
-        await seen.Task.WaitAsync(TimeSpan.FromSeconds(20));
+        // Мост лежит в bin тестов (ProjectReference на ConPtyBridge), поэтому на Windows
+        // терминал обязан пойти через ConPTY, а не в упрощённый фолбэк
+        if (OperatingSystem.IsWindows())
+            terminal.GetProperty("pty").GetBoolean().Should().BeTrue("ConPtyBridge.exe рядом со сборкой");
+        // Маркер складывается оболочкой, чтобы не совпасть с эхом ввода. На Windows оболочка —
+        // powershell (через ConPTY-мост или перенаправление): путь без таблицы pwd, Enter — \r
+        // (под ConPTY голый \n — это Ctrl+Enter, PSReadLine строку не выполнит)
+        var input = OperatingSystem.IsWindows()
+            ? "(Get-Location).Path; echo \"agent-$(40+2)\"\r\n"
+            : "pwd; echo agent-$((40+2))\n";
+        await hub.InvokeAsync("TerminalInput", id, input);
+        try
+        {
+            await seen.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            string got;
+            lock (output) got = output.ToString();
+            throw new TimeoutException($"маркер agent-42 не пришёл; вывод терминала:\n{got}");
+        }
 
         lock (output) output.ToString().Should().Contain(AgentPathPolicy.RealPath(_box.Project));
+        // ESC-последовательность — признак VT-рендера псевдоконсоли: в фолбэке с
+        // перенаправлением powershell цветов и Clear-Host не выдаёт
+        if (OperatingSystem.IsWindows())
+            lock (output) output.ToString().Should().Contain("\x1b[");
         (await hub.InvokeAsync<List<JsonElement>>("ListTerminals", "p1")).Should().ContainSingle();
         await hub.InvokeAsync("StopTerminal", id);
         _launchers.TrackedCount.Should().Be(0);

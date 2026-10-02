@@ -60,6 +60,9 @@ public class DesktopDevice
     /// <summary>Возможности агента (<c>exec</c>, <c>files</c>, <c>relay</c>) — только известные значения.</summary>
     public List<string> Capabilities { get; set; } = [];
 
+    /// <summary>Состояние самообновления агента из последнего Hello; null — агент его не сообщал.</summary>
+    public ClaudeHomeServer.Protocol.DeviceAgentUpdate? AgentUpdate { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>Последнее успешное обращение устройства (обновляется с троттлингом).</summary>

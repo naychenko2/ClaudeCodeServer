@@ -164,6 +164,55 @@ public class ProjectCapabilitiesTests
     public void Привязка_ФлагИExec_ДажеОфлайн_Можно() =>
         ProjectCapabilities.BindRefusal(true, Device(online: false)).Should().BeNull();
 
+    // --- Руки (ADR-016 §7, план рук Ш1) ---
+
+    private static DeviceExecStatus WithHands() => Device(caps: [DeviceCapabilities.Exec, DeviceCapabilities.Hands]);
+
+    [Fact]
+    public void Руки_ВсеУсловия_Можно_ДажеОфлайн_БезФлага()
+    {
+        ProjectCapabilities.HandsRefusal(Local(), WithHands(), projectHandsEnabled: true)
+            .Should().BeNull("флага нет: руки у всех, выключатель — тумблер проекта");
+        ProjectCapabilities.HandsRefusal(Local(), WithHands() with { Online = false }, true)
+            .Should().BeNull("сеанс и онлайн проверяются при ходе, а не в матрице");
+    }
+
+    [Fact]
+    public void Руки_КаждоеНевыполненноеУсловие_СвояПричина()
+    {
+        ProjectCapabilities.HandsRefusal(Server(), WithHands(), true).Should().Be(ProjectCapabilities.HandsNotLocalReason);
+        ProjectCapabilities.HandsRefusal(Local(), null, true).Should().Be(ProjectCapabilities.DeviceMissingReason);
+        ProjectCapabilities.HandsRefusal(Local(), WithHands(), false).Should().Be(ProjectCapabilities.HandsProjectOffReason);
+    }
+
+    // Мост едет в составе агента под Windows: Windows-агент без возможности — старой версии
+    [Theory]
+    [InlineData("windows", ProjectCapabilities.HandsAgentOutdatedReason)]
+    [InlineData(null, ProjectCapabilities.HandsAgentOutdatedReason)]
+    [InlineData("linux", ProjectCapabilities.HandsNotWindowsReason)]
+    [InlineData("macos", ProjectCapabilities.HandsNotWindowsReason)]
+    public void Руки_АгентБезМоста_ЧестныйОтказ(string? platform, string reason) =>
+        ProjectCapabilities.HandsRefusal(Local(), Device() with { Platform = platform }, true).Should().Be(reason);
+
+    [Fact]
+    public void Руки_ВозможностьУстройстваНеТеряетсяПриНормализации() =>
+        DeviceCapabilities.Normalize(["EXEC", " hands ", "мусор"]).Should().Equal(DeviceCapabilities.Exec, DeviceCapabilities.Hands);
+
+    // Решение владельца 3б: shell в ходе с руками разрешён, из правил хода остался только режим прав
+    [Theory]
+    [InlineData("--permission-mode acceptEdits", true)]
+    [InlineData("--permission-mode default", true)]
+    [InlineData("--permission-mode=plan", true)]
+    [InlineData("--permission-mode bypassPermissions", false)]
+    [InlineData("--permission-mode=BypassPermissions", false)]
+    [InlineData("--permission-mode acceptEdits --permission-mode bypassPermissions", false)]
+    [InlineData("--permission-mode acceptEdits --dangerously-skip-permissions", false)]
+    [InlineData("--permission-mode acceptEdits --allow-dangerously-skip-permissions", false)]
+    [InlineData("--print --output-format stream-json", false)]
+    [InlineData("--permission-mode", false)]
+    public void Руки_РежимПравХода_БезBypassИТолькоЯвный(string args, bool ok) =>
+        (HandsTurnRules.PermissionRefusal(args.Split(' ')) is null).Should().Be(ok);
+
     // --- Вердикт для фоновой работы (ADR-016, вариант А плана §5) ---
 
     [Fact]
@@ -199,5 +248,79 @@ public class ProjectCapabilitiesTests
 
         gate.Verdict.Should().Be(ProjectBackgroundVerdict.DeviceGone);
         gate.MustWait.Should().BeFalse();
+    }
+
+    // --- Устаревший агент (agent-distribution AD-6): отказ хода и чтения, фоновые ждут ---
+
+    private static DeviceExecStatus Agent(string version, DeviceAgentUpdate? update = null) =>
+        Device(caps: [DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay])
+            with { AgentVersion = version, AgentUpdate = update };
+
+    [Theory]
+    [InlineData("1.0.0")]
+    [InlineData("1.0.0+0a1b2c3d")]
+    [InlineData(" 1.0.0 ")]
+    [InlineData("1.207.0")]
+    public void АгентНеНижеМинимума_ХодИЧтениеРазрешены(string version)
+    {
+        var device = Agent(version);
+
+        device.AgentOutdated.Should().BeFalse();
+        device.CanExec.Should().BeTrue();
+        ProjectCapabilities.For(Local(), device).Exec.Available.Should().BeTrue();
+        ProjectCapabilities.BackgroundGate(Local(), device).IsReady.Should().BeTrue();
+        ProjectCapabilities.RelayRefusal(Local(), device).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("0.9.99")]
+    [InlineData("0.1.0")]
+    [InlineData("1.0.0-dirty.20260926120000")]
+    [InlineData("мусор")]
+    public void АгентНижеМинимума_ХодИЧтениеОтказывают(string version)
+    {
+        var device = Agent(version);
+
+        device.AgentOutdated.Should().BeTrue();
+        device.CanExec.Should().BeFalse();
+        var exec = ProjectCapabilities.For(Local(), device).Exec;
+        exec.Available.Should().BeFalse();
+        exec.Reason.Should().StartWith(DeviceAgentCompatibility.NotReadyPrefix).And.Contain("обновите агента");
+        ProjectCapabilities.RelayRefusal(Local(), device).Should().Be(exec.Reason);
+    }
+
+    [Fact]
+    public void КлиентРукБезВерсииАгента_НеСчитаетсяУстаревшим()
+    {
+        DeviceAgentCompatibility.IsOutdated(null).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(DeviceAgentUpdateStates.Downloading)]
+    [InlineData(DeviceAgentUpdateStates.WaitingIdle)]
+    public void BackgroundGate_УстаревшийАгентОбновляется_ЖдатьУстройство(string state)
+    {
+        var gate = ProjectCapabilities.BackgroundGate(Local(), Agent("0.9.0", new DeviceAgentUpdate(state, "1.207.0")));
+
+        gate.Verdict.Should().Be(ProjectBackgroundVerdict.WaitDevice);
+        gate.Reason.Should().StartWith(DeviceAgentCompatibility.NotReadyPrefix)
+            .And.Contain("агент обновляется").And.Contain("1.207.0")
+            .And.NotContain("обновите агента");
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(DeviceAgentUpdateStates.Idle, null)]
+    [InlineData(DeviceAgentUpdateStates.Failed, "нет места на диске")]
+    public void BackgroundGate_УстаревшийАгентБезОбновления_ЖдатьУстройствоСПросьбойОбновить(string? state, string? reason)
+    {
+        var update = state is null ? null : new DeviceAgentUpdate(state, null, reason);
+        var gate = ProjectCapabilities.BackgroundGate(Local(), Agent("0.9.0", update));
+
+        gate.Verdict.Should().Be(ProjectBackgroundVerdict.WaitDevice, "фоновые механизмы ждут устройство, а не падают");
+        gate.Reason.Should().StartWith(DeviceAgentCompatibility.NotReadyPrefix)
+            .And.Contain("обновите агента").And.Contain(DeviceAgentCompatibility.MinVersion)
+            .And.NotContain("агент обновляется");
+        if (reason is not null) gate.Reason.Should().Contain(reason);
     }
 }

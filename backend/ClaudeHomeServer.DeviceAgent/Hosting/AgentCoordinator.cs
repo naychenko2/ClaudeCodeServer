@@ -2,7 +2,10 @@ using System.Net;
 using System.Net.WebSockets;
 using ClaudeHomeServer.DeviceAgent.Cli;
 using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.DeviceAgent.Hands;
+using ClaudeHomeServer.DeviceAgent.Pairing;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
+using ClaudeHomeServer.DeviceAgent.Update;
 using ClaudeHomeServer.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -41,39 +44,75 @@ internal sealed class ManagedCliHarness(ManagedCli cli) : IHarness
     }
 }
 
+/// <summary>Самообновление глазами координатора (боевое — <see cref="AgentUpdater"/>).</summary>
+internal interface IAgentUpdates
+{
+    DeviceAgentUpdate Status { get; }
+    void OnAck(DeviceHelloAck ack);
+    event Action<DeviceAgentUpdate>? Changed;
+}
+
 /// <summary>
 /// Жизнь агента в канале управления: hello с возможностью <c>exec</c> и версией управляемой
 /// копии CLI, требуемая версия из ответа — в <see cref="IHarness"/>. Поменялась активная
 /// копия (<c>ManagedCli.Changed</c>) — hello повторяется, чтобы сервер пересчитал вердикт
 /// «харнес готов». Команда открытия исполнения — связь <see cref="ExecLink"/> и ход.
+///
+/// Самообновление (AD-5): ack уходит в <see cref="IAgentUpdates"/>, его состояние — в hello
+/// (<see cref="DeviceHello.AgentUpdate"/>), смена состояния повторяет hello. Каждый канал
+/// исполнения — ход или запрос ретранслятора — держит аренду <see cref="ActivityRegistry"/>
+/// до конца работы: пока она открыта, агент на новую версию не переключается.
+/// Ack приходит только на hello, а hello — только при подключении, поэтому
+/// <see cref="RunUpdateChecksAsync"/> повторяет его раз в период: сервер, переоткрывший
+/// раздачу без рестарта, назовёт новую версию и без переподключения агента.
 /// </summary>
 internal sealed class AgentCoordinator : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultMaxOutage = DeviceExecProtocol.MaxOutage;
+
+    /// <summary>Период повторной проверки обновления по умолчанию (<c>AI_HOME_AGENT_UPDATE_CHECK_MINUTES</c>).</summary>
+    public static readonly TimeSpan DefaultUpdateCheckPeriod = TimeSpan.FromMinutes(30);
+
+    /// <summary>Разброс периода: ±10 %, чтобы агенты, поднятые одной выкаткой, не стучались разом.</summary>
+    public const double UpdateCheckJitter = 0.1;
 
     private readonly IControlConnection _control;
     private readonly IHarness _harness;
     private readonly IExecSocketConnector _connector;
     private readonly Func<ExecLink, CancellationToken, Task> _runTurn;
     private readonly Func<ExecLink, CancellationToken, Task>? _runRelay;
+    private readonly Func<ExecLink, CancellationToken, Task>? _runBindFolder;
+    private readonly IAgentUpdates? _updates;
+    private readonly ActivityRegistry? _activity;
+    private readonly HandsRuntime? _hands;
     private readonly string _agentVersion;
     private readonly ILogger _log;
     private readonly TimeSpan _maxOutage;
+    private readonly TimeProvider _time;
     private readonly SemaphoreSlim _helloLock = new(1, 1);
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _turns = [];
     private string? _announcedCli;
+    private DeviceAgentUpdate? _announcedUpdate;
+    private bool _announcedHands;
     private bool _announced;
 
     public AgentCoordinator(IControlConnection control, IHarness harness, IExecSocketConnector connector,
         Func<ExecLink, CancellationToken, Task> runTurn, string agentVersion, ILogger? log = null, TimeSpan? maxOutage = null,
-        Func<ExecLink, CancellationToken, Task>? runRelay = null)
+        Func<ExecLink, CancellationToken, Task>? runRelay = null, IAgentUpdates? updates = null, ActivityRegistry? activity = null,
+        TimeProvider? time = null, Func<ExecLink, CancellationToken, Task>? runBindFolder = null,
+        HandsRuntime? hands = null)
     {
+        _hands = hands;
+        _time = time ?? TimeProvider.System;
         _control = control;
         _harness = harness;
         _connector = connector;
         _runTurn = runTurn;
         _runRelay = runRelay;
+        _runBindFolder = runBindFolder;
+        _updates = updates;
+        _activity = activity;
         _agentVersion = agentVersion;
         _log = log ?? NullLogger.Instance;
         _maxOutage = maxOutage ?? DefaultMaxOutage;
@@ -81,10 +120,16 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         _control.ExecOpen += OnExecOpenAsync;
         _control.Reconnected += () => HelloAsync(force: true);
         _harness.Changed += OnHarnessChanged;
+        if (_updates is not null) _updates.Changed += OnUpdateChanged;
     }
 
     public static string PlatformName =>
         OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
+
+    /// <summary>RID этой сборки агента (win-x64, linux-x64…): под него сервер выбирает архив обновления.</summary>
+    public static string RidName =>
+        (OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux")
+        + "-" + System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
 
     public DeviceHello BuildHello() => new(
         DesktopProtocol.Version,
@@ -93,9 +138,19 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         Platform: PlatformName,
         AgentVersion: _agentVersion,
         CliVersion: _harness.ActiveVersion,
-        Capabilities: _runRelay is null
-            ? [DeviceCapabilities.Exec, DeviceCapabilities.Files]
-            : [DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay]);
+        Capabilities: Capabilities(),
+        Rid: RidName,
+        AgentUpdate: _updates?.Status);
+
+    private List<string> Capabilities()
+    {
+        List<string> capabilities = [DeviceCapabilities.Exec, DeviceCapabilities.Files];
+        if (_runRelay is not null) capabilities.Add(DeviceCapabilities.Relay);
+        if (_runBindFolder is not null) capabilities.Add(DeviceCapabilities.BindFolder);
+        // Руки — только когда мост лежит в каталоге версии: ход с маркером иначе всё равно откажет
+        if (_hands?.Component.IsReady == true) capabilities.Add(DeviceCapabilities.Hands);
+        return capabilities;
+    }
 
     /// <summary>Hello; force = false — только если активная копия поменялась с прошлого раза.</summary>
     public async Task HelloAsync(bool force = true)
@@ -104,14 +159,19 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         try
         {
             var hello = BuildHello();
-            if (!force && _announced && hello.CliVersion == _announcedCli) return;
+            var hands = hello.Capabilities?.Contains(DeviceCapabilities.Hands) == true;
+            if (!force && _announced && hello.CliVersion == _announcedCli && hello.AgentUpdate == _announcedUpdate
+                && hands == _announcedHands) return;
 
             var ack = await _control.HelloAsync(hello, _stopping.Token);
             _announced = true;
             _announcedCli = hello.CliVersion;
+            _announcedUpdate = hello.AgentUpdate;
+            _announcedHands = hands;
             if (ack.HarnessReady) _log.LogInformation("Сервер принял агента: готов к работе (CLI {Version})", hello.CliVersion);
             else _log.LogInformation("Сервер принял агента: {Problem}", ack.HarnessProblem ?? "агент устройства не готов");
             _harness.SetRequiredVersion(ack.RequiredCliVersion);
+            _updates?.OnAck(ack);
         }
         finally
         {
@@ -119,7 +179,37 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         }
     }
 
-    private void OnHarnessChanged(HarnessStatus status)
+    /// <summary>
+    /// Раз в <paramref name="period"/> (с разбросом) — hello ради свежего ack. Канал лежит —
+    /// hello не уходит, это не ошибка: после реконнекта его пошлёт <see cref="IControlConnection.Reconnected"/>.
+    /// </summary>
+    public async Task RunUpdateChecksAsync(TimeSpan period, CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stopping.Token);
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(Jittered(period, Random.Shared.NextDouble()), _time, linked.Token);
+                try { await HelloAsync(force: true); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    _log.LogInformation("Проверка обновления агента не ушла: {Error}", e.Message);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
+    }
+
+    /// <summary>Период с разбросом; <paramref name="sample"/> ∈ [0, 1) растягивается на ±<see cref="UpdateCheckJitter"/>.</summary>
+    internal static TimeSpan Jittered(TimeSpan period, double sample) =>
+        period * (1 - UpdateCheckJitter + 2 * UpdateCheckJitter * sample);
+
+    private void OnHarnessChanged(HarnessStatus status) => RepeatHello("смены копии CLI");
+
+    private void OnUpdateChanged(DeviceAgentUpdate update) => RepeatHello("смены состояния обновления");
+
+    private void RepeatHello(string why)
     {
         if (_stopping.IsCancellationRequested) return;
         _ = Task.Run(async () =>
@@ -127,7 +217,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
             try { await HelloAsync(force: false); }
             catch (Exception e) when (e is not OperationCanceledException)
             {
-                _log.LogWarning(e, "Повторный hello после смены копии CLI не ушёл");
+                _log.LogWarning(e, "Повторный hello после {Why} не ушёл", why);
             }
         });
     }
@@ -146,6 +236,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         {
             null => (_runTurn, _maxOutage),
             DeviceExecPurposes.Relay when _runRelay is not null => (_runRelay, RelayProtocol.MaxOutage),
+            DeviceExecPurposes.BindFolder when _runBindFolder is not null => (_runBindFolder, RelayProtocol.MaxOutage),
             _ => ((Func<ExecLink, CancellationToken, Task>?)null, TimeSpan.Zero),
         };
         if (run is null)
@@ -153,6 +244,18 @@ internal sealed class AgentCoordinator : IAsyncDisposable
             _log.LogWarning("Сервер просит канал {ExecId} с назначением «{Purpose}», агент его не обслуживает",
                 command.ExecId, command.Purpose);
             return;
+        }
+
+        // Аренда — до первого кадра: пока канал открывается, переключение версии его не обгонит
+        IDisposable? lease = null;
+        if (_activity is not null)
+        {
+            lease = _activity.TryAcquire(command.Purpose is null ? WorkKind.Turn : WorkKind.Relay);
+            if (lease is null)
+            {
+                _log.LogWarning("Канал {ExecId} не открыт: агент переключается на новую версию", command.ExecId);
+                return;
+            }
         }
 
         var link = new ExecLink(command.ExecId, _connector, maxOutage, _log);
@@ -164,13 +267,20 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         {
             _log.LogWarning(e, "Канал исполнения {ExecId} не открылся", command.ExecId);
             await link.DisposeAsync();
+            lease?.Dispose();
             return;
+        }
+        catch
+        {
+            lease?.Dispose();
+            throw;
         }
 
         var turn = Task.Run(async () =>
         {
             try { await run(link, _stopping.Token); }
             catch (Exception e) { _log.LogError(e, "Исполнение {ExecId} упало", command.ExecId); }
+            finally { lease?.Dispose(); }
         });
         lock (_turns)
         {
@@ -182,6 +292,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _harness.Changed -= OnHarnessChanged;
+        if (_updates is not null) _updates.Changed -= OnUpdateChanged;
         await _stopping.CancelAsync();
         Task[] turns;
         lock (_turns) turns = _turns.ToArray();
@@ -195,6 +306,8 @@ internal sealed class ExecSocketConnector(IDeviceIdentity device) : IExecSocketC
 {
     public async Task<WebSocket> ConnectAsync(string execId, CancellationToken ct)
     {
+        if (!ServerChannel.IsSecure(device.ServerUri)) throw new ExecLinkRefusedException(ServerChannel.InsecureError);
+
         var socket = new ClientWebSocket();
         socket.Options.CollectHttpResponseDetails = true;
         socket.Options.SetRequestHeader("Authorization", SidecarProxy.DeviceAuthPrefix + device.DeviceToken);

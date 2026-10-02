@@ -3,12 +3,16 @@
 // SignalR и показывает стек в правом верхнем углу. Уведомление от персоны несёт её лицо
 // (аватар) и строку «Роль (Имя) · Проект»; системное — плитку вида. Клик открывает
 // диплинк через onNavigate (SPA-переход), без обработчика — фолбэк на hash-URL.
+// Закреплённое уведомление (sticky) не гаснет по таймеру и всплывает при каждом входе,
+// пока не прочитано: клик или ✕ помечают его прочитанным.
 
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW, Z } from '../lib/design';
 import { ICON_STROKE } from './ui/icons';
+import { useGenSheetRaised } from '../lib/genSheet';
 import { joinUser, onMessage, onReconnected } from '../lib/signalr';
+import { loadUnreadCount, loadUnreadSticky, markRead } from '../lib/notifications';
 import type { LocalToast, ToastAction } from '../lib/toast';
 import { KIND_LABELS, TOAST_META } from '../features/notifications/kindMeta';
 import { NotificationAvatar, hasPersona, notifPersonaLabel } from '../features/notifications/NotificationAvatar';
@@ -24,6 +28,9 @@ interface ToastItem {
   personaRole?: string;
   personaColor?: string;
   projectName?: string;
+  // Серверное уведомление: id — чтобы пометить прочитанным и не задвоить тост
+  notificationId?: string;
+  sticky?: boolean;
   // Необязательное действие («Отменить», «Открыть»…) — кнопка справа под body.
   // Не задан — тост как раньше, только текст. Колбэк зовётся из NotificationToasts
   // при клике; id не нужен — действие само знает, что делать
@@ -60,9 +67,17 @@ function joinUserGroup() {
 export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) => void }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
+  // Закреплённое снимается только явно — и тогда помечается прочитанным, иначе всплыло
+  // бы снова при следующем входе
+  const dismiss = (t: ToastItem) => {
+    setToasts(prev => prev.filter(x => x.id !== t.id));
+    if (t.sticky && t.notificationId)
+      markRead(t.notificationId).then(() => loadUnreadCount()).catch(() => {});
+  };
+
   const openToast = (t: ToastItem) => {
     if (!t.url) return;
-    setToasts(prev => prev.filter(x => x.id !== t.id));
+    dismiss(t);
     if (onNavigate) onNavigate(t.url);
     else window.location.assign(t.url);
   };
@@ -72,8 +87,11 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
     const offReconnect = onReconnected(joinUserGroup);
     const pushToast = (t: Omit<ToastItem, 'id'>) => {
       const item: ToastItem = { id: nextId++, ...t };
-      setToasts(prev => [...prev, item].slice(-MAX_TOASTS));
-      setTimeout(() => setToasts(prev => prev.filter(x => x.id !== item.id)), AUTO_DISMISS_MS);
+      // Одно и то же серверное уведомление (живое + загруженное при входе) — один тост
+      setToasts(prev => item.notificationId && prev.some(x => x.notificationId === item.notificationId)
+        ? prev : [...prev, item].slice(-MAX_TOASTS));
+      if (!item.sticky)
+        setTimeout(() => setToasts(prev => prev.filter(x => x.id !== item.id)), AUTO_DISMISS_MS);
     };
     const off = onMessage(msg => {
       if (msg.type !== 'notification') return;
@@ -81,8 +99,18 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
         title: msg.title, body: msg.body, url: msg.url, kind: msg.kind,
         personaId: msg.personaId, personaName: msg.personaName, personaRole: msg.personaRole,
         personaColor: msg.personaColor, projectName: msg.projectName,
+        notificationId: msg.notificationId, sticky: msg.sticky,
       });
     });
+    // Закреплённые, пришедшие, пока вкладка была закрыта, — показываем при входе
+    loadUnreadSticky()
+      .then(list => list.forEach(n => pushToast({
+        title: n.title, body: n.body, url: n.url, kind: n.kind,
+        personaId: n.personaId, personaName: n.personaName, personaRole: n.personaRole,
+        personaColor: n.personaColor, projectName: n.projectName,
+        notificationId: n.id, sticky: true,
+      })))
+      .catch(() => {});
     // Локальные тосты (клиентские события без сервера)
     const onLocal = (e: Event) => {
       const d = (e as CustomEvent<LocalToast>).detail;
@@ -92,11 +120,14 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
     return () => { off(); offReconnect(); window.removeEventListener('cc-local-toast', onLocal); };
   }, []);
 
+  // Поднятая шторка панели генерации держит шапку в зоне тостов: тосты уходят под её слой
+  const sheetRaised = useGenSheetRaised();
+
   if (toasts.length === 0) return null;
 
   return (
     <div style={{
-      position: 'fixed', top: 14, right: 14, zIndex: Z.modal + 10,
+      position: 'fixed', top: 14, right: 14, zIndex: sheetRaised ? Z.modal - 1 : Z.modal + 10,
       display: 'flex', flexDirection: 'column', gap: 10,
       maxWidth: 'min(360px, calc(100vw - 28px))',
     }}>
@@ -181,7 +212,7 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
               )}
             </div>
             <button
-              onClick={e => { e.stopPropagation(); setToasts(prev => prev.filter(x => x.id !== t.id)); }}
+              onClick={e => { e.stopPropagation(); dismiss(t); }}
               title="Закрыть"
               style={{
                 border: 'none', background: 'none', cursor: 'pointer', padding: 2,

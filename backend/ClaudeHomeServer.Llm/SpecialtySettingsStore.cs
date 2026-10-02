@@ -154,9 +154,14 @@ public sealed class SpecialtySettingsStore
     private readonly object _writeLock = new();
     private volatile SpecialtySettingsFile _file = new();
 
+    // Сведение родного Claude к семейству в ячейках и шагах пресетов на записи; без реестра
+    // (юнит-тесты) — по форме id
+    private readonly LlmProviderRegistry? _providers;
+
     public SpecialtySettingsStore(IConfiguration config, IUserStore users,
-        ILogger<SpecialtySettingsStore>? log = null)
+        ILogger<SpecialtySettingsStore>? log = null, LlmProviderRegistry? providers = null)
     {
+        _providers = providers;
         _log = log;
         _users = users;
         // Путь выводим ТОЛЬКО от DataPath (как LocalActionOverridesStore): иначе стор
@@ -323,7 +328,11 @@ public sealed class SpecialtySettingsStore
     // Значения не-модели («preset:{id}», «tier:*», local/claude/default) и незнакомые id
     // остаются как были: карта адресуется точным совпадением. Возвращает число изменённых
     // записей (шаг цепочки и ячейка считаются по отдельности); 0 — файл не переписывается.
-    public int RemapModels(IReadOnlyDictionary<string, string> map)
+    public int RemapModels(IReadOnlyDictionary<string, string> map) =>
+        RemapModels(id => map.TryGetValue(id, out var next) ? next : null);
+
+    // То же с произвольным сведением: map(id) → новое значение или null (не менять).
+    public int RemapModels(Func<string, string?> map)
     {
         lock (_writeLock)
         {
@@ -345,12 +354,12 @@ public sealed class SpecialtySettingsStore
         foreach (var layer in file.Owners.Values) yield return layer;
     }
 
-    private static int RemapLayer(SpecialtySettingsLayer layer, IReadOnlyDictionary<string, string> map)
+    private static int RemapLayer(SpecialtySettingsLayer layer, Func<string, string?> map)
     {
         var changed = 0;
         foreach (var preset in layer.Presets)
             for (var i = 0; i < preset.Steps.Count; i++)
-                if (map.TryGetValue(preset.Steps[i].Trim(), out var step))
+                if (map(preset.Steps[i].Trim()) is { } step && step != preset.Steps[i])
                 {
                     preset.Steps[i] = step;
                     changed++;
@@ -367,8 +376,8 @@ public sealed class SpecialtySettingsStore
     }
 
     // Новое значение ячейки либо null — менять нечего (пусто, не модель, не из карты)
-    private static string? Remapped(string? cell, IReadOnlyDictionary<string, string> map) =>
-        cell is not null && map.TryGetValue(cell.Trim(), out var next) ? next : null;
+    private static string? Remapped(string? cell, Func<string, string?> map) =>
+        cell is not null && map(cell.Trim()) is { } next && next != cell ? next : null;
 
     // Заменить глобальный слой. null-ошибка = слой валиден.
     public string? SetGlobal(SpecialtySettingsLayer layer)
@@ -629,7 +638,7 @@ public sealed class SpecialtySettingsStore
     // Канонический вид слоя: ключи специальностей — camelCase каталога, Tools нормализованы
     // (полный набор → null = «все»), у не-Custom запреты пусты, ячейки матриц триммированы,
     // пустые id пресетов досозданы, шаги очищены от пустых.
-    private static SpecialtySettingsLayer NormalizeLayer(SpecialtySettingsLayer layer)
+    private SpecialtySettingsLayer NormalizeLayer(SpecialtySettingsLayer layer)
     {
         var specialties = new Dictionary<string, SpecialtyTemplateSettings>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, settings) in layer.Specialties)
@@ -647,12 +656,12 @@ public sealed class SpecialtySettingsStore
                 Id = string.IsNullOrWhiteSpace(p.Id) ? Guid.NewGuid().ToString() : p.Id.Trim(),
                 Name = p.Name.Trim(),
                 Description = string.IsNullOrWhiteSpace(p.Description) ? null : p.Description.Trim(),
-                Steps = p.Steps.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList(),
+                Steps = p.Steps.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => CanonModel(s.Trim())!).ToList(),
             }).ToList(),
         };
     }
 
-    private static SpecialtyTemplateSettings NormalizeTemplate(SpecialtyTemplateSettings s) => new()
+    private SpecialtyTemplateSettings NormalizeTemplate(SpecialtyTemplateSettings s) => new()
     {
         Access = s.Access,
         Tools = NormalizeTools(s.Tools),
@@ -710,8 +719,13 @@ public sealed class SpecialtySettingsStore
         return result.Count > 0 ? result : null;
     }
 
-    private static string? CleanCell(string? cell) =>
-        string.IsNullOrWhiteSpace(cell) ? null : cell.Trim();
+    private string? CleanCell(string? cell) =>
+        string.IsNullOrWhiteSpace(cell) ? null : CanonModel(cell.Trim());
+
+    // Родной Claude — семейством (opus/fable…): версию выбирает CLI, окно — сервер.
+    // preset:{id}, tier:*, local/claude и сторонние id остаются как есть.
+    private string? CanonModel(string? model) =>
+        _providers is not null ? _providers.CanonicalizeModel(model) : ClaudeModelFamily.Canonicalize(model);
 
     private static List<string>? NormalizeTools(List<string>? tools)
     {

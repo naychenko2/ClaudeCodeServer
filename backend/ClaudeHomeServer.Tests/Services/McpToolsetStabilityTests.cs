@@ -121,6 +121,7 @@ public class McpToolsetStabilityTests
     [SkippableTheory]
     [InlineData("private WidgetsMcpContext? BuildWidgetsContext", "widgets")]
     [InlineData("private CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
+    [InlineData("private ArchitectureMcpContext? BuildArchitectureContext", "architecture")]
     // internal с волны 2 http: те же формулы резолвят тулсеты по живой сессии-вызывателю
     [InlineData("internal bool PersonasEnabled", "personas")]
     [InlineData("internal bool ConsultantsEnabled", "consultants")]
@@ -365,6 +366,127 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Сервер редактора картинок (ADR-019 §4) едет в ход по свойствам сессии, владельца и
+    /// процесса: чат проекта, флаг image-editor, тулсет в реестре. Признак хода («идёт
+    /// генерация», глубина делегирования), фокус и нити картинок перезапускали бы CLI со всеми
+    /// серверами.
+    /// </summary>
+    [SkippableFact]
+    public void СерверРедактораКартинок_ГейтитсяПоСессииФлагуИРеестру()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "internal ImageEditorMcpContext? BuildImageEditorContext");
+
+        body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
+        body.Should().NotContain("ImageChat", "отдельного чата картинки в v3 нет");
+        body.Should().NotContain("Thread", "фокус и нити картинок не влияют на состав серверов");
+        body.Should().Contain("FeatureFlagKeys.ImageEditor", "флаг владельца гейтит сервер");
+        body.Should().Contain("McpEndpoints.ImageEditorName",
+            "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
+        body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
+        body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync тулсета");
+        body.Should().NotContain("IsBusy", "идущий ход не должен влиять на состав серверов");
+    }
+
+    /// <summary>
+    /// Сервер image-editor едет и в личные чаты, поэтому контекст обязаны собирать ВСЕ три
+    /// точки сборки LlmSessionContext: StartNewSessionAsync и обе ветки EnsureProcessCoreAsync.
+    /// Забытая ветка «вне проекта» дала бы личному чату сервер на первом ходу и отняла бы его
+    /// после перезапуска процесса — другая сигнатура запуска и «No such tool available».
+    /// </summary>
+    [SkippableFact]
+    public void СерверРедактораКартинок_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var source = File.ReadAllText(path!);
+
+        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
+        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
+        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
+        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
+        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
+
+        var points = new Dictionary<string, string>
+        {
+            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
+            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
+            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
+        };
+        foreach (var (name, body) in points)
+        {
+            body.Should().Contain("BuildImageEditorContext(", $"{name} обязан собирать контекст image-editor");
+            body.Should().Contain("ImageEditorMcp: imageEditorMcp", $"{name} обязан передать его в LlmSessionContext");
+            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
+            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
+            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+            body[active..activeEnd].Should().Contain("imageEditorMcp",
+                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
+        }
+    }
+
+    /// <summary>
+    /// Сервер модуля «Звук» (ADR-021 §5) — по тем же правилам, что image-editor: свойства сессии,
+    /// владельца и процесса (флаг audio-editor, тулсет в реестре), а не хода, фокуса, режима и нитей.
+    /// </summary>
+    [SkippableFact]
+    public void СерверЗвука_ГейтитсяПоФлагуИРеестру()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "internal AudioEditorMcpContext? BuildAudioEditorContext");
+
+        body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
+        body.Should().NotContain("Thread", "фокус и нити звука не влияют на состав серверов");
+        body.Should().Contain("FeatureFlagKeys.AudioEditor", "флаг владельца гейтит сервер");
+        body.Should().Contain("McpEndpoints.AudioEditorName",
+            "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
+        body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
+        body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync тулсета");
+        body.Should().NotContain("IsBusy", "идущий ход не должен влиять на состав серверов");
+    }
+
+    /// <summary>
+    /// Сервер audio-editor едет и в личные чаты: контекст обязаны собирать ВСЕ три точки сборки
+    /// LlmSessionContext — иначе после перезапуска процесса личный чат теряет сервер («No such tool available»).
+    /// </summary>
+    [SkippableFact]
+    public void СерверЗвука_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var source = File.ReadAllText(path!);
+
+        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
+        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
+        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
+        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
+        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
+
+        var points = new Dictionary<string, string>
+        {
+            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
+            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
+            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
+        };
+        foreach (var (name, body) in points)
+        {
+            body.Should().Contain("BuildAudioEditorContext(", $"{name} обязан собирать контекст audio-editor");
+            body.Should().Contain("AudioEditorMcp: audioEditorMcp", $"{name} обязан передать его в LlmSessionContext");
+            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
+            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
+            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+            body[active..activeEnd].Should().Contain("audioEditorMcp",
+                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
+        }
+    }
+
+    /// <summary>
     /// Провайдер сабагентов-консультантов (pmem-серверы + --add-dir) гейтится тем же
     /// ConsultantsEnabled, а не собственной копией правила.
     /// </summary>
@@ -393,9 +515,20 @@ public class McpToolsetStabilityTests
     {
         var dir = FindDir("Services", "Mcp", "Http");
         Skip.If(dir is null, "Services/Mcp/Http не найден (сборка вне дерева репозитория)");
+        // Тулсеты модулей живут в своих сборках (ADR-018 §10.2) — их тела проверяются тем же правилом
+        var imageEditor = FindDirIn("ClaudeHomeServer.ImageEditor", "Mcp");
+        imageEditor.Should().NotBeNull("тулсет редактора картинок обязан попасть в проверку тел ToolsFor");
+        var audioEditor = FindDirIn("ClaudeHomeServer.AudioEditor", "Mcp");
+        audioEditor.Should().NotBeNull("тулсет модуля «Звук» обязан попасть в проверку тел ToolsFor");
+        var files = Directory.GetFiles(dir!.FullName, "*.cs")
+            .Concat(Directory.GetFiles(imageEditor!.FullName, "*.cs"))
+            .Concat(Directory.GetFiles(audioEditor!.FullName, "*.cs"))
+            .ToList();
+        files.Should().Contain(f => Path.GetFileName(f) == "ImageEditorToolset.cs");
+        files.Should().Contain(f => Path.GetFileName(f) == "AudioEditorToolset.cs");
 
         var checkedAny = false;
-        foreach (var file in Directory.GetFiles(dir!.FullName, "*.cs"))
+        foreach (var file in files)
         {
             var source = File.ReadAllText(file);
             // Только РЕАЛИЗАЦИИ (public-члены классов): декларация интерфейса в
@@ -429,6 +562,43 @@ public class McpToolsetStabilityTests
                 $"{name}: состояние хода не должно влиять на состав инструментов");
         }
         checkedAny.Should().BeTrue("хотя бы один тулсет с ToolsFor обязан существовать");
+    }
+
+    /// <summary>
+    /// Тулсет архитектуры живёт в вертикали (ClaudeHomeServer.Architecture), вне папки,
+    /// которую обходит сторож выше, — поэтому свой сторож: состав ToolsFor решается только
+    /// по владельцу и сессии (флаг, привязка персоны), а не по ходу.
+    /// </summary>
+    [SkippableFact]
+    public void СоставToolsFor_ТулсетаАрхитектуры_НеЧитаетСостояниеХода()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        while (dir is not null && path is null)
+        {
+            var candidate = Path.Combine(dir.FullName, "backend", "ClaudeHomeServer.Architecture",
+                "Services", "Architecture", "ArchitectureToolset.cs");
+            if (File.Exists(candidate)) path = candidate;
+            dir = dir.Parent;
+        }
+        Skip.If(path is null, "ArchitectureToolset.cs не найден (сборка вне дерева репозитория)");
+
+        var source = File.ReadAllText(path!);
+        var start = source.IndexOf("public IReadOnlyList<McpToolSchema> ToolsFor(", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(0, "ToolsFor обязан существовать");
+        var end = source.IndexOf("\n    public ", start + 1, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start);
+        var resolve = source.IndexOf("private bool TryResolve(", StringComparison.Ordinal);
+        resolve.Should().BeGreaterThan(0, "резолв состава обязан существовать");
+        var resolveEnd = source.IndexOf("\n    // ", resolve, StringComparison.Ordinal);
+
+        foreach (var body in new[] { source[start..end], source[resolve..resolveEnd] })
+        {
+            body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync, не в составе");
+            body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав инструментов");
+        }
+        source[resolve..resolveEnd].Should().Contain("IsServerToolEnabled(",
+            "Off-привязка персоны tool:architecture — та же точка, что в SessionManager");
     }
 
     /// <summary>
@@ -478,14 +648,31 @@ public class McpToolsetStabilityTests
 
         code.Should().Contain("GetOwned(",
             "профиль резолвится по сессии-вызывателю, изолированной по владельцу токена");
-        code.Should().Contain("ResolveByModel(",
-            "провайдер выводится из эффективной модели сессии — той же формулой, что в бою");
+        code.Should().Contain("LightProfileFor(",
+            "профиль выводится из эффективной модели И персоны сессии — единой точкой резолва, "
+            + "той же, что у ClaudeSession (иначе состав MCP и фильтр разъедутся)");
+        code.Should().Contain("personas.Get(",
+            "признак «Облегчённый контекст» — свойство персоны СЕССИИ, а не хода");
+        code.Should().NotContain("ResolveByModel(",
+            "своей копии резолва профиля здесь быть не должно");
         code.Should().NotContain("GetActiveTurnDelegation",
             "глубина делегирования — свойство ХОДА: гейт делегирования живёт отдельно");
         code.Should().NotContain("TurnDelegation",
             "состояние делегирования не смеет влиять на состав инструментов");
         code.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав инструментов");
+    }
+
+    private static DirectoryInfo? FindDirIn(string assembly, params string[] relative)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine([dir.FullName, "backend", assembly, .. relative]);
+            if (Directory.Exists(candidate)) return new DirectoryInfo(candidate);
+            dir = dir.Parent;
+        }
+        return null;
     }
 
     // Каталог по пути от корня репозитория (FindSource ищет файл — этот ищет папку)
@@ -806,5 +993,25 @@ public class McpToolsetStabilityTests
             "решение принимает FeatureFlagService.IsEnabled по владельцу сессии");
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав инструментов памяти");
+    }
+
+    /// <summary>
+    /// Руки локального проекта (ADR-016 §7) — свойство чата: маркер рук, запреты HandsTurnRules и
+    /// режим прав входят в сигнатуру запуска. Два хода одного чата с руками обязаны дать ОДНУ
+    /// сигнатуру — иначе каждый ход перезапускал бы CLI со всеми MCP (и с мостом рук).
+    /// </summary>
+    [Fact]
+    public async Task РукиВключены_ДваХода_ОднаСигнатура()
+    {
+        using var h = new HandsTurnHarness(true,
+            mode: ClaudeHomeServer.Models.ClaudeMode.Bypass);
+        var first = await h.RunTurnAsync("первый ход");
+        var second = await h.RunTurnAsync("второй ход, другой текст");
+
+        first.McpServers!.ContainsKey(ClaudeHomeServer.Protocol.DeviceExecPlaceholders.HandsServerName)
+            .Should().BeTrue("кейс про чат с руками");
+        first.Signature.Should().NotBeNullOrEmpty();
+        second.Signature.Should().Be(first.Signature,
+            "руки — свойство чата, а не хода: сигнатура запуска между ходами не мерцает");
     }
 }

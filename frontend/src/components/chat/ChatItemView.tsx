@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, Camera, MonitorSmartphone } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -12,6 +12,7 @@ import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
 import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { prunedHeadline, prunedDetails } from '../../lib/contextPruned';
 import { Button } from '../ui/Button';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -29,10 +30,12 @@ import { stripVoiceMarker } from '../../lib/tts';
 import { VoiceDigestNote, parseVoiceDigest } from './VoiceDigestNote';
 import { useContextPersona } from '../../lib/contextPersona';
 import { useSlotItem } from '../../lib/subsystems/registry';
-import type { ChatItemSaveNoteCtx, ChatItemFileChangedApi } from '../../lib/subsystems/registryCore';
+import type { ChatItemSaveNoteCtx, ChatItemFileChangedApi, ChatItemToolCtx } from '../../lib/subsystems/registryCore';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, SpeakingItemContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { RootsAddHint } from '../../features/desktop/AgentCommands';
+import { isRootNotAllowed } from '../../lib/agentInstall';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MessageOriginChip } from '../MessageOriginChip';
 import { getPersonaById, usePersonasVersion, personaLabel, ensurePersonasLoaded } from '../../lib/personas';
@@ -1037,7 +1040,27 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   // Вклад карточки изменённого файла-заметки: заметка ли это (match) и как её
   // открыть/нарисовать. Нет вклада — обычная карточка изменённого файла.
   const fileChangedNote = useSlotItem<never, ChatItemFileChangedApi>('chat-item-action', 'file-changed');
+  // Своя карточка записи от подсистемы (редактор картинок: image_generate, image_launch…):
+  // ключ — имя инструмента у tool_use, иначе kind. Прямых веток по именам модулей в ядре нет
+  const chatSessionId = useContext(ChatSessionContext);
+  // Запись модуля (module_record) — по ключу `${module}:${recordType}`
+  const ownKey = item.kind === 'tool_use' ? item.name
+    : item.kind === 'module_record' ? `${item.module}:${item.recordType}` : item.kind;
+  const ownView = useSlotItem<ChatItemToolCtx>('chat-item-tool', ownKey);
+  if (ownView?.render) {
+    return <>{ownView.render({ item, online, projectId: project?.id ?? null, sessionId: chatSessionId, persona })}</>;
+  }
   switch (item.kind) {
+    case 'module_record':
+      // Модуль выключен или не знает записи — готовый текст строки от сервера
+      return item.fallback ? (
+        <div data-module-record={ownKey} style={{
+          alignSelf: 'center', maxWidth: 420, textAlign: 'center', overflowWrap: 'anywhere',
+          fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45,
+        }}>
+          {item.fallback}
+        </div>
+      ) : null;
     case 'user_message': {
       // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны) —
       // компактная плашка-разделитель вместо пузыря «Автоматически» с сырым текстом директивы
@@ -1172,12 +1195,20 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 {item.attachedPaths.map(p => (
                   <span key={p} style={{
                     background: C.bgPanel, color: C.textSecondary, borderRadius: 5,
-                    padding: '1px 6px', fontSize: 11,
+                    padding: '1px 6px', fontSize: 11, maxWidth: '100%', overflowWrap: 'anywhere',
                   }}>
                     {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
                     {project ? relPathTree(p, project.rootPath, treePath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
                   </span>
                 ))}
+              </div>
+            )}
+            {/* Чат картинки: холст не менялся с прошлого сообщения — снимок не приложили,
+                агент его уже видел (ADR-018 §3) */}
+            {item.imageSnapshot && !item.imageSnapshot.attached && (
+              <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 4, fontSize: FS.xs, color: C.textMuted }}>
+                <Camera size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                холст не менялся — снимок не приложен
               </div>
             )}
           </UserMessageBubble>
@@ -1919,6 +1950,24 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       );
     }
 
+    case 'hands_notice': {
+      // Строка о руках локального проекта: остановка на устройстве — янтарная, как
+      // остальные предупреждения ленты; справочная (понижение режима) — нейтральная
+      const warn = item.tone === 'warning';
+      return (
+        <div style={{
+          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          justifyContent: 'center', textAlign: 'center', borderRadius: 8, padding: '6px 12px', fontSize: 12.5,
+          background: warn ? C.warningBg : C.bgSelected,
+          border: `1px solid ${warn ? C.warning : C.border}`,
+          color: warn ? C.warningText : C.textSecondary,
+        }}>
+          <MonitorSmartphone size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span>{item.text}</span>
+        </div>
+      );
+    }
+
     case 'truncated':
       return (
         <div style={{
@@ -2127,6 +2176,10 @@ function ErrorCard({ item, online, onRetry, onDropWindow1M }: {
   // остальной лентой и для возможного переноса подписи в будущем
   useIsMobile();
   const showDrop = item.action === 'window-1m-drop' && !!onDropWindow1M && !dropResolved;
+  // Ход локального проекта отказан: папка не под разрешёнными корнями агента — команда для машины
+  const projectCtx = useContext(ChatProjectContext);
+  const localProjects = useFeature(FLAGS.localProjects);
+  const rootsHint = localProjects && !!projectCtx?.local && isRootNotAllowed(item.text);
 
   const handleDrop = useCallback(async () => {
     if (!onDropWindow1M || dropLoading) return;
@@ -2205,6 +2258,11 @@ function ErrorCard({ item, online, onRetry, onDropWindow1M }: {
               {dropError}
             </div>
           )}
+        </div>
+      )}
+      {rootsHint && projectCtx && (
+        <div style={{ marginTop: SP.sm }}>
+          <RootsAddHint rootPath={projectCtx.rootPath} platform={projectCtx.devicePlatform} />
         </div>
       )}
     </div>

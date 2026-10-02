@@ -306,6 +306,12 @@ public record ChatDeletedMessage()
 // а не удаляет — клиенты убирают/возвращают его в списках, но семантики «чата больше нет»
 // (как у chat_deleted — на ней строятся ChatsPage/awaiting/projectActivity) здесь нет.
 // SessionId — в базовом поле.
+// Живая копия StoredModuleRecord (ADR-019 §2): запись модуля в ленте чата. Поля те же, что у
+// записи истории; SessionId — в базовом поле.
+public record ModuleRecordMessage(string Module, string RecordType, System.Text.Json.JsonElement? Data,
+    string Fallback, long? Timestamp = null)
+    : ServerMessage("module_record");
+
 public record ChatArchivedMessage(bool Archived)
     : ServerMessage("chat_archived");
 
@@ -572,7 +578,9 @@ public record NotificationMessage(string Title, string Body, string? Url = null,
     // Атрибуция персоны (для аватара/лица в тосте, центре и web-push) и имя проекта.
     // Денормализуются в NotificationService по PersonaId/ProjectId — отправители шлют id.
     string? PersonaId = null, string? PersonaName = null, string? PersonaRole = null,
-    string? PersonaColor = null, bool PersonaHasAvatar = false, string? ProjectName = null)
+    string? PersonaColor = null, bool PersonaHasAvatar = false, string? ProjectName = null,
+    // Закреплённое: тост не гаснет сам, пока не прочитано (AppNotification.Sticky)
+    bool Sticky = false)
     : ServerMessage("notification");
 
 // Манифест recall (F3): что персона подтянула в ход из памяти/заметок/базы/команды — для
@@ -588,25 +596,16 @@ public record RecallManifestMessage(IReadOnlyList<RecallItemDto> Items)
 public record PromptSnapshotMessage(string SnapshotId, bool Applied, string? InheritedFromId = null)
     : ServerMessage("prompt_snapshot");
 
-// Статус сеанса рук десктопного агента (ADR-008 о десктопном агенте, раздел «Сеанс рук
-// и согласие») — источник бейджа «руки на home» в шапке чата и индикатора в оболочке.
-// Эфемерное событие: в history.json не пишется (аудит действий строится отдельным
-// персистируемым типом по серверной копии кадра, это не он).
-// Active=false — сеанс погашен; поля устройства и чата остаются заполненными, иначе бейджу
-// нечего снимать. Reason — отчего погас: idle (15 минут без вызовов) | cap (потолок 2 часа) |
-// client_closed | facet_off (грань выключили в проекте) | disconnected | restart | stopped
-// (человек нажал «Стоп»); у активного — null.
-// DeviceName — ЧЕЛОВЕЧЕСКОЕ имя устройства («home», «work»), то же, что принимает параметр
-// device инструментов desktop_*: GUID устройства наружу не отдаём.
-// ChatSessionId/ChatName — чат, которому принадлежат руки. Дублируют контекст намеренно:
-// бейдж живёт и вне ленты этого чата (список чатов, шапка приложения), а базовый SessionId
-// заполняется адресом броадкаста, а не смыслом.
-// StartedAt/ExpiresAt — UTC: старт сеанса и предельный срок (минимум из «15 минут без
-// вызовов» и потолка 2 часа), по нему фронт рисует отсчёт без опроса сервера.
-public record DesktopSessionMessage(bool Active, string DeviceName, string ChatSessionId,
-    string? ChatName = null, DateTime? StartedAt = null, DateTime? ExpiresAt = null,
-    string? Reason = null)
-    : ServerMessage("desktop_session");
+// Статус рук локального проекта в чате (ADR-016 §7) — источник бейджа LocalHandsBadge и строк
+// ленты. Эфемерное: в history.json не пишется. State — HandsChatStates; Reason —
+// HandsEndReason у stopped и HandsEndReason.Busy у unavailable; DeviceName — человеческое имя устройства.
+public record HandsStatusMessage(string State, string? DeviceName = null, string? Reason = null)
+    : ServerMessage("hands_status");
+
+// Строка ленты о руках, не ошибка хода (ErrorMessage перевёл бы чат в Error): «режим
+// «Без ограничений» понижен» и подобные. Эфемерное, в history.json не пишется.
+public record HandsNoticeMessage(string Text)
+    : ServerMessage("hands_notice");
 
 // Подсказка следующего сообщения: текст от claude CLI после хода.
 // Эфемерное событие — в history.json не пишется (нет case в OnMessageAsync и StoredMessage).

@@ -52,5 +52,5 @@ export const STATUS_GLOW: Record<VisualStatus, { alpha: number; breath: boolean;
   finished: { alpha: 0,  breath: false },
 }
 
-// Сам box-shadow карточки управляется классами cc-glow-* в index.css (анимация
-// требует управления им целиком), здесь — только источник легенды (цвет + сила)
+// Сам перелив фона карточки рисуют классы cc-tint-* в index.css (слой ::after),
+// здесь — только источник легенды (цвет + сила)

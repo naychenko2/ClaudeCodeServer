@@ -20,6 +20,9 @@ public sealed class ProjectFiles : IProjectFiles
 
     public event Action<string, string, FileMutationKind, string?>? OnMutated;
 
+    public void NotifyMutated(string root, string relativePath, FileMutationKind kind) =>
+        _files.NotifyMutated(root, relativePath, kind);
+
     public Task<IReadOnlyList<FileEntry>> ListAsync(Project project, string relativePath = "", bool showHidden = false, CancellationToken ct = default) =>
         Run<IReadOnlyList<FileEntry>>(project, root => _files.List(root, relativePath, showHidden).ToList());
 

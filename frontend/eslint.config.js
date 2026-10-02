@@ -41,10 +41,12 @@ export const RAW_COLOR_ALLOWED = [
 // Щиток дизайн-системы. Вынесен отдельно, потому что подключается дважды: здесь (в общий
 // линт) и в eslint.design.config.js — под `npm run lint:design`, который проверяет ТОЛЬКО
 // дизайн-правила и потому держится зелёным, в отличие от общего линта с его легаси-долгом.
+export const designPlugin = { rules: { 'no-raw-color': noRawColor } }
+
 export const designSystem = [
   {
     files: ['src/**/*.{ts,tsx}'],
-    plugins: { design: { rules: { 'no-raw-color': noRawColor } } },
+    plugins: { design: designPlugin },
     rules: { 'design/no-raw-color': 'error' },
   },
   {
@@ -52,6 +54,43 @@ export const designSystem = [
     rules: { 'design/no-raw-color': 'off' },
   },
 ]
+
+// Сторож MF-модуля «Редактор картинок» (ADR-018 §10.3): ядро модуль берёт только из
+// aihome_shell/kit. Любой относительный импорт из src/components, hooks, lib, pages,
+// features соберётся ВТОРОЙ копией внутрь remote: для чата это второе SignalR-соединение
+// и вторые сторы, а для контекстов React — другой объект контекста и молчаливый undefined.
+// Типы бандл не несут, поэтому `import type` разрешён (как и src/types).
+// Подключается дважды: здесь и в eslint.remote.config.js — блокирующий шаг CI, который
+// не тонет в легаси-долге общего линта.
+export const imageEditorImportGuard = {
+  files: ['src/features/imageEditor/**/*.{ts,tsx}'],
+  // Тесты в бандл remote не попадают, вторую копию ядра они не соберут — им можно в ядро напрямую
+  ignores: ['**/*.test.{ts,tsx}'],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/components/**', '**/hooks/**', '**/lib/**', '**/pages/**', '**/features/**', '**/api/**', '**/App'],
+        allowTypeImports: true,
+        message: 'Модуль image-editor берёт ядро только из aihome_shell/kit (ADR-018 §10.3): прямой импорт соберёт вторую копию в remote.',
+      }],
+    }],
+  },
+}
+
+// Тот же сторож для MF-модуля «Звук» (ADR-021 §3): причины и исключения — как у imageEditorImportGuard
+export const audioEditorImportGuard = {
+  files: ['src/features/audioEditor/**/*.{ts,tsx}'],
+  ignores: ['**/*.test.{ts,tsx}'],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/components/**', '**/hooks/**', '**/lib/**', '**/pages/**', '**/features/**', '**/api/**', '**/App'],
+        allowTypeImports: true,
+        message: 'Модуль audio-editor берёт ядро только из aihome_shell/kit (ADR-021 §3): прямой импорт соберёт вторую копию в remote.',
+      }],
+    }],
+  },
+}
 
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA
@@ -111,4 +150,6 @@ export default defineConfig([
     },
   },
   ...designSystem,
+  imageEditorImportGuard,
+  audioEditorImportGuard,
 ])

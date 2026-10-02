@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -597,6 +598,31 @@ public class LocalProcessRunnerIsolationTests
             IsolationOptions.Instance = prev;
         }
     }
+    // Поддельный systemd-run: отбрасывает флаги обёртки до «--» и exec-ает команду.
+    // Файл аргументов — по PID: exec сохраняет PID, так что это PID нашего процесса. Раннер
+    // глобальный, и процессы параллельных тестов других коллекций тоже проходят через фейк.
+    // Скрипт для /bin/sh и режим файла Unix — хелпер только для не-Windows, вызывающие гейтят.
+    [UnsupportedOSPlatform("windows")]
+    private static (string Dir, string Fake) FakeSystemdRun()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "lpr_stop_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var fake = Path.Combine(dir, "systemd-run");
+        File.WriteAllText(fake, $$"""
+            #!/bin/sh
+            printf '%s\n' "$@" > '{{dir}}/args-'$$'.txt'
+            while [ "$1" != "--" ]; do shift; done
+            shift
+            exec "$@"
+            """.Replace("\r\n", "\n"));
+        File.SetUnixFileMode(fake, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return (dir, fake);
+    }
+
+    private static string UnitOf(string dir, int pid) =>
+        File.ReadAllLines(Path.Combine(dir, $"args-{pid}.txt"))
+            .Single(a => a.StartsWith("--unit="))["--unit=".Length..];
+
     // Гашение scope по выходу процесса — через шов StopScope и поддельный systemd-run
     // (скрипт отбрасывает флаги обёртки до «--» и exec-ает команду): реальный systemd не
     // нужен, поэтому тест идёт на любом Linux, включая CI. Проверяем: стоп ровно один раз
@@ -606,19 +632,7 @@ public class LocalProcessRunnerIsolationTests
     {
         if (OperatingSystem.IsWindows()) return;
 
-        var dir = Path.Combine(Path.GetTempPath(), "lpr_stop_" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(dir);
-        var fake = Path.Combine(dir, "systemd-run");
-        // Файл аргументов — по PID: exec сохраняет PID, так что это PID нашего процесса. Раннер
-        // глобальный, и процессы параллельных тестов других коллекций тоже проходят через фейк
-        File.WriteAllText(fake, $$"""
-            #!/bin/sh
-            printf '%s\n' "$@" > '{{dir}}/args-'$$'.txt'
-            while [ "$1" != "--" ]; do shift; done
-            shift
-            exec "$@"
-            """.Replace("\r\n", "\n"));
-        File.SetUnixFileMode(fake, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var (dir, fake) = FakeSystemdRun();
 
         using var _ = Bus(present: true);
         var prevOptions = IsolationOptions.Instance;
@@ -646,11 +660,10 @@ public class LocalProcessRunnerIsolationTests
             });
             (await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))
                 .Should().Be("готово");
-            var unitArg = File.ReadAllLines(Path.Combine(dir, $"args-{process.Id}.txt"))
-                .Single(a => a.StartsWith("--unit="));
+            var unit = UnitOf(dir, process.Id);
             lock (calls)
             {
-                ourUnit = unitArg["--unit=".Length..];
+                ourUnit = unit;
                 if (calls.Any(c => c.Unit == ourUnit)) stopped.TrySetResult();
             }
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
@@ -704,6 +717,65 @@ public class LocalProcessRunnerIsolationTests
         }
     }
 
+    // Регрессия флаки Start_ИзоляцияВыключена_ScopeНеГасится: процесс запущен при одном шве,
+    // выходит при другом. Гашение обязано уйти шву момента запуска — иначе запоздавший стоп
+    // процесса из предыдущего теста попадает в счётчик следующего, подменившего шов.
+    [Fact]
+    public async Task Start_ГашениеУходитШвуМоментаЗапуска()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var (dir, fake) = FakeSystemdRun();
+        using var _ = Bus(present: true);
+        var prevOptions = IsolationOptions.Instance;
+        var prevStop = LocalProcessRunner.StopScope;
+        var atStart = new List<string>();
+        var atExit = new List<string>();
+        var stoppedAtStart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        string? ourUnit = null;
+        IsolationOptions.Instance = new IsolationOptions { Enabled = true, SystemdRunPath = fake };
+        LocalProcessRunner.StopScope = (_, unit) =>
+        {
+            lock (atStart)
+            {
+                atStart.Add(unit);
+                if (unit == ourUnit) stoppedAtStart.TrySetResult();
+            }
+        };
+        try
+        {
+            // Оболочка ждёт stdin: выход наступает только после подмены шва
+            using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
+            {
+                FileName = "sh",
+                Args = ["-c", "echo готово; read _"],
+                Track = false,
+            });
+            (await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))
+                .Should().Be("готово");
+            var unit = UnitOf(dir, process.Id);
+            lock (atStart)
+            {
+                ourUnit = unit;
+                if (atStart.Contains(unit)) stoppedAtStart.TrySetResult();
+            }
+
+            LocalProcessRunner.StopScope = (_, u) => { lock (atExit) atExit.Add(u); };
+            process.StandardInput.Close();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+            (await Task.WhenAny(stoppedAtStart.Task, Task.Delay(TimeSpan.FromSeconds(10))))
+                .Should().Be(stoppedAtStart.Task, "scope гасит шов, действовавший при запуске процесса");
+            lock (atExit) atExit.Should().NotContain(ourUnit, "подменивший шов позже не видит чужих процессов");
+        }
+        finally
+        {
+            LocalProcessRunner.StopScope = prevStop;
+            IsolationOptions.Instance = prevOptions;
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
     // Живой systemd: процесс оставляет в своём scope фоновый хвост (как узлы MSBuild после
     // сборки) и выходит. Остановка scope обязана добить хвост и не дать в scope остаться
     // ничему живому. Только Linux с user-шиной и systemd-run — иначе пропуск.
@@ -729,17 +801,20 @@ public class LocalProcessRunnerIsolationTests
             using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
             {
                 FileName = "sh",
-                // Хвост отвязан от наших труб, иначе чтение stdout ждало бы и его
-                Args = ["-c", "sleep 300 </dev/null >/dev/null 2>&1 & echo $!"],
-                RedirectStdin = false,
+                // Хвост отвязан от наших труб, иначе чтение stdout ждало бы и его. Выход
+                // оболочки держим на stdin: по выходу раннер гасит scope, и хвост погибает
+                // раньше, чем тест успевает прочесть его cgroup (плавающий DirectoryNotFound на CI)
+                Args = ["-c", "sleep 300 </dev/null >/dev/null 2>&1 & echo $!; read _"],
                 Track = false,
             });
             var tailPid = int.Parse((await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))!);
+            // Оболочка ждёт stdin — scope жив, хвост в нём тоже: cgroup читается без гонки
             var cgroupLine = (await File.ReadAllTextAsync($"/proc/{tailPid}/cgroup")).Trim();
             var unit = cgroupLine.Split('/').Last();
             unit.Should().StartWith("ccs-run-").And.EndWith(".scope");
             // Путь cgroup сохраняем сразу: после гашения читать его будет неоткуда
             var cgroupDir = "/sys/fs/cgroup" + cgroupLine[(cgroupLine.IndexOf("::", StringComparison.Ordinal) + 2)..];
+            process.StandardInput.Close();
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
             // Остановка асинхронная (stop --no-block), а под нагрузкой SIGTERM и уборка

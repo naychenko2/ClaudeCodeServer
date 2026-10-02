@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Higgsfield;
 
 namespace ClaudeHomeServer.Services.Mcp;
 

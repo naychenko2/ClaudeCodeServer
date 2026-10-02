@@ -1,0 +1,591 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace ClaudeHomeServer.Services.ImageEditor.Threads;
+
+// Хранилище нитей и фокуса чата (ADR-019 §1): data/image-threads/{ownerId}/{sessionId}.json.
+// Корень отдельный от рабочей папки редактора (data/image-editor): TTL-чистка его не видит, а
+// бэкап берёт по умолчанию — карточка в ленте живёт бессрочно, её нить тоже.
+//
+// Сессию не трогает никогда: смена фокуса — настройка чата, она не пишет sessions.json и не
+// двигает UpdatedAt. У Session поэтому и нет полей нитей — они целиком живут в модуле.
+//
+// Записи от человека идут с ревизией, от которой он считал (устарела — Conflict). Записи от
+// сервера (старт задачи, сохранение, переименование файла) ревизию не сверяют: они не затирают
+// чужую правку, а дописывают факт, и тоже поднимают ревизию.
+public sealed class ImageThreadStore(string root, TimeProvider? time = null)
+{
+    public const string DirName = "image-threads";
+    public const int MaxEvents = 30;
+
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private readonly Lock _gate = new();
+
+    public string Root { get; } = root;
+
+    public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
+    public static ImageThreadStore FromConfig(IConfiguration config)
+    {
+        var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
+        return new ImageThreadStore(Path.Combine(Path.GetDirectoryName(dataPath)!, DirName));
+    }
+
+    public DateTime Now() => _time.GetUtcNow().UtcDateTime;
+
+    public ImageThreadsState Get(string ownerId, string sessionId)
+    {
+        lock (_gate) return Read(ownerId, sessionId);
+    }
+
+    // Новая нить по файлу проекта или черновик по папке; focus — сразу взять её в работу.
+    // Исходник заводится вместе с нитью и сразу в работе: якорь нити в ленте — его карточка
+    public (ImageThreadsState State, ImageThread Thread) Create(string ownerId, string sessionId,
+        string? file, string? draftFolder, bool focus)
+    {
+        if ((file is null) == (draftFolder is null))
+            throw new ArgumentException("Нужно ровно одно: файл картинки или папка черновика");
+        lock (_gate)
+        {
+            var current = Read(ownerId, sessionId);
+            var thread = NewThread(file, draftFolder);
+            var next = current with
+            {
+                Threads = [.. current.Threads, thread],
+                Focus = focus ? thread.Id : current.Focus,
+                Revision = current.Revision + 1,
+            };
+            Save(ownerId, sessionId, next);
+            return (next, thread);
+        }
+    }
+
+    // Взять картинку в работу от человека (POST threads): нить по этому файлу уже есть — фокус на
+    // неё (Existing), новую не плодим; черновик заводится всегда новый. settings — настройки новой
+    // нити (выбор человека в полосе «Картинки» проекта), уже существующую нить они не трогают
+    public ImageThreadWrite Open(string ownerId, string sessionId, string? file, string? draftFolder, long revision,
+        ImageThreadSettings? settings = null)
+    {
+        if ((file is null) == (draftFolder is null))
+            throw new ArgumentException("Нужно ровно одно: файл картинки или папка черновика");
+        lock (_gate)
+        {
+            var current = Read(ownerId, sessionId);
+            if (revision != current.Revision)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Conflict, current);
+
+            if (file is not null && current.Threads.FirstOrDefault(t => t.File == file) is { } existing)
+            {
+                var focused = current.Focus == existing.Id ? current
+                    : current with { Focus = existing.Id, Revision = current.Revision + 1 };
+                if (!ReferenceEquals(focused, current)) Save(ownerId, sessionId, focused);
+                return new ImageThreadWrite(ImageThreadWriteStatus.Ok, focused) { Thread = existing, Existing = true };
+            }
+
+            var thread = NewThread(file, draftFolder, settings);
+            var next = current with
+            {
+                Threads = [.. current.Threads, thread],
+                Focus = thread.Id,
+                Revision = current.Revision + 1,
+            };
+            Save(ownerId, sessionId, next);
+            return new ImageThreadWrite(ImageThreadWriteStatus.Ok, next) { Thread = thread };
+        }
+    }
+
+    // Взять нить в работу или снять выбор (threadId = null). revision — та, от которой считал
+    // вызывающий; устарела — конфликт. Тот же фокус повторно — Ok без записи
+    public ImageThreadWrite SetFocus(string ownerId, string sessionId, string? threadId, long revision)
+    {
+        lock (_gate)
+        {
+            var current = Read(ownerId, sessionId);
+            if (revision != current.Revision)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Conflict, current);
+            if (threadId is not null && current.Threads.All(t => t.Id != threadId))
+                return new ImageThreadWrite(ImageThreadWriteStatus.ThreadNotFound, current);
+            if (current.Focus == threadId)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Ok, current);
+
+            var next = current with { Focus = threadId, Revision = current.Revision + 1 };
+            Save(ownerId, sessionId, next);
+            return new ImageThreadWrite(ImageThreadWriteStatus.Ok, next);
+        }
+    }
+
+    // Убрать нить без шагов (передумал брать картинку или пустой черновик) вместе с фокусом.
+    // У нити с шагами, версиями, идущим запуском или вариантами, ждущими выбора, — Invalid: там
+    // есть что терять
+    public ImageThreadWrite Remove(string ownerId, string sessionId, string threadId, long revision) =>
+        Mutate(ownerId, sessionId, threadId, revision, (state, thread) =>
+        {
+            if (thread.HasSteps || thread.PendingJobId is not null || thread.HasRunningLaunch)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Invalid, state);
+            var next = state with
+            {
+                Threads = [.. state.Threads.Where(t => t.Id != threadId)],
+                Focus = state.Focus == threadId ? null : state.Focus,
+            };
+            return new ImageThreadWrite(ImageThreadWriteStatus.Ok, next);
+        });
+
+    // Новый шаг нити — взятый вариант или правка без ИИ. Текущий шаг последний в текущей стопке —
+    // шаг дописывается в неё. Иначе был откат: текущая стопка замораживается (Old), новая стопка
+    // начинается общими шагами до точки отката и новым шагом (Forked — вызывающему в ленту).
+    // clearPendingJobId — задача, чьи варианты этим разобраны
+    public ImageThreadWrite AddStep(string ownerId, string sessionId, string threadId, string stepId, long revision,
+        string? clearPendingJobId = null, ImageThreadEvent? log = null) =>
+        Mutate(ownerId, sessionId, threadId, revision, (state, thread) =>
+        {
+            var pending = clearPendingJobId is not null && thread.PendingJobId == clearPendingJobId ? null : thread.PendingJobId;
+            if (thread.Owns(stepId))
+                return Replace(state, thread with { PendingJobId = pending, CurrentStepId = stepId }, log);
+
+            var stack = thread.CurrentStack;
+            var at = thread.CurrentStepId;
+            if (stack is null || stack.Steps.Count == 0 || stack.Steps[^1] == at)
+            {
+                // Пустая текущая стопка: у свежей нити или после отката в старую — шаги до точки
+                // отката переносятся в неё, чтобы стопка читалась с первого шага
+                var head = stack is { Steps.Count: > 0 } ? stack.Steps : Prefix(thread, at);
+                var target = stack ?? new ImageThreadStack(NewId(), [], at, false);
+                var grown = target with { Steps = [.. head, stepId] };
+                IReadOnlyList<ImageThreadStack> stacks = stack is null
+                    ? [.. thread.Stacks, grown]
+                    : [.. thread.Stacks.Select(s => s.StackId == grown.StackId ? grown : s)];
+                return Replace(state, thread with
+                {
+                    Stacks = stacks,
+                    CurrentStackId = grown.StackId,
+                    CurrentStepId = stepId,
+                    PendingJobId = pending,
+                }, log);
+            }
+
+            var index = at is null ? -1 : IndexOf(stack.Steps, at);
+            var keptFrom = at is null ? 1 : index >= 0 ? index + 2 : (int?)null;
+            int? keptTo = keptFrom is { } from && from <= stack.Steps.Count ? stack.Steps.Count : null;
+            if (keptTo is null) keptFrom = null;
+
+            var frozen = stack with { Old = true };
+            var fresh = new ImageThreadStack(NewId(), [.. Prefix(thread, at), stepId], at, false);
+            var forkedThread = thread with
+            {
+                Stacks = [.. thread.Stacks.Select(s => s.StackId == stack.StackId ? frozen : s), fresh],
+                CurrentStackId = fresh.StackId,
+                CurrentStepId = stepId,
+                PendingJobId = pending,
+            };
+            return Replace(state, forkedThread, log) with { Forked = new ImageThreadFork(frozen, fresh, keptFrom, keptTo) };
+        });
+
+    // Откат: сделать шаг нити текущим (null — вернуться к исходнику). Стопки не трогает — форк
+    // случится на следующем шаге, если откатились не на последний
+    public ImageThreadWrite Rollback(string ownerId, string sessionId, string threadId, string? stepId, long revision) =>
+        Mutate(ownerId, sessionId, threadId, revision, (state, thread) =>
+            stepId is not null && !thread.Owns(stepId)
+                ? new ImageThreadWrite(ImageThreadWriteStatus.StepNotFound, state)
+                : Replace(state, thread with { CurrentStepId = stepId }));
+
+    // «Не брать»: варианты задачи больше не ждут выбора. Задача уже не та — ничего не меняет
+    public ImageThreadWrite Dismiss(string ownerId, string sessionId, string threadId, string jobId, long revision) =>
+        Mutate(ownerId, sessionId, threadId, revision, (state, thread) =>
+            Replace(state, thread with
+            {
+                PendingJobId = thread.PendingJobId == jobId ? null : thread.PendingJobId,
+                InterruptedJobId = thread.InterruptedJobId == jobId ? null : thread.InterruptedJobId,
+            }));
+
+    public ImageThreadWrite SetSettings(string ownerId, string sessionId, string threadId, ImageThreadSettings settings,
+        long revision) =>
+        Mutate(ownerId, sessionId, threadId, revision, (state, thread) => Replace(state, thread with { Settings = settings }));
+
+    // Задача запущена по нити — её варианты ждут выбора (прежняя ожидавшая задача вытесняется)
+    public ImageThreadWrite SetPending(string ownerId, string sessionId, string threadId, string jobId,
+        ImageThreadEvent? log = null) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+            Replace(state, thread with { PendingJobId = jobId, InterruptedJobId = null }, log));
+
+    // «Продолжить от версии»: версия становится текущей — от неё пойдёт следующая правка. Ничего
+    // не удаляет. stepId — ещё и её текущий шаг (шаг этой версии); focus — заодно взять нить в
+    // работу. revision = null — запись агента или сервера без сверки
+    public ImageThreadWrite SetCurrentVersion(string ownerId, string sessionId, string threadId, string versionId,
+        string? stepId, long? revision, bool focus = false) =>
+        Mutate(ownerId, sessionId, threadId, revision, (state, thread) =>
+        {
+            if (thread.Version(versionId) is not { } version)
+                return new ImageThreadWrite(ImageThreadWriteStatus.VersionNotFound, state);
+            if (stepId is not null && !version.Steps.Contains(stepId))
+                return new ImageThreadWrite(ImageThreadWriteStatus.StepNotFound, state);
+            var moved = stepId is null ? version : version with { CurrentStepId = stepId };
+            var written = Replace(state, thread with
+            {
+                Versions = WithVersion(thread, moved),
+                CurrentVersionId = version.Id,
+            });
+            return focus ? written with { State = written.State with { Focus = threadId } } : written;
+        });
+
+    // Правка без ИИ — шаг текущей версии, новой версии не заводит. Шаг уже в версии — только
+    // становится её текущим шагом
+    public ImageThreadWrite AddVersionStep(string ownerId, string sessionId, string threadId, string stepId, long revision) =>
+        Mutate(ownerId, sessionId, threadId, revision, (state, thread) =>
+        {
+            var version = thread.CurrentVersion ?? thread.Version(ImageThreadVersion.OriginId)!;
+            var grown = version with
+            {
+                Steps = version.Steps.Contains(stepId) ? version.Steps : [.. version.Steps, stepId],
+                CurrentStepId = stepId,
+            };
+            return Replace(state, thread with { Versions = WithVersion(thread, grown), CurrentVersionId = grown.Id });
+        });
+
+    // Запуск ИИ в нить: его версия-основа становится текущей (запускали от неё), пометка прошлой
+    // потерянной задачи снимается. Повтор с тем же jobId ничего не дописывает
+    public ImageThreadWrite AddLaunch(string ownerId, string sessionId, string threadId, ImageThreadLaunch launch,
+        ImageThreadEvent? log = null) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+        {
+            if (thread.Launches.Any(l => l.JobId == launch.JobId)) return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
+            return Replace(state, thread with
+            {
+                Launches = [.. thread.Launches, launch],
+                CurrentVersionId = thread.Version(launch.BaseVersionId)?.Id ?? thread.CurrentVersionId,
+                InterruptedJobId = null,
+            }, log);
+        });
+
+    // Готовые по ходу варианты идущего запуска: версии добавляются, статус запуска НЕ меняется — его
+    // меняет только FinishLaunch (иначе финал не нашёл бы запуск Running и потерял бы хвост).
+    // Журнал не пишется: строка одна на весь запуск, в финале
+    public ImageThreadWrite AddLaunchVersions(string ownerId, string sessionId, string threadId, string jobId,
+        IReadOnlyList<(int Variant, string StepId)> variants) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+        {
+            if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
+            var (after, added) = WithLaunchVersions(thread, launch, variants);
+            return added.Count == 0
+                ? new ImageThreadWrite(ImageThreadWriteStatus.Ok, state)
+                : Replace(state, after) with { NewVersions = added };
+        });
+
+    // Запуск кончился: status — ImageThreadLaunchStatus.*, variants — (номер варианта, шаг с его
+    // байтами) по порядку. Каждый вариант — новая версия внизу с основой запуска; вариант, уже
+    // ставший версией по ходу (AddLaunchVersions), не дублируется. Текущей становится первая новая
+    // версия, если человек не сменил текущую, пока шла генерация. Запуск уже не идёт (повтор, потерян
+    // при перезапуске) — ничего не меняет. log получает ВСЕ версии запуска, а не только прирост
+    public ImageThreadWrite FinishLaunch(string ownerId, string sessionId, string threadId, string jobId, string status,
+        IReadOnlyList<(int Variant, string StepId)> variants,
+        Func<ImageThread, IReadOnlyList<ImageThreadVersion>, ImageThreadEvent?>? log = null) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+        {
+            if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
+
+            var (grown, added) = WithLaunchVersions(thread, launch, variants);
+            var after = grown with
+            {
+                Launches = [.. grown.Launches.Select(l => l.JobId == jobId ? l with { Status = status } : l)],
+            };
+            List<ImageThreadVersion> all = [.. after.Versions.Where(v => v.JobId == jobId)];
+            return Replace(state, after, log?.Invoke(after, all)) with { NewVersions = added };
+        });
+
+    // Версии вариантов запуска внизу нити; пара (JobId, Variant), уже ставшая версией, пропускается.
+    // Текущая сдвигается на первую новую, только пока текущей остаётся основа запуска
+    private (ImageThread After, List<ImageThreadVersion> Added) WithLaunchVersions(ImageThread thread,
+        ImageThreadLaunch launch, IReadOnlyList<(int Variant, string StepId)> variants)
+    {
+        var number = thread.Versions.Max(v => v.Number) + 1;
+        var now = Now();
+        List<ImageThreadVersion> added = [.. variants
+            .Where(v => !thread.Versions.Any(x => x.JobId == launch.JobId && x.Variant == v.Variant))
+            .Select((v, i) => new ImageThreadVersion(NewId(), number + i, launch.JobId,
+                v.Variant, launch.BaseVersionId, launch.BaseStepId, [v.StepId], v.StepId, now))];
+        var moveCurrent = added.Count > 0 && thread.CurrentVersionId == launch.BaseVersionId;
+        return (thread with
+        {
+            Versions = [.. thread.Versions, .. added],
+            CurrentVersionId = moveCurrent ? added[0].Id : thread.CurrentVersionId,
+        }, added);
+    }
+
+    // Задачи, которых нет в живом реестре (isAlive = false), снимаются с нитей чата: их оборвал
+    // перезапуск сервера, вариантов не будет. Сверка идёт под замком хранилища, поэтому запуск,
+    // записавший PendingJobId или запуск версий, уже виден реестру. null — снимать нечего
+    public ImageThreadsState? DropDeadPending(string ownerId, string sessionId, Func<string, bool> isAlive,
+        Func<ImageThread, string, ImageThreadEvent> log)
+    {
+        lock (_gate)
+        {
+            var current = Read(ownerId, sessionId);
+            var events = current.Events.ToList();
+            var changed = false;
+            var threads = current.Threads.Select(t =>
+            {
+                var dead = t.Launches.Where(l => l.Status == ImageThreadLaunchStatus.Running && !isAlive(l.JobId)).ToList();
+                foreach (var launch in dead) events.Add(log(t, launch.JobId));
+                if (dead.Count > 0)
+                {
+                    changed = true;
+                    t = t with
+                    {
+                        Launches = [.. t.Launches.Select(l => dead.Contains(l) ? l with { Status = ImageThreadLaunchStatus.Interrupted } : l)],
+                    };
+                }
+                if (t.PendingJobId is not { } jobId || isAlive(jobId)) return t;
+                changed = true;
+                events.Add(log(t, jobId));
+                return t with { PendingJobId = null, InterruptedJobId = jobId };
+            }).ToList();
+            if (!changed) return null;
+            var next = current with
+            {
+                Threads = threads,
+                Events = [.. events.TakeLast(MaxEvents)],
+                Revision = current.Revision + 1,
+            };
+            Save(ownerId, sessionId, next);
+            return next;
+        }
+    }
+
+    // Все чаты с нитями: пары (владелец, сессия) по файлам хранилища
+    public IReadOnlyList<(string OwnerId, string SessionId)> Chats()
+    {
+        lock (_gate)
+        {
+            if (!Directory.Exists(Root)) return [];
+            return [.. Directory.EnumerateDirectories(Root).SelectMany(dir => Directory.EnumerateFiles(dir, "*.json")
+                .Select(file => (Path.GetFileName(dir), Path.GetFileNameWithoutExtension(file))))];
+        }
+    }
+
+    // Человек сохранил картинку нити в проект: нить идёт за новым файлом, прежний уходит в
+    // Lineage; у черновика файл появляется впервые, папка черновика больше не нужна
+    public ImageThreadWrite MoveToFile(string ownerId, string sessionId, string threadId, string path,
+        ImageThreadEvent? log = null) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) => Replace(state, thread with
+        {
+            File = path,
+            DraftFolder = null,
+            Lineage = thread.File is { } old && old != path ? [.. thread.Lineage, old] : thread.Lineage,
+        }, log));
+
+    // Файл переименовали через файловый API: пути нитей чата переписываются следом. false —
+    // ни один путь не поменялся (ничего не записано)
+    public bool RewritePaths(string ownerId, string sessionId, Func<string, string> move)
+    {
+        lock (_gate)
+        {
+            var current = Read(ownerId, sessionId);
+            var changed = false;
+            var threads = current.Threads.Select(t =>
+            {
+                var file = t.File is null ? null : move(t.File);
+                var lineage = t.Lineage.Select(move).ToList();
+                if (file == t.File && lineage.SequenceEqual(t.Lineage)) return t;
+                changed = true;
+                return t with { File = file, Lineage = lineage };
+            }).ToList();
+            if (!changed) return false;
+            Save(ownerId, sessionId, current with { Threads = threads, Revision = current.Revision + 1 });
+            return true;
+        }
+    }
+
+    // Состояние для блока хода и записи журнала, ещё не показанные ходу; курсор сдвигается.
+    // Ревизию не трогает: сборка хода — не правка состояния
+    public (ImageThreadsState State, IReadOnlyList<ImageThreadEvent> Fresh) TakeForTurn(string ownerId, string sessionId)
+    {
+        lock (_gate)
+        {
+            var current = Read(ownerId, sessionId);
+            var cursor = current.TurnCursor;
+            var fresh = current.Events.Where(e => cursor is null || e.At > cursor).ToList();
+            if (fresh.Count > 0)
+                Save(ownerId, sessionId, current with { TurnCursor = fresh.Max(e => e.At) });
+            return (current, fresh);
+        }
+    }
+
+    // Все шаги, на которые ссылаются нити владельца: их не трогает чистка рабочей папки
+    public IReadOnlySet<string> ReferencedSteps(string ownerId)
+    {
+        var steps = new HashSet<string>(StringComparer.Ordinal);
+        lock (_gate)
+        {
+            var dir = Path.Combine(Root, Safe(ownerId));
+            if (!Directory.Exists(dir)) return steps;
+            foreach (var file in Directory.EnumerateFiles(dir, "*.json"))
+            {
+                var state = ReadFile(file);
+                foreach (var thread in state.Threads)
+                {
+                    foreach (var stack in thread.Stacks) steps.UnionWith(stack.Steps);
+                    if (thread.CurrentStepId is { } current) steps.Add(current);
+                    foreach (var version in thread.Versions)
+                    {
+                        steps.UnionWith(version.Steps);
+                        if (version.BaseStepId is { } based) steps.Add(based);
+                    }
+                    foreach (var launch in thread.Launches)
+                        if (launch.BaseStepId is { } based) steps.Add(based);
+                }
+            }
+        }
+        return steps;
+    }
+
+    // Чат удалён — нити уходят вместе с ним (подписчик session/deleted)
+    public void Delete(string ownerId, string sessionId)
+    {
+        lock (_gate)
+        {
+            var path = StatePath(ownerId, sessionId);
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    // Ветка чата получает копию нитей источника с теми же threadId и stackId: якоря в
+    // скопированном history.json ветки продолжают разрешаться. false — у источника нитей нет
+    public bool Copy(string ownerId, string fromSessionId, string toSessionId)
+    {
+        lock (_gate)
+        {
+            var from = StatePath(ownerId, fromSessionId);
+            if (!File.Exists(from)) return false;
+            var to = StatePath(ownerId, toSessionId);
+            Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+            File.Copy(from, to, overwrite: true);
+            return true;
+        }
+    }
+
+    public string StatePath(string ownerId, string sessionId) =>
+        Path.Combine(Root, Safe(ownerId), Safe(sessionId) + ".json");
+
+    // Правка одной нити: revision = null — запись сервера без сверки. Нить не найдена — отказ
+    // без записи; результат Ok с изменённым состоянием сохраняется с новой ревизией
+    private ImageThreadWrite Mutate(string ownerId, string sessionId, string threadId, long? revision,
+        Func<ImageThreadsState, ImageThread, ImageThreadWrite> change)
+    {
+        lock (_gate)
+        {
+            var current = Read(ownerId, sessionId);
+            if (revision is { } r && r != current.Revision)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Conflict, current);
+            if (current.Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
+                return new ImageThreadWrite(ImageThreadWriteStatus.ThreadNotFound, current);
+
+            var written = change(current, thread);
+            if (written.Status != ImageThreadWriteStatus.Ok || written.State == current)
+                return written with { State = current, Thread = written.Status == ImageThreadWriteStatus.Ok ? thread : null };
+
+            var next = written.State with { Revision = current.Revision + 1 };
+            Save(ownerId, sessionId, next);
+            return written with { State = next, Thread = next.Threads.FirstOrDefault(t => t.Id == threadId) };
+        }
+    }
+
+    // Нить на своём месте в списке плюс запись журнала, если есть
+    private ImageThreadWrite Replace(ImageThreadsState state, ImageThread thread, ImageThreadEvent? log = null)
+    {
+        var old = state.Threads.First(t => t.Id == thread.Id);
+        if (old.Equals(thread) && log is null) return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
+        var next = state with { Threads = [.. state.Threads.Select(t => t.Id == thread.Id ? thread : t)] };
+        if (log is not null) next = next with { Events = [.. next.Events.Append(log).TakeLast(MaxEvents)] };
+        return new ImageThreadWrite(ImageThreadWriteStatus.Ok, next);
+    }
+
+    // Шаги от первого до точки отката включительно — по стопке, где она лежит (текущая первой)
+    private static IReadOnlyList<string> Prefix(ImageThread thread, string? at)
+    {
+        if (at is null) return [];
+        var stack = new[] { thread.CurrentStack }.Concat(thread.Stacks)
+            .FirstOrDefault(s => s is not null && s.Steps.Contains(at));
+        return stack is null ? [] : [.. stack.Steps.Take(IndexOf(stack.Steps, at) + 1)];
+    }
+
+    private static int IndexOf(IReadOnlyList<string> steps, string id)
+    {
+        for (var i = 0; i < steps.Count; i++)
+            if (steps[i] == id) return i;
+        return -1;
+    }
+
+    private static IReadOnlyList<ImageThreadVersion> WithVersion(ImageThread thread, ImageThreadVersion version) =>
+        [.. thread.Versions.Select(v => v.Id == version.Id ? version : v)];
+
+    // Новая нить стопок не заводит: только исходник, он же в работе
+    private ImageThread NewThread(string? file, string? draftFolder, ImageThreadSettings? settings = null)
+    {
+        var now = Now();
+        return new ImageThread(NewId(), file, [], draftFolder, [], null, settings, null, now)
+        {
+            Versions = [ImageThreadVersion.Origin(now)],
+            CurrentVersionId = ImageThreadVersion.OriginId,
+        };
+    }
+
+    private ImageThreadsState Read(string ownerId, string sessionId) => ReadFile(StatePath(ownerId, sessionId));
+
+    private static ImageThreadsState ReadFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path) && JsonSerializer.Deserialize<ImageThreadsState>(File.ReadAllText(path), Json) is { } state)
+                return state with
+                {
+                    Threads = [.. (state.Threads ?? []).Select(Normalize)],
+                    Events = state.Events ?? [],
+                };
+        }
+        catch (Exception ex) when (ex is IOException or JsonException) { }
+        return ImageThreadsState.Empty;
+    }
+
+    // Миграция на чтении: у нити до 27.09 версий нет — ей достаётся исходник в работе, чья картинка
+    // — текущий шаг стопки (ImageThread.ImageStepOf). Стопки остаются как были: их якоря в ленте
+    // продолжают разрешаться, а файл перепишется в новом виде при следующей записи
+    private static ImageThread Normalize(ImageThread t)
+    {
+        var versions = (t.Versions ?? []).Select(v => v with { Steps = v.Steps ?? [] }).ToList();
+        if (versions.All(v => v.Id != ImageThreadVersion.OriginId))
+            versions.Insert(0, ImageThreadVersion.Origin(t.CreatedAt));
+        return t with
+        {
+            Lineage = t.Lineage ?? [],
+            Stacks = [.. (t.Stacks ?? []).Select(s => s with { Steps = s.Steps ?? [] })],
+            Versions = versions,
+            CurrentVersionId = versions.Any(v => v.Id == t.CurrentVersionId) ? t.CurrentVersionId : ImageThreadVersion.OriginId,
+            Launches = t.Launches ?? [],
+        };
+    }
+
+    // Через временный файл: оборванная запись не оставит битый JSON
+    private void Save(string ownerId, string sessionId, ImageThreadsState state)
+    {
+        var path = StatePath(ownerId, sessionId);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(state, Json));
+        File.Move(tmp, path, overwrite: true);
+    }
+
+    private static string NewId() => Guid.NewGuid().ToString("N");
+
+    // id владельца и сессии — из claim и маршрута; маршрут приходит снаружи, отсюда белый список
+    private static string Safe(string segment)
+    {
+        if (string.IsNullOrWhiteSpace(segment) || segment.Contains("..")
+            || segment.IndexOfAny(['/', '\\', ':']) >= 0 || segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            throw new ArgumentException("Недопустимый идентификатор", nameof(segment));
+        return segment;
+    }
+}

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -50,6 +51,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         McpEndpoints.PersonasName, McpEndpoints.NotificationsName, McpEndpoints.WatchName,
         McpEndpoints.WebSearchName, McpEndpoints.CodeGraphName, McpEndpoints.DifyName,
         McpEndpoints.HiggsfieldName, McpEndpoints.WidgetsName, McpEndpoints.WorkspaceName,
+        McpEndpoints.LocalMediaName,
     };
 
     // Живые исполнения по «владелец/ход»: Kill обязан найти ход, даже если его зовут
@@ -62,9 +64,10 @@ public sealed class RemoteProcessRunner : IProcessLauncher
     private readonly string _deviceId;
     private readonly string _relayScript;
     private readonly string _nodePath;
+    private readonly IHumanTurnStop? _humanStop;
 
     public RemoteProcessRunner(IDeviceExecChannel channel, IDeviceTurnGateway gateway, string ownerId, string deviceId,
-        string? relayScriptPath = null, string? nodePath = null)
+        string? relayScriptPath = null, string? nodePath = null, IHumanTurnStop? humanStop = null)
     {
         _channel = channel;
         _gateway = gateway;
@@ -72,6 +75,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         _deviceId = deviceId;
         _relayScript = relayScriptPath ?? Path.Combine(AppContext.BaseDirectory, "exec-relay.mjs");
         _nodePath = nodePath ?? ResolveNode();
+        _humanStop = humanStop;
     }
 
     public string DeviceId => _deviceId;
@@ -106,9 +110,13 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         var spawn = BuildSpawn(spec);
         // Отказ шлюза — DeviceExecRefusedException с его текстом, до канала и ретранслятора
         var gateway = StartGatewayTurn(spec);
+        // Ход с маркером рук: донесения агента о руках принимаются только по нему (ADR-016 §7).
+        // Регистрация — ДО отправки spec: «active» агент шлёт раньше, чем мы дождёмся вердикта
+        var hands = HasHandsMarker(spawn);
         IDeviceExecStream? stream = null;
         try
         {
+            if (hands) DeviceHandsTurns.Register(_ownerId, _deviceId, turnId, spec.SessionId!);
             var control = DeviceExecJson.Serialize(
                 new DeviceExecControl(DeviceExecControlOps.Spawn, turnId, spawn, gateway));
             if (control.Length > DeviceExecProtocol.MaxPayloadBytes)
@@ -118,11 +126,16 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             // Отказ неготового устройства — DeviceExecRefusedException с причиной, до старта ретранслятора
             stream = _channel.OpenAsync(_ownerId, _deviceId).GetAwaiter().GetResult();
             stream.SendAsync(DeviceExecFrameChannel.Control, control).AsTask().GetAwaiter().GetResult();
-            var exec = RemoteExec.Launch(ExecKey(turnId), turnId, stream, spec, _nodePath, _relayScript);
+            // Отказ агента по кадру spawn (папка вне разрешённых корней, нет копии CLI) — тоже
+            // DeviceExecRefusedException с его причиной: иначе человек увидит «процесс упал»
+            stream = AwaitAgentVerdictAsync(stream).GetAwaiter().GetResult();
+            var exec = RemoteExec.Launch(ExecKey(turnId), turnId, stream, spec, _nodePath, _relayScript, _humanStop);
             Execs[exec.Key] = exec;
             exec.Run(() =>
             {
                 Execs.TryRemove(new KeyValuePair<string, RemoteExec>(exec.Key, exec));
+                // Не Remove: итог о руках агент шлёт уже после кадра Exit
+                if (hands) DeviceHandsTurns.End(_ownerId, _deviceId, turnId);
                 _gateway.EndTurn(gateway.TurnId);
             });
             if (spec.Track) ProcessRegistry.Register(exec.Relay);
@@ -130,10 +143,65 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         }
         catch
         {
+            if (hands) DeviceHandsTurns.Remove(_ownerId, _deviceId, turnId);
             _gateway.EndTurn(gateway.TurnId);
             if (stream is not null) _ = stream.DisposeAsync().AsTask();
             throw;
         }
+    }
+
+    private static readonly TimeSpan VerdictTimeout = TimeSpan.FromSeconds(15);
+
+    // Первый кадр агента после spawn — Info (ход запущен) либо stderr с Exit и Error (отказ).
+    // Прочитанное до вердикта не теряется: его первым отдаёт обёртка потока. Нет ответа за
+    // потолок — решает дальше ретранслятор, как до этой проверки.
+    private static async Task<IDeviceExecStream> AwaitAgentVerdictAsync(IDeviceExecStream stream)
+    {
+        var head = new List<DeviceExecFrame>();
+        using var cts = new CancellationTokenSource(VerdictTimeout);
+        try
+        {
+            await foreach (var frame in stream.ReadAllAsync(cts.Token))
+            {
+                head.Add(frame);
+                if (frame.Channel == DeviceExecFrameChannel.Stderr) continue;
+                if (frame.Channel == DeviceExecFrameChannel.Exit && ExitError(frame) is { } exit)
+                    throw new DeviceExecRefusedException(
+                        exit.Refusal == HandsEndReason.Busy ? DeviceExecRefusal.HandsBusy : DeviceExecRefusal.AgentRefused,
+                        exit.Error!);
+                break;
+            }
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        return head.Count == 0 ? stream : new PrefetchedStream(stream, head);
+    }
+
+    private static DeviceExecExit? ExitError(DeviceExecFrame frame)
+    {
+        try
+        {
+            var exit = DeviceExecJson.Deserialize<DeviceExecExit>(frame.Payload.Span);
+            return string.IsNullOrWhiteSpace(exit?.Error) ? null : exit;
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    private sealed class PrefetchedStream(IDeviceExecStream inner, IReadOnlyList<DeviceExecFrame> head) : IDeviceExecStream
+    {
+        private IReadOnlyList<DeviceExecFrame>? _head = head;
+
+        public string ExecId => inner.ExecId;
+
+        public ValueTask SendAsync(DeviceExecFrameChannel channel, ReadOnlyMemory<byte> payload, CancellationToken ct = default) =>
+            inner.SendAsync(channel, payload, ct);
+
+        public async IAsyncEnumerable<DeviceExecFrame> ReadAllAsync([EnumeratorCancellation] CancellationToken ct = default)
+        {
+            foreach (var frame in Interlocked.Exchange(ref _head, null) ?? []) yield return frame;
+            await foreach (var frame in inner.ReadAllAsync(ct)) yield return frame;
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     // Маршрут и токен хода — до запуска на устройстве. Модель — подсказка из --model: провайдера
@@ -185,6 +253,10 @@ public sealed class RemoteProcessRunner : IProcessLauncher
 
     internal static string NewTurnId() => Guid.NewGuid().ToString("N")[..12];
 
+    // Маркер рук переживает санитизацию только в каноническом узле — его и ищем
+    internal static bool HasHandsMarker(DeviceExecSpawn spawn) =>
+        spawn.Files.Any(f => f.Content.Contains(DeviceExecPlaceholders.Hands, StringComparison.Ordinal));
+
     private string ExecKey(string turnId) => _ownerId + "/" + turnId;
 
     // ---------- сборка spawn по allow-list ----------
@@ -234,7 +306,8 @@ public sealed class RemoteProcessRunner : IProcessLauncher
     /// <summary>
     /// MCP-конфиг для устройства: только http-серверы нашего бэкенда, адрес
     /// <c>{сайдкар}/mcp/{имя}/{хвост}</c>, никаких заголовков и env. Авторизацию и
-    /// <c>X-Caller-Session-Id</c> ставит шлюз по привязке токена хода.
+    /// <c>X-Caller-Session-Id</c> ставит шлюз по привязке токена хода. Плюс маркер рук
+    /// <see cref="DeviceExecPlaceholders.Hands"/> — без команды и путей.
     /// </summary>
     internal static string SanitizeMcpConfig(string json)
     {
@@ -244,6 +317,21 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             foreach (var (name, node) in src)
             {
                 if (node is not JsonObject server) continue;
+                // Маркер рук (ADR-016 §7) — единственный не-http узел, который едет: без
+                // команды, путей и env, пересобранный из двух известных полей. Узел целиком
+                // заменяет агент на свой мост; любой другой stdio-узел выбрасывается ниже.
+                if (name == DeviceExecPlaceholders.HandsServerName)
+                {
+                    if ((server["type"] as JsonValue)?.TryGetValue<string>(out var ht) == true
+                        && ht == DeviceExecPlaceholders.Hands)
+                        servers[name] = new JsonObject
+                        {
+                            ["type"] = DeviceExecPlaceholders.Hands,
+                            [DeviceExecPlaceholders.HandsVisionField] =
+                                (server[DeviceExecPlaceholders.HandsVisionField] as JsonValue)?.TryGetValue<bool>(out var v) == true && v,
+                        };
+                    continue;
+                }
                 var type = (server["type"] as JsonValue)?.TryGetValue<string>(out var t) == true ? t : null;
                 var url = (server["url"] as JsonValue)?.TryGetValue<string>(out var u) == true ? u : null;
                 if (type is not ("http" or "sse") || url is null) continue;
@@ -285,6 +373,8 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         private readonly IDeviceExecStream _stream;
         private readonly TcpListener _listener;
         private readonly byte[] _relayKey;
+        private readonly string? _sessionId;
+        private readonly IHumanTurnStop? _humanStop;
         private int _killSent;
         private volatile bool _exited;
 
@@ -292,8 +382,11 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         public string TurnId { get; }
         public Process Relay { get; }
 
-        private RemoteExec(string key, string turnId, IDeviceExecStream stream, TcpListener listener, byte[] relayKey, Process relay)
+        private RemoteExec(string key, string turnId, IDeviceExecStream stream, TcpListener listener, byte[] relayKey, Process relay,
+            string? sessionId, IHumanTurnStop? humanStop)
         {
+            _sessionId = sessionId;
+            _humanStop = humanStop;
             Key = key;
             TurnId = turnId;
             _stream = stream;
@@ -303,7 +396,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         }
 
         public static RemoteExec Launch(string key, string turnId, IDeviceExecStream stream, ProcessSpec spec,
-            string nodePath, string relayScript)
+            string nodePath, string relayScript, IHumanTurnStop? humanStop)
         {
             if (!File.Exists(relayScript))
                 throw new InvalidOperationException($"Не найден ретранслятор удалённого исполнения: {relayScript}");
@@ -343,7 +436,8 @@ public sealed class RemoteProcessRunner : IProcessLauncher
                 var relay = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents };
                 if (!relay.Start())
                     throw new InvalidOperationException("Не удалось запустить ретранслятор удалённого исполнения");
-                return new RemoteExec(key, turnId, stream, listener, Encoding.ASCII.GetBytes(relayKey), relay);
+                return new RemoteExec(key, turnId, stream, listener, Encoding.ASCII.GetBytes(relayKey), relay,
+                    spec.SessionId, humanStop);
             }
             catch
             {
@@ -442,6 +536,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
                             break;
                         case DeviceExecFrameChannel.Exit:
                             _exited = true;
+                            NoteHumanStop(frame);
                             await net.WriteAsync(DeviceExecFrames.Encode(frame.Channel, 0, frame.Payload.Span), ct);
                             return;
                     }
@@ -454,6 +549,24 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             {
                 // Конец вывода: ретранслятор допишет своё и выйдет с полученным кодом
                 try { client.Client.Shutdown(SocketShutdown.Send); } catch { }
+            }
+        }
+
+        // «Стоп» человека на устройстве: прерываем ход тем же путём, что веб-«Стоп», и строго
+        // ДО того, как код выхода уйдёт ретранслятору, — иначе ClaudeSession увидит смерть CLI
+        // раньше прерывания, и фолбэк примет её за отказ провайдера (обрыв → Unreachable →
+        // следующая модель цепочки). Чат берём из spec сервера, а не из кадра устройства.
+        private void NoteHumanStop(DeviceExecFrame frame)
+        {
+            if (_humanStop is null || string.IsNullOrEmpty(_sessionId)) return;
+            try
+            {
+                var exit = DeviceExecJson.Deserialize<DeviceExecExit>(frame.Payload.Span);
+                if (exit?.StoppedBy == HandsEndReason.StoppedFromTray) _humanStop.StoppedByHuman(_sessionId);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine($"[RemoteProcessRunner] Остановка хода {TurnId} человеком не доставлена: {e.Message}");
             }
         }
 

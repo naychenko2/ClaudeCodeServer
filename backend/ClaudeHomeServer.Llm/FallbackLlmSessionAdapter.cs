@@ -492,7 +492,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // Цепочка хода (ADR-007 §4): конкретные модели пресета, первый = основной, остальные
         // = план фолбэка. Есть цепочка (Count > 1) — фолбэк идёт по её шагам; нет (одноэлементная
         // или пустая) — после пула честная ошибка, автоподбора больше нет. Вычисляем один раз за ход.
-        var chain = TrimChainForDesktop(_effectiveChain?.Invoke() ?? Array.Empty<string>());
+        var chain = _effectiveChain?.Invoke() ?? Array.Empty<string>();
         var chainIndex = 0;
         // Отладка «почему выбралась эта модель»: построенная цепочка хода одной строкой.
         LogDebug($"Цепочка хода ({Info.Id}): [{string.Join(", ", chain)}]");
@@ -613,6 +613,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         currentModel = stepModel;
                         currentKey = stepKey;
                         Info.Model = currentModel;
+                        Info.FallbackSubstitution = true;
                         Info.Provider = currentKey;
                         _profileRoot = stepRoot;
                         appliedModel = currentModel;
@@ -693,6 +694,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 currentModel = winModel;
                 currentKey = winKey!;
                 Info.Model = currentModel;
+                Info.FallbackSubstitution = true;
                 Info.Provider = currentKey;
                 _profileRoot = winRoot;
                 appliedModel = currentModel;
@@ -1072,6 +1074,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             //     сменила подписку — именно там лежит свежий ответ).
             var modelRestored = false;
             var providerRestored = false;
+            // Признак подмены живёт только на время хода — снимаем безусловно, даже если CAS
+            // модели ниже не сработает (человек сменил модель посреди хода — это уже его выбор)
+            Info.FallbackSubstitution = false;
             if (Info.Model == appliedModel) { Info.Model = origModel; modelRestored = true; }
             if (anyProviderSwitch)
             {
@@ -1411,27 +1416,6 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private bool IsExternalProvider(string? key) =>
         _providers is not null && _providers.GetByKey(key ?? "") is not null;
 
-    // Десктопный чат вне межпровайдерного фолбэка (ADR-008 о десктопном агенте, «Последствия»).
-    // Шаг цепочки к стороннему провайдеру — это не «другая модель», а копия транскрипта в его
-    // профиль (TryMigrateTranscript) плюс запуск CLI с чужим ANTHROPIC_BASE_URL: кадры рабочего
-    // стола, осевшие в .jsonl, штатно уехали бы вендору. Поэтому цепочка режется до пула Claude.
-    // Первый шаг НЕ трогаем: это пара, на которой чат уже живёт (там его транскрипт), а не
-    // миграция — обрезать её значило бы не выпустить ход вовсе. Уровень 1 (ротация подписок
-    // того же пула Claude) правилом не затронут: эндпоинт и владелец данных те же.
-    // Не десктопный чат — цепочка возвращается как есть, ссылка та же.
-    private IReadOnlyList<string> TrimChainForDesktop(IReadOnlyList<string> chain)
-    {
-        if (!Info.DesktopChat || chain.Count <= 1) return chain;
-        var kept = new List<string> { chain[0] };
-        for (var i = 1; i < chain.Count; i++)
-            if (!IsExternalProvider(ProviderKeyFor(chain[i]))) kept.Add(chain[i]);
-        if (kept.Count == chain.Count) return chain;
-        // Обрезка — не аномалия, но она объясняет «почему ход не ушёл на запасную модель»:
-        // без строки в логе исчерпание цепочки в десктопном чате неотличимо от поломки.
-        LogInfo($"Десктопный чат: цепочка обрезана до пула Claude ({chain.Count} → {kept.Count} шагов) — транскрипт с кадрами рабочего стола стороннему провайдеру не отдаём");
-        return kept;
-    }
-
     // Оценка размера контекста текущего хода. Составная (собирается фабрикой): живое значение
     // (ClaudeSession.LastContextTokens — usage последнего assistant-сообщения), а при его
     // отсутствии — фолбэк на историю чата (LastContextFromHistory, переживает рестарт). 0 —
@@ -1588,7 +1572,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // оверрайды подписки читаются из Info.Provider, модель — из Info.Model на каждый ход
     private void ApplyTarget(FallbackTarget next)
     {
-        if (next.IsProviderSwitch) Info.Model = next.Model;
+        // Признак подмены — вместе с моделью: по нему LightProfileFor включает облегчённый профиль
+        // локальной модели принудительно (модель сменили без ведома человека). Тихая ротация
+        // подписки модель не трогает и признак не ставит.
+        if (next.IsProviderSwitch) { Info.Model = next.Model; Info.FallbackSubstitution = true; }
         Info.Provider = next.Key;
         Info.UpdatedAt = DateTime.UtcNow;
         _profileRoot = next.ProfileRoot;

@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
+import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import type { Project } from '../types';
 import { canRunTurn } from '../lib/projectCapabilities';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, MessageSquare, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -16,7 +16,6 @@ import {
 import { useActionVisibility } from '../hooks/useActionVisibility';
 import { ComposerModelPicker } from './ComposerModelPicker';
 import { USAGE } from '../lib/models';
-import { ComposerEffortPicker } from './ComposerEffortPicker';
 import { TeamDrawer } from '../features/team/TeamDrawer';
 import {
   DEFAULT_TEAM_SETTINGS, buildTeamTurnText, teamMechanic,
@@ -34,7 +33,13 @@ import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
-import { IconButton, Modal, Notice } from './ui';
+import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
+import { plusButtonTitle, useStripShortcuts } from './chat/ComposerStripHost';
+import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
+import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
+import { getComposerStripsVersion, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
+import { modeDraftText, modeSubmitButton, nextComposerMode, nextModeDraft, nextPrefill, type ComposerModeSeen, type ModeDraftState, type PrefillState } from '../lib/composerModes';
+import { getGenDraftText, setGenDraftText } from '../lib/genDrafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -65,6 +70,8 @@ export interface ComposerProps {
   autoAllowTools?: string[];
   onRevokeAutoAllow?: (tool: string) => void | Promise<void>;
   attachments: string[];
+  // Чипы перед вложениями: снимок холста чата картинки (ADR-018 §3)
+  leadingChips?: ReactNode;
   onRemoveAttachment: (path: string) => void;
   // Вставка/перетаскивание любых файлов (скриншот, pdf, документ) — File-объекты
   // для загрузки и отправки. Что делать с картинками у модели без зрения — решает родитель
@@ -536,6 +543,7 @@ export function Composer({
   autoAllowTools,
   onRevokeAutoAllow,
   attachments,
+  leadingChips,
   onRemoveAttachment,
   onAttachFiles,
   isMobile,
@@ -595,6 +603,67 @@ export function Composer({
   useEffect(() => {
     setDraft(sessionId, text);
   }, [sessionId, text]);
+  // Режимы поля ввода от подсистем (слот composer-mode, например «Картинка»): текст режима
+  // уходит мимо агента через onSubmit вклада и хранится отдельно от черновика чата.
+  // Доступность режима зависит от состояния владельца; пересчитываемся по сигналу стора
+  // полос: владелец режима и полосы — одна подсистема, её выбор проходит через этот стор
+  useSyncExternalStore(subscribeComposerStrips, getComposerStripsVersion, getComposerStripsVersion);
+  const modeCtx: ComposerModeCtx = { projectId: project?.id ?? null, sessionId };
+  const slotModes = useSlot<ComposerModeCtx, ComposerModeApi>(SLOT_COMPOSER_MODE)
+    .filter(c => c.name && c.action && c.action.isAvailable(modeCtx));
+  const slotChips = useSlot<ComposerChipCtx>(SLOT_COMPOSER_CHIP);
+  // Ярлыки полос («Голос», «Музыка») превращают «＋» в меню; без них «＋» прикрепляет сразу
+  const stripShortcuts = useStripShortcuts(project?.id ?? null, sessionId);
+  const [plusMenu, setPlusMenu] = useState<DOMRect | null>(null);
+  // Меню с якорем само Esc не ловит — как у переключателя полос
+  useEffect(() => {
+    if (!plusMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlusMenu(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [plusMenu]);
+  const [modeId, setModeId] = useState<string | null>(null);
+  // Самовключение режима по поводу от владельца (черновик, «Редактировать»): считаем по
+  // состоянию, а не по клику — фокус картинки приходит и от агента, и после перезагрузки
+  const autoSeenRef = useRef<ComposerModeSeen>({});
+  const autoMode = nextComposerMode(slotModes, modeCtx, autoSeenRef.current, modeId);
+  useEffect(() => {
+    autoSeenRef.current = autoMode.seen;
+    if (autoMode.modeId !== modeId) setModeId(autoMode.modeId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- переключаемся только на новый ключ
+  }, [autoMode.key]);
+  // Режим пропал (условие стало ложным) — поле само возвращается в «Чат»
+  const activeMode = slotModes.find(c => c.name === modeId)?.action ?? null;
+  const [modeText, setModeText] = useState('');
+  useEffect(() => {
+    activeMode?.onTextChange?.(modeCtx, modeText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сообщаем только смену текста или режима
+  }, [modeText, modeId, sessionId]);
+  // Затравка поля режима (например, промпт последнего запуска картинки) — правила в
+  // nextPrefill. Считаем от значения поля этого рендера, а не в updater'е setModeText:
+  // updater с записью в ref StrictMode зовёт дважды
+  const modePrefill = activeMode?.prefill?.(modeCtx) ?? null;
+  const prefillKey = modePrefill ? `${modeId}:${modePrefill.key}` : null;
+  const prefillRef = useRef<PrefillState>({ key: null, auto: null });
+  // Черновик элемента (draftKey режима): сперва смена элемента, затем затравка — одним
+  // эффектом, чтобы затравка видела уже подменённое поле (nextModeDraft)
+  const draftKey = activeMode?.draftKey?.(modeCtx) ?? null;
+  const draftRef = useRef<ModeDraftState>({ key: null });
+  useEffect(() => {
+    const d = nextModeDraft(draftRef.current, draftKey, modeText, prefillRef.current.auto, getGenDraftText);
+    draftRef.current = d.state;
+    const r = nextPrefill(prefillRef.current, prefillKey ? { key: prefillKey, text: modePrefill!.text } : null, d.field);
+    prefillRef.current = r.state;
+    if (r.field !== modeText) setModeText(r.field);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- подставляем только на новый повод или элемент
+  }, [prefillKey, draftKey]);
+  // Набранное — черновиком своего элемента на каждой правке. Кадр смены элемента пропускаем:
+  // в поле ещё текст прежнего, его подменит эффект выше
+  const draftWriteKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (draftWriteKey.current !== draftKey) { draftWriteKey.current = draftKey; return; }
+    setGenDraftText(draftKey, modeDraftText(modeText, prefillRef.current.auto));
+  }, [modeText, draftKey]);
   // Преднастройка из раздела «Заметки»: «Спросить Claude про это» кладёт контекст
   // заметки в sessionStorage — забираем при появлении композера и по событию
   // (на случай, если чат уже открыт и композер смонтирован).
@@ -766,9 +835,8 @@ export function Composer({
     : 0;
   const layout = pickLayout(stripWidth, hasTP, hasKR, hasLoop, !!isMobile, leftBudget);
   const rightForm: StripForm = layout.rightForm;
-  // Подписи правой группы теряются по лестнице: усилие (с формы B), собеседник (с B2),
-  // модель (только в C). Усилие компактно начиная с B — на ступень раньше собеседника
-  const effortCompact = rightForm === 'B' || rightForm === 'B2' || rightForm === 'C';
+  // Подписи правой группы теряются по лестнице: уровень усилия в плашке модели (с формы B),
+  // собеседник (с B2), модель (только в C)
   const compactStrip = rightForm === 'C';
   const widePickers = rightForm === 'A-wide';
   const rightWidth = layout.rightWidth;
@@ -776,7 +844,7 @@ export function Composer({
   const autoChipVisible = layout.autoChipVisible;
   const loopInMenu = layout.loopInMenu;
   const krInMenu = layout.krInMenu;
-  // Модель и усилие получают maxTriggerWidth по форме правой группы (выводится из таблицы
+  // Плашка «модель · усилие» получает maxTriggerWidth = model + effort по форме (из таблицы
   // номиналов — STRIP_RIGHT_MAX, см. lib/composerStrip). B2/C-форма у собеседника — компактная,
   // companionLabel=null передаём чтобы CompanionSelector не пытался выставить maxWidth на
   // короткой форме (там собственный compactStyle)
@@ -876,7 +944,7 @@ export function Composer({
     setModeMenuBottom(r ? window.innerHeight - r.top + 6 : 80);
   });
 
-  const hasText = text.trim().length > 0;
+  const hasText = (activeMode ? modeText : text).trim().length > 0;
 
   // Обновление состояния autocomplete при каждом изменении текста
   const updateSkillDropdown = useCallback((newText: string, cursorPos: number) => {
@@ -963,19 +1031,32 @@ export function Composer({
     // Прямая DOM-мутация осознанно: высота поля не должна гонять ререндер на каждый ввод
     // eslint-disable-next-line react-hooks/immutability -- стиль DOM-узла из эффекта, не рендер-данные
     el.style.height = 'auto';
+    // Пустое поле не меряем: Chrome включает в scrollHeight перенесённый плейсхолдер, и в
+    // узком поле («Чат» на мобиле, длинное имя ассистента) пустое поле вставало на две-три
+    // строки. Высота 'auto' — это rows=1, дотянутая до minHeight режима
+    if (!el.value) return;
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, []);
 
   // isListening в зависимостях не для красоты: на время записи textarea размонтирована
   // (вместо неё полоса с волной), распознанные куски копятся в text вхолостую — ref пустой.
   // Возвращается поле уже НОВЫМ узлом, без inline-высоты прошлого, то есть в одну строку
-  // при большом тексте; text при этом не меняется, и по нему эффект не сработал бы
+  // при большом тексте; text при этом не меняется, и по нему эффект не сработал бы.
+  // Слушаем видимое значение поля, а не text: у режима подсистемы свой буфер modeText, и
+  // смена режима, prefill промпта и очистка после отправки меняют value без события ввода —
+  // иначе поле держало бы высоту прошлого буфера.
+  // Режим в зависимостях отдельно от значения: у режима подсистемы minHeight 78 и другая
+  // ширина поля, авторазмер пустого поля пишет inline-высоту 78px — при смене режима с
+  // одинаковыми буферами (оба пустые после отправки промпта) value не меняется, и «Чат»
+  // остался бы растянутым на три строки
+  const fieldValue = activeMode ? modeText : text;
+  const fieldModeId = activeMode ? modeId : null;
   useEffect(() => {
     autoResize();
-  }, [text, isListening, autoResize]);
+  }, [fieldValue, fieldModeId, isListening, autoResize]);
 
   // Голосовая диктовка: после коммита нового текста уводим textarea в конец.
-  // Эффект стоит ПОСЛЕ useEffect [text, autoResize] выше — React выполняет эффекты
+  // Эффект стоит ПОСЛЕ useEffect [fieldValue, autoResize] выше — React выполняет эффекты
   // одного рендера в порядке объявления, поэтому к моменту срабатывания этого autoResize
   // уже обновил высоту и scrollHeight соответствует новому содержимому. Сбрасываем флаг
   // сразу, чтобы повторный запуск эффекта (напр. при быстром апдейте text из иной ветки)
@@ -1008,6 +1089,19 @@ export function Composer({
     // ADR-016 §3.4: локальный проект с недоступной exec (устройство офлайн/нет
     // харнеса). Причину уже показал баннер над полем, здесь только гасим Enter
     if (execBlocked) return false;
+    // Режим подсистемы: текст — её, агенту ничего не уходит. Отказ вклада (исключение) —
+    // текст остаётся в поле
+    if (activeMode && overrideText === undefined) {
+      const mt = modeText.trim();
+      if (!mt) return false;
+      try {
+        await activeMode.onSubmit(modeCtx, mt);
+        setModeText('');
+        return true;
+      } catch {
+        return false;
+      }
+    }
     const t = (overrideText ?? text).trim();
     // Обычная отправка руками снимает пометку голосового хода: её текст человек писал сам,
     // и вернуть его в поле при прерывании — правильное поведение
@@ -1075,6 +1169,19 @@ export function Composer({
     if (overrideText === undefined) resetInput();
     return true;
   };
+
+  // Внешний запуск режима поля ввода (низ панели «Картинки», submitComposerMode): тот же
+  // путь, что Enter. Пустое поле или другой режим — включаем режим и ставим фокус в поле
+  const submitModeRef = useRef<(mode: string) => void>(() => {});
+  useLayoutEffect(() => {
+    submitModeRef.current = mode => {
+      if (!slotModes.some(c => c.name === mode)) return;
+      if (modeId === mode && modeText.trim()) { void handleSend(); return; }
+      setModeId(mode);
+      textareaRef.current?.focus();
+    };
+  });
+  useEffect(() => registerComposerSubmit(sessionId, m => submitModeRef.current(m)), [sessionId]);
 
   // Хвост выхода из разговора. ДВЕ разновидности — прерывание хода в них НЕ одно и то же:
   // полный exitTalk — «человек явно сказал прекрати» (кнопка, голосовое «стоп»): прерываем
@@ -1309,7 +1416,9 @@ export function Composer({
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс «скрыто» при приходе новой подсказки
   useEffect(() => { setSuggestionDismissed(false); }, [promptSuggestion]);
-  const suggestionVisible = !!promptSuggestion && text.trim() === '' && !suggestionDismissed && !isGenerating && !isListening;
+  // Подсказка — следующее сообщение агенту: в режиме подсистемы («Картинка») поле держит
+  // свой текст, и подсказка легла бы поверх промпта модели
+  const suggestionVisible = !!promptSuggestion && !activeMode && text.trim() === '' && !suggestionDismissed && !isGenerating && !isListening;
   const acceptSuggestion = useCallback(() => {
     if (!promptSuggestion) return;
     setText(promptSuggestion);
@@ -1368,11 +1477,17 @@ export function Composer({
     // talkActive/isListening: поле подменяется зонами разговора/записи — по
     // возврату textarea наблюдатель переподписывается на свежий узел
   }, [talkActive, isListening, tallInput, columnNeed]);
-  // Сброс защёлки: поле пустое — столбца у однострочного поля быть не должно
+  // Сброс защёлки: поле пустое — столбца у однострочного поля быть не должно. Смотрим на
+  // видимое значение поля, а не на text: высоту набирал и буфер режима (промпт картинки,
+  // в том числе подставленный prefill'ом), а при уходе из режима пустой text не меняется —
+  // столбец оставался у однострочного «Чата». Смена режима сбрасывает защёлку всегда:
+  // поле показывает другой буфер, и ResizeObserver перемерит его заново
+  const latchModeRef = useRef(fieldModeId);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс защёлки столбца при опустевшем поле
-    if (text === '') setTallInput(false);
-  }, [text]);
+    const modeChanged = latchModeRef.current !== fieldModeId;
+    latchModeRef.current = fieldModeId;
+    if (modeChanged || fieldValue === '') setTallInput(false);
+  }, [fieldValue, fieldModeId]);
   // Столбец только при живом textarea: в разговоре и записи поле низкое, кнопки — ряд
   const columnRight = tallInput && !talkActive && !isListening;
 
@@ -1380,7 +1495,7 @@ export function Composer({
   const containerStyle: React.CSSProperties = {
     position: 'relative',
     background: C.bgWhite,
-    border: `1px solid ${dragOver || hasText ? C.accent : C.border}`,
+    border: `1px solid ${dragOver || hasText || activeMode ? C.accent : C.border}`,
     borderRadius: R.xxl,
     padding: isMobile ? '8px 10px' : '7px 8px',
     // Подъём как у островов, но разлётом ВВЕРХ (SHADOW.lift): композер стоит на
@@ -1405,10 +1520,31 @@ export function Composer({
 
   // --- Контролы (переиспользуются в обеих раскладках) ---
 
+  const closePlus = () => setPlusMenu(null);
+  const plusItems = (
+    <>
+      <MenuItem icon={<Paperclip size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} isMobile={isMobile}
+        label="Прикрепить файл" onClick={() => { closePlus(); onAttach(); }} />
+      <MenuSep />
+      {stripShortcuts.map(sc => (
+        <MenuItem key={sc.key} icon={sc.icon} isMobile={isMobile}
+          label={
+            <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span>{sc.title}</span>
+              {sc.hint && <span style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 1 }}>{sc.hint}</span>}
+            </span>
+          }
+          onClick={() => { closePlus(); sc.onSelect(); }} />
+      ))}
+    </>
+  );
   const attachButton = (
     <button
-      onClick={onAttach}
-      title="Прикрепить файл"
+      onClick={stripShortcuts.length > 0
+        ? (e) => setPlusMenu((e.currentTarget as HTMLElement).getBoundingClientRect())
+        : onAttach}
+      title={plusButtonTitle(stripShortcuts)}
+      aria-haspopup={stripShortcuts.length > 0 ? 'menu' : undefined}
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
@@ -1418,6 +1554,10 @@ export function Composer({
       <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   );
+  // Меню «＋»: на десктопе карточка у кнопки, на телефоне шторка — как у переключателя полос
+  const plusMenuNode = plusMenu && (isMobile
+    ? <Modal title="Добавить" onClose={closePlus}><div style={{ display: 'flex', flexDirection: 'column' }}>{plusItems}</div></Modal>
+    : <Menu anchor={plusMenu} onClose={closePlus} minWidth={260} maxWidth={340} maxHeight={260}>{plusItems}</Menu>);
 
   const slashButton = skills.length > 0 ? (
     <button
@@ -1645,6 +1785,28 @@ export function Composer({
     </div>
   );
 
+  // Сегмент режимов поля: в «Чате» — слева от поля, в режиме подсистемы («Картинка») —
+  // в нижней строке действий: поле тогда на всю ширину, три строки как в прототипе полос
+  const modesSeg = slotModes.length > 0 && (
+        // Сегмент «Чат | …» слева поля. По макету (.mswitch) это радио-группа из
+        // двух кнопок — она появляется только при выбранной картинке, иначе первая
+        // кнопка «Чат» рисуется одна. Здесь slotModes.length > 0 уже отфильтровано
+        // isAvailable, поэтому «Картинка» в списке означает картинка выбрана — рисуем
+        // полный сегмент, иначе (например, другие подсистемы заведут свои режимы) —
+        // оставляем только кнопку «Чат», чтобы высота композера не менялась
+        <div data-composer-modes="" style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginRight: SP.xs }}>
+          <IconButton size="sm" active={!activeMode} title={`Чат — сообщение ${asstName}`} ariaLabel="Режим «Чат»"
+            onClick={() => setModeId(null)}>
+            <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </IconButton>
+          {slotModes.map(m => (
+            <IconButton key={m.name} size="sm" active={modeId === m.name} title={m.action!.title} ariaLabel={`Режим «${m.action!.title}»`}
+              onClick={() => { setModeId(m.name!); textareaRef.current?.focus(); }}>
+              {m.action!.icon}
+            </IconButton>
+          ))}
+        </div>
+      );
   const inputArea = talkActive ? loopArea : isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
@@ -1652,15 +1814,20 @@ export function Composer({
       <Waveform />
     </div>
   ) : (
-    // Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
-    // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
-    <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex' }}>
+    // Сегмент режимов — снаружи позиционированной обёртки: ghost-слой подсказки
+    // (left: 0) иначе ложился поверх иконок «Чат | Картинка»
+    <div style={{ flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
+    {!activeMode && modesSeg}
+    {/* Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
+        (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно) */}
+    <div data-composer-input="" style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
       <textarea
         autoComplete="off"
         ref={textareaRef}
         className="cc-composer-input"
-        value={text}
+        value={fieldValue}
         onChange={(e) => {
+          if (activeMode) { setModeText(e.target.value); return; }
           setText(e.target.value);
           updateSkillDropdown(e.target.value, e.target.selectionStart ?? e.target.value.length);
         }}
@@ -1668,18 +1835,19 @@ export function Composer({
         onInput={autoResize}
         onPaste={handlePaste}
         // Пока видна ghost-подсказка, обычный плейсхолдер прячем — тексты бы наложились
-        placeholder={suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : `Спросите ${asstName}…`}
+        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : `Спросите ${asstName}…`}
         rows={1}
         style={{
           flex: 1,
           width: '100%',
+          minWidth: 0, // иначе flex-item не сжимается меньше content и наезжает на send-кнопку при длинном submitLabel
           border: 'none',
           outline: 'none',
           resize: 'none',
           fontSize: isMobile ? 16 : 15, // 16px — чтобы iOS не зумил при фокусе
           color: C.textPrimary,
           background: 'transparent',
-          minHeight: 34,
+          minHeight: activeMode ? 78 : 34,
           maxHeight: 200,
           lineHeight: '1.5',
           padding: isMobile ? '6px 8px' : '6px 4px',
@@ -1691,9 +1859,15 @@ export function Composer({
       {suggestionVisible && promptSuggestion && (
         // Ghost text как в Claude Code Desktop: серый текст подсказки в самом поле
         // + бейдж-клавиша ⇥ (тап — принять; на десктопе также → / Tab).
-        // pointerEvents:none у слоя — тап по полю ставит фокус как обычно
+        // pointerEvents:none у слоя — тап по полю ставит фокус как обычно.
+        // ВАЖНО: позиционируется ТОЛЬКО над textarea (left/right через те же отступы
+        // что у textarea), а не inset:0 — иначе ghost закрывал send-кнопку и переключатель
+        // режима, при длинном submitLabel «✦ Изменить · ≈ $0.15» и длинном имени модели
+        // они визуально наезжали на подсказку
         <div style={{
-          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', gap: 8,
+          position: 'absolute', top: 0, bottom: 0,
+          left: 0, right: 0,
+          display: 'flex', alignItems: 'center', gap: 8,
           padding: isMobile ? '0 8px' : '0 4px', pointerEvents: 'none', boxSizing: 'border-box',
           fontSize: isMobile ? 16 : 15, lineHeight: '1.5', color: C.textMuted, minWidth: 0,
         }}>
@@ -1714,6 +1888,7 @@ export function Composer({
           </button>
         </div>
       )}
+    </div>
     </div>
   );
 
@@ -2006,6 +2181,12 @@ export function Composer({
   // (работают по текущему диффу/контексту)
   const canSend = hasText || attachments.length > 0
     || teamMech === 'qa' || teamMech === 'review' || teamMech === 'redteam';
+  // Кнопка строки режима: при пустом поле — запуск вклада emptySubmit, если он есть
+  const modeSubmit = activeMode ? modeSubmitButton(activeMode, modeCtx, hasText, execBlocked) : null;
+  // Отказ вклада (исключение) причину уже показал сам — поле не трогаем
+  const runEmptySubmit = async (run: () => Promise<void> | void) => {
+    try { await run(); } catch { /* причина уже показана вкладом */ }
+  };
   const stopButton = (
     <button
       type="button"
@@ -2372,7 +2553,7 @@ export function Composer({
         />
       )}
       {/* Чипы вложений */}
-      {attachments.length > 0 && (
+      {(attachments.length > 0 || !!leadingChips) && (
         <div
           style={{
             display: 'flex',
@@ -2381,6 +2562,7 @@ export function Composer({
             padding: '11px 12px 8px',
           }}
         >
+          {leadingChips}
           {attachments.map((filePath) => {
             const name = basename(filePath);
             return (
@@ -2432,10 +2614,22 @@ export function Composer({
         </div>
       )}
 
+      {/* Чипы подсистем (слот composer-chip): вклад сам решает, рисоваться ли */}
+      {slotChips.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, padding: '0 12px' }}>
+          {slotChips.map(c => (
+            <Fragment key={c.name}>{c.render?.({ projectId: project?.id ?? null, sessionId, isMobile: !!isMobile })}</Fragment>
+          ))}
+        </div>
+      )}
+
       {/* В белой рамке — только сам ввод: поле, микрофон и «отправить».
           Выросшее выше столбца кнопок поле разворачивает правую группу
           вертикально (columnRight) — кнопки прижимаются к низу, «отправить»
           остаётся в правом нижнем углу, поле забирает ширину карточки */}
+      {activeMode?.hint && !talkActive && (
+        <div data-composer-mode-hint="" style={{ padding: `${SP.xxs}px ${SP.sm}px 0` }}>{activeMode.hint(modeCtx)}</div>
+      )}
       <div style={{ display: 'flex', alignItems: columnRight ? 'flex-end' : 'center', gap: 6 }}>
         {inputArea}
         <div style={{ display: 'flex', flexDirection: columnRight ? 'column' : 'row', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -2448,9 +2642,24 @@ export function Composer({
             ? talkStopButton
             : isListening
               ? <>{cancelRecBtn}{confirmRecBtn}</>
-              : <>{phrasesButton}{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
+              : activeMode
+                ? null
+                : <>{phrasesButton}{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
         </div>
       </div>
+      {/* Режим подсистемы: третья строка — сегмент режимов слева, запуск справа */}
+      {activeMode && !talkActive && !isListening && (
+        <div data-composer-mode-bar="" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: `0 ${SP.xxs}px ${SP.xxs}px` }}>
+          {modesSeg}
+          <span style={{ flex: 1 }} />
+          <span data-composer-send={modeSubmit!.kind === 'empty' ? 'empty' : ''} style={{ display: 'inline-flex', minWidth: 0, flexShrink: 1 }}>
+            <Button size="sm" pill variant="primary" disabled={modeSubmit!.disabled}
+              onClick={() => { if (modeSubmit!.run) void runEmptySubmit(modeSubmit!.run); else void handleSend(); }} style={{ minWidth: 0 }}>
+              {modeSubmit!.label ?? <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+            </Button>
+          </span>
+        </div>
+      )}
       </div>
     </div>
 
@@ -2526,8 +2735,8 @@ export function Composer({
         {teamImplementBadge}
         {loopPill}
       </div>
-      {/* Правая группа: модель → усилие → собеседник, прижаты к правому краю */}
-      {(onModelChange || onEffortChange || companionSelector) && (
+      {/* Правая группа: «модель · усилие» → собеседник, прижаты к правому краю */}
+      {(onModelChange || companionSelector) && (
         <div ref={rightRef} style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
           {onModelChange && (
             <ComposerModelPicker
@@ -2538,11 +2747,12 @@ export function Composer({
               compact={compactStrip}
               // У чата с персоной своё назначение модели — пункт «По умолчанию» подписывается им
               usage={selectedPersona ? USAGE.chatPersona : USAGE.chatNew}
-              maxTriggerWidth={rightMax.model ?? undefined}
+              // Усилие живёт в той же плашке: подпись уровня снимается с формы B
+              effort={effort}
+              onEffortChange={onEffortChange}
+              showEffortLabel={rightMax.effort !== null}
+              maxTriggerWidth={rightMax.model === null ? undefined : rightMax.model + (rightMax.effort ?? 0)}
             />
-          )}
-          {onEffortChange && (
-            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={effortCompact} maxTriggerWidth={rightMax.effort ?? undefined} />
           )}
           {companionSelector}
         </div>
@@ -2564,6 +2774,8 @@ export function Composer({
     )}
 
     {phrasesEditOpen && <QuickPhrasesDialog onClose={() => setPhrasesEditOpen(false)} />}
+
+    {plusMenuNode}
 
     {pendingMode && (
       <DangerModeConfirm

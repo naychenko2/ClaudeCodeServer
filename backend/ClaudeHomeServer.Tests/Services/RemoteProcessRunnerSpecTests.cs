@@ -133,6 +133,49 @@ public class RemoteProcessRunnerSpecTests : IDisposable
         wire.Should().NotContain("headers").And.NotContain("service-jwt").And.NotContain("fal-key").And.NotContain("leak");
     }
 
+    // Руки (ADR-016 §7, решение 4): stdio-узлы по-прежнему выбрасываются, маркер рук едет —
+    // пересобранным из двух полей, без команды, путей и env. Маркер под чужим именем и узел
+    // «hands» с командой — не маркер.
+    [Fact]
+    public void McpКонфиг_StdioВыброшен_МаркерРукПроходитБезЛишнихПолей()
+    {
+        var config = new JsonObject
+        {
+            ["mcpServers"] = new JsonObject
+            {
+                [DeviceExecPlaceholders.HandsServerName] = new JsonObject
+                {
+                    ["type"] = DeviceExecPlaceholders.Hands,
+                    [DeviceExecPlaceholders.HandsVisionField] = true,
+                    ["command"] = "C:/evil.exe",
+                    ["env"] = new JsonObject { ["X"] = "y" },
+                },
+                ["ext-stdio"] = new JsonObject { ["command"] = "node", ["args"] = new JsonArray("x.js") },
+                ["fake-hands"] = new JsonObject { ["type"] = DeviceExecPlaceholders.Hands },
+            },
+        };
+
+        var mcp = JsonNode.Parse(RemoteProcessRunner.SanitizeMcpConfig(config.ToJsonString()))!["mcpServers"]!.AsObject();
+
+        mcp.Select(kv => kv.Key).Should().Equal(DeviceExecPlaceholders.HandsServerName);
+        var hands = mcp[DeviceExecPlaceholders.HandsServerName]!.AsObject();
+        hands.Select(kv => kv.Key).Should().BeEquivalentTo(["type", DeviceExecPlaceholders.HandsVisionField]);
+        ((string?)hands["type"]).Should().Be(DeviceExecPlaceholders.Hands);
+        ((bool?)hands[DeviceExecPlaceholders.HandsVisionField]).Should().BeTrue();
+    }
+
+    [Fact]
+    public void McpКонфиг_УзелHandsСКомандой_НеМаркер_Выброшен()
+    {
+        var json = """{"mcpServers":{"hands":{"command":"node","args":["x.js"]}}}""";
+        var mcp = JsonNode.Parse(RemoteProcessRunner.SanitizeMcpConfig(json))!["mcpServers"]!.AsObject();
+        mcp.Should().BeEmpty();
+
+        var noVision = """{"mcpServers":{"hands":{"type":"{{ccs-hands}}","vision":"yes"}}}""";
+        var hands = JsonNode.Parse(RemoteProcessRunner.SanitizeMcpConfig(noVision))!["mcpServers"]!["hands"]!;
+        ((bool?)hands[DeviceExecPlaceholders.HandsVisionField]).Should().BeFalse("не булево «да» — зрения нет");
+    }
+
     [Fact]
     public void ФайлФлагаНеНайден_ОтказВместоПередачиСырогоЗначения()
     {

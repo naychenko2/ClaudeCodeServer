@@ -239,6 +239,37 @@ public class TurnExecutorUnixTests
     }
 
     [SkippableTheory]
+    [InlineData("dotdot")]
+    [InlineData("outside")]
+    [InlineData("symlink")]
+    public async Task ВраждебныйWorkingDirectory_Отказ(string kind)
+    {
+        var launched = 0;
+        Skip.If(OperatingSystem.IsWindows());
+        await using var h = new TurnHarness("/nonexistent/claude",
+            launcher: l => { launched++; throw new InvalidOperationException("не должен запускаться"); });
+        var outside = Directory.CreateDirectory(Path.Combine(h.Root, "outside")).FullName;
+        var workingDirectory = kind switch
+        {
+            "dotdot" => h.WorkDir + "/../outside",
+            "outside" => outside,
+            _ => Path.Combine(h.WorkDir, "escape"),
+        };
+        if (kind == "symlink") Directory.CreateSymbolicLink(workingDirectory, outside);
+
+        await h.StartAsync(h.Spawn(workingDirectory: workingDirectory));
+        var frames = await h.Server.ReadUntilExitAsync(Wait);
+        await h.Run!.WaitAsync(Wait);
+
+        var exit = TurnHarness.ExitOf(frames);
+        exit.Code.Should().Be(TurnExecutor.RefusedExitCode);
+        exit.Error.Should().Contain("не под разрешёнными корнями", "UI распознаёт отказ по этому тексту");
+        TurnHarness.Text(frames, DeviceExecFrameChannel.Stderr).Should().Contain("ai-home-agent roots add");
+        launched.Should().Be(0);
+        h.Cli.Acquired.Should().Be(0);
+    }
+
+    [SkippableTheory]
     [InlineData("claude.cmd")]
     [InlineData("/usr/bin/claude")]
     [InlineData("bash")]

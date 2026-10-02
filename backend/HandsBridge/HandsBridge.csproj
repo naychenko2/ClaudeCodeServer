@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Мост рук: форк sbroenne/mcp-windows 1.3.24 (MIT, см. LICENSE и SOURCE.md) — stdio-MCP
+       для UI Automation на машине локального проекта. Каждый инструмент зовёт гейт HandsPolicy
+       (проект HandsBridge.Policy); правки upstream перечислены в SOURCE.md.
+       Мост едет в каталоге версии агента и делит его рантайм (как трей), поэтому без WinForms
+       и без проекции Windows SDK: замер 2026-09-27 — они добавляли к архиву агента 21 МБ при
+       пороге 15. Мониторы — Win32 напрямую (DisplayMonitors), GDI+ — пакетом
+       System.Drawing.Common, OCR удалён (снимок окна читает модель со зрением). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>$(NoWarn);CA1822;CA1805;CS1591</NoWarn>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>Sbroenne.WindowsMcp</RootNamespace>
+    <AssemblyName>HandsBridge</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <Version>1.3.24</Version>
+    <!-- CI собирает решение на ubuntu, а выкатка публикует win-x64 с Linux (как Tray) -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.0" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.12" />
+    <PackageReference Include="Interop.UIAutomationClient" Version="10.19041.0" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HandsBridge.Policy\HandsBridge.Policy.csproj" />
+    <ProjectReference Include="..\HandsBridge.Browser\HandsBridge.Browser.csproj" />
+  </ItemGroup>
+
+  <!-- Публикация в каталог версии агента (ClaudeHomeServer.DeviceAgent.csproj): агент передаёт
+       список своих опубликованных файлов, и мост их не копирует — общий рантайм остаётся
+       ровно тем, что описывает deps.json агента, а не тем, чья копия оказалась новее -->
+  <Target Name="SkipHostPublishedFiles" AfterTargets="ComputeResolvedFilesToPublishList"
+          Condition="'$(HandsBridgeHostFiles)' != ''">
+    <PropertyGroup>
+      <_HandsBridgeHostFiles>|$(HandsBridgeHostFiles)|</_HandsBridgeHostFiles>
+    </PropertyGroup>
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="$(_HandsBridgeHostFiles.Contains('|%(ResolvedFileToPublish.RelativePath)|'))" />
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <None Include="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="HandsBridge.LICENSE.txt" />
+  </ItemGroup>
+
+</Project>

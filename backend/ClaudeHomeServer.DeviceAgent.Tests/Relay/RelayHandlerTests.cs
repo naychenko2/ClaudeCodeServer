@@ -75,6 +75,79 @@ public sealed class RelayHandlerTests : IDisposable
         File.ReadAllText(Path.Combine(_box.Project, "a.txt")).Should().Be("было");
     }
 
+    // ---------- проверка папки под проект (создание и перепривязка) ----------
+
+    private async Task<RelayPathCheck> CheckPathAsync(string root)
+    {
+        var (status, json, _) = await RunAsync(new RelayRequest(RelayOperations.CheckPath, "", root));
+        status.Should().Be(200);
+        return json!.Value.Deserialize<RelayPathCheck>(RelayProtocol.Json)!;
+    }
+
+    [Fact]
+    public async Task ПроверкаПапки_ПапкаПодКорнем_Годится()
+    {
+        (await CheckPathAsync(_box.Project)).Should().Be(new RelayPathCheck(true, true, true));
+    }
+
+    [Fact]
+    public async Task ПроверкаПапки_НетПапки_ExistsFalse()
+    {
+        (await CheckPathAsync(Path.Combine(_box.AllowedRoot, "nope"))).Should().Be(new RelayPathCheck(false, false, true));
+    }
+
+    [Fact]
+    public async Task ПроверкаПапки_Файл_НеКаталог()
+    {
+        (await CheckPathAsync(Path.Combine(_box.Project, "a.txt"))).Should().Be(new RelayPathCheck(true, false, true));
+    }
+
+    [Fact]
+    public async Task ПроверкаПапки_ВнеКорней_InsideRootsFalse()
+    {
+        (await CheckPathAsync(_box.Outside)).Should().Be(new RelayPathCheck(true, true, false));
+    }
+
+    [Fact]
+    public async Task ПроверкаПапки_ДвеТочкиНаружу_ВнеКорней_ВнутрьКорня_Годится()
+    {
+        (await CheckPathAsync(Path.Combine(_box.Project, "..", "..", "outside")))
+            .Should().Be(new RelayPathCheck(true, true, false));
+        (await CheckPathAsync(Path.Combine(_box.Project, "..", "proj")))
+            .Should().Be(new RelayPathCheck(true, true, true));
+    }
+
+    [Fact]
+    public async Task ПроверкаПапки_РегистрПути_КакУФайловойСистемы()
+    {
+        // Windows и macOS регистр не различают — папка та же и под корнем; Linux различает
+        var check = await CheckPathAsync(_box.Project.ToUpperInvariant());
+
+        check.InsideRoots.Should().Be(!OperatingSystem.IsLinux());
+    }
+
+    [Theory]
+    [InlineData("relative/path")]
+    [InlineData("")]
+    public async Task ПроверкаПапки_НеАбсолютныйПуть_ПапкиНет(string root)
+    {
+        (await CheckPathAsync(root)).Should().Be(new RelayPathCheck(false, false, false));
+    }
+
+    [Fact]
+    public void ПроверкаПапки_ТаЖеФункцияЧтоУХода()
+    {
+        // Ход (C1) зовёт ProjectRoot: он обязан отказывать ровно там, где проверка говорит «не годится»
+        var policy = _box.Policy();
+        foreach (var root in new[] { _box.Project, _box.Outside, Path.Combine(_box.Project, "a.txt"), Path.Combine(_box.AllowedRoot, "nope") })
+        {
+            var check = policy.CheckRoot(root);
+            var act = () => policy.ProjectRoot(root);
+            if (check.IsDirectory && check.InsideRoots) act.Should().NotThrow();
+            else act.Should().Throw<Exception>();
+        }
+    }
+
     // ---------- G7: агент не выходит за корни ----------
 
     [Theory]

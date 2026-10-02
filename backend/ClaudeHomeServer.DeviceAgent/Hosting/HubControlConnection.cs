@@ -1,4 +1,5 @@
 using ClaudeHomeServer.DeviceAgent.Composition;
+using ClaudeHomeServer.DeviceAgent.Pairing;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Http.Connections;
@@ -10,16 +11,19 @@ namespace ClaudeHomeServer.DeviceAgent.Hosting;
 /// <summary>
 /// Канал управления — тот же хаб /hubs/devices, что у клиента рук ADR-008: авторизация
 /// только токеном устройства плюс отпечаток. Имена методов — часть протокола
-/// (<c>IDesktopDeviceClient</c> на сервере).
+/// (<c>IDeviceClient</c> на сервере).
 /// </summary>
-internal sealed class HubControlConnection : IControlConnection, IAgentTicketIntrospector, IFilesChangedSink, IAsyncDisposable
+internal sealed class HubControlConnection : IControlConnection, IAgentTicketIntrospector, IFilesChangedSink,
+    Hands.IHandsStatusSink, IAsyncDisposable
 {
     private readonly HubConnection _connection;
     private readonly ILogger _log;
+    private readonly Uri _server;
 
     public HubControlConnection(IDeviceIdentity device, ILogger log)
     {
         _log = log;
+        _server = device.ServerUri;
         _connection = new HubConnectionBuilder()
             .WithUrl(new Uri(device.ServerUri, "hubs/devices"), o =>
             {
@@ -31,7 +35,6 @@ internal sealed class HubControlConnection : IControlConnection, IAgentTicketInt
             .Build();
 
         _connection.On<DeviceExecOpenCommand>("ExecOpen", command => ExecOpen?.Invoke(command) ?? Task.CompletedTask);
-        // Команды рук ADR-008 агенту не адресованы: SupportedSteps пуст, сервер их не шлёт
         _connection.Reconnected += _ => Reconnected?.Invoke() ?? Task.CompletedTask;
     }
 
@@ -41,6 +44,8 @@ internal sealed class HubControlConnection : IControlConnection, IAgentTicketInt
     /// <summary>Подключается, повторяя до успеха: сервер мог быть ещё не поднят.</summary>
     public async Task ConnectAsync(CancellationToken ct)
     {
+        // Отказ окончательный: повтор не сделает открытый канал шифрованным
+        if (!ServerChannel.IsSecure(_server)) throw new InsecureServerException();
         var delay = TimeSpan.FromSeconds(1);
         while (true)
         {
@@ -72,6 +77,15 @@ internal sealed class HubControlConnection : IControlConnection, IAgentTicketInt
         _connection.State == HubConnectionState.Connected
             ? _connection.InvokeAsync(DeviceAgentApi.FilesChangedMethod, report, ct)
             : Task.CompletedTask;
+
+    /// <summary>Состояние рук хода — в чат; канал не поднят — теряется, бейдж перечитает состояние запросом.</summary>
+    Task Hands.IHandsStatusSink.ReportAsync(DeviceHandsReport report, CancellationToken ct) =>
+        _connection.State == HubConnectionState.Connected
+            ? _connection.InvokeAsync(DeviceHandsReport.Method, report, ct)
+            : Task.CompletedTask;
+
+    /// <summary>Канал управления на связи — трей показывает, дойдёт ли статус до чата.</summary>
+    public bool IsConnected => _connection.State == HubConnectionState.Connected;
 
     public ValueTask DisposeAsync() => _connection.DisposeAsync();
 

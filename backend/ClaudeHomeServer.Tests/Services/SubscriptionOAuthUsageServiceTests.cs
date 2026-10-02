@@ -106,6 +106,32 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Ответ429_СтатусRateLimited_ЛогОдинРаз_Backoff()
+    {
+        // Прод 30.09: setup-токен упёрся в часовой лимит usage, а поллер молчал —
+        // на пилюле тире, в логе и на экране «Использование» пусто
+        var handler = new StubHandler(_ =>
+        {
+            var resp = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            resp.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(3084));
+            return resp;
+        });
+        var (svc, usage) = CreateService(handler);
+
+        var log = await CaptureErrAsync(async () =>
+        {
+            await svc.PollAsync("claude", "sk-ant-oat01-secret", CancellationToken.None);
+            await svc.PollAsync("claude", "sk-ant-oat01-secret", CancellationToken.None);
+        });
+
+        svc.StatusOf("claude").Should().Be(SubscriptionOAuthUsageService.StatusRateLimited);
+        usage.GetAll().Should().BeEmpty();
+        handler.Calls.Should().Be(1, "второй тик ждёт Retry-After, эндпоинт не дёргается");
+        Regex.Matches(log, Regex.Escape("[OAuthUsage]")).Count.Should().Be(1);
+        log.Should().Contain("429").And.NotContain("sk-ant-oat01");
+    }
+
+    [Fact]
     public async Task Ответ500_СтатусError()
     {
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
@@ -126,7 +152,8 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
             "seven_day_fable": { "utilization": 23.0, "resets_at": "2026-07-30T00:00:00Z" },
             "extra_usage": { "is_enabled": true, "monthly_limit": 100, "used_credits": 5, "utilization": 5.0 },
             "account_kind": "max",
-            "meta": { "irrelevant": true }
+            "meta": { "irrelevant": true },
+            "nimbus_quill": { "utilization": 0.0 }
         }
         """;
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -202,6 +229,38 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
 
         accounts.Select(a => a.Key).Should().BeEquivalentTo("claude", "second");
         accounts.Single(a => a.Key == "second").Token.Should().Be("token-second");
+    }
+
+    [Fact]
+    public void EnumerateAccounts_PrimaryИзФайлаЛогина_БезПрофиля_РефрешЗапрещён()
+    {
+        // Ревью d04dcd2e: файл ~/.claude/.credentials.json делит живая сессия CLI;
+        // рефреш одноразового refresh-токена с нашей стороны гасил бы её логин
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", null);
+        var profileDir = WriteProfileCreds("user-home", "file-token", "refresh-1",
+            DateTimeOffset.UtcNow.AddHours(-1).ToUnixTimeMilliseconds());
+        var svc = CreateServiceWith(new Dictionary<string, string?> { ["ClaudeUserProfileDir"] = profileDir });
+
+        var primary = svc.EnumerateAccounts().Single();
+
+        primary.Key.Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+        primary.Token.Should().Be("file-token");
+        primary.ProfileDir.Should().BeNull("primary-файл продлевает только сам CLI");
+    }
+
+    [Fact]
+    public void EnumerateAccounts_PrimaryИзEnv_БезПрофиля()
+    {
+        // env-токен (setup-токен) файлом не продлевается — рефреш файла тут был бы чужим
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", "env-token");
+        var profileDir = WriteProfileCreds("user-home-env", "file-token", "refresh-1",
+            DateTimeOffset.UtcNow.AddHours(-1).ToUnixTimeMilliseconds());
+        var svc = CreateServiceWith(new Dictionary<string, string?> { ["ClaudeUserProfileDir"] = profileDir });
+
+        var primary = svc.EnumerateAccounts().Single();
+
+        primary.Token.Should().Be("env-token");
+        primary.ProfileDir.Should().BeNull();
     }
 
     // --- LoginCommandFor: готовая PowerShell-команда входа для плашки «нужен claude login» ---

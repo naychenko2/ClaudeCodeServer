@@ -28,6 +28,42 @@ internal sealed class TokenStoreException(string message) : Exception(message);
 
 internal static class DeviceTokenStores
 {
+    public const string DpapiKind = "dpapi";
+    public const string SecretServiceKind = "secret-service";
+    public const string FileKind = "file";
+
+    /// <summary>
+    /// Выбор при сопряжении (Р6). <paramref name="alwaysOn"/> на Linux — всегда файл 0600: при
+    /// загрузке без входа (linger) связка ключей сеанса закрыта, и агент остался бы без токена.
+    /// Выбор запоминается в регистрации: иначе агент в сеансе с Secret Service искал бы там
+    /// токен, лежащий в файле.
+    /// </summary>
+    public static (IDeviceTokenStore Store, string? Kind) Choose(string configDirectory, bool alwaysOn)
+    {
+        if (!alwaysOn || OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+        {
+            var store = ForCurrentOs(configDirectory);
+            return (store, KindOf(store));
+        }
+        return (new FileTokenStore(configDirectory), FileKind);
+    }
+
+    /// <summary>Хранилище, выбранное при сопряжении; сопряжение до записи выбора — как раньше, по ОС.</summary>
+    public static IDeviceTokenStore Open(string? kind, string configDirectory)
+    {
+        if (kind == FileKind && !OperatingSystem.IsWindows()) return new FileTokenStore(configDirectory);
+        if (kind == SecretServiceKind && !OperatingSystem.IsWindows()) return new SecretServiceTokenStore(new SecretToolRunner());
+        return ForCurrentOs(configDirectory);
+    }
+
+    private static string? KindOf(IDeviceTokenStore store) => store switch
+    {
+        DpapiTokenStore => DpapiKind,
+        SecretServiceTokenStore => SecretServiceKind,
+        FileTokenStore => FileKind,
+        _ => null,
+    };
+
     /// <summary>
     /// Windows — DPAPI CurrentUser (как клиент ADR-008); Linux — Secret Service (libsecret
     /// через <c>secret-tool</c>), если он доступен, иначе файл 0600 в каталоге 0700;

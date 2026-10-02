@@ -3,7 +3,6 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.Images.Editing;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;

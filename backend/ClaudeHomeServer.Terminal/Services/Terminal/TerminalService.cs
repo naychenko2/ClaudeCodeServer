@@ -7,7 +7,10 @@ using Microsoft.AspNetCore.SignalR;
 namespace ClaudeHomeServer.Services.Terminal;
 
 /// <summary>ДТО списка терминалов для фронта.</summary>
-public record TerminalInfoDto(string Id, string ProjectId, string Name, string Status, string? Shell);
+/// <param name="Pty">Терминал идёт через псевдоконсоль (ConPTY-мост или pty-bridge). false —
+/// упрощённый терминал на перенаправленных потоках: без цветов, очистки экрана и
+/// интерактивных программ; фронт обязан показать это честно.</param>
+public record TerminalInfoDto(string Id, string ProjectId, string Name, string Status, string? Shell, bool Pty);
 
 /// <summary>Экземпляр запущенного терминала.</summary>
 internal sealed class TerminalInstance : IDisposable
@@ -162,7 +165,8 @@ public sealed class TerminalService : IDisposable
             // backspace/стрелки/история/Tab/Ctrl+C, тот же кадровый протокол, что у
             // Linux-моста), при недоступности — фолбэк на голое перенаправление.
             shell = "powershell.exe";
-            var bridgePath = launcher.IsSandboxed ? null : Execution.ConPtyBridgeLocator.Find();
+            var reason = "Windows-песочница";
+            var bridgePath = launcher.IsSandboxed ? null : Execution.ConPtyBridgeLocator.Find(out reason);
             process = null!;
             if (bridgePath is not null)
             {
@@ -180,15 +184,17 @@ public sealed class TerminalService : IDisposable
                         TurnId = turnId,
                     });
                     usesPtyBridge = true;
+                    _log.LogInformation("Терминал {TerminalId}: мост ConPTY {BridgePath}", terminalId, bridgePath);
                 }
                 catch (Exception ex)
                 {
-                    _log.LogWarning(ex, "ConPtyBridge не запустился — фолбэк на перенаправление");
+                    _log.LogWarning(ex, "Терминал {TerminalId}: фолбэк на перенаправление — ConPtyBridge не запустился",
+                        terminalId);
                 }
             }
             else
             {
-                _log.LogWarning("ConPtyBridge.exe не найден или Windows без ConPTY — powershell с перенаправлением");
+                _log.LogWarning("Терминал {TerminalId}: фолбэк на перенаправление — {Reason}", terminalId, reason);
             }
             if (!usesPtyBridge)
             {
@@ -457,7 +463,7 @@ public sealed class TerminalService : IDisposable
         }
     }
 
-    private static TerminalInfoDto ToDto(TerminalInstance inst) => new(inst.Id, inst.ProjectId, inst.Name, inst.Status, inst.Shell);
+    private static TerminalInfoDto ToDto(TerminalInstance inst) => new(inst.Id, inst.ProjectId, inst.Name, inst.Status, inst.Shell, inst.UsesPtyBridge);
 
     public void Dispose()
     {

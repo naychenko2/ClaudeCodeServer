@@ -638,7 +638,7 @@ public class SessionManagerTests : IDisposable
 
         var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: null, model: "opus[1m]", effort: null);
 
-        updated!.Model.Should().Be("opus[1m]");
+        updated!.Model.Should().Be("opus", "родной Claude хранится семейством, окно — при запуске");
         updated.Provider.Should().Be("claude",
             "родная Claude-модель → ключ из пула (пустой пул → PrimaryKey), а не застрявший glm");
     }
@@ -836,24 +836,6 @@ public class SessionManagerTests : IDisposable
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Идёт ответ ассистента*");
         session.Provider.Should().Be("claude", "отказ не двигает провайдера");
-    }
-
-    [Fact]
-    public async Task Update_ДесктопныйЧатНаСтороннего_Отказ()
-    {
-        // ADR-008: кадры рабочего стола из транскрипта стороннему вендору не отдаём. Гейт
-        // живёт в MigrateProviderAsync — единственной точке смены провайдера, — поэтому
-        // закрывает и настройки чата, и кнопку «Продолжить на …».
-        var dir = MkProjectDir("prov11");
-        var project = _projectManager.Create("PROV11", dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
-        session.DesktopChat = true;
-
-        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
-
-        (await act.Should().ThrowAsync<InvalidOperationException>())
-            .WithMessage("Десктопный чат нельзя перевести на стороннего провайдера*");
-        session.Provider.Should().Be("claude");
     }
 
     [Fact]
@@ -1761,6 +1743,37 @@ public class SessionManagerTests : IDisposable
         (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().BeEmpty();
     }
 
+    // «Стоп» в чате и «Стоп» в трее рук — один исход: прерывание адаптера (фолбэк на нём
+    // запрещён), отметка в истории и пометка модели в начале следующего хода
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Стоп_ВЧатеИВТрееРук_ОдинИсход_ОтметкаИПометкаМодели(bool fromTray)
+    {
+        var (session, adapter) = await MkRunningTurnAsync("stop-note-" + fromTray);
+        string? sent = null;
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>()))
+            .Callback<string, IReadOnlyList<string>?, int, bool>((t, _, _, _) => sent = t)
+            .Returns(Task.CompletedTask);
+
+        if (fromTray) new ClaudeHomeServer.Services.Composition.HumanTurnStop(_sut).StoppedByHuman(session.Id);
+        else _sut.Interrupt(session.Id);
+
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().ContainSingle();
+
+        // Ход прерван — чат свободен, следующее сообщение человека уходит в CLI с пометкой
+        session.Status = SessionStatus.Active;
+        await _sut.SendMessageAsync(session.Id, "что дальше?", []);
+        sent.Should().StartWith(SessionManager.UserStopNoteText).And.EndWith("что дальше?");
+
+        // Пометка одноразовая
+        session.Status = SessionStatus.Active;
+        await _sut.SendMessageAsync(session.Id, "ещё", []);
+        sent.Should().Be("ещё");
+    }
+
     [Fact]
     public async Task PreemptForPending_ПишетОтметкуВИсторию()
     {
@@ -2102,6 +2115,88 @@ public class SessionManagerTests : IDisposable
             "маркер уже стоит — повторный проход не перебивает выбор пользователя");
     }
 
+    // --- Модели родного Claude храним семействами (opus/fable/sonnet/haiku) ---
+
+    private ClaudeModelFamilyMigration NewFamilyMigration()
+    {
+        var config = GlmMigrationConfig();
+        return new ClaudeModelFamilyMigration(
+            new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(TestConfig.Build(new Dictionary<string, string?>
+            {
+                ["LlmProviders:glm:ApiKey"] = "sk-test",
+                ["LlmProviders:glm:AnthropicBaseUrl"] = "https://glm.example.com",
+                ["LlmProviders:glm:Models:0:Id"] = "glm-5.2",
+            })),
+            _sut, config, NullLogger<ClaudeModelFamilyMigration>.Instance,
+            personas: _personaManager, appSettings: _appSettings, users: _userStore,
+            localActions: _actionOverrides);
+    }
+
+    [Fact]
+    public async Task МиграцияСемейств_СводитПрибитыеВерсииИСтавитМаркер()
+    {
+        var opus48 = await MkSessionWithModelAsync("opus48", "claude-opus-4-8");
+        var fable5 = await MkSessionWithModelAsync("fable5", "claude-fable-5[1m]");
+        var fable51 = await MkSessionWithModelAsync("fable51", "claude-fable-5-1[1m]");
+        var opus1m = await MkSessionWithModelAsync("opus1m", "opus[1m]");
+        var fable1m = await MkSessionWithModelAsync("fable1m", "fable[1m]");
+        var glm = await MkSessionWithModelAsync("glm", "glm-5.2");
+        var def = await MkSessionWithModelAsync("def", "default");
+        var empty = await MkSessionWithModelAsync("empty", null);
+        var persona = _personaManager.Create(TestUserId, "Модельная", null, null, null,
+            model: null, effort: null, PersonaScope.Global, projectId: null, color: null,
+            greeting: null, memoryEnabled: false);
+        persona.Model = "claude-opus-5";
+        persona.TierStrong = "claude-fable-5-1[1m]";
+        _sut.SetVoiceMode(opus48.Id, false); // стор на диске — чтобы было с чего снять копию
+
+        await NewFamilyMigration().StartAsync(CancellationToken.None);
+
+        opus48.Model.Should().Be("opus");
+        fable5.Model.Should().Be("fable");
+        fable51.Model.Should().Be("fable");
+        opus1m.Model.Should().Be("opus");
+        fable1m.Model.Should().Be("fable");
+        glm.Model.Should().Be("glm-5.2", "модель стороннего провайдера не трогаем");
+        def.Model.Should().Be("default");
+        empty.Model.Should().BeNull();
+        _personaManager.Get(persona.Id, TestUserId)!.Model.Should().Be("opus");
+        _personaManager.Get(persona.Id, TestUserId)!.TierStrong.Should().Be("fable");
+        File.Exists(Path.Combine(_tempDir, ClaudeModelFamilyMigration.MarkerFileName)).Should().BeTrue();
+        Directory.GetFiles(_tempDir, "sessions.json.bak-*").Should().ContainSingle();
+        (await File.ReadAllTextAsync(Path.Combine(_tempDir, "sessions.json")))
+            .Should().NotContain("claude-opus-4-8").And.NotContain("[1m]");
+
+        // Идемпотентность: повторное сведение ничего не меняет
+        var migration = NewFamilyMigration();
+        _sut.RemapModels(migration.Canonical).Should().Be(0);
+        _personaManager.RemapModels(migration.Canonical).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task МиграцияСемейств_ПовторныйСтарт_НичегоНеТрогает()
+    {
+        await NewFamilyMigration().StartAsync(CancellationToken.None);
+        var session = await MkSessionWithModelAsync("second-run", "claude-opus-4-8");
+
+        await NewFamilyMigration().StartAsync(CancellationToken.None);
+
+        session.Model.Should().Be("claude-opus-4-8", "маркер уже стоит — второй проход не идёт");
+    }
+
+    [Fact]
+    public async Task ЗаписьМодели_РоднойClaudeСводитсяКСемейству()
+    {
+        var session = await MkSessionWithModelAsync("write", null);
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "claude-fable-5-1[1m]", null);
+
+        updated!.Model.Should().Be("fable");
+        _personaManager.Create(TestUserId, "Пин", null, null, null, model: "opus[1m]", effort: null,
+            PersonaScope.Global, projectId: null, color: null, greeting: null, memoryEnabled: false)
+            .Model.Should().Be("opus");
+    }
+
     [Fact]
     public async Task Interrupt_ЗанятыйЧатБезЖивогоПрогона_РеанимируетЧат()
     {
@@ -2210,7 +2305,7 @@ public class SessionManagerTests : IDisposable
         deferred.Should().BeTrue();
         var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
         queued.Silent.Should().BeTrue();
-        queued.SuppressTasksExecute.Should().BeTrue("иначе постановщик самозапустит задачу и закольцует A↔B");
+        queued.SuppressTasksExecute.Should().BeTrue("признак хода-реакции едет с отложенным ходом");
         _sut.GetVisiblePending(session.Id).Should().BeEmpty("служебный ход призраком не показываем");
     }
 
@@ -4513,6 +4608,15 @@ public class SessionManagerTests : IDisposable
         // обязан решать по нему, а не по одному Outcome.
         var (session, _, _) = await MakeInterviewStabAsync("wire-crashed-failclosed");
         var entry = GetEntry(session.Id);
+        // Стаб ставит вводную в очередь. Терминал ниже выводит чат из Working, очередь поднимает
+        // настоящий ход, и он падает в тестовом окружении. Если его SessionStartedMessage не
+        // дошёл до result, LastTurnSeq остаётся 7 (выставлен рукой ниже), и его пустой план ложится
+        // под ключ 7 уже ПОСЛЕ изъятия нашего. Изымать его некому: шина публикует тот ход под
+        // своим TurnSeq. На медленном CI проверка слота ловила этот чужой план, поэтому очередь
+        // снимаем: здесь проверяется только разбор нашего хода.
+        foreach (var pending in _sut.GetPending(session.Id))
+            await _sut.CancelPendingAsync(session.Id, pending.Id);
+        _sut.GetPending(session.Id).Should().BeEmpty("предусловие: постороннего хода из очереди не будет");
         _sut.GetById(session.Id)!.Status = SessionStatus.Working;
         SetLastTurnSeq(entry, 7);
 
@@ -5798,15 +5902,13 @@ public class SessionManagerTests : IDisposable
             new Dictionary<string, object?>(), controller: new object());
     }
 
-    // Фильтр запуска задачи ровно с теми настройками, что стоят на TasksController.Execute.
-    // Цикл «до готово» больше НЕ несёт отдельной квоты запусков: чистый рабочий ход
-    // координатора пропускается, лавину возвратов держит Iteration в ContinueWorkLoopAsync.
+    // Фильтр запуска задачи — тот самый атрибут, что стоит на TasksController.Execute:
+    // копия настроек в тесте разъехалась бы с контроллером незаметно.
     private static ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute ExecuteFilter() =>
-        new("Запуск задачи на исполнение")
-        {
-            AlsoWhenExecutorSuppressed = true,
-            AllowInTeamImplement = true,
-        };
+        (ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute)Attribute.GetCustomAttribute(
+            typeof(ClaudeHomeServer.Controllers.TasksController).GetMethod(
+                nameof(ClaudeHomeServer.Controllers.TasksController.Execute))!,
+            typeof(ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute))!;
 
     [Fact]
     public async Task ГейтЗапуска_ОбычныйХодШтаба_ТожеРасходуетКвоту()
@@ -6060,10 +6162,8 @@ public class SessionManagerTests : IDisposable
     }
 
     // Регресс: запуск задачи из чата с включённым циклом на ходу ДОКЛАДА исполнителя —
-    // по-прежнему запрещён (тоже AlsoWhenExecutorSuppressed, иначе «доклад → запуск →
-    // доклад» → бесконечный круг). В чате с АКТИВНЫМ циклом ход-реакция — единственная точка,
-    // где координатор принимает результат и запускает следующего; круг уже оплачен инкрементом
-    // Iteration в ContinueWorkLoopAsync, поэтому запрет здесь срезает саму суть цикла.
+    // разрешён: ход-реакция — точка, где координатор принимает результат и запускает
+    // следующего исполнителя.
     [Fact]
     public async Task ГейтЗапуска_ХодДокладаВЧатеСЦиклом_Разрешён()
     {
@@ -6081,9 +6181,10 @@ public class SessionManagerTests : IDisposable
             + "ставит следующего исполнителя; лавину возвратов держит Iteration, не запрет");
     }
 
-    // Регресс: ход доклада вне цикла — запрет как раньше.
+    // Ход доклада вне цикла тоже запускает: запрет снят решением владельца (мешал ставить
+    // следующую задачу), цикл «доклад → запуск → доклад» останавливает «Стоп».
     [Fact]
-    public async Task ГейтЗапуска_ХодДокладаВнеЦикла_ЗапретКакРаньше()
+    public async Task ГейтЗапуска_ХодДокладаВнеЦикла_Разрешён()
     {
         var dir = MkProjectDir("wl-report-plain");
         var project = _projectManager.Create("WL-RP", dir, TestUserId, TestUsername);
@@ -6096,8 +6197,7 @@ public class SessionManagerTests : IDisposable
 
         ExecuteFilter().OnActionExecuting(context);
 
-        var result = context.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
-        result.StatusCode.Should().Be(403, "без цикла запрет хода доклада сохраняется");
+        context.Result.Should().BeNull("ход-реакция на доклад запуск задачи больше не запрещает");
     }
 
     // Регресс: делегированный ход в чате с циклом — запрет как раньше.
@@ -10116,6 +10216,35 @@ public class SessionManagerTests : IDisposable
             .Should().NotBeNull();
         InvokePrivate("BuildPersonasContext", TestUserId, project.Id, session, null).Should().NotBeNull();
         InvokePrivate("ConsultantsEnabled", TestUserId, session, null).Should().Be(true);
+    }
+
+    // Гейт «модуль Architecture реально загружен» (Viaduct 10.2): без записи в сторе
+    // подсистем тулсета нет в реестре — ход не должен объявлять CLI мёртвый сервер.
+    // Остальные замки открыты (привязок нет, фич-флага у раздела нет), меняется только стор.
+    [Fact]
+    public void Архитектура_ГейтЗагрузкиМодуля_ПоСторуПодсистем()
+    {
+        var dir = MkProjectDir("gates-arch");
+        var user = _userStore.Add("arch-gate-owner", "password123", "user");
+        var project = _projectManager.Create("GA", dir, user.Id, user.Username);
+        var states = new SubsystemStateStore();
+        typeof(SessionManager).GetField("_subsystemStates", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(_sut, states);
+
+        InvokePrivate("BuildArchitectureContext", user.Id, project.Id, null)
+            .Should().BeNull("модуль не загружен — записи architecture в сторе нет");
+
+        states.RecordActive(new ArchitectureStubSubsystem());
+
+        InvokePrivate("BuildArchitectureContext", user.Id, project.Id, null)
+            .Should().NotBeNull("модуль загружен (RecordActive), прочие замки открыты");
+    }
+
+    private sealed class ArchitectureStubSubsystem : IAppSubsystem
+    {
+        public string Key => McpEndpoints.ArchitectureName;
+        public string Title => "Архитектура (заглушка)";
+        public void Register(Microsoft.Extensions.DependencyInjection.IServiceCollection services, IConfiguration config) { }
     }
 
     [Fact]

@@ -220,14 +220,15 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const parseDisallowed = (s: string) => Array.from(new Set(s.split(',').map(t => t.trim()).filter(Boolean)));
 
   function buildContract(): PersonaContract {
+    // Пустой слот — пустой строкой: сервер мержит контракт по слотам, undefined = «не менять»
     return {
-      character: character.trim() || undefined,
-      tone: tone.trim() || undefined,
+      character: character.trim(),
+      tone: tone.trim(),
       mustDo: parseLines(mustDo),
       mustNot: parseLines(mustNot),
-      outputFormat: outputFormat.trim() || undefined,
+      outputFormat: outputFormat.trim(),
       speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
-      instructions: instructions.trim() || undefined,
+      instructions: instructions.trim(),
     };
   }
 

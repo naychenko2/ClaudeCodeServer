@@ -153,6 +153,36 @@ public class FileWatcherSubscriptionTests : IDisposable
         svc.Unwatch(projectId, "conn-tree");
     }
 
+    // Состояние oh-my-claudecode (`.omc`) копит каталог на каждую сессию и на этом репозитории
+    // съело почти половину бюджета: оно не подписывается, и его правки до клиента не доходят.
+    [SkippableFact]
+    public async Task КаталогOmc_НеПодписываетсяИВСобытияНеПопадает()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(), "inotify и /proc/self/fdinfo — только Linux");
+
+        var root = Path.Combine(_tempDir, "proj-omc");
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        for (var i = 0; i < 50; i++)
+            Directory.CreateDirectory(Path.Combine(root, ".omc", "state", "sessions", $"s{i}"));
+        var sent = new List<JsonElement>();
+        var (svc, projectId) = Build(root, sent);
+
+        var watchesBefore = InotifyProbe.CountWatches();
+        svc.Watch(projectId, "conn-omc");
+        var own = InotifyProbe.CountWatches() - watchesBefore;
+        // Корень и src/ — всё; 50 каталогов сессий под `.omc` дали бы полсотни слежек сверху.
+        own.Should().Be(2, "под `.omc` слежки не ставятся");
+
+        File.WriteAllText(Path.Combine(root, ".omc", "state", "sessions", "s0", "a.json"), "{}");
+        File.WriteAllText(Path.Combine(root, "src", "a.txt"), "x");
+
+        var paths = await WaitPaths(sent, "src/a.txt", TimeSpan.FromSeconds(10));
+        paths.Should().NotContain(p => p.StartsWith(".omc", StringComparison.Ordinal),
+            "правки состояния плагина в дерево файлов не уходят");
+
+        svc.Unwatch(projectId, "conn-omc");
+    }
+
     // Собирает пути из всех событий filesChanged, пока не появится ожидаемый.
     private static async Task<List<string>> WaitPaths(List<JsonElement> sent, string expected, TimeSpan timeout)
     {

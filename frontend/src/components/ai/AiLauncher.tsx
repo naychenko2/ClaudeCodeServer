@@ -14,6 +14,7 @@ import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionC
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
 import { getFabObstacle, subscribeFabObstacle } from '../../lib/ai/fabObstacle';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useGenSheetRaised } from '../../lib/genSheet';
 import { useListAutoFocus } from '../../lib/listAutoFocus';
 import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
 import { rankContext } from '../../lib/ai/suggest';
@@ -96,6 +97,8 @@ export function AiLauncher() {
   const [semanticCaps, setSemanticCaps] = useState(false);
   // Мобильный вид — палитра становится нижней шторкой
   const isMobile = useIsMobile();
+  // Поднятая шторка панели генерации — кнопка лежала бы поверх её опций
+  const sheetRaised = useGenSheetRaised();
   const aiBusy = useAiBusy();
   // Какие чаты ждут ответа человека (permission_request / ask_question без ответа).
   // Глобальный стор — AiLauncher видит «нужен ответ» из любого раздела, даже уйдя из чата.
@@ -592,7 +595,7 @@ export function AiLauncher() {
           только «работа»; маячок «нужен ответ» и accent-ореол «идеи» — в CSS по data-state.
           Геометрия (размер, наведение, ужимание) осталась inline; ореол и анимации — в CSS,
           т.к. box-shadow/transform анимаций inline-стилем не перебить. */}
-      {!open && (
+      {!open && !sheetRaised && (
         <button
           ref={fabRef}
           className="cc-fab"
@@ -830,9 +833,10 @@ const fabStyle: React.CSSProperties = {
   // отдельный (--cc-fab-bottom): в компактном режиме он равен отступу холста островов,
   // чтобы кнопка стояла на одной линии с их нижней кромкой. Из угла кнопка не уезжает
   // никогда — на подошедший снизу композер она отвечает не подъёмом, а ужиманием
-  // (см. useFabObstacleOverlap). Снизу ещё safe-area.
+  // (см. useFabObstacleOverlap). Снизу ещё safe-area; --cc-fab-raise — подъём над плашкой
+  // «Вернуть» полосы генерации, пока она висит над полем ввода (ReleaseNotice raiseFab).
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-raise, 0px))',
   // Базовый размер — var --cc-fab-size: по умолчанию 54 (панель не распахнута), а когда
   // справа распахнута панель во всю высоту, PanelZone ставит 36 (компактный, не мешает).
   // При наведении переопределяется на 54 (см. button inline). Меняется плавно (transition).
@@ -899,7 +903,7 @@ const toggleThumb: React.CSSProperties = {
 const balloonStyle: React.CSSProperties = {
   // Над кнопкой в покое — её нижний отступ (var) + текущая высота кнопки (var, −8 нахлёст)
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-size, 54px) - 8px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-raise, 0px) + var(--cc-fab-size, 54px) - 8px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };
@@ -920,7 +924,7 @@ const balloonGhost: React.CSSProperties = {
 const hoverBalloonStyle: React.CSSProperties = {
   // Показывается на наведении, когда кнопка выросла до 54 — её нижний отступ (var) + высота
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 46px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-raise, 0px) + 46px)',
   width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
   borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

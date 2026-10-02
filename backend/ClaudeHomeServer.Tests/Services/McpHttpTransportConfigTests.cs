@@ -75,7 +75,7 @@ public class McpHttpTransportConfigTests : IDisposable
     {
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var result = method.Invoke(session, [difyDatasetId, personaAgents])!;
+        var result = method.Invoke(session, [difyDatasetId, personaAgents, false])!;
         var type = result.GetType();
         // У ValueTuple элементы — ПОЛЯ, а не свойства
         var path = (string?)type.GetField("Item1")!.GetValue(result);
@@ -188,6 +188,43 @@ public class McpHttpTransportConfigTests : IDisposable
         headers["Authorization"]!.GetValue<string>().Should().Be("Bearer tok-W");
         headers.ContainsKey("X-Caller-Session-Id").Should().BeTrue();
         keys.Should().Contain("watch:t:http");
+    }
+
+    /// <summary>
+    /// Сервер архитектуры (arch_*): http-узел с сессией-вызывателем в хвосте URL; без
+    /// контекста или при снятом рубильнике узла нет вовсе — stdio-ветки у него нет.
+    /// </summary>
+    [Fact]
+    public void Архитектура_HttpУзелССессиейВХвосте_БезКонтекстаИРубильникаУзлаНет()
+    {
+        var session = new Session { Id = "sess-arch-1" };
+        var architecture = new ArchitectureMcpContext("http://localhost:5000", () => "tok-R", UseHttp: true);
+        var httpOn = true;
+        var adapter = new ClaudeSession(session, new LlmSessionContext(
+            RootPath: _root,
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null,
+            HttpMcpEnabledProvider: () => httpOn,
+            ArchitectureMcp: architecture));
+
+        var (servers, keys) = BuildFor(adapter);
+        var node = servers["architecture"]!.AsObject();
+        node["type"]!.GetValue<string>().Should().Be("http");
+        node["url"]!.GetValue<string>().Should().Be($"http://localhost:5000/mcp/architecture/{session.Id}");
+        node["alwaysLoad"]!.GetValue<bool>().Should().BeTrue();
+        node["headers"]!["Authorization"]!.GetValue<string>().Should().Be("Bearer tok-R");
+        node["headers"]!.AsObject().ContainsKey("X-Caller-Session-Id").Should().BeTrue();
+        keys.Should().Contain("architecture:t:http");
+
+        httpOn = false;
+        var (offServers, offKeys) = BuildFor(adapter);
+        offServers.ContainsKey("architecture").Should().BeFalse("рубильник снят — stdio-подмены нет");
+        offKeys.Should().NotContain("architecture:");
+
+        var (noServers, _) = BuildConfig();
+        noServers.ContainsKey("architecture").Should().BeFalse("контекста нет — сервер ходу не объявляется");
     }
 
     /// <summary>

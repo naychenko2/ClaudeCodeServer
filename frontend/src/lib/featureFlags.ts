@@ -10,7 +10,6 @@ import { useSyncExternalStore } from 'react';
 export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
   changeDossiersRecall: 'change-dossiers-recall',
-  desktopAgent: 'desktop-agent',
   specialtyPromptSections: 'specialty-prompt-sections',
   // Автоправило архивации чатов (план «Архив чатов» v4, шаг 6): фоновый сервис
   // раз в час убирает в архив чаты без активности дольше порога. Флаг закрывает
@@ -39,6 +38,15 @@ export const FLAGS = {
   // Локальные проекты (ADR-016): проект на устройстве владельца, ход идёт через агента.
   // Что доступно у такого проекта, решает матрица capabilities из DTO проекта, а не флаг.
   localProjects: 'local-projects',
+  // Локальная модель по умолчанию для картинок и видео (MCP local-media).
+  localMediaDefault: 'local-media-default',
+  // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта.
+  audioEditor: 'audio-editor',
+// MIDI-просмотрщик: ноты из .mid в файлах и в редакторе звука.
+  midiEditor: 'midi-editor',
+  // Панель «Картинки» v5 «Создать / Править»: режим на чат и выбор по режиму. Выключен —
+  // картинки ведут себя побайтно как раньше.
+  imagePanelV5: 'image-panel-v5',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

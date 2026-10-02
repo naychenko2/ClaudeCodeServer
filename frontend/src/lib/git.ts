@@ -5,6 +5,7 @@
 import { useSyncExternalStore } from 'react';
 import type { GitStatus, GitBranchInfo, GitLogEntry, GitStashEntry, GitRemoteInfo, ChangedBySession } from '../types';
 import { api, getGitSessionContext } from './api';
+import { plural } from './plural';
 import { joinUser, onFilesChanged, onGitStatusChanged, onReconnected } from './signalr';
 
 export interface GitProjectState {
@@ -487,6 +488,23 @@ export function workingDiffStat(status: GitStatus | null): { added: number; dele
   return { added, deleted, files: seen.size };
 }
 
+// Строка состояния git-полосы над композером (её пункт в меню переключателя полос):
+// есть что фиксировать → есть что публиковать → чисто (прототип полос, вариант C)
+export type GitStripTone = 'changes' | 'ahead' | 'clean';
+export function gitStripStatus(status: GitStatus | null, unpushed: number): { text: string; tone: GitStripTone } {
+  const files = workingDiffStat(status).files;
+  if (files > 0) return { text: `${files} ${plural(files, 'файл', 'файла', 'файлов')} изменено`, tone: 'changes' };
+  const ahead = (status?.ahead ?? 0) > 0 ? status!.ahead : unpushed;
+  if (ahead > 0) return { text: `${ahead} ${plural(ahead, 'коммит', 'коммита', 'коммитов')} к публикации`, tone: 'ahead' };
+  return { text: 'чисто, всё опубликовано', tone: 'clean' };
+}
+
+// Git-полоса «без дела»: чисто, всё опубликовано и нет своего дерева (чата или хода).
+// Тогда полоса стоит строкой и не разворачивается (ProjectGitBar, autoMicro)
+export function gitStripIdle(status: GitStatus | null, unpushed: number, hasTree: boolean): boolean {
+  return !hasTree && gitStripStatus(status, unpushed).tone === 'clean';
+}
+
 // Состояние git проекта (статус/история/ветки/busy/ошибка)
 export function useGitState(projectId: string): GitProjectState {
   return useSyncExternalStore(
@@ -500,4 +518,24 @@ export function useGitState(projectId: string): GitProjectState {
 // семантика, что у useGitState, без useSyncExternalStore. Аналог getNotesSnapshot (notes.ts).
 export function getGitState(projectId: string): GitProjectState {
   return get(projectId);
+}
+
+// Доступность полосы Git над композером: до первого ответа статус неизвестен, и
+// полоса считается доступной (иначе в проекте С git секунду мигало бы «Картинки → Git»,
+// пока не пришёл первый статус, а спрашивать его больше некому — только рендер
+// самой git-полосы зовёт ensureGit). После ответа — только в настоящем репозитории.
+export function isGitStripAvailable(projectId: string): boolean {
+  const s = get(projectId);
+  return !s.statusLoaded || !!s.status?.isRepo;
+}
+
+// Примитивный (boolean) снапшот для useSyncExternalStore — подписка на весь объект
+// стора перерисовывала бы вызывающий компонент на каждый emit git-стора (busy,
+// changedBy и т.п.), а тут нужна перерисовка ровно при смене доступности полосы.
+export function useGitStripAvailable(projectId: string | null): boolean {
+  return useSyncExternalStore(
+    fn => { _listeners.add(fn); return () => _listeners.delete(fn); },
+    () => (projectId ? isGitStripAvailable(projectId) : false),
+    () => (projectId ? isGitStripAvailable(projectId) : false),
+  );
 }

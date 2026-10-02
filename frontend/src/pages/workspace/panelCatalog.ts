@@ -15,9 +15,9 @@
 // здешний notes — панель заметок ПРОЕКТА, тамошний — заметки-артефакты хода), но
 // это разные типы: там, где импортируются оба, брать один из них под алиасом.
 import {
-  BookOpen, BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
+  BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb,
+  TableOfContents, Lightbulb, DraftingCompass, Image as ImageIcon, AudioLines,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
@@ -34,9 +34,15 @@ export const PANEL_KEYS = [
   // Порядок рельсы: сначала работа с проектом «здесь и сейчас» — дерево файлов,
   // его изменения, задачи по ним; дальше справочное (документация, знания, граф)
   // и командное
-  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
   'toc',
+  // Панели подсистем (слот workspace-panel-def): ключ зарезервирован здесь, тело и
+  // доступность — у подсистемы; выключена подсистема — нет содержимого, нет и кнопки
+  'characters',
+  // Панели генерации (ADR-021 §3): «Картинки» и «Звук» — вклады вертикалей тем же
+  // слотом; справа одновременно живёт только одна из них (см. EXCLUSIVE_PANEL_SETS)
+  'images', 'sound',
   // Фоновый эфир рядом с работой: живёт и в проекте, и в разделе «Чаты».
   // Каталог каналов панелью НЕ является: он открывается в центральном острове
   // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
@@ -104,7 +110,12 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   changes:  { title: 'Изменения', Icon: GitCompare },
   tasks:    { title: 'Задачи',    Icon: ListTodo },
   graph:    { title: 'Граф',      Icon: Network },
-  team:     { title: 'Команда',   Icon: Users },
+  // «Архитектура» (C4-модель Viaduct, есть, когда загружен модуль architecture) — сосед «Графа» по смыслу:
+  // граф — код «как есть», архитектура — «как задумано». Чертёжный циркуль — инструмент
+  // архитектора: проектирование, а не содержимое. Boxes читался как «кубики/склад» и занят
+  // «Командным спринтом»; Layers/LayoutDashboard/Shapes/SquareStack уже заняты в продукте
+  arch:     { title: 'Архитектура', Icon: DraftingCompass },
+  team:    { title: 'Команда',   Icon: Users },
   // Навыки и агенты рабочей папки (.claude/skills, .claude/agents) — файловые
   // умения CLI, а не персоны-контакты: поэтому отдельная панель рядом с «Командой»,
   // а не вкладка внутри неё. Bot занят сессионными «Агентами» (артефакт хода),
@@ -122,6 +133,11 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // — отсюда своя группа рельсы (CENTER_KEYS), а не соседство с содержимым проекта:
   // «Файлы» и «Документация» показывают репозиторий, эта — то, что сейчас читают.
   toc:      { title: 'Оглавление', Icon: TableOfContents },
+  // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
+  characters: { title: 'Персонажи', Icon: Contact },
+  // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные
+  images:   { title: 'Картинки',  Icon: ImageIcon },
+  sound:    { title: 'Звук',      Icon: AudioLines },
 
   // Разделы хаба. Ключи намеренно длиннее воркспейсных: рядом живут похожие по
   // смыслу панели проекта, и путать их нельзя. personasList — все персоны
@@ -147,6 +163,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   changes: 'right',
   tasks: 'right',
   graph: 'right',
+  arch: 'right',
   team: 'right',
   skills: 'right',
   terminal: 'right',
@@ -158,6 +175,9 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   agents: 'right',
   context: 'right',
   toc: 'right',
+  characters: 'right',
+  images: 'right',
+  sound: 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
@@ -168,8 +188,9 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
-  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
-  'plan', 'agents', 'context', 'toc', 'video',
+  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
+  'plan', 'agents', 'context', 'toc', 'video', 'characters',
+  'images', 'sound',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];
@@ -183,6 +204,23 @@ export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
 // Персона — если собеседник персона). В рельсе они отделены сепаратором от
 // инструментов проекта.
 export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
+
+// Правая зона раздела «Чаты»: панели сессии плюс панели генерации личного чата
+export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'images', 'sound'];
+
+// Панели генерации: справа одна за раз, а в планшетной зоне они держат поток до
+// GEN_PANEL_INLINE_MIN (genPanelPlacement)
+export const GEN_PANEL_KEYS: readonly PanelKey[] = ['images', 'sound'];
+
+// Наборы взаимоисключающих панелей: открытие одной закрывает остальные из её набора
+// в ЛЮБОЙ зоне, при любой ширине окна. «Справа одна панель генерации» (ADR-021 §3):
+// с прочими панелями картинки и звук соседствуют по обычной модели зоны.
+export const EXCLUSIVE_PANEL_SETS: readonly (readonly PanelKey[])[] = [GEN_PANEL_KEYS];
+
+// Соперники панели — те, кого её открытие закрывает
+export function panelRivals(k: PanelKey): PanelKey[] {
+  return EXCLUSIVE_PANEL_SETS.flatMap(set => (set.includes(k) ? set.filter(x => x !== k) : []));
+}
 
 // Панели ЦЕНТРАЛЬНОЙ ОБЛАСТИ: показывают не проект и не сессию, а то, что открыто
 // в центре прямо сейчас. Живут ровно столько, сколько живёт их источник: закрыли
@@ -199,9 +237,14 @@ export const CENTER_KEYS: readonly PanelKey[] = ['toc'];
 //
 // Раньше группа гейтилась настройкой проекта «Инструменты» (Project.ToolsEnabled)
 // и по дефолту была скрыта у всех. Гейт убран: видимость кнопок — дело ящика
-// рельсы («…»), а не настроек проекта, и per-project разницы у неё нет. Обе кнопки
-// лежат в ящике по умолчанию (defaultTucked у wsPanels).
-export const TOOLS_KEYS: readonly PanelKey[] = ['terminal', 'preview', 'video'];
+// рельсы («…»), а не настроек проекта, и per-project разницы у неё нет. Терминал и
+// «Сервисы» лежат в ящике по умолчанию (defaultTucked у wsPanels).
+//
+// «Архитектура» (C4-модель, есть, когда загружен модуль architecture) — первая в группе, но,
+// как терминал и «Сервисы», по умолчанию лежит в ящике «…» (defaultTucked у wsPanels):
+// отдельная группа «Проектирование» ради одной кнопки дробила рельсу лишней чертой.
+// С выключенным модулем кнопки просто нет, группа живёт без неё.
+export const TOOLS_KEYS: readonly PanelKey[] = ['arch', 'terminal', 'preview', 'video'];
 
 // Содержимое проекта и панели разделов: всё, что не относится ни к текущей сессии,
 // ни к запуску процессов, ни к центральной области. Первая группа рельсы, дальше

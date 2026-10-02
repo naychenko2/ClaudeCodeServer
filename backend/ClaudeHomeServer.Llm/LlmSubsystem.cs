@@ -321,6 +321,25 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<SubscriptionOAuthUsageService>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
 
+        // Сторож обновлений claude CLI: раз в сутки сверяет версию хоста с npm latest и
+        // уведомляет админов; singleton — снимок статуса читает /api/models/claude-cli.
+        services.AddQuietHttpClient(
+            Claude.ClaudeCliUpdateWatcher.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.ClaudeCliUpdate",
+                Subject: "реестром npm (версия claude CLI)",
+                Consequence: "Проверка обновлений claude CLI пропущена до следующего раза."));
+        // CHANGELOG claude-code (~1 МБ) — список изменений и новые модели при отставании
+        services.AddQuietHttpClient(
+            Claude.ClaudeCliUpdateWatcher.ChangelogClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.ClaudeCliChangelog",
+                Subject: "CHANGELOG claude-code на GitHub",
+                Consequence: "Уведомление об обновлении claude CLI уйдёт без списка изменений."))
+            .ConfigureHttpClient(c => c.MaxResponseContentBufferSize = 5 * 1024 * 1024);
+        services.AddSingleton<Claude.ClaudeCliUpdateWatcher>();
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<Claude.ClaudeCliUpdateWatcher>());
+
         // Токен хода для шлюза LLM/MCP (ADR-016): в памяти, отзыв по turn/completed —
         // подписка в конструкторе, поэтому экземпляр создаётся при старте в Program.cs
         // (там же явный отзыв по удалению чата).
@@ -346,6 +365,8 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<Gateway.EgressTunnelLimiter>();
         // Шов для удалённого раннера (Execution): выдача маршрута и токена хода на устройстве
         services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway, Gateway.DeviceTurnGateway>();
+        // Серверный ход провайдера с NormalizeToolInputArrays — тоже через шлюз (ADR-016 §2)
+        services.AddSingleton<Gateway.ServerTurnGateway>();
         services.AddHttpClient(Gateway.LlmGatewayEndpoints.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
 
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические

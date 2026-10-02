@@ -69,7 +69,12 @@ public sealed class ProjectRelayControllerTests : IDisposable
     {
         await SetFlagAsync(_client, true);
         var root = deviceId is null ? MkDir() : "/home/u/relay-" + Guid.NewGuid().ToString("N")[..8];
+        // Создание спросило бы у агента папку через этот же канал и сбило бы счётчик Opened:
+        // на время создания устройство — старый агент без ретранслятора, проверка пропускается
+        var status = _devices.Devices[Device];
+        _devices.Devices[Device] = FakeDeviceStatus.Status(Device, online: true, DeviceCapabilities.Exec, DeviceCapabilities.Files);
         var r = await _client.PostAsJsonAsync("/api/projects", new { name = "R" + Guid.NewGuid().ToString("N")[..6], rootPath = root, deviceId });
+        _devices.Devices[Device] = status;
         r.EnsureSuccessStatusCode();
         return (await r.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
     }

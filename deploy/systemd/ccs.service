@@ -11,6 +11,10 @@ After=network-online.target docker.service
 WorkingDirectory=/opt/ccs/app
 Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+# NT-хэши основного пароля для NTLM WebDAV (gss-ntlmssp читает путь из среды процесса,
+# Environment.SetEnvironmentVariable из .NET его не меняет). Вне data/: в бэкап не едет.
+# Каталог — 0700, файл пишет сервер сам с правами 0600. Разбор — docs/operations/remote-access.md
+Environment=NTLM_USER_FILE=/srv/ccs/secrets/ntlm_users
 Environment=PATH=/home/an/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/dotnet /opt/ccs/app/ClaudeHomeServer.dll
 Restart=always

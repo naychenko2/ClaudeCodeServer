@@ -13,8 +13,8 @@ stdio JSON-RPC, **без зависимостей**), CLI поднимал их 
 `/mcp/{name}/{sessionId}`), `wsp`/`codegraph`/`notifications` (волна 3) и `dify` (волна 4 —
 его объявление перенесено в код из внешнего конфига `McpConfigPath`: ключ и адрес берутся из
 секции `Dify` appsettings, тулсет ходит во внешний Dify напрямую через `KnowledgeService`,
-ключ не покидает бэкенд). На stdio остался только `desktop` (capability-токен, отдельный
-канал — ADR-008) и внешние модули. stdio-файлы переехавших (`mcp/*-server/index.js` и
+ключ не покидает бэкенд). На stdio остались только внешние модули (`desktop` ADR-008 удалён
+2026-09-30). stdio-файлы переехавших (`mcp/*-server/index.js` и
 `mcp-dify/src`) заморожены как ветки отката (`Mcp:HttpTransport=false` возвращает всё на
 stdio прежним env).
 

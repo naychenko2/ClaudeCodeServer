@@ -39,6 +39,10 @@ public interface IProjectFiles
     Task<ProjectFileStream> OpenReadAsync(Project project, string relativePath, CancellationToken ct = default);
 
     event Action<string, string, FileMutationKind, string?>? OnMutated;
+
+    // Сообщить подписчикам OnMutated о записи мимо этого шва: редактор картинок пишет
+    // персонажей и сохранения сам (ADR-018 §10.1). Сбой подписчика операцию не роняет.
+    void NotifyMutated(string root, string relativePath, FileMutationKind kind);
 }
 
 /// <summary>Открытый на чтение файл проекта: поток и его длина на момент открытия.</summary>

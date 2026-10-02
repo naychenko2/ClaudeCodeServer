@@ -102,7 +102,12 @@ public static class BackupPaths
         // кеш на 7 дней весом до гигабайт. Журнал трат редактора лежит рядом, в корне data
         // (image-editor-spend.jsonl), и в архив едет: это деньги, других копий у них нет.
         if (segments.Length > 1
-            && root.Equals(Images.Editing.ImageEditWorkspace.DirName, StringComparison.OrdinalIgnoreCase))
+            && root.Equals(ImageEditor.ImageEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
+            return false;
+        // Рабочая папка задач модуля «Звук» (ADR-021 §2): файлы вариантов — кеш на 7 дней.
+        // Нити (audio-threads) и префы (audio-editor-prefs) — другие корни, они в архив едут
+        if (segments.Length > 1
+            && root.Equals(AudioEditor.AudioEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
             return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 
@@ -129,6 +134,12 @@ public static class BackupPaths
             if (segments.Length >= 3 && segments[2].Equals("cache", StringComparison.OrdinalIgnoreCase))
                 return false;
         }
+        // Сборка Viaduct (modules/viaduct/**) — воспроизводимый кеш скрипта build-viaduct.ps1,
+        // а не данные. Только эта подпапка: соседние modules/{id}/module.json — манифесты
+        // внешних модулей, они в архив едут
+        if (root.Equals("modules", StringComparison.OrdinalIgnoreCase)
+            && segments.Length >= 2 && segments[1].Equals("viaduct", StringComparison.OrdinalIgnoreCase))
+            return false;
         // Дефолтные папки архивов внутри data (нестандартные пути отсекаются по абсолютному
         // пути в BackupCore — имя папки там может быть любым)
         if (root.Equals(DefaultBackupDirName, StringComparison.OrdinalIgnoreCase)) return false;

@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { readStoredToken, request } from './offline';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
 
@@ -14,6 +14,61 @@ export interface ModelTiers {
 // Сервер валидирует на входе; на фронте достаточно хранить как есть.
 export interface GlyphCandidate {
   name?: string | null;
+}
+
+// Итог «Собрать архитектуру» (POST /projects/{id}/architecture/generate).
+// graphBuiltAt — время снимка графа кода, которым помечена карта (ISO); added/matched —
+// новые и сохранённые элементы: повторная сборка ручные описания не трогает.
+export interface ArchitectureGenerateResult {
+  modelPath: string;
+  graphBuiltAt: string | null;
+  generatedAt: string;
+  containers: number;
+  components: number;
+  added: number;
+  matched: number;
+  connectionsAdded: number;
+  // Проход 1 «Собрать архитектуру»: внешние системы-кандидаты (тег «кандидат»), элементы из
+  // кода, которых больше нет (тег «нет в коде»), снятые пометки и удалённые руками (не
+  // пересоздаются); missing/candidatesSkipped — имена для сводки
+  candidates?: number;
+  markedMissing?: number;
+  unmarked?: number;
+  skippedDeleted?: number;
+  missing?: string[] | null;
+  candidatesSkipped?: string[] | null;
+  // Проход 2 (withAgent): задача исполнителю, его персона (null — без персоны-архитектора)
+  // и код отказа; launch_failed — задача создана, но исполнитель не стартовал
+  agentTaskId?: string | null;
+  agentPersonaId?: string | null;
+  agentError?: string | null;
+  warnings?: ArchitectureModelFinding[] | null;
+}
+
+// Несостыковка модели (ArchitectureModelValidator на бэке): висящая ссылка, точка связи,
+// которой у карточки нет, дубль id. Предупреждение — запись она не блокирует
+export interface ArchitectureModelFinding {
+  kind: 'dangling_parent' | 'dangling_connection' | 'dangling_flow_step' | 'unknown_handle' | 'duplicate_id';
+  elementId: string;
+  text: string;
+}
+
+// Модель раздела «Архитектура» (GET /projects/{id}/architecture/model). version — SHA-256
+// содержимого файла; updatedBy — имя человека или «Сборка из кода».
+export interface ArchitectureModelDto {
+  exists: boolean;
+  content: string | null;
+  version: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  warnings?: ArchitectureModelFinding[];
+}
+
+export interface ArchitectureSaveResult {
+  version: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  warnings?: ArchitectureModelFinding[];
 }
 
 
@@ -435,9 +490,7 @@ export const api = {
       }),
   },
 
-  // Десктопный агент (ADR-008): устройства владельца, сопряжение и веб-половина сеанса рук.
-  // Начать сеанс отсюда нельзя ни при каких условиях — эта дверь на самом устройстве,
-  // веб-морда может только попросить (request) и остановить (handsStop).
+  // Устройства владельца и сопряжение (канал устройства ADR-016).
   devices: {
     list: () => request<DesktopDevice[]>('/devices'),
     // Код сопряжения: 8 символов, живёт 5 минут, принадлежит ЭТОЙ веб-сессии
@@ -450,17 +503,6 @@ export const api = {
       }),
     // Отзыв: запись остаётся надгробием, токен устройства умирает немедленно
     revoke: (id: string) => request<void>(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-
-    // Статус сеанса для бейджа «руки на …». Отдельный запрос, а не только событие ленты:
-    // событие эфемерное, и после перезагрузки страницы бейдж погас бы при живых руках
-    handsChat: (chatSessionId: string) =>
-      request<DesktopHandsChatStatus>(`/devices/hands/chat/${encodeURIComponent(chatSessionId)}`),
-    handsRequest: (chatSessionId: string) =>
-      request<{ requested: boolean; active: boolean; requestedAt?: string }>(
-        `/devices/hands/chat/${encodeURIComponent(chatSessionId)}/request`, { method: 'POST' }),
-    handsStop: (chatSessionId: string) =>
-      request<{ stopped: boolean }>(
-        `/devices/hands/chat/${encodeURIComponent(chatSessionId)}/stop`, { method: 'POST' }),
   },
 
   providers: {
@@ -475,12 +517,26 @@ export const api = {
   models: {
     list: () =>
       request<{
-        models: { value: string; displayName: string; description?: string | null; provider?: string | null; contextWindow?: number | null; isCurated?: boolean }[];
+        models: { value: string; displayName: string; description?: string | null; provider?: string | null; contextWindow?: number | null; isCurated?: boolean; resolvedVersion?: string | null }[];
         providers?: Record<string, import('./models').ProviderCapabilities>;
         // Резолвнутые модели агентных мест (ключ каталога → модель или null): по ним
         // пикеры подписывают пункт «По умолчанию (<модель>)»
         assignments?: Record<string, string | null>;
       }>('/models'),
+    // Версия claude CLI хоста и последняя вышедшая (только админ). refresh — перечитать
+    // локальную версию (после claude update), npm сервер при этом не опрашивает.
+    // updateAvailable = null — сравнить нельзя.
+    claudeCli: (refresh = false) =>
+      request<{
+        current: string | null; latest: string | null; updateAvailable: boolean | null; checkedAt: string | null;
+        // Из CHANGELOG пропущенных версий (current, latest]; пусто — списка нет.
+        // isFamilyDefault — самая новая в семействе: алиас пойдёт на неё после обновления
+        newModels?: { name: string; id: string; cliVersion: string; isFamilyDefault: boolean }[];
+        changes?: { version: string; items: string[]; hidden: number }[];
+        hiddenCount?: number;
+        truncated?: boolean;
+      }>(
+        `/models/claude-cli${refresh ? '?refresh=true' : ''}`),
     // Эффективный резолв для строки «Сейчас пойдёт» (считается той же кодовой дорогой,
     // что запуск хода — второй точки истины нет). sessionId вместе с personaId добавляет
     // в ответ subagentChip — чип модели на карточке персоны-сабагента.
@@ -699,13 +755,10 @@ export const api = {
       request<Project>(`/projects/${encodeURIComponent(id)}/device`, {
         method: 'PUT', body: JSON.stringify(body),
       }).then(noted),
-    // Тумблер грани десктопного агента в проекте (ADR-008). Отдельная ручка, а не поле
-    // update: выключение — рубильник, сервер гасит живые сеансы рук проекта и отвечает,
-    // сколько погасил (состав инструментов зафиксирован на запуске CLI, и запущенный ход
-    // иначе доработал бы с гранью в руках)
-    setDesktopAgent: (id: string, enabled: boolean) =>
-      request<{ project: Project; handsStopped: number }>(
-        `/projects/${encodeURIComponent(id)}/desktop-agent`,
+    // Тумблер рук локального проекта (ADR-016 §7): включение сервер пускает только по
+    // матрице (иначе 400 с причиной), выключение — всегда
+    setHands: (id: string, enabled: boolean) =>
+      request<Project>(`/projects/${encodeURIComponent(id)}/hands`,
         { method: 'PUT', body: JSON.stringify({ enabled }) }),
     // Реестр общих тегов проекта: перезапись целиком (бэк нормализует order по позиции
     // массива и валидирует уникальность имён без учёта регистра)
@@ -833,6 +886,25 @@ export const api = {
     // поэтому таймаут запроса поднят до 3 минут (дефолтный 30с перехватил бы сборку).
     codeGraphBuild: (id: string) =>
       request<void>(`/projects/${encodeURIComponent(id)}/code-graph/build`, { method: 'POST', timeoutMs: 180_000 }),
+    // «Собрать из кода» (раздел «Архитектура»): стартовая модель Viaduct из графа кода,
+    // слияние с docs/architecture/model.viaduct.json без затирания ручных описаний.
+    // Если графа нет, бэкенд строит его в том же запросе (на CCS ~1.5 мин), отсюда таймаут.
+    // 409 code=model_corrupt — файл модели битый, 503 code=graph_unavailable — графа нет.
+    // withAgent — проход 2: задача исполнителю (персона-архитектор, если есть). 409
+    // code=build_in_progress (+agentTaskId, result) — агент уже собирает; 503
+    // code=agent_unavailable (+result) — собрано без агента.
+    architectureGenerate: (id: string, withAgent = false) =>
+      request<ArchitectureGenerateResult>(`/projects/${encodeURIComponent(id)}/architecture/generate`,
+        { method: 'POST', body: JSON.stringify({ withAgent }), timeoutMs: 300_000 }),
+    // Хранилище модели раздела «Архитектура»: content — байты файла как есть (null —
+    // модели ещё нет). live: устаревшая модель из офлайн-кэша дала бы ложный конфликт.
+    architectureModel: (id: string) =>
+      request<ArchitectureModelDto>(`/projects/${encodeURIComponent(id)}/architecture/model`, { live: true }),
+    // Запись от версии baseVersion (null — «модели не было»); 409 code=version_conflict,
+    // в err.body.current — состояние файла на сервере.
+    architectureSaveModel: (id: string, content: string, baseVersion: string | null) =>
+      request<ArchitectureSaveResult>(`/projects/${encodeURIComponent(id)}/architecture/model`,
+        { method: 'PUT', body: JSON.stringify({ content, baseVersion }) }),
     // Preview: сервисы проекта (инференс из манифестов + сохранённые в .claude/launch.json).
     // У локального проекта — у агента устройства (projectRequest); внешнего доступа там нет
     services: (id: string) =>
@@ -1388,15 +1460,16 @@ export const api = {
 
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
+    // Начальное состояние бейджа рук локального проекта; дальше — событие hands_status
+    handsStatus: (sessionId: string) =>
+      request<LocalHandsChatStatus>(`/sessions/${encodeURIComponent(sessionId)}/hands-status`),
     // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки тем»)
     iconBatch: (projectId: string) =>
       request<{ processed: number; skipped: number }>(`/projects/${encodeURIComponent(projectId)}/sessions/icon-batch`, { method: 'POST' }),
-    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string, desktop?: boolean) =>
+    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
-        // desktop — ТИП чата (ADR-008), задаётся только при создании: из десктопного чата
-        // нельзя продолжить обычный и наоборот, поэтому в update этого поля нет
-        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort, desktop }),
+        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
       }),
     update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {

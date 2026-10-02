@@ -36,6 +36,8 @@ public class TaskExecutionServiceJoinTests : IDisposable
     private readonly NotificationStore _notifStore;
     private readonly TaskExecutionService _sut;
     private readonly UserStore _userStore;
+    private readonly TestSessionBroadcaster _broadcaster;
+    private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
 
     public TaskExecutionServiceJoinTests()
     {
@@ -57,7 +59,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         _personas = personas;
         _tasks = new TaskManager(config, personas: personas);
 
-        var broadcaster = new TestSessionBroadcaster();
+        var broadcaster = _broadcaster = new TestSessionBroadcaster();
 
         var pushStore = new PushSubscriptionStore(config);
         var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
@@ -75,7 +77,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var sessions = CreateSessionManager(config, projectManager, userStore, appSettings, personas, knowledge, notesKb, broadcaster);
 
         _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notif,
-            NullLogger<TaskExecutionService>.Instance, config, kb: notesKb);
+            NullLogger<TaskExecutionService>.Instance, config, subagentRuns: _subagentRuns, kb: notesKb);
     }
 
     public void Dispose()
@@ -353,6 +355,42 @@ public class TaskExecutionServiceJoinTests : IDisposable
         (await CountNotificationsAsync(task.OwnerId!)).Should().Be(0);
     }
 
+    // ─── «Стоп» оборвал сабагентов: отметка не переживает прерванный ход ──────
+    // Случай 2026-10-01: «Стоп» оборвал двух scout'ов (паспорта Truncated, FinishedBy =
+    // interrupted), прерванный ход result не дал, и отметка «сабагент оборван» съела итог
+    // следующего успешного хода — ClaudeResult не встал, доклад постановщику не ушёл никогда.
+    [Fact]
+    public async Task OnSessionMessageAsync_ОбрывСабагентовСтопомВПрошломХоде_ДокладУходит()
+    {
+        var task = CreateTrackedTask();
+        var session = new Session { Id = "sess-1", OwnerId = task.OwnerId };
+
+        // Ход 1: «Стоп» — паспорта оборванных агентов пришли, result нет
+        _subagentRuns.Record(InterruptedPassport("scout-1"));
+        _subagentRuns.Record(InterruptedPassport("scout-2"));
+        await _sut.MarkStoppedByUserAsync("sess-1");
+
+        // Ход 2: исполнитель доделал и закрыл задачу (D), затем штатный result (R)
+        await _sut.ResumeAfterUserStopAsync("sess-1");
+        var tracked = _tasks.GetById(task.Id)!;
+        tracked.Status = TaskItemStatus.Done;
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+
+        var after = _tasks.GetById(task.Id)!;
+        after.ClaudeResult.Should().Be("success", "обрыв «Стопом» прошлого хода не делает этот ход оборванным");
+        after.CompletionDelivered.Should().BeTrue();
+        (await CountNotificationsAsync(task.OwnerId!)).Should().Be(1);
+    }
+
+    private static SubagentRunPassport InterruptedPassport(string agentId) =>
+        new(AgentId: agentId, AgentType: "scout", Description: "Разведка", SessionId: "sess-1",
+            ToolUseId: "toolu_" + agentId, StartedAt: DateTime.UtcNow.AddSeconds(-60),
+            LastActivityAt: DateTime.UtcNow, DurationSeconds: 60, ToolUses: 3,
+            AssistantMessages: 4, Prompts: 1, ContextTokens: 20_000, OutputTokens: 500,
+            LastStopReason: "tool_use", Truncated: true, LastTool: "Grep", Model: "claude-opus-5",
+            TranscriptBytes: 1024, NudgeAttempts: 0, Partial: false, FinishedBy: "interrupted",
+            RecordedAt: DateTime.UtcNow);
+
     // ─── (д) дедупликация: о факте завершения — ровно одно уведомление ──────
     // Постановщик-персона и владелец задачи — всегда один человек (персоны per-owner,
     // обе отправки идут в task.OwnerId), поэтому «Завершил работу над задачей» +
@@ -498,5 +536,63 @@ public class TaskExecutionServiceJoinTests : IDisposable
 
         _tasks.GetById(task.Id)!.CompletionDelivered.Should().BeTrue();
         (await CountNotificationsAsync(task.OwnerId!)).Should().Be(1);
+    }
+
+    // Д3 регресса 2026-09-27: «Стоп» у исполнителя задачи — прерванный ход result не шлёт,
+    // ClaudeResult не вставал, и задача висела «в работе» (плашка «Агент собирает» вечно running).
+    [Fact]
+    public async Task СтопЧеловека_ПомечаетОстановкуИсполнителя_БезУведомления()
+    {
+        var task = CreateTrackedTask();
+
+        var stopped = await _sut.MarkStoppedByUserAsync("sess-1");
+
+        stopped.Should().NotBeNull();
+        var fresh = _tasks.GetById(task.Id)!;
+        fresh.ExecutorStoppedAt.Should().NotBeNull();
+        fresh.ExecutorStopReason.Should().Be(ExecutorStopClassifier.InterruptedByUserReason);
+        fresh.Status.Should().NotBe(TaskItemStatus.Done, "статус пометка не трогает");
+        _broadcaster.Owner.Select(m => m.Message).OfType<TaskChangedMessage>().Should().Contain(tc => tc.Task.Id == task.Id,
+            "стор задач на фронте живёт по task_changed");
+        (await CountNotificationsAsync(task.OwnerId!)).Should().Be(0, "остановил сам человек — он в курсе");
+    }
+
+    [Fact]
+    public async Task СтопЧеловека_ВЧужойСессии_ЗадачуНеТрогает()
+    {
+        var task = CreateTrackedTask();
+
+        (await _sut.MarkStoppedByUserAsync("sess-other")).Should().BeNull();
+        _tasks.GetById(task.Id)!.ExecutorStoppedAt.Should().BeNull();
+    }
+
+    // Продолжение в чате исполнителя после «Стоп»: новый ход снимает пометку interrupted_by_user,
+    // иначе задача не считалась бы живой (HasLiveDelegatedTask) при идущей работе.
+    [Fact]
+    public async Task СтартХодаПослеСтопа_СнимаетПометкуОстановки()
+    {
+        var task = CreateTrackedTask();
+        await _sut.MarkStoppedByUserAsync("sess-1");
+
+        await _sut.ResumeAfterUserStopAsync("sess-1");
+
+        var fresh = _tasks.GetById(task.Id)!;
+        fresh.ExecutorStoppedAt.Should().BeNull();
+        fresh.ExecutorStopReason.Should().BeNull();
+        _broadcaster.Owner.Select(m => m.Message).OfType<TaskChangedMessage>()
+            .Count(tc => tc.Task.Id == task.Id).Should().Be(2, "и остановка, и продолжение уходят task_changed");
+    }
+
+    [Fact]
+    public async Task СтартХода_ТерминальнуюОстановкуНеСнимает()
+    {
+        var task = CreateTrackedTask();
+        _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.AuthFailedReason);
+
+        await _sut.ResumeAfterUserStopAsync("sess-1");
+
+        var fresh = _tasks.GetById(task.Id)!;
+        fresh.ExecutorStoppedAt.Should().NotBeNull("401 снимает только перезапуск исполнителя");
+        fresh.ExecutorStopReason.Should().Be(ExecutorStopClassifier.AuthFailedReason);
     }
 }

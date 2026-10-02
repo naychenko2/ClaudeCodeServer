@@ -86,6 +86,10 @@ public static class ProjectFeatures
     public const string WorkflowView = "workflowView";
     public const string ChatBranch = "chatBranch";
 
+    // Руки на устройстве (ADR-016, раздел «Руки»): ни в одну группу не входят — доступность
+    // считает ProjectCapabilities.HandsRefusal, а не состояние группы
+    public const string Hands = "hands";
+
     public static readonly IReadOnlyList<string> FileBound =
         [Files, Diff, Git, FileWatcher, Terminal, DevServers, Skills, Attachments];
 
@@ -128,6 +132,11 @@ public sealed record ProjectCapabilities(
     public const string ServerContentOffReason = "У локального проекта недоступно: его файлы лежат на устройстве, а не на сервере";
     public const string TranscriptOnDeviceReason =
         "У локального проекта недоступно: подробная история чата хранится на его устройстве";
+    public const string HandsNotLocalReason = "Руки есть только у локального проекта: ИИ управляет программами на устройстве проекта";
+    public const string HandsAgentOutdatedReason =
+        "Агент устройства старой версии, в нём нет рук: обновите агента AI Home на устройстве";
+    public const string HandsNotWindowsReason = "Руки есть только у агента на Windows: на этом устройстве их нет";
+    public const string HandsProjectOffReason = "Руки выключены в настройках проекта";
 
     /// <summary>Проект привязан к устройству. Единственная проверка локальности во всём коде.</summary>
     public static bool IsDeviceBound(Project project) => project.DeviceId is not null;
@@ -210,7 +219,9 @@ public sealed record ProjectCapabilities(
     /// Можно ли фоновой работе (исполнитель задачи, волна штаба, очередь чата, автоматизация,
     /// опрос сторожа) запускать ход проекта прямо сейчас. Серверный проект — всегда да.
     /// Локальный: устройство готово — да; устройства нет (отозвано) — ждать нечего, отказ;
-    /// иначе (офлайн, нет exec, харнес не готов) — ждать выхода устройства в онлайн.
+    /// иначе (офлайн, нет exec, агент устарел, харнес не готов) — ждать выхода устройства в
+    /// онлайн. Устаревший агент — тоже ожидание, а не ошибка: после обновления он переподключится,
+    /// а причина различает «агент обновляется» и «обновите агента».
     /// </summary>
     public static ProjectBackgroundGate BackgroundGate(Project project, DeviceExecStatus? device)
     {
@@ -225,7 +236,8 @@ public sealed record ProjectCapabilities(
 
     /// <summary>
     /// Чтение файлов проекта с другого устройства через ретранслятор (ADR-016 §5): только у
-    /// локального проекта и только пока его устройство онлайн и объявило ретранслятор.
+    /// локального проекта и только пока его устройство онлайн, объявило ретранслятор и агент
+    /// не ниже минимальной версии.
     /// null — можно, иначе причина для человека.
     /// </summary>
     public static string? RelayRefusal(Project project, DeviceExecStatus? device) =>
@@ -233,6 +245,24 @@ public sealed record ProjectCapabilities(
         : device is null ? DeviceMissingReason
         : !device.Online ? DeviceOfflineReason
         : !device.HasCapability(DeviceCapabilities.Relay) ? NoRelayReason
+        : device.AgentProblem;
+
+    /// <summary>
+    /// Можно ли чатам проекта подключать руки (ADR-016, раздел «Руки»): локальный проект,
+    /// устройство объявило <see cref="DeviceCapabilities.Hands"/>, тумблер рук у проекта включён.
+    /// null — можно, иначе причина для человека. Флага нет: руки у всех, выключатель — тумблер
+    /// проекта. Мост едет в составе агента под Windows, поэтому Windows-устройство без
+    /// возможности — это агент старой версии. Онлайн не требуется, как у <see cref="BindRefusal"/>:
+    /// без сети ход откажет по <see cref="Exec"/>. Сеанса рук на машине нет (решение 1в): наличие
+    /// моста, режим прав хода и занятость рук машины проверяет агент при подключении.
+    /// Контракт шага Ш1; к серверу и фронту матрицу подключает Ш4.
+    /// </summary>
+    public static string? HandsRefusal(Project project, DeviceExecStatus? device, bool projectHandsEnabled) =>
+        !IsDeviceBound(project) ? HandsNotLocalReason
+        : device is null ? DeviceMissingReason
+        : !device.HasCapability(DeviceCapabilities.Hands)
+            ? device.Platform is null or "windows" ? HandsAgentOutdatedReason : HandsNotWindowsReason
+        : !projectHandsEnabled ? HandsProjectOffReason
         : null;
 
     /// <summary>
@@ -262,6 +292,7 @@ public sealed record ProjectCapabilities(
             device is null ? DeviceMissingReason
             : !device.Online ? DeviceOfflineReason
             : !device.HasCapability(DeviceCapabilities.Exec) ? NoExecReason
+            : device.AgentOutdated ? device.AgentProblem
             : !device.HarnessReady ? device.HarnessProblem ?? "Харнес устройства не готов"
             : null;
 

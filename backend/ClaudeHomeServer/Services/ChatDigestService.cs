@@ -55,9 +55,6 @@ public class ChatDigestService(
     {
         var session = sessions.GetOwned(sessionId, userId)
             ?? throw new KeyNotFoundException("Чат не найден");
-        if (session.DesktopChat)
-            throw new InvalidOperationException(
-                "Сводка десктопного чата не строится: описания экрана не покидают грань десктопного агента");
 
         // Кэш: свежая сводка (построена после последней активности) отдаётся как есть
         if (FreshSummary(session) is not null) return session;

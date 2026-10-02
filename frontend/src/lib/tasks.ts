@@ -226,7 +226,7 @@ export function upsertTaskLocal(task: Task): void {
 // Hash-URL задачи в её родном разделе: проектная — вкладка «Задачи» проекта,
 // личная — «Календарь». Формат совпадает с бэковым TaskSchedulerService.TaskUrl
 // и диплинками уведомлений (App.openNotificationUrl их и обрабатывает).
-export function taskHashUrl(task: Task): string {
+export function taskHashUrl(task: Pick<Task, 'id' | 'projectId'>): string {
   return task.projectId
     ? `#/project/${task.projectId}/task/${task.id}`
     : `#/calendar/task/${task.id}`;
@@ -234,7 +234,7 @@ export function taskHashUrl(task: Task): string {
 
 // Открыть задачу в её разделе из любого места (вкладка «Задачи» персоны и т.п.):
 // шлём глобальное событие, App переиспует навигацию уведомлений.
-export function openTaskInSection(task: Task): void {
+export function openTaskInSection(task: Pick<Task, 'id' | 'projectId'>): void {
   window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: taskHashUrl(task) } }));
 }
 

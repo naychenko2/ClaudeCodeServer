@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, useCallback, lazy, Suspense, createElement } from 'react'
 import type { Project, AuthState } from './types'
 import { C } from './lib/design'
-import { ImageEditorHost } from './components/imageEditor'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
@@ -34,6 +33,7 @@ import { onFilesChanged, onMessage } from './lib/signalr'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
+import { requestOpenModelsSpend } from './lib/modelProvidersNav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
@@ -116,6 +116,10 @@ if (initialHash?.screen === 'project' && initialHash.projectId) {
   // Диплинк на чат внутри проекта: #/project/{id}/chat/{chatId}
   if (initialHash.chatId) sessionStorage.setItem('cc_pending_project_chat', `${initialHash.projectId}|${initialHash.chatId}`)
 }
+// Диплинк #/models — «Модели и расход» на вкладке «Расход» (уведомление об обновлении
+// claude CLI). Пендинг ставим до первого рендера: хост модалки (HubHeader/WorkspacePage)
+// подхватит его при маунте, а эффекты детей идут раньше эффектов App
+if (initialHash?.modelsSpend) requestOpenModelsSpend('quotas')
 // Диплинк #/calendar/task/{id} — личная задача, модал деталей поверх календаря
 if (initialHash?.screen === 'calendar' && initialHash.taskId) {
   sessionStorage.setItem('cc_pending_calendar_task', initialHash.taskId)
@@ -442,6 +446,15 @@ export default function App() {
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
     setProject(fresh)
   }), [])
+
+  // Секция настроек открытого проекта сохранила своё поле (тумблер рук, MCP, устройство):
+  // realtime у проектов нет, поэтому свежий DTO несём сюда сами. Иначе чаты держат прежний
+  // объект до перезагрузки — так включённые в открытом чате руки не доходили до полосы «Руки»
+  const handleOpenProjectUpdated = useCallback((fresh: Project) => {
+    if (fresh.id !== projectIdRef.current) return
+    localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
+    setProject(fresh)
+  }, [])
 
   // Связь: возврат offline → online теперь тихий. Маркер у аватарки
   // (useConnectionDisplayState) сам показывает состояние с гистерезисом
@@ -783,6 +796,8 @@ export default function App() {
       if (!target) return
       // Overlay'ы (#/history, #/intro) — собственная логика выше в onPop
       if (target.history || target.intro) return
+      // #/models — модалка поверх текущего экрана, раздел не меняем
+      if (target.modelsSpend) { requestOpenModelsSpend('quotas'); return }
       if (target.screen === 'project' && target.projectId) {
         // Диплинк на проект из внешнего источника (вставка URL в адресную строку).
         // Уже открытый этот же проект — выходим, чтобы не гонять api.projects.list.
@@ -1114,6 +1129,12 @@ export default function App() {
       window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT))
       return
     }
+    // Диплинк #/models — модалка «Модели и расход» поверх текущего экрана. Ветка обязана
+    // стоять до общей «раздел без глубокой цели»: parseHash отдаёт её как screen:'home'
+    if (target?.modelsSpend) {
+      requestOpenModelsSpend('quotas')
+      return
+    }
     // Диплинк на СПИСОК проектов (#/projects) — явный выход из открытого проекта к списку.
     // Просто switchHubTab сбрасывает проект лишь когда мы уже в разделе «Проекты»; с
     // дашборда проект бы остался и показался его воркспейс вместо списка.
@@ -1254,9 +1275,8 @@ export default function App() {
           остров отдают ему только место, а iframe живёт здесь и переживает
           перемонтаж страницы при смене проекта. */}
       {auth && <VideoStageFrame />}
-      {/* Редактор картинок — тоже НАД страницами: уход с проекта должен спросить про
-          несохранённые варианты, а не молча размонтировать редактор вместе с деревом файлов */}
-      {auth && !authChecking && <ImageEditorHost />}
+      {/* Слои подсистем НАД страницами (редактор картинок): уход с проекта должен спросить
+          про несохранённые варианты, а не молча размонтировать слой вместе с деревом файлов */}
       {authChecking
         ? <LoadingScreen hint="Проверяю вход" />
         : !auth
@@ -1271,8 +1291,10 @@ export default function App() {
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : activeSubsystemKey
               ? <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+                  {/* createElement, а не JSX: компонент не создаётся в рендере, а берётся
+                      из реестра — ленивый экземпляр живёт в манифесте и стабилен */}
                   {ActiveSubsystemTab
-                    ? <ActiveSubsystemTab auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+                    ? createElement(ActiveSubsystemTab, { auth, onLogout: logout, onHubTab: switchHubTab })
                     : null}
                 </Suspense>
             : effectiveHubTab === 'personas'
@@ -1292,7 +1314,7 @@ export default function App() {
                 // key: прямой переход проект→проект (back/forward) обязан перемонтировать
                 // WorkspacePage — иначе useState-инициализаторы не перечитают состояние
                 // нового проекта и на экране остаётся чат/файл/вкладка старого
-                ? <WorkspacePage key={project.id} project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
+                ? <WorkspacePage key={project.id} project={project} onProjectUpdated={handleOpenProjectUpdated} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
       {auth && historyOpen && (

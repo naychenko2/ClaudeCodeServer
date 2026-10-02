@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <c>ClaudeHomeServer.Services.Composition</c> (контракт <c>IAppSubsystem</c>),
 /// <c>ClaudeHomeServer.Services.Mcp</c> (сознательная граница для <c>McpSecretStore</c>).
 ///
-/// Всё прочее под <c>ClaudeHomeServer.Services.*</c> (Desktop, Backup, Llm, Images, Tts,
+/// Всё прочее под <c>ClaudeHomeServer.Services.*</c> (Devices, Backup, Llm, Images, Tts,
 /// Deploy, Memory, Turn, Docs, Git и т.п.) — нарушение. Список не дописывается под каждую
 /// новую вертикаль: появилась новая — тест автоматом ловит любую ссылку на неё, и повод
 /// обсудить шов. Подход — как в <c>PiiRules</c> (default-deny с явным allow-list).
@@ -38,14 +38,12 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <c>PromptToolsSinkFor</c> → <c>SafePromptSnapshotAttach</c>, и пришлось чинить
 /// отдельной задачей. Источник правды тут — сборка, а не текст.
 ///
-/// Сторож читает: поля, параметры конструкторов, публичные свойства, сигнатуры
-/// публичных методов И тела методов (IL-скан через <see cref="BoundaryIlScanner"/>).
-/// Поэтому видны: статические вызовы, резолвы <c>sp.GetRequiredService&lt;T&gt;()</c>,
-/// вызовы из async-state-машинок и замыканий. Обход вложенных типов обязателен:
-/// без него 3 из 7 известных швов остаются невидимыми.
-///
-/// Что НЕ проверяется осознанно: интерфейсы и базовые классы (за пределами четырёх мест
-/// ниже). Если потребуется — расширим в следующем шаге.
+/// Сторож читает (всё через <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/>):
+/// метаданные типа — поля всех видимостей, сигнатуры методов и конструкторов, свойства,
+/// события, базовый тип, интерфейсы, атрибуты — И тела методов (IL-скан).
+/// Поэтому видны: поле чужого типа, не тронутое в коде, статические вызовы, резолвы
+/// <c>sp.GetRequiredService&lt;T&gt;()</c>, вызовы из async-state-машинок и замыканий.
+/// Обход вложенных типов обязателен: без него 3 из 7 известных швов остаются невидимыми.
 /// </summary>
 public class SubsystemBoundaryTests
 {
@@ -84,10 +82,10 @@ public class SubsystemBoundaryTests
         // чтобы сторож видел их типы и проверял границы по Dossiers.dll / Memory.dll.
         _ = typeof(ClaudeHomeServer.Services.Dossiers.DossiersSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Memory.MemorySubsystem).Assembly;
-        // Desktop — отдельная сборка (Этап 5, вынос Desktop): форс-загрузка нужна,
-        // чтобы сторож видел типы грани (маршрутизатор канала, хаб устройств, схемы
-        // авторизации) и проверял их границы по Desktop.dll.
-        _ = typeof(ClaudeHomeServer.Services.Desktop.DesktopCallRouter).Assembly;
+        // Devices — отдельная сборка (Этап 5, вынос Devices): форс-загрузка нужна,
+        // чтобы сторож видел типы канала устройства (реестр, хаб устройств, схема
+        // авторизации) и проверял их границы по Devices.dll.
+        _ = typeof(ClaudeHomeServer.Services.Devices.DeviceRegistry).Assembly;
         // === Этап 5, волна C, шаг 2: новые швы Core, использованные вынесенными
         // вертикалями. Форс-загрузка нужна, чтобы вертикальные сборки (Modules,
         // ProjectServices) видели соответствующие Core-интерфейсы по сборке Core.dll.
@@ -95,6 +93,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.IProjectBackgroundWriter).Assembly;
         _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Architecture.ArchitectureSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.IProjectIconMigrator).Assembly;
         _ = typeof(ClaudeHomeServer.Services.IDataBackupService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
@@ -111,6 +110,12 @@ public class SubsystemBoundaryTests
         // чтобы сторож видел типы Images (IImageGenerator, ImageGenerationService)
         // и проверял границы по Images.dll.
         _ = typeof(ClaudeHomeServer.Services.Images.ImagesSubsystem).Assembly;
+        // ImageEditor — динамический модуль (ADR-018 §10.1): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.ImageEditor.ImageEditorSubsystem).Assembly;
+        // AudioEditor — динамический модуль «Звук» (ADR-021): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.AudioEditor.AudioEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): форс-загрузка нужна,
         // чтобы сторож видел типы Prompts (OmoPrompts, SubagentPrompts, OmcPersonaRouting)
         // и проверял границы по Prompts.dll.
@@ -250,14 +255,41 @@ public class SubsystemBoundaryTests
         // на внешние типы уходят в Core-интерфейсы: `IPersonaLookup`/`IPersonaAvatarStore`
         // (аватар персоны), `ServerMessage` (ImageBackfilledMessage), `ImageAssetHelper`
         // (ExtFor) — все в ClaudeHomeServer.Core.dll, покрываются `IsCoreAssembly`.
-        // Допусков за пределами спинки и своего namespace не осталось.
+        // `SkiaSharp.*` — third-party растр редактора (ADR-018 §9, `SkiaImageRaster`);
+        // пакет живёт только в Images, остальным вертикалям допуска нет.
         new object[]
         {
             new VerticalBoundary(
                 "Images",
                 "ClaudeHomeServer.Services.Images",
                 SharedAllowedPrefixes
-                    .Concat(new[] { "ClaudeHomeServer.Services.Images" })
+                    .Concat(new[] { "ClaudeHomeServer.Services.Images", "SkiaSharp" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // ImageEditor — динамический модуль редактора картинок (ADR-018 §10.1). Только общая
+        // спинка: растр, место генерации, Higgsfield и «Обсудить» — швы Core. SkiaSharp здесь
+        // намеренно нет — пакет живёт только в Images, модуль берёт растр через IImageRaster.
+        new object[]
+        {
+            new VerticalBoundary(
+                "ImageEditor",
+                "ClaudeHomeServer.Services.ImageEditor",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.ImageEditor" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // AudioEditor — динамический модуль «Звук» (ADR-021 §1). Только общая спинка: Higgsfield,
+        // локальные модели и DSP — швы Core в нейтральных namespace. Ссылка на сборку ImageEditor
+        // (а не на Core) — нарушение, так и проверяется мутацией.
+        new object[]
+        {
+            new VerticalBoundary(
+                "AudioEditor",
+                "ClaudeHomeServer.Services.AudioEditor",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.AudioEditor" })
                     .ToArray(),
                 Array.Empty<string>()),
         },
@@ -406,6 +438,23 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.ProjectIcons",
+                    })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // Architecture — раздел «Архитектура» (встраивание Viaduct). Контроллер и раздача
+        // Viaduct живут в вертикали (namespace под этим корнем — иначе выпали бы из-под
+        // сторожа); снимок графа кода — через Core-шов IArchitectureCodeSource, поэтому
+        // ссылки на CodeGraph нет; швы и SafePath — Core (IsCoreAssembly).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Architecture",
+                "ClaudeHomeServer.Services.Architecture",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Architecture",
                     })
                     .ToArray(),
                 Array.Empty<string>()),
@@ -1019,22 +1068,21 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.InstanceSecretFiles",
                 }),
         },
-        // Desktop — ручной агент песочницы (ADR-008), отдельная сборка
-        // ClaudeHomeServer.Desktop (Этап 5, вынос Desktop). Допусков нет: связи с корнем
-        // закрыты швами спины (ISessionDirectory/IFeatureFlagGate/IPersonaResolver/
-        // IProjectManager/IUserStore/IDesktopCapabilityTokens), хаб устройств переехал
-        // в саму вертикаль, а Protocol.* проходит по сборке Core.
-        // ADR-016 (задача 2.1): Desktop РЕАЛИЗУЕТ Core-шов `Services.Execution.IDeviceExecChannel`
+        // Devices — канал устройства агента локальных проектов (ADR-016; руки ADR-008
+        // удалены), отдельная сборка ClaudeHomeServer.Devices (Этап 5, вынос Devices).
+        // Допусков нет: связи с корнем закрыты швами спины, хаб устройств живёт в самой
+        // вертикали, а Protocol.* проходит по сборке Core.
+        // ADR-016 (задача 2.1): Devices РЕАЛИЗУЕТ Core-шов `Services.Execution.IDeviceExecChannel`
         // (канал исполнения на устройстве, WebSocket /api/devices/exec), потребитель —
-        // Execution (`RemoteProcessRunner`, задача 2.3). Прямого ребра Execution ⇄ Desktop нет:
+        // Execution (`RemoteProcessRunner`, задача 2.3). Прямого ребра Execution ⇄ Devices нет:
         // шов проходит по сборке Core, отдельного допуска не требует.
         new object[]
         {
             new VerticalBoundary(
-                "Desktop",
-                "ClaudeHomeServer.Services.Desktop",
+                "Devices",
+                "ClaudeHomeServer.Services.Devices",
                 SharedAllowedPrefixes
-                    .Concat(new[] { "ClaudeHomeServer.Services.Desktop" })
+                    .Concat(new[] { "ClaudeHomeServer.Services.Devices" })
                     .ToArray(),
                 Array.Empty<string>()),
         },
@@ -1158,7 +1206,7 @@ public class SubsystemBoundaryTests
         // вертикаль физически не может сослаться на Main (нет ProjectReference):
         // - `IHubContext<TerminalHub>` (префикс `ClaudeHomeServer.Hubs`) → Core-шов
         //   `ITerminalHubNotifier` (три метода: SendToClient/SendToGroup/AddToGroup).
-        //   Прежде это было «названное исключение» Ф4 наравне с `DesktopCallRouter`;
+        //   Прежде это было «названное исключение» Ф4 наравне с маршрутизатором канала устройств;
         //   курс Этапа 5 на вынос ВСЕХ вертикалей потребовал закрыть его швом.
         //   Реализация `TerminalHubNotifier` осталась в `Hubs/` рядом с `TerminalHub`
         //   (SignalR — транспорт, живёт в Main; тот же приём, что `ISessionBroadcaster`).
@@ -1254,7 +1302,7 @@ public class SubsystemBoundaryTests
         //  - `ICheapTextRunner` — уже в Core с волны 1 Skills;
         //  - `IHubContext<SessionHub>` и `Protocol.NotesChangedMessage` →
         //    `INotesHubNotifier` (первый в проекте шов Hub-рассылки для вынесенной
-        //    вертикали; по этому образцу пойдут Team и Desktop);
+        //    вертикали; по этому образцу пойдут Team и Devices);
         //  - `ProjectManager` → `IProjectManager` (3 метода), `UserStore` → `IUserStore`,
         //    `ProjectEventLogService` → `IProjectEventLogService`;
         //  - `FileService.SafeJoinPublic` → Core-примитив `SafePath.Join`;
@@ -1722,15 +1770,25 @@ public class SubsystemBoundaryTests
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).
         "ClaudeHomeServer.Core.Telemetry",
-        // ADR-017 (редактор картинок): контракт драйвера IImageEditor, REST-DTO, каталог
-        // поставщиков, события задачи и швы IHiggsfieldAccess/IImageEditJobs. Контроллер
-        // живёт в Main, драйверы — в вертикали Images, общий язык у них должен быть в спине.
+        // ADR-018 §10.1: швы модуля редактора картинок в спине — список авторазрешения
+        // тулсета агента (ImageEditorAgentTools), имя рабочей папки для бэкапа и записи
+        // операций растра.
+        // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
         "ClaudeHomeServer.Services.ImageEditor",
-        // ADR-017, разделы 4 и 5: версионное сохранение (FileMode.CreateNew, hero.v2.png) и
-        // журнал трат редактора per-user — примитивы спины, их зовут и контроллер Main, и
-        // исполнитель задач в вертикали Images.
+        // ADR-021 §2: имя рабочей папки модуля «Звук» для бэкапа (AudioEditorPaths) — Main
+        // типов динамического модуля не видит. Сам модуль — в ClaudeHomeServer.AudioEditor.
+        "ClaudeHomeServer.Services.AudioEditor",
+        // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая
+        // функция по сигнатуре байтов, нужна и модулю редактора, и LocalMedia в Images.
         "ClaudeHomeServer.Services.ImageEditor.Versioning",
-        "ClaudeHomeServer.Services.ImageEditor.Spending",
+        // ADR-018 §10.1: шов растра. Реализация (SkiaImageRaster) в Images, потребитель —
+        // модуль редактора; namespace сохранён при переносе интерфейса из Images.
+        "ClaudeHomeServer.Services.Images.Editing.Raster",
+        // ADR-021 §2: общие швы медиа-модулей (картинки и звук) под нейтральными именами —
+        // IHiggsfieldAccess (доступ к инстансной интеграции Higgsfield) и ProjectLinkGuard
+        // (запрет символических ссылок в путях проекта). Перенесены из Services.ImageEditor.
+        "ClaudeHomeServer.Services.Higgsfield",
+        "ClaudeHomeServer.Services.Media",
     ];
 
     /// <summary>
@@ -1747,6 +1805,10 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.OutputRingBuffer",
         "ClaudeHomeServer.Services.JsonFileStore",
         "ClaudeHomeServer.Services.SsrfGuard",
+        // Скачивание результата генерации по ссылке поставщика поверх SsrfGuard: им пользуются
+        // и Images, и ImageEditor — вторая копия в вертикали снова открыла бы SSRF
+        "ClaudeHomeServer.Services.SafeMediaDownloader",
+        "ClaudeHomeServer.Services.MediaDownloadResult",
         "ClaudeHomeServer.Services.RuleRuntimeState",
         "ClaudeHomeServer.Services.ModelTiers",
         "ClaudeHomeServer.Services.SpecialtyDefaultBinding",

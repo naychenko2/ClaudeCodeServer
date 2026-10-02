@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Serialization;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ClaudeHomeServer.Protocol;
 
@@ -24,6 +25,9 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredModelSwitchedMessage), "model_switched")]
 [JsonDerivedType(typeof(StoredBranchedFromMessage), "branched_from")]
 [JsonDerivedType(typeof(StoredInterruptedMessage), "interrupted")]
+[JsonDerivedType(typeof(StoredImageLaunchMessage), "image_launch")]
+[JsonDerivedType(typeof(StoredImageFileMovedMessage), "image_file_moved")]
+[JsonDerivedType(typeof(StoredModuleRecord), "module_record")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -69,7 +73,14 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     // StoredTextMessage.DelegationTaskId (доклад из чата-исполнителя без персоны
     // приходит пользовательским сообщением)
     public string? DelegationTaskId { get; init; } = delegationTaskId;
+    // Снимок холста чата картинки (ADR-018 §3): приложен ли он к этому сообщению и на какой
+    // ревизии холста. По нему лента пишет «холст не менялся — снимок не приложен».
+    // null — обычный чат либо история до этого поля. С v3 (ADR-019) не пишется, только читается
+    // из истории старых чатов картинки — удалять поле нельзя.
+    public StoredImageSnapshot? ImageSnapshot { get; init; }
 }
+
+public record StoredImageSnapshot(string Revision, bool Attached);
 
 public class StoredSessionStartedMessage(string model, string mode, TurnWorktreeInfo? turnWorktree = null) : StoredMessage
 {
@@ -348,5 +359,52 @@ public class StoredBranchedFromMessage : StoredMessage
 {
     public string SourceSessionId { get; init; } = "";
     public string SourceName { get; init; } = "";
+    public long? Timestamp { get; init; }
+}
+
+// Тихая строка «Вы запустили: «…» · FLUX Fill · ≈ $0.10 · 2 варианта» в чате картинки
+// (ADR-018 §2). Пишется в history.json, а не в транскрипт CLI: модель её НЕ видит, о ручном
+// запуске она узнаёт из блока состояния хода. By — кто запустил, значение SpendInitiators.*
+// ("human" | "agent"; тот же словарь, что у SpendRecord.Initiator): у истории нет конвертера
+// enum'ов, поэтому строка, а не ImageEditInitiator. Estimate — котировка на момент запуска.
+public class StoredImageLaunchMessage : StoredMessage
+{
+    public string By { get; init; } = Models.SpendInitiators.Human;
+    public string Prompt { get; init; } = "";
+    public string Provider { get; init; } = "";
+    public string Model { get; init; } = "";
+    public int Count { get; init; }
+    public StoredImageLaunchEstimate? Estimate { get; init; }
+    public string JobId { get; init; } = "";
+    public long? Timestamp { get; init; }
+}
+
+// Оценка запуска в строке истории. Своя запись спины, а не котировка из DTO редактора:
+// редактор — отдельный модуль (ADR-018 §10.1), и протокол от него не зависит. Имена полей те
+// же, что у котировки, поэтому history.json не меняется. Source — ImageEditEstimateSources.*
+public sealed record StoredImageLaunchEstimate(double? Amount, string Unit, bool Approx, string Source);
+
+// Тихая строка «Сохранено как … Редактор перешёл на этот файл, чат — вместе с ним»
+// (ADR-018 §1): чат картинки переехал на новый путь. Пути — от корня проекта.
+public class StoredImageFileMovedMessage : StoredMessage
+{
+    public string From { get; init; } = "";
+    public string To { get; init; } = "";
+    public long? Timestamp { get; init; }
+}
+
+// Запись модуля в ленте чата (ADR-019 §2): одна общая запись истории на все модули, чтобы
+// каждый новый вид строки не был правкой полиморфизма ядра. Ядро Data не разбирает — это JSON
+// модуля. Fallback — готовый текст строки на случай, когда модуль выключен или не знает
+// RecordType: лента рисует его вместо карточки. RecordType, а не Type: у живой пары
+// (ModuleRecordMessage) поле type занято типом события протокола, а формы обязаны совпадать.
+// Пишется в history.json через IChatFeed, а не в транскрипт CLI: модель такую запись не видит.
+public class StoredModuleRecord : StoredMessage
+{
+    // Ключ подсистемы-автора (IAppSubsystem.Key), например "imageeditor"
+    public string Module { get; init; } = "";
+    public string RecordType { get; init; } = "";
+    public JsonElement? Data { get; init; }
+    public string Fallback { get; init; } = "";
     public long? Timestamp { get; init; }
 }

@@ -6,12 +6,8 @@ import { useAssistantName } from './contexts';
 import { personaLabel, personaTitleLines } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { useContextPersona } from '../../lib/contextPersona';
-
-// Чипы-подсказки для empty state проектного чата
-const HINTS = ['Объясни структуру проекта', 'Найди и почини падающие тесты'];
-
-// Чипы-подсказки для чата вне проекта — универсальный ассистент (тексты, поиск, генерация медиа)
-const CHAT_HINTS = ['Найди информацию в интернете', 'Напиши пост для соцсетей', 'Сгенерируй картинку'];
+import { Button } from '../ui';
+import { useStripShortcuts } from './ComposerStripHost';
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
 // Внизу — настройка будущего чата (модель, усилие, время жизни, теги), пока не отправлено первое сообщение.
@@ -35,6 +31,8 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
   greetingAbove?: boolean;
 }) {
   const asstName = useAssistantName();
+  // Ярлыки полос над композером («Голос», «Музыка» у «Звука») — кнопками под приветствием
+  const shortcuts = useStripShortcuts(project?.id ?? null, session?.id ?? null);
   // Лицо пустого чата: аватар персоны чата (или дефолт-персоны контекста);
   // нейтральный favicon — только когда персоны нет
   const facePersona = useContextPersona({
@@ -56,8 +54,8 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
             {!hasProject ? (
               <>
                 {/* Приветствие чата вне проекта — general-purpose ассистент.
-                    С приветствием персоны сверху свой заголовок/подзаголовок не нужен:
-                    остаётся только затравка-чипы, чтобы не было двух приветствий подряд */}
+                    С приветствием персоны сверху свой заголовок/подзаголовок не нужен,
+                    чтобы не было двух приветствий подряд */}
                 {!greetingAbove && (
                   <>
                     <div style={{
@@ -72,26 +70,6 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
                     </div>
                   </>
                 )}
-
-                {/* Чипы */}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
-                  {CHAT_HINTS.map(hint => (
-                    <button
-                      key={hint}
-                      onClick={() => onHint(hint)}
-                      style={{
-                        background: C.bgWhite, border: `1px solid ${C.borderLight}`,
-                        borderRadius: 10, padding: '9px 12px',
-                        fontSize: 13, color: C.textPrimary, cursor: 'pointer',
-                        fontFamily: 'inherit',
-                      }}
-                      onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
-                      onMouseLeave={e => (e.currentTarget.style.background = C.bgWhite)}
-                    >
-                      {hint}
-                    </button>
-                  ))}
-                </div>
               </>
             ) : hasCLAUDEmd === false ? (
               <>
@@ -129,8 +107,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
               </>
             ) : (
               <>
-                {/* С приветствием персоны сверху заголовок/подзаголовок не рисуем:
-                    чипы-подсказки остаются как затравка */}
+                {/* С приветствием персоны сверху заголовок/подзаголовок не рисуем */}
                 {!greetingAbove && (
                   <>
                     <div style={{
@@ -145,27 +122,18 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
                     </div>
                   </>
                 )}
-
-                {/* Чипы */}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
-                  {HINTS.map(hint => (
-                    <button
-                      key={hint}
-                      onClick={() => onHint(hint)}
-                      style={{
-                        background: C.bgWhite, border: `1px solid ${C.borderLight}`,
-                        borderRadius: 10, padding: '9px 12px',
-                        fontSize: 13, color: C.textPrimary, cursor: 'pointer',
-                        fontFamily: 'inherit',
-                      }}
-                      onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
-                      onMouseLeave={e => (e.currentTarget.style.background = C.bgWhite)}
-                    >
-                      {hint}
-                    </button>
-                  ))}
-                </div>
               </>
+            )}
+
+            {shortcuts.length > 0 && (
+              <div data-empty-shortcuts="" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: SP.sm }}>
+                {shortcuts.map(sc => (
+                  <Button key={sc.key} variant="secondary" size="sm" leftIcon={sc.icon}
+                    title={sc.hint ? `${sc.title} — ${sc.hint}` : sc.title} onClick={sc.onSelect}>
+                    {sc.title}
+                  </Button>
+                ))}
+              </div>
             )}
 
             {/* Ряд персон «Поговорить с…» — назначить персону текущему пустому чату.

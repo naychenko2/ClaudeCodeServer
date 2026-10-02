@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // которые без явного Kill остаются сиротами).
 //
 // Паттерн — тот же CapturingLauncher, что в ClaudeSessionPromptSectionsOrderTests: настоящий
-// ClaudeSession с fake-CLI launcher (sleep-процесс на 10 с). Дополнительно тут launcher
+// ClaudeSession с fake-CLI launcher (sleep-процесс на 60 с). Дополнительно тут launcher
 // ведёт счётчик вызовов Kill и фиксирует HasExited сразу после Kill: SendMessageAsync
 // уходит в фон и не зовёт Kill (процесс живой, никаких смертей/финализаций нет),
 // DisposeAsync обязан позвать Kill хотя бы раз — это и есть проверяемый контракт.
@@ -43,19 +43,19 @@ public class ClaudeSessionDisposeTests : IDisposable
     // разница и есть «сколько раз уборка позвала Kill». Без Kill в DisposeAsync разница 0,
     // и тест роняется — это и есть мутация, которую тест ловит.
     //
-    // HasExited фиксируем СРАЗУ ПОСЛЕ Kill: после DisposeAsync процесс уже диспознут (Kill +
-    // WaitForExitAsync + Dispose в одной цепочке), и Process.HasExited бросает
-    // InvalidOperationException «No process is associated with this object». На момент Kill
-    // объект ещё жив (Dispose приходит следом) — успеваем прочитать реальное состояние.
+    // Выход процесса ловим СОБЫТИЕМ Exited, подписанным при старте, а не синхронным HasExited
+    // сразу после Kill: Kill посылает сигнал, а выход фиксируется позже — на загруженном CI
+    // чтение HasExited в момент Kill давало плавающий False. После DisposeAsync сам объект
+    // уже диспознут, и HasExited бросает InvalidOperationException — событие этого не боится.
     private sealed class CapturingLauncher(
         ConcurrentDictionary<int, Process> clis) : IProcessLauncher
     {
         private int _killCount;
         private int _killCountAtStart;
-        private bool _observedExitedAtKill;
+        private readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int KillCallsSinceStart => _killCount - _killCountAtStart;
-        public bool ObservedExitedAtKill => _observedExitedAtKill;
+        public Task Exited => _exited.Task;
 
         public bool IsSandboxed => false;
         public bool TargetIsWindows => OperatingSystem.IsWindows();
@@ -70,8 +70,8 @@ public class ClaudeSessionDisposeTests : IDisposable
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
-                    ? ["/c", "ping -n 10 127.0.0.1 >nul"]
-                    : ["-c", "sleep 10"],
+                    ? ["/c", "ping -n 60 127.0.0.1 >nul"]
+                    : ["-c", "sleep 60"],
                 WorkingDirectory = spec.WorkingDirectory,
                 ClearEnv = spec.ClearEnv,
                 StdioEncoding = spec.StdioEncoding,
@@ -80,6 +80,9 @@ public class ClaudeSessionDisposeTests : IDisposable
                 Track = false, // тестовый процесс: в реестр боевых PID его не пишем
             };
             var process = LocalProcessRunner.Instance.Start(fake);
+            process.EnableRaisingEvents = true;
+            process.Exited += (_, _) => _exited.TrySetResult();
+            if (process.HasExited) _exited.TrySetResult();
             clis[clis.Count + 1] = process;
             // Фиксируем снимок счётчика Kill на момент старта хода — после уборки разница
             // покажет «сколько Kill пришло из уборки, а не откуда-то ещё»
@@ -102,8 +105,6 @@ public class ClaudeSessionDisposeTests : IDisposable
         {
             try { process.Kill(entireProcessTree: true); }
             catch { /* уже мёртв */ }
-            try { _observedExitedAtKill = process.HasExited; }
-            catch { /* process уже освобождён — состояние не зафиксировать */ }
             _killCount++;
         }
     }
@@ -135,7 +136,7 @@ public class ClaudeSessionDisposeTests : IDisposable
         while (!_clis.TryGetValue(1, out cli!) && DateTime.UtcNow < deadline)
             await Task.Delay(20);
         cli.Should().NotBeNull("fake-CLI должен быть запущен в течение 15 с после SendMessageAsync");
-        cli!.HasExited.Should().BeFalse("сразу после Start процесс CLI ещё жив (sleep/ping на 10 с)");
+        cli!.HasExited.Should().BeFalse("сразу после Start процесс CLI ещё жив (sleep/ping на 60 с)");
 
         // Уборка: обязана позвать Kill на _currentProcess
         await session.DisposeAsync();
@@ -143,9 +144,10 @@ public class ClaudeSessionDisposeTests : IDisposable
         // 1. Kill был вызван уборкой (а не где-то ещё)
         launcher.KillCallsSinceStart.Should().BeGreaterThanOrEqualTo(1,
             "DisposeAsync обязан звать _launcher.Kill — иначе процесс CLI переживёт сессию и утечёт в фоне (на Windows это node-MCP-серверы, остаются сиротами на сутки)");
-        // 2. На момент Kill процесс реально был убит — без Kill он бы ещё ~10 с спал.
-        // HasExited проверяем в момент Kill внутри launcher (объект ещё жив, Dispose приходит следом).
-        launcher.ObservedExitedAtKill.Should().BeTrue(
-            "уборка должна не просто позвать Kill, а довести процесс до выхода — на момент Kill объект жив, читаем HasExited синхронно");
+        // 2. Процесс реально завершился. Фейк живёт 60 с — заметно дольше 10-секундного
+        // ожидания выхода в уборке: без Kill он переживает DisposeAsync, и событие не приходит
+        (await Task.WhenAny(launcher.Exited, Task.Delay(TimeSpan.FromSeconds(5))))
+            .Should().Be(launcher.Exited,
+                "уборка должна не просто позвать Kill, а довести процесс до выхода");
     }
 }

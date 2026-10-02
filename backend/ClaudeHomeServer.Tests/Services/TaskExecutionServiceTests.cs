@@ -708,8 +708,8 @@ public class TaskExecutionServiceTests
     [InlineData(0, false, true, false)]   // обычный ход пользователя — можно
     [InlineData(1, false, true, true)]    // делегированный ход (chats_send) — нельзя
     [InlineData(2, false, true, true)]    // глубже по цепочке — тем более нельзя
-    [InlineData(0, true, true, true)]     // реакция на доклад исполнителя — нельзя (цикл A↔B)
-    [InlineData(0, true, false, false)]   // подавление учитывают только запуск исполнителя
+    [InlineData(0, true, true, true)]     // реакция на доклад — нельзя там, где действие учитывает подавление
+    [InlineData(0, true, false, false)]   // действие без учёта подавления (запуск задач) — можно
     public void ЗапретДействияНаХоду(int depth, bool suppressed, bool alsoWhenSuppressed, bool expected)
     {
         var turn = new TurnDelegationState(depth, suppressed);

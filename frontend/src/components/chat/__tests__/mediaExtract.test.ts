@@ -397,6 +397,24 @@ describe('local-media', () => {
     expect(extractMediaMeta(result).source).toBe('local');
   });
 
+  // Боевой результат local_jobs_wait (QA 2026-09-26): медиа вложены в jobs[i], путь %-кодирован
+  it('local_jobs_wait: images/videos внутри jobs[] → медиа, источник local', () => {
+    const img = `/api/projects/${PID}/files/stream?path=.cc-attachments%2Flocal-media%2F2026-09-26%2Flm_5b1d-1.png`;
+    const vid = `/api/projects/${PID}/files/stream?path=.cc-attachments%2Flocal-media%2F2026-09-26%2Flm_ad73-1.mp4`;
+    const result = JSON.stringify({ all_done: true, jobs: [
+      { job_id: 'lm_5b1d', operation: 'generate_image', status: 'completed', seed: 1,
+        images: [{ url: img, content_type: 'image/png', width: 1472, height: 1104, path: '.cc-attachments/local-media/2026-09-26/lm_5b1d-1.png' }] },
+      { job_id: 'lm_ad73', operation: 'image_to_video', status: 'completed', seed: 2,
+        videos: [{ url: vid, content_type: 'video/mp4', width: 480, height: 864, path: '.cc-attachments/local-media/2026-09-26/lm_ad73-1.mp4' }] },
+    ] });
+    const media = extractMediaFromResult(result);
+    expect(media.map(m => [m.kind, m.url, m.fileName])).toEqual([
+      ['image', img, 'lm_5b1d-1.png'],
+      ['video', vid, 'lm_ad73-1.mp4'],
+    ]);
+    expect(extractMediaMeta(result).source).toBe('local');
+  });
+
   it('classifyUrl по content_type работает и для локального URL', () => {
     expect(classifyUrl({ url: LOCAL_VID, content_type: 'video/mp4' })).toBe('video');
   });

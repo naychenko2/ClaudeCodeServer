@@ -855,6 +855,15 @@ try {
         }
     }
 
+    # --- Relcheck: ffmpeg для модуля «Звук» (ADR-021, этап 5) -----------------------------
+    # Только предупреждение, не блок: модуль «Звук» корректно сереет без ffmpeg
+    # (`503 dsp_unavailable`), и в контейнере ffmpeg добавляется в образ (Dockerfile).
+    # Здесь ловим случай, когда выкатка идёт на хост без ffmpeg — чтобы человек
+    # увидел предупреждение в журнале ДО старта ФАЗЫ 2 (когда остановит сервер).
+    if (-not (Test-Tool 'ffmpeg')) {
+        Write-Warn 'relcheck: ffmpeg не найден в PATH — монтаж без ИИ в модуле «Звук» будет серым (503 dsp_unavailable). Выкатка продолжается.'
+    }
+
     # --- Сухой прогон: план и выход -------------------------------------------------------
     if ($DryRun) {
         Write-Host ''
@@ -985,19 +994,22 @@ try {
     Complete-DeployStep $h 'ok' ''
 
     $h = Add-DeployStep 'publish-backend'
-    dotnet publish (Join-Path $RepoDir 'backend\ClaudeHomeServer\ClaudeHomeServer.csproj') -c Release -o $StagingDir
+    # RID обязателен: без него нативка SkiaSharp (растр редактора) едет под все платформы, ~0,4 ГБ
+    dotnet publish (Join-Path $RepoDir 'backend\ClaudeHomeServer\ClaudeHomeServer.csproj') -c Release -r win-x64 --self-contained false -o $StagingDir
     if ($LASTEXITCODE -ne 0) { Complete-DeployStep $h 'failed' "dotnet exit $LASTEXITCODE"; throw "публикация бэка упала (exit $LASTEXITCODE)" }
     # Проверка динамических модулей: ModuleLoader резолвит их по пути из appsettings.json
-    # (modules/notes и modules/spend). Если csproj потеряет копию при publish — INoteSemanticIndex
+    # (modules/notes, modules/spend, modules/image-editor и modules/audio-editor). Если csproj потеряет копию при publish — INoteSemanticIndex
     # и ISpendCollector не зарегистрируются, форвардер Knowledge роняет старт, /api/spend/*
     # отдаёт 404. Раньше отлавливалось уже в продакшене (задача H4). Ловим здесь, пока
     # staging не заархивирован: падаем с понятным сообщением, а не выкатываем мёртвый хост.
     foreach ($mod in @(
         @{ Name = 'notes'; Dll = 'ClaudeHomeServer.Notes.dll' },
-        @{ Name = 'spend'; Dll = 'ClaudeHomeServer.Spend.dll' })) {
+        @{ Name = 'spend'; Dll = 'ClaudeHomeServer.Spend.dll' },
+        @{ Name = 'image-editor'; Dll = 'ClaudeHomeServer.ImageEditor.dll' },
+        @{ Name = 'audio-editor'; Dll = 'ClaudeHomeServer.AudioEditor.dll' })) {
         $dllPath = Join-Path $StagingDir "modules\$($mod.Name)\$($mod.Dll)"
         if (-not (Test-Path $dllPath)) {
-            $msg = "нет $dllPath после publish: ModuleLoader не найдёт модуль $($mod.Name) — INoteSemanticIndex/ISpendCollector не зарегистрируются (см. CopyNotesModule/CopySpendModule)"
+            $msg = "нет $dllPath после publish: ModuleLoader не найдёт модуль $($mod.Name) — INoteSemanticIndex/ISpendCollector не зарегистрируются (см. цели копирования модулей в ClaudeHomeServer.csproj)"
             Complete-DeployStep $h 'failed' $msg
             throw $msg
         }

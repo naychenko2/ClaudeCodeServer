@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.DeviceAgent.Versioning;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -49,9 +50,7 @@ public sealed partial class ManagedCli
 
     private const string InstallRecordFile = "install.json";
 
-    private readonly string _versionsDir;
-    private readonly string _stagingDir;
-    private readonly string _activeFile;
+    private readonly VersionedDirectory _dirs;
     private readonly ICliDistribution _distribution;
     private readonly CliManifestVerifier _manifestVerifier;
     private readonly IExecutableSignatureCheck _executableCheck;
@@ -79,19 +78,15 @@ public sealed partial class ManagedCli
         TimeProvider? time = null, ILogger<ManagedCli>? logger = null,
         CliManifestVerifier? manifestVerifier = null, IExecutableSignatureCheck? executableCheck = null)
     {
-        _versionsDir = Path.Combine(rootDirectory, "versions");
-        _stagingDir = Path.Combine(rootDirectory, "staging");
-        _activeFile = Path.Combine(rootDirectory, "active");
+        _logger = (ILogger?)logger ?? NullLogger.Instance;
+        _dirs = new VersionedDirectory(rootDirectory, _logger);
         _distribution = distribution;
         _manifestVerifier = manifestVerifier ?? CliManifestVerifier.Anthropic;
         _executableCheck = executableCheck ?? ExecutableSignatureCheck.ForCurrentOs();
         _platform = platform;
         _time = time ?? TimeProvider.System;
-        _logger = (ILogger?)logger ?? NullLogger.Instance;
 
-        Directory.CreateDirectory(_versionsDir);
-        TryDeleteDirectory(_stagingDir);
-        Directory.CreateDirectory(_stagingDir);
+        _dirs.ResetStaging();
         LoadActive();
     }
 
@@ -270,8 +265,7 @@ public sealed partial class ManagedCli
             throw new CliUnavailableException($"в выпуске CLI {version} нет сборки для платформы {_platform.Key}");
         ValidateBuild(build);
 
-        var staging = Path.Combine(_stagingDir, $"{version}-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(staging);
+        var staging = _dirs.CreateStaging(version);
         var done = false;
         try
         {
@@ -288,17 +282,15 @@ public sealed partial class ManagedCli
             var record = new InstallRecord(version, _platform.Key, build.Binary, build.Sha256.ToLowerInvariant(), build.Size);
             await File.WriteAllTextAsync(Path.Combine(staging, InstallRecordFile), JsonSerializer.Serialize(record), ct);
 
-            var final = VersionDir(version);
-            // Каталог без годной записи установки — остаток старой ошибки, а не копия.
-            TryDeleteDirectory(final);
-            Directory.Move(staging, final);
+            // Каталог без годной записи установки — остаток старой ошибки, а не копия: Commit его снесёт
+            var final = _dirs.Commit(staging, version);
             done = true;
             _logger.LogInformation("Управляемая копия CLI {Version} ({Platform}) установлена", version, _platform.Key);
             return Path.Combine(final, build.Binary);
         }
         finally
         {
-            if (!done) TryDeleteDirectory(staging);
+            if (!done) _dirs.TryDeleteDirectory(staging);
         }
     }
 
@@ -349,13 +341,7 @@ public sealed partial class ManagedCli
 
     private void LoadActive()
     {
-        string? version;
-        try
-        {
-            version = File.Exists(_activeFile) ? File.ReadAllText(_activeFile).Trim() : null;
-        }
-        catch (IOException) { version = null; }
-
+        var version = _dirs.ReadActive();
         if (version is null || !IsValidVersion(version)) return;
         if (TryReadInstalled(version) is { } executable)
         {
@@ -394,9 +380,7 @@ public sealed partial class ManagedCli
         _problem = null;
         try
         {
-            var tmp = _activeFile + ".tmp";
-            File.WriteAllText(tmp, version);
-            File.Move(tmp, _activeFile, overwrite: true);
+            _dirs.WriteActive(version);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -410,18 +394,9 @@ public sealed partial class ManagedCli
     // не удалилось (на Windows файл ещё держит процесс) — попробуем при следующей уборке.
     private void SweepObsolete()
     {
-        IEnumerable<string> dirs;
-        try { dirs = Directory.EnumerateDirectories(_versionsDir).ToList(); }
-        catch (IOException) { return; }
-
-        foreach (var dir in dirs)
-        {
-            var name = Path.GetFileName(dir);
-            if (name == _active || name == _required || _leases.ContainsKey(name)) continue;
-            // Не зная требуемой версии, чужие копии не трогаем: вдруг сервер попросит именно её.
-            if (!_requiredKnown) continue;
-            TryDeleteDirectory(dir);
-        }
+        // Не зная требуемой версии, чужие копии не трогаем: вдруг сервер попросит именно её.
+        if (!_requiredKnown) return;
+        _dirs.Sweep(name => name == _active || name == _required || _leases.ContainsKey(name));
     }
 
     private HarnessStatus AfterChange()
@@ -465,7 +440,7 @@ public sealed partial class ManagedCli
         _ => $"установка CLI {version} не удалась: {e.Message}",
     };
 
-    private string VersionDir(string version) => Path.Combine(_versionsDir, version);
+    private string VersionDir(string version) => _dirs.VersionDir(version);
 
     private void Wake()
     {
@@ -480,18 +455,6 @@ public sealed partial class ManagedCli
         status ??= Status;
         try { handler(status); }
         catch (Exception e) { _logger.LogWarning(e, "Подписчик состояния CLI упал"); }
-    }
-
-    private void TryDeleteDirectory(string dir)
-    {
-        try
-        {
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogInformation(e, "Каталог {Dir} пока не удалён, повтор при следующей уборке", dir);
-        }
     }
 
     private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;

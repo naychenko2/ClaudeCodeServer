@@ -10,6 +10,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { federation } from '@module-federation/vite';
+import { hostReactShared } from '../hostReactShared';
 
 export default defineConfig(({ mode }) => ({
   // Dev: префикс прокси хоста — MF-рантайм резолвит root-absolute импорты
@@ -33,10 +34,8 @@ export default defineConfig(({ mode }) => ({
       remotes: {
         aihome_shell: { type: 'module', name: 'aihome_shell', entry: '/remoteEntry.js' },
       },
-      shared: {
-        react: { singleton: true, requiredVersion: '^19.2.0' },
-        'react-dom': { singleton: true, requiredVersion: '^19.2.0' },
-      },
+      // React — только singleton ядра, своей копии модуль не везёт (см. hostReactShared).
+      shared: hostReactShared,
     }),
   ],
   build: {

@@ -4,6 +4,7 @@
 // остаются в хуке; редьюсер только считает следующее состояние.
 
 import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
+import { handsStatusFeedLine } from './localHands';
 import { isBgLaunchResult } from './agentTail';
 
 // Live-состояние режима «Командная реализация» из REST-гидратации (Session.teamImplement):
@@ -259,6 +260,7 @@ export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'context_pruned', 'error',
   'work_loop_stopped', 'model_switched', 'branched_from', 'interrupted',
+  'image_launch', 'image_file_moved', 'module_record',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
@@ -472,6 +474,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.staffNote ? { staffNote: msg.staffNote } : {}),
         ...(msg.auto ? { auto: true } : {}),
         ...(msg.delegationTaskId ? { delegationTaskId: msg.delegationTaskId } : {}),
+        ...(msg.imageSnapshot ? { imageSnapshot: msg.imageSnapshot } : {}),
       }]);
     }
 
@@ -753,6 +756,29 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.promptTokens !== undefined ? { promptTokens: msg.promptTokens } : {}),
       }]);
 
+    case 'image_launch': {
+      // Тихая строка ручного запуска в чате картинки. Одна задача — одна строка: повторная
+      // доставка того же события (веерная рассылка) ленту не удваивает
+      if (prev.items.some(it => it.kind === 'image_launch' && it.jobId === msg.jobId)) return prev;
+      return withItems([...prev.items, {
+        kind: 'image_launch', by: msg.by, prompt: msg.prompt, provider: msg.provider, model: msg.model,
+        count: msg.count, estimate: msg.estimate, jobId: msg.jobId, timestamp: msg.timestamp,
+      }]);
+    }
+
+    case 'image_file_moved':
+      if (prev.items.some(it => it.kind === 'image_file_moved' && it.to === msg.to && it.timestamp === msg.timestamp)) return prev;
+      return withItems([...prev.items, { kind: 'image_file_moved', from: msg.from, to: msg.to, timestamp: msg.timestamp }]);
+
+    case 'module_record':
+      // Повторная доставка той же записи (веерная рассылка) ленту не удваивает
+      if (prev.items.some(it => it.kind === 'module_record' && it.module === msg.module && it.recordType === msg.recordType
+        && it.timestamp === msg.timestamp && JSON.stringify(it.data) === JSON.stringify(msg.data))) return prev;
+      return withItems([...prev.items, {
+        kind: 'module_record', module: msg.module, recordType: msg.recordType, data: msg.data,
+        fallback: msg.fallback, timestamp: msg.timestamp,
+      }]);
+
     case 'compact_status':
       // Ход компакции: compacting → началась; compact_result — завершилась.
       // «Not enough messages» — не ошибка, а «сжимать пока нечего»: показываем мягко (note), без красной плашки.
@@ -1016,6 +1042,18 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           liveness: msg.liveness,
         },
       };
+
+    case 'hands_notice':
+      // Строка о руках от сервера (понижение «Без ограничений» и подобное) — live-only:
+      // событие эфемерное, после перезагрузки его нет и в истории
+      return withItems([...prev.items, { kind: 'hands_notice', text: msg.text, tone: 'neutral' }]);
+
+    case 'hands_status': {
+      // Состояние рук живёт в полосе «Руки» (LocalHandsStripFeed слушает то же событие); в ленту идёт
+      // только остановка на устройстве — она объясняет, почему ход оборвался
+      const line = handsStatusFeedLine(msg);
+      return line ? withItems([...prev.items, { kind: 'hands_notice', text: line, tone: 'warning' }]) : prev;
+    }
 
     case 'prompt_suggestion':
       // Подсказка следующего сообщения — приходит после result хода; в ленту не попадает

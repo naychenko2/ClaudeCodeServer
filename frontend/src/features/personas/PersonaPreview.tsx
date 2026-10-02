@@ -262,6 +262,7 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
   // === Настройки: факты, у которых нет своей вкладки (остальное — в навигаторе) ===
   const facts: { label: string; value: string; title?: string }[] = [
     { label: 'Модель', value: persona.effort ? `${modelName} · ${effortLabel(persona.effort)}` : modelName },
+    { label: 'Облегчённый контекст', value: persona.lightContext ? 'вкл' : 'выкл' },
     { label: 'Доступ', value: accessText },
     { label: 'Возможности', value: toolsText },
     { label: 'Зона', value: zoneLabel ?? (persona.scope === 'project' ? 'Проект' : 'Глобальная') },

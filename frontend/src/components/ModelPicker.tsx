@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { ModelOption } from '../lib/models';
-import { modelProvider, providerLabel, useDefaultModelOption, USAGE, type UsageKey } from '../lib/models';
-import { C, R, FONT, SP } from '../lib/design';
+import { modelProvider, providerLabel, useDefaultModelOption, versionHint, USAGE, type UsageKey } from '../lib/models';
+import { C, R, FONT, FS, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 // Выбор модели строками-карточками (как карточки режимов): название + бейдж окна
@@ -65,6 +65,7 @@ export function WindowBadge({ tokens }: { tokens?: number }) {
 function ModelRow({
   option, active, compact, onClick,
 }: { option: ModelOption; active: boolean; compact?: boolean; onClick: () => void }) {
+  const hint = versionHint(option);
   return (
     <button
       type="button"
@@ -79,12 +80,20 @@ function ModelRow({
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{
-            flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600,
+            flex: hint ? '0 1 auto' : 1, minWidth: 0, fontSize: 13, fontWeight: 600,
             color: active ? C.textHeading : C.textPrimary,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {option.label}
           </span>
+          {hint && (
+            <span style={{
+              flex: 1, minWidth: 0, fontSize: FS.xs, color: C.textMuted,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {hint}
+            </span>
+          )}
           <WindowBadge tokens={option.contextWindow} />
         </span>
         {option.description && (

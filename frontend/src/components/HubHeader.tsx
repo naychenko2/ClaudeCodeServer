@@ -18,12 +18,12 @@ import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
 import { DevicesModal } from '../features/desktop/DevicesModal';
-import { useFeature, FLAGS } from '../lib/featureFlags';
+import { useDevicesMenuVisible } from '../features/desktop/deviceOptions';
 import { DeployModal } from './DeployModal';
 import { PowerModal } from './PowerModal';
 import { RemoteCommandsModal } from './RemoteCommandsModal';
 import { api } from '../lib/api';
-import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
+import { hasPendingOpen, subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
 import { BADGE_EVENT, loadIncidentBadge } from '../features/telemetry/incidentBadge';
 
@@ -68,7 +68,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showSubsystems, setShowSubsystems] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
-  const [showModelsSpend, setShowModelsSpend] = useState(false);
+  // Пендинг при маунте — холодный старт по ссылке из уведомления (#/models)
+  const [showModelsSpend, setShowModelsSpend] = useState(hasPendingOpen);
   const [showMcpServers, setShowMcpServers] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
   const [showDeploy, setShowDeploy] = useState(false);
@@ -91,7 +92,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // absolute-пробник раздувает scrollWidth трека, хоть и невидим).
   const probeFullRef = useRef<HTMLDivElement>(null);
 
-  // «Собрать цепочку…» из панелей выбора модели — открыть единый раздел «Модели и расход»
+  // «Собрать цепочку…» из панелей выбора модели и диплинк #/models — открыть единый раздел
+  // «Модели и расход»
   useEffect(() => subscribeModelProvidersNav(() => setShowModelsSpend(true)), []);
 
   // Замер «влезают ли 5 табов» — по скрытому компактному эталону полного набора
@@ -179,9 +181,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     return () => { alive = false; window.removeEventListener(BADGE_EVENT, refresh); };
   }, [isAdmin]);
 
-  // Грань десктопного агента за фич-флагом: без него пункта «Устройства» нет —
-  // сопрягать нечего, а сервер всё равно откажет
-  const desktopEnabled = useFeature(FLAGS.desktopAgent);
+  // Пункт «Устройства» — под флагом local-projects: без него подключать нечего
+  const devicesMenu = useDevicesMenuVisible();
 
   // Доступна ли выкатка на бой. Спрашиваем только у админа: фича admin-only и вдобавок
   // выключена в конфиге по умолчанию — на машинах, где раннера нет, пункта быть не должно.
@@ -547,9 +548,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowModelsSpend={() => setShowModelsSpend(true)}
           onShowMcpServers={() => setShowMcpServers(true)}
-          // Устройства десктопной грани — только при поднятом флаге: без него сопрягать
-          // нечего, сервер всё равно откажет
-          onShowDevices={desktopEnabled ? () => setShowDevices(true) : undefined}
+          // Устройства — агенты локальных проектов (local-projects)
+          onShowDevices={devicesMenu ? () => setShowDevices(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           // Админский список подсистем инстанса (Этап 5, волна 3): только
           // чтение через GET /api/admin/subsystems, без тумблера — глобальный

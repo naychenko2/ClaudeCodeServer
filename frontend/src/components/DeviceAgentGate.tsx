@@ -1,10 +1,15 @@
-import type { ReactNode } from 'react';
-import { Loader2, MonitorOff, ShieldAlert, Unplug } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { Loader2, MonitorOff, Plug, ShieldAlert, Unplug } from 'lucide-react';
 import type { Project } from '../types';
 import { useDeviceAgent, probeDeviceAgent, type DeviceAgentStatus } from '../lib/deviceAgent';
+import { isRootNotAllowed } from '../lib/agentInstall';
+import { FLAGS, useFeature } from '../lib/featureFlags';
+import { C, FS, SP } from '../lib/design';
 import { EmptyState, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { CapabilityUnavailable } from './CapabilityGate';
+import { DevicesModal } from '../features/desktop/DevicesModal';
+import { RootsAddHint } from '../features/desktop/AgentCommands';
 
 interface Props {
   project: Project;
@@ -16,7 +21,7 @@ interface Props {
 
 type View = { icon: ReactNode; title: string; subtitle: string } | null;
 
-function describe(status: DeviceAgentStatus): View {
+function describe(status: DeviceAgentStatus, agentMode: boolean): View {
   const icon = (I: typeof Unplug) => <I size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />;
   switch (status.kind) {
     case 'ready':
@@ -24,7 +29,9 @@ function describe(status: DeviceAgentStatus): View {
     case 'checking':
       return { icon: <Loader2 size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} style={{ animation: 'spin 1s linear infinite' }} />, title: 'Ищем агент AI Home на этом компьютере', subtitle: 'Файлы, терминал и сервисы локального проекта открываются через агента AI Home на этом компьютере' };
     case 'unreachable':
-      return { icon: icon(Unplug), title: 'Агент AI Home на этом компьютере не найден', subtitle: 'Файлы, терминал и сервисы локального проекта доступны только на его компьютере с запущенным агентом AI Home. Запустите агента или откройте проект с машины проекта' };
+      return { icon: icon(Unplug), title: 'Агент AI Home на этом компьютере не найден', subtitle: agentMode
+        ? 'Файлы, терминал и сервисы локального проекта доступны на компьютере с агентом AI Home. Поставьте агента: Устройства → Подключить компьютер — или откройте проект с машины проекта'
+        : 'Файлы, терминал и сервисы локального проекта доступны только на его компьютере с запущенным агентом AI Home. Запустите агента или откройте проект с машины проекта' };
     case 'refused':
       return { icon: icon(ShieldAlert), title: 'Доступ к проекту на устройстве не выдан', subtitle: status.reason };
     case 'rejected':
@@ -42,26 +49,74 @@ function describe(status: DeviceAgentStatus): View {
 // Серверному проекту гейт прозрачен. Хуки панели живут в children — ранний выход здесь их не ломает.
 export function DeviceAgentGate({ project, children, relayTitle }: Props) {
   const status = useDeviceAgent(project);
+  const agentMode = useFeature(FLAGS.localProjects);
+  const [devicesOpen, setDevicesOpen] = useState(false);
   const retry = (
     <Button variant="secondary" size="sm" onClick={() => void probeDeviceAgent(project.id)}>
       Проверить снова
     </Button>
   );
+  const reason = 'reason' in status ? status.reason : null;
+  // Агент отказал: папка проекта не под разрешёнными корнями машины — даём готовую команду
+  const rootsHint = agentMode && isRootNotAllowed(reason);
+  // Ретранслятор включается и там, где агента нет вовсе: присутствие «не здесь» неотличимо
+  // от «агент не поставлен», поэтому подсказка установки видна на постоянной плашке, а не мелькает
+  const installHint = agentMode && !rootsHint && (status.kind === 'relay' || status.kind === 'relay-unavailable');
+  const action = rootsHint
+    ? (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.md, maxWidth: 420 }}>
+        <RootsAddHint rootPath={project.rootPath} platform={project.device?.platform} bare />
+        {retry}
+      </div>
+    )
+    : installHint
+      ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.md, maxWidth: 420 }}>
+          <div data-device-agent-install-hint style={{ fontSize: FS.sm, color: C.textMuted, textAlign: 'center', lineHeight: 1.5 }}>
+            Если это компьютер проекта — поставьте агента AI Home: Устройства → Подключить компьютер
+          </div>
+          <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <Button variant="secondary" size="sm" leftIcon={<Plug size={14} strokeWidth={2.2} />} onClick={() => setDevicesOpen(true)}>
+              Устройства
+            </Button>
+            {retry}
+          </div>
+        </div>
+      )
+      : retry;
+  const devicesModal = devicesOpen && <DevicesModal onClose={() => setDevicesOpen(false)} />;
+
   if (relayTitle !== undefined && status.kind === 'relay') return <>{children}</>;
   // Устройство не в сети или агент без ретранслятора — та же плашка «недоступно с причиной», что у матрицы
   if (relayTitle !== undefined && status.kind === 'relay-unavailable')
-    return <CapabilityUnavailable feature="relay" title={relayTitle} reason={status.reason} action={retry} />;
-  const view = describe(status);
+    return (
+      <>
+        <CapabilityUnavailable feature="relay" title={relayTitle} reason={status.reason} action={action} />
+        {devicesModal}
+      </>
+    );
+  const view = describe(status, agentMode);
   if (!view) return <>{children}</>;
+  const unreachableAction = agentMode && status.kind === 'unreachable'
+    ? (
+      <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <Button variant="primary" size="sm" leftIcon={<Plug size={14} strokeWidth={2.2} />} onClick={() => setDevicesOpen(true)}>
+          Подключить компьютер
+        </Button>
+        {retry}
+      </div>
+    )
+    : null;
   return (
     <div role="status" data-device-agent-state={status.kind} style={{ height: '100%' }}>
       <EmptyState
         compact
         icon={view.icon}
-        title={view.title}
-        subtitle={view.subtitle}
-        action={status.kind === 'checking' ? undefined : retry}
+        title={rootsHint ? 'Папка проекта не разрешена агенту' : view.title}
+        subtitle={rootsHint ? 'Агент на этом компьютере открывает только папки, которые вы разрешили сами' : view.subtitle}
+        action={status.kind === 'checking' ? undefined : unreachableAction ?? action}
       />
+      {devicesModal}
     </div>
   );
 }

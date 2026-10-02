@@ -1,8 +1,11 @@
 using System.Collections.Concurrent;
 using System.Text;
+using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.DeviceAgent.Hands;
 using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
+using ClaudeHomeServer.DeviceAgent.Tests.Composition;
 using ClaudeHomeServer.Protocol;
 using Microsoft.Extensions.Logging;
 
@@ -25,7 +28,8 @@ internal sealed class TurnHarness : IAsyncDisposable
         ["GITHUB_TOKEN"] = "ghp_SECRET5",
     };
 
-    public TurnHarness(string cliPath, string? leaseProblem = null, Func<TurnLaunch, TurnProcess>? launcher = null)
+    public TurnHarness(string cliPath, string? leaseProblem = null, Func<TurnLaunch, TurnProcess>? launcher = null,
+        HandsRuntime? hands = null, TimeSpan? drainTimeout = null)
     {
         Root = Path.Combine(Path.GetTempPath(), "agent-turn-" + Guid.NewGuid().ToString("N")[..10]);
         WorkDir = Directory.CreateDirectory(Path.Combine(Root, "project")).FullName;
@@ -46,8 +50,11 @@ internal sealed class TurnHarness : IAsyncDisposable
             ConfigDirectory = Profile,
             SidecarUrl = () => SidecarUrl,
             InheritedEnvironment = () => inherited,
-            DrainTimeout = TimeSpan.FromSeconds(10),
+            DrainTimeout = drainTimeout ?? TimeSpan.FromSeconds(10),
             Launcher = launcher ?? TurnProcess.Start,
+            // Разрешённый корень машины — сам каталог проекта
+            PathPolicy = new AgentPathPolicy(new AgentSandbox.FixedRoots(WorkDir)),
+            Hands = hands,
         }, Cli, Grants, Journal, new ListLogger<TurnExecutor>(Logs));
     }
 
@@ -65,8 +72,8 @@ internal sealed class TurnHarness : IAsyncDisposable
     public Task? Run { get; private set; }
 
     public DeviceExecSpawn Spawn(IReadOnlyList<string>? args = null, IReadOnlyList<DeviceExecFile>? files = null,
-        IReadOnlyDictionary<string, string>? env = null, string fileName = "claude") =>
-        new(fileName, args ?? ["-p", "--output-format", "stream-json"], WorkDir,
+        IReadOnlyDictionary<string, string>? env = null, string fileName = "claude", string? workingDirectory = null) =>
+        new(fileName, args ?? ["-p", "--output-format", "stream-json"], workingDirectory ?? WorkDir,
             env ?? new Dictionary<string, string>(), files ?? [], RedirectStdin: true);
 
     public async Task StartAsync(DeviceExecSpawn spawn, string turnId = "turn1", DeviceExecGateway? grant = null, TimeSpan? maxOutage = null)

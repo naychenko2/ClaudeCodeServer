@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/board")]
-public class BoardController(BoardService board, SessionManager sessions) : ControllerBase
+public class BoardController(BoardService board, SessionManager sessions, TaskExecutionService executions) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -34,10 +34,12 @@ public class BoardController(BoardService board, SessionManager sessions) : Cont
     /// POST /api/board/agents/{sessionId}/interrupt — прервать выполнение агента.
     /// </summary>
     [HttpPost("agents/{sessionId}/interrupt")]
-    public IActionResult InterruptAgent(string sessionId)
+    public async Task<IActionResult> InterruptAgent(string sessionId)
     {
         if (OwnedSession(sessionId) is null) return NotFound();
         sessions.Interrupt(sessionId);
+        // Исполнитель задачи: прерванный ход result не пришлёт — фиксируем остановку сами
+        await executions.MarkStoppedByUserAsync(sessionId);
         return NoContent();
     }
 

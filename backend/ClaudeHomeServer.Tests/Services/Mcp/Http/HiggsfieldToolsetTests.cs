@@ -832,6 +832,45 @@ public class HiggsfieldToolsetTests
         }
     }
 
+    // Описание generate_audio от апстрима зовёт list_voices и generate_audio_batch, которых
+    // в белом списке нет. Оговорка дописывается только к generate_audio, остальные — как есть.
+    [Fact]
+    public async Task FetchToolsListAsync_GenerateAudio_ПолучаетОговоркуОНедоступныхИнструментах()
+    {
+        var body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":0," +
+            "\"result\":{\"tools\":[" +
+            "{\"name\":\"generate_audio\",\"description\":\"audio\",\"inputSchema\":{}}," +
+            "{\"name\":\"generate_image\",\"description\":\"img\",\"inputSchema\":{}}," +
+            "{\"name\":\"job_status\",\"description\":\"st\",\"inputSchema\":{}}" +
+            "]}}\n\n";
+        var (dir, config, statuses, oauth, handler) = NewStep3Fixture("audionote", HttpStatusCode.OK, body);
+        try
+        {
+            var toolset = new HiggsfieldToolset(oauth,
+                new StubHttpClientFactory(handler),
+                sessions: null!,
+                config,
+                mcpStatus: statuses,
+                NullLogger<HiggsfieldToolset>.Instance);
+
+            var fetch = typeof(HiggsfieldToolset).GetMethod("FetchToolsListAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var tools = await (Task<IReadOnlyList<McpToolSchema>?>)fetch.Invoke(toolset, [CancellationToken.None])!;
+
+            tools.Should().NotBeNull().And.HaveCount(3);
+            var audio = tools!.Single(t => t.Name == "generate_audio");
+            audio.Description.Should().StartWith("audio");
+            audio.Description.Should().Contain("`list_voices` и `generate_audio_batch` недоступны");
+            foreach (var other in tools!.Where(t => t.Name != "generate_audio"))
+                other.Description.Should().NotContain("list_voices",
+                    $"оговорка нужна только generate_audio, а не {other.Name}");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
     // --- Шаг 4: фоновый прогрев снимка ---
 
     // Интеграция не подключена (per-owner токена нет, EnsureFresh() вернёт null):

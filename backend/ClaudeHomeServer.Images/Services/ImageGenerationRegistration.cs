@@ -10,6 +10,8 @@ public static class ImageGenerationRegistration
     public static IServiceCollection AddImageGeneration(this IServiceCollection services)
     {
         services.AddSingleton<ImageGenerationSettingsStore>();
+        // Шов места для редактора в модуле: тот же экземпляр стора, а не второй
+        services.AddSingleton<Composition.IImagePlaceSettings>(sp => sp.GetRequiredService<ImageGenerationSettingsStore>());
         // fal остаётся доступен и как конкретный тип: на него завязаны существующие
         // точки генерации, которые переезжают на роутер отдельной волной.
         services.AddImageDriver<FalImageService>();

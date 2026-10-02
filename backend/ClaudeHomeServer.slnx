@@ -1,15 +1,20 @@
 <Solution>
   <Project Path="ClaudeHomeServer/ClaudeHomeServer.csproj" />
+  <Project Path="ClaudeHomeServer.Architecture/ClaudeHomeServer.Architecture.csproj" />
+  <Project Path="ClaudeHomeServer.AudioEditor/ClaudeHomeServer.AudioEditor.csproj" />
+  <Project Path="ClaudeHomeServer.AudioEditor.Tests/ClaudeHomeServer.AudioEditor.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Backgrounds/ClaudeHomeServer.Backgrounds.csproj" />
   <Project Path="ClaudeHomeServer.Changelog/ClaudeHomeServer.Changelog.csproj" />
   <Project Path="ClaudeHomeServer.Changelog.Tests/ClaudeHomeServer.Changelog.Tests.csproj" />
   <Project Path="ClaudeHomeServer.CodeGraph/ClaudeHomeServer.CodeGraph.csproj" />
   <Project Path="ClaudeHomeServer.CodeGraph.Tests/ClaudeHomeServer.CodeGraph.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Core/ClaudeHomeServer.Core.csproj" />
-  <Project Path="ClaudeHomeServer.Desktop/ClaudeHomeServer.Desktop.csproj" />
-  <Project Path="ClaudeHomeServer.Desktop.Tests/ClaudeHomeServer.Desktop.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.Devices/ClaudeHomeServer.Devices.csproj" />
+  <Project Path="ClaudeHomeServer.Devices.Tests/ClaudeHomeServer.Devices.Tests.csproj" />
   <Project Path="ClaudeHomeServer.DeviceAgent/ClaudeHomeServer.DeviceAgent.csproj" />
   <Project Path="ClaudeHomeServer.DeviceAgent.Tests/ClaudeHomeServer.DeviceAgent.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.DeviceAgent.Tests.ChildFixture/ClaudeHomeServer.DeviceAgent.Tests.ChildFixture.csproj" />
+  <Project Path="ClaudeHomeServer.DeviceAgent.Tray/ClaudeHomeServer.DeviceAgent.Tray.csproj" />
   <Project Path="ClaudeHomeServer.Diagnostics/ClaudeHomeServer.Diagnostics.csproj" />
   <Project Path="ClaudeHomeServer.Diagnostics.Tests/ClaudeHomeServer.Diagnostics.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Docs/ClaudeHomeServer.Docs.csproj" />
@@ -22,6 +27,8 @@
   <Project Path="ClaudeHomeServer.Git.Tests/ClaudeHomeServer.Git.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Images/ClaudeHomeServer.Images.csproj" />
   <Project Path="ClaudeHomeServer.Images.Tests/ClaudeHomeServer.Images.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.ImageEditor/ClaudeHomeServer.ImageEditor.csproj" />
+  <Project Path="ClaudeHomeServer.ImageEditor.Tests/ClaudeHomeServer.ImageEditor.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Knowledge/ClaudeHomeServer.Knowledge.csproj" />
   <Project Path="ClaudeHomeServer.Knowledge.Tests/ClaudeHomeServer.Knowledge.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Llm/ClaudeHomeServer.Llm.csproj" />
@@ -54,4 +61,8 @@
   <Project Path="ClaudeHomeServer.Yandex/ClaudeHomeServer.Yandex.csproj" />
   <Project Path="ClaudeHomeServer.Yandex.Tests/ClaudeHomeServer.Yandex.Tests.csproj" />
   <Project Path="ConPtyBridge/ConPtyBridge.csproj" />
+  <Project Path="HandsBridge/HandsBridge.csproj" />
+  <Project Path="HandsBridge.Browser/HandsBridge.Browser.csproj" />
+  <Project Path="HandsBridge.Policy/HandsBridge.Policy.csproj" />
+  <Project Path="HandsBridge.Policy.Tests/HandsBridge.Policy.Tests.csproj" />
 </Solution>

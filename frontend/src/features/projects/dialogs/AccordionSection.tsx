@@ -7,7 +7,7 @@ import { useIsMobile } from '../../../lib/breakpoints';
 
 // Тон однострочной сводки статуса в заголовке секции.
 // Спека: docs/mockups/edit-project-compact-proposal.md, раздел «Спецификация для Киры».
-export type AccordionSummaryTone = 'neutral' | 'ok' | 'err';
+export type AccordionSummaryTone = 'neutral' | 'ok' | 'warning' | 'err';
 
 interface Props {
   icon: LucideIcon;
@@ -39,6 +39,7 @@ export function AccordionSection({
 
   const sumColor =
     summaryTone === 'ok' ? C.successText
+      : summaryTone === 'warning' ? C.warningText
       : summaryTone === 'err' ? C.dangerText
         : C.textMuted;
   // Hover — только десктоп: на мобильной шторке строка и так tap-зона 44px,

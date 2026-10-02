@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Динамический модуль редактора картинок (ADR-018 §10.1), форма — как у Notes и Spend:
+         библиотека под Web SDK ради FrameworkReference Microsoft.AspNetCore.App, без Program.cs. -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Тесты контроллера остаются в ClaudeHomeServer.Tests (поднимают собранное приложение),
+         модульные — в ClaudeHomeServer.ImageEditor.Tests; обоим нужны internal драйверов. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.ImageEditor.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Модуль грузится в дефолтный контекст, зависимости резолвятся по deps.json Main:
+         своих пакетов вне замыкания Main у него быть не может (сторож
+         DynamicModulePackagesGuardTests). JwtBearer — ради claim sub, как у Notes и Spend. -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>

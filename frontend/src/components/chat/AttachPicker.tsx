@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { Check, Upload } from 'lucide-react';
 import type { FileEntry } from '../../types';
 import { api } from '../../lib/api';
@@ -21,9 +21,11 @@ interface AttachPickerProps {
   // контекст чата зовёт его для «Указать заново…», и слово «прикрепить» там
   // означало бы вложение — другую сущность
   title?: string;
+  // Строка над поиском от хозяина пикера (чат картинки: «Снимок холста с пометками»)
+  extra?: ReactNode;
 }
 
-export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload, title }: AttachPickerProps) {
+export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload, title, extra }: AttachPickerProps) {
   const [query, setQuery] = useState('');
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,6 +57,7 @@ export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload,
     >
       {/* Загрузка с устройства — отдельной строкой над поиском: в одной строке с полем
           кнопка с полной подписью съедала бы поиск (диалог всего MODAL_W.form шириной) */}
+      {extra}
       {onUpload && (
         <div style={{ marginBottom: SP.sm, display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
           <input

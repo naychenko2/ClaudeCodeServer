@@ -54,7 +54,8 @@ export default defineConfig({
     // singleton react/react-dom для внешних модулей. Remotes регистрируются в рантайме
     // (registerRemotes по списку GET /api/modules) — статических remotes нет.
     // Спайк R5a подтвердил: Vite 8/Rolldown + MF + PWA injectManifest собираются,
-    // React-инстанс один, remote-чанки не попадают в precache (живут под /api/modules/**/ui/).
+    // React-инстанс один. Remote-чанки в precache не попадают: у внешних модулей они живут
+    // под /api/modules/**/ui/, у подсистем (/{имя}-remote/) исключены globIgnores ниже.
     federation({
       name: 'aihome_shell',
       // Design-kit ядра для внешних модулей (контракт §7.1, R14–R16): модули берут
@@ -81,6 +82,9 @@ export default defineConfig({
         // ПОСТАВЩИК singleton-инстанса (remotes пустые), для него eager штатен и
         // не мешает модулям-потребителям.
         react: { singleton: true, eager: true, requiredVersion: '^19.2.0' },
+        // Подпуть явно: модули берут jsx-runtime с import: false только у ядра
+        // (hostReactShared), а автодобавление подпутей — поведение версии плагина.
+        'react/jsx-runtime': { singleton: true, eager: true, requiredVersion: '^19.2.0' },
         'react-dom': { singleton: true, eager: true, requiredVersion: '^19.2.0' },
       },
     }),
@@ -114,8 +118,11 @@ export default defineConfig({
       injectManifest: {
         globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'],
         // Ассеты барж-ина офлайн не нужны (петля разговора в офлайне гаснет),
-        // а worklet и ort-loader попали бы в precache по маске выше
-        globIgnores: ['vad/**'],
+        // а worklet и ort-loader попали бы в precache по маске выше.
+        // *-remote/** — MF-remote подсистем: сейчас их копируют в dist ПОСЛЕ vite build,
+        // но окажись они там до сборки хоста, старый SW отдавал бы старые remoteEntry
+        // и чанки мимо ?v= из /api/subsystem-modules
+        globIgnores: ['vad/**', '*-remote/**'],
         // Основной бандл перевалил дефолтный лимит precache (2 MiB); с инъекцией
         // data-cc-src (UI-инспектор) вырос до ~4.4 MiB — держим лимит с запасом
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
@@ -147,6 +154,9 @@ export default defineConfig({
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
       // Self-hosted draw.io: бэкенд (YARP) проксирует /drawio/* в контейнер jgraph/drawio
       '/drawio': { target: backendUrl, changeOrigin: true },
+      // Раздача агента устройства (манифест, скрипты установки) — анонимно, вне /api.
+      // Регулярка, а не префикс: '/agent' совпал бы и с '/agents…'
+      '^/agent/': { target: backendUrl, changeOrigin: true },
       // Раздел «Телеметрия»: бэкенд форвардит /telemetry-proxy/* на SigNoz. Без этой строки
       // Vite отдал бы свой index.html (SPA-fallback), и в iframe грузился бы сам CCS.
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
@@ -155,6 +165,11 @@ export default defineConfig({
       '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true },
       // MF remote spend (dev): dev-сервер модуля на :5175.
       '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },
+      // MF remote редактора картинок (dev): dev-сервер модуля на :5176.
+      '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
+      // MF remote модуля «Звук» (dev): dev-сервер модуля на :5178.
+      '/audio-editor-remote': { target: 'http://localhost:5178', changeOrigin: true },
+      '/architecture-remote': { target: 'http://localhost:5177', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },
   preview: {
@@ -164,9 +179,13 @@ export default defineConfig({
       '/api': { target: backendUrl, changeOrigin: true },
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
       '/drawio': { target: backendUrl, changeOrigin: true },
+      '^/agent/': { target: backendUrl, changeOrigin: true },
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
       '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true },
       '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },
+      '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
+      '/audio-editor-remote': { target: 'http://localhost:5178', changeOrigin: true },
+      '/architecture-remote': { target: 'http://localhost:5177', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },
 });

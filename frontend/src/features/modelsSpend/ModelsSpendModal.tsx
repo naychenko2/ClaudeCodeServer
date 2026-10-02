@@ -5,7 +5,7 @@ import { C, FONT, FS, MODAL_W } from '../../lib/design';
 import { api } from '../../lib/api';
 import { useModels } from '../../lib/models';
 import { useProviderData, type TierKey } from '../../lib/modelProvidersShared';
-import { consumeOpenRequest, consumeDraftRequest } from '../../lib/modelProvidersNav';
+import { consumeOpenRequest, consumeDraftRequest, subscribeModelProvidersNav } from '../../lib/modelProvidersNav';
 import { reloadPresetSettings, saveLayer, useSaveState } from '../../lib/presets';
 import type { LayerReducer } from '../../lib/presets';
 import { QuotasTab } from './QuotasTab';
@@ -60,9 +60,16 @@ export function ModelsSpendModal({ balances, initialTab = 'quotas', onClose }: {
   // Диплинк «Собрать цепочку…» (requestNewPreset из панелей выбора модели):
   // открываем раздел прямо на вкладке «Модели» (перекрывая стартовый «Расход»)
   // и просим начать черновик.
+  // Тот же разбор — и при маунте (запрос пришёл до открытия), и по событию, когда модалка
+  // уже открыта (диплинк #/models из уведомления поверх открытого раздела).
   useEffect(() => {
-    if (consumeOpenRequest()) setTab('slots');
-    if (consumeDraftRequest()) { setTab('slots'); setPendingDraft(true); }
+    const take = () => {
+      const requested = consumeOpenRequest();
+      if (requested) setTab(requested);
+      if (consumeDraftRequest()) { setTab('slots'); setPendingDraft(true); }
+    };
+    take();
+    return subscribeModelProvidersNav(take);
   }, []);
 
   // Балансы внешних сервисов (fal/glif/Yandex). Открыли из UsageWidget — prop

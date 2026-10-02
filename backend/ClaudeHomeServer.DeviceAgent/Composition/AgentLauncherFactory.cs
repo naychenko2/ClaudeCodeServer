@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ClaudeHomeServer.DeviceAgent.Processes;
+using ClaudeHomeServer.DeviceAgent.Update;
 using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.DeviceAgent.Composition;
@@ -15,6 +16,8 @@ namespace ClaudeHomeServer.DeviceAgent.Composition;
 /// ход (задача 4.3, механизм 2.2): Unix — своя сессия и группа через <c>setsid</c>, kill бьёт
 /// группу; Windows — свой Job Object. Каждый пишется в журнал ходов: агент, убитый не
 /// штатно, добьёт их при следующем старте. Короткий git (<c>Track = false</c>) идёт как есть.
+/// Пока долгоживущий процесс жив, он держит аренду <see cref="ActivityRegistry"/>: открытый
+/// терминал или дев-сервер откладывает переключение агента на новую версию (Р8).
 /// </summary>
 internal sealed class AgentLauncherFactory : ILauncherFactory
 {
@@ -22,7 +25,8 @@ internal sealed class AgentLauncherFactory : ILauncherFactory
 
     private readonly AgentProcessLauncher _local;
 
-    public AgentLauncherFactory(TurnJournal? journal = null) => _local = new AgentProcessLauncher(journal);
+    public AgentLauncherFactory(TurnJournal? journal = null, ActivityRegistry? activity = null) =>
+        _local = new AgentProcessLauncher(journal, activity);
 
     public IProcessLauncher Local => _local;
     public IProcessLauncher ForOwner(string? ownerId) => _local;
@@ -35,7 +39,7 @@ internal sealed class AgentLauncherFactory : ILauncherFactory
     /// <summary>Число живых долгоживущих процессов (для тестов).</summary>
     internal int TrackedCount => _local.TrackedCount;
 
-    private sealed class AgentProcessLauncher(TurnJournal? journal) : IProcessLauncher
+    private sealed class AgentProcessLauncher(TurnJournal? journal, ActivityRegistry? activity) : IProcessLauncher
     {
         private readonly ConcurrentDictionary<int, Tracked> _tracked = new();
 
@@ -106,7 +110,8 @@ internal sealed class AgentLauncherFactory : ILauncherFactory
                 }
             }
 
-            var tracked = new Tracked(process, turnId, job, terminate);
+            // Реестр запечатан (агент уже уходит на новую версию) — аренды нет: процесс добьёт выход агента
+            var tracked = new Tracked(process, turnId, job, terminate, activity?.TryAcquire(WorkKind.Process));
             _tracked[process.Id] = tracked;
             try { journal?.Add(new TurnJournal.Entry(turnId, process.Id, StartTimeOf(process), null)); }
             catch (IOException) { /* журнал — страховка от смерти агента, ход без него работает */ }
@@ -156,6 +161,7 @@ internal sealed class AgentLauncherFactory : ILauncherFactory
         {
             if (!_tracked.TryRemove(new KeyValuePair<int, Tracked>(tracked.Pid, tracked))) return;
             tracked.Job?.Dispose();
+            tracked.Lease?.Dispose();
             journal?.Remove(tracked.TurnId);
         }
 
@@ -177,7 +183,7 @@ internal sealed class AgentLauncherFactory : ILauncherFactory
         public int EstimateCommandLineLength(ProcessSpec spec) =>
             spec.FileName.Length + (spec.RawArguments?.Length ?? spec.Args.Sum(a => a.Length + 3));
 
-        private sealed record Tracked(Process Process, string TurnId, IDisposable? Job, Func<bool>? Terminate)
+        private sealed record Tracked(Process Process, string TurnId, IDisposable? Job, Func<bool>? Terminate, IDisposable? Lease)
         {
             public int Pid { get; } = Process.Id;
         }

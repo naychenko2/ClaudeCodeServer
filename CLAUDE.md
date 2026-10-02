@@ -179,35 +179,44 @@ one-shot действия и разговор с исполнителем «Ло
 
 ## Генератор картинок (Services/Images)
 
-Аватар персоны рисует слой драйверов `IImageGenerator` (fal.ai, glif) за роутером
-`ImageGenerationService`; провайдера и модель выбирает админ отдельно для каждого места
-(`ImagePlaces` — сейчас одно: `persona-avatar`). Инвариант тот же, что у моделей: **явно
-выбранного провайдера не подменяем**, переход на другого — только в «Автоматически». Не
-нарисовалось — сущность живёт на инициалах, картинку догоняет очередь `ImageBackfillService`.
-Детали — [docs/features/image-generation.md](docs/features/image-generation.md).
+Слой драйверов `IImageGenerator` (fal.ai, glif) за роутером `ImageGenerationService`; провайдера и
+модель админ выбирает отдельно для каждого места `ImagePlaces`: `persona-avatar` и `image-editor` (у
+редактора — лишь умолчание). **Явно выбранного провайдера не подменяем**, переход — только в
+«Автоматически»; не нарисовалось — инициалы, догоняет `ImageBackfillService` ([image-generation.md](docs/features/image-generation.md)).
+Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU, только по явной просьбе (с флагом `local-media-default` — по умолчанию, облако при отказе лишь с согласия);
+**граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста ([local-media.md](docs/features/local-media.md)).
+Аудио (музыка, голос, стемы) — там же, модели вне venv ComfyUI идут узлом `CcsAudioWorker` в общей очереди GPU1, веса — только при установке ([ADR-020](docs/adr/ADR-020-local-media-audio.md)).
+
+## Редактор картинок (ClaudeHomeServer.ImageEditor)
+
+Динамический модуль правки картинок проекта: fal, Higgsfield, локальные модели, правки без ИИ, чат картинки с агентом; за флагом `image-editor`.
+Инварианты и подробности — [backend/ClaudeHomeServer.ImageEditor/CLAUDE.md](backend/ClaudeHomeServer.ImageEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой.
+
+## Редактор звука (ClaudeHomeServer.AudioEditor)
+
+Динамический модуль озвучки, музыки и обработки звука в чате: fal, Higgsfield, Яндекс, локальные модели, монтаж и склейка без ИИ, «Голоса», агент; за флагом `audio-editor` ([ADR-021](docs/adr/ADR-021-audio-editor-and-generation-panel.md), [audio-editor.md](docs/features/audio-editor.md)).
+Инварианты и подробности — [backend/ClaudeHomeServer.AudioEditor/CLAUDE.md](backend/ClaudeHomeServer.AudioEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Раздел «Видео» (Services/Video)
 
 Эфиры телеканалов и лента подписок YouTube за общим `IVideoProvider`; живой кадр рисуется оверлеем над страницами (панель, центральный остров, плавающее окно).
-
 Инварианты и подробности — [backend/ClaudeHomeServer.Video/CLAUDE.md](backend/ClaudeHomeServer.Video/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Значок проекта (Services/ProjectIcons)
 
-Иконка проекта — **не картинка**: модель отдаёт имя иконки из белого списка lucide
-(`LucideGlyphs`), разметки от модели не приходит никогда; любой сбой молча оставляет инициалы.
-Контракт ответа, двухходовая схема подбора, белый список и форма хранения —
-[ADR-009](docs/adr/ADR-009-project-icon-glyph.md); тексты интерфейса —
-[docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
+Иконка проекта — **не картинка**: модель отдаёт имя иконки из белого списка lucide (`LucideGlyphs`), разметки от модели не приходит никогда; любой сбой молча оставляет инициалы.
+Контракт ответа, двухходовая схема подбора, белый список и форма хранения — [ADR-009](docs/adr/ADR-009-project-icon-glyph.md); тексты интерфейса — [docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
 
 ## Уборка карты проекта (Services/Docs)
 
-Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые
-ссылки, вложенные карты) и предлагает, что прибрать; за флагом `project-map-hygiene`. Запись —
-только по явной отметке человека, а **вынос секции кнопкой не делается никогда** (цена ошибки —
-потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет. Устройство двух фаз —
-[docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план —
-[project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
+Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые ссылки, вложенные карты) и предлагает, что прибрать; за флагом `project-map-hygiene`.
+Запись — только по явной отметке человека, а **вынос секции кнопкой не делается никогда** (цена ошибки — потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет.
+Устройство двух фаз — [docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план — [project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
+
+## Раздел «Архитектура» (Viaduct)
+
+C4-схема проекта в Viaduct (sandbox-iframe), модель — `docs/architecture/model.viaduct.json` под git; динамический модуль + MF-remote, фич-флага нет. **Код Viaduct здесь не правится.**
+Инварианты и подробности — [backend/ClaudeHomeServer.Architecture/CLAUDE.md](backend/ClaudeHomeServer.Architecture/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Внутренние подсистемы (Services/Composition)
 
@@ -226,7 +235,7 @@ one-shot действия и разговор с исполнителем «Ло
 держим намеренно: источник правды — таблица в коде, а устаревший список хуже его отсутствия.
 
 **Правило зависимостей:** вертикаль зависит от спины (`Microsoft.*`, `Models`,
-`Services.Http`/`Composition`/`Mcp`) и от явных швов (например, `IDesktopChatDirectory`), но
+`Services.Http`/`Composition`/`Mcp`) и от явных швов (например, `IDeviceExecChannel`), но
 НИКОГДА от другой вертикали напрямую. Нужна связь — два пути: событие `TurnEventBus`
 ([ADR-013](docs/adr/ADR-013-turn-event-bus.md)) либо явный интерфейс-шов. Держат правило
 сторожа `SubsystemBoundaryTests` и `SubsystemBoundaryCoverageTests` (default-deny +
@@ -285,7 +294,7 @@ WorkingDirectory = `project.RootPath`. Маппинг `stream-json` → `ServerM
 общий `POST /mcp/{name}[/{хвост}]`, node-процесса нет вовсе. Хвост маршрута несёт контекст вызова
 (сессия-вызыватель, у `memory` — персона и проект), по нему тулсет живьём резолвит
 проект/персону/привязки; владелец берётся из claim `sub` сервисного JWT, не из маршрута.
-На stdio остались только `desktop` (capability-токен, ADR-008) и внешние модули;
+На stdio остались только внешние модули;
 у `watch`, `websearch` и `higgsfield` stdio-ветки отката нет вовсе. Замороженные
 `mcp/*-server/index.js` — ветки отката под `Mcp:HttpTransport=false`.
 
@@ -341,11 +350,10 @@ diff/артефакты/виджеты; оправдывает интеграц�
 **Перед правками в персонах (промпт, память, групповые чаты, пантеон OmO, аватары, MCP
 personas/memory) — прочитай [docs/architecture/personas.md](docs/architecture/personas.md).**
 
-## Десктопный агент (ClaudeHomeServer.Desktop, за флагом `desktop-agent`)
+## Канал устройства (ClaudeHomeServer.Devices)
 
-Руки песочницы на машине пользователя: MCP-сервер `desktop` плюс WPF-клиент, за флагом `desktop-agent`.
-
-Инварианты и подробности — [backend/ClaudeHomeServer.Desktop/CLAUDE.md](backend/ClaudeHomeServer.Desktop/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+Серверная половина агента локальных проектов ([ADR-016](docs/adr/ADR-016-local-projects.md)): реестр и сопряжение устройств, хаб `/hubs/devices`, канал исполнения; руки ADR-008 удалены 2026-09-30.
+Инварианты и подробности — [backend/ClaudeHomeServer.Devices/CLAUDE.md](backend/ClaudeHomeServer.Devices/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Механики OmO в чатах
 
@@ -441,8 +449,8 @@ Dark launch: фича коммитится выключенной и включ�
 ([ADR-008](docs/adr/ADR-008-project-background-generation.md),
 [project-backgrounds.md](docs/features/project-backgrounds.md)), карточка доклада о
 завершённой задаче ([task-completion-report.md](docs/features/task-completion-report.md)),
-серверные сторожа чатов ([ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md)) и встроенная
-интеграция Higgsfield — её доставка в ход, предохранитель «Отключить» и отсутствие тумблера
+серверные сторожа чатов ([ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md)), руки (ADR-016 §7)
+и встроенная интеграция Higgsfield — её доставка в ход, предохранитель «Отключить» и отсутствие тумблера
 в интерфейсе разобраны в [mcp-registry.md](docs/architecture/mcp-registry.md).
 
 **Как добавить новый флаг (3 шага):**

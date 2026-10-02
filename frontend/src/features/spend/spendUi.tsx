@@ -1,7 +1,7 @@
 // Общие примитивы раздела «Аналитика токенов»: пустые состояния, скелетоны,
 // чипы, иконки узлов. Только токены design.ts, инлайн-стили.
-import type { ReactNode, CSSProperties } from 'react';
-import { C, FONT, GROUP_COLORS, R, SP, Dot } from 'aihome_shell/kit';
+import type { ReactNode, CSSProperties, ComponentProps } from 'react';
+import { C, FONT, GROUP_COLORS, R, Dot, Chip as UiChip, ChipX } from 'aihome_shell/kit';
 import type { SpendDim } from '../../lib/spendContract';
 
 // Детерминированный цвет аватара-инициала по строке (как у групп проектов)
@@ -110,54 +110,11 @@ export function GhostBtn({ onClick, children, style }: { onClick: () => void; ch
   );
 }
 
-// Чип (фильтр/действие): filter — активный accent-чип с крестиком.
-// maxW — потолок ширины: длинное имя чата иначе выдавливает бар за край острова;
-// подпись при этом обрезается, а крестик остаётся снаружи и достижим.
-// touch — тач-цель (планшет/мобила): та же форма, но ≥32px по высоте.
-export function Chip({ children, onClick, filter, dashed, title, maxW, touch }: {
-  children: ReactNode; onClick?: () => void; filter?: boolean; dashed?: boolean; title?: string;
-  maxW?: number | string; touch?: boolean;
-}) {
-  return (
-    <span
-      onClick={onClick}
-      title={title}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11,
-        padding: touch ? `${SP.sm}px 10px` : '3px 10px',
-        borderRadius: R.max, whiteSpace: 'nowrap', fontFamily: FONT.sans, flexShrink: 0,
-        border: `1px ${dashed ? 'dashed' : 'solid'} ${filter ? C.accentMuted : C.border}`,
-        background: filter ? C.accentLight : C.bgCard,
-        color: filter ? C.accent : C.textSecondary,
-        fontWeight: filter ? 600 : 400,
-        cursor: onClick ? 'pointer' : 'default',
-        ...(maxW !== undefined ? { maxWidth: maxW, overflow: 'hidden' } : null),
-      }}
-    >
-      {maxW !== undefined
-        ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{children}</span>
-        : children}
-    </span>
-  );
-}
-
-// Крестик внутри чипа/уровня. touch — тач-площадь: без неё цель 8×14px,
-// пальцем в неё не попасть (замер на планшете)
-export function ChipX({ onClick, touch }: { onClick: () => void; touch?: boolean }) {
-  return (
-    <span
-      onClick={e => { e.stopPropagation(); onClick(); }}
-      style={touch
-        ? {
-            fontWeight: 700, opacity: 0.8, cursor: 'pointer', flexShrink: 0,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            minWidth: SP.xxl, minHeight: SP.xxl, margin: `-${SP.sm}px -${SP.sm}px -${SP.sm}px 0`,
-          }
-        : { fontWeight: 700, opacity: 0.8, cursor: 'pointer', padding: '0 1px' }}
-    >
-      ×
-    </span>
-  );
+// Чип и крестик — общие из ui (Chip/ChipX). Здесь переходник: потребители spend
+// пишут filter, в общем чипе это selected
+export { ChipX };
+export function Chip({ filter, ...rest }: Omit<ComponentProps<typeof UiChip>, 'selected' | 'variant' | 'large'> & { filter?: boolean }) {
+  return <UiChip selected={filter} {...rest} />;
 }
 
 // Горизонтальная полоса-доля (топ моделей, состав хода)

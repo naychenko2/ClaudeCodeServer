@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
 import { ProjectFeature } from '../types';
@@ -12,19 +12,20 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying } from '../lib/videoStage';
-import { type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { isPanelKey, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
-import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
+import { hasPendingOpen, subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
-import { useSlotItem } from '../lib/subsystems/registry';
-import type { WorkspacePanelNotesCtx } from '../lib/subsystems/registryCore';
+import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem, type RevealPanelDetail } from '../lib/subsystems/registry';
+import { markGenPanelDismissed } from '../lib/genPanelDismissed';
+import type { WorkspacePanelDefApi, WorkspacePanelDefCtx, WorkspacePanelNotesCtx, WorkspacePanelArchCtx, WorkspaceCenterDocCtx } from '../lib/subsystems/registryCore';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
@@ -69,7 +70,8 @@ import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
 import { DossierHistoryPanel } from './workspace/DossierHistoryPanel';
-import { wsPanels } from './workspace/panelStackState';
+import { openKeysOf, wsPanels } from './workspace/panelStackState';
+import { followHost } from '../lib/genPanelFollow';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
 import { SkillsPanel } from '../components/SkillsPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
@@ -82,6 +84,8 @@ import { useHasChatContext } from '../lib/chatContext';
 
 interface Props {
   project: Project;
+  // Секция настроек сохранила поле проекта — свежий DTO открытому проекту приложения
+  onProjectUpdated?: (updated: Project) => void;
   onGoToProjects: () => void;
   // Переключение раздела хаба «Чаты | Проекты» из верхней шапки проекта
   onSwitchHub: (t: HubTabValue) => void;
@@ -295,7 +299,7 @@ function histReducer(s: FileHistoryState, a: FileHistoryAction): FileHistoryStat
   }
 }
 
-export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
+export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
   // Гейт подсистемы «Заметки»: при выключенной notes панель «notes» (notes/ репы)
   // не должна появляться в рельсе панелей и принимать клики. Рельсу собирает
   // PanelZone из `allowedKeys` и `panels`: если ключ есть в WORKSPACE_KEYS, но
@@ -305,6 +309,10 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const notesEnabled = useSubsystem(SUBSYSTEMS.notes)
   // Панель «Заметки проекта» — вклад слота workspace-panel (ноль прямых импортов фичи).
   const notesPanel = useSlotItem<WorkspacePanelNotesCtx>('workspace-panel', 'project-notes')
+  // Панели подсистем (слот workspace-panel-def, например «Персонажи» редактора картинок):
+  // ключ зарезервирован в panelCatalog, тело рисует подсистема. Выключенная подсистема
+  // вкладов не отдаёт — контента нет, и keyAvailable прячет кнопку в рельсе
+  const panelDefs = useSlot<WorkspacePanelDefCtx, WorkspacePanelDefApi>(SLOT_WORKSPACE_PANEL_DEF)
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -356,14 +364,44 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // Документ «Граф зависимостей» открыт в центре — та же модель «документ поверх чата»,
   // что и openFile: крестик возвращает центр к чату, открытие любого другого документа
   // (файл/задача/чат) закрывает граф. Открывается из панели «Граф» в рельсе.
-  const [graphOpen, setGraphOpen] = useState(false);
+  // Тем же местом живёт документ «Архитектура» (панель arch): документ
+  // центра один, поэтому состояние общее — setGraphOpen(false) у всех открывателей
+  // центра закрывает любой из двух, а открытие одного вытесняет другой.
+  const [centerDoc, setCenterDoc] = useState<'graph' | 'arch' | null>(null);
+  const graphOpen = centerDoc === 'graph';
+  const archOpen = centerDoc === 'arch';
+  const setGraphOpen = useCallback((open: boolean) => setCenterDoc(open ? 'graph' : null), []);
+  // «Архитектура» — MF-remote (modules/architecture): панель рельсы и документ центра
+  // приходят вкладами слотов, ноль прямых импортов фичи. Гейт — только наличие ОБОИХ
+  // вкладов (remote не загрузился / подсистема выключена — раздела нет целиком);
+  // фич-флага у раздела нет, включение — конфигом модуля.
+  const archPanel = useSlotItem<WorkspacePanelArchCtx>('workspace-panel', 'architecture');
+  const archDoc = useSlotItem<WorkspaceCenterDocCtx>('workspace-center-doc', 'arch');
+  const archEnabled = !!archPanel && !!archDoc;
   // Ридер ссылок: живёт как просмотр файла — сплит с чатом либо на всю контентную
   // зону (см. DesktopWorkspace). Один экземпляр состояния на страницу.
   const reader = useReaderPanel();
   // «История решений»: реветь панель по клику на файл в файловом менеджере — той
   // же точкой входа, что «Открыть изменения» у ProjectGitBar и тумблер «Оглавление»
   // у FileViewer (правим раскладку напрямую через стор зон)
-  const { reveal: revealPanelKey } = wsPanels.use();
+  const { reveal: revealPanelKey, close: closePanelKey, replaceWith: replacePanelKey, zones: wsZones } = wsPanels.use();
+  const wsOpenKeys = useRef<string[]>([]);
+  wsOpenKeys.current = openKeysOf(wsZones);
+  // Показ панели по просьбе подсистемы (пунктирный чип «Персонаж» в полосе «Картинки»,
+  // автооткрытие панели генерации). Вкладку detail.tab панель разбирает сама.
+  // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
+  useEffect(() => {
+    const onReveal = (e: Event) => {
+      const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
+      const key = d?.key;
+      if (!isPanelKey(key)) return;
+      const host = d?.follow ? followHost(wsOpenKeys.current, key) : null;
+      if (host && isPanelKey(host)) replacePanelKey(key, host);
+      else revealPanelKey(key);
+    };
+    window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
+    return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
+  }, [revealPanelKey, replacePanelKey]);
   // Режим просмотра файла — из ГЛОБАЛЬНОГО предпочтения (одно на все проекты), а не
   // из per-project стора: тумблер в шапке файла пишет предпочтение, точки открытия
   // его читают. См. loadFileFullscreenPref в lib/workspaceState.
@@ -377,9 +415,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     window.addEventListener('open-fal-stats', open);
     return () => window.removeEventListener('open-fal-stats', open);
   }, []);
-  // Диплинк «Собрать цепочку…» из PresetOptions (RoutePicker/PersonaForm) — может
-  // сработать в контексте проекта, где HubHeader не смонтирован (см. HubHeader.tsx)
-  useEffect(() => subscribeModelProvidersNav(() => setShowModelsSpend(true)), []);
   // Открыть только что созданную сессию этого проекта (групповой чат из ChatPanel):
   // проект уже открыт, событие приходит без ремоунта страницы
   useEffect(() => {
@@ -396,6 +431,12 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
 
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
+  // Сохранение секции настроек (тумблер рук, MCP, устройство) — и диалогу, и проекту, который
+  // видят чаты: иначе они держат прежний объект до перезагрузки страницы
+  const handleProjectUpdated = useCallback((updated: Project) => {
+    setProjectForEdit(updated);
+    onProjectUpdated?.(updated);
+  }, [onProjectUpdated]);
   type ToolsTab = 'terminal' | 'preview';
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
   const [terminalBusy, setTerminalBusy] = useState(false);
@@ -517,6 +558,17 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
 const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth <= MOBILE_MAX;
+  // Запросы навигации в «Модели и расход» («Собрать цепочку…» из PresetOptions, диплинк
+  // #/models из уведомления) открываем здесь только на мобиле: там HubHeader не смонтирован.
+  // На десктопе проекта модалку открывает его HubHeader — вторая подписка давала две
+  // модалки друг на друге. Условие читается в момент события (ref), а не вокруг хука.
+  const isMobileRef = useRef(isMobile);
+  useEffect(() => { isMobileRef.current = isMobile; });
+  useEffect(() => {
+    const open = () => { if (isMobileRef.current) setShowModelsSpend(true); };
+    if (hasPendingOpen()) open();
+    return subscribeModelProvidersNav(open);
+  }, []);
   const isTablet = windowWidth > MOBILE_MAX && windowWidth <= TABLET_MAX;
 
   // из git-панели «История»/«Изменения» → просмотр коммита в контентной области;
@@ -851,15 +903,27 @@ const windowWidth = useWindowWidth();
     ? [...leftTabOptions.slice(0, Math.max(0, projectVisibleCount - 1)), leftTabOptions[activeLeftIdx]]
     : leftTabOptions.slice(0, projectVisibleCount);
   const mobileVisibleValues = new Set(mobileLeftTabOptions.map(o => o.value));
+  const overflowTabItems: OverflowItem[] = leftTabOptions
+    .filter(o => !mobileVisibleValues.has(o.value))
+    .map(o => ({ key: o.value, icon: o.icon, label: o.label, onClick: () => handleTabSwitch(o.value) }));
+  // Порядок как у групп рельсы (RAIL_GROUPS): содержимое проекта с «Графом» →
+  // инструменты запуска, первой в которых идёт «Архитектура». Поэтому граф встаёт
+  // перед «Инструментами», а архитектура — первой в их группе, не в хвост списка
+  const toolsIdx = overflowTabItems.findIndex(i => i.key === 'tools');
+  const splitAt = toolsIdx === -1 ? overflowTabItems.length : toolsIdx;
   const projectOverflowItems: OverflowItem[] = [
-    ...leftTabOptions
-      .filter(o => !mobileVisibleValues.has(o.value))
-      .map(o => ({ key: o.value, icon: o.icon, label: o.label, onClick: () => handleTabSwitch(o.value) })),
+    ...overflowTabItems.slice(0, splitAt),
     {
       key: 'graph', label: 'Граф',
       icon: <Network size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
       onClick: () => ensureGraphOpen(),
     },
+    ...(archEnabled ? [{
+      key: 'arch', label: 'Архитектура',
+      icon: <DraftingCompass size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
+      onClick: () => ensureArchOpen(),
+    }] : []),
+    ...overflowTabItems.slice(splitAt),
     {
       key: 'models-spend', label: 'Модели и расход',
       icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
@@ -996,7 +1060,13 @@ const windowWidth = useWindowWidth();
     setSelectedTaskId(null);
     setActivePreviewId(null);
     if (isMobile) setMobileView('chat');
-  }, [isMobile, setActivePreviewId]);
+  }, [isMobile, setActivePreviewId, setGraphOpen]);
+
+  // Документ «Архитектура» — то же место и те же правила, что у «Графа»
+  const ensureArchOpen = useCallback(() => {
+    ensureGraphOpen();
+    setCenterDoc('arch');
+  }, [ensureGraphOpen]);
 
   // «Построить граф» (empty-state документа и панели): явный POST-build на бэке,
   // стор сам переходит в 'building' и дожидается готовности polling'ом.
@@ -1092,7 +1162,7 @@ const windowWidth = useWindowWidth();
   // Актуальное значение для колбэков создания чата: у них deps осознанно сужены,
   // и без ref они держат дефолт на момент монтирования
   const projectDefaultIdRef = useRef(projectDefaultId);
-  projectDefaultIdRef.current = projectDefaultId;
+  useLayoutEffect(() => { projectDefaultIdRef.current = projectDefaultId; }, [projectDefaultId]);
   useEffect(() => {
     if (project.defaultPersonaId !== undefined) setProjectDefaultId(project.defaultPersonaId);
   }, [project.defaultPersonaId]);
@@ -1357,6 +1427,7 @@ const windowWidth = useWindowWidth();
       const f = s.file ?? null;
       setOpenFile(f);
       if (f === null) setFileFullscreen(false);
+      if (f && s.revealInTree) revealPanelKey('files');
       setSelectedTaskId(s.task ?? null);
       setProjectBoard(!!s.board);   // режим доски проекта из снимка истории
       // Персона / командный центр (вкладка «Команда») — восстанавливаем, если снимок несёт
@@ -1807,6 +1878,12 @@ const windowWidth = useWindowWidth();
             <CodeGraphDocument projectId={project.id} isMobile onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />
           </div>
         )}
+        {/* Документ «Архитектура» — там же и так же, как граф */}
+        {!openFile && archOpen && archEnabled && (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex', background: C.bgMain }}>
+            {archDoc?.render?.({ projectId: project.id, projectName: project.name, isMobile: true, onClose: handleGraphClose, onShowFile: handleOpenFileFromTree })}
+          </div>
+        )}
         {columnsDialogEl}
         {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
         {editProjectOpen && (
@@ -1814,7 +1891,7 @@ const windowWidth = useWindowWidth();
             project={projectForEdit}
             onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
             onIconUpdated={setProjectForEdit}
-            onProjectUpdated={setProjectForEdit}
+            onProjectUpdated={handleProjectUpdated}
             onClose={() => setEditProjectOpen(false)}
           />
         )}
@@ -1897,6 +1974,7 @@ const windowWidth = useWindowWidth();
           personaCreating={personaCreating}
           onOpenPersonaChat={handleOpenPersonaChat}
           availableChatIds={availableSessionIds}
+          onPanelUserClose={k => markGenPanelDismissed(activeSessionId, k)}
           onPersonaSelectAfterCreate={handlePersonaSelectAfterCreate}
           onPersonaCleared={handlePersonaCleared}
           teamCenterOpen={teamCenterOpen}
@@ -1907,8 +1985,10 @@ const windowWidth = useWindowWidth();
           previewOpen={!!ccActivePreview}
           previewArea={ccActivePreview ? <PreviewView service={ccActivePreview} projectId={project.id} onStop={stopService} onClose={() => setActivePreviewId(null)} services={previewServices} /> : null}
           onClosePreview={() => setActivePreviewId(null)}
-          graphOpen={graphOpen}
-          graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
+          graphOpen={graphOpen || (archOpen && archEnabled)}
+          graphArea={archOpen && archEnabled
+            ? archDoc?.render?.({ projectId: project.id, projectName: project.name, isMobile: false, onClose: handleGraphClose, onShowFile: handleOpenFileFromTree })
+            : <CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
           onOpenReader={handleOpenReader}
           panels={{
             files: <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenDossiers={handleOpenDossiers} />,
@@ -1932,6 +2012,10 @@ const windowWidth = useWindowWidth();
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onCollapseGraph={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
+            // «Архитектура» за флагом: без контента кнопки в рельсе нет (keyAvailable)
+            ...(archEnabled ? {
+              arch: archPanel?.render?.({ projectId: project.id, archOpen, onEnsureOpen: ensureArchOpen, onCollapse: handleGraphClose }),
+            } : {}),
             // Навыки и агенты рабочей папки. onChanged кладёт свежий состав в тот же
             // skillsData, откуда композер берёт «/»-команды: установка навыка в панели
             // видна в подсказке сразу, без перезагрузки страницы
@@ -1941,6 +2025,11 @@ const windowWidth = useWindowWidth();
             terminal: <DeviceAgentGate project={project}><TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} /></DeviceAgentGate>,
             preview: <DeviceAgentGate project={project}><PreviewPanelContent projectId={project.id} project={project} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} /></DeviceAgentGate>,
             video: <VideoPanel />,
+            ...Object.fromEntries(panelDefs.flatMap(d => (
+              d.name && isPanelKey(d.name) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
+                ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => { markGenPanelDismissed(activeSessionId, d.name!); closePanelKey(d.name as PanelKey); } })]]
+                : []
+            ))),
           }}
         />
       </div>
@@ -1952,7 +2041,7 @@ const windowWidth = useWindowWidth();
           project={projectForEdit}
           onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
           onIconUpdated={setProjectForEdit}
-          onProjectUpdated={setProjectForEdit}
+          onProjectUpdated={handleProjectUpdated}
           onClose={() => setEditProjectOpen(false)}
         />
       )}

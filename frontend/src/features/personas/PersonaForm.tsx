@@ -161,8 +161,16 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [disallowedText, setDisallowedText] = useState(
     (persona?.disallowedTools ?? []).join(', '));
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
+  // Облегчённый контекст: переключатель Вкл/Выкл без «Авто» (решение владельца)
+  const [lightContext, setLightContext] = useState(persona?.lightContext ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Локальный провайдер среди явно заданных моделей персоны (ключ провайдера local-*): с выключенным
+  // переключателем предупреждение становится жёлтым. Модель чата и слот владельца здесь не видны —
+  // для них то же предупреждение звучит условно. Принудительно облегчение включается только на
+  // подмене фолбэком (сервер, LlmProviderRegistry.LightProfileFor)
+  const usesLocalModel = [model, tierStrong, tierMedium, tierWeak]
+    .some(m => !!m && modelProvider(m).startsWith('local'));
 
   // Смена специальности: подставляет права и инструменты из эффективного шаблона,
   // дальше они правятся вручную. Если текущие поля уже отличаются от нового шаблона —
@@ -382,14 +390,16 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);
 
   // Текущий контракт из стейтов формы — для сохранения и как current при AI-улучшении
+  // Пустой слот уходит пустой строкой, а не undefined: сервер мержит контракт по слотам
+  // (отсутствующий слот = «не менять»), и очистка поля в карточке иначе не сохранилась бы
   const buildContract = (): PersonaContract => ({
-    character: character.trim() || undefined,
-    tone: tone.trim() || undefined,
+    character: character.trim(),
+    tone: tone.trim(),
     mustDo: parseLines(mustDo),
     mustNot: parseLines(mustNot),
-    outputFormat: outputFormat.trim() || undefined,
+    outputFormat: outputFormat.trim(),
     speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
-    instructions: instructions.trim() || undefined,
+    instructions: instructions.trim(),
   });
 
   // Заполнен ли хоть один слот контракта — от этого зависит доступность «Улучшить»
@@ -479,7 +489,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     model, modelTier, effort, scope,
     tierStrong, tierMedium, tierWeak,
     projectId: scope === 'project' ? projectId : '',
-    color, greeting: greeting.trim(), memoryEnabled,
+    color, greeting: greeting.trim(), memoryEnabled, lightContext,
     tools: [...tools].sort(),
     access,
     specialty,
@@ -514,6 +524,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       color: persona?.avatar?.color ?? 'orange',
       greeting: (persona?.greeting ?? '').trim(),
       memoryEnabled: persona?.memoryEnabled ?? false,
+      lightContext: persona?.lightContext ?? false,
       tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
       access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
       specialty: persona ? (persona.specialty ?? 'none') : (initial?.specialty ?? 'none'),
@@ -569,6 +580,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       color,
       greeting: greeting.trim() || undefined,
       memoryEnabled,
+      lightContext,
       // Всегда явный список: полный набор бэкенд нормализует в «без ограничений»
       tools,
       // Профиль доступа: свой список запретов уходит только при custom
@@ -1187,6 +1199,40 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />
           </Field>
         )}
+
+        <Field label="Облегчённый контекст">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+                {lightContext ? 'Включён' : 'Выключен'}
+              </span>
+              <Toggle checked={lightContext} onChange={setLightContext} />
+            </div>
+            <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+              Персона получает краткую карту проекта вместо полного CLAUDE.md, сокращённый набор
+              инструментов и только базовые MCP-серверы: задачи, память, граф кода, веб-поиск, сторожа.
+              Ход быстрее и дешевле по токенам, но персона хуже знает устройство проекта и не видит
+              заметки, базу знаний, других персон и генерацию медиа. Модель та же — урезается то, что
+              ей подаётся.
+            </div>
+            {!lightContext && (
+              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: usesLocalModel ? C.warning : C.textMuted, lineHeight: 1.45 }}>
+                Если персона работает на локальной модели (своей, модели чата или слота), с выключенным
+                переключателем она получает полный CLAUDE.md и все MCP-серверы — ход станет заметно
+                медленнее. Для локальной модели облегчённый контекст лучше включить.
+              </div>
+            )}
+            <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+              Если ход на локальную модель уведёт подмена при сбое основной модели, облегчённый
+              контекст включится сам, независимо от переключателя.
+            </div>
+            {isEdit && lightContext !== (persona?.lightContext ?? false) && (
+              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+                После сохранения открытые чаты персоны перезапустятся.
+              </div>
+            )}
+          </div>
+        </Field>
 
         <Field label="Зона">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -32,6 +32,35 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    // Строка версий claude CLI — только админу. Без refresh: иначе в CI запустился бы
+    // настоящий `claude --version` с таймаутом 15 с.
+    [Fact]
+    public async Task ClaudeCli_NonAdmin_Returns403()
+    {
+        var userClient = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        var response = await userClient.GetAsync("/api/models/claude-cli");
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task ClaudeCli_Admin_ReturnsStatusShape()
+    {
+        var admin = _factory.CreateAuthenticatedClient();
+        var response = await admin.GetAsync("/api/models/claude-cli");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.TryGetProperty("current", out _).Should().BeTrue();
+        body.TryGetProperty("latest", out _).Should().BeTrue();
+        body.TryGetProperty("updateAvailable", out _).Should().BeTrue();
+        body.TryGetProperty("checkedAt", out _).Should().BeTrue();
+        // Список изменений и новые модели: в тестовом хосте сторож в сеть не ходит — пусто
+        body.GetProperty("newModels").GetArrayLength().Should().Be(0);
+        body.GetProperty("changes").GetArrayLength().Should().Be(0);
+        body.GetProperty("hiddenCount").GetInt32().Should().Be(0);
+        body.GetProperty("truncated").GetBoolean().Should().BeFalse();
+    }
+
     [Fact]
     public async Task Get_AssignmentsRespectUserTierOverrides()
     {

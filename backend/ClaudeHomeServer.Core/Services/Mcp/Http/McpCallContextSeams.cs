@@ -23,6 +23,14 @@ public interface IMcpSessionAccessor
     Session? GetOwned(string sessionId, string ownerId);
 }
 
+// DelegatedTurnGate.Decide для тулсета из модуля (ADR-018 §10.1): сам гейт живёт в Main
+// (Filters/) и смотрит в SessionManager, модулю нужен только вердикт. Fail-closed: вызов без
+// сессии-вызывателя — отказ, а не пропуск. null — действие разрешено, иначе текст отказа.
+public interface IDelegatedTurnGate
+{
+    string? Deny(string ownerId, string callerSessionId, string action);
+}
+
 // PersonaBindingsService: гейты Tool/Section-привязок персоны на MCP-вызов.
 // Сигнатуры 1:1 с `PersonaBindingsService.EffectiveToolEnabled`/`SectionEnabled`.
 // НЕ тот же шов, что IPersonaServerToolGate (Services/Composition): там

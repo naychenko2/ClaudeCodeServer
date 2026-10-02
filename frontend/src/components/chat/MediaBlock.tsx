@@ -157,15 +157,15 @@ export function extractMediaFromResult(result: string): MediaItem[] {
     const url = obj.url ?? obj.uri ?? obj.result_url;
     if (typeof url !== 'string') return;
     // Только абсолютные http(s) и строгий локальный stream-URL — никаких иных относительных
-    const isLocal = isLocalStreamUrl(url);
-    if (!isLocal && !/^https?:\/\//i.test(url)) return;
+    const isStream = isLocalStreamUrl(url);
+    if (!isStream && !/^https?:\/\//i.test(url)) return;
     // Входные изображения пользователя (uploaded) — не выход генерации
     if (obj.source === 'uploaded' || url.includes('glifchat-image-input-production')) return;
     const kind = classifyUrl(obj);
     if (!kind) return;
     if (items.some(m => m.url === url)) return;
     const fileNameRaw = obj.file_name ?? obj.fileName ?? obj.filename ?? obj.name ?? obj.title;
-    const fileName = typeof fileNameRaw === 'string' ? fileNameRaw : isLocal ? localFileName(url) : undefined;
+    const fileName = typeof fileNameRaw === 'string' ? fileNameRaw : isStream ? localFileName(url) : undefined;
     // Размеры: fal кладёт в корень элемента, glif assets — в metadata.{width,height};
     // в view_media media[] размеров нет — блок рендерится без них, это ок
     const meta = asObj(obj.metadata);
@@ -193,6 +193,11 @@ export function extractMediaFromResult(result: string): MediaItem[] {
     // Массивы медиа (fal + glif assets + glif view_media media[] + higgsfield jobs/results)
     for (const arr of [value.images, value.videos, value.audio_files, value.audios, value.assets, value.media, value.jobs, value.results]) {
       if (Array.isArray(arr)) for (const item of arr) push(item);
+    }
+    // Задания со вложенными медиа: local_jobs_wait кладёт images/videos внутрь jobs[i],
+    // у самого задания url нет (у Higgsfield он прямо в элементе — его взял push выше)
+    for (const arr of [value.jobs, value.results]) {
+      if (Array.isArray(arr)) for (const item of arr) scan(item, depth + 1);
     }
     // Одиночные объекты
     for (const key of ['video', 'audio', 'audio_file', 'image'] as const) push(value[key]);

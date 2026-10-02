@@ -23,8 +23,14 @@ public static class McpEndpoints
     public const string CodeGraphName = "codegraph";
     public const string DifyName = "dify";
     public const string HiggsfieldName = "higgsfield";
+    // Редактор картинок (ADR-018 §2, §10.2): сервер есть только в чате картинки
+    public const string ImageEditorName = "image-editor";
+    // Модуль «Звук» (ADR-021 §5): сервер есть в любом чате владельца при флаге audio-editor
+    public const string AudioEditorName = "audio-editor";
+    public const string LocalMediaName = "local-media";
     public const string WidgetsName = "widgets";
     public const string WorkspaceName = "wsp";
+    public const string ArchitectureName = "architecture";
 
     /// <summary>
     /// Имя заголовка вызывающей MCP-сессии: ставит общий api() каждого MCP-сервера в свой запрос,

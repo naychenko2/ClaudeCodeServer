@@ -29,7 +29,7 @@ public static class McpGatewayEndpoints
         McpEndpoints.TasksName, McpEndpoints.NotesName, McpEndpoints.PersonasName,
         McpEndpoints.NotificationsName, McpEndpoints.WatchName, McpEndpoints.WebSearchName,
         McpEndpoints.CodeGraphName, McpEndpoints.DifyName, McpEndpoints.HiggsfieldName,
-        McpEndpoints.WorkspaceName,
+        McpEndpoints.WorkspaceName, McpEndpoints.LocalMediaName,
     }.ToFrozenSet(StringComparer.Ordinal);
 
     // Заголовки, которые к бэкенду не едут: учётные данные клиента, контекст, который ставит

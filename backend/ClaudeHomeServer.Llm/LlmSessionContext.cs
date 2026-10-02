@@ -151,10 +151,35 @@ public sealed record WatchMcpContext(string ApiUrl, Func<string> TokenFactory, b
 // он живёт только на бэкенде, в конфиг хода и env процесса CLI не уезжает.
 public sealed record WebSearchMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
+// Контекст MCP-сервера архитектуры (arch_*: C4-модель проекта, раздел «Архитектура»):
+// адрес API и фабрика сервисного токена владельца; сессия-вызыватель едет хвостом URL
+// (/mcp/architecture/{sessionId}), по ней тулсет резолвит проект. null — чат вне проекта,
+// выключенная подсистема, флаг владельца architecture выключен или Off-привязка персоны.
+// stdio-ветки отката НЕТ (сервер рождён в Kestrel) — идиом тот же, что у watch/websearch.
+public sealed record ArchitectureMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 // Контекст MCP-сервера Higgsfield (инстансное OAuth-подключение, прокси к mcp.higgsfield.ai).
 // null — инстанс не подключён (EnsureFresh() = null) или персона ReadOnly.
 // TokenFactory/UseHttp — тот же идиом, что у websearch: сервисный JWT владельца Kestrel.
 public sealed record HiggsfieldMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+
+// Контекст MCP-сервера редактора картинок (ADR-019 §4): тулсет живёт в модуле, сессия едет
+// хвостом URL (/mcp/image-editor/{sessionId}), в любом чате владельца — проектном и личном.
+// null — флаг image-editor у владельца выключен или модуль не загружен (тулсета нет в реестре — иначе «fetch failed» у
+// всего хода). Всё это — свойства сессии, владельца и процесса, не хода. stdio-ветки нет.
+// AutoAllowTools — инструменты сервера, которые DecidePermission пропускает без карточки.
+public sealed record ImageEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
+    IReadOnlyList<string>? AutoAllowTools = null);
+// Контекст MCP-сервера модуля «Звук» (ADR-021 §5) — как у редактора картинок: тулсет живёт в модуле,
+// сессия едет хвостом URL (/mcp/audio-editor/{sessionId}), в любом чате владельца. null — флаг
+// audio-editor у владельца выключен или модуль не загружен. Свойства сессии, владельца и процесса, не хода.
+public sealed record AudioEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
+    IReadOnlyList<string>? AutoAllowTools = null);
+// Контекст MCP-сервера локальной генерации (local-media: ComfyUI на своей GPU). null — чат без
+// владельца или вне проекта, тумблер LocalMedia:Enabled выключен, подсистема images выключена,
+// проект локальный или персона ReadOnly (сервер пишет файлы в проект). Всё это — свойства
+// инстанса, сессии и персоны, а не хода: инвариант стабильности состава не задет.
+// TokenFactory/UseHttp — тот же идиом, что у higgsfield; stdio-ветки отката нет.
+public sealed record LocalMediaMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
@@ -167,15 +192,6 @@ public sealed record HiggsfieldMcpContext(string ApiUrl, Func<string> TokenFacto
 // из сессии-вызывателя (хвост), поэтому состав и адрес от worktree не зависят.
 public sealed record CodeGraphMcpContext(string ApiUrl, Func<string> TokenFactory, string ProjectId,
     string? SessionId = null, string? RootPath = null, bool UseHttp = false);
-
-// Контекст MCP-сервера десктопной грани (ADR-008): адрес API, capability-токен хода
-// и id чата. Токен отдельный — сервисный JWT владельца эндпоинты /api/devices/* не
-// принимают вовсе (иначе руками ходил бы любой чат владельца, включая ночной
-// tasks-executor): audience desktop, claims ownerId + sessionId + deviceId, TTL — минуты.
-// Чат-вызыватель бэкенд выводит ИЗ ТОКЕНА; DESKTOP_SESSION_ID уезжает в X-Caller-Session-Id
-// и служит только диагностикой (GET /api/mcp/calls) — в решении об авторизации он не
-// участвует (спуфится). null — грань чату не доставляется.
-public sealed record DesktopMcpContext(string ApiUrl, string Token, string SessionId);
 
 // Один MCP-сервер внешнего модуля (контракт docs/modules/integration-contract.md §6):
 // Key — ключ сервера в mcp-конфиге хода, Command/Args — запуск из манифеста (args уже
@@ -306,11 +322,6 @@ public sealed record LlmSessionContext(
     // запускает разбор Pending-очереди — ходы, накопленные через EnqueueBypass во время
     // оркестрации, доставляются штатно (теперь уже в свободный адаптер). null (тесты) — no-op.
     Action<string>? OrchestrationDone = null,
-    // MCP-сервер десктопной грани (ADR-008): руки на машине пользователя.
-    // null — грань чату не положена (не десктопный чат, выключена в проекте, нет флага,
-    // чат-исполнитель задачи / автоматизации / групповой). Решается по КОНФИГУРАЦИИ
-    // на момент запуска CLI — от свойств хода состав не зависит.
-    DesktopMcpContext? DesktopMcp = null,
     // Сводный признак «у сессии есть продуктовые MCP-серверы, чей АДРЕС допускает http»:
     // от него (вместе с живым рубильником ниже) ClaudeSession ставит NO_PROXY хода
     // (ADR-012) — обход прокси нужен ЛЮБОМУ http-серверу, а не одному виджету. Решение
@@ -350,10 +361,18 @@ public sealed record LlmSessionContext(
     // Perplexity:ApiKey. Наличие контекста — свойство владельца и настройки инстанса
     // (инвариант стабильности состава ADR-012).
     WebSearchMcpContext? WebSearchMcp = null,
+    // MCP-сервер архитектуры (arch_*): null — чат вне проекта, подсистема/флаг выключены
+    // или Off-привязка персоны. Все оси — свойства владельца/сессии (инвариант ADR-012).
+    ArchitectureMcpContext? ArchitectureMcp = null,
     // MCP-сервер Higgsfield (инстансное OAuth-подключение): null — не подключён или RO-персона.
     // Наличие контекста — свойство инстанса (EnsureFresh) и персоны (ReadOnly) — инвариант
     // стабильности состава не нарушается: оба стабильны в рамках сессии.
     HiggsfieldMcpContext? HiggsfieldMcp = null,
+    // MCP-сервер редактора картинок: только в чате картинки (ADR-018 §2)
+    ImageEditorMcpContext? ImageEditorMcp = null,
+    // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
+    // (см. LocalMediaMcpContext). Свойство инстанса, сессии и персоны, не хода.
+    LocalMediaMcpContext? LocalMediaMcp = null,
     // Корень сервера (AppContext.BaseDirectory, не IHostEnvironment.ContentRootPath —
     // при `dotnet run` это bin/Debug/net10.0, у IHostEnvironment — папка проекта) — для
     // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации
@@ -382,4 +401,20 @@ public sealed record LlmSessionContext(
     // task-notification, живой поток субагентов, ватчер workflow, вес истории в снимке) и
     // фолбэк не переносит его между профилями — провайдера выбирает шлюз, профиль один.
     // Считает SessionManager по ProjectCapabilities.
-    bool TranscriptOnServer = true);
+    bool TranscriptOnServer = true,
+    // Руки локального проекта (ADR-016 §7) — свойство ЧАТА, а не хода: матрица
+    // ProjectCapabilities.HandsRefusal пропускает (локальный проект, устройство
+    // с hands, тумблер проекта). Провайдер хода роли не играет (решение владельца 2026-09-27):
+    // ClaudeSession ставит маркер рук и режим прав без bypassPermissions в одном месте и по
+    // одному условию, а снимки окон отдаёт только провайдеру со зрением (vision=false — мост
+    // без screenshot_control).
+    // Смена признака у начатого чата — осознанный перезапуск CLI, как смена провайдера.
+    bool HandsEnabled = false,
+    // Адрес бэкенда, по которому СЕРВЕРНЫЙ процесс CLI видит шлюз LLM (тот же, что у
+    // MCP-серверов: у песочницы — мост хоста). Нужен ходу провайдера с
+    // NormalizeToolInputArrays: его ответ чинит нормализатор шлюза (ADR-016 §2, серверный ход).
+    // null — серверный режим шлюза не применяется: у локального проекта шлюз ходу ставит
+    // раннер устройства, а тесты без SessionManager идут напрямую, как раньше.
+    string? LlmGatewayApiUrl = null,
+    // MCP-сервер модуля «Звук» (ADR-021 §5): null — флаг audio-editor выключен или модуль не загружен
+    AudioEditorMcpContext? AudioEditorMcp = null);

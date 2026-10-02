@@ -12,6 +12,30 @@ namespace ClaudeHomeServer.Tests.Services.Gateway;
 /// </summary>
 public class UpstreamSelectorGatewayTests
 {
+    // ---- Тумблер шлюза ----
+
+    [Theory]
+    [InlineData("claude-opus-5-5")]
+    [InlineData("deepseek-v4-pro")]
+    public void ШлюзВыключен_ОтказДоВыдачиТокена_ПричинаВТексте(string model)
+    {
+        using var kit = new GatewayTestKit(("st", "tok-st", null));
+        kit.Options.CurrentValue = new LlmGatewayOptions { Enabled = false, AllowSubscriptions = true };
+        var tokens = new TurnTokenService(new TurnEventBus());
+
+        var start = kit.Selector.StartTurn(tokens, "owner", "chat", "device", model);
+
+        start.Token.Should().BeNull("ход не стартует");
+        start.FailureText.Should().Be(TurnFailureText.GatewayDisabled);
+        start.FailureText.Should().Contain("LlmGateway:Enabled");
+        tokens.ActiveCount.Should().Be(0);
+        kit.Pool.PickSetupTokenCalls.Should().Be(0);
+
+        kit.Options.CurrentValue = new LlmGatewayOptions { Enabled = true, AllowSubscriptions = true };
+        kit.Selector.StartTurn(tokens, "owner", "chat", "device", model).Token
+            .Should().NotBeNull("тумблер читается живьём, без рестарта");
+    }
+
     // ---- G2 ----
 
     [Fact]

@@ -39,7 +39,7 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Core/Services/Mcp/Http/LoopbackProxyBypass.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LocalEndpointProbe.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LlmSessionContext.cs"] = (1, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (5, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (7, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (4, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),

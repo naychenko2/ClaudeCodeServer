@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
+using RemoteStaticFiles = ClaudeHomeServer.Services.DynamicModules.RemoteStaticFiles;
 using ClaudeHomeServer.Services.Modules;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/modules")]
-public class ModulesController(ModuleRegistry registry, FeatureFlagService flags) : ControllerBase
+public class ModulesController(ModuleRegistry registry, FeatureFlagService flags, RemoteStaticFiles remoteFiles) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -36,9 +37,10 @@ public class ModulesController(ModuleRegistry registry, FeatureFlagService flags
                 tab = m.Manifest.Frontend?.Tab is { } tab
                     ? new { label = tab.Label, icon = tab.Icon, order = tab.Order }
                     : null,
-                // ?v={version} — cache-busting immutable-статики remoteEntry (§7)
+                // ?v= — сброс кэша remoteEntry (§7): хеш файла, если он лежит в нашей статике,
+                // иначе версия манифеста (remote за gateway модуля на нашем диске не лежит)
                 remoteEntry = m.Manifest.Frontend?.RemoteEntry is { } entry
-                    ? $"{entry}{(entry.Contains('?') ? '&' : '?')}v={Uri.EscapeDataString(m.Manifest.Version)}"
+                    ? RemoteStaticFiles.WithVersion(entry, remoteFiles.ContentVersion(entry) ?? m.Manifest.Version)
                     : null,
                 exposedModule = m.Manifest.Frontend?.ExposedModule,
             })

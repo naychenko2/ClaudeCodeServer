@@ -55,6 +55,9 @@ public sealed partial class SubscriptionOAuthUsageService(
     public const string StatusOk = "ok";
     public const string StatusUnauthorized = "unauthorized";
     public const string StatusError = "error";
+    // rate_limited — эндпоинт ответил 429 на запрос usage: токен годный, но опрос упёрся
+    // в лимит частоты (у setup-токена он около раза в час) и ждёт backoff
+    public const string StatusRateLimited = "rate_limited";
 
     private readonly ConcurrentDictionary<string, string> _status = new();
 
@@ -124,6 +127,10 @@ public sealed partial class SubscriptionOAuthUsageService(
         var primaryPooled = pool.All.Any(s => s.Key == ClaudeSubscriptionPool.PrimaryKey);
         if (!primaryPooled)
         {
+            // ProfileDir у primary — всегда null: его .credentials.json делит живая
+            // интерактивная сессия CLI пользователя. Refresh-токен одноразовый — наш рефреш
+            // погасил бы его у CLI, а сорвавшаяся запись новой пары убила бы логин целиком.
+            // Продлевает этот файл только сам CLI (ревью d04dcd2e, откат фикса df14723e).
             var primary = ResolvePrimaryToken();
             if (!string.IsNullOrWhiteSpace(primary))
                 yield return (ClaudeSubscriptionPool.PrimaryKey, primary!, null);
@@ -261,6 +268,8 @@ public sealed partial class SubscriptionOAuthUsageService(
         if (r.Code == 429)
         {
             ApplyBackoff(key, b.Strikes, r.RetryAfter);
+            // Раньше 429 уходил в backoff молча: процентов нет, плашки нет, в логе пусто
+            SetStatus(key, StatusRateLimited, r.Code);
             return;
         }
         if (r.Code is < 200 or >= 300)
@@ -395,6 +404,10 @@ public sealed partial class SubscriptionOAuthUsageService(
         if (status == StatusUnauthorized)
             Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP {httpCode} — токен не принят эндпоинтом usage " +
                 "(setup-токен вместо полноценного входа?); нужен `claude login` в профиле подписки");
+        else if (status == StatusRateLimited)
+            Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP 429 — эндпоинт usage ограничил частоту опроса " +
+                $"(у setup-токена лимит около раза в час; без него — `claude login` в профиле подписки); " +
+                $"следующая попытка после {_backoff[key].AllowedAt.ToLocalTime():HH:mm}");
         else if (status == StatusError)
             Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP {httpCode}");
         else if (prev is not null)
@@ -405,38 +418,13 @@ public sealed partial class SubscriptionOAuthUsageService(
     internal void OverrideUserAgent(string ua) => _userAgent = ua;
 
     // User-Agent claude-code/<версия установленного CLI> — обязателен (см. FallbackCliVersion).
-    // Версию узнаём один раз за жизнь процесса через `claude --version`.
+    // Версию узнаём один раз за жизнь процесса (ClaudeCliVersion).
     private async Task<string> ResolveUserAgentAsync(CancellationToken ct)
     {
         if (_userAgent is not null) return _userAgent;
-        var version = await TryGetCliVersionAsync(ct) ?? FallbackCliVersion;
+        var version = await ClaudeHomeServer.Services.Execution.ClaudeCliVersion.GetAsync().WaitAsync(ct) ?? FallbackCliVersion;
         return _userAgent = $"claude-code/{version}";
     }
-
-    private static async Task<string?> TryGetCliVersionAsync(CancellationToken ct)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo(ClaudeHomeServer.Services.Execution.ClaudeCliLocator.FindClaudeExecutable())
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-            psi.ArgumentList.Add("--version");
-            using var p = Process.Start(psi);
-            if (p is null) return null;
-            var output = await p.StandardOutput.ReadToEndAsync(ct);
-            await p.WaitForExitAsync(ct);
-            var m = CliVersionRegex().Match(output);
-            return m.Success ? m.Value : null;
-        }
-        catch { return null; }
-    }
-
-    [GeneratedRegex(@"\d+\.\d+\.\d+")]
-    private static partial Regex CliVersionRegex();
 
     // Динамический перебор окон ответа: любое свойство-объект с utilization/resets_at —
     // окно лимита (five_hour, seven_day, per-model seven_day_opus/sonnet/fable и любые
@@ -447,9 +435,16 @@ public sealed partial class SubscriptionOAuthUsageService(
         {
             if (prop.Value.ValueKind != JsonValueKind.Object) continue;
             if (prop.Name == "extra_usage") RecordExtraUsage(key, root);
-            else RecordWindow(key, prop.Name, prop.Value);
+            else if (IsLimitWindow(prop.Name)) RecordWindow(key, prop.Name, prop.Value);
         }
     }
+
+    // Окна лимитов — только five_hour и seven_day / seven_day_<модель>: новые per-model окна
+    // подхватываются без правок, а посторонние объекты ответа — нет. Прод 30.09: эндпоинт
+    // отдаёт недокументированный nimbus_quill (utilization 0, без сброса) — кодовое имя
+    // Anthropic, а не лимит; всеядный разбор выводил его на пилюлю вечным «0%».
+    internal static bool IsLimitWindow(string name)
+        => name is "five_hour" or "seven_day" || name.StartsWith("seven_day_", StringComparison.Ordinal);
 
     // Окно из ответа: { "utilization": 51.0 (проценты), "resets_at": ISO }.
     private void RecordWindow(string key, string window, JsonElement w)

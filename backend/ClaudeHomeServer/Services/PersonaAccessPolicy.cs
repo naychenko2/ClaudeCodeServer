@@ -28,13 +28,6 @@ public static class PersonaAccessPolicy
         // MCP персон (mcp__personas__*)
         "mcp__personas__personas_create", "mcp__personas__personas_update",
         "mcp__personas__personas_delete", "mcp__personas__personas_generate_avatar",
-        // Десктопная грань (ADR-008): читающие desktop_devices/desktop_screen/desktop_ui
-        // персоне «только чтение» остаются, всё меняющее чужой рабочий стол — нет.
-        // Имена MCP-инструментов в deny безопасны и когда сервер в ход не доставлен:
-        // CLI не сверяет mcp__* со списком известных инструментов (в отличие от встроенных
-        // имён — см. MultiEdit выше). Проверено живым прогоном CLI — см. тест
-        // DesktopMcpToolsetStabilityTests.DenyИменаДесктопа_НеРоняютЗапускCli.
-        "mcp__desktop__desktop_act", "mcp__desktop__desktop_open", "mcp__desktop__desktop_run",
         // Рабочее пространство (wsp, ADR-012 волна 3): все МУТИРУЮЩИЕ инструменты — файлы
         // (включая files_to_markdown: он сохраняет .md в проекте), git-запись, проекты и
         // теги, базы знаний, создание/переименование чатов и деструктив. Находка приёмки
@@ -49,6 +42,10 @@ public static class PersonaAccessPolicy
         "mcp__wsp__tags_remove",
         "mcp__wsp__knowledge_index", "mcp__wsp__kb_add_document",
         "mcp__wsp__chats_create", "mcp__wsp__chats_update", "mcp__wsp__chats_delete",
+        // C4-модель проекта: создание, правка и удаление элементов, правка связей (тулсет
+        // отклоняет их и сам; соответствие ArchitectureToolset.WriteTools держит тест)
+        "mcp__architecture__arch_create_element", "mcp__architecture__arch_update_element",
+        "mcp__architecture__arch_delete_element", "mcp__architecture__arch_set_connection",
     ];
 
     // Итоговый список дополнительных запретов сессии персоны:

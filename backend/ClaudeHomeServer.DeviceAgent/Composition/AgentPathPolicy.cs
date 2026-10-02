@@ -22,6 +22,9 @@ internal sealed record AgentLimits
 /// <summary>Отказ агента по пути: вне корней, симлинк наружу, абсолютный путь, потолок размера.</summary>
 internal sealed class AgentPathRefusedException(string message) : UnauthorizedAccessException(message);
 
+/// <summary>Вердикт политики по корню проекта: реальный путь, есть ли он, каталог ли, под корнями ли машины.</summary>
+internal sealed record AgentRootCheck(string RealPath, bool Exists, bool IsDirectory, bool InsideRoots);
+
 /// <summary>Файл больше потолка — отказ, а не частичная отдача.</summary>
 internal sealed class AgentFileTooLargeException(string message) : IOException(message);
 
@@ -60,20 +63,35 @@ internal sealed class AgentPathPolicy(IAgentRoots roots, AgentLimits? limits = n
     /// </summary>
     public string ProjectRoot(string rootPath)
     {
+        var check = CheckRoot(rootPath);
+        if (!check.IsDirectory)
+            throw new DirectoryNotFoundException("Папки проекта на этой машине нет");
+        if (!check.InsideRoots)
+            throw new AgentPathRefusedException(
+                "Папка проекта не под разрешёнными корнями этой машины: добавь её командой «ai-home-agent roots add <путь>»");
+        return check.RealPath;
+    }
+
+    /// <summary>
+    /// Вердикт по корню проекта без отказа: есть ли путь, каталог ли он и под разрешённым ли
+    /// корнем машины (по реальному пути). Одна функция и для хода (<see cref="ProjectRoot"/>),
+    /// и для проверки папки при создании проекта — вторая реализация разошлась бы с первой.
+    /// </summary>
+    public AgentRootCheck CheckRoot(string rootPath)
+    {
         if (string.IsNullOrWhiteSpace(rootPath) || !Path.IsPathFullyQualified(rootPath))
             throw new AgentPathRefusedException("Корень проекта должен быть абсолютным путём");
         var real = RealPath(rootPath);
-        if (!Directory.Exists(real))
-            throw new DirectoryNotFoundException("Папки проекта на этой машине нет");
+        var isDirectory = Directory.Exists(real);
+        var inside = false;
         foreach (var allowed in roots.Roots)
         {
             string realAllowed;
             try { realAllowed = RealPath(allowed); }
             catch (IOException) { continue; }
-            if (IsUnder(real, realAllowed)) return real;
+            if (IsUnder(real, realAllowed)) { inside = true; break; }
         }
-        throw new AgentPathRefusedException(
-            "Папка проекта не под разрешёнными корнями этой машины: добавь её командой «ai-home-agent roots add <путь>»");
+        return new AgentRootCheck(real, isDirectory || File.Exists(real), isDirectory, inside);
     }
 
     /// <summary>

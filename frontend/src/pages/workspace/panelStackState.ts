@@ -14,7 +14,7 @@
 // Стор параметризован неймспейсом (createPanelZones): воркспейс и раздел «Чаты»
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
 import { useCallback, useSyncExternalStore } from 'react';
-import { PANEL_HOME, RAIL_GROUPS, isPanelKey, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
+import { PANEL_HOME, RAIL_GROUPS, isPanelKey, migrateLegacyKey, panelRivals, type PanelKey, type Zone } from './panelCatalog';
 
 // Реестр панелей (ключи, мета, домашние зоны) — соседний panelCatalog.ts.
 // Здесь только раскладка: что где лежит и какого размера.
@@ -407,8 +407,16 @@ export function enforceZoneInvariant(zones: PanelZones): PanelZones {
   const claim = (cols: PanelKey[][]): PanelKey[][] => {
     const out: PanelKey[][] = [];
     for (const col of cols) {
-      const clean = col.filter(k => !seen.has(k));
-      clean.forEach(k => seen.add(k));
+      // Соперник занявшей место панели (EXCLUSIVE_PANEL_SETS) места уже не получит:
+      // так чинится и сохранённая раскладка, где обе панели генерации открыты разом.
+      // Помечаем по ходу, а не после фильтра: соперники бывают и в одной колонке
+      const clean: PanelKey[] = [];
+      for (const k of col) {
+        if (seen.has(k)) continue;
+        clean.push(k);
+        seen.add(k);
+        panelRivals(k).forEach(r => seen.add(r));
+      }
       if (clean.length) out.push(clean);
     }
     return out;
@@ -510,6 +518,17 @@ function dropFromStash(zones: PanelZones, k: PanelKey): PanelZones {
     return { ...z, stash: z.stash.map(col => col.filter(x => x !== k)).filter(col => col.length > 0) };
   };
   return { ...zones, left: strip(zones.left), right: strip(zones.right) };
+}
+
+// Убрать соперников панели (EXCLUSIVE_PANEL_SETS) отовсюду — из раскладок и
+// спрятанных наборов обеих зон: свёрнутый соперник, вернувшись разворотом, снова
+// оказался бы рядом. Зовут все операции, которые ОТКРЫВАЮТ панель, — до вставки.
+export function closeRivals(zones: PanelZones, k: PanelKey): PanelZones {
+  const rivals = panelRivals(k);
+  if (rivals.length === 0) return zones;
+  const strip = (cols: PanelKey[][]) => cols.map(c => c.filter(x => !rivals.includes(x))).filter(c => c.length > 0);
+  const clean = (z: ZoneState): ZoneState => ({ ...z, layout: strip(z.layout), stash: strip(z.stash) });
+  return { ...zones, left: clean(zones.left), right: clean(zones.right) };
 }
 
 // Закрыть панель, бросив её на рельсу зоны: она не просто закрывается, а
@@ -626,7 +645,7 @@ export function reorderRail(
 // cap — вместимость колонки у рельсы (сколько панелей влезает по высоте), её
 // считает зона: см. COL_CAP.
 export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP, railSeq?: readonly PanelKey[]): PanelZones {
-  const base = closePanel(zones, k);
+  const base = closeRivals(closePanel(zones, k), k);
   return withZone(base, zone, z => ({
     ...z,
     layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone, cap, railSeq),
@@ -722,7 +741,10 @@ export function replacePanelWith(zones: PanelZones, guest: PanelKey, host: Panel
     ...z,
     layout: z.layout.map(col => col.map(k => (k === host ? guest : k))),
   }));
-  return { ...filled, home: { ...filled.home, [host]: zh } };
+  // Соперников убираем ПОСЛЕ замены: хозяин сам может оказаться соперником гостя
+  // (картинки бросили на звук), и снятый заранее он не оставил бы гостю слота
+  const done = closeRivals(filled, guest);
+  return { ...done, home: { ...done.home, [host]: zh } };
 }
 
 // Дроп в горизонтальный плейсхолдер зоны. Внутри своей зоны — обычная
@@ -735,7 +757,9 @@ export function moveAcrossAt(zones: PanelZones, k: PanelKey, zone: Zone, colIdx:
   const src = zoneOf(zones, k);
   if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelAt(z.layout, k, colIdx, rowIdx) }));
   const base = closePanel(zones, k);
-  return withZone(base, zone, z => {
+  // Соперников снимаем ПОСЛЕ вставки: снятый заранее, он мог унести целую колонку
+  // и сдвинуть colIdx — дроп встал бы мимо или потерялся
+  return closeRivals(withZone(base, zone, z => {
     // Зона в режиме одной панели принимает гостя вместо своей — как при клике по
     // иконке (openPanelIn), иначе перенос втихую сломал бы её режим
     if (z.mode === 'solo') return { ...z, layout: [[k]] };
@@ -744,7 +768,7 @@ export function moveAcrossAt(zones: PanelZones, k: PanelKey, zone: Zone, colIdx:
     if (colIdx < 0 || colIdx >= cols.length) return z;
     cols[colIdx].splice(Math.max(0, Math.min(cols[colIdx].length, rowIdx)), 0, k);
     return { ...z, layout: cols };
-  });
+  }), k);
 }
 
 // Дроп в разделитель колонок зоны: панель выносится в НОВУЮ колонку, в том
@@ -754,12 +778,13 @@ export function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone
   const src = zoneOf(zones, k);
   if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelToNewColumn(z.layout, k, insertIdx) }));
   const base = closePanel(zones, k);
-  return withZone(base, zone, z => {
+  // Как и в moveAcrossAt: соперников снимаем после вставки, чтобы не сдвинуть insertIdx
+  return closeRivals(withZone(base, zone, z => {
     if (z.mode === 'solo') return { ...z, layout: [[k]] };
     const cols = z.layout.map(c => [...c]);
     cols.splice(Math.max(0, Math.min(cols.length, insertIdx)), 0, [k]);
     return { ...z, layout: cols };
-  });
+  }), k);
 }
 
 // Выселить из зоны панели, которых на этом экране в ней быть не может, и вернуть
@@ -1340,13 +1365,17 @@ function createPanelZones(ns: string, opts?: {
 // Инстанс воркспейса — ключ cc_ws_zones, миграция со старых cc_ws_panels_* /
 // cc_ws_left_panels_* и совсем старого плоского списка cc_ws_panels_open.
 // Слева при первом запуске открыты «Чаты».
+// Редкие кнопки прячем в ящик рельсы из коробки: столбец остаётся коротким
+// (Файлы/Изменения/Задачи/Документация/Команда), а Граф, Знания, Заметки,
+// Архитектура, Навыки, Терминал и Сервисы достаются из «…» по мере надобности.
+export const WS_DEFAULT_TUCKED: readonly PanelKey[] = [
+  'graph', 'knowledge', 'notes', 'arch', 'skills', 'terminal', 'preview',
+];
+
 export const wsPanels = createPanelZones('ws', {
   legacyOpenKey: 'cc_ws_panels_open',
   defaultZones: { left: [['chats']] },
-  // Редкие кнопки прячем в ящик рельсы из коробки: столбец остаётся коротким
-  // (Файлы/Изменения/Задачи/Документация/Команда), а Граф, Знания, Заметки,
-  // Навыки, Терминал и Сервисы достаются из «…» по мере надобности.
-  defaultTucked: ['graph', 'knowledge', 'notes', 'skills', 'terminal', 'preview'],
+  defaultTucked: [...WS_DEFAULT_TUCKED],
 });
 
 // Инстанс раздела «Чаты» — независимая раскладка (cc_chat_zones).

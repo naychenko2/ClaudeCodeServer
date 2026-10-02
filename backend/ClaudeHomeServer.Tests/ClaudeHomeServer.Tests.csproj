@@ -59,12 +59,17 @@
       <_Parameter1>ClaudeHomeServer.Memory.Tests</_Parameter1>
     </AssemblyAttribute>
     <!-- Desktop — отдельная сборка (Этап 5, вынос Desktop): тесты вертикали живут в
-         ClaudeHomeServer.Desktop.Tests. Допуск нужен под общие internal-фейки грани
+         ClaudeHomeServer.Devices.Tests. Допуск нужен под общие internal-фейки грани
          (Helpers/DesktopFakes.cs) — их делят тесты вертикали и оставшиеся в Main тесты
          контроллеров канала, — а также чтобы статические конструкторы сторожей
          форс-загрузили сборку. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
-      <_Parameter1>ClaudeHomeServer.Desktop.Tests</_Parameter1>
+      <_Parameter1>ClaudeHomeServer.Devices.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- ImageEditor.Tests — модульные тесты редактора (ADR-018 §10.1) делят с тестами
+         контроллера internal-фейки ImageEditor/Fakes. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.ImageEditor.Tests</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
   <ItemGroup>
@@ -76,6 +81,12 @@
     <!-- Spend — динамический модуль: Main не тянет его как ProjectReference,
          поэтому Tests (нуждает SpendStore напрямую) добавляет явную ссылку. -->
     <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
+    <!-- ImageEditor — динамический модуль (ADR-018 §10.1): тесты контроллера и фейки
+         драйверов живут здесь, им нужны типы модуля напрямую. -->
+    <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" />
+    <!-- AudioEditor — динамический модуль (ADR-021): типы нужны сторожам границ (форс-загрузка
+         сборки) и будущим тестам контроллера. -->
+    <ProjectReference Include="..\ClaudeHomeServer.AudioEditor\ClaudeHomeServer.AudioEditor.csproj" />
     <!-- Core — спинка (этап 3, Этап 5). Тесты ссылаются на Core-DTO
          (`SubagentRunPassport`/`TurnRunPassport`/`RecallItem`/`RecallBlock` после
          переезда, И на Core-интерфейсы вроде `IKnowledgeIndex`). Транзитивно
@@ -105,6 +116,7 @@
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
@@ -165,5 +177,25 @@
     <Copy SourceFiles="..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll"
           DestinationFolder="$(OutDir)modules\spend" SkipUnchangedFiles="true"
           Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
+  </Target>
+  <!-- ImageEditor: тот же паттерн — dll в modules/image-editor/ для ModuleLoader. -->
+  <Target Name="CopyImageEditorModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll"
+          DestinationFolder="$(OutDir)modules\image-editor" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
+  </Target>
+  <!-- AudioEditor: тот же паттерн — dll в modules/audio-editor/ для ModuleLoader. -->
+  <Target Name="CopyAudioEditorModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll"
+          DestinationFolder="$(OutDir)modules\audio-editor" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll')" />
+  </Target>
+  <!-- Architecture (Viaduct 10.2): динамический модуль, как Notes. Без копии хосты
+       WebApplicationFactory не найдут dll — раздела нет, тулсет arch_* выпадает из реестра,
+       и тесты контроллера/стабильности состава проходили бы на пустом наборе. -->
+  <Target Name="CopyArchitectureModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll"
+          DestinationFolder="$(OutDir)modules\architecture" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll')" />
   </Target>
 </Project>

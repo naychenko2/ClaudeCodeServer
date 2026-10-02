@@ -467,4 +467,77 @@ public class TaskExecutionServiceStallTests : IDisposable
         after.ExecutorNudgedAt.Should().BeNull();
         after.ExecutorStaleAlertedAt.Should().BeNull();
     }
+
+    // --- Закрытая задача без итога хода: доклад по одному сигналу D --------------
+    // Случай 2026-10-01: итог успешного хода отбросили, задача в Done, доклад не ушёл
+    // никогда, а страховка молчала — для Done она не срабатывала вовсе.
+
+    private static TaskItem DoneWithoutResult()
+    {
+        var task = StaleTask();
+        task.Status = TaskItemStatus.Done;
+        task.ClaudeResult = null;
+        return task;
+    }
+
+    [Fact]
+    public void ClassifyStall_ЗакрытаБезИтогаХодаИЧатМолчит_ДоставляемДоклад()
+    {
+        var action = TaskExecutionService.ClassifyStall(DoneWithoutResult(),
+            Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.DeliverCompletion);
+    }
+
+    [Fact]
+    public void ClassifyStall_ЗакрытаБезИтогаНоХодИдёт_Ждём()
+    {
+        // tasks_complete пришёл посреди хода — R вот-вот приедет штатно
+        var action = TaskExecutionService.ClassifyStall(DoneWithoutResult(),
+            Chat(SessionStatus.Working, Now.AddHours(-1)), Now, Stale);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.None);
+    }
+
+    [Fact]
+    public void ClassifyStall_ЗакрытаБезИтогаДавно_НеРассылаемЛавиной()
+    {
+        var task = DoneWithoutResult();
+        task.UpdatedAt = Now - TaskExecutionService.NudgeWindow.Add(TimeSpan.FromHours(1));
+
+        var action = TaskExecutionService.ClassifyStall(task,
+            Chat(SessionStatus.Active, task.UpdatedAt), Now, Stale);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.None);
+    }
+
+    [Fact]
+    public void ClassifyStall_ЗакрытаСИтогомХода_НичегоНеДелаем()
+    {
+        var task = StaleTask();
+        task.Status = TaskItemStatus.Done;
+
+        var action = TaskExecutionService.ClassifyStall(task,
+            Chat(SessionStatus.Active, Now.AddHours(-1)), Now, Stale);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.None);
+    }
+
+    [Fact]
+    public async Task CheckStalledExecutorAsync_ЗакрытаБезИтогаХода_ОдинДоклад()
+    {
+        var (task, _) = await ArrangeExecutorChatAsync(silence: TimeSpan.FromMinutes(20));
+        var tracked = _tasks.GetById(task.Id)!;
+        tracked.ClaudeResult = null;
+        tracked.Status = TaskItemStatus.Done;
+
+        await _sut.CheckStalledExecutorAsync(tracked, Now);
+        await _sut.CheckStalledExecutorAsync(_tasks.GetById(task.Id)!, Now.AddSeconds(30));
+
+        var after = _tasks.GetById(task.Id)!;
+        after.CompletionDelivered.Should().BeTrue();
+        after.ClaudeResult.Should().Be("success");
+        (await CountNotificationsAsync(task.OwnerId!)).Should().Be(1, "доклад уходит ровно один раз");
+        Sent<UserMessageMessage>().Should().BeEmpty("закрытую задачу исполнителю не окликают");
+    }
 }

@@ -79,7 +79,6 @@ public class TrimMcpServersKeepTests : IDisposable
         WidgetsMcp: new WidgetsMcpContext("http://localhost:5999", () => "tok", UseHttp: true),
         CodeGraphMcp: new CodeGraphMcpContext("http://localhost:5999", () => "tok", "proj1"),
         DifyMcp: dify,
-        DesktopMcp: new DesktopMcpContext("http://localhost:5999", "tok", "sess-test"),
         ExternalMcpProvider: () => external);
 
     // Вызов приватного BuildTurnMcpConfig + разбор temp-конфига. Возвращает СПИСОК
@@ -91,7 +90,7 @@ public class TrimMcpServersKeepTests : IDisposable
             mcpConfigPath: mcpConfigPath, providers: providers);
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var result = method.Invoke(session, [null, null])!;
+        var result = method.Invoke(session, [null, null, false])!;
         var type = result.GetType();
         var path = (string?)type.GetField("Item1")!.GetValue(result);
         var keys = (string)type.GetField("Item2")!.GetValue(result)!;

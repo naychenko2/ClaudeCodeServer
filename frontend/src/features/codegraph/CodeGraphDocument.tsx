@@ -13,7 +13,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { Network, RefreshCw, X, SlidersHorizontal, AlertTriangle, Loader, Unlink } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
-import { Button, WaitingIndicator, BackButton, EmptyState } from '../../components/ui';
+import { Button, WaitingIndicator, BackButton, EmptyState, MetaChip } from '../../components/ui';
 import { Toolbar, ToolbarIconButton } from '../../components/Toolbar';
 import { Modal } from '../../components/ui/Modal';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -318,15 +318,6 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
 }
 
 // === Мелкие презентационные куски ===
-
-function MetaChip({ children }: { children: React.ReactNode }) {
-  return (
-    <span style={{
-      fontSize: FS.xs, color: C.textSecondary, background: C.bgCard, border: `1px solid ${C.borderLight}`,
-      borderRadius: R.max, padding: `${SP.xs} ${SP.sm}`, whiteSpace: 'nowrap', display: 'inline-flex', gap: 4, alignItems: 'center',
-    }}>{children}</span>
-  );
-}
 
 // Строка состояния под холстом: что именно сейчас показано и что скрыто. Обычным
 // текстом, а не моноширинной телеметрией — это подпись к картинке, а не лог

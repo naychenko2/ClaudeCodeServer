@@ -10,7 +10,11 @@ namespace ClaudeHomeServer.Services.CodeGraph;
 // и регистрируется в Program.cs вместе с остальными тулсетами ADR-012.
 public sealed class CodeGraphSubsystem : IAppPhaseSubsystem
 {
-    public string Key => "code-graph";
+    // Константой — чтобы гейт форвардера шва Architecture↔CodeGraph в Program.cs
+    // спрашивал SubsystemGate тем же ключом, а не строкой-однофамильцем
+    public const string SubsystemKey = "code-graph";
+
+    public string Key => SubsystemKey;
 
     public string Title => "Граф кода";
 

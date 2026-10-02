@@ -67,7 +67,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         SeedTranscript(_profileA);
         var store = NewStore();
 
-        store.Archive(badId, desktopChat: false, [_profileA], Cwd).Should().BeFalse();
+        store.Archive(badId, [_profileA], Cwd).Should().BeFalse();
 
         Directory.Exists(_root).Should().BeFalse();
         // Не задет и файл за пределами архива — ключ мог увести путь наружу
@@ -76,24 +76,11 @@ public class ArchivedTranscriptStoreTests : IDisposable
     }
 
     [Fact]
-    public void Archive_ДесктопныйЧат_КопиюНеДелает()
-    {
-        // Гейт по DesktopChat, а не по размеру: в jsonl десктопных чатов — кадры
-        // рабочего стола, наружу (бэкап едет в облако) их не отдаём
-        SeedTranscript(_profileA);
-        var store = NewStore();
-
-        store.Archive(Csid, desktopChat: true, [_profileA], Cwd).Should().BeFalse();
-
-        Directory.Exists(_root).Should().BeFalse();
-    }
-
-    [Fact]
     public void Archive_ТранскриптаНет_FalseБезОшибки()
     {
         // Ходов не было либо CLI уже вычистил — чат архивируется, карточка честно
         // предупредит про устаревший контекст
-        NewStore().Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeFalse();
+        NewStore().Archive(Csid, [_profileA], Cwd).Should().BeFalse();
     }
 
     // --- Archive: копирование ---
@@ -103,7 +90,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
     {
         SeedTranscript(_profileA, content: "line1\nline2");
 
-        NewStore().Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        NewStore().Archive(Csid, [_profileA], Cwd).Should().BeTrue();
 
         var copy = Path.Combine(_root, Csid + ".jsonl");
         File.Exists(copy).Should().BeTrue();
@@ -116,7 +103,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         var seeded = SeedTranscript(_profileA);
         SeedSubagents(seeded);
 
-        NewStore().Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        NewStore().Archive(Csid, [_profileA], Cwd).Should().BeTrue();
 
         File.Exists(Path.Combine(_root, Csid, "subagents", "agent-1.jsonl")).Should().BeTrue();
     }
@@ -129,7 +116,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         SeedTranscript(_profileA, content: "short");
         SeedTranscript(_profileB, content: "much longer transcript with the whole conversation");
 
-        NewStore().Archive(Csid, desktopChat: false, [_profileA, _profileB], Cwd).Should().BeTrue();
+        NewStore().Archive(Csid, [_profileA, _profileB], Cwd).Should().BeTrue();
 
         File.ReadAllText(Path.Combine(_root, Csid + ".jsonl"))
             .Should().Be("much longer transcript with the whole conversation");
@@ -141,7 +128,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         // Рабочую папку определить не удалось (проект удалён) — фолбэк-скан профилей
         var seeded = SeedTranscript(_profileA);
 
-        NewStore().Archive(Csid, desktopChat: false, [_profileA], cwd: null).Should().BeTrue();
+        NewStore().Archive(Csid, [_profileA], cwd: null).Should().BeTrue();
 
         File.Exists(Path.Combine(_root, Csid + ".jsonl")).Should().BeTrue();
         File.Exists(seeded).Should().BeTrue(); // источник не трогаем — это копия, не переезд
@@ -155,7 +142,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         var store = NewStore();
         store.MaxCopyBytes = 10;
 
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeFalse();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeFalse();
 
         Directory.Exists(_root).Should().BeFalse();
         File.Exists(seeded).Should().BeTrue();
@@ -168,10 +155,10 @@ public class ArchivedTranscriptStoreTests : IDisposable
         // а вот усечённый (повреждённый/пустой профиль) полную копию не затирает
         SeedTranscript(_profileA, content: "full history line1\nline2\nline3");
         var store = NewStore();
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
 
         SeedTranscript(_profileA, content: "short"); // профиль перезаписали короче
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
 
         File.ReadAllText(Path.Combine(_root, Csid + ".jsonl")).Should().Be("full history line1\nline2\nline3");
     }
@@ -181,10 +168,10 @@ public class ArchivedTranscriptStoreTests : IDisposable
     {
         SeedTranscript(_profileA, content: "v1");
         var store = NewStore();
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
 
         SeedTranscript(_profileA, content: "v1\nv2-new-turn");
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
 
         File.ReadAllText(Path.Combine(_root, Csid + ".jsonl")).Should().Be("v1\nv2-new-turn");
     }
@@ -200,7 +187,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         var seeded = SeedTranscript(_profileA, content: "line1\nline2");
         SeedSubagents(seeded);
         var store = NewStore();
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
         // Симуляция ретенции CLI: исходный транскрипт вычищен
         File.Delete(seeded);
 
@@ -221,7 +208,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
     {
         SeedTranscript(_profileA, content: "line1");
         var store = NewStore();
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
         File.Delete(Path.Combine(_profileA, "projects", TranscriptMigrator.FlattenCwd(Cwd), Csid + ".jsonl"));
 
         store.Restore(Csid, _profileA, Cwd).Should().BeTrue();
@@ -244,7 +231,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         // перезапись не нужна (цель уже достигнута)
         SeedTranscript(_profileA, content: "v1");
         var store = NewStore();
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
 
         var dstFile = Path.Combine(_profileA, "projects", TranscriptMigrator.FlattenCwd(Cwd), Csid + ".jsonl");
         File.WriteAllText(dstFile, "v1\nv2-new-turns-after-restore"); // живая история длиннее
@@ -273,7 +260,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         store.HasCopy(Csid).Should().BeFalse();
 
         SeedTranscript(_profileA);
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
 
         store.HasCopy(Csid).Should().BeTrue();
     }
@@ -286,7 +273,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         var seeded = SeedTranscript(_profileA);
         SeedSubagents(seeded);
         var store = NewStore();
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
         store.HasCopy(Csid).Should().BeTrue();
 
         store.Delete(Csid);
@@ -302,7 +289,7 @@ public class ArchivedTranscriptStoreTests : IDisposable
         // Один корень на все чаты: бьём строго по {csid}, соседние копии живут
         SeedTranscript(_profileA);
         var store = NewStore();
-        store.Archive(Csid, desktopChat: false, [_profileA], Cwd).Should().BeTrue();
+        store.Archive(Csid, [_profileA], Cwd).Should().BeTrue();
         var foreign = Path.Combine(_root, "e4d1f0aa-0000-4000-8000-000000000001.jsonl");
         File.WriteAllText(foreign, "не трогать");
 

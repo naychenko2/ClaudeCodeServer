@@ -25,6 +25,8 @@ public class FallbackLlmSessionAdapterTests
         public Queue<Action> Scripts { get; } = new();
         // (Provider, Model) на момент запуска каждой попытки
         public List<(string Provider, string? Model)> Attempts { get; } = [];
+        // Признак подмены фолбэком (Session.FallbackSubstitution) на момент каждой попытки
+        public List<bool> SubstitutionFlags { get; } = [];
         public int Interrupts;
 
         public LlmCapabilities Capabilities => LlmCapabilitiesCatalog.Claude;
@@ -47,6 +49,7 @@ public class FallbackLlmSessionAdapterTests
         {
             SubmittedTurnSeq++;
             Attempts.Add((Info.Provider ?? "", Info.Model));
+            SubstitutionFlags.Add(Info.FallbackSubstitution);
             if (Scripts.Count > 0) Scripts.Dequeue()();
             return Task.CompletedTask;
         }
@@ -1098,6 +1101,34 @@ public class FallbackLlmSessionAdapterTests
         // обрыв (ExitedMessage) → Unreachable → «сервис не отвечает»
         error.Text.Should().Contain("слишком много запросов").And.Contain("сервис не отвечает");
         inner.Attempts.Should().HaveCount(3);
+    }
+
+    // Признак подмены (Session.FallbackSubstitution) стоит ровно на подменной попытке: по нему
+    // LightProfileFor включает облегчённый профиль локальной модели принудительно. На попытке с
+    // моделью, выбранной человеком, и после хода его нет — иначе опция персоны перестала бы решать.
+    [Fact]
+    public async Task ПризнакПодмены_ТолькоНаПодменнойПопытке_СнимаетсяПослеХода()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации (restore в finally)");
+
+        inner.SubstitutionFlags.Should().Equal(new[] { false, true },
+            "первая попытка — на модели человека, вторая — подмена фолбэком");
+        inner.Info.FallbackSubstitution.Should().BeFalse("признак живёт только на время хода");
     }
 
     // Волна 2: подмена не переписывает модель чата навсегда. После хода с переходом по цепочке

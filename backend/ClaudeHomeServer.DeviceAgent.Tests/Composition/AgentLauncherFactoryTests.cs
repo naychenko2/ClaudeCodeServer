@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Processes;
+using ClaudeHomeServer.DeviceAgent.Tests.Processes;
 using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Composition;
@@ -19,19 +21,32 @@ public sealed class AgentLauncherFactoryTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { /* временная папка */ }
     }
 
+    // Потолок под холодный раннер CI: ждём по часам, а не счётчиком итераций
+    private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
+
+    private static async Task<T> WaitForAsync<T>(Func<T?> probe, string failure) where T : class
+    {
+        var deadline = DateTime.UtcNow + Ceiling;
+        while (true)
+        {
+            if (probe() is { } found) return found;
+            if (DateTime.UtcNow > deadline) throw new TimeoutException(failure);
+            await Task.Delay(50);
+        }
+    }
+
     private static async Task<int> ReadPidAsync(string file)
     {
-        for (var i = 0; i < 100; i++)
-        {
-            if (File.Exists(file) && int.TryParse(File.ReadAllText(file).Trim(), out var pid)) return pid;
-            await Task.Delay(100);
-        }
-        throw new TimeoutException("внук не записал свой pid");
+        var text = await WaitForAsync(
+            () => File.Exists(file) && File.ReadAllText(file).Trim() is var t && int.TryParse(t, out _) ? t : null,
+            "внук не записал свой pid");
+        return int.Parse(text);
     }
 
     private static async Task WaitAsync(Func<bool> condition)
     {
-        for (var i = 0; i < 100 && !condition(); i++) await Task.Delay(100);
+        var deadline = DateTime.UtcNow + Ceiling;
+        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(50);
     }
 
     [SkippableFact]
@@ -58,7 +73,7 @@ public sealed class AgentLauncherFactoryTests : IDisposable
         journal.ReadAll().Should().ContainSingle(e => e.TurnId == "term-1" && e.Pid == process.Id);
 
         launchers.Local.Kill(process, "term-1");
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await process.WaitForExitAsync().WaitAsync(Ceiling);
         await WaitAsync(() => !UnixGroupProcess.IsAlive(grandchild));
 
         UnixGroupProcess.IsAlive(grandchild).Should().BeFalse("внук терминала умирает с ним");
@@ -88,7 +103,7 @@ public sealed class AgentLauncherFactoryTests : IDisposable
 
         // Агент умер, не убив процесс: новая жизнь читает журнал с диска
         var killed = new TurnJournal(journalDir).SweepLeftovers(new SessionFileJanitor(Path.Combine(_dir, "profile")));
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await process.WaitForExitAsync().WaitAsync(Ceiling);
         await WaitAsync(() => !UnixGroupProcess.IsAlive(grandchild));
 
         killed.Should().Be(1);
@@ -124,26 +139,42 @@ public sealed class AgentLauncherFactoryTests : IDisposable
         Skip.IfNot(OperatingSystem.IsWindows(), "ветка Windows: Job Object");
         var journal = new TurnJournal(Path.Combine(_dir, "journal"));
         var launchers = new AgentLauncherFactory(journal);
-        var pidFile = Path.Combine(_dir, "grandchild.pid");
-        var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
-        var script = $"$p = Start-Process -FilePath ping.exe -ArgumentList '-n','600','127.0.0.1' -PassThru -WindowStyle Hidden; " +
-                     $"Set-Content -Path '{pidFile}' -Value $p.Id; Start-Sleep -Seconds 600";
+        // PowerShell не берём: на холодном раннере CI он стартует дольше 10 с (тот же урок, что в
+        // KillTreeTests). Внук — вложенный cmd, а не ping: иначе его не отличить в снимке от
+        // паузного ping, после которого cmd уже сидит в Job (посадка идёт после старта).
+        var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        var script = "ping -n 2 127.0.0.1 >nul & cmd /d /c ping -n 600 127.0.0.1 >nul";
 
         var process = launchers.Local.Start(new ProcessSpec
         {
-            FileName = powershell,
-            Args = ["-NoProfile", "-Command", script],
+            FileName = cmd,
+            Args = ["/d", "/c", script],
             WorkingDirectory = _dir,
             TurnId = "term-1",
         });
-        var grandchild = await ReadPidAsync(pidFile);
+        using var grandchild = await WaitForAsync(
+            () => WindowsSnapshot.ChildrenOf(process.Id, "cmd.exe").Select(OpenAlive).FirstOrDefault(p => p is not null),
+            "cmd не породил внука");
         journal.ReadAll().Should().ContainSingle(e => e.TurnId == "term-1");
 
         launchers.Local.Kill(process, "term-1");
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        await WaitAsync(() => !WindowsJobProcess.IsAlive(grandchild));
+        await process.WaitForExitAsync().WaitAsync(Ceiling);
+        await grandchild.WaitForExitAsync().WaitAsync(Ceiling);
 
-        WindowsJobProcess.IsAlive(grandchild).Should().BeFalse();
+        WindowsJobProcess.IsAlive(grandchild.Id).Should().BeFalse();
         journal.ReadAll().Should().BeEmpty();
+    }
+
+    private static Process? OpenAlive(int pid)
+    {
+        try
+        {
+            var process = Process.GetProcessById(pid);
+            if (!process.HasExited) return process;
+            process.Dispose();
+        }
+        catch (ArgumentException) { }
+        catch (InvalidOperationException) { }
+        return null;
     }
 }

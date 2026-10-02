@@ -3,27 +3,29 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Controllers;
 
 /// <summary>
-/// Реестр устройств десктопного агента и сопряжение (ADR-008). Управление устройствами —
+/// Реестр устройств и сопряжение (канал устройства ADR-016). Управление устройствами —
 /// работа человека в вебе, поэтому обычный [Authorize]; обмен кода на токен анонимен —
 /// у клиента на этот момент нет вообще никаких учётных данных.
 ///
 /// Сервисный токен владельца сюда не пускается ни на одну ручку: он лежит в env КАЖДОГО
 /// хода (включая ночной tasks-executor), и с ним ход завёл бы себе устройство или снял
-/// чужое. Вызовы канала с capability-токеном чата живут отдельно от этого контроллера.
+/// чужое.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("api/devices")]
 public class DevicesController(
-    DeviceRegistry registry, DevicePairingService pairing, UserStore users) : ControllerBase
+    DeviceRegistry registry, DevicePairingService pairing, UserStore users,
+    DeviceConnectionRegistry connections) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -99,6 +101,27 @@ public class DevicesController(
             : NotFound(new { error = "Устройство не найдено" });
     }
 
+    /// <summary>
+    /// Самоотзыв (agent-distribution Р12): <c>uninstall</c> агента снимает СВОЁ устройство.
+    /// Авторизация — только токен устройства плюс отпечаток машины (схема хаба); веб-JWT и
+    /// сервисный токен эту ручку не открывают. Какое устройство отзывать, берётся из токена,
+    /// а не из запроса: чужое так не снять. Результат — то же надгробие, что при отзыве из веба.
+    /// </summary>
+    [Authorize(AuthenticationSchemes = DeviceAuthHandler.SchemeName)]
+    [HttpDelete("self")]
+    public IActionResult RevokeSelf()
+    {
+        var ownerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        var deviceId = User.FindFirstValue(DeviceAuthHandler.DeviceIdClaim);
+        if (User.Identity?.AuthenticationType != DeviceAuthHandler.SchemeName
+            || string.IsNullOrEmpty(ownerId) || string.IsNullOrEmpty(deviceId))
+            return Unauthorized();
+
+        return registry.Revoke(ownerId, deviceId)
+            ? NoContent()
+            : NotFound(new { error = "Устройство не найдено" });
+    }
+
     public record PairRequest(string Code, string Name, string Fingerprint, string? ClientVersion);
 
     /// <summary>
@@ -135,7 +158,9 @@ public class DevicesController(
         };
     }
 
-    private static object ToDto(DesktopDevice device) => new
+    // Имена полей — контракт с DesktopDevice во frontend/src/types: пикер локального проекта
+    // пускает устройство только при capabilities.exec === true (сторож — DevicesControllerDtoTests)
+    private object ToDto(DesktopDevice device) => new
     {
         id = device.Id,
         name = device.Name,
@@ -150,6 +175,17 @@ public class DevicesController(
         revoked = device.Revoked,
         revokedAt = device.RevokedAt,
         tokenVersion = device.TokenVersion,
+        online = connections.IsOnline(device.OwnerId, device.Id),
+        platform = device.Platform,
+        capabilities = new
+        {
+            exec = device.Capabilities.Contains(DeviceCapabilities.Exec),
+            files = device.Capabilities.Contains(DeviceCapabilities.Files),
+        },
+        agentVersion = device.AgentVersion,
+        agentUpdate = device.AgentUpdate is { } update
+            ? new { state = update.State, targetVersion = update.TargetVersion, reason = update.Reason }
+            : null,
     };
 
     // Сервисный токен владельца (typ=svc) — не человек за клавиатурой: устройствами

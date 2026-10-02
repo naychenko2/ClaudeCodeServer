@@ -87,7 +87,7 @@ function toProjectRelative(src: string, rootPath: string): string {
 
 // Картинка из markdown: внешние URL (http/https/data) — напрямую; локальный путь файла
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
-function ChatImage({ src, alt }: { src?: string; alt?: string }) {
+export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const project = useContext(ChatProjectContext);
   // /api/proxy?... — уже проксированный URL (от urlTransform)
   const isRemote = !!src && /^(https?:|data:|\/api\/proxy)/i.test(src);
@@ -122,8 +122,10 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
 
   const finalSrc = isRemote ? src : cached ?? resolved;
 
-  if (failed) return <span style={{ fontSize: 13, color: C.textMuted }}>🖼 {alt || src}</span>;
-  if (!finalSrc) return <span style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
+  // ref — на КАЖДУЮ ветку: пока картинки нет, в DOM только плейсхолдер, и без ref на нём
+  // IntersectionObserver ничего не наблюдает → inView вечно false → fetch не стартует никогда
+  if (failed) return <span ref={wrapRef} style={{ fontSize: 13, color: C.textMuted }}>🖼 {alt || src}</span>;
+  if (!finalSrc) return <span ref={wrapRef} style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
 
   return (
     <a ref={wrapRef} href={finalSrc} target="_blank" rel="noopener noreferrer" style={{ display: 'block', margin: '6px 0' }}>

@@ -126,7 +126,7 @@ public sealed class PersonasCrudService(
                 req.MemoryEnabled ?? true, templated.Tools, req.Contract,
                 templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
                 req.AllProjectsAccess ?? false, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindingList.Count > 0)
@@ -191,7 +191,7 @@ public sealed class PersonasCrudService(
         if (req.Contract is not null || req.SystemPrompt is not null)
         {
             var currentSize = PersonaManager.ContractSize(current.Contract, current.SystemPrompt);
-            if (PersonaManager.ExceedsContractLimit(req.Contract ?? current.Contract,
+            if (PersonaManager.ExceedsContractLimit(PersonaManager.MergeContract(current.Contract, req.Contract),
                     req.SystemPrompt ?? current.SystemPrompt, currentSize, out var tooBig))
                 return BadRequest(new { error = tooBig });
         }
@@ -229,7 +229,7 @@ public sealed class PersonasCrudService(
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
                 req.MemoryEnabled, templated.Tools, req.Contract, templated.Access, templated.DisallowedTools,
                 req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         // Ручная правка заготовки снимает её статус (план 2.8): если у нетронутой заготовки

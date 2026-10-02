@@ -29,4 +29,15 @@ public static class TreeExcludes
     };
 
     public static bool Contains(string name) => Names.Contains(name);
+
+    // Что наблюдатели дерева файлов (FileWatcherService на сервере, AgentFileWatchers на
+    // устройстве) не подписывают и чьи события глушат — одним списком для подписки и фильтра.
+    // Сверх Names — `.omc`: состояние плагина oh-my-claudecode копит каталог на каждую сессию
+    // (`.omc/state/sessions`, `session-end-jobs/runs`) и на этом репозитории к 2026-09-27
+    // съело 426 из 1013 слежек. В дереве файлов `.omc` по умолчанию и так скрыт, поэтому в
+    // Names его нет, а правки на каждый вызов инструмента гнали бы filesChanged впустую.
+    public static readonly HashSet<string> WatchNames =
+        new([.. Names, ".omc"], StringComparer.OrdinalIgnoreCase);
+
+    public static bool WatchContains(string name) => WatchNames.Contains(name);
 }

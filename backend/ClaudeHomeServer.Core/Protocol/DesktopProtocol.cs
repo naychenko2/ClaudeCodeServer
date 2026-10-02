@@ -1,12 +1,9 @@
-﻿using System.Security.Cryptography;
-using System.Text.Json;
-
-namespace ClaudeHomeServer.Protocol;
+﻿namespace ClaudeHomeServer.Protocol;
 
 /// <summary>
-/// Протокол канала десктопного агента — ADR-008, раздел «Протокол канала».
-/// Одна точка правды по версии протокола, генерации callId, дедлайнам фаз, потолкам и
-/// составу исходов: те же числа читает клиент устройства (вторая волна) и MCP-сервер.
+/// Протокол хаба устройств (/hubs/devices): версия, схема авторизации и claims токена
+/// устройства. Заведён ADR-008, сегодня это канал управления агента локальных проектов
+/// (ADR-016); фазы вызова рук ADR-008 удалены вместе с десктопным клиентом.
 /// </summary>
 public static class DesktopProtocol
 {
@@ -18,221 +15,55 @@ public static class DesktopProtocol
 
     /// <summary>
     /// Схема авторизации канала устройств. /api/devices/* и /hubs/devices НЕ принимают
-    /// дефолтную JwtBearer и сервисный JWT владельца (ADR-008, «Авторизация канала»);
-    /// сама схема регистрируется в слое авторизации устройств. Источник правды —
-    /// здесь: вертикаль Desktop ссылается на этот литерал, а не наоборот (иначе
-    /// контракт WS-канала зависел бы от вертикали, что ломает Ф3 Этапа 5).
+    /// дефолтную JwtBearer и сервисный JWT владельца; сама схема регистрируется в слое
+    /// авторизации устройств. Источник правды — здесь: вертикаль Desktop ссылается на этот
+    /// литерал, а не наоборот (иначе контракт WS-канала зависел бы от вертикали, что ломает
+    /// Ф3 Этапа 5).
     /// </summary>
     public const string DeviceTokenScheme = "DesktopDevice";
 
     // Claims токена устройства. Имена НЕ свои: их выдаёт сторона авторизации
-    // (DesktopDeviceAuthHandler), и разъехавшиеся литералы означали бы пустого владельца
+    // (DeviceAuthHandler), и разъехавшиеся литералы означали бы пустого владельца
     // в хабе при формально успешной проверке токена. Источник правды — здесь,
-    // `DesktopDeviceAuthHandler` ссылается на эти литералы, а не объявляет свои.
-    // Claim чата (sid) сюда НЕ выносим: его читает только DesktopCaller.FromPrincipal —
-    // единственная точка разбора capability-токена, а висящий алиас читался бы как
-    // отдельная проверка чата.
+    // `DeviceAuthHandler` ссылается на эти литералы, а не объявляет свои.
     public const string OwnerIdClaim = "sub";
     public const string DeviceIdClaim = "did";
 
-    /// <summary>
-    /// Audience capability-токена канала (ADR-008, «Авторизация канала»). Отдельный от
-    /// "ClaudeHomeServer" — в этом весь смысл: сервисный JWT владельца /api/devices/* не
-    /// открывает. Живёт здесь, а не у выдающей стороны: литерал сверяют обе стороны —
-    /// и выдача (JwtService в Main), и схема DesktopCapability в вертикали.
-    /// </summary>
-    public const string CapabilityAudience = "desktop";
+    // Три числа ниже — только поля ответа на Hello (DeviceHelloAck). Фаз вызова, которыми
+    // они управляли, больше нет, но поля оставлены, чтобы не менять формат ответа Hello
+    // для уже установленных агентов (SignalR сериализует JSON по именам, агент их не читает).
 
-    /// <summary>
-    /// TTL capability-токена — минуты: сторона доверия здесь физическая машина владельца,
-    /// а конфиг хода лежит в общем /turn-tmp песочницы (принятый остаточный риск ADR-008).
-    /// Короткий срок сужает окно, поэтому токен обновляется на каждом запуске хода, а не
-    /// живёт днями. Читают обе стороны: выдача и кеш токенов чата.
-    /// </summary>
-    public static readonly TimeSpan CapabilityTokenLifetime = TimeSpan.FromMinutes(10);
-
-    /// <summary>Ack на команду: нет за 2 с — честная ошибка, а не висение до таймаута MCP.</summary>
+    /// <summary>Ack на команду (поле ответа Hello).</summary>
     public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(2);
 
-    /// <summary>
-    /// Ожидание человека разведено с дедлайном исполнения: пока висит тост подтверждения,
-    /// часы исполнения не идут, а ожидание меряется минутами.
-    /// </summary>
-    public static readonly TimeSpan DefaultConfirmationWait = TimeSpan.FromMinutes(3);
-
-    /// <summary>Потолок ожидания человека, сколько бы минут ни попросило устройство.</summary>
-    public static readonly TimeSpan MaxConfirmationWait = TimeSpan.FromMinutes(10);
-
-    /// <summary>Потолок тела результата (~8 МБ) — это лимит HTTP, а не лимит кадра.</summary>
+    /// <summary>Потолок тела результата вызова (поле ответа Hello).</summary>
     public const int MaxResultBytes = 8 * 1024 * 1024;
 
-    /// <summary>Потолок шагов в одном батче desktop_act.</summary>
+    /// <summary>Потолок шагов в одном батче (поле ответа Hello).</summary>
     public const int MaxBatchSteps = 10;
-
-    /// <summary>Сколько держим завершённый вызов, чтобы клиент забрал результат при реконнекте.</summary>
-    public static readonly TimeSpan ResultRetention = TimeSpan.FromMinutes(15);
-
-    /// <summary>callId — 128 бит случайности, генерирует бэкенд (устройство своих не придумывает).</summary>
-    public static string NewCallId() =>
-        Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
     /// <summary>Совместима ли версия клиента с сервером.</summary>
     public static bool IsSupportedClientVersion(int version) =>
         version >= MinClientVersion && version <= Version;
-
-    /// <summary>
-    /// Дедлайн исполнения ПОСЛЕ встречного go (ADR: screen 15 с, ui 20 с, act 30 с, run 120 с).
-    /// desktop_open отдельного числа в ADR не имеет — по поведению он ближе к act.
-    /// </summary>
-    public static TimeSpan DeadlineFor(string kind) => kind switch
-    {
-        DesktopCallKinds.Screen => TimeSpan.FromSeconds(15),
-        DesktopCallKinds.Ui => TimeSpan.FromSeconds(20),
-        DesktopCallKinds.Act => TimeSpan.FromSeconds(30),
-        DesktopCallKinds.Open => TimeSpan.FromSeconds(30),
-        DesktopCallKinds.Run => TimeSpan.FromSeconds(120),
-        _ => TimeSpan.FromSeconds(30)
-    };
-}
-
-/// <summary>Виды вызовов, которые уезжают на устройство (desktop_devices обслуживает сервер).</summary>
-public static class DesktopCallKinds
-{
-    public const string Screen = "screen";
-    public const string Ui = "ui";
-    public const string Act = "act";
-    public const string Open = "open";
-    public const string Run = "run";
-
-    public static readonly IReadOnlyList<string> All = [Screen, Ui, Act, Open, Run];
-
-    public static bool IsKnown(string? kind) => kind is not null && All.Contains(kind);
-}
-
-/// <summary>
-/// Исходы вызова. Явный исход вместо тихого no-op — требование ADR: модель обязана
-/// понимать, что произошло, и не строить догадок.
-/// </summary>
-public static class DesktopOutcomes
-{
-    /// <summary>Вызов исполнен.</summary>
-    public const string Ok = "ok";
-
-    // --- исходы устройства (ADR, «Протокол канала») ---
-    public const string SessionLocked = "session_locked";
-    public const string SecureDesktop = "secure_desktop";
-    public const string TargetElevated = "target_elevated";
-    public const string InputBlocked = "input_blocked";
-    public const string SelfTargetDenied = "self_target_denied";
-    public const string WindowNotAvailable = "window_not_available";
-    public const string WindowMinimized = "window_minimized";
-
-    /// <summary>Чем кончилось — неизвестно. Формулировка НЕ содержит подсказки «повтори».</summary>
-    public const string Unknown = "unknown";
-
-    /// <summary>Снапшот, на который ссылается вызов, устарел.</summary>
-    public const string SnapshotStale = "snapshot_stale";
-
-    /// <summary>Шаг применён, но адресной улики не нашлось; повтор запрещён.</summary>
-    public const string AppliedUnverified = "applied_unverified";
-
-    /// <summary>Видимых изменений не произошло; повтор запрещён.</summary>
-    public const string NoVisibleChange = "no_visible_change";
-
-    // --- исходы, которые ставит сам бэкенд ---
-    /// <summary>Человек ещё не подтвердил: ожидание меряется минутами, не дедлайном исполнения.</summary>
-    public const string AwaitingConfirmation = "awaiting_confirmation";
-
-    /// <summary>Человек отказал.</summary>
-    public const string Denied = "denied";
-
-    /// <summary>Устройство не подтвердило приём команды за 2 с.</summary>
-    public const string NoAck = "no_ack";
-
-    /// <summary>Устройство не на связи.</summary>
-    public const string DeviceOffline = "device_offline";
-
-    /// <summary>Дедлайн исполнения после go истёк.</summary>
-    public const string DeadlineExceeded = "deadline_exceeded";
-
-    /// <summary>Вызов отменён (interrupt пользователя, погасший сеанс, выключенная грань).</summary>
-    public const string Cancelled = "cancelled";
-
-    /// <summary>Отказ протокола: неизвестный вид вызова, битые аргументы, канал не принял команду.</summary>
-    public const string ProtocolError = "protocol_error";
-
-    /// <summary>Исходы, которые устройство вправе прислать в результате.</summary>
-    public static readonly IReadOnlySet<string> FromDevice = new HashSet<string>(StringComparer.Ordinal)
-    {
-        Ok, SessionLocked, SecureDesktop, TargetElevated, InputBlocked, SelfTargetDenied,
-        WindowNotAvailable, WindowMinimized, Unknown, SnapshotStale, AppliedUnverified,
-        NoVisibleChange, Denied, Cancelled, DeadlineExceeded,
-        // Устройство вправе само сообщить, что человек не отвечает, не дожидаясь окна сервера
-        AwaitingConfirmation
-    };
-}
-
-/// <summary>
-/// Человеческие формулировки исходов, которые ставит бэкенд. Текст устройства (если пришёл)
-/// имеет приоритет — здесь честный дефолт. Правило ADR: у unknown нет подсказки «повтори»,
-/// авто-ретраев в этой грани нет нигде, клик и ввод не идемпотентны.
-/// </summary>
-public static class DesktopOutcomeText
-{
-    public static string For(string outcome, string? deviceName = null, int? waitMinutes = null)
-    {
-        var device = string.IsNullOrWhiteSpace(deviceName) ? "устройство" : $"устройство {deviceName}";
-        return outcome switch
-        {
-            DesktopOutcomes.DeviceOffline => $"{Cap(device)} офлайн — команда не отправлена.",
-            DesktopOutcomes.NoAck => $"{Cap(device)} не подтвердило приём команды за 2 секунды; ни один шаг не применён.",
-            DesktopOutcomes.AwaitingConfirmation => waitMinutes is > 0
-                ? $"Действие ждёт подтверждения человека на устройстве; ждали {waitMinutes} мин, ответа пока нет."
-                : "Действие ждёт подтверждения человека на устройстве, ответа пока нет.",
-            DesktopOutcomes.Denied => "Человек отклонил действие на устройстве.",
-            DesktopOutcomes.DeadlineExceeded => "Дедлайн исполнения истёк; устройство результат не прислало.",
-            DesktopOutcomes.Cancelled => "Вызов отменён.",
-            // Ровно то, что произошло, и ни слова о повторе.
-            DesktopOutcomes.Unknown => "Связь с устройством оборвалась во время вызова; чем он закончился — неизвестно.",
-            DesktopOutcomes.ProtocolError => "Канал устройства не принял команду.",
-            _ => outcome
-        };
-    }
-
-    private static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
 }
 
 // ---------- сервер → устройство ----------
 
 /// <summary>
-/// Команда устройству. Исполнение не начинается по ней: устройство подтверждает приём
-/// (Ack), спрашивает человека и ждёт встречного go.
-/// </summary>
-public sealed record DesktopCallCommand(
-    int ProtocolVersion,
-    string CallId,
-    string Kind,
-    JsonElement? Args,
-    int DeadlineSeconds,
-    bool RequiresConfirmation,
-    int ConfirmationWaitMinutes,
-    string SessionId,
-    string? ChatName,
-    long IssuedAt);
-
-/// <summary>Встречный go: с этого момента идут часы дедлайна исполнения.</summary>
-public sealed record DesktopGoCommand(string CallId, int DeadlineSeconds);
-
-/// <summary>Отмена: гасит ожидание и невыполненные шаги; уже отправленный ввод не откатывается.</summary>
-public sealed record DesktopCancelCommand(string CallId, string Reason);
-
-/// <summary>
-/// Ответ на Hello: версия сервера и потолки протокола. Поля агента локальных проектов
-/// (ADR-016) — аддитивные: клиент рук ADR-008 их не читает.
+/// Ответ на Hello: версия сервера и потолки протокола (первые четыре поля остались от рук
+/// ADR-008 и сохранены, чтобы не менять формат ответа Hello для уже установленных агентов: SignalR сериализует JSON по именам, агент этих полей не читает). Поля агента локальных проектов (ADR-016)
+/// — аддитивные.
 /// <see cref="RequiredCliVersion"/> — версия управляемой копии CLI, которую агент обязан
 /// держать (null — сервер её не задал); <see cref="HarnessReady"/> и
 /// <see cref="HarnessProblem"/> — вердикт сервера по объявленной копии. Поставив нужную
 /// версию, агент повторяет Hello — вердикт пересчитывается.
+///
+/// Раздача агента (agent-distribution Р9): <see cref="AgentLatestVersion"/> — версия текущей
+/// выкатки (null — сервер агента не раздаёт), <see cref="AgentMinVersion"/> — минимальная
+/// совместимая. Хеш, размер и путь архива (относительно <c>/agent/</c>) — под RID из Hello;
+/// архива под этот RID нет — поля пустые. Хеш едет по аутентифицированному каналу
+/// устройства, сам архив агент качает анонимной ручкой. Мост рук отдельного архива не имеет:
+/// он едет внутри архива агента под win-x64.
 /// </summary>
 public sealed record DeviceHelloAck(
     int ProtocolVersion,
@@ -242,7 +73,12 @@ public sealed record DeviceHelloAck(
     string? RequiredCliVersion = null,
     bool HarnessReady = false,
     string? HarnessProblem = null,
-    int ExecProtocolVersion = DeviceExecProtocol.Version);
+    int ExecProtocolVersion = DeviceExecProtocol.Version,
+    string? AgentLatestVersion = null,
+    string? AgentMinVersion = null,
+    string? AgentArchiveSha256 = null,
+    long? AgentArchiveSize = null,
+    string? AgentArchivePath = null);
 
 /// <summary>
 /// Открыть канал исполнения: устройство отвечает WebSocket-подключением на
@@ -259,6 +95,13 @@ public static class DeviceExecPurposes
 {
     /// <summary>Ретранслятор чтения для других устройств: протокол — <see cref="RelayProtocol"/>.</summary>
     public const string Relay = "relay";
+
+    /// <summary>
+    /// Выдача папки проекта (решение владельца 2026-09-27, ADR-016 §5): агент создаёт папку и
+    /// добавляет её в корни машины. Отдельно от ретранслятора: тот не пишет по построению (G6).
+    /// Протокол — <see cref="BindFolderProtocol"/>.
+    /// </summary>
+    public const string BindFolder = BindFolderProtocol.Operation;
 }
 
 // ---------- устройство → сервер ----------
@@ -268,9 +111,11 @@ public static class DeviceExecPurposes
 /// (сервер не додумывает состав — устройство объявляет его само).
 ///
 /// Хвост — агент локальных проектов (ADR-016): признак агента — непустой
-/// <see cref="AgentVersion"/>; клиент рук ADR-008 эти поля не шлёт, и сохранённые
-/// сведения об агенте его Hello не затирает. <see cref="CliVersion"/> — версия
+/// <see cref="AgentVersion"/>; Hello без этих полей сохранённые сведения об агенте не
+/// затирает. <see cref="CliVersion"/> — версия
 /// УПРАВЛЯЕМОЙ копии CLI в каталоге агента (null — копии нет), а не CLI из PATH.
+/// <see cref="Rid"/> — RID сборки агента (<c>win-x64</c>, <c>linux-x64</c>): под него сервер
+/// выбирает архив обновления. <see cref="AgentUpdate"/> — состояние самообновления.
 /// </summary>
 public sealed record DeviceHello(
     int ProtocolVersion,
@@ -279,7 +124,68 @@ public sealed record DeviceHello(
     string? Platform = null,
     string? AgentVersion = null,
     string? CliVersion = null,
-    IReadOnlyList<string>? Capabilities = null);
+    IReadOnlyList<string>? Capabilities = null,
+    string? Rid = null,
+    DeviceAgentUpdate? AgentUpdate = null);
+
+/// <summary>
+/// Состояние самообновления агента (agent-distribution AD-3/AD-5): <see cref="State"/> — одно
+/// из <see cref="DeviceAgentUpdateStates"/>, <see cref="TargetVersion"/> — версия, к которой
+/// идёт обновление, <see cref="Reason"/> — причина ожидания или провала, текстом для человека.
+/// </summary>
+public sealed record DeviceAgentUpdate(string State, string? TargetVersion = null, string? Reason = null)
+{
+    /// <summary>Потолок длины причины: текст приходит с устройства и уходит в стор и в UI.</summary>
+    public const int MaxReasonLength = 500;
+
+    /// <summary>
+    /// Только известное состояние, версия — только разбираемая, причина — обрезанная.
+    /// Незнакомое состояние — null: сервер не хранит того, чего не понимает.
+    /// </summary>
+    public static DeviceAgentUpdate? Normalize(DeviceAgentUpdate? declared)
+    {
+        if (declared is null) return null;
+        var state = (declared.State ?? "").Trim().ToLowerInvariant();
+        if (!DeviceAgentUpdateStates.All.Contains(state)) return null;
+
+        var target = DeviceAgentVersion.TryParse(declared.TargetVersion?.Trim(), out var v) ? v.ToString() : null;
+        var reason = string.IsNullOrWhiteSpace(declared.Reason) ? null : declared.Reason.Trim();
+        if (reason is { Length: > MaxReasonLength }) reason = reason[..MaxReasonLength];
+        return new DeviceAgentUpdate(state, target, reason);
+    }
+}
+
+/// <summary>Состояния самообновления агента.</summary>
+public static class DeviceAgentUpdateStates
+{
+    /// <summary>Обновлять нечего или обновление не начиналось.</summary>
+    public const string Idle = "idle";
+
+    /// <summary>Архив новой версии скачивается и проверяется.</summary>
+    public const string Downloading = "downloading";
+
+    /// <summary>Новая версия готова, переключение ждёт конца работы (ход, терминал…).</summary>
+    public const string WaitingIdle = "waiting-idle";
+
+    /// <summary>Обновление не удалось, причина — в <see cref="DeviceAgentUpdate.Reason"/>.</summary>
+    public const string Failed = "failed";
+
+    public static readonly IReadOnlyList<string> All = [Idle, Downloading, WaitingIdle, Failed];
+}
+
+/// <summary>
+/// RID-ы, под которые сервер раздаёт агента (agent-distribution Р11). Белый список: строка
+/// из запроса или из Hello, которой здесь нет, до каталога релизов не доходит.
+/// </summary>
+public static class DeviceAgentRids
+{
+    public const string WinX64 = "win-x64";
+    public const string LinuxX64 = "linux-x64";
+
+    public static readonly IReadOnlyList<string> Supported = [WinX64, LinuxX64];
+
+    public static bool IsSupported(string? rid) => rid is not null && Supported.Contains(rid, StringComparer.Ordinal);
+}
 
 /// <summary>
 /// Возможности агента устройства (ADR-016). Устройство объявляет их само; незнакомые
@@ -296,7 +202,18 @@ public static class DeviceCapabilities
     /// <summary>Ретранслятор чтения для других устройств (этап 5).</summary>
     public const string Relay = "relay";
 
-    public static readonly IReadOnlyList<string> All = [Exec, Files, Relay];
+    /// <summary>
+    /// Руки (ADR-016, раздел «Руки»): мост <c>HandsBridge</c> лежит в каталоге версии агента — его
+    /// привозит архив агента под Windows. Агент старой версии возможность не объявляет. Сеанса на
+    /// машине нет (решение владельца 1в): объявленная возможность и тумблер проекта — всё, что
+    /// нужно ходу.
+    /// </summary>
+    public const string Hands = "hands";
+
+    /// <summary>Выдача папки проекта (<see cref="DeviceExecPurposes.BindFolder"/>); старый агент её не объявляет.</summary>
+    public const string BindFolder = "bind-folder";
+
+    public static readonly IReadOnlyList<string> All = [Exec, Files, Relay, Hands, BindFolder];
 
     /// <summary>Только известные значения, без дублей, в порядке <see cref="All"/>.</summary>
     public static List<string> Normalize(IEnumerable<string>? declared)
@@ -311,7 +228,7 @@ public static class DeviceCapabilities
 
 /// <summary>
 /// Протокол потокового канала исполнения. Версия своя, отдельная от версии хаба: хаб — канал
-/// управления, и его клиент рук ADR-008 о кадрах exec не знает. Устройство называет версию
+/// управления, кадры exec идут мимо него. Устройство называет версию
 /// заголовком <see cref="VersionHeader"/> при подключении; несовместимая — явный отказ 400
 /// с кодом <see cref="UnsupportedVersionError"/> до апгрейда WebSocket.
 /// </summary>
@@ -353,6 +270,10 @@ public static class DeviceExecProtocol
 
     public static bool IsSupportedClientVersion(int version) =>
         version >= MinClientVersion && version <= Version;
+
+    /// <summary>execId — 128 бит случайности, генерирует бэкенд (устройство своих не придумывает).</summary>
+    public static string NewExecId() =>
+        Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 }
 
 /// <summary>
@@ -419,25 +340,4 @@ public static class DeviceExecFrames
         frame = new DeviceExecFrame(channel, sequence, message[DeviceExecProtocol.HeaderBytes..]);
         return true;
     }
-}
-
-/// <summary>
-/// Результат вызова. Приезжает HTTP-POST'ом мимо 32-КБ лимита сообщения хаба.
-/// LastAppliedStep возвращается В ЛЮБОМ исходе: -1 — неизвестно, 0 — ни один шаг не применён,
-/// N — применён N-й шаг батча (нумерация с единицы).
-/// </summary>
-public sealed record DesktopCallResult(
-    string CallId,
-    string Outcome,
-    int LastAppliedStep,
-    string? Message = null,
-    bool Partial = false,
-    JsonElement? Payload = null,
-    int? AwaitMinutes = null)
-{
-    public static DesktopCallResult Server(string callId, string outcome, int lastAppliedStep,
-        string? deviceName = null, int? waitMinutes = null) =>
-        new(callId, outcome, lastAppliedStep,
-            DesktopOutcomeText.For(outcome, deviceName, waitMinutes),
-            AwaitMinutes: waitMinutes);
 }

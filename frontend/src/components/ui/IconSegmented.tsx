@@ -1,6 +1,6 @@
 import { useLayoutEffect, useState, type ReactNode } from 'react';
 import { C, R, TB } from '../../lib/design';
-import type { SegmentOptionState } from './Segmented';
+import { SEG_MUTED_BORDER, type SegmentOptionState } from './Segmented';
 
 // Группа иконок-переключателей: «списком | деревом», «список | по дате | доска».
 // Один выбранный вариант, подпись уходит в tooltip — форма для тесных мест,
@@ -108,7 +108,7 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
               transition: quiet ? 'background 0.12s, color 0.2s' : 'background 0.12s',
               ...(opt.disabled
                 ? { cursor: 'not-allowed', opacity: 0.35, background: 'transparent' }
-                : opt.muted && !active ? { opacity: 0.5 } : null),
+                : opt.muted && !active ? { border: SEG_MUTED_BORDER } : null),
             }}
           >
             {opt.icon}

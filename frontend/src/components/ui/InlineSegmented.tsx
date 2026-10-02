@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { C, FS, SP, TB } from '../../lib/design';
-import type { SegmentOptionState } from './Segmented';
+import { SEG_MUTED_BORDER, type SegmentOptionState } from './Segmented';
 
 // === Компактный inline-сегмент (режимы в строках списков) ===
 // Отличия от PillSwitch: без скользящей пилюли и drag (строка и так плотная),
@@ -45,8 +45,10 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
               background: tone ? tone.bg : 'transparent',
               color: tone ? tone.fg : C.textMuted,
               transition: 'background 0.12s, color 0.12s',
-              // Невыбранный сегмент и так серый — выключенный и приглушённый отличаем прозрачностью
-              ...(o.disabled && !disabled ? { cursor: 'not-allowed', opacity: 0.4 } : o.muted && !active ? { opacity: 0.6 } : null),
+              // Выключенный гасится прозрачностью, приглушённый — цветом обычного сегмента
+              // с пунктирной рамкой (см. SEG_MUTED_BORDER); поля меньше на ширину рамки
+              ...(o.disabled && !disabled ? { cursor: 'not-allowed', opacity: 0.4 }
+                : o.muted && !active ? { border: SEG_MUTED_BORDER, padding: `${SP.xs - 1}px ${SP.sm - 1}px` } : null),
             }}
           >
             {o.icon}

@@ -4267,8 +4267,8 @@ function KitOptionsDemo() {
           {pickOpen && (
             // Во всю ширину родителя, вверх от низа блока — как над полосой на 360
             <Menu onClose={() => setPickOpen(false)} bottom={0} fullWidth>
-              <MenuItem icon={<Music size={ICON_SIZE.xs} />} label="Песня про кота · 2:14 · агент · 3 мин назад" onClick={() => { setHasSound(true); setMode('process'); setPickOpen(false); }} />
-              <MenuItem icon={<Mic size={ICON_SIZE.xs} />} label="Озвучка вступления · 0:12 · вы · 10 мин назад" onClick={() => { setHasSound(true); setMode('process'); setPickOpen(false); }} />
+              <MenuItem icon={<Music size={ICON_SIZE.xs} />} label="Песня про кота" hint="2:14 · агент · 3 мин назад" onClick={() => { setHasSound(true); setMode('process'); setPickOpen(false); }} />
+              <MenuItem icon={<Mic size={ICON_SIZE.xs} />} label="Озвучка вступления" hint="0:12 · вы · 10 мин назад" onClick={() => { setHasSound(true); setMode('process'); setPickOpen(false); }} />
               <MenuSep />
               <MenuItem label="Склеить несколько…" onClick={() => setPickOpen(false)} />
             </Menu>

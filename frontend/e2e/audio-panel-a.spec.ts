@@ -212,8 +212,8 @@ for (const width of [1440, 360]) {
   }
 }
 
-// Дизайн-проверка Майи на 360: имя звука в чипе читается (≥ 96 px видимой ширины), «▴» —
-// тач-цель 40×40 внутри рамки полосы, сегменты по 40, строка «Ещё настройки» не ниже 40
+// Дизайн-проверка Майи на 360: имя звука в чипе читается (≥ 96 px видимой ширины), «▴»
+// и переключатель полос — тач-цели 40×40 внутри рамки полосы, сегменты по 40, строка «Ещё настройки» не ниже 40
 type Rect = { x: number; y: number; width: number; height: number };
 const rect = (l: Locator) => l.evaluate(n => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }) as Promise<Rect>;
 const inside = (a: Rect, b: Rect) => a.x >= b.x - 0.5 && a.x + a.width <= b.x + b.width + 0.5 && a.y >= b.y - 0.5 && a.y + a.height <= b.y + b.height + 0.5;
@@ -224,6 +224,11 @@ async function stripGeometry(page: Page) {
   expect(toggle.width, '«▴» шириной 40').toBeGreaterThanOrEqual(40);
   expect(toggle.height, '«▴» высотой 40').toBeGreaterThanOrEqual(40);
   expect(inside(toggle, strip), `«▴» внутри полосы: ${JSON.stringify({ toggle, strip })}`).toBeTruthy();
+  // Переключатель полос (общий хост полос над полем ввода) — тоже тач-цель 40×40 внутри полосы
+  const sw = await rect(page.locator('[data-sound-strip="full"] [data-composer-strip-switcher] button'));
+  expect(sw.width, 'переключатель полос шириной 40').toBeGreaterThanOrEqual(40);
+  expect(sw.height, 'переключатель полос высотой 40').toBeGreaterThanOrEqual(40);
+  expect(inside(sw, strip), `переключатель полос внутри полосы: ${JSON.stringify({ sw, strip })}`).toBeTruthy();
   const segs = page.locator('[data-sound-mode-switch] button');
   await expect(segs).toHaveCount(3);
   for (let i = 0; i < 3; i++) {

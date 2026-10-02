@@ -134,9 +134,9 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
       style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, flexShrink: 0 }}>
       <span style={{ position: 'relative', display: 'inline-flex' }}>
         {/* Телефон: место в полосе нужнее её содержимому (имя звука в чипе) — одна иконка
-            без «▾» и без разделителя; шторка с полосами открывается тем же нажатием */}
+            без «▾» и без разделителя, но тач-цель 40×40; шторка с полосами открывается тем же нажатием */}
         {isMobile ? (
-          <IconButton size="xs" title={switchTitle} ariaLabel={switchTitle} onClick={() => setSheet(true)}>
+          <IconButton size="lg" title={switchTitle} ariaLabel={switchTitle} onClick={() => setSheet(true)}>
             {current.action!.icon}
           </IconButton>
         ) : (

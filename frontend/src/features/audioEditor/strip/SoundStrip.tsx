@@ -139,9 +139,10 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
       </div>
     )}
     <div ref={bar} data-composer-strip="sound" data-sound-strip="full" style={{
-      position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 8, boxSizing: 'border-box', minWidth: 0,
-      // Телефон: справа без поля — «▴» 40×40 встаёт вплотную к рамке и не вылезает за неё
-      height: isMobile ? 42 : 48, margin: isMobile ? '6px 0' : '10px 0 8px', padding: isMobile ? '0 0 0 2px' : '0 8px',
+      position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 0 : 8, boxSizing: 'border-box', minWidth: 0,
+      // Телефон: без полей и зазоров — переключатель полос и «▴» (по 40×40) встают вплотную к рамке,
+      // воздух между соседями дают поля самих иконок-кнопок, а ширина остаётся имени в чипе
+      height: isMobile ? 42 : 48, margin: isMobile ? '6px 0' : '10px 0 8px', padding: isMobile ? 0 : '0 8px',
       background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
     }}>
       {title}

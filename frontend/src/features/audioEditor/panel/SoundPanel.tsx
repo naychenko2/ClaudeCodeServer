@@ -11,16 +11,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AudioLines, Combine, Cpu, Lock, Mic, Scissors, SlidersHorizontal, X } from 'lucide-react';
 import {
-  Badge, GenerationPanel, IconButton, SegmentedControl, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
+  Badge, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
   clearGenDraft, followPeeked, noteGenDraft, useAgentPick,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
-import { audioApi, type AudioMode, type AudioOp, type AudioQuote } from '../api';
+import { audioApi, type AudioOp, type AudioQuote } from '../api';
 import { MODE_LABEL, opInfo } from '../ops';
 import { audioScope, isPersonalScope } from '../scope';
 import { focusLabel, queueBadge } from '../strip/summary';
-import { changeSoundSettings, flushSoundSettings, releaseFocus, setSoundMode, soundPanelState } from '../thread/actions';
+import { SoundModeSwitch } from '../strip/SoundModeSwitch';
+import { changeSoundSettings, flushSoundSettings, releaseFocus, soundPanelState } from '../thread/actions';
 import {
   focusThread, getCatalog, getComposerText, getJobsOf, getSelection, setPieceFieldOpen, setSelection,
   soundDraftKey, SOUND_PANEL, useAudioStoreVersion, useAudioThreads,
@@ -68,8 +69,6 @@ if (typeof window !== 'undefined') {
   });
 }
 
-const MODES: { value: AudioMode; label: string }[] = (['voice', 'music', 'process'] as AudioMode[])
-  .map(m => ({ value: m, label: MODE_LABEL[m] }));
 const QUOTE_DELAY = 600;
 
 export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
@@ -348,7 +347,8 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     body = (
       <div data-sound-settings="">
         <div style={{ height: SP.sm }} />
-        <SegmentedControl<AudioMode> value={state.mode} options={MODES} onChange={mode => { setSoundMode(scope, sessionId, mode); }} />
+        {/* Зеркало переключателя полосы: выбор общий, «Обработка» без звука спрашивает, что обработать */}
+        <SoundModeSwitch scope={scope} sessionId={sessionId} mode={state.mode} thread={thread} threads={threads.threads} isMobile={ctx.isMobile} />
 
         <Label>Операция</Label>
         <Row>

@@ -1,24 +1,30 @@
 // Полоса «Звук» над композером (реестр composer-strip; макет audio-editor-v2-proposal.md,
 // раздел «Полоса «Звук» над композером»). Настроек в себе не раскрывает — это сводка и вход в
 // панель «Звук»: заголовок-переключатель от хоста (в его меню — ярлыки «Голос» и «Музыка»),
-// чип «Работаем с: файл · версия ✕» или пунктирный «✦ Новый звук», бейдж очереди GPU,
+// зеркало режимов «Голос / Музыка / Обработка» (макет audio-panel-v4, вариант 3), чип
+// «Работаем с: файл · версия ✕» или пунктирный «✦ Новый звук», бейдж очереди GPU,
 // кнопка-сводка «Режим · операция · поставщик · модель · голос · N вар. · цена» → панель на
-// «Настройках». Высота 48 px на десктопе, 42 на телефоне, свёрнутая строка — 30 px.
+// «Настройках» (на телефоне — одна «▴»). Над полосой — плашка «Вернуть» после снятия звука
+// в «Обработке». Высота 48 px на десктопе, 42 на телефоне, свёрнутая строка — 30 px с иконкой режима.
 
-import { useState } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { AudioLines, ChevronDown, ChevronRight, ChevronUp, Cpu, Sparkles, X } from 'lucide-react';
 import type { User } from 'lucide-react';
-import { Button, Chip, IconButton, C, FS, R, SP, ICON_SIZE, ICON_STROKE, revealWorkspacePanel, useGenerationSheet } from 'aihome_shell/kit';
+import {
+  Button, Chip, IconButton, ReleaseNotice, C, FS, R, SP, ICON_SIZE, ICON_STROKE, revealWorkspacePanel, useGenerationSheet,
+} from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import { audioScope, isPersonalScope } from '../scope';
-import { createDraft, releaseFocus } from '../thread/actions';
+import { createDraft, releaseFocus, soundReleaseUndo, undoSoundRelease } from '../thread/actions';
 import {
   getCatalog, getFocusedThread, getJobsOf, SOUND_PANEL, useAudioThreads,
 } from '../thread/threadStore';
 import { soundSource } from '../thread/modeState';
 import type { AudioThread } from '../api';
-import { focusLabel, queueBadge, resolveLaunch, soundSummary, soundSummaryMobile } from './summary';
+import { MODE_LABEL } from '../ops';
+import { focusLabel, queueBadge, resolveLaunch, soundSummary } from './summary';
+import { MODE_ICON, SoundModeSwitch } from './SoundModeSwitch';
 
 const ic = (I: typeof User, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -65,6 +71,10 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const thread = state.focus ? state.threads.find(t => t.id === state.focus) ?? null : null;
   const m = stripModel(ctx.projectId, sessionId, thread);
   const [drafting, setDrafting] = useState(false);
+  const bar = useRef<HTMLDivElement>(null);
+  const offer = useSyncExternalStore(soundReleaseUndo.subscribe, soundReleaseUndo.current, soundReleaseUndo.current);
+  const undo = offer && offer.snapshot.sessionId === sessionId ? offer : null;
+  const ModeIcon = MODE_ICON[m.launch.mode];
   // Уже 800 панель встаёт шторкой над полем ввода, а не колонкой справа
   const narrow = useGenerationSheet();
 
@@ -94,6 +104,9 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
           background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
         }}>
         {title}
+        <span data-sound-mini-mode={m.launch.mode} title={`Режим: ${MODE_LABEL[m.launch.mode]}`} style={{ display: 'inline-flex', color: C.textSecondary, flexShrink: 0 }}>
+          {ic(ModeIcon, ICON_SIZE.sm)}
+        </span>
         {/* Клик по сводке в строке открывает панель, по остальной строке — разворачивает полосу */}
         <span data-sound-summary="" title="Открыть настройки в панели «Звук»"
           onClick={e => { e.stopPropagation(); openSettings(); }}
@@ -110,13 +123,28 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
     );
   }
 
+  const modeSwitch = (
+    <SoundModeSwitch scope={scope} sessionId={sessionId} mode={m.launch.mode} thread={thread} threads={state.threads}
+      isMobile={isMobile} compact={isMobile} quiet={isMobile} bar={bar} />
+  );
+
   return (
-    <div data-composer-strip="sound" data-sound-strip="full" style={{
+    <>
+    {/* Плашка «Вернуть» встаёт над полосой и не сдвигает поле ввода */}
+    {undo && (
+      <div style={{ position: 'relative', height: 0 }}>
+        <div data-sound-release="" style={{ position: 'absolute', left: 0, right: 0, bottom: SP.xs }}>
+          <ReleaseNotice text={undo.text} onUndo={() => { void undoSoundRelease(); }} isMobile={isMobile} />
+        </div>
+      </div>
+    )}
+    <div ref={bar} data-composer-strip="sound" data-sound-strip="full" style={{
       position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 8, boxSizing: 'border-box', minWidth: 0,
       height: isMobile ? 42 : 48, margin: isMobile ? '6px 0' : '10px 0 8px', padding: isMobile ? '0 6px' : '0 8px',
       background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
     }}>
       {title}
+      {modeSwitch}
       {thread ? (
         <span data-sound-chip="focus" style={{ display: 'inline-flex', minWidth: 72, flex: '0 1 auto' }}>
           <Chip selected leading={ic(AudioLines)} maxW="100%" onRemove={release}
@@ -138,22 +166,33 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
         <span style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           Звучать нечем: поставщиков не настроил администратор
         </span>
+      ) : isMobile ? (
+        // Телефон: место нужно переключателю, цена уже на кнопке поля ввода — от сводки остаётся «▴»
+        <span data-sound-settings-toggle="" style={{ display: 'inline-flex', flexShrink: 0 }}>
+          <IconButton size="md" title="Открыть настройки панели «Звук»" ariaLabel="Открыть настройки панели «Звук»" onClick={openSettings}>
+            {ic(ChevronUp, ICON_SIZE.sm)}
+          </IconButton>
+        </span>
       ) : (
         <span data-sound-settings-toggle="" style={{ display: 'inline-flex', minWidth: 0, flex: '0 1 auto' }}>
           <Button size="xs" variant="secondary" title={narrow ? 'Открыть настройки панели «Звук»' : 'Настройки открываются в панели «Звук» справа'} onClick={openSettings}
             style={{ minWidth: 0, flex: '0 1 auto', height: 28, border: `1px solid ${C.border}`, background: C.bgWhite }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {isMobile ? soundSummaryMobile(m.launch) : soundSummary({ focus: m.focus, launch: m.launch }, true)}
+                {soundSummary({ focus: m.focus, launch: m.launch }, true)}
               </span>
               {ic(narrow ? ChevronUp : ChevronRight)}
             </span>
           </Button>
         </span>
       )}
-      <IconButton size="sm" title="Свернуть полосу в строку" ariaLabel="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
-        {ic(ChevronUp, ICON_SIZE.sm)}
-      </IconButton>
+      {/* Телефон: вторая «▴» рядом со сводкой путалась бы с ней (макет v4) */}
+      {!isMobile && (
+        <IconButton size="sm" title="Свернуть полосу в строку" ariaLabel="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
+          {ic(ChevronUp, ICON_SIZE.sm)}
+        </IconButton>
+      )}
     </div>
+    </>
   );
 }

@@ -2,7 +2,8 @@
 // поля ввода (котировка → задача строго по quoteId, ADR-021 §2).
 
 import {
-  autoRevealGenerationPanel, clearGenDraft, dropAgentPick, followSelection, requestStrip, revealWorkspacePanel, showToast,
+  autoRevealGenerationPanel, clearGenDraft, createReleaseUndo, dropAgentPick, followSelection, requestStrip, revealWorkspacePanel,
+  showToast,
 } from 'aihome_shell/kit';
 import { audioApi, nameTakenSuggestion, type AudioMode, type AudioOp, type AudioThread } from '../api';
 import type { MixPlan } from '../player/mix';
@@ -12,7 +13,7 @@ import { opInfo } from '../ops';
 import { rememberMode, saveSettings } from '../panel/inputs';
 import { nextSettings, resolvePanel, type PanelState, type SettingsPatch } from '../panel/model';
 import { resolveLaunch } from '../strip/summary';
-import { hasSound, soundSource, type PendingSettings } from './modeState';
+import { getSoundMode, hasSound, soundSource, type PendingSettings } from './modeState';
 import {
   dropPendingSettings, focusThread, getCatalog, getFocusedThread, getPrefs, mutate, requestSoundMode, setChosenMode,
   setPendingSettings, soundDraftKey, SOUND_PANEL, SOUND_STRIP,
@@ -90,8 +91,53 @@ export async function createDraft(scope: string, sessionId: string, mode: AudioM
   return ok;
 }
 
+// «Вернуть» после снятия выбора человеком в «Обработке»: одна плашка на модуль, полоса
+// показывает её только своему чату. Агент снимает выбор событием нитей мимо releaseFocus — плашки нет
+export interface SoundReleaseSnapshot { scope: string; sessionId: string; threadId: string }
+export const soundReleaseUndo = createReleaseUndo<SoundReleaseSnapshot>();
+// «вернулись к «Музыке»»
+const MODE_DATIVE: Record<AudioMode, string> = { voice: 'Голосу', music: 'Музыке', process: 'Обработке' };
+
+// ✕ на чипе полосы и в панели — снимает человек
 export async function releaseFocus(scope: string, sessionId: string, thread: AudioThread | null) {
-  if (thread) await focusThread(scope, sessionId, null);
+  if (!thread) return;
+  const wasProcess = hasSound(thread) && getSoundMode(scope, sessionId) === 'process';
+  if (!await focusThread(scope, sessionId, null)) return;
+  if (wasProcess) {
+    soundReleaseUndo.release({
+      snapshot: { scope, sessionId, threadId: thread.id },
+      text: `Звук снят — вернулись к «${MODE_DATIVE[getSoundMode(scope, sessionId)]}»`,
+    }, true);
+  }
+}
+
+// Звук — в работу человеком и «Обработка» — строго друг за другом: режим ставится уже на нить
+// в фокусе, иначе правка ушла бы в префы. false — звук не выбран или режим не принят
+export async function processThreadByHuman(scope: string, sessionId: string, threadId: string): Promise<boolean> {
+  if (!await selectThreadByHuman(scope, sessionId, threadId)) return false;
+  if (!setSoundMode(scope, sessionId, 'process')) {
+    showToast('Не удалось включить «Обработку» для этого звука', '', 'error');
+    return false;
+  }
+  // Поле ввода — в режим «Звук»: запуск «Разделить» идёт прямо из него
+  requestSoundMode(sessionId);
+  return true;
+}
+
+// «Вернуть»: тот же звук и «Обработка»
+export async function undoSoundRelease(): Promise<boolean> {
+  const s = soundReleaseUndo.undo();
+  return s ? processThreadByHuman(s.scope, s.sessionId, s.threadId) : false;
+}
+
+// «Склеить несколько…» из меню «Что обработать?»: склейке выбранный звук не нужен, куски
+// набираются в панели. Черновик в фокусе снимается — «Обработка» на нём не включается
+export async function startConcat(scope: string, sessionId: string | null): Promise<boolean> {
+  const focus = getFocusedThread(sessionId);
+  if (sessionId && focus && !await focusThread(scope, sessionId, null)) return false;
+  if (!changeSoundSettings(scope, sessionId, { mode: 'process', operation: 'concat' })) return false;
+  revealWorkspacePanel(SOUND_PANEL, 'settings');
+  return true;
 }
 
 // Ярлык «Звук» (меню полос, «＋» композера, пустая лента): полоса «Звук» и панель «Звук» на

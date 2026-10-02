@@ -191,4 +191,14 @@ export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
 // Общий каркас панели генерации: «Картинки» и «Звук» видят хост только через кит (ADR-021 §3)
 export { GenerationPanel, GEN_PANEL_W, useGenerationSheet } from '../../components/generation/GenerationPanel';
 export type { GenerationFoot, GenerationPanelView } from '../../components/generation/GenerationPanel';
+// Общий слой панелей: переключатель режима, меню выбора источника, «Вернуть» после снятия выбора
+export { GenerationModeSwitch } from '../../components/generation/GenerationModeSwitch';
+export type { GenerationModeOption } from '../../components/generation/GenerationModeSwitch';
+export { GenerationPickMenu } from '../../components/generation/GenerationPickMenu';
+export type { GenerationPickRow, GenerationPickExtra } from '../../components/generation/GenerationPickMenu';
+export { ReleaseNotice } from '../../components/generation/ReleaseNotice';
+export { createReleaseUndo, RELEASE_UNDO_MS } from '../../components/generation/useReleaseUndo';
+export type { ReleaseOffer, ReleaseUndoController } from '../../components/generation/useReleaseUndo';
+export { pickRows } from '../../components/generation/pickSort';
+export type { PickCandidate } from '../../components/generation/pickSort';
 export type { TabItem } from '../../components/ui';

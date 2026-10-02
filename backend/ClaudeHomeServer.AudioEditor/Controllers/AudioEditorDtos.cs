@@ -7,8 +7,11 @@ namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 
 // Каталог для полосы и панели: заведённые поставщики в порядке показа, у каждого — доступен ли он
 // В ЭТОЙ области и почему нет. Недоступный остаётся в списке серым с причиной, а не пропадает.
-// LibraryVoicesReason — почему поставщик не берёт голос из библиотеки «Голоса» (null — берёт)
-public sealed record AudioCatalogDto(IReadOnlyList<AudioProviderDto> Providers, string AutoModelId, int MaxCount);
+// LibraryVoicesReason — почему поставщик не берёт голос из библиотеки «Голоса» (null — берёт).
+// AutoProviders — ключи поставщиков в порядке, в каком «Авто» их перебирает (AudioCatalog.AutoCandidates):
+// фронт не считает этот порядок сам, иначе сводка разошлась бы с котировкой
+public sealed record AudioCatalogDto(IReadOnlyList<AudioProviderDto> Providers, string AutoModelId, int MaxCount,
+    IReadOnlyList<string> AutoProviders);
 
 public sealed record AudioProviderDto(
     string Key, string Label, string PriceUnit, bool Available, string? Reason, IReadOnlyList<AudioModelInfo> Models,
@@ -18,13 +21,14 @@ public static class AudioCatalogView
 {
     public const string UnavailableReason = "Поставщик сейчас недоступен";
 
-    public static AudioCatalogDto Build(IEnumerable<IAudioEngine> engines, AudioEditScope scope) =>
+    public static AudioCatalogDto Build(IEnumerable<IAudioEngine> engines, AudioEditScope scope, bool preferLocal = false) =>
         new([.. AudioCatalog.Registered(engines).Select(e =>
         {
             var reason = Safe(() => e.Enabled) ? Safe(() => e.ScopeRefusal(scope), UnavailableReason) : UnavailableReason;
             return new AudioProviderDto(e.Key, e.Label, e.PriceUnit, reason is null, reason, e.Models,
                 Safe(() => e.LibraryVoicesRefusal, UnavailableReason));
-        })], AudioCatalog.AutoModelId, AudioModePrefs.MaxCount);
+        })], AudioCatalog.AutoModelId, AudioModePrefs.MaxCount,
+            [.. AudioCatalog.AutoCandidates(engines, scope, preferLocal).Select(e => e.Key)]);
 
     private static bool Safe(Func<bool> probe)
     {

@@ -305,10 +305,15 @@ Core):
    `LocalMedia:AudioEnabled` и живом ComfyUI), облако при отказе — только с согласия, как у картинок.
    Обработка (`AudioLocal`) и так без запрета. Без флага порядок «Авто» — fal → Higgsfield → Яндекс →
    local (local последним: доступность мигает). Отдельный флаг не заводим.
-   **Расхождение с фактом:** порядок «Авто» в каталоге не зависит от флага — `AudioCatalog.ProviderOrder`
-   = fal → Higgsfield → local, Яндекс вне списка и идёт после них. Умолчание local при флаге держит текст
-   хода: `LocalMediaDefaultContributor.ProjectAudioEditorRule` велит агенту при «по умолчанию» в полосе
-   передавать `provider local`.
+   **Как сделано (02.10):** порядок «Авто» — одна точка, `AudioCatalog.AutoCandidates`: доступные
+   поставщики, работающие в области, в порядке `ProviderOrder` (fal → Higgsfield → local, Яндекс — после
+   них); при флаге владельца `local-media-default` local ставится первым. Её зовут котировка
+   (`AudioEditJobService.QuoteAsync`, флаг читает `PrefersLocal` через `IFeatureFlagGate`) и каталог для
+   фронта — поле `autoProviders`, по нему сводка полосы и панель показывают «Авто → local»; сами порядок
+   фронт не считает. У local нет операции или он лежит — дальше прежний порядок, цена видна до запуска; в
+   личном чате local нет (`ScopeRefusal`), порядок прежний. Явно выбранный поставщик флагом не
+   подменяется. Агенту то же умолчание дополнительно повторяет текст хода
+   (`LocalMediaDefaultContributor.ProjectAudioEditorRule`).
 
 ### 6. Инварианты под угрозой и сторожа
 
@@ -394,7 +399,7 @@ Core):
 | Поля-ссылки fal | `FalSchemaReader.IsLink` (`webhook*`, `callback*`, `url(s)`, `uri(s)`, `endpoint(s)`) — в `Reserved`: в `params` не принимаются, в «Дополнительно» не рисуются | `Schema/FalSchemaReader` |
 | Потолки размеров | входной звук ручек, правок без ИИ, склейки и запуска агентом — 200 МиБ до чтения; тело запуска — 500 МиБ; образец `data:` URI у fal (клон MiniMax, Chatterbox, Qwen-клон) — 20 МБ с отказом до запроса; образец голоса в библиотеке — до 5 штук по 50 МБ | `AudioEditorEndpoints`, `DspAudioEngine`, `FalAudioEngine`, `VoiceStore` |
 | Кеш id поставщиков | `AudioVoiceCacheEntry` с пустым `Id` — удалить запись поставщика (§2) | `Voices/VoiceLibrary` |
-| Порядок «Авто» | fal → Higgsfield → local, Яндекс — после них; от `local-media-default` каталог не зависит, умолчание local держит правило хода (§5, вопрос 3) | `Catalog/AudioCatalog` |
+| Порядок «Авто» | fal → Higgsfield → local, Яндекс — после них; при `local-media-default` владельца local первым (в проекте, если доступен и умеет операцию); одна точка `AutoCandidates` для котировки и `autoProviders` каталога, явный поставщик не подменяется (§5, вопрос 3) | `Catalog/AudioCatalog`, `AudioAutoLocalTests` |
 | Сверка запуска с котировкой | котировка хранит всё, от чего зависит цена: текст, подводку, слова, длительность и итог `params`; запуск с другими значениями — отказ «Котировка не соответствует запросу — запросите цену заново» до поставщика, котировка не сгорает; правило одно для всех поставщиков, включая local | `Jobs/AudioEditJobService` |
 | `LocalMediaDefaultContributor` | устаревшая фраза из «Что показала сверка» и §8 заменена: при сервере `audio-editor` в ходе — ссылка на блок «Звук в этом чате», без него — прямые `local_*` | Images |
 

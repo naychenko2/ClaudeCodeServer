@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { AudioCatalog, AudioModelInfo, AudioParamSchema, AudioPrefs, AudioProvider, AudioQuote, AudioThread } from '../api';
+import type { AudioCatalog, AudioMode, AudioModelInfo, AudioParamSchema, AudioPrefs, AudioProvider, AudioQuote, AudioThread, AudioThreadSettings } from '../api';
 import {
   modelOptions, nextSettings, panelOps, pillOf, priceLines, providerOptions, pruneFields, resolvePanel, runReason,
-  splitSchema, widgetOf, type PanelState, type ReasonInput,
+  splitSchema, widgetOf, type PanelState, type ReasonInput, type SettingsPatch,
 } from './model';
+import { modePrefsOf } from './inputs';
 
 const model = (id: string, ops: AudioModelInfo['caps']['ops'], extra: Partial<AudioModelInfo['caps']> = {}, hint?: AudioModelInfo['priceHint']): AudioModelInfo => ({
   id, label: id.toUpperCase(),
@@ -83,6 +84,67 @@ describe('цепочка настроек', () => {
     expect(own.fields).toEqual({ voice: 'тенор', speaker: 'Eric' });
     const none = resolvePanel(null, NO_PREFS, CATALOG, 'process');
     expect(none).toMatchObject({ mode: 'process', op: 'separate', providerKey: null, modelId: 'auto' });
+  });
+
+  describe('режимы помнят свой выбор', () => {
+    const FAL_MUSIC: AudioProvider = { ...FAL, models: [...FAL.models, model('cassette', ['song'], {}, { amount: 0.02, unit: 'sec', per: 'sec' })] };
+    const CAT: AudioCatalog = { ...CATALOG, providers: [LOCAL, FAL_MUSIC] };
+
+    // Как панель: без нити выбор пишется в префы режима, с нитью — в нить, а уходя из режима — в его префы
+    function panel(withThread: boolean) {
+      let prefs: AudioPrefs = { ...NO_PREFS };
+      let own: AudioThreadSettings | null = withThread ? { mode: 'voice', operation: null, provider: null, model: null, fields: null } : null;
+      let fallback: AudioMode = 'voice';
+      const state = () => resolvePanel(own ? thread(own) : null, prefs, CAT, fallback);
+      return {
+        state,
+        prefs: () => prefs,
+        change(patch: SettingsPatch) {
+          const cur = state();
+          const next = nextSettings(cur, patch, prefs, CAT);
+          if (own && next.mode !== cur.mode) {
+            const old = nextSettings(cur, {});
+            prefs = { ...prefs, [old.mode]: modePrefsOf(old, prefs[old.mode]) };
+          }
+          if (own) own = next;
+          else {
+            fallback = next.mode;
+            prefs = { ...prefs, [next.mode]: modePrefsOf(next, { ...emptyPrefs, inputs: next.inputs ?? null }) };
+          }
+        },
+      };
+    }
+    const emptyPrefs = { operation: null, provider: null, model: null, count: null, fields: null };
+
+    it.each([false, true])('Голос local + qwen, Музыка fal + cassette — туда-обратно у каждого свой (нить: %s)', withThread => {
+      const p = panel(withThread);
+      p.change({ provider: 'local' });
+      p.change({ model: 'qwen', fields: { speaker: 'Eric' } });
+      p.change({ mode: 'music' });
+      expect(p.state()).toMatchObject({ mode: 'music', op: 'song' });
+      p.change({ provider: 'fal' });
+      p.change({ model: 'cassette' });
+      p.change({ mode: 'voice' });
+      expect(p.state()).toMatchObject({ mode: 'voice', op: 'speak', providerKey: 'local', modelId: 'qwen' });
+      expect(p.state().fields).toEqual({ speaker: 'Eric' });
+      p.change({ mode: 'music' });
+      expect(p.state()).toMatchObject({ mode: 'music', op: 'song', providerKey: 'fal', modelId: 'cassette' });
+      // Префы ушедшего режима не затёрты пустыми
+      expect(p.prefs().voice).toMatchObject({ provider: 'local', model: 'qwen', fields: { speaker: 'Eric' } });
+    });
+
+    it('модель, которой нет у поставщика для операции, сбрасывается, поставщик остаётся', () => {
+      const prefs: AudioPrefs = { ...NO_PREFS, music: { operation: 'song', provider: 'fal', model: 'minimax', count: null, fields: { x: 1 } } };
+      const cur = resolvePanel(null, prefs, CAT, 'voice');
+      expect(nextSettings(cur, { mode: 'music' }, prefs, CAT)).toMatchObject({ provider: 'fal', model: null, fields: {} });
+    });
+
+    it('операция карточки вместе с режимом: поставщик режима остаётся, модель чужой операции — нет', () => {
+      const prefs: AudioPrefs = { ...NO_PREFS, music: { operation: 'song', provider: 'local', model: 'ace', count: null, fields: { bpm: 90 } } };
+      const cur = resolvePanel(null, prefs, CAT, 'voice');
+      expect(nextSettings(cur, { mode: 'music', operation: 'repaint' }, prefs, CAT))
+        .toMatchObject({ operation: 'repaint', provider: 'local', model: null, fields: {} });
+    });
   });
 
   it('смена режима, операции, поставщика и модели сбрасывает зависимое', () => {

@@ -75,6 +75,18 @@ describe('сводка полосы «Звук»', () => {
     expect(soundSummary({ focus: 'x', launch: L }, true)).toBe('Голос · Озвучить · fal · MiniMax Speech · Аня · 2 вар. · ≈ $0.1 за 1000 симв.');
   });
 
+  it('«Авто» идёт порядком сервера: с local первым сводка показывает local, явный выбор не подменяется', () => {
+    const fal = { ...CATALOG.providers[0], available: true, reason: null };
+    const catalog: AudioCatalog = { ...CATALOG, providers: [fal, CATALOG.providers[1]] };
+    expect(resolveLaunch(null, PREFS, catalog, 'voice').provider?.key).toBe('fal');
+    const preferLocal: AudioCatalog = { ...catalog, autoProviders: ['local', 'fal'] };
+    const L = resolveLaunch(null, PREFS, preferLocal, 'voice');
+    expect(L.provider?.key).toBe('local');
+    expect(L.model?.id).toBe('qwen');
+    const own = thread({ settings: { mode: 'voice', operation: 'speak', provider: 'fal', model: null, fields: null } });
+    expect(resolveLaunch(own, PREFS, preferLocal, 'voice').provider?.key).toBe('fal');
+  });
+
   it('режим задаёт нить, а не ярлык; без настроек нити — режим ярлыка и его префы', () => {
     const prefs: AudioPrefs = { ...PREFS, music: { operation: 'song', provider: null, model: null, count: null, fields: null } };
     const t = thread({ settings: { mode: 'voice', operation: null, provider: null, model: null, fields: null } });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { awaitsToolStart, formatClock, isQueued, isToolGroupDone, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText } from '../toolTiming';
+import { activeToolLabel, awaitsToolStart, formatClock, formatWaitClock, isQueued, isToolGroupDone, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption } from '../toolTiming';
 
 // Дефект Киры: карточка разрешения встаёт ПОСЛЕ группы и сворачивала её в «N действий»
 // вместе с живым Bash и таймером
@@ -311,5 +311,84 @@ describe('stageCaptionOf', () => {
     expect(stageCaptionOf({ stage: 'running', label: '12 из 177' })).toBe('12 из 177');
     expect(stageCaptionOf({ stage: 'build', label: 'сборка' })).toBeNull();
     expect(stageCaptionOf(null)).toBeNull();
+  });
+});
+
+// Активный инструмент индикатора ожидания: берётся из уже посчитанного toolLiveness.live
+describe('pickActiveTool', () => {
+  type It = { kind: string; id?: string; name?: string; input?: unknown; result?: string | null;
+    parentToolUseId?: string | null; streamingArg?: string | null; startedAt?: number | null; started?: boolean };
+  const tool = (id: string, over: Partial<It> = {}): It =>
+    ({ kind: 'tool_use', id, name: 'Bash', input: { command: 'x' }, startedAt: 1_000, started: true, ...over });
+  const pick = (items: It[], busy = true) => pickActiveTool(items, toolLiveness(items, busy).live);
+
+  it('параллельные живые — самый поздний; после его завершения прыжок на предыдущий', () => {
+    const a = tool('a'), b = tool('b');
+    expect(pick([a, b])?.id).toBe('b');
+    expect(pick([a, { ...b, result: 'ok' }])?.id).toBe('a');
+  });
+
+  it('вложенный вызов сабагента не в счёт — показан сам агент', () => {
+    const agent = tool('ag', { name: 'Task', input: { description: 'Разведка' } });
+    const inner = tool('in', { parentToolUseId: 'ag' });
+    expect(pick([agent, inner])?.id).toBe('ag');
+  });
+
+  it('фоновый агент (квитанция запуска) — закрыт результатом, его внутренние вызовы вложенные', () => {
+    const bg = tool('bg', { name: 'Task', result: 'Async agent launched successfully.\nagentId: x' });
+    const inner = tool('in', { parentToolUseId: 'bg' });
+    expect(pick([bg, inner], false)).toBeNull();
+    expect(pick([bg, inner], true)).toBeNull();
+  });
+
+  it('оборванный ход и конец хода — ничего', () => {
+    const a = tool('a');
+    expect(pick([a, { kind: 'interrupted', ts: 2_000 }])).toBeNull();
+    expect(pick([a], false)).toBeNull();
+  });
+
+  it('без startedAt и со стримящимися аргументами — пропускаются', () => {
+    const old = tool('old');
+    expect(pick([old, tool('n', { startedAt: undefined })])?.id).toBe('old');
+    expect(pick([old, tool('s', { streamingArg: '{"comm' })])?.id).toBe('old');
+  });
+});
+
+describe('activeToolLabel', () => {
+  it('русское description — как есть, иначе имя по-русски', () => {
+    expect(activeToolLabel({ name: 'Bash', input: { command: 'x', description: ' Синхронизирую транскрипты ' } }))
+      .toBe('Синхронизирую транскрипты');
+    expect(activeToolLabel({ name: 'Bash', input: { command: 'x' } })).toBe('Команда');
+    expect(activeToolLabel({ name: 'mcp__tests__run_tests', input: { kind: 'vitest' } })).toBe('Тесты · vitest');
+  });
+});
+
+describe('waitingToolCaption — порог и время', () => {
+  it('до первого тика и короче 2 с — глаголы (null)', () => {
+    expect(waitingToolCaption('Сборка', null, true, false)).toBeNull();
+    expect(waitingToolCaption('Сборка', 1_999, true, false)).toBeNull();
+  });
+
+  it('с порога — подпись и время', () => {
+    expect(waitingToolCaption('Сборка', 2_000, true, false)).toEqual({ label: 'Сборка', clock: '2 с' });
+  });
+
+  it('фактический старт ещё не пришёл — подпись без времени', () => {
+    expect(waitingToolCaption('Сборка', 5_000, false, false)).toEqual({ label: 'Сборка', clock: null });
+  });
+
+  it('ждёт ответа человека или подписи нет — глаголы', () => {
+    expect(waitingToolCaption('Сборка', 5_000, true, true)).toBeNull();
+    expect(waitingToolCaption(null, 5_000, true, false)).toBeNull();
+  });
+});
+
+describe('formatWaitClock', () => {
+  it('секунды, минуты с секундами, часы с минутами', () => {
+    expect(formatWaitClock(0)).toBe('0 с');
+    expect(formatWaitClock(52_400)).toBe('52 с');
+    expect(formatWaitClock(72_000)).toBe('1 мин 12 с');
+    expect(formatWaitClock(3_780_000)).toBe('1 ч 3 мин');
+    expect(formatWaitClock(-5)).toBe('0 с');
   });
 });

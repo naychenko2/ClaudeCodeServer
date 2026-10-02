@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
-import { C } from '../../lib/design';
+import { C, FS, SP } from '../../lib/design';
+import { waitingToolCaption } from '../../lib/toolTiming';
+import { useRunningElapsed } from '../../hooks/useRunningElapsed';
 import { pickVerb } from '../chat/thinkingVerbs';
 import aiHome from '../../assets/ai-home.png';
 import { useContextPersona } from '../../lib/contextPersona';
@@ -22,7 +24,12 @@ const ECHO_FACE_H = 56;
 // что именно происходит и сколько примерно ждать.
 // В режиме awaitingResponse=true — фиксированный текст «Ожидаю ответа…» без анимации,
 // т.к. Claude ждёт ввода пользователя.
-export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks }: {
+//
+// Идёт долгий инструмент (activeToolLabel) — вместо глагола его русская подпись и время:
+// «Синхронизирую транскрипты · 52 с». Пропы примитивами: объект пересоздавался бы на каждом
+// рендере ленты. Подпись встаёт только с порога TOOL_TIMER_MIN_MS, чтобы быстрые Read/Grep
+// не мигали поверх глаголов, и без печати — она сменяет глагол целиком.
+export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks, activeToolLabel, activeToolStartedAt, activeToolTimer = true }: {
   planning?: 'planning' | 'replanning';
   hint?: string;
   awaitingResponse?: boolean;
@@ -31,6 +38,12 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   waitingReason?: string | null;
   // Счётчик тиков ожидания (Loop:WaitingTickSeconds, дефолт 300 с). 0 — не показываем
   waitingTicks?: number;
+  // Подпись идущего инструмента (description либо имя по-русски); null — крутятся глаголы
+  activeToolLabel?: string | null;
+  // Старт инструмента по часам сервера (Unix-мс) — после F5 отсчёт продолжается
+  activeToolStartedAt?: number | null;
+  // false — фактический старт ещё не пришёл (awaitsToolStart): подпись без времени
+  activeToolTimer?: boolean;
 } = {}) {
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -75,6 +88,10 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
     return () => clearTimeout(timer);
   }, [reduced, awaitingResponse]);
 
+  // Отсчёт идущего инструмента; до первого тика — null, и подпись не встаёт (порог)
+  const toolElapsed = useRunningElapsed(activeToolStartedAt, !!activeToolLabel && !awaitingResponse);
+  const tool = waitingToolCaption(activeToolLabel, toolElapsed, activeToolTimer, !!awaitingResponse);
+
   // Обёртка лица: внешний бокс с вертикальным резервом (ECHO_FACE_H), внутри — аватар
   // 28px по центру с двумя кольцами «Эхо» поверх. Резерв вмещает размах колец, чтобы они
   // не торчали за бокс (см. ECHO_FACE_H). --cc-echo-color на аватар-обёртке задаёт цвет
@@ -105,7 +122,7 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
       {/* minHeight = бокс лица (ECHO_FACE_H): строка НЕ меняет высоту ни при смене глагола,
           ни в пустой фазе печати. Сам бокс уже вмещает весь размах колец, так что visual
           overflow нулевой — ResizeObserver на contentRef не дёргается, scrollHeight ленты
@@ -135,17 +152,27 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
             baseline: в пустой фазе (между глаголами) baseline задаёт один курсор, и
             строку чуть перекашивало по высоте каждый цикл. */}
         <span style={{ display: 'inline-flex', alignItems: 'center', minHeight: 17, minWidth: 0, overflow: 'hidden' }}>
-          <span className="cc-shimmer-text" style={{
+          <span className="cc-shimmer-text" title={tool?.label} style={{
             fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
             whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden',
           }}>
-            {text}
+            {tool ? tool.label : text}
           </span>
-          <span style={{
+          {/* Время инструмента не сжимается: обрезается подпись, а не цифры */}
+          {tool?.clock && (
+            <span style={{
+              marginLeft: SP.sm, flexShrink: 0, fontSize: FS.sm, color: C.textMuted,
+              whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
+            }}>
+              {tool.clock}
+            </span>
+          )}
+          {/* Курсор печатной машинки — только у глаголов: подпись инструмента не печатается */}
+          {!tool && <span style={{
             display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2, flexShrink: 0,
             background: pulseColor, borderRadius: 1, alignSelf: 'center',
             animation: (reduced || awaitingResponse) ? 'none' : 'blink 1s step-start infinite',
-          }} />
+          }} />}
         </span>
       </div>
       {hint && (

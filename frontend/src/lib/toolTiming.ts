@@ -7,7 +7,7 @@
 // после F5 карточка идущего или прерванного инструмента показывала «готово» без времени.
 
 import { isBgLaunchResult } from './agentTail';
-import { RUN_TESTS_TOOL, toolLabel, toolWord } from './toolLabels';
+import { RUN_TESTS_TOOL, toolCardLabel, toolLabel, toolWord } from './toolLabels';
 import type { ToolProgress, ToolRunTotals, ToolStage } from '../types';
 
 // Имя инструмента внутри подписи «сейчас …». Русское — со строчной: это середина фразы.
@@ -279,6 +279,56 @@ export function toolLiveness(items: readonly LivenessItem[], busy: boolean): Too
   };
   const live = busy ? open : open.filter(o => !!o.parentToolUseId && inLiveBgAgent(o.parentToolUseId));
   return { live: new Set(live.map(o => o.id!)), dead, abortedAt };
+}
+
+// Активный инструмент для индикатора ожидания под лентой: из живых (ToolLiveness.live) —
+// самый поздний по порядку ленты вызов верхнего уровня с отметкой старта. Вложенные вызовы
+// сабагентов не в счёт (их видно в карточке агента), стримящиеся аргументы — тоже: команда
+// ещё печатается. Параллельные вызовы: показан последний; закончился он раньше остальных —
+// подпись честно прыгает на предыдущий живой
+type ActiveToolItem = {
+  kind: string; id?: string; name?: string; input?: unknown; parentToolUseId?: string | null;
+  streamingArg?: string | null; startedAt?: number | null; started?: boolean;
+};
+
+export function pickActiveTool<T extends ActiveToolItem>(items: readonly T[], live: ReadonlySet<string>): T | null {
+  // Зовётся на каждую дельту стрима: без живых вызовов ленту не обходим
+  if (live.size === 0) return null;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind !== 'tool_use' || !it.id || !live.has(it.id)) continue;
+    if (it.parentToolUseId || it.streamingArg != null || typeof it.startedAt !== 'number') continue;
+    return it;
+  }
+  return null;
+}
+
+// Подпись активного инструмента: русское description от модели, иначе имя по-русски
+export function activeToolLabel(item: { name: string; input?: unknown }): string {
+  const d = (item.input as { description?: unknown } | null | undefined)?.description;
+  return typeof d === 'string' && d.trim() ? d.trim() : toolCardLabel(item.name, item.input);
+}
+
+// Время рядом с подписью индикатора — словами, как в строке ожидания: «52 с», «1 мин 12 с»,
+// «1 ч 3 мин» (секунды в часовом масштабе — шум)
+export function formatWaitClock(ms: number): string {
+  const total = Math.floor(Math.max(0, ms) / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h} ч ${m} мин`;
+  if (m > 0) return `${m} мин ${s} с`;
+  return `${s} с`;
+}
+
+// Что показать индикатору ожидания вместо глагола. null — глаголы: инструмента нет, ход
+// ждёт ответа человека или порог не пройден (elapsed null — до первого тика). clock null —
+// подпись без времени: фактический старт Bash/агента ещё не пришёл (timer = false)
+export function waitingToolCaption(
+  label: string | null | undefined, elapsed: number | null, timer: boolean, awaitingResponse: boolean,
+): { label: string; clock: string | null } | null {
+  if (awaitingResponse || !label || elapsed == null || elapsed < TOOL_TIMER_MIN_MS) return null;
+  return { label, clock: timer ? formatWaitClock(elapsed) : null };
 }
 
 // Пройдена ли группа «N действий» (сворачивать ли её). Обычно — как только после неё встал

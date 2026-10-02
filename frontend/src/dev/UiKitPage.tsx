@@ -92,7 +92,10 @@ const DOT_SAMPLES: { color: string; label: string }[] = [
 
 // Демо-файлы для FileTypeTile: код, разметка, документ, картинка и незнакомый тип
 // (последний показывает фолбэк — первые три знака расширения на нейтральной плитке).
-const FILE_TILE_SAMPLES = ['App.tsx', 'Program.cs', 'README.md', 'schema.json', 'shot.png', 'notes.rtf'];
+// Старт инструмента для витрины WaitingIndicator: 52 с до загрузки модуля, дальше тикает
+const SHOWCASE_TOOL_STARTED_AT = Date.now() - 52_000;
+
+const FILE_TILE_SAMPLES =['App.tsx', 'Program.cs', 'README.md', 'schema.json', 'shot.png', 'notes.rtf'];
 
 // Состояния файла для FileStatusBadge — коды git, как их отдаёт статус репозитория
 const FILE_STATUS_SAMPLES: { status: FileStatus; label: string }[] = [
@@ -643,6 +646,16 @@ function OverlaysSection() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
             <WaitingIndicator />
             <WaitingIndicator hint="Читаю файлы проекта…" />
+          </div>
+        </SubBlock>
+
+        {/* WaitingIndicator с идущим инструментом: русская подпись вместо глагола и время.
+            Старт — за 52 с до загрузки витрины, отсчёт идёт дальше; второй вариант — Bash до
+            фактического старта (подпись без времени) */}
+        <SubBlock label="WaitingIndicator — идёт инструмент (с временем и до фактического старта)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
+            <WaitingIndicator activeToolLabel="Синхронизирую транскрипты в sub-claude" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} />
+            <WaitingIndicator activeToolLabel="Собираю бэкенд и прогоняю тесты" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} activeToolTimer={false} />
           </div>
         </SubBlock>
 

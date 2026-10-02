@@ -35,7 +35,7 @@ import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
-import { toolLiveness, isToolGroupDone } from '../lib/toolTiming';
+import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart } from '../lib/toolTiming';
 import { RUN_TESTS_TOOL } from '../lib/toolLabels';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
@@ -1529,6 +1529,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const livenessKey = `${[...livenessRaw.live].join(',')}|${[...livenessRaw.dead].join(',')}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- пересчёт по составу множеств (livenessKey), а не по ссылке
   const toolLivenessCtx = useMemo(() => livenessRaw, [livenessKey]);
+  // Идущий инструмент для подписи индикатора ожидания («Синхронизирую транскрипты · 52 с»).
+  // Наружу — примитивы: индикатор не перезапускает печать глаголов на каждую дельту ленты
+  const activeTool = useMemo(() => pickActiveTool(items, toolLivenessCtx.live), [items, toolLivenessCtx]);
+  const activeToolText = activeTool?.kind === 'tool_use' ? activeToolLabel(activeTool) : null;
+  const activeToolStart = activeTool?.kind === 'tool_use' ? activeTool.startedAt ?? null : null;
+  const activeToolTimed = activeTool?.kind === 'tool_use' ? !awaitsToolStart(activeTool) : true;
   // Ждёт ответа от пользователя (permission_request / ask_question) — для режима текста
   const awaitingResponse = items.some(it =>
     (it.kind === 'permission_request' || it.kind === 'ask_question') && !it.resolved
@@ -2746,12 +2752,19 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           // гаснет по концу хода, а прогресс нужно смотреть как раз в паузе. Общая строка
           // держит её на одном месте в обоих состояниях, без прыжка при старте/конце хода.
           <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <WaitingIndicator
-              planning={planningKind}
-              awaitingResponse={awaitingResponse}
-              waitingReason={workLoopState?.waitingReason ?? null}
-              waitingTicks={workLoopState?.waitingTicks ?? 0}
-            />
+            {/* Обёртка с нулевой базой: индикатор берёт место, оставшееся после пилюли, и
+                длинная подпись инструмента обрезается многоточием, а не выдавливает пилюлю */}
+            <div style={{ flex: '1 1 0%', minWidth: 0 }}>
+              <WaitingIndicator
+                planning={planningKind}
+                awaitingResponse={awaitingResponse}
+                waitingReason={workLoopState?.waitingReason ?? null}
+                waitingTicks={workLoopState?.waitingTicks ?? 0}
+                activeToolLabel={activeToolText}
+                activeToolStartedAt={activeToolStart}
+                activeToolTimer={activeToolTimed}
+              />
+            </div>
             <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex' }}>
               <TurnPlanPill todos={taskTodos} />
             </div>

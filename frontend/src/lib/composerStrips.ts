@@ -52,6 +52,18 @@ export function subscribeComposerStrips(fn: () => void) {
 }
 export function getComposerStripsVersion() { return _version; }
 
+// Активная полоса, как её показывает хост полос: поле ввода по ней отбирает режимы
+// (ComposerModeApi.strip). Нет записи — хост не смонтирован, режимы не фильтруются
+const _shown = new Map<string, string | null>();
+export function reportShownStrip(sessionId: string, stripId: string | null) {
+  if (_shown.get(sessionId) === stripId && _shown.has(sessionId)) return;
+  _shown.set(sessionId, stripId);
+  emit();
+}
+export function getShownStrip(sessionId: string | null): string | null | undefined {
+  return sessionId ? _shown.get(sessionId) : undefined;
+}
+
 export function getRememberedStrip(sessionId: string): string | null {
   if (_remembered.has(sessionId)) return _remembered.get(sessionId) ?? null;
   let v: string | null = null;
@@ -193,5 +205,6 @@ export function __resetComposerStrips() {
   _focus.clear();
   _remembered.clear();
   _collapsed.clear();
+  _shown.clear();
   emit();
 }

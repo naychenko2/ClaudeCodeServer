@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { C, FS, SP } from '../../lib/design';
-import { useComposerStrip } from '../../lib/composerStrips';
+import { reportShownStrip, useComposerStrip } from '../../lib/composerStrips';
 import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
 import type { ComposerStripApi, ComposerStripCtx, ComposerStripShortcut, SlotContribution } from '../../lib/subsystems/registry';
 import { Button, Dot, IconButton, Menu, MenuItem, MenuSep, Modal } from '../ui';
@@ -88,6 +88,11 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
   const ids = strips.map(c => c.name!);
   const { active, pendingFocus, select, collapsed, setCollapsed } = useComposerStrip(sessionId, ids, isMobile);
   const current = strips.find(c => c.name === active);
+  const shownId = current?.name ?? null;
+  // Поле ввода по показанной полосе отбирает свои режимы
+  useEffect(() => {
+    if (sessionId) reportShownStrip(sessionId, shownId);
+  }, [sessionId, shownId]);
   if (!current) return null;
 
   const close = () => { setMenu(null); setSheet(false); };

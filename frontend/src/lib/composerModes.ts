@@ -9,8 +9,31 @@ import type { ComposerModeApi, ComposerModeCtx } from './subsystems/registryCore
 
 export interface ComposerModeEntry { name?: string; action?: ComposerModeApi }
 
+// Режимы, видимые при активной полосе: режим с `strip` — только над своей полосой.
+// shown === undefined — хост полос не отчитался, ничего не прячем; null — полосы нет,
+// режимы чужих полос прячем. Режим без `strip` от полосы не зависит
+export function modesForStrip<T extends ComposerModeEntry>(modes: readonly T[], shown: string | null | undefined): T[] {
+  if (shown === undefined) return [...modes];
+  return modes.filter(m => !m.action?.strip || m.action.strip === shown);
+}
+
 // Поводы, на которые поле уже переключалось: режим → его последний повод
 export type ComposerModeSeen = Readonly<Record<string, string>>;
+
+// Память самовключения по чату — вне компонента: поле ввода перемонтируется при каждой смене
+// чата (key={session.id}), а просьбы режимов (счётчики владельцев) живут дольше него. Без
+// этой памяти повод, уже отработавший, на возврате в чат выглядел бы новым и включал режим
+// заново поверх ручного «Чат». modeId — режим поля на момент ухода, чтобы вернуться в него
+export interface ComposerModeMemory { seen: ComposerModeSeen; modeId: string | null }
+const _modeMemory = new Map<string, ComposerModeMemory>();
+
+export function composerModeMemory(sessionId: string): ComposerModeMemory {
+  let m = _modeMemory.get(sessionId);
+  if (!m) { m = { seen: {}, modeId: null }; _modeMemory.set(sessionId, m); }
+  return m;
+}
+
+export function forgetComposerModeMemory(sessionId: string) { _modeMemory.delete(sessionId); }
 
 // modes — только доступные сейчас режимы. Тот же повод второй раз режим не навязывает,
 // иначе ручной уход в «Чат» откатывался бы на каждой перерисовке. Память — по каждому

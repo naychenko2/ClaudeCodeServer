@@ -112,6 +112,10 @@ export interface World {
   quotes: Record<string, unknown>[];
   jobs: Record<string, unknown>[];
   patches: Record<string, unknown>[];
+  // Вызовы ручек фильма без sessionId: бэкенд в таком случае не пишет строку ленты у человека
+  filmNoSession: string[];
+  // Отказ загрузки кадра в личном чате: 400 «не картинка», 413 «больше 20 МБ»
+  uploadFail: 'notImage' | 'tooBig' | null;
   hubs: WebSocketRoute[];
   imageThreads: Record<string, unknown>[];
   imageRevision: number;
@@ -129,7 +133,7 @@ export const w = () => world;
 export function newWorld(o: Partial<Pick<World, 'personal' | 'focus' | 'scenes' | 'autoFinish' | 'dsp' | 'feed'>> & { films?: Film[] } = {}): World {
   world = {
     personal: !!o.personal, focus: o.focus ?? {}, revision: 1, scenes: o.scenes ?? [], films: new Map((o.films ?? []).map(f => [f.path, f])),
-    feed: o.feed ?? [], quotes: [], jobs: [], patches: [], hubs: [], imageThreads: [], imageRevision: 1, autoFinish: o.autoFinish ?? true,
+    feed: o.feed ?? [], quotes: [], jobs: [], patches: [], filmNoSession: [], uploadFail: null, hubs: [], imageThreads: [], imageRevision: 1, autoFinish: o.autoFinish ?? true,
     dsp: o.dsp ?? true, audioThreads: [], musicFor: null,
   };
   return world;
@@ -235,6 +239,9 @@ function applyOps(f: Film, ops: Record<string, unknown>[]) {
   }
 }
 
+// Имя фильма в тексте строки ленты — как в бэкенде (VideoFeedTexts): без расширения .film
+const filmTitle = (path: string) => path.split('/').pop()!.replace('.film', '');
+
 function runBuild(f: Film) {
   f.build = { state: 'waiting', progress: 0 };
   pushFilm(f);
@@ -247,7 +254,7 @@ function runBuild(f: Film) {
     f.marks = f.marks.map(m => ({ ...m, updated: false, stale: false }));
     f.revision = `r${Number(f.revision.slice(1)) + 1}`;
     pushFilm(f);
-    pushRecord(record('video_film_built', { path: f.path, file: out, initiator: 'human' }, `Вы собрали фильм: ${out}`, Date.now()));
+    pushRecord(record('video_film_built', { path: f.path, file: out, initiator: 'human' }, `Вы собрали фильм ${filmTitle(f.path)}: ${out}`, Date.now()));
   }, 900);
 }
 
@@ -377,7 +384,7 @@ export async function mockApi(page: Page, trace = false) {
         }
         world.revision++;
         setTimeout(pushThreads, 30);
-        pushRecord(record('video_saved', { sceneId: s.sceneId, path: out, initiator: 'human' }, `Вы сохранили ${s.name.toLowerCase()}: ${out}${added ? ' · стоит в фильме' : ''}`, Date.now()));
+        pushRecord(record('video_saved', { sceneId: s.sceneId, path: out, initiator: 'human' }, `Вы сохранили сцену «${s.name}» в проект: ${out}${added ? ' · стоит в фильме' : ''}`, Date.now()));
         return json({ path: out, framePaths: [], addedToFilm: added });
       }
       if (sm[4] === 'file') return r.fulfill({ contentType: 'video/mp4', body: MP4 });
@@ -414,6 +421,12 @@ export async function mockApi(page: Page, trace = false) {
       return json({ jobId }, 202);
     }
     if (/\/video-editor\/(?:chats\/[^/]+\/)?jobs\/[^/]+$/.test(p)) return json({ jobId: 'x', status: 'running' });
+    if (p.startsWith(`${vb}/films`) && method !== 'GET' && !url.searchParams.get('sessionId')) world.filmNoSession.push(`${method} ${p}`);
+    if (p === `${vb}/frames/upload` && method === 'POST') {
+      if (world.uploadFail === 'notImage') return json({ error: 'Файл не картинка', code: 'invalid_request' }, 400);
+      if (world.uploadFail === 'tooBig') return json({ error: 'Слишком большой файл' }, 413);
+      return json({ kind: 'file', path: 'frames/0123456789abcdef0123456789abcdef.png' });
+    }
     if (p === `${vb}/films`) {
       if (method === 'PATCH') {
         const fp = url.searchParams.get('path')!;
@@ -423,6 +436,7 @@ export async function mockApi(page: Page, trace = false) {
         world.patches.push(b);
         if (b.expectedRevision !== f.revision && f.revision !== 'r0') return json({ error: 'Фильм поменяли', code: 'revision_conflict', state: f }, 409);
         applyOps(f, b.ops as Record<string, unknown>[]);
+        pushRecord(record('video_note', { filmPath: f.path, initiator: 'human' }, `Вы поправили фильм ${filmTitle(f.path)}: ${[...new Set((b.ops as { op: string }[]).map(o => o.op))].join(', ')}`, Date.now()));
         return json(f);
       }
       return json([...world.films.values()].map(f => ({ path: f.path, name: f.path.split('/').pop()!.replace('.film', ''), itemCount: f.document.items.length, durationSec: 31, stale: !f.document.builds.length, valid: true })));

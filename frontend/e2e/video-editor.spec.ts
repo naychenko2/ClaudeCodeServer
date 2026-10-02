@@ -182,6 +182,13 @@ for (const theme of ['light', 'dark'] as const) {
         await expect(foot(page).locator('[data-gen-foot-result]')).toContainText('film.mp4', { timeout: 10_000 });
         await expect(foot(page).getByRole('button', { name: 'Собрано' })).toBeVisible();
         await shot(page, SHOTS, shotName('s3-built'));
+        // Лента человека: строки правки и сборки есть, а ручки фильма звали с sessionId
+        expect(w().filmNoSession).toEqual([]);
+        await peek(page);
+        await expect(page.locator('[data-video-quiet="video_note"]').filter({ hasText: /^Вы поправили фильм утро-в-горах: / }).first()).toBeVisible();
+        await expect(page.locator('[data-video-quiet="video_film_built"]').last()).toHaveText('Вы собрали фильм утро-в-горах: video/утро-в-горах/film.mp4');
+        await shot(page, SHOTS, shotName('s3-human-feed'));
+        await raise(page);
         await foot(page).locator('[data-gen-foot-result]').getByRole('button', { name: 'Показать в дереве' }).click();
         await expect.poll(() => decodeURIComponent(page.url())).toContain('/file/video/утро-в-горах/film.mp4');
       });
@@ -193,6 +200,9 @@ for (const theme of ['light', 'dark'] as const) {
         const sound = page.getByRole('complementary', { name: 'Звук' }).or(page.getByRole('dialog', { name: 'Звук' })).first();
         await expect(sound).toBeVisible();
         await expect(sound.locator('[data-gen-return]')).toContainText('К фильму «утро-в-горах»');
+        // Решение v7 №9: полоса над полем ввода остаётся на «Видео», на «Звук» не уходит
+        await expect(page.locator('[data-composer-strip="video"]')).toBeVisible();
+        await expect(page.locator('[data-composer-strip="sound"]')).toHaveCount(0);
         await expect(sound.getByText(/заготовка из «Видео»/)).toBeVisible();
         await shot(page, SHOTS, shotName('s4-sound'));
         await sound.locator('[data-gen-return] button').click();
@@ -343,6 +353,19 @@ for (const theme of ['light', 'dark'] as const) {
         await expect(panel(page).getByRole('button', { name: /Из проекта/ })).toHaveCount(0);
         await expect(panel(page).getByRole('button', { name: /С компьютера/ })).toBeEnabled();
         await shot(page, SHOTS, shotName('personal-scene'));
+        // «С компьютера»: новая ручка чата, путь из ответа кладётся в настройки сцены как есть
+        const png = { name: 'кадр.png', mimeType: 'image/png', buffer: Buffer.from('x') };
+        const put = page.waitForRequest(r => r.method() === 'PUT' && /\/scenes\/[^/]+\/settings/.test(r.url()) && r.postData()!.includes('frames/0123456789abcdef'));
+        await panel(page).locator('[data-video-frame-menu="A"] input[type="file"]').setInputFiles(png);
+        await put;
+        await shot(page, SHOTS, shotName('personal-upload'));
+        await panel(page).locator('[data-video-frame="A"] button').click();
+        w().uploadFail = 'notImage';
+        await panel(page).locator('[data-video-frame-menu="A"] input[type="file"]').setInputFiles(png);
+        await expect(page.getByText('Это не картинка')).toBeVisible();
+        w().uploadFail = 'tooBig';
+        await panel(page).locator('[data-video-frame-menu="A"] input[type="file"]').setInputFiles(png);
+        await expect(page.getByText('Файл больше 20 МБ')).toBeVisible();
         await tab(page, 'Фильм').click();
         await expect(panel(page).locator('[data-video-empty="film"]')).toContainText('Фильмы живут в проекте');
         await shot(page, SHOTS, shotName('personal-film'));
@@ -375,6 +398,21 @@ test('агент снимает: та же карточка запуска с ц
   await expect(c.getByRole('button', { name: 'Сохранить сцену' })).toBeVisible();
   await expect(tab(page, 'Фильм')).toHaveAttribute('aria-selected', 'true');
   await shot(page, SHOTS, 'agent-launch-card-1440-light');
+});
+
+test('агент: тихие строки без слова «Claude» в тексте, лицо даёт одна метка «✦ Claude»', async ({ page }) => {
+  await start(page, { vp: DESK, theme: 'light' });
+  pushRecord(record('video_saved', { sceneId: 'scene-2', path: 'video/утро-в-горах/scene-02.mp4', initiator: 'agent' }, 'Сохранил сцену «Сцена 2» в проект: video/утро-в-горах/scene-02.mp4', Date.now()));
+  pushRecord(record('video_film_built', { path: FILM, file: 'video/утро-в-горах/film.mp4', initiator: 'agent' }, 'Собрал фильм утро-в-горах: video/утро-в-горах/film.mp4', Date.now()));
+  const saved = page.locator('[data-video-quiet="video_saved"]');
+  await expect(saved).toHaveText('Сохранил сцену «Сцена 2» в проект: video/утро-в-горах/scene-02.mp4');
+  const line = saved.locator('xpath=..');
+  await expect(line.locator('[data-by-claude]')).toHaveCount(1);
+  for (const t of ['video_saved', 'video_film_built']) {
+    const row = page.locator(`[data-video-quiet="${t}"]`).locator('xpath=..');
+    expect((await row.innerText()).match(/Claude/g)?.length ?? 0).toBeLessThanOrEqual(1);
+  }
+  await shot(page, SHOTS, 'agent-quiet-lines-1440-light');
 });
 
 test('503 dsp_unavailable: «Собрать» серое с причиной, «Проверить снова» оживляет', async ({ page }) => {

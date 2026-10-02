@@ -833,9 +833,10 @@ const fabStyle: React.CSSProperties = {
   // отдельный (--cc-fab-bottom): в компактном режиме он равен отступу холста островов,
   // чтобы кнопка стояла на одной линии с их нижней кромкой. Из угла кнопка не уезжает
   // никогда — на подошедший снизу композер она отвечает не подъёмом, а ужиманием
-  // (см. useFabObstacleOverlap). Снизу ещё safe-area.
+  // (см. useFabObstacleOverlap). Снизу ещё safe-area; --cc-fab-raise — подъём над плашкой
+  // «Вернуть» полосы генерации, пока она висит над полем ввода (ReleaseNotice raiseFab).
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-raise, 0px))',
   // Базовый размер — var --cc-fab-size: по умолчанию 54 (панель не распахнута), а когда
   // справа распахнута панель во всю высоту, PanelZone ставит 36 (компактный, не мешает).
   // При наведении переопределяется на 54 (см. button inline). Меняется плавно (transition).
@@ -902,7 +903,7 @@ const toggleThumb: React.CSSProperties = {
 const balloonStyle: React.CSSProperties = {
   // Над кнопкой в покое — её нижний отступ (var) + текущая высота кнопки (var, −8 нахлёст)
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-size, 54px) - 8px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-raise, 0px) + var(--cc-fab-size, 54px) - 8px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };
@@ -923,7 +924,7 @@ const balloonGhost: React.CSSProperties = {
 const hoverBalloonStyle: React.CSSProperties = {
   // Показывается на наведении, когда кнопка выросла до 54 — её нижний отступ (var) + высота
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 46px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-raise, 0px) + 46px)',
   width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
   borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

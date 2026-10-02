@@ -160,7 +160,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
       {undo && (
         <div style={{ position: 'relative', height: 0 }}>
           <div data-images-release="" style={{ position: 'absolute', left: 0, right: 0, bottom: SP.xs }}>
-            <ReleaseNotice text={undo.text} onUndo={() => { void undoImageRelease(); }} isMobile={isMobile} />
+            <ReleaseNotice text={undo.text} onUndo={() => { void undoImageRelease(); }} isMobile={isMobile} raiseFab />
           </div>
         </div>
       )}

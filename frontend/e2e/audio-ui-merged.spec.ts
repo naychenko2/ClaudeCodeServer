@@ -232,22 +232,25 @@ for (const vp of [{ name: 'w1440', width: 1440, height: 1000 }, { name: 'm360', 
     const p = page.locator('[data-sound-settings]');
     await expect(p).toBeVisible();
     await p.getByRole('button', { name: 'Голос', exact: true }).click();
-    await expect(p.locator('[data-opt="op:speak"]')).toBeVisible();
-    // Ключ key у голосовой модели — не «Тональность» на виду, а свой параметр в «Дополнительно»
+    await expect(p.locator('[data-sound-op] select')).toHaveValue('speak');
+    // Ключ key у голосовой модели — не «Тональность» на виду, а свой параметр в «Ещё настройки»
     await expect(p.locator('[data-param="speaker"]')).toBeVisible();
     await expect(p.getByText('Тональность')).toHaveCount(0);
-    await p.getByRole('button', { name: /^Дополнительно/ }).click();
+    await expect(p.locator('[data-sound-advanced-summary]')).toHaveText('всё по умолчанию');
+    await p.getByRole('button', { name: /^Ещё настройки/ }).click();
     await expect(p.locator('[data-sound-advanced="open"]').getByText('Ключ стиля')).toBeVisible();
     await shot('panel-voice');
 
     await p.getByRole('button', { name: 'Музыка', exact: true }).click();
-    await p.locator('[data-opt="op:song"] button').click();
+    await p.locator('[data-sound-op] select').selectOption('song');
+    // Темп и тональность в варианте А — в «Ещё настройки», подписи русские
+    if (await p.locator('[data-sound-advanced="closed"]').count()) await p.getByRole('button', { name: /^Ещё настройки/ }).click();
     await expect(p.locator('[data-param="bpm"]')).toBeVisible();
     await expect(p.getByText('Тональность')).toBeVisible();
     await shot('panel-music');
 
     await p.getByRole('button', { name: 'Обработка', exact: true }).click();
-    await expect(p.locator('[data-opt^="op:"]').first()).toBeVisible();
+    await expect(p.locator('[data-sound-op] select')).toBeVisible();
     await shot('panel-process');
 
     // Вкладка «Голоса»: у личного чата библиотеки нет — понятный отказ, без падения

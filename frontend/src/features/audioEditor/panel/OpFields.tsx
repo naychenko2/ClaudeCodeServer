@@ -9,7 +9,6 @@ import {
   Button, Checkbox, IconButton, SegmentedControl, Select, TextArea, TextField, C, FS, SP,
 } from 'aihome_shell/kit';
 import type { AudioFileFormat, AudioOp, AudioParamField } from '../api';
-import { opInfo } from '../ops';
 import type { AudioSelection } from '../player/selection';
 import { pickedSlug } from '../voices/model';
 import { LIBRARY_VOICE_OPS, type PanelInputs, type Replica, type TrimInputs } from './inputs';
@@ -188,7 +187,6 @@ export function VoiceFields(p: OpFieldsProps) {
           <div style={{ height: SP.sm }} />
         </>
       )}
-      <Label>Поля операции · {opInfo(op)?.label}</Label>
       {library && <LibraryVoice value={inputs.voice} onClear={() => setInputs({ voice: '' })} onOpen={p.onOpenVoices} />}
       {op === 'cloneVoice' && ref('Образец голоса', 'Чистая речь 5–60 с; длиннее обрежем до 15 с')}
       {op === 'dialogue' && <Replicas list={inputs.replicas} onChange={r => setInputs({ replicas: r })} />}
@@ -271,8 +269,6 @@ export function ProcessFields(p: OpFieldsProps) {
   const caps = s.model?.caps ?? null;
   return (
     <div data-op-fields={op}>
-      <Label>Поля операции · {opInfo(op)?.label}</Label>
-      {op === 'separate' && <Hint>Что разделить — выбором модели: вокал и минус, 4 или 6 стемов, караоке</Hint>}
       {op === 'master' && (
         <Reference title="Образец звучания" hint="Громкость и АЧХ возьмём как у этого трека" file={p.reference} setFile={p.setReference}
           personal={p.personal} path={inputs.referencePath} setPath={v => setInputs({ referencePath: v })} />

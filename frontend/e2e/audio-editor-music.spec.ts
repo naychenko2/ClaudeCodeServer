@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -120,6 +120,17 @@ const shot = async (page: Page, name: string) => {
 
 const panel = (page: Page) => page.locator('[data-sound-settings]');
 
+// «Чем» → список «Исполнитель»: раскрыть, если свёрнут, и выбрать или проверить строку по имени модели
+const executorList = async (p: Locator) => {
+  const box = p.locator('[data-sound-executor]');
+  if (await box.getAttribute('data-sound-executor') === 'closed') await box.locator('button[aria-expanded]').click();
+  return box.getByRole('radio');
+};
+const pickExecutor = async (p: Locator, name: string) => (await executorList(p)).filter({ has: p.page().getByText(name, { exact: true }) }).click();
+const executorOn = async (p: Locator, name: string) =>
+  expect((await executorList(p)).and(p.locator('[aria-checked="true"]'))).toContainText(name);
+
+
 for (const [width, theme] of [[1280, 'light'], [1280, 'dark'], [360, 'light'], [360, 'dark']] as const) {
   test(`${width} px, ${theme}: «Перегенерировать кусок» из карточки, кусок ⇄ волна, поля музыки`, async ({ page }) => {
     await fixtures(page);
@@ -137,7 +148,7 @@ for (const [width, theme] of [[1280, 'light'], [1280, 'dark'], [360, 'light'], [
     await card.getByRole('button', { name: 'Перегенерировать кусок' }).click();
     const p = panel(page);
     await expect(p).toBeVisible({ timeout: 10_000 });
-    await expect(p.locator('[data-opt="op:repaint"]')).toHaveAttribute('data-on', 'true');
+    await expect(p.locator('[data-sound-op] select')).toHaveValue('repaint');
     // Поле «Кусок» = выделение на волне; карточка знает, что связана с панелью
     const piece = p.locator('[data-field="piece"]');
     const start = piece.getByRole('textbox').first();
@@ -157,14 +168,14 @@ for (const [width, theme] of [[1280, 'light'], [1280, 'dark'], [360, 'light'], [
     if (mobile && await page.getByRole('button', { name: 'Поднять шторку' }).first().isVisible()) {
       await page.getByRole('button', { name: 'Поднять шторку' }).first().click();
     }
-    await expect(p.locator('[data-opt="op:trim"]')).toHaveAttribute('data-on', 'true');
+    await expect(p.locator('[data-sound-op] select')).toHaveValue('trim');
     await expect(p.locator('[data-field="piece"]').getByRole('textbox').first()).toHaveValue('1');
 
     // Песня: YuE2 — CC BY-NC видна до запуска, «Инструментал» серый с причиной
     await p.getByRole('button', { name: 'Музыка', exact: true }).click();
-    await p.locator('[data-opt="op:song"] button').click();
-    await p.locator('[data-opt="provider:local"] button').click();
-    await p.locator('[data-opt="model:yue2-3b"] button').click();
+    await p.locator('[data-sound-op] select').selectOption('song');
+    await pickExecutor(p, 'YuE2-3B');
+    await executorOn(p, 'YuE2-3B');
     await expect(p.locator('[data-sound-license]')).toContainText('CC BY-NC 4.0: только некоммерческое');
     await expect(p.locator('[data-opt="lyrics:off"]')).toHaveAttribute('data-disabled', 'true');
     await expect(p.locator('[data-param="abc"]')).toBeVisible();
@@ -174,13 +185,15 @@ for (const [width, theme] of [[1280, 'light'], [1280, 'dark'], [360, 'light'], [
     await expect(p.locator('[data-field="lyrics"] textarea')).toHaveValue('Припев про море\n\n[Chorus]\n');
     await shot(page, `song-yue2-${width}-${theme}`);
 
-    // ACE: язык вокала, темп и тональность; «Вытащить дорожку» — тяжёлая, 12 дорожек
-    await p.locator('[data-opt="model:ace-step-1.5-xl"] button').click();
+    // ACE: язык вокала, темп и тональность — в «Ещё настройки»; «Вытащить дорожку» — тяжёлая, 12 дорожек
+    await pickExecutor(p, 'ACE-Step 1.5 XL');
+    await expect(p.locator('[data-param="bpm"]')).toHaveCount(0);
+    await p.getByRole('button', { name: /^Ещё настройки/ }).click();
     await expect(p.locator('[data-field="language"]')).toBeVisible();
     await expect(p.locator('[data-param="bpm"]')).toBeVisible();
     await expect(p.locator('[data-param="key"]')).toBeVisible();
-    await p.locator('[data-opt="op:extract"] button').click();
-    await p.locator('[data-opt="model:ace-step-1.5-xl"] button').click();
+    await p.locator('[data-sound-op] select').selectOption('extract');
+    await pickExecutor(p, 'ACE-Step 1.5 XL');
     await expect(p.locator('[data-sound-heavy]')).toContainText('одна за раз');
     await expect(p.locator('[data-field="track"] [data-opt^="track:"]')).toHaveCount(12);
     await p.locator('[data-opt="track:drums"] button').click();

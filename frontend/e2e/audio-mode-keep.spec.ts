@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -127,7 +127,15 @@ async function openPanel(page: Page, mobile: boolean) {
   return p;
 }
 
-const on = (p: ReturnType<Page['locator']>, opt: string) => expect(p.locator(`[data-opt="${opt}"]`)).toHaveAttribute('data-on', 'true');
+// «Чем» → список «Исполнитель»: раскрыть, если свёрнут, и выбрать или проверить строку по имени модели
+const executorList = async (p: Locator) => {
+  const box = p.locator('[data-sound-executor]');
+  if (await box.getAttribute('data-sound-executor') === 'closed') await box.locator('button[aria-expanded]').click();
+  return box.getByRole('radio');
+};
+const pickExecutor = async (p: Locator, name: string) => (await executorList(p)).filter({ has: p.page().getByText(name, { exact: true }) }).click();
+const executorOn = async (p: Locator, name: string) =>
+  expect((await executorList(p)).and(p.locator('[aria-checked="true"]'))).toContainText(name);
 
 for (const width of [1440, 360]) {
   test(`${width} px: Голос и Музыка помнят своего поставщика и модель`, async ({ page }) => {
@@ -136,29 +144,24 @@ for (const width of [1440, 360]) {
     await open(page, sid, width);
     const p = await openPanel(page, width < 500);
     const mode = (name: string) => p.getByRole('button', { name, exact: true }).click();
-    const pick = (opt: string) => p.locator(`[data-opt="${opt}"] button`).click();
 
     await mode('Голос');
-    await pick('provider:local');
-    await pick('model:moss-tts');
-    await on(p, 'model:moss-tts');
+    await pickExecutor(p, 'MOSS-TTS');
+    await executorOn(p, 'MOSS-TTS');
 
     await mode('Музыка');
-    await on(p, 'op:song');
-    await pick('provider:fal');
-    await pick('model:fal-ai/elevenlabs/music');
-    await on(p, 'model:fal-ai/elevenlabs/music');
+    await expect(p.locator('[data-sound-op] select')).toHaveValue('song');
+    await pickExecutor(p, 'ElevenLabs Music v2.5');
+    await executorOn(p, 'ElevenLabs Music v2.5');
     await shot(page, `music-${width}`);
 
     await mode('Голос');
-    await on(p, 'provider:local');
-    await on(p, 'model:moss-tts');
+    await executorOn(p, 'MOSS-TTS');
     await shot(page, `voice-back-${width}`);
 
     await mode('Обработка');
     await mode('Музыка');
-    await on(p, 'provider:fal');
-    await on(p, 'model:fal-ai/elevenlabs/music');
+    await executorOn(p, 'ElevenLabs Music v2.5');
 
     // Префы ушедшего режима на сервере — выбор человека, а не пустота
     await expect.poll(async () => {
@@ -170,10 +173,9 @@ for (const width of [1440, 360]) {
     // После перезагрузки: нить держит Музыку, Голос поднимается из своих префов
     await page.reload();
     const p2 = await openPanel(page, width < 500);
-    await on(p2, 'provider:fal');
+    await executorOn(p2, 'ElevenLabs Music v2.5');
     await p2.getByRole('button', { name: 'Голос', exact: true }).click();
-    await on(p2, 'provider:local');
-    await on(p2, 'model:moss-tts');
+    await executorOn(p2, 'MOSS-TTS');
 
     const box = (await p2.boundingBox())!;
     expect(box.x + box.width).toBeLessThanOrEqual(width);

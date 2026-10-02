@@ -28,7 +28,7 @@ const supports = (p: AudioProvider, op: AudioOp) => p.models.some(m => m.caps.op
 
 // Порядок «Авто» задаёт сервер (AudioCatalog.AutoCandidates): сами его не считаем, иначе сводка
 // показала бы fal, а котировка взяла бы local
-function autoOrder(catalog: AudioCatalog | null): AudioProvider[] {
+export function autoOrder(catalog: AudioCatalog | null): AudioProvider[] {
   const providers = catalog?.providers ?? [];
   const order = catalog?.autoProviders;
   if (!order) return providers;

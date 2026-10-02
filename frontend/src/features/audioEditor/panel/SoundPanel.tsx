@@ -2,21 +2,22 @@
 // audio-editor-v2-proposal.md, «Панель «Звук»») на общем каркасе GenerationPanel. Живёт и в
 // проекте, и в правой колонке личного чата (projectId = null → область personal).
 //
-// «Настройки»: режим → операция → поставщик → модель → поля операции → «Дополнительно» по схеме
-// модели; закреплённый низ с «− N +», ценой из котировки и запуском. Настройки пишутся в нить
+// «Настройки» (вариант А, docs/mockups/audio-panel-v3-proposal.md): режим → операция одним списком
+// с группами → поля операции → «Чем» со списком «Исполнитель» → «Ещё настройки» по схеме модели;
+// закреплённый низ с «− N +», ценой из котировки и запуском. Настройки пишутся в нить
 // (без нити — в префы режима), входы операции — туда же отдельной частью inputs, остальное — в браузер
 // на ту же нить (panel/inputs.ts). «Голоса» — библиотека voices/ проекта; «Выбрать» ставит голос в
 // поле операции.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AudioLines, Combine, Cpu, Lock, Mic, Scissors, SlidersHorizontal, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AudioLines, Combine, Mic, Scissors, Send, SlidersHorizontal, X } from 'lucide-react';
 import {
-  Badge, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
+  GenerationPanel, IconButton, SegmentedControl, Select, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
   clearGenDraft, followPeeked, noteGenDraft, useAgentPick,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
-import { audioApi, type AudioOp, type AudioQuote } from '../api';
+import { audioApi, type AudioOp, type AudioQuote, type AudioStemSet } from '../api';
 import { MODE_LABEL, opInfo } from '../ops';
 import { audioScope, isPersonalScope } from '../scope';
 import { focusLabel, queueBadge } from '../strip/summary';
@@ -37,18 +38,21 @@ import {
   type PanelInputs,
 } from './inputs';
 import {
-  isNoAi, modelOptions, panelOps, pillOf, priceLines, providerOptions, pruneFields, runReason,
-  splitSchema, voicePick, type PanelState, type SettingsPatch,
+  isNoAi, pillOf, priceLines, providerOptions, pruneFields, runReason,
+  splitSchema, tuckSchema, voicePick, type PanelState, type SettingsPatch,
 } from './model';
-import { heavyWarning, licenseWarning } from './music';
+import { heavyWarning, licenseWarning, vocalLanguage } from './music';
 import { MusicFields } from './MusicFields';
-import { ProcessFields, trimReady, VoiceFields } from './OpFields';
+import { Language, ProcessFields, trimReady, VoiceFields } from './OpFields';
 import { pendingOperation, takeOperation } from './opRequest';
 import { withFirstPiece } from '../thread/procMenu';
 import { readPiece } from './piece';
 import type { PieceBinding } from './PieceField';
 import { AdvancedForm } from './ParamField';
-import { Hint, ic, Label, Opt, Row } from './primitives';
+import { ExecutorField } from './ExecutorField';
+import { composerHintOf, opOptions } from './opGroups';
+import { Hint, ic, Label } from './primitives';
+import { stemChoices, stemPatch, stemValue } from './stems';
 import { dialogueText, musicDuration, quoteRequest, runPanel, type CloneRefusal } from './run';
 import { useSchema } from './schema';
 
@@ -209,7 +213,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // ── Схема модели: поля операции и «Дополнительно» ──
   const noAi = isNoAi(state.op);
   const schema = useSchema(noAi ? null : state.provider?.key ?? null, noAi ? null : state.model?.id ?? null, state.op);
-  const { main, extra } = splitSchema(schema.schema, state.mode);
+  const { main, extra, labels } = tuckSchema(state.mode, splitSchema(schema.schema, state.mode));
   // Поля, которых у модели нет, сервер отверг бы — чистим, как только схема пришла
   useEffect(() => {
     if (!schema.schema) return;
@@ -324,8 +328,6 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     context = <span>Новый звук · результат ляжет в ленту новой карточкой</span>;
   }
 
-  const heavyOps = useMemo(() => new Set(catalog?.providers.flatMap(p => p.models.flatMap(m => m.caps.heavyOps ?? [])) ?? []), [catalog]);
-
   let body;
   if (tab === 'voices') {
     body = (
@@ -336,7 +338,6 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   } else if (!catalog) {
     body = <div style={{ fontSize: FS.sm, color: C.textMuted, paddingTop: SP.sm }}>Загружаем…</div>;
   } else {
-    const pill = pillOf(state.op);
     const fieldsProps = {
       state, personal, main, values: state.fields, setField, inputs, setInputs: editInputs, reference, setReference,
       onOp: (op: AudioOp) => change(op === 'transcribe' && state.mode !== 'process' ? { mode: 'process' } : { operation: op }),
@@ -344,6 +345,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     };
     const license = noAi ? null : licenseWarning(state.model);
     const heavy = noAi ? null : heavyWarning(state.op, state.model);
+    const composerHint = composerHintOf(state.op);
     body = (
       <div data-sound-settings="">
         <div style={{ height: SP.sm }} />
@@ -351,57 +353,19 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
         <SoundModeSwitch scope={scope} sessionId={sessionId} mode={state.mode} thread={thread} threads={threads.threads} isMobile={ctx.isMobile} />
 
         <Label>Операция</Label>
-        <Row>
-          {panelOps(state.mode).map(o => (
-            <Opt key={o.op} dataKey={`op:${o.op}`} on={pill === o.op} name={o.label}
-              badges={heavyOps.has(o.op) ? <span title="Тяжёлая задача: одна за раз, минуты" style={{ display: 'inline-flex', color: C.textMuted }}>{ic(Cpu)}</span> : undefined}
-              onClick={() => change({ operation: o.op })} />
-          ))}
-        </Row>
+        <div data-sound-op="">
+          <Select<AudioOp> value={pillOf(state.op)} options={opOptions(state.mode, !!thread?.currentVersionId, state.op)}
+            onChange={op => { if (op) change({ operation: op }); }} />
+        </div>
+        {catalog.providers.length === 0 && !noAi && <Hint warn>Звучать нечем: поставщиков не настроил администратор</Hint>}
 
-        {noAi ? (
-          state.op !== 'concat' && <div style={{ marginTop: SP.md }}><Badge tone="neutral">Правка без ИИ · бесплатно</Badge></div>
-        ) : (
-          <>
-            <Label>Поставщик</Label>
-            {providers.length === 0
-              ? <Hint>Звучать нечем: поставщиков не настроил администратор</Hint>
-              : (
-                <Row>
-                  <Opt dataKey="provider:auto" on={state.providerKey === null} name="Авто"
-                    hint={state.provider && !state.providerKey ? `сейчас ${state.provider.label}` : 'первый, кто умеет'}
-                    onClick={() => change({ provider: null })} />
-                  {providers.map(p => (
-                    <Opt key={p.key} dataKey={`provider:${p.key}`} on={state.providerKey === p.key} disabled={p.disabled}
-                      title={p.reason ?? undefined}
-                      name={<>{p.locked && ic(Lock)}{p.label}</>}
-                      hint={p.reason ?? p.unit}
-                      onClick={() => change({ provider: p.key })} />
-                  ))}
-                </Row>
-              )}
-            {state.provider && (
-              <>
-                <Label aside={state.provider.key === 'fal' ? 'отобранные · остальные — по запросу' : undefined}>Модель</Label>
-                <Row>
-                  {modelOptions(state.provider, state.op, catalog.autoModelId).map(m => (
-                    <Opt key={m.id} dataKey={`model:${m.id}`} on={state.modelId === m.id} name={m.label}
-                      badges={<>
-                        {m.ru && <Badge size="xs" tone={m.ru === 'RU' ? 'success' : 'neutral'}>{m.ru}</Badge>}
-                        {m.license && <Badge size="xs" tone="neutral">{m.license}</Badge>}
-                        {m.heavy && <Badge size="xs" tone="warning" title="Тяжёлая задача: одна за раз, минуты">тяжёлая</Badge>}
-                      </>}
-                      hint={m.unit ?? undefined}
-                      onClick={() => change({ model: m.id })} />
-                  ))}
-                </Row>
-              </>
-            )}
-            {license && <div data-sound-license=""><Hint warn>{license}</Hint></div>}
-            {heavy && <div data-sound-heavy=""><Hint warn>{heavy}</Hint></div>}
-          </>
+        {state.op === 'separate' && (
+          <div data-field="stems">
+            <Label>Что получить</Label>
+            <SegmentedControl<AudioStemSet> value={stemValue(state.model) ?? ('' as AudioStemSet)} options={stemChoices(state.provider)}
+              onChange={set => { const patch = stemPatch(state.provider, state.model, set); if (patch) change(patch); }} />
+          </div>
         )}
-
         {state.mode === 'voice' && <VoiceFields {...fieldsProps} />}
         {state.mode === 'process' && state.op !== 'concat' && <ProcessFields {...fieldsProps} />}
         {state.op === 'concat' && (
@@ -409,13 +373,27 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
             threads={threads.threads} personal={personal} />
         )}
         {state.mode === 'music' && <MusicFields {...fieldsProps} />}
+        {composerHint && <Hint>{ic(Send)} {composerHint} — в поле ввода чата</Hint>}
+
+        {!noAi && catalog.providers.length > 0 && (
+          <>
+            <ExecutorField catalog={catalog} state={state} price={foot.price?.[0] ?? ''} onChange={change} isMobile={ctx.isMobile} />
+            {license && <div data-sound-license=""><Hint warn>{license}</Hint></div>}
+            {heavy && <div data-sound-heavy=""><Hint warn>{heavy}</Hint></div>}
+          </>
+        )}
 
         {refusal && <CloneRefusalNote scope={scope} refusal={refusal} onCleared={() => setRefusal(null)} />}
 
         {!noAi && state.model && (
           <AdvancedForm schema={schema.schema} fields={extra}
             values={state.fields} error={schema.error} loading={schema.loading}
-            onChange={setField} onReset={() => change({ fields: {} })} />
+            onChange={setField} onReset={() => change({ fields: {} })} labels={labels}
+            lead={vocalLanguage(state.op, state.model) && state.model ? (
+              <Language languages={state.model.caps.languages} value={inputs.language} onChange={v => editInputs({ language: v })}
+                auto="Язык вокала — как определит модель" />
+            ) : undefined}
+            leadSet={vocalLanguage(state.op, state.model) && !!inputs.language} />
         )}
       </div>
     );

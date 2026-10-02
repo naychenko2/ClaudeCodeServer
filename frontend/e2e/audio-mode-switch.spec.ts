@@ -239,7 +239,7 @@ test('сценарий 5 · склеить три реплики: 9 кликов
   await c.click('b', page.getByRole('button', { name: /Склеить несколько/ }));
   const p = page.locator('[data-sound-settings]');
   await expect(p).toBeVisible();
-  await expect(p.locator('[data-opt="op:concat"]')).toHaveAttribute('data-on', 'true');
+  await expect(p.locator('[data-sound-op] select')).toHaveValue('concat');
   // Выбор звука не нужен: чипа «Работаем с» нет
   await expect(strip(page).locator('[data-sound-chip="focus"]')).toHaveCount(0);
   const add = p.locator('select[title="Звук этого чата"]');

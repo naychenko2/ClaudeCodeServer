@@ -83,7 +83,8 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
             return Call.Refuse(VideoEditorErrors.InvalidRequest,
                 "У чата вне проекта нет папок проекта: сцену можно завести только без папки");
         if (!InsideAllowed(value))
-            return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders, "Сцены лежат только в video/ проекта");
+            return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders,
+                $"Сцены лежат только в video/ проекта, а получено «{value}»: укажи полный путь от корня проекта, например video/утро");
         if (ClaudeHomeServer.Services.Media.ProjectLinkGuard.ResolveInside(project.RootPath, value) is null)
             return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders, "Путь идёт через символическую ссылку или вне проекта");
         folder = value;

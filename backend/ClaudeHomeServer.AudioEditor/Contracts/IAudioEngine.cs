@@ -151,10 +151,21 @@ public static class AudioOutputs
     public const string Index = "index";
 }
 
+// Что разделяет модель операции separate: вокал и минус, 4 или 6 стемов, караоке (основной вокал
+// отдельно от бэк-вокала и музыки). Панель «Звук» выбирает модель по этому набору, а не по имени
+public static class AudioStemSets
+{
+    public const string Vocals = "vocals";
+    public const string Four = "4";
+    public const string Six = "6";
+    public const string Karaoke = "karaoke";
+}
+
 // Возможности МОДЕЛИ. MaxTextChars — текст озвучки или слова песни; Min/MaxDurationSec — длина
 // результата, который модель порождает; InputMaxSec — потолок входного звука (образец, трек).
 // Languages — коды ISO; LanguageNeutral — модель работает со звуком, а не с речью (стемы, денойз),
-// язык ей безразличен. HeavyOps — операции, которые держат GPU «одна за раз»
+// язык ей безразличен. HeavyOps — операции, которые держат GPU «одна за раз»; StemSet — набор стемов
+// (AudioStemSets) у моделей разделения, у остальных null
 public sealed record AudioCaps(
     IReadOnlyList<AudioOp> Ops,
     IReadOnlyList<string> Languages,
@@ -167,7 +178,8 @@ public sealed record AudioCaps(
     int? MaxDurationSec = null,
     int? InputMaxSec = null,
     bool LanguageNeutral = false,
-    IReadOnlyList<AudioOp>? HeavyOps = null)
+    IReadOnlyList<AudioOp>? HeavyOps = null,
+    string? StemSet = null)
 {
     // Признак «умеет ru» для каталога: русский в языках модели или язык ей безразличен
     public bool SpeaksRu => LanguageNeutral || Languages.Contains("ru");

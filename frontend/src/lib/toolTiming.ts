@@ -159,13 +159,17 @@ export function toolElapsedMs(
   return typeof item.finishedAt === 'number' ? Math.max(0, item.finishedAt - item.startedAt) : null;
 }
 
-// Bash и агенты получают фактический старт (tool_started) — до него «идёт» не показываем
-// вовсе: отсчёт от tool_use включал бы ожидание разрешения, и после «Разрешить» цифра
-// замирала бы, пока честный отсчёт от фактического старта её не догонит. У остальных
-// инструментов tool_started не бывает — у них отсчёт от tool_use.
+// Консоль (Bash, PowerShell) и агенты получают фактический старт (tool_started) — до него
+// «идёт» не показываем вовсе: отсчёт от tool_use включал бы ожидание разрешения, и после
+// «Разрешить» цифра замирала бы, пока честный отсчёт от фактического старта её не догонит
+// (у PowerShell без этого индикатор ожидания показывал ложный отсчёт и сбрасывал его на старте).
+// У остальных инструментов tool_started не бывает — у них отсчёт от tool_use. Список явный, а
+// не isConsoleTool: BashOutput и KillShell тоже «консоль» по имени, но старта не получают —
+// их таймер не появился бы никогда
+const STARTED_TOOLS = new Set(['bash', 'powershell', 'task', 'agent']);
+
 export function awaitsToolStart(item: { name: string; started?: boolean }): boolean {
-  const n = item.name.toLowerCase();
-  return (n === 'bash' || n === 'task' || n === 'agent') && item.started !== true;
+  return STARTED_TOOLS.has(item.name.toLowerCase()) && item.started !== true;
 }
 
 // Показанное «идёт» привязано к своему startedAt. Сдвиг старта (финальный tool_use после
@@ -284,8 +288,10 @@ export function toolLiveness(items: readonly LivenessItem[], busy: boolean): Too
 // Активный инструмент для индикатора ожидания под лентой: из живых (ToolLiveness.live) —
 // самый поздний по порядку ленты вызов верхнего уровня с отметкой старта. Вложенные вызовы
 // сабагентов не в счёт (их видно в карточке агента), стримящиеся аргументы — тоже: команда
-// ещё печатается. Параллельные вызовы: показан последний; закончился он раньше остальных —
-// подпись честно прыгает на предыдущий живой
+// ещё печатается. Параллельные вызовы: показан последний из уже стартовавших (у ждущего
+// tool_started времени нет — он сбросил бы идущий отсчёт соседа); стартовавших нет — последний
+// ждущий, подписью без времени. Закончился показанный раньше остальных — подпись честно
+// прыгает на предыдущий живой
 type ActiveToolItem = {
   kind: string; id?: string; name?: string; input?: unknown; parentToolUseId?: string | null;
   streamingArg?: string | null; startedAt?: number | null; started?: boolean;
@@ -294,13 +300,15 @@ type ActiveToolItem = {
 export function pickActiveTool<T extends ActiveToolItem>(items: readonly T[], live: ReadonlySet<string>): T | null {
   // Зовётся на каждую дельту стрима: без живых вызовов ленту не обходим
   if (live.size === 0) return null;
+  let waiting: T | null = null;
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
     if (it.kind !== 'tool_use' || !it.id || !live.has(it.id)) continue;
     if (it.parentToolUseId || it.streamingArg != null || typeof it.startedAt !== 'number') continue;
-    return it;
+    if (!awaitsToolStart({ name: it.name ?? '', started: it.started })) return it;
+    waiting ??= it;
   }
-  return null;
+  return waiting;
 }
 
 // Подпись активного инструмента: русское description от модели, иначе имя по-русски.

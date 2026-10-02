@@ -166,6 +166,18 @@ describe('toolClockMs — замирание после ожидания раз�
     expect(toolClockMs(bash({ started: true }), true, 4_000)).toBe(4_000);
   });
 
+  // Живой прогон Киры: у PowerShell отсчёт шёл от tool_use и сбрасывался на фактическом старте
+  it('PowerShell — как Bash: до tool_started без цифры, после — живой отсчёт', () => {
+    expect(awaitsToolStart({ name: 'PowerShell' })).toBe(true);
+    expect(toolClockMs(bash({ name: 'PowerShell' }), true, 17_000)).toBeNull();
+    expect(toolClockMs(bash({ name: 'PowerShell', started: true }), true, 4_000)).toBe(4_000);
+  });
+
+  it('BashOutput и KillShell старта не получают — считают от tool_use', () => {
+    expect(awaitsToolStart({ name: 'BashOutput' })).toBe(false);
+    expect(awaitsToolStart({ name: 'KillShell' })).toBe(false);
+  });
+
   it('инструменты без tool_started считают от tool_use, как прежде', () => {
     expect(awaitsToolStart({ name: 'Read' })).toBe(false);
     expect(toolClockMs({ name: 'mcp__x__y', startedAt: 1_000 }, true, 5_000)).toBe(5_000);
@@ -352,6 +364,21 @@ describe('pickActiveTool', () => {
     const old = tool('old');
     expect(pick([old, tool('n', { startedAt: undefined })])?.id).toBe('old');
     expect(pick([old, tool('s', { streamingArg: '{"comm' })])?.id).toBe('old');
+  });
+
+  // Живой прогон Киры: второй параллельный вызов, ещё не стартовавший, сбрасывал отсчёт первого
+  it('параллельные: второй ждёт tool_started — показан первый, идущий', () => {
+    const a = tool('a', { name: 'PowerShell' });
+    const b = tool('b', { name: 'PowerShell', started: undefined });
+    expect(pick([a, b])?.id).toBe('a');
+    expect(pick([a, { ...b, started: true }])?.id).toBe('b');
+  });
+
+  it('стартовавших нет — последний ждущий (подпись без времени)', () => {
+    const a = tool('a', { name: 'PowerShell', started: undefined });
+    const b = tool('b', { started: undefined });
+    expect(pick([a, b])?.id).toBe('b');
+    expect(pick([a])?.id).toBe('a');
   });
 });
 

@@ -363,6 +363,17 @@ describe('ToolUseView — витрина Веры', () => {
     const html = render(bash, [bash, { kind: 'interrupted', ts: 71_000 }], false);
     expect(html).toContain('прервано · 1:10');
   });
+
+  // Карточка PowerShell, как и Bash, ждёт tool_started: до фактического старта команда не
+  // работала — у «прервано» нет длительности; после старта — есть
+  it('PowerShell до tool_started — «прервано» без времени, после старта — с временем', () => {
+    const ps: ToolItem = { kind: 'tool_use', id: 'p1', name: 'PowerShell', input: { command: 'Start-Sleep 99' }, startedAt: 1_000 };
+    const before = render(ps, [ps, { kind: 'interrupted', ts: 71_000 }], false);
+    expect(before).toContain('прервано');
+    expect(before).not.toContain('прервано · ');
+    const started = { ...ps, started: true };
+    expect(render(started, [started, { kind: 'interrupted', ts: 71_000 }], false)).toContain('прервано · 1:10');
+  });
 });
 
 // Вариант B: строка этапов прогона тестов и итог с цифрами на закрытой карточке

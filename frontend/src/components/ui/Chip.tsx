@@ -9,9 +9,10 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 // maxW — потолок ширины: подпись обрезается многоточием, крестик onRemove остаётся
 // снаружи обрезки и достижим. touch — тач-цель: та же форма, но не ниже 32px.
 // leading — миниатюра/аватар слева (18px), onRemove — крестик справа.
+// dense — узкие поля по бокам (6 вместо 10): тесный ряд, где каждый пиксель отдан подписи.
 export function Chip({
   children, onClick, selected, dashed, title, maxW, touch, leading, onRemove,
-  variant = 'soft', large,
+  variant = 'soft', large, dense,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -24,6 +25,7 @@ export function Chip({
   onRemove?: () => void;
   variant?: 'soft' | 'toggle';
   large?: boolean;
+  dense?: boolean;
 }) {
   const body = maxW !== undefined
     ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{children}</span>
@@ -65,7 +67,7 @@ export function Chip({
       title={title}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: FS.xs,
-        padding: touch ? `${SP.sm}px 10px` : '3px 10px',
+        padding: `${touch ? SP.sm : 3}px ${dense ? 6 : 10}px`,
         borderRadius: R.max, whiteSpace: 'nowrap', fontFamily: FONT.sans, flexShrink: 0,
         border: `1px ${dashed ? 'dashed' : 'solid'} ${selected ? C.accentMuted : C.border}`,
         background: selected ? C.accentLight : C.bgCard,

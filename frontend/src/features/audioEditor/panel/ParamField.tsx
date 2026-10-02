@@ -98,7 +98,7 @@ export function advancedSummary(fields: AudioParamField[], values: Record<string
   return n ? `изменено: ${n}` : 'всё по умолчанию';
 }
 
-export function AdvancedForm({ schema, fields, values, error, loading, onChange, onReset, lead, leadSet, labels }: {
+export function AdvancedForm({ schema, fields, values, error, loading, onChange, onReset, lead, leadSet, labels, isMobile }: {
   schema: AudioParamSchema | null;
   fields: AudioParamField[];
   error: string | null;
@@ -110,13 +110,15 @@ export function AdvancedForm({ schema, fields, values, error, loading, onChange,
   lead?: ReactNode;
   leadSet?: boolean;
   labels?: Record<string, string>;
+  // Телефон: строка-переключатель — тач-цель не ниже 40
+  isMobile?: boolean;
 }) {
   const count = fields.length + (lead ? 1 : 0);
   const [open, setOpen] = useState(false);
   return (
     <div data-sound-advanced={open ? 'open' : 'closed'}>
       <Button size="sm" variant="ghost" fullWidth onClick={() => setOpen(!open)} leftIcon={ic(open ? ChevronDown : ChevronRight)}
-        style={{ marginTop: SP.xs, justifyContent: 'flex-start', fontWeight: 400 }}>
+        style={{ marginTop: SP.xs, justifyContent: 'flex-start', fontWeight: 400, ...(isMobile ? { minHeight: 40 } : null) }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flex: 1, minWidth: 0 }}>
           <span style={{ flexShrink: 0 }}>Ещё настройки{count ? ` · ${count}` : ''}</span>
           <span data-sound-advanced-summary="" style={{

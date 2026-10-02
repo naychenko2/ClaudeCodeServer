@@ -5,6 +5,8 @@ import { nextSettings, resolvePanel, splitSchema, tuckSchema, type PanelState } 
 import type { AudioParamSchema } from '../api';
 import { composerHintOf, OP_GROUP, opOptions } from './opGroups';
 import { stemChoices, stemPatch, stemValue } from './stems';
+import { opPlaceholder } from '../ops';
+import { resolveLaunch } from '../strip/summary';
 
 const model = (id: string, ops: AudioModelInfo['caps']['ops'], extra: Partial<AudioModelInfo['caps']> = {}, hint?: AudioModelInfo['priceHint']): AudioModelInfo => ({
   id, label: id.toUpperCase(),
@@ -197,5 +199,25 @@ describe('«Ещё настройки» у музыки', () => {
   it('вне «Музыки» раскладка splitSchema как есть', () => {
     const split = splitSchema(schema, 'voice');
     expect(tuckSchema('voice', split)).toEqual({ ...split, labels: {} });
+  });
+});
+
+describe('плейсхолдер композера в «Стемах» — по модели запуска', () => {
+  it('«Авто» берёт BS-RoFormer с готовым набором: описание не нужно, чужой подсказки нет', () => {
+    const L = resolveLaunch(null, NO_PREFS, CATALOG, 'process');
+    expect(L.op).toBe('separate');
+    expect(L.model?.id).toBe('bs-roformer');
+    const ph = opPlaceholder(L.op, L.model);
+    expect(ph).toBe('Комментарий не нужен — выберите, что получить');
+    expect(ph).not.toMatch(/SAM/);
+  });
+
+  it('модель без набора стемов выделяет звук по описанию — просим описание', () => {
+    const sam = FAL.models.find(m => m.id === 'fal-ai/sam-audio')!;
+    expect(opPlaceholder('separate', sam)).toBe('Что выделить: например «лай собаки»');
+  });
+
+  it('у остальных операций — подсказка операции как была', () => {
+    expect(opPlaceholder('denoise', LOCAL.models[0]!)).toBe('Комментарий не нужен');
   });
 });

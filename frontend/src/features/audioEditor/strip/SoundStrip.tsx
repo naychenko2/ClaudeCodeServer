@@ -87,8 +87,8 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
   };
   const release = () => { if (sessionId) void releaseFocus(scope, sessionId, thread); };
   const title = switcher ?? (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
-      {ic(AudioLines)}Звук
+    <span title="Звук" style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
+      {ic(AudioLines)}{!isMobile && 'Звук'}
     </span>
   );
 
@@ -139,37 +139,40 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
       </div>
     )}
     <div ref={bar} data-composer-strip="sound" data-sound-strip="full" style={{
-      position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 8, boxSizing: 'border-box', minWidth: 0,
-      height: isMobile ? 42 : 48, margin: isMobile ? '6px 0' : '10px 0 8px', padding: isMobile ? '0 6px' : '0 8px',
+      position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 8, boxSizing: 'border-box', minWidth: 0,
+      // Телефон: справа без поля — «▴» 40×40 встаёт вплотную к рамке и не вылезает за неё
+      height: isMobile ? 42 : 48, margin: isMobile ? '6px 0' : '10px 0 8px', padding: isMobile ? '0 0 0 2px' : '0 8px',
       background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
     }}>
       {title}
       {modeSwitch}
       {thread ? (
-        <span data-sound-chip="focus" style={{ display: 'inline-flex', minWidth: 72, flex: '0 1 auto' }}>
-          <Chip selected leading={ic(AudioLines)} maxW="100%" onRemove={release}
+        // Телефон: имени отдано всё, что осталось от сегментов и «▴»; иконка-дубль режима и
+        // широкие поля чипа уходят, чтобы имя читалось (≥ 96 px на 360)
+        <span data-sound-chip="focus" style={{ display: 'inline-flex', minWidth: isMobile ? 0 : 72, flex: isMobile ? '1 1 0' : '0 1 auto' }}>
+          <Chip selected leading={isMobile ? undefined : ic(AudioLines)} dense={isMobile} maxW="100%" onRemove={release}
             title={personal ? 'Режим «Звук» работает с этой версией. ✕ — снять выбор' : 'Режим «Звук» и Claude работают с этой версией. ✕ — снять выбор'}>
             {!isMobile && 'Работаем с: '}<b>{m.focus}</b>
           </Chip>
         </span>
       ) : (
-        <span data-sound-chip="new" style={{ display: 'inline-flex', flexShrink: 0 }}>
-          <Chip dashed leading={ic(Sparkles)} title={sessionId ? 'Карточка «Новый звук» в ленте, поле — в режим «Звук»' : 'Сначала начните чат'}
+        <span data-sound-chip="new" style={{ display: 'inline-flex', flexShrink: isMobile ? 1 : 0, minWidth: 0 }}>
+          <Chip dashed maxW="100%" leading={ic(Sparkles)} title={sessionId ? 'Карточка «Новый звук» в ленте, поле — в режим «Звук»' : 'Сначала начните чат'}
             onClick={sessionId && !drafting ? () => { void draft(); } : undefined}>
             Новый звук
           </Chip>
         </span>
       )}
       {m.badge && !isMobile && <Badge>{m.badge}</Badge>}
-      <span style={{ flex: 1 }} />
+      {!isMobile && <span style={{ flex: 1 }} />}
       {m.noProviders ? (
         <span style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           Звучать нечем: поставщиков не настроил администратор
         </span>
       ) : isMobile ? (
         // Телефон: место нужно переключателю, цена уже на кнопке поля ввода — от сводки остаётся «▴»
-        <span data-sound-settings-toggle="" style={{ display: 'inline-flex', flexShrink: 0 }}>
-          <IconButton size="md" title="Открыть настройки панели «Звук»" ariaLabel="Открыть настройки панели «Звук»" onClick={openSettings}>
+        <span data-sound-settings-toggle="" style={{ display: 'inline-flex', flexShrink: 0, marginLeft: 'auto' }}>
+          <IconButton size="lg" title="Открыть настройки панели «Звук»" ariaLabel="Открыть настройки панели «Звук»" onClick={openSettings}>
             {ic(ChevronUp, ICON_SIZE.sm)}
           </IconButton>
         </span>

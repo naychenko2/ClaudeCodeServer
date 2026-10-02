@@ -393,7 +393,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
               <Language languages={state.model.caps.languages} value={inputs.language} onChange={v => editInputs({ language: v })}
                 auto="Язык вокала — как определит модель" />
             ) : undefined}
-            leadSet={vocalLanguage(state.op, state.model) && !!inputs.language} />
+            leadSet={vocalLanguage(state.op, state.model) && !!inputs.language} isMobile={ctx.isMobile} />
         )}
       </div>
     );

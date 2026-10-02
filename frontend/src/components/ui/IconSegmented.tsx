@@ -53,6 +53,11 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
   size?: 'sm' | 'lg';
 }) {
   const { w: BTN_W, h: BTN_H } = SIZES[size];
+  // Тихая дорожка прозрачна — её поля и зазоры не видны, но в полосе телефона съедают место
+  // под соседей и выпирают по высоте (44 в полосе 42); у крупного тихого вида их нет
+  const bare = quiet && size === 'lg';
+  const pad = bare ? 0 : PAD;
+  const gap = bare ? 0 : GAP;
   const btnR = size === 'lg' ? R.md : R.sm;
   const [hover, setHover] = useState<T | null>(null);
   const activeIdx = options.findIndex(o => o.value === value);
@@ -67,7 +72,7 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
   }, [activeIdx, thumbIdx, persistKey]);
   return (
     <span style={{
-      position: 'relative', display: 'flex', flexShrink: 0, gap: GAP, padding: PAD,
+      position: 'relative', display: 'flex', flexShrink: 0, gap, padding: pad,
       background: quiet ? 'transparent' : C.track, borderRadius: size === 'lg' ? R.lg : R.md,
       ...style,
     }}>
@@ -78,11 +83,11 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
         <span
           aria-hidden
           style={{
-            position: 'absolute', top: PAD, left: PAD, width: BTN_W, height: BTN_H,
+            position: 'absolute', top: pad, left: pad, width: BTN_W, height: BTN_H,
             borderRadius: btnR,
             background: quiet ? C.bgSelected : TB.pillThumbBg,
             boxShadow: quiet ? 'none' : TB.pillThumbShadow,
-            transform: `translateX(${thumbIdx * (BTN_W + GAP)}px)`,
+            transform: `translateX(${thumbIdx * (BTN_W + gap)}px)`,
             transition: quiet ? `transform 0.32s ${QUIET_EASE}` : 'transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)',
           }}
         />

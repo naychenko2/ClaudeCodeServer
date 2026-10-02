@@ -16,7 +16,7 @@ import { C, FS, SP } from '../../lib/design';
 import { useComposerStrip } from '../../lib/composerStrips';
 import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
 import type { ComposerStripApi, ComposerStripCtx, ComposerStripShortcut, SlotContribution } from '../../lib/subsystems/registry';
-import { Button, Dot, Menu, MenuItem, MenuSep, Modal } from '../ui';
+import { Button, Dot, IconButton, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_STROKE } from '../ui/icons';
 
 export type ComposerStripContribution = SlotContribution<ComposerStripCtx, ComposerStripApi>;
@@ -127,26 +127,32 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
 
   // Выбранная картинка, чья полоса скрыта ручным выбором, — точка на «▾»
   const dot = !!pendingFocus && pendingFocus !== active;
+  const switchTitle = `${current.action!.title} — сменить полосу над полем ввода`;
   const switcher = strips.length > 1 ? (
     // Клик по переключателю в свёрнутой строке не должен её разворачивать
     <span data-composer-strip-switcher="" onClick={e => e.stopPropagation()}
       style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, flexShrink: 0 }}>
       <span style={{ position: 'relative', display: 'inline-flex' }}>
-        <Button
-          variant="ghost" size="xs"
-          leftIcon={current.action!.icon}
-          title={`${current.action!.title} — сменить полосу над полем ввода`}
-          style={{ fontWeight: 600, color: C.textHeading, paddingLeft: SP.xs, paddingRight: SP.xs }}
-          onClick={(e: MouseEvent) => {
-            if (isMobile) setSheet(true);
-            else setMenu((e.currentTarget as HTMLElement).getBoundingClientRect());
-          }}
-        >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
-            {!isMobile && current.action!.title}
-            <ChevronDown size={12} strokeWidth={ICON_STROKE} color={C.textMuted} />
-          </span>
-        </Button>
+        {/* Телефон: место в полосе нужнее её содержимому (имя звука в чипе) — одна иконка
+            без «▾» и без разделителя; шторка с полосами открывается тем же нажатием */}
+        {isMobile ? (
+          <IconButton size="xs" title={switchTitle} ariaLabel={switchTitle} onClick={() => setSheet(true)}>
+            {current.action!.icon}
+          </IconButton>
+        ) : (
+          <Button
+            variant="ghost" size="xs"
+            leftIcon={current.action!.icon}
+            title={switchTitle}
+            style={{ fontWeight: 600, color: C.textHeading, paddingLeft: SP.xs, paddingRight: SP.xs }}
+            onClick={(e: MouseEvent) => setMenu((e.currentTarget as HTMLElement).getBoundingClientRect())}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
+              {current.action!.title}
+              <ChevronDown size={12} strokeWidth={ICON_STROKE} color={C.textMuted} />
+            </span>
+          </Button>
+        )}
         {dot && (
           <span title="Картинка выбрана — её полоса сейчас не показана"
             style={{ position: 'absolute', top: 2, right: 0, display: 'inline-flex', pointerEvents: 'none' }}>
@@ -154,7 +160,7 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
           </span>
         )}
       </span>
-      <span style={{ width: 1, height: collapsed ? 16 : 22, background: C.divider, flexShrink: 0 }} />
+      {!isMobile && <span style={{ width: 1, height: collapsed ? 16 : 22, background: C.divider, flexShrink: 0 }} />}
       {menu && (
         <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={290} maxWidth={360} maxHeight={320}>
           {items}

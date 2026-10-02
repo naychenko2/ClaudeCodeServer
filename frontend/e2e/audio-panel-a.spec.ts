@@ -111,7 +111,7 @@ async function chat(page: Page, mode: 'voice' | 'music' | 'process', withFile: b
   return sid;
 }
 
-async function openPanel(page: Page, sid: string, width: number, theme: 'light' | 'dark') {
+async function openStrip(page: Page, sid: string, width: number, theme: 'light' | 'dark') {
   const mobile = width < 500;
   await page.setViewportSize({ width, height: mobile ? 780 : 900 });
   await page.addInitScript(([tk, s, th]) => {
@@ -124,6 +124,10 @@ async function openPanel(page: Page, sid: string, width: number, theme: 'light' 
   await expect(page.locator('[data-sound-strip="full"]')).toBeVisible({ timeout: 30_000 });
   const close = page.locator('[data-cc-src*="NotificationToasts"] [title="Закрыть"]');
   for (let i = 0; i < 5 && await close.count(); i++) await close.first().click().catch(() => {});
+}
+
+async function openPanel(page: Page, sid: string, width: number, theme: 'light' | 'dark') {
+  await openStrip(page, sid, width, theme);
   await page.locator('[data-sound-settings-toggle] button').click();
   const p = page.locator('[data-sound-settings]');
   await expect(p).toBeVisible();
@@ -206,4 +210,65 @@ for (const width of [1440, 360]) {
       await shot(page, `stems-fal-${width}-${theme}`);
     });
   }
+}
+
+// Дизайн-проверка Майи на 360: имя звука в чипе читается (≥ 96 px видимой ширины), «▴» —
+// тач-цель 40×40 внутри рамки полосы, сегменты по 40, строка «Ещё настройки» не ниже 40
+type Rect = { x: number; y: number; width: number; height: number };
+const rect = (l: Locator) => l.evaluate(n => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }) as Promise<Rect>;
+const inside = (a: Rect, b: Rect) => a.x >= b.x - 0.5 && a.x + a.width <= b.x + b.width + 0.5 && a.y >= b.y - 0.5 && a.y + a.height <= b.y + b.height + 0.5;
+
+async function stripGeometry(page: Page) {
+  const strip = await rect(page.locator('[data-sound-strip="full"]'));
+  const toggle = await rect(page.locator('[data-sound-settings-toggle] button'));
+  expect(toggle.width, '«▴» шириной 40').toBeGreaterThanOrEqual(40);
+  expect(toggle.height, '«▴» высотой 40').toBeGreaterThanOrEqual(40);
+  expect(inside(toggle, strip), `«▴» внутри полосы: ${JSON.stringify({ toggle, strip })}`).toBeTruthy();
+  const segs = page.locator('[data-sound-mode-switch] button');
+  await expect(segs).toHaveCount(3);
+  for (let i = 0; i < 3; i++) {
+    const s = await rect(segs.nth(i));
+    expect(s.width, 'сегмент шириной 40').toBeGreaterThanOrEqual(40);
+    expect(s.height, 'сегмент высотой 40').toBeGreaterThanOrEqual(40);
+    expect(inside(s, strip), 'сегмент внутри полосы').toBeTruthy();
+  }
+  return strip;
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`360 ${theme}: полоса без звука — «▴» 40×40 внутри полосы`, async ({ page }) => {
+    await fixtures(page);
+    await openStrip(page, await chat(page, 'voice', false), 360, theme);
+    await expect(page.locator('[data-sound-chip="new"]')).toBeVisible({ timeout: 30_000 });
+    const strip = await stripGeometry(page);
+    expect(inside(await rect(page.locator('[data-sound-chip="new"]')), strip), 'чип «Новый звук» внутри полосы').toBeTruthy();
+    await shot(page, `strip-new-360-${theme}`);
+  });
+
+  test(`360 ${theme}: выбранный звук — имя в чипе читается, «Ещё настройки» не ниже 40`, async ({ page }) => {
+    await fixtures(page);
+    const sid = await chat(page, 'process', true);
+    await openStrip(page, sid, 360, theme);
+    await expect(page.locator('[data-sound-chip="focus"]')).toBeVisible({ timeout: 30_000 });
+    const strip = await stripGeometry(page);
+    const name = page.locator('[data-sound-chip="focus"] b');
+    await expect(name).toContainText('песня-2.mp3');
+    // Видимая часть имени: <b> внутри обрезки многоточием, считаем по рамке обрезки
+    const visible = await name.evaluate(n => {
+      const b = n.getBoundingClientRect();
+      const clip = n.parentElement!.getBoundingClientRect();
+      return Math.min(b.right, clip.right) - b.left;
+    });
+    expect(visible, 'видимая ширина имени в чипе').toBeGreaterThanOrEqual(96);
+    expect(inside(await rect(page.locator('[data-sound-chip="focus"]')), strip), 'чип внутри полосы').toBeTruthy();
+    await shot(page, `strip-picked-360-${theme}`);
+
+    await page.locator('[data-sound-settings-toggle] button').click();
+    const p = page.locator('[data-sound-settings]');
+    await expect(p).toBeVisible();
+    const adv = p.getByRole('button', { name: /^Ещё настройки/ });
+    await expect(adv).toBeVisible();
+    expect((await rect(adv)).height, 'строка «Ещё настройки» — тач-цель').toBeGreaterThanOrEqual(40);
+    await shot(page, `panel-advanced-360-${theme}`);
+  });
 }

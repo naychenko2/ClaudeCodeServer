@@ -36,7 +36,7 @@ export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
 export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel } from '../subsystems/registryCore';
-export type { SubsystemManifest, RevealPanelDetail } from '../subsystems/registryCore';
+export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions, PanelReturnTo } from '../subsystems/registryCore';
 
 // ─── genPanelDismissed ───────────────────────────────────────────────────────
 // Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл
@@ -50,6 +50,7 @@ export { followSelection, isCardPick, noteAgentPick, dropAgentPick, dropAgentPic
 export type { GenerationAgentPick } from '../genPanelFollow';
 export { noteGenDraft, clearGenDraft, useGenDraft } from '../genDrafts';
 export { followPeeked } from '../genPanelOpen';
+export { usePanelReturnTo, usePendingPreset, consumePreset, returnToOrigin, returnLabel } from '../genPanelReturn';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts

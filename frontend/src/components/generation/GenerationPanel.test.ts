@@ -117,3 +117,12 @@ describe('низ панели: состояния progress / result / stale', ()
     expect(html({ ...run, count: 2, maxCount: 4, onCountChange: () => {}, price: ['≈ $1', '2 × $0.5'] })).toContain('Сколько вариантов');
   });
 });
+
+describe('ссылка «↩» к вызвавшей панели', () => {
+  it('рисуется строкой над контекстом, без returnLink — нет', () => {
+    const h = renderToStaticMarkup(panel({ layout: 'column', returnLink: { label: 'К фильму «утро»', onClick: () => {} } }));
+    expect(h).toContain('data-gen-return');
+    expect(h).toContain('К фильму «утро»');
+    expect(renderToStaticMarkup(panel({ layout: 'column' }))).not.toContain('data-gen-return');
+  });
+});

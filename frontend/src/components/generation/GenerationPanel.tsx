@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CSSProperties, ReactNode } from 'react';
-import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Cpu, RefreshCw, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, CornerUpLeft, Cpu, RefreshCw, Sparkles, X } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP, Z } from '../../lib/design';
 import { GEN_PANEL_INLINE_MIN, useWindowWidth } from '../../lib/breakpoints';
 import { holdGenSheetRaised } from '../../lib/genSheet';
@@ -97,6 +97,8 @@ interface Props<T extends string> {
   // Ключ панели в рабочей области («images», «sound»): каркас отмечает её открытой, пока
   // смонтирован, — по этому признаку клик по карточке переключает панель (genPanelFollow)
   panelKey?: string;
+  // «↩ К сцене 5» — ссылка назад к панели, из которой сюда пришли (returnTo события показа)
+  returnLink?: { label: string; onClick: () => void };
   // Подсказка «✦ Claude взял в работу: имя · Открыть · ✕» под шапкой
   agentPick?: GenerationAgentPick;
   // Ключ элемента «Работаем с»: есть черновик — в строке контекста пометка «черновик»
@@ -205,6 +207,7 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
   const pick = p.agentPick && <AgentPickRow pick={p.agentPick} />;
   const content = (
     <>
+      {p.returnLink && <ReturnRow link={p.returnLink} />}
       <Tabs ariaLabel={`Панель «${p.title}»`} value={p.tab} items={p.tabs} onChange={p.onTabChange} transparent={sheet} />
       {p.context && (
         <div style={{
@@ -307,6 +310,21 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
       {pick}
       {content}
       {footBox}
+    </div>
+  );
+}
+
+// «↩ К фильму «утро» — панель «Видео»»: возврат к вызвавшей панели
+function ReturnRow({ link }: { link: { label: string; onClick: () => void } }) {
+  return (
+    <div data-gen-return="" style={{
+      flex: '0 0 auto', display: 'flex', alignItems: 'center', minWidth: 0,
+      padding: `${SP.xxs}px ${PAD.row}px ${SP.xxs}px ${PAD.row}px`, borderBottom: `1px solid ${C.borderLight}`,
+    }}>
+      <Button size="xs" variant="ghost" leftIcon={icon(CornerUpLeft)} onClick={link.onClick} title={link.label}
+        style={{ minWidth: 0, maxWidth: '100%' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{link.label}</span>
+      </Button>
     </div>
   );
 }

@@ -30,11 +30,11 @@ export function executorSettings(id: string): Pick<ImageThreadSettings, 'provide
   return { provider: id.slice(0, i), model: id.slice(i + 1) };
 }
 
-const isLocal = (pv: ImageEditProvider) => isFreeUnit(pv.priceUnit);
+const onOwnGpu = (pv: ImageEditProvider) => isFreeUnit(pv.priceUnit);
 
 // Цена строки: «бесплатно», «$0.04 / шт.», «2 кр. / шт.»; без ориентира — единица поставщика
 export function rowPrice(pv: ImageEditProvider, m: ImageEditModel | null): string {
-  if (isLocal(pv)) return 'бесплатно';
+  if (onOwnGpu(pv)) return 'бесплатно';
   const h = m?.priceHint;
   if (h && !isFreeUnit(h.unit)) {
     return h.unit === 'usd' ? `$${h.amount.toFixed(2)} / шт.` : `${Math.round(h.amount * 100) / 100} кр. / шт.`;
@@ -44,7 +44,7 @@ export function rowPrice(pv: ImageEditProvider, m: ImageEditModel | null): strin
 }
 
 const rowName = (pv: ImageEditProvider, m: ImageEditModel) =>
-  m.id === AUTO_MODEL ? `${pv.label} · Авто` : isLocal(pv) ? m.label : `${pv.label} · ${m.label}`;
+  m.id === AUTO_MODEL ? `${pv.label} · Авто` : onOwnGpu(pv) ? m.label : `${pv.label} · ${m.label}`;
 
 // Задача, под которую серим модели: операция запуска, есть ли картинка и маска; quick —
 // операция без промпта (её ведёт модель поставщика, которая умеет, а не выбранная)
@@ -64,7 +64,7 @@ function autoNow(catalog: ImageEditCatalog): string {
   const pv = catalog.providers.find(p => p.key === catalog.default.provider);
   if (!pv) return '';
   const m = catalog.default.model !== AUTO_MODEL ? pv.models.find(x => x.id === catalog.default.model) : null;
-  return [isLocal(pv) ? 'локально' : pv.label, m?.label].filter(Boolean).join(' · ');
+  return [onOwnGpu(pv) ? 'локально' : pv.label, m?.label].filter(Boolean).join(' · ');
 }
 
 export function executorRows(catalog: ImageEditCatalog, task: ExecutorTask): ExecutorRow[] {
@@ -76,14 +76,14 @@ export function executorRows(catalog: ImageEditCatalog, task: ExecutorTask): Exe
     rows.push({ id: AUTO_EXECUTOR, group: 'auto', name: 'Авто', sub: now ? `как в настройках · сейчас ${now}` : 'как в настройках', price: rowPrice(admin, adminModel) });
   }
   // Сначала своя видеокарта, потом облако; внутри — порядок каталога
-  const ordered = [...catalog.providers.filter(isLocal), ...catalog.providers.filter(p => !isLocal(p))];
+  const ordered = [...catalog.providers.filter(onOwnGpu), ...catalog.providers.filter(p => !onOwnGpu(p))];
   for (const pv of ordered) {
     const down = unavailableMark(pv);
     for (const m of pv.models) {
       const why = blockReason(catalog, pv, m, task);
       rows.push({
         id: rowId(pv.key, m.id),
-        group: isLocal(pv) ? 'local' : 'cloud',
+        group: onOwnGpu(pv) ? 'local' : 'cloud',
         name: rowName(pv, m),
         sub: m.id === AUTO_MODEL ? 'подберём модель под задачу' : undefined,
         price: rowPrice(pv, m.id === AUTO_MODEL ? null : m),
@@ -104,7 +104,7 @@ export function executorSummary(
   const dpv = done ? catalog.providers.find(p => p.key === done.provider) ?? null : null;
   const dm = dpv && done && done.model !== AUTO_MODEL ? dpv.models.find(m => m.id === done.model) ?? null : null;
   if (value === AUTO_EXECUTOR) {
-    const now = dpv ? [isLocal(dpv) ? 'локально' : dpv.label, dm?.label] : [autoNow(catalog)];
+    const now = dpv ? [onOwnGpu(dpv) ? 'локально' : dpv.label, dm?.label] : [autoNow(catalog)];
     return { name: 'Авто', parts: now.filter((x): x is string => !!x) };
   }
   const { provider, model } = executorSettings(value);
@@ -114,5 +114,5 @@ export function executorSummary(
   const name = rowName(pv, m);
   // Выбрана одна модель, а пойдёт другая (операцию без промпта ведёт умеющая)
   const other = dm && dm.id !== m.id ? `сделает ${dm.label}` : null;
-  return { name, parts: [isLocal(pv) && m.id !== AUTO_MODEL ? 'локально' : null, other].filter((x): x is string => !!x) };
+  return { name, parts: [onOwnGpu(pv) && m.id !== AUTO_MODEL ? 'локально' : null, other].filter((x): x is string => !!x) };
 }

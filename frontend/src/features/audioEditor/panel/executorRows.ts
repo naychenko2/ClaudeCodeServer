@@ -15,7 +15,7 @@ export const AUTO_EXECUTOR = 'auto';
 const SEP = '|';
 const rowId = (provider: string, model: string) => `${provider}${SEP}${model}`;
 
-const isLocal = (p: AudioProvider) => p.priceUnit === 'free';
+const onOwnGpu = (p: AudioProvider) => p.priceUnit === 'free';
 const supports = (m: AudioModelInfo, op: AudioOp) => m.caps.ops.includes(op);
 const isAutoModel = (id: string | null | undefined, catalog: AudioCatalog) => !id || id === catalog.autoModelId;
 
@@ -27,7 +27,7 @@ export function autoPick(catalog: AudioCatalog, op: AudioOp): { provider: AudioP
 }
 
 // «локально · Qwen3-TTS», «fal · MiniMax Speech»
-const where = (p: AudioProvider, m: AudioModelInfo | null) => [isLocal(p) ? 'локально' : p.label, m?.label].filter((x): x is string => !!x);
+const where = (p: AudioProvider, m: AudioModelInfo | null) => [onOwnGpu(p) ? 'локально' : p.label, m?.label].filter((x): x is string => !!x);
 
 export function rowPrice(p: AudioProvider, m: AudioModelInfo | null): string {
   return unitLabel(p, m) ?? providerUnit(p);
@@ -60,7 +60,7 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
     ...(auto ? null : { disabled: true, reason: 'Нет доступного поставщика для этой операции' }),
   }];
   const providers = catalog.providers;
-  const ordered = [...providers.filter(isLocal), ...providers.filter(p => !isLocal(p))];
+  const ordered = [...providers.filter(onOwnGpu), ...providers.filter(p => !onOwnGpu(p))];
   for (const p of ordered) {
     const why = p.available ? null : p.reason ?? 'Поставщик сейчас недоступен';
     const locked = personal && p.key === 'local';
@@ -68,9 +68,9 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
       const b = badges(m, op);
       rows.push({
         id: rowId(p.key, m.id),
-        group: isLocal(p) ? 'local' : 'cloud',
+        group: onOwnGpu(p) ? 'local' : 'cloud',
         name: m.label,
-        sub: isLocal(p) ? undefined : p.key === 'fal' && i === 0 ? `${p.label} · ${FAL_NOTE}` : p.label,
+        sub: onOwnGpu(p) ? undefined : p.key === 'fal' && i === 0 ? `${p.label} · ${FAL_NOTE}` : p.label,
         price: rowPrice(p, m),
         ...(b.length ? { badges: b } : null),
         ...(why ? { disabled: true, reason: why } : null),
@@ -109,5 +109,5 @@ export function executorSummary(
   if (!p) return { name: state.providerKey ?? 'Авто', parts: ['поставщика нет в каталоге'] };
   if (isAutoModel(state.modelId, catalog)) return { name: `${p.label} · Авто`, parts: state.model ? [state.model.label] : [] };
   const name = state.model?.label ?? state.modelId;
-  return isLocal(p) ? { name, parts: ['локально'] } : { name: `${p.label} · ${name}`, parts: [] };
+  return onOwnGpu(p) ? { name, parts: ['локально'] } : { name: `${p.label} · ${name}`, parts: [] };
 }

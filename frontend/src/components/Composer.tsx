@@ -2447,7 +2447,9 @@ export function Composer({
       {executorTask && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0,
-          padding: `${SP.xxs}px ${SP.xs}px 0`, fontSize: FS.xs, color: C.textSecondary,
+          // Нижний отступ отделяет строку от поля и его кнопок — без него «к постановщику»
+          // садилась прямо на иконки правой группы
+          padding: `${SP.xxs}px ${SP.xs}px`, marginBottom: SP.xs, fontSize: FS.xs, color: C.textSecondary,
         }}>
           <ClipboardList size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

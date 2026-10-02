@@ -551,8 +551,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const parentChatId = session.parentSessionId ?? null;
   const executorTask = useMemo(() => !isExecutor ? null : {
     title: executorTitle,
-    onOpenParent: parentChatId ? () => { void openChatById(parentChatId); } : undefined,
-  }, [isExecutor, executorTitle, parentChatId]);
+    onOpenParent: parentChatId ? () => {
+      // Постановщик в этом же проекте — открываем внутри воркспейса, как групповой чат:
+      // диплинк через cc-open-url уже открытый проект на другой чат не переключает
+      void api.chats.get(parentChatId).then(chat => {
+        if (project && chat.projectId === project.id)
+          window.dispatchEvent(new CustomEvent('cc-open-project-session', { detail: { session: chat } }));
+        else void openChatById(parentChatId);
+      }, () => { void openChatById(parentChatId); });
+    } : undefined,
+  }, [isExecutor, executorTitle, parentChatId, project]);
   // Сжимать имеет смысл только когда набралось достаточно ходов (иначе CLI вернёт «not enough messages»)
   const canCompact = useMemo(
     () => caps.supportsCompact && items.filter(it => it.kind === 'result').length >= 2,

@@ -72,19 +72,34 @@ export type SettingsPatch = Partial<Pick<AudioThreadSettings, 'mode' | 'operatio
   inputs?: AudioOpInputs | null;
 };
 
-// Следующие настройки нити. Смена режима, операции, поставщика или модели сбрасывает то, что от них
+// Следующие настройки нити. Смена операции, поставщика или модели сбрасывает то, что от них
 // зависит: иначе поля чужой модели ушли бы в params и сервер отказал бы «неизвестный параметр».
+// Смена режима поднимает запомненный выбор нового режима из его префов: пустые поля без нити
+// ушли бы PUT'ом в те же префы и затёрли бы выбор человека.
 // Входы едут всегда (PUT их заменяет), при смене операции — только те, что нужны новой
-export function nextSettings(cur: PanelState, patch: SettingsPatch): AudioThreadSettings {
+export function nextSettings(
+  cur: PanelState, patch: SettingsPatch, prefs?: AudioPrefs | null, catalog?: AudioCatalog | null,
+): AudioThreadSettings {
   const base: AudioThreadSettings = {
     mode: cur.mode, operation: cur.op, provider: cur.providerKey, model: cur.modelId, fields: cur.fields, count: cur.count,
     inputs: cur.inputs,
   };
   const inputsFor = (op: AudioOp) => projectInputs(patch.inputs !== undefined ? patch.inputs : cur.inputs, op);
   if (patch.mode && patch.mode !== cur.mode) {
+    const p = prefs?.[patch.mode] ?? null;
+    const remembered = p?.operation && opInfo(p.operation)?.mode === patch.mode ? p.operation : defaultOp(patch.mode);
     // Операция вместе с режимом — просьба карточки («Перегенерировать кусок» из режима «Голос»)
-    const operation = patch.operation && opInfo(patch.operation)?.mode === patch.mode ? patch.operation : defaultOp(patch.mode);
-    return { mode: patch.mode, operation, provider: null, model: null, fields: {}, count: cur.count, inputs: inputsFor(operation) };
+    const operation = patch.operation && opInfo(patch.operation)?.mode === patch.mode ? patch.operation : remembered;
+    const provider = p?.provider ?? null;
+    // Модель и её поля — только если они про ту же операцию и модель у поставщика её умеет
+    let model = operation === remembered ? p?.model ?? null : null;
+    const known = catalog?.providers.find(x => x.key === provider);
+    if (model && model !== (catalog?.autoModelId ?? 'auto') && known
+      && !known.models.some(m => m.id === model && m.caps.ops.includes(operation))) model = null;
+    return {
+      mode: patch.mode, operation, provider, model, fields: model ? { ...(p?.fields ?? {}) } : {},
+      count: p?.count ?? cur.count, inputs: inputsFor(operation),
+    };
   }
   const next = { ...base, ...patch };
   if (patch.operation && patch.operation !== cur.op) {

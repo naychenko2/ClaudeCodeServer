@@ -124,7 +124,7 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   terminal: { title: 'Терминал',  Icon: SquareTerminal },
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
   preview:  { title: 'Сервисы',   Icon: AppWindow },
-  video:    { title: 'Видео',     Icon: MonitorPlay },
+  video:    { title: 'Эфир',      Icon: MonitorPlay },
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)

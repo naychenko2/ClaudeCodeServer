@@ -62,6 +62,7 @@ public sealed class AudioEditJobService : IDisposable
     private readonly ISpendCollector? _spend;
     private readonly ISessionBroadcaster? _broadcaster;
     private readonly Voices.VoiceLibrary? _voices;
+    private readonly IFeatureFlagGate? _flags;
     private readonly ILogger<AudioEditJobService> _log;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, Quote> _quotes = new();
@@ -79,7 +80,8 @@ public sealed class AudioEditJobService : IDisposable
         ISpendCollector? spend = null,
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
-        Voices.VoiceLibrary? voices = null)
+        Voices.VoiceLibrary? voices = null,
+        IFeatureFlagGate? flags = null)
     {
         _engines = engines;
         _workspace = workspace;
@@ -90,7 +92,13 @@ public sealed class AudioEditJobService : IDisposable
         _broadcaster = broadcaster;
         _time = time ?? TimeProvider.System;
         _voices = voices;
+        _flags = flags;
     }
+
+    // «Авто» сначала пробует локальные модели — по флагу владельца local-media-default (ADR-021 §2).
+    // Явно выбранного поставщика флаг не трогает никогда
+    public bool PrefersLocal(string ownerId) =>
+        _flags?.IsEnabled(ownerId, FeatureFlagKeys.LocalMediaDefault) == true;
 
     private sealed record Quote(
         string Id, string OwnerId, string ScopeKey, string Mode, AudioOp Op, string Provider, AudioModelInfo Model,
@@ -192,7 +200,7 @@ public sealed class AudioEditJobService : IDisposable
         }
         else
         {
-            var candidates = AudioCatalog.Available(_engines).Where(e => e.ScopeRefusal(scope) is null).ToList();
+            var candidates = AudioCatalog.AutoCandidates(_engines, scope, PrefersLocal(ownerId));
             foreach (var candidate in candidates) await RefreshModelsQuietly(candidate, ct);
             (engine, model) = candidates
                 .Select(e => (Engine: e, Model: Pick(e, op, modelId, voiceKind)))

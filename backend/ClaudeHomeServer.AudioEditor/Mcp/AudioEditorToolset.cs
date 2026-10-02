@@ -592,7 +592,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
                 music = _prefs.Get(ownerId, scope, AudioModes.Music),
                 process = _prefs.Get(ownerId, scope, AudioModes.Process),
             },
-            catalog = AudioCatalogView.Build(_engines, scope),
+            catalog = AudioCatalogView.Build(_engines, scope, _jobs.PrefersLocal(ownerId)),
             agentLaunch = _agentLaunch,
             humanChoice = HumanChoice(ownerId, scope, state.Threads.FirstOrDefault(t => t.Id == state.Focus)),
             note = (state.Threads.Count, scope.IsPersonal) switch

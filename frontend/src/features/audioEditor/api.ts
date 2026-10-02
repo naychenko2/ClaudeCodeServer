@@ -54,7 +54,9 @@ export interface AudioProvider {
   models: AudioModelInfo[];
 }
 
-export interface AudioCatalog { providers: AudioProvider[]; autoModelId: string; maxCount: number }
+// autoProviders — порядок перебора «Авто», как его считает сервер (с флагом local-media-default локальные
+// первыми); нет поля — старый сервер, берём порядок списка
+export interface AudioCatalog { providers: AudioProvider[]; autoModelId: string; maxCount: number; autoProviders?: string[] }
 
 // ── Префы и настройки нити ──
 

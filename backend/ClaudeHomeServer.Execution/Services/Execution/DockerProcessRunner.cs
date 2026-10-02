@@ -176,10 +176,7 @@ public sealed class DockerProcessRunner : IProcessLauncher
                 };
                 foreach (var a in new[]
                 {
-                    "exec", _sandbox.Options.ContainerName, "sh", "-c",
-                    // dash-builtin kill не поддерживает "--"; отрицательный аргумент =
-                    // группа процессов. Пустой pid-файл → "kill -KILL -" тихо игнорируем
-                    $"P=$(cat /tmp/turns/{turnId}.pid 2>/dev/null); [ -n \"$P\" ] && kill -KILL \"-$P\" 2>/dev/null; exit 0",
+                    "exec", _sandbox.Options.ContainerName, "sh", "-c", KillTurnScript($"/tmp/turns/{turnId}.pid"),
                 })
                     psi.ArgumentList.Add(a);
                 using var killer = Process.Start(psi);
@@ -191,6 +188,33 @@ public sealed class DockerProcessRunner : IProcessLauncher
         try { process.Kill(entireProcessTree: true); }
         catch { /* процесс уже завершился */ }
     }
+
+    // Скрипт гашения хода внутри контейнера (dash + mawk + /proc, всё есть в bookworm).
+    // Одной группы из setsid мало: потомок, ушедший в СВОЮ группу и сессию (webServer
+    // Playwright'а с detached: true), её сигнал не получает и остаётся сиротой в общем
+    // контейнере. Поэтому гасим как local-раннер (Kill(entireProcessTree) идёт по ppid):
+    //  1. STOP группе хода — она больше не плодит потомков, пока мы обходим дерево;
+    //  2. по /proc собираем всех потомков группы по ppid — ДО гашения, иначе осиротевшие
+    //     уедут к pid 1 и связь с ходом потеряется;
+    //  3. KILL каждой их группе и каждому процессу; в конце — KILL группе хода без условий,
+    //     чтобы сбой обхода не оставил её остановленной навсегда.
+    // Мягкую остановку (SIGTERM и пауза) намеренно не берём: она полагается на обработчик
+    // самого процесса и задерживает каждое гашение, включая обычные ходы claude.
+    // dash-builtin kill не поддерживает "--"; отрицательный аргумент = группа процессов.
+    // Пустой pid-файл — выходим молча. pid и группу 1 не трогаем никогда.
+    // Одной строкой: аргумент едет через командную строку docker-клиента на Windows-хосте.
+    internal static string KillTurnScript(string pidFile) =>
+        $"P=$(cat '{pidFile}' 2>/dev/null); [ -n \"$P\" ] || exit 0; "
+        + "kill -STOP \"-$P\" 2>/dev/null; "
+        + "for f in /proc/[0-9]*/stat; do read -r L 2>/dev/null < \"$f\" || continue; "
+        + "R=\"${L##*) }\"; set -- $R; echo \"${L%% *} $2 $3\"; done "
+        + "| awk -v P=\"$P\" '{ pid[NR] = $1; pp[NR] = $2; pg[NR] = $3 } END { "
+        + "for (i = 1; i <= NR; i++) if (pg[i] == P) t[pid[i]] = 1; "
+        + "do { c = 0; for (i = 1; i <= NR; i++) if (!(pid[i] in t) && (pp[i] in t)) { t[pid[i]] = 1; c = 1 } } while (c); "
+        + "for (i = 1; i <= NR; i++) if ((pid[i] in t) && pg[i] > 1) g[pg[i]] = 1; "
+        + "for (k in g) print \"-\" k; for (k in t) if (k != \"1\") print k }' "
+        + "| while read -r X; do kill -KILL \"$X\" 2>/dev/null; done; "
+        + "kill -KILL \"-$P\" 2>/dev/null; exit 0";
 
     // Сборка env хода: копия spec.Env + песочный CLAUDE_CONFIG_DIR + фолбэк токена подписки.
     // Вынесено из Start, чтобы правило сборки можно было проверить тестом без запуска

@@ -18,8 +18,8 @@ import {
 } from '../editorInputs';
 import { isPersonalScope } from '../scope';
 import {
-  activeChoice, effectiveMode, footPrice, isOneVariant, modeOp, opBlockReason, queueText, quickOf, resolveOp, runVerb,
-  usePanelChoiceVersion, type PanelChoice,
+  activeChoice, effectiveMode, footPrice, getCreateRatio, isOneVariant, launchMarks, modeOp, opBlockReason, queueText, quickOf,
+  resolveOp, runVerb, usePanelChoiceVersion, type PanelChoice,
 } from '../panel/panelOp';
 import { useQuote } from '../useQuote';
 import { getCatalog, loadCatalog, useCatalog } from './catalog';
@@ -27,7 +27,7 @@ import { effectiveSettings, getPrefs, modeSettings, setModeSettings, setPrefs, u
 import { effectiveImageMode, getStoredImageMode, modeAware, useImageModeVersion, type ImageMode } from './modeState';
 import { activeStepOf } from './actions';
 import { currentVersion, isLegacyThread, originFile, versionHasImage, versionStep } from './model';
-import { getSamples, getThreadMarks, imageDraftKey, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
+import { getSamples, getThreadMarks, imageDraftKey, isWholeImage, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadSettings, type ImageThreadVersion } from './threadsApi';
 
 // Картинка позиции нити: шаг — из рабочей папки редактора, исходник — файл проекта
@@ -126,7 +126,9 @@ export async function launchThread(
     showToast('Рисовать нечем: администратор не настроил поставщиков картинок', '', 'error');
     return false;
   }
-  const { marks, size } = getThreadMarks(thread.id);
+  const { marks: drawn, size } = getThreadMarks(thread.id);
+  // С режимом «Где менять: Вся картинка» маску не шлём, даже если она закрашена
+  const marks = mode ? launchMarks(drawn, isWholeImage(thread.id)) : drawn;
   const hasImage = threadHasImage(thread);
   const hasMask = hasImage && hasMaskMark(marks);
   // Операция панели «Картинки» (без флага — всегда «Авто»): у промпта она решает, что делать
@@ -172,6 +174,8 @@ export async function launchThread(
   const noSamples = own || route?.maxReferences === 0;
   const withMask = plan.useMask && hasMask;
   const withMarks = !fromScratch && (action.kind === 'prompt' || action.kind === 'removeMarked') && hasImage && marks.length > 0;
+  // Пропорции новой картинки из «Ещё настроек» «Создать»; у дорисовки — свои
+  const aspectRatio = plan.aspectRatio ?? (mode === 'create' && fromScratch ? getCreateRatio(projectId) : null);
   try {
     const q = await api.quote(projectId, {
       provider: route?.provider ?? pv.key, model: route?.model ?? m.id,
@@ -204,7 +208,7 @@ export async function launchThread(
       source, mask, annotated, ...samples,
       characterSlug: noSamples ? undefined : prefs.characterSlug ?? undefined,
       matchSourceSize: settings.matchSourceSize,
-      ...(plan.aspectRatio ? { aspectRatio: plan.aspectRatio } : null),
+      ...(aspectRatio ? { aspectRatio } : null),
       sessionId, threadId: thread.id, baseStepId: stepId ?? undefined, versionId: version?.id,
     });
     // Пометки ушли с запуском
@@ -231,7 +235,9 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   const imgMode = launchMode(sessionId, thread);
   const settings = launchSettings(imgMode, prefs, thread?.settings);
   const { pv, m } = resolveModel(catalog, settings);
-  const { marks, size } = getThreadMarks(thread?.id ?? null);
+  const { marks: drawn, size } = getThreadMarks(thread?.id ?? null);
+  const whole = isWholeImage(thread?.id ?? null);
+  const marks = imgMode ? launchMarks(drawn, whole) : drawn;
   const hasImage = threadHasImage(thread);
   const hasMask = hasImage && hasMaskMark(marks);
   const hasAnnotations = hasImage && hasAnnotationMark(marks);
@@ -296,7 +302,7 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
 
   return {
     catalog, settings, prefs, imageMode: imgMode, provider: pv, model: m, blocked, quote, quoteLoading: loading,
-    priceLabel, price, marks, hasImage, hasMask, setSettings, launch,
+    priceLabel, price, marks, drawn, whole, hasImage, hasMask, setSettings, launch, route,
     op: pr.op, quickAction: pr.quick, choice, count, maxCount, reason, priceLines, queue, runLabel: runVerb(pr.op),
   };
 }

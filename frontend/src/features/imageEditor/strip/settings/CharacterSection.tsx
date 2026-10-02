@@ -10,6 +10,7 @@ import { maxSamples, roleShort, SAMPLE_ROLES, type Sample } from '../../editorIn
 import { ProjectImagePicker } from '../../PanelSections';
 import { isPersonalScope } from '../../scope';
 import { setPrefs } from '../../thread/prefs';
+import { modeAware } from '../../thread/modeState';
 import { getSamples, setSamples } from '../../thread/threadStore';
 import { ic, Label, type Launch } from './primitives';
 
@@ -83,7 +84,7 @@ export function SampleChips({ projectId, max, initialRoleFor = null }: {
         </div>
       )}
       {picker && !personal && (
-        <ProjectImagePicker projectId={projectId}
+        <ProjectImagePicker projectId={projectId} pickOnClick={modeAware()}
           taken={samples.flatMap(s => (s.source === 'project' ? [s.path] : []))}
           onPick={path => {
             add([{ id: id(), source: 'project', name: path.split('/').pop() ?? path, role: 'style', path, url: appApi.files.fileUrl(projectId, path) }]);

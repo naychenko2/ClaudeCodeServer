@@ -169,5 +169,61 @@ export function usePanelChoiceVersion() {
 
 export function __resetPanelChoice() {
   _choice.clear();
+  _createRatio.clear();
   _version++;
+}
+
+// ── Панель v5 (флаг image-panel-v5): список «Операция» режима «Править» ──
+
+// Правки без ИИ открывают редактор на своём инструменте и операцией запуска не становятся
+export type NoAiTool = 'crop' | 'rotate' | 'resize';
+export type EditPick = Exclude<ImageEditOp, 'generate' | 'inpaint'> | NoAiTool;
+
+export const AI_GROUP = 'С ИИ';
+export const NO_AI_GROUP = 'Без ИИ · бесплатно';
+
+export const NO_AI_TOOLS: [NoAiTool, string][] = [
+  ['crop', 'Обрезать'],
+  ['rotate', 'Повернуть и отразить'],
+  ['resize', 'Размер и формат'],
+];
+
+export const isNoAiTool = (v: string): v is NoAiTool => NO_AI_TOOLS.some(([t]) => t === v);
+
+// «Правка» и «По отмеченному» — один пункт: отметки переключают его сами (modeOp).
+// «Улучшить лица» умеют только локальные модели — без них пункта нет
+export function editOpOptions(faces: boolean): { value: EditPick; label: string; group: string }[] {
+  const ai: Exclude<ImageEditOp, 'generate' | 'inpaint'>[] = ['edit', 'outpaint', 'removeBackground', 'upscale', ...(faces ? ['enhanceFaces' as const] : [])];
+  return [
+    ...ai.map(op => ({ value: op, label: op === 'edit' ? 'Изменить по тексту' : opLabel(op), group: AI_GROUP })),
+    ...NO_AI_TOOLS.map(([value, label]) => ({ value, label, group: NO_AI_GROUP })),
+  ];
+}
+
+// Пункт списка, который сейчас выбран: инпейнт и прежнее «Авто» — это «Изменить»
+export const editPickOf = (op: PanelOp): EditPick =>
+  op === 'auto' || op === 'inpaint' || op === 'generate' ? 'edit' : op;
+
+// «Где менять»: «Отмеченное», только если есть закрашенное кистью и его не отменили
+// выбором «Вся картинка»
+export type EditWhere = 'whole' | 'marked';
+export const editWhere = (maskMarks: number, whole: boolean): EditWhere =>
+  maskMarks > 0 && !whole ? 'marked' : 'whole';
+
+// Пометки, которые уйдут с запуском: при «Вся картинка» закрашенное кистью (маска) не уходит,
+// стрелки, рамки и подписи остаются подсказкой модели
+export const launchMarks = <M extends { type: string }>(marks: M[], whole: boolean): M[] =>
+  whole ? marks.filter(m => m.type !== 'mask') : marks;
+
+// Пропорции новой картинки («Ещё настройки» режима «Создать»): в памяти вкладки на проект,
+// null — как решит модель
+const _createRatio = new Map<string, OutpaintRatio>();
+
+export const getCreateRatio = (projectId: string): OutpaintRatio | null => _createRatio.get(projectId) ?? null;
+
+export function setCreateRatio(projectId: string, ratio: OutpaintRatio | null) {
+  if (ratio) _createRatio.set(projectId, ratio);
+  else _createRatio.delete(projectId);
+  _version++;
+  _listeners.forEach(fn => fn());
 }

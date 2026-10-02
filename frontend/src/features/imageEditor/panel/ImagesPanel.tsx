@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 import { Contact, Image as ImageIcon, Plus, SlidersHorizontal, Users, X } from 'lucide-react';
 import {
   Button, EmptyState, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE, showToast, submitComposerMode, useAgentPick,
+  useIsMobile,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
@@ -29,6 +30,8 @@ import { imageDraftKey, useThreads } from '../thread/threadStore';
 import type { ImageThread } from '../thread/threadsApi';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 import { ONE_VARIANT_HINT } from './panelOp';
+import { CreateBody } from './CreateBody';
+import { EditBody } from './EditBody';
 import { useMarkImagesPanelShown } from './panelOpen';
 
 type Tab = 'settings' | 'characters';
@@ -71,6 +74,7 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
   const { name: characterName } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
   useMarkImagesPanelShown(layout === 'column');
   const agentPick = useAgentPick(sessionId, IMAGES_PANEL);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     const on = () => { const t = takeWanted(); if (t) setTab(t); };
@@ -111,6 +115,14 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
     body = <div style={{ fontSize: FS.sm, color: C.textMuted, paddingTop: SP.sm }}>Загружаем…</div>;
   } else if (!L.catalog.providers.length) {
     body = <EmptyState compact icon={ic(ImageIcon, ICON_SIZE.sm)} title="Рисовать нечем" subtitle="Поставщиков не настроил администратор" />;
+  } else if (L.imageMode === 'create') {
+    // Панель v5 (флаг image-panel-v5): тело по режиму «Создать / Править»
+    body = <CreateBody projectId={projectId} L={L} catalog={L.catalog} isMobile={isMobile} onCharacters={() => setTab('characters')} />;
+  } else if (L.imageMode === 'edit' && thread) {
+    body = (
+      <EditBody projectId={projectId} sessionId={sessionId} thread={thread} L={L} catalog={L.catalog} isMobile={isMobile}
+        onCharacters={() => setTab('characters')} />
+    );
   } else {
     body = (
       <SettingsSections projectId={projectId} L={L} catalog={L.catalog} thread={thread} onCharacters={() => setTab('characters')} />

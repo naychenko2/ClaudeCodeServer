@@ -4,7 +4,7 @@
 
 Сцены и фильм прямо в чате — проекта или личном вне проекта: **сцена** — один клип между кадром A и кадром B
 с версиями-вариантами, поставщики `local` (своя видеокарта), fal и Higgsfield. **Фильм** (`.film`, сборка
-ffmpeg без ИИ) и швы к «Картинкам» и «Звуку» — блок 2 (`Films/`, `Assembly/`); агент `video-editor` — блок 3, его здесь пока нет.
+ffmpeg без ИИ) и швы к «Картинкам» и «Звуку» — блок 2 (`Films/`, `Assembly/`); агент `video-editor` — блок 3 (`Mcp/`, `Chats/`).
 За флагом `video-editor`. Решение — [ADR-022](../../docs/adr/ADR-022-video-editor.md), там же
 **раздел «Контракты»** с JSON-примерами каждого DTO: его сверяет `VideoContractExamplesTests`, правка контракта
 после КТ-1 — отдельным коммитом `refactor(videoEditor): контракт …`.
@@ -91,4 +91,18 @@ ffmpeg без ИИ) и швы к «Картинкам» и «Звуку» — б
   `FilmFeedParityTests`.
 - Потолки: до 50 сцен, клип до 300 МБ (сохранение и сборка), `VideoEditor:AssembleTimeoutMinutes` = 20.
 
-Граница блока 2: нет `Mcp/`, `Chats/` и постера версии — это блок 3.
+**Агент (блок 3, ADR-022 §5).** `Mcp/VideoEditorToolset` — MCP-сервер `video-editor`, `Chats/VideoEditorStateContributor` —
+блок хвоста хода `video-editor-state`. Описание — [video-editor.md](../../docs/features/video-editor.md).
+
+- **У тулсета нет своего пути исполнения.** Каждый инструмент зовёт тот же сервис, что REST-ручка человека
+  (`VideoSceneService`, `VideoEditJobService`, `FilmSceneSaver`, `FilmService`, `FilmAssembler`), а запись ленты пишут
+  сервисы. Тулсет НЕ пишет `module_record` сам и не заводит своих `recordType`; различие — только `initiator = agent`.
+  Сторож — `VideoEditorToolsetFeedParityTests` (каждый инструмент против настоящего контроллера).
+- **Потолка трат и лимита запусков за ход нет** (решение Андрея): `MaxLaunchesPerTurn` из звука не переносить; темп
+  держит правило «после сцены — спроси» в блоке хвоста.
+- **Состав `tools/list`** — только сессия, флаг владельца и `VideoEditor:AgentLaunch`; пять пишущих и тратящих
+  (`shoot`, `cancel`, `save_scene`, `film_edit`, `film_build`) идут через `IDelegatedTurnGate` в `CallAsync`, не в составе.
+- **Запись агента** — только `video/**` и `music/**`, `CreateNew`, `.film` под ревизией (её агент берёт из `video_state`).
+- Новая операция над нитями сцен — в `VideoSceneService`, а не в контроллере: иначе ручка и инструмент разойдутся.
+
+Граница блока 3: постера версии нет — это фронт.

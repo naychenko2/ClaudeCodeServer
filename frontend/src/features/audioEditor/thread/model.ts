@@ -109,6 +109,10 @@ export function extraFiles(v: AudioThreadVersion): ExtraFile[] {
 }
 const rank = (role: string) => { const i = EXTRA_ORDER.indexOf(role); return i < 0 ? EXTRA_ORDER.length : i; };
 
+// Версия «в MIDI» для просмотра нот: файл роли midi без главного звука
+export const midiFileOf = (v: AudioThreadVersion): AudioVersionFile | null =>
+  hasMain(v) ? null : v.files.find(f => f.role === 'midi') ?? null;
+
 // Имя файла черновика без файла при «Сохранить в проект» — по имени нити («anthem.mp3» → «anthem»):
 // без него сервер звал группу «audio», и стемы песни ложились в «audio.stems/». Запрещённые в
 // имени файла символы заменяем, пустое имя — «audio», как у сервера

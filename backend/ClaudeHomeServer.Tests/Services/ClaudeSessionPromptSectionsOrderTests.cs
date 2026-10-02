@@ -303,6 +303,35 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         tail.Text.Should().Contain("«лампа»");
     }
 
+    // Секция tool-descriptions (живая русская подпись к инструменту): стабильная, в системном
+    // блоке, до voice-mode и слоя персоны; системный блок от хода к ходу не меняется.
+    [Fact]
+    public async Task ToolDescriptions_ВСистемномБлоке_ДоГолосаИПерсоны_Стабильна()
+    {
+        static void PersonaLayer(TurnEventBus bus) => bus.OnFilter<PromptAssembling>(900, async (e, next) =>
+        {
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "persona-layer", "МАРКЕР_ПЕРСОНЫ Ты — Тестовая Персона."));
+            await next();
+        }, "Test.PersonaLayer");
+
+        var first = await RunTailTurnAsync(false, "МАРКЕР_СОСТОЯНИЯ первый", PersonaLayer);
+        var second = await RunTailTurnAsync(false, "МАРКЕР_СОСТОЯНИЯ второй", PersonaLayer);
+
+        var prompt = first.SystemPrompt;
+        var toolIdx = prompt.IndexOf(ToolDescriptionPrompts.SectionText, StringComparison.Ordinal);
+        var voiceIdx = prompt.IndexOf(VoicePrompts.LongAnswerSectionText, StringComparison.Ordinal);
+        var personaIdx = prompt.IndexOf("МАРКЕР_ПЕРСОНЫ", StringComparison.Ordinal);
+
+        toolIdx.Should().BeGreaterThanOrEqualTo(0, "правило про description обязано уехать модели в системном блоке");
+        voiceIdx.Should().BeGreaterThan(toolIdx, "tool-descriptions стоит до voice-mode");
+        personaIdx.Should().BeGreaterThan(toolIdx, "tool-descriptions стоит до слоя персоны");
+
+        var section = first.Sections.Should().ContainSingle(s => s.Key == "tool-descriptions").Subject;
+        section.Kind.Should().NotBe("turn", "секция стабильная и живёт в системном блоке, а не хвостом хода");
+        first.SystemPrompt.Should().Be(second.SystemPrompt, "стабильная секция не рвёт prefix cache между ходами");
+    }
+
     // Порядок хвоста (шаг 3 «локальная по умолчанию»): правило local-media-default едет хвостом
     // сразу после блока «Картинки в этом чате» и ссылается на него; в системный блок не попадает
     [Theory]
@@ -509,10 +538,12 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             await using var _ = session;
             await session.SendMessageAsync("привет", agentDepth: agentDepth);
 
-            var args = await WhenAnyAsync(argsCaptured.Task, TimeSpan.FromSeconds(15));
+            // Потолок ожидания события с запасом: под параллельной сборкой старт fake-CLI
+            // не укладывался в 15 с, а зелёный прогон дольше от этого не становится
+            var args = await WhenAnyAsync(argsCaptured.Task, TimeSpan.FromSeconds(60));
             var idx = args.ToList().IndexOf("--append-system-prompt");
             idx.Should().BeGreaterThanOrEqualTo(0, "стабильная секция непустая — аргумент обязан присутствовать");
-            var done = await Task.WhenAny(snapshot.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+            var done = await Task.WhenAny(snapshot.Task, Task.Delay(TimeSpan.FromSeconds(60)));
             done.Should().Be(snapshot.Task, "снимок промпта хода обязан быть опубликован");
             return (args[idx + 1], await snapshot.Task);
         }

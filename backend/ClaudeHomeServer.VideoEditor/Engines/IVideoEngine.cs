@@ -102,7 +102,8 @@ public static class VideoPriceUnits
 
 // Возможности МОДЕЛИ: Durations — допустимые длительности, с; Aspects — пропорции ("16:9"); Sound — умеет
 // звук в ролике; LastFrame — берёт и последний кадр («кадр A → кадр B»); FirstFrame — берёт ли первый
-// (false — только текст); MaxFrameBytes — потолок входного кадра
+// (false — только текст); MaxFrameBytes — потолок входного кадра; LastFrameRequired — без последнего
+// кадра модель не работает (подбор «Авто» не берёт её для сцены с одним кадром)
 public sealed record VideoCaps(
     IReadOnlyList<int> Durations,
     IReadOnlyList<string> Aspects,
@@ -112,7 +113,8 @@ public sealed record VideoCaps(
     string PriceUnit,
     bool FirstFrame = true,
     long? MaxFrameBytes = null,
-    bool Heavy = false);
+    bool Heavy = false,
+    bool LastFrameRequired = false);
 
 // Ориентир цены для каталога; точная сумма — только в котировке. Per — "sec" | "run"
 public sealed record VideoPriceHint(double Amount, string Unit, string Per);

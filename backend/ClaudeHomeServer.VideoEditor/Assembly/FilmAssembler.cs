@@ -255,12 +255,20 @@ public sealed class FilmAssembler(
     private async Task RecordBuildAsync(string ownerId, VideoEditScope scope, FilmService.Resolved film, FilmBuildStatusDto status,
         string initiator, string? sessionId)
     {
-        if (string.IsNullOrWhiteSpace(sessionId) || !films.Threads.OwnChat(ownerId, scope.Key, sessionId)) return;
-        var agent = initiator == VideoInitiators.Agent;
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            log.LogWarning("Видео: сборка фильма {Path} без записи в ленту — не передан sessionId (initiator {Initiator})", film.Relative, initiator);
+            return;
+        }
+        if (!films.Threads.OwnChat(ownerId, scope.Key, sessionId))
+        {
+            log.LogWarning("Видео: сборка фильма {Path} без записи в ленту — чат {SessionId} не принадлежит владельцу (initiator {Initiator})", film.Relative, sessionId, initiator);
+            return;
+        }
         var name = FilmPaths.NameOf(film.Relative);
         var data = new { filmPath = film.Relative, file = status.File, state = status.State, error = status.Error, initiator };
         if (status.State == FilmBuildStates.Done)
-            await films.Threads.FilmBuiltAsync(sessionId.Trim(), $"{(agent ? "Claude собрал" : "Вы собрали")} фильм {name}: {status.File}", data);
+            await films.Threads.FilmBuiltAsync(sessionId.Trim(), VideoFeedTexts.FilmBuilt(initiator, name, status.File), data);
         else
             await films.Threads.NoteAsync(sessionId.Trim(),
                 $"Сборка фильма {name} {(status.State == FilmBuildStates.Cancelled ? "отменена" : "не удалась")}", data);

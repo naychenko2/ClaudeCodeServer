@@ -32,14 +32,14 @@ public sealed class FilmFeedParityTests
     }
 
     // Три действия подряд; возвращает записи ленты по действиям (recordType, initiator из data)
-    private static async Task<Dictionary<string, List<(string RecordType, string? Initiator)>>> Run(string initiator)
+    private static async Task<Dictionary<string, List<(string RecordType, string? Initiator, string Text)>>> Run(string initiator)
     {
         using var w = new FilmWorld(new OkDsp());
-        var result = new Dictionary<string, List<(string, string?)>>();
-        List<(string, string?)> Take()
+        var result = new Dictionary<string, List<(string, string?, string)>>();
+        List<(string, string?, string)> Take()
         {
             var taken = w.Feed.Records.Select(r => (r.Record.RecordType,
-                r.Record.Data is { } d && d.TryGetProperty("initiator", out var i) ? i.GetString() : null)).ToList();
+                r.Record.Data is { } d && d.TryGetProperty("initiator", out var i) ? i.GetString() : null, r.Record.Fallback)).ToList();
             w.Feed.Records.Clear();
             return taken;
         }
@@ -86,6 +86,31 @@ public sealed class FilmFeedParityTests
         human["save"].Select(r => r.RecordType).Should().Contain(VideoThreadRecordTypes.Saved);
         human["patch"].Select(r => r.RecordType).Should().Contain(VideoThreadRecordTypes.Note);
         human["build"].Select(r => r.RecordType).Should().Contain(VideoThreadRecordTypes.FilmBuilt);
+    }
+
+    // Лицо у агентской строки даёт метка «✦ Claude» на фронте, поэтому слова «Claude» в тексте быть не должно
+    [Fact]
+    public async Task Тексты_строк_ленты_у_человека_с_лицом_у_агента_без_слова_Claude()
+    {
+        var human = await Run(VideoInitiators.Human);
+        var agent = await Run(VideoInitiators.Agent);
+
+        human["save"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Вы сохранили сцену «"));
+        human["patch"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Вы поправили фильм "));
+        human["build"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Вы собрали фильм "));
+        agent["save"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Сохранил сцену «"));
+        agent["patch"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Поправил фильм "));
+        agent["build"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Собрал фильм "));
+        agent.Values.SelectMany(v => v).Select(r => r.Text).Should().NotContain(t => t.Contains("Claude"));
+    }
+
+    // Человек из чата с sessionId получает те же записи, что агент: правка и сборка фильма не молчат
+    [Fact]
+    public async Task Человек_с_sessionId_получает_записи_ленты_правки_и_сборки()
+    {
+        var human = await Run(VideoInitiators.Human);
+        human["patch"].Should().ContainSingle(r => r.RecordType == VideoThreadRecordTypes.Note && r.Initiator == VideoInitiators.Human);
+        human["build"].Should().ContainSingle(r => r.RecordType == VideoThreadRecordTypes.FilmBuilt && r.Initiator == VideoInitiators.Human);
     }
 
     [Fact]

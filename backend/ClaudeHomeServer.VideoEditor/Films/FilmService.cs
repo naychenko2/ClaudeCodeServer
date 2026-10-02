@@ -241,10 +241,18 @@ public sealed class FilmService(
     private async Task RecordPatchAsync(string ownerId, VideoEditScope scope, string filmPath, IReadOnlyList<FilmPatchOp> ops,
         string initiator, string? sessionId, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(sessionId) || !threads.OwnChat(ownerId, scope.Key, sessionId)) return;
-        var agent = initiator == VideoInitiators.Agent;
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            log.LogWarning("Видео: правка фильма {Path} без записи в ленту — не передан sessionId (initiator {Initiator})", filmPath, initiator);
+            return;
+        }
+        if (!threads.OwnChat(ownerId, scope.Key, sessionId))
+        {
+            log.LogWarning("Видео: правка фильма {Path} без записи в ленту — чат {SessionId} не принадлежит владельцу (initiator {Initiator})", filmPath, sessionId, initiator);
+            return;
+        }
         var what = string.Join(", ", ops.Select(o => o.Op).Distinct());
-        await threads.NoteAsync(sessionId.Trim(), $"{(agent ? "Claude поправил" : "Вы поправили")} фильм {FilmPaths.NameOf(filmPath)}: {what}",
+        await threads.NoteAsync(sessionId.Trim(), VideoFeedTexts.FilmPatched(initiator, FilmPaths.NameOf(filmPath), what),
             new { kind = "film_patch", filmPath, ops = ops.Select(o => o.Op).ToArray(), initiator }, ct);
     }
 

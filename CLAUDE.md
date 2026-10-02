@@ -202,6 +202,8 @@ one-shot действия и разговор с исполнителем «Ло
 Эфиры телеканалов и лента подписок YouTube за общим `IVideoProvider`; живой кадр рисуется оверлеем над страницами (панель, центральный остров, плавающее окно).
 Инварианты и подробности — [backend/ClaudeHomeServer.Video/CLAUDE.md](backend/ClaudeHomeServer.Video/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
+**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; панель «Видео», ключ `videoEditor`, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` за флагом `video-editor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
+
 ## Значок проекта (Services/ProjectIcons)
 
 Иконка проекта — **не картинка**: модель отдаёт имя иконки из белого списка lucide (`LucideGlyphs`), разметки от модели не приходит никогда; любой сбой молча оставляет инициалы.

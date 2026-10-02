@@ -313,16 +313,46 @@ public class LocalAudioMediaAdapterTests
     }
 
     [Fact]
-    public async Task Отмена_снимает_ждущую_и_не_трогает_идущую()
+    public async Task Отмена_снимает_ждущую_и_не_трогает_чужую_идущую()
     {
-        _comfy.Running.Add("идёт");
+        _comfy.Running.Add("чужая");
         _comfy.Pending.Add("ждёт");
         var adapter = Build();
 
-        (await adapter.CancelAsync("идёт", default)).Should().BeFalse();
         (await adapter.CancelAsync("ждёт", default)).Should().BeTrue();
+        (await adapter.CancelAsync("пропала", default)).Should().BeFalse();
         _comfy.Pending.Should().BeEmpty();
-        _comfy.Running.Should().Equal("идёт");
+        _comfy.Running.Should().Equal("чужая");
+        _comfy.Interrupted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Отмена_идущей_прерывает_граф_адресно_по_prompt_id()
+    {
+        _comfy.Running.Add("идёт");
+        _comfy.Pending.Add("чужая-ждёт");
+        var adapter = Build();
+
+        (await adapter.CancelAsync("идёт", default)).Should().BeTrue();
+        _comfy.Interrupted.Should().Equal("идёт");
+        _comfy.Pending.Should().Equal("чужая-ждёт");
+    }
+
+    [Fact]
+    public async Task Отмена_не_прерывает_чужой_прогон_начавшийся_после_чтения_очереди()
+    {
+        _comfy.Running.Add("наша");
+        _comfy.AfterQueueRead = () =>
+        {
+            _comfy.Running.Clear();
+            _comfy.Running.Add("чужая");
+        };
+        var adapter = Build();
+
+        await adapter.CancelAsync("наша", default);
+
+        _comfy.Interrupted.Should().BeEmpty("прерывание адресное: чужой прогон не задевается");
+        _comfy.Running.Should().Equal("чужая");
     }
 
     [Fact]

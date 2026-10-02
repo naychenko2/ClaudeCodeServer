@@ -272,11 +272,20 @@ public sealed class AudioEditJobService : IDisposable
     }
 
     // Проверка params по схеме модели. Пустые params не проверяем (схема могла не прийти — запуску это не
-    // мешает); поставщик без схемы — тоже: проверять нечем. Схемы нет при непустых params — отказ
+    // мешает). Поставщик без схемы (Higgsfield, Яндекс) — сверка имён по ParamNames: неизвестный ключ иначе
+    // молча выпал бы в драйвере. Схемы нет при непустых params — отказ
     private static async Task<string?> CheckParamsAsync(IAudioEngine engine, AudioModelInfo model, AudioOp op,
         JsonObject parameters, CancellationToken ct)
     {
-        if (parameters.Count == 0 || engine is not IAudioParamSchemas schemas) return null;
+        if (parameters.Count == 0) return null;
+        if (engine is not IAudioParamSchemas schemas)
+        {
+            var names = engine.ParamNames(model, op) ?? new HashSet<string>();
+            return parameters.Select(p => p.Key).FirstOrDefault(k => !names.Contains(k)) is { } unknown
+                ? $"Неизвестный параметр «{unknown}» у модели {model.Id}"
+                  + (names.Count == 0 ? ". Частных параметров у неё нет." : ". Допустимые: " + string.Join(", ", names.Order()) + ".")
+                : null;
+        }
         var lookup = await schemas.SchemaAsync(model, op, ct);
         return lookup.Schema is { } schema
             ? AudioParamValidator.Validate(schema, parameters)

@@ -19,8 +19,8 @@ import { lruGet, lruSet, normalizeJoint } from '../player/peaks';
 import { dropNode } from '../player/StemMixer';
 import { mixStems, saveVersion, takeVersion } from './actions';
 import {
-  abSides, currentIndex, doneText, extraFiles, launchEndNote, licenseBadge, navText, orderedVersions, priceText, saveKind,
-  splitSuggestion, stemsFolder, versionStems,
+  abSides, doneText, extraFiles, launchEndNote, licenseBadge, orderedVersions, priceText, saveKind,
+  splitSuggestion, stemsFolder, versionStems, versionTag,
 } from './model';
 import { __peaksCacheSize, __resetPeaksCache, CACHE_MAX, loadPeaks } from './serverPeaks';
 import {
@@ -46,19 +46,20 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('карточка: версии ‹ ›', () => {
-  it('исходник первым, дальше по номеру; текущая — индекс нити, без текущей — последняя', () => {
+describe('карточка: подпись версии', () => {
+  it('исходник первым, дальше по номеру', () => {
     const t = thread([ver('v2', 2), ver('origin', 0), ver('v1', 1)], { currentVersionId: 'v1' });
-    const list = orderedVersions(t);
-    expect(list.map(v => v.id)).toEqual(['origin', 'v1', 'v2']);
-    expect(currentIndex(list, 'v1')).toBe(1);
-    expect(currentIndex(list, null)).toBe(2);
+    expect(orderedVersions(t).map(v => v.id)).toEqual(['origin', 'v1', 'v2']);
   });
 
-  it('подпись листания — «версия N из последней», у исходника — «исходник»', () => {
-    const list = orderedVersions(thread([ver('origin', 0), ver('v1', 1), ver('v3', 3)]));
-    expect(navText(list[1], list)).toBe('версия 1 из 3');
-    expect(navText(list[0], list)).toBe('исходник');
+  it('«исходник», «версия N», у варианта запуска — «вариант k из n»', () => {
+    const t = thread([
+      ver('origin', 0), ver('v1', 1, { jobId: 'j1', variant: 1 }), ver('v2', 2, { jobId: 'j1', variant: 2 }), ver('v3', 3),
+    ]);
+    expect(versionTag(t, t.versions[0])).toBe('исходник');
+    expect(versionTag(t, t.versions[1])).toBe('версия 1 · вариант 1 из 2');
+    expect(versionTag(t, t.versions[2])).toBe('версия 2 · вариант 2 из 2');
+    expect(versionTag(t, t.versions[3])).toBe('версия 3');
   });
 });
 

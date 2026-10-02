@@ -1,5 +1,5 @@
 // Модель карточки нити звука в ленте (макет audio-editor-v2-proposal.md, «Карточка нити в ленте»):
-// листание версий ‹ ›, пара A/B, файлы версии по ролям, значок лицензии, цена, сохранение. Чистые
+// подпись версии, пара A/B, файлы версии по ролям, значок лицензии, цена, сохранение. Чистые
 // функции — под юнит-тестом; карточка только рисует то, что они вернули.
 
 import type {
@@ -29,23 +29,16 @@ export function threadName(thread: AudioThread): string {
 
 export const versionLabel = (v: AudioThreadVersion) => (v.id === ORIGIN ? 'исходник' : `версия ${v.number}`);
 
-// ── Листание ‹ › ──
-
 // Версии по порядку: исходник первым, дальше по номеру
 export const orderedVersions = (thread: AudioThread): AudioThreadVersion[] =>
   [...thread.versions].sort((a, b) => a.number - b.number);
 
-// Где нить сейчас: индекс текущей версии; нет текущей — последняя
-export function currentIndex(list: AudioThreadVersion[], currentId: string | null): number {
-  const i = list.findIndex(v => v.id === currentId);
-  return i >= 0 ? i : list.length - 1;
-}
-
-// «версия 2 из 3»; у исходника — «исходник», номеров у него нет
-export function navText(v: AudioThreadVersion, list: AudioThreadVersion[]): string {
+// Подпись версии в шапке карточки: «исходник», «версия 3», у варианта запуска — «версия 3 · вариант 2 из 2»
+export function versionTag(thread: AudioThread, v: AudioThreadVersion): string {
   if (v.id === ORIGIN) return 'исходник';
-  const last = list.reduce((m, x) => Math.max(m, x.number), 0);
-  return `версия ${v.number} из ${last}`;
+  const siblings = v.jobId ? launchVersions(thread, v.jobId) : [];
+  if (siblings.length < 2) return `версия ${v.number}`;
+  return `версия ${v.number} · вариант ${siblings.findIndex(x => x.id === v.id) + 1} из ${siblings.length}`;
 }
 
 // ── A/B ──

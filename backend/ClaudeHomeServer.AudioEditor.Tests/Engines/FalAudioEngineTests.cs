@@ -210,6 +210,34 @@ public sealed class FalAudioEngineTests
         result.Error.Should().Be("User is locked. Reason: Exhausted balance.");
     }
 
+    // Ключ уходит на адреса из ответа очереди — чужой хост или http не опрашиваем вовсе
+    [Theory]
+    [InlineData("status_url", "https://evil.test/requests/r1/status")]
+    [InlineData("response_url", "https://evil.test/requests/r1")]
+    [InlineData("cancel_url", "https://evil.test/requests/r1/cancel")]
+    [InlineData("status_url", "http://q.test/requests/r1/status")]
+    [InlineData("status_url", "https://q.test.evil.test/requests/r1/status")]
+    public async Task Submit_QueueUrlOutsideFalHosts_RefusedByValue_KeyNotSent(string field, string url)
+    {
+        var urls = new Dictionary<string, string>
+        {
+            ["status_url"] = $"{Queue}/requests/r1/status",
+            ["response_url"] = $"{Queue}/requests/r1",
+            ["cancel_url"] = $"{Queue}/requests/r1/cancel",
+        };
+        urls[field] = url;
+        _fal.Respond(HttpMethod.Post, $"{Queue}/{AudioCatalog.FalMiniMaxHd}", HttpStatusCode.OK,
+            $$"""{"request_id":"r1","status_url":"{{urls["status_url"]}}","response_url":"{{urls["response_url"]}}","cancel_url":"{{urls["cancel_url"]}}"}""");
+
+        var result = await Engine().RunAsync(new AudioRequest(AudioOp.Speak, AudioCatalog.FalMiniMaxHd, Personal, Text: "a"),
+            new Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Failed);
+        result.Error.Should().Contain("вне своих хостов");
+        _fal.Requests.Should().ContainSingle("после отправки ни опроса, ни отмены с ключом")
+            .Which.Url.Should().Be($"{Queue}/{AudioCatalog.FalMiniMaxHd}");
+    }
+
     [Fact]
     public async Task Network_Down_UnavailableByValue()
     {

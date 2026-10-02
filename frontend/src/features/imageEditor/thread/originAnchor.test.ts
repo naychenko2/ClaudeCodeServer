@@ -54,19 +54,14 @@ describe('OriginAnchor', () => {
   });
 });
 
-// Одиночная карточка — на всю ленту, в запуске на 2+ варианта — половина (не больше двух в ряд)
+// Каждая карточка версии — на всю ленту: варианты запуска идут друг под другом, не в ряд
 describe('VersionCard: ширина', () => {
-  const t = draft({ file: 'img/hero.png', draftFolder: null });
-  const card = (solo?: boolean) => renderToStaticMarkup(createElement(VersionCard, {
-    projectId: 'p1', sessionId: 's1', thread: t, version: t.versions[0], focused: true, solo,
-  }));
-
-  it('одиночная по умолчанию занимает всю ширину', () => {
-    expect(card()).toContain('width:100%');
-    expect(card()).not.toContain('calc(');
-  });
-
-  it('в паре — половина ленты', () => {
-    expect(card(false)).toContain('width:calc((100% - 12px) / 2)');
+  it('занимает всю ширину ленты', () => {
+    const t = draft({ file: 'img/hero.png', draftFolder: null });
+    const html = renderToStaticMarkup(createElement(VersionCard, {
+      projectId: 'p1', sessionId: 's1', thread: t, version: t.versions[0], focused: true,
+    }));
+    expect(html).toContain('width:100%');
+    expect(html).not.toContain('calc(');
   });
 });

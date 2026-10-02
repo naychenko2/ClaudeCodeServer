@@ -1,9 +1,11 @@
 // Витрина дизайн-системы — секция «Карточка инструмента: прогресс».
 //
 // Все состояния живой карточки инструмента рядом, на НАСТОЯЩЕМ ToolUseView и
-// ToolGroupBlock (не макет из div): бегущая/сплошная/пунктирная полоса, «идёт M:SS»,
-// «готово · M:SS», «прервано», строка подписи прогресса (сабагент, тесты, local-media,
-// очередь сборок) и группа «N действий», не сворачивающаяся при живом инструменте.
+// ToolGroupBlock (не макет из div): живая точка вместо бегущей полосы, короткая сплошная или
+// пунктирная полоса только с процентом, «идёт M:SS», «готово · M:SS», «прервано», строка
+// подписи прогресса (сабагент, local-media), строка этапов прогона тестов с итогом «174 из
+// 177 · упало 3» на закрытой карточке и группа «N действий», не сворачивающаяся при живом
+// инструменте.
 //
 // Живость задаётся тем же ToolLivenessContext, что в ленте: живые id — в live, оборванные —
 // в dead. Отметки startedAt берутся от момента монтирования секции, поэтому таймеры тикают
@@ -19,8 +21,7 @@ import { ToolGroupBlock } from '../components/chat/timeline';
 import { ToolLivenessContext } from '../components/chat/contexts';
 import { isToolGroupDone, type ToolLiveness } from '../lib/toolTiming';
 import { applyServerMessage, initialChatState } from '../lib/chatReducer';
-import type { ServerMessage } from '../types';
-import { ToolProgressCalmVariants } from './ToolProgressCalmVariants';
+import type { ServerMessage, ToolStage } from '../types';
 
 // Сабагент с ОДНИМ вызовом run_tests — через настоящий редьюсер и в боевом порядке событий:
 // прогресс «сейчас тесты» приходит раньше, чем вызов с аргументами (FAIL Киры). Вид прогона
@@ -49,14 +50,24 @@ function buildDemos(t0: number): { groups: { title: string; demos: Demo[] }[]; l
   const tests = (id: string, input: Record<string, unknown>, over: Partial<ToolUseItem>) =>
     tu(id, 'mcp__tests__run_tests', input, over);
   const dotnet = { target: 'backend/ClaudeHomeServer.Tests', filter: 'FullyQualifiedName~ToolProgress' };
+  // Этапы прогона, как их шлёт сервер: [ключ, подпись, длительность с] подряд от старта;
+  // последний без длительности — идёт (или оборван, если open)
+  const st = (start: number, ...parts: [string, string, number | null][]): ToolStage[] => {
+    let at = start;
+    return parts.map(([stage, label, s]) => {
+      const it: ToolStage = { stage, label, startedAt: at, ...(s != null ? { endedAt: at + s * 1000 } : {}) };
+      if (s != null) at += s * 1000;
+      return it;
+    });
+  };
 
   const groups = [
     {
       title: 'Команда (Bash)',
       demos: [
         // Старт «в будущем»: отсчёт прижат к нулю, карточка навсегда остаётся до порога 2 с
-        { label: 'короче 2 с — только спиннер', item: tu('k-read', 'Read', { file_path: 'frontend/src/lib/toolTiming.ts' }, { startedAt: t0 + 24 * 3600_000 }) },
-        { label: 'идёт — «идёт M:SS» и бегущая полоса, спиннер убран (место под него держится)', item: tu('k-bash-run', 'Bash', { command: 'dotnet build backend/ClaudeHomeServer.slnx' }, { startedAt: ago(AGO.bash), started: true }) },
+        { label: 'короче 2 с — только живая точка', item: tu('k-read', 'Read', { file_path: 'frontend/src/lib/toolTiming.ts' }, { startedAt: t0 + 24 * 3600_000 }) },
+        { label: 'идёт — «идёт M:SS» и точка; бегущей полосы нет', item: tu('k-bash-run', 'Bash', { command: 'dotnet build backend/ClaudeHomeServer.slnx' }, { startedAt: ago(AGO.bash), started: true }) },
         { label: 'готово — шапка не съезжает влево', item: tu('k-bash-done', 'Bash', { command: 'git status --short' }, { startedAt: t0 - 15_000, finishedAt: t0, started: true, result: ' M frontend/src/dev/UiKitPage.tsx' }) },
         { label: 'прервано (ход оборван «Стопом») — с длительностью', item: tu('k-bash-dead', 'Bash', { command: 'npm run lint:design' }, { startedAt: t0 - 70_000, started: true }) },
       ],
@@ -72,25 +83,27 @@ function buildDemos(t0: number): { groups: { title: string; demos: Demo[] }[]; l
     {
       title: 'Тесты · dotnet — фазы прогона',
       demos: [
-        { label: 'ждёт очереди сборок — без «в очереди» и без бегущей полосы', item: tests('k-t-queue', dotnet, { startedAt: ago(AGO.queue), progress: { stage: 'queued', label: 'ждёт очереди сборок (занято 2)' } }) },
-        { label: 'сборка', item: tests('k-t-build', dotnet, { startedAt: ago(AGO.build), progress: { stage: 'build', label: 'сборка' } }) },
-        { label: 'подсчёт тестов', item: tests('k-t-list', dotnet, { startedAt: ago(AGO.list), progress: { stage: 'list', label: 'подсчёт тестов' } }) },
-        { label: 'N из M с упавшими — сплошная, «упало K» красным, 5% видно', item: tests('k-t-run', dotnet, { startedAt: ago(AGO.tests), progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true } }) },
-        { label: 'готово', item: tests('k-t-done', dotnet, { startedAt: t0 - 222_000, finishedAt: t0, result: 'dotnet test: все тесты прошли (код выхода 0) за 3:42.' }) },
+        { label: 'ждёт очереди сборок — точка, без полосы; очередь в этапах с 2 с', item: tests('k-t-queue', dotnet, { startedAt: ago(AGO.queue), progress: { stage: 'queued', label: 'ждёт очереди сборок (занято 2)' }, stages: st(ago(AGO.queue), ['queued', 'очередь', null]) }) },
+        { label: 'сборка — после очереди', item: tests('k-t-build', dotnet, { startedAt: ago(AGO.build), progress: { stage: 'build', label: 'сборка' }, stages: st(ago(AGO.build), ['queued', 'очередь', 12], ['build', 'сборка', null]) }) },
+        { label: 'подсчёт тестов', item: tests('k-t-list', dotnet, { startedAt: ago(AGO.list + 102), progress: { stage: 'list', label: 'подсчёт тестов' }, stages: st(ago(AGO.list + 102), ['build', 'сборка', 102], ['list', 'подсчёт', null]) }) },
+        { label: 'N из M с упавшими — короткая сплошная полоса под этапами, «упало K» красным', item: tests('k-t-run', dotnet, { startedAt: ago(AGO.tests), progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true }, stages: st(ago(AGO.tests), ['build', 'сборка', 102], ['list', 'подсчёт', 3], ['running', 'тесты', null]) }) },
+        { label: 'готово с упавшими — счётчики и этапы без раскрытия', item: tests('k-t-done-fail', dotnet, { startedAt: t0 - 135_000, finishedAt: t0, result: 'dotnet test: есть упавшие тесты (код выхода 1) за 2:15.', stages: st(t0 - 135_000, ['build', 'сборка', 62], ['list', 'подсчёт', 2], ['running', 'тесты', 71]), totals: { passed: 174, failed: 3, total: 177 } }) },
+        { label: 'готово, всё прошло', item: tests('k-t-done', dotnet, { startedAt: t0 - 235_000, finishedAt: t0, result: 'dotnet test: все тесты прошли (код выхода 0) за 3:55.', stages: st(t0 - 235_000, ['build', 'сборка', 102], ['list', 'подсчёт', 3], ['running', 'тесты', 130]), totals: { passed: 7951, failed: 0, total: 7951 } }) },
+        { label: 'прервано на сборке — этап крестиком', item: tests('k-t-dead', dotnet, { startedAt: t0 - 77_000, stages: st(t0 - 77_000, ['queued', 'очередь', 12], ['build', 'сборка', 65]).map((s, i) => i === 1 ? { ...s, failed: true } : s) }) },
       ],
     },
     {
       title: 'Тесты · vitest и Playwright',
       demos: [
-        { label: 'vitest — файлы', item: tests('k-vitest', { kind: 'vitest', target: 'frontend', files: ['src/lib/a.test.ts', 'src/lib/b.test.ts', 'src/lib/c.test.ts'] }, { startedAt: ago(AGO.vitest), progress: { stage: 'running', label: '87 из 171 файла · упало 2', percent: 50, exact: true } }) },
-        { label: 'Playwright', item: tests('k-pw', { kind: 'playwright', target: 'frontend', filter: 'офлайн' }, { startedAt: ago(AGO.pw), progress: { stage: 'running', label: '12 из 40 · упало 1', percent: 30, exact: true } }) },
+        { label: 'vitest — файлы', item: tests('k-vitest', { kind: 'vitest', target: 'frontend', files: ['src/lib/a.test.ts', 'src/lib/b.test.ts', 'src/lib/c.test.ts'] }, { startedAt: ago(AGO.vitest), progress: { stage: 'running', label: '87 из 171 файла · упало 2', percent: 50, exact: true }, stages: st(ago(AGO.vitest), ['list', 'подсчёт', 4], ['running', 'тесты', null]) }) },
+        { label: 'Playwright — стенд поднят из webServer', item: tests('k-pw', { kind: 'playwright', target: 'frontend', filter: 'офлайн' }, { startedAt: ago(AGO.pw), progress: { stage: 'running', label: '12 из 40 · упало 1', percent: 30, exact: true }, stages: st(ago(AGO.pw), ['stand', 'стенд', 9], ['running', 'тесты', null]) }) },
         { label: 'vitest — ошибка', item: tests('k-vitest-err', { kind: 'vitest', target: 'frontend' }, { startedAt: t0 - 38_000, finishedAt: t0, isError: true, result: 'vitest: есть упавшие тесты (код выхода 1) за 0:38.' }) },
       ],
     },
     {
       title: 'Локальная генерация (local-media)',
       demos: [
-        { label: 'в очереди — пустая дорожка, полоса не бежит', item: tu('k-lm-queue', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_1'] }, { startedAt: ago(AGO.queue), progress: { stage: 'queued', queuePosition: 2 } }) },
+        { label: 'в очереди — только точка, полосы нет', item: tu('k-lm-queue', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_1'] }, { startedAt: ago(AGO.queue), progress: { stage: 'queued', queuePosition: 2 } }) },
         { label: 'оценка по ETA — пунктир, «≈»', item: tu('k-lm-est', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_2'] }, { startedAt: ago(AGO.lm), progress: { stage: 'running', percent: 40, etaSeconds: 75 } }) },
         { label: 'настоящие шаги — сплошная', item: tu('k-lm-exact', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_3'] }, { startedAt: ago(AGO.lm), progress: { stage: 'running', label: 'шаг 8 из 20', percent: 40, exact: true, etaSeconds: 45 } }) },
         { label: 'готово', item: tu('k-lm-done', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_4', 'lm_5'] }, { startedAt: t0 - 95_000, finishedAt: t0, result: '{"all_done":true}' }) },
@@ -99,10 +112,10 @@ function buildDemos(t0: number): { groups: { title: string; demos: Demo[] }[]; l
   ];
 
   const all = groups.flatMap(g => g.demos.map(d => d.item));
-  const dead = ['k-bash-dead'];
+  const dead = ['k-bash-dead', 'k-t-dead'];
   const live = all.filter(it => it.result == null && !dead.includes(it.id)).map(it => it.id);
-  // Ход оборван через 1:10 после старта прерванной карточки — её длительность
-  const abortedAt = new Map([['k-bash-dead', t0]]);
+  // Ход оборван в момент монтирования — длительность прерванных карточек до него
+  const abortedAt = new Map(dead.map(id => [id, t0]));
   return { groups, live, dead, abortedAt };
 }
 
@@ -152,9 +165,6 @@ export function ToolProgressSection() {
       <ToolLivenessContext.Provider value={liveness}>
         {/* Ширина — как у колонки ленты чата: карточку смотрим в её настоящей ширине */}
         <div data-kit="tool-progress" style={{ padding: ISLAND.pad, maxWidth: CHAT_MAX_W, display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-          {/* Макет на выбор: спокойнее полоса и этапы прогона с длительностью */}
-          <ToolProgressCalmVariants />
-          <GroupTitle>Сейчас на бою</GroupTitle>
           {groups.map(g => (
             <div key={g.title} style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
               <GroupTitle>{g.title}</GroupTitle>

@@ -47,7 +47,7 @@ import {
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel, Select,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
-  Chip, ProgressBar,
+  Chip, ProgressBar, LiveDot,
 } from '../components/ui';
 import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
@@ -512,6 +512,17 @@ function TogglesSection() {
             <ProgressBar value={100} tone="success" />
             <ProgressBar value={75} tone="warning" />
             <ProgressBar value={20} tone="danger" />
+          </div>
+        </SubBlock>
+
+        {/* LiveDot: идёт, а сколько осталось — неизвестно. Карточка инструмента ставит её на
+            место спиннера вместо бегущей полосы; полоса появляется только с процентом */}
+        <SubBlock label="LiveDot — живая точка вместо бегущей полосы">
+          <div data-kit="live-dot" style={{ display: 'flex', alignItems: 'center', gap: SP.md, fontSize: FS.xs, color: C.textMuted }}>
+            <LiveDot />
+            <span>по умолчанию — 6px, accent</span>
+            <LiveDot size={8} color={C.success} />
+            <span>8px, success</span>
           </div>
         </SubBlock>
       </div>

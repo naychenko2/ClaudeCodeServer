@@ -9,10 +9,76 @@ import type { MixPlan } from '../player/mix';
 import { isPersonalScope } from '../scope';
 import { draftStem, mixRequest } from './model';
 import { opInfo } from '../ops';
+import { rememberMode, saveSettings } from '../panel/inputs';
+import { nextSettings, resolvePanel, type PanelState, type SettingsPatch } from '../panel/model';
 import { resolveLaunch } from '../strip/summary';
+import { hasSound, soundSource, type PendingSettings } from './modeState';
 import {
-  focusThread, getCatalog, getPrefs, getShortcutMode, mutate, requestSoundMode, soundDraftKey, SOUND_PANEL, SOUND_STRIP,
+  dropPendingSettings, focusThread, getCatalog, getFocusedThread, getPrefs, mutate, requestSoundMode, setChosenMode,
+  setPendingSettings, soundDraftKey, SOUND_PANEL, SOUND_STRIP,
 } from './threadStore';
+
+// ── Настройки и режим звука: одна цепочка для панели и полосы ──
+
+const SAVE_DELAY = 500;
+// Отложенное сохранение правки по чату: уходит само по таймеру, а раньше — при смене звука,
+// закрытии панели или смене режима
+const _later = new Map<string, { threadId: string | null; timer: ReturnType<typeof setTimeout>; flush: () => void }>();
+
+// Настройки, которые видит человек: нить → префы режима → умолчание, плюс невыехавший выбор
+export function soundPanelState(scope: string, sessionId: string | null, focus: AudioThread | null = getFocusedThread(sessionId)): PanelState {
+  const src = soundSource(scope, sessionId, focus);
+  return resolvePanel(src.thread, src.prefs, getCatalog(scope), src.mode);
+}
+
+export function flushSoundSettings(sessionId: string | null) {
+  const key = sessionId ?? '';
+  const l = _later.get(key);
+  if (!l) return;
+  _later.delete(key);
+  clearTimeout(l.timer);
+  l.flush();
+}
+
+// Правка настроек звука: сразу поверх экрана, на сервер — сейчас или через SAVE_DELAY.
+// Пишется в нить в фокусе, без нити — в префы режима. false — правка не принята
+export function changeSoundSettings(scope: string, sessionId: string | null, patch: SettingsPatch, debounced = false): boolean {
+  const key = sessionId ?? '';
+  const thread = getFocusedThread(sessionId);
+  const threadId = thread?.id ?? null;
+  // Недосохранённое другой нити уходит в СВОЮ нить (flush держит её в замыкании)
+  if (_later.get(key)?.threadId !== threadId) flushSoundSettings(sessionId);
+  const state = soundPanelState(scope, sessionId, thread);
+  const prefs = getPrefs(scope);
+  const next = nextSettings(state, patch, prefs, getCatalog(scope));
+  if (next.mode !== state.mode) {
+    // Черновику без звука «Обработка» не нужна: обрабатывать нечего
+    if (next.mode === 'process' && thread && !hasSound(thread)) return false;
+    // Выбор уходящего режима: у нити — в его префы, без нити — недосохранённая правка в те же префы
+    if (thread) void rememberMode(scope, sessionId, nextSettings(state, {}), prefs[state.mode]);
+    else flushSoundSettings(sessionId);
+    setChosenMode(sessionId, { mode: next.mode, withSound: hasSound(thread) }, state.mode);
+  }
+  const p: PendingSettings = { threadId, settings: next };
+  setPendingSettings(sessionId, p);
+  const l = _later.get(key);
+  if (l) clearTimeout(l.timer);
+  _later.delete(key);
+  const flush = () => { void saveSettings(scope, sessionId, thread, next).then(() => dropPendingSettings(sessionId, p)); };
+  if (debounced) _later.set(key, { threadId, flush, timer: setTimeout(() => { _later.delete(key); flush(); }, SAVE_DELAY) });
+  else flush();
+  return true;
+}
+
+// Смена режима — из панели и (шаг K2) из полосы
+export const setSoundMode = (scope: string, sessionId: string | null, mode: AudioMode): boolean =>
+  changeSoundSettings(scope, sessionId, { mode });
+
+// Сброс — только для тестов
+export function __resetSoundSettings() {
+  _later.forEach(l => clearTimeout(l.timer));
+  _later.clear();
+}
 
 // «✦ Новый звук»: черновик в корне, его настройки — копия префов режима; поле — в режим «Звук»
 export async function createDraft(scope: string, sessionId: string, mode: AudioMode): Promise<boolean> {
@@ -30,7 +96,7 @@ export async function releaseFocus(scope: string, sessionId: string, thread: Aud
 
 // Ярлык «Звук» (меню полос, «＋» композера, пустая лента): полоса «Звук» и панель «Звук» на
 // «Настройках», если человек её в этом чате не закрывал (решение 2 по v2). Режим — последний
-// выбранный в панели (getShortcutMode, по умолчанию «Голос»)
+// действующий (modeState, по умолчанию «Голос»)
 export function openSoundShortcut(sessionId: string | null) {
   // Чата ещё нет — закрыть панель в нём не могли: открываем всегда
   if (!sessionId) {
@@ -57,7 +123,8 @@ export async function launchFromComposer(
   scope: string, sessionId: string, thread: AudioThread, text: string,
   override?: { mode: AudioMode; operation: AudioOp; provider: string | null; model: string | null } | null,
 ): Promise<boolean> {
-  const L = resolveLaunch(thread, getPrefs(scope), getCatalog(scope), getShortcutMode(sessionId) ?? 'voice');
+  const src = soundSource(scope, sessionId, thread);
+  const L = resolveLaunch(src.thread, src.prefs, getCatalog(scope), src.mode);
   const field = opInfo(override?.operation ?? L.op)?.field ?? 'prompt';
   const trimmed = text.trim();
   try {

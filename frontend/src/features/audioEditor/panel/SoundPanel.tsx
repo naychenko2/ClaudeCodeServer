@@ -16,13 +16,13 @@ import {
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
-import { audioApi, type AudioMode, type AudioOp, type AudioPrefs, type AudioQuote, type AudioThread, type AudioThreadSettings } from '../api';
+import { audioApi, type AudioMode, type AudioOp, type AudioQuote } from '../api';
 import { MODE_LABEL, opInfo } from '../ops';
 import { audioScope, isPersonalScope } from '../scope';
 import { focusLabel, queueBadge } from '../strip/summary';
-import { releaseFocus } from '../thread/actions';
+import { changeSoundSettings, flushSoundSettings, releaseFocus, setSoundMode, soundPanelState } from '../thread/actions';
 import {
-  focusThread, getCatalog, getComposerText, getJobsOf, getPrefs, getSelection, getShortcutMode, setPieceFieldOpen, setSelection,
+  focusThread, getCatalog, getComposerText, getJobsOf, getSelection, setPieceFieldOpen, setSelection,
   soundDraftKey, SOUND_PANEL, useAudioStoreVersion, useAudioThreads,
 } from '../thread/threadStore';
 import { hasRvcModel, voicePickValue, pickedSlug } from '../voices/model';
@@ -31,12 +31,12 @@ import { VoicesTab } from '../voices/VoicesTab';
 import { CloneRefusalNote } from './CloneRefusalNote';
 import { ConcatFields } from './ConcatFields';
 import {
-  inputsKey, LIBRARY_VOICE_OPS, mergeInputs, migrateLocal, readInputs, rememberMode, saveSettings, serverPiece, toServerInputs,
+  inputsKey, LIBRARY_VOICE_OPS, mergeInputs, migrateLocal, readInputs, serverPiece, toServerInputs,
   writeInputs,
   type PanelInputs,
 } from './inputs';
 import {
-  isNoAi, modelOptions, nextSettings, panelOps, pillOf, priceLines, providerOptions, pruneFields, resolvePanel, runReason,
+  isNoAi, modelOptions, panelOps, pillOf, priceLines, providerOptions, pruneFields, runReason,
   splitSchema, voicePick, type PanelState, type SettingsPatch,
 } from './model';
 import { heavyWarning, licenseWarning } from './music';
@@ -70,24 +70,7 @@ if (typeof window !== 'undefined') {
 
 const MODES: { value: AudioMode; label: string }[] = (['voice', 'music', 'process'] as AudioMode[])
   .map(m => ({ value: m, label: MODE_LABEL[m] }));
-const SAVE_DELAY = 500;
 const QUOTE_DELAY = 600;
-
-// Выбор человека, ещё не доехавший до сервера, — поверх нити (или префов режима без нити)
-function overlay(thread: AudioThread | null, prefs: AudioPrefs, pending: AudioThreadSettings | null) {
-  if (!pending) return { thread, prefs };
-  if (thread) return { thread: { ...thread, settings: pending }, prefs };
-  return {
-    thread: null,
-    prefs: {
-      ...prefs,
-      [pending.mode]: {
-        operation: pending.operation, provider: pending.provider, model: pending.model, count: pending.count ?? null,
-        fields: pending.fields, inputs: pending.inputs ?? null,
-      },
-    },
-  };
-}
 
 export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const { sessionId } = ctx;
@@ -109,51 +92,15 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     return () => { subs.delete(on); };
   }, []);
 
-  // ── Настройки: цепочка нить → префы режима → умолчание, плюс несохранённый выбор ──
-  const [pending, setPending] = useState<AudioThreadSettings | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Отложенное сохранение правки: уходит сразу, если звук сменили или панель закрыли раньше таймера
-  const flushLater = useRef<(() => void) | null>(null);
+  // ── Настройки: цепочка нить → префы режима → умолчание, плюс несохранённый выбор (общий с полосой) ──
   const threadId = thread?.id ?? null;
   // Черновик элемента «Работаем с» (genDrafts): правка поля его ставит, запуск снимает
   const draftKey = threadId ? soundDraftKey(threadId) : null;
-  useEffect(() => { setPending(null); }, [threadId, sessionId]);
-  const eff = overlay(thread, getPrefs(scope), pending);
-  const state: PanelState = resolvePanel(eff.thread, eff.prefs, catalog, pending?.mode ?? getShortcutMode(sessionId) ?? 'voice');
-
-  const flush = (next: AudioThreadSettings) => {
-    void saveSettings(scope, sessionId, thread, next).then(() => {
-      setPending(p => (p === next ? null : p));
-    });
-  };
-  const change = (patch: SettingsPatch, debounced = false) => {
-    const prefs = getPrefs(scope);
-    const next = nextSettings(state, patch, prefs, catalog);
-    if (next.mode !== state.mode) {
-      // Выбор уходящего режима: у нити — в его префы, без нити — недосохранённая правка в те же префы
-      if (thread) {
-        const cur = nextSettings(state, {});
-        void rememberMode(scope, sessionId, cur, prefs[cur.mode]);
-      } else flushLater.current?.();
-    }
-    setPending(next);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    flushLater.current = null;
-    if (debounced) {
-      flushLater.current = () => flush(next);
-      timer.current = setTimeout(() => { timer.current = null; flushLater.current = null; flush(next); }, SAVE_DELAY);
-    } else flush(next);
-  };
-  // Клик по другой карточке не сбрасывает правку: недосохранённое уходит в СВОЮ нить (flush
-  // держит её в замыкании) до смены звука и при закрытии панели
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    const f = flushLater.current;
-    flushLater.current = null;
-    f?.();
-  }, [threadId, sessionId]);
+  const state: PanelState = soundPanelState(scope, sessionId, thread);
+  const change = (patch: SettingsPatch, debounced = false) => { changeSoundSettings(scope, sessionId, patch, debounced); };
+  // Клик по другой карточке не сбрасывает правку: недосохранённое уходит в СВОЮ нить до смены
+  // звука и при закрытии панели
+  useEffect(() => () => flushSoundSettings(sessionId), [threadId, sessionId]);
 
   // ── Просьба карточки («Обрезать», «Перегенерировать кусок»): сперва её нить в работу, потом операция ──
   const opReq = pendingOperation(sessionId);
@@ -401,7 +348,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     body = (
       <div data-sound-settings="">
         <div style={{ height: SP.sm }} />
-        <SegmentedControl<AudioMode> value={state.mode} options={MODES} onChange={mode => change({ mode })} />
+        <SegmentedControl<AudioMode> value={state.mode} options={MODES} onChange={mode => { setSoundMode(scope, sessionId, mode); }} />
 
         <Label>Операция</Label>
         <Row>

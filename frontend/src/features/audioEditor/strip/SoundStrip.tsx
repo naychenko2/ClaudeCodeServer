@@ -14,8 +14,9 @@ import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import { audioScope, isPersonalScope } from '../scope';
 import { createDraft, releaseFocus } from '../thread/actions';
 import {
-  getCatalog, getFocusedThread, getJobsOf, getPrefs, getShortcutMode, SOUND_PANEL, useAudioThreads,
+  getCatalog, getFocusedThread, getJobsOf, SOUND_PANEL, useAudioThreads,
 } from '../thread/threadStore';
+import { soundSource } from '../thread/modeState';
 import type { AudioThread } from '../api';
 import { focusLabel, queueBadge, resolveLaunch, soundSummary, soundSummaryMobile } from './summary';
 
@@ -25,7 +26,8 @@ const ic = (I: typeof User, size: number = ICON_SIZE.xs) => <I size={size} strok
 export function stripModel(projectId: string | null, sessionId: string | null, thread: AudioThread | null) {
   const scope = audioScope(projectId);
   const catalog = getCatalog(scope);
-  const launch = resolveLaunch(thread, getPrefs(scope), catalog, getShortcutMode(sessionId) ?? 'voice');
+  const src = soundSource(scope, sessionId, thread);
+  const launch = resolveLaunch(src.thread, src.prefs, catalog, src.mode);
   const running = !!thread?.launches.some(l => l.status === 'running');
   return {
     scope,

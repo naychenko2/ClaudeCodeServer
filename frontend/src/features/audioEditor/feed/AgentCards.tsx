@@ -14,8 +14,9 @@ import { audioApi, type AudioCatalog, type AudioThread } from '../api';
 import { MODE_LABEL } from '../ops';
 import { audioScope } from '../scope';
 import { launchFromComposer } from '../thread/actions';
+import { soundSource } from '../thread/modeState';
 import {
-  focusThread, getCatalog, getFocusedThread, getJobsOf, getPrefs, getShortcutMode, mutate, suggestPrompt, useAudioThreads,
+  focusThread, getCatalog, getFocusedThread, getJobsOf, mutate, suggestPrompt, useAudioThreads,
   type JobProgress,
 } from '../thread/threadStore';
 import { promptLaunch, promptRunLabel } from './promptLaunch';
@@ -263,8 +264,9 @@ export function AudioPromptCard({ ctx }: { ctx: ChatItemToolCtx }) {
   useAudioThreads(scope, ctx.sessionId);
   const thread = getFocusedThread(ctx.sessionId);
   // Запуск — по режиму и модели карточки, если агент их назвал, иначе по полосе; цена — того, что пойдёт
-  const planned = thread
-    ? promptLaunch(thread, getPrefs(scope), getCatalog(scope), getShortcutMode(ctx.sessionId) ?? 'voice', { mode, model: str(input.model) })
+  const src = thread ? soundSource(scope, ctx.sessionId, thread) : null;
+  const planned = src
+    ? promptLaunch(src.thread, src.prefs, getCatalog(scope), src.mode, { mode, model: str(input.model) })
     : null;
   const [busy, setBusy] = useState(false);
   const [launched, setLaunched] = useState(false);

@@ -15,6 +15,8 @@ import {
 } from '../api';
 import type { AudioSelection } from '../player/selection';
 import type { ConcatPiece } from '../panel/inputs';
+import { isCreateMode } from '../ops';
+import type { ChosenMode, PendingSettings } from './modeState';
 import { threadName } from './model';
 
 export const SOUND_STRIP = 'sound';
@@ -41,8 +43,12 @@ const _entries = new Map<string, Entry>();
 const _catalogs = new Map<string, AudioCatalog>();
 const _prefs = new Map<string, AudioPrefs>();
 const _jobs = new Map<string, JobProgress>();
-// Режим, выбранный ярлыком «Голос» / «Музыка» в чате: по нему сводка без нити и новый звук
-const _shortcutMode = new Map<string, AudioMode>();
+// Режим, выбранный человеком в чате, и последний режим создания: из них modeState выводит
+// действующий режим для полосы, панели и запуска
+const _chosenMode = new Map<string, ChosenMode>();
+const _lastCreate = new Map<string, AudioMode>();
+// Выбор человека, ещё не доехавший до сервера, — общий для панели и полосы
+const _pending = new Map<string, PendingSettings>();
 const _modeRequests = new Map<string, number>();
 // Текст поля режима «Звук» по чатам: панель считает по нему цену и запускает с ним
 const _composerText = new Map<string, string>();
@@ -273,11 +279,41 @@ export const getOperationRequest = (sessionId: string | null): OperationRequest 
 // ── Режим ярлыков и поля ввода ──
 
 export function getShortcutMode(sessionId: string | null): AudioMode | null {
-  return (sessionId && _shortcutMode.get(sessionId)) || null;
+  return getChosenMode(sessionId)?.mode ?? null;
+}
+
+// Чата ещё нет (панель открыта ярлыком) — выбор держится под пустым ключом
+const modeKey = (sessionId: string | null) => sessionId ?? '';
+export const getChosenMode = (sessionId: string | null): ChosenMode | null => _chosenMode.get(modeKey(sessionId)) ?? null;
+export const getLastCreateMode = (sessionId: string | null): AudioMode | null => _lastCreate.get(modeKey(sessionId)) ?? null;
+
+// Выбор режима человеком. leaving — режим, из которого ушли: режим создания запоминается, чтобы
+// «Обработка» без звука вернулась к нему
+export function setChosenMode(sessionId: string | null, chosen: ChosenMode, leaving: AudioMode | null = null) {
+  _chosenMode.set(modeKey(sessionId), chosen);
+  const create = isCreateMode(chosen.mode) ? chosen.mode : leaving && isCreateMode(leaving) ? leaving : null;
+  if (create) _lastCreate.set(modeKey(sessionId), create);
+  emit();
 }
 
 export function setShortcutMode(sessionId: string, mode: AudioMode) {
-  _shortcutMode.set(sessionId, mode);
+  setChosenMode(sessionId, { mode, withSound: false });
+}
+
+export function getPendingSettings(sessionId: string | null, threadId: string | null): PendingSettings | null {
+  const p = _pending.get(modeKey(sessionId));
+  return p && p.threadId === threadId ? p : null;
+}
+
+export function setPendingSettings(sessionId: string | null, p: PendingSettings) {
+  _pending.set(modeKey(sessionId), p);
+  emit();
+}
+
+// Сохранение доехало: снимаем только свою правку — более свежая остаётся поверх
+export function dropPendingSettings(sessionId: string | null, p: PendingSettings) {
+  if (_pending.get(modeKey(sessionId)) !== p) return;
+  _pending.delete(modeKey(sessionId));
   emit();
 }
 
@@ -318,7 +354,9 @@ export function __resetAudioStore() {
   _catalogs.clear();
   _prefs.clear();
   _jobs.clear();
-  _shortcutMode.clear();
+  _chosenMode.clear();
+  _lastCreate.clear();
+  _pending.clear();
   _modeRequests.clear();
   _composerText.clear();
   _selections.clear();

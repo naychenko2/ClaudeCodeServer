@@ -52,6 +52,9 @@ export const OPS: readonly OpInfo[] = [
 
 export const MODE_LABEL: Record<AudioMode, string> = { voice: 'Голос', music: 'Музыка', process: 'Обработка' };
 
+// Режимы, создающие новый звук; «Обработка» работает с готовым
+export const isCreateMode = (mode: AudioMode | null | undefined): mode is 'voice' | 'music' => mode === 'voice' || mode === 'music';
+
 export const opInfo = (op: AudioOp | null | undefined): OpInfo | null => OPS.find(o => o.op === op) ?? null;
 
 export const defaultOp = (mode: AudioMode): AudioOp => OPS.find(o => o.mode === mode)!.op;

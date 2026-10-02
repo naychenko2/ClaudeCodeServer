@@ -106,9 +106,6 @@ export function soundSummary({ focus, launch: L }: SoundSummaryParts, short = fa
   return [focus ? `Работаем с: ${focus}` : 'Звук не выбран', ...body].filter(Boolean).join(' · ');
 }
 
-// Телефон: «Голос · бесплатно»
-export const soundSummaryMobile = (L: ResolvedLaunch) => [MODE_LABEL[L.mode], isNoAi(L.op) ? 'без ИИ' : L.price].filter(Boolean).join(' · ');
-
 const eta = (sec: number) => (sec < 60 ? `${sec} с` : `${Math.round(sec / 60)} мин`);
 
 // Бейдж очереди GPU: ход идущей задачи нити; без задачи — только пометка тяжёлой локальной

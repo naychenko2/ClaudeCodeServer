@@ -22,7 +22,7 @@ import type { AudioCatalog, AudioPrefs, AudioThread } from '../api';
 import { soundShortcuts } from '../manifest';
 import { __applyThreads, __resetAudioStore, __setScopeData, getShortcutMode, handleEvent, setShortcutMode, SOUND_STRIP } from '../thread/threadStore';
 import { soundStripStatus, stripModel } from './SoundStrip';
-import { queueBadge, resolveLaunch, soundSummary, soundSummaryMobile } from './summary';
+import { queueBadge, resolveLaunch, soundSummary } from './summary';
 
 const CAPS = { languages: ['ru'], voiceKinds: [], producesFiles: ['main'], license: { label: 'Apache-2.0', kind: 'permissive' as const } };
 const CATALOG: AudioCatalog = {
@@ -59,7 +59,6 @@ describe('сводка полосы «Звук»', () => {
   it('правка без ИИ — без поставщика, модели и вариантов: «Обработка · Склеить · без ИИ»', () => {
     const L = resolveLaunch(thread({ settings: { mode: 'process', operation: 'concat', provider: null, model: null, fields: null } }), PREFS, CATALOG, 'voice');
     expect(soundSummary({ focus: null, launch: L }, true)).toBe('Обработка · Склеить · без ИИ');
-    expect(soundSummaryMobile(L)).toBe('Обработка · без ИИ');
   });
 
   it('без настроек — режим ярлыка, первая операция, первый доступный поставщик и «Авто»', () => {

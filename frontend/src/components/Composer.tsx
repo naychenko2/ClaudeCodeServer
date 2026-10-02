@@ -1,7 +1,7 @@
 import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import type { Project } from '../types';
 import { canRunTurn } from '../lib/projectCapabilities';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, MessageSquare, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, ClipboardList, Eye, EyeOff, FolderGit2, Lock, MessageSquare, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -184,6 +184,10 @@ export interface ComposerProps {
   // берётся цвет кольца у её аватара в ленте, чтобы свет и кольцо не разъезжались.
   // Не задан (чат вне проекта, говорит голос инстанса) — accent (токен auroraUser)
   auroraColorHex?: string;
+  // Чат-исполнитель задачи: поле ввода в тоне панели плюс строка «Исполнитель задачи «…»»
+  // внутри карточки — чтобы с одного взгляда было видно, что пишешь не в основной чат.
+  // title = null — задача ещё не подгрузилась; onOpenParent нет — постановщик неизвестен
+  executorTask?: { title: string | null; onOpenParent?: () => void } | null;
 }
 
 // Раскладка полосы контролов — номиналы блоков и лестница ступеней живут в
@@ -591,6 +595,7 @@ export function Composer({
   onReplaceAttachments,
   focusSignal,
   auroraColorHex,
+  executorTask = null,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session. Composer смонтирован с key={sessionId} (см. ChatPanel), поэтому
@@ -1452,7 +1457,9 @@ export function Composer({
   // Стили контейнера — поле всегда активно (доступно для ввода и во время генерации)
   const containerStyle: React.CSSProperties = {
     position: 'relative',
-    background: C.bgWhite,
+    // Исполнитель — тон панели, а не белый: отличие от основного чата. Содержимое не
+    // бледнеет и тень остаётся — иначе поле читалось бы как выключенное
+    background: executorTask ? C.bgPanel : C.bgWhite,
     border: `1px solid ${dragOver || hasText || activeMode ? C.accent : C.border}`,
     borderRadius: R.xxl,
     padding: isMobile ? '8px 10px' : '7px 8px',
@@ -1768,7 +1775,7 @@ export function Composer({
         onInput={autoResize}
         onPaste={handlePaste}
         // Пока видна ghost-подсказка, обычный плейсхолдер прячем — тексты бы наложились
-        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : `Спросите ${asstName}…`}
+        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : executorTask ? 'Напишите исполнителю…' : `Спросите ${asstName}…`}
         rows={1}
         style={{
           flex: 1,
@@ -2437,6 +2444,20 @@ export function Composer({
       )}
       {/* Полоска-индикатор лимита подписки по кромке карточки (warn/danger) */}
       {rateWindow && rateWindow.level !== 'normal' && <RateStripe w={rateWindow} isMobile={isMobile} />}
+      {executorTask && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0,
+          padding: `${SP.xxs}px ${SP.xs}px 0`, fontSize: FS.xs, color: C.textSecondary,
+        }}>
+          <ClipboardList size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {executorTask.title ? `Исполнитель задачи «${executorTask.title}»` : 'Исполнитель задачи'}
+          </span>
+          {executorTask.onOpenParent && (
+            <Button variant="ghost" size="xs" onClick={executorTask.onOpenParent}>к постановщику</Button>
+          )}
+        </div>
+      )}
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
       {showSkillsDropdown && skills.length > 0 && (
         <SkillsDropdown

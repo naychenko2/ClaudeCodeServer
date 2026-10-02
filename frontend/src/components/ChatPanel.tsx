@@ -81,6 +81,8 @@ import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 import { NO_AUTOFILL } from '../lib/noAutofill';
 import { SLOT_COMPOSER_CHIP, useSlot, type ComposerChipApi, type ComposerChipCtx } from '../lib/subsystems/registry';
 import type { ChatItemToolCtx } from '../lib/subsystems/registryCore';
+import { ensureTasksLoaded, useTasks } from '../lib/tasks';
+import { openChatById } from '../lib/openChat';
 
 // Боковой отступ мобильной ленты: чуть шире стандартных 12px, чтобы кольца «Эхо»
 // индикатора ожидания не резались клипом области прокрутки (overflow-x: hidden).
@@ -540,6 +542,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds), [items, session.model, ctxThresholds]);
   // Возможности провайдера модели (UI скрывает недоступное)
   const caps = useModelCaps(session.model);
+  // Чат-исполнитель задачи: композер помечается строкой «Исполнитель задачи «…»».
+  // Постановщик — родитель чата в списке (бэк выводит его из задачи)
+  const isExecutor = !!session.taskExecution;
+  useEffect(() => { if (isExecutor) void ensureTasksLoaded(); }, [isExecutor]);
+  const tasks = useTasks();
+  const executorTitle = isExecutor && session.taskId ? tasks.find(t => t.id === session.taskId)?.title ?? null : null;
+  const parentChatId = session.parentSessionId ?? null;
+  const executorTask = useMemo(() => !isExecutor ? null : {
+    title: executorTitle,
+    onOpenParent: parentChatId ? () => { void openChatById(parentChatId); } : undefined,
+  }, [isExecutor, executorTitle, parentChatId]);
   // Сжимать имеет смысл только когда набралось достаточно ходов (иначе CLI вернёт «not enough messages»)
   const canCompact = useMemo(
     () => caps.supportsCompact && items.filter(it => it.kind === 'result').length >= 2,
@@ -3005,6 +3018,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // её аватара в ленте), иначе фирменный цвет проекта — «голос проекта»;
             // ни того, ни другого нет — оранжевый токен внутри композера
             auroraColorHex={activeSpeaker?.color ?? (project ? projectMainColor(project) : undefined)}
+            executorTask={executorTask}
           />
           </div>
         </div>

@@ -9,6 +9,8 @@
 // В dev/prod MF-рантайм модуля резолвит это через remoteEntry.js хоста;
 // в хостовой сборке (tsc/vitest/vite) — через алиас на этот файл.
 
+import { lazy } from 'react';
+
 // ─── design ──────────────────────────────────────────────────────────────────
 export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W } from '../design';
 
@@ -137,6 +139,11 @@ export { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 // ─── components/MarkdownViewer ───────────────────────────────────────────────
 export { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 export type { ResolvedNote } from '../../components/MarkdownViewer';
+
+// ─── components/midi/MidiEditor ──────────────────────────────────────────────
+// Ленивый — чтобы @tonejs/midi и нотная лента не ехали в чанк кита.
+export const MidiEditor = lazy(() => import('../../components/midi/MidiEditor').then(m => ({ default: m.MidiEditor })));
+export type { MidiEditorProps } from '../../components/midi/MidiEditor';
 
 // ─── components/Toolbar ──────────────────────────────────────────────────────
 export { PillSwitch, tbBtnPrimary, tbBtnGhost, Toolbar, ToolbarIconButton } from '../../components/Toolbar';

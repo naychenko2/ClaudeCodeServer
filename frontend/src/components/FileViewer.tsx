@@ -1087,6 +1087,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // (Windows), как есть — relPath не нормализует то, что вне корня проекта
   const fileName = basename(filePath) || filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
+  const midiOn = useFeature(FLAGS.midiEditor);
+  const isMidi = midiOn && /\.midi?$/i.test(fileName);
   // «В контекст чата» (фича chat-context). Хостовый файл (путь вне проекта) туда не
   // кладём: запись контекста адресуется путём ОТ КОРНЯ ПРОЕКТА, чужой сервер её
   // не разрешит и пометит «не найден»
@@ -1103,7 +1105,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const docProps = useDocProps(project.id, filePath, !isHostMode && isMarkdown);
   // Текстовый файл, содержимое которого можно скопировать целиком
   const isCopyableText = !!fileContent && !fileContent.isBinary && !fileContent.isImage
-    && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio;
+    && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isMidi;
 
   // === ОГЛАВЛЕНИЕ НАРУЖУ (панель «Оглавление») ===
   // Заголовки уже собраны выше (useHeadings) ради якорей — отдаём тот же список панели
@@ -1206,8 +1208,6 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const isHtml = /\.html?$/i.test(fileName);
   const isDrawio = /\.(drawio|dio)$/i.test(fileName);
   const isExcalidraw = /\.excalidraw$/i.test(fileName);
-  const midiOn = useFeature(FLAGS.midiEditor);
-  const isMidi = midiOn && /\.midi?$/i.test(fileName);
   const diffStats = diff ? {
     added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
     removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
@@ -1232,13 +1232,25 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const isHtmlPreviewing = !loading && !loadError && tab === 'file' && isHtml && htmlTab === 'preview' && !editing && !fileContent?.isBinary;
   const isDrawioViewing = !loading && !loadError && tab === 'file' && isDrawio && !fileContent?.isBinary;
   const isExcalidrawViewing = !loading && !loadError && tab === 'file' && isExcalidraw && !fileContent?.isBinary;
-  // .mid приходит бинарником без isAudio — узнаём только по имени; вне проекта URL файла нет
+  // .mid узнаём только по имени: files/content отдаёт его текстом (isBinary=false, без
+  // base64), и полагаться на эти поля нельзя. Вне проекта URL файла нет
   const isMidiViewing = !loading && !loadError && tab === 'file' && isMidi && !isHostMode && !!fileContent;
   const loadMidi = async () => {
     const url = viaAgent ? await agentStreamUrl(project.id, filePath) : api.files.fileUrl(project.id, filePath);
     const r = await fetch(url);
     if (!r.ok) throw new Error(`Не удалось загрузить MIDI-файл (код ${r.status})`);
     return r.arrayBuffer();
+  };
+  // Скачиваем сырые байты из потока: content из files/content испорчен текстовой кодировкой
+  const downloadMidi = () => {
+    loadMidi().then(buf => {
+      const url = URL.createObjectURL(new Blob([buf], { type: 'audio/midi' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    }, () => setActionError('Не удалось скачать файл'));
   };
 
   // Сохранение диаграммы из встроенного редактора draw.io: пишем XML и обновляем diff.
@@ -1369,7 +1381,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             icon: <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
             onClick: () => { void (async () => { await excalidrawRef.current?.flush(); setExcalidrawMode('view'); })(); },
           };
-    } else if (online && !isMobile && !isHostMode && !fileContent?.isBinary) {
+    } else if (online && !isMobile && !isHostMode && !fileContent?.isBinary && !isMidiViewing) {
       // На мобиле правку открывает плавающая кнопка (FAB) внизу слева
       mainAction = {
         key: 'edit', label: 'Править', primary: true,
@@ -1548,15 +1560,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         });
       }
     }
-    if (!editing && fileContent?.base64) {
+    if (!editing && (fileContent?.base64 || isMidiViewing)) {
+      const download = isMidiViewing ? downloadMidi : handleDownload;
       secondary.push({
         key: 'download',
         node: (
-          <ToolbarIconButton isMobile={isMobile} onClick={handleDownload} title="Скачать">
+          <ToolbarIconButton isMobile={isMobile} onClick={download} title="Скачать">
             <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </ToolbarIconButton>
         ),
-        item: { key: 'download', icon: <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Скачать', onClick: handleDownload },
+        item: { key: 'download', icon: <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Скачать', onClick: download },
       });
     }
     if (online && !editing && !isHostMode && canDelete) {
@@ -2126,7 +2139,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   variant="full"
                   fileName={fileName}
                   load={loadMidi}
-                  onDownload={fileContent?.base64 ? handleDownload : undefined}
+                  onDownload={downloadMidi}
                 />
               </Suspense>
             )}
@@ -2146,7 +2159,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
               />
             )}
 
-            {!fileContent?.isBinary && !fileContent?.isImage && (
+            {!fileContent?.isBinary && !fileContent?.isImage && !isMidiViewing && (
               editing
                 ? (
                   <Suspense fallback={

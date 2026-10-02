@@ -53,7 +53,9 @@
 2026-09-30),
 [image-generation.md](features/image-generation.md) (выбор генератора картинок:
 иконка проекта, аватар персоны), [image-editor.md](features/image-editor.md) (редактор
-картинок v2: поставщики, чат картинки, агент, правки без ИИ), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
+картинок v2: поставщики, чат картинки, агент, правки без ИИ),
+[midi-editor.md](features/midi-editor.md) (просмотрщик нот: нотная лента, проигрывание через
+Tone.js, где встроен, инварианты ленивой загрузки), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
 [model-providers-rework.md](features/model-providers-rework.md),
 [model-route-format-validation.md](features/model-route-format-validation.md),
 [project-backgrounds.md](features/project-backgrounds.md),

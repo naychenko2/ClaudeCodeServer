@@ -12,9 +12,11 @@ const store = new Map<string, string>();
 } as Storage;
 
 import {
-  __resetComposerStrips, getActiveStrip, getPendingFocus, releaseStrip, requestStrip,
-  resolveStrip, selectStrip, stripStorageKey,
+  __resetComposerStrips, forgetComposerSession, getActiveStrip, getPendingFocus,
+  getRememberedStrip, getShownStrip, releaseStrip, requestStrip, reportShownStrip,
+  resetComposerMemory, resolveStrip, selectStrip, stripStorageKey,
 } from './composerStrips';
+import { composerModeMemory } from './composerModes';
 
 const ALL = ['git', 'images'];
 
@@ -121,5 +123,44 @@ describe('свёрнутость полос (прототип полос, вар
     setStripCollapsed('s1', 'images', true);
     expect(isStripCollapsed('s1', 'images', false)).toBe(true);
     expect(isStripCollapsed('s1', 'git', false)).toBe(false);
+  });
+});
+
+describe('чистка памяти полос и режима', () => {
+  beforeEach(() => { localStorage.clear(); __resetComposerStrips(); });
+
+  it('удаление чата чистит его записи и не трогает соседний чат', () => {
+    for (const id of ['A', 'B']) {
+      selectStrip(id, 'images');
+      requestStrip(id, 'images');
+      setStripCollapsed(id, 'images', false);
+      reportShownStrip(id, 'images');
+      composerModeMemory(id).seen = { image: 'x' };
+    }
+    forgetComposerSession('A');
+    expect(getRememberedStrip('A')).toBeNull();
+    expect(getPendingFocus('A')).toBeNull();
+    expect(getShownStrip('A')).toBeUndefined();
+    expect(localStorage.getItem(stripStorageKey('A'))).toBeNull();
+    expect(localStorage.getItem(collapsedStorageKey('A', 'images'))).toBeNull();
+    expect(isStripCollapsed('A', 'images', true)).toBe(true);
+    expect(composerModeMemory('A').seen).toEqual({});
+    expect(getRememberedStrip('B')).toBe('images');
+    expect(getShownStrip('B')).toBe('images');
+    expect(composerModeMemory('B').seen).toEqual({ image: 'x' });
+  });
+
+  it('выход из аккаунта: память прошлого пользователя не видна', () => {
+    selectStrip('A', 'images');
+    requestStrip('A', 'images');
+    reportShownStrip('A', 'images');
+    setStripCollapsed('A', 'images', false);
+    composerModeMemory('A').seen = { image: 'x' };
+    composerModeMemory('A').modeId = 'image';
+    resetComposerMemory();
+    expect(getActiveStrip('A', ['git', 'images'])).toBe('images'); // из localStorage устройства, фокуса нет
+    expect(getShownStrip('A')).toBeUndefined();
+    expect(getPendingFocus('A')).toBeNull();
+    expect(composerModeMemory('A')).toEqual({ seen: {}, modeId: null });
   });
 });

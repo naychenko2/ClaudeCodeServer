@@ -260,9 +260,9 @@ public sealed class VideoEditJobService : IDisposable
             return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, QuoteMismatchText);
 
         // Кадры читаются ДО слота и до денег: нет кадра — отказ без следа
-        var frameA = await _frames.ReadAsync(scope, settings.FrameA, ct);
+        var frameA = await _frames.ReadAsync(ownerId, scope, settings.FrameA, ct);
         if (frameA.ErrorCode is not null) return Fail<VideoJobCreated>(frameA.ErrorCode, frameA.Error!);
-        var frameB = await _frames.ReadAsync(scope, settings.FrameB, ct);
+        var frameB = await _frames.ReadAsync(ownerId, scope, settings.FrameB, ct);
         if (frameB.ErrorCode is not null) return Fail<VideoJobCreated>(frameB.ErrorCode, frameB.Error!);
 
         var initiator = input.Initiator == VideoInitiators.Agent ? VideoInitiators.Agent : VideoInitiators.Human;

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
+using ClaudeHomeServer.Services.VideoEditor.Films;
 
 namespace ClaudeHomeServer.Services.VideoEditor;
 
@@ -53,9 +54,13 @@ public sealed class VideoEditorSubsystem : IAppSubsystem
         services.AddSingleton<IVideoEngine>(sp => sp.GetRequiredService<Engines.FalVideoEngine>());
         // Исполнитель съёмки: котировка → запуск по quoteId, потолки, траты, события video_edit_*, итог
         // версиями сцены и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
+        // Чтение кадров сцены: файлы проекта и (швом IImageFrameSource, необязательным) версии нитей «Картинок»
+        services.AddSingleton<Jobs.VideoFrameReader>();
         services.AddSingleton<Jobs.VideoJobThreads>();
         services.AddSingleton<Jobs.VideoEditJobService>();
         // Гейт ручек: флаг, свой проект, свой чат — иначе 404
         services.AddSingleton<Controllers.VideoEditScopeGate>();
+        // Фильм: .film под ревизией, сохранение сцены, сборка ffmpeg, подписки на «Картинки» и «Звук» (блок 2)
+        services.AddFilms();
     }
 }

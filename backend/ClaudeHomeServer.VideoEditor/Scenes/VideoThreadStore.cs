@@ -105,10 +105,10 @@ public sealed class VideoThreadStore(string root, TimeProvider? time = null)
     // Настройки сцены (текст, кадры, поставщик, модель, длительность…). Пишутся от человека (с ревизией)
     // и агентом (null — без сверки)
     public VideoThreadWrite SetSettings(string ownerId, string sessionId, string sceneId, VideoSceneSettingsDto settings,
-        long? revision) =>
+        long? revision, VideoThreadEvent? log = null) =>
         Mutate(ownerId, sessionId, sceneId, revision, (state, scene) =>
             ValidSettings(settings)
-                ? Replace(state, scene with { Settings = settings })
+                ? Replace(state, scene with { Settings = settings }, log)
                 : new VideoThreadWrite(VideoThreadWriteStatus.Invalid, state));
 
     // «Продолжить от версии»: версия становится текущей, ничего не удаляет; focus — заодно взять сцену в работу

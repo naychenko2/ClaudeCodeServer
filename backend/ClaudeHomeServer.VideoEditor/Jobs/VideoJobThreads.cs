@@ -40,6 +40,11 @@ public sealed class VideoJobThreads(
             && directory.ResolveOwnerId(session) == ownerId;
     }
 
+    // Область чата (id проекта или personal) — для рассылки события, когда вызывающий знает только чат.
+    // Без справочника чатов (тесты без DI) — personal: событие всё равно уходит владельцу нитей
+    public string ScopeKeyOf(string sessionId) =>
+        directory?.GetById(sessionId) is { } session ? VideoEditScope.Of(session).Key : VideoEditScope.Personal;
+
     // Якорь сцены в ленте — зовут ручки при заведении сцены
     public Task AnchorAsync(string sessionId, VideoSceneDto scene, CancellationToken ct) =>
         RecordAsync(sessionId, VideoThreadRecordTypes.Scene, $"Видео: {scene.Name}",
@@ -114,6 +119,28 @@ public sealed class VideoJobThreads(
         catch (Exception ex)
         {
             log.LogWarning(ex, "Видео: итог задачи {JobId} не записан в сцену {SceneId}", jobId, sceneId);
+        }
+    }
+
+    // Тихая строка в ленте (video_note): без карточки, модель её не видит; журнал для хода пишет вызывающий в нить
+    public Task NoteAsync(string sessionId, string text, object data, CancellationToken ct = default) =>
+        RecordAsync(sessionId, VideoThreadRecordTypes.Note, text, data, ct);
+
+    // Карточка «сцена сохранена в проект»
+    public Task SavedAsync(string sessionId, string text, object data, CancellationToken ct = default) =>
+        RecordAsync(sessionId, VideoThreadRecordTypes.Saved, text, data, ct);
+
+    // Фильм изменён (правка, сборка, музыка): свежее состояние уходит владельцу. Не привязано к чату
+    public async Task BroadcastFilmAsync(string ownerId, string scopeKey, string path, FilmStateDto state)
+    {
+        if (broadcaster is null) return;
+        try
+        {
+            await broadcaster.ToOwner(ownerId, new VideoFilmChangedMessage(scopeKey, path, state));
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "Видео: состояние фильма {Path} не разослано", path);
         }
     }
 

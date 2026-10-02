@@ -27,6 +27,8 @@ public static class VideoThreadEventKinds
     public const string Versions = "versions";
     public const string Saved = "saved";
     public const string Interrupted = "interrupted";
+    // Кадр сцены переехал на новую версию нити «Картинок», клип уже снят — переснять
+    public const string FrameChanged = "frameChanged";
 }
 
 public enum VideoThreadWriteStatus

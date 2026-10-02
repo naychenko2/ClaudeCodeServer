@@ -78,6 +78,9 @@ public static class FeatureFlagKeys
     // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта, общая панель генерации.
     // Гейтит и серверные ручки модуля audio-editor.
     public const string AudioEditor = "audio-editor";
+    // MIDI-просмотрщик: ноты из .mid открываются в файлах и в редакторе звука, их видно на
+    // нотной ленте и можно послушать. Выкатка выключенной (dark launch) за этим флагом.
+    public const string MidiEditor = "midi-editor";
 }
 
 /// <summary>
@@ -207,6 +210,14 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.AudioEditor,
             Title: "Звук",
             Description: "Озвучка текста, музыка и правка звука прямо в проекте: результат ложится версиями рядом с исходником, оригинал не трогается.",
+            Default: false,
+            Stage: "dev"),
+
+        // MIDI-просмотрщик: ноты из .mid открываются в файлах и в редакторе звука.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.MidiEditor,
+            Title: "MIDI: просмотр и правка",
+            Description: "Ноты из .mid открываются в файлах и в редакторе звука: их видно на нотной ленте и можно послушать.",
             Default: false,
             Stage: "dev"),
     ];

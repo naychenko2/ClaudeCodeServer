@@ -1535,6 +1535,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const activeToolText = activeTool?.kind === 'tool_use' ? activeToolLabel(activeTool) : null;
   const activeToolStart = activeTool?.kind === 'tool_use' ? activeTool.startedAt ?? null : null;
   const activeToolTimed = activeTool?.kind === 'tool_use' ? !awaitsToolStart(activeTool) : true;
+  const activeToolAppeared = activeTool?.kind === 'tool_use' ? activeTool.appearedAt ?? null : null;
   // Ждёт ответа от пользователя (permission_request / ask_question) — для режима текста
   const awaitingResponse = items.some(it =>
     (it.kind === 'permission_request' || it.kind === 'ask_question') && !it.resolved
@@ -2763,6 +2764,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 activeToolLabel={activeToolText}
                 activeToolStartedAt={activeToolStart}
                 activeToolTimer={activeToolTimed}
+                activeToolAppearedAt={activeToolAppeared}
               />
             </div>
             {/* Пилюле — не больше половины строки: иначе на 320px её 300px съедали всё, и у

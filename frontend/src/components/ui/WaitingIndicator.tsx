@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { C, FS, SP } from '../../lib/design';
-import { waitingToolCaption } from '../../lib/toolTiming';
+import { captionLeadMs, waitingToolCaption } from '../../lib/toolTiming';
 import { useRunningElapsed } from '../../hooks/useRunningElapsed';
 import { pickVerb } from '../chat/thinkingVerbs';
 import aiHome from '../../assets/ai-home.png';
@@ -29,7 +29,7 @@ const ECHO_FACE_H = 56;
 // «Синхронизирую транскрипты · 52 с». Пропы примитивами: объект пересоздавался бы на каждом
 // рендере ленты. Подпись встаёт только с порога TOOL_TIMER_MIN_MS, чтобы быстрые Read/Grep
 // не мигали поверх глаголов, и без печати — она сменяет глагол целиком.
-export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks, activeToolLabel, activeToolStartedAt, activeToolTimer = true }: {
+export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks, activeToolLabel, activeToolStartedAt, activeToolTimer = true, activeToolAppearedAt }: {
   planning?: 'planning' | 'replanning';
   hint?: string;
   awaitingResponse?: boolean;
@@ -44,6 +44,8 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   activeToolStartedAt?: number | null;
   // false — фактический старт ещё не пришёл (awaitsToolStart): подпись без времени
   activeToolTimer?: boolean;
+  // Момент появления вызова до сдвига старта на tool_started; null — старт не сдвигался
+  activeToolAppearedAt?: number | null;
 } = {}) {
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -90,7 +92,9 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
 
   // Отсчёт идущего инструмента; до первого тика — null, и подпись не встаёт (порог)
   const toolElapsed = useRunningElapsed(activeToolStartedAt, !!activeToolLabel && !awaitingResponse);
-  const tool = waitingToolCaption(activeToolLabel, toolElapsed, activeToolTimer, !!awaitingResponse);
+  // Порог — от появления вызова: подпись, вставшая до tool_started, на старте не уходит в глаголы
+  const tool = waitingToolCaption(activeToolLabel, toolElapsed, activeToolTimer, !!awaitingResponse,
+    captionLeadMs(activeToolStartedAt, activeToolAppearedAt));
 
   // Обёртка лица: внешний бокс с вертикальным резервом (ECHO_FACE_H), внутри — аватар
   // 28px по центру с двумя кольцами «Эхо» поверх. Резерв вмещает размах колец, чтобы они

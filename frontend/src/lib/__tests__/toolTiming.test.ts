@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { activeToolLabel, awaitsToolStart, formatClock, formatWaitClock, isQueued, isToolGroupDone, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption } from '../toolTiming';
+import { activeToolLabel, awaitsToolStart, captionLeadMs, formatClock, formatWaitClock, isQueued, isToolGroupDone, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption } from '../toolTiming';
 import { toolCardLabel } from '../toolLabels';
 
 // Дефект Киры: карточка разрешения встаёт ПОСЛЕ группы и сворачивала её в «N действий»
@@ -426,6 +426,37 @@ describe('waitingToolCaption — порог и время', () => {
   it('ждёт ответа человека или подписи нет — глаголы', () => {
     expect(waitingToolCaption('Сборка', 5_000, true, true)).toBeNull();
     expect(waitingToolCaption(null, 5_000, true, false)).toBeNull();
+  });
+});
+
+// Остаток дефекта 776fd3f9: на tool_started старт сдвигается, отсчёт индикатора начинается с
+// нуля, и порог 2 с срабатывал второй раз — «подпись → глаголы → подпись». Индикатор ровно так
+// и считает: useRunningElapsed от startedAt + waitingToolCaption с captionLeadMs
+describe('индикатор: «ожидает старта → стартовал» без возврата к глаголам', () => {
+  const caption = (startedAt: number, appearedAt: number | undefined, elapsed: number | null, timer: boolean) =>
+    waitingToolCaption('Собираю бэкенд', elapsed, timer, false, captionLeadMs(startedAt, appearedAt));
+
+  it('подпись до старта остаётся после tool_started, цифры — от фактического старта', () => {
+    // Bash появился в 1000, ждёт разрешения: к 4000 подпись без времени уже стоит
+    expect(caption(1_000, undefined, 3_000, false)).toEqual({ label: 'Собираю бэкенд', clock: null });
+    // tool_started в 5000: редьюсер сдвинул старт и запомнил появление. Первый кадр до тика
+    // (elapsed null) и первые секунды — подпись, а не глаголы
+    expect(caption(5_000, 1_000, null, true)).toEqual({ label: 'Собираю бэкенд', clock: '0 с' });
+    expect(caption(5_000, 1_000, 1_000, true)).toEqual({ label: 'Собираю бэкенд', clock: '1 с' });
+  });
+
+  it('быстрый вызов (меньше 2 с всего) по-прежнему не всплывает', () => {
+    // Появился в 1000, стартовал в 1500, 300 мс работы — всего 0,8 с
+    expect(caption(1_500, 1_000, null, true)).toBeNull();
+    expect(caption(1_500, 1_000, 300, true)).toBeNull();
+    // Порог — от появления: 0,5 с до старта + 1,5 с работы
+    expect(caption(1_500, 1_000, 1_500, true)).toEqual({ label: 'Собираю бэкенд', clock: '1 с' });
+  });
+
+  it('старт не сдвигался — порог как прежде, до первого тика глаголы', () => {
+    expect(captionLeadMs(1_000, undefined)).toBe(0);
+    expect(caption(1_000, undefined, null, true)).toBeNull();
+    expect(caption(1_000, undefined, 1_999, true)).toBeNull();
   });
 });
 

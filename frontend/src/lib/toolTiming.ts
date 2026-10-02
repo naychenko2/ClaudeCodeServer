@@ -341,12 +341,24 @@ export function formatWaitClock(ms: number): string {
 
 // Что показать индикатору ожидания вместо глагола. null — глаголы: инструмента нет, ход
 // ждёт ответа человека или порог не пройден (elapsed null — до первого тика). clock null —
-// подпись без времени: фактический старт Bash/агента ещё не пришёл (timer = false)
+// подпись без времени: фактический старт Bash/агента ещё не пришёл (timer = false).
+// leadMs — сколько вызов уже провисел до текущего startedAt (tool_started сдвинул старт, см.
+// captionLeadMs). Порог один на вызов и считается от появления: иначе подпись, уже стоявшая
+// до старта, на tool_started сменялась глаголами ещё на 2 с — отсчёт-то начался с нуля
 export function waitingToolCaption(
-  label: string | null | undefined, elapsed: number | null, timer: boolean, awaitingResponse: boolean,
+  label: string | null | undefined, elapsed: number | null, timer: boolean, awaitingResponse: boolean, leadMs = 0,
 ): { label: string; clock: string | null } | null {
-  if (awaitingResponse || !label || elapsed == null || elapsed < TOOL_TIMER_MIN_MS) return null;
-  return { label, clock: timer ? formatWaitClock(elapsed) : null };
+  if (awaitingResponse || !label) return null;
+  // До первого тика нового отсчёта (elapsed null) — ноль: прошедший порог не откатываем
+  const run = elapsed ?? (leadMs > 0 ? 0 : null);
+  if (run == null || run + leadMs < TOOL_TIMER_MIN_MS) return null;
+  return { label, clock: timer ? formatWaitClock(run) : null };
+}
+
+// Сколько вызов провисел до фактического старта: от появления (appearedAt — прежний startedAt,
+// его хранит редьюсер на tool_started) до текущего startedAt. 0 — старт не сдвигался
+export function captionLeadMs(startedAt: number | null | undefined, appearedAt: number | null | undefined): number {
+  return typeof startedAt === 'number' && typeof appearedAt === 'number' ? Math.max(0, startedAt - appearedAt) : 0;
 }
 
 // Пройдена ли группа «N действий» (сворачивать ли её). Обычно — как только после неё встал

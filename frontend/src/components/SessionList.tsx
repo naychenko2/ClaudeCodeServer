@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react';
 import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive } from 'lucide-react';
 import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
+import { idbGet } from '../lib/idb';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -212,11 +213,25 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Загрузка и поллинг сессий
   useEffect(() => {
     initializedRef.current = false;
+    // Ответ ушедшего проекта не должен лечь в список нового
+    let cancelled = false;
+    let freshArrived = false;
+
+    // Прошлый ответ из офлайн-кэша рисуем сразу, не дожидаясь сервера: иначе при входе в
+    // проект список стоял с одним открытым чатом, пока свежий ответ ехал по сети. Свежий
+    // список заменяет кэш целиком; empty-состояния и автовыбор ждут именно его (loaded)
+    idbGet<Session[]>(`/projects/${project.id}/sessions`).then(cached => {
+      if (cancelled || freshArrived || !Array.isArray(cached?.data)) return;
+      const fromCache = cached.data;
+      // Чат, подложенный до кэша (открытый, в т.ч. только что созданный), не теряем
+      setSessions(prev => [...prev.filter(p => !fromCache.some(c => c.id === p.id)), ...fromCache]);
+    }).catch(() => { /* кэш недоступен — ждём сервер */ });
 
     const init = async () => {
       // Офлайн без кэша — список недоступен, выходим без выбора
       const list = await api.sessions.list(project.id).catch(() => null);
-      if (!list) return;
+      if (!list || cancelled) return;
+      freshArrived = true;
       setSessions(list);
       setLoaded(true);
       if (!initializedRef.current) {
@@ -240,7 +255,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const interval = setInterval(() => {
       api.sessions.list(project.id).then(list => setSessions(prev => keepIfSame(prev, list))).catch(() => {});
     }, 5000);
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [project.id]);
 
   // Подписка на статусы в реальном времени. Членство в project-группе держит WorkspacePage.

@@ -22,20 +22,33 @@ public class TestRunStagesTests
         _now = 13_000;
         stages.Advance("build").Should().BeTrue();
         _now = 115_000;
-        stages.Advance("list").Should().BeTrue();
+        stages.Advance("list").Should().BeTrue("подсчёт открывает этап «тесты»");
         _now = 118_000;
-        stages.Advance("running").Should().BeTrue();
+        stages.Advance("running").Should().BeFalse("конец подсчёта — тот же этап «тесты»");
         _now = 120_000;
         stages.Advance("running").Should().BeFalse("шаг счётчика «412 из 7951» — тот же этап");
 
         stages.Snapshot().Should().Equal(
             new ToolStage("queued", "очередь", 1_000, 13_000),
             new ToolStage("build", "сборка", 13_000, 115_000),
-            new ToolStage("list", "подсчёт", 115_000, 118_000),
-            new ToolStage("running", "тесты", 118_000));
+            new ToolStage("running", "тесты", 115_000));
 
         _now = 250_000;
-        stages.Finish(failed: false)[^1].Should().Be(new ToolStage("running", "тесты", 118_000, 250_000));
+        stages.Finish(failed: false)[^1].Should().Be(new ToolStage("running", "тесты", 115_000, 250_000),
+            "время тестов включает подсчёт");
+    }
+
+    [Fact]
+    public void ОбрывНаПодсчёте_КрестикНаТестах()
+    {
+        var stages = NewStages();
+        _now = 1_000;
+        stages.Advance("build");
+        _now = 60_000;
+        stages.Advance("list");
+        _now = 63_000;
+
+        stages.Finish(failed: true)[^1].Should().Be(new ToolStage("running", "тесты", 60_000, 63_000, Failed: true));
     }
 
     [Fact]

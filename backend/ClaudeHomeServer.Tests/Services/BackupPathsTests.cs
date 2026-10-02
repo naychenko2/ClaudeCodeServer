@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.AudioEditor;
+using ClaudeHomeServer.Services.VideoEditor;
 using ClaudeHomeServer.Services.Backup;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Spend;
@@ -147,6 +148,17 @@ public class BackupPathsTests
         // Нити и префы — другие корни: карточка в ленте живёт бессрочно, выбор человека тоже
         BackupPaths.ShouldInclude("audio-threads/user-1/session-1.json").Should().BeTrue();
         BackupPaths.ShouldInclude("audio-editor-prefs/user-1/personal.json").Should().BeTrue();
+    }
+
+    [Fact]
+    public void МодульВидео_РабочаяПапкаИсключена_НитиИПрефыЕдут()
+    {
+        var job = $"{VideoEditorPaths.WorkspaceDirName}/user-1/job-1";
+        BackupPaths.ShouldInclude($"{job}/v1.mp4").Should().BeFalse();
+        BackupPaths.ShouldInclude($"{job}/poster.jpg").Should().BeFalse();
+        BackupPaths.ShouldInclude("video-threads/user-1/session-1.json").Should().BeTrue();
+        BackupPaths.ShouldInclude("video-editor-prefs/user-1/personal.json").Should().BeTrue();
+        BackupPaths.ShouldInclude("video-films/user-1/p-1/ab12.json").Should().BeTrue();
     }
 
     [Fact]

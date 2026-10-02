@@ -198,6 +198,26 @@
           SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll')" />
   </Target>
 
+  <!-- Динамический модуль «Видео» (ADR-022 §1): тот же паттерн, что VideoEditor.
+       ReferenceOutputAssembly="false" — Main не видит типов модуля, швы живут в Core. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.VideoEditor\ClaudeHomeServer.VideoEditor.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyVideoEditorModuleBuild" AfterTargets="Build">
+    <ItemGroup>
+      <VideoEditorModuleFiles Include="..\ClaudeHomeServer.VideoEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.VideoEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(VideoEditorModuleFiles)" DestinationFolder="$(OutDir)modules\video-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.VideoEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.VideoEditor.dll')" />
+  </Target>
+  <Target Name="CopyVideoEditorModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <VideoEditorModuleFiles Include="..\ClaudeHomeServer.VideoEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.VideoEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(VideoEditorModuleFiles)" DestinationFolder="$(PublishDir)modules\video-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.VideoEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.VideoEditor.dll')" />
+  </Target>
+
   <!-- Динамический модуль Architecture (раздел «Архитектура», Viaduct 10.2): тот же паттерн,
        что Notes. ReferenceOutputAssembly="false" — Main не видит типы вертикали на компиляции;
        швы (IArchitectureCodeSource, IStaticBranchContributor, McpEndpoints.ArchitectureName)

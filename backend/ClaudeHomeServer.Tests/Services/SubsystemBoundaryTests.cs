@@ -116,6 +116,9 @@ public class SubsystemBoundaryTests
         // AudioEditor — динамический модуль «Звук» (ADR-021): Main на него не ссылается,
         // без форс-загрузки сторож прошёл бы по нему вакуумно.
         _ = typeof(ClaudeHomeServer.Services.AudioEditor.AudioEditorSubsystem).Assembly;
+        // VideoEditor — динамический модуль «Видео» (ADR-022): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.VideoEditor.VideoEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): форс-загрузка нужна,
         // чтобы сторож видел типы Prompts (OmoPrompts, SubagentPrompts, OmcPersonaRouting)
         // и проверял границы по Prompts.dll.
@@ -290,6 +293,19 @@ public class SubsystemBoundaryTests
                 "ClaudeHomeServer.Services.AudioEditor",
                 SharedAllowedPrefixes
                     .Concat(new[] { "ClaudeHomeServer.Services.AudioEditor" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // VideoEditor — динамический модуль «Видео» (ADR-022 §1). Только общая спинка: Higgsfield,
+        // локальные модели и ffmpeg — швы Core в нейтральных namespace. Ссылка на сборку ImageEditor
+        // или AudioEditor — нарушение, так и проверяется мутацией.
+        new object[]
+        {
+            new VerticalBoundary(
+                "VideoEditor",
+                "ClaudeHomeServer.Services.VideoEditor",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.VideoEditor" })
                     .ToArray(),
                 Array.Empty<string>()),
         },
@@ -1778,6 +1794,9 @@ public class SubsystemBoundaryTests
         // ADR-021 §2: имя рабочей папки модуля «Звук» для бэкапа (AudioEditorPaths) — Main
         // типов динамического модуля не видит. Сам модуль — в ClaudeHomeServer.AudioEditor.
         "ClaudeHomeServer.Services.AudioEditor",
+        // ADR-022 §2: имя рабочей папки модуля «Видео» для бэкапа (VideoEditorPaths) и общие
+        // константы агента — Main типов динамического модуля не видит.
+        "ClaudeHomeServer.Services.VideoEditor",
         // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая
         // функция по сигнатуре байтов, нужна и модулю редактора, и LocalMedia в Images.
         "ClaudeHomeServer.Services.ImageEditor.Versioning",

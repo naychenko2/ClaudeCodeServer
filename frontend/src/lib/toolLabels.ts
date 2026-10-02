@@ -55,6 +55,26 @@ export function toolLabel(name: string): string {
   return TOOL_LABELS[name.toLowerCase()] ?? name;
 }
 
+// Консольный инструмент (Bash, PowerShell и прочие shell): тёмный вывод, команда в input.command
+export function isConsoleTool(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.startsWith('bash') || n.includes('shell');
+}
+
+// Живая подпись консольной команды: модель пишет в description по-русски, что делает команда
+// («Синхронизирую транскрипты») — её и показываем в шапке, а саму команду уводим в тело.
+// null — подписи нет (старые чаты, не консоль, MCP с полем command) или аргументы ещё
+// стримятся: тогда карточка ведёт себя как раньше
+export function consoleCaption(
+  name: string, input: unknown, streamingArg?: string | null,
+): { description: string; command: string } | null {
+  if (!isConsoleTool(name) || name.startsWith('mcp__') || streamingArg != null) return null;
+  const inp = (input ?? {}) as { command?: unknown; description?: unknown };
+  if (typeof inp.command !== 'string' || !inp.command.trim()) return null;
+  if (typeof inp.description !== 'string' || !inp.description.trim()) return null;
+  return { description: inp.description.trim(), command: inp.command };
+}
+
 // Прогон тестов (run_tests): вид прогона виден в шапке карточки — «Тесты · vitest»
 export const RUN_TESTS_TOOL = 'mcp__tests__run_tests';
 const TEST_KIND_LABELS: Record<string, string> = { dotnet: 'dotnet', vitest: 'vitest', playwright: 'Playwright' };

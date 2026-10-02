@@ -1,13 +1,13 @@
 import { memo, useState, useEffect, useMemo, useContext } from 'react';
 import { Plug, Eye, SquarePen, Terminal, Globe, CircleUser, Sparkles, SquareCheck, Wrench } from 'lucide-react';
 import type { ChatItem } from '../../types';
-import { C, FONT, FS, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
 import { LiveDot, ProgressBar } from '../ui';
 import { awaitsToolStart, formatClock, isQueued, shownFor, stageCaptionOf, stageViews, tickShownClock, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type ShownClock, type StageView } from '../../lib/toolTiming';
-import { toolLabel, toolWord, toolCardLabel, testRunArg, localJobsWaitArg, RUN_TESTS_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
+import { toolLabel, toolWord, toolCardLabel, testRunArg, localJobsWaitArg, consoleCaption, isConsoleTool, RUN_TESTS_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
 import { useIsMobile } from '../../lib/breakpoints';
 import { CodeBlockFrame } from './CodeCopyButton';
 import { MediaBlock, extractMediaMeta, mediaLabel } from './MediaBlock';
@@ -176,7 +176,10 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
       : item.name === RUN_TESTS_TOOL ? testRunArg(inp)
       : item.name === LOCAL_JOBS_WAIT_TOOL ? localJobsWaitArg(inp)
       : null;
-  const toolArg = item.streamingArg ?? taskArg ?? String(
+  // Консольная команда с русской подписью: в шапке — подпись, команда — в теле над выводом
+  const caption = consoleCaption(item.name, item.input, item.streamingArg);
+  const commandText = caption ? stripRoot(caption.command, project?.rootPath) : null;
+  const toolArg = item.streamingArg ?? caption?.description ?? taskArg ?? String(
     (inp.command != null ? stripRoot(String(inp.command), project?.rootPath) : null)
     ?? (pathVal != null ? relPath(String(pathVal), project?.rootPath) : null)
     ?? (inp.pattern != null ? stripRoot(String(inp.pattern), project?.rootPath) : null)
@@ -248,11 +251,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   }, [costPending]);
   // Имя модели — из input вызова (в результате fal его нет)
   const falModel = ((inp.endpoint_id as string | undefined) ?? mediaMeta.model)?.split('/').pop();
-  // Медиа показываем сразу, без клика; текст/diff — за клик
-  const hasBody = hasDiff || (hasResult && !hasMedia);
+  // Медиа показываем сразу, без клика; текст/diff — за клик. Команда, ушедшая из шапки в
+  // тело, раскрывается и до результата
+  const hasBody = hasDiff || (hasResult && !hasMedia) || commandText != null;
   // Консольные инструменты (Bash/shell) → тёмный «терминальный» вывод.
   // Остальные (Read/Grep/Glob/MCP и пр.) → светлая «панель вывода», чтобы текст/код не давил тёмным фоном.
-  const isConsole = n.startsWith('bash') || n.includes('shell');
+  const isConsole = isConsoleTool(item.name);
 
   // Таймер: пока нет результата — тикает раз в секунду (только в живом ходе, см.
   // ToolLivenessContext), после результата — итоговая длительность. Короче порога не
@@ -326,7 +330,10 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
               const dir = sepIdx >= 0 ? toolArg.slice(0, sepIdx + 1) : '';
               const base = sepIdx >= 0 ? toolArg.slice(sepIdx + 1) : toolArg;
               return (
-                <span style={{ flex: 1, display: 'flex', alignItems: 'baseline', overflow: 'hidden', fontFamily: FONT.mono, fontSize: 11, minWidth: 0 }}>
+                <span
+                  title={commandText ?? undefined}
+                  style={{ flex: 1, display: 'flex', alignItems: 'baseline', overflow: 'hidden', fontFamily: caption ? FONT.sans : FONT.mono, fontSize: 11, minWidth: 0 }}
+                >
                   {dir && (
                     <span
                       className="cc-trunc-left"
@@ -402,6 +409,18 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         </div>
       )}
       {open && hasDiff && <DiffBody hunks={editHunks} />}
+      {/* Команда под русской подписью — над выводом и до результата; копируется именно она */}
+      {open && commandText != null && (
+        <CodeBlockFrame text={commandText}>
+          <pre style={{
+            margin: `0 0 ${SP.xs}px`, padding: `${SP.sm}px`, borderRadius: R.sm,
+            background: C.termBg, color: C.termText, fontFamily: FONT.mono, fontSize: FS.xs,
+            maxHeight: 160, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            {commandText}
+          </pre>
+        </CodeBlockFrame>
+      )}
       {open && !hasDiff && hasResult && !hasMedia && (
         <>
           <CodeBlockFrame text={outputText}>

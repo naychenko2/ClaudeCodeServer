@@ -11,6 +11,7 @@ import { PersonaConsultCard } from '../PersonaTaskView';
 import { ToolLivenessContext } from '../contexts';
 import { normalizeHistory } from '../../../lib/chatReducer';
 import { toolLiveness } from '../../../lib/toolTiming';
+import { consoleCaption } from '../../../lib/toolLabels';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -440,5 +441,68 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     const html = render(run({ result: 'итог', finishedAt: 135_000, stages: done3, totals: { passed: 177, failed: 0, total: 177 } }), undefined, false);
     expect(html.indexOf('готово · 2:15')).toBeLessThan(html.indexOf('✓ сборка'));
     expect(html).toContain('177 из 177');
+  });
+});
+
+// Живая русская подпись консольной команды: description — в шапке, команда — в title шапки
+// и в теле над выводом. Тело статикой не видно (карточка свёрнута), поэтому о нём говорит
+// наличие стрелки раскрытия, а состав — чистая consoleCaption
+describe('ToolUseView — русская подпись консольной команды', () => {
+  const bash = (over: Partial<ToolItem>): ToolItem => ({
+    kind: 'tool_use', id: 'c1', name: 'Bash',
+    input: { command: 'git status --short', description: 'Смотрю статус рабочего дерева' },
+    ...over,
+  });
+
+  it('с description: подпись в шапке, команда — подсказкой и не текстом шапки', () => {
+    const html = renderTool(bash({ result: 'M a.ts', finishedAt: 1 }));
+    expect(html).toContain('>Смотрю статус рабочего дерева<');
+    expect(html).toContain('title="git status --short"');
+    expect(html).not.toContain('>git status --short<');
+  });
+
+  it('с description: раскрывается и до результата — команда уехала в тело', () => {
+    const html = renderTool(bash({}));
+    expect(html).toContain('▾');
+  });
+
+  it('без description: как раньше — команда текстом в шапке, без подсказки', () => {
+    const html = renderTool(bash({ input: { command: 'git status --short' } }));
+    expect(html).toContain('>git status --short<');
+    expect(html).not.toContain('title="git status --short"');
+    expect(html).not.toContain('▾');
+  });
+
+  it('во время стрима аргументов: печатается сырой аргумент, подписи нет', () => {
+    const html = renderTool(bash({ streamingArg: '{"command":"git st' }));
+    expect(html).not.toContain('Смотрю статус');
+    expect(html).not.toContain('title="git status --short"');
+  });
+
+  it('MCP с полем command: без изменений, даже если в имени есть shell', () => {
+    const html = renderTool(bash({ name: 'mcp__box__run_shell' }));
+    expect(html).toContain('>git status --short<');
+    expect(html).not.toContain('>Смотрю статус рабочего дерева<');
+  });
+});
+
+describe('consoleCaption', () => {
+  const input = { command: 'ls -la', description: '  Список файлов  ' };
+
+  it('Bash и PowerShell с подписью — подпись обрезана, команда как есть', () => {
+    expect(consoleCaption('Bash', input)).toEqual({ description: 'Список файлов', command: 'ls -la' });
+    expect(consoleCaption('PowerShell', input)).toEqual({ description: 'Список файлов', command: 'ls -la' });
+  });
+
+  it('нет подписи, пустая подпись, нет команды — null', () => {
+    expect(consoleCaption('Bash', { command: 'ls' })).toBeNull();
+    expect(consoleCaption('Bash', { command: 'ls', description: '   ' })).toBeNull();
+    expect(consoleCaption('Bash', { description: 'Список' })).toBeNull();
+  });
+
+  it('не консоль, MCP и стрим аргументов — null', () => {
+    expect(consoleCaption('Read', input)).toBeNull();
+    expect(consoleCaption('mcp__box__run_shell', input)).toBeNull();
+    expect(consoleCaption('Bash', input, '{"comm')).toBeNull();
   });
 });

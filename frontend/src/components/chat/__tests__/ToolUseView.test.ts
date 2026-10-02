@@ -23,6 +23,24 @@ vi.mock('../../../lib/breakpoints', async (orig) => ({
   useIsMobile: () => viewport.mobile,
 }));
 
+// Раскрытая карточка: статический рендер кликов не знает, поэтому флагом подменяем
+// начальное false у useState на true — так рендерится тело (раскрытие и прочие
+// булевы флаги карточки, тут это безвредно). Рамка копирования выставляет свой text
+// атрибутом: что уйдёт в буфер, видно прямо в разметке
+const forceOpen = vi.hoisted(() => ({ on: false }));
+vi.mock('react', async (orig) => {
+  const react = await orig<typeof import('react')>();
+  const useState = ((init: unknown) => react.useState(forceOpen.on && init === false ? true : init)) as typeof react.useState;
+  return { ...react, default: react, useState };
+});
+vi.mock('../CodeCopyButton', async () => {
+  const { createElement: h } = await import('react');
+  return {
+    CodeBlockFrame: ({ text, children }: { text: string; children: unknown }) =>
+      h('div', { 'data-copy': text }, children as never),
+  };
+});
+
 // Квитанция фонового запуска (isAsyncLaunchAck): tool_result приходит мгновенно,
 // завершение агента отслеживается по bgDone/bgAborted, а не по этому тексту
 const ASYNC_ACK =
@@ -477,6 +495,20 @@ describe('ToolUseView — русская подпись консольной к�
     const html = renderTool(bash({ streamingArg: '{"command":"git st' }));
     expect(html).not.toContain('Смотрю статус');
     expect(html).not.toContain('title="git status --short"');
+  });
+
+  it('раскрытая: в теле сама команда, копируется именно она, а не вывод', () => {
+    forceOpen.on = true;
+    try {
+      const html = renderTool(bash({ result: 'M a.ts', finishedAt: 1 }));
+      expect(html).toContain('data-copy="git status --short"');
+      expect(html).toContain('>git status --short</pre>');
+      // вывод — своим блоком со своим текстом для копирования
+      expect(html).toContain('data-copy="M a.ts"');
+      expect(html.indexOf('data-copy="git status --short"')).toBeLessThan(html.indexOf('data-copy="M a.ts"'));
+    } finally {
+      forceOpen.on = false;
+    }
   });
 
   it('MCP с полем command: без изменений, даже если в имени есть shell', () => {

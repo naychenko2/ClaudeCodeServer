@@ -90,12 +90,12 @@ const DOT_SAMPLES: { color: string; label: string }[] = [
   { color: C.textMuted,    label: 'textMuted'    },
 ];
 
-// Демо-файлы для FileTypeTile: код, разметка, документ, картинка и незнакомый тип
-// (последний показывает фолбэк — первые три знака расширения на нейтральной плитке).
 // Старт инструмента для витрины WaitingIndicator: 52 с до загрузки модуля, дальше тикает
 const SHOWCASE_TOOL_STARTED_AT = Date.now() - 52_000;
 
-const FILE_TILE_SAMPLES =['App.tsx', 'Program.cs', 'README.md', 'schema.json', 'shot.png', 'notes.rtf'];
+// Демо-файлы для FileTypeTile: код, разметка, документ, картинка и незнакомый тип
+// (последний показывает фолбэк — первые три знака расширения на нейтральной плитке).
+const FILE_TILE_SAMPLES = ['App.tsx', 'Program.cs', 'README.md', 'schema.json', 'shot.png', 'notes.rtf'];
 
 // Состояния файла для FileStatusBadge — коды git, как их отдаёт статус репозитория
 const FILE_STATUS_SAMPLES: { status: FileStatus; label: string }[] = [
@@ -656,6 +656,10 @@ function OverlaysSection() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
             <WaitingIndicator activeToolLabel="Синхронизирую транскрипты в sub-claude" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} />
             <WaitingIndicator activeToolLabel="Собираю бэкенд и прогоняю тесты" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} activeToolTimer={false} />
+            {/* Длинная подпись в узкой колонке: режется многоточием, время не сжимается */}
+            <div style={{ width: 240, border: `1px dashed ${C.border}` }}>
+              <WaitingIndicator activeToolLabel="Синхронизирую транскрипты всех профилей CLI и пересобираю индекс поиска" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} />
+            </div>
           </div>
         </SubBlock>
 

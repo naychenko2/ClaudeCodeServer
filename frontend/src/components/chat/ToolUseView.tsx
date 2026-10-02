@@ -1,7 +1,7 @@
 import { memo, useState, useEffect, useMemo, useContext } from 'react';
 import { Plug, Eye, SquarePen, Terminal, Globe, CircleUser, Sparkles, SquareCheck, Wrench } from 'lucide-react';
 import type { ChatItem } from '../../types';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, SP } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
@@ -17,6 +17,13 @@ import { useVisibleMedia } from './mediaDedup';
 // Высота строки подписи прогресса и строки этапов под шапкой: фиксированная, чтобы приход
 // и смена текста не двигали ленту
 const CAPTION_LINE_H = 16;
+
+// Общая вёрстка моноширинных блоков тела: команда под подписью и вывод выглядят одной
+// парой — отступы, радиус, кегль и интерлиньяж совпадают
+const MONO_PRE_STYLE: React.CSSProperties = {
+  padding: '8px 10px', borderRadius: 7, fontFamily: FONT.mono, fontSize: 11.5, lineHeight: 1.5,
+  overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+};
 
 // Место слева в шапке: пока инструмент идёт — живая точка (LiveDot), у готовой карточки —
 // пустое место той же ширины, и шапка при завершении не прыгает вбок. Бегущей полосы нет
@@ -316,7 +323,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
               return (
                 <span
                   title={commandText ?? undefined}
-                  style={{ flex: 1, display: 'flex', alignItems: 'baseline', overflow: 'hidden', fontFamily: caption ? FONT.sans : FONT.mono, fontSize: 11, minWidth: 0 }}
+                  style={{ flex: 1, display: 'flex', alignItems: 'baseline', overflow: 'hidden', fontFamily: caption ? FONT.sans : FONT.mono, fontSize: caption ? FS.xs : 11, minWidth: 0 }}
                 >
                   {dir && (
                     <span
@@ -329,7 +336,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
                   <span
                     onClick={clickable ? (e) => { e.stopPropagation(); onOpenFile!(relPath(String(pathVal), project?.rootPath)); } : undefined}
                     title={clickable ? 'Открыть файл' : undefined}
-                    style={{ color: clickable ? C.accent : C.textMuted, cursor: clickable ? 'pointer' : 'inherit', flexShrink: 0 }}
+                    // Имя файла держим целиком (каталог слева обрежется сам); прочий аргумент —
+                    // подпись, команда — обрезаем многоточием, а не посреди слова
+                    style={{
+                      color: clickable ? C.accent : C.textMuted, cursor: clickable ? 'pointer' : 'inherit',
+                      ...(argIsPath ? { flexShrink: 0 } : { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+                    }}
                   >
                     {base}
                   </span>
@@ -397,9 +409,8 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
       {open && commandText != null && (
         <CodeBlockFrame text={commandText}>
           <pre style={{
-            margin: `0 0 ${SP.xs}px`, padding: `${SP.sm}px`, borderRadius: R.sm,
-            background: C.termBg, color: C.termText, fontFamily: FONT.mono, fontSize: FS.xs,
-            maxHeight: 160, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            ...MONO_PRE_STYLE, margin: `0 0 ${SP.xs}px`, maxHeight: 160,
+            background: C.termBg, color: C.termText,
           }}>
             {commandText}
           </pre>
@@ -409,7 +420,8 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         <>
           <CodeBlockFrame text={outputText}>
             <pre style={{
-              margin: agentSplit?.tail ? '0 0 4px' : '0 0 9px', padding: '8px 10px', borderRadius: 7,
+              ...MONO_PRE_STYLE, maxHeight: 280,
+              margin: agentSplit?.tail ? '0 0 4px' : '0 0 9px',
               // Bash → тёмный терминал; остальное → светлая панель вывода
               background: isConsole ? C.termBg : C.outputBg,
               border: isConsole ? 'none' : `1px solid ${C.outputBorder}`,
@@ -417,9 +429,6 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
               color: isConsole
                 ? (item.isError ? C.termError : C.termText)
                 : (item.isError ? C.dangerText : C.textPrimary),
-              fontFamily: FONT.mono,
-              fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
-              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             }}>
               {outputText.length > 4000 ? outputText.slice(0, 4000) + '\n…(обрезано)' : outputText}
             </pre>

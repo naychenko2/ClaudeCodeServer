@@ -7,6 +7,9 @@ using ClaudeHomeServer.Services.AudioEditor.Threads;
 using ClaudeHomeServer.Services.Media;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
+using Moq;
 
 namespace ClaudeHomeServer.AudioEditor.Tests.Engines;
 
@@ -89,6 +92,28 @@ public sealed class DspAudioEngineTests : IDisposable
         _store.ReferencedJobs(Owner).Should().Contain(version.JobId!);
         thread.Launches.Should().BeEmpty("правка без ИИ — не запуск");
         _store.Get(Owner, Session).Events.Should().Contain(e => e.Kind == AudioThreadEventKinds.Edited && e.JobId == version.JobId);
+    }
+
+    [Fact]
+    public async Task Правка_кладёт_в_ленту_якорь_карточки_своей_версии()
+    {
+        var threadId = OpenSong();
+        var records = new List<StoredModuleRecord>();
+        var feed = new Mock<IChatFeed>();
+        feed.Setup(f => f.AppendRecordAsync(Session, It.IsAny<StoredModuleRecord>(), It.IsAny<CancellationToken>()))
+            .Callback<string, StoredModuleRecord, CancellationToken>((_, r, _) => records.Add(r))
+            .ReturnsAsync(true);
+        var threads = new AudioJobThreads(_store, NullLogger<AudioJobThreads>.Instance, null, feed.Object);
+        var engine = new DspAudioEngine(threads, _workspace, NullLogger<DspAudioEngine>.Instance, _dsp);
+
+        var result = await engine.EditAsync(Owner, _scope,
+            new AudioDspEditInput(Session, threadId, AudioDspEditOp.Trim, StartSec: 1, EndSec: 3), CancellationToken.None);
+
+        result.ErrorCode.Should().BeNull(result.Error);
+        var record = records.Should().ContainSingle().Subject;
+        record.RecordType.Should().Be(AudioJobThreads.RecordTypes.Thread);
+        record.Data!.Value.GetProperty("threadId").GetString().Should().Be(threadId);
+        record.Data!.Value.GetProperty("versionId").GetString().Should().Be(result.Value!.VersionId, "карточка — на новой версии, а не на исходнике");
     }
 
     [Fact]

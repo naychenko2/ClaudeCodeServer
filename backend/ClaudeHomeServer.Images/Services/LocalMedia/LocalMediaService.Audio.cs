@@ -29,6 +29,24 @@ public sealed partial class LocalMediaService
         ["vocals", "backing_vocals", "drums", "bass", "guitar", "keyboard", "percussion", "strings", "synth", "fx",
          "brass", "woodwinds"];
     public static readonly IReadOnlyList<string> SeparateModes = ["vocals", "4stems", "6stems", "karaoke"];
+    public static readonly IReadOnlyList<string> StemFormats = ["mp3", "wav", "flac"];
+    public static readonly IReadOnlyList<string> SeedVcModes = ["speech", "singing"];
+    public static readonly IReadOnlyList<string> UpsampleModels = ["basic", "speech"];
+
+    // Числовые аргументы аудио-операций: умолчание и границы. Те же значения показывает схема
+    // «Дополнительно» модуля «Звук» (AudioCatalog.LocalParams) — расхождение ловит сторож
+    // LocalAudioLimitsSyncTests
+    public sealed record AudioArgRange(double Default, double Min, double Max);
+
+    public static readonly IReadOnlyDictionary<string, AudioArgRange> AudioArgRanges =
+        new Dictionary<string, AudioArgRange>(StringComparer.Ordinal)
+        {
+            ["strength"] = new(0.6, 0, 1),
+            ["pitch_shift"] = new(0, -24, 24),
+            ["epochs"] = new(200, 20, 1000),
+            ["bpm"] = new(120, 40, 220),
+            ["expressiveness"] = new(0.5, 0.25, 2.0),
+        };
     public static readonly IReadOnlyList<string> EnhanceModes = ["denoise", "upsample", "master"];
     public static readonly IReadOnlyList<string> QwenSpeakers =
         ["Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee"];
@@ -138,7 +156,7 @@ public sealed partial class LocalMediaService
                 switch (task)
                 {
                     case "cover":
-                        p["strength"] = Range(a, "strength", 0.6, 0, 1);
+                        p["strength"] = Range(a, "strength");
                         break;
                     case "repaint":
                         var start = Range(a, "start_seconds", 0, 0, 600);
@@ -169,8 +187,8 @@ public sealed partial class LocalMediaService
             case LocalMediaOps.VoiceConvert:
             {
                 var engine = OneOf(a, "engine", "seedvc", ["seedvc", "rvc"]);
-                var shift = (int)Range(a, "pitch_shift", 0, -24, 24);
-                var mode = engine == "seedvc" ? OneOf(a, "mode", "speech", ["speech", "singing"]) : null;
+                var shift = (int)Range(a, "pitch_shift");
+                var mode = engine == "seedvc" ? OneOf(a, "mode", "speech", SeedVcModes) : null;
                 // Модель v2 режима speech сдвига высоты не умеет: молча отдать исходную высоту хуже отказа
                 if (mode == "speech" && shift != 0)
                     throw new LocalMediaInputException("Seed-VC в режиме speech сдвиг высоты не применяет: уберите "
@@ -206,7 +224,7 @@ public sealed partial class LocalMediaService
                     names.Add(name);
                     total += seconds ?? 0;
                 }
-                var epochs = (int)Range(a, "epochs", 200, 20, 1000);
+                var epochs = (int)Range(a, "epochs");
                 job.Engine = "rvc";
                 job.InputSeconds = total;
                 return (ComfyWorkflows.AudioWorker("rvc_train", new JsonObject { ["epochs"] = epochs }, names, job.Id, 240),
@@ -216,7 +234,7 @@ public sealed partial class LocalMediaService
             case LocalMediaOps.AudioSeparate:
             {
                 var mode = OneOf(a, "mode", "vocals", SeparateModes);
-                var format = OneOf(a, "format", "mp3", ["mp3", "wav", "flac"]);
+                var format = OneOf(a, "format", "mp3", StemFormats);
                 var (name, seconds) = await AudioInputAsync(inputs, job, Required(a, "audio"), "src", maxAudioInputSeconds, ct);
                 job.Engine = mode;
                 return (ComfyWorkflows.AudioWorker("separate", new JsonObject { ["mode"] = mode, ["format"] = format },
@@ -244,7 +262,7 @@ public sealed partial class LocalMediaService
                         if (seconds > UpsampleMaxSeconds)
                             throw new LocalMediaInputException($"Расширение частот — для записей до {UpsampleMaxSeconds} с: "
                                 + "оно медленное. Отрежь нужный кусок.");
-                        var model = OneOf(a, "model", "basic", ["basic", "speech"]);
+                        var model = OneOf(a, "model", "basic", UpsampleModels);
                         return (ComfyWorkflows.AudioWorker("upsample", new JsonObject { ["model"] = model }, [name], job.Id, 30),
                             UpsampleEta(seconds));
                     default:
@@ -318,7 +336,7 @@ public sealed partial class LocalMediaService
                 var language = Str(a, "language") ?? "unknown";
                 if (!ComfyWorkflows.AceLanguages.Contains(language))
                     throw new LocalMediaInputException("language — код языка вокала (ru, en, …) или unknown.");
-                var bpm = (int)Range(a, "bpm", 120, 40, 220);
+                var bpm = (int)Range(a, "bpm");
                 var key = Str(a, "key") ?? "C major";
                 if (!ComfyWorkflows.AceKeys.Contains(key))
                     throw new LocalMediaInputException("key — тональность вида «A minor» или «F# major».");
@@ -389,7 +407,7 @@ public sealed partial class LocalMediaService
             if (!ChatterboxLanguages.Contains(language))
                 throw new LocalMediaInputException("language для chatterbox — одно из: " + string.Join(", ", ChatterboxLanguages) + ".");
             p["language"] = language;
-            p["exaggeration"] = Range(a, "expressiveness", 0.5, 0.25, 2.0);
+            p["exaggeration"] = Range(a, "expressiveness");
             op = "tts_chatterbox";
         }
         else
@@ -517,6 +535,12 @@ public sealed partial class LocalMediaService
         return allowed.Contains(value)
             ? value
             : throw new LocalMediaInputException($"{name} — одно из: {string.Join(", ", allowed)}.");
+    }
+
+    private static double Range(JsonObject a, string name)
+    {
+        var r = AudioArgRanges[name];
+        return Range(a, name, r.Default, r.Min, r.Max);
     }
 
     private static double Range(JsonObject a, string name, double fallback, double min, double max)

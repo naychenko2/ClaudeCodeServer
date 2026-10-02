@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
@@ -216,6 +217,10 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
             if (!resp.IsSuccessStatusCode)
                 return Fail(ClassifyHttp(resp.StatusCode, text), false, null, ErrorText(text, resp.StatusCode));
             ticket = ParseTicket(text) ?? throw new JsonException("нет request_id в ответе очереди");
+            // Ключ уходит и на эти адреса — чужой хост не опрашиваем
+            if (!new[] { ticket.StatusUrl, ticket.ResponseUrl, ticket.CancelUrl }.All(u => FalQueueUrls.IsTrusted(u, _queueBase)))
+                return Fail(EditOutcome.Failed, null, ticket.RequestId,
+                    "fal.ai вернул адрес опроса вне своих хостов — задачу не опрашиваем");
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException || ex is TaskCanceledException && !ct.IsCancellationRequested)
         {

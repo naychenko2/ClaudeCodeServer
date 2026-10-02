@@ -11,7 +11,7 @@ import { draftStem, mixRequest } from './model';
 import { opInfo } from '../ops';
 import { resolveLaunch } from '../strip/summary';
 import {
-  focusThread, getCatalog, getPrefs, getShortcutMode, mutate, requestSoundMode, setShortcutMode, soundDraftKey, SOUND_PANEL, SOUND_STRIP,
+  focusThread, getCatalog, getPrefs, getShortcutMode, mutate, requestSoundMode, soundDraftKey, SOUND_PANEL, SOUND_STRIP,
 } from './threadStore';
 
 // «✦ Новый звук»: черновик в корне, его настройки — копия префов режима; поле — в режим «Звук»
@@ -28,16 +28,15 @@ export async function releaseFocus(scope: string, sessionId: string, thread: Aud
   if (thread) await focusThread(scope, sessionId, null);
 }
 
-// Ярлык «Голос» / «Музыка» (меню полос, «＋» композера, пустая лента): полоса «Звук», режим и
-// панель «Звук» на «Настройках», если человек её в этом чате не закрывал (решение 2 по v2).
-// Панель читает режим из стора (getShortcutMode)
-export function openSoundShortcut(sessionId: string | null, mode: AudioMode) {
+// Ярлык «Звук» (меню полос, «＋» композера, пустая лента): полоса «Звук» и панель «Звук» на
+// «Настройках», если человек её в этом чате не закрывал (решение 2 по v2). Режим — последний
+// выбранный в панели (getShortcutMode, по умолчанию «Голос»)
+export function openSoundShortcut(sessionId: string | null) {
   // Чата ещё нет — закрыть панель в нём не могли: открываем всегда
   if (!sessionId) {
     revealWorkspacePanel(SOUND_PANEL, 'settings');
     return;
   }
-  setShortcutMode(sessionId, mode);
   requestStrip(sessionId, SOUND_STRIP);
   autoRevealGenerationPanel(SOUND_PANEL, sessionId, 'settings');
 }
@@ -99,7 +98,7 @@ export async function mixStems(scope: string, sessionId: string, thread: AudioTh
   if (!plan.canMix) return false;
   const ok = await mutate(scope, sessionId, async rev =>
     (await audioApi.mix(scope, sessionId, thread.id, mixRequest(plan, versionId, rev))).state);
-  if (ok) showToast(`Сведено: ${plan.description}`, 'Новая версия — в карточке нити', 'info');
+  if (ok) showToast(`Сведено: ${plan.description}`, 'Новая версия — своей карточкой в ленте', 'info');
   return ok;
 }
 

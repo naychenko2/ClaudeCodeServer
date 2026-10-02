@@ -226,20 +226,28 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
     }
 
     // Снять задачу из ожидающих: POST /queue {"delete":[id]}. Идущую задачу ComfyUI так не
-    // снимает — для неё нужен interrupt, а он бьёт по любому текущему прогону
-    public async Task DeletePendingAsync(string promptId, CancellationToken ct)
+    // снимает — для неё InterruptAsync
+    public Task DeletePendingAsync(string promptId, CancellationToken ct) =>
+        PostAsync("queue", new JsonObject { ["delete"] = new JsonArray(promptId) }, "снятие задачи", ct);
+
+    // Прервать идущую задачу: POST /interrupt {"prompt_id":id}. С prompt_id ComfyUI (проверено на
+    // 0.37) прерывает прогон, только если идёт именно он, — чужой не заденет. Без prompt_id не
+    // звать: так прерывается любой текущий прогон
+    public Task InterruptAsync(string promptId, CancellationToken ct) =>
+        PostAsync("interrupt", new JsonObject { ["prompt_id"] = promptId }, "прерывание задачи", ct);
+
+    private async Task PostAsync(string path, JsonObject body, string what, CancellationToken ct)
     {
-        var body = new JsonObject { ["delete"] = new JsonArray(promptId) };
         using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         try
         {
-            using var response = await Client().PostAsync("queue", content, ct);
+            using var response = await Client().PostAsync(path, content, ct);
             if (!response.IsSuccessStatusCode)
-                throw new ComfyException($"ComfyUI отклонил снятие задачи ({(int)response.StatusCode})");
+                throw new ComfyException($"ComfyUI отклонил {what} ({(int)response.StatusCode})");
         }
         catch (HttpRequestException ex)
         {
-            throw new ComfyException("ComfyUI недоступен (снятие задачи)", ex);
+            throw new ComfyException($"ComfyUI недоступен ({what})", ex);
         }
     }
 

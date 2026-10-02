@@ -1,6 +1,7 @@
 // Тело версии звука в карточке ленты: плеер с серверной волной и A/B, мини-микшер стемов со
 // сведением без ИИ и список остальных файлов версии (.abc, .txt/.srt/.lrc, .mid, .pth/.index)
-// со скачиванием. Общее у карточки нити и вариантов запуска.
+// со скачиванием. Выделение куска — у каждой карточки своё: волна показывает его, только если
+// выделяли на этой версии; операция над куском сперва ставит эту версию в работу.
 
 import { useState } from 'react';
 import { Download, FileText } from 'lucide-react';
@@ -9,7 +10,7 @@ import { audioApi, type AudioThread, type AudioThreadVersion } from '../api';
 import { AudioPlayer, StemMixer, type AudioSource, type Stem } from '../player';
 import { normalizeJoint } from '../player/peaks';
 import { isPersonalScope } from '../scope';
-import { downloadFile, mixStems } from './actions';
+import { downloadFile, mixStems, takeVersion } from './actions';
 import { abSides, extraFiles, hasMain, stemsFolder, versionLabel, versionStems } from './model';
 import { useServerPeaks } from './serverPeaks';
 import {
@@ -25,9 +26,6 @@ interface Props {
   sessionId: string;
   thread: AudioThread;
   version: AudioThreadVersion;
-  // Выделение куска — только у нити в работе на её текущей версии
-  selectable: boolean;
-  compact?: boolean;
 }
 
 export function VersionBody(p: Props) {
@@ -41,7 +39,7 @@ export function VersionBody(p: Props) {
   );
 }
 
-function PlayerBlock({ scope, sessionId, thread, version, selectable, compact }: Props) {
+function PlayerBlock({ scope, sessionId, thread, version }: Props) {
   useAudioStoreVersion();
   const sides = abSides(thread, version);
   const peaks = useServerPeaks(sides.map(s => (
@@ -63,23 +61,30 @@ function PlayerBlock({ scope, sessionId, thread, version, selectable, compact }:
     };
   });
 
-  const sel = selectable ? getSelection(sessionId, thread.id) : null;
-  const linked = selectable && getPieceFieldOpen(sessionId) === thread.id;
+  // Выделение одно на нить; карточка показывает его, только если выделяли на её версии
+  const stored = getSelection(sessionId, thread.id);
+  const sel = stored?.versionId === version.id ? stored : null;
+  const current = thread.currentVersionId === version.id;
+  const linked = current && getPieceFieldOpen(sessionId) === thread.id;
+  // Операция над куском — от этой версии: не текущую сперва ставим в работу
+  const operate = async (op: 'trim' | 'repaint') => {
+    if (!current && !(await takeVersion(scope, sessionId, thread, version.id))) return;
+    requestOperation(sessionId, thread.id, op);
+  };
   return (
     <AudioPlayer
       sources={sources}
       activeKey={active}
       onActiveChange={setActive}
       selection={sel}
-      onSelectionChange={selectable ? s => setSelection(sessionId, thread.id, s ? { ...s, versionId: active } : null) : undefined}
-      selectionActions={selectable && (
+      onSelectionChange={s => setSelection(sessionId, thread.id, s ? { ...s, versionId: version.id } : null)}
+      selectionActions={
         <>
           {linked && <span data-piece-linked="" style={{ color: C.accent, fontWeight: 600 }}>= «Кусок» в панели</span>}
-          <Button size="xs" variant="ghost" onClick={() => requestOperation(sessionId, thread.id, 'trim')}>Обрезать</Button>
-          <Button size="xs" variant="ghost" onClick={() => requestOperation(sessionId, thread.id, 'repaint')}>Перегенерировать кусок</Button>
+          <Button size="xs" variant="ghost" onClick={() => { void operate('trim'); }}>Обрезать</Button>
+          <Button size="xs" variant="ghost" onClick={() => { void operate('repaint'); }}>Перегенерировать кусок</Button>
         </>
-      )}
-      compact={compact}
+      }
     />
   );
 }

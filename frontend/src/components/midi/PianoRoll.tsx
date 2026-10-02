@@ -3,6 +3,7 @@ import { C, FONT, FS, GROUP_COLORS, SP } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { subscribeThemeMode } from '../../lib/themeMode';
 import type { MidiDoc, MidiNote } from './midiModel';
+import { shouldFollowPlayhead } from './midiViewerLogic';
 
 // Нотная лента на canvas: клавиатура слева, линейка тактов сверху, ноты цветом дорожки.
 // Холст размером с видимую область, рисуется только окно времени под scrollLeft.
@@ -13,12 +14,15 @@ export type PianoRollProps = {
   muted: Set<number>;
   pxPerSec: number;
   height: number;
+  // Явный переход (старт, перемотка): новый key — показать playhead на sec, даже если лента прокручена в сторону
+  reveal?: { sec: number; key: number };
   onSeek(sec: number): void;
 };
 
 export const RULER_H = 20;
 const KEY_W = 56;
 const KEY_W_MOBILE = 40;
+export const rollKeyWidth = (isMobile: boolean) => (isMobile ? KEY_W_MOBILE : KEY_W);
 // Запас по высоте сверху и снизу диапазона нот
 const PITCH_PAD = 2;
 const MIN_ROWS = 12;
@@ -247,9 +251,9 @@ function draw(
   ctx.fillRect(keyW - 1, 0, 1, height);
 }
 
-export function PianoRoll({ doc, positionSec, muted, pxPerSec, height, onSeek }: PianoRollProps) {
+export function PianoRoll({ doc, positionSec, muted, pxPerSec, height, reveal, onSeek }: PianoRollProps) {
   const isMobile = useIsMobile();
-  const keyW = isMobile ? KEY_W_MOBILE : KEY_W;
+  const keyW = rollKeyWidth(isMobile);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const paletteRef = useRef<Palette | null>(null);
@@ -281,20 +285,28 @@ export function PianoRoll({ doc, positionSec, muted, pxPerSec, height, onSeek }:
     [doc, keyW, pxPerSec, viewW, height],
   );
 
-  // Playhead ушёл за правый край (или левее окна) — догоняем прокруткой,
-  // но только если до этого он был виден: ручную прокрутку пользователя не перебиваем
-  useEffect(() => {
+  const follow = useCallback((prev: number, sec: number, force: boolean) => {
     const el = wrapRef.current;
+    if (!el || viewW === 0) return;
+    if (shouldFollowPlayhead(prev, sec, visibleWindow(layoutFor(el.scrollLeft)), force)) {
+      el.scrollLeft = Math.max(0, sec * pxPerSec - SP.xxl);
+    }
+  }, [layoutFor, pxPerSec, viewW]);
+
+  // Playhead ушёл за край во время игры — догоняем, если до этого он был виден
+  useEffect(() => {
     const prev = prevPosRef.current;
     prevPosRef.current = positionSec;
-    if (!el || viewW === 0) return;
-    const l = layoutFor(el.scrollLeft);
-    const [t0, t1] = visibleWindow(l);
-    const wasVisible = prev >= t0 && prev <= t1;
-    if (wasVisible && (positionSec > t1 || positionSec < t0)) {
-      el.scrollLeft = Math.max(0, positionSec * pxPerSec - SP.xxl);
-    }
-  }, [positionSec, layoutFor, pxPerSec, viewW]);
+    follow(prev, positionSec, false);
+  }, [positionSec, follow]);
+
+  // Явный переход — к playhead принудительно
+  const revealKey = reveal?.key;
+  const revealSec = reveal?.sec ?? 0;
+  useEffect(() => {
+    if (revealKey !== undefined) follow(revealSec, revealSec, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на новый key
+  }, [revealKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

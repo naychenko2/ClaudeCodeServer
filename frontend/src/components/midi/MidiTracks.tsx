@@ -49,10 +49,10 @@ export function MidiTracks({ tracks, muted, onToggleMute, onToggleSolo }: MidiTr
               {name}
             </span>
             <span style={{ color: C.textMuted, fontSize: FS.xs }}>{t.notes.length}</span>
-            <IconButton size="xs" active={isMuted} title={isMuted ? 'Включить дорожку' : 'Заглушить'} onClick={() => onToggleMute(t.index)}>
+            <IconButton size={isMobile ? 'lg' : 'xs'} active={isMuted} title={isMuted ? 'Включить дорожку' : 'Заглушить'} onClick={() => onToggleMute(t.index)}>
               <span style={{ fontSize: FS.xs, fontWeight: 700 }}>M</span>
             </IconButton>
-            <IconButton size="xs" active={solo} title={solo ? 'Снять соло' : 'Только эта'} onClick={() => onToggleSolo(t.index)}>
+            <IconButton size={isMobile ? 'lg' : 'xs'} active={solo} title={solo ? 'Снять соло' : 'Только эта'} onClick={() => onToggleSolo(t.index)}>
               <span style={{ fontSize: FS.xs, fontWeight: 700 }}>S</span>
             </IconButton>
           </div>

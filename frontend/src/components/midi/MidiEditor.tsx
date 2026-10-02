@@ -10,7 +10,7 @@ import { Notice } from '../ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { MidiParseError, parseMidi, type MidiDoc } from './midiModel';
 import { getState, pause, play, seek, stop, subscribe } from './midiPlayer';
-import { PianoRoll } from './PianoRoll';
+import { PianoRoll, rollKeyWidth } from './PianoRoll';
 import { MidiTracks } from './MidiTracks';
 import { fitPxPerSec, formatTime, toggleMute, toggleSolo, zoomPxPerSec } from './midiViewerLogic';
 
@@ -32,8 +32,6 @@ type LoadState =
 
 const INLINE_ROLL_H = 220;
 const INLINE_ROLL_H_MOBILE = 180;
-// Ширина клавиатуры ленты: вычитается при подгонке масштаба под ширину
-const KEYS_W = 56;
 const ICON = { size: ICON_SIZE.sm, strokeWidth: ICON_STROKE };
 
 export function MidiEditor({ load, fileName, variant, onExpand, onDownload, onRetry }: MidiEditorProps) {
@@ -46,6 +44,7 @@ export function MidiEditor({ load, fileName, variant, onExpand, onDownload, onRe
   const [localPos, setLocalPos] = useState(0);
   const [audioFailed, setAudioFailed] = useState(false);
   const [width, setWidth] = useState(0);
+  const [reveal, setReveal] = useState<{ sec: number; key: number } | undefined>(undefined);
   const [fullRollH, setFullRollH] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const rollBoxRef = useRef<HTMLDivElement>(null);
@@ -56,6 +55,14 @@ export function MidiEditor({ load, fileName, variant, onExpand, onDownload, onRe
   const mine = player.ownerId === ownerId;
   const playing = mine && player.playing;
   const positionSec = mine ? player.positionSec : localPos;
+  // Плеер ушёл к другому владельцу — остаёмся на месте остановки, а не на 0:00
+  useEffect(() => {
+    let prev = getState();
+    return subscribe(next => {
+      if (prev.ownerId === ownerId && next.ownerId !== ownerId) setLocalPos(prev.positionSec);
+      prev = next;
+    });
+  }, [ownerId]);
 
   // Загрузка и разбор; ответ после размонтирования или повторного запуска отбрасывается
   useEffect(() => {
@@ -87,9 +94,11 @@ export function MidiEditor({ load, fileName, variant, onExpand, onDownload, onRe
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root || typeof ResizeObserver === 'undefined') return;
+    // Масштаб подгоняется под ширину самой ленты, а не всего просмотрщика
     const ro = new ResizeObserver(() => {
-      setWidth(root.clientWidth);
-      if (rollBoxRef.current) setFullRollH(rollBoxRef.current.clientHeight);
+      const box = rollBoxRef.current;
+      setWidth(box ? box.clientWidth : root.clientWidth);
+      if (box) setFullRollH(box.clientHeight);
     });
     ro.observe(root);
     if (rollBoxRef.current) ro.observe(rollBoxRef.current);
@@ -97,7 +106,9 @@ export function MidiEditor({ load, fileName, variant, onExpand, onDownload, onRe
   }, [state.kind, variant]);
 
   const doc = state.kind === 'ready' ? state.doc : null;
-  const pxPerSec = zoom ?? fitPxPerSec(width - KEYS_W, doc?.durationSec ?? 0);
+  const pxPerSec = zoom ?? fitPxPerSec(width, rollKeyWidth(isMobile), doc?.durationSec ?? 0);
+  const btnSize = isMobile ? 'lg' : 'sm';
+  const revealAt = useCallback((sec: number) => setReveal(r => ({ sec, key: (r?.key ?? 0) + 1 })), []);
 
   const startPlay = useCallback((d: MidiDoc, fromSec: number, nextMuted: Set<number>) => {
     setAudioFailed(false);
@@ -107,13 +118,18 @@ export function MidiEditor({ load, fileName, variant, onExpand, onDownload, onRe
   const togglePlay = useCallback(() => {
     if (!doc) return;
     if (playing) pause(ownerId);
-    else startPlay(doc, positionSec >= doc.durationSec ? 0 : positionSec, muted);
-  }, [doc, playing, ownerId, startPlay, positionSec, muted]);
+    else {
+      const from = positionSec >= doc.durationSec ? 0 : positionSec;
+      revealAt(from);
+      startPlay(doc, from, muted);
+    }
+  }, [doc, playing, ownerId, startPlay, positionSec, muted, revealAt]);
 
   const handleSeek = useCallback((sec: number) => {
     setLocalPos(sec);
+    revealAt(sec);
     if (mine) seek(ownerId, sec);
-  }, [mine, ownerId]);
+  }, [mine, ownerId, revealAt]);
 
   // Смена заглушённых во время игры — перезапуск с текущей позиции
   const applyMuted = (next: Set<number>) => {
@@ -180,16 +196,14 @@ export function MidiEditor({ load, fileName, variant, onExpand, onDownload, onRe
 
       {doc && doc.noteCount > 0 && (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
-            <IconButton
-              size="sm"
-              tone="accent"
-              onClick={togglePlay}
-              title={playing ? 'Пауза' : 'Нет звука на iPhone — проверьте беззвучный режим'}
-            >
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap',
+            paddingLeft: isMobile ? SP.sm : 0,
+          }}>
+            <IconButton size={btnSize} tone="accent" onClick={togglePlay} title={playing ? 'Пауза' : 'Играть'}>
               {playing ? <Pause {...ICON} /> : <Play {...ICON} />}
             </IconButton>
-            <IconButton size="sm" title="В начало" onClick={() => handleSeek(0)}>
+            <IconButton size={btnSize} title="В начало" onClick={() => handleSeek(0)}>
               <SkipBack {...ICON} />
             </IconButton>
             <span style={{
@@ -199,23 +213,29 @@ export function MidiEditor({ load, fileName, variant, onExpand, onDownload, onRe
               {formatTime(positionSec)} / {formatTime(doc.durationSec)}
             </span>
             <span style={{ flex: 1 }} />
-            <IconButton size="sm" title="Мельче" onClick={() => setZoom(zoomPxPerSec(pxPerSec, -1))}>
+            <IconButton size={btnSize} title="Мельче" onClick={() => setZoom(zoomPxPerSec(pxPerSec, -1))}>
               <Minus {...ICON} />
             </IconButton>
-            <IconButton size="sm" title="Крупнее" onClick={() => setZoom(zoomPxPerSec(pxPerSec, 1))}>
+            <IconButton size={btnSize} title="Крупнее" onClick={() => setZoom(zoomPxPerSec(pxPerSec, 1))}>
               <Plus {...ICON} />
             </IconButton>
             {onDownload && (
-              <IconButton size="sm" title="Скачать" onClick={onDownload}>
+              <IconButton size={btnSize} title="Скачать" onClick={onDownload}>
                 <Download {...ICON} />
               </IconButton>
             )}
             {onExpand && (
-              <IconButton size="sm" title="Развернуть" onClick={onExpand}>
+              <IconButton size={btnSize} title="Развернуть" onClick={onExpand}>
                 <Maximize2 {...ICON} />
               </IconButton>
             )}
           </div>
+
+          {isMobile && (
+            <div style={{ paddingLeft: SP.sm, fontSize: FS.xs, color: C.textMuted }}>
+              Нет звука на iPhone — проверьте беззвучный режим
+            </div>
+          )}
 
           {audioFailed && (
             <Notice tone="warning" icon={AlertTriangle}>Не удалось включить звук</Notice>
@@ -236,6 +256,7 @@ export function MidiEditor({ load, fileName, variant, onExpand, onDownload, onRe
                 muted={muted}
                 pxPerSec={pxPerSec}
                 height={rollH}
+                reveal={reveal}
                 onSeek={handleSeek}
               />
             )}

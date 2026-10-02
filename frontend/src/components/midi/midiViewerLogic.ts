@@ -15,8 +15,10 @@ export function formatTime(sec: number): string {
 
 export const clampPxPerSec = (px: number) => Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, px));
 
-// Начальный масштаб: трек целиком влезает в доступную ширину ленты
-export function fitPxPerSec(availW: number, durationSec: number): number {
+// Начальный масштаб: трек целиком влезает в ширину ленты за вычетом клавиатуры.
+// Ширина берётся по целым пикселям вниз: дробная вёрстка иначе даёт лишний пиксель прокрутки
+export function fitPxPerSec(viewW: number, keyW: number, durationSec: number): number {
+  const availW = Math.floor(viewW) - keyW;
   if (!(availW > 0) || !(durationSec > 0)) return DEFAULT_PX_PER_SEC;
   return clampPxPerSec(availW / durationSec);
 }
@@ -41,4 +43,14 @@ export function isSolo(indices: number[], muted: Set<number>, index: number): bo
 export function toggleSolo(indices: number[], muted: Set<number>, index: number): Set<number> {
   if (isSolo(indices, muted, index)) return new Set();
   return new Set(indices.filter(i => i !== index));
+}
+
+// Догонять ли playhead прокруткой. Сам по себе — только если он был виден и ушёл
+// за край (ручную прокрутку во время игры не перебиваем); по явному действию
+// (старт, переход, «В начало») — всегда, когда он вне окна
+export function shouldFollowPlayhead(
+  prevSec: number, sec: number, [t0, t1]: [number, number], force: boolean,
+): boolean {
+  if (sec >= t0 && sec <= t1) return false;
+  return force || (prevSec >= t0 && prevSec <= t1);
 }

@@ -36,7 +36,8 @@ import {
 import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads } from '../thread/threadStore';
 import { imageSrc, launchThread, quickAvailabilityFor, threadHasImage, versionSrc } from '../thread/useThreadLaunch';
 import { useCatalog } from '../thread/catalog';
-import { effectiveSettings, usePrefs } from '../thread/prefs';
+import { effectiveSettings, modeSettings, usePrefs } from '../thread/prefs';
+import { modeAware } from '../thread/modeState';
 import { useJobStatus } from '../thread/useJobStatus';
 
 const ic = (I: typeof Check, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -150,7 +151,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
   };
 
   // Умеет ли поставщик полосы действие — по каталогу, до котировки и запуска
-  const settings = effectiveSettings(prefs, thread.settings);
+  // Быстрые действия редактора — правка: с режимами (image-panel-v5) идут выбором «Править»
+  const settings = modeAware() ? modeSettings('edit', prefs, thread.settings) : effectiveSettings(prefs, thread.settings);
   const quickActions = QUICK_ACTIONS.filter(a => quickOffered(a, catalog));
   const availability = (a: QuickAction) => (catalog ? quickAvailabilityFor(catalog, settings, a) : null);
   const quickBlock = (a: QuickAction) => {

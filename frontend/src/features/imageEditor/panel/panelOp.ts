@@ -7,6 +7,8 @@ import { useSyncExternalStore } from 'react';
 import { AUTO_MODEL, type EditMode, type ImageEditEstimate, type ImageEditModel, type ImageEditOp } from '../api';
 import { etaText, isFreeUnit, money, pickOp, priceSum, variantsWord } from '../format';
 import type { OutpaintRatio, QuickAction } from '../editorInputs';
+import { getPrefs, setEditChoice, type ProjectPrefs } from '../thread/prefs';
+import { modeAware, type ImageMode } from '../thread/modeState';
 
 export type PanelOp = 'auto' | ImageEditOp;
 
@@ -119,13 +121,44 @@ const _listeners = new Set<() => void>();
 export const getPanelChoice = (projectId: string): PanelChoice => _choice.get(projectId) ?? DEFAULT_CHOICE;
 
 export function setPanelChoice(projectId: string, patch: Partial<PanelChoice>) {
-  _choice.set(projectId, { ...getPanelChoice(projectId), ...patch });
+  // Под флагом image-panel-v5 выбор живёт в префах «Править» проекта. «Авто» там нет —
+  // это «Изменить» с инпейнтом по отметкам; «По тексту» — режим «Создать», а не операция
+  if (modeAware()) {
+    const op = patch.op === 'auto' ? 'edit' : patch.op === 'generate' ? undefined : patch.op;
+    setEditChoice(projectId, {
+      ...(op ? { op } : null),
+      ...(patch.mode ? { editMode: patch.mode } : null),
+      ...(patch.ratio ? { ratio: patch.ratio } : null),
+    });
+  } else {
+    _choice.set(projectId, { ...getPanelChoice(projectId), ...patch });
+  }
   _version++;
   _listeners.forEach(fn => fn());
 }
 
-// Выбор, с которым пойдёт запуск
-export const activeChoice = (projectId: string): PanelChoice => getPanelChoice(projectId);
+// Выбор режима «Править» из префов проекта
+export function editChoice(prefs: ProjectPrefs): PanelChoice {
+  const e = prefs.edit;
+  return { op: e?.op ?? 'edit', mode: e?.editMode ?? 'auto', ratio: e?.ratio ?? DEFAULT_CHOICE.ratio };
+}
+
+// Выбор, с которым пойдёт запуск. С режимом (флаг image-panel-v5): «Создать» — всегда по
+// тексту, «Править» — выбор «Править» проекта
+export function activeChoice(projectId: string, mode: ImageMode | null = null): PanelChoice {
+  if (!mode) return getPanelChoice(projectId);
+  const edit = editChoice(getPrefs(projectId));
+  return mode === 'create' ? { op: 'generate', mode: 'auto', ratio: edit.ratio } : edit;
+}
+
+// Операция запуска с режимом: «Изменить» сам становится инпейнтом, если есть отметки (как
+// pickOp у прежнего «Авто»); причина отказа — у выбранной операции, а не у вычисленной
+export function modeOp(op: PanelOp, hasImage: boolean, hasMask: boolean): { op: ImageEditOp; reason: string } {
+  if (op === 'edit' || op === 'inpaint' || op === 'auto') {
+    return { op: pickOp(hasImage, hasMask), reason: opBlockReason('edit', hasImage, hasMask) };
+  }
+  return { op, reason: opBlockReason(op, hasImage, hasMask) };
+}
 
 export function usePanelChoiceVersion() {
   return useSyncExternalStore(

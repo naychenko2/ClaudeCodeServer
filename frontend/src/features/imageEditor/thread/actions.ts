@@ -13,6 +13,7 @@ import {
 } from './model';
 import { closeEditor, getEditor, getThreadsState, imageDraftKey, mutate, requestImageMode, setThreadMarks } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadTake, type ImageThreadVersion } from './threadsApi';
+import { noteImageMode } from './modeState';
 
 // Шаг, который уже лежит в проекте файлом нити: версия «в проекте», а не «черновик»
 const _saved = new Map<string, string>();
@@ -54,17 +55,26 @@ function openPanel(ok: boolean, sessionId: string, threadId: string): boolean {
   return true;
 }
 
+// Картинку выбрал человек — режим «Править» (флаг image-panel-v5); выбор агента сюда не идёт
+function humanPick(ok: boolean, sessionId: string): boolean {
+  if (ok) noteImageMode(sessionId, 'edit');
+  return ok;
+}
+
 // Клик человека по карточке в ленте: картинка — в работу, открытая панель переключается на
 // «Картинки → Настройки», закрытая не открывается (правило 1)
 export async function pickByHuman(projectId: string, sessionId: string, threadId: string, focused: boolean): Promise<boolean> {
   const ok = focused || await mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
-  if (ok) followSelection(IMAGES_PANEL, sessionId, imageDraftKey(threadId));
+  if (ok) {
+    noteImageMode(sessionId, 'edit');
+    followSelection(IMAGES_PANEL, sessionId, imageDraftKey(threadId));
+  }
   return ok;
 }
 
 // «Продолжить от неё» и «Работать с этой»: версия становится текущей, нить — в работе
 export const continueFrom = async (projectId: string, sessionId: string, t: ImageThread, versionId: string) =>
-  openPanel(await mutate(projectId, sessionId, rev => threadsApi.current(projectId, sessionId, t.id, versionId, rev)), sessionId, t.id);
+  openPanel(humanPick(await mutate(projectId, sessionId, rev => threadsApi.current(projectId, sessionId, t.id, versionId, rev)), sessionId), sessionId, t.id);
 
 // Правка без ИИ: у нити с версиями — шаг текущей версии, у старой — «Взять» шага в стопку
 export const applyStep = (projectId: string, sessionId: string, t: ImageThread, stepId: string) =>
@@ -94,19 +104,22 @@ export async function rollbackTo(projectId: string, sessionId: string, t: ImageT
 // «Работать с этой»: фокус на существующую нить
 export async function workWith(projectId: string, sessionId: string, threadId: string | null) {
   const ok = await mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
-  if (threadId) openPanel(ok, sessionId, threadId);
+  if (threadId) openPanel(humanPick(ok, sessionId), sessionId, threadId);
   return ok;
 }
 
 // Файл проекта в работу: сервер найдёт его нить или заведёт новую с якорем в ленте
 export const workWithFile = async (projectId: string, sessionId: string, file: string) =>
-  revealPanel(await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { file, revision: rev })), sessionId);
+  revealPanel(humanPick(await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { file, revision: rev })), sessionId), sessionId);
 
 // «✦ Нарисовать новую»: карточка-черновик «Новая картинка» и фокус на неё. Черновик завёл
 // человек — это и есть просьба о режиме «Картинка»; черновик агента режим не меняет
 export async function createDraft(projectId: string, sessionId: string, folder: string) {
   const ok = await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { draftFolder: folder, revision: rev }));
-  if (ok) requestImageMode(sessionId);
+  if (ok) {
+    noteImageMode(sessionId, 'create');
+    requestImageMode(sessionId);
+  }
   return revealPanel(ok, sessionId);
 }
 

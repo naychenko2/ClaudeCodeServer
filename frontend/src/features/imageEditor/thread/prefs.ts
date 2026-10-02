@@ -13,6 +13,7 @@ import { scopeBase } from '../scope';
 import type { ImageThreadSettings } from './threadsApi';
 import type { EditMode, ImageEditOp } from '../api';
 import type { OutpaintRatio } from '../editorInputs';
+import type { ImageMode } from './modeState';
 
 // Выбор режимов «Создать» и «Править» панели v5; null в полях — берётся плоское поле. Сервер
 // сливает PUT: нет режима в теле — сохранённый остаётся
@@ -80,9 +81,33 @@ function sync(projectId: string): Sync {
 }
 
 const normalize = (v: Partial<ProjectPrefs> | null | undefined): ProjectPrefs => ({ ...DEFAULTS, ...(v ?? {}) });
+// Режимные части сравниваются по полям: без них эхо сервера со свежим выбором режима
+// считалось бы «тем же» и не доходило до кэша
+const sameCreate = (a: ImageCreatePrefs | null | undefined, b: ImageCreatePrefs | null | undefined) =>
+  !a || !b ? !a === !b : a.provider === b.provider && a.model === b.model && a.count === b.count;
+const sameEdit = (a: ImageEditPrefs | null | undefined, b: ImageEditPrefs | null | undefined) =>
+  !a || !b ? !a === !b : sameCreate(a, b) && a.op === b.op && a.editMode === b.editMode && a.ratio === b.ratio;
 const same = (a: ProjectPrefs, b: ProjectPrefs) =>
   a.provider === b.provider && a.model === b.model && a.count === b.count
-  && a.matchSourceSize === b.matchSourceSize && a.characterSlug === b.characterSlug;
+  && a.matchSourceSize === b.matchSourceSize && a.characterSlug === b.characterSlug
+  && sameCreate(a.create, b.create) && sameEdit(a.edit, b.edit);
+
+// Режимные части, правленные здесь и ещё не отправленные. PUT несёт режим, только если его
+// правили: сервер без режима в теле оставляет сохранённый, и устаревший кэш вкладки не
+// затрёт свежий выбор, сделанный в другой
+const _modesDirty = new Map<string, { create: boolean; edit: boolean }>();
+
+function body(projectId: string): ProjectPrefs {
+  const { create, edit, ...flat } = getPrefs(projectId);
+  const d = _modesDirty.get(projectId);
+  _modesDirty.delete(projectId);
+  return { ...flat, ...(d?.create ? { create } : null), ...(d?.edit ? { edit } : null) };
+}
+
+function markModes(projectId: string, sent: ProjectPrefs) {
+  const d = _modesDirty.get(projectId) ?? { create: false, edit: false };
+  _modesDirty.set(projectId, { create: d.create || 'create' in sent, edit: d.edit || 'edit' in sent });
+}
 
 function readStored(projectId: string): ProjectPrefs | null {
   try {
@@ -118,13 +143,16 @@ async function flush(projectId: string) {
   if (s.inflight) { s.dirty = true; return; }
   s.inflight = true;
   s.dirty = false;
+  const sent = body(projectId);
   try {
-    const saved = await prefsApi.put(projectId, getPrefs(projectId));
+    const saved = await prefsApi.put(projectId, sent);
     s.inflight = false;
     if (s.dirty) { void flush(projectId); return; }
     applyServer(projectId, normalize(saved));
   } catch (e) {
     s.inflight = false;
+    // Неотправленный выбор режима уйдёт со следующей записью
+    markModes(projectId, sent);
     if (s.dirty) { void flush(projectId); return; }
     showToast(`Настройки картинок не сохранились: ${(e as Error).message}`, '', 'error');
   }
@@ -132,6 +160,7 @@ async function flush(projectId: string) {
 
 export function setPrefs(projectId: string, patch: Partial<ProjectPrefs>) {
   const next = { ...getPrefs(projectId), ...patch };
+  markModes(projectId, patch as ProjectPrefs);
   sync(projectId).seq++;
   store(projectId, next);
   void flush(projectId);
@@ -204,10 +233,53 @@ export function effectiveSettings(prefs: ProjectPrefs, own: ImageThreadSettings 
   return own ?? { provider: prefs.provider, model: prefs.model, count: prefs.count, matchSourceSize: prefs.matchSourceSize };
 }
 
+// Выбор режима «Создать» и «Править» (флаг image-panel-v5). Поставщик и модель — парой, как на
+// сервере: модель плоских полей могла быть выбрана у другого поставщика
+function modePick(prefs: ProjectPrefs, m: ImageCreatePrefs | null | undefined): ImageThreadSettings {
+  const own = !!m && (m.provider != null || m.model != null);
+  return {
+    provider: own ? m!.provider : prefs.provider,
+    model: own ? m!.model : prefs.model,
+    count: m?.count ?? prefs.count,
+    matchSourceSize: prefs.matchSourceSize,
+  };
+}
+
+// Настройки, с которыми пойдёт запуск в режиме: «Создать» — выбор «Создать» проекта, «Править» —
+// настройки нити, иначе выбор «Править»
+export function modeSettings(mode: ImageMode, prefs: ProjectPrefs, own: ImageThreadSettings | null | undefined): ImageThreadSettings {
+  return mode === 'create' ? modePick(prefs, prefs.create) : own ?? modePick(prefs, prefs.edit);
+}
+
+const EMPTY_EDIT: ImageEditPrefs = { provider: null, model: null, count: null, op: null, editMode: null, ratio: null };
+
+// Запись выбора режима: поставщик, модель и число — в его часть, «размер оригинала» общий
+// на оба режима и пишется в плоское поле
+export function setModeSettings(projectId: string, mode: ImageMode, patch: Partial<ImageThreadSettings>) {
+  const prefs = getPrefs(projectId);
+  const cur = modePick(prefs, mode === 'create' ? prefs.create : prefs.edit);
+  const part = {
+    provider: patch.provider !== undefined ? patch.provider : cur.provider,
+    model: patch.model !== undefined ? patch.model : cur.model,
+    count: patch.count ?? cur.count,
+  };
+  const flat = patch.matchSourceSize !== undefined ? { matchSourceSize: patch.matchSourceSize } : null;
+  setPrefs(projectId, mode === 'create'
+    ? { ...flat, create: part }
+    : { ...flat, edit: { ...(prefs.edit ?? EMPTY_EDIT), ...part } });
+}
+
+// Операция, режим подбора и пропорции «Править» (бывший выбор панели в памяти вкладки)
+export function setEditChoice(projectId: string, patch: Partial<Pick<ImageEditPrefs, 'op' | 'editMode' | 'ratio'>>) {
+  const prefs = getPrefs(projectId);
+  setPrefs(projectId, { edit: { ...(prefs.edit ?? EMPTY_EDIT), ...patch } });
+}
+
 export function __resetPrefs() {
   _unsub?.();
   _unsub = null;
   _cache.clear();
   _sync.clear();
+  _modesDirty.clear();
   _listeners.clear();
 }

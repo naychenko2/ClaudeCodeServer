@@ -207,5 +207,5 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
 export function imagesStripStatus(projectId: string | null, sessionId: string | null): string {
   const scope = enterScope(projectId, sessionId);
   const t = getFocusedThread(sessionId);
-  return stripSummary({ focus: t ? focusLabel(t, false, isPersonalScope(scope)) : null, character: null, ...launchSummaryParts(scope, t) });
+  return stripSummary({ focus: t ? focusLabel(t, false, isPersonalScope(scope)) : null, character: null, ...launchSummaryParts(scope, t, sessionId) });
 }

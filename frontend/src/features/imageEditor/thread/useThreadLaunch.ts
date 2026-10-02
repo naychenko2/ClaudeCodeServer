@@ -5,7 +5,7 @@
 // отсюда же, чтобы полоса и кнопка не разошлись.
 
 import { useCallback, useMemo } from 'react';
-import { api as appApi, clearGenDraft, followChat, showToast } from 'aihome_shell/kit';
+import { api as appApi, clearGenDraft, FLAGS, followChat, showToast, useFeature } from 'aihome_shell/kit';
 import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditQuoteRequest } from '../api';
 import {
   effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, providerTitle, variantsWord,
@@ -18,12 +18,13 @@ import {
 } from '../editorInputs';
 import { isPersonalScope } from '../scope';
 import {
-  activeChoice, effectiveMode, footPrice, isOneVariant, opBlockReason, queueText, quickOf, resolveOp, runVerb,
+  activeChoice, effectiveMode, footPrice, isOneVariant, modeOp, opBlockReason, queueText, quickOf, resolveOp, runVerb,
   usePanelChoiceVersion, type PanelChoice,
 } from '../panel/panelOp';
 import { useQuote } from '../useQuote';
 import { getCatalog, loadCatalog, useCatalog } from './catalog';
-import { effectiveSettings, getPrefs, setPrefs, usePrefs } from './prefs';
+import { effectiveSettings, getPrefs, modeSettings, setModeSettings, setPrefs, usePrefs, type ProjectPrefs } from './prefs';
+import { effectiveImageMode, getStoredImageMode, modeAware, useImageModeVersion, type ImageMode } from './modeState';
 import { activeStepOf } from './actions';
 import { currentVersion, isLegacyThread, originFile, versionHasImage, versionStep } from './model';
 import { getSamples, getThreadMarks, imageDraftKey, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
@@ -63,10 +64,19 @@ function resolveModel(catalog: ImageEditCatalog | null, settings: ImageThreadSet
   return { pv, m: currentModel(pv, settings.model ?? fallback) };
 }
 
+// Режим запуска чата (флаг image-panel-v5); null — флаг выключен, режимов нет
+export function launchMode(sessionId: string | null, thread: ImageThread | null): ImageMode | null {
+  return modeAware() ? effectiveImageMode(getStoredImageMode(sessionId), threadHasImage(thread)) : null;
+}
+
+// Настройки запуска: с режимом — выбор режима, без него — как раньше
+export const launchSettings = (mode: ImageMode | null, prefs: ProjectPrefs, own: ImageThreadSettings | null | undefined) =>
+  mode ? modeSettings(mode, prefs, own) : effectiveSettings(prefs, own);
+
 // Поставщик, модель и ориентир цены без подписки — для строк вне рендера полосы
 // (меню переключателя полос): каталог берётся из кэша, котировки нет
-export function launchSummaryParts(projectId: string, thread: ImageThread | null) {
-  const settings = effectiveSettings(getPrefs(projectId), thread?.settings);
+export function launchSummaryParts(projectId: string, thread: ImageThread | null, sessionId: string | null = null) {
+  const settings = launchSettings(launchMode(sessionId, thread), getPrefs(projectId), thread?.settings);
   const { pv, m } = resolveModel(getCatalog(projectId), settings);
   const price = m?.priceHint ? priceSum(m.priceHint.amount * settings.count, m.priceHint.unit, true) : null;
   return { provider: pv ? providerTitle(pv) : null, model: m?.label ?? null, count: settings.count, price };
@@ -90,9 +100,12 @@ export function quickAvailabilityFor(catalog: ImageEditCatalog | null, settings:
 
 // Что запустит промпт или кнопка низа при операции панели «Картинки»: «Авто» — pickOp,
 // операция без промпта идёт путём быстрого действия редактора
-export function panelRoute(choice: PanelChoice, hasImage: boolean, hasMask: boolean) {
-  const op = resolveOp(choice.op, hasImage, hasMask);
-  return { op, quick: quickOf(op), one: isOneVariant(op), reason: opBlockReason(choice.op, hasImage, hasMask) };
+// byMode — выбор по режиму (флаг image-panel-v5): «Авто» нет, «Изменить» сам решает по отметкам
+export function panelRoute(choice: PanelChoice, hasImage: boolean, hasMask: boolean, byMode = false) {
+  const { op, reason } = byMode
+    ? modeOp(choice.op, hasImage, hasMask)
+    : { op: resolveOp(choice.op, hasImage, hasMask), reason: opBlockReason(choice.op, hasImage, hasMask) };
+  return { op, quick: quickOf(op), one: isOneVariant(op), reason };
 }
 
 // Запуск в нить; true — задача запущена, причина отказа уже показана тостом.
@@ -103,7 +116,10 @@ export async function launchThread(
   let action = requested;
   const api = imageEditorApi();
   const prefs = getPrefs(projectId);
-  const settings = effectiveSettings(prefs, thread.settings);
+  // Быстрое действие — правка выбранной картинки: в любом режиме идёт выбором «Править»
+  const chatMode = launchMode(sessionId, thread);
+  const mode = chatMode && requested.kind !== 'prompt' && threadHasImage(thread) ? 'edit' : chatMode;
+  const settings = launchSettings(mode, prefs, thread.settings);
   const catalog = await loadCatalog(projectId);
   const { pv, m } = resolveModel(catalog, settings);
   if (!pv || !m) {
@@ -114,8 +130,8 @@ export async function launchThread(
   const hasImage = threadHasImage(thread);
   const hasMask = hasImage && hasMaskMark(marks);
   // Операция панели «Картинки» (без флага — всегда «Авто»): у промпта она решает, что делать
-  const choice = activeChoice(projectId);
-  const pr = panelRoute(choice, hasImage, hasMask);
+  const choice = activeChoice(projectId, mode);
+  const pr = panelRoute(choice, hasImage, hasMask, !!mode);
   let one = false;
   if (action.kind === 'prompt') {
     if (pr.reason) {
@@ -210,7 +226,10 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   const catalog = useCatalog(projectId);
   const prefs = usePrefs(projectId);
   useThreadStoreVersion();
-  const settings = effectiveSettings(prefs, thread?.settings);
+  useFeature(FLAGS.imagePanelV5);
+  useImageModeVersion();
+  const imgMode = launchMode(sessionId, thread);
+  const settings = launchSettings(imgMode, prefs, thread?.settings);
   const { pv, m } = resolveModel(catalog, settings);
   const { marks, size } = getThreadMarks(thread?.id ?? null);
   const hasImage = threadHasImage(thread);
@@ -218,8 +237,8 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   const hasAnnotations = hasImage && hasAnnotationMark(marks);
   // Операция и режим панели «Картинки»
   usePanelChoiceVersion();
-  const choice = activeChoice(projectId);
-  const pr = panelRoute(choice, hasImage, hasMask);
+  const choice = activeChoice(projectId, imgMode);
+  const pr = panelRoute(choice, hasImage, hasMask, !!imgMode);
   const quick = pr.quick ? quickAvailabilityFor(catalog, settings, pr.quick) : null;
   const route = quick?.route ?? null;
   const fromScratch = pr.op === 'generate';
@@ -263,18 +282,20 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
 
   const setSettings = useCallback((patch: Partial<ImageThreadSettings>) => {
     const next = { ...settings, ...patch };
-    setPrefs(projectId, patch);
-    if (thread && sessionId) {
+    // С режимом: «Создать» пишет только свой выбор проекта, нить не трогает
+    if (imgMode) setModeSettings(projectId, imgMode, patch);
+    else setPrefs(projectId, patch);
+    if (thread && sessionId && imgMode !== 'create') {
       void mutate(projectId, sessionId, rev => threadsApi.settings(projectId, sessionId, thread.id, next, rev));
     }
-  }, [projectId, sessionId, thread, settings]);
+  }, [projectId, sessionId, thread, settings, imgMode]);
 
   const launch = useCallback((action: LaunchAction) =>
     (thread && sessionId ? launchThread(projectId, sessionId, thread, action) : Promise.resolve(false)),
   [projectId, sessionId, thread]);
 
   return {
-    catalog, settings, prefs, provider: pv, model: m, blocked, quote, quoteLoading: loading,
+    catalog, settings, prefs, imageMode: imgMode, provider: pv, model: m, blocked, quote, quoteLoading: loading,
     priceLabel, price, marks, hasImage, hasMask, setSettings, launch,
     op: pr.op, quickAction: pr.quick, choice, count, maxCount, reason, priceLines, queue, runLabel: runVerb(pr.op),
   };

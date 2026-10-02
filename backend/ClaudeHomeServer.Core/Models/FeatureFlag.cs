@@ -78,6 +78,9 @@ public static class FeatureFlagKeys
     // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта, общая панель генерации.
     // Гейтит и серверные ручки модуля audio-editor.
     public const string AudioEditor = "audio-editor";
+    // Панель «Картинки» v5 «Создать / Править» (переходный флаг до снятия старой панели):
+    // режим на чат и свой выбор у каждого режима. Сервер префов по режиму под флагом не прячется
+    public const string ImagePanelV5 = "image-panel-v5";
 }
 
 /// <summary>
@@ -207,6 +210,15 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.AudioEditor,
             Title: "Звук",
             Description: "Озвучка текста, музыка и правка звука прямо в проекте: результат ложится версиями рядом с исходником, оригинал не трогается.",
+            Default: false,
+            Stage: "dev"),
+
+        // Новая панель «Картинки» v5 (docs/mockups/image-panel-v5*): пока флаг выключен,
+        // полоса и панель картинок ведут себя как раньше
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ImagePanelV5,
+            Title: "Картинки: режимы «Создать» и «Править»",
+            Description: "В полосе и панели «Картинки» два режима: «Создать» рисует новую картинку, «Править» меняет выбранную. У каждого режима свой запомненный выбор модели и операции.",
             Default: false,
             Stage: "dev"),
     ];

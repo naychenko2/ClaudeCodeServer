@@ -9,6 +9,7 @@ import type { Sample } from '../editorInputs';
 import type { Mark } from '../marks';
 import { conflictState, EMPTY_THREADS, threadsApi, type ImageThread, type ImageThreadsState } from './threadsApi';
 import { threadName } from './model';
+import { noteImageMode } from './modeState';
 
 export const IMAGES_STRIP = 'images';
 // Ключ панели «Картинки» в рабочей области — тот же, что IMAGES_PANEL в characters/panel
@@ -57,6 +58,8 @@ function apply(sessionId: string, projectId: string, state: ImageThreadsState) {
   const prevFocus = e?.loaded ? e.state.focus : null;
   _entries.set(sessionId, { projectId, state, loaded: true, loading: false });
   syncStrip(sessionId, prevFocus, state.focus);
+  // Выбор сняли — человек или агент: дальше рисуем новую (режим «Создать», флаг image-panel-v5)
+  if (prevFocus && !state.focus) noteImageMode(sessionId, 'create');
   emit();
   // Поле ввода пересчитывает режим «Картинка» по сигналу стора полос
   notifyComposer();

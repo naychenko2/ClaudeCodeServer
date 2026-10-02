@@ -197,7 +197,10 @@ export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
 // ─── components/generation ───────────────────────────────────────────────────
 // Общий каркас панели генерации: «Картинки» и «Звук» видят хост только через кит (ADR-021 §3)
 export { GenerationPanel, GEN_PANEL_W, useGenerationSheet } from '../../components/generation/GenerationPanel';
-export type { GenerationFoot, GenerationPanelView } from '../../components/generation/GenerationPanel';
+export type {
+  GenerationFoot, GenerationFootProgress, GenerationFootResult, GenerationPanelView,
+} from '../../components/generation/GenerationPanel';
+export { ByClaude } from '../../components/generation/ByClaude';
 // Общий слой панелей: переключатель режима, меню выбора источника, «Вернуть» после снятия выбора
 export { GenerationModeSwitch } from '../../components/generation/GenerationModeSwitch';
 export type { GenerationModeOption } from '../../components/generation/GenerationModeSwitch';

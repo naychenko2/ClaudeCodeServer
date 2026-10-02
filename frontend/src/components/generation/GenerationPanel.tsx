@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CSSProperties, ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Cpu, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Cpu, RefreshCw, Sparkles, X } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP, Z } from '../../lib/design';
 import { GEN_PANEL_INLINE_MIN, useWindowWidth } from '../../lib/breakpoints';
 import { holdGenSheetRaised } from '../../lib/genSheet';
@@ -9,7 +9,7 @@ import { useGenDraft } from '../../lib/genDrafts';
 import { followPeeked, holdGenPanelOpen } from '../../lib/genPanelOpen';
 import type { GenerationAgentPick } from '../../lib/genPanelFollow';
 import { useRequestPanelFill } from '../../pages/workspace/panelFill';
-import { Badge, Button, IconButton, PanelHeaderSlot, ResizeHandle, Stepper, Tabs, useHasPanelHeader } from '../ui';
+import { Badge, Button, IconButton, PanelHeaderSlot, ProgressBar, ResizeHandle, Stepper, Tabs, useHasPanelHeader } from '../ui';
 import type { TabItem } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 
@@ -39,23 +39,43 @@ const SPINE_RUN = 32;   // круглая кнопка запуска в кор�
 // Шторка телефона занимает 88 % высоты: над ней остаётся видна полоса ленты
 const SHEET_H = '88%';
 
-// Контракт закреплённого низа — ровно из макета (ADR-021 §3)
-// Счётчик: при maxCount: 1 колбэк не нужен (кнопки ± заперты), при любом другом
-// потолке тип требует onCountChange — иначе «+» кликался бы молча впустую
+// Контракт закреплённого низа — ровно из макета (ADR-021 §3). Общая часть плюс два
+// независимых выбора: счётчик вариантов и состояние запуска.
+// Счётчик: без count «− N +» не рисуется (у «Фильма» один результат); при maxCount: 1
+// колбэк не нужен (кнопки ± заперты), при любом другом потолке тип требует
+// onCountChange — иначе «+» кликался бы молча впустую.
+// Состояние: покой (кнопка запуска), progress (идёт работа — вместо кнопки полоса и
+// «Отмена»), result (готовый файл с действиями над кнопкой). stale — причины пересборки
+// над кнопкой, сочетается с покоем и результатом.
+export interface GenerationFootProgress {
+  label: string;                    // «Собираем: сцена 3 из 4»
+  p?: number;                       // 0..100; нет — ход неизвестен, полоса не рисуется
+  onCancel?: () => void;
+}
+export interface GenerationFootResult {
+  file: string;                     // «film.mp4»
+  actions: { label: string; onClick: () => void }[];
+}
+export type GenerationFootCount =
+  | { count?: undefined; maxCount?: undefined; onCountChange?: undefined }
+  | ({ count: number; maxCountHint?: string } & (
+    | { maxCount: 1; onCountChange?: (n: number) => void }
+    | { maxCount: number; onCountChange: (n: number) => void }
+  ));
+export type GenerationFootState =
+  | { progress?: undefined; result?: undefined }
+  | { progress: GenerationFootProgress; result?: undefined }
+  | { progress?: undefined; result: GenerationFootResult };
 export type GenerationFoot = {
   reason?: string;                  // почему запуск невозможен; задана — кнопка гаснет
   queue?: string;                   // очередь GPU у локальных моделей
-  count: number;
-  maxCountHint?: string;            // причина потолка: «Эта операция даёт один вариант»
-  price: [string, string];          // итог («≈ $0.08») и расшифровка («2 × $0.04»)
+  price?: [string, string];         // итог («≈ $0.08») и расшифровка («2 × $0.04»)
   runLabel: string;                 // глагол запуска: «Изменить», «Перегенерировать»
   runIcon?: ReactNode;              // значок запуска; без него ✦ — значок ИИ
   noCount?: boolean;                // правка без ИИ: один результат, «− N +» не рисуем
+  stale?: string[];                 // что изменилось после сборки: «порядок сцен», «склейка 2»
   onRun: () => void;
-} & (
-  | { maxCount: 1; onCountChange?: (n: number) => void }
-  | { maxCount: number; onCountChange: (n: number) => void }
-);
+} & GenerationFootCount & GenerationFootState;
 
 // Уже GEN_PANEL_INLINE_MIN панели генерации нет места в зоне: её рисует шторкой вертикаль
 // у полосы над полем ввода (genPanelPlacement)
@@ -166,7 +186,7 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
     </div>
   );
 
-  const foot = p.footContent ?? (p.foot && <Foot foot={p.foot} />);
+  const foot = p.footContent ?? (p.foot && <GenerationFootView foot={p.foot} />);
   const footBox = foot && (
     <div style={{
       flex: '0 0 auto', borderTop: `1px solid ${C.borderLight}`, background: C.bgCard,
@@ -309,8 +329,10 @@ function AgentPickRow({ pick }: { pick: GenerationAgentPick }) {
   );
 }
 
-// Низ: причина · очередь GPU · «− N +» · цена в две строки · кнопка запуска
-function Foot({ foot: f }: { foot: GenerationFoot }) {
+// Низ: причина · очередь GPU · «устарел» · результат · «− N +» · цена в две строки · кнопка
+// запуска; во время работы строка запуска заменяется полосой прогресса с «Отменить»
+export function GenerationFootView({ foot: f }: { foot: GenerationFoot }) {
+  const showCount = !f.noCount && f.count !== undefined;
   return (
     <>
       {f.reason && (
@@ -327,34 +349,75 @@ function Foot({ foot: f }: { foot: GenerationFoot }) {
           <Badge tone="info" icon={<Cpu size={QUEUE_ICON} strokeWidth={ICON_STROKE} />}>{f.queue}</Badge>
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
-        {!f.noCount && <Stepper
-          ariaLabel="Сколько вариантов"
-          value={f.count}
-          min={1}
-          max={f.maxCount}
-          maxHint={f.maxCountHint}
-          onChange={n => f.onCountChange?.(n)}
-        />}
-        {/* Цена ровно в две строки: строки не переносятся, а режутся многоточием */}
-        <span title={`${f.price[0]} · ${f.price[1]}`} style={{
-          flex: 1, minWidth: 0, fontSize: FS.sm, lineHeight: 1.35, color: C.textSecondary,
-          whiteSpace: 'nowrap',
+      {f.stale && f.stale.length > 0 && (
+        <div data-gen-foot-stale="" style={{
+          display: 'flex', alignItems: 'flex-start', gap: PAD.row, marginBottom: PAD.row,
+          fontSize: FS.sm, color: C.info,
         }}>
-          <b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', color: C.textHeading }}>{f.price[0]}</b>
-          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.price[1]}</span>
-        </span>
-        <Button
-          size="xs"
-          disabled={!!f.reason}
-          title={f.reason}
-          leftIcon={f.runIcon ?? icon(Sparkles)}
-          onClick={f.onRun}
-          style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
-        >
-          {f.runLabel}
-        </Button>
-      </div>
+          <span style={{ display: 'inline-flex', marginTop: 1, flexShrink: 0 }}>{icon(RefreshCw)}</span>
+          <span>Изменено после сборки: {f.stale.join(' · ')}</span>
+        </div>
+      )}
+      {f.result && (
+        <div data-gen-foot-result="" style={{
+          display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: PAD.row, marginBottom: PAD.row, minWidth: 0,
+          fontSize: FS.sm, color: C.textSecondary,
+        }}>
+          <span style={{ display: 'inline-flex', color: C.success, flexShrink: 0 }}>{icon(Check)}</span>
+          <span title={f.result.file} style={{
+            flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            fontWeight: 600, color: C.textHeading, textDecoration: f.stale?.length ? 'line-through' : undefined,
+          }}>{f.result.file}</span>
+          {f.stale?.length ? <Badge size="xs" tone="warning">устарел</Badge> : null}
+          {f.result.actions.map(a => (
+            <Button key={a.label} size="xs" variant="ghost" onClick={a.onClick} style={{ flexShrink: 0 }}>{a.label}</Button>
+          ))}
+        </div>
+      )}
+      {f.progress ? (
+        <div data-gen-foot-progress="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+          <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: PAD.row }}>
+            <span title={f.progress.label} style={{
+              fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{f.progress.label}</span>
+            {f.progress.p !== undefined && <ProgressBar value={f.progress.p} />}
+          </span>
+          {f.progress.onCancel && (
+            <Button size="xs" variant="ghost" onClick={f.progress.onCancel} style={{ flexShrink: 0 }}>Отменить</Button>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+          {showCount && <Stepper
+            ariaLabel="Сколько вариантов"
+            value={f.count!}
+            min={1}
+            max={f.maxCount!}
+            maxHint={f.maxCountHint}
+            onChange={n => f.onCountChange?.(n)}
+          />}
+          {/* Цена ровно в две строки: строки не переносятся, а режутся многоточием */}
+          {f.price ? (
+            <span title={`${f.price[0]} · ${f.price[1]}`} style={{
+              flex: 1, minWidth: 0, fontSize: FS.sm, lineHeight: 1.35, color: C.textSecondary,
+              whiteSpace: 'nowrap',
+            }}>
+              <b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', color: C.textHeading }}>{f.price[0]}</b>
+              <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.price[1]}</span>
+            </span>
+          ) : <span style={{ flex: 1 }} />}
+          <Button
+            size="xs"
+            disabled={!!f.reason}
+            title={f.reason}
+            leftIcon={f.runIcon ?? icon(Sparkles)}
+            onClick={f.onRun}
+            style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+          >
+            {f.runLabel}
+          </Button>
+        </div>
+      )}
     </>
   );
 }
@@ -382,7 +445,7 @@ function Spine<T extends string>(p: Props<T> & { onExpand: () => void; onTab: (t
           pill
           size="xs"
           disabled={!!f.reason}
-          title={f.reason ?? `${f.runLabel} · ${f.price[0]}`}
+          title={f.reason ?? (f.price ? `${f.runLabel} · ${f.price[0]}` : f.runLabel)}
           onClick={f.onRun}
           style={{ width: SPINE_RUN, height: SPINE_RUN, minHeight: SPINE_RUN, padding: 0 }}
         >

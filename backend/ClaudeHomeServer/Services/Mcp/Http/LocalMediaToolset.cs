@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Images.LocalMedia;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
@@ -24,7 +26,9 @@ public sealed class LocalMediaToolset(
     SessionManager sessions,
     ProjectManager projects,
     // Из отключаемой вертикали Images: выключена — инструменты честно отказывают
-    LocalMediaService? media = null) : IMcpParameterizedToolset
+    LocalMediaService? media = null,
+    // Живой прогресс local_jobs_wait в ленту; нет — вызов работает без прогресса
+    ISessionBroadcaster? broadcaster = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.LocalMediaName;
 
@@ -130,7 +134,8 @@ public sealed class LocalMediaToolset(
                 var ids = StringListArg(arguments, "job_ids");
                 if (ids.Count == 0) return Deny("Передай job_ids — id задач из ответов local_*.");
                 var (jobs, missing) = await media.WaitAsync(context.OwnerId, ids,
-                    IntArg(arguments, "timeout_seconds") ?? LocalMediaService.MaxWaitSeconds, ct);
+                    IntArg(arguments, "timeout_seconds") ?? LocalMediaService.MaxWaitSeconds, ct,
+                    views => SendProgress(session.Id, context.ToolUseId, views));
                 var result = new JsonObject
                 {
                     ["all_done"] = jobs.Count > 0 && jobs.All(j => LocalMediaStatuses.IsTerminal(j.Job.Status)),
@@ -180,10 +185,7 @@ public sealed class LocalMediaToolset(
         if (view.EtaSeconds is { } eta)
         {
             json["eta_seconds"] = eta;
-            // Грубая оценка снизу по доле ETA с начала прогона (не с постановки: очередь
-            // исказила бы её); потолок 95 — «готово» говорит только статус
-            if (job.Status == LocalMediaStatuses.Running && job.StartedAt is { } started && eta > 0)
-                json["progress_estimate"] = (int)Math.Floor(Math.Clamp((at - started).TotalSeconds / eta, 0, 0.95) * 100);
+            if (ProgressEstimate(view, at) is { } estimate) json["progress_estimate"] = estimate;
         }
         if (job.Error is { } error) json["error"] = error;
         if (view.Warning is { } warning) json["warning"] = warning;
@@ -227,6 +229,73 @@ public sealed class LocalMediaToolset(
         if (job.DurationSeconds is { } duration) stats["duration_seconds"] = duration;
         if (job.CachedNodes is { } cached) stats["cached_nodes"] = cached.Count;
         return stats;
+    }
+
+    // Грубая оценка снизу по доле ETA с начала прогона (не с постановки: очередь исказила бы
+    // её); потолок 95 — «готово» говорит только статус. null — не идёт или ETA не замерено
+    private static int? ProgressEstimate(LocalMediaJobView view, DateTime at) =>
+        view.Job.Status == LocalMediaStatuses.Running && view.Job.StartedAt is { } started
+        && view.EtaSeconds is { } eta && eta > 0
+            ? (int)Math.Floor(Math.Clamp((at - started).TotalSeconds / eta, 0, 0.95) * 100)
+            : null;
+
+    // Шаги, которым верит полоса: только первая нода с прогрессом. Со второго этапа (ещё один
+    // семплер видео, тайловый декод) счёт шагов начинается заново, и «точная» полоса поехала бы
+    // назад — дальше честнее оценка по ETA, а этап и шаг остаются в подписи
+    private static ComfyStepProgress? ExactSteps(LocalMediaJobView view) =>
+        view.Steps is { Stage: 1 } steps ? steps : null;
+
+    // Процент идущей задачи: настоящие шаги ComfyUI, если слушатель их знает, иначе оценка по ETA
+    private static int? RunPercent(LocalMediaJobView view, DateTime at) =>
+        ExactSteps(view)?.Percent ?? ProgressEstimate(view, at);
+
+    // Живой прогресс карточки local_jobs_wait (tool_progress) по снимку опроса. Несколько задач
+    // сводятся в одну строку: стадия — самой продвинутой (идёт хоть одна → running), очередь —
+    // ближайшая позиция, процент — среднее (готовая = 100, в очереди = 0, идущая — шаги, оценка
+    // или 0), ETA — дольше всех оставшаяся у идущих. Exact — у ВСЕХ идущих настоящие шаги первого этапа: тогда
+    // потолок 99 и полоса сплошная, иначе потолок 95 и пунктир оценки. «Готово» — только
+    // результат. null — показывать нечего (все задачи уже завершены, итог вернёт сам вызов)
+    internal static ToolProgressMessage? Progress(string toolUseId, IReadOnlyList<LocalMediaJobView> views, DateTime at)
+    {
+        var active = views.Where(v => !LocalMediaStatuses.IsTerminal(v.Job.Status)).ToList();
+        if (active.Count == 0) return null;
+        var running = active.Where(v => v.Job.Status == LocalMediaStatuses.Running).ToList();
+        var stage = running.Count > 0 ? "running" : "queued";
+        var position = running.Count > 0 ? null : active.Select(v => v.Position).Where(p => p > 0).Min();
+        var exact = running.Count > 0 && running.All(v => ExactSteps(v) is not null);
+        int? percent = running.Any(v => RunPercent(v, at) is not null)
+            ? Math.Min(exact ? 99 : 95, (int)Math.Floor(views.Average(v =>
+                LocalMediaStatuses.IsTerminal(v.Job.Status) ? 100 : RunPercent(v, at) ?? 0)))
+            : null;
+        int? eta = running
+            .Select(v => v.EtaSeconds is { } e && v.Job.StartedAt is { } s
+                ? (int?)Math.Max(0, (int)Math.Ceiling(e - (at - s).TotalSeconds)) : null)
+            .Where(e => e is not null)
+            .Max();
+        var done = views.Count - active.Count;
+        // Без слова «готово»: операция ещё идёт, а «готово» в ленте значит конец вызова
+        var parts = new List<string>();
+        if (views.Count > 1) parts.Add($"{done} из {views.Count}");
+        // Шаг — только когда идёт одна задача: у нескольких «шаг» был бы ничей
+        if (running is [{ Steps: { } steps }])
+            parts.Add((steps.Stage > 1 ? $"этап {steps.Stage} · " : "") + $"шаг {steps.Step} из {steps.Total}");
+        return new ToolProgressMessage(toolUseId, Stage: stage, Label: parts.Count > 0 ? string.Join(" · ", parts) : null,
+            Percent: percent, QueuePosition: position, EtaSeconds: eta, Exact: exact ? true : null);
+    }
+
+    // Шлёт прогресс в чат-вызыватель мимо CLI: CLI notifications/progress в stream-json не
+    // пробрасывает. Потеря события безвредна — следующий опрос пришлёт новый снимок
+    private void SendProgress(string sessionId, string? toolUseId, IReadOnlyList<LocalMediaJobView> views)
+    {
+        if (broadcaster is null || toolUseId is null) return;
+        if (Progress(toolUseId, views, DateTime.UtcNow) is not { } message) return;
+        _ = SendAsync();
+
+        async Task SendAsync()
+        {
+            try { await broadcaster.ToSession(sessionId, message with { SessionId = sessionId }); }
+            catch { /* живое событие: следующий опрос пришлёт новое */ }
+        }
     }
 
     private static double Seconds(TimeSpan span) => Math.Round(Math.Max(0, span.TotalSeconds), 1);

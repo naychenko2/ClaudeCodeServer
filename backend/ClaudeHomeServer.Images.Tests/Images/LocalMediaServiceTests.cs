@@ -33,7 +33,7 @@ public class LocalMediaServiceTests : IDisposable
     }
 
     private (LocalMediaService Service, LocalMediaJobStore Store) Build(bool enabled = true, int maxPerOwner = 2,
-        int maxQueue = 4, bool fastDefault = false, string upscale1440 = "single")
+        int maxQueue = 4, bool fastDefault = false, string upscale1440 = "single", ComfyProgressTracker? steps = null)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -48,7 +48,63 @@ public class LocalMediaServiceTests : IDisposable
         }).Build();
         var store = new LocalMediaJobStore(config);
         var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
-        return (new LocalMediaService(client, store, _projects, config, NullLogger<LocalMediaService>.Instance), store);
+        return (new LocalMediaService(client, store, _projects, config, NullLogger<LocalMediaService>.Instance, steps), store);
+    }
+
+    // Шаги семплера по WebSocket ComfyUI приезжают в снимок идущей задачи; сокет оборвался
+    // (знание сброшено) — снимок без шагов, прогресс откатывается на оценку
+    [Fact]
+    public async Task Опрос_ИдущаяЗадача_ШагиИзСокета_ПослеОбрываБезНих()
+    {
+        LocalMediaJobStore? storeRef = null;
+        var tracker = new ComfyProgressTracker(id => storeRef!.IsActivePrompt(id));
+        var (service, store) = Build(steps: tracker);
+        storeRef = store;
+        var job = (await service.SubmitAsync(Generate(), default)).View!.Job;
+        _comfy.Pending.Remove(job.PromptId);
+        _comfy.Running.Add(job.PromptId);
+
+        tracker.Handle($$$"""{"type":"progress","data":{"value":7,"max":25,"prompt_id":"{{{job.PromptId}}}","node":"ks"}}""");
+        var view = (await service.GetAsync(Owner, job.Id, default))!;
+        view.Job.Status.Should().Be(LocalMediaStatuses.Running);
+        view.Steps.Should().Be(new ComfyStepProgress(7, 25, 1));
+
+        tracker.Reset();
+        (await service.GetAsync(Owner, job.Id, default))!.Steps.Should().BeNull();
+    }
+
+    // Вторая ветка «идёт»: история уже есть, но прогон не завершён
+    [Fact]
+    public async Task Опрос_ИсторияБезЗавершения_ШагиИзСокета()
+    {
+        LocalMediaJobStore? storeRef = null;
+        var tracker = new ComfyProgressTracker(id => storeRef!.IsActivePrompt(id));
+        var (service, store) = Build(steps: tracker);
+        storeRef = store;
+        var job = (await service.SubmitAsync(Generate(), default)).View!.Job;
+        _comfy.History[job.PromptId] = JsonNode.Parse("""{"status":{"status_str":"running","completed":false},"outputs":{}}""")!.AsObject();
+
+        tracker.Handle($$$"""{"type":"progress","data":{"value":9,"max":25,"prompt_id":"{{{job.PromptId}}}","node":"ks"}}""");
+        var view = (await service.GetAsync(Owner, job.Id, default))!;
+
+        view.Steps.Should().Be(new ComfyStepProgress(9, 25, 1));
+    }
+
+    [Fact]
+    public async Task Опрос_ЗадачаВОчереди_ШаговНет()
+    {
+        LocalMediaJobStore? storeRef = null;
+        var tracker = new ComfyProgressTracker(id => storeRef!.IsActivePrompt(id));
+        var (service, store) = Build(steps: tracker);
+        storeRef = store;
+        _comfy.Running.Add("чужой-идущий");
+        var job = (await service.SubmitAsync(Generate(), default)).View!.Job;
+        tracker.Handle($$$"""{"type":"progress","data":{"value":3,"max":25,"prompt_id":"{{{job.PromptId}}}","node":"ks"}}""");
+
+        var view = (await service.GetAsync(Owner, job.Id, default))!;
+
+        view.Job.Status.Should().Be(LocalMediaStatuses.Queued);
+        view.Steps.Should().BeNull("шаги — только у идущей задачи");
     }
 
     private static LocalMediaRequest Generate(string owner = Owner, string project = ProjectId) =>
@@ -68,13 +124,18 @@ public class LocalMediaServiceTests : IDisposable
         sent["extra_data"]!["preview_method"]!.GetValue<string>().Should().Be("latent2rgb",
             "без него превью TAEHV под DynamicVRAM роняет общий процесс ComfyUI");
         sent["prompt"]!["enc"]!["inputs"]!["prompt"]!.GetValue<string>().Should().Be("котик на подоконнике");
+        // Тот же clientId, с которым слушатель подключает сокет: progress ComfyUI шлёт только ему
+        var clientId = sent["client_id"]!.GetValue<string>();
+        clientId.Should().Be(ComfyClient.ClientId);
+        ComfyProgressListener.SocketUri("http://comfy.test:8188").Query
+            .Should().Be("?clientId=" + Uri.EscapeDataString(clientId));
     }
 
     [Fact]
     public async Task Клиент_ОтказГрафа_ТекстОшибкиНоды()
     {
         var (service, store) = Build();
-        _comfy.RejectPrompt = """{"error":{"message":"Prompt outputs failed validation"},"node_errors":{"ks":{"errors":[{"message":"Value not in list","details":"sampler_name"}]}}}""";
+        _comfy.RejectPrompt = """{"error":{"message":"Prompt outputs failed validation"},"node_errors":{"ks":{"errors":[{"message":"Value not in list","details":"sampler_name"}]}}""";
 
         var result = await service.SubmitAsync(Generate(), default);
 

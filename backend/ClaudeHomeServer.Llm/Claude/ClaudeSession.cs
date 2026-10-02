@@ -5148,7 +5148,17 @@ public class ClaudeSession : ILlmSessionAdapter
                 // ПЕРВИЧНЫЙ источник учёта наравне с текстовыми путями (TrackBgLaunch,
                 // <task-notification>, TaskOutput): несут готовую пару task_id↔tool_use_id
                 // без регекс-разбора текста. Текстовые пути не удаляем — фолбэк для старых CLI.
-                else if (sysSubtype == "task_started") HandleTaskStarted(run, root);
+                else if (sysSubtype == "task_started")
+                {
+                    // Фактический старт инструмента (Bash, агент) — для таймера карточки
+                    if (HandleTaskStarted(run, root) is { } started)
+                        await _onMessage(new ToolStartedMessage(started.ToolUseId));
+                }
+                // Ход сабагента: на каждый его вызов инструмента — живой прогресс карточки
+                else if (sysSubtype == "task_progress")
+                {
+                    if (ParseTaskProgress(root) is { } progress) await _onMessage(progress);
+                }
                 else if (sysSubtype == "task_notification") HandleStructuredTaskNotification(run, root);
                 else if (sysSubtype == "background_tasks_changed") HandleBackgroundTasksChanged(run, root);
                 break;
@@ -5529,6 +5539,30 @@ public class ClaudeSession : ILlmSessionAdapter
         return string.IsNullOrEmpty(taskId) || string.IsNullOrEmpty(toolUseId) ? null : (taskId, toolUseId);
     }
 
+    // task_progress сабагента (живой образец CLI 2.1.287 — docs/research/tool-progress-2026-10.md):
+    // что он делает сейчас (last_tool_name), сколько вызовов и сколько идёт (usage). Процента нет.
+    // null — без tool_use_id привязать к карточке нечем
+    internal static ToolProgressMessage? ParseTaskProgress(JsonElement root)
+    {
+        var toolUseId = StringProp(root, "tool_use_id");
+        if (string.IsNullOrEmpty(toolUseId)) return null;
+        int? toolUses = null;
+        long? durationMs = null;
+        if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+        {
+            // Только через IntProp/LongProp: null или строка в usage иначе роняет цикл чтения.
+            // Отрицательный дефолт — признак «поля нет или оно не число»
+            if (IntProp(usage, "tool_uses", -1) is >= 0 and var n) toolUses = n;
+            if (LongProp(usage, "duration_ms", -1) is >= 0 and var ms) durationMs = ms;
+        }
+        var description = StringProp(root, "description");
+        var lastTool = StringProp(root, "last_tool_name");
+        return new ToolProgressMessage(toolUseId, Stage: "working",
+            Label: string.IsNullOrWhiteSpace(description) ? null : description,
+            LastTool: string.IsNullOrWhiteSpace(lastTool) ? null : lastTool,
+            ToolUses: toolUses, DurationMs: durationMs);
+    }
+
     // task_notification (структурный): (TaskId, ToolUseId?, Aborted) — null, если task_id
     // отсутствует. Aborted = статус не "completed" (failed/stopped и любой нераспознанный
     // считаем обрывом — тот же принцип, что и у ParseTaskOutputCompletion).
@@ -5757,9 +5791,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // перезапишет тем же значением; если tool_use_id уже был учтён как неизвестный (текстовый
     // путь не смог распарсить id) — снимаем его оттуда, чтобы карточка не осталась висеть
     // в UnknownBgToolUses и не закрылась дважды при финализации прогона.
-    private void HandleTaskStarted(CliRun run, JsonElement root)
+    // Возвращает разобранную пару task_id↔tool_use_id (null — событие не разобралось),
+    // чтобы вызывающий не парсил событие второй раз
+    private (string TaskId, string ToolUseId)? HandleTaskStarted(CliRun run, JsonElement root)
     {
-        if (ParseTaskStarted(root) is not { } started) return;
+        if (ParseTaskStarted(root) is not { } started) return null;
         var (taskId, toolUseId) = started;
         run.BgTasksEmptySnapshot = false;   // старт новой задачи отменяет «работать некому»
         lock (run.PendingBg)
@@ -5774,6 +5810,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 run.PendingBgUnknown = false;
         }
         PublishBgPresence(run);
+        return started;
     }
 
     // Структурное событие CLI: завершение фоновой задачи (completed/failed/stopped) — точный

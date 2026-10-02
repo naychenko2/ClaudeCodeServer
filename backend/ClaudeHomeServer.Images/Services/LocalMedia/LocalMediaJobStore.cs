@@ -155,6 +155,20 @@ public sealed class LocalMediaJobStore
             return _jobs.Where(j => !LocalMediaStatuses.IsTerminal(j.Status)).Select(Clone).ToList();
     }
 
+    public bool HasActive()
+    {
+        lock (_writeLock)
+            return _jobs.Any(j => !LocalMediaStatuses.IsTerminal(j.Status));
+    }
+
+    // Наш ли это незавершённый прогон ComfyUI: события чужих прогонов стенда слушатель шагов
+    // не копит (ComfyProgressTracker)
+    public bool IsActivePrompt(string promptId)
+    {
+        lock (_writeLock)
+            return _jobs.Any(j => j.PromptId == promptId && !LocalMediaStatuses.IsTerminal(j.Status));
+    }
+
     // Завершённые задачи, чьи промежуточные файлы в ComfyUI ещё не убраны
     public IReadOnlyList<LocalMediaJob> TerminalUncleaned()
     {

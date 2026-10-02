@@ -126,18 +126,21 @@ internal class TurnAccumulator
         lock (_lock) _thinkingBuf.Append(text);
     }
 
-    public void OnToolUse(string id, string name, object? input, string? parentToolUseId = null)
+    public void OnToolUse(string id, string name, object? input, string? parentToolUseId = null, long? startedAt = null)
     {
         lock (_lock)
         {
             FlushBuffers();
-            // Дедуп: ранняя карточка из стрима (пустой input) + финальный assistant с тем же id → обновляем, не дублируем
+            // Дедуп: ранняя карточка из стрима (пустой input) + финальный assistant с тем же id → обновляем, не дублируем.
+            // Старт тоже сдвигается на финальный: ранняя карточка приходит в начале стрима
+            // аргументов, а выполняться инструмент начнёт только после него
             if (_pendingTools.TryGetValue(id, out var existing))
             {
                 existing.Input = input;
+                if (startedAt is not null) existing.StartedAt = startedAt;
                 return;
             }
-            var msg = new StoredToolUseMessage { Id = id, Name = name, Input = input, ParentToolUseId = parentToolUseId };
+            var msg = new StoredToolUseMessage { Id = id, Name = name, Input = input, ParentToolUseId = parentToolUseId, StartedAt = startedAt };
             _pendingTools[id] = msg;
             _currentTurn.Add(msg);
         }
@@ -164,27 +167,43 @@ internal class TurnAccumulator
         }
     }
 
-    public void OnToolResult(string toolUseId, string content, bool isError)
+    public void OnToolResult(string toolUseId, string content, bool isError, long? finishedAt = null)
     {
         lock (_lock)
         {
-            if (_pendingTools.TryGetValue(toolUseId, out var msg))
+            if (FindTool(toolUseId) is { } msg)
             {
                 msg.Result = content;
                 msg.IsError = isError;
-                return;
+                msg.FinishedAt = finishedAt;
             }
-            // Инструмент завершился после конца хода (дочерний вызов доживающего фонового
-            // агента) — его tool_use уже уплыл в _history: дописываем результат туда,
-            // иначе после перезагрузки карточка крутила бы спиннер вечно
-            for (var i = _history.Count - 1; i >= 0; i--)
-                if (_history[i] is StoredToolUseMessage h && h.Id == toolUseId)
-                {
-                    h.Result = content;
-                    h.IsError = isError;
-                    return;
-                }
         }
+    }
+
+    // Фактический старт выполнения (task_started CLI) — сдвигает отсчёт таймера карточки.
+    // Результат уже есть — старт опоздал (гонка событий), длительность не трогаем
+    public void OnToolStarted(string toolUseId, long startedAt)
+    {
+        lock (_lock)
+        {
+            if (FindTool(toolUseId) is { Result: null } msg)
+            {
+                msg.StartedAt = startedAt;
+                msg.Started = true;
+            }
+        }
+    }
+
+    // Вызывать только под _lock. Сначала текущий ход; инструмент, завершившийся после конца
+    // хода (дочерний вызов доживающего фонового агента), уже уплыл в _history — ищем там,
+    // иначе после перезагрузки карточка крутила бы спиннер вечно
+    private StoredToolUseMessage? FindTool(string toolUseId)
+    {
+        if (_pendingTools.TryGetValue(toolUseId, out var msg)) return msg;
+        for (var i = _history.Count - 1; i >= 0; i--)
+            if (_history[i] is StoredToolUseMessage h && h.Id == toolUseId)
+                return h;
+        return null;
     }
 
     // Завершение фоновых агентов (bg_agent_done): помечаем их tool_use — единственный

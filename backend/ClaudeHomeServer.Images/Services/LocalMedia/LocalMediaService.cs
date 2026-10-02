@@ -34,9 +34,10 @@ public sealed record LocalMediaRequest(
 
 // Задача и её живое положение: Position — сколько задач ComfyUI впереди (0 — идёт),
 // Warning — временный сбой опроса (ComfyUI недоступен), задача при этом жива. EtaSeconds без
-// явного значения берётся из задачи: иначе local_jobs_wait теряет оценку после постановки
+// явного значения берётся из задачи: иначе local_jobs_wait теряет оценку после постановки.
+// Steps — настоящие шаги идущего прогона по WebSocket ComfyUI; null — шагов не знаем
 public sealed record LocalMediaJobView(LocalMediaJob Job, int? Position = null, int? EtaSeconds = null,
-    string? Warning = null)
+    string? Warning = null, ComfyStepProgress? Steps = null)
 {
     public int? EtaSeconds { get; init; } = EtaSeconds ?? Job.EtaSeconds;
 }
@@ -53,7 +54,9 @@ public sealed class LocalMediaService(
     LocalMediaJobStore store,
     ILocalMediaProjectAccess projects,
     IConfiguration config,
-    ILogger<LocalMediaService> log)
+    ILogger<LocalMediaService> log,
+    // Шаги семплера по WebSocket ComfyUI; нет — живой прогресс остаётся на оценке по ETA
+    ComfyProgressTracker? steps = null)
 {
     // Папка результатов в проекте: скрыта из дерева, из синка знаний и из git
     public const string ResultsFolder = ".cc-attachments/local-media";
@@ -552,9 +555,12 @@ public sealed class LocalMediaService(
     }
 
     // Ожидание нескольких задач: до готовности всех или до таймаута (не больше 15 с —
-    // вызов инструмента не должен висеть). Чужие id возвращаются отдельно как «не найдены»
+    // вызов инструмента не должен висеть). Чужие id возвращаются отдельно как «не найдены».
+    // onPoll — снимок после каждого опроса, кроме последнего (его вернёт сам вызов): живой
+    // прогресс карточки local_jobs_wait в ленте
     public async Task<(IReadOnlyList<LocalMediaJobView> Jobs, IReadOnlyList<string> Missing)> WaitAsync(
-        string ownerId, IReadOnlyList<string> jobIds, int timeoutSeconds, CancellationToken ct)
+        string ownerId, IReadOnlyList<string> jobIds, int timeoutSeconds, CancellationToken ct,
+        Action<IReadOnlyList<LocalMediaJobView>>? onPoll = null)
     {
         var deadline = DateTime.UtcNow.AddSeconds(Math.Clamp(timeoutSeconds, 0, MaxWaitSeconds));
         var ids = jobIds.Distinct(StringComparer.Ordinal).Take(MaxWaitJobs).ToList();
@@ -572,6 +578,7 @@ public sealed class LocalMediaService(
             var left = deadline - DateTime.UtcNow;
             if (views.All(v => LocalMediaStatuses.IsTerminal(v.Job.Status)) || left <= TimeSpan.Zero)
                 return (views, missing);
+            onPoll?.Invoke(views);
             await Task.Delay(left < interval ? left : interval, ct);
         }
     }
@@ -603,14 +610,15 @@ public sealed class LocalMediaService(
                         j.Status = status;
                         if (status == LocalMediaStatuses.Running) j.StartedAt ??= DateTime.UtcNow;
                     }) ?? job;
-                    return new LocalMediaJobView(current, position);
+                    return new LocalMediaJobView(current, position,
+                        Steps: position == 0 ? steps?.Get(job.PromptId) : null);
                 }
             }
 
             if (history.Failed)
                 return new LocalMediaJobView(Fail(job, history.Error ?? "ComfyUI завершил задачу ошибкой.", history));
             if (!history.Completed)
-                return new LocalMediaJobView(job, 0);
+                return new LocalMediaJobView(job, 0, Steps: steps?.Get(job.PromptId));
             return new LocalMediaJobView(await CollectAsync(job, history, ct));
         }
         catch (ComfyException ex)

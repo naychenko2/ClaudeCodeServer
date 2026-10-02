@@ -61,8 +61,13 @@ public sealed record McpToolCallResult(string Text, bool IsError = false);
 /// null у одно-сегментных серверов; параметризованный тулсет достаёт из него свои
 /// параметры (например, id персоны). Хвост виден модели в конфиге хода, поэтому
 /// источником прав он может быть только вместе с проверкой по OwnerId.
+/// ToolUseId — id карточки вызова в ленте: CLI кладёт его в <c>params._meta["claudecode/toolUseId"]</c>
+/// каждого tools/call (проверено живым CLI и на stdio, и на http). По нему тулсет шлёт живой
+/// прогресс в чат мимо CLI (<c>tool_progress</c>); null — CLI не прислал или форма не прошла
+/// проверку. Свойство ВЫЗОВА, а не хода: на состав tools/list не влияет никак.
 /// </summary>
-public sealed record McpToolCallContext(string OwnerId, string? CallerSessionId, string? RouteTail = null);
+public sealed record McpToolCallContext(string OwnerId, string? CallerSessionId, string? RouteTail = null,
+    string? ToolUseId = null);
 
 /// <summary>
 /// Тулсет с параметром в маршруте: <c>POST /mcp/{name}/{хвост}</c> вместо одно-сегментного

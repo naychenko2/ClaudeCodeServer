@@ -332,6 +332,72 @@ public class TurnAccumulatorTests : IDisposable
         tool.IsError.Should().BeTrue();
     }
 
+    // Таймер карточки инструмента: старт и конец живут в истории, иначе после F5 отсчёт
+    // начинался бы заново. Ранняя карточка из стрима сдвигается финальным tool_use, а
+    // фактический старт (task_started) — ещё дальше, но только пока результата нет
+    [Fact]
+    public void ToolTiming_СтартСдвигаетсяФинальнымToolUseИTaskStarted_КонецПишетсяРезультатом()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "Bash", new { }, startedAt: 1_000);
+        acc.OnToolUse("t1", "Bash", new { command = "sleep 20" }, startedAt: 2_000);
+        acc.OnToolStarted("t1", 5_000);
+        acc.OnToolResult("t1", "ok", false, finishedAt: 25_000);
+        acc.OnToolStarted("t1", 30_000); // опоздавший старт после результата не портит длительность
+
+        var tool = acc.GetAll().OfType<StoredToolUseMessage>().Single();
+        tool.StartedAt.Should().Be(5_000);
+        tool.FinishedAt.Should().Be(25_000);
+        tool.Started.Should().BeTrue();
+    }
+
+    // Без фактического старта признака нет: карточка Bash после F5 не покажет «идёт»,
+    // пока длится ожидание разрешения
+    [Fact]
+    public void ToolTiming_БезTaskStarted_ПризнакаСтартаНет()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "Bash", new { }, startedAt: 1_000);
+
+        acc.GetAll().OfType<StoredToolUseMessage>().Single().Started.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ToolTiming_ПереживаетСохранениеИстории()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnToolUse("t1", "Bash", new { }, startedAt: 1_000);
+        acc.OnToolResult("t1", "ok", false, finishedAt: 16_000);
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        var tool = (await _histSvc.LoadAsync(sessionId)).OfType<StoredToolUseMessage>().Single();
+        tool.StartedAt.Should().Be(1_000);
+        tool.FinishedAt.Should().Be(16_000);
+    }
+
+    // Регресс QA (F5 посреди выполнения): у идущего инструмента в истории лежало
+    // "result": null, и лента принимала null за результат — «готово» без времени.
+    // Незавершённый вызов пишется в историю вовсе без поля result и без пустого конца
+    [Fact]
+    public async Task ToolTiming_ИдущийИнструмент_ВИсторииНетNullПолейResultИFinishedAt()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnToolUse("t1", "Bash", new { command = "sleep 20" }, startedAt: 1_000);
+        await acc.SaveSnapshotAsync(_histSvc);
+
+        var file = Directory.GetFiles(_tempDir, "history.json", SearchOption.AllDirectories).Single();
+        var json = await File.ReadAllTextAsync(file);
+        json.Should().Contain("\"startedAt\":1000");
+        json.Should().NotContain("\"result\"");
+        json.Should().NotContain("\"finishedAt\"");
+
+        var tool = (await _histSvc.LoadAsync(sessionId)).OfType<StoredToolUseMessage>().Single();
+        tool.Result.Should().BeNull();
+        tool.StartedAt.Should().Be(1_000);
+    }
+
     [Fact]
     public void OnFileChanged_AddsFileChangedMessage()
     {

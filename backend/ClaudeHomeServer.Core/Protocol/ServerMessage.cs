@@ -89,14 +89,39 @@ public record AgentTextMessage(string ParentToolUseId, string Text)
 public record AgentThinkingMessage(string ParentToolUseId, string Text)
     : ServerMessage("agent_thinking");
 
-public record ToolUseMessage(string Id, string Name, object Input, string? ParentToolUseId = null)
+// StartedAt (Unix-мс UTC) — когда сервер увидел вызов: от него карточка ведёт таймер
+// «идёт M:SS». Проставляет SessionManager при приёме (часы сервера, а не браузера), тем же
+// числом оно уходит в историю — отсчёт после F5 продолжается с того же места. Уточняется
+// событием tool_started, когда CLI сообщает о фактическом старте (Bash, агенты).
+public record ToolUseMessage(string Id, string Name, object Input, string? ParentToolUseId = null,
+    long? StartedAt = null)
     : ServerMessage("tool_use");
+
+// Фактический старт выполнения инструмента — по system/task_started CLI (Bash, сабагенты).
+// Между tool_use и стартом может пройти заметное время (хуки PreToolUse, ожидание
+// разрешения), поэтому таймер карточки сдвигается сюда. StartedAt проставляет SessionManager.
+public record ToolStartedMessage(string ToolUseId, long? StartedAt = null)
+    : ServerMessage("tool_started");
+
+// Живой прогресс идущего инструмента — поверх таймера карточки (docs/research/tool-progress-2026-10.md,
+// вариант б). Percent — оценка (elapsed/ETA с потолком 95) либо, при Exact, процент по
+// настоящим шагам семплера ComfyUI (потолок 99); «готово» говорит только tool_result. Источники:
+//   • сабагент — system/task_progress CLI: LastTool, ToolUses, DurationMs, Label = описание;
+//   • local-media (local_jobs_wait) — шлёт сам MCP-тулсет мимо CLI по _meta.claudecode/toolUseId:
+//     Stage queued|running, QueuePosition, EtaSeconds, Percent, Exact, Label («шаг N из M»).
+// Не персистится: событие живое, после F5 карточку догонит следующее.
+public record ToolProgressMessage(string ToolUseId, string? Stage = null, string? Label = null,
+    int? Percent = null, int? QueuePosition = null, int? EtaSeconds = null,
+    string? LastTool = null, int? ToolUses = null, long? DurationMs = null, bool? Exact = null)
+    : ServerMessage("tool_progress");
 
 // Стриминг аргументов инструмента (input_json_delta) — накопленный частичный JSON
 public record ToolInputDeltaMessage(string ToolUseId, string PartialJson)
     : ServerMessage("tool_input_delta");
 
-public record ToolResultMessage(string ToolUseId, string Content, bool IsError)
+// FinishedAt (Unix-мс UTC) — когда пришёл результат; вместе с ToolUseMessage.StartedAt даёт
+// итоговую длительность на карточке. Проставляет SessionManager, как и StartedAt.
+public record ToolResultMessage(string ToolUseId, string Content, bool IsError, long? FinishedAt = null)
     : ServerMessage("tool_result");
 
 // Завершение фоновых агентов (Agent run_in_background / Workflow): toolUseId их карточек.

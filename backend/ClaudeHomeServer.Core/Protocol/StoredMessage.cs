@@ -263,6 +263,9 @@ public class StoredToolUseMessage : StoredMessage
     public string Id { get; init; } = "";
     public string Name { get; init; } = "";
     public object? Input { get; set; }
+    // Нет результата — поля в JSON нет вовсе, а не "result": null: лента считает «результата
+    // нет» отсутствием поля, и null после F5 читался бы завершением («готово» без времени)
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Result { get; set; }
     public bool IsError { get; set; }
     public string? ParentToolUseId { get; init; }
@@ -270,6 +273,17 @@ public class StoredToolUseMessage : StoredMessage
     // у него tool_result — лишь квитанция запуска, признак завершения — только этот.
     // null — не фоновый вызов либо старая история
     public bool? BgDone { get; set; }
+    // Старт и конец выполнения (Unix-мс UTC) — см. ToolUseMessage.StartedAt и
+    // ToolResultMessage.FinishedAt. null — история до этих полей
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? StartedAt { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? FinishedAt { get; set; }
+    // true — пришёл фактический старт (tool_started) и StartedAt сдвинут на него: только
+    // тогда карточка Bash/агента показывает «идёт» (до него идёт ожидание разрешения).
+    // null — старта не было либо история до этого поля
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Started { get; set; }
 }
 
 // Последний снапшот workflow_progress (по ToolUseId вызова Workflow) — чтобы карточка

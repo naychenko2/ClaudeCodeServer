@@ -52,6 +52,11 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
     // Подпапка input ComfyUI для наших загрузок
     public const string InputFolder = "ccs-local-media";
 
+    // client_id постановки: события прогресса ComfyUI шлёт только сокету с этим clientId
+    // (ComfyProgressListener). Свой на каждый процесс: ComfyUI держит на sid один сокет, и
+    // общий id дева и боя на одном стенде вытеснял бы сокет соседа — тот молча глох без Close
+    public static readonly string ClientId = "ccs-local-media-" + Guid.NewGuid().ToString("N");
+
     private HttpClient Client()
     {
         var client = http.CreateClient(HttpClientName);
@@ -90,7 +95,7 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         var body = new JsonObject
         {
             ["prompt"] = graph,
-            ["client_id"] = "ccs-local-media",
+            ["client_id"] = ClientId,
             ["extra_data"] = new JsonObject { ["preview_method"] = "latent2rgb" },
         };
         using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");

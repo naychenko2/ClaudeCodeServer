@@ -8862,13 +8862,24 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     break;
                 case AgentThinkingMessage m: acc.OnAgentThinking(m.ParentToolUseId, m.Text); break;
                 case ToolUseMessage m:
-                    acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId);
+                    // Время старта — по часам сервера и одним числом в ленту и в историю:
+                    // иначе таймер карточки после F5 начинал бы отсчёт заново
+                    m = m with { StartedAt = m.StartedAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                    msg = m;
+                    acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId, m.StartedAt);
                     TryUnmarkCommittedOnToolUse(sessionId, entry, m.Name, m.Input);
                     if (entry is not null && SpendMapping.TryExtractHiggsfieldGeneration(m.Name))
                         SpendMapping.RecordHiggsfieldGeneration(_spend, ResolveOwnerId, _log, entry.Info);
                     break;
+                case ToolStartedMessage m:
+                    m = m with { StartedAt = m.StartedAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                    msg = m;
+                    acc.OnToolStarted(m.ToolUseId, m.StartedAt.Value);
+                    break;
                 case ToolResultMessage m:
-                    acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
+                    m = m with { FinishedAt = m.FinishedAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                    msg = m;
+                    acc.OnToolResult(m.ToolUseId, m.Content, m.IsError, m.FinishedAt);
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
                     TryTrackFalCost(sessionId, m.Content); // fire-and-forget: стоимость придёт позже
                     TryTrackGlifCost(sessionId, m.Content); // синхронно: кредиты уже в tool_result

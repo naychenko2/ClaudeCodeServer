@@ -46,7 +46,7 @@ public class LocalMediaToolsetTests : IDisposable
     private sealed record Env(LocalMediaToolset Toolset, McpToolCallContext Context, Session Session, Project Project,
         SessionManager Sessions, ProjectManager Projects, LocalMediaJobStore? Store);
 
-    private Env Build(bool enabled = true, bool withService = true)
+    private Env Build(bool enabled = true, bool withService = true, ISessionBroadcaster? broadcaster = null)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -72,7 +72,7 @@ public class LocalMediaToolsetTests : IDisposable
             media = new LocalMediaService(client, store, new LocalMediaProjectAccess(projects), config,
                 NullLogger<LocalMediaService>.Instance);
         }
-        var toolset = new LocalMediaToolset(sessions, projects, media);
+        var toolset = new LocalMediaToolset(sessions, projects, media, broadcaster);
         return new Env(toolset, new McpToolCallContext(TestUserId, session.Id, session.Id), session, project,
             sessions, projects, store);
     }
@@ -269,6 +269,123 @@ public class LocalMediaToolsetTests : IDisposable
         var overdue = await StatusAsync(env, jobId);
         overdue["progress_estimate"]!.GetValue<int>().Should().Be(95);
         overdue["elapsed_seconds"]!.GetValue<double>().Should().BeGreaterThanOrEqualTo(0);
+    }
+
+    // Прогресс карточки local_jobs_wait (tool_progress): CLI notifications/progress в ленту не
+    // пробрасывает, поэтому тулсет шлёт его в чат сам — по id карточки из _meta вызова
+    [Fact]
+    public async Task ПрогрессОжидания_ИдущаяЗадача_ШлётсяВЧатПоToolUseId()
+    {
+        var sent = new List<(string Session, Protocol.ServerMessage Message)>();
+        var broadcaster = new Mock<ISessionBroadcaster>();
+        broadcaster.Setup(b => b.ToSession(It.IsAny<string>(), It.IsAny<Protocol.ServerMessage>()))
+            .Callback<string, Protocol.ServerMessage>((s, m) => { lock (sent) sent.Add((s, m)); })
+            .Returns(Task.CompletedTask);
+        var env = Build(broadcaster: broadcaster.Object);
+        var jobId = JsonNode.Parse((await env.Toolset.CallAsync("local_generate_image",
+            new JsonObject { ["prompt"] = "котик" }, env.Context, default)).Text)!["job_id"]!.GetValue<string>();
+        var promptId = _comfy.Pending.Single();
+        _comfy.Pending.Remove(promptId);
+        _comfy.Running.Add(promptId);
+
+        await env.Toolset.CallAsync("local_jobs_wait",
+            new JsonObject { ["job_ids"] = new JsonArray(jobId), ["timeout_seconds"] = 1 },
+            env.Context with { ToolUseId = "toolu_wait1" }, default);
+
+        lock (sent)
+        {
+            sent.Should().NotBeEmpty();
+            var (session, message) = sent[0];
+            session.Should().Be(env.Session.Id);
+            var progress = message.Should().BeOfType<Protocol.ToolProgressMessage>().Subject;
+            progress.ToolUseId.Should().Be("toolu_wait1");
+            progress.SessionId.Should().Be(env.Session.Id, "фронт роутит событие по сессии");
+            progress.Stage.Should().Be("running");
+            progress.Percent.Should().BeInRange(0, 95);
+            progress.EtaSeconds.Should().BeGreaterThan(0);
+        }
+    }
+
+    [Fact]
+    public async Task ПрогрессОжидания_БезToolUseId_ВЧатНичегоНеУходит()
+    {
+        var broadcaster = new Mock<ISessionBroadcaster>();
+        var env = Build(broadcaster: broadcaster.Object);
+        var jobId = JsonNode.Parse((await env.Toolset.CallAsync("local_generate_image",
+            new JsonObject { ["prompt"] = "котик" }, env.Context, default)).Text)!["job_id"]!.GetValue<string>();
+
+        await env.Toolset.CallAsync("local_jobs_wait",
+            new JsonObject { ["job_ids"] = new JsonArray(jobId), ["timeout_seconds"] = 1 }, env.Context, default);
+
+        broadcaster.Invocations.Should().BeEmpty();
+    }
+
+    // Несколько задач — одна строка: очередь, пока ничего не идёт; среднее с потолком 95
+    [Fact]
+    public void ПрогрессОжидания_НесколькоЗадач_СводятсяВОднуСтроку()
+    {
+        var at = DateTime.UtcNow;
+        LocalMediaJobView View(string status, int? position = null, DateTime? started = null) =>
+            new(new LocalMediaJob { Status = status, StartedAt = started, EtaSeconds = 100 }, position);
+
+        var queued = LocalMediaToolset.Progress("t1",
+            [View(LocalMediaStatuses.Queued, 3), View(LocalMediaStatuses.Queued, 2), View(LocalMediaStatuses.Completed)], at)!;
+        queued.Stage.Should().Be("queued");
+        queued.QueuePosition.Should().Be(2, "ближайшая позиция в очереди");
+        queued.Percent.Should().BeNull("процент — только когда хоть одна задача идёт");
+        queued.Label.Should().Be("1 из 3", "«готово» — только у завершённого вызова");
+
+        var running = LocalMediaToolset.Progress("t1",
+            [View(LocalMediaStatuses.Running, 0, at.AddSeconds(-50)), View(LocalMediaStatuses.Completed)], at)!;
+        running.Stage.Should().Be("running");
+        running.QueuePosition.Should().BeNull();
+        running.Percent.Should().Be(75, "(50 + 100) / 2");
+        running.EtaSeconds.Should().Be(50);
+
+        var overdue = LocalMediaToolset.Progress("t1",
+            [View(LocalMediaStatuses.Running, 0, at.AddHours(-1)), View(LocalMediaStatuses.Completed)], at)!;
+        overdue.Percent.Should().Be(95, "«готово» говорит только результат");
+        overdue.EtaSeconds.Should().Be(0);
+
+        LocalMediaToolset.Progress("t1", [View(LocalMediaStatuses.Completed)], at)
+            .Should().BeNull("всё завершено — итог вернёт сам вызов");
+    }
+
+    // Этап 3: шаги семплера по WebSocket ComfyUI — честный процент и «шаг N из M» вместо
+    // оценки; без шагов (сокет не подключён или оборвался) — прежняя оценка по ETA
+    [Fact]
+    public void ПрогрессОжидания_НастоящиеШаги_ЧестныйПроцент_БезНих_Оценка()
+    {
+        var at = DateTime.UtcNow;
+        LocalMediaJobView Running(ComfyStepProgress? steps) =>
+            new(new LocalMediaJob { Status = LocalMediaStatuses.Running, StartedAt = at.AddSeconds(-50), EtaSeconds = 100 },
+                0, Steps: steps);
+
+        var exact = LocalMediaToolset.Progress("t1", [Running(new ComfyStepProgress(5, 20, 1))], at)!;
+        exact.Exact.Should().BeTrue();
+        exact.Percent.Should().Be(25, "5 из 20 шагов, а не 50% оценки по ETA");
+        exact.Label.Should().Be("шаг 5 из 20");
+
+        var stage2 = LocalMediaToolset.Progress("t1", [Running(new ComfyStepProgress(2, 8, 2))], at)!;
+        stage2.Label.Should().Be("этап 2 · шаг 2 из 8", "у видео семплеров несколько, и счёт шагов у каждого свой");
+        // Шаги второго этапа начинаются с нуля: «точная» полоса поехала бы назад (99 → 25),
+        // поэтому со второго этапа — оценка по ETA пунктиром
+        stage2.Exact.Should().BeNull("сплошная полоса не имеет права ехать назад");
+        stage2.Percent.Should().Be(50, "оценка elapsed/ETA, а не 2 из 8 шагов");
+
+        var last = LocalMediaToolset.Progress("t1", [Running(new ComfyStepProgress(20, 20, 1))], at)!;
+        last.Percent.Should().Be(99, "«готово» говорит только результат, даже на последнем шаге");
+
+        var fallback = LocalMediaToolset.Progress("t1", [Running(null)], at)!;
+        fallback.Exact.Should().BeNull("без шагов — оценка, полоса пунктиром");
+        fallback.Percent.Should().Be(50, "оценка elapsed/ETA");
+        fallback.Label.Should().BeNull();
+
+        // Одна задача с шагами, другая без — процент уже не честный целиком
+        var mixed = LocalMediaToolset.Progress("t1", [Running(new ComfyStepProgress(10, 20, 1)), Running(null)], at)!;
+        mixed.Exact.Should().BeNull();
+        mixed.Percent.Should().Be(50, "(50 по шагам + 50 по оценке) / 2");
+        mixed.Label.Should().Be("0 из 2", "шаг у нескольких идущих был бы ничей");
     }
 
     [Fact]

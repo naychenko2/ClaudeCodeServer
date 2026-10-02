@@ -12,6 +12,9 @@ export interface SoundPreset {
   instrumental?: boolean;
   // Откуда заготовка: «под фильм «утро-в-горах»» — в строке контекста нового звука
   from?: string;
+  // Черновик, который вызвавшая панель уже завела на сервере (у «Видео» — звук, который встанет
+  // музыкой фильма): заготовка ложится на него, а не на новый звук
+  threadId?: string;
 }
 
 export function parseSoundPreset(raw: unknown): SoundPreset | null {
@@ -28,5 +31,6 @@ export function parseSoundPreset(raw: unknown): SoundPreset | null {
   if (typeof r.style === 'string' && r.style.trim()) out.style = r.style.trim();
   if (typeof r.instrumental === 'boolean') out.instrumental = r.instrumental;
   if (typeof r.from === 'string' && r.from.trim()) out.from = r.from.trim();
+  if (typeof r.thread === 'string' && r.thread.trim()) out.threadId = r.thread.trim();
   return out;
 }

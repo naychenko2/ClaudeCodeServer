@@ -115,6 +115,8 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const preset = useRef<SoundPreset | null>(null);
   const presetStage = useRef(0);
   const [presetFrom, setPresetFrom] = useState<string | null>(null);
+  // Черновик заготовки (preset.thread): пока он в работе, строка контекста помнит, откуда заготовка
+  const [presetThread, setPresetThread] = useState<string | null>(null);
   if (pendingRaw && !preset.current) {
     preset.current = parseSoundPreset(pendingRaw);
     presetStage.current = 0;
@@ -124,7 +126,13 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     if (!pendingRaw) return;
     if (!pr || !sessionId) { consumePreset(SOUND_PANEL); preset.current = null; return; }
     setTab('settings');
-    if (thread) { if (presetStage.current === 0) { presetStage.current = 1; void releaseFocus(scope, sessionId, thread); } return; }
+    if (pr.threadId) {
+      // Черновик вызвавшей панели: берём в работу его, прежний звук не снимаем отдельно
+      if (thread?.id !== pr.threadId) {
+        if (presetStage.current === 0) { presetStage.current = 1; void focusThread(scope, sessionId, pr.threadId); }
+        return;
+      }
+    } else if (thread) { if (presetStage.current === 0) { presetStage.current = 1; void releaseFocus(scope, sessionId, thread); } return; }
     const wantOp = pr.op ?? state.op;
     if ((state.mode !== 'music' || state.op !== wantOp) && presetStage.current < 2) {
       presetStage.current = 2;
@@ -139,12 +147,13 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     }
     if (pr.style) setComposerText(sessionId, pr.style);
     setPresetFrom(pr.from ?? '');
+    setPresetThread(pr.threadId ?? null);
     noteGenDraft(draftKey);
     preset.current = null;
     consumePreset(SOUND_PANEL);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- по приходу заготовки и перестройке настроек под неё
   }, [pendingRaw, threadId, state.mode, state.op, sessionId]);
-  useEffect(() => { if (threadId) setPresetFrom(null); }, [threadId]);
+  useEffect(() => { if (threadId && threadId !== presetThread) { setPresetFrom(null); setPresetThread(null); } }, [threadId, presetThread]);
 
   // ── Просьба карточки («Обрезать», «Перегенерировать кусок»): сперва её нить в работу, потом операция ──
   const opReq = pendingOperation(sessionId);
@@ -357,6 +366,8 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       : <span>Папка <code>voices/</code> проекта · подключённый голос уходит в каждую озвучку</span>;
   } else if (state.op === 'concat') {
     context = <span>Куски — звук этого чата · результат — новый файл, исходники не меняются</span>;
+  } else if (thread && presetFrom !== null && thread.id === presetThread) {
+    context = <span>Новый звук · заготовка из «Видео»{presetFrom ? `: ${presetFrom}` : ''}</span>;
   } else if (thread) {
     context = (
       <>

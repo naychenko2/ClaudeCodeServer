@@ -258,11 +258,12 @@ describe('ToolUseView — мобила: строка подписи пережи
     expect(done).toContain('готово · 0:15');
   });
 
-  it('настоящие шаги ComfyUI — сплошная заливка, оценка по ETA — пунктир', () => {
+  it('настоящие шаги ComfyUI — сплошное подчёркивание, оценка по ETA — точечное', () => {
     const exact = render(wait({ progress: { stage: 'running', percent: 40, exact: true } }), true);
-    expect(exact).not.toContain('repeating-linear-gradient');
+    expect(exact).toContain('border-top:2px solid');
+    expect(exact).not.toContain('dotted');
     const estimate = render(wait({ progress: { stage: 'running', percent: 40 } }), true);
-    expect(estimate).toContain('repeating-linear-gradient');
+    expect(estimate).toContain('border-top:2px dotted');
   });
 });
 
@@ -320,14 +321,16 @@ describe('ToolUseView — витрина Веры', () => {
     expect(done).toContain(SLOT);
   });
 
-  it('вариант B: процента нет — живая точка и никакой полосы; с процентом — короткая полоса', () => {
+  it('вариант З: процента нет — живая точка без линии; с процентом — подчёркнута подпись, полосы нет', () => {
     const idle = render(wait());
     expect(idle).toContain('cc-live-dot');
     expect(idle).not.toContain('progressbar');
     expect(idle).not.toContain('cc-progress-run');
-    const html = render(wait({ progress: { stage: 'running', percent: 40, exact: true } }));
-    expect(html).toContain('progressbar');
-    expect(html).toContain('max-width:200px');
+    const html = render(wait({ progress: { stage: 'running', label: 'осталось ≈1:15', percent: 40, exact: true } }));
+    // Подчёркивание обнимает саму подпись прогресса, а не стоит отдельной строкой
+    expect(html).toMatch(/role="progressbar"[^>]*aria-valuenow="40"[^>]*>осталось ≈1:15/);
+    expect(html).toContain('width:max(4px, 40%)');
+    expect(html).not.toContain('max-width:200px');
     expect(html).toContain('cc-live-dot');
   });
 
@@ -442,7 +445,7 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     expect(html).not.toContain(' из ');
   });
 
-  it('идёт: текущий этап выделен и не режется, подпись прогресса при нём, полоса под этапами', () => {
+  it('идёт: текущий этап выделен, не режется и подчёркнут на долю процента, подпись прогресса при нём', () => {
     const item = run({
       stages: [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 102_000 }, { stage: 'running', label: 'тесты', startedAt: 102_000 }],
       progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true },
@@ -450,9 +453,11 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     const html = render(item);
     expect(html).toContain('✓ сборка 1:42');
     expect(html).toContain('flex-shrink:0');
-    expect(html).toContain('font-weight:600">тесты');
+    // Подчёркнут именно текущий этап «тесты M:SS», а не счётчик
+    expect(html).toMatch(/font-weight:600"><span role="progressbar"[^>]*aria-valuenow="5"[^>]*>тесты/);
     expect(html).toContain('412 из 7951 · <span style="color:var(--c-danger-text)">упало 2</span>');
-    expect(html).toContain('progressbar');
+    expect(html.match(/role="progressbar"/g)?.length).toBe(1);
+    expect(html).not.toContain('max-width:200px');
     expect(html).toContain('cc-live-dot');
   });
 

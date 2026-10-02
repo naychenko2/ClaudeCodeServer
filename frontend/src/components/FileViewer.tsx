@@ -66,6 +66,8 @@ import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectio
 import { wsPanels, zoneOf } from '../pages/workspace/panelStackState';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { MidiEditor } from '../lib/shell-kit';
+import { FLAGS, useFeature } from '../lib/featureFlags';
 
 const CodeEditor = lazy(() =>
   import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
@@ -1204,6 +1206,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const isHtml = /\.html?$/i.test(fileName);
   const isDrawio = /\.(drawio|dio)$/i.test(fileName);
   const isExcalidraw = /\.excalidraw$/i.test(fileName);
+  const midiOn = useFeature(FLAGS.midiEditor);
+  const isMidi = midiOn && /\.midi?$/i.test(fileName);
   const diffStats = diff ? {
     added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
     removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
@@ -1228,6 +1232,14 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const isHtmlPreviewing = !loading && !loadError && tab === 'file' && isHtml && htmlTab === 'preview' && !editing && !fileContent?.isBinary;
   const isDrawioViewing = !loading && !loadError && tab === 'file' && isDrawio && !fileContent?.isBinary;
   const isExcalidrawViewing = !loading && !loadError && tab === 'file' && isExcalidraw && !fileContent?.isBinary;
+  // .mid приходит бинарником без isAudio — узнаём только по имени; вне проекта URL файла нет
+  const isMidiViewing = !loading && !loadError && tab === 'file' && isMidi && !isHostMode && !!fileContent;
+  const loadMidi = async () => {
+    const url = viaAgent ? await agentStreamUrl(project.id, filePath) : api.files.fileUrl(project.id, filePath);
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`Не удалось загрузить MIDI-файл (код ${r.status})`);
+    return r.arrayBuffer();
+  };
 
   // Сохранение диаграммы из встроенного редактора draw.io: пишем XML и обновляем diff.
   // fileContent.content обновляем, но iframe не перезагружаем (DrawioViewer грузит XML
@@ -1932,7 +1944,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
       {/* Содержимое. Для .md (просмотр и редактирование) — белый «лист» вместо
           карточного фона; в тёмной теме bgWhite = карточный тон, глаз не режет. */}
-      <div ref={contentAreaRef} style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing || isExcalidrawViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing || isExcalidrawViewing) ? 0 : 16, display: 'flex', flexDirection: 'column', background: (isMarkdown && tab === 'file') ? C.bgWhite : undefined }}>
+      <div ref={contentAreaRef} style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing || isExcalidrawViewing || isMidiViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing || isExcalidrawViewing || isMidiViewing) ? 0 : 16, display: 'flex', flexDirection: 'column', background: (isMarkdown && tab === 'file') ? C.bgWhite : undefined }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />
@@ -2102,7 +2114,24 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
               />
             )}
 
-            {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isAudio && !fileContent.isDocument && (
+            {isMidiViewing && (
+              <Suspense fallback={
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10, color: C.textMuted, fontSize: 13 }}>
+                  <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2.5px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.7s linear infinite' }} />
+                  Загрузка нот…
+                </div>
+              }>
+                <MidiEditor
+                  key={filePath}
+                  variant="full"
+                  fileName={fileName}
+                  load={loadMidi}
+                  onDownload={fileContent?.base64 ? handleDownload : undefined}
+                />
+              </Suspense>
+            )}
+
+            {fileContent?.isBinary && !isMidiViewing && !fileContent.isImage && !fileContent.isVideo && !fileContent.isAudio && !fileContent.isDocument && (
               <EmptyState
                 icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
                 title="Нельзя показать"
@@ -2384,7 +2413,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
       {/* Плавающая кнопка редактирования на мобиле (MA4). ЛЕВЫЙ нижний угол — правый занят
           глобальным AiLauncher (⌘/Ctrl+K), чтобы кнопки не накладывались. */}
-      {isMobile && online && canEdit && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !isExcalidraw && !(isHtml && htmlTab === 'preview') && (
+      {isMobile && online && canEdit && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !isExcalidraw && !isMidiViewing && !(isHtml && htmlTab === 'preview') && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"

@@ -227,7 +227,10 @@ JSON ниже — единственное описание формы для ф
 Маршруты (`VideoEditorRoutes`; `Price.Unit` — `usd` | `credits` | `free`): проектные `api/projects/{projectId}/video-editor/sessions/{sessionId}/…` и общие
 `…/catalog`, `…/prefs`, `…/quote`, `…/jobs`; личные `api/video-editor/chats/{sessionId}/…`. Хвосты: `state`,
 `scenes`, `scenes/focus`, `scenes/{sceneId}/settings|current|save`, `scenes/{sceneId}/versions/{versionId}/file|poster`,
-`films`, `films/state?path=`, `films/build?path=`. Коды ошибок (`VideoEditorErrors`): `name_taken`,
+`films`, `films/state?path=`, `films/build?path=`; только личные — `frames/upload`
+(`POST` multipart, поле `file`: png/jpg/webp по сигнатуре, до 20 МБ → `FrameRef` вида `file` с путём `frames/<id>.<ext>`
+в рабочей папке владельца; 404 — чужой чат, 400 — не картинка, 413 — больше лимита). В проектном чате кадр кладёт
+фронт через `files/upload` в `video/<фильм>/кадры/`. Коды ошибок (`VideoEditorErrors`): `name_taken`,
 `revision_conflict`, `dsp_unavailable`, `personal_scope_no_films`, `local_unavailable_personal`,
 `project_local_unsupported`, `outside_allowed_folders`, `film_invalid`, `film_schema_unsupported`, а также общие
 `invalid_request`, `provider_unavailable`, `quote_not_found`, `too_many_jobs`, `heavy_busy`, `chat_not_found`,

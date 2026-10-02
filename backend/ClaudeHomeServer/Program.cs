@@ -690,6 +690,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolWhitelis
 // (6 провайдеров + DossierTrailerHint) подключается к шине через SessionManager.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
     ClaudeHomeServer.Services.Turn.TurnEventBus>();
+// Хаб событий между редакторами (ADR-022 §3): «в Картинках/Звуке появилась версия» → «Видео». In-memory,
+// один на инстанс; сами редакторы друг о друге не знают
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, ClaudeHomeServer.Services.Media.MediaEventHub>();
 // Этап 2: контрибьюторы секций системного промпта (этап 2 плана «Шина событий хода»).
 // Каждый контрибьютор несёт Order/Key/Group и два метода: IsEnabled (гейт по
 // per-session условиям — без него регрессия golden-фикстуры 4) и BuildAsync (исключения

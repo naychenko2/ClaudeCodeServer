@@ -83,6 +83,12 @@ ffmpeg без ИИ) и швы к «Картинкам» и «Звуку» — б
   все необязательные параметры (нет Images/«Картинок»/«Звука» — `dsp_unavailable` / `provider_unavailable`, не 500).
   Хранилищ `image-threads` и `audio-threads` модуль не читает никогда — сторож `VideoModuleIsolationGuardTests`
   (строки и типы в тексте кода плюс ссылки сборки).
+- **Лента — одна точка записи на действие для человека и агента** (требование Андрея 2026-10-02): сохранение сцены
+  (`FilmSceneSaver` → `video_saved`), правка (`FilmService.PatchAsync` → `video_note`) и сборка (`FilmAssembler` →
+  `video_film_built`, отказ — `video_note`) пишут `module_record` сами, а не контроллер; `recordType` одинаков при
+  `initiator = human` и `agent`, различие только в `data.initiator`. Чат для записи — необязательный `sessionId`
+  (query у PATCH и POST build; чужой чат игнорируется). Тулсет блока 3 обязан звать эти же методы. Сторож —
+  `FilmFeedParityTests`.
 - Потолки: до 50 сцен, клип до 300 МБ (сохранение и сборка), `VideoEditor:AssembleTimeoutMinutes` = 20.
 
 Граница блока 2: нет `Mcp/`, `Chats/` и постера версии — это блок 3.

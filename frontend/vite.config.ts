@@ -169,6 +169,8 @@ export default defineConfig({
       '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
       // MF remote модуля «Звук» (dev): dev-сервер модуля на :5178.
       '/audio-editor-remote': { target: 'http://localhost:5178', changeOrigin: true },
+      // MF remote модуля «Видео» (dev): dev-сервер модуля на :5179.
+      '/video-editor-remote': { target: 'http://localhost:5179', changeOrigin: true },
       '/architecture-remote': { target: 'http://localhost:5177', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },
@@ -185,6 +187,8 @@ export default defineConfig({
       '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },
       '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
       '/audio-editor-remote': { target: 'http://localhost:5178', changeOrigin: true },
+      // MF remote модуля «Видео» (dev): dev-сервер модуля на :5179.
+      '/video-editor-remote': { target: 'http://localhost:5179', changeOrigin: true },
       '/architecture-remote': { target: 'http://localhost:5177', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },

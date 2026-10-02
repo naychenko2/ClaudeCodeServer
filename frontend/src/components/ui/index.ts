@@ -28,6 +28,7 @@ export { Modal } from './Modal';
 export { ModalActions } from './ModalActions';
 export { useIsMobileModal } from './useIsMobileModal';
 export { ConfirmDialog } from './ConfirmDialog';
+export { ImageLightbox } from './ImageLightbox';
 export { Field, FieldLabel, TextField, TextArea, IconField } from './Field';
 export { Select } from './Select';
 export type { SelectOption } from './Select';

@@ -1,10 +1,9 @@
 import { useState, useRef, useContext } from 'react';
-import { X } from 'lucide-react';
 import { getExplorerCreateInDir } from '../FileExplorer';
 import { api } from '../../lib/api';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { getEffectiveTheme } from '../../lib/themeMode';
-import { Modal, ModalActions } from '../ui';
+import { ImageLightbox, Modal, ModalActions } from '../ui';
 import { proxyUrl } from './MarkdownContent';
 import { ChatProjectContext } from './contexts';
 import { fmtCredits } from './glifStats';
@@ -557,40 +556,9 @@ export function MediaBlock({
 
       {/* Лайтбокс — только тач/мобайл, pop-up с кнопкой закрытия */}
       {lightbox && (
-        <div
-          onClick={() => setLightbox(false)}
-          style={{
-            position: 'fixed', inset: 0, zIndex: 9999,
-            background: 'rgba(0,0,0,0.92)',
-            display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', padding: 16,
-          }}
-        >
-          <button
-            onClick={e => { e.stopPropagation(); setLightbox(false); }}
-            style={{
-              position: 'absolute', top: 16, right: 16,
-              background: 'rgba(255,255,255,0.15)',
-              border: '1px solid rgba(255,255,255,0.3)',
-              borderRadius: 10, color: C.onDark, fontSize: 18,
-              width: 44, height: 44, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              lineHeight: 1, fontWeight: 300,
-            }}
-          >
-            <X size={20} strokeWidth={2} />
-          </button>
-          <img
-            src={mediaSrc(m.url)}
-            alt=""
-            onClick={e => e.stopPropagation()}
-            style={{ maxWidth: '92vw', maxHeight: '76vh', objectFit: 'contain',
-                     borderRadius: 8, display: 'block' }}
-          />
-          <div onClick={e => e.stopPropagation()} style={{ marginTop: 16 }}>
-            {renderButtons(true)}
-          </div>
-        </div>
+        <ImageLightbox src={mediaSrc(m.url)} onClose={() => setLightbox(false)}>
+          {renderButtons(true)}
+        </ImageLightbox>
       )}
 
       {/* Диалог «Добавить в проект» */}

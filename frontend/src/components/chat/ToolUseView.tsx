@@ -6,29 +6,13 @@ import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
 import { LiveDot, ProgressBar } from '../ui';
-import { awaitsToolStart, formatClock, isQueued, shownFor, stageCaptionOf, stageViews, tickShownClock, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type ShownClock, type StageView } from '../../lib/toolTiming';
+import { awaitsToolStart, formatClock, isQueued, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
+import { useRunningElapsed } from '../../hooks/useRunningElapsed';
 import { toolLabel, toolWord, toolCardLabel, testRunArg, localJobsWaitArg, consoleCaption, isConsoleTool, RUN_TESTS_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
 import { useIsMobile } from '../../lib/breakpoints';
 import { CodeBlockFrame } from './CodeCopyButton';
 import { MediaBlock, extractMediaMeta, mediaLabel } from './MediaBlock';
 import { useVisibleMedia } from './mediaDedup';
-
-// Спиннер для выполняющегося инструмента
-// Живой отсчёт «идёт M:SS» раз в секунду. Значение привязано к своему startedAt
-// (tickShownClock): сдвиг старта начинает отсчёт заново, а не тащит старый максимум в итог.
-// null — до первого тика: короче порога таймер всё равно не показывается. После остановки
-// возвращает последнее показанное — итог «готово» не должен оказаться меньше него
-function useRunningElapsed(startedAt: number | undefined, running: boolean): number | null {
-  const [clock, setClock] = useState<ShownClock | null>(null);
-  useEffect(() => {
-    if (!running || typeof startedAt !== 'number') return;
-    const tick = () => setClock(prev => tickShownClock(prev, startedAt, Date.now()));
-    const first = setTimeout(tick, 0);
-    const t = setInterval(tick, 1000);
-    return () => { clearTimeout(first); clearInterval(t); };
-  }, [startedAt, running]);
-  return shownFor(clock, startedAt);
-}
 
 // Высота строки подписи прогресса и строки этапов под шапкой: фиксированная, чтобы приход
 // и смена текста не двигали ленту

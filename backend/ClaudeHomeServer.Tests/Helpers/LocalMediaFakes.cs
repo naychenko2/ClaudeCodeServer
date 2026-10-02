@@ -236,7 +236,14 @@ public sealed class FakeProjectAccess : ILocalMediaProjectAccess
     public string? ResolveRoot(string ownerId, string projectId) =>
         Roots.TryGetValue((ownerId, projectId), out var root) ? root : null;
 
-    public void NotifyWritten(string root, string relativePath) => Notified.Add(relativePath);
+    // Хук тестов: сработал на записи файла результата (например, оборвать токен запроса посреди сборки)
+    public Action<string>? OnNotified { get; set; }
+
+    public void NotifyWritten(string root, string relativePath)
+    {
+        Notified.Add(relativePath);
+        OnNotified?.Invoke(relativePath);
+    }
 }
 
 public static class LocalMediaTestImages

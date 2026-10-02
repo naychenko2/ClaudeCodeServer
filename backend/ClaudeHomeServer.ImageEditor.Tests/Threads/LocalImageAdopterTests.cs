@@ -2,11 +2,14 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Media;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
@@ -34,6 +37,7 @@ public sealed class LocalImageAdopterTests : IDisposable
         _directory.Setup(d => d.GetById(Chat)).Returns(session);
         _directory.Setup(d => d.ResolveOwnerId(session)).Returns(Owner);
         _projects.Setup(p => p.GetById(Project)).Returns(new Project { Id = Project, OwnerId = Owner, RootPath = _dir });
+        Directory.CreateDirectory(Path.Combine(_dir, "gen"));
     }
 
     public void Dispose()
@@ -41,18 +45,19 @@ public sealed class LocalImageAdopterTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
-    private LocalImageAdopter Adopter()
+    private LocalImageAdopter Adopter(bool withSteps = false)
     {
         var feed = new Mock<IChatFeed>();
         feed.Setup(f => f.AppendRecordAsync(It.IsAny<string>(), It.IsAny<StoredModuleRecord>(), It.IsAny<CancellationToken>()))
             .Callback<string, StoredModuleRecord, CancellationToken>((_, r, _) => _records.Add(r)).ReturnsAsync(true);
         var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, _directory.Object, feed.Object,
-            new Mock<ISessionBroadcaster>().Object);
+            new Mock<ISessionBroadcaster>().Object,
+            withSteps ? new ImageEditSteps(new SkiaImageRaster(), new ImageEditWorkspace(Path.Combine(_dir, "ws")), new Mock<IImageEditJobs>().Object) : null);
         return new LocalImageAdopter(threads, _directory.Object, _projects.Object, _flags.Object);
     }
 
     private static LocalMediaAdoption Result(params (string Path, string Type)[] files) =>
-        new(Owner, Project, Chat, "generate_image", [.. files.Select(f => new LocalMediaAdoptedFile(f.Path, f.Type))]);
+        new(Owner, Project, Chat, "generate_image", "lm_a", [.. files.Select(f => new LocalMediaAdoptedFile(f.Path, f.Type))]);
 
     [Fact]
     public async Task Картинка_результата_получает_нить_и_якорь_в_ленте()
@@ -91,5 +96,57 @@ public sealed class LocalImageAdopterTests : IDisposable
 
         _store.Get(Owner, Chat).Threads.Should().BeEmpty();
         _records.Should().BeEmpty();
+    }
+
+    private string[] Pngs(int count)
+    {
+        var paths = new string[count];
+        for (var i = 0; i < count; i++)
+        {
+            paths[i] = $"gen/lm_a-{i + 1}.png";
+            using var bitmap = new SKBitmap(new SKImageInfo(8 + i, 6, SKColorType.Rgba8888, SKAlphaType.Opaque));
+            bitmap.Erase(SKColors.Coral);
+            using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(Path.Combine(_dir, paths[i]), data.ToArray());
+        }
+        return paths;
+    }
+
+    // Как у кнопки при count=N: ОДНА нить и N вариантов-версий, запуск и якорь image_launch_versions
+    [Fact]
+    public async Task Несколько_картинок_задачи_одна_нить_с_вариантами()
+    {
+        var paths = Pngs(3);
+
+        await Adopter(withSteps: true).AdoptAsync(Result(paths.Select(p => (p, "image/png")).ToArray()), default);
+
+        var thread = _store.Get(Owner, Chat).Threads.Should().ContainSingle("count=3 — не три нити").Subject;
+        thread.File.Should().BeNull();
+        thread.Versions.Where(v => v.JobId == "lm_a").Select(v => v.Variant).Should().Equal(1, 2, 3);
+        thread.Versions.Where(v => v.JobId == "lm_a").Should().OnlyContain(v => v.Steps.Count == 1 && v.CurrentStepId != null);
+        thread.Launches.Should().ContainSingle().Which.Status.Should().Be(ImageThreadLaunchStatus.Done);
+        var record = _records.Should().ContainSingle().Subject;
+        record.RecordType.Should().Be(ImageThreadService.RecordTypes.LaunchVersions);
+        record.Data!.Value.GetProperty("threadId").GetString().Should().Be(thread.Id);
+        record.Data!.Value.GetProperty("jobId").GetString().Should().Be("lm_a");
+        record.Data!.Value.GetProperty("count").GetInt32().Should().Be(3);
+    }
+
+    [Fact]
+    public async Task Несколько_картинок_повторное_усыновление_и_выбор_человека()
+    {
+        var paths = Pngs(2);
+        var mine = _store.Open(Owner, Chat, "images/mine.png", null, _store.Get(Owner, Chat).Revision).Thread!.Id;
+        var adopter = Adopter(withSteps: true);
+        var result = Result(paths.Select(p => (p, "image/png")).ToArray());
+
+        await adopter.AdoptAsync(result, default);
+        await adopter.AdoptAsync(result, default);
+
+        var state = _store.Get(Owner, Chat);
+        state.Threads.Should().HaveCount(2, "своя нить человека и одна нить задачи");
+        state.Threads.Sum(t => t.Versions.Count(v => v.JobId == "lm_a")).Should().Be(2);
+        _records.Should().ContainSingle();
+        state.Focus.Should().Be(mine);
     }
 }

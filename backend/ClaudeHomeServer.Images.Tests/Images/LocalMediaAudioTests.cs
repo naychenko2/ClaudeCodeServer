@@ -331,13 +331,77 @@ public class LocalMediaAudioTests : IDisposable
         adopter.Got.Should().BeEmpty();
     }
 
+    // «Стоп» / конец хода обрывает опрос ПОСЛЕ записи Completed: карточка всё равно должна появиться, потому
+    // что повторно готовую задачу уже никто не соберёт
+    [Fact]
+    public async Task Сбор_ОбрывТокенаЗапросаПослеСборки_УсыновлениеВсёРавноСлучается()
+    {
+        var adopter = new RecordingAdopter();
+        var (service, _) = Build(adopters: [adopter]);
+        var submitted = await service.SubmitAsync(Audio(LocalMediaOps.MusicGenerate, new JsonObject
+        {
+            ["engine"] = "ace", ["lyrics"] = "[Verse]\nла-ла",
+        }, prompt: "pop"), default);
+        var job = submitted.View!.Job;
+        _comfy.CompleteAudio(job.PromptId, [], ($"{job.Id}_00001_.mp3", Encoding.ASCII.GetBytes("ID3")));
+        using var cts = new CancellationTokenSource();
+        _projects.OnNotified = _ => cts.Cancel();
+
+        var view = await service.GetAsync(Owner, job.Id, cts.Token);
+
+        view!.Job.Status.Should().Be(LocalMediaStatuses.Completed);
+        adopter.Got.Should().ContainSingle("карточка не должна зависеть от токена запроса");
+        adopter.TokenCancelled.Should().BeFalse("усыновителю не отдают токен оборванного запроса");
+        adopter.Got[0].JobId.Should().Be(job.Id);
+    }
+
+    // Усыновитель не держит общий замок сборки: пока он работает, соседняя задача другого владельца собирается
+    [Fact]
+    public async Task Сбор_ПокаУсыновительРаботает_ЗамокСборкиСвободен()
+    {
+        var (service, _) = Build(adopters: [new CollectingNeighbourAdopter()]);
+        var first = (await service.SubmitAsync(Audio(LocalMediaOps.MusicGenerate, new JsonObject
+        {
+            ["engine"] = "ace", ["lyrics"] = "[Verse]\nла-ла",
+        }, prompt: "pop"), default)).View!.Job;
+        var second = (await service.SubmitAsync(Audio(LocalMediaOps.MusicGenerate, new JsonObject
+        {
+            ["engine"] = "ace", ["lyrics"] = "[Verse]\nла-ла",
+        }, prompt: "rock") with { SessionId = null }, default)).View!.Job;
+        _comfy.CompleteAudio(first.PromptId, [], ($"{first.Id}_00001_.mp3", Encoding.ASCII.GetBytes("ID3")));
+        _comfy.CompleteAudio(second.PromptId, [], ($"{second.Id}_00001_.mp3", Encoding.ASCII.GetBytes("ID3")));
+        CollectingNeighbourAdopter.Neighbour = () => service.GetAsync(Owner, second.Id, default);
+
+        var view = await service.GetAsync(Owner, first.Id, default).WaitAsync(TimeSpan.FromSeconds(10));
+
+        view!.Job.Status.Should().Be(LocalMediaStatuses.Completed);
+        CollectingNeighbourAdopter.Collected.Should().Be(LocalMediaStatuses.Completed,
+            "сосед собрался внутри усыновления: замок отпущен");
+    }
+
+    private sealed class CollectingNeighbourAdopter : ClaudeHomeServer.Services.Media.ILocalMediaAdopter
+    {
+        public static Func<Task<LocalMediaJobView?>>? Neighbour { get; set; }
+        public static string? Collected { get; private set; }
+
+        public async Task AdoptAsync(ClaudeHomeServer.Services.Media.LocalMediaAdoption adoption, CancellationToken ct)
+        {
+            if (Neighbour is null) return;
+            var run = Neighbour;
+            Neighbour = null;
+            Collected = (await run().WaitAsync(TimeSpan.FromSeconds(5), ct))?.Job.Status;
+        }
+    }
+
     private sealed class RecordingAdopter : ClaudeHomeServer.Services.Media.ILocalMediaAdopter
     {
         public List<ClaudeHomeServer.Services.Media.LocalMediaAdoption> Got { get; } = [];
+        public bool TokenCancelled { get; private set; }
 
         public Task AdoptAsync(ClaudeHomeServer.Services.Media.LocalMediaAdoption adoption, CancellationToken ct)
         {
             Got.Add(adoption);
+            TokenCancelled = ct.IsCancellationRequested;
             return Task.CompletedTask;
         }
     }

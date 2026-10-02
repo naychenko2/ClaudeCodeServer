@@ -667,7 +667,19 @@ public sealed partial class LocalMediaService(
         }
     }
 
+    // Сборку делает один вызов под общим замком; усыновление — уже ПОСЛЕ замка и без токена запроса:
+    // усыновитель не держит сборку остальных владельцев, а обрыв опроса («Стоп», конец хода) после
+    // записи Completed не оставляет задачу без карточки (повторно её уже никто не соберёт)
     private async Task<LocalMediaJob> CollectAsync(LocalMediaJob job, ComfyHistoryEntry history, CancellationToken ct)
+    {
+        var (result, collected) = await CollectUnderGateAsync(job, history, ct);
+        if (collected) await AdoptAsync(result, CancellationToken.None);
+        return result;
+    }
+
+    // Collected = true, только если файлы собрал именно этот вызов (а не соседний опрос)
+    private async Task<(LocalMediaJob Job, bool Collected)> CollectUnderGateAsync(LocalMediaJob job, ComfyHistoryEntry history,
+        CancellationToken ct)
     {
         var files = history.Files;
         await _collectGate.WaitAsync(ct);
@@ -675,13 +687,13 @@ public sealed partial class LocalMediaService(
         {
             // Пока ждали ворот, результат мог собрать соседний опрос
             var current = store.Get(job.Id, job.OwnerId) ?? job;
-            if (LocalMediaStatuses.IsTerminal(current.Status)) return current;
+            if (LocalMediaStatuses.IsTerminal(current.Status)) return (current, false);
 
             var root = projects.ResolveRoot(current.OwnerId, current.ProjectId);
-            if (root is null) return Fail(current, "Проект задачи недоступен — результат некуда сохранить.", history);
+            if (root is null) return (Fail(current, "Проект задачи недоступен — результат некуда сохранить.", history), false);
 
             var wanted = files.Where(f => ContentTypeOf(Path.GetExtension(f.FileName)) is not null).ToList();
-            if (wanted.Count == 0) return Fail(current, "ComfyUI не вернул файлов результата.", history);
+            if (wanted.Count == 0) return (Fail(current, "ComfyUI не вернул файлов результата.", history), false);
 
             var folder = $"{ResultsFolder}/{current.CreatedAt:yyyy-MM-dd}";
             var outputs = new List<LocalMediaOutput>();
@@ -737,17 +749,16 @@ public sealed partial class LocalMediaService(
                 j.FinishedAt = DateTime.UtcNow;
                 ApplyRunStats(j, history);
             }) ?? current;
-            await AdoptAsync(completed, ct);
-            return completed;
+            return (completed, true);
         }
         catch (UnauthorizedAccessException)
         {
-            return Fail(job, "Папка результатов идёт через символическую ссылку или вне проекта — результат не сохранён.", history);
+            return (Fail(job, "Папка результатов идёт через символическую ссылку или вне проекта — результат не сохранён.", history), false);
         }
         catch (IOException ex)
         {
             log.LogWarning(ex, "Не удалось записать результат задачи {JobId}", job.Id);
-            return Fail(job, "Не удалось записать результат в папку проекта.", history);
+            return (Fail(job, "Не удалось записать результат в папку проекта.", history), false);
         }
         finally
         {
@@ -762,7 +773,7 @@ public sealed partial class LocalMediaService(
         if (adopters is null || string.IsNullOrWhiteSpace(job.SessionId) || job.Status != LocalMediaStatuses.Completed)
             return;
         var adoption = new ClaudeHomeServer.Services.Media.LocalMediaAdoption(job.OwnerId, job.ProjectId, job.SessionId,
-            job.Op, [.. job.Outputs.Select(o => new ClaudeHomeServer.Services.Media.LocalMediaAdoptedFile(o.Path, o.ContentType))]);
+            job.Op, job.Id, [.. job.Outputs.Select(o => new ClaudeHomeServer.Services.Media.LocalMediaAdoptedFile(o.Path, o.ContentType))]);
         foreach (var adopter in adopters)
         {
             try { await adopter.AdoptAsync(adoption, ct); }

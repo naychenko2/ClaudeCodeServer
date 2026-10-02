@@ -54,7 +54,11 @@ public sealed class LocalAudioAdopterTests : IDisposable
     }
 
     private static LocalMediaAdoption Result(params (string Path, string Type)[] files) =>
-        new(Owner, Project, Chat, "music_edit", [.. files.Select(f => new LocalMediaAdoptedFile(f.Path, f.Type))]);
+        new(Owner, Project, Chat, "music_edit", "lm_a", [.. files.Select(f => new LocalMediaAdoptedFile(f.Path, f.Type))]);
+
+    private static LocalMediaAdoption Separated(params string[] stems) =>
+        new(Owner, Project, Chat, "audio_separate", "lm_a",
+            [.. stems.Select(n => new LocalMediaAdoptedFile($".cc-attachments/local-media/2026-10-02/lm_a-{n}.wav", "audio/wav"))]);
 
     [Fact]
     public async Task Звук_результата_получает_нить_и_якорь_в_ленте()
@@ -131,5 +135,74 @@ public sealed class LocalAudioAdopterTests : IDisposable
         await Adopter().AdoptAsync(Result((Cover, "audio/mpeg")), default);
 
         _store.Get(Owner, Chat).Threads.Should().BeEmpty();
+    }
+
+    // Как у кнопки separate: ОДНА нить, ОДНА версия со стемами по ролям, запуск и якорь audio_launch_versions
+    [Fact]
+    public async Task Стемы_одной_задачи_одна_нить_и_одна_версия_по_ролям()
+    {
+        await Adopter().AdoptAsync(Separated("vocals", "no_vocals"), default);
+
+        var thread = _store.Get(Owner, Chat).Threads.Should().ContainSingle("стемы — не две нити").Subject;
+        thread.File.Should().BeNull("нить-черновик: источник задача не знает");
+        var version = thread.Versions.Should().ContainSingle().Subject;
+        version.JobId.Should().Be("lm_a");
+        version.Variant.Should().Be(1);
+        version.Files.Select(f => f.Role).Should().Equal("stem:vocals", "stem:no_vocals");
+        version.Files[0].Path.Should().EndWith("lm_a-vocals.wav");
+        thread.CurrentVersionId.Should().Be(version.Id);
+        thread.Launches.Should().ContainSingle().Which.Status.Should().Be(AudioThreadLaunchStatus.Done);
+        var record = _records.Should().ContainSingle().Subject;
+        record.RecordType.Should().Be(AudioJobThreads.RecordTypes.LaunchVersions);
+        record.Data!.Value.GetProperty("threadId").GetString().Should().Be(thread.Id);
+        record.Data!.Value.GetProperty("jobId").GetString().Should().Be("lm_a");
+        record.Data!.Value.GetProperty("op").GetString().Should().Be("separate");
+    }
+
+    [Fact]
+    public async Task Стемы_повторное_усыновление_той_же_задачи_ничего_не_дублирует()
+    {
+        var adopter = Adopter();
+        await adopter.AdoptAsync(Separated("vocals", "drums"), default);
+        await adopter.AdoptAsync(Separated("vocals", "drums"), default);
+
+        var thread = _store.Get(Owner, Chat).Threads.Should().ContainSingle().Subject;
+        thread.Versions.Should().ContainSingle();
+        _records.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Стемы_без_хвоста_в_имени_получают_номера_и_роли_не_совпадают()
+    {
+        var files = new LocalMediaAdoptedFile[]
+        {
+            new("a/odd.wav", "audio/wav"), new("a/odd.wav", "audio/wav"), new("a/lm_a-vocals.wav", "audio/wav"),
+        };
+
+        var roles = LocalAudioAdopter.StemFiles("lm_a", files).Select(f => f.Role).ToList();
+
+        roles.Should().Equal("stem:1", "stem:2", "stem:vocals").And.OnlyHaveUniqueItems();
+    }
+
+    [Fact]
+    public async Task Стемы_выбор_человека_не_двигается()
+    {
+        var mine = _store.Open(Owner, Chat, "mine.wav", null, null).Thread!.Id;
+
+        await Adopter().AdoptAsync(Separated("vocals", "drums"), default);
+
+        _store.Get(Owner, Chat).Focus.Should().Be(mine);
+    }
+
+    [Fact]
+    public async Task Стемы_без_звуковых_файлов_и_при_выключенном_флаге_молчат()
+    {
+        await Adopter().AdoptAsync(new LocalMediaAdoption(Owner, Project, Chat, "audio_separate", "lm_a",
+            [new LocalMediaAdoptedFile("a/x.txt", "text/plain")]), default);
+        _flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.AudioEditor)).Returns(false);
+        await Adopter().AdoptAsync(Separated("vocals"), default);
+
+        _store.Get(Owner, Chat).Threads.Should().BeEmpty();
+        _records.Should().BeEmpty();
     }
 }

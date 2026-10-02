@@ -13,12 +13,14 @@ public interface ILocalMediaAdopter
 }
 
 // Что собрала задача: чат-вызыватель, проект и файлы результата (путь — от корня проекта через «/»).
-// Op — имя операции local-media (music_edit, speech, generate_image …)
+// Op — имя операции local-media (music_edit, speech, generate_image …), JobId — id задачи local-media
+// (по нему усыновитель узнаёт собственный след и не усыновляет задачу дважды)
 public sealed record LocalMediaAdoption(
     string OwnerId,
     string ProjectId,
     string SessionId,
     string Op,
+    string JobId,
     IReadOnlyList<LocalMediaAdoptedFile> Files);
 
 public sealed record LocalMediaAdoptedFile(string Path, string ContentType);

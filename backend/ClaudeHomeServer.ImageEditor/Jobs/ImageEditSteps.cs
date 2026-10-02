@@ -96,6 +96,20 @@ public sealed class ImageEditSteps(IImageRaster raster, ImageEditWorkspace works
         return ImageEditCallResult<ImageEditStep>.Ok(step);
     }
 
+    // Усыновление результата прямого local_*: файл проекта (его байты) ложится шагом-вариантом как есть,
+    // без перекодирования, — так же, как вариант запуска через редактор. Своей ленты у шага нет: родителя
+    // нет, sourcePath — сам файл
+    public ImageEditCallResult<ImageEditStep> TakeFile(string ownerId, string projectId, string jobId, int variant, ProjectImage file)
+    {
+        if (raster.Probe(file.Bytes) is not { } probe)
+            return ImageEditCallResult<ImageEditStep>.Fail(ImageEditErrorCodes.InvalidRequest, "Файл не распознан как картинка");
+        var step = new ImageEditStep(ImageEditWorkspace.NewStepId(), ImageEditWorkspace.NewStepId(), projectId, null,
+            ImageEditStepKinds.Variant, probe.DisplayWidth, probe.DisplayHeight, file.Bytes.LongLength, DateTime.UtcNow,
+            file.RelativePath, jobId, variant);
+        workspace.SaveStep(ownerId, step, file.Bytes);
+        return ImageEditCallResult<ImageEditStep>.Ok(step);
+    }
+
     // Шаг своего проекта; чужой владелец или проект неотличимы от отсутствующего
     public (ImageEditStep Step, EditedImage Image)? Open(string ownerId, string projectId, string stepId) =>
         workspace.OpenStep(ownerId, stepId) is { } found && found.Step.ProjectId == projectId ? found : null;

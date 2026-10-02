@@ -267,9 +267,10 @@ public static partial class AudioCatalog
                 new FalFields(Prompt: "prompt", Duration: "extend_seconds_after", Source: "audio_url", Seed: "seed")),
 
             // ── Обработка ────────────────────────────────────────────────────────────
+            // Модель поставщика по умолчанию — htdemucs_6s: вокал, барабаны, бас, гитара, пианино, прочее
             new(FalInfo(FalDemucs, "Demucs · стемы",
                     new AudioCaps([AudioOp.Separate], [], [], [AudioOutputs.Stems], AudioLicenses.Mit, AudioPriceUnits.Sec,
-                        LanguageNeutral: true), 0.0007),
+                        LanguageNeutral: true, StemSet: AudioStemSets.Six), 0.0007),
                 new FalFields(Source: "audio_url"), FalOutputKind.Stems),
             // Чистит речь и поднимает частоту до 48 кГц (моно)
             new(FalInfo(FalDeepFilterNet, "DeepFilterNet 3",

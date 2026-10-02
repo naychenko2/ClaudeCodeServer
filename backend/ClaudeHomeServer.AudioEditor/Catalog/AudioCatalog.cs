@@ -211,22 +211,22 @@ public static partial class AudioCatalog
             {
                 [AudioOp.Separate] = Bind(LocalAudioOp.Separate, ("mode", "vocals")),
             },
-            ops => Processing(ops, [AudioOutputs.Stems], AudioLicenses.Mit)),
+            ops => Processing(ops, [AudioOutputs.Stems], AudioLicenses.Mit) with { StemSet = AudioStemSets.Vocals }),
         Model(HtDemucs4, "HTDemucs ft · 4 стема", new Dictionary<AudioOp, LocalBinding>
             {
                 [AudioOp.Separate] = Bind(LocalAudioOp.Separate, ("mode", "4stems")),
             },
-            ops => Processing(ops, [AudioOutputs.Stems], AudioLicenses.Mit)),
+            ops => Processing(ops, [AudioOutputs.Stems], AudioLicenses.Mit) with { StemSet = AudioStemSets.Four }),
         Model(HtDemucs6, "HTDemucs 6s · 6 стемов", new Dictionary<AudioOp, LocalBinding>
             {
                 [AudioOp.Separate] = Bind(LocalAudioOp.Separate, ("mode", "6stems")),
             },
-            ops => Processing(ops, [AudioOutputs.Stems], AudioLicenses.Mit)),
+            ops => Processing(ops, [AudioOutputs.Stems], AudioLicenses.Mit) with { StemSet = AudioStemSets.Six }),
         Model(MelRoformer, "Mel-RoFormer · караоке", new Dictionary<AudioOp, LocalBinding>
             {
                 [AudioOp.Separate] = Bind(LocalAudioOp.Separate, ("mode", "karaoke")),
             },
-            ops => Processing(ops, [AudioOutputs.Stems], AudioLicenses.Mit)),
+            ops => Processing(ops, [AudioOutputs.Stems], AudioLicenses.Mit) with { StemSet = AudioStemSets.Karaoke }),
         Model(DeepFilterNet, "DeepFilterNet 3", new Dictionary<AudioOp, LocalBinding>
             {
                 [AudioOp.Denoise] = Bind(LocalAudioOp.Enhance, ("mode", "denoise")),

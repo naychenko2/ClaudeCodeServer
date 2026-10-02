@@ -155,7 +155,7 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
         )}
         {!miniSummary && <span style={{ flex: 1 }} />}
         {stopBtn(24)}
-        <ChevronDown size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
+        <ChevronUp size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
       </div>
     );
   }
@@ -200,7 +200,7 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
       {stopBtn(slim ? 32 : 28)}
       {setCollapsed && (
         <IconButton size={slim ? 'md' : 'sm'} title="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
-          <ChevronUp size={15} strokeWidth={ICON_STROKE} />
+          <ChevronDown size={15} strokeWidth={ICON_STROKE} />
         </IconButton>
       )}
       {overlays}

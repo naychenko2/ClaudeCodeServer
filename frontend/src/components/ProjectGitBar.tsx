@@ -45,7 +45,7 @@ export function ProjectGitBar({
   // Полоса одна (только Git) — null и отрисовываем привычный вид без кнопки слева
   switcher?: ReactNode;
   // Свёрнутость от хоста полос (своя у каждой полосы чата): задана — полная полоса и
-  // свёрнутая строка 30 px на любой ширине, кнопка ⌃ и клик по строке идут в хост,
+  // свёрнутая строка 30 px на любой ширине, кнопка ⌄ и клик по строке идут в хост,
   // а собственное сворачивание планшета не участвует (прототип полос, вариант C)
   collapsed?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
@@ -353,7 +353,8 @@ export function ProjectGitBar({
       onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
     >
-      <ChevronUp size={15} strokeWidth={ICON_STROKE} />
+      {/* Губа прикреплена к полю снизу: сворачивание опускает её верхний край — шеврон вниз */}
+      <ChevronDown size={15} strokeWidth={ICON_STROKE} />
     </button>
   ) : null;
 
@@ -409,7 +410,7 @@ export function ProjectGitBar({
       {diff.added > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.diffAddText, fontWeight: 700, flexShrink: 0 }}>+{diff.added}</span>}
       {diff.deleted > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.diffRemText, fontWeight: 700, flexShrink: 0 }}>−{diff.deleted}</span>}
       {publishN > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.accent, fontWeight: 700, flexShrink: 0 }}>↑{publishN}</span>}
-      {!autoMicro && <ChevronDown size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+      {!autoMicro && <ChevronUp size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
     </MicroTag>
   );
 

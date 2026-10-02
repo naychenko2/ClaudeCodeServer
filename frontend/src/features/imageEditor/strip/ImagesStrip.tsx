@@ -320,7 +320,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
             <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>
           </span>
         )}
-        <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ChevronDown, ICON_SIZE.sm)}</span>
+        <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ChevronUp, ICON_SIZE.sm)}</span>
       </div>
     );
   }
@@ -385,7 +385,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
             onClick={() => openCharacters(isMobile, () => setCharSheet(true))}>{ic(User)}</IconButton>
         ))}
       <IconButton size="sm" title="Свернуть полосу в строку" ariaLabel="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
-        {ic(ChevronUp, ICON_SIZE.sm)}
+        {ic(ChevronDown, ICON_SIZE.sm)}
       </IconButton>
 
       {open && settings && !isMobile && (

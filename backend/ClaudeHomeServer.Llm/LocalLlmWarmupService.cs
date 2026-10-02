@@ -37,7 +37,11 @@ public sealed class LocalLlmWarmupService(
         // В копии (--inspect) пропускаем: см. LlmSubsystem.Register — прогрев там же
         // не делается, чтобы не поднимать веса на инспекционном копировании.
         // Условие «локаль включена И есть маршрут» уже отсекает пустые случаи.
-        return Task.Run(async () =>
+        // Таск прогрева хосту НЕ возвращаем: хост ждёт StartAsync каждого сервиса до
+        // открытия Kestrel, и зависшая Ollama держала старт ~90 с — трей не дожидался
+        // порта и откатывал выкатку (02.10). Токен старта тоже не берём: он отменяет
+        // только сам старт, прогрев обрывает таймаут HTTP-клиента.
+        _ = Task.Run(async () =>
         {
             try
             {
@@ -45,14 +49,15 @@ public sealed class LocalLlmWarmupService(
                 // голосовой ход тоже использует его как основную модель. Раньше
                 // прогрев грел `Model` и при разъезде значений в память уходила
                 // не та модель.
-                await client.WarmUpAsync(client.TextModel, cancellationToken);
+                await client.WarmUpAsync(client.TextModel, CancellationToken.None);
             }
             catch (Exception ex)
             {
                 // best-effort: ошибка прогрева не должна мешать старту сервера
                 log.LogDebug(ex, "Прогрев локальной модели не удался (не критично)");
             }
-        }, cancellationToken);
+        });
+        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

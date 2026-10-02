@@ -43,7 +43,7 @@ function Lyrics({ p }: { p: OpFieldsProps }) {
             placeholder={'[Verse]\nПервый куплет…\n\n[Chorus]\nПрипев…'} />
           <div style={{ display: 'flex', gap: SP.xxs, flexWrap: 'wrap', marginTop: SP.xxs }}>
             {SECTIONS.map(sec => (
-              <Button key={sec} size="xs" variant="ghost" onClick={() => setInputs({ lyrics: insertSection(inputs.lyrics, sec) })}>{sec}</Button>
+              <Button key={sec} size={p.isMobile ? 'md' : 'xs'} variant="ghost" onClick={() => setInputs({ lyrics: insertSection(inputs.lyrics, sec) })}>{sec}</Button>
             ))}
           </div>
           {op === 'song' && !required && <Hint>Пустые слова — инструментал</Hint>}

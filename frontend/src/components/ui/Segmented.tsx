@@ -24,10 +24,11 @@ interface SegmentedControlProps<T extends string> {
   options: ({ value: T; label: string } & SegmentOptionState)[];
   onChange: (v: T) => void;
   columns?: number;   // сколько кнопок в ряд (по умолчанию — все в один ряд)
+  touch?: boolean;    // тач-раскладка: сегмент не ниже 40
 }
 
 // === Сегмент-выбор кнопками (режим, модель): активный сегмент — accent ===
-export function SegmentedControl<T extends string>({ value, options, onChange, columns }: SegmentedControlProps<T>) {
+export function SegmentedControl<T extends string>({ value, options, onChange, columns, touch }: SegmentedControlProps<T>) {
   const cols = columns ?? options.length;
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -46,6 +47,7 @@ export function SegmentedControl<T extends string>({ value, options, onChange, c
               background: active ? C.accent : C.bgPanel,
               color: active ? C.onAccent : C.textSecondary,
               transition: 'background 0.15s, color 0.15s',
+              ...(touch ? { minHeight: 40 } : null),
               // Рамка съедает по пикселю — поля меньше на столько же, размер сегмента прежний
               ...(o.disabled ? { cursor: 'not-allowed', opacity: 0.45 } : o.muted && !active ? { border: SEG_MUTED_BORDER, padding: '8px 3px' } : null),
             }}

@@ -134,6 +134,8 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
 
   if (view === 'spine' && !inShell) return <Spine {...p} onExpand={() => setCollapsed(false)} onTab={t => { p.onTabChange(t); setCollapsed(false); }} />;
 
+  // Шторка — телефонная раскладка: тач-цели не ниже 40 (гайд, чек-лист)
+  const touch = sheet;
   const head = (
     <div style={{
       height: HEAD_H, flex: `0 0 ${HEAD_H}px`, display: 'flex', alignItems: 'center', gap: PAD.row,
@@ -150,23 +152,23 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
       )}
       <span style={{ flex: 1 }} />
       {sheet ? (
-        <IconButton size="xs" title={peeked ? 'Поднять шторку' : 'Опустить до цены — лента станет доступна'} onClick={() => setPeeked(!peeked)}>
+        <IconButton size={touch ? 'lg' : 'xs'} title={peeked ? 'Поднять шторку' : 'Опустить до цены — лента станет доступна'} onClick={() => setPeeked(!peeked)}>
           {icon(peeked ? ChevronUp : ChevronDown)}
         </IconButton>
       ) : (
-        <IconButton size="xs" title="Свернуть в корешок" onClick={() => setCollapsed(true)}>
+        <IconButton size={touch ? 'lg' : 'xs'} title="Свернуть в корешок" onClick={() => setCollapsed(true)}>
           {icon(ChevronRight)}
         </IconButton>
       )}
       {p.onClose && (
-        <IconButton size="xs" title="Закрыть панель — сводка останется в полосе" onClick={p.onClose}>
+        <IconButton size={touch ? 'lg' : 'xs'} title="Закрыть панель — сводка останется в полосе" onClick={p.onClose}>
           {icon(X)}
         </IconButton>
       )}
     </div>
   );
 
-  const foot = p.footContent ?? (p.foot && <Foot foot={p.foot} />);
+  const foot = p.footContent ?? (p.foot && <Foot foot={p.foot} touch={sheet} />);
   const footBox = foot && (
     <div style={{
       flex: '0 0 auto', borderTop: `1px solid ${C.borderLight}`, background: C.bgCard,
@@ -310,7 +312,7 @@ function AgentPickRow({ pick }: { pick: GenerationAgentPick }) {
 }
 
 // Низ: причина · очередь GPU · «− N +» · цена в две строки · кнопка запуска
-function Foot({ foot: f }: { foot: GenerationFoot }) {
+function Foot({ foot: f, touch }: { foot: GenerationFoot; touch?: boolean }) {
   return (
     <>
       {f.reason && (
@@ -329,6 +331,7 @@ function Foot({ foot: f }: { foot: GenerationFoot }) {
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
         {!f.noCount && <Stepper
+          touch={touch}
           ariaLabel="Сколько вариантов"
           value={f.count}
           min={1}
@@ -336,16 +339,20 @@ function Foot({ foot: f }: { foot: GenerationFoot }) {
           maxHint={f.maxCountHint}
           onChange={n => f.onCountChange?.(n)}
         />}
-        {/* Цена ровно в две строки: строки не переносятся, а режутся многоточием */}
+        {/* Цена в две строки: на десктопе строки режутся многоточием, на телефоне вторая
+            переносится — «~40 с · очередь GPU: 0» при кнопках по 40 иначе не помещается */}
         <span title={`${f.price[0]} · ${f.price[1]}`} style={{
           flex: 1, minWidth: 0, fontSize: FS.sm, lineHeight: 1.35, color: C.textSecondary,
           whiteSpace: 'nowrap',
         }}>
           <b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', color: C.textHeading }}>{f.price[0]}</b>
-          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.price[1]}</span>
+          <span style={{
+            display: 'block', overflow: 'hidden',
+            ...(touch ? { whiteSpace: 'normal', overflowWrap: 'anywhere' } : { textOverflow: 'ellipsis' }),
+          }}>{f.price[1]}</span>
         </span>
         <Button
-          size="xs"
+          size={touch ? 'md' : 'xs'}
           disabled={!!f.reason}
           title={f.reason}
           leftIcon={f.runIcon ?? icon(Sparkles)}

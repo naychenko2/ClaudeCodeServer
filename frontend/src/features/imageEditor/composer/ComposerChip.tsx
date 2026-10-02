@@ -16,7 +16,11 @@ import { enterChat, getEditor, getThreadMarks, openEditor, setThreadMarks, useTh
 import { usePrefs } from '../thread/prefs';
 import { getStoredImageMode, effectiveImageMode, useImageModeVersion } from '../thread/modeState';
 import { threadHasImage } from '../thread/useThreadLaunch';
+import { IMAGE_COMPOSER_MODE } from './imageMode';
 import { editChoice, editPickOf } from '../panel/panelOp';
+
+// Кисть живёт только в режиме поля ввода «Картинка»: в «Чат», «Звук» и прочих она лишняя
+export const brushModeActive = (modeId: string | null | undefined) => modeId === IMAGE_COMPOSER_MODE;
 
 export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
   const { sessionId } = ctx;
@@ -33,7 +37,7 @@ export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
   useImageModeVersion();
   const mobile = useIsMobile();
   const prefs = usePrefs(projectId);
-  const brush = v5 && !mobile && !!thread && n === 0 && threadHasImage(thread)
+  const brush = v5 && brushModeActive(ctx.modeId) && !mobile && !!thread && n === 0 && threadHasImage(thread)
     && effectiveImageMode(getStoredImageMode(sessionId), true) === 'edit'
     && editPickOf(editChoice(prefs).op) === 'edit';
   return (

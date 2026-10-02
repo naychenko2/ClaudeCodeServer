@@ -2618,7 +2618,7 @@ export function Composer({
       {slotChips.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, padding: '0 12px' }}>
           {slotChips.map(c => (
-            <Fragment key={c.name}>{c.render?.({ projectId: project?.id ?? null, sessionId, isMobile: !!isMobile })}</Fragment>
+            <Fragment key={c.name}>{c.render?.({ projectId: project?.id ?? null, sessionId, isMobile: !!isMobile, modeId: activeMode ? modeId : null })}</Fragment>
           ))}
         </div>
       )}

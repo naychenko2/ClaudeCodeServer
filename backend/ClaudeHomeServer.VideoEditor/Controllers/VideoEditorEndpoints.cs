@@ -20,14 +20,15 @@ public abstract class VideoEditorEndpoints(
     VideoEditJobService jobs,
     VideoJobThreads threads,
     VideoPrefsService prefs,
-    VideoEditWorkspace workspace) : ControllerBase
+    VideoEditWorkspace workspace,
+    VideoSceneService scenes) : ControllerBase
 {
     // Владелец — claim sub сервисного JWT. Константой, а не JwtRegisteredClaimNames: своих пакетов у
     // модуля нет (DynamicModulePackagesGuardTests)
     private const string SubClaim = "sub";
 
     // Модуль пишет в проект только в video/** и music/**; сцены живут в video/**
-    public const string ScenesRoot = "video";
+    public const string ScenesRoot = VideoSceneService.ScenesRoot;
 
     protected string UserId => User.FindFirstValue(SubClaim)!;
 
@@ -92,35 +93,20 @@ public abstract class VideoEditorEndpoints(
     protected IActionResult ScenesIn(string sessionId) => Ok(threads.Store.Get(UserId, sessionId).ToDto());
 
     // Новая сцена: папка — внутри video/** проекта (у личного чата — только пустая), кадры в настройках
-    // проверяются так же, как при правке настроек
+    // проверяются так же, как при правке настроек. Тело — VideoSceneService, общий с тулсетом агента
     protected async Task<IActionResult> AddSceneIn(VideoEditScope scope, string sessionId, VideoSceneCreateRequest? req,
         CancellationToken ct)
     {
         if (req is null)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Пустой запрос");
-        if (FolderProblem(scope, req.Folder, out var folder) is { } badFolder) return badFolder;
-        var settings = req.Settings ?? prefs.ForNewScene(UserId, scope);
-        if (SettingsProblem(scope, settings) is { } badSettings) return badSettings;
-
-        var written = threads.Store.AddScene(UserId, sessionId, folder, settings, req.Revision,
-            string.IsNullOrWhiteSpace(req.Name) ? null : req.Name.Trim());
-        if (written is { Status: VideoThreadWriteStatus.Ok, Scene: { } scene })
-            await threads.AnchorAsync(sessionId, scene, ct);
-        return await ResultAsync(scope, sessionId, written);
+        return Reply(await scenes.AddAsync(UserId, scope, sessionId, req.Folder, req.Settings, req.Name, req.Revision, ct));
     }
 
     protected async Task<IActionResult> FocusIn(VideoEditScope scope, string sessionId, VideoSceneFocusRequest? req)
     {
         if (req?.Focus is not { } focus)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указан фокус");
-        // Открытый фильм — только у проекта и только внутри video/**: путь хранится как есть, диска не касаемся
-        if (focus.FilmPath is not null && (scope.IsPersonal || !InsideAllowed(focus.FilmPath)))
-            return Error(StatusCodes.Status400BadRequest,
-                scope.IsPersonal ? VideoEditorErrors.PersonalScopeNoFilms : VideoEditorErrors.OutsideAllowedFolders,
-                scope.IsPersonal ? "Фильмы — только в чате проекта" : "Фильм должен лежать в video/");
-        var clean = new VideoFocusDto(string.IsNullOrWhiteSpace(focus.SceneId) ? null : focus.SceneId.Trim(),
-            string.IsNullOrWhiteSpace(focus.FilmPath) ? null : focus.FilmPath.Trim());
-        return await ResultAsync(scope, sessionId, threads.Store.SetFocus(UserId, sessionId, clean, req.Revision));
+        return Reply(await scenes.FocusAsync(UserId, scope, sessionId, focus, req.Revision));
     }
 
     // Убрать сцену, где нечего терять; у сцены с версиями или идущим запуском — 400
@@ -132,8 +118,7 @@ public abstract class VideoEditorEndpoints(
     {
         if (req?.Settings is not { } settings)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Пустые настройки");
-        if (SettingsProblem(scope, settings) is { } bad) return bad;
-        return await ResultAsync(scope, sessionId, threads.Store.SetSettings(UserId, sessionId, sceneId, settings, req.Revision));
+        return Reply(await scenes.SettingsAsync(UserId, scope, sessionId, sceneId, settings, req.Revision));
     }
 
     // «Продолжить от версии»: версия становится текущей, сцена — в работе. Ничего не удаляет
@@ -142,8 +127,7 @@ public abstract class VideoEditorEndpoints(
     {
         if (req is null || string.IsNullOrWhiteSpace(req.VersionId))
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указана версия");
-        return await ResultAsync(scope, sessionId,
-            threads.Store.SetCurrentVersion(UserId, sessionId, sceneId, req.VersionId.Trim(), req.Revision, focus: true));
+        return Reply(await scenes.CurrentAsync(UserId, scope, sessionId, sceneId, req.VersionId, req.Revision));
     }
 
     // Клип версии для плеера: Range — перемотка без скачивания целиком. Только файлы своих сцен; токен для
@@ -165,10 +149,14 @@ public abstract class VideoEditorEndpoints(
         return result;
     }
 
-    private async Task<IActionResult> ResultAsync(VideoEditScope scope, string sessionId, VideoThreadWrite written)
+    private async Task<IActionResult> ResultAsync(VideoEditScope scope, string sessionId, VideoThreadWrite written) =>
+        Reply(await scenes.PublishedAsync(UserId, scope, sessionId, written));
+
+    // Отказ проверки входа — 400 с кодом; запись хранилища — по статусу
+    private IActionResult Reply(VideoSceneService.Call call)
     {
-        if (written.Status == VideoThreadWriteStatus.Ok)
-            await threads.BroadcastAsync(UserId, scope.Key, sessionId, written.State);
+        if (call.Written is not { } written)
+            return Error(StatusCodes.Status400BadRequest, call.ErrorCode ?? VideoEditorErrors.InvalidRequest, call.Error ?? "Запрос не выполнен");
         return written.Status switch
         {
             VideoThreadWriteStatus.Ok => Ok(written.State.ToDto()),
@@ -185,69 +173,7 @@ public abstract class VideoEditorEndpoints(
         };
     }
 
-    // ── Проверки входов ──────────────────────────────────────────────────────────
-
-    // Папка сцены: у личной области только пустая (диска проекта нет — отказ до RootPath); у проекта — внутри
-    // video/** без «..» и без символических ссылок по существующим сегментам
-    private IActionResult? FolderProblem(VideoEditScope scope, string? raw, out string folder)
-    {
-        folder = "";
-        var value = (raw ?? "").Trim().Replace('\\', '/').Trim('/');
-        if (value.Length == 0) return null;
-        if (scope.Project is not { } project)
-            return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest,
-                "У чата вне проекта нет папок проекта: сцену можно завести только без папки");
-        if (!InsideAllowed(value))
-            return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.OutsideAllowedFolders,
-                "Сцены лежат только в video/ проекта");
-        if (ProjectLinkGuard.ResolveInside(project.RootPath, value) is null)
-            return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.OutsideAllowedFolders,
-                "Путь идёт через символическую ссылку или вне проекта");
-        folder = value;
-        return null;
-    }
-
-    // Только video/** и music/**: сегменты без «..», корень — video или music
-    internal static bool InsideAllowed(string relative)
-    {
-        var value = relative.Trim().Replace('\\', '/').Trim('/');
-        if (value.Length == 0 || value.Split('/').Any(s => s is ".." or "." or "")) return false;
-        var root = value.Split('/')[0];
-        return root is ScenesRoot or "music";
-    }
-
-    // Кадры в настройках: image — с threadId и versionId, file — путь существующего файла проекта (у личной
-    // области файлов проекта нет); число вариантов и длительность в пределах
-    private IActionResult? SettingsProblem(VideoEditScope scope, VideoSceneSettingsDto s)
-    {
-        if (s.Count is { } count && (count < 1 || count > VideoThreadStore.MaxCount))
-            return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest,
-                $"Вариантов — от 1 до {VideoThreadStore.MaxCount}");
-        if (s.DurationSec is <= 0)
-            return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Длительность должна быть положительной");
-        foreach (var frame in new[] { s.FrameA, s.FrameB })
-        {
-            if (frame is null) continue;
-            switch (frame.Kind)
-            {
-                case FrameRef.KindImage when string.IsNullOrWhiteSpace(frame.ThreadId) || string.IsNullOrWhiteSpace(frame.VersionId):
-                    return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "У кадра из «Картинок» нужны нить и версия");
-                case FrameRef.KindFile:
-                    if (scope.Project is not { } project)
-                        return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest,
-                            "У чата вне проекта нет файлов проекта: кадр-файл недоступен");
-                    if (string.IsNullOrWhiteSpace(frame.Path)
-                        || ProjectLinkGuard.ResolveInside(project.RootPath, frame.Path) is not { } full || !System.IO.File.Exists(full))
-                        return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Кадр не найден в проекте");
-                    break;
-                case FrameRef.KindImage:
-                    break;
-                default:
-                    return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Неизвестный вид кадра");
-            }
-        }
-        return null;
-    }
+    internal static bool InsideAllowed(string relative) => VideoSceneService.InsideAllowed(relative);
 
     // ── Помощники ────────────────────────────────────────────────────────────────
 

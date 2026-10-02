@@ -58,9 +58,13 @@ public sealed class VideoEditorSubsystem : IAppSubsystem
         services.AddSingleton<Jobs.VideoFrameReader>();
         services.AddSingleton<Jobs.VideoJobThreads>();
         services.AddSingleton<Jobs.VideoEditJobService>();
+        // Операции над сценами, общие для ручек и тулсета агента: проверки, якорь в ленте, рассылка
+        services.AddSingleton<Scenes.VideoSceneService>();
         // Гейт ручек: флаг, свой проект, свой чат — иначе 404
         services.AddSingleton<Controllers.VideoEditScopeGate>();
         // Фильм: .film под ревизией, сохранение сцены, сборка ffmpeg, подписки на «Картинки» и «Звук» (блок 2)
         services.AddFilms();
+        // Агент: MCP-сервер video-editor (ADR-022 §5) и блок хвоста хода; сервисы — те же, что у ручек человека
+        services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.VideoEditorToolset>();
     }
 }

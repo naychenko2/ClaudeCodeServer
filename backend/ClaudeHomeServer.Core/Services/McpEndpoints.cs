@@ -27,6 +27,8 @@ public static class McpEndpoints
     public const string ImageEditorName = "image-editor";
     // Модуль «Звук» (ADR-021 §5): сервер есть в любом чате владельца при флаге audio-editor
     public const string AudioEditorName = "audio-editor";
+    // Модуль «Видео» (ADR-022 §5): сервер есть в любом чате владельца при флаге video-editor
+    public const string VideoEditorName = "video-editor";
     public const string LocalMediaName = "local-media";
     public const string WidgetsName = "widgets";
     public const string WorkspaceName = "wsp";

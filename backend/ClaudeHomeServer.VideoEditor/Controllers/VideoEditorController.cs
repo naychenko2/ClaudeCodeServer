@@ -3,6 +3,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Jobs;
 using ClaudeHomeServer.Services.VideoEditor.Prefs;
+using ClaudeHomeServer.Services.VideoEditor.Scenes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -22,8 +23,9 @@ public class VideoEditorController(
     VideoEditJobService jobs,
     VideoJobThreads threads,
     VideoPrefsService prefs,
-    VideoEditWorkspace workspace)
-    : VideoEditorEndpoints(engines, jobs, threads, prefs, workspace)
+    VideoEditWorkspace workspace,
+    VideoSceneService scenes)
+    : VideoEditorEndpoints(engines, jobs, threads, prefs, workspace, scenes)
 {
     [HttpGet(VideoEditorRoutes.Catalog)]
     public IActionResult Catalog(string projectId) =>

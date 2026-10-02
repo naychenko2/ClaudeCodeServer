@@ -2,7 +2,7 @@
 // явным tab при любом показе: «Сцена» (✦ Снять) и «Фильм» (✦ Собрать). Живёт и в проекте, и в правой
 // колонке личного чата (projectId = null → область personal, фильмов нет).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Clapperboard, Film, X } from 'lucide-react';
 import {
   GenerationPanel, IconButton, C, REVEAL_PANEL_EVENT, ICON_SIZE, followPeeked, returnLabel, returnToOrigin,
@@ -13,7 +13,7 @@ import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore'
 import { FilmTab, useFilmPanel } from '../film/FilmTab';
 import { flushSettings, releaseFocus, wireFrameBinding } from '../scene/actions';
 import { isPersonalScope, videoScope } from '../scope';
-import { focusFilm, focusScene, getThreadsState, VIDEO_PANEL } from '../store/videoStore';
+import { ensureVideoThreads, focusFilm, focusScene, getThreadsState, VIDEO_PANEL } from '../store/videoStore';
 import { ic } from './primitives';
 import { SceneTab } from './SceneTab';
 import { useScene } from './useScene';
@@ -43,7 +43,9 @@ export function VideoPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   wireFrameBinding();
   const m = useScene(ctx.projectId, sessionId);
   const filmPanel = useFilmPanel(ctx.projectId, sessionId);
-  const [tab, setTab] = useState<Tab>(() => takeWanted()?.tab ?? 'scene');
+  // Первый запрос показа (панель смонтирована им же): вкладка — сразу, цель — эффектом ниже
+  const [first] = useState<Wanted | null>(() => takeWanted());
+  const [tab, setTab] = useState<Tab>(first?.tab ?? 'scene');
   // Опущенная шторка держит низ с ценой и запуском на любой вкладке
   const [peeked, setPeeked] = useState(() => followPeeked(VIDEO_PANEL));
   const agentPick = useAgentPick(sessionId, VIDEO_PANEL);
@@ -53,19 +55,24 @@ export function VideoPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   useEffect(() => { if (preset) consumePreset(VIDEO_PANEL); }, [preset]);
 
   // Запрос показа: вкладка и цель («к сцене», «к фильму»)
+  const firstUsed = useRef(false);
   useEffect(() => {
     const on = () => {
-      const w = takeWanted();
+      const w = firstUsed.current ? takeWanted() : (firstUsed.current = true, first ?? takeWanted());
       if (!w) return;
       setTab(w.tab);
-      if (!sessionId) return;
-      if (w.tab === 'scene' && w.target && !w.target.includes(':') && getThreadsState(sessionId).scenes.some(s => s.sceneId === w.target)
-        && getThreadsState(sessionId).focus.sceneId !== w.target) void focusScene(scope, sessionId, w.target);
-      if (w.tab === 'film' && w.target?.endsWith('.film') && getThreadsState(sessionId).focus.filmPath !== w.target) void focusFilm(scope, sessionId, w.target);
+      if (!sessionId || !w.target) return;
+      const target = w.target;
+      void ensureVideoThreads(scope, sessionId).then(() => {
+        const st = getThreadsState(sessionId);
+        if (w.tab === 'scene' && st.scenes.some(s => s.sceneId === target) && st.focus.sceneId !== target) void focusScene(scope, sessionId, target);
+        if (w.tab === 'film' && target.endsWith('.film') && st.focus.filmPath !== target) void focusFilm(scope, sessionId, target);
+      });
     };
     subs.add(on);
     on();
     return () => { subs.delete(on); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- first читается один раз
   }, [scope, sessionId]);
 
   // Недосохранённая правка уходит в свою сцену при закрытии панели и смене чата

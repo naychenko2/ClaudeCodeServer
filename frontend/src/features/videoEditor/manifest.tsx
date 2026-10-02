@@ -5,9 +5,14 @@
 import { Clapperboard } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
-  ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SubsystemManifest, WorkspacePanelDefApi, WorkspacePanelDefCtx,
+  ChatItemToolCtx, ComposerChipCtx, FileViewerToolbarCtx, SlotContribution, ComposerStripCtx, ComposerStripShortcut, SubsystemManifest, WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
+import { sceneMode } from './composer/sceneMode';
 import { VideoChatWatcher } from './composer/VideoChatWatcher';
+import { FilmFileOpener } from './film/FilmFileOpener';
+import { LaunchAnchor, QuietLine, SceneAnchor } from './feed/SceneCard';
+import { recordKey } from './feed/records';
+import { RECORD } from './api';
 import { VideoPanel } from './panel/VideoPanel';
 import { VideoSheet } from './panel/VideoSheet';
 import { openVideoShortcut } from './scene/actions';
@@ -15,6 +20,14 @@ import { VideoStrip, videoStripStatus } from './strip/VideoStrip';
 import { VIDEO_PANEL, VIDEO_STRIP } from './store/videoStore';
 
 const enabled = () => getFlag(FLAGS.videoEditor);
+
+// Карточки ленты (module_record модуля): якорь сцены, запуск с вариантами, тихие строки.
+// Флаг проверяют сами якоря: без него — строка fallback записи
+const ANCHORS: SlotContribution<ChatItemToolCtx>[] = [
+  { name: recordKey(RECORD.scene), render: ctx => <SceneAnchor ctx={ctx} /> },
+  { name: recordKey(RECORD.launchVersions), render: ctx => <LaunchAnchor ctx={ctx} /> },
+  ...[RECORD.saved, RECORD.filmBuilt, RECORD.note].map(t => ({ name: recordKey(t), render: (ctx: ChatItemToolCtx) => <QuietLine ctx={ctx} /> })),
+];
 
 // Ярлык «Видео» («＋» композера, пустая лента): полоса и панель на «Сцене»
 export function videoShortcuts({ sessionId }: { sessionId: string | null }): ComposerStripShortcut[] {
@@ -30,6 +43,15 @@ export const manifest: SubsystemManifest = {
   order: 97,
   noPill: true,
   slots: {
+    'chat-item-tool': ANCHORS,
+    // Режим поля ввода «Сцена» — только при выбранной сцене
+    'composer-mode': [
+      { name: 'scene', order: 30, action: sceneMode as unknown as Record<string, unknown> },
+    ],
+    // Клик по .film в дереве: просмотр файла открывается, а панель «Видео» встаёт на «Фильм»
+    'file-viewer-toolbar': [
+      { name: 'video-editor-film', order: 20, render: (ctx: FileViewerToolbarCtx) => <FilmFileOpener path={ctx.filePath} /> },
+    ],
     // Полоса «Видео» над композером: выбор сцены открывает её сам (стор нитей)
     'composer-strip': [
       {

@@ -134,9 +134,10 @@ for (const vp of [W, M]) {
       await page.goto(`/#/project/${P}/chat/${S}`);
       await closeSheet(page);
     }
-    const draft = page.locator('[data-image-draft]');
-    await expect(draft).toContainText('Новая картинка');
-    await expect(draft).toContainText('сохранять в images/');
+    // Пустой черновик карточкой в ленте не рисуется (просьба 02.10: лента без плашки «Новая картинка»);
+    // состояние остаётся — нить-черновик есть, чип в полосе, а папка «images» едет в запуск
+    await expect(page.locator('[data-image-draft]')).toHaveCount(0);
+    await expect(page.getByText('Опишите её в поле ввода')).toHaveCount(0);
     await shot(page, SHOTS, `${mobile ? 'm360' : 'w1440'}-draft`);
 
     // Агент запускает генерацию в черновик: карточка запуска «Claude: генерация» и «Отменить»

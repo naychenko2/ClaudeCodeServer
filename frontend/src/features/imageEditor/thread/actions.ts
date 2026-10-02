@@ -121,7 +121,7 @@ export async function workWith(projectId: string, sessionId: string, threadId: s
 export const workWithFile = async (projectId: string, sessionId: string, file: string, how: RevealMode = 'auto') =>
   revealPanel(humanPick(await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { file, revision: rev })), sessionId), sessionId, how);
 
-// «✦ Нарисовать новую»: карточка-черновик «Новая картинка» и фокус на неё. Черновик завёл
+// «✦ Нарисовать новую»: черновик «Новая картинка» (чип в полосе, в ленту не рисуется) и фокус на него. Черновик завёл
 // человек — это и есть просьба о режиме «Картинка»; черновик агента режим не меняет
 export async function createDraft(projectId: string, sessionId: string, folder: string, how: RevealMode = 'auto') {
   const ok = await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { draftFolder: folder, revision: rev }));

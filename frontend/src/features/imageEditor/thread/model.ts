@@ -12,6 +12,9 @@ export const threadName = (t: ImageThread) => (t.file ? splitPath(t.file).name :
 export const isEmptyThread = (t: ImageThread) =>
   t.stacks.every(s => !s.steps.length) && versionsOf(t).every(v => v.id === ORIGIN && !v.steps.length);
 
+// Пустой черновик без идущего запуска: в ленте карточкой не рисуется (живёт чипом в полосе)
+export const isHiddenDraft = (t: ImageThread) => !t.file && isEmptyThread(t) && !t.pendingJobId;
+
 export const findStack = (t: ImageThread, stackId: string | null | undefined) =>
   t.stacks.find(s => s.stackId === stackId) ?? null;
 

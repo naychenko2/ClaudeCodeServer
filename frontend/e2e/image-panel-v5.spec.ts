@@ -1,7 +1,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import {
-  CAT, Counter, H, brush, catThread, heroThread, imageComposer, input, newWorld, openChat, panel, shot, strip, w,
+  CAT, Counter, H, brush, catThread, heroThread, imageComposer, imageToggle, input, newWorld, openChat, panel, shot, strip, w,
   type Thread,
 } from './imagePanelMock';
 
@@ -45,6 +45,34 @@ test.afterEach(async ({ page }, info) => {
     fs.mkdirSync('/tmp/i4', { recursive: true });
     await page.screenshot({ path: `/tmp/i4/fail-${info.title.slice(0, 12).replace(/[^\p{L}\d]+/gu, '_')}.png` }).catch(() => {});
   }
+});
+
+test.describe('лента: черновик и кисть', () => {
+  for (const vp of [{ name: '1440', v: W }, { name: '360', v: M }]) {
+    test(`${vp.name}: черновик «Новая картинка» не рисуется карточкой, кисть «Отметить» — только в режиме «Картинка»`, async ({ page }) => {
+      await open(page, vp.v, 'light', H, 'edit', [heroThread()]);
+      await imageComposer(page);
+      if (vp.v === W) await expect(page.locator('[data-image-brush]')).toBeVisible();
+      await seg(page, 0).click().catch(async () => { await openPanel(page); await seg(page, 0).click(); });
+      await expect.poll(() => w().threads.map(t => t.id)).toEqual([H, 'thread-draft']);
+      // Черновик завёлся, но в ленте плашки нет
+      await expect(page.locator('[data-image-draft]')).toHaveCount(0);
+      await expect(page.getByText('Опишите её в поле ввода')).toHaveCount(0);
+      await expect(page.getByText('Ещё не нарисована')).toHaveCount(0);
+      await shot(page, SHOTS, `${vp.name}-no-draft-card`);
+    });
+  }
+
+  test('1440: «Отметить» скрыта в режиме «Чат»', async ({ page }) => {
+    await open(page, W, 'light', H, 'edit', [heroThread()]);
+    await imageComposer(page);
+    await expect(page.locator('[data-image-brush]')).toBeVisible();
+    await page.getByRole('button', { name: 'Режим «Чат»' }).click();
+    await expect(page.locator('[data-image-brush]')).toHaveCount(0);
+    await shot(page, SHOTS, '1440-brush-chat-mode');
+    await imageToggle(page).click();
+    await expect(page.locator('[data-image-brush]')).toBeVisible();
+  });
 });
 
 test.describe('сценарии v5 со счётом кликов', () => {

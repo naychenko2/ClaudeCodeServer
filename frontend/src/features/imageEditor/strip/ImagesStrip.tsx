@@ -218,7 +218,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
           </span>
         ) : (
           <span style={{ display: 'inline-flex', flexShrink: 0 }}>
-            <Chip dashed leading={ic(Sparkles)} title={sessionId ? 'Карточка «Новая картинка» в ленте, поле — в режим «Картинка»' : 'Сначала начните чат'}
+            <Chip dashed leading={ic(Sparkles)} title={sessionId ? 'Новый черновик: поле ввода переключится в режим «Картинка»' : 'Сначала начните чат'}
               onClick={sessionId && !drafting ? () => { void draw(); } : undefined}>
               Нарисовать новую
             </Chip>

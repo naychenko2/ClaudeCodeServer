@@ -11,6 +11,7 @@ import { api } from '../../lib/api';
 import { C, FONT, SP } from '../../lib/design';
 import { readStoredToken } from '../../lib/offline';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { ImageLightbox } from '../ui/ImageLightbox';
 import { relPathTree } from '../../lib/paths';
 import { useProjectFileIndex, lookupProjectFile, FILE_LIKE_MENTION } from '../../lib/projectFileIndex';
 import { withImageLimit } from '../../lib/concurrency';
@@ -101,6 +102,7 @@ export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const cached = cacheKey ? _imageCache.get(cacheKey) ?? null : null;
   const [resolved, setResolved] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [lightbox, setLightbox] = useState(false);
   // Не фетчим, пока картинка вне viewport: лента не виртуализирована, и без этого все картинки
   // разных сообщений фетчатся разом, забивая пул браузера. Remote (http/data/proxy) тут не нужен —
   // они идут через нативный <img loading="lazy">, а эффект для них делает ранний return по !projectId.
@@ -127,11 +129,19 @@ export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   if (failed) return <span ref={wrapRef} style={{ fontSize: 13, color: C.textMuted }}>🖼 {alt || src}</span>;
   if (!finalSrc) return <span ref={wrapRef} style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
 
+  // Клик открывает лайтбокс, а не вкладку: картинки проекта — data:-URL, а на data: браузер
+  // вкладку верхнего уровня не пускает (открывалась пустая). href оставлен для «открыть в новой
+  // вкладке» у внешних картинок.
   return (
-    <a ref={wrapRef} href={finalSrc} target="_blank" rel="noopener noreferrer" style={{ display: 'block', margin: '6px 0' }}>
-      <img src={finalSrc} alt={alt ?? ''} loading="lazy" onError={() => setFailed(true)}
-        style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}` }} />
-    </a>
+    <>
+      <a ref={wrapRef} href={finalSrc} target="_blank" rel="noopener noreferrer"
+        onClick={e => { e.preventDefault(); setLightbox(true); }}
+        style={{ display: 'block', margin: '6px 0' }}>
+        <img src={finalSrc} alt={alt ?? ''} loading="lazy" onError={() => setFailed(true)}
+          style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'zoom-in' }} />
+      </a>
+      {lightbox && <ImageLightbox src={finalSrc} alt={alt} onClose={() => setLightbox(false)} />}
+    </>
   );
 }
 

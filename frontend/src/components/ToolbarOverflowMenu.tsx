@@ -63,6 +63,7 @@ export function ToolbarOverflowMenu({
   align = 'right',
   renderTrigger,
   openTrigger,
+  triggerSize,
 }: {
   isMobile?: boolean;
   items?: OverflowItem[];
@@ -79,6 +80,9 @@ export function ToolbarOverflowMenu({
   // меню открывается по anchor (если задан; без anchor — под триггером «⋯»).
   // Якорь с нулевым размером ставит дропдаун прямо к точке курсора
   openTrigger?: { counter: number; anchor?: DOMRect | null };
+  // Сторона иконочного триггера «⋯», px; не задано — размер ToolbarIconButton по умолчанию.
+  // Нижней губе композера нужен 28 — под высоту её пикеров
+  triggerSize?: number;
 }) {
   const [open, setOpen] = useState(false);
   // Куда раскрывать десктопный дропдаун и сколько ему позволено занять по высоте.
@@ -230,7 +234,8 @@ export function ToolbarOverflowMenu({
     // Дефолтный icon-триггер «⋯» с опциональным индикатором
     trigger = (
       <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
-        <ToolbarIconButton onClick={toggle} title={triggerTitle} isMobile={isMobile} active={open}>
+        <ToolbarIconButton onClick={toggle} title={triggerTitle} isMobile={isMobile} active={open}
+          style={triggerSize ? { width: triggerSize, height: triggerSize } : undefined}>
           {triggerIcon ?? <MoreHorizontal size={18} />}
         </ToolbarIconButton>
         {typeof indicator === 'number' && indicator > 0 && <span style={countBadge}>{indicator}</span>}

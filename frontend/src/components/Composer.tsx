@@ -1448,6 +1448,9 @@ export function Composer({
   // у однострочного поля, растянув карточку по своей высоте
   const [tallInput, setTallInput] = useState(false);
   const sideBtnH = isMobile ? 36 : 32;
+  // Иконки нижней губы — высоты её пикеров (28): ряд губы тогда совпадает с верхней,
+  // где чипы тоже 28. На телефоне цель под палец остаётся 36
+  const lipBtn = isMobile ? 36 : 28;
   const sendBtnH = isMobile ? 38 : 34;
   const columnNeed = (1 + (hasSpeech ? 1 : 0)) * (sideBtnH + 6) + sendBtnH;
   useEffect(() => {
@@ -1514,7 +1517,7 @@ export function Composer({
       onClick={onAttach}
       title="Прикрепить файл"
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
         justifyContent: 'center', flexShrink: 0,
       }}
@@ -1528,7 +1531,7 @@ export function Composer({
       onClick={handleSlashButton}
       title="Выбрать скилл"
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
         justifyContent: 'center', flexShrink: 0,
         fontFamily: FONT.mono, fontSize: 16, fontWeight: 600, lineHeight: 1,
@@ -1546,7 +1549,7 @@ export function Composer({
       onClick={() => setTeamOpen(o => !o)}
       title="Обсудить с командой"
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none',
         background: teamOpen ? C.accentLight : 'none',
         cursor: 'pointer', color: teamOpen ? C.accent : C.textMuted,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -1621,7 +1624,7 @@ export function Composer({
       onClick={toggleWorkLoopSafe}
       title="Цикл «до готово»: агент работает итерациями, пока не отчитается о завершении, затем верификационный ход"
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none',
         background: 'none',
         cursor: 'pointer', color: C.textMuted,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -1697,7 +1700,7 @@ export function Composer({
       disabled={worktreeToggleDisabled}
       title={worktreeButtonTitle}
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none',
         background: worktreeActive ? C.accentLight : 'none',
         cursor: worktreeToggleDisabled ? 'default' : 'pointer',
         color: worktreeActive ? C.accent : C.textMuted,
@@ -2676,6 +2679,7 @@ export function Composer({
           items={hiddenItems}
           title="Ещё"
           indicator={menuOnlyActive}
+          triggerSize={isMobile ? undefined : 28}
           triggerTitle={menuOnlyActive
             ? 'Ещё · есть включённые режимы'
             : 'Ещё'}

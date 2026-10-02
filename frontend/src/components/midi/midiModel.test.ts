@@ -58,10 +58,31 @@ describe('parseMidi', () => {
     expect(doc.bars[7]).toBeCloseTo(14, 3);
   });
 
+  it('смена размера 4/4 → 3/4 укорачивает такт', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    const ppq = midi.header.ppq;
+    midi.header.timeSignatures.push({ ticks: 0, timeSignature: [4, 4] });
+    midi.header.timeSignatures.push({ ticks: ppq * 8, timeSignature: [3, 4] });
+    midi.header.update();
+    midi.addTrack().addNote({ midi: 60, time: 0, duration: 8 });
+
+    const doc = parseMidi(toBuffer(midi));
+    // два такта 4/4 по 2 с, дальше 3/4 по 1,5 с
+    expect(doc.bars[1] - doc.bars[0]).toBeCloseTo(2, 3);
+    expect(doc.bars[2]).toBeCloseTo(4, 3);
+    expect(doc.bars[3] - doc.bars[2]).toBeCloseTo(1.5, 3);
+    expect(doc.bars[4] - doc.bars[3]).toBeCloseTo(1.5, 3);
+  });
+
   it('пустой файл — без нот и без исключения', () => {
     const doc = parseMidi(toBuffer(new Midi()));
     expect(doc.tracks).toEqual([]);
     expect(doc.noteCount).toBe(0);
+    expect(doc.minPitch).toBe(0);
+    expect(doc.maxPitch).toBe(0);
+    expect(doc.bpm).toBe(120);
+    expect(doc.timeSig).toEqual([4, 4]);
   });
 
   it('мусор и обрезанный файл — MidiParseError', () => {
@@ -81,7 +102,7 @@ describe('parseMidi', () => {
 describe('gmFamily', () => {
   it('граничные номера GM', () => {
     const cases: [number, string][] = [
-      [0, 'piano'], [7, 'piano'], [8, 'keys'], [23, 'keys'], [24, 'strings'], [31, 'strings'],
+      [0, 'piano'], [5, 'piano'], [7, 'piano'], [8, 'keys'], [23, 'keys'], [24, 'strings'], [31, 'strings'],
       [32, 'bass'], [39, 'bass'], [40, 'strings'], [55, 'strings'], [56, 'brass'], [79, 'brass'],
       [80, 'lead'], [87, 'lead'], [88, 'pad'], [103, 'pad'], [104, 'piano'], [127, 'piano'],
     ];

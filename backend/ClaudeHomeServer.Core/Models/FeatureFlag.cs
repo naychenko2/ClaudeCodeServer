@@ -216,7 +216,7 @@ public static class FeatureFlagCatalog
         // MIDI-просмотрщик: ноты из .mid открываются в файлах и в редакторе звука.
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.MidiEditor,
-            Title: "MIDI: просмотр и правка",
+            Title: "MIDI-просмотрщик",
             Description: "Ноты из .mid открываются в файлах и в редакторе звука: их видно на нотной ленте и можно послушать.",
             Default: false,
             Stage: "dev"),

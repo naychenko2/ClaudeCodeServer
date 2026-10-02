@@ -236,6 +236,26 @@ export function migrateLocal(key: string, server: AudioOpInputs | null | undefin
   return empty ? toServerInputs(op, old, null, personal) : null;
 }
 
+// Нить хранит настройки одного режима: уходя из режима, кладём её выбор в префы этого режима, иначе
+// возврат в него поднял бы старые префы. Входы префов не трогаем — они от черновика без нити
+export function modePrefsOf(cur: AudioThreadSettings, prefs: AudioModePrefs | null): AudioModePrefs {
+  return {
+    operation: cur.operation, provider: cur.provider, model: cur.model, count: cur.count ?? null, fields: cur.fields,
+    inputs: prefs?.inputs ?? null,
+  };
+}
+
+export async function rememberMode(
+  scope: string, sessionId: string | null, cur: AudioThreadSettings, prefs: AudioModePrefs | null,
+): Promise<boolean> {
+  try {
+    setScopePrefs(scope, await audioApi.putPrefs(scope, sessionId, cur.mode, modePrefsOf(cur, prefs)));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Куда пишутся настройки: в нить, если она выбрана, иначе — в префы режима области
 export async function saveSettings(
   scope: string, sessionId: string | null, thread: AudioThread | null, next: AudioThreadSettings,

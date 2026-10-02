@@ -37,6 +37,15 @@ public static partial class AudioCatalog
     public static IReadOnlyList<IAudioEngine> Available(IEnumerable<IAudioEngine> engines) =>
         engines.Where(e => Safe(() => e.Enabled)).OrderBy(e => OrderOf(e.Key)).ThenBy(e => e.Key, StringComparer.OrdinalIgnoreCase).ToList();
 
+    // Кандидаты «Авто» в порядке перебора: доступные и работающие в этой области. С флагом владельца
+    // local-media-default локальные модели идут первыми (ADR-021 §2): человек просил по умолчанию
+    // свою видеокарту. Единственная точка порядка «Авто» — её зовут и котировка, и каталог для фронта
+    public static IReadOnlyList<IAudioEngine> AutoCandidates(IEnumerable<IAudioEngine> engines, AudioEditScope scope,
+        bool preferLocal) =>
+        Available(engines).Where(e => Safe(() => e.ScopeRefusal(scope) is null))
+            .OrderBy(e => preferLocal && string.Equals(e.Key, Engines.LocalAudioEngine.ProviderKey, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ToList();
+
     // Заведённые поставщики (в том числе лежащие сейчас) в порядке показа
     public static IReadOnlyList<IAudioEngine> Registered(IEnumerable<IAudioEngine> engines) =>
         engines.Where(e => Safe(() => e.Registered)).OrderBy(e => OrderOf(e.Key)).ThenBy(e => e.Key, StringComparer.OrdinalIgnoreCase).ToList();

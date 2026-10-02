@@ -26,6 +26,15 @@ const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null
 
 const supports = (p: AudioProvider, op: AudioOp) => p.models.some(m => m.caps.ops.includes(op));
 
+// Порядок «Авто» задаёт сервер (AudioCatalog.AutoCandidates): сами его не считаем, иначе сводка
+// показала бы fal, а котировка взяла бы local
+function autoOrder(catalog: AudioCatalog | null): AudioProvider[] {
+  const providers = catalog?.providers ?? [];
+  const order = catalog?.autoProviders;
+  if (!order) return providers;
+  return order.map(key => providers.find(p => p.key === key)).filter((p): p is AudioProvider => !!p);
+}
+
 export function resolveLaunch(
   thread: AudioThread | null, prefs: AudioPrefs, catalog: AudioCatalog | null, fallbackMode: AudioMode,
 ): ResolvedLaunch {
@@ -38,7 +47,7 @@ export function resolveLaunch(
   // Явный выбор не подменяем: недоступный поставщик остаётся в сводке, как выбран
   const provider = providerKey
     ? providers.find(x => x.key === providerKey) ?? null
-    : providers.find(x => x.available && supports(x, op)) ?? null;
+    : autoOrder(catalog).find(x => x.available && supports(x, op)) ?? null;
   const modelId = own?.model ?? p?.model ?? catalog?.autoModelId ?? 'auto';
   const auto = !modelId || modelId === (catalog?.autoModelId ?? 'auto');
   const model = provider

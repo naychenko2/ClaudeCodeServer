@@ -283,9 +283,18 @@ export interface ComposerModeApi {
   hint?: (ctx: ComposerModeCtx) => ReactNode;
   // Отправка мимо агента; текст режима хранится отдельно от черновика чата
   onSubmit: (ctx: ComposerModeCtx, text: string) => Promise<void> | void;
+  // Запуск при ПУСТОМ поле («↻ Ещё 2 · бесплатно» — повтор прошлого запуска): кнопка
+  // отправки берёт эту подпись и действие. null или нет вклада — при пустом поле кнопка
+  // гаснет, как раньше
+  emptySubmit?: (ctx: ComposerModeCtx) => ComposerEmptySubmit | null;
   // Текст поля режима после каждой правки: панель режима считает по нему цену и
   // запускает с ним же свою кнопку («Звук»)
   onTextChange?: (ctx: ComposerModeCtx, text: string) => void;
+}
+
+export interface ComposerEmptySubmit {
+  label: ReactNode;
+  run: () => Promise<void> | void;
 }
 
 // Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).

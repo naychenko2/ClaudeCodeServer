@@ -146,6 +146,110 @@ public class ImageProjectPrefsTests : IDisposable
             "без картинки в работе — выбор проекта; удалённый персонаж не подключён");
     }
 
+    // ── Выбор по режимам «Создать» и «Править» (панель v5) ─────────────────────
+
+    private static readonly ImageCreatePrefs CreateLocal = new("local", "qwen-image-2.1", 1);
+    private static readonly ImageEditPrefs EditHiggs = new("higgsfield", null, 4, "removeBackground", "fast", "16:9");
+
+    [Fact]
+    public async Task Запись_без_режимов_не_затирает_сохранённые_режимы()
+    {
+        await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", null, 2, true, null, CreateLocal, EditHiggs));
+
+        // Старый фронт из другой вкладки шлёт только плоские поля
+        var saved = await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", "m2", 3, false, null));
+
+        saved.Should().Be(new ImageProjectPrefs("fal", "m2", 3, false, null, CreateLocal, EditHiggs));
+        _store.Get(Owner, ProjectId).Should().Be(saved);
+
+        var edit = EditHiggs with { Op = "outpaint", Count = 1 };
+        (await _prefs.SetAsync(Owner, _project, saved with { Edit = edit, Create = null }))
+            .Should().Be(saved with { Edit = edit }, "присланный режим заменяется, неприсланный остаётся");
+    }
+
+    [Fact]
+    public void Старый_файл_без_режимов_читается_и_даёт_прежние_настройки()
+    {
+        var path = _store.PathOf(Owner, ProjectId);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """{"provider":"fal","model":"m1","count":3,"matchSourceSize":false,"characterSlug":null}""");
+
+        var prefs = _store.Get(Owner, ProjectId);
+
+        prefs.Should().Be(new ImageProjectPrefs("fal", "m1", 3, false, null));
+        prefs.HasModes.Should().BeFalse();
+        var flat = new ImageThreadSettings("fal", "m1", 3, false);
+        prefs.CreateSettings().Should().Be(flat);
+        prefs.EditSettings().Should().Be(flat);
+        _prefs.SettingsFor(Owner, ProjectId).Should().Be(flat);
+    }
+
+    [Fact]
+    public void Режим_берёт_поставщика_и_модель_парой_а_число_с_запасом_из_плоских()
+    {
+        var prefs = new ImageProjectPrefs("fal", "flux", 3, false, null,
+            new ImageCreatePrefs("local", null, null), new ImageEditPrefs(null, null, 2, "upscale", null, null));
+
+        prefs.CreateSettings().Should().Be(new ImageThreadSettings("local", null, 3, false),
+            "модель плоских полей выбрана у другого поставщика");
+        prefs.EditSettings().Should().Be(new ImageThreadSettings("fal", "flux", 2, false));
+    }
+
+    [Fact]
+    public async Task Новая_нить_получает_настройки_режима_Править()
+    {
+        var threads = new ImageThreadStore(Path.Combine(_dir, ImageThreadStore.DirName));
+        var service = new ImageThreadService(threads, NullLogger<ImageThreadService>.Instance, prefs: _prefs);
+        await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", null, 2, true, null, CreateLocal, EditHiggs));
+
+        var opened = await service.OpenAsync(Owner, ProjectId, Chat, "images/hero.png", null, 0, default);
+
+        opened.Thread!.Settings.Should().Be(new ImageThreadSettings("higgsfield", null, 4, true));
+    }
+
+    [Theory]
+    [InlineData("edit", null, null, 2, null)]
+    [InlineData("removeBackground", "photoreal", "9:16", 4, null)]
+    [InlineData("generate", null, null, 2, "Недопустимая операция правки: generate")]
+    [InlineData("bogus", null, null, 2, "Недопустимая операция правки: bogus")]
+    [InlineData("RemoveBackground", null, null, 2, "Недопустимая операция правки: RemoveBackground")]
+    [InlineData(null, "slow", null, 2, "Недопустимый режим подбора: slow")]
+    [InlineData(null, null, "4:3", 2, "Пропорции 4:3 не поддерживаются: только 1:1, 16:9, 9:16")]
+    [InlineData(null, null, null, 5, "Число вариантов — от 1 до 4")]
+    [InlineData(null, null, null, 0, "Число вариантов — от 1 до 4")]
+    public void Режим_Править_проверяется_белыми_списками(string? op, string? mode, string? ratio, int count, string? error)
+    {
+        ImageProjectPrefsService.Validate(ImageProjectPrefs.Default with { Edit = new(null, null, count, op, mode, ratio) })
+            .Should().Be(error);
+    }
+
+    [Fact]
+    public void Число_вариантов_режима_Создать_проверяется_лимитом()
+    {
+        ImageProjectPrefsService.Validate(ImageProjectPrefs.Default with { Create = new(null, null, 5) })
+            .Should().Be("Число вариантов — от 1 до 4");
+        ImageProjectPrefsService.Validate(ImageProjectPrefs.Default with { Create = new(null, null, null) }).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Блок_хода_с_режимами_показывает_оба_выбора()
+    {
+        await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", null, 2, true, null, CreateLocal, EditHiggs));
+        var (contributor, context, threads) = Contributor();
+
+        var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
+
+        text.Should().Contain("Выбор человека в полосе «Картинки»: "
+            + "новая картинка (генерация по тексту) — поставщик local, модель qwen-image-2.1, вариантов 1; "
+            + "правка — поставщик higgsfield, модель auto, вариантов 4, операция removeBackground; персонаж не подключён");
+
+        threads.Open(Owner, Chat, "images/hero.png", null, 0, new ImageThreadSettings("fal", "m1", 2, true));
+        var focused = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
+        focused.Should().Contain("правка картинки в работе — поставщик fal, модель m1, вариантов 2, операция removeBackground",
+            "у картинки в работе правка идёт по её настройкам");
+        focused.Should().Contain("новая картинка (генерация по тексту) — поставщик local");
+    }
+
     private (ImageEditorStateContributor Contributor, PromptSessionContext Context, ImageThreadStore Threads) Contributor(
         bool agentLaunch = true, bool personal = false, bool flag = true)
     {

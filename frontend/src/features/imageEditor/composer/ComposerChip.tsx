@@ -6,13 +6,17 @@
 
 import { useEffect } from 'react';
 import { Brush } from 'lucide-react';
-import { Chip, ICON_SIZE, ICON_STROKE, SP } from 'aihome_shell/kit';
+import { Chip, FLAGS, ICON_SIZE, ICON_STROKE, SP, useFeature, useIsMobile } from 'aihome_shell/kit';
 import type { ComposerChipCtx } from '../../../lib/subsystems/registryCore';
 import { EditorModal } from '../editor/EditorModal';
 import { enterScope, isPersonalScope } from '../scope';
 import { plural } from '../format';
 import { threadName } from '../thread/model';
 import { enterChat, getEditor, getThreadMarks, openEditor, setThreadMarks, useThreads } from '../thread/threadStore';
+import { usePrefs } from '../thread/prefs';
+import { getStoredImageMode, effectiveImageMode, useImageModeVersion } from '../thread/modeState';
+import { threadHasImage } from '../thread/useThreadLaunch';
+import { editChoice, editPickOf } from '../panel/panelOp';
 
 export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
   const { sessionId } = ctx;
@@ -23,8 +27,26 @@ export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
   const thread = state.focus ? state.threads.find(t => t.id === state.focus) ?? null : null;
   const editor = getEditor();
   const n = thread ? getThreadMarks(thread.id).marks.length : 0;
+  // Панель v5: у «Изменить» над картинкой — кисть, редактор открывается сразу с ней.
+  // Отметок на телефоне нет, а с отметками чип ниже и так ведёт в редактор
+  const v5 = useFeature(FLAGS.imagePanelV5);
+  useImageModeVersion();
+  const mobile = useIsMobile();
+  const prefs = usePrefs(projectId);
+  const brush = v5 && !mobile && !!thread && n === 0 && threadHasImage(thread)
+    && effectiveImageMode(getStoredImageMode(sessionId), true) === 'edit'
+    && editPickOf(editChoice(prefs).op) === 'edit';
   return (
     <>
+      {brush && sessionId && (
+        <span data-image-brush="" style={{ display: 'inline-flex', paddingTop: SP.sm }}>
+          <Chip dashed leading={<Brush size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            title="Отметить место кистью — откроется редактор картинки"
+            onClick={() => openEditor(sessionId, thread.id, null, { tool: 'mask' })}>
+            Отметить
+          </Chip>
+        </span>
+      )}
       {thread && n > 0 && (
         <span style={{ display: 'inline-flex', paddingTop: SP.sm }}>
         <Chip leading={<Brush size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} maxW={260}
@@ -38,7 +60,7 @@ export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
         </span>
       )}
       {sessionId && editor?.sessionId === sessionId && (
-        <EditorModal projectId={projectId} sessionId={sessionId} threadId={editor.threadId} versionId={editor.versionId} />
+        <EditorModal projectId={projectId} sessionId={sessionId} threadId={editor.threadId} versionId={editor.versionId} startTool={editor.tool} />
       )}
     </>
   );

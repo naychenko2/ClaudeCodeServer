@@ -129,7 +129,7 @@ export {
   IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem, MenuSep,
   SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
   Island, EmptyState, Field, TextField, TextArea, IconField, ModalActions, Menu, SegmentedControl, Checkbox,
-  Chip, ChipX, ProgressBar, MetaChip, Select,
+  Chip, ChipX, ProgressBar, MetaChip, Select, InlineSegmented,
 } from '../../components/ui';
 export type { SelectOption } from '../../components/ui';
 
@@ -198,9 +198,6 @@ export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
 // Общий каркас панели генерации: «Картинки» и «Звук» видят хост только через кит (ADR-021 §3)
 export { GenerationPanel, GEN_PANEL_W, useGenerationSheet } from '../../components/generation/GenerationPanel';
 export type { GenerationFoot, GenerationPanelView } from '../../components/generation/GenerationPanel';
-// Список «Исполнитель» панели генерации (общий слой Г1): строки строит раздел сам
-export { ExecutorList, ExecutorSummaryRow } from '../../components/generation/ExecutorList';
-export type { ExecutorRow, ExecutorBadge } from '../../components/generation/ExecutorList';
 // Общий слой панелей: переключатель режима, меню выбора источника, «Вернуть» после снятия выбора
 export { GenerationModeSwitch } from '../../components/generation/GenerationModeSwitch';
 export type { GenerationModeOption } from '../../components/generation/GenerationModeSwitch';
@@ -211,4 +208,7 @@ export { createReleaseUndo, RELEASE_UNDO_MS } from '../../components/generation/
 export type { ReleaseOffer, ReleaseUndoController } from '../../components/generation/useReleaseUndo';
 export { pickRows } from '../../components/generation/pickSort';
 export type { PickCandidate } from '../../components/generation/pickSort';
+// Список «Исполнитель» панели генерации (общий слой Г1): строки строит раздел сам
+export { ExecutorList, ExecutorSummaryRow } from '../../components/generation/ExecutorList';
+export type { ExecutorRow, ExecutorBadge } from '../../components/generation/ExecutorList';
 export type { TabItem } from '../../components/ui';

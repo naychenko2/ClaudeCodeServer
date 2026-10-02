@@ -193,6 +193,13 @@ body {
   inherits: true;
   initial-value: 20px;
 }
+/* Подъём FAB над плашкой «Вернуть» полосы генерации (ReleaseNotice raiseFab): плашка
+   висит над композером вне его высоты. Регистрируем как длину — подъём плавный. */
+@property --cc-fab-raise {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
 /* Размер FAB: по умолчанию 54 (панель не распахнута), 36 когда справа распахнута панель
    во всю высоту (ставит PanelZone). Регистрируем как длину — уменьшение/увеличение плавное. */
 @property --cc-fab-size {
@@ -203,7 +210,7 @@ body {
 /* --cc-fab-size НЕ анимируем на :root: смену размера проигрывает transition width/height
    самой кнопки (registered @property триггерит его). Иначе выходит двойная анимация в 2 шага. */
 :root {
-  transition: --cc-fab-bottom 0.3s ease, --cc-fab-inset 0.22s ease;
+  transition: --cc-fab-bottom 0.3s ease, --cc-fab-inset 0.22s ease, --cc-fab-raise 0.2s ease;
   /* Оправа FAB — постоянный носитель статуса. Толщина и зазор НЕ масштабируются
      вместе с кнопкой: на 36px пропорциональная оправа выродилась бы в нитку. */
   --cc-fab-ring-w: 2px;

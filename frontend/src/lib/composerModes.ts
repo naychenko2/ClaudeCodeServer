@@ -4,6 +4,7 @@
 // а не только от клика в интерфейсе — фокус может прийти от агента, после перезагрузки
 // или из другой вкладки. Чистая функция — под юнит-тестом.
 
+import type { ReactNode } from 'react';
 import type { ComposerModeApi, ComposerModeCtx } from './subsystems/registryCore';
 
 export interface ComposerModeEntry { name?: string; action?: ComposerModeApi }
@@ -65,3 +66,20 @@ export function nextModeDraft(
 // нетронутая затравка)
 export const modeDraftText = (field: string, auto: string | null): string | null =>
   field.trim() && field !== auto ? field : null;
+
+// Кнопка запуска строки режима: с текстом — отправка текста, как всегда; при пустом поле —
+// запуск вклада emptySubmit («↻ Ещё 2»), если он его даёт. Без вклада (или он вернул null)
+// всё как до слота: подпись режима, кнопка гаснет на пустом поле
+export interface ModeSubmitButton {
+  // 'text' — отправка набранного; 'empty' — запуск вклада при пустом поле
+  kind: 'text' | 'empty';
+  disabled: boolean;
+  label: ReactNode | null;
+  run: (() => Promise<void> | void) | null;
+}
+
+export function modeSubmitButton(mode: ComposerModeApi, ctx: ComposerModeCtx, hasText: boolean, blocked: boolean): ModeSubmitButton {
+  const empty = hasText ? null : mode.emptySubmit?.(ctx) ?? null;
+  if (empty) return { kind: 'empty', disabled: blocked, label: empty.label, run: empty.run };
+  return { kind: 'text', disabled: !hasText || blocked, label: mode.submitLabel ? mode.submitLabel(ctx) : null, run: null };
+}

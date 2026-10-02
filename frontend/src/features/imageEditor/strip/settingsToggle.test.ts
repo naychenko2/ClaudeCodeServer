@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mobileSummary, settingsToggle } from './settingsToggle';
+import { mobileSendPrice, mobileSummary, settingsToggle } from './settingsToggle';
 
 describe('сводка полосы «Картинки»', () => {
   it('панель открыта колонкой — акцентная обводка и подсказка «открыты справа»', () => {
@@ -16,5 +16,10 @@ describe('сводка полосы «Картинки»', () => {
     expect(mobileSummary(2, '≈ $0.08')).toBe('2 вар. · ≈ $0.08');
     expect(mobileSummary(2, '≈ 4 кредита')).toBe('2 вар. · ≈ 4 кр.');
     expect(mobileSummary(1, null)).toBe('1 вар.');
+  });
+
+  it('телефон: цена на кнопке запуска без времени и очереди', () => {
+    expect(mobileSendPrice('Бесплатно · ≈ 40 с · в очереди 2')).toBe('Бесплатно');
+    expect(mobileSendPrice('≈ $0.15')).toBe('≈ $0.15');
   });
 });

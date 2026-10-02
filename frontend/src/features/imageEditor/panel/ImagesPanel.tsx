@@ -9,9 +9,10 @@
 // телефона нет зоны панелей рабочей области.
 
 import { useEffect, useState } from 'react';
-import { Contact, Image as ImageIcon, Plus, SlidersHorizontal, Users, X } from 'lucide-react';
+import { Contact, Image as ImageIcon, Plus, RotateCw, SlidersHorizontal, Users, X } from 'lucide-react';
 import {
   Button, EmptyState, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE, showToast, submitComposerMode, useAgentPick,
+  useIsMobile,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
@@ -22,13 +23,17 @@ import { useCharacter } from '../strip/settings/CharacterSection';
 import { enterScope, isPersonalScope } from '../scope';
 import { ic } from '../strip/settings/primitives';
 import { SettingsSections } from '../strip/settings/SettingsSections';
-import { IMAGE_COMPOSER_MODE } from '../composer/imageMode';
+import { againPrompt, IMAGE_COMPOSER_MODE, launchAgain } from '../composer/imageMode';
+import { useImageComposerText } from '../composer/composerText';
+import { ImageModeSwitch } from '../strip/ImageModeSwitch';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { focusLabel, isEmptyThread } from '../thread/model';
 import { imageDraftKey, useThreads } from '../thread/threadStore';
 import type { ImageThread } from '../thread/threadsApi';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 import { ONE_VARIANT_HINT } from './panelOp';
+import { CreateBody } from './CreateBody';
+import { EditBody } from './EditBody';
 import { useMarkImagesPanelShown } from './panelOpen';
 
 type Tab = 'settings' | 'characters';
@@ -71,6 +76,10 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
   const { name: characterName } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
   useMarkImagesPanelShown(layout === 'column');
   const agentPick = useAgentPick(sessionId, IMAGES_PANEL);
+  const isMobile = useIsMobile();
+  // «↻ Ещё N» в низу: «Создать», поле ввода пустое, у выбранной картинки есть прошлый запуск
+  const composerText = useImageComposerText(sessionId);
+  const again = L.imageMode === 'create' && !composerText.trim() && !!againPrompt(sessionId);
 
   useEffect(() => {
     const on = () => { const t = takeWanted(); if (t) setTab(t); };
@@ -111,6 +120,20 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
     body = <div style={{ fontSize: FS.sm, color: C.textMuted, paddingTop: SP.sm }}>Загружаем…</div>;
   } else if (!L.catalog.providers.length) {
     body = <EmptyState compact icon={ic(ImageIcon, ICON_SIZE.sm)} title="Рисовать нечем" subtitle="Поставщиков не настроил администратор" />;
+  } else if (L.imageMode === 'create' || (L.imageMode === 'edit' && thread)) {
+    // Панель v5 (флаг image-panel-v5): зеркало «Создать / Править» и тело по режиму
+    body = (
+      <>
+        <div style={{ height: SP.sm }} />
+        <ImageModeSwitch projectId={projectId} sessionId={sessionId} mode={L.imageMode} thread={thread} threads={state.threads} isMobile={ctx.isMobile} />
+        {L.imageMode === 'create' || !thread
+          ? <CreateBody projectId={projectId} L={L} catalog={L.catalog} isMobile={isMobile} onCharacters={() => setTab('characters')} />
+          : (
+            <EditBody projectId={projectId} sessionId={sessionId} thread={thread} L={L} catalog={L.catalog} isMobile={isMobile}
+              onCharacters={() => setTab('characters')} />
+          )}
+      </>
+    );
   } else {
     body = (
       <SettingsSections projectId={projectId} L={L} catalog={L.catalog} thread={thread} onCharacters={() => setTab('characters')} />
@@ -125,8 +148,13 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
     maxCountHint: L.maxCount === 1 ? ONE_VARIANT_HINT : undefined,
     onCountChange: n => L.setSettings({ count: n }),
     price: L.priceLines,
-    runLabel: L.runLabel,
-    onRun: () => { if (sessionId) void panelRun(projectId, sessionId, thread, !!L.quickAction); },
+    runLabel: again ? `Ещё ${L.count}` : L.runLabel,
+    ...(again ? { runIcon: ic(RotateCw) } : null),
+    onRun: () => {
+      if (!sessionId) return;
+      if (again) void launchAgain(projectId, sessionId);
+      else void panelRun(projectId, sessionId, thread, !!L.quickAction);
+    },
   } : undefined;
 
   // Свой низ «Персонажей»: кто подключён и «＋ Персонаж»; на время формы низа нет

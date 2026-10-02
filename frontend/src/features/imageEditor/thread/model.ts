@@ -109,6 +109,13 @@ export const versionStep = (t: ImageThread, v: ImageThreadVersion) =>
 // Файл исходника: после «Сохранить в проект» нить идёт за новым файлом, а исходник — первый
 export const originFile = (t: ImageThread) => t.lineage[0] ?? t.file;
 
+// Картинка в работе — есть что править: версия с картинкой, шаг или файл
+export function threadHasImage(t: ImageThread | null): boolean {
+  if (!t) return false;
+  const v = isLegacyThread(t) ? null : currentVersion(t);
+  return v ? versionHasImage(t, v) : !!t.currentStepId || !!t.file;
+}
+
 export const versionHasImage = (t: ImageThread, v: ImageThreadVersion) =>
   !!versionStep(t, v) || (v.id === ORIGIN && !!originFile(t));
 

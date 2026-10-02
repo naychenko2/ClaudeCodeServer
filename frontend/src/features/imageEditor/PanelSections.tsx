@@ -125,12 +125,17 @@ function SampleMenuLabel({ title, hint }: { title: string; hint: string }) {
 }
 
 // «Из файлов проекта…»: все картинки проекта сеткой, поиск по имени
-export function ProjectImagePicker({ projectId, taken, onPick, onClose }: {
+export function ProjectImagePicker({ projectId, taken, onPick, onClose, pickOnClick = false, title = 'Образец из файлов проекта', confirmLabel = 'Добавить образец' }: {
   projectId: string;
+  // «Что править?» берёт картинку в работу, а не образцом — свои заголовок и кнопка
+  title?: string;
+  confirmLabel?: string;
   // Уже добавленные пути — повторно не предлагаем
   taken: string[];
   onPick: (path: string) => void;
   onClose: () => void;
+  // Панель v5: клик по картинке сразу берёт её образцом, без «Добавить образец»
+  pickOnClick?: boolean;
 }) {
   const [files, setFiles] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -151,8 +156,8 @@ export function ProjectImagePicker({ projectId, taken, onPick, onClose }: {
   }, [files, q, taken]);
 
   return (
-    <Modal title="Образец из файлов проекта" width={560} onClose={onClose}
-      footer={<ModalActions confirmLabel="Добавить образец" confirmDisabled={!sel} onCancel={onClose} onConfirm={() => { if (sel) onPick(sel); }} />}>
+    <Modal title={title} width={560} onClose={onClose}
+      footer={<ModalActions confirmLabel={confirmLabel} confirmDisabled={!sel} onCancel={onClose} onConfirm={() => { if (sel) onPick(sel); }} />}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
         <IconField icon={ic(Search, ICON_SIZE.sm)} value={q} onChange={setQ} placeholder="Поиск по имени" height={38} radius={R.lg} fontSize={14} />
         {error && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{error}</div>}
@@ -164,7 +169,7 @@ export function ProjectImagePicker({ projectId, taken, onPick, onClose }: {
         {shown.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))', gap: SP.sm, maxHeight: 360, overflow: 'auto' }}>
             {shown.map(p => (
-              <Button key={p} variant={sel === p ? 'ghostAccent' : 'ghost'} size="sm" title={p} onClick={() => setSel(p)}
+              <Button key={p} variant={sel === p ? 'ghostAccent' : 'ghost'} size="sm" title={p} onClick={() => (pickOnClick ? onPick(p) : setSel(p))}
                 style={{ flexDirection: 'column', alignItems: 'stretch', height: 'auto', padding: SP.xs, gap: SP.xxs, minWidth: 0 }}>
                 <span style={{ display: 'block', aspectRatio: '1', borderRadius: R.md, overflow: 'hidden', background: C.bgInset }}>
                   <img src={appApi.files.fileUrl(projectId, p)} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />

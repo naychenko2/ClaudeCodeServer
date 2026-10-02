@@ -78,9 +78,12 @@ public static class FeatureFlagKeys
     // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта, общая панель генерации.
     // Гейтит и серверные ручки модуля audio-editor.
     public const string AudioEditor = "audio-editor";
-    // MIDI-просмотрщик: ноты из .mid открываются в файлах и в редакторе звука, их видно на
+// MIDI-просмотрщик: ноты из .mid открываются в файлах и в редакторе звука, их видно на
     // нотной ленте и можно послушать. Выкатка выключенной (dark launch) за этим флагом.
     public const string MidiEditor = "midi-editor";
+    // Панель «Картинки» v5 «Создать / Править» (переходный флаг до снятия старой панели):
+    // режим на чат и свой выбор у каждого режима. Сервер префов по режиму под флагом не прячется
+    public const string ImagePanelV5 = "image-panel-v5";
 }
 
 /// <summary>
@@ -213,11 +216,19 @@ public static class FeatureFlagCatalog
             Default: false,
             Stage: "dev"),
 
-        // MIDI-просмотрщик: ноты из .mid открываются в файлах и в редакторе звука.
+// MIDI-просмотрщик: ноты из .mid открываются в файлах и в редакторе звука.
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.MidiEditor,
             Title: "MIDI-просмотрщик",
             Description: "Ноты из .mid открываются в файлах и в редакторе звука: их видно на нотной ленте и можно послушать.",
+            Default: false,
+            Stage: "dev"),
+        // Новая панель «Картинки» v5 (docs/mockups/image-panel-v5*): пока флаг выключен,
+        // полоса и панель картинок ведут себя как раньше
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ImagePanelV5,
+            Title: "Картинки: режимы «Создать» и «Править»",
+            Description: "В полосе и панели «Картинки» два режима: «Создать» рисует новую картинку, «Править» меняет выбранную. У каждого режима свой запомненный выбор модели и операции.",
             Default: false,
             Stage: "dev"),
     ];

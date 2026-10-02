@@ -38,7 +38,7 @@ import { plusButtonTitle, useStripShortcuts } from './chat/ComposerStripHost';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, getShownStrip, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
-import { modeDraftText, modesForStrip, modeSubmitButton, nextComposerMode, nextModeDraft, nextPrefill, type ComposerModeSeen, type ModeDraftState, type PrefillState } from '../lib/composerModes';
+import { composerModeMemory, modeDraftText, modesForStrip, modeSubmitButton, nextComposerMode, nextModeDraft, nextPrefill, type ModeDraftState, type PrefillState } from '../lib/composerModes';
 import { getGenDraftText, setGenDraftText } from '../lib/genDrafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
@@ -624,17 +624,21 @@ export function Composer({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [plusMenu]);
-  const [modeId, setModeId] = useState<string | null>(null);
+  const modeMemory = composerModeMemory(sessionId);
+  const [modeId, setModeIdState] = useState<string | null>(() => modeMemory.modeId);
+  const setModeId = (id: string | null) => { modeMemory.modeId = id; setModeIdState(id); };
   // Полоса сменилась на чужую — поле уходит в «Чат», а не ждёт возврата полосы в режиме
+  // Признак считаем в рендере (slotModes пересобирается каждый раз), а эффект зависит только от него
+  const modeHiddenByStrip = !!modeId && availableModes.some(c => c.name === modeId) && !slotModes.some(c => c.name === modeId);
   useEffect(() => {
-    if (modeId && availableModes.some(c => c.name === modeId) && !slotModes.some(c => c.name === modeId)) setModeId(null);
-  });
+    if (modeHiddenByStrip) setModeId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сбрасываем только на смену признака
+  }, [modeHiddenByStrip]);
   // Самовключение режима по поводу от владельца (черновик, «Редактировать»): считаем по
   // состоянию, а не по клику — фокус картинки приходит и от агента, и после перезагрузки
-  const autoSeenRef = useRef<ComposerModeSeen>({});
-  const autoMode = nextComposerMode(slotModes, modeCtx, autoSeenRef.current, modeId);
+  const autoMode = nextComposerMode(slotModes, modeCtx, modeMemory.seen, modeId);
   useEffect(() => {
-    autoSeenRef.current = autoMode.seen;
+    modeMemory.seen = autoMode.seen;
     if (autoMode.modeId !== modeId) setModeId(autoMode.modeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- переключаемся только на новый ключ
   }, [autoMode.key]);

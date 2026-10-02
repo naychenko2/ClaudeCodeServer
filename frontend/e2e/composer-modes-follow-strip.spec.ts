@@ -15,6 +15,7 @@ const PASS = process.env.E2E_PASS || '12345';
 const ROOT = process.env.AE_PROJECT_ROOT || '';
 const SHOTS = process.env.CM_SHOTS_DIR || '';
 
+const names = new Map<string, string>();
 let token = '';
 let projectId = '';
 const auth = () => ({ Authorization: `Bearer ${token}` });
@@ -41,9 +42,12 @@ test.beforeAll(async ({ playwright, baseURL }) => {
 });
 
 // Чат, где выбраны и картинка, и звук: обе полосы доступны
-async function chat(page: Page): Promise<string> {
+async function chat(page: Page, only?: 'image' | 'sound'): Promise<string> {
   const req = page.request;
-  const sid = (await (await req.post(`/api/projects/${projectId}/sessions`, { headers: auth(), data: { name: `Режимы ${Date.now()}` } })).json()).id as string;
+  const created = await (await req.post(`/api/projects/${projectId}/sessions`, { headers: auth(), data: { name: `Режимы ${Date.now()}${Math.floor(Math.random() * 1000)}` } })).json() as { id: string; name: string };
+  const sid = created.id;
+  names.set(sid, created.name);
+  if (only !== 'sound') {
   const img = await req.post(`/api/projects/${projectId}/image-editor/sessions/${sid}/threads`, { headers: auth(), data: { file: 'm/p.png', revision: 0 } });
   expect(img.ok(), `нить картинки: ${await img.text()}`).toBeTruthy();
   const imgState = await img.json() as { revision: number; focus: string | null; threads: { id: string }[] };
@@ -51,12 +55,15 @@ async function chat(page: Page): Promise<string> {
     const f = await req.put(`/api/projects/${projectId}/image-editor/sessions/${sid}/threads/focus`, { headers: auth(), data: { threadId: imgState.threads[0].id, revision: imgState.revision } });
     expect(f.ok(), `фокус картинки: ${await f.text()}`).toBeTruthy();
   }
+  }
+  if (only !== 'image') {
   const snd = await req.post(`/api/projects/${projectId}/audio-editor/sessions/${sid}/threads`, { headers: auth(), data: { file: 'm/a.mp3', mode: 'music', revision: 0 } });
   expect(snd.ok(), `нить звука: ${await snd.text()}`).toBeTruthy();
   const sndState = await snd.json() as { revision: number; focus: string | null; threads: { id: string }[] };
   if (!sndState.focus) {
     const f = await req.put(`/api/projects/${projectId}/audio-editor/sessions/${sid}/threads/focus`, { headers: auth(), data: { threadId: sndState.threads[0].id, revision: sndState.revision } });
     expect(f.ok(), `фокус звука: ${await f.text()}`).toBeTruthy();
+  }
   }
   return sid;
 }
@@ -70,7 +77,7 @@ async function pickStrip(page: Page, stripId: 'images' | 'sound') {
   await sw.click();
   const title = stripId === 'images' ? 'Картинки' : 'Звук';
   // Пункт меню — кнопка с подписью и строкой состояния; меню рисуется последним в body
-  await page.getByRole('button', { name: new RegExp(`^${title} Работаем с`) }).last().click();
+  await page.getByRole('button', { name: new RegExp(`^${title}(\\s|$)`) }).last().click();
   await expect(target).toBeVisible({ timeout: 10_000 });
 }
 
@@ -84,6 +91,12 @@ async function open(page: Page, sid: string, stripId: 'images' | 'sound', width:
   await page.goto(`/#/project/${projectId}/chat/${sid}`);
   await expect(page.locator('[data-composer-strip]').first()).toBeVisible({ timeout: 30_000 });
   await pickStrip(page, stripId);
+}
+
+// На телефоне просьба режима открывает шторку панели поверх поля — её опускаем, как человек
+async function dropSheet(page: Page) {
+  const close = page.getByRole('button', { name: 'Закрыть панель — сводка останется в полосе' });
+  if (await close.isVisible().catch(() => false)) await close.click();
 }
 
 const modes = (page: Page) => page.locator('[data-composer-modes]');
@@ -119,3 +132,117 @@ for (const width of [1440, 360]) {
     await shot(page, `${width}-sound-strip`);
   });
 }
+
+// Возврат в чат не переключает поле само: просьба режима («Править», «Новый звук») срабатывает
+// один раз, а при перемонтировании поля (уход в другой чат и обратно) её не повторяют.
+// Ручной уход в «Чат» и черновик текста при возврате сохраняются. Проверяем и мелькание
+// панели режима на возврате: итоговое «Чат» бывает и случайным (полоса мигнула чужой)
+async function setFlag(page: Page, flag: string, enabled: boolean) {
+  await page.request.put(`/api/feature-flags/${flag}`, { headers: auth(), data: { enabled } });
+}
+
+// Переход как у человека: кликом по чату в списке, а не новой загрузкой страницы
+async function goChat(page: Page, sid: string) {
+  await page.getByText(names.get(sid)!, { exact: false }).first().click();
+  await expect(page.locator('[data-composer-strip]').first()).toBeVisible({ timeout: 30_000 });
+}
+
+const watchModeBar = (page: Page) => page.evaluate(() => {
+  const w = window as unknown as { __bar: boolean };
+  w.__bar = !!document.querySelector('[data-composer-mode-bar]');
+  new MutationObserver(() => { if (document.querySelector('[data-composer-mode-bar]')) w.__bar = true; })
+    .observe(document.body, { childList: true, subtree: true });
+});
+const barEverShown = (page: Page) => page.evaluate(() => (window as unknown as { __bar: boolean }).__bar);
+
+async function roundTrip(page: Page, a: string, b: string) {
+  await page.getByRole('textbox').last().fill('черновик А');
+  await goChat(page, b);
+  await watchModeBar(page);
+  await goChat(page, a);
+  await page.waitForTimeout(2000);
+  expect(await barEverShown(page), 'панель режима не должна мелькать при возврате').toBe(false);
+  await expect(page.locator('[data-composer-mode-bar]')).toHaveCount(0);
+  await expect(page.getByRole('textbox').last()).toHaveValue('черновик А');
+}
+
+for (const v5 of [true, false]) {
+  for (const width of [1440, 360]) {
+    test(`${width}: «Картинка» (image-panel-v5=${v5}) — возврат в чат не включает режим сам`, async ({ page }) => {
+      await setFlag(page, 'image-panel-v5', v5);
+      try {
+        const a = await chat(page);
+        const b = await chat(page);
+        await open(page, a, 'images', width);
+        if (v5) await page.locator('[data-images-mode-switch] button').nth(1).click();
+        else {
+          // Без флага просьба — «Нарисовать новую», она есть, когда картинка не выбрана
+          await page.locator('[data-composer-strip="images"]').getByText('×', { exact: true }).first().click();
+          await page.locator('[data-composer-strip="images"]').getByText('Нарисовать новую').first().dispatchEvent('click');
+        }
+        await expect(page.locator('[data-composer-mode-bar]')).toBeVisible({ timeout: 10_000 });
+        await dropSheet(page);
+        await chatBtn(page).click();
+        await expect(page.locator('[data-composer-mode-bar]')).toHaveCount(0);
+        if (width > 500) await roundTrip(page, a, b);
+        else {
+          // На телефоне списка чатов рядом нет: уходим назад из чата и возвращаемся по адресу
+          await page.getByRole('textbox').last().fill('черновик А');
+          await page.goto(`/#/project/${projectId}`);
+          await watchModeBar(page);
+          await page.goto(`/#/project/${projectId}/chat/${a}`);
+          await expect(page.locator('[data-composer-strip]').first()).toBeVisible({ timeout: 30_000 });
+          await page.waitForTimeout(2000);
+          expect(await barEverShown(page)).toBe(false);
+          await expect(page.getByRole('textbox').last()).toHaveValue('черновик А');
+        }
+      } finally { await setFlag(page, 'image-panel-v5', true); }
+    });
+  }
+}
+
+for (const width of [1440, 360]) {
+  test(`${width}: «Звук» — возврат в чат не включает режим сам`, async ({ page }) => {
+    const a = await chat(page);
+    const b = await chat(page);
+    await open(page, a, 'sound', width);
+    await page.locator('[data-composer-strip="sound"]').locator('[data-sound-chip="focus"]').getByText('×', { exact: true }).first().click();
+    await pickStrip(page, 'sound');
+    await page.locator('[data-composer-strip="sound"]').getByText('Новый звук').first().dispatchEvent('click');
+    await expect(page.locator('[data-composer-mode-bar]')).toBeVisible({ timeout: 10_000 });
+    await dropSheet(page);
+    await chatBtn(page).click();
+    await expect(page.locator('[data-composer-mode-bar]')).toHaveCount(0);
+    if (width > 500) await roundTrip(page, a, b);
+    else {
+      await page.getByRole('textbox').last().fill('черновик А');
+      await page.goto(`/#/project/${projectId}`);
+      await watchModeBar(page);
+      await page.goto(`/#/project/${projectId}/chat/${a}`);
+      await expect(page.locator('[data-composer-strip]').first()).toBeVisible({ timeout: 30_000 });
+      await page.waitForTimeout(2000);
+      expect(await barEverShown(page)).toBe(false);
+      await expect(page.getByRole('textbox').last()).toHaveValue('черновик А');
+    }
+  });
+}
+
+// Свёрнутая полоса: режим «Чат» и черновик переживают уход и возврат, панель режима не мелькает
+test('1440: свёрнутая полоса — возврат в чат не включает «Картинка»', async ({ page }) => {
+  const a = await chat(page);
+  const b = await chat(page);
+  await open(page, a, 'images', 1440);
+  await page.locator('[data-images-mode-switch] button').nth(1).click();
+  await expect(page.locator('[data-composer-mode-bar]')).toBeVisible({ timeout: 10_000 });
+  await chatBtn(page).click();
+  await page.evaluate(s => {
+    for (const k of ['images', 'sound']) localStorage.setItem(`cc-composer-strip-collapsed:${s}:${k}`, '1');
+  }, a);
+  await page.getByRole('textbox').last().fill('черновик А');
+  await goChat(page, b);
+  await watchModeBar(page);
+  await goChat(page, a);
+  await page.waitForTimeout(2000);
+  expect(await barEverShown(page)).toBe(false);
+  await expect(page.getByRole('textbox').last()).toHaveValue('черновик А');
+});

@@ -64,6 +64,7 @@ import type {
 } from '../components/ui';
 
 import { ColorsSection } from './ColorsSection';
+import { ToolProgressSection } from './ToolProgressSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -122,6 +123,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-panels',     label: 'Панели'             },
   { id: 'sec-visual-plan',label: 'Визуальный план'    },
   { id: 'sec-headers',    label: 'Шапки'              },
+  { id: 'sec-tool-progress', label: 'Прогресс инструмента' },
 ];
 
 // Высота sticky-элементов над контентом: шапка темы + TOC-бар. Секция
@@ -269,6 +271,12 @@ export function UiKitPage() {
             {/* Секция «Шапки» — HubHeader, ProjectRail, IslandHeader */}
             <div id="sec-headers" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <HeadersSection />
+            </div>
+
+            {/* Секция «Карточка инструмента: прогресс» — все состояния живой карточки
+                на настоящем ToolUseView (см. ToolProgressSection) */}
+            <div id="sec-tool-progress" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ToolProgressSection />
             </div>
           </div>
 
@@ -489,12 +497,18 @@ function TogglesSection() {
           </div>
         </SubBlock>
 
-        {/* ProgressBar: тонкая полоса 4px на дорожке C.track, тон — роль. estimate —
-            прогноз, а не факт (приглушённая заливка) */}
-        <SubBlock label="ProgressBar — тоны и прогноз (estimate)">
+        {/* ProgressBar: тонкая полоса 4px на дорожке C.track, тон — роль. Факт (настоящие
+            шаги) — сплошная заливка; estimate — прогноз, а не факт (пунктир); indeterminate —
+            сколько осталось, неизвестно (бегущий отрезок); thin — 2px для строки карточки */}
+        <SubBlock label="ProgressBar — тоны, прогноз (estimate), бегущая и тонкая">
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, maxWidth: 320 }}>
             <ProgressBar value={62} />
             <ProgressBar value={40} estimate />
+            <ProgressBar value={0} indeterminate />
+            <ProgressBar value={48} size="thin" />
+            {/* Пара строки карточки: шаги идут сплошной заливкой, оценка — пунктиром */}
+            <ProgressBar value={48} size="thin" estimate />
+            <ProgressBar value={0} size="thin" indeterminate />
             <ProgressBar value={100} tone="success" />
             <ProgressBar value={75} tone="warning" />
             <ProgressBar value={20} tone="danger" />

@@ -25,8 +25,9 @@ const { imageEditorApi } = await import('../api');
 const { __resetPrefs, ensurePrefs, getPrefs, prefsApi } = await import('../thread/prefs');
 const { __applyThreads, __resetThreadStore, getFocusedThread, getThreadMarks, setThreadMarks } = await import('../thread/threadStore');
 const { threadsApi } = await import('../thread/threadsApi');
+const { api: appApi } = await import('aihome_shell/kit');
 const {
-  editThreadByHuman, imageReleaseUndo, IMAGE_RELEASE_TEXT, releaseFocus, setImageModeByHuman, undoImageRelease,
+  editThreadByHuman, editUploadByHuman, imageReleaseUndo, IMAGE_RELEASE_TEXT, releaseFocus, setImageModeByHuman, undoImageRelease,
 } = await import('../thread/actions');
 const { __resetImageModes, getStoredImageMode, setImageMode } = await import('../thread/modeState');
 const { __resetPanelChoice } = await import('../panel/panelOp');
@@ -266,6 +267,20 @@ describe('сегмент и меню «Что править?»', () => {
     expect(create).toHaveBeenCalledOnce();
     expect(getStoredImageMode(S)).toBe('create');
     expect(reveals).toEqual([]);
+  });
+
+  it('«С компьютера…»: в личном чате отказ без загрузки, в проекте — вложение берётся в «Править»', async () => {
+    const upload = vi.spyOn(appApi.chats, 'uploadFile').mockResolvedValue({ path: '.cc-attachments/up.png' });
+    const pic = new File([], 'up.png');
+    expect(await editUploadByHuman('personal', S, pic, 'none')).toBe(false);
+    expect(upload).not.toHaveBeenCalled();
+    __applyThreads(S, P, state(null));
+    setImageMode(S, 'create');
+    const create = vi.spyOn(threadsApi, 'create').mockResolvedValue(state(thread({ file: '.cc-attachments/up.png' }), 2));
+    expect(await editUploadByHuman(P, S, pic, 'none')).toBe(true);
+    expect(upload).toHaveBeenCalledWith(S, pic, P);
+    expect(create.mock.calls[0][2]).toMatchObject({ file: '.cc-attachments/up.png' });
+    expect(getStoredImageMode(S)).toBe('edit');
   });
 
   it('«Править» без картинки режим не меняет — его спрашивает меню', async () => {

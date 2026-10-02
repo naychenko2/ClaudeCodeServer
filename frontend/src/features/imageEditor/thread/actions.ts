@@ -164,9 +164,11 @@ export async function editThreadByHuman(projectId: string, sessionId: string, th
   return true;
 }
 
-// Файл проекта из «Что править?»: нить по файлу (найдётся или заведётся), затем «Править»
+// Файл проекта из «Что править?»: нить по файлу (найдётся или заведётся), затем «Править» —
+// явно, как у editThreadByHuman, а не попутно через humanPick
 export async function editFileByHuman(projectId: string, sessionId: string, file: string, how: RevealMode): Promise<boolean> {
   if (!await workWithFile(projectId, sessionId, file, how)) return false;
+  setImageMode(sessionId, 'edit');
   requestImageMode(sessionId);
   return true;
 }

@@ -881,6 +881,68 @@ public class ImageEditorToolsetTests : IDisposable
         job.Count.Should().Be(1);
     }
 
+    [Fact]
+    public async Task image_generate_по_тексту_берёт_выбор_Создать_а_правка_выбор_Править()
+    {
+        Prefs(new ImageProjectPrefs("higgsfield", null, 3, true, null,
+            new ImageCreatePrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 1),
+            new ImageEditPrefs("higgsfield", null, 2, "edit", null, null)));
+        var (toolset, _) = WithLocal();
+        var draft = Draft();
+        // У черновика свои настройки (старый фронт пишет их в нить) — генерация по тексту их не берёт
+        _store.SetSettings(Owner, ChatId, draft, new ImageThreadSettings("higgsfield", null, 4, true), _store.Get(Owner, ChatId).Revision);
+        var thread = Thread();
+
+        var created = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот"));
+        var edited = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread, "ярче"));
+
+        created.IsError.Should().BeFalse(created.Text);
+        var createJob = _jobs.Get(Owner, ProjectId, Parse(created)["jobId"]!.GetValue<string>())!;
+        createJob.Provider.Should().Be(LocalImageEditor.ProviderKey);
+        createJob.Model.Should().Be(LocalImageEditor.QwenImage);
+        createJob.Count.Should().Be(1);
+        edited.IsError.Should().BeFalse(edited.Text);
+        var editJob = _jobs.Get(Owner, ProjectId, Parse(edited)["jobId"]!.GetValue<string>())!;
+        editJob.Provider.Should().Be("higgsfield", "правка идёт по выбору «Править», а не «Создать»");
+        editJob.Count.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Без_выбора_Создать_генерация_по_тексту_берёт_настройки_нити_как_раньше()
+    {
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, null, 3, true, null));
+        var (toolset, _) = WithLocal();
+        var draft = Draft();
+        _store.SetSettings(Owner, ChatId, draft, new ImageThreadSettings("higgsfield", null, 1, true), _store.Get(Owner, ChatId).Revision);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот"));
+
+        result.IsError.Should().BeFalse(result.Text);
+        var job = _jobs.Get(Owner, ProjectId, Parse(result)["jobId"]!.GetValue<string>())!;
+        job.Provider.Should().Be("higgsfield", "старый фронт пишет выбор в нить черновика");
+        job.Count.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Явный_поставщик_агента_не_подменяется_и_не_берёт_чужую_модель_выбора()
+    {
+        Prefs(ImageProjectPrefs.Default with
+        {
+            Create = new ImageCreatePrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 1),
+        });
+        var (toolset, _) = WithLocal();
+        var draft = Draft();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = draft, ["prompt"] = "кот", ["provider"] = "higgsfield" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var job = _jobs.Get(Owner, ProjectId, Parse(result)["jobId"]!.GetValue<string>())!;
+        job.Provider.Should().Be("higgsfield");
+        job.Model.Should().NotBe(LocalImageEditor.QwenImage, "модель qwen выбрана у поставщика local — у higgsfield идёт «Авто»");
+        job.Count.Should().Be(1, "число вариантов — из выбора «Создать»");
+    }
+
     // Быстрое действие со своей моделью — как у человека (quickUsesOwnModel на фронте): из полосы
     // не едут ни персонаж, ни чужая модель, ни число вариантов
     [Fact]

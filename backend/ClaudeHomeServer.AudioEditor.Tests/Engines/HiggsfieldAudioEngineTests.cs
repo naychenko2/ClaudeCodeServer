@@ -531,7 +531,10 @@ public sealed class HiggsfieldAudioEngineTests
     public async Task ListVoices_ParsedTolerantly()
     {
         var http = new FakeHttp(c => FakeHttp.Tool(c) == "list_voices"
-            ? FakeHttp.McpText("""{"voices":[{"voice_id":"v-1","name":"Anna","language":"ru"},{"id":"v-2","label":"Bob"},{"name":"без id"}]}""")
+            ? FakeHttp.McpText("""
+                {"voices":[{"voice_id":"v-1","voice_type":"preset","name":"Anna","language":"ru"},
+                 {"id":"v-2","voice_type":"preset","label":"Bob"},{"voice_type":"preset","name":"без id"}]}
+                """)
             : Happy(c));
         var engine = new HiggsfieldAudioEngine(FakeHttp.Client(http));
 
@@ -539,6 +542,25 @@ public sealed class HiggsfieldAudioEngineTests
 
         voices.Should().Equal(new HiggsfieldVoice("v-1", "Anna", "ru", null), new HiggsfieldVoice("v-2", "Bob", null, null));
         FakeHttp.Arguments(http.Calls.Single())!["model"]!.ToString().Should().Be("seed_audio");
+    }
+
+    // list_voices отдаёт и элементы воркспейса — голоса библиотек всех владельцев под общим ключом: их
+    // element-id агенту не уходит, как и голос без voice_type
+    [Fact]
+    public async Task Voices_ForAgent_OnlyPresets_WorkspaceElementIdsNeverLeak()
+    {
+        var http = new FakeHttp(c => FakeHttp.Tool(c) == "list_voices"
+            ? FakeHttp.McpText("""
+                {"voices":[{"voice_id":"preset-1","voice_type":"preset","name":"Anna","language":"ru"},
+                 {"voice_id":"el-workspace-1","voice_type":"element","name":"Голос Пети"},
+                 {"voice_id":"el-untyped","name":"Без типа"}]}
+                """)
+            : Happy(c));
+        IAudioEngine engine = new HiggsfieldAudioEngine(FakeHttp.Client(http));
+
+        var voices = await engine.ListVoicesAsync("seed_audio", null, CancellationToken.None);
+
+        voices!.Select(v => v.Id).Should().Equal("preset-1");
     }
 
     // Перезаливка образца — только на отказ про сам образец, а не на любое «not found» рядом со словом media

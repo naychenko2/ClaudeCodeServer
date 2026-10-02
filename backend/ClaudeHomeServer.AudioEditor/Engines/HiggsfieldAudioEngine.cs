@@ -69,7 +69,10 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
         _catalog.FirstOrDefault(m => string.Equals(m.Info.Id, id, StringComparison.OrdinalIgnoreCase));
 
     // Дикторы для выбора голоса (инструмент агента audio_voices). Форма ответа list_voices живьём не
-    // сверена — разбор терпимый: массив voices/items/корень, id — voice_id или id. Сбой — пустой список
+    // сверена — разбор терпимый: массив voices/items/корень, id — voice_id или id. Сбой — пустой список.
+    // Только готовые дикторы (voice_type=preset): list_voices отдаёт и элементы воркспейса — голоса,
+    // заведённые библиотеками всех владельцев под общим ключом. Их id наружу не уходит; поле не пришло —
+    // тоже не отдаём
     public async Task<IReadOnlyList<HiggsfieldVoice>> ListVoicesAsync(string? model, CancellationToken ct)
     {
         var args = new JsonObject();
@@ -80,7 +83,8 @@ public sealed partial class HiggsfieldAudioEngine(HiggsfieldMcpClient client, Ti
         var items = json?["voices"] as JsonArray ?? json?["items"] as JsonArray ?? json as JsonArray;
         var voices = new List<HiggsfieldVoice>();
         foreach (var v in items?.OfType<JsonObject>() ?? [])
-            if ((v["voice_id"] ?? v["id"])?.ToString() is { Length: > 0 } id)
+            if (string.Equals(v["voice_type"]?.ToString(), "preset", StringComparison.OrdinalIgnoreCase)
+                && (v["voice_id"] ?? v["id"])?.ToString() is { Length: > 0 } id)
                 voices.Add(new HiggsfieldVoice(id, (v["name"] ?? v["label"])?.ToString() ?? id,
                     v["language"]?.ToString(), v["gender"]?.ToString()));
         return voices;

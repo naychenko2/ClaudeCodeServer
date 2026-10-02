@@ -124,9 +124,18 @@ public sealed class LocalAudioMediaAdapter(
         try
         {
             var queue = await comfy.GetQueueAsync(ct);
-            if (queue.PositionOf(ticket) is not > 0) return false;
-            await comfy.DeletePendingAsync(ticket, ct);
-            return true;
+            switch (queue.PositionOf(ticket))
+            {
+                case null:
+                    return false;
+                // Идёт — прерываем адресно: иначе граф доигрывает и держит GPU
+                case 0:
+                    await comfy.InterruptAsync(ticket, ct);
+                    return true;
+                default:
+                    await comfy.DeletePendingAsync(ticket, ct);
+                    return true;
+            }
         }
         catch (ComfyException)
         {

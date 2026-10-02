@@ -1,7 +1,7 @@
 // «Чем: **Авто** · локально · Qwen3-TTS — бесплатно ▾» и список «Исполнитель» под ним (вариант А,
 // docs/mockups/audio-panel-v3-proposal.md). Строки — executorRows.ts, рисует общий ExecutorList.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ExecutorList, ExecutorSummaryRow, SP } from 'aihome_shell/kit';
 import type { AudioCatalog } from '../api';
 import { executorPatch, executorRows, executorSummary, executorValue } from './executorRows';
@@ -18,10 +18,17 @@ export function ExecutorField({ catalog, state, personal, price, onChange, isMob
   isMobile: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  // Строка «Чем» стоит внизу панели: раскрытый список уходил за край, и клик выглядел пустым
+  useEffect(() => {
+    if (!open) return;
+    const raf = requestAnimationFrame(() => box.current?.scrollIntoView({ block: 'nearest' }));
+    return () => cancelAnimationFrame(raf);
+  }, [open]);
   const { name, parts } = executorSummary(catalog, state);
   const free = state.provider?.priceUnit === 'free';
   return (
-    <div data-sound-executor={open ? 'open' : 'closed'} style={{ marginTop: SP.md }}>
+    <div ref={box} data-sound-executor={open ? 'open' : 'closed'} style={{ marginTop: SP.md }}>
       <ExecutorSummaryRow name={name} parts={parts} price={{ label: price, tone: free ? 'success' : 'neutral' }}
         open={open} onToggle={() => setOpen(o => !o)} isMobile={isMobile} />
       {open && (

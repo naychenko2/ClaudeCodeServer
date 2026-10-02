@@ -152,6 +152,17 @@ async function inFirstScreen(el: Locator) {
   expect(gap, 'строка «Чем» видна без прокрутки').toBeGreaterThanOrEqual(0);
 }
 
+// Раскрытый элемент целиком в видимой части прокручиваемого тела панели — без ручной прокрутки
+async function fullyInView(el: Locator) {
+  await expect.poll(() => el.evaluate(node => {
+    let box: HTMLElement | null = node.parentElement;
+    while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+    const r = node.getBoundingClientRect();
+    const b = box ? box.getBoundingClientRect() : { top: 0, bottom: innerHeight };
+    return r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5;
+  }), 'список «Исполнитель» виден целиком сразу после раскрытия').toBe(true);
+}
+
 const op = (p: Locator) => p.locator('[data-sound-op] select');
 const executorRow = (p: Locator) => p.locator('[data-sound-executor] button[aria-expanded]');
 
@@ -171,6 +182,7 @@ for (const width of [1440, 360]) {
       await executorRow(p).click();
       const list = p.getByRole('radiogroup', { name: 'Исполнитель' });
       await expect(list.getByRole('group', { name: 'Бесплатно на своей видеокарте' })).toBeVisible();
+      await fullyInView(list);
       await expect(list.getByRole('radio').filter({ hasText: 'SpeechKit' })).toBeDisabled();
       await shot(page, `speak-executor-${width}-${theme}`);
       await list.getByRole('radio').filter({ hasText: 'MiniMax Speech 2.6' }).click();

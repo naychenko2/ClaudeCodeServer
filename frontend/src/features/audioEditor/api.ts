@@ -25,6 +25,8 @@ export type AudioInitiator = 'Human' | 'Agent';
 
 // ── Каталог ──
 
+export type AudioStemSet = 'vocals' | '4' | '6' | 'karaoke';
+
 export interface AudioCaps {
   ops: AudioOp[];
   languages: string[];
@@ -38,6 +40,8 @@ export interface AudioCaps {
   inputMaxSec?: number | null;
   languageNeutral?: boolean;
   heavyOps?: AudioOp[] | null;
+  /** Что разделяет модель операции separate; у остальных моделей нет */
+  stemSet?: AudioStemSet | null;
 }
 
 export interface AudioPriceHint { amount: number; unit: string; per: string }

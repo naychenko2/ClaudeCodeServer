@@ -107,9 +107,10 @@ export function nextSettings(
     next.fields = {};
     next.inputs = inputsFor(patch.operation);
   }
+  // Строка списка «Исполнитель» меняет поставщика вместе с моделью — её модель и остаётся
   if (patch.provider !== undefined && patch.provider !== cur.providerKey) {
-    next.model = null;
-    next.fields = {};
+    next.model = patch.model ?? null;
+    next.fields = patch.fields ?? {};
   }
   if (patch.model !== undefined && patch.model !== cur.modelId && !patch.fields) next.fields = {};
   return next;
@@ -355,6 +356,22 @@ export function splitSchema(schema: AudioParamSchema | null, mode: AudioMode): {
   return {
     main: fields.filter(f => f.key in labels && f.passed !== false),
     extra: fields.filter(f => !(f.key in labels) || f.passed === false),
+  };
+}
+
+// Вариант А (audio-panel-v3-proposal.md): темп и тональность музыки уходят в «Ещё настройки» —
+// на виду у песни только слова и длительность; подписи у них остаются русскими
+const TUCKED_MUSIC: ReadonlySet<string> = new Set(['bpm', 'key']);
+
+export function tuckSchema(
+  mode: AudioMode, split: { main: AudioParamField[]; extra: AudioParamField[] },
+): { main: AudioParamField[]; extra: AudioParamField[]; labels: Record<string, string> } {
+  if (mode !== 'music') return { ...split, labels: {} };
+  const tucked = split.main.filter(f => TUCKED_MUSIC.has(f.key));
+  return {
+    main: split.main.filter(f => !TUCKED_MUSIC.has(f.key)),
+    extra: [...tucked, ...split.extra],
+    labels: Object.fromEntries(tucked.map(f => [f.key, MUSIC_FIELD_LABELS[f.key]])),
   };
 }
 

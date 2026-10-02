@@ -20,8 +20,8 @@ import { SEG_MUTED_BORDER, type SegmentOptionState } from './Segmented';
 
 // Геометрия дорожки: кнопка 28×20 (иконка 14 + поля), зазор и рамка по 2 —
 // итоговая высота 24, вписывается в шапку панели (ISLAND.headerH = 40).
-const BTN_W = 28;
-const BTN_H = 20;
+// Крупный вариант (size="lg") — для телефона: зона нажатия 40×40, чек-лист гайда
+const SIZES = { sm: { w: 28, h: 20 }, lg: { w: 40, h: 40 } } as const;
 const GAP = 2;
 const PAD = 2;
 // Та же «пружинистая» кривая, что у пилюли главного меню (PillSwitch)
@@ -39,7 +39,7 @@ export interface IconSegmentedOption<T extends string> extends SegmentOptionStat
   icon: ReactNode;  // иконка 14px
 }
 
-export function IconSegmented<T extends string>({ value, options, onChange, style, quiet, persistKey }: {
+export function IconSegmented<T extends string>({ value, options, onChange, style, quiet, persistKey, size = 'sm' }: {
   value: T;
   options: IconSegmentedOption<T>[];
   onChange: (v: T) => void;
@@ -49,7 +49,16 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
   // переключатель стоит рядом с содержимым, а не в шапке (полосы над композером)
   quiet?: boolean;
   persistKey?: string;
+  // lg — тач-цели 40×40 на телефоне (полоса над композером); иконку крупнее передаёт хозяин
+  size?: 'sm' | 'lg';
 }) {
+  const { w: BTN_W, h: BTN_H } = SIZES[size];
+  // Тихая дорожка прозрачна — её поля и зазоры не видны, но в полосе телефона съедают место
+  // под соседей и выпирают по высоте (44 в полосе 42); у крупного тихого вида их нет
+  const bare = quiet && size === 'lg';
+  const pad = bare ? 0 : PAD;
+  const gap = bare ? 0 : GAP;
+  const btnR = size === 'lg' ? R.md : R.sm;
   const [hover, setHover] = useState<T | null>(null);
   const activeIdx = options.findIndex(o => o.value === value);
   // Где плашка стоит сейчас: у свежего экземпляра — из памяти, дальше доезжает
@@ -63,8 +72,8 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
   }, [activeIdx, thumbIdx, persistKey]);
   return (
     <span style={{
-      position: 'relative', display: 'flex', flexShrink: 0, gap: GAP, padding: PAD,
-      background: quiet ? 'transparent' : C.track, borderRadius: R.md,
+      position: 'relative', display: 'flex', flexShrink: 0, gap, padding: pad,
+      background: quiet ? 'transparent' : C.track, borderRadius: size === 'lg' ? R.lg : R.md,
       ...style,
     }}>
       {/* Ползунок — единственная плашка, переезжающая к выбранной позиции.
@@ -74,11 +83,11 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
         <span
           aria-hidden
           style={{
-            position: 'absolute', top: PAD, left: PAD, width: BTN_W, height: BTN_H,
-            borderRadius: R.sm,
+            position: 'absolute', top: pad, left: pad, width: BTN_W, height: BTN_H,
+            borderRadius: btnR,
             background: quiet ? C.bgSelected : TB.pillThumbBg,
             boxShadow: quiet ? 'none' : TB.pillThumbShadow,
-            transform: `translateX(${thumbIdx * (BTN_W + GAP)}px)`,
+            transform: `translateX(${thumbIdx * (BTN_W + gap)}px)`,
             transition: quiet ? `transform 0.32s ${QUIET_EASE}` : 'transform 0.18s cubic-bezier(0.4, 0, 0.2, 1)',
           }}
         />
@@ -88,6 +97,7 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
         return (
           <button
             key={opt.value}
+            aria-pressed={active}
             onClick={() => onChange(opt.value)}
             onMouseEnter={() => setHover(opt.value)}
             onMouseLeave={() => setHover(null)}
@@ -96,7 +106,7 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
             style={{
               position: 'relative', width: BTN_W, height: BTN_H, padding: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              border: 'none', borderRadius: R.sm,
+              border: 'none', borderRadius: btnR,
               cursor: active ? 'default' : 'pointer',
               // Подсветка только у невыбранных: фон выбранной рисует ползунок под ними.
               // В тихом виде подложка ползунка того же цвета, что hover, — там наведение

@@ -1,5 +1,5 @@
-// Поле по схеме модели и автоформа «Дополнительно» (макет audio-editor-v2-proposal.md, пункт 6
-// «Вкладки «Настройки»»): тип поля → ползунок, список, флажок или строка; у каждого поля русская
+// Поле по схеме модели и автоформа «Ещё настройки» (макет audio-editor-v2-proposal.md, пункт 6
+// «Вкладки «Настройки»»; вариант А audio-panel-v3-proposal.md): тип поля → ползунок, список, флажок или строка; у каждого поля русская
 // подпись, код параметра и умолчание. Не тронутое поле в params не уходит — модель берёт своё.
 
 import { useState } from 'react';
@@ -91,8 +91,14 @@ export function ParamField({ field, value, onChange, label }: {
   );
 }
 
-// «Дополнительно ▸» — свёрнуто по умолчанию; «Сбросить» снимает все поля формы
-export function AdvancedForm({ schema, fields, values, error, loading, onChange, onReset }: {
+// «› Ещё настройки · N» со сводкой справа — свёрнуто по умолчанию; «Сбросить» снимает все поля формы
+// Сводка справа от «Ещё настройки»: «всё по умолчанию» или сколько полей тронуто
+export function advancedSummary(fields: AudioParamField[], values: Record<string, unknown>, leadSet = false): string {
+  const n = fields.filter(f => values[f.key] !== undefined && values[f.key] !== '').length + (leadSet ? 1 : 0);
+  return n ? `изменено: ${n}` : 'всё по умолчанию';
+}
+
+export function AdvancedForm({ schema, fields, values, error, loading, onChange, onReset, lead, leadSet, labels, isMobile }: {
   schema: AudioParamSchema | null;
   fields: AudioParamField[];
   error: string | null;
@@ -100,24 +106,40 @@ export function AdvancedForm({ schema, fields, values, error, loading, onChange,
   values: Record<string, unknown>;
   onChange: (key: string, v: unknown) => void;
   onReset: () => void;
+  // Поле вне схемы первой строкой (язык вокала) и задано ли оно; подписи полей, унесённых с виду
+  lead?: ReactNode;
+  leadSet?: boolean;
+  labels?: Record<string, string>;
+  // Телефон: строка-переключатель — тач-цель не ниже 40
+  isMobile?: boolean;
 }) {
+  const count = fields.length + (lead ? 1 : 0);
   const [open, setOpen] = useState(false);
   return (
     <div data-sound-advanced={open ? 'open' : 'closed'}>
-      <Button size="xs" variant="ghost" onClick={() => setOpen(!open)} leftIcon={ic(open ? ChevronDown : ChevronRight)}
-        style={{ marginTop: SP.md, paddingLeft: 0 }}>
-        Дополнительно{fields.length ? ` · ${fields.length}` : ''}
+      <Button size="sm" variant="ghost" fullWidth onClick={() => setOpen(!open)} leftIcon={ic(open ? ChevronDown : ChevronRight)}
+        style={{ marginTop: SP.xs, justifyContent: 'flex-start', fontWeight: 400, ...(isMobile ? { minHeight: 40 } : null) }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flex: 1, minWidth: 0 }}>
+          <span style={{ flexShrink: 0 }}>Ещё настройки{count ? ` · ${count}` : ''}</span>
+          <span data-sound-advanced-summary="" style={{
+            flex: 1, minWidth: 0, textAlign: 'right', color: C.textMuted, fontSize: FS.xs,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {advancedSummary(fields, values, leadSet)}
+          </span>
+        </span>
       </Button>
       {open && (
         <div style={{ paddingTop: SP.xs }}>
           {loading && <div style={{ fontSize: FS.sm, color: C.textMuted }}>Загружаем схему…</div>}
           {error && <div style={{ fontSize: FS.sm, color: C.warningText }}>{error}</div>}
+          {lead}
           {schema && (
             <>
               <Label>{SOURCE_TITLE[schema.source]?.(schema) ?? `по схеме ${schema.provider}`}{schema.stale ? ' · из кеша' : ''}</Label>
-              {fields.length === 0
+              {fields.length === 0 && !lead
                 ? <div style={{ fontSize: FS.sm, color: C.textMuted }}>У модели нет дополнительных параметров</div>
-                : fields.map(f => <ParamField key={f.key} field={f} value={values[f.key]} onChange={v => onChange(f.key, v)} />)}
+                : fields.map(f => <ParamField key={f.key} field={f} value={values[f.key]} onChange={v => onChange(f.key, v)} label={labels?.[f.key]} />)}
               {fields.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.xs }}>
                   <span style={{ flex: 1, fontSize: FS.xs, color: C.textMuted }}>Поле не тронуто — модель берёт своё значение по умолчанию</span>

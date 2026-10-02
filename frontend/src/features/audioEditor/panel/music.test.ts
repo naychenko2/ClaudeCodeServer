@@ -84,14 +84,14 @@ describe('музыка: операции и их поля', () => {
     expect(panelOps('music').map(o => o.op)).toEqual(['song', 'cover', 'repaint', 'outpaint', 'extract', 'lego', 'complete', 'sfx']);
   });
 
-  it('песня у ACE: слова с секциями, язык вокала, длительность, темп и тональность', () => {
+  it('песня у ACE: слова с секциями, длительность, поля схемы; язык вокала — в «Ещё настройки»', () => {
     const html = render('song', ACE, [F.bpm, F.key]);
     expect(html).toContain('data-field="lyrics"');
     expect(html).toContain('[Verse]');
     expect(html).toContain('[Chorus]');
-    expect(html).toContain('data-field="language"');
+    expect(html).not.toContain('data-field="language"');
     expect(html).toContain('data-field="duration"');
-    expect(html).toContain('От 10 до 240 с');
+    expect(html).toContain('как у модели · 10–240');
     expect(html).toContain('data-param="bpm"');
     expect(html).toContain('data-param="key"');
     expect(html).not.toContain('data-field="piece"');

@@ -1,14 +1,13 @@
 // «Поля операции» режима «Музыка» (макет audio-editor-v2-proposal.md, таблица «Музыка»): слова с
-// секциями и «Инструментал», длительность, язык вокала, кусок, дорожки; темп, тональность, сила
-// кавера и партитура ABC — поля схемы модели. Чего у модели нет, то не рисуется.
+// секциями и «Инструментал», длительность, кусок, дорожки; сила кавера и партитура ABC — поля схемы
+// модели. Язык вокала, темп и тональность — в «Ещё настройки» (вариант А). Чего у модели нет, то не рисуется.
 
 import { Button, TextArea, TextField, C, FS, SP } from 'aihome_shell/kit';
 import type { AudioParamField } from '../api';
-import { opInfo } from '../ops';
 import {
-  durationRange, insertSection, instrumentalBlocked, lyricsField, lyricsRequired, SECTIONS, trackLabel, vocalLanguage, YUE2,
+  durationRange, insertSection, instrumentalBlocked, lyricsField, lyricsRequired, SECTIONS, trackLabel, YUE2,
 } from './music';
-import { Language, SchemaFields, type OpFieldsProps } from './OpFields';
+import { SchemaFields, type OpFieldsProps } from './OpFields';
 import { PieceField } from './PieceField';
 import { Hint, Label, Opt, Row } from './primitives';
 
@@ -40,7 +39,7 @@ function Lyrics({ p }: { p: OpFieldsProps }) {
       {!instrumental && (
         <>
           <Label aside={max ? `${inputs.lyrics.length} / ${max}` : `${inputs.lyrics.length} симв.`}>{title}</Label>
-          <TextArea autoGrow minHeight={96} maxHeight={360} value={inputs.lyrics} onChange={v => setInputs({ lyrics: v })}
+          <TextArea autoGrow minHeight={72} maxHeight={360} value={inputs.lyrics} onChange={v => setInputs({ lyrics: v })}
             placeholder={'[Verse]\nПервый куплет…\n\n[Chorus]\nПрипев…'} />
           <div style={{ display: 'flex', gap: SP.xxs, flexWrap: 'wrap', marginTop: SP.xxs }}>
             {SECTIONS.map(sec => (
@@ -64,7 +63,6 @@ function Duration({ p, min, max }: { p: OpFieldsProps; min: number; max: number 
           const n = Math.round(Number(t.replace(',', '.')));
           p.setInputs({ durationSec: t.trim() && Number.isFinite(n) ? n : null });
         }} />
-      <Hint>От {min} до {max} с</Hint>
     </div>
   );
 }
@@ -100,7 +98,7 @@ function Tracks({ field, value, multi, onChange }: {
 }
 
 export function MusicFields(p: OpFieldsProps) {
-  const { state: s, inputs, setInputs } = p;
+  const { state: s } = p;
   const op = s.op;
   const range = durationRange(op, s.model);
   const track = p.main.find(f => f.key === 'track');
@@ -108,17 +106,10 @@ export function MusicFields(p: OpFieldsProps) {
   const rest = p.main.filter(f => !TRACK_KEYS.includes(f.key));
   return (
     <div data-op-fields={op}>
-      <Label>Поля операции · {opInfo(op)?.label}</Label>
       {op === 'repaint' && (p.piece
         ? <PieceField binding={p.piece} aside="что перегенерировать" />
         : <Hint>Выберите звук в ленте — кусок выделяется на его волне</Hint>)}
       {lyricsField(op, s.model) && <Lyrics p={p} />}
-      {vocalLanguage(op, s.model) && s.model && (
-        <div style={{ marginTop: SP.sm }}>
-          <Language languages={s.model.caps.languages} value={inputs.language} onChange={v => setInputs({ language: v })}
-            auto="Язык вокала — как определит модель" />
-        </div>
-      )}
       {range && <Duration p={p} min={range.min} max={range.max} />}
       {track && <Tracks field={track} value={p.values.track} multi={false} onChange={v => p.setField('track', v)} />}
       {tracks && <Tracks field={tracks} value={p.values.tracks} multi onChange={v => p.setField('tracks', v)} />}

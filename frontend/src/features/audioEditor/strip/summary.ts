@@ -28,7 +28,7 @@ const supports = (p: AudioProvider, op: AudioOp) => p.models.some(m => m.caps.op
 
 // Порядок «Авто» задаёт сервер (AudioCatalog.AutoCandidates): сами его не считаем, иначе сводка
 // показала бы fal, а котировка взяла бы local
-function autoOrder(catalog: AudioCatalog | null): AudioProvider[] {
+export function autoOrder(catalog: AudioCatalog | null): AudioProvider[] {
   const providers = catalog?.providers ?? [];
   const order = catalog?.autoProviders;
   if (!order) return providers;
@@ -105,9 +105,6 @@ export function soundSummary({ focus, launch: L }: SoundSummaryParts, short = fa
   if (short) return body.filter(Boolean).join(' · ');
   return [focus ? `Работаем с: ${focus}` : 'Звук не выбран', ...body].filter(Boolean).join(' · ');
 }
-
-// Телефон: «Голос · бесплатно»
-export const soundSummaryMobile = (L: ResolvedLaunch) => [MODE_LABEL[L.mode], isNoAi(L.op) ? 'без ИИ' : L.price].filter(Boolean).join(' · ');
 
 const eta = (sec: number) => (sec < 60 ? `${sec} с` : `${Math.round(sec / 60)} мин`);
 

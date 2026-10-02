@@ -36,7 +36,7 @@ export const OPS: readonly OpInfo[] = [
   op('lego', 'music', 'Дописать дорожку', 'Дописать', 'Характер новой дорожки: например «тёплый бас, пальцами»', 'prompt'),
   op('complete', 'music', 'Доаранжировать', 'Доаранжировать', 'Комментарий необязателен', 'prompt'),
   op('sfx', 'music', 'Звуковой эффект', 'Сгенерировать звук', 'Опишите звук до 450 символов: «скрип двери в пустом подъезде»', 'prompt'),
-  op('separate', 'process', 'Стемы', 'Разделить', 'Для SAM Audio — что выделить: «лай собаки»', 'prompt'),
+  op('separate', 'process', 'Стемы', 'Разделить', 'Что выделить: например «лай собаки»', 'prompt'),
   op('denoise', 'process', 'Очистить шум', 'Очистить', NO_COMMENT, 'none'),
   op('upsample', 'process', 'Восстановить частоты', 'Восстановить', NO_COMMENT, 'none'),
   op('master', 'process', 'Мастеринг', 'Сделать мастеринг', `${NO_COMMENT} — выберите образец`, 'none'),
@@ -52,7 +52,17 @@ export const OPS: readonly OpInfo[] = [
 
 export const MODE_LABEL: Record<AudioMode, string> = { voice: 'Голос', music: 'Музыка', process: 'Обработка' };
 
+// Режимы, создающие новый звук; «Обработка» работает с готовым
+export const isCreateMode = (mode: AudioMode | null | undefined): mode is 'voice' | 'music' => mode === 'voice' || mode === 'music';
+
 export const opInfo = (op: AudioOp | null | undefined): OpInfo | null => OPS.find(o => o.op === op) ?? null;
+
+// Плейсхолдер композера с учётом модели: у стемов с готовым набором (Вокал + минус, 4, 6,
+// Караоке) описание не нужно — оно бывает только у модели «выделить звук по описанию»
+export function opPlaceholder(op: AudioOp | null | undefined, model: { caps: { stemSet?: string | null } } | null): string | null {
+  if (op === 'separate' && model?.caps.stemSet) return `${NO_COMMENT} — выберите, что получить`;
+  return opInfo(op)?.placeholder ?? null;
+}
 
 export const defaultOp = (mode: AudioMode): AudioOp => OPS.find(o => o.mode === mode)!.op;
 

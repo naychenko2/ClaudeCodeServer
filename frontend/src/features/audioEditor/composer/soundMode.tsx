@@ -7,7 +7,7 @@ import { useEffect } from 'react';
 import { AudioLines, Sparkles } from 'lucide-react';
 import { FLAGS, getFlag, requestStrip, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { ComposerModeApi, ComposerModeCtx } from '../../../lib/subsystems/registryCore';
-import { MODE_LABEL, opInfo } from '../ops';
+import { MODE_LABEL, opInfo, opPlaceholder } from '../ops';
 import { audioScope } from '../scope';
 import { stripModel } from '../strip/SoundStrip';
 import { launchFromComposer } from '../thread/actions';
@@ -45,7 +45,7 @@ function Hint({ ctx }: { ctx: ComposerModeCtx }) {
 
 export function soundPlaceholder(projectId: string | null, sessionId: string | null): string {
   const { launch } = stripModel(projectId, sessionId, getFocusedThread(sessionId));
-  return opInfo(launch.op)?.placeholder ?? 'Текст для модели';
+  return opPlaceholder(launch.op, launch.model) ?? 'Текст для модели';
 }
 
 export const soundMode: ComposerModeApi = {

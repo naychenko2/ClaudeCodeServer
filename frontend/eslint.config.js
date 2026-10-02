@@ -92,6 +92,21 @@ export const audioEditorImportGuard = {
   },
 }
 
+// Тот же сторож для MF-модуля «Видео» (ADR-022): причины и исключения — как у imageEditorImportGuard
+export const videoEditorImportGuard = {
+  files: ['src/features/videoEditor/**/*.{ts,tsx}'],
+  ignores: ['**/*.test.{ts,tsx}'],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/components/**', '**/hooks/**', '**/lib/**', '**/pages/**', '**/features/**', '**/api/**', '**/App'],
+        allowTypeImports: true,
+        message: 'Модуль video-editor берёт ядро только из aihome_shell/kit (ADR-022): прямой импорт соберёт вторую копию в remote.',
+      }],
+    }],
+  },
+}
+
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA
   {
@@ -152,4 +167,5 @@ export default defineConfig([
   ...designSystem,
   imageEditorImportGuard,
   audioEditorImportGuard,
+  videoEditorImportGuard,
 ])

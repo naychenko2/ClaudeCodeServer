@@ -1,6 +1,6 @@
 // Module Federation build для MF-модуля «Видео» (ADR-022, по образцу ADR-018 §10.3).
 //
-// Весь код фичи живёт в src/features/audioEditor, здесь только обёртка: remote
+// Весь код фичи живёт в src/features/videoEditor, здесь только обёртка: remote
 // экспортирует ./subsystem (полный SubsystemManifest), ядро берёт через aihome_shell/kit.
 //
 // Dev-сервер на порту 5179 (vite dev), хост проксирует /video-editor-remote/** сюда.

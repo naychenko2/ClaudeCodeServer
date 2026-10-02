@@ -1160,6 +1160,23 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new LocalMediaMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
     }
 
+    // MCP-сервер прогона тестов (run_tests). Узел есть в конфиге хода, только когда:
+    //   1) включена подсистема test-runs (там живёт движок прогона);
+    //   2) чат проекта, чьи файлы на сервере (локальный проект ADR-016 в v1 не поддерживаем:
+    //      TRX и лог лежали бы на устройстве — тесты там агент гоняет Bash'ем);
+    //   3) персоне не запрещён Bash (ReadOnly или Custom без Bash): прогон исполняет код
+    //      проекта и пишет bin/obj и .cc-attachments — это тот же запуск кода, что и Bash.
+    // Всё это — свойства сессии, персоны и процесса, не хода. Тулсет на вызове повторяет проверки.
+    internal TestsMcpContext? BuildTestsContext(string? ownerId, string? projectId, Persona? persona)
+    {
+        if (ownerId is null || projectId is null) return null;
+        if (!Composition.SubsystemGate.IsEnabled(_config, TestRuns.TestRunsSubsystem.SubsystemKey)) return null;
+        if (!PersonaAccessPolicy.AllowsBash(persona)) return null;
+        if (_projects.GetById(projectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new TestsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
     // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
     // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
     // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
@@ -1200,8 +1217,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
         WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null,
         HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null,
-        LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null) =>
-        architecture is { UseHttp: true }
+        LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null,
+        TestsMcpContext? tests = null) =>
+        architecture is { UseHttp: true } || tests is { UseHttp: true }
         || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
@@ -4048,6 +4066,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var higgsfieldMcp = BuildHiggsfieldContext(ownerId, persona.Persona);
         var imageEditorMcp = BuildImageEditorContext(ownerId, session);
         var localMediaMcp = BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona);
+        var testsMcp = BuildTestsContext(ownerId, session.ProjectId, persona.Persona);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
             ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
@@ -4089,7 +4108,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                 workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                imageEditorMcp, localMediaMcp, architectureMcp),
+                imageEditorMcp, localMediaMcp, architectureMcp, testsMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
@@ -4101,6 +4120,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             HiggsfieldMcp: higgsfieldMcp,
             ImageEditorMcp: imageEditorMcp,
             LocalMediaMcp: localMediaMcp,
+            TestsMcp: testsMcp,
             // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
             // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
             // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
@@ -5622,6 +5642,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var higgsfieldMcp = BuildHiggsfieldContext(project.OwnerId, persona.Persona);
             var imageEditorMcp = BuildImageEditorContext(project.OwnerId, entry.Info);
             var localMediaMcp = BuildLocalMediaContext(project.OwnerId, project.Id, persona.Persona);
+            var testsMcp = BuildTestsContext(project.OwnerId, project.Id, persona.Persona);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null;
@@ -5661,7 +5682,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                    imageEditorMcp, localMediaMcp, architectureMcp),
+                    imageEditorMcp, localMediaMcp, architectureMcp, testsMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ArchitectureMcp: architectureMcp,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
@@ -5671,6 +5692,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 HiggsfieldMcp: higgsfieldMcp,
                 ImageEditorMcp: imageEditorMcp,
                 LocalMediaMcp: localMediaMcp,
+                TestsMcp: testsMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).
                 MainRootPath: projectRoot,

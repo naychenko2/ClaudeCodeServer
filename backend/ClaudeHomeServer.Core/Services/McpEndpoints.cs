@@ -26,6 +26,8 @@ public static class McpEndpoints
     // Редактор картинок (ADR-018 §2, §10.2): сервер есть только в чате картинки
     public const string ImageEditorName = "image-editor";
     public const string LocalMediaName = "local-media";
+    // Прогон тестов с прогрессом (run_tests): только серверные проекты, на устройство не едет
+    public const string TestsName = "tests";
     public const string WidgetsName = "widgets";
     public const string WorkspaceName = "wsp";
     public const string ArchitectureName = "architecture";

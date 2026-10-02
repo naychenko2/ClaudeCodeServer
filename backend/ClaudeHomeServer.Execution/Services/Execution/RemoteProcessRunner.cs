@@ -251,7 +251,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         return total;
     }
 
-    internal static string NewTurnId() => Guid.NewGuid().ToString("N")[..12];
+    internal static string NewTurnId() => ProcessTurnIds.New();
 
     // Маркер рук переживает санитизацию только в каноническом узле — его и ищем
     internal static bool HasHandsMarker(DeviceExecSpawn spawn) =>

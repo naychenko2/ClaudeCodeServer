@@ -152,6 +152,9 @@
          Настройка снова живая: parallelizeTestCollections вернулся в true, классы с
          процесс-глобальным состоянием сериализуются коллекцией (TestCollections.cs) -->
     <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Настоящий вывод dotnet test (консоль, список тестов, TRX, ошибка сборки) для
+         разборщиков run_tests: сторож на смену формата vstest -->
+    <None Include="Services\TestRuns\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Динамический модуль-заглушка (сценарий Б): копируем собранный dll рядом с test-host

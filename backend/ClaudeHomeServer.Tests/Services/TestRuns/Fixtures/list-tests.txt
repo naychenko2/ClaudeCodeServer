@@ -1,0 +1,11 @@
+Test run for C:\src\fix\A.Tests\bin\Debug\net10.0\A.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+Test run for C:\src\fix\B.Tests\bin\Debug\net10.0\B.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    A.Tests.CalcTests.Adds
+    A.Tests.CalcTests.Fails
+    A.Tests.CalcTests.Skipped
+    A.Tests.CalcTests.Theory(x: 1)
+    A.Tests.CalcTests.Theory(x: 2)
+    B.Tests.OtherTests.One
+    B.Tests.OtherTests.Two

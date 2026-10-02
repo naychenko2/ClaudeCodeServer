@@ -687,6 +687,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Images.LocalMedia.ILocal
     ClaudeHomeServer.Services.Mcp.LocalMediaProjectAccess>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.LocalMediaToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.TestsToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают
@@ -927,6 +929,9 @@ builder.Services.AddSubsystems(builder.Configuration,
     // всех: вертикаль листовая, ни от кого не зависит; наоборот, на неё ссылаются
     // PreviewController и SessionHub (через Program.cs).
     new ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem(),
+    // TestRuns — движок run_tests (листовая: Core и только Core). Тулсет `tests` в Main
+    // зависит от него опционально — выключенная подсистема даёт честный отказ инструмента.
+    new ClaudeHomeServer.Services.TestRuns.TestRunsSubsystem(),
     // Changelog — «Что нового»: листовая подсистема, ни от кого не зависит, читает
     // git-вывод и `data/changelog/product.json` через `FileService`.
     new ClaudeHomeServer.Services.Changelog.ChangelogSubsystem(),

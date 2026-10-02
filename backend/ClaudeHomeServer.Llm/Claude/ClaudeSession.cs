@@ -656,6 +656,9 @@ public class ClaudeSession : ILlmSessionAdapter
     private static readonly string[] BuiltInMcpServerPrefixes =
         ["mcp__tasks__", "mcp__notes__", "mcp__memory__", "mcp__personas__", "mcp__wsp__", "mcp__notifications__", "mcp__widgets__", "mcp__dify__", "mcp__pmem_"];
 
+    // Полное имя инструмента прогона тестов в CLI: в «Авто» разрешается без карточки
+    internal const string RunTestsToolName = "mcp__" + McpEndpoints.TestsName + "__run_tests";
+
     // Игнор служебной папки вложений в git ставится лениво один раз за жизнь сессии:
     // модель кладёт туда картинки для показа в ленте (см. подсказку про картинки в промпте),
     // а у проекта со своим .gitignore правила может не быть — при аплоаде его пишет
@@ -767,6 +770,13 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly LocalMediaMcpContext? _localMediaMcp;
     // Локальная генерация: условие как у higgsfield — схема адреса допускает http И рубильник включён
     private bool LocalMediaHttpOn() => _localMediaMcp is { UseHttp: true } && HttpMcpOnNow();
+    // MCP-сервер прогона тестов (run_tests): null — выключен или недоступен чату
+    private readonly TestsMcpContext? _testsMcp;
+    // Прогон тестов: условие как у local-media — схема адреса допускает http И рубильник включён
+    private bool TestsHttpOn() => _testsMcp is { UseHttp: true } && HttpMcpOnNow();
+    // Потолок одного вызова MCP-инструмента в env хода (см. сборку envOverrides)
+    internal const string McpToolTimeoutEnv = "MCP_TOOL_TIMEOUT";
+    internal const string McpToolTimeoutMs = "600000";
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
@@ -928,6 +938,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _higgsfieldMcp = context.HiggsfieldMcp;
         _imageEditorMcp = context.ImageEditorMcp;
         _localMediaMcp = context.LocalMediaMcp;
+        _testsMcp = context.TestsMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
@@ -1011,6 +1022,8 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasImageEditor = ImageEditorHttpOn();
         // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
         var hasLocalMedia = LocalMediaHttpOn();
+        // Прогон тестов: stdio-ветки нет, контекста нет у локального проекта и RO-персоны
+        var hasTests = TestsHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
         bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
@@ -1107,6 +1120,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasHiggsfield = hasHiggsfield && Keep("higgsfield");
             hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
+            hasTests = hasTests && Keep(McpEndpoints.TestsName);
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
             hasFalAi = hasFalAi && Keep("fal-ai");
@@ -1116,7 +1130,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasImageEditor && !hasLocalMedia && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasLocalMedia && !hasTests && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -1826,6 +1840,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 shapes["local-media"] = "t:http";
             }
 
+            if (hasTests)
+            {
+                // Прогон тестов (run_tests): http-ветка только, stdio-отката нет. Процесс тестов
+                // запускает сам тулсет через среду проекта; сессия-вызыватель едет хвостом URL
+                servers[McpEndpoints.TestsName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_testsMcp!.ApiUrl, McpEndpoints.TestsName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_testsMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (один инструмент), вариативен только транспорт
+                shapes[McpEndpoints.TestsName] = "t:http";
+            }
+
             if (hasArchitecture)
             {
                 // C4-модель проекта (arch_*): единственная ветка — http, как у веб-поиска.
@@ -2500,6 +2533,13 @@ public class ClaudeSession : ILlmSessionAdapter
             && autoCmdEl.ValueKind == JsonValueKind.String
             && !IrreversibleCommandGuard.LooksIrreversible(autoCmdEl.GetString()))
             return "allow";
+        // Прогон тестов в «Авто» — как безопасный Bash: без карточки. Только этот инструмент,
+        // другие MCP сюда не расширять. Персону без Bash/ReadOnly режут узел (BuildTestsContext)
+        // и сам вызов (TestsToolset) — авто-разрешение их не обходит.
+        if (ruleDecision == null
+            && Info.Mode == ClaudeMode.Auto
+            && string.Equals(toolName, RunTestsToolName, StringComparison.Ordinal))
+            return "allow";
         // Сессия-исполнитель задачи или ход правила автоматизации персоны работают автономно —
         // отвечать на карточку разрешения некому (чат никто не открывал), и без этого исполнитель
         // вязнет в первом же permission-запросе (status=Waiting до таймаута в 60 мин) и не может
@@ -3122,6 +3162,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ServerContent: _serverContent,
                     HasLocalMediaMcp: _localMediaMcp is not null && McpDelivered("local-media"),
                     HasImageEditorMcp: _imageEditorMcp is not null && McpDelivered(McpEndpoints.ImageEditorName),
+                    HasTestsMcp: _testsMcp is not null && McpDelivered(McpEndpoints.TestsName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth));
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
@@ -3312,6 +3353,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     "его содержимое текстом, достаточно короткого комментария.";
                 Add("mcp-widgets", "Как показывать виджеты в чате", widgetsHint, group: "mcp");
             }
+
+            // Подсказка «тесты — через run_tests»: контрибьютор вертикали TestRuns, гейт
+            // HasTestsMcp (сервер tests доехал до хода) — в его IsEnabled. Текст постоянный,
+            // поэтому секция стабильная и едет системным блоком, а не хвостом хода
+            if (contributorSections.TryGetValue("mcp-tests", out var testsHint))
+                Add("mcp-tests", testsHint.Title ?? "Как запускать тесты", testsHint.Text, group: "mcp");
 
             // Подсказка про показ картинок — только у чата с проектом: локальный путь фронт
             // резолвит относительно RootPath проекта (ChatImage), вне проекта показать нечем.
@@ -3610,6 +3657,14 @@ public class ClaudeSession : ILlmSessionAdapter
             // зарегистрировать тулы, и первый же вызов падал «No such tool available»
             // (модель ретраила, но карточка ошибки засоряла ленту).
             ["MCP_TIMEOUT"] = "30000",
+
+            // Потолок ОДНОГО вызова MCP-инструмента: прогон тестов (mcp__tests__run_tests) идёт
+            // минутами, а с дефолтом CLI обрывает вызов раньше ответа. 10 минут одобрены
+            // (docs/research/test-progress-2026-10.md); серверный потолок прогона — 540 с, чтобы
+            // ответ модели успел уйти до обрыва. Значение постоянное и от хода не зависит:
+            // сигнатура запуска (BuildLaunchSignature) между ходами не мерцает. Действует на
+            // ВСЕ MCP-серверы хода — зависший внешний держит ход до 10 минут, «Стоп» работает.
+            [McpToolTimeoutEnv] = McpToolTimeoutMs,
         };
 
         // Обход прокси для локального бэкенда — жёсткое требование HTTP-транспорта MCP

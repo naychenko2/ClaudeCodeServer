@@ -73,6 +73,9 @@ public sealed record PromptSessionContext(
     // MCP-сервер редактора картинок (image_new/image_generate) доехал до хода: без него
     // TrimMcpServers или выключенный модуль оставляют ход без этих инструментов
     bool HasImageEditorMcp = false,
+    // MCP-сервер прогона тестов (run_tests) доехал до хода: в нём учтены подсистема, чат
+    // проекта на сервере и персона, которой не запрещён Bash; TrimMcpServers — тоже
+    bool HasTestsMcp = false,
     // Живого человека у хода нет — см. TurnAudience.IsUnattended
     bool Unattended = false);
 

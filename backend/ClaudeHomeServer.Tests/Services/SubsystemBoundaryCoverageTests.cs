@@ -73,6 +73,9 @@ public class SubsystemBoundaryCoverageTests
         // Files — отдельная сборка (ADR-016, задача 4.1): форс-загрузка нужна, чтобы
         // сторож видел FileService и проверял границы вертикали по Files.dll.
         _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
+        // TestRuns — отдельная сборка (движок run_tests): без typeof проверка полноты
+        // Boundaries по ней ничего не проверяет.
+        _ = typeof(ClaudeHomeServer.Services.TestRuns.TestRunsSubsystem).Assembly;
     }
 
     [Fact]

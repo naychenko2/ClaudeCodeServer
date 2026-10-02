@@ -132,6 +132,83 @@ public class ClaudeSessionAutoModeTests
         (await pending).Should().Be("deny");
     }
 
+    // run_tests в «Авто» — как безопасный Bash: без карточки
+    [Fact]
+    public async Task Авто_RunTests_РазрешаетБезКарточки()
+    {
+        var info = new Session { Mode = ClaudeMode.Auto };
+        var (session, sent) = NewClaudeSession(info);
+        await using var _ = session;
+
+        // Таймаут: без авто-разрешения решение ждало бы ответа на карточку час, а не падало
+        var pending = DecideAsync(session, "req-6", "mcp__tests__run_tests", "");
+        var finished = await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(5)));
+        if (finished != pending) session.RespondPermission("req-6", "deny");
+
+        (await pending).Should().Be("allow");
+        lock (sent) sent.Should().BeEmpty("в «Авто» прогон тестов идёт без карточки");
+    }
+
+    // Остальные режимы на run_tests показывают карточку как раньше
+    [Theory]
+    [InlineData(ClaudeMode.Default)]
+    [InlineData(ClaudeMode.AcceptEdits)]
+    [InlineData(ClaudeMode.Plan)]
+    public async Task ДругойРежим_RunTests_ПоказываетКарточку(ClaudeMode mode)
+    {
+        var info = new Session { Mode = mode };
+        var (session, sent) = NewClaudeSession(info);
+        await using var _ = session;
+
+        var pending = DecideAsync(session, "req-7", "mcp__tests__run_tests", "");
+
+        await WaitForAsync(() => { lock (sent) return sent.OfType<PermissionRequestMessage>().Any(); });
+        lock (sent)
+            sent.OfType<PermissionRequestMessage>().Should().ContainSingle()
+                .Which.ToolName.Should().Be("mcp__tests__run_tests");
+
+        session.RespondPermission("req-7", "deny");
+        (await pending).Should().Be("deny");
+    }
+
+    // Авто-разрешение точечное: соседний инструмент того же сервера и прочие MCP спрашивают
+    [Theory]
+    [InlineData("mcp__tests__run_tests_all")]
+    [InlineData("mcp__fal__run_model")]
+    public async Task Авто_ДругойMcp_ПоказываетКарточку(string toolName)
+    {
+        var info = new Session { Mode = ClaudeMode.Auto };
+        var (session, sent) = NewClaudeSession(info);
+        await using var _ = session;
+
+        var pending = DecideAsync(session, "req-8", toolName, "");
+
+        await WaitForAsync(() => { lock (sent) return sent.OfType<PermissionRequestMessage>().Any(); });
+        lock (sent)
+            sent.OfType<PermissionRequestMessage>().Should().ContainSingle()
+                .Which.ToolName.Should().Be(toolName);
+
+        session.RespondPermission("req-8", "deny");
+        (await pending).Should().Be("deny");
+    }
+
+    // Deny-правило проекта сильнее авто-разрешения run_tests
+    [Fact]
+    public async Task Авто_RunTests_DenyПравилоПроекта_Побеждает()
+    {
+        var info = new Session { Mode = ClaudeMode.Auto };
+        var (session, sent) = NewClaudeSession(info,
+        [
+            new PermissionRule { Pattern = "mcp__tests__run_tests", Action = "deny" },
+        ]);
+        await using var _ = session;
+
+        var decision = await DecideAsync(session, "req-9", "mcp__tests__run_tests", "");
+
+        decision.Should().Be("deny");
+        lock (sent) sent.Should().BeEmpty();
+    }
+
     // Ждём событие, а не спим фиксированно (тесты гоняются и на слабом CI-раннере)
     private static async Task WaitForAsync(Func<bool> condition)
     {

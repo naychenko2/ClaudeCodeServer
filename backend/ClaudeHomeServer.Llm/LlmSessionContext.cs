@@ -176,6 +176,12 @@ public sealed record ImageEditorMcpContext(string ApiUrl, Func<string> TokenFact
 // TokenFactory/UseHttp — тот же идиом, что у higgsfield; stdio-ветки отката нет.
 public sealed record LocalMediaMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
+// Контекст MCP-сервера прогона тестов (tests: run_tests с прогрессом). null — чат без владельца
+// или вне проекта, подсистема test-runs выключена, проект локальный (ADR-016: TRX лежал бы на
+// устройстве) или персона ReadOnly (прогон пишет bin/obj и .cc-attachments). Всё это — свойства
+// сессии, персоны и процесса, не хода. Идиом TokenFactory/UseHttp — как у local-media.
+public sealed record TestsMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
 // граф ключуется проектом, в чате вне проекта сервер не подключается.
@@ -368,6 +374,9 @@ public sealed record LlmSessionContext(
     // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
     // (см. LocalMediaMcpContext). Свойство инстанса, сессии и персоны, не хода.
     LocalMediaMcpContext? LocalMediaMcp = null,
+    // MCP-сервер прогона тестов (run_tests): null — выключен или недоступен чату
+    // (см. TestsMcpContext). Свойство сессии, персоны и процесса, не хода.
+    TestsMcpContext? TestsMcp = null,
     // Корень сервера (AppContext.BaseDirectory, не IHostEnvironment.ContentRootPath —
     // при `dotnet run` это bin/Debug/net10.0, у IHostEnvironment — папка проекта) — для
     // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации

@@ -1,0 +1,40 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="469f5127-11e3-47f8-a2ac-63cf6a1e34b9" name="user@HOST 2026-10-02 12:08:04" runUser="HOST\user" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-10-02T12:08:04.6376927+03:00" queuing="2026-10-02T12:08:04.6376931+03:00" start="2026-10-02T12:08:04.0842091+03:00" finish="2026-10-02T12:08:04.6441052+03:00" />
+  <TestSettings name="default" id="d7a863e6-54f7-4ee3-be11-3064f4a12b8f">
+    <Deployment runDeploymentRoot="user_HOST_2026-10-02_12_08_04" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="cbc1af16-c3cc-4930-bc29-c8f09948c60a" testId="fbd8c57e-adbf-412a-8a4d-ef8000efea76" testName="B.Tests.OtherTests.Two" computerName="HOST" duration="00:00:00.0000460" startTime="2026-10-02T12:08:04.5519068+03:00" endTime="2026-10-02T12:08:04.5519069+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="cbc1af16-c3cc-4930-bc29-c8f09948c60a" />
+    <UnitTestResult executionId="efe1ee3e-e0ac-4583-8dab-dac5677bcc08" testId="7336701d-694e-4000-8bb3-823bcadc602d" testName="B.Tests.OtherTests.One" computerName="HOST" duration="00:00:00.0022796" startTime="2026-10-02T12:08:04.5490651+03:00" endTime="2026-10-02T12:08:04.5490974+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="efe1ee3e-e0ac-4583-8dab-dac5677bcc08" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="B.Tests.OtherTests.Two" storage="c:\src\fix\b.tests\bin\debug\net10.0\b.tests.dll" id="fbd8c57e-adbf-412a-8a4d-ef8000efea76">
+      <Execution id="cbc1af16-c3cc-4930-bc29-c8f09948c60a" />
+      <TestMethod codeBase="C:\src\fix\B.Tests\bin\Debug\net10.0\B.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="B.Tests.OtherTests" name="Two" />
+    </UnitTest>
+    <UnitTest name="B.Tests.OtherTests.One" storage="c:\src\fix\b.tests\bin\debug\net10.0\b.tests.dll" id="7336701d-694e-4000-8bb3-823bcadc602d">
+      <Execution id="efe1ee3e-e0ac-4583-8dab-dac5677bcc08" />
+      <TestMethod codeBase="C:\src\fix\B.Tests\bin\Debug\net10.0\B.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="B.Tests.OtherTests" name="One" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="fbd8c57e-adbf-412a-8a4d-ef8000efea76" executionId="cbc1af16-c3cc-4930-bc29-c8f09948c60a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="7336701d-694e-4000-8bb3-823bcadc602d" executionId="efe1ee3e-e0ac-4583-8dab-dac5677bcc08" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="2" executed="2" passed="2" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.8.2+699d445a1a (64-bit .NET 10.0.6)&#xD;
+[xUnit.net 00:00:00.06]   Discovering: B.Tests&#xD;
+[xUnit.net 00:00:00.09]   Discovered:  B.Tests&#xD;
+[xUnit.net 00:00:00.09]   Starting:    B.Tests&#xD;
+[xUnit.net 00:00:00.13]   Finished:    B.Tests&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>

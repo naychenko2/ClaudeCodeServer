@@ -1,0 +1,53 @@
+
+ RUN  v4.1.9 C:/GIT/ClaudeCodeServer/frontend
+
+ ❯ src/__vtprobe__/broken.test.ts (0 test)
+ ❯ src/__vtprobe__/fail.test.ts (3 tests | 1 failed | 1 skipped) 10ms
+     ✓ проходит 2ms
+     × падает 7ms
+     ↓ пропущен
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/__vtprobe__/broken.test.ts [ src/__vtprobe__/broken.test.ts ]
+Error: Cannot find module './нет-такого-модуля' imported from C:/GIT/ClaudeCodeServer/frontend/src/__vtprobe__/broken.test.ts
+ ❯ src/__vtprobe__/broken.test.ts:2:1
+      1| import { it } from 'vitest';
+      2| import { nope } from './нет-такого-модуля';
+       | ^
+      3| it('не дойдёт', () => { nope(); });
+      4|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/__vtprobe__/fail.test.ts > проба > падает
+AssertionError: expected { a: 1 } to deeply equal { a: 2 }
+
+- Expected
++ Received
+
+  {
+-   "a": 2,
++   "a": 1,
+  }
+
+ ❯ src/__vtprobe__/fail.test.ts:4:41
+      2| describe('проба', () => {
+      3|   it('проходит', () => { expect(1).toBe(1); });
+      4|   it('падает', () => { expect({ a: 1 }).toEqual({ a: 2 }); });
+       |                                         ^
+      5|   it.skip('пропущен', () => {});
+      6| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  1 failed | 1 passed | 1 skipped (3)
+   Start at  13:16:21
+   Duration  241ms (transform 48ms, setup 0ms, import 38ms, tests 10ms, environment 0ms)
+
+JSON report written to C:/GIT/ClaudeCodeServer/.cc-attachments/vt-probe3.json

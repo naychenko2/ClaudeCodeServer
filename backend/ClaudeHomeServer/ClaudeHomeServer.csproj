@@ -252,6 +252,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Prompts\ClaudeHomeServer.Prompts.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Tasks\ClaudeHomeServer.Tasks.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TestRuns\ClaudeHomeServer.TestRuns.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Tts\ClaudeHomeServer.Tts.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Turn\ClaudeHomeServer.Turn.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.WebSearch\ClaudeHomeServer.WebSearch.csproj" />

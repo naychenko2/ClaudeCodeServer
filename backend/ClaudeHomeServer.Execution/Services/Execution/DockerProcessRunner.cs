@@ -88,7 +88,7 @@ public sealed class DockerProcessRunner : IProcessLauncher
     // отдельным internal-методом, чтобы тест-сторож проверял РЕАЛЬНУЮ генерацию, а не свою
     // копию формулы (та дыра, на которой раньше проходили мутации «подменить Guid на
     // константу» и «растянуть Guid до 24 символов»).
-    internal static string NewTurnId() => Guid.NewGuid().ToString("N")[..12];
+    internal static string NewTurnId() => ProcessTurnIds.New();
 
     public int EstimateCommandLineLength(ProcessSpec spec)
     {

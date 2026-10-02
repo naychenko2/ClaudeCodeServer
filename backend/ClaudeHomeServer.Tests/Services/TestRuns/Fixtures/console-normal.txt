@@ -1,0 +1,59 @@
+Test run for C:\src\fix\A.Tests\bin\Debug\net10.0\A.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+Test run for C:\src\fix\B.Tests\bin\Debug\net10.0\B.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.8.2+699d445a1a (64-bit .NET 10.0.6)
+[xUnit.net 00:00:00.05]   Discovering: A.Tests
+[xUnit.net 00:00:00.09]   Discovered:  A.Tests
+[xUnit.net 00:00:00.10]   Starting:    A.Tests
+[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.8.2+699d445a1a (64-bit .NET 10.0.6)
+[xUnit.net 00:00:00.06]   Discovering: B.Tests
+[xUnit.net 00:00:00.26]     A.Tests.CalcTests.Fails [FAIL]
+[xUnit.net 00:00:00.26]       Assert.Equal() Failure: Strings differ
+[xUnit.net 00:00:00.26]                  ↓ (pos 0)
+[xUnit.net 00:00:00.26]       Expected: "ожидалось"
+[xUnit.net 00:00:00.26]       Actual:   "получено\nвторая строка"
+[xUnit.net 00:00:00.26]                  ↑ (pos 0)
+[xUnit.net 00:00:00.26]       Stack Trace:
+[xUnit.net 00:00:00.26]         C:\src\fix\A.Tests\T.cs(10,0): at A.Tests.Helper.Boom()
+[xUnit.net 00:00:00.26]         C:\src\fix\A.Tests\T.cs(6,0): at A.Tests.CalcTests.Fails()
+[xUnit.net 00:00:00.26]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+[xUnit.net 00:00:00.26]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.27]     A.Tests.CalcTests.Skipped [SKIP]
+[xUnit.net 00:00:00.27]       не сейчас
+[xUnit.net 00:00:00.27]   Finished:    A.Tests
+[xUnit.net 00:00:00.09]   Discovered:  B.Tests
+[xUnit.net 00:00:00.09]   Starting:    B.Tests
+[xUnit.net 00:00:00.13]   Finished:    B.Tests
+  Failed A.Tests.CalcTests.Fails [123 ms]
+  Error Message:
+   Assert.Equal() Failure: Strings differ
+           ↓ (pos 0)
+Expected: "ожидалось"
+Actual:   "получено\nвторая строка"
+           ↑ (pos 0)
+  Stack Trace:
+     at A.Tests.Helper.Boom() in C:\src\fix\A.Tests\T.cs:line 10
+   at A.Tests.CalcTests.Fails() in C:\src\fix\A.Tests\T.cs:line 6
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Passed A.Tests.CalcTests.Adds [3 ms]
+  Passed A.Tests.CalcTests.Theory(x: 2) [< 1 ms]
+  Passed A.Tests.CalcTests.Theory(x: 1) [< 1 ms]
+  Skipped A.Tests.CalcTests.Skipped [1 ms]
+
+Test Run Failed.
+Total tests: 5
+     Passed: 3
+     Failed: 1
+    Skipped: 1
+ Total time: 0,6781 Seconds
+Results File: C:\src\fix\.cc-attachments\test-runs\r1\results_net10.0_20261002120804.trx
+  Passed B.Tests.OtherTests.One [2 ms]
+  Passed B.Tests.OtherTests.Two [< 1 ms]
+
+Test Run Successful.
+Total tests: 2
+     Passed: 2
+ Total time: 0,5431 Seconds
+Results File: C:\src\fix\.cc-attachments\test-runs\r1\results_net10.0_20261002120805.trx

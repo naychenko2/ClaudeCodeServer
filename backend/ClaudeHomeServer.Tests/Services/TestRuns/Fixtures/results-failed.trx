@@ -1,0 +1,98 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="7f6a378a-ac72-4065-adea-1f56ba5b4561" name="user@HOST 2026-10-02 12:08:04" runUser="HOST\user" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-10-02T12:08:04.5930233+03:00" queuing="2026-10-02T12:08:04.5930238+03:00" start="2026-10-02T12:08:03.9035479+03:00" finish="2026-10-02T12:08:04.5997587+03:00" />
+  <TestSettings name="default" id="e5fabb49-b971-480d-b33d-a0e5e5221c6a">
+    <Deployment runDeploymentRoot="user_HOST_2026-10-02_12_08_04" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="74ea6691-08f6-46d7-92ec-6173cfdb47dd" testId="ffa795f5-2bc3-b341-c832-b580c0874ee6" testName="A.Tests.CalcTests.Theory(x: 1)" computerName="HOST" duration="00:00:00.0001791" startTime="2026-10-02T12:08:04.5071178+03:00" endTime="2026-10-02T12:08:04.5071179+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="74ea6691-08f6-46d7-92ec-6173cfdb47dd" />
+    <UnitTestResult executionId="f40e4297-521a-4e45-9dc6-da958b2829fc" testId="0e25cf48-f4a9-64b7-1ca9-e535dfde3346" testName="A.Tests.CalcTests.Adds" computerName="HOST" duration="00:00:00.0034197" startTime="2026-10-02T12:08:04.5066710+03:00" endTime="2026-10-02T12:08:04.5066712+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f40e4297-521a-4e45-9dc6-da958b2829fc" />
+    <UnitTestResult executionId="82461142-fc98-4124-bbfb-910a05ce49c2" testId="12c66314-664a-a8f5-3462-c369fa3fceb2" testName="A.Tests.CalcTests.Skipped" computerName="HOST" duration="00:00:00.0010000" startTime="2026-10-02T12:08:04.5078860+03:00" endTime="2026-10-02T12:08:04.5078861+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="82461142-fc98-4124-bbfb-910a05ce49c2">
+      <Output>
+        <ErrorInfo>
+          <Message>не сейчас</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="f02771ad-7e7c-4514-a8f0-f5cf74149a12" testId="cf787df5-dd9d-fc51-bdb7-0a391cf37df7" testName="A.Tests.CalcTests.Fails" computerName="HOST" duration="00:00:00.1234259" startTime="2026-10-02T12:08:04.5031451+03:00" endTime="2026-10-02T12:08:04.5031946+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f02771ad-7e7c-4514-a8f0-f5cf74149a12">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.Equal() Failure: Strings differ&#xD;
+           ↓ (pos 0)&#xD;
+Expected: "ожидалось"&#xD;
+Actual:   "получено\nвторая строка"&#xD;
+           ↑ (pos 0)</Message>
+          <StackTrace>   at A.Tests.Helper.Boom() in C:\src\fix\A.Tests\T.cs:line 10&#xD;
+   at A.Tests.CalcTests.Fails() in C:\src\fix\A.Tests\T.cs:line 6&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="32fa9a4c-ff7f-4ea7-bf96-d344663513fa" testId="8cb58411-d25d-a7cf-7f26-505378397dc3" testName="A.Tests.CalcTests.Theory(x: 2)" computerName="HOST" duration="00:00:00.0001733" startTime="2026-10-02T12:08:04.5070317+03:00" endTime="2026-10-02T12:08:04.5070317+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="32fa9a4c-ff7f-4ea7-bf96-d344663513fa" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="A.Tests.CalcTests.Skipped" storage="c:\src\fix\a.tests\bin\debug\net10.0\a.tests.dll" id="12c66314-664a-a8f5-3462-c369fa3fceb2">
+      <Execution id="82461142-fc98-4124-bbfb-910a05ce49c2" />
+      <TestMethod codeBase="C:\src\fix\A.Tests\bin\Debug\net10.0\A.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="A.Tests.CalcTests" name="Skipped" />
+    </UnitTest>
+    <UnitTest name="A.Tests.CalcTests.Adds" storage="c:\src\fix\a.tests\bin\debug\net10.0\a.tests.dll" id="0e25cf48-f4a9-64b7-1ca9-e535dfde3346">
+      <Execution id="f40e4297-521a-4e45-9dc6-da958b2829fc" />
+      <TestMethod codeBase="C:\src\fix\A.Tests\bin\Debug\net10.0\A.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="A.Tests.CalcTests" name="Adds" />
+    </UnitTest>
+    <UnitTest name="A.Tests.CalcTests.Theory(x: 1)" storage="c:\src\fix\a.tests\bin\debug\net10.0\a.tests.dll" id="ffa795f5-2bc3-b341-c832-b580c0874ee6">
+      <Execution id="74ea6691-08f6-46d7-92ec-6173cfdb47dd" />
+      <TestMethod codeBase="C:\src\fix\A.Tests\bin\Debug\net10.0\A.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="A.Tests.CalcTests" name="Theory" />
+    </UnitTest>
+    <UnitTest name="A.Tests.CalcTests.Fails" storage="c:\src\fix\a.tests\bin\debug\net10.0\a.tests.dll" id="cf787df5-dd9d-fc51-bdb7-0a391cf37df7">
+      <Execution id="f02771ad-7e7c-4514-a8f0-f5cf74149a12" />
+      <TestMethod codeBase="C:\src\fix\A.Tests\bin\Debug\net10.0\A.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="A.Tests.CalcTests" name="Fails" />
+    </UnitTest>
+    <UnitTest name="A.Tests.CalcTests.Theory(x: 2)" storage="c:\src\fix\a.tests\bin\debug\net10.0\a.tests.dll" id="8cb58411-d25d-a7cf-7f26-505378397dc3">
+      <Execution id="32fa9a4c-ff7f-4ea7-bf96-d344663513fa" />
+      <TestMethod codeBase="C:\src\fix\A.Tests\bin\Debug\net10.0\A.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="A.Tests.CalcTests" name="Theory" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="ffa795f5-2bc3-b341-c832-b580c0874ee6" executionId="74ea6691-08f6-46d7-92ec-6173cfdb47dd" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0e25cf48-f4a9-64b7-1ca9-e535dfde3346" executionId="f40e4297-521a-4e45-9dc6-da958b2829fc" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="12c66314-664a-a8f5-3462-c369fa3fceb2" executionId="82461142-fc98-4124-bbfb-910a05ce49c2" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="cf787df5-dd9d-fc51-bdb7-0a391cf37df7" executionId="f02771ad-7e7c-4514-a8f0-f5cf74149a12" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8cb58411-d25d-a7cf-7f26-505378397dc3" executionId="32fa9a4c-ff7f-4ea7-bf96-d344663513fa" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="5" executed="4" passed="3" failed="1" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.8.2+699d445a1a (64-bit .NET 10.0.6)&#xD;
+[xUnit.net 00:00:00.05]   Discovering: A.Tests&#xD;
+[xUnit.net 00:00:00.09]   Discovered:  A.Tests&#xD;
+[xUnit.net 00:00:00.10]   Starting:    A.Tests&#xD;
+[xUnit.net 00:00:00.26]       Assert.Equal() Failure: Strings differ&#xD;
+[xUnit.net 00:00:00.26]                  ↓ (pos 0)&#xD;
+[xUnit.net 00:00:00.26]       Expected: "ожидалось"&#xD;
+[xUnit.net 00:00:00.26]       Actual:   "получено\nвторая строка"&#xD;
+[xUnit.net 00:00:00.26]                  ↑ (pos 0)&#xD;
+[xUnit.net 00:00:00.26]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.26]         C:\src\fix\A.Tests\T.cs(10,0): at A.Tests.Helper.Boom()&#xD;
+[xUnit.net 00:00:00.26]         C:\src\fix\A.Tests\T.cs(6,0): at A.Tests.CalcTests.Fails()&#xD;
+[xUnit.net 00:00:00.26]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.26]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.27]       не сейчас&#xD;
+[xUnit.net 00:00:00.27]   Finished:    A.Tests&#xD;
+Test 'A.Tests.CalcTests.Skipped' was skipped in the test run.&#xD;
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="HOST" outcome="Error" timestamp="2026-10-02T12:08:04.5008397+03:00">
+        <Text>[xUnit.net 00:00:00.26]     A.Tests.CalcTests.Fails [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="HOST" outcome="Warning" timestamp="2026-10-02T12:08:04.5078521+03:00">
+        <Text>[xUnit.net 00:00:00.27]     A.Tests.CalcTests.Skipped [SKIP]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

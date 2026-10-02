@@ -122,6 +122,9 @@ public class SubsystemBoundaryTests
         // Files — отдельная сборка (ADR-016, задача 4.1): форс-загрузка нужна, чтобы
         // сторож видел FileService и проверял границы вертикали по Files.dll.
         _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
+        // TestRuns — отдельная сборка (движок run_tests): без форс-загрузки сторож прошёл бы
+        // по ней вакуумно — Main трогает её только из тулсета tests.
+        _ = typeof(ClaudeHomeServer.Services.TestRuns.TestRunsSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -276,6 +279,19 @@ public class SubsystemBoundaryTests
                 "ClaudeHomeServer.Services.ImageEditor",
                 SharedAllowedPrefixes
                     .Concat(new[] { "ClaudeHomeServer.Services.ImageEditor" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // TestRuns — движок прогона тестов (run_tests). Только спинка: запуск через Core-швы
+        // ILauncherFactory/ProcessSpec/BuildConcurrencyGate/ProcessTurnIds, модель Project.
+        // Тулсет MCP-сервера tests живёт в Main и зависит от вертикали, а не наоборот.
+        new object[]
+        {
+            new VerticalBoundary(
+                "TestRuns",
+                "ClaudeHomeServer.Services.TestRuns",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.TestRuns" })
                     .ToArray(),
                 Array.Empty<string>()),
         },

@@ -47,6 +47,7 @@
   <Project Path="ClaudeHomeServer.Tasks/ClaudeHomeServer.Tasks.csproj" />
   <Project Path="ClaudeHomeServer.Tasks.Tests/ClaudeHomeServer.Tasks.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Terminal/ClaudeHomeServer.Terminal.csproj" />
+  <Project Path="ClaudeHomeServer.TestRuns/ClaudeHomeServer.TestRuns.csproj" />
   <Project Path="ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Turn/ClaudeHomeServer.Turn.csproj" />
   <Project Path="ClaudeHomeServer.Turn.Tests/ClaudeHomeServer.Turn.Tests.csproj" />

@@ -420,6 +420,39 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         section.Should().BeNull($"{why}: image_new/image_generate у хода нет («No such tool available»)");
     }
 
+    // Подсказка run_tests: HasTestsMcp собирает сам ClaudeSession из доставки узла tests; секция
+    // постоянная и едет СИСТЕМНЫМ блоком (prefix cache стабилен), а не хвостом хода
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TestsHint_СерверДоставлен_СистемнымБлоком(bool recallInTurnText)
+    {
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus,
+                [new ClaudeHomeServer.Services.TestRuns.TestRunsHintContributor()]),
+            ProjectChat(), c => c with { TestsMcp = TestsMcp });
+
+        systemPrompt.Should().Contain(ClaudeHomeServer.Services.TestRuns.TestRunsHintContributor.Text);
+        sections.Should().NotContain(s => s.Key == "mcp-tests" && s.Kind == "turn");
+    }
+
+    [Theory]
+    [InlineData("нет узла")]
+    [InlineData("TrimMcpServers без tests")]
+    public async Task TestsHint_СервераНетУХода_ПодсказкиНет(string why)
+    {
+        var (systemPrompt, _) = await RunTailTurnAsync(false, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus,
+                [new ClaudeHomeServer.Services.TestRuns.TestRunsHintContributor()]),
+            ProjectChat(), why == "нет узла" ? c => c : c => c with { TestsMcp = TestsMcp },
+            why == "нет узла" ? null : TrimToTasks);
+
+        systemPrompt.Should().NotContain(ClaudeHomeServer.Services.TestRuns.TestRunsHintContributor.Text,
+            $"{why}: подсказка звала бы инструмент, которого у хода нет");
+    }
+
+    private static readonly TestsMcpContext TestsMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+
     private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {
         public bool IsEnabled(string userId, string key) => true;

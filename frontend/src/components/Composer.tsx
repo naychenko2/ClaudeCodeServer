@@ -1,7 +1,7 @@
 import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import type { Project } from '../types';
 import { canRunTurn } from '../lib/projectCapabilities';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, ClipboardList, Eye, EyeOff, FolderGit2, Lock, MessageSquare, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, MessageSquare, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -185,8 +185,8 @@ export interface ComposerProps {
   // берётся цвет кольца у её аватара в ленте, чтобы свет и кольцо не разъезжались.
   // Не задан (чат вне проекта, говорит голос инстанса) — accent (токен auroraUser)
   auroraColorHex?: string;
-  // Чат-исполнитель задачи: поле ввода в тоне панели плюс строка «Исполнитель задачи «…»»
-  // внутри карточки — чтобы с одного взгляда было видно, что пишешь не в основной чат.
+  // Чат-исполнитель задачи: поле ввода в тоне панели, название задачи в подсказке поля и
+  // бейдж «к постановщику» справа — чтобы с одного взгляда было видно, что пишешь не в основной чат.
   // title = null — задача ещё не подгрузилась; onOpenParent нет — постановщик неизвестен
   executorTask?: { title: string | null; onOpenParent?: () => void } | null;
 }
@@ -201,6 +201,28 @@ export interface ComposerProps {
 // «Скачать/Поделиться/Печать» и перебивает onClick (голосовой ввод не стартует).
 // Щит общий — им же закрыты кнопки рельс, поднимающие плашку по удержанию.
 const iconBtnGuard = TOUCH_CALLOUT_GUARD;
+
+// Бейдж-кнопка внутри поля ввода: ⇥ у подсказки следующего сообщения и «к постановщику»
+// у чата-исполнителя. Один стиль на обе, чтобы не разъехались
+function FieldBadge({ onClick, title, style, children }: {
+  onClick: () => void; title: string; style?: React.CSSProperties; children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        pointerEvents: 'auto', flexShrink: 0, cursor: 'pointer', whiteSpace: 'nowrap',
+        border: `1px solid ${C.border}`, borderRadius: R.sm, background: 'transparent',
+        color: C.textMuted, fontSize: 11, fontWeight: 600, lineHeight: 1,
+        padding: '3px 7px', fontFamily: 'inherit',
+        ...style,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
 // Получить имя файла из пути
 function basename(filePath: string): string {
@@ -1778,7 +1800,8 @@ export function Composer({
         onPaste={handlePaste}
         // Пока видна ghost-подсказка, обычный плейсхолдер прячем — тексты бы наложились
         // «Написать Вере…»: имя в дательном; не склоняется однозначно — фраза без имени
-        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : executorTask ? 'Написать исполнителю…' : addressee ? `Написать ${addressee}…` : 'Написать сообщение…'}
+        // Исполнитель на телефоне — коротко: рядом бейдж «к постановщику», длинное не влезает
+        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : executorTask ? (isMobile ? 'Написать…' : executorTask.title ? `Написать исполнителю задачи «${executorTask.title}»…` : 'Написать исполнителю…') : addressee ? `Написать ${addressee}…` : 'Написать сообщение…'}
         rows={1}
         style={{
           flex: 1,
@@ -1817,21 +1840,17 @@ export function Composer({
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
             {promptSuggestion}
           </span>
-          <button
-            onClick={acceptSuggestion}
-            title="Вставить подсказку (→ или Tab)"
-            style={{
-              pointerEvents: 'auto', flexShrink: 0, cursor: 'pointer',
-              border: `1px solid ${C.border}`, borderRadius: R.sm, background: 'transparent',
-              color: C.textMuted, fontSize: 11, fontWeight: 600, lineHeight: 1,
-              padding: '3px 7px', fontFamily: 'inherit',
-            }}
-          >
-            ⇥
-          </button>
+          <FieldBadge onClick={acceptSuggestion} title="Вставить подсказку (→ или Tab)">⇥</FieldBadge>
         </div>
       )}
     </div>
+    {/* Исполнитель: переход к чату-постановщику — тем же бейджем, что ⇥, прижат вправо */}
+    {executorTask?.onOpenParent && (
+      <FieldBadge onClick={executorTask.onOpenParent} title="Открыть чат, из которого поставлена задача"
+        style={{ marginLeft: SP.sm }}>
+        к постановщику
+      </FieldBadge>
+    )}
     </div>
   );
 
@@ -2447,22 +2466,6 @@ export function Composer({
       )}
       {/* Полоска-индикатор лимита подписки по кромке карточки (warn/danger) */}
       {rateWindow && rateWindow.level !== 'normal' && <RateStripe w={rateWindow} isMobile={isMobile} />}
-      {executorTask && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0,
-          // Нижний отступ отделяет строку от поля и его кнопок — без него «к постановщику»
-          // садилась прямо на иконки правой группы
-          padding: `${SP.xxs}px ${SP.xs}px`, marginBottom: SP.xs, fontSize: FS.xs, color: C.textSecondary,
-        }}>
-          <ClipboardList size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {executorTask.title ? `Исполнитель задачи «${executorTask.title}»` : 'Исполнитель задачи'}
-          </span>
-          {executorTask.onOpenParent && (
-            <Button variant="ghost" size="xs" onClick={executorTask.onOpenParent}>к постановщику</Button>
-          )}
-        </div>
-      )}
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
       {showSkillsDropdown && skills.length > 0 && (
         <SkillsDropdown

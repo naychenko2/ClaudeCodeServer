@@ -148,6 +148,35 @@ describe('audio_generate', () => {
   });
 });
 
+// Агент и человек получают одну картинку: готовую версию (монтаж, склейка) рисует якорь audio_thread,
+// а вызов инструмента при известной нити молчит — второго блока на то же действие нет
+describe('готовая версия — карточка только у якоря', () => {
+  const withVersion = (id: string): AudioThread => {
+    const t = thread(null);
+    return { ...t, versions: [...t.versions, { id, number: 1, jobId: null, variant: null, baseVersionId: 'origin', files: [], license: null, createdAt: '' }] };
+  };
+
+  it('монтаж без ИИ: версия есть в нити — вызов молчит', () => {
+    withThreads(withVersion('v9'));
+    const out = html(AudioLaunchCard, tool('audio_generate', { threadId: 't1', op: 'trim' }, JSON.stringify({ threadId: 't1', versionId: 'v9' })));
+    expect(out).toBe('');
+  });
+
+  it('склейка: версия есть в нити — вызов молчит', () => {
+    withThreads({ ...withVersion('c1'), id: 't2', file: null, name: 'склейка.wav' });
+    const out = html(AudioConcatCard, tool('audio_concat', { pieces: [{ threadId: 'a' }, { threadId: 'b' }] },
+      JSON.stringify({ threadId: 't2', versionId: 'c1', name: 'склейка.wav' })));
+    expect(out).toBe('');
+  });
+
+  it('нити в чате нет — своя короткая карточка остаётся следом', () => {
+    withThreads();
+    const out = html(AudioConcatCard, tool('audio_concat', { pieces: [{ threadId: 'a' }, { threadId: 'b' }] },
+      JSON.stringify({ threadId: 't2', versionId: 'c1', name: 'склейка.wav' })));
+    expect(out).toContain('Склеено: склейка.wav');
+  });
+});
+
 describe('audio_concat', () => {
   it('склеено: имя, число кусков, переход к звуку', () => {
     withThreads({ ...thread(null), id: 't2', file: null, name: 'склейка.wav' });

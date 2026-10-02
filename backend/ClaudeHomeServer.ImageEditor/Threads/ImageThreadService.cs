@@ -166,6 +166,96 @@ public sealed class ImageThreadService(
         }
     }
 
+    // Агент позвал local_* напрямую, мимо image_*: картинка легла файлом в проект. Нить по файлу и якорь в
+    // ленте дают ту же карточку, что запуск через редактор. Выбор человека не трогаем (Open отдаёт фокус
+    // новой нити — возвращаем прежний), тихой строки «взял в работу» нет: Claude картинку не выбирал.
+    // Нить по этому файлу уже есть — второго якоря нет
+    public async Task AdoptFileAsync(string ownerId, string projectId, string sessionId, string file, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < AgentAttempts; attempt++)
+        {
+            var before = store.Get(ownerId, sessionId);
+            var written = store.Open(ownerId, sessionId, file, null, before.Revision, NewThreadSettings(ownerId, projectId));
+            if (written.Status == ImageThreadWriteStatus.Conflict) continue;
+            if (written is not { Status: ImageThreadWriteStatus.Ok, Thread: { } thread }) return;
+            if (!written.Existing) await AnchorAsync(sessionId, thread, ct);
+            var state = written.State;
+            if (before.Focus is not null && state.Focus != before.Focus
+                && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
+                state = back.State;
+            await BroadcastAsync(ownerId, projectId, sessionId, state);
+            return;
+        }
+    }
+
+    // Результат local_* с несколькими картинками (count > 1) — как у кнопки: ОДНА нить-черновик, запуск с
+    // якорем image_launch_versions и вариант каждой картинки версией. Повторное усыновление той же задачи
+    // (нить с её запуском уже есть) ничего не пишет. Одна картинка или нет рабочей папки шагов — по нити на
+    // файл (AdoptFileAsync)
+    public async Task AdoptFilesAsync(string ownerId, string projectId, string sessionId, string jobId,
+        IReadOnlyList<ProjectImage> images, CancellationToken ct)
+    {
+        if (images.Count == 0) return;
+        if (images.Count == 1 || steps is null)
+        {
+            foreach (var image in images)
+                await AdoptFileAsync(ownerId, projectId, sessionId, image.RelativePath, ct);
+            return;
+        }
+        if (store.Get(ownerId, sessionId).Threads.Any(t => t.Launches.Any(l => l.JobId == jobId))) return;
+
+        var first = images[0].RelativePath;
+        var folder = first.Contains('/') ? first[..first.LastIndexOf('/')] : "";
+        ImageThreadWrite? opened = null;
+        ImageThreadsState before = ImageThreadsState.Empty;
+        for (var attempt = 0; attempt < AgentAttempts && opened is not { Status: ImageThreadWriteStatus.Ok }; attempt++)
+        {
+            before = store.Get(ownerId, sessionId);
+            opened = store.Open(ownerId, sessionId, null, folder, before.Revision, NewThreadSettings(ownerId, projectId));
+        }
+        if (opened is not { Status: ImageThreadWriteStatus.Ok, Thread: { } thread }) return;
+
+        var text = $"Claude получил картинки напрямую из local-media: {images.Count} {ImageEditorStateContributor.Variants(images.Count)}";
+        var launched = store.AddLaunch(ownerId, sessionId, thread.Id,
+            new ImageThreadLaunch(jobId, null, null, store.Now(), ImageThreadLaunchStatus.Running, SpendInitiators.Agent, null),
+            new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched, text, thread.Id, jobId));
+        if (launched.Status != ImageThreadWriteStatus.Ok) return;
+
+        List<(int Variant, string StepId)> taken = [];
+        for (var n = 0; n < images.Count; n++)
+        {
+            var step = steps.TakeFile(ownerId, projectId, jobId, n + 1, images[n]);
+            if (step.Value is { } s) taken.Add((n + 1, s.StepId));
+            else log.LogWarning("Редактор картинок: файл {Path} задачи {JobId} не стал версией: {Error}",
+                images[n].RelativePath, jobId, step.Error);
+        }
+        var finished = store.FinishLaunch(ownerId, sessionId, thread.Id, jobId,
+            taken.Count == 0 ? ImageThreadLaunchStatus.Failed : ImageThreadLaunchStatus.Done, taken,
+            (_, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
+                all.Count == 0 ? "Картинки local-media не стали версиями"
+                    : $"Готово: картинки local-media, {(all.Count == 1 ? $"версия {all[0].Number}" : $"версии {all[0].Number}–{all[^1].Number}")}",
+                thread.Id, jobId));
+        await RecordAsync(sessionId, RecordTypes.LaunchVersions, $"Claude получил картинки: {images.Count} {ImageEditorStateContributor.Variants(images.Count)}",
+            new
+            {
+                threadId = thread.Id,
+                jobId,
+                prompt = "local-media",
+                provider = "local",
+                model = "local-media",
+                count = images.Count,
+                initiator = SpendInitiators.Agent,
+                baseVersionId = (string?)null,
+            }, ct);
+
+        var state = finished.Status == ImageThreadWriteStatus.Ok ? finished.State : launched.State;
+        // Выбор человека не трогаем: возвращаем, пока ревизию никто не двигал (конфликт — человек выбрал сам)
+        if (before.Focus is not null && state.Focus != before.Focus
+            && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
+            state = back.State;
+        await BroadcastAsync(ownerId, projectId, sessionId, state);
+    }
+
     // Новая нить (от человека и от агента) начинает с выбора человека в полосе «Картинки» проекта
     private ImageThreadSettings? NewThreadSettings(string ownerId, string projectId) =>
         prefs?.SettingsFor(ownerId, projectId);

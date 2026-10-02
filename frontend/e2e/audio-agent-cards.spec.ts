@@ -164,7 +164,8 @@ for (const theme of ['light', 'dark'] as const) {
       await expect(page.getByText('Не получилось: Озвучить')).toHaveCount(0);
       await expect(page.getByText('Лимит запусков за ход')).toBeVisible();
       await expect(page.getByText('Запуск недоступен на чужом ходу')).toBeVisible();
-      await expect(page.getByText('Склеено: склейка-реплик.wav')).toBeVisible();
+      // Склейка с известной нитью — карточку рисует якорь audio_thread, а не вызов инструмента
+      await expect(page.getByText('Склеено: склейка-реплик.wav')).toHaveCount(0);
       await expect(page.getByText(/Операция со звуком отменена/)).toBeVisible();
       await expect(page.getByText('Верни результат')).toHaveCount(0);
       await expect(page.getByText('"jobId"')).toHaveCount(0);

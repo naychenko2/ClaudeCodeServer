@@ -2,8 +2,8 @@
 // подрезкой, добавление сцен, музыка с «Сочинить под фильм…», «Сценарий» и закреплённый низ сборки.
 // Фильмы — только в чате проекта: в личном чате вкладка остаётся с объяснением.
 
-import { useEffect, useState, type ReactNode } from 'react';
-import { Check, ChevronDown, Clapperboard, Film, FilePlus2, FolderTree, Hammer, ListVideo, Music, Plus, Sparkles, X } from 'lucide-react';
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import { Check, ChevronDown, Clapperboard, Film, FilePlus2, FolderTree, Hammer, ListVideo, Music, Plus, RefreshCw, Sparkles, X } from 'lucide-react';
 import {
   Button, C, FS, IconButton, Menu, MenuItem, MenuSep, R, SegmentedControl, SP, TextField, ByClaude, showToast,
   type GenerationFoot,
@@ -19,6 +19,7 @@ import {
   useVideoThreads,
 } from '../store/videoStore';
 import { filmDuration } from '../strip/summary';
+import { TOUCH, useBoxWidth } from '../useBoxWidth';
 import { composeForFilm, isComposing, isFromSound } from './compose';
 import { FilmList, type RowActions } from './FilmList';
 import {
@@ -30,8 +31,24 @@ import { ScriptView } from './ScriptView';
 const MP4_RE = /\.(mp4|webm|mov)$/i;
 const AUDIO_RE = /\.(mp3|wav|flac|ogg|m4a)$/i;
 
-// Сборка, упёршаяся в 503 dsp_unavailable: «Собрать» серое с причиной до следующей попытки
+// Сборка, упёршаяся в 503 dsp_unavailable: «Собрать» серое с причиной, пока человек не проверит снова
+// (кнопка «Проверить снова» в теле вкладки) или не откроет вкладку заново — сервер за это время мог поправиться
+export const DSP_TEXT = 'Сборка фильмов на этом сервере выключена — обратитесь к администратору';
 const _blocked = new Map<string, string>();
+const _blockedSubs = new Set<() => void>();
+let _blockedVer = 0;
+const setBlocked = (path: string, text: string | null) => {
+  if (text === null ? !_blocked.delete(path) : (_blocked.set(path, text), false)) return;
+  _blockedVer++;
+  _blockedSubs.forEach(f => f());
+};
+const useBlocked = (path: string | null): string | undefined => {
+  useSyncExternalStore(f => { _blockedSubs.add(f); return () => { _blockedSubs.delete(f); }; }, () => _blockedVer, () => _blockedVer);
+  return path ? _blocked.get(path) : undefined;
+};
+
+// Высота тач-цели на телефоне для кнопок xs (24 px) и строк меню
+const touchH = (isMobile: boolean): CSSProperties | undefined => (isMobile ? { height: TOUCH, minHeight: TOUCH } : undefined);
 
 export interface FilmPanelModel {
   foot?: GenerationFoot;
@@ -44,7 +61,7 @@ export interface FilmPanelModel {
 }
 
 // Шапка, строка контекста и низ вкладки — для каркаса панели
-export function useFilmPanel(projectId: string | null, sessionId: string | null): FilmPanelModel {
+export function useFilmPanel(projectId: string | null, sessionId: string | null, isMobile = false): FilmPanelModel {
   const scope = videoScope(projectId);
   const personal = isPersonalScope(scope);
   const threads = useVideoThreads(scope, sessionId);
@@ -53,7 +70,7 @@ export function useFilmPanel(projectId: string | null, sessionId: string | null)
   const film = useFilm(scope, path ? sessionId : null, path);
   const f = film.state;
   const name = path ? filmName(path) : '';
-  const [, bump] = useState(0);
+  const blocked = useBlocked(path);
   const nameOf = (p: string) => filmName(p);
   if (personal) {
     return { count: 0, context: <span>Фильмы — только в проекте</span>, nameOf };
@@ -64,15 +81,14 @@ export function useFilmPanel(projectId: string | null, sessionId: string | null)
   const count = f?.document.items.length ?? 0;
   const dur = f ? filmClock(f.document) : '0:00';
   const v = f ? buildView(f) : { kind: 'empty' as const };
-  const blocked = _blocked.get(path);
   const runBuild = async () => {
-    _blocked.delete(path);
+    setBlocked(path, null);
     const ok = await buildFilm(scope, sessionId, path);
-    if (!ok.ok && ok.code === ERR.dspUnavailable) { _blocked.set(path, ok.text); bump(n => n + 1); }
+    if (!ok.ok && ok.code === ERR.dspUnavailable) setBlocked(path, DSP_TEXT);
   };
   const base: GenerationFoot = {
     reason: count === 0 ? 'Добавьте в фильм хотя бы одну сцену' : blocked,
-    price: [`${dur} · бесплатно`, `${count} ${scenesWord(count)} · ${dur} · сборка без ИИ`],
+    price: [`${dur} · бесплатно`, `${count} ${scenesWord(count)} · сборка без ИИ`],
     runLabel: 'Собрать',
     runIcon: ic(Hammer),
     onRun: () => { void runBuild(); },
@@ -91,7 +107,7 @@ export function useFilmPanel(projectId: string | null, sessionId: string | null)
   } else if (v.kind === 'done') {
     foot = v.stale.length
       ? { ...base, stale: v.stale, result: { file: fileName(v.file), actions: resultActions(v.file) }, runLabel: 'Пересобрать' }
-      : { ...base, result: { file: fileName(v.file), actions: resultActions(v.file) }, runLabel: 'Собрано', runIcon: ic(Check), onRun: () => {} };
+      : { ...base, result: { file: fileName(v.file), actions: resultActions(v.file) }, runLabel: 'Собрано', runIcon: ic(Check), runDisabled: true };
   } else if (v.kind === 'failed') {
     foot = { ...base, runLabel: 'Собрать ещё раз' };
   }
@@ -101,29 +117,41 @@ export function useFilmPanel(projectId: string | null, sessionId: string | null)
     peekSummary: `${name} · ${count} ${scenesWord(count)} · ${dur}`,
     context: <FilmContext scope={scope} sessionId={sessionId} path={path} f={f} />,
     contextAction: (
-      <IconButton size="xs" title="Закрыть фильм — он сохранён в проекте" ariaLabel="Закрыть фильм"
+      <IconButton size={isMobile ? 'lg' : 'xs'} title="Закрыть фильм — он сохранён в проекте" ariaLabel="Закрыть фильм"
+        style={isMobile ? { width: TOUCH, height: TOUCH } : undefined}
         onClick={() => { void focusFilm(scope, sessionId, null); }}>{ic(X)}</IconButton>
     ),
   };
 }
 
-// «🎞 Фильм: утро-в-горах · video/утро-в-горах/ ▾ · $13.00»
+// Строка контекста: «Фильм: утро-в-горах ▾ · video/утро-в-горах/ · $13.00». Имя фильма не режем никогда:
+// на узкой колонке прячем сначала путь (он есть в меню ▾), потом слово «Фильм:»
+const CTX_WIDE = 420;
+const CTX_PATH = 520;
+
 function FilmContext({ scope, sessionId, path, f }: { scope: string; sessionId: string; path: string; f: FilmState | null }) {
   const [menuAt, setMenuAt] = useState<DOMRect | null>(null);
   const [spentOpen, setSpentOpen] = useState(false);
   const films = useFilmList(scope, sessionId);
   const spent = spentText(f?.spent);
+  const box = useRef<HTMLSpanElement>(null);
+  const w = useBoxWidth(box);
+  const showPrefix = w === 0 || w >= CTX_WIDE;
+  const showPath = w >= CTX_PATH;
   return (
-    <span data-video-context="film" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: SP.xs, overflow: 'hidden' }}>
-      <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(Film)}</span>
-      <Button size="xs" variant="ghost" title="Фильмы проекта" onClick={e => setMenuAt((e.currentTarget as HTMLElement).getBoundingClientRect())}
-        style={{ minWidth: 0, height: 22, padding: `0 ${SP.xxs}px` }}>
+    <span ref={box} data-video-context="film" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: SP.xs, overflow: 'hidden' }}>
+      <span style={{ display: 'inline-flex', color: C.textMuted, flexShrink: 0 }}>{ic(Film)}</span>
+      <Button size="xs" variant="ghost" title={`Фильмы проекта · ${path}`} onClick={e => setMenuAt((e.currentTarget as HTMLElement).getBoundingClientRect())}
+        style={{ minWidth: 0, flexShrink: 0, maxWidth: '100%', height: 22, padding: `0 ${SP.xxs}px` }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xxs, minWidth: 0 }}>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Фильм: <b style={{ color: C.textHeading }}>{filmName(path)}</b></span>
+          <span style={{ whiteSpace: 'nowrap' }}>{showPrefix && 'Фильм: '}<b style={{ color: C.textHeading }}>{filmName(path)}</b></span>
           {ic(ChevronDown)}
         </span>
       </Button>
-      <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{filmFolder(path)}/</span>
+      {showPath && (
+        <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{filmFolder(path)}/</span>
+      )}
+      <span style={{ flex: 1 }} />
       {spent && (
         <span style={{ position: 'relative', flexShrink: 0 }}>
           <Button size="xs" variant="ghost" title="Потрачено на сцены фильма" onClick={() => setSpentOpen(o => !o)} style={{ height: 22, padding: `0 ${SP.xxs}px` }}>
@@ -149,7 +177,7 @@ function FilmContext({ scope, sessionId, path, f }: { scope: string; sessionId: 
           ))}
           {films.length > 0 && <MenuSep />}
           <MenuItem icon={ic(FilePlus2)} label="Новый фильм" onClick={() => { setMenuAt(null); setNewFilm(sessionId); }} />
-          <MenuItem icon={ic(FolderTree)} label="Показать в дереве" onClick={() => { setMenuAt(null); void openProjectFile(path, true); }} />
+          <MenuItem icon={ic(FolderTree)} label="Показать в дереве" hint={path} onClick={() => { setMenuAt(null); void openProjectFile(path, true); }} />
         </Menu>
       )}
     </span>
@@ -203,11 +231,14 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const path = personal ? null : threads.focus.filmPath ?? null;
   const film = useFilm(scope, path ? sessionId : null, path);
   const films = useFilmList(scope, personal ? null : sessionId);
+  const dspBlocked = useBlocked(path);
   const [newOpen, openNew, closeNew] = useNewFilm(sessionId);
   const [picking, setPicking] = useState<Picking>(null);
   const [script, setScript] = useState(false);
   const [highlight, setHighlight] = useState<number | null>(null);
   useEffect(() => { setPicking(null); setScript(false); setHighlight(null); }, [path]);
+  // Открыли вкладку заново — прошлый отказ «сборка выключена» мог устареть: проверим при следующем «Собрать»
+  useEffect(() => { if (path) setBlocked(path, null); }, [path]);
 
   if (personal) {
     return (
@@ -237,7 +268,7 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
             <Label>Фильмы проекта</Label>
             {films.map(x => (
               <Button key={x.path} size="sm" variant="ghost" onClick={() => { void focusFilm(scope, sessionId, x.path); }}
-                style={{ width: '100%', justifyContent: 'flex-start', minHeight: 36 }}>
+                style={{ width: '100%', justifyContent: 'flex-start', minHeight: isMobile ? TOUCH : 36 }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
                   {ic(Film)}<span style={{ fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.name}</span>
                   <span style={{ fontSize: FS.xs, color: C.textMuted }}>{x.itemCount} {scenesWord(x.itemCount)}{x.stale ? ' · устарел' : ''}</span>
@@ -303,10 +334,16 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const composing = isComposing(path, music?.file);
   return (
     <div data-video-film-tab="">
+      {dspBlocked && (
+        <div data-video-dsp-blocked="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', marginTop: SP.sm, fontSize: FS.sm, color: C.warningText }}>
+          <span style={{ flex: '1 1 auto', minWidth: 0 }}>{dspBlocked}</span>
+          <Button size="xs" variant="secondary" leftIcon={ic(RefreshCw)} onClick={() => setBlocked(path, null)} style={touchH(isMobile)}>Проверить снова</Button>
+        </div>
+      )}
       {f.build?.state === 'failed' && (
         <div data-video-build-failed="" style={{ marginTop: SP.sm, fontSize: FS.sm, color: C.warningText }}>Прошлая сборка не получилась: {f.build.error ?? 'причина не пришла'}</div>
       )}
-      <Label aside={<Button size="xs" variant="ghost" leftIcon={ic(ListVideo)} onClick={() => setScript(true)} disabled={!doc.items.length}>Сценарий</Button>}>
+      <Label aside={<Button size="xs" variant="ghost" leftIcon={ic(ListVideo)} onClick={() => setScript(true)} disabled={!doc.items.length} style={touchH(isMobile)}>Сценарий</Button>}>
         Сцены · {doc.items.length} · {filmClock(doc)}
       </Label>
       {doc.items.length === 0
@@ -318,15 +355,15 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
         : <FilmList scope={scope} items={doc.items} cuts={doc.cuts} marks={f.marks} highlight={highlight} isMobile={isMobile} a={actions} />}
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: SP.sm }}>
-        <Button size="xs" variant="secondary" leftIcon={ic(Plus)} onClick={() => setPicking(picking === 'scene' ? null : 'scene')}>Сцена из проекта</Button>
-        <Button size="xs" variant="secondary" leftIcon={ic(Plus)} onClick={() => setPicking(picking === 'mp4' ? null : 'mp4')}>Готовый mp4</Button>
-        <Button size="xs" variant="secondary" leftIcon={ic(Clapperboard)} onClick={newScene}>Снять новую</Button>
+        <Button size="xs" variant="secondary" leftIcon={ic(Plus)} onClick={() => setPicking(picking === 'scene' ? null : 'scene')} style={touchH(isMobile)}>Сцена из проекта</Button>
+        <Button size="xs" variant="secondary" leftIcon={ic(Plus)} onClick={() => setPicking(picking === 'mp4' ? null : 'mp4')} style={touchH(isMobile)}>Готовый mp4</Button>
+        <Button size="xs" variant="secondary" leftIcon={ic(Clapperboard)} onClick={newScene} style={touchH(isMobile)}>Снять новую</Button>
       </div>
       {picking === 'scene' && (
         <div data-video-add-scene="" style={{ marginTop: SP.sm, border: `1px solid ${C.borderLight}`, borderRadius: R.md, padding: SP.xxs }}>
           {savedOutside.length === 0 && <div style={{ padding: SP.sm, fontSize: FS.sm, color: C.textMuted }}>Сохранённых сцен вне фильма в этом чате нет — выберите файл ниже.</div>}
           {savedOutside.map(x => (
-            <Button key={x.path} size="sm" variant="ghost" onClick={() => addFile(x.path, x.s)} style={{ width: '100%', justifyContent: 'flex-start', minHeight: 36 }}>
+            <Button key={x.path} size="sm" variant="ghost" onClick={() => addFile(x.path, x.s)} style={{ width: '100%', justifyContent: 'flex-start', minHeight: isMobile ? TOUCH : 36 }}>
               <span style={{ fontWeight: 400 }}>{x.s.name} · {fileName(x.path)}</span>
             </Button>
           ))}
@@ -346,12 +383,13 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
             <span style={{ color: C.textMuted, display: 'inline-flex' }}>{ic(Music)}</span>
             <span title={music.file} style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fileName(music.file)}</span>
-            <Button size="xs" variant="ghost" onClick={() => setPicking(picking === 'music' ? null : 'music')}>Сменить</Button>
-            <IconButton size="xs" title="Убрать музыку" ariaLabel="Убрать музыку" onClick={() => { void patch([{ op: 'music', music: null }]); }}>{ic(X)}</IconButton>
+            <Button size="xs" variant="ghost" onClick={() => setPicking(picking === 'music' ? null : 'music')} style={touchH(isMobile)}>Сменить</Button>
+            <IconButton size={isMobile ? 'lg' : 'xs'} title="Убрать музыку" ariaLabel="Убрать музыку" onClick={() => { void patch([{ op: 'music', music: null }]); }}
+              style={isMobile ? { width: TOUCH, height: TOUCH } : undefined}>{ic(X)}</IconButton>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.sm }}>
             <span style={{ fontSize: FS.xs, color: C.textMuted, width: 64 }}>Громкость</span>
-            <input type="range" min={0} max={100} step={5} defaultValue={music.volume} aria-label="Громкость музыки"
+            <input key={music.volume} type="range" min={0} max={100} step={5} defaultValue={music.volume} aria-label="Громкость музыки"
               onMouseUp={e => { void patch([{ op: 'music', music: { ...music, volume: Number((e.target as HTMLInputElement).value) } }]); }}
               onTouchEnd={e => { void patch([{ op: 'music', music: { ...music, volume: Number((e.target as HTMLInputElement).value) } }]); }}
               onKeyUp={e => { void patch([{ op: 'music', music: { ...music, volume: Number((e.target as HTMLInputElement).value) } }]); }}
@@ -369,7 +407,7 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.sm, color: C.textSecondary }}>
           <span style={{ flex: 1 }}>Без музыки · в фильме только звук сцен</span>
-          <Button size="xs" variant="ghost" onClick={() => setPicking(picking === 'music' ? null : 'music')}>Файл из проекта</Button>
+          <Button size="xs" variant="ghost" onClick={() => setPicking(picking === 'music' ? null : 'music')} style={touchH(isMobile)}>Файл из проекта</Button>
         </div>
       )}
       {picking === 'music' && (
@@ -378,21 +416,23 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
             onPick={p => { setPicking(null); void patch([{ op: 'music', music: { file: p, volume: music?.volume ?? 60, fadeOut: music?.fadeOut ?? 2 } }]); }} />
         </div>
       )}
-      <div style={{ marginTop: SP.sm }}>
-        <Button size="sm" variant="secondary" leftIcon={ic(Sparkles)} disabled={composing}
-          onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f); }}>
-          {composing ? 'Сочиняем в «Звуке»…' : 'Сочинить под фильм…'}
-        </Button>
-        <Hint>
-          Откроет «Звук» с заготовкой: длина {filmClock(doc)}, настроение по текстам сцен. Готовый трек встанет сюда сам.
-        </Hint>
-      </div>
+      {doc.items.length > 0 && (
+        <div style={{ marginTop: SP.sm }}>
+          <Button size="sm" variant="secondary" leftIcon={ic(Sparkles)} disabled={composing} style={isMobile ? { minHeight: TOUCH } : undefined}
+            onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f); }}>
+            {composing ? 'Сочиняем в «Звуке»…' : 'Сочинить под фильм…'}
+          </Button>
+          <Hint>
+            Откроет «Звук» с заготовкой: длина {filmClock(doc)}, настроение по текстам сцен. Готовый трек встанет сюда сам.
+          </Hint>
+        </div>
+      )}
       {f.document.builds.length > 0 && f.marks.some(m => m.claude) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginTop: SP.md, fontSize: FS.xs, color: C.textMuted }}>
           <ByClaude /> — правки Claude в этом фильме; ваша правка снимет метку
         </div>
       )}
-      <Hint>Фильм сохраняется сам на каждое изменение: <code>{path}</code> · {Math.round(filmDuration(doc))} с</Hint>
+      <Hint>Фильм сохраняется сам на каждое изменение: <code>{path}</code>{doc.items.length > 0 && ` · ${Math.round(filmDuration(doc))} с`}</Hint>
     </div>
   );
 }

@@ -4,10 +4,11 @@
 
 import { useRef, useState } from 'react';
 import { ArrowLeft, Brush, FolderOpen, Image as ImageIcon, Pencil, Plus, Trash2, Upload } from 'lucide-react';
-import { api, Button, C, FS, R, SP, ByClaude } from 'aihome_shell/kit';
+import { api, Button, C, FS, ICON_SIZE, R, SP, ByClaude } from 'aihome_shell/kit';
 import type { FrameRef } from '../api';
 import { frameName } from '../scene/model';
 import { imageSrcOf, imageThreadName, useImageFramesVersion } from '../store/imageFrames';
+import { TOUCH } from '../useBoxWidth';
 import { ic } from './primitives';
 import { ProjectPicker } from './ProjectPicker';
 
@@ -43,14 +44,14 @@ export function FrameThumb({ scope, sessionId, frame, label, empty, onClick, act
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: SP.xxs, height: '100%',
               padding: SP.xs, fontSize: small ? FS.xs : FS.sm, color: C.textMuted, textAlign: 'center',
             }}>
-              {frame ? ic(ImageIcon, 18) : ic(Plus, 18)}
+              {frame ? ic(ImageIcon, ICON_SIZE.md) : ic(Plus, ICON_SIZE.md)}
               <span>{frame ? name : `Кадр ${label}`}</span>
               {!frame && <span style={{ fontSize: FS.xs }}>{empty}</span>}
             </span>
           )}
         <span style={{
-          position: 'absolute', left: SP.xs, top: SP.xs, minWidth: 18, height: 18, padding: '0 5px', borderRadius: R.sm,
-          background: C.bgCard, color: C.textHeading, fontSize: FS.xs, fontWeight: 700, lineHeight: '18px', textAlign: 'center',
+          position: 'absolute', left: SP.xs, top: SP.xs, minWidth: ICON_SIZE.md, height: ICON_SIZE.md, padding: `0 ${SP.xs}px`, borderRadius: R.sm,
+          background: C.bgCard, color: C.textHeading, fontSize: FS.xs, fontWeight: 700, lineHeight: `${ICON_SIZE.md}px`, textAlign: 'center',
         }}>{label}</span>
       </button>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginTop: SP.xxs, minWidth: 0, fontSize: FS.xs, color: stale ? C.warningText : C.textMuted }}>
@@ -64,6 +65,7 @@ export function FrameThumb({ scope, sessionId, frame, label, empty, onClick, act
 export interface FrameMenuProps {
   scope: string;
   personal: boolean;
+  isMobile?: boolean;
   slot: 'A' | 'B';
   frame: FrameRef | null;
   // Кадр B прошлой сцены (у кадра A — стык без скачка); null — прошлой сцены нет
@@ -76,10 +78,10 @@ export interface FrameMenuProps {
   onClose: () => void;
 }
 
-function Row({ icon, label, hint, disabled, onClick, danger }: { icon: React.ReactNode; label: string; hint?: string; disabled?: boolean; onClick: () => void; danger?: boolean }) {
+function Row({ icon, label, hint, disabled, onClick, danger, touch }: { icon: React.ReactNode; label: string; hint?: string; disabled?: boolean; onClick: () => void; danger?: boolean; touch?: boolean }) {
   return (
     <Button variant="ghost" size="sm" disabled={disabled} onClick={onClick} title={disabled ? hint : undefined}
-      style={{ width: '100%', justifyContent: 'flex-start', height: 'auto', minHeight: 36, padding: `${SP.xs}px ${SP.sm}px`, color: danger ? C.danger : undefined }}>
+      style={{ width: '100%', justifyContent: 'flex-start', height: 'auto', minHeight: touch ? TOUCH : 36, padding: `${SP.xs}px ${SP.sm}px`, color: danger ? C.danger : undefined }}>
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, textAlign: 'left', minWidth: 0 }}>
         {icon}
         <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, fontWeight: 400 }}>
@@ -95,26 +97,26 @@ function Row({ icon, label, hint, disabled, onClick, danger }: { icon: React.Rea
 export function FrameMenu(p: FrameMenuProps) {
   const [mode, setMode] = useState<'menu' | 'project'>('menu');
   const file = useRef<HTMLInputElement>(null);
+  const t = !!p.isMobile;
   return (
     <div data-video-frame-menu={p.slot} style={{ marginTop: SP.sm, border: `1px solid ${C.borderLight}`, borderRadius: R.md, background: C.bgCard, padding: SP.xxs }}>
       {mode === 'menu' ? (
         <>
-          {p.frame && <Row icon={ic(Pencil)} label="Править кадр" hint="Откроет «Картинки» на этой картинке" onClick={p.onEdit} />}
-          <Row icon={ic(Brush)} label="Нарисовать в «Картинках»" hint="Откроет «Картинки», готовая картинка сама станет кадром" onClick={p.onDraw} />
+          {p.frame && <Row touch={t} icon={ic(Pencil)} label="Править кадр" hint="Откроет «Картинки» на этой картинке" onClick={p.onEdit} />}
+          <Row touch={t} icon={ic(Brush)} label="Нарисовать в «Картинках»" hint="Откроет «Картинки», готовая картинка сама станет кадром" onClick={p.onDraw} />
           {p.slot === 'A' && p.prevB && (
-            <Row icon={ic(ArrowLeft)} label={`Кадр B сцены «${p.prevB.sceneName}»`} hint="Стык без скачка" onClick={() => p.onPick(p.prevB!.frame)} />
+            <Row touch={t} icon={ic(ArrowLeft)} label={`Кадр B сцены «${p.prevB.sceneName}»`} hint="Стык без скачка" onClick={() => p.onPick(p.prevB!.frame)} />
           )}
           {p.slot === 'B' && p.prevB && (
-            <Row icon={ic(ArrowLeft)} label={`Кадр B сцены «${p.prevB.sceneName}»`} onClick={() => p.onPick(p.prevB!.frame)} />
+            <Row touch={t} icon={ic(ArrowLeft)} label={`Кадр B сцены «${p.prevB.sceneName}»`} onClick={() => p.onPick(p.prevB!.frame)} />
           )}
-          <Row icon={ic(FolderOpen)} label="Файл проекта" disabled={p.personal}
-            hint={p.personal ? 'В личном чате файлов проекта нет' : 'Картинка из папок проекта'} onClick={() => setMode('project')} />
-          <Row icon={ic(Upload)} label="С компьютера" disabled={p.personal}
-            hint={p.personal ? 'Пока только в чате проекта: загрузку для личного чата сервер ещё не принимает' : 'Файл ляжет в video/…/кадры/ проекта'}
+          {!p.personal && <Row touch={t} icon={ic(FolderOpen)} label="Из проекта" hint="Картинка из папок проекта" onClick={() => setMode('project')} />}
+          <Row touch={t} icon={ic(Upload)} label="С компьютера"
+            hint={p.personal ? 'Файл останется в этом чате, в проект не попадёт' : 'Файл ляжет в video/…/кадры/ проекта'}
             onClick={() => file.current?.click()} />
           <input ref={file} type="file" accept="image/*" hidden
             onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) p.onUpload(f); }} />
-          {p.frame && <Row icon={ic(Trash2)} label="Убрать кадр" danger onClick={() => p.onPick(null)} />}
+          {p.frame && <Row touch={t} icon={ic(Trash2)} label="Убрать кадр" danger onClick={() => p.onPick(null)} />}
         </>
       ) : (
         <ProjectPicker scope={p.scope} start={p.folder} accept={IMG_RE} emptyText="В этой папке нет картинок" onBack={() => setMode('menu')} onPick={f => p.onPick({ kind: 'file', path: f })} />

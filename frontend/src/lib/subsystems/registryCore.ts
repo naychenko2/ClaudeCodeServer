@@ -299,7 +299,8 @@ export interface ComposerEmptySubmit {
 
 // Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).
 // Вклад сам решает, рисоваться ли (null — чипа нет).
-export interface ComposerChipCtx { projectId: string | null; sessionId: string | null; isMobile: boolean }
+// modeId — выбранный режим поля ввода (null — «Чат»): чип чужого режима в нём не рисуется
+export interface ComposerChipCtx { projectId: string | null; sessionId: string | null; isMobile: boolean; modeId?: string | null }
 // Действие вклада composer-chip: перед отправкой сообщения агенту (режим «Чат») вклад
 // отдаёт файлы, которые уйдут вложениями (снимок картинки с пометками), и сам гасит
 // свой чип. Пустой список — прикладывать нечего

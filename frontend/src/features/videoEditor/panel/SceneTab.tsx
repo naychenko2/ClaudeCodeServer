@@ -69,7 +69,7 @@ export function SceneTab({ m, isMobile, prevScene, claudeFrames }: {
     stale: s === 'A' ? !!scene?.stale?.frameA : !!scene?.stale?.frameB, claude: claudeFrames,
   });
   const menuFor = (s: 'A' | 'B') => (
-    <FrameMenu scope={scope} personal={personal} slot={s} frame={s === 'A' ? r.frameA : r.frameB} prevB={prevB}
+    <FrameMenu scope={scope} personal={personal} isMobile={isMobile} slot={s} frame={s === 'A' ? r.frameA : r.frameB} prevB={prevB}
       folder={scene?.folder ? `${scene.folder}/кадры` : 'video'}
       onPick={f => pickFrame(s, f)}
       onEdit={() => { if (scene && sessionId) void editFrame(scope, sessionId, scene, s); setSlot(null); }}

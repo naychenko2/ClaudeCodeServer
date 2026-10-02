@@ -5,10 +5,11 @@
 import { useState, type DragEvent } from 'react';
 import { AlertTriangle, ArrowDown, ArrowUp, Clapperboard, FolderTree, GripVertical, MoreHorizontal, Scissors, Trash2 } from 'lucide-react';
 import {
-  api, Badge, Button, ByClaude, C, FS, IconButton, Menu, MenuItem, MenuSep, R, SegmentedControl, SP,
+  api, Badge, Button, ByClaude, C, Dot, FS, IconButton, Menu, MenuItem, MenuSep, R, SegmentedControl, SHADOW, SP,
 } from 'aihome_shell/kit';
 import type { FilmCut, FilmCutType, FilmItem, FilmItemMark } from '../api';
 import { ic } from '../panel/primitives';
+import { TOUCH } from '../useBoxWidth';
 import { clampTrim, clipLength, CUT_LABEL, CUT_SECS, cutLabel, fileName, TRIM_STEP, trimLabel, trimmedLength } from './model';
 
 export interface RowActions {
@@ -19,6 +20,10 @@ export interface RowActions {
   onReshoot: (i: number) => void;
   onReveal: (i: number) => void;
 }
+
+// Миниатюра строки и номер на ней: размеры макета v7
+const THUMB = { w: 64, h: 36, num: 14, numGap: 2, handle: 3, trimBtn: 20, cutBtn: 22, stepBtn: 24, dot: 6 } as const;
+const FRAMES = 8;
 
 const sec = (n: number) => `${String(n).replace('.', ',')} с`;
 
@@ -44,7 +49,7 @@ export function FilmList({ scope, items, cuts, marks, highlight, isMobile, a }: 
             onDragStart={() => setDrag(i)} onDragEnter={() => setOver(i)} onDrop={() => drop(i)} onDragEnd={() => { setDrag(null); setOver(null); }}
             a={a} />
           {i < items.length - 1 && (
-            <Cut c={cuts[i]} i={i} open={cutOpen === i} onToggle={() => setCutOpen(cutOpen === i ? null : i)}
+            <Cut c={cuts[i]} i={i} isMobile={isMobile} open={cutOpen === i} onToggle={() => setCutOpen(cutOpen === i ? null : i)}
               onPick={(t, s) => a.onCut(i, t, s)} />
           )}
         </div>
@@ -66,7 +71,7 @@ function Row({ scope, it, i, mark, last, highlight, dragging, over, isMobile, tr
       onDragOver={prevent} onDragEnter={onDragEnter} onDrop={e => { e.preventDefault(); onDrop(); }}
       style={{
         border: `1px solid ${highlight ? C.accent : over ? C.accentMuted : C.borderLight}`, borderRadius: R.lg, background: C.bgCard,
-        boxShadow: highlight ? `0 0 0 3px ${C.accentLight}` : undefined, opacity: dragging ? 0.5 : 1, overflow: 'hidden',
+        boxShadow: highlight ? SHADOW.selected : undefined, opacity: dragging ? 0.5 : 1, overflow: 'hidden',
       }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, padding: `${SP.xs}px ${SP.xs}px ${SP.xs}px 0` }}>
         {!isMobile && (
@@ -74,23 +79,24 @@ function Row({ scope, it, i, mark, last, highlight, dragging, over, isMobile, tr
             title="Перетащите, чтобы поменять порядок" aria-label="Перетащить" data-video-drag=""
             style={{ display: 'inline-flex', color: C.textMuted, cursor: 'grab', padding: `0 ${SP.xxs}px` }}>{ic(GripVertical)}</span>
         )}
-        <span style={{ position: 'relative', width: 64, height: 36, flexShrink: 0, borderRadius: R.sm, overflow: 'hidden', background: C.bgInset, marginLeft: isMobile ? SP.xs : 0 }}>
+        <span style={{ position: 'relative', width: THUMB.w, height: THUMB.h, flexShrink: 0, borderRadius: R.sm, overflow: 'hidden', background: C.bgInset, marginLeft: isMobile ? SP.xs : 0 }}>
           {src && <video src={`${src}#t=0.1`} preload="metadata" muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
-          <span style={{ position: 'absolute', left: 2, top: 2, minWidth: 14, height: 14, borderRadius: R.sm, background: C.bgCard, fontSize: FS.xs, lineHeight: '14px', textAlign: 'center', fontWeight: 700, color: C.textHeading }}>{i + 1}</span>
+          <span style={{ position: 'absolute', left: THUMB.numGap, top: THUMB.numGap, minWidth: THUMB.num, height: THUMB.num, borderRadius: R.sm, background: C.bgCard, fontSize: FS.xs, lineHeight: `${THUMB.num}px`, textAlign: 'center', fontWeight: 700, color: C.textHeading }}>{i + 1}</span>
         </span>
-        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xxs / 2 }}>
           <span title={it.file} style={{ fontSize: FS.sm, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fileName(it.file)}</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.xs, color: C.textMuted }}>
-            <Button size="xs" variant="ghost" onClick={onTrimToggle} title="Подрезать" style={{ height: 20, padding: `0 ${SP.xxs}px` }}>{trimLabel(it)}</Button>
-            {mark?.updated && <span data-video-mark="updated" title="Новый файл сцены — пересоберите"><Badge size="xs" tone="info">● обновлена</Badge></span>}
+            <Button size="xs" variant="ghost" onClick={onTrimToggle} title="Подрезать"
+              style={{ height: isMobile ? TOUCH : THUMB.trimBtn, minHeight: isMobile ? TOUCH : undefined, padding: `0 ${SP.xxs}px` }}>{trimLabel(it)}</Button>
+            {mark?.updated && <span data-video-mark="updated" title="Новый файл сцены — пересоберите"><Badge size="xs" tone="info" icon={<Dot color={C.info} size={THUMB.dot} />}>обновлена</Badge></span>}
             {mark?.claude && <ByClaude />}
             {mark?.stale && <span data-video-mark="stale" title="Текст или кадр изменён — переснимите" style={{ color: C.warningText, display: 'inline-flex' }}>{ic(AlertTriangle)}</span>}
           </span>
         </span>
-        <IconButton size="xs" title="Действия со сценой" ariaLabel="Действия со сценой"
+        <IconButton size={isMobile ? 'lg' : 'xs'} title="Действия со сценой" ariaLabel="Действия со сценой" style={isMobile ? { width: TOUCH, height: TOUCH } : undefined}
           onClick={e => setMenuAt((e.currentTarget as HTMLElement).getBoundingClientRect())}>{ic(MoreHorizontal)}</IconButton>
       </div>
-      {trimOpen && <Trim scope={scope} it={it} onDone={t => { a.onTrim(i, t); onTrimToggle(); }} />}
+      {trimOpen && <Trim scope={scope} it={it} isMobile={isMobile} onDone={t => { a.onTrim(i, t); onTrimToggle(); }} />}
       {menuAt && (
         <Menu onClose={() => setMenuAt(null)} anchor={menuAt} anchorAlign="end" minWidth={240}>
           <MenuItem icon={ic(Clapperboard)} label="Переснять" hint="Вкладка «Сцена»" onClick={() => { setMenuAt(null); a.onReshoot(i); }} />
@@ -107,13 +113,13 @@ function Row({ scope, it, i, mark, last, highlight, dragging, over, isMobile, tr
 }
 
 // Склейка под стыком: «| встык», «≈ наплыв 1 с», «■ затемнение 1 с»; клик — выбор прямо здесь
-function Cut({ c, i, open, onToggle, onPick }: { c: FilmCut | undefined; i: number; open: boolean; onToggle: () => void; onPick: (t: FilmCutType, s: number) => void }) {
+function Cut({ c, i, isMobile, open, onToggle, onPick }: { c: FilmCut | undefined; i: number; isMobile: boolean; open: boolean; onToggle: () => void; onPick: (t: FilmCutType, s: number) => void }) {
   const type = c?.type ?? 'butt';
   const s = c && c.type !== 'butt' ? c.sec : 1;
   return (
     <div data-video-cut={i} style={{ margin: `${SP.xxs}px 0`, paddingLeft: SP.lg }}>
       <Button size="xs" variant="ghost" onClick={onToggle} aria-expanded={open} title="Склейка между сценами"
-        style={{ height: 22, color: C.textSecondary }}>{cutLabel(c)}</Button>
+        style={{ height: isMobile ? TOUCH : THUMB.cutBtn, minHeight: isMobile ? TOUCH : undefined, color: C.textSecondary }}>{cutLabel(c)}</Button>
       {open && (
         <div style={{ margin: `${SP.xs}px 0 ${SP.sm}px`, padding: SP.sm, border: `1px solid ${C.borderLight}`, borderRadius: R.md, background: C.bgCard }}>
           <SegmentedControl<FilmCutType> value={type} onChange={t => onPick(t, t === 'butt' ? 0 : s)}
@@ -133,27 +139,27 @@ function Cut({ c, i, open, onToggle, onPick }: { c: FilmCut | undefined; i: numb
   );
 }
 
-const FRAMES = 8;
-
 // Подрезка в строке: плёнка из восьми кадров клипа, затемнённые края, ± по 0,5 с
-function Trim({ scope, it, onDone }: { scope: string; it: FilmItem; onDone: (t: [number, number]) => void }) {
+function Trim({ scope, it, isMobile, onDone }: { scope: string; it: FilmItem; isMobile: boolean; onDone: (t: [number, number]) => void }) {
   const full = clipLength(it) || 1;
   const [t, setT] = useState<[number, number]>([it.trim[0] ?? 0, it.trim[1] ?? full]);
   const set = (n: [number, number]) => setT(clampTrim(n, full));
   const src = api.files.fileUrl(scope, it.file);
   const left = (t[0] / full) * 100;
   const right = 100 - (t[1] / full) * 100;
+  const box = isMobile ? TOUCH : THUMB.stepBtn;
+  const stepBox = { minWidth: box, height: box, minHeight: box, padding: 0 } as const;
   const step = (label: string, v: number, on: (d: number) => void) => (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xxs, fontSize: FS.xs, color: C.textSecondary }}>
       {label}
-      <Button size="xs" variant="secondary" onClick={() => on(-TRIM_STEP)} title={`${label} − 0,5 с`} style={{ minWidth: 24, height: 24, padding: 0 }}>−</Button>
+      <Button size="xs" variant="secondary" onClick={() => on(-TRIM_STEP)} title={`${label} − 0,5 с`} style={stepBox}>−</Button>
       <b style={{ minWidth: 36, textAlign: 'center', color: C.textHeading }}>{sec(v)}</b>
-      <Button size="xs" variant="secondary" onClick={() => on(TRIM_STEP)} title={`${label} + 0,5 с`} style={{ minWidth: 24, height: 24, padding: 0 }}>+</Button>
+      <Button size="xs" variant="secondary" onClick={() => on(TRIM_STEP)} title={`${label} + 0,5 с`} style={stepBox}>+</Button>
     </span>
   );
   return (
     <div data-video-trim="" style={{ padding: `0 ${SP.sm}px ${SP.sm}px` }}>
-      <div style={{ position: 'relative', display: 'flex', height: 36, borderRadius: R.sm, overflow: 'hidden', background: C.bgInset }}>
+      <div style={{ position: 'relative', display: 'flex', height: THUMB.h, borderRadius: R.sm, overflow: 'hidden', background: C.bgInset }}>
         {Array.from({ length: FRAMES }, (_, k) => (
           <span key={k} style={{ flex: 1, minWidth: 0, borderRight: k < FRAMES - 1 ? `1px solid ${C.bgCard}` : undefined }}>
             {src && <video src={`${src}#t=${((k + 0.5) * full / FRAMES).toFixed(2)}`} preload="metadata" muted playsInline
@@ -162,8 +168,8 @@ function Trim({ scope, it, onDone }: { scope: string; it: FilmItem; onDone: (t: 
         ))}
         <span style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${left}%`, background: C.overlay }} />
         <span style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: `${right}%`, background: C.overlay }} />
-        <span style={{ position: 'absolute', left: `${left}%`, top: 0, bottom: 0, width: 3, background: C.accent }} />
-        <span style={{ position: 'absolute', right: `${right}%`, top: 0, bottom: 0, width: 3, background: C.accent }} />
+        <span style={{ position: 'absolute', left: `${left}%`, top: 0, bottom: 0, width: THUMB.handle, background: C.accent }} />
+        <span style={{ position: 'absolute', right: `${right}%`, top: 0, bottom: 0, width: THUMB.handle, background: C.accent }} />
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.sm, marginTop: SP.xs }}>
         {step('Начало', t[0], d => set([t[0] + d, t[1]]))}
@@ -173,7 +179,7 @@ function Trim({ scope, it, onDone }: { scope: string; it: FilmItem; onDone: (t: 
         <span style={{ flex: 1, fontSize: FS.xs, color: C.textMuted }}>
           Шаг 0,5 с · остаётся {sec(trimmedLength({ ...it, trim: t }))} из {sec(full)} · файл сцены не меняется
         </span>
-        <Button size="xs" onClick={() => onDone(t)}>Готово</Button>
+        <Button size="xs" onClick={() => onDone(t)} style={isMobile ? { height: TOUCH, minHeight: TOUCH } : undefined}>Готово</Button>
       </div>
     </div>
   );

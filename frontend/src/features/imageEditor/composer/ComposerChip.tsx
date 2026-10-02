@@ -17,6 +17,7 @@ import { usePrefs } from '../thread/prefs';
 import { getStoredImageMode, effectiveImageMode, useImageModeVersion } from '../thread/modeState';
 import { threadHasImage } from '../thread/useThreadLaunch';
 import { editChoice, editPickOf } from '../panel/panelOp';
+import { IMAGE_COMPOSER_MODE } from './imageMode';
 
 export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
   const { sessionId } = ctx;
@@ -33,7 +34,9 @@ export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
   useImageModeVersion();
   const mobile = useIsMobile();
   const prefs = usePrefs(projectId);
-  const brush = v5 && !mobile && !!thread && n === 0 && threadHasImage(thread)
+  // Другой режим поля ввода («Сцена», «Звук») — кисть «Картинок» там ни к чему
+  const foreignMode = !!ctx.modeId && ctx.modeId !== IMAGE_COMPOSER_MODE;
+  const brush = v5 && !mobile && !foreignMode && !!thread && n === 0 && threadHasImage(thread)
     && effectiveImageMode(getStoredImageMode(sessionId), true) === 'edit'
     && editPickOf(editChoice(prefs).op) === 'edit';
   return (

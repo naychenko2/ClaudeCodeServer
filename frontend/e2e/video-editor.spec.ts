@@ -21,9 +21,9 @@ test.use({ serviceWorkers: 'block' });
 
 const feed = () => [1, 2, 3, 4, 5].map(n => record('video_scene', { sceneId: `scene-${n}` }, `Видео: Сцена ${n}`, Date.parse('2026-10-02T10:00:00Z') + n * 1000));
 
-async function start(page: Page, o: { vp: typeof DESK; theme: 'light' | 'dark'; built?: boolean; focus?: { sceneId?: string; filmPath?: string }; personal?: boolean; dsp?: boolean; autoFinish?: boolean; scenes?: ReturnType<typeof standardScenes> }) {
+async function start(page: Page, o: { vp: typeof DESK; theme: 'light' | 'dark'; built?: boolean; focus?: { sceneId?: string; filmPath?: string }; personal?: boolean; dsp?: boolean; autoFinish?: boolean; scenes?: ReturnType<typeof standardScenes>; emptyFeed?: boolean }) {
   newWorld({
-    scenes: o.scenes ?? standardScenes(), films: o.personal ? [] : [standardFilm(!!o.built)], feed: feed(),
+    scenes: o.scenes ?? standardScenes(), films: o.personal ? [] : [standardFilm(!!o.built)], feed: o.emptyFeed ? [] : feed(),
     focus: o.focus ?? (o.personal ? { sceneId: 'scene-5' } : { sceneId: 'scene-5', filmPath: FILM }), personal: o.personal, dsp: o.dsp,
     autoFinish: o.autoFinish,
   });
@@ -241,7 +241,10 @@ for (const theme of ['light', 'dark'] as const) {
         await start(page, { vp, theme });
         const bar = page.locator('[data-video-strip="full"]');
         const box = await bar.boundingBox();
-        expect(box!.height).toBeLessThanOrEqual(44);
+        // Одна строка: тач-цель 44 px плюс рамка
+        expect(box!.height).toBeLessThanOrEqual(52);
+        expect((await sceneChip(page).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        expect((await filmChip(page).boundingBox())!.height).toBeGreaterThanOrEqual(44);
         await noHorizontalScroll(page);
         await shot(page, SHOTS, shotName('s7-strip'));
         await openScene(page);
@@ -255,14 +258,15 @@ for (const theme of ['light', 'dark'] as const) {
       });
 
       test('8. пустая сцена и пустой фильм: кадры и текст оживляют «Снять», «Сцена из проекта» наполняет фильм', async ({ page }) => {
-        await start(page, { vp, theme, focus: {}, scenes: [] });
+        // Лента пуста: якоря сцен 1–5 из feed() дали бы вторую карточку «Сцена 1» рядом с созданной сценой
+        await start(page, { vp, theme, focus: {}, scenes: [], emptyFeed: true });
         await openByShortcut(page);
         await expect(panel(page).locator('[data-video-empty="scene"]')).toBeVisible();
         await expect(foot(page).getByText('Нужны оба кадра: выберите кадр A и кадр B выше')).toBeVisible();
         await shot(page, SHOTS, shotName('s8-empty-scene'));
         for (const [slot, name] of [['A', 'кадр-1.png'], ['B', 'кадр-2.png']] as const) {
           await panel(page).locator(`[data-video-frame="${slot}"] button`).click();
-          await panel(page).getByRole('button', { name: 'Файл проекта' }).click();
+          await panel(page).getByRole('button', { name: /^Из проекта/ }).click();
           const picker = panel(page).locator('[data-video-project-picker]');
           // Без сцены выбор стартует в video/; у заведённой сцены — сразу в её кадрах
           if (slot === 'A') {
@@ -272,6 +276,7 @@ for (const theme of ['light', 'dark'] as const) {
           await picker.getByRole('button', { name }).click();
         }
         await expect.poll(() => w().scenes.length).toBe(1);
+        await expect(page.locator('[data-video-card="scene"][data-scene="scene-1"]')).toHaveCount(1);
         await panel(page).locator('[data-video-text] textarea').fill('Туман рассеивается над озером');
         await expect(foot(page).getByRole('button', { name: 'Снять', exact: true })).toBeEnabled({ timeout: 10_000 });
         await shot(page, SHOTS, shotName('s8-ready'));
@@ -335,7 +340,8 @@ for (const theme of ['light', 'dark'] as const) {
         await expect(local).toBeDisabled();
         await expect(local).toContainText('Локальные модели работают только в чате проекта');
         await panel(page).locator('[data-video-frame="A"] button').click();
-        await expect(panel(page).getByRole('button', { name: /Файл проекта/ })).toBeDisabled();
+        await expect(panel(page).getByRole('button', { name: /Из проекта/ })).toHaveCount(0);
+        await expect(panel(page).getByRole('button', { name: /С компьютера/ })).toBeEnabled();
         await shot(page, SHOTS, shotName('personal-scene'));
         await tab(page, 'Фильм').click();
         await expect(panel(page).locator('[data-video-empty="film"]')).toContainText('Фильмы живут в проекте');
@@ -371,13 +377,16 @@ test('агент снимает: та же карточка запуска с ц
   await shot(page, SHOTS, 'agent-launch-card-1440-light');
 });
 
-test('503 dsp_unavailable: «Собрать» серое с причиной', async ({ page }) => {
+test('503 dsp_unavailable: «Собрать» серое с причиной, «Проверить снова» оживляет', async ({ page }) => {
   await start(page, { vp: DESK, theme: 'light', dsp: false });
   await openFilm(page);
   await foot(page).getByRole('button', { name: 'Собрать' }).click();
-  await expect(foot(page).getByText('На сервере нет ffmpeg — сборка фильма недоступна')).toBeVisible();
+  await expect(foot(page).getByText('Сборка фильмов на этом сервере выключена — обратитесь к администратору').first()).toBeVisible();
   await expect(foot(page).getByRole('button', { name: 'Собрать' })).toBeDisabled();
   await shot(page, SHOTS, 'dsp-unavailable-1440-light');
+  w().dsp = true;
+  await panel(page).getByRole('button', { name: 'Проверить снова' }).click();
+  await expect(foot(page).getByRole('button', { name: 'Собрать' })).toBeEnabled();
 });
 
 test('409 revision_conflict: фильм перечитан и показан свежим', async ({ page }) => {

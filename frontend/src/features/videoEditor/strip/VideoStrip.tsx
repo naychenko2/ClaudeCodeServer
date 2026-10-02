@@ -1,13 +1,13 @@
 // Полоса «Видео» над композером (реестр composer-strip; макет v7, «Полоса «Видео»»): две сводки-чипа —
 // «Сцена» и «Фильм»; настроек в себе не раскрывает — это вход в панель «Видео» на нужной вкладке.
-// Заголовок-переключатель — от хоста. ▾ у чипа сцены — меню сцен чата (GenerationPickMenu), ✕ — снять
-// выбор. Высота 48 px на десктопе, 42 на телефоне, свёрнутая строка — 30 px (на телефоне 42, ради «⌄» 40×40).
+// Заголовок-переключатель — от хоста. ▾ у чипа сцены — меню сцен чата (GenerationPickMenu), там же «Снять
+// выбор». Вид телефона (короткие чипы, тач-цели 44 px) включает ширина самой полосы, а не только окна:
+// «Файлы» и соседние панели сужают колонку и на широком экране. Высота 48 px, свёрнутая строка — 30 px.
 
-import { useRef, useState, useSyncExternalStore } from 'react';
-import type { KeyboardEvent } from 'react';
-import { ChevronDown, ChevronRight, ChevronUp, Clapperboard, Cpu, Film, Plus, X } from 'lucide-react';
+import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight, ChevronUp, Clapperboard, Cpu, Film, Plus, TriangleAlert, X } from 'lucide-react';
 import {
-  Button, C, FS, GenerationPickMenu, IconButton, ICON_SIZE, ICON_STROKE, R, ReleaseNotice, SP, gitRelTime, pickRows,
+  Button, C, Dot, FS, GenerationPickMenu, IconButton, ICON_SIZE, R, ReleaseNotice, SP, gitRelTime, pickRows,
   type GenerationPickExtra, type GenerationPickRow,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
@@ -16,10 +16,12 @@ import { isPersonalScope, videoScope } from '../scope';
 import {
   filmName, getCatalog, getFocusedFilmPath, getFocusedScene, getJobsOf, getPriceHint, useFilm, useVideoStoreVersion, useVideoThreads,
 } from '../store/videoStore';
+import { useSceneQuote } from '../panel/useScene';
+import { TOUCH, useBoxWidth } from '../useBoxWidth';
+import { ic } from '../panel/primitives';
 import { filmChip, sceneChip, staleFilm } from './summary';
 import type { VideoScene } from '../api';
 
-const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
 // Сводка в меню переключателя полос — та же, что в чипе
 export function videoStripStatus(projectId: string | null, sessionId: string | null): string {
@@ -28,6 +30,13 @@ export function videoStripStatus(projectId: string | null, sessionId: string | n
   const r = currentResolved(sessionId, scope, scene);
   return sceneChip(scene, r, getPriceHint(sessionId, scene?.sceneId ?? null)).text;
 }
+
+// Полоса уже этой ширины (CSS px) рисуется как на телефоне: короткие чипы
+const NARROW_W = 480;
+const CHIP_H = 28;
+// Высота полосы и свёрнутой строки на десктопе (на телефоне — тач-цель плюс рамка)
+const FULL_H = 48;
+const MINI_H = 30;
 
 function QueueBadge({ children }: { children: string }) {
   return (
@@ -60,6 +69,7 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
   useVideoStoreVersion();
   const scene = getFocusedScene(sessionId);
   const r = currentResolved(sessionId, scope, scene);
+  useSceneQuote(scope, sessionId, scene, getCatalog(scope), r);
   const chip = sceneChip(scene, r, getPriceHint(sessionId, scene?.sceneId ?? null));
   const filmPath = personal ? null : getFocusedFilmPath(sessionId);
   const film = useFilm(scope, filmPath ? sessionId : null, filmPath);
@@ -68,6 +78,11 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const work = workText(sessionId, scene, film.state?.build);
   const [menuAt, setMenuAt] = useState<DOMRect | null>(null);
   const bar = useRef<HTMLDivElement>(null);
+  const host = useRef<HTMLDivElement>(null);
+  const hostW = useBoxWidth(host);
+  // Узкая колонка: телефон или фактическая ширина меньше порога (до замера — по окну)
+  const narrow = isMobile || (hostW > 0 && hostW < NARROW_W);
+  const h = isMobile ? TOUCH : CHIP_H;
   const offer = useSyncExternalStore(videoReleaseUndo.subscribe, videoReleaseUndo.current, videoReleaseUndo.current);
   const undo = offer && offer.snapshot.sessionId === sessionId ? offer : null;
   const catalogReady = !!getCatalog(scope);
@@ -75,7 +90,7 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const release = () => { if (sessionId) void releaseFocus(scope, sessionId, scene); };
   const title = switcher ?? (
     <span title="Видео" style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
-      {ic(Clapperboard)}{!isMobile && 'Видео'}
+      {ic(Clapperboard)}{!narrow && 'Видео'}
     </span>
   );
 
@@ -87,46 +102,67 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
         icon: ic(Film),
       }))
     : [];
-  const extras: GenerationPickExtra[] = [{
-    key: 'new', label: 'Новая сцена', icon: ic(Plus), onClick: () => { setMenuAt(null); if (sessionId) void createScene(scope, sessionId); },
-  }];
+  const extras: GenerationPickExtra[] = [
+    { key: 'new', label: 'Новая сцена', icon: ic(Plus), onClick: () => { setMenuAt(null); if (sessionId) void createScene(scope, sessionId); } },
+    ...(scene ? [{ key: 'release', label: 'Снять выбор', icon: ic(X), onClick: () => { setMenuAt(null); release(); } }] : []),
+  ];
   const menu = menuAt && (
     <GenerationPickMenu title="Сцены чата" subtitle="Выбрать сцену для панели «Видео»" rows={rows} extras={extras} isMobile={isMobile}
       emptyText="В этом чате других сцен пока нет" onClose={() => setMenuAt(null)} anchor={menuAt}
       onPick={id => { setMenuAt(null); if (sessionId) void selectSceneByHuman(scope, sessionId, id); }} />
   );
 
+  // Кнопка-сводка: прозрачная, без рамки — строка свёрнутой полосы
+  const summaryBtn = (props: { dataKey: string; title: string; onClick: () => void; children: ReactNode; grow?: boolean }) => (
+    <Button size="xs" variant="ghost" title={props.title} onClick={e => { e.stopPropagation(); props.onClick(); }}
+      style={{ minWidth: 0, height: h, border: 'none', flex: props.grow ? '1 1 0' : '0 0 auto', justifyContent: 'flex-start', color: C.textSecondary }}>
+      <span data-video-summary={props.dataKey} style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 400 }}>{props.children}</span>
+    </Button>
+  );
+
+  const frame = (node: ReactNode) => <div ref={host} style={{ minWidth: 0 }}>{node}</div>;
+
   if (collapsed) {
     const expand = () => setCollapsed(false);
-    return (
-      <div role="button" tabIndex={0} data-composer-strip="video" data-video-strip="mini" title="Развернуть полосу «Видео»"
-        onClick={expand}
-        onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); } }}
+    return frame(
+      <div data-composer-strip="video" data-video-strip="mini" title="Развернуть полосу «Видео»" onClick={expand}
         style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm, height: isMobile ? 42 : 30, margin: isMobile ? '6px 0' : '4px 0 6px',
-          padding: isMobile ? '0 0 0 4px' : '0 6px 0 4px', boxSizing: 'border-box', minWidth: 0, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: SP.xs, height: isMobile ? TOUCH : MINI_H, margin: isMobile ? `${SP.sm}px 0` : `${SP.xs}px 0 ${SP.sm}px`,
+          padding: isMobile ? `0 0 0 ${SP.xs}px` : `0 ${SP.sm}px 0 ${SP.xs}px`, boxSizing: 'border-box', minWidth: 0, cursor: 'pointer',
           background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
         }}>
         {title}
-        <span data-video-summary="" title="Открыть сцену в панели «Видео»" onClick={e => { e.stopPropagation(); open(); }}
-          style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {isMobile ? chip.short : chip.text}
-        </span>
-        {fchip && (
-          <span data-video-film-summary="" title="Открыть фильм в панели «Видео»" onClick={e => { e.stopPropagation(); openFilmPanel(sessionId); }}
-            style={{ flexShrink: 0, fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap' }}>
-            🎞 {isMobile ? fchip.short : `${filmName(filmPath!)} · ${fchip.short}`}
-          </span>
-        )}
-        <span data-video-mini-expand="" style={{
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: C.textMuted,
-          ...(isMobile && { width: 40, height: 40 }),
-        }}>{ic(ChevronDown, ICON_SIZE.sm)}</span>
-      </div>
+        {summaryBtn({ dataKey: 'scene', title: 'Открыть сцену в панели «Видео»', onClick: open, grow: true, children: narrow ? chip.short : chip.text })}
+        {fchip && summaryBtn({
+          dataKey: 'film', title: 'Открыть фильм в панели «Видео»', onClick: () => openFilmPanel(sessionId),
+          children: <>{ic(Film)} {narrow ? fchip.short : `${filmName(filmPath!)} · ${fchip.short}`}</>,
+        })}
+        <IconButton size={isMobile ? 'lg' : 'xs'} title="Развернуть полосу «Видео»" ariaLabel="Развернуть полосу «Видео»" onClick={e => { e.stopPropagation(); expand(); }}
+          style={isMobile ? { width: TOUCH, height: TOUCH } : undefined}>{ic(ChevronDown, ICON_SIZE.sm)}</IconButton>
+      </div>,
     );
   }
 
-  return (
+  const sceneLabel = narrow
+    ? <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chip.short}</span>
+    : (
+      <>
+        <span style={{ whiteSpace: 'nowrap', flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{chip.name}</span>
+        <span style={{ flex: '0 8 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {chip.model}</span>
+        {chip.meta && <span style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.meta}</span>}
+        {chip.price && <span style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.price}</span>}
+      </>
+    );
+  const filmLabel = !fchip ? null : isMobile
+    ? <span style={{ whiteSpace: 'nowrap' }}>{fchip.short}</span>
+    : (
+      <>
+        <span style={{ whiteSpace: 'nowrap', flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{filmName(filmPath!)}</span>
+        {fchip.meta && <span style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {narrow ? fchip.short : fchip.meta}</span>}
+      </>
+    );
+
+  return frame(
     <>
       {undo && (
         <div style={{ position: 'relative', height: 0 }}>
@@ -135,51 +171,53 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
           </div>
         </div>
       )}
+      {work && narrow && <div style={{ marginTop: SP.xs }}><QueueBadge>{work}</QueueBadge></div>}
       <div ref={bar} data-composer-strip="video" data-video-strip="full" style={{
-        position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 0 : 8, boxSizing: 'border-box', minWidth: 0,
-        height: isMobile ? 42 : 48, margin: isMobile ? '6px 0' : '10px 0 8px', padding: isMobile ? 0 : '0 8px',
+        position: 'relative', display: 'flex', alignItems: 'center', gap: narrow ? SP.xxs : SP.sm, boxSizing: 'border-box', minWidth: 0,
+        height: isMobile ? TOUCH + SP.xs : FULL_H, margin: isMobile ? `${SP.sm}px 0` : `${SP.md}px 0 ${SP.sm}px`,
+        padding: narrow ? `0 ${SP.xxs}px` : `0 ${SP.sm}px`,
         background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
       }}>
         {title}
-        <span data-video-chip="scene" style={{ display: 'inline-flex', alignItems: 'center', minWidth: 0, flex: isMobile ? '1 1 0' : '0 1 auto', gap: 2 }}>
+        <span data-video-chip="scene" style={{ display: 'inline-flex', alignItems: 'center', minWidth: 0, flex: '0 1 auto', gap: SP.xxs }}>
           <Button size="xs" variant="secondary" title="Открыть сцену в панели «Видео»" onClick={open}
-            style={{ minWidth: 0, flex: '0 1 auto', height: 28, border: `1px solid ${scene ? C.accent : C.border}`, background: C.bgWhite }}>
+            style={{ minWidth: 0, flex: '0 1 auto', height: h, border: `1px solid ${scene ? C.accent : C.border}`, background: C.bgWhite }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
               {ic(Clapperboard)}
-              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isMobile ? chip.short : chip.text}</span>
-              {chip.warn && scene && <span title="Снять пока нельзя: нет кадра или текста" style={{ color: C.warningText }}>⚠</span>}
-              {ic(isMobile ? ChevronUp : ChevronRight)}
+              {sceneLabel}
+              {chip.warn && scene && <span title="Снять пока нельзя: нет кадра или текста" style={{ color: C.warningText, display: 'inline-flex', flexShrink: 0 }}>{ic(TriangleAlert)}</span>}
+              {ic(narrow ? ChevronUp : ChevronRight)}
             </span>
           </Button>
           {state.scenes.length > 0 && (
-            <IconButton size="xs" title="Сцены чата" ariaLabel="Сцены чата" onClick={e => setMenuAt((e.currentTarget as HTMLElement).getBoundingClientRect())}>{ic(ChevronDown)}</IconButton>
+            <IconButton size={isMobile ? 'lg' : 'xs'} title="Сцены чата" ariaLabel="Сцены чата" onClick={e => setMenuAt((e.currentTarget as HTMLElement).getBoundingClientRect())}
+              style={isMobile ? { width: TOUCH, height: TOUCH } : undefined}>{ic(ChevronDown)}</IconButton>
           )}
-          {scene && !isMobile && <IconButton size="xs" title="Снять выбор — новая сцена" ariaLabel="Снять выбор — новая сцена" onClick={release}>{ic(X)}</IconButton>}
         </span>
         {fchip && (
           <span data-video-chip="film" style={{ display: 'inline-flex', minWidth: 0, flex: '0 1 auto', position: 'relative' }}>
             <Button size="xs" variant="secondary" title={filmStale ? 'Фильм изменён после сборки — пересоберите' : 'Открыть фильм в панели «Видео»'}
               onClick={() => openFilmPanel(sessionId)}
-              style={{ minWidth: 0, flex: '0 1 auto', height: 28, border: `1px solid ${C.border}`, background: C.bgWhite }}>
+              style={{ minWidth: 0, flex: '0 1 auto', height: h, border: `1px solid ${C.border}`, background: C.bgWhite }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
                 {ic(Film)}
-                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isMobile ? fchip.short : fchip.text}</span>
-                {filmStale && <span data-video-film-dot="" aria-label="Фильм изменён после сборки" style={{ width: 7, height: 7, borderRadius: R.full, background: C.info, flexShrink: 0 }} />}
-                {ic(isMobile ? ChevronUp : ChevronRight)}
+                {filmLabel}
+                {filmStale && <span data-video-film-dot="" aria-label="Фильм изменён после сборки" style={{ display: 'inline-flex', flexShrink: 0 }}><Dot color={C.info} /></span>}
+                {ic(narrow ? ChevronUp : ChevronRight)}
               </span>
             </Button>
           </span>
         )}
-        {work && !isMobile && <QueueBadge>{work}</QueueBadge>}
-        {!isMobile && <span style={{ flex: 1 }} />}
-        {!catalogReady && !isMobile && <span style={{ fontSize: FS.xs, color: C.textMuted }}>Загружаем…</span>}
-        {!isMobile && (
+        {work && !narrow && <QueueBadge>{work}</QueueBadge>}
+        {!narrow && <span style={{ flex: 1 }} />}
+        {!catalogReady && !narrow && <span style={{ fontSize: FS.xs, color: C.textMuted }}>Загружаем…</span>}
+        {!narrow && (
           <IconButton size="sm" title="Свернуть полосу в строку" ariaLabel="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
             {ic(ChevronUp, ICON_SIZE.sm)}
           </IconButton>
         )}
       </div>
       {menu}
-    </>
+    </>,
   );
 }

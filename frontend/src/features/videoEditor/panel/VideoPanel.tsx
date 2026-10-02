@@ -13,6 +13,7 @@ import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore'
 import { FilmTab, useFilmPanel } from '../film/FilmTab';
 import { flushSettings, releaseFocus, wireFrameBinding } from '../scene/actions';
 import { isPersonalScope, videoScope } from '../scope';
+import { TOUCH } from '../useBoxWidth';
 import { ensureVideoThreads, focusFilm, focusScene, getThreadsState, VIDEO_PANEL } from '../store/videoStore';
 import { ic } from './primitives';
 import { SceneTab } from './SceneTab';
@@ -42,7 +43,7 @@ export function VideoPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const personal = isPersonalScope(scope);
   wireFrameBinding();
   const m = useScene(ctx.projectId, sessionId);
-  const filmPanel = useFilmPanel(ctx.projectId, sessionId);
+  const filmPanel = useFilmPanel(ctx.projectId, sessionId, ctx.isMobile);
   // Первый запрос показа (панель смонтирована им же): вкладка — сразу, цель — эффектом ниже
   const [first] = useState<Wanted | null>(() => takeWanted());
   const [tab, setTab] = useState<Tab>(first?.tab ?? 'scene');
@@ -92,7 +93,7 @@ export function VideoPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   else if (scene) {
     context = (
       <span data-video-context="" style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        Работаем со: <b style={{ color: C.textHeading }}>{scene.name}</b>
+        Работаем с: <b style={{ color: C.textHeading }}>{scene.name}</b>
         {scene.filmRef ? ` · в фильме ${filmPanel.nameOf(scene.filmRef.path)}` : ' · не в фильме'}
       </span>
     );
@@ -117,7 +118,8 @@ export function VideoPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       onTabChange={setTab}
       context={context}
       contextAction={tab === 'scene' && scene
-        ? <IconButton size="xs" title="Снять выбор — новая сцена" ariaLabel="Снять выбор — новая сцена" onClick={release}>{ic(X)}</IconButton>
+        ? <IconButton size={ctx.isMobile ? 'lg' : 'xs'} title="Снять выбор — новая сцена" ariaLabel="Снять выбор — новая сцена" onClick={release}
+          style={ctx.isMobile ? { width: TOUCH, height: TOUCH } : undefined}>{ic(X)}</IconButton>
         : tab === 'film' ? filmPanel.contextAction : undefined}
       panelKey={VIDEO_PANEL}
       returnLink={returnTo ? { label: returnLabel(returnTo), onClick: () => returnToOrigin(VIDEO_PANEL, returnTo, sessionId ?? undefined) } : undefined}

@@ -68,6 +68,7 @@ import type {
 
 import { ColorsSection } from './ColorsSection';
 import { AudioPlayerKitSection } from './AudioPlayerKitSection';
+import { GenSharedKitSection } from './GenSharedKitSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -116,6 +117,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-toggles',    label: 'Переключатели'     },
   { id: 'sec-gen-panel',  label: 'Примитивы генерации' },
   { id: 'sec-gen-scaffold', label: 'Панель генерации' },
+  { id: 'sec-gen-shared', label: 'Общий слой генерации' },
   { id: 'sec-audio-player', label: 'Звук: плеер' },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
@@ -221,6 +223,11 @@ export function UiKitPage() {
             {/* Каркас GenerationPanel — четыре вида */}
             <div id="sec-gen-scaffold" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <GenPanelScaffoldSection />
+            </div>
+
+            {/* Общий слой панелей генерации (Г1) — переключатель, меню выбора, исполнитель, «Вернуть» */}
+            <div id="sec-gen-shared" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <GenSharedKitSection />
             </div>
 
             {/* Звук: плеер — волна, выделение куска, A/B, микшер стемов (синусы из браузера) */}

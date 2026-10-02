@@ -126,8 +126,10 @@ export function MenuSep() {
 export interface MenuItemAction { icon: ReactNode; title: string; onClick: () => void; disabled?: boolean }
 
 // Единый пункт выпадающего меню.
-export function MenuItem({ icon, label, hint, onClick, danger, disabled, wrapper, action, actions, isMobile }: {
+export function MenuItem({ icon, iconSize = 15, label, hint, onClick, danger, disabled, wrapper, action, actions, isMobile }: {
   icon?: ReactNode;
+  // Габарит слота иконки: миниатюре картинки в меню выбора («Что править?») 15 px мало
+  iconSize?: number;
   label: ReactNode;
   // Вторая строка под подписью — мета пункта (длительность · кто · когда), C.textMuted.
   // Без неё мета в одной строке с именем первой уходит под многоточие на узком экране
@@ -176,7 +178,7 @@ export function MenuItem({ icon, label, hint, onClick, danger, disabled, wrapper
       style={style}
     >
       {icon && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', width: 15, height: 15, flexShrink: 0, color: 'inherit' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', width: iconSize, height: iconSize, flexShrink: 0, color: 'inherit' }}>
           {icon}
         </span>
       )}

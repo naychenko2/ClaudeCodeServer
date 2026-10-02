@@ -99,7 +99,9 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
         onClick={expand}
         onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); } }}
         style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm, height: 30, margin: '4px 0 6px', padding: '0 6px 0 4px',
+          // Телефон: строка высотой с полную полосу, чтобы «⌄» встал тач-целью 40×40 (место — за счёт сводки)
+          display: 'flex', alignItems: 'center', gap: SP.sm, height: isMobile ? 42 : 30, margin: isMobile ? '6px 0' : '4px 0 6px',
+          padding: isMobile ? '0 0 0 4px' : '0 6px 0 4px',
           boxSizing: 'border-box', minWidth: 0, cursor: 'pointer',
           background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
         }}>
@@ -118,7 +120,10 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
             <IconButton size="xs" title="Снять выбор звука" ariaLabel="Снять выбор звука" onClick={release}>{ic(X)}</IconButton>
           </span>
         )}
-        <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ChevronDown, ICON_SIZE.sm)}</span>
+        <span data-sound-mini-expand="" style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: C.textMuted,
+          ...(isMobile && { width: 40, height: 40 }),
+        }}>{ic(ChevronDown, ICON_SIZE.sm)}</span>
       </div>
     );
   }

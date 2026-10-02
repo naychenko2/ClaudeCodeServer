@@ -111,17 +111,17 @@ async function chat(page: Page, mode: 'voice' | 'music' | 'process', withFile: b
   return sid;
 }
 
-async function openStrip(page: Page, sid: string, width: number, theme: 'light' | 'dark') {
+async function openStrip(page: Page, sid: string, width: number, theme: 'light' | 'dark', collapsed = false) {
   const mobile = width < 500;
   await page.setViewportSize({ width, height: mobile ? 780 : 900 });
-  await page.addInitScript(([tk, s, th]) => {
+  await page.addInitScript(([tk, s, th, c]) => {
     localStorage.setItem('cc_token', tk);
     localStorage.setItem('theme-mode', th);
     localStorage.setItem(`cc-composer-strip:${s}`, 'sound');
-    localStorage.setItem(`cc-composer-strip-collapsed:${s}:sound`, '0');
-  }, [token, sid, theme] as const);
+    localStorage.setItem(`cc-composer-strip-collapsed:${s}:sound`, c);
+  }, [token, sid, theme, collapsed ? '1' : '0'] as const);
   await page.goto(`/#/project/${projectId}/chat/${sid}`);
-  await expect(page.locator('[data-sound-strip="full"]')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(`[data-sound-strip="${collapsed ? 'mini' : 'full'}"]`)).toBeVisible({ timeout: 30_000 });
   const close = page.locator('[data-cc-src*="NotificationToasts"] [title="Закрыть"]');
   for (let i = 0; i < 5 && await close.count(); i++) await close.first().click().catch(() => {});
 }
@@ -287,5 +287,28 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(adv).toBeVisible();
     expect((await rect(adv)).height, 'строка «Ещё настройки» — тач-цель').toBeGreaterThanOrEqual(40);
     await shot(page, `panel-advanced-360-${theme}`);
+  });
+
+  // Свёрнутая строка на 360: сводка открывает панель, а развернуть полосу можно «⌄» — тач-цель 40×40
+  test(`360 ${theme}: свёрнутая полоса — «⌄» 40×40, сводка по-прежнему открывает панель`, async ({ page }) => {
+    await fixtures(page);
+    await openStrip(page, await chat(page, 'process', true), 360, theme, true);
+    const mini = page.locator('[data-sound-strip="mini"]');
+    const expand = mini.locator('[data-sound-mini-expand]');
+    const e = await rect(expand);
+    expect(e.width, '«⌄» шириной 40').toBeGreaterThanOrEqual(40);
+    expect(e.height, '«⌄» высотой 40').toBeGreaterThanOrEqual(40);
+    expect(inside(e, await rect(mini)), `«⌄» внутри строки: ${JSON.stringify(e)}`).toBeTruthy();
+    // Сводке остаётся место — она по-прежнему читается
+    expect((await rect(mini.locator('[data-sound-summary]'))).width, 'ширина сводки').toBeGreaterThanOrEqual(96);
+    await shot(page, `strip-collapsed-360-${theme}`);
+    await expand.click();
+    await expect(page.locator('[data-sound-strip="full"]')).toBeVisible();
+
+    await page.reload();
+    await expect(mini).toBeVisible({ timeout: 30_000 });
+    await mini.locator('[data-sound-summary]').click();
+    await expect(page.locator('[data-sound-settings]')).toBeVisible();
+    await expect(page.locator('[data-sound-strip="full"]')).toHaveCount(0);
   });
 }

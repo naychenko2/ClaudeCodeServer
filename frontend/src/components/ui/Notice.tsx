@@ -10,11 +10,15 @@ import type { LucideIcon } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './icons';
 
-export type NoticeTone = 'warning' | 'danger';
+export type NoticeTone = 'warning' | 'danger' | 'info';
 
-const TONE: Record<NoticeTone, { bg: string; fg: string; border: string }> = {
+// icon — свой цвет иконки. У info нет парного «текстового» токена, а C.info мелким
+// текстом на C.infoBg светлой темы не дотягивает до контраста 4.5:1 — поэтому текст
+// основной, а тон держат рамка и иконка
+const TONE: Record<NoticeTone, { bg: string; fg: string; border: string; icon?: string }> = {
   warning: { bg: C.warningBg, fg: C.warningText, border: C.warning },
   danger: { bg: C.dangerBg, fg: C.dangerText, border: C.dangerBorder },
+  info: { bg: C.infoBg, fg: C.textPrimary, border: C.info, icon: C.info },
 };
 
 interface Props extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
@@ -40,7 +44,7 @@ export function Notice({ tone = 'warning', icon: Icon, title, children, style, .
         ...style,
       }}
     >
-      <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: SP.xxs }} />
+      <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: SP.xxs, color: t.icon }} />
       <div style={{ minWidth: 0 }}>
         {title && <div style={{ fontWeight: 600 }}>{title}</div>}
         {children}

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useState, type ReactNode } from 'react';
 import { C, R, TB } from '../../lib/design';
+import type { SegmentOptionState } from './Segmented';
 
 // Группа иконок-переключателей: «списком | деревом», «список | по дате | доска».
 // Один выбранный вариант, подпись уходит в tooltip — форма для тесных мест,
@@ -31,7 +32,8 @@ const QUIET_EASE = 'cubic-bezier(.32,.72,0,1)';
 // себя), стартует с прошлой позиции и на следующем кадре доезжает до своей
 const segMemory = new Map<string, number>();
 
-export interface IconSegmentedOption<T extends string> {
+// title — подсказка вместо label (например, «Обработка — сначала выберите звук»)
+export interface IconSegmentedOption<T extends string> extends SegmentOptionState {
   value: T;
   label: string;    // tooltip кнопки
   icon: ReactNode;  // иконка 14px
@@ -89,7 +91,8 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
             onClick={() => onChange(opt.value)}
             onMouseEnter={() => setHover(opt.value)}
             onMouseLeave={() => setHover(null)}
-            title={opt.label}
+            disabled={opt.disabled}
+            title={opt.title ?? opt.label}
             style={{
               position: 'relative', width: BTN_W, height: BTN_H, padding: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -103,6 +106,9 @@ export function IconSegmented<T extends string>({ value, options, onChange, styl
               // виде подложка едва видна, и выбор дочитывается цветом
               color: quiet ? (active || hover === opt.value ? C.textHeading : C.textMuted) : C.textSecondary,
               transition: quiet ? 'background 0.12s, color 0.2s' : 'background 0.12s',
+              ...(opt.disabled
+                ? { cursor: 'not-allowed', opacity: 0.35, background: 'transparent' }
+                : opt.muted && !active ? { opacity: 0.5 } : null),
             }}
           >
             {opt.icon}

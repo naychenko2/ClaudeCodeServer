@@ -16,7 +16,7 @@ import { IconButton } from './IconButton';
 //    PanelShell держит transform ради анимации появления, и меню внутри панели
 //    уезжало на её смещение и обрезалось overflow острова.
 // Закрытие по Esc/скроллу в anchor-режиме — на вызывающей стороне (поведение, не контрол).
-export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, maxHeight = 300, gap = 6, anchorSide, inertBackdrop, children }: {
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, maxHeight = 300, gap = 6, anchorSide, inertBackdrop, fullWidth, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
@@ -42,6 +42,11 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   // мест дропа под ней события не доходят вовсе. Закрыть меню на старте
   // перетаскивания нельзя — исчезнувший источник не дождётся dragend.
   inertBackdrop?: boolean;
+  // Во всю ширину: в обычном режиме — по ширине родителя, в anchor-режиме — окна с
+  // полями по 8 px; minWidth/maxWidth/align не действуют, направление по вертикали
+  // прежнее. Для телефона 360, где меню встаёт над полосой, а не узкой карточкой у
+  // триггера. С anchorSide не сочетается и игнорируется
+  fullWidth?: boolean;
   children: ReactNode;
 }) {
   let pos: CSSProperties;
@@ -69,6 +74,10 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
     };
   } else {
     pos = { position: 'absolute', ...(bottom != null ? { bottom } : { top }), [align]: 0 };
+  }
+  if (fullWidth && !anchorSide) {
+    const edge = anchor ? 8 : 0;
+    pos = { ...pos, left: edge, right: edge, minWidth: 0, maxWidth: 'none' };
   }
   // Слой: обычное меню живёт внутри своего родителя и обходится Z.dropdown, а меню
   // в anchor-режиме уходит ПОРТАЛОМ в body — то есть наружу контекста наложения того,

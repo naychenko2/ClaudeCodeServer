@@ -58,7 +58,7 @@ function ProgressCaption({ text }: { text: string }) {
     i % 2 ? <span key={i} style={{ color: C.dangerText }}>{part}</span> : part)}</>;
 }
 
-// Строка этапов прогона: «✓ сборка 1:42 · ✓ подсчёт 0:03 · тесты 2:13 · 412 из 7951».
+// Строка этапов прогона: «✓ сборка 1:42 · тесты 2:13 · 412 из 7951».
 // Прошедшие прижимаются и режутся многоточием, текущий этап с подписью прогресса — никогда:
 // даже на 320 px видно, что идёт сейчас. Этап, на котором оборвалось, — крестиком и красным
 function StageLine({ stages, caption }: { stages: StageView[]; caption: string | null }) {
@@ -282,7 +282,8 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   }), [item.stages, item.startedAt, item.finishedAt, item.id, running, aborted, shownElapsed, liveness]);
   const hasStages = stages.length > 0;
   // С этапами подпись прогресса едет при текущем этапе, а не в шапке (тесты — счётчик,
-  // очередь — «занято 2»); «сборка» и «подсчёт» сами себе подпись — при них только счётчик этапа
+  // очередь — «занято 2»); «сборка» и подсчёт под «тестами» сами себе подпись — при них только
+  // счётчик этапа
   const stageCaption = hasStages ? stageCaptionOf(item.progress) : null;
   // На мобиле подпись прогресса и итог — отдельной строкой под шапкой у ВСЕХ карточек
   // (шапка остаётся описанию, итог у всех стоит на одном месте). Строка держится с начала

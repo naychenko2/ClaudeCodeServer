@@ -365,7 +365,32 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     const html = render(run({ result: 'итог', finishedAt: 135_000, stages: done3, totals: { passed: 174, failed: 3, total: 177 } }), undefined, false);
     expect(html).toContain('готово · 2:15');
     expect(html).toContain('174 из 177 · <span style="color:var(--c-danger-text)">упало 3</span>');
-    expect(html).toContain('✓ сборка 1:02 · ✓ подсчёт 0:02 · ✓ тесты 1:11');
+    // Старая история с отдельным подсчётом: он схлопнут в «тесты», время прибавлено к ним
+    expect(html).toContain('✓ сборка 1:02 · ✓ тесты 1:13');
+    expect(html).not.toContain('подсчёт');
+  });
+
+  it('прервано на подсчёте (старая история): «✕ тесты» с временем подсчёта', () => {
+    const stages = [
+      { stage: 'build', label: 'сборка', startedAt: 0, endedAt: 60_000 },
+      { stage: 'list', label: 'подсчёт', startedAt: 60_000 },
+    ];
+    const item = run({ stages });
+    const html = render(item, [item, { kind: 'interrupted', ts: 63_000 }], false);
+    expect(html).toContain('✓ сборка 1:00');
+    expect(html).toContain('✕ тесты 0:03');
+    expect(html).not.toContain('подсчёт');
+  });
+
+  it('идёт подсчёт: текущий этап «тесты» без подписи и полосы', () => {
+    const item = run({
+      stages: [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 102_000 }, { stage: 'running', label: 'тесты', startedAt: 102_000 }],
+      progress: { stage: 'list', label: 'подсчёт тестов' },
+    });
+    const html = render(item);
+    expect(html).toContain('font-weight:600">тесты');
+    expect(html).not.toContain('подсчёт');
+    expect(html).not.toContain('progressbar');
   });
 
   it('готово без упавших — «177 из 177» без «упало»', () => {
@@ -406,7 +431,7 @@ describe('ToolUseView — этапы и итог run_tests', () => {
       { kind: 'tool_use', id: 'rt', name: 'mcp__tests__run_tests', input: {}, result: 'итог', startedAt: 0, finishedAt: 135_000, stages: done3, totals: { passed: 174, failed: 3, total: 177 } },
     ]);
     const html = render(items[0] as ToolItem, items, false);
-    expect(html).toContain('✓ тесты 1:11');
+    expect(html).toContain('✓ тесты 1:13');
     expect(html).toContain('174 из 177');
   });
 

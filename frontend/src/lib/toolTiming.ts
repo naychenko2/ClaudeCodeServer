@@ -71,14 +71,31 @@ export const QUEUE_STAGE_MIN_MS = 2000;
 // восстановить (старая история, этап без конца)
 export interface StageView { key: string; label: string; ms: number | null; state: 'done' | 'current' | 'failed' }
 
+// Подсчёт тестов отдельным этапом на карточке не показываем: он входит в «тесты». Сервер его
+// уже не шлёт, а в сохранённой истории он есть — сливаем со следующим этапом (тот начинается с
+// начала подсчёта), а последний (обрыв на подсчёте) переименовываем в «тесты»
+function foldListStage(stages: readonly ToolStage[]): readonly ToolStage[] {
+  if (!stages.some(s => s.stage === 'list')) return stages;
+  const out: ToolStage[] = [];
+  let listStart: number | null = null;
+  stages.forEach((s, i) => {
+    if (s.stage === 'list' && i < stages.length - 1) { listStart ??= s.startedAt; return; }
+    const folded = s.stage === 'list' ? { ...s, stage: 'running', label: 'тесты' } : s;
+    out.push(listStart != null ? { ...folded, startedAt: listStart } : folded);
+    listStart = null;
+  });
+  return out;
+}
+
 // Строка этапов run_tests из снимка сервера. now — «сейчас» по часам карточки (идёт), endAt —
 // конец вызова (finishedAt результата или момент обрыва): им закрывается этап, который сервер
 // не успел закрыть. aborted — вызов оборван: незакрытый последний этап — на нём и оборвалось
 export function stageViews(
-  stages: readonly ToolStage[] | null | undefined,
+  raw: readonly ToolStage[] | null | undefined,
   opts: { running: boolean; aborted: boolean; now: number | null; endAt: number | null },
 ): StageView[] {
-  if (!stages?.length) return [];
+  if (!raw?.length) return [];
+  const stages = foldListStage(raw);
   const views: StageView[] = [];
   stages.forEach((s, i) => {
     const last = i === stages.length - 1;
@@ -104,7 +121,7 @@ export function isFinalStages(
 
 // Подпись при текущем этапе в строке этапов. Тесты — подпись прогресса целиком («тесты 12 из
 // 177»); очередь — только подробность из скобок («занято 2»): слово «очередь» уже в этапе.
-// «Сборка» и «подсчёт» сами себе подпись
+// «Сборка» сама себе подпись; подсчёт идёт под этапом «тесты» без подписи и процента
 export function stageCaptionOf(p: ToolProgress | null | undefined): string | null {
   if (!p?.label) return null;
   if (p.stage === 'running') return p.label;

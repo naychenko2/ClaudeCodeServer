@@ -97,7 +97,7 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
           variant="ghost" size="xs"
           leftIcon={current.action!.icon}
           title={`${current.action!.title} — сменить полосу над полем ввода`}
-          style={{ fontWeight: 600, color: C.textHeading, paddingLeft: SP.xs, paddingRight: SP.xs }}
+          style={{ fontWeight: 600, color: C.textHeading, border: 'none', paddingLeft: SP.xs, paddingRight: SP.xs }}
           onClick={(e: MouseEvent) => {
             if (isMobile) setSheet(true);
             else setMenu((e.currentTarget as HTMLElement).getBoundingClientRect());
@@ -115,7 +115,6 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
           </span>
         )}
       </span>
-      <span style={{ width: 1, height: collapsed ? 16 : 22, background: C.divider, flexShrink: 0 }} />
       {menu && (
         <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={290} maxWidth={360} maxHeight={200}>
           {items}

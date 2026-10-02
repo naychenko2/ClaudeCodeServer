@@ -16,6 +16,9 @@ import { isPersonalScope, videoScope } from '../scope';
 
 const QUOTE_DELAY = 600;
 
+// Пока цены нет — как у «Картинок»: честно «уточняется», а не пустое место
+const PRICE_PENDING = (count: number, sec: number): [string, string] => ['Цена уточняется', `${count} ${plural(count, 'вариант', 'варианта', 'вариантов')} · ${sec} с`];
+
 export interface SceneModel {
   scope: string;
   personal: boolean;
@@ -35,7 +38,52 @@ export interface SceneModel {
   run: (extra?: string) => Promise<boolean>;
 }
 
-const headline = (q: VideoQuote) => priceLines(q, q.count, q.durationSec)?.[0] ?? null;
+export const headline = (q: VideoQuote) => priceLines(q, q.count, q.durationSec)?.[0] ?? null;
+
+// Одна котировка на набор настроек: панель, полоса и кнопка композера смотрят в один запрос
+const QUOTE_TTL = 15_000;
+const _quotes = new Map<string, { at: number; p: Promise<VideoQuote> }>();
+function quoteOnce(scope: string, sessionId: string, body: Parameters<typeof videoApi.quote>[2]): Promise<VideoQuote> {
+  const key = [scope, sessionId, body.sceneId, body.provider, body.model, body.count, body.durationSec, body.aspect, body.sound].join('|');
+  const hit = _quotes.get(key);
+  if (hit && Date.now() - hit.at < QUOTE_TTL) return hit.p;
+  const p = videoApi.quote(scope, sessionId, body);
+  _quotes.set(key, { at: Date.now(), p });
+  p.catch(() => { if (_quotes.get(key)?.p === p) _quotes.delete(key); });
+  return p;
+}
+
+// Котировка: цена и ETA до запуска; пересчёт по смыслу настроек, а не по ссылкам. Цена уходит в стор —
+// из него её берут полоса и кнопка композера, пока панель закрыта
+export function useSceneQuote(scope: string, sessionId: string | null, scene: VideoScene | null, catalog: VideoCatalog | null, r: ResolvedScene) {
+  const [quote, setQuote] = useState<VideoQuote | null>(null);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const providerKey = r.provider?.key ?? null;
+  const modelId = r.model?.id ?? null;
+  const canQuote = !!sessionId && !!scene && !!catalog && catalog.providers.some(p => p.available);
+  useEffect(() => {
+    setQuote(null);
+    setQuoteError(null);
+    if (!canQuote || !sessionId || !scene) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      quoteOnce(scope, sessionId, {
+        sessionId, sceneId: scene.sceneId, ...(providerKey && modelId ? { provider: providerKey, model: modelId } : {}),
+        count: r.count, durationSec: r.durationSec, aspect: r.aspect, sound: r.sound,
+      }).then(
+        q => { if (alive) setQuote(q); },
+        (e: Error) => { if (alive) setQuoteError(e.message || 'Цена не посчиталась'); },
+      );
+    }, QUOTE_DELAY);
+    return () => { alive = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- по смыслу настроек
+  }, [canQuote, scope, sessionId, scene?.sceneId, providerKey, modelId, r.count, r.durationSec, r.aspect, r.sound]);
+  useEffect(() => {
+    if (sessionId && scene) setPriceHint(sessionId, scene.sceneId, quote ? headline(quote) : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- по сцене и котировке
+  }, [sessionId, scene?.sceneId, quote]);
+  return { quote, quoteError, setQuoteError };
+}
 
 export const progressLabel = (scene: VideoScene | null, jobs: JobProgress[], count: number): { label: string; p?: number } => {
   const j = jobs[0];
@@ -66,29 +114,9 @@ export function useScene(projectId: string | null, sessionId: string | null): Sc
   const failure = getFailure(sessionId, scene?.sceneId ?? null);
   const draftKey = scene ? sceneDraftKey(scene.sceneId) : null;
 
-  // Котировка: цена и ETA до запуска; пересчёт по смыслу настроек, а не по ссылкам
-  const [quote, setQuote] = useState<VideoQuote | null>(null);
-  const [quoteError, setQuoteError] = useState<string | null>(null);
   const providerKey = r.provider?.key ?? null;
   const modelId = r.model?.id ?? null;
-  const canQuote = !!sessionId && !!scene && !!catalog && catalog.providers.some(p => p.available);
-  useEffect(() => {
-    setQuote(null);
-    setQuoteError(null);
-    if (!canQuote || !sessionId || !scene) return;
-    let alive = true;
-    const t = setTimeout(() => {
-      videoApi.quote(scope, sessionId, {
-        sessionId, sceneId: scene.sceneId, ...(providerKey && modelId ? { provider: providerKey, model: modelId } : {}),
-        count: r.count, durationSec: r.durationSec, aspect: r.aspect, sound: r.sound,
-      }).then(
-        q => { if (alive) setQuote(q); },
-        (e: Error) => { if (alive) setQuoteError(e.message || 'Котировка не получилась'); },
-      );
-    }, QUOTE_DELAY);
-    return () => { alive = false; clearTimeout(t); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- по смыслу настроек
-  }, [canQuote, scope, sessionId, scene?.sceneId, providerKey, modelId, r.count, r.durationSec, r.aspect, r.sound]);
+  const { quote, quoteError, setQuoteError } = useSceneQuote(scope, sessionId, scene, catalog, r);
 
   const anyAvailable = !!catalog?.providers.some(p => p.available);
   const providerOk = r.auto ? anyAvailable : !!r.provider?.available;
@@ -98,18 +126,13 @@ export function useScene(projectId: string | null, sessionId: string | null): Sc
     quoteError, running,
   });
 
-  useEffect(() => {
-    if (sessionId && scene) setPriceHint(sessionId, scene.sceneId, quote ? headline(quote) : null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- по сцене и котировке
-  }, [sessionId, scene?.sceneId, quote]);
-
   // Цена ещё в пути (клик сразу после правки) — котировку берём тут же: запуск всё равно строго по ней
   const run = async (extra = '') => {
     if (!sessionId || !scene || reason) return false;
     const q = quote ?? await videoApi.quote(scope, sessionId, {
       sessionId, sceneId: scene.sceneId, ...(providerKey && modelId ? { provider: providerKey, model: modelId } : {}),
       count: r.count, durationSec: r.durationSec, aspect: r.aspect, sound: r.sound,
-    }).catch((e: Error) => { setQuoteError(e.message || 'Котировка не получилась'); return null; });
+    }).catch((e: Error) => { setQuoteError(e.message || 'Цена не посчиталась'); return null; });
     if (!q) return false;
     return runScene({ scope, sessionId, scene, r, quote: q }, extra);
   };
@@ -122,7 +145,7 @@ export function useScene(projectId: string | null, sessionId: string | null): Sc
     reason: reason ?? undefined,
     queue,
     count: r.count,
-    price: price ?? (scene ? undefined : undefined),
+    price: price ?? PRICE_PENDING(r.count, r.durationSec),
     runLabel: hasClip(scene) ? 'Переснять' : 'Снять',
     onRun: () => { void run().then(ok => { if (ok) clearGenDraft(draftKey); }); },
   };

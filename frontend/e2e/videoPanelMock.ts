@@ -247,7 +247,7 @@ function runBuild(f: Film) {
     f.marks = f.marks.map(m => ({ ...m, updated: false, stale: false }));
     f.revision = `r${Number(f.revision.slice(1)) + 1}`;
     pushFilm(f);
-    pushRecord(record('video_film_built', { path: f.path, file: out }, `Фильм собран: ${out}`, Date.now()));
+    pushRecord(record('video_film_built', { path: f.path, file: out, initiator: 'human' }, `Вы собрали фильм: ${out}`, Date.now()));
   }, 900);
 }
 
@@ -377,7 +377,7 @@ export async function mockApi(page: Page, trace = false) {
         }
         world.revision++;
         setTimeout(pushThreads, 30);
-        pushRecord(record('video_saved', { sceneId: s.sceneId, path: out }, `Сцена сохранена: ${out}${added ? ' · стоит в фильме' : ''}`, Date.now()));
+        pushRecord(record('video_saved', { sceneId: s.sceneId, path: out, initiator: 'human' }, `Вы сохранили ${s.name.toLowerCase()}: ${out}${added ? ' · стоит в фильме' : ''}`, Date.now()));
         return json({ path: out, framePaths: [], addedToFilm: added });
       }
       if (sm[4] === 'file') return r.fulfill({ contentType: 'video/mp4', body: MP4 });
@@ -406,7 +406,7 @@ export async function mockApi(page: Page, trace = false) {
       if (s) {
         s.launches.push({ jobId, at: now, status: 'running', interrupted: false, initiator: 'human', provider: q.provider ?? 'fal', model: q.model ?? 'veo-3.1', count: q.count ?? 1, prompt: s.settings.text });
         world.revision++;
-        pushRecord(record('video_launch_versions', { sceneId: s.sceneId, jobId, count: q.count ?? 1, initiator: 'human' }, 'Вы запустили съёмку', Date.now()));
+        pushRecord(record('video_launch_versions', { sceneId: s.sceneId, jobId, provider: q.provider ?? 'fal', model: q.model ?? 'veo-3.1', count: q.count ?? 1, price: q.price, initiator: 'human' }, 'Вы запустили съёмку', Date.now()));
         hubSend({ type: 'video_edit_progress', sessionId: S, scopeKey: scope(), jobId, sceneId: s.sceneId, stage: 'running', variant: 1, count: q.count ?? 1, initiator: 'human' });
         pushThreads();
         if (world.autoFinish) setTimeout(() => finishJob(jobId), 400);

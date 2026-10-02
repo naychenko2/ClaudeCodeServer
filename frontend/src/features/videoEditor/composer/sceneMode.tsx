@@ -1,12 +1,14 @@
 // Режим композера «Сцена» (слот composer-mode; макет v7): есть только при выбранной сцене, текст поля —
 // просьба к съёмке: она добавляется к тексту сцены, кадры и настройки берутся из панели. Запуск идёт мимо
-// агента, по свежей котировке (деньги — только quote → job).
+// агента, по свежей цене (деньги — только quote → job).
 
 import { Clapperboard, Sparkles } from 'lucide-react';
 import { FLAGS, getFlag, showToast, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { ComposerModeApi, ComposerModeCtx } from '../../../lib/subsystems/registryCore';
 import { errorText, videoApi } from '../api';
 import { currentResolved, runScene } from '../scene/actions';
+import { useSceneQuote } from '../panel/useScene';
+import { PRICE_UNKNOWN } from '../strip/summary';
 import { hasClip, runReason } from '../scene/model';
 import { videoScope, isPersonalScope } from '../scope';
 import { getCatalog, getFocusedScene, getPriceHint, sceneDraftKey, useVideoThreads, useVideoStoreVersion } from '../store/videoStore';
@@ -20,11 +22,12 @@ function useModel(ctx: ComposerModeCtx) {
 }
 
 function SubmitLabel({ ctx }: { ctx: ComposerModeCtx }) {
-  const { scene, price } = useModel(ctx);
+  const { scope, scene, r, price } = useModel(ctx);
+  useSceneQuote(scope, ctx.sessionId, scene, getCatalog(scope), r);
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap' }}>
       <Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-      {hasClip(scene) ? 'Переснять' : 'Снять'}{price ? ` · ${price}` : ''}
+      {hasClip(scene) ? 'Переснять' : 'Снять'} · {price ?? PRICE_UNKNOWN}
     </span>
   );
 }
@@ -77,7 +80,7 @@ async function submit(ctx: ComposerModeCtx, text: string) {
     });
     if (!await runScene({ scope, sessionId, scene, r, quote }, text)) throw new Error('Съёмка не запущена');
   } catch (e) {
-    if ((e as Error).message !== 'Съёмка не запущена') showToast(errorText(e, 'Котировка не получилась'), '', 'error');
+    if ((e as Error).message !== 'Съёмка не запущена') showToast(errorText(e, 'Цена не посчиталась'), '', 'error');
     throw e;
   }
 }

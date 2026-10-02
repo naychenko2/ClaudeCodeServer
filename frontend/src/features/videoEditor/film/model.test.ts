@@ -44,6 +44,10 @@ describe('сборка и «обновлена»', () => {
     expect(staleReasons(f)).toEqual(['сцена 3 обновлена']);
     expect(staleFilm(f)).toBe(true);
   });
+  it('фильм ни разу не собирали — синей точки «изменён после сборки» нет', () => {
+    expect(staleFilm(film({ marks: [{ index: 2, claude: false, updated: true, stale: false }] }))).toBe(false);
+    expect(staleFilm(film())).toBe(false);
+  });
 });
 
 describe('стыки с соседями', () => {

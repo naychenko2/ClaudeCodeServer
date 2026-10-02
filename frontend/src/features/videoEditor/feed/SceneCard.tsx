@@ -6,24 +6,28 @@
 // строит только запись ленты и стор, а не текст ответа инструмента; отличие — одна метка «✦ Claude».
 // Клик по карточке, а не по её кнопке, — выбор человеком: панель следует за ним, только если открыта.
 
-import { useState, type ReactNode } from 'react';
+import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Save } from 'lucide-react';
 import {
-  Badge, Button, ByClaude, C, FLAGS, FS, IconButton, ProgressBar, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, isCardPick, showToast, useFeature,
+  Badge, Button, ByClaude, C, FLAGS, FS, IconButton, ProgressBar, R, SHADOW, SP, ICON_SIZE, isCardPick, showToast, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
-import { videoApi, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
+import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
 import { snapshotOf } from '../film/model';
 import { progressLabel } from '../panel/useScene';
 import { downloadClip, openFilmPanel, openScenePanel, saveScene, selectFilmByHuman, selectSceneByHuman, takeVersion } from '../scene/actions';
-import { currentVersion, plural, staleNotes } from '../scene/model';
+import { currentVersion, modelLabel, plural, staleNotes } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
 import {
-  filmName, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, patchFilm, useVideoStoreVersion, useVideoThreads, type JobProgress,
+  filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, patchFilm, useVideoStoreVersion, useVideoThreads, type JobProgress,
 } from '../store/videoStore';
+import { ic } from '../panel/primitives';
 import { recordOf, str } from './records';
 
-const ic = (I: typeof Film, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
+
+// Потолки карточки в ленте: ширина читаемой колонки и высота плеера
+const CARD_MAX_W = 560;
+const PLAYER_MAX_H = 280;
 
 // ── Модель карточки: чистая функция от сцены, записи ленты и хода задач ──
 
@@ -35,6 +39,17 @@ export function priceOfRecord(price: unknown): string | null {
   if (typeof p.amount !== 'number') return null;
   if (p.unit === 'credits') return `${Math.round(p.amount)} ${plural(Math.round(p.amount), 'кредит', 'кредита', 'кредитов')}`;
   return `${p.approx ? '≈ ' : ''}$${p.amount.toFixed(2)}`;
+}
+
+// Цена, когда в записи ленты её нет: сумма стоимостей готовых вариантов запуска
+export function priceOfVersions(versions: VideoClipVersion[]): string | null {
+  const costs = versions.map(v => v.cost).filter((c): c is NonNullable<VideoClipVersion['cost']> => !!c);
+  if (!costs.length) return null;
+  if (costs.every(c => c.currency === 'local')) return 'бесплатно';
+  const usd = costs.filter(c => c.currency === 'usd').reduce((n, c) => n + c.amount, 0);
+  if (usd > 0) return `$${usd.toFixed(2)}`;
+  const cr = Math.round(costs.filter(c => c.currency === 'credits').reduce((n, c) => n + c.amount, 0));
+  return cr > 0 ? `${cr} ${plural(cr, 'кредит', 'кредита', 'кредитов')}` : null;
 }
 
 export interface SceneCardView {
@@ -52,6 +67,8 @@ export interface SceneCardView {
   versions: VideoClipVersion[];
   index: number;
   version: VideoClipVersion | null;
+  // Подпись модели версии — из каталога, не сырой id
+  versionModel: string | null;
   isCurrent: boolean;
   savedPath: string | null;
   canSave: boolean;
@@ -64,7 +81,7 @@ export interface SceneCardView {
 
 export function sceneCardView(p: {
   scene: VideoScene; jobId?: string | null; record?: Record<string, unknown>; personal: boolean; focused: boolean;
-  jobs: JobProgress[]; pos: number | null;
+  jobs: JobProgress[]; pos: number | null; catalog?: VideoCatalog | null;
 }): SceneCardView {
   const { scene, jobId, record, personal } = p;
   const launch: VideoLaunch | undefined = jobId ? scene.launches.find(l => l.jobId === jobId) : scene.launches[scene.launches.length - 1];
@@ -75,9 +92,9 @@ export function sceneCardView(p: {
   const jobs = p.jobs.filter(j => !jobId || j.jobId === jobId);
   const running = launch?.status === 'running' || jobs.length > 0;
   const initiator = str(record?.initiator) ?? launch?.initiator ?? (jobId ? null : version?.initiator) ?? null;
-  const model = str(record?.model) ?? launch?.model ?? null;
+  const model = modelLabel(p.catalog ?? null, str(record?.provider) ?? launch?.provider, str(record?.model) ?? launch?.model);
   const count = typeof record?.count === 'number' ? record.count : launch?.count;
-  const price = priceOfRecord(record?.price);
+  const price = priceOfRecord(record?.price) ?? priceOfVersions(versions);
   const launchLine = jobId
     ? [model, count ? `${count} вар.` : null, price].filter(Boolean).join(' · ') || null
     : null;
@@ -98,6 +115,7 @@ export function sceneCardView(p: {
     versions,
     index,
     version,
+    versionModel: version ? modelLabel(p.catalog ?? null, version.provider, version.model) : null,
     isCurrent: !!version && version.versionId === cur?.versionId,
     savedPath: saved?.path ?? null,
     canSave: !!version && !personal && !saved,
@@ -112,9 +130,10 @@ export function sceneCardView(p: {
 // ── Разметка: одна для человека и агента ──
 
 function Line({ children, onClick, by }: { children: ReactNode; onClick?: () => void; by?: boolean }) {
+  const key = (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(); } };
   return (
-    <div data-video-line="" onClick={onClick} style={{
-      display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45,
+    <div data-video-line="" onClick={onClick} {...(onClick ? { role: 'button', tabIndex: 0, onKeyDown: key } : {})} style={{
+      display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: SP.xs, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45,
       cursor: onClick ? 'pointer' : undefined, overflowWrap: 'anywhere',
     }}>{children}{by && <ByClaude />}</div>
   );
@@ -137,17 +156,17 @@ export function SceneCardView({ v, src, busy, a }: { v: SceneCardView; src: stri
     <div data-video-card={v.kind} data-scene={v.sceneId} data-current={v.focused ? 'true' : 'false'}
       onClick={e => { if (isCardPick(e.target, e.currentTarget)) a.onPick(); }}
       style={{
-        display: 'flex', flexDirection: 'column', gap: SP.sm, padding: SP.md, width: '100%', maxWidth: 560, boxSizing: 'border-box',
+        display: 'flex', flexDirection: 'column', gap: SP.sm, padding: SP.md, width: '100%', maxWidth: CARD_MAX_W, boxSizing: 'border-box',
         border: `1px solid ${v.focused ? C.accent : C.border}`, borderRadius: R.xl, background: C.bgCard, minWidth: 0, cursor: 'pointer',
-        boxShadow: v.focused ? `${SHADOW.card}, 0 0 0 3px ${C.accentLight}` : SHADOW.card,
+        boxShadow: v.focused ? `${SHADOW.card}, ${SHADOW.selected}` : SHADOW.card,
       }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0, flexWrap: 'wrap' }}>
         <span style={{ display: 'inline-flex', color: C.accent }}>{ic(Clapperboard, ICON_SIZE.sm)}</span>
         <b style={{ fontSize: FS.base, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.name}</b>
-        {v.version && <span style={{ fontSize: FS.xs, color: C.textMuted }}>· версия {v.version.number} · {v.version.model} · {v.version.durationSec} с</span>}
+        {v.version && <span style={{ fontSize: FS.xs, color: C.textMuted }}>· версия {v.version.number} · {v.versionModel ?? v.version.model} · {v.version.durationSec} с</span>}
         <span style={{ flex: 1 }} />
         {v.byClaude && <ByClaude title={v.progress ? 'Claude снимает эту сцену' : 'Сделал Claude'} />}
-        {v.focused && <Badge size="xs" tone="neutral">в работе</Badge>}
+        {v.focused && <Badge size="xs" tone="neutral">в панели</Badge>}
       </div>
       {v.launchLine && <div data-video-launch-line="" style={{ fontSize: FS.sm, color: C.textSecondary }}>{v.launchLine}</div>}
       {v.progress && (
@@ -159,7 +178,7 @@ export function SceneCardView({ v, src, busy, a }: { v: SceneCardView; src: stri
       {v.failure && <Line>{v.failure}</Line>}
       {v.version && src && (
         <video data-video-player="" controls preload="metadata" playsInline src={src}
-          style={{ width: '100%', maxHeight: 280, borderRadius: R.md, background: C.bgInset, display: 'block' }} />
+          style={{ width: '100%', maxHeight: PLAYER_MAX_H, borderRadius: R.md, background: C.bgInset, display: 'block' }} />
       )}
       {v.versions.length > 1 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
@@ -183,7 +202,8 @@ export function SceneCardView({ v, src, busy, a }: { v: SceneCardView; src: stri
       </div>
       {v.film && (
         <Line onClick={a.onOpenFilm}>
-          {ic(Film)} В фильме «{v.film.name}» · место {v.film.position + 1} · <span style={{ color: C.accent }}>Открыть «Фильм» →</span>
+          {ic(Film)}<span>В фильме «{v.film.name}» · <span style={{ whiteSpace: 'nowrap' }}>место {v.film.position + 1}</span></span>
+          <span style={{ color: C.accent, whiteSpace: 'nowrap' }}>Открыть «Фильм» →</span>
         </Line>
       )}
     </div>
@@ -221,7 +241,7 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const scene = state.scenes.find(s => s.sceneId === sceneId) ?? null;
   if (!scene || !sessionId) return null;
   const v = sceneCardView({
-    scene, jobId, record, personal, focused: state.focus.sceneId === scene.sceneId, jobs: getJobsOf(sessionId, scene.sceneId), pos,
+    scene, jobId, record, personal, focused: state.focus.sceneId === scene.sceneId, jobs: getJobsOf(sessionId, scene.sceneId), pos, catalog: getCatalog(scope),
   });
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
   const ver = v.version;

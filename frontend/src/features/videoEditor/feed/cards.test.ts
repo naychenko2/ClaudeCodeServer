@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { VideoScene } from '../api';
-import { scene, version } from '../mocks';
+import { CATALOG, scene, version } from '../mocks';
 import { quietView, QuietLineView, sceneCardView, SceneCardView, type SceneCardActions } from './SceneCard';
 
 // Дополнение плана 2026-10-02: действие агента рисуется ТОЙ ЖЕ разметкой, что действие человека, —
@@ -16,7 +16,7 @@ const render = (s: VideoScene, who: 'human' | 'agent', o: { jobId?: string; reco
   const v = sceneCardView({
     scene: s, jobId: o.jobId, record: o.record ? { ...o.record, initiator: who } : undefined, personal: false, focused: false,
     jobs: o.running ? [{ jobId: 'job-7', sessionId: 'c1', sceneId: s.sceneId, stage: 'running', queuePosition: null, etaSeconds: null, variant: 1, count: 2 }] : [],
-    pos: null,
+    pos: null, catalog: CATALOG,
   });
   return { v, html: renderToStaticMarkup(createElement(SceneCardView, { v, src: '/clip.mp4', busy: false, a: A })) };
 };
@@ -75,5 +75,26 @@ describe('карточки «Видео»: агент — та же размет
       expect(a.replace(BY, '')).toBe(h);
     }
     expect(quietView('video_film_built', { path: 'video/утро/утро.film' }, '').filmPath).toBe('video/утро/утро.film');
+  });
+
+  it('карточка человека = карточка агента: подпись модели из каталога и цена, а не сырой id', () => {
+    // запись ленты как её пишет бэкенд: id модели и цена, одинаково у обоих
+    const rec = { sceneId: 's1', jobId: 'job-7', provider: 'fal', model: 'veo-3.1', count: 2, durationSec: 8, price: { amount: 3.2, unit: 'usd', approx: true, source: 'pricing' } };
+    const h = render(shot('human'), 'human', { jobId: 'job-7', record: rec });
+    const a = render(shot('agent'), 'agent', { jobId: 'job-7', record: rec });
+    expect(h.html).toContain('Veo 3.1 · 2 вар. · ≈ $3.20');
+    expect(h.html).not.toContain('veo-3.1');
+    expect(a.html).not.toContain('veo-3.1');
+    expect(h.html).not.toMatch(BY);
+    expect(a.html).toMatch(BY);
+    expect(a.html.replace(BY, '')).toBe(h.html);
+  });
+
+  it('в записи нет цены — обоим берётся стоимость готовых вариантов', () => {
+    const rec = { sceneId: 's1', jobId: 'job-7', provider: 'fal', model: 'veo-3.1', count: 2 };
+    const h = render(shot('human'), 'human', { jobId: 'job-7', record: rec });
+    const a = render(shot('agent'), 'agent', { jobId: 'job-7', record: rec });
+    expect(h.html).toContain('Veo 3.1 · 2 вар. · $3.20');
+    expect(a.html.replace(BY, '')).toBe(h.html);
   });
 });

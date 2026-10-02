@@ -9,7 +9,8 @@ import type {
 
 export const TEXT_MAX = 2000;
 export const LOCAL_PROVIDER = 'local';
-export const PERSONAL_LOCAL_REASON = 'Локальные модели работают только в чате проекта — результат ложится в его папку';
+// Один текст отказа: что нельзя, почему и что делать (сервер в LocalVideoEngine говорит то же по смыслу)
+export const PERSONAL_LOCAL_REASON = 'Локальные модели работают только в чате проекта: клипу некуда лечь. Выберите другого поставщика или откройте проект';
 
 export interface ResolvedScene {
   provider: VideoProvider | null;
@@ -32,6 +33,19 @@ export const findProvider = (catalog: VideoCatalog | null, key: string | undefin
 
 export const findModel = (p: VideoProvider | null, id: string | undefined | null) =>
   (id && p?.models.find(m => m.id === id)) || null;
+
+// Подпись модели для человека: «Veo 3.1», а не «veo-3.1». Нет в каталоге — как пришло.
+// Один источник и для карточки человека, и для карточки агента
+export function modelLabel(catalog: VideoCatalog | null, providerKey: string | null | undefined, id: string | null | undefined): string | null {
+  if (!id) return null;
+  const own = findModel(findProvider(catalog, providerKey), id);
+  if (own) return own.label;
+  for (const p of catalog?.providers ?? []) {
+    const m = p.models.find(x => x.id === id || x.label === id);
+    if (m) return m.label;
+  }
+  return id;
+}
 
 // Ближайшее значение из списка, который понимает модель
 export function snapTo(values: readonly number[], want: number | undefined): number | undefined {

@@ -180,7 +180,7 @@ export async function runScene(i: RunInput, extraText = ''): Promise<boolean> {
     return true;
   } catch (e) {
     setFailure(sessionId, { sceneId: scene.sceneId, text: errorText(e, 'Съёмка не запустилась'), retry: retryOf(e) });
-    if (errorCode(e) === ERR.quoteNotFound) showToast('Котировка устарела — цена пересчитана, нажмите ещё раз', '', 'info');
+    if (errorCode(e) === ERR.quoteNotFound) showToast('Цена устарела — она пересчитана, нажмите ещё раз', '', 'info');
     return false;
   }
 }

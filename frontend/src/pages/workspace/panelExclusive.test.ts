@@ -16,17 +16,20 @@ function zones(left: string[][], right: string[][], stash: { left?: string[][]; 
 }
 
 describe('каталог панелей генерации', () => {
-  it('images и sound — правые, есть в проекте и в правой зоне личного чата', () => {
-    for (const k of ['images', 'sound'] as const) {
+  it('images, sound и videoEditor — правые, есть в проекте и в правой зоне личного чата', () => {
+    for (const k of ['images', 'sound', 'videoEditor'] as const) {
       expect(PANEL_HOME[k]).toBe('right');
       expect(WORKSPACE_KEYS).toContain(k);
       expect(CHAT_RIGHT_KEYS).toContain(k);
     }
   });
 
-  it('соперники: images ↔ sound, у прочих панелей соперников нет', () => {
-    expect(panelRivals('images')).toEqual(['sound']);
-    expect(panelRivals('sound')).toEqual(['images']);
+  it('соперники: images, sound и videoEditor друг другу; у прочих панелей соперников нет', () => {
+    expect(panelRivals('images')).toEqual(['sound', 'videoEditor']);
+    expect(panelRivals('sound')).toEqual(['images', 'videoEditor']);
+    expect(panelRivals('videoEditor')).toEqual(['images', 'sound']);
+    // Эфир — другая панель, с генерацией не конкурирует
+    expect(panelRivals('video')).toEqual([]);
     expect(panelRivals('files')).toEqual([]);
   });
 });

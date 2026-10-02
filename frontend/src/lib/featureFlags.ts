@@ -42,6 +42,8 @@ export const FLAGS = {
   localMediaDefault: 'local-media-default',
   // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта.
   audioEditor: 'audio-editor',
+  // Модуль «Видео»: сцены и фильм (ADR-022) — съёмка по кадрам A и B, сборка фильма без ИИ.
+  videoEditor: 'video-editor',
 // MIDI-просмотрщик: ноты из .mid в файлах и в редакторе звука.
   midiEditor: 'midi-editor',
   // Панель «Картинки» v5 «Создать / Править»: режим на чат и выбор по режиму. Выключен —

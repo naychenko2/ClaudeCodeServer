@@ -13,7 +13,7 @@ import { revealWorkspacePanel } from './subsystems/registryCore';
 
 const STORAGE_KEY = 'cc_gen_panel_dismissed';
 export const MAX_KEYS = 500;
-export const GEN_PANEL_KEYS: readonly string[] = ['images', 'sound'];
+export const GEN_PANEL_KEYS: readonly string[] = ['images', 'sound', 'videoEditor'];
 
 export function isGenPanelKey(key: string): boolean {
   return GEN_PANEL_KEYS.includes(key);

@@ -30,7 +30,7 @@ export function ProjectPicker({ scope, start, accept, emptyText, onBack, onPick 
     return () => { alive = false; };
   }, [scope, dir]);
   const shown = useMemo(() => (items ?? []).filter(i => i.isDirectory || accept.test(i.name))
-    .sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name, 'ru')), [items]);
+    .sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name, 'ru')), [items, accept]);
   const up = () => setDir(dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '');
   return (
     <div data-video-project-picker="">

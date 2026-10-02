@@ -25,7 +25,8 @@ export function VideoSheet({ ctx }: { ctx: ComposerChipCtx }) {
   const [open, setOpen] = useState(false);
   const { sessionId } = ctx;
   const narrow = useGenerationSheet();
-  useEffect(() => { setOpen(false); }, [sessionId]);
+  const [shownSession, setShownSession] = useState(sessionId);
+  if (shownSession !== sessionId) { setShownSession(sessionId); setOpen(false); }
   useEffect(() => {
     // В широком окне запрос забирает рабочая область — здесь его только гасим
     const pull = () => { if (take() && narrow) setOpen(true); };

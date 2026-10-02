@@ -236,7 +236,8 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const [picking, setPicking] = useState<Picking>(null);
   const [script, setScript] = useState(false);
   const [highlight, setHighlight] = useState<number | null>(null);
-  useEffect(() => { setPicking(null); setScript(false); setHighlight(null); }, [path]);
+  const [shownPath, setShownPath] = useState(path);
+  if (shownPath !== path) { setShownPath(path); setPicking(null); setScript(false); setHighlight(null); }
   // Открыли вкладку заново — прошлый отказ «сборка выключена» мог устареть: проверим при следующем «Собрать»
   useEffect(() => { if (path) setBlocked(path, null); }, [path]);
 

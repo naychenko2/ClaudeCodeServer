@@ -47,7 +47,7 @@ import {
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel, Select,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
-  Chip, ProgressBar, LiveDot,
+  Chip, ProgressBar, ProgressUnderline, LiveDot,
 } from '../components/ui';
 import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
@@ -515,6 +515,17 @@ function TogglesSection() {
             <ProgressBar value={100} tone="success" />
             <ProgressBar value={75} tone="warning" />
             <ProgressBar value={20} tone="danger" />
+          </div>
+        </SubBlock>
+
+        {/* ProgressUnderline: прогресс подчёркиванием того, что идёт сейчас, — линия 2 px под
+            текстом на долю процента, без дорожки и без отдельной строки. Факт — сплошная,
+            estimate — точечная. Так карточка инструмента показывает процент */}
+        <SubBlock label="ProgressUnderline — подчёркивание текущего этапа: факт и оценка">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.xs, color: C.textMuted, fontVariantNumeric: 'tabular-nums' }}>
+            <span>✓ сборка 1:42 · <span style={{ color: C.textSecondary, fontWeight: 600 }}><ProgressUnderline value={5}>тесты 0:12</ProgressUnderline></span> · 398 из 7951</span>
+            <span>✓ сборка 1:42 · <span style={{ color: C.textSecondary, fontWeight: 600 }}><ProgressUnderline value={63}>тесты 1:25</ProgressUnderline></span> · 5009 из 7951</span>
+            <span><ProgressUnderline value={42} estimate>осталось ≈1:15</ProgressUnderline></span>
           </div>
         </SubBlock>
 

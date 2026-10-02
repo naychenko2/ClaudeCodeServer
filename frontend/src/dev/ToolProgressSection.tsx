@@ -1,8 +1,8 @@
 // Витрина дизайн-системы — секция «Карточка инструмента: прогресс».
 //
 // Все состояния живой карточки инструмента рядом, на НАСТОЯЩЕМ ToolUseView и
-// ToolGroupBlock (не макет из div): живая точка вместо бегущей полосы, короткая сплошная или
-// пунктирная полоса только с процентом, «идёт M:SS», «готово · M:SS», «прервано», строка
+// ToolGroupBlock (не макет из div): живая точка вместо бегущей полосы, с процентом —
+// подчёркивание текущего этапа или подписи (сплошное — факт, точечное — оценка), «идёт M:SS», «готово · M:SS», «прервано», строка
 // подписи прогресса (сабагент, local-media), строка этапов прогона тестов с итогом «174 из
 // 177 · упало 3» на закрытой карточке и группа «N действий», не сворачивающаяся при живом
 // инструменте.
@@ -22,7 +22,6 @@ import { ToolLivenessContext } from '../components/chat/contexts';
 import { isToolGroupDone, type ToolLiveness } from '../lib/toolTiming';
 import { applyServerMessage, initialChatState } from '../lib/chatReducer';
 import type { ServerMessage, ToolStage } from '../types';
-
 // Сабагент с ОДНИМ вызовом run_tests — через настоящий редьюсер и в боевом порядке событий:
 // прогресс «сейчас тесты» приходит раньше, чем вызов с аргументами (FAIL Киры). Вид прогона
 // в подписи обязан дорисоваться приходом вызова
@@ -86,7 +85,7 @@ function buildDemos(t0: number): { groups: { title: string; demos: Demo[] }[]; l
         { label: 'ждёт очереди сборок — точка, без полосы; очередь в этапах с 2 с', item: tests('k-t-queue', dotnet, { startedAt: ago(AGO.queue), progress: { stage: 'queued', label: 'ждёт очереди сборок (занято 2)' }, stages: st(ago(AGO.queue), ['queued', 'очередь', null]) }) },
         { label: 'сборка — после очереди', item: tests('k-t-build', dotnet, { startedAt: ago(AGO.build), progress: { stage: 'build', label: 'сборка' }, stages: st(ago(AGO.build), ['queued', 'очередь', 12], ['build', 'сборка', null]) }) },
         { label: 'подсчёт тестов — уже этап «тесты», без процента', item: tests('k-t-list', dotnet, { startedAt: ago(AGO.list + 102), progress: { stage: 'list', label: 'подсчёт тестов' }, stages: st(ago(AGO.list + 102), ['build', 'сборка', 102], ['running', 'тесты', null]) }) },
-        { label: 'N из M с упавшими — короткая сплошная полоса под этапами, «упало K» красным', item: tests('k-t-run', dotnet, { startedAt: ago(AGO.tests), progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true }, stages: st(ago(AGO.tests), ['build', 'сборка', 102], ['running', 'тесты', null]) }) },
+        { label: 'N из M с упавшими — «тесты M:SS» подчёркнуты на долю процента, «упало K» красным', item: tests('k-t-run', dotnet, { startedAt: ago(AGO.tests), progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true }, stages: st(ago(AGO.tests), ['build', 'сборка', 102], ['running', 'тесты', null]) }) },
         { label: 'готово с упавшими — счётчики и этапы без раскрытия', item: tests('k-t-done-fail', dotnet, { startedAt: t0 - 135_000, finishedAt: t0, result: 'dotnet test: есть упавшие тесты (код выхода 1) за 2:15.', stages: st(t0 - 135_000, ['build', 'сборка', 62], ['running', 'тесты', 73]), totals: { passed: 174, failed: 3, total: 177 } }) },
         { label: 'готово, всё прошло', item: tests('k-t-done', dotnet, { startedAt: t0 - 235_000, finishedAt: t0, result: 'dotnet test: все тесты прошли (код выхода 0) за 3:55.', stages: st(t0 - 235_000, ['build', 'сборка', 102], ['running', 'тесты', 133]), totals: { passed: 7951, failed: 0, total: 7951 } }) },
         { label: 'прервано на сборке — этап крестиком', item: tests('k-t-dead', dotnet, { startedAt: t0 - 77_000, stages: st(t0 - 77_000, ['queued', 'очередь', 12], ['build', 'сборка', 65]).map((s, i) => i === 1 ? { ...s, failed: true } : s) }) },
@@ -104,8 +103,8 @@ function buildDemos(t0: number): { groups: { title: string; demos: Demo[] }[]; l
       title: 'Локальная генерация (local-media)',
       demos: [
         { label: 'в очереди — только точка, полосы нет', item: tu('k-lm-queue', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_1'] }, { startedAt: ago(AGO.queue), progress: { stage: 'queued', queuePosition: 2 } }) },
-        { label: 'оценка по ETA — пунктир, «≈»', item: tu('k-lm-est', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_2'] }, { startedAt: ago(AGO.lm), progress: { stage: 'running', percent: 40, etaSeconds: 75 } }) },
-        { label: 'настоящие шаги — сплошная', item: tu('k-lm-exact', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_3'] }, { startedAt: ago(AGO.lm), progress: { stage: 'running', label: 'шаг 8 из 20', percent: 40, exact: true, etaSeconds: 45 } }) },
+        { label: 'оценка по ETA — подпись подчёркнута точками, «≈»', item: tu('k-lm-est', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_2'] }, { startedAt: ago(AGO.lm), progress: { stage: 'running', percent: 40, etaSeconds: 75 } }) },
+        { label: 'настоящие шаги — сплошное подчёркивание', item: tu('k-lm-exact', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_3'] }, { startedAt: ago(AGO.lm), progress: { stage: 'running', label: 'шаг 8 из 20', percent: 40, exact: true, etaSeconds: 45 } }) },
         { label: 'готово', item: tu('k-lm-done', 'mcp__local-media__local_jobs_wait', { job_ids: ['lm_4', 'lm_5'] }, { startedAt: t0 - 95_000, finishedAt: t0, result: '{"all_done":true}' }) },
       ],
     },

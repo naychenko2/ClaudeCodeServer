@@ -26,7 +26,7 @@ import {
   Calendar, Share2, MessageCircle,
   Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug, ImageIcon } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug, ImageIcon, Info, Mic, Music, SlidersHorizontal } from 'lucide-react';
 import { GenerationPanel } from '../components/generation/GenerationPanel';
 import type { GenerationFoot } from '../components/generation/GenerationPanel';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
@@ -45,7 +45,7 @@ import {
   Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge, Badge,
   SidebarSection,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
-  Menu, MenuItem, BackButton, WaitingIndicator,
+  Menu, MenuItem, MenuSep, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel, Select,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
@@ -3659,6 +3659,8 @@ function ToolbarAndEmptySection() {
             <Notice tone="danger" icon={Unplug} title="Не запускалась: устройство так и не вышло на связь" />
           </div>
         </SubBlock>
+
+        <KitOptionsDemo />
       </div>
     </Island>
   );
@@ -4221,5 +4223,92 @@ function VisualPlanCardDemo() {
         </div>
       )}
     </div>
+  );
+}
+
+// Опции сегментов (disabled / muted / title), группы Select, тон info у Notice и Menu
+// во всю ширину — заготовки кита под панель «Звук». «Обработка» без выбранного звука
+// приглушена, но кликабельна: открывает меню «Что обработать?»
+type SoundModeDemo = 'voice' | 'music' | 'process';
+
+function KitOptionsDemo() {
+  const isMobile = useIsMobile();
+  const [mode, setMode] = useState<SoundModeDemo>('voice');
+  const [hasSound, setHasSound] = useState(false);
+  const [pickOpen, setPickOpen] = useState(false);
+  const [op, setOp] = useState<string>('speak');
+  const [stems, setStems] = useState('vocals');
+  const pick = (m: SoundModeDemo) => {
+    if (m === 'process' && !hasSound) { setPickOpen(true); return; }
+    setMode(m);
+  };
+  const processHint = hasSound ? undefined : 'Обработка — сначала выберите звук';
+  const modes = [
+    { value: 'voice' as const, label: 'Голос', icon: <Mic size={12} /> },
+    { value: 'music' as const, label: 'Музыка', icon: <Music size={12} /> },
+    { value: 'process' as const, label: 'Обработка', icon: <SlidersHorizontal size={12} />, muted: !hasSound, title: processHint },
+  ];
+  const sourceGroup = { label: hasSound ? 'С выбранным звуком' : 'С выбранным звуком · выберите звук в ленте', disabled: !hasSound };
+  return (
+    <>
+      <SubBlock label={`Опции сегментов: muted «Обработка» (звук ${hasSound ? 'выбран' : 'не выбран'}) — режим: ${mode}`}>
+        <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          <SegmentedControl value={mode} onChange={pick} options={modes} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+            <InlineSegmented value={mode} onChange={pick} options={modes} isMobile={isMobile} />
+            <IconSegmented<SoundModeDemo>
+              value={mode}
+              onChange={pick}
+              options={modes.map(m => ({ ...m, icon: { voice: <Mic size={14} />, music: <Music size={14} />, process: <SlidersHorizontal size={14} /> }[m.value] }))}
+            />
+            <Toggle checked={hasSound} onChange={v => { setHasSound(v); if (!v && mode === 'process') setMode('voice'); }} />
+            <span style={{ fontSize: FS.sm, color: C.textMuted }}>звук выбран</span>
+          </div>
+          {pickOpen && (
+            // Во всю ширину родителя, вверх от низа блока — как над полосой на 360
+            <Menu onClose={() => setPickOpen(false)} bottom={0} fullWidth>
+              <MenuItem icon={<Music size={ICON_SIZE.xs} />} label="Песня про кота" hint="2:14 · агент · 3 мин назад" onClick={() => { setHasSound(true); setMode('process'); setPickOpen(false); }} />
+              <MenuItem icon={<Mic size={ICON_SIZE.xs} />} label="Озвучка вступления" hint="0:12 · вы · 10 мин назад" onClick={() => { setHasSound(true); setMode('process'); setPickOpen(false); }} />
+              <MenuSep />
+              <MenuItem label="Склеить несколько…" onClick={() => setPickOpen(false)} />
+            </Menu>
+          )}
+        </div>
+      </SubBlock>
+
+      <SubBlock label="SegmentedControl — disabled с подсказкой (у поставщика нет «6 стемов»)">
+        <SegmentedControl
+          value={stems}
+          onChange={setStems}
+          options={[
+            { value: 'vocals', label: 'Вокал+минус' },
+            { value: '4', label: '4 стема' },
+            { value: '6', label: '6 стемов', disabled: true, title: 'У этого поставщика нет разделения на 6 стемов' },
+            { value: 'karaoke', label: 'Караоке' },
+          ]}
+        />
+      </SubBlock>
+
+      <SubBlock label={`Select — группы (optgroup), группа «С выбранным звуком» ${hasSound ? 'доступна' : 'выключена'}: ${op}`}>
+        <Select
+          value={op}
+          onChange={v => setOp(v || 'speak')}
+          options={[
+            { value: 'speak', label: 'Озвучить текст', group: 'Новый звук' },
+            { value: 'song', label: 'Песня', group: 'Новый звук' },
+            { value: 'denoise', label: 'Убрать шум', group: sourceGroup },
+            { value: 'separate', label: 'Разделить на стемы', group: sourceGroup },
+            { value: 'trim', label: 'Обрезать', group: 'Без ИИ · бесплатно' },
+            { value: 'concat', label: 'Склеить несколько звуков', group: 'Без ИИ · бесплатно' },
+          ]}
+        />
+      </SubBlock>
+
+      <SubBlock label="Notice — тон info">
+        <Notice tone="info" icon={Info} title="Выбор звука снят">
+          Режим вернулся к «Голосу». Вернуть «Обработку» можно в течение 4 секунд.
+        </Notice>
+      </SubBlock>
+    </>
   );
 }

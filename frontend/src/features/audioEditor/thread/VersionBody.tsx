@@ -2,16 +2,19 @@
 // сведением без ИИ и список остальных файлов версии (.abc, .txt/.srt/.lrc, .mid, .pth/.index)
 // со скачиванием. Выделение куска — у каждой карточки своё: волна показывает его, только если
 // выделяли на этой версии; операция над куском сперва ставит эту версию в работу.
+// Версия «в MIDI» (без основного звука) под флагом midi-editor показывает ноты просмотрщиком кита.
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { Download, FileText } from 'lucide-react';
-import { Button, IconButton, C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE, useIsMobile } from 'aihome_shell/kit';
+import {
+  Button, IconButton, MidiEditor, Modal, C, FLAGS, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE, useFeature, useIsMobile,
+} from 'aihome_shell/kit';
 import { audioApi, type AudioThread, type AudioThreadVersion } from '../api';
 import { AudioPlayer, StemMixer, type AudioSource, type Stem } from '../player';
 import { normalizeJoint } from '../player/peaks';
 import { isPersonalScope } from '../scope';
 import { downloadFile, mixStems, takeVersion } from './actions';
-import { abSides, extraFiles, hasMain, stemsFolder, versionLabel, versionStems } from './model';
+import { abSides, extraFiles, hasMain, midiFileOf, stemsFolder, versionLabel, versionStems } from './model';
 import { useServerPeaks } from './serverPeaks';
 import {
   getPieceFieldOpen, getSelection, requestOperation, setSelection, useAudioStoreVersion,
@@ -30,12 +33,42 @@ interface Props {
 
 export function VersionBody(p: Props) {
   const stems = versionStems(p.version);
+  const midiOn = useFeature(FLAGS.midiEditor);
   return (
     <>
       {hasMain(p.version) && <PlayerBlock {...p} />}
+      {midiOn && midiFileOf(p.version) && <MidiBlock {...p} />}
       {stems.length > 0 && <StemsBlock {...p} />}
       <ExtraFiles {...p} />
     </>
+  );
+}
+
+function MidiBlock({ scope, sessionId, thread, version }: Props) {
+  const [full, setFull] = useState(false);
+  const file = midiFileOf(version);
+  if (!file) return null;
+  const name = file.path.split('/').pop() ?? file.path;
+  const load = () => fetch(audioApi.versionFileUrl(scope, sessionId, thread.id, version.id, 'midi')).then(r => {
+    if (!r.ok) throw new Error('Не удалось загрузить MIDI');
+    return r.arrayBuffer();
+  });
+  const download = () => downloadFile(scope, sessionId, thread, version.id, 'midi');
+  return (
+    <div data-audio-midi="">
+      <Suspense fallback={null}>
+        <MidiEditor load={load} fileName={name} variant="inline" onExpand={() => setFull(true)} onDownload={download} />
+      </Suspense>
+      {full && (
+        <Modal size="fullscreen" title={name} subtitle={versionLabel(version)} onClose={() => setFull(false)}>
+          <div style={{ height: '100%', padding: SP.sm }}>
+            <Suspense fallback={null}>
+              <MidiEditor load={load} fileName={name} variant="full" onDownload={download} />
+            </Suspense>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }
 

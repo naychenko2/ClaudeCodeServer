@@ -119,6 +119,42 @@ flowchart TD
 ffmpeg на хосте, всегда перекодирование; запуск `Heavy` под единым `BuildConcurrencyGate`; CPU, не GPU;
 итог — `CreateNew` `film.mp4` → `film.v2.mp4`. Подробности блока — в его комментариях и CLAUDE.md модуля.
 
+**Шов `IVideoDsp` — файловый** (клипы весят сотни МБ, `byte[]` не годится): `ProbeAsync`, `FilmstripAsync`,
+`LastFrameAsync`, `AssembleAsync(FilmPlan, outPath, progress, ct)`; реализация `FfmpegVideoDsp` в Images, общий
+`Detect` с `FfmpegAudioDsp`. План сборки: `trim` → `scale`+`pad` под общий размер → `fps` → `format=yuv420p`;
+клип без звука получает `anullsrc` его длины; склейки — `xfade`+`acrossfade` (наплыв), `fade` (затемнение через
+чёрное), `concat` (встык); музыка — `volume`+`afade`+`amix` без нормализации; выход `libx264 -preset veryfast`, `aac`,
+`+faststart`, прогресс по `-progress pipe:1`. Наплыв и затемнение не длиннее половины меньшего соседа. Запись — во
+временный файл рядом, переименование целой (`CreateNew`); отмена и отказ шва удаляют temp. Размер кадра — по
+`aspect` (16:9 → 1280×720), частота 24.
+
+**Слот и scope.** Спека сборки — `ProcessSpec { Heavy = true }`, слот единого `BuildConcurrencyGate.Instance`
+берётся **до** старта процесса и держится до его выхода (внутри `FfmpegVideoDsp`, второго семафора нет); запуск —
+`ILauncherFactory.Local` (системный local-запуск). Поверх слота — потолок модуля в `FilmBuildRegistry`: 1 сборка на
+владельца, 2 на инстанс (ждущая слот считается). Лимиты: до 50 сцен, клип до 300 МБ, таймаут процесса
+`VideoEditor:AssembleTimeoutMinutes` (20). Нет ffmpeg или выключены Images — `503 dsp_unavailable`. Сборка пишет
+трату с нулём (`Label` «сборка фильма», источник `free`, провайдер `ffmpeg`).
+
+**Проверка (блок 2, 2026-10-02).** Системный local-запуск **уходит в `ccs-agents.slice`**: `LauncherFactory.Local` —
+это `LocalProcessRunner.Instance`, а он при `Execution:Isolation:Enabled` оборачивает КАЖДЫЙ запуск (тяжёлый или
+нет) в `systemd-run --user --scope --slice=… --property=MemoryMax=…`. Свидетельство: живой тест
+`VideoAssembleIsolationTests` запускает настоящую `FfmpegVideoDsp.AssembleAsync` и читает `/proc/<pid>/cgroup` —
+`…/user@1000.service/ccs.slice/ccs-isotest.slice/ccs-run-….scope`, слот гейта занят (`Available == 0`) всё время
+работы и возвращается при отмене. Отдельный `Process.Start` с `MemoryMax` не понадобился; `MemoryHigh` не ставится
+(разбор 2026-09-22). Оговорка: в `appsettings.json` изоляция по умолчанию выключена — на боевом инстансе она
+включается в `appsettings.Local.json`, без неё сборка идёт процессом напрямую и держится только слотом гейта.
+**ffmpeg на бою:** Марк проверил боевой Linux (задача `b4c5d5fe`): ffmpeg 8.0.1 с `libx264`, `aac`, `xfade`,
+`acrossfade`, `amix`, пробное кодирование прошло — риск «нет ffmpeg» закрыт.
+
+**Связи с соседями (блок 2).** `IMediaEvents` — in-memory хаб в Core (падение подписчика гасится и логируется);
+`ImageEditor` и `AudioEditor` публикуют `ImageVersionAdded` / `AudioVersionAdded` ПОСЛЕ записи версии в нить, из
+асинхронного пути исполнителя, а не из синхронного `Report` прогресса. «Видео» подписано через
+`FilmMediaSubscriber`: кадр с `follow` переходит на новую версию нити (клип уже снят — «Кадр изменён — переснять»,
+тихая строка в ленте и запись в журнал хода); нить «Сочинить под фильм…» запоминается у фильма, первая готовая
+версия ложится в `music/<фильм>.mp3` (`CreateNew`, занятое — `.v2`) и в `.film`. Кадры читаются швом
+`IImageFrameSource` (нить ищется среди чатов владельца по `threadId`: чат нити не обязан быть чатом сцены),
+музыка — `IAudioTrackSource`. Хранилищ соседей модуль не читает: сторож `VideoModuleIsolationGuardTests`.
+
 ### 5. Агент (блок 3)
 
 Тулсет `video-editor`, состав `tools/list` зависит только от сессии, флага и `VideoEditor:AgentLaunch`.

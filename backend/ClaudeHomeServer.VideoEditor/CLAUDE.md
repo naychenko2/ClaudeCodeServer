@@ -4,7 +4,7 @@
 
 Сцены и фильм прямо в чате — проекта или личном вне проекта: **сцена** — один клип между кадром A и кадром B
 с версиями-вариантами, поставщики `local` (своя видеокарта), fal и Higgsfield. **Фильм** (`.film`, сборка
-ffmpeg без ИИ), швы к «Картинкам» и «Звуку» и агент `video-editor` — блоки 2 и 3, в этой папке их пока нет.
+ffmpeg без ИИ) и швы к «Картинкам» и «Звуку» — блок 2 (`Films/`, `Assembly/`); агент `video-editor` — блок 3, его здесь пока нет.
 За флагом `video-editor`. Решение — [ADR-022](../../docs/adr/ADR-022-video-editor.md), там же
 **раздел «Контракты»** с JSON-примерами каждого DTO: его сверяет `VideoContractExamplesTests`, правка контракта
 после КТ-1 — отдельным коммитом `refactor(videoEditor): контракт …`.
@@ -57,5 +57,32 @@ ffmpeg без ИИ), швы к «Картинкам» и «Звуку» и аг�
 - `recordType` ленты (`VideoThreadRecordTypes`) не удалять и не переименовывать никогда.
 - Потолки задач: 2 на владельца, 4 на инстанс, у local — одна съёмка за раз (GPU).
 
-Граница блока 1: нет `Films/`, `Assembly/`, `Mcp/`, `Chats/`, `IVideoDsp`, `IMediaEvents`, `IImageFrameSource`,
-`IAudioTrackSource` и постера версии — это блоки 2 и 3.
+**Фильм (блок 2, ADR-022 §2–§4).** `Films/`: формат `.film` (`FilmFormat`: `cuts = items − 1`, неизвестная `schema` —
+только чтение), атомарная запись под ревизией (`FilmStore`: temp + rename, ревизия — хеш содержимого, чужая правка —
+`409 revision_conflict`; единственное место, где модуль переписывает существующий файл проекта), патч
+(`FilmPatcher`: `add`/`remove`/`move`/`cut`/`trim`/`music`, всё или ничего), `FilmService` (список, состояние, патч,
+пометки, траты), «Сохранить сцену» (`FilmSceneSaver`: `scene-NN.mp4` → `.v2` → … `CreateNew`, кадры-нити в `кадры/`,
+сама встаёт в фильм), подписки на соседей (`FilmFrameFollower`, `FilmMusicComposer`, `FilmMediaSubscriber`),
+регистрация одной строкой `AddFilms()` (`FilmRegistration`). `Assembly/`: `FilmAssembler` и `FilmBuildRegistry`.
+Ручки — `FilmController` (проектные) и `PersonalFilmController` (те же маршруты у личного чата отвечают
+`personal_scope_no_films`).
+
+- **Писать можно только в `video/**` и `music/**`**, каждый путь — через `FilmService.ResolveInside`
+  (`ProjectLinkGuard.ResolveInside`): символическая ссылка наружу — `outside_allowed_folders`. Фильм — `video/<папка>/*.film`.
+- **«Устарел» и «● обновлена» не хранятся**: `FilmStaleness` считает их из `builds[].sourceHash` (отпечаток входов:
+  aspect, строки с размером файла, склейки, музыка) и из mtime файла сцены против времени последней сборки. «Переснять»
+  у строки — из нити сцены (`VideoStale`), чей `SavedFiles` содержит файл строки.
+- **Состояние вне файла** — `data/video-films/{owner}/{projectId}/{filmKey}.json` (`FilmSideStore`, `filmKey` — хеш
+  пути): траты версий сцен фильма (копятся, не убывают, потолка нет; «GPU-секунды» — время локального запуска с
+  очередью, оценка), пометки «✦ Claude», нить звука, из которой фильм ждёт музыку.
+- **Сборка**: `IVideoDsp.AssembleAsync` берёт слот единого `BuildConcurrencyGate` ДО старта и запускает `Heavy`-спеку
+  через `ILauncherFactory.Local` (в `ccs-agents.slice` при включённой изоляции); второго семафора нет, поверх слота —
+  потолок модуля в `FilmBuildRegistry` (1 на владельца, 2 на инстанс). Итог `film.mp4` → `film.v2.mp4`, в `.film`
+  дописывается `builds[]` с хешем входов НА МОМЕНТ плана (правка за время сборки делает фильм устаревшим).
+- **Соседи — только швы и события Core**: `IImageFrameSource`, `IAudioTrackSource`, `IMediaEvents`, `IVideoDsp` —
+  все необязательные параметры (нет Images/«Картинок»/«Звука» — `dsp_unavailable` / `provider_unavailable`, не 500).
+  Хранилищ `image-threads` и `audio-threads` модуль не читает никогда — сторож `VideoModuleIsolationGuardTests`
+  (строки и типы в тексте кода плюс ссылки сборки).
+- Потолки: до 50 сцен, клип до 300 МБ (сохранение и сборка), `VideoEditor:AssembleTimeoutMinutes` = 20.
+
+Граница блока 2: нет `Mcp/`, `Chats/` и постера версии — это блок 3.

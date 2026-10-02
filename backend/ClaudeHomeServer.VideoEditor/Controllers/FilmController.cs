@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Claims;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.VideoEditor.Assembly;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Films;
 using Microsoft.AspNetCore.Authorization;
@@ -19,6 +20,7 @@ public class FilmController(
     VideoEditScopeGate gate,
     FilmService films,
     FilmSceneSaver saver,
+    FilmAssembler assembler,
     FilmMusicComposer music) : ControllerBase
 {
     private const string SubClaim = "sub";
@@ -39,9 +41,32 @@ public class FilmController(
 
     [HttpPatch(VideoEditorRoutes.FilmPatchRoute)]
     public async Task<IActionResult> Patch(string projectId, [FromQuery] string? path, [FromBody] FilmPatch? patch,
-        CancellationToken ct) =>
+        CancellationToken ct, [FromQuery] string? sessionId = null) =>
         Gate(projectId, out var scope, out var denied)
-            ? FilmHttp.Map(await films.PatchAsync(UserId, scope, path, patch, VideoInitiators.Human, ct), state => Ok(state))
+            ? FilmHttp.Map(await films.PatchAsync(UserId, scope, path, patch, VideoInitiators.Human, ct, sessionId), state => Ok(state))
+            : denied;
+
+    [HttpPost(VideoEditorRoutes.FilmBuild)]
+    public IActionResult Build(string projectId, [FromQuery] string? path, [FromQuery] string? sessionId = null) =>
+        Gate(projectId, out var scope, out var denied)
+            ? FilmHttp.Map(assembler.Start(UserId, scope, path, VideoInitiators.Human, sessionId),
+                status => StatusCode(StatusCodes.Status202Accepted, status))
+            : denied;
+
+    [HttpGet(VideoEditorRoutes.FilmBuild)]
+    public IActionResult BuildStatus(string projectId, [FromQuery] string? path) =>
+        Gate(projectId, out var scope, out var denied)
+            ? assembler.Status(UserId, scope, path) is { } status
+                ? Ok(status)
+                : FilmHttp.Map(FilmCallResult<FilmBuildStatusDto>.Fail(VideoEditorErrors.JobNotFound, "Сборки ещё не было"), s => Ok(s))
+            : denied;
+
+    [HttpDelete(VideoEditorRoutes.FilmBuild)]
+    public IActionResult CancelBuild(string projectId, [FromQuery] string? path) =>
+        Gate(projectId, out var scope, out var denied)
+            ? assembler.Cancel(UserId, scope, path) && assembler.Status(UserId, scope, path) is { } status
+                ? Ok(status)
+                : FilmHttp.Map(FilmCallResult<FilmBuildStatusDto>.Fail(VideoEditorErrors.JobNotFound, "Сборка не идёт"), s => Ok(s))
             : denied;
 
     [HttpPost(VideoEditorRoutes.FilmMusic)]

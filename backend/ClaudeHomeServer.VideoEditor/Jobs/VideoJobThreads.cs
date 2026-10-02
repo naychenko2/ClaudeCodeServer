@@ -126,6 +126,10 @@ public sealed class VideoJobThreads(
     public Task NoteAsync(string sessionId, string text, object data, CancellationToken ct = default) =>
         RecordAsync(sessionId, VideoThreadRecordTypes.Note, text, data, ct);
 
+    // Карточка «фильм собран» — одна на человека и агента, различает только initiator в data
+    public Task FilmBuiltAsync(string sessionId, string text, object data, CancellationToken ct = default) =>
+        RecordAsync(sessionId, VideoThreadRecordTypes.FilmBuilt, text, data, ct);
+
     // Карточка «сцена сохранена в проект»
     public Task SavedAsync(string sessionId, string text, object data, CancellationToken ct = default) =>
         RecordAsync(sessionId, VideoThreadRecordTypes.Saved, text, data, ct);

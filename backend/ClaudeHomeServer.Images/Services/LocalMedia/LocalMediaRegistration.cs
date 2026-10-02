@@ -29,6 +29,9 @@ public static class LocalMediaRegistration
         services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalVideoMedia, LocalVideoMediaAdapter>();
         // Шов обработки звука без ИИ (ffmpeg на хосте) для модуля «Звук» (ADR-021)
         services.AddSingleton<ClaudeHomeServer.Services.Media.IAudioDsp, FfmpegAudioDsp>();
+        // Шов обработки видео без ИИ для модуля «Видео» (ADR-022 §4): сборка фильма — тяжёлый запуск под общим
+        // слотом BuildConcurrencyGate через системный local-запуск (scope ccs-agents.slice)
+        services.AddSingleton<ClaudeHomeServer.Services.Media.IVideoDsp, FfmpegVideoDsp>();
         services.AddSingleton<LocalMediaCleanup>();
         services.AddGatedHostedService<LocalMediaCollector>(config, "images");
         return services;

@@ -465,7 +465,7 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
         return Encoding.UTF8.GetString(tail, from, length - from);
     }
 
-    private static bool Detect(IConfiguration config, ILogger log)
+    internal static bool Detect(IConfiguration config, ILogger log)
     {
         string Path(string key, string fallback) => config[key] is { Length: > 0 } p ? p : fallback;
         var ok = Responds(Path("AudioDsp:FfmpegPath", "ffmpeg")) && Responds(Path("AudioDsp:FfprobePath", "ffprobe"));

@@ -205,6 +205,7 @@ public class FilmControllerTests : IDisposable
                  {
                      await _client.GetAsync($"{url}/films"),
                      await _client.GetAsync($"{url}/films/state?path=video/a/a.film"),
+                     await _client.PostAsync($"{url}/films/build?path=video/a/a.film", null),
                      await _client.PostAsJsonAsync($"{url}/scenes/s1/save", new { sessionId = personal.Id, sceneId = "s1" }),
                  })
         {
@@ -220,6 +221,22 @@ public class FilmControllerTests : IDisposable
 
         _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(_ownerId, FeatureFlagKeys.VideoEditor, false);
         (await _client.GetAsync($"{Root}/films")).StatusCode.Should().Be(HttpStatusCode.NotFound, "без флага ручки фильма закрыты");
+    }
+
+    [Fact]
+    public async Task Сборка_пустого_фильма_и_статус_без_сборки_отвечают_по_контракту()
+    {
+        Directory.CreateDirectory(Path.Combine(_projectRoot, "video", "e"));
+        File.WriteAllText(Path.Combine(_projectRoot, "video", "e", "e.film"),
+            """{ "schema": 1, "aspect": "16:9", "items": [], "cuts": [], "builds": [] }""");
+
+        var build = await _client.PostAsync($"{Root}/films/build?path=video/e/e.film", null);
+        var status = await _client.GetAsync($"{Root}/films/build?path=video/e/e.film");
+
+        // Без ffmpeg на машине — dsp_unavailable (503), с ним — пустой фильм собирать нечего (400)
+        build.StatusCode.Should().BeOneOf(HttpStatusCode.BadRequest, HttpStatusCode.ServiceUnavailable);
+        status.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Json(status)).GetProperty("code").GetString().Should().Be(VideoEditorErrors.JobNotFound);
     }
 
     [Fact]

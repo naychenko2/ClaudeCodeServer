@@ -195,7 +195,7 @@ public sealed class FilmService(
     // ── Правка патчем ─────────────────────────────────────────────────────────────
 
     public async Task<FilmCallResult<FilmStateDto>> PatchAsync(string ownerId, VideoEditScope scope, string? path,
-        FilmPatch? patch, string initiator, CancellationToken ct)
+        FilmPatch? patch, string initiator, CancellationToken ct, string? sessionId = null)
     {
         if (patch is null || patch.Ops is null || patch.Ops.Count == 0 || string.IsNullOrWhiteSpace(patch.ExpectedRevision))
             return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.InvalidRequest, "Пустая правка: нужны ревизия и операции");
@@ -232,7 +232,20 @@ public sealed class FilmService(
 
         MarkTouched(ownerId, scope, film.Relative, read.Document!, applied, initiator);
         await AfterWriteAsync(ownerId, scope, film, written.Current, ct);
+        await RecordPatchAsync(ownerId, scope, film.Relative, ops, initiator, sessionId, ct);
         return StateOf(ownerId, scope, film, written.Current);
+    }
+
+    // Тихая строка правки фильма. ЕДИНСТВЕННАЯ точка записи ленты для правки — зовут и ручка человека, и тулсет
+    // агента (требование Андрея 2026-10-02): recordType один, различается только initiator в data
+    private async Task RecordPatchAsync(string ownerId, VideoEditScope scope, string filmPath, IReadOnlyList<FilmPatchOp> ops,
+        string initiator, string? sessionId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || !threads.OwnChat(ownerId, scope.Key, sessionId)) return;
+        var agent = initiator == VideoInitiators.Agent;
+        var what = string.Join(", ", ops.Select(o => o.Op).Distinct());
+        await threads.NoteAsync(sessionId.Trim(), $"{(agent ? "Claude правил" : "Вы правили")} фильм {FilmPaths.NameOf(filmPath)}: {what}",
+            new { kind = "film_patch", filmPath, ops = ops.Select(o => o.Op).ToArray(), initiator }, ct);
     }
 
     // Операция до патчера: файлы add и music существуют внутри проекта, у add без обрезки длина — по пробе клипа

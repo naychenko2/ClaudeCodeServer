@@ -8,7 +8,7 @@
 // написания живого сервера у них нет: фронт ходит в них через videoApi, а тесты и e2e — на моках.
 
 import { onMessage, readStoredToken, request } from 'aihome_shell/kit';
-import { chatBase, isPersonalScope, videoBase } from './scope';
+import { chatBase, isPersonalScope, PERSONAL_SCOPE, videoBase } from './scope';
 
 // ── Кадры и настройки сцены ──
 
@@ -330,6 +330,8 @@ const json = <T>(url: string, body: unknown, method = 'POST', timeoutMs?: number
 const sceneUrl = (scope: string, sessionId: string, sceneId: string) =>
   `${chatBase(scope, sessionId)}/scenes/${encodeURIComponent(sceneId)}`;
 
+const filmQuery = (path: string, sessionId: string) => new URLSearchParams({ path, sessionId });
+
 const withToken = (url: string, extra: Record<string, string> = {}) => {
   const q = new URLSearchParams(extra);
   const token = readStoredToken();
@@ -386,14 +388,21 @@ export const videoApi = {
     request<FilmSummary[]>(`${videoBase(scope, sessionId)}/films`, { live: true }),
   filmState: (scope: string, sessionId: string, path: string) =>
     request<FilmState>(`${videoBase(scope, sessionId)}/films/state?${new URLSearchParams({ path })}`, { live: true }),
+  // sessionId в query — чат-вызыватель: без него бэкенд не пишет строку ленты у человека
   patchFilm: (scope: string, sessionId: string, path: string, patch: FilmPatch) =>
-    json<FilmState>(`${videoBase(scope, sessionId)}/films?${new URLSearchParams({ path })}`, patch, 'PATCH'),
+    json<FilmState>(`${videoBase(scope, sessionId)}/films?${filmQuery(path, sessionId)}`, patch, 'PATCH'),
   buildFilm: (scope: string, sessionId: string, path: string) =>
-    json<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${new URLSearchParams({ path })}`, {}),
+    json<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${filmQuery(path, sessionId)}`, {}),
   buildStatus: (scope: string, sessionId: string, path: string) =>
-    request<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${new URLSearchParams({ path })}`, { live: true }),
+    request<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${filmQuery(path, sessionId)}`, { live: true }),
   cancelBuild: (scope: string, sessionId: string, path: string) =>
-    request<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${new URLSearchParams({ path })}`, { method: 'DELETE' }),
+    request<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${filmQuery(path, sessionId)}`, { method: 'DELETE' }),
+  // Загрузка кадра «С компьютера» в личном чате: файл ложится в рабочую папку чата, ответ — FrameRef
+  uploadFrame: (sessionId: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<FrameRef>(`${videoBase(PERSONAL_SCOPE, sessionId)}/frames/upload`, { method: 'POST', body: form, timeoutMs: 120_000 });
+  },
   // «Сочинить под фильм…»: сервер заводит черновик звука в чате и ждёт его первую версию — она встанет
   // музыкой фильма сама (FilmMusicComposer), и при запуске человеком, и агентом
   composeMusic: (scope: string, sessionId: string, path: string) =>

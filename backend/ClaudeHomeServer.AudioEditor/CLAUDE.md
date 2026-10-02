@@ -106,6 +106,9 @@ dll копируется в `modules/audio-editor/` двумя целями (`Bu
 - **Нет ffmpeg или выключена Images — `503 dsp_unavailable`**, а не 500; выключенные Images / Tts /
   нет ключа fal / нет доступа Higgsfield — драйвер `Enabled=false`. Параметры конструкторов от
   отключаемых вертикалей — только nullable.
+- **Раскладка стемов — `AudioCaps.StemSet`, а не id модели**: панель «Что получить» подставляет модель
+  `separate` по набору (`vocals | 4 | 6 | karaoke`). Новая модель разделения без `StemSet` в сегменты не
+  встанет: панель её не подставит, выбрать её можно только в «Исполнителе».
 - **Отключаемость — 404, а не 500**: `DynamicModules[audioeditor].Enabled=false` или
   `Subsystems:AudioEditor:Enabled=false`.
 

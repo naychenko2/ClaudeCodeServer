@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modeSubmitButton, nextComposerMode, nextPrefill, type ComposerModeEntry, type ComposerModeSeen, type PrefillState } from './composerModes';
+import { modeSubmitButton, modesForStrip, nextComposerMode, nextPrefill, type ComposerModeEntry, type ComposerModeSeen, type PrefillState } from './composerModes';
 import type { ComposerModeApi } from './subsystems/registryCore';
 
 const EMPTY: PrefillState = { key: null, auto: null };
@@ -151,5 +151,26 @@ describe('кнопка строки режима и слот emptySubmit', () =>
 
   it('ход недоступен — и «Ещё» гаснет', () => {
     expect(modeSubmitButton({ ...base, emptySubmit: () => again }, ctx, false, true).disabled).toBe(true);
+  });
+});
+
+describe('режимы следуют за полосой (modesForStrip)', () => {
+  const entry = (name: string, strip?: string) => ({ name, action: { strip } as ComposerModeApi });
+  const image = entry('image', 'images');
+  const sound = entry('sound', 'sound');
+  const free = entry('free');
+
+  it('над «Картинками» — без «Звука», над «Звуком» — без «Картинки»', () => {
+    expect(modesForStrip([image, sound], 'images').map(m => m.name)).toEqual(['image']);
+    expect(modesForStrip([image, sound], 'sound').map(m => m.name)).toEqual(['sound']);
+  });
+
+  it('другая полоса или её отсутствие прячут режимы полос, режим без полосы остаётся', () => {
+    expect(modesForStrip([image, sound, free], 'git').map(m => m.name)).toEqual(['free']);
+    expect(modesForStrip([image, sound, free], null).map(m => m.name)).toEqual(['free']);
+  });
+
+  it('хост полос не отчитался — ничего не прячем', () => {
+    expect(modesForStrip([image, sound], undefined)).toHaveLength(2);
   });
 });

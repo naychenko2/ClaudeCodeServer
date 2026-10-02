@@ -9,6 +9,14 @@ import type { ComposerModeApi, ComposerModeCtx } from './subsystems/registryCore
 
 export interface ComposerModeEntry { name?: string; action?: ComposerModeApi }
 
+// Режимы, видимые при активной полосе: режим с `strip` — только над своей полосой.
+// shown === undefined — хост полос не отчитался, ничего не прячем; null — полосы нет,
+// режимы чужих полос прячем. Режим без `strip` от полосы не зависит
+export function modesForStrip<T extends ComposerModeEntry>(modes: readonly T[], shown: string | null | undefined): T[] {
+  if (shown === undefined) return [...modes];
+  return modes.filter(m => !m.action?.strip || m.action.strip === shown);
+}
+
 // Поводы, на которые поле уже переключалось: режим → его последний повод
 export type ComposerModeSeen = Readonly<Record<string, string>>;
 

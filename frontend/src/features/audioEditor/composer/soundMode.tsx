@@ -52,6 +52,7 @@ export const soundMode: ComposerModeApi = {
   title: 'Звук',
   icon: <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
   isAvailable: ctx => getFlag(FLAGS.audioEditor) && !!getFocusedThread(ctx.sessionId),
+  strip: SOUND_STRIP,
   // Только по явной просьбе человека («✦ Новый звук»): выбор звука агентом режим не меняет
   autoSelect: ctx => {
     if (!getFocusedThread(ctx.sessionId)) return null;

@@ -143,6 +143,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // JoinSession: без него клиент после F5 видел бы «Claude печатает…» без
         // возможности ответить, а CLI ждал бы до часового таймаута
         public ServerMessage? PendingInteraction;
+        // Карточка пришла ВНЕ пользовательского хода: её поднял фоновый агент или ход-продолжение
+        // CLI после result (чат был свободен). Ответ на неё не должен ставить Working — result
+        // продолжения ClaudeSession намеренно отбрасывает («между ходами», чтобы не закрыть им
+        // будущий ход), и снять Working было бы некому: чат висел занятым до «Стопа».
+        // Пишется при каждой карточке, пришедшей не в Waiting, — протухнуть не успевает.
+        public volatile bool InteractionOutsideTurn;
         // Контекст адаптера устарел (смена собеседника / правка персоны) — убирается
         // ЛЕНИВО перед следующим ходом, чтобы не рвать активный ход и доживающих агентов
         public volatile bool AdapterStale;
@@ -6110,6 +6116,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return true;
     }
 
+    // Статус после ответа на карточку. Внутри хода — Working: ход продолжается, закроет его
+    // result. Карточка вне хода (фоновый агент, ход-продолжение после result) — чат возвращается
+    // в свободный Active, как до карточки: result такой работы до SessionManager не доходит
+    // (ClaudeSession отбрасывает его как «между ходами»), и Working не снял бы никто. Метка
+    // LastTurnEndedAt — как у result: sweep доведёт до Finished, когда фоновая работа кончится.
+    private void ResumeAfterInteraction(string sessionId, SessionEntry entry, string what)
+    {
+        var outsideTurn = entry.InteractionOutsideTurn && entry.Info.Status == SessionStatus.Waiting;
+        entry.InteractionOutsideTurn = false;
+        var status = outsideTurn ? SessionStatus.Active : SessionStatus.Working;
+        if (outsideTurn)
+            lock (entry.PendingLock) entry.LastTurnEndedAt = DateTimeOffset.UtcNow;
+        FireAndForget(ApplyStatusAsync(sessionId, entry, status), $"смена статуса после {what} ({sessionId})");
+    }
+
     public void RespondPermission(string sessionId, string requestId, string behavior)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
@@ -6143,8 +6164,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         FireAndForget(BroadcastAsync(sessionId,
                 new InteractionResolvedMessage("permission", requestId, Decision: decision)),
             $"рассылка ответа на permission ({sessionId})");
-        FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
-            $"смена статуса после permission ({sessionId})");
+        ResumeAfterInteraction(sessionId, entry, "permission");
     }
 
     // Снять инструмент с «Разрешать всегда» этого чата: следующий его вызов снова спросит.
@@ -8518,8 +8538,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         FireAndForget(BroadcastAsync(sessionId,
                 new InteractionResolvedMessage("question", toolUseId, Answers: answers)),
             $"рассылка ответа на вопрос ({sessionId})");
-        FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
-            $"смена статуса после ответа на вопрос ({sessionId})");
+        ResumeAfterInteraction(sessionId, entry, "ответа на вопрос");
     }
 
     public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback)
@@ -8538,8 +8557,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         FireAndForget(BroadcastAsync(sessionId,
                 new InteractionResolvedMessage("plan", requestId, Approved: approve, Feedback: feedback)),
             $"рассылка решения по плану ({sessionId})");
-        FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
-            $"смена статуса после решения по плану ({sessionId})");
+        ResumeAfterInteraction(sessionId, entry, "решения по плану");
     }
 
     // Решение (Minor, волна 3, осознанно оставлено как есть): удаление чата-штаба НЕ отменяет
@@ -9120,6 +9138,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             if (msg is PermissionRequestMessage or AskQuestionMessage or PlanReviewMessage)
             {
+                // Вторая карточка поверх висящей наследует признак первой; иначе свободный
+                // (не Working) чат = карточка пришла между ходами
+                if (entry.Info.Status is not SessionStatus.Waiting)
+                    entry.InteractionOutsideTurn = entry.Info.Status is not SessionStatus.Working;
                 newStatus = SessionStatus.Waiting;
                 // Кэш для replay при JoinSession: после F5 клиент должен снова увидеть
                 // карточку, которую ждёт CLI

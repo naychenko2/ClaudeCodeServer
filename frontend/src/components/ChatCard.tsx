@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
+import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
 import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
@@ -209,22 +209,31 @@ interface Props {
  * сама карточка перерисовывается, только когда поменялись данные или набор действий.
  */
 export function ChatCard(props: Props) {
-  const latest = useRef(props);
-  useLayoutEffect(() => { latest.current = props; });
-  const proxies = useRef(new Map<string, (...args: unknown[]) => unknown>());
-  const stable: Record<string, unknown> = { ...props };
-  for (const [key, value] of Object.entries(props)) {
-    if (typeof value !== 'function') continue;
-    let proxy = proxies.current.get(key);
-    if (!proxy) {
-      proxy = (...args) => (latest.current as unknown as Record<string, (...a: unknown[]) => unknown>)[key]?.(...args);
-      proxies.current.set(key, proxy);
-    }
-    // Наличие обработчика значимо (нет onRename — нет пункта меню), поэтому прокси
-    // ставится только на месте заданного колбэка
-    stable[key] = proxy;
-  }
-  return <ChatCardMemo {...(stable as unknown as Props)} />;
+  return (
+    <ChatCardMemo
+      {...props}
+      onSelect={useStableHandler(props.onSelect)!}
+      onHover={useStableHandler(props.onHover)!}
+      onDelete={useStableHandler(props.onDelete)!}
+      onTogglePin={useStableHandler(props.onTogglePin)}
+      onAssignTags={useStableHandler(props.onAssignTags)}
+      onRename={useStableHandler(props.onRename)}
+      onAddToWall={useStableHandler(props.onAddToWall)}
+      onArchive={useStableHandler(props.onArchive)}
+      onSaveAsNote={useStableHandler(props.onSaveAsNote)}
+      onEdited={useStableHandler(props.onEdited)}
+      onSwipeToggle={useStableHandler(props.onSwipeToggle)}
+    />
+  );
+}
+
+// Стабильная ссылка, которая зовёт свежую версию колбэка. Наличие обработчика значимо
+// (нет onRename — нет пункта меню), поэтому без колбэка отдаём undefined, а не заглушку
+function useStableHandler<A extends unknown[], R>(fn: ((...args: A) => R) | undefined) {
+  const ref = useRef(fn);
+  useLayoutEffect(() => { ref.current = fn; });
+  const stable = useCallback((...args: A) => ref.current?.(...args) as R, []);
+  return fn ? stable : undefined;
 }
 
 // Теги приходят новым массивом на каждую перерисовку списка — сравниваем по содержимому

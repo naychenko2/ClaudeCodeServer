@@ -376,6 +376,63 @@ public class TurnAccumulatorTests : IDisposable
         tool.FinishedAt.Should().Be(16_000);
     }
 
+    // Этапы и итог run_tests живут в истории вызова: строка этапов и «174 из 177 · упало 3»
+    // на закрытой карточке переживают F5 (сохранение и загрузка с диска)
+    [Fact]
+    public async Task ToolStages_ЭтапыИИтог_ПереживаютСохранениеИстории()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { }, startedAt: 1_000);
+        acc.OnToolStages("t1", [new ToolStage("build", "сборка", 1_000)], null).Should().BeTrue();
+        acc.OnToolStages("t1",
+        [
+            new ToolStage("build", "сборка", 1_000, 103_000),
+            new ToolStage("running", "тесты", 103_000, 135_000),
+        ], new ToolRunTotals(174, 3, 177));
+        acc.OnToolResult("t1", "итог", false, finishedAt: 135_500);
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        var tool = (await _histSvc.LoadAsync(sessionId)).OfType<StoredToolUseMessage>().Single();
+        tool.Stages.Should().Equal(
+            new ToolStage("build", "сборка", 1_000, 103_000),
+            new ToolStage("running", "тесты", 103_000, 135_000));
+        tool.Totals.Should().Be(new ToolRunTotals(174, 3, 177));
+    }
+
+    // Живые снимки уходят fire-and-forget и могут опоздать: снимок без итога после итогового
+    // не стирает ни счётчики, ни закрытые этапы. Без этапов поля в истории нет вовсе
+    [Fact]
+    public void ToolStages_ОпоздавшийСнимокБезИтога_НеПеретираетИтог()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { });
+        acc.OnToolUse("t2", "Bash", new { });
+        var final = new ToolStage("running", "тесты", 1_000, 5_000);
+        acc.OnToolStages("t1", [final], new ToolRunTotals(5, 0, 5));
+        acc.OnToolStages("t1", [new ToolStage("running", "тесты", 1_000)], null);
+
+        var tools = acc.GetAll().OfType<StoredToolUseMessage>().ToList();
+        tools[0].Stages.Should().Equal(final);
+        tools[0].Totals.Should().Be(new ToolRunTotals(5, 0, 5));
+        tools[1].Stages.Should().BeNull();
+        acc.OnToolStages("нет-такого", [final], null).Should().BeFalse();
+    }
+
+    // Прогон оборван на сборке: итога нет, но последний этап закрыт неудачей — снимок
+    // финальный. Опоздавший живой снимок (этап ещё открыт) не возвращает «✓ сборка»
+    [Fact]
+    public void ToolStages_ОпоздавшийЖивойСнимок_НеПеретираетФиналБезИтога()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { });
+        var failed = new ToolStage("build", "сборка", 1_000, 70_000, Failed: true);
+        acc.OnToolStages("t1", [failed], null);
+        acc.OnToolStages("t1", [new ToolStage("build", "сборка", 1_000)], null);
+
+        acc.GetAll().OfType<StoredToolUseMessage>().Single().Stages.Should().Equal(failed);
+    }
+
     // Регресс QA (F5 посреди выполнения): у идущего инструмента в истории лежало
     // "result": null, и лента принимала null за результат — «готово» без времени.
     // Незавершённый вызов пишется в историю вовсе без поля result и без пустого конца

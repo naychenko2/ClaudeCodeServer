@@ -88,15 +88,22 @@ public sealed class TestsToolset(
             Env = env,
             NodeBin = nodeBin,
         };
-        TestRunResult result;
+        var stages = new TestRunStages(() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        TestRunResult? result = null;
         try
         {
-            result = await runs.RunAsync(request, p => SendProgress(session.Id, context.ToolUseId, p), ct);
+            result = await runs.RunAsync(request, p => SendProgress(session.Id, context.ToolUseId, p, stages), ct);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
             // Сбой запуска (нет dotnet/node, отказ среды) — честный текст модели, а не 500 транспорта
             return Deny($"Не удалось запустить {TestRunSummaryFormatter.KindTitle(kind)}: {e.Message}");
+        }
+        finally
+        {
+            // Этапы и итог — на карточку и в историю вызова и при обрыве: строка этапов
+            // «прервано · сборка 1:10» должна пережить F5
+            SendFinal(session.Id, context.ToolUseId, stages, result);
         }
         // Упавшие тесты — штатный исход вызова, а не ошибка инструмента; ошибка — только отказ
         return new McpToolCallResult(runs.FormatResult(result), IsError: result.Refusal is not null);
@@ -407,12 +414,33 @@ public sealed class TestsToolset(
     }
 
     // Шлёт фазу прогона в чат-вызыватель мимо CLI (CLI notifications/progress в stream-json не
-    // пробрасывает). Потеря события безвредна — следующая фаза пришлёт новое
-    private void SendProgress(string sessionId, string? toolUseId, TestRunProgress progress)
+    // пробрасывает). Потеря события безвредна — следующая фаза пришлёт новое. Каждое событие
+    // несёт полный снимок этапов; смена этапа сразу пишется и в историю вызова
+    private void SendProgress(string sessionId, string? toolUseId, TestRunProgress progress, TestRunStages stages)
     {
-        if (broadcaster is null || toolUseId is null) return;
-        var message = new ToolProgressMessage(toolUseId, Stage: progress.Stage, Label: progress.Label,
-            Percent: progress.Percent, Exact: progress.Exact) { SessionId = sessionId };
+        if (toolUseId is null) return;
+        var changed = stages.Advance(progress.Stage);
+        var snapshot = stages.Snapshot();
+        if (changed) sessions.RecordToolStages(sessionId, toolUseId, snapshot, totals: null, persist: false);
+        Broadcast(sessionId, new ToolProgressMessage(toolUseId, Stage: progress.Stage, Label: progress.Label,
+            Percent: progress.Percent, Exact: progress.Exact, Stages: snapshot) { SessionId = sessionId });
+    }
+
+    // Конец прогона (в том числе обрыв): последний этап закрывается, итоговые счётчики уходят
+    // на карточку и сразу на диск — tool_result после «Стопа» может не прийти вовсе.
+    // result null — RunAsync бросил (отмена, сбой запуска): этап, на котором оборвалось, — неудача
+    private void SendFinal(string sessionId, string? toolUseId, TestRunStages stages, TestRunResult? result)
+    {
+        if (toolUseId is null || stages.Snapshot().Count == 0) return;
+        var final = stages.Finish(failed: result is null || TestRunStages.EndedBadly(result));
+        var totals = result is null ? null : TestRunStages.Totals(result);
+        sessions.RecordToolStages(sessionId, toolUseId, final, totals, persist: true);
+        Broadcast(sessionId, new ToolProgressMessage(toolUseId, Stages: final, Totals: totals) { SessionId = sessionId });
+    }
+
+    private void Broadcast(string sessionId, ToolProgressMessage message)
+    {
+        if (broadcaster is null) return;
         _ = SendAsync();
 
         async Task SendAsync()

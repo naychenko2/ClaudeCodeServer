@@ -166,6 +166,32 @@ public class FalPersistLockDedupTests : IDisposable
                 .Should().Contain($"concurrent-append-payload-{i}");
     }
 
+    // Ход оборван раньше конца прогона тестов: аккумулятора уже нет, а финальный снимок
+    // этапов («✕ сборка») и итог дописываются в сохранённую историю по toolUseId — карточка
+    // «прервано · сборка» переживает F5. Промежуточный снимок без аккумулятора не пишется
+    [Fact]
+    public async Task RecordToolStagesAsync_БезАккумулятора_ДописываетФинальныйСнимокВИсторию()
+    {
+        var user = _userStore.Add("stages-user", "pw-123456", "user");
+        var projDir = Directory.CreateDirectory(Path.Combine(_dir, "proj_stages")).FullName;
+        var project = _projectManager.Create("Stages", projDir, user.Id, user.Username);
+        var session = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: "cs-stages-1");
+        await _history.SaveAsync(session.ClaudeSessionId!,
+            [new StoredToolUseMessage { Id = "t1", Name = "mcp__tests__run_tests" }]);
+        ClearAccumulator(session.Id);
+
+        await _sessions.RecordToolStagesAsync(session.Id, "t1",
+            [new ToolStage("build", "сборка", 1_000)], null, persist: false);
+        (await _history.LoadAsync(session.ClaudeSessionId!)).OfType<StoredToolUseMessage>().Single()
+            .Stages.Should().BeNull();
+
+        var final = new ToolStage("build", "сборка", 1_000, 71_000, Failed: true);
+        await _sessions.RecordToolStagesAsync(session.Id, "t1", [final], null, persist: true);
+
+        (await _history.LoadAsync(session.ClaudeSessionId!)).OfType<StoredToolUseMessage>().Single()
+            .Stages.Should().Equal(final);
+    }
+
     // Сбрасывает Accumulator в null у записи SessionEntry — без этого CreateAsync
     // инициализирует Accumulator и Publish*/AppendStored используют его ветку
     // (у которой собственный внутренний лок). Сбрасывая Accumulator, заставляем

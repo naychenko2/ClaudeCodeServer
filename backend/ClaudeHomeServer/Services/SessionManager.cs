@@ -6895,6 +6895,34 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
     }
 
+    // Этапы и итоговые счётчики долгого инструмента (run_tests) — в историю его вызова: живой
+    // tool_progress идёт мимо пампа CLI, и без этой записи строка этапов и итог «174 из 177»
+    // пропадали бы после F5. persist — записать снимок на диск сразу (конец прогона: tool_result
+    // может уже не прийти, если ход оборван); промежуточные снимки ляжут с ближайшим сохранением.
+    // Аккумулятора уже нет (ход оборван раньше конца прогона) — финальный снимок дописывается
+    // в сохранённую историю по toolUseId, иначе «прервано · сборка» не пережило бы F5;
+    // промежуточные без аккумулятора не пишем — их перекроет финальный
+    public void RecordToolStages(string sessionId, string toolUseId, IReadOnlyList<ToolStage> stages,
+        ToolRunTotals? totals, bool persist) =>
+        FireAndForget(RecordToolStagesAsync(sessionId, toolUseId, stages, totals, persist),
+            $"этапы инструмента ({sessionId})");
+
+    // Снимок в аккумулятор ложится синхронно, до первого await: порядок событий сохраняется
+    internal async Task RecordToolStagesAsync(string sessionId, string toolUseId, IReadOnlyList<ToolStage> stages,
+        ToolRunTotals? totals, bool persist)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (entry.Accumulator is { } acc)
+        {
+            if (acc.OnToolStages(toolUseId, stages, totals) && persist)
+                await acc.SaveSnapshotAsync(_history);
+            return;
+        }
+        if (persist)
+            await MutateStoredAsync<StoredToolUseMessage>(entry, sessionId, m => m.Id == toolUseId,
+                m => TurnAccumulator.ApplyToolStages(m, stages, totals));
+    }
+
     // Публичный (волна Д): TeamDecisionService зовёт его вместо прямой работы с
     // entry.Accumulator. Счётчик и момент последнего оклика пишутся на карточку в истории —
     // переживают рестарт сервера, чтобы после перезапуска не начать оклик заново.

@@ -284,6 +284,13 @@ public class StoredToolUseMessage : StoredMessage
     // null — старта не было либо история до этого поля
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Started { get; set; }
+    // Этапы и итоговые счётчики долгого инструмента (run_tests, ToolProgressMessage.Stages/
+    // Totals): строка этапов и итог на закрытой карточке переживают F5. null — у вызова этапов
+    // нет либо история до этих полей
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ToolStage>? Stages { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ToolRunTotals? Totals { get; set; }
 }
 
 // Последний снапшот workflow_progress (по ToolUseId вызова Workflow) — чтобы карточка

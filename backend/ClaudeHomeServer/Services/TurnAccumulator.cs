@@ -194,6 +194,36 @@ internal class TurnAccumulator
         }
     }
 
+    // Этапы и итоговые счётчики долгого инструмента (run_tests): снимок целиком заменяет
+    // прежний (правило — ApplyToolStages). Ищется и в _history: прогон, оборванный вместе с
+    // ходом, дописывает этапы уже после конца хода.
+    // false — вызова нет (чужой toolUseId, потерянный tool_use)
+    public bool OnToolStages(string toolUseId, IReadOnlyList<ToolStage> stages, ToolRunTotals? totals)
+    {
+        lock (_lock)
+        {
+            if (FindTool(toolUseId) is not { } msg) return false;
+            ApplyToolStages(msg, stages, totals);
+            return true;
+        }
+    }
+
+    // Слияние снимка этапов в карточку вызова — общее для аккумулятора и правки истории на
+    // диске. Финальный снимок (итог есть либо последний этап закрыт) не перетирается поздним
+    // живым: события уходят fire-and-forget и могут обогнать друг друга, а живой снимок
+    // вернул бы «✓ сборка» вместо «✕ сборка». Итог, однажды записанный, не стирается
+    internal static void ApplyToolStages(StoredToolUseMessage msg, IReadOnlyList<ToolStage> stages, ToolRunTotals? totals)
+    {
+        if (IsFinalStages(msg.Stages, msg.Totals) && !IsFinalStages(stages, totals)) return;
+        msg.Stages = [.. stages];
+        if (totals is not null) msg.Totals = totals;
+    }
+
+    // Живой снимок всегда держит последний этап открытым (Advance закрывает прежний и
+    // открывает следующий); закрывает его только конец прогона
+    private static bool IsFinalStages(IReadOnlyList<ToolStage>? stages, ToolRunTotals? totals) =>
+        totals is not null || stages is [.., { EndedAt: not null }];
+
     // Вызывать только под _lock. Сначала текущий ход; инструмент, завершившийся после конца
     // хода (дочерний вызов доживающего фонового агента), уже уплыл в _history — ищем там,
     // иначе после перезагрузки карточка крутила бы спиннер вечно

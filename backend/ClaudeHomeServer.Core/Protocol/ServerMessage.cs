@@ -109,11 +109,25 @@ public record ToolStartedMessage(string ToolUseId, long? StartedAt = null)
 //   • сабагент — system/task_progress CLI: LastTool, ToolUses, DurationMs, Label = описание;
 //   • local-media (local_jobs_wait) — шлёт сам MCP-тулсет мимо CLI по _meta.claudecode/toolUseId:
 //     Stage queued|running, QueuePosition, EtaSeconds, Percent, Exact, Label («шаг N из M»).
-// Не персистится: событие живое, после F5 карточку догонит следующее.
+// Само событие не персистится: после F5 карточку догонит следующее. Исключение — этапы и
+// итоговые счётчики прогона тестов (Stages, Totals): их тулсет пишет и в историю вызова
+// (StoredToolUseMessage), чтобы строка этапов и «174 из 177 · упало 3» жили после F5.
+//   • run_tests — Stages: полный снимок этапов (очередь → сборка → подсчёт → тесты) по часам
+//     сервера; Totals — только в последнем событии, когда прогон кончился.
 public record ToolProgressMessage(string ToolUseId, string? Stage = null, string? Label = null,
     int? Percent = null, int? QueuePosition = null, int? EtaSeconds = null,
-    string? LastTool = null, int? ToolUses = null, long? DurationMs = null, bool? Exact = null)
+    string? LastTool = null, int? ToolUses = null, long? DurationMs = null, bool? Exact = null,
+    IReadOnlyList<ToolStage>? Stages = null, ToolRunTotals? Totals = null)
     : ServerMessage("tool_progress");
+
+// Этап долгого инструмента (run_tests): ключ (queued | build | list | stand | running), короткая
+// подпись для строки этапов, начало и конец — Unix-мс по часам сервера. EndedAt null — этап
+// идёт (или вызов оборвался, не успев его закрыть). Failed — этап кончился неудачей (сборка
+// упала, прогон оборван на нём): карточка рисует его крестиком, а не галочкой
+public sealed record ToolStage(string Stage, string Label, long StartedAt, long? EndedAt = null, bool? Failed = null);
+
+// Итоговые счётчики прогона тестов для закрытой карточки: «174 из 177 · упало 3»
+public sealed record ToolRunTotals(int Passed, int Failed, int Total);
 
 // Стриминг аргументов инструмента (input_json_delta) — накопленный частичный JSON
 public record ToolInputDeltaMessage(string ToolUseId, string PartialJson)

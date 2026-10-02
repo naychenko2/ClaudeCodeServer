@@ -36,6 +36,7 @@ const GRAB = { hitW: 64, barW: 40, barH: 4 } as const;
 const QUEUE_ICON = 11;  // значок в бейдже очереди — мельче ICON_SIZE.xs, по макету
 const SPINE_DIVIDER_W = 24;
 const SPINE_RUN = 32;   // круглая кнопка запуска в корешке
+const TOUCH_MIN = 44;   // тач-цель на телефоне: кнопки низа шторки не ниже этого
 // Шторка телефона занимает 88 % высоты: над ней остаётся видна полоса ленты
 const SHEET_H = '88%';
 
@@ -71,6 +72,7 @@ export type GenerationFoot = {
   queue?: string;                   // очередь GPU у локальных моделей
   price?: [string, string];         // итог («≈ $0.08») и расшифровка («2 × $0.04»)
   runLabel: string;                 // глагол запуска: «Изменить», «Перегенерировать»
+  runDisabled?: boolean;            // кнопка серая без причины: делать нечего («Собрано» — результат уже актуален)
   runIcon?: ReactNode;              // значок запуска; без него ✦ — значок ИИ
   noCount?: boolean;                // правка без ИИ: один результат, «− N +» не рисуем
   stale?: string[];                 // что изменилось после сборки: «порядок сцен», «склейка 2»
@@ -188,7 +190,7 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
     </div>
   );
 
-  const foot = p.footContent ?? (p.foot && <GenerationFootView foot={p.foot} />);
+  const foot = p.footContent ?? (p.foot && <GenerationFootView foot={p.foot} touch={sheet} />);
   const footBox = foot && (
     <div style={{
       flex: '0 0 auto', borderTop: `1px solid ${C.borderLight}`, background: C.bgCard,
@@ -349,7 +351,9 @@ function AgentPickRow({ pick }: { pick: GenerationAgentPick }) {
 
 // Низ: причина · очередь GPU · «устарел» · результат · «− N +» · цена в две строки · кнопка
 // запуска; во время работы строка запуска заменяется полосой прогресса с «Отменить»
-export function GenerationFootView({ foot: f }: { foot: GenerationFoot }) {
+export function GenerationFootView({ foot: f, touch }: { foot: GenerationFoot; touch?: boolean }) {
+  // На телефоне кнопки низа — тач-цели 44 px: главная — размера md, остальные растянуты по высоте
+  const hit = touch ? { height: TOUCH_MIN, minHeight: TOUCH_MIN } : undefined;
   const showCount = !f.noCount && f.count !== undefined;
   return (
     <>
@@ -388,7 +392,7 @@ export function GenerationFootView({ foot: f }: { foot: GenerationFoot }) {
           }}>{f.result.file}</span>
           {f.stale?.length ? <Badge size="xs" tone="warning">устарел</Badge> : null}
           {f.result.actions.map(a => (
-            <Button key={a.label} size="xs" variant="ghost" onClick={a.onClick} style={{ flexShrink: 0 }}>{a.label}</Button>
+            <Button key={a.label} size="xs" variant="ghost" onClick={a.onClick} style={{ flexShrink: 0, ...hit }}>{a.label}</Button>
           ))}
         </div>
       )}
@@ -401,7 +405,7 @@ export function GenerationFootView({ foot: f }: { foot: GenerationFoot }) {
             {f.progress.p !== undefined && <ProgressBar value={f.progress.p} />}
           </span>
           {f.progress.onCancel && (
-            <Button size="xs" variant="ghost" onClick={f.progress.onCancel} style={{ flexShrink: 0 }}>Отменить</Button>
+            <Button size="xs" variant="ghost" onClick={f.progress.onCancel} style={{ flexShrink: 0, ...hit }}>Отменить</Button>
           )}
         </div>
       ) : (
@@ -412,6 +416,7 @@ export function GenerationFootView({ foot: f }: { foot: GenerationFoot }) {
             min={1}
             max={f.maxCount!}
             maxHint={f.maxCountHint}
+            touch={touch}
             onChange={n => f.onCountChange?.(n)}
           />}
           {/* Цена ровно в две строки: строки не переносятся, а режутся многоточием */}
@@ -425,12 +430,12 @@ export function GenerationFootView({ foot: f }: { foot: GenerationFoot }) {
             </span>
           ) : <span style={{ flex: 1 }} />}
           <Button
-            size="xs"
-            disabled={!!f.reason}
+            size={touch ? 'md' : 'xs'}
+            disabled={!!f.reason || !!f.runDisabled}
             title={f.reason}
             leftIcon={f.runIcon ?? icon(Sparkles)}
             onClick={f.onRun}
-            style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+            style={{ flexShrink: 0, whiteSpace: 'nowrap', ...(touch ? { minHeight: TOUCH_MIN } : null) }}
           >
             {f.runLabel}
           </Button>
@@ -462,7 +467,7 @@ function Spine<T extends string>(p: Props<T> & { onExpand: () => void; onTab: (t
         <Button
           pill
           size="xs"
-          disabled={!!f.reason}
+          disabled={!!f.reason || !!f.runDisabled}
           title={f.reason ?? (f.price ? `${f.runLabel} · ${f.price[0]}` : f.runLabel)}
           onClick={f.onRun}
           style={{ width: SPINE_RUN, height: SPINE_RUN, minHeight: SPINE_RUN, padding: 0 }}

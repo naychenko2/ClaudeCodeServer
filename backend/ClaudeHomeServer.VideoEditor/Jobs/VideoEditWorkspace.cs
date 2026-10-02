@@ -1,0 +1,77 @@
+namespace ClaudeHomeServer.Services.VideoEditor.Jobs;
+
+// Рабочая папка задач модуля «Видео»: data/video-editor/{ownerId}/{jobId}/{variant}/clip.mp4 (ADR-022 §2,
+// как у звука). Кеш на 7 дней весом до сотен МБ, поэтому в бэкап не едет (BackupPaths по
+// VideoEditorPaths.WorkspaceDirName). Чистку зовёт исполнитель задач при каждом запуске. Версии живых
+// нитей чистка не трогает (RetainedJobs).
+public sealed class VideoEditWorkspace(string root)
+{
+    public const string DirName = VideoEditorPaths.WorkspaceDirName;
+    public static readonly TimeSpan Ttl = TimeSpan.FromDays(7);
+    private const string ClipName = "clip";
+
+    public string Root { get; } = root;
+
+    public static VideoEditWorkspace FromConfig(IConfiguration config)
+    {
+        var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
+        return new VideoEditWorkspace(Path.Combine(Path.GetDirectoryName(dataPath)!, DirName));
+    }
+
+    // Задачи, на которые ссылаются версии нитей владельца: живут столько же, сколько нить, а не TTL.
+    // Ставит регистрация модуля поверх VideoThreadStore; null — удерживать нечего
+    public Func<string, IReadOnlySet<string>>? RetainedJobs { get; set; }
+
+    public string JobDir(string ownerId, string jobId) => Path.Combine(Root, Safe(ownerId), Safe(jobId));
+
+    // Клип варианта: {jobId}/{variant}/clip.mp4. Расширение от драйвера — с точкой, латиница и цифры, не
+    // длиннее 10; иначе .mp4. Возвращает путь файла
+    public string SaveClip(string ownerId, string jobId, int variant, byte[] bytes, string? extension)
+    {
+        var dir = Path.Combine(JobDir(ownerId, jobId), variant.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, ClipName + SafeExtension(extension));
+        File.WriteAllBytes(path, bytes);
+        return path;
+    }
+
+    // Файл клипа варианта; нет — null (чистка по TTL или ещё не готов)
+    public string? FindClip(string ownerId, string jobId, int variant)
+    {
+        var dir = Path.Combine(JobDir(ownerId, jobId), variant.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return Directory.Exists(dir) ? Directory.EnumerateFiles(dir, ClipName + ".*").FirstOrDefault() : null;
+    }
+
+    private static string SafeExtension(string? extension) =>
+        extension is { Length: > 1 and <= 10 } e && e[0] == '.' && e[1..].All(char.IsAsciiLetterOrDigit)
+            ? e.ToLowerInvariant()
+            : ".mp4";
+
+    // Чистка задач старше TTL, кроме удержанных нитями; ошибки файловой системы не мешают запуску
+    public void Sweep(DateTime nowUtc)
+    {
+        if (!Directory.Exists(Root)) return;
+        try
+        {
+            foreach (var owner in Directory.EnumerateDirectories(Root))
+            {
+                IReadOnlySet<string>? keep = null;
+                foreach (var job in Directory.EnumerateDirectories(owner))
+                {
+                    if (nowUtc - Directory.GetLastWriteTimeUtc(job) <= Ttl) continue;
+                    keep ??= RetainedJobs?.Invoke(Path.GetFileName(owner)) ?? new HashSet<string>();
+                    if (!keep.Contains(Path.GetFileName(job))) Directory.Delete(job, recursive: true);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    private static string Safe(string segment)
+    {
+        if (string.IsNullOrWhiteSpace(segment) || segment.Contains("..")
+            || segment.IndexOfAny(['/', '\\', ':']) >= 0 || segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            throw new ArgumentException("Недопустимый идентификатор", nameof(segment));
+        return segment;
+    }
+}

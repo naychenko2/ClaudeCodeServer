@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CSSProperties, HTMLAttributes, MouseEvent, ReactNode } from 'react';
-import { C, R, FONT, SHADOW, Z } from '../../lib/design';
+import { C, R, FONT, FS, SHADOW, Z } from '../../lib/design';
 import { IconButton } from './IconButton';
 
 // Единое выпадающее меню: карточка + подложка для закрытия по клику вне.
@@ -16,7 +16,7 @@ import { IconButton } from './IconButton';
 //    PanelShell держит transform ради анимации появления, и меню внутри панели
 //    уезжало на её смещение и обрезалось overflow острова.
 // Закрытие по Esc/скроллу в anchor-режиме — на вызывающей стороне (поведение, не контрол).
-export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, maxHeight = 300, gap = 6, anchorSide, inertBackdrop, children }: {
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
@@ -37,11 +37,23 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   // прижал бы карточку к тому же краю поверх самой рельсы. Низ карточки
   // выравнивается по низу якоря.
   anchorSide?: 'left' | 'right';
+  // По горизонтали в anchor-режиме: end — правый край карточки у правого края якоря
+  // (прежнее поведение), start — левый край у левого края якоря: меню, открытое из
+  // сегмента полосы, не свисает влево за остров
+  anchorAlign?: 'start' | 'end';
+  // В anchor-режиме открываться вверх, когда сверху хватает места (меню над полосой
+  // композера), а не только когда не влезает снизу
+  preferUp?: boolean;
   // Подложка перестаёт ловить события. Нужно, когда из меню ЧТО-ТО ПЕРЕТАСКИВАЮТ:
   // подложка накрывает весь экран и первой перехватывает dragover, так что до
   // мест дропа под ней события не доходят вовсе. Закрыть меню на старте
   // перетаскивания нельзя — исчезнувший источник не дождётся dragend.
   inertBackdrop?: boolean;
+  // Во всю ширину: в обычном режиме — по ширине родителя, в anchor-режиме — окна с
+  // полями по 8 px; minWidth/maxWidth/align не действуют, направление по вертикали
+  // прежнее. Для телефона 360, где меню встаёт над полосой, а не узкой карточкой у
+  // триггера. С anchorSide не сочетается и игнорируется
+  fullWidth?: boolean;
   children: ReactNode;
 }) {
   let pos: CSSProperties;
@@ -58,8 +70,9 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
         : { top: Math.max(8, Math.min(anchor.top, window.innerHeight - maxHeight - 8)) }),
     };
   } else if (anchor) {
-    const openUp = anchor.bottom + gap + maxHeight > window.innerHeight && anchor.top > maxHeight;
-    const left = Math.max(8, Math.min(anchor.right - minWidth, window.innerWidth - minWidth - 8));
+    const roomUp = anchor.top > maxHeight;
+    const openUp = roomUp && (preferUp || anchor.bottom + gap + maxHeight > window.innerHeight);
+    const left = Math.max(8, Math.min(anchorAlign === 'start' ? anchor.left : anchor.right - minWidth, window.innerWidth - minWidth - 8));
     pos = {
       position: 'fixed', left,
       // Потолок ширины считаем ОТ ЛЕВОГО КРАЯ карточки: позиция выбрана по minWidth, а
@@ -69,6 +82,10 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
     };
   } else {
     pos = { position: 'absolute', ...(bottom != null ? { bottom } : { top }), [align]: 0 };
+  }
+  if (fullWidth && !anchorSide) {
+    const edge = anchor ? 8 : 0;
+    pos = { ...pos, left: edge, right: edge, minWidth: 0, maxWidth: 'none' };
   }
   // Слой: обычное меню живёт внутри своего родителя и обходится Z.dropdown, а меню
   // в anchor-режиме уходит ПОРТАЛОМ в body — то есть наружу контекста наложения того,
@@ -117,9 +134,20 @@ export function MenuSep() {
 export interface MenuItemAction { icon: ReactNode; title: string; onClick: () => void; disabled?: boolean }
 
 // Единый пункт выпадающего меню.
-export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, action, actions, isMobile }: {
+export function MenuItem({ icon, iconSize = 15, iconTile, label, hint, hintWrap, onClick, danger, disabled, wrapper, action, actions, isMobile }: {
   icon?: ReactNode;
+  // Габарит слота иконки: миниатюре картинки в меню выбора («Что править?») 15 px мало
+  iconSize?: number;
+  // Иконка на плитке C.bgInset размером iconSize (как .ic в макетах меню выбора):
+  // у строк с миниатюрой и без неё колонка подписей одна
+  iconTile?: boolean;
   label: ReactNode;
+  // Вторая строка под подписью — мета пункта (длительность · кто · когда), C.textMuted.
+  // Без неё мета в одной строке с именем первой уходит под многоточие на узком экране
+  hint?: ReactNode;
+  // Вторая строка переносится, а не режется многоточием: в ней смысл (причина,
+  // отметка), а на таче подсказки title нет
+  hintWrap?: boolean;
   onClick?: (e: MouseEvent) => void;
   danger?: boolean;
   disabled?: boolean;
@@ -164,18 +192,33 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, acti
       style={style}
     >
       {icon && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', width: 15, height: 15, flexShrink: 0, color: 'inherit' }}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', width: iconSize, height: iconSize, flexShrink: 0, color: 'inherit',
+          ...(iconTile ? { justifyContent: 'center', borderRadius: R.md, background: C.bgInset, color: disabled ? 'inherit' : C.textSecondary, overflow: 'hidden' } : null),
+        }}>
           {icon}
         </span>
       )}
       {/* Подпись в одну строку с многоточием: пункты бывают длинные (путь к папке,
           заголовок документа), а карточка ограничена по ширине — без обрезки они
           расползались бы на две строки и ломали ритм списка */}
-      <span style={{
-        flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
-        {label}
-      </span>
+      {hint == null ? (
+        <span style={{
+          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {label}
+        </span>
+      ) : (
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+          <span style={{
+            ...(hintWrap ? { overflowWrap: 'anywhere' } : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+            fontSize: FS.xs, color: disabled ? 'inherit' : C.textMuted,
+          }}>
+            {hint}
+          </span>
+        </span>
+      )}
     </button>
   );
   const row = hasAction ? (

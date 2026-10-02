@@ -28,8 +28,8 @@ public interface ILocalAudioMedia
 
     Task<LocalAudioPoll> PollAsync(string ticket, CancellationToken ct);
 
-    // Снять задачу из ОЖИДАЮЩИХ очереди; идущую не прерываем (interrupt ComfyUI бьёт по любому
-    // текущему прогону, в том числе чужому) — тогда false
+    // Снять задачу: ждущую — из очереди, идущую — прервать адресно по её prompt_id (чужой прогон
+    // не задевается). Задачи в очереди уже нет — false
     Task<bool> CancelAsync(string ticket, CancellationToken ct);
 }
 

@@ -1,6 +1,9 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.AudioEditor.Tests.Engines;
+using ClaudeHomeServer.AudioEditor.Tests.Fakes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.AudioEditor;
+using ClaudeHomeServer.Services.AudioEditor.Engines;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 using FluentAssertions;
@@ -36,6 +39,43 @@ public sealed class AudioParamsValidationTests : IDisposable
 
         quote.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
         quote.Error.Should().Be($"Неизвестный параметр «temperature» у модели {SchemaEngine.SpeakModel}");
+    }
+
+    // Поставщики без схемы (Higgsfield, Яндекс) сверяют имена по ParamNames: неизвестный ключ — отказ с
+    // именем поля до цены, а не молчаливая потеря в драйвере; известный — проходит
+    [Fact]
+    public async Task Quote_Yandex_UnknownKey_RefusedWithName_KnownPasses()
+    {
+        var svc = Service(new YandexAudioEngine(new FakeTts()));
+        AudioQuoteRequest Request(JsonObject fields) =>
+            new(AudioModes.Voice, "speak", YandexAudioEngine.ProviderKey, YandexAudioEngine.ModelId, Text: "Привет", Fields: fields);
+
+        var bad = await svc.QuoteAsync(Owner, Scope, Request(new JsonObject { ["pitch"] = 2 }), CancellationToken.None);
+        var ok = await svc.QuoteAsync(Owner, Scope, Request(new JsonObject { ["speed"] = 1.2 }), CancellationToken.None);
+
+        bad.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        bad.Error.Should().StartWith($"Неизвестный параметр «pitch» у модели {YandexAudioEngine.ModelId}");
+        ok.Error.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Quote_Higgsfield_UnknownKey_RefusedWithName_BeforeCost_KnownPasses()
+    {
+        var http = new FakeHttp(HiggsfieldAudioEngineTests.Happy);
+        var engine = new HiggsfieldAudioEngine(FakeHttp.Client(http)) { PollInterval = TimeSpan.Zero };
+        await engine.RefreshModelsAsync(CancellationToken.None);
+        var svc = Service(engine);
+        AudioQuoteRequest Request(JsonObject fields) =>
+            new(AudioModes.Voice, "speak", HiggsfieldAudioEngine.ProviderKey, "seed_audio", Text: "Привет", Fields: fields);
+
+        var bad = await svc.QuoteAsync(Owner, Scope, Request(new JsonObject { ["temperature"] = 1 }), CancellationToken.None);
+        var costCalls = http.Calls.Count(c => FakeHttp.Tool(c) == "generate_audio");
+        var ok = await svc.QuoteAsync(Owner, Scope, Request(new JsonObject { ["speech_rate"] = 10 }), CancellationToken.None);
+
+        bad.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        bad.Error.Should().StartWith("Неизвестный параметр «temperature» у модели seed_audio");
+        costCalls.Should().Be(0, "отказ — до запроса цены");
+        ok.Error.Should().BeNull();
     }
 
     [Fact]

@@ -19,7 +19,7 @@ import { markGenPanelDismissed } from '../../../lib/genPanelDismissed';
 import { REVEAL_PANEL_EVENT } from '../../../lib/subsystems/registryCore';
 import { audioApi } from '../api';
 import { openSoundShortcut, selectThreadByHuman } from '../thread/actions';
-import { __applyThreads, __resetAudioStore, getShortcutMode, handleEvent, soundDraftKey } from '../thread/threadStore';
+import { __applyThreads, __resetAudioStore, handleEvent, soundDraftKey } from '../thread/threadStore';
 import { __resetGenPanelOpen, holdGenPanelOpen } from '../../../lib/genPanelOpen';
 import { __resetAgentPicks, dropAgentPick, getAgentPick } from '../../../lib/genPanelFollow';
 
@@ -35,18 +35,16 @@ beforeEach(() => {
 });
 
 describe('автооткрытие панели «Звук» по действию человека', () => {
-  it('ярлык «Голос» открывает панель на «Настройках», пока её в чате не закрывали', () => {
-    openSoundShortcut('s1', 'voice');
+  it('ярлык «Звук» открывает панель на «Настройках», пока её в чате не закрывали', () => {
+    openSoundShortcut('s1');
     expect(reveals()).toEqual([{ key: 'sound', tab: 'settings', sessionId: 's1' }]);
-    expect(getShortcutMode('s1')).toBe('voice');
   });
 
-  it('закрыл панель в чате — ярлык её больше сам не открывает, режим всё равно запоминается', () => {
+  it('закрыл панель в чате — ярлык её больше сам не открывает', () => {
     markGenPanelDismissed('s1', 'sound');
-    openSoundShortcut('s1', 'music');
+    openSoundShortcut('s1');
     expect(reveals()).toEqual([]);
-    expect(getShortcutMode('s1')).toBe('music');
-    openSoundShortcut('s2', 'voice');
+    openSoundShortcut('s2');
     expect(reveals()).toEqual([{ key: 'sound', tab: 'settings', sessionId: 's2' }]);
   });
 

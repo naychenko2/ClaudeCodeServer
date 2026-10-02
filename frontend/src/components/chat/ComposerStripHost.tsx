@@ -35,7 +35,7 @@ function ItemLabel({ title, status }: { title: string; status: ReactNode }) {
   );
 }
 
-// Ярлыки доступных полос реестра («Голос», «Музыка» у «Звука») — для других входов
+// Ярлыки доступных полос реестра («Звук») — для других входов
 // каркаса: меню «＋» композера и пустой ленты (ADR-021 п.1). Хост полос берёт их сам
 export function useStripShortcuts(projectId: string | null, sessionId: string | null): ComposerStripShortcut[] {
   const fromSlot = useSlot<ComposerStripCtx, ComposerStripApi>(SLOT_COMPOSER_STRIP);
@@ -46,7 +46,16 @@ export function useStripShortcuts(projectId: string | null, sessionId: string | 
     .flatMap(c => c.action!.shortcuts?.(avail) ?? []);
 }
 
-// Подсказка кнопки «＋»: «Прикрепить файл, голос, музыка…» — из ярлыков, а не зашитой строкой
+// Ярлыки в меню полос: ярлык с ключом самой полосы («Звук») — не второй пункт, а действие её
+// пункта (own): выбор полосы его и запускает. Остальные — отдельными пунктами под чертой
+export function menuShortcuts(stripIds: string[], all: ComposerStripShortcut[]) {
+  return {
+    shortcuts: all.filter(sc => !stripIds.includes(sc.key)),
+    own: (stripId: string) => all.find(sc => sc.key === stripId),
+  };
+}
+
+// Подсказка кнопки «＋»: «Прикрепить файл, звук…» — из ярлыков, а не зашитой строкой
 export function plusButtonTitle(shortcuts: Pick<ComposerStripShortcut, 'title'>[]): string {
   if (shortcuts.length === 0) return 'Прикрепить файл';
   const titles = shortcuts.map(s => s.title.charAt(0).toLocaleLowerCase('ru') + s.title.slice(1));
@@ -82,8 +91,8 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
   if (!current) return null;
 
   const close = () => { setMenu(null); setSheet(false); };
-  // Ярлыки полос («Голос», «Музыка») — под списком, отделены чертой
-  const shortcuts = strips.flatMap(s => s.action!.shortcuts?.(avail) ?? []);
+  // Ярлыки полос — под списком, отделены чертой
+  const { shortcuts, own } = menuShortcuts(ids, strips.flatMap(s => s.action!.shortcuts?.(avail) ?? []));
 
   const items = (
     <>
@@ -100,7 +109,7 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
               {s.name === active && <Check size={14} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />}
             </span>
           }
-          onClick={() => { close(); select(s.name!); }}
+          onClick={() => { close(); select(s.name!); own(s.name!)?.onSelect(); }}
         />
       ))}
       {shortcuts.length > 0 && <MenuSep />}

@@ -20,7 +20,7 @@ const dispatched: unknown[] = [];
 import { __resetComposerStrips, getActiveStrip } from '../../../lib/composerStrips';
 import type { AudioCatalog, AudioPrefs, AudioThread } from '../api';
 import { soundShortcuts } from '../manifest';
-import { __applyThreads, __resetAudioStore, __setScopeData, getShortcutMode, handleEvent, SOUND_STRIP } from '../thread/threadStore';
+import { __applyThreads, __resetAudioStore, __setScopeData, getShortcutMode, handleEvent, setShortcutMode, SOUND_STRIP } from '../thread/threadStore';
 import { soundStripStatus, stripModel } from './SoundStrip';
 import { queueBadge, resolveLaunch, soundSummary, soundSummaryMobile } from './summary';
 
@@ -110,14 +110,20 @@ describe('полоса «Звук» по стору', () => {
     expect(soundStripStatus('p1', 's1').startsWith('Звук не выбран · ')).toBe(true);
   });
 
-  it('ярлык «Музыка» ставит режим чата, просит полосу «Звук» и открывает панель на «Настройках»', () => {
+  it('ярлык «Звук» один: просит полосу «Звук», открывает панель на «Настройках» в последнем режиме', () => {
     __setScopeData('p1', CATALOG, PREFS);
     __applyThreads('s1', 'p1', { focus: null, revision: 1, threads: [] });
-    const music = soundShortcuts({ sessionId: 's1' }).find(s => s.key === 'sound-music')!;
-    music.onSelect();
-    expect(getShortcutMode('s1')).toBe('music');
+    const all = soundShortcuts({ sessionId: 's1' });
+    expect(all.map(s => [s.key, s.title])).toEqual([[SOUND_STRIP, 'Звук']]);
+    // Без выбора в панели — «Голос»; режим, выбранный раньше, ярлык не сбивает
+    all[0].onSelect();
+    expect(getShortcutMode('s1')).toBeNull();
     expect(getActiveStrip('s1', ['git', SOUND_STRIP])).toBe(SOUND_STRIP);
     expect(dispatched).toEqual([expect.objectContaining({ type: 'cc-reveal-panel', init: { detail: { key: 'sound', tab: 'settings', sessionId: 's1' } } })]);
+    expect(soundStripStatus('p1', 's1').startsWith('Звук не выбран · Голос · ')).toBe(true);
+    setShortcutMode('s1', 'music');
+    all[0].onSelect();
+    expect(getShortcutMode('s1')).toBe('music');
     expect(soundStripStatus('p1', 's1')).toBe('Звук не выбран · Музыка · Песня · Локально · ACE-Step 1.5 XL · 1 вар. · бесплатно');
   });
 });

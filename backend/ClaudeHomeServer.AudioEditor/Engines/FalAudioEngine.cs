@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
+using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.AudioEditor.Schema;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Engines;
@@ -374,6 +375,10 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
             if (!resp.IsSuccessStatusCode)
                 return new QueueRun(null, null, AudioResult.Fail(ClassifyHttp(resp.StatusCode, text), ErrorText(text, resp.StatusCode)));
             ticket = ParseTicket(text) ?? throw new JsonException("нет request_id в ответе очереди");
+            // Ключ уходит и на эти адреса — чужой хост не опрашиваем
+            if (!new[] { ticket.StatusUrl, ticket.ResponseUrl, ticket.CancelUrl }.All(u => FalQueueUrls.IsTrusted(u, _queueBase)))
+                return new QueueRun(null, ticket.RequestId, AudioResult.Fail(AudioOutcome.Failed,
+                    "fal.ai вернул адрес опроса вне своих хостов — задачу не опрашиваем."));
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException || ex is OperationCanceledException && !outer.IsCancellationRequested)
         {

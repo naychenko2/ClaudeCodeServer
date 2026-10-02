@@ -19,6 +19,9 @@ public sealed class FakeComfy : HttpMessageHandler
     public List<string> UploadPaths { get; } = [];
     public Dictionary<string, byte[]> UploadedBytes { get; } = [];
     public List<string> Requests { get; } = [];
+    public List<string> Interrupted { get; } = [];
+    // Срабатывает после отдачи снимка очереди — гонка «прочитали очередь, а прогон уже сменился»
+    public Action? AfterQueueRead { get; set; }
     public bool Down { get; set; }
     public string? RejectPrompt { get; set; }
 
@@ -31,17 +34,34 @@ public sealed class FakeComfy : HttpMessageHandler
         if (Down) throw new HttpRequestException("connection refused");
 
         if (request.Method == HttpMethod.Get && path == "/queue")
-            return Json(new JsonObject
+        {
+            var snapshot = Json(new JsonObject
             {
                 ["queue_running"] = new JsonArray([.. Running.Select((id, i) => (JsonNode)new JsonArray(i, id, new JsonObject()))]),
                 ["queue_pending"] = new JsonArray([.. Pending.Select((id, i) => (JsonNode)new JsonArray(100 + i, id, new JsonObject()))]),
             });
+            AfterQueueRead?.Invoke();
+            return snapshot;
+        }
 
         // Снятие ждущих: {"delete":[id…]}
         if (request.Method == HttpMethod.Post && path == "/queue")
         {
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject();
             foreach (var id in body["delete"]?.AsArray() ?? []) Pending.Remove(id!.GetValue<string>());
+            return Json(new JsonObject());
+        }
+
+        // Прерывание как в ComfyUI 0.37: с prompt_id — только если она идёт; без него — любой текущий прогон
+        if (request.Method == HttpMethod.Post && path == "/interrupt")
+        {
+            var text = request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct);
+            var target = text.Length == 0 ? null : JsonNode.Parse(text)?["prompt_id"]?.GetValue<string>();
+            foreach (var id in Running.Where(id => target is null || id == target).ToList())
+            {
+                Running.Remove(id);
+                Interrupted.Add(id);
+            }
             return Json(new JsonObject());
         }
 

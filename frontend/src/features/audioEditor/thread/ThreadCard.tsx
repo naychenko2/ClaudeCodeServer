@@ -1,12 +1,13 @@
-// Карточка нити звука в ленте (макет audio-editor-v2-proposal.md, «Карточка нити в ленте»). В
-// history.json лежат только якоря module_record: audio_thread { threadId, versionId } — карточка нити
-// с листанием версий ‹ ›, и audio_launch_versions { threadId, jobId, … } — запуск ИИ с вариантами и
-// «Взять». Всё содержимое — живьём из стора нитей. Всё за флагом audio-editor: без него — строка fallback.
+// Карточки звука в ленте: каждая версия нити — своя полноценная карточка на своём месте. В
+// history.json лежат только якоря module_record: audio_thread { threadId, versionId } — карточка
+// версии (исходник, склейка, правка без ИИ), и audio_launch_versions { threadId, jobId, … } — запуск
+// ИИ: карточка хода, по готовности — карточка на каждый вариант. Всё содержимое — живьём из стора
+// нитей. Всё за флагом audio-editor: без него — строка fallback.
 
 import { useState, type ReactNode } from 'react';
-import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Combine, Download, Mic, Music, Save, Scissors, Sparkles, Target, Wand2, X } from 'lucide-react';
+import { AudioLines, ChevronDown, Combine, Download, Mic, Music, Save, Scissors, Sparkles, Target, Wand2, X } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, Menu, MenuItem, MenuSep, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, FLAGS, isCardPick, useFeature,
+  Badge, Button, Dot, Menu, MenuItem, MenuSep, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, FLAGS, isCardPick, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { audioApi, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
@@ -14,8 +15,8 @@ import { opInfo } from '../ops';
 import { audioScope, isPersonalScope } from '../scope';
 import { downloadFile, saveVersion, selectThreadByHuman, takeVersion } from './actions';
 import {
-  currentIndex, doneText, hasMain, launchEndNote, launchOf, launchVersions, licenseBadge, licenseBadgeOf, navText,
-  orderedVersions, priceText, saveKind, threadName, type LicenseBadge,
+  doneText, hasMain, launchEndNote, launchOf, launchVersions, licenseBadge, licenseBadgeOf, priceText, saveKind,
+  threadName, versionTag, type LicenseBadge,
 } from './model';
 import { recordOf, str } from './records';
 import { SaveAsDialog } from './SaveAsDialog';
@@ -135,21 +136,15 @@ function DraftBox({ thread, focused }: { thread: AudioThread; focused: boolean }
   );
 }
 
-export function ThreadCard({ scope, sessionId, thread, focused, events }: {
-  scope: string; sessionId: string; thread: AudioThread; focused: boolean;
+// Карточка версии: открыта на своей версии и действует от неё — «Работать с этой», «Обработать ▾»,
+// выделение куска, A/B с основой этой версии, сохранение. Листания нет: каждая версия нити — своя
+// карточка на своём месте в ленте (исходник — у якоря нити, варианты — у якоря запуска)
+export function VersionCard({ scope, sessionId, thread, version: v, focused, events }: {
+  scope: string; sessionId: string; thread: AudioThread; version: AudioThreadVersion; focused: boolean;
   events?: Parameters<typeof doneText>[2];
 }) {
-  const list = orderedVersions(thread);
-  const at = currentIndex(list, thread.currentVersionId);
-  // Листание помнится, пока нить не сдвинулась: новая версия или «Взять» — показываем, где нить сейчас
-  const [nav, setNav] = useState({ at, view: at });
   const [busy, setBusy] = useState(false);
-  if (!list.length) return <DraftBox thread={thread} focused={focused} />;
-  const view = nav.at === at ? nav.view : at;
-  const idx = Math.min(Math.max(view, 0), list.length - 1);
-  const v = list[idx];
-  const isCurrent = v.id === thread.currentVersionId;
-  const working = focused && isCurrent;
+  const working = focused && v.id === thread.currentVersionId;
   const done = doneText(thread, v, events);
   const Icon = modeIcon(thread);
 
@@ -160,21 +155,11 @@ export function ThreadCard({ scope, sessionId, thread, focused, events }: {
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere', minWidth: 0 }}>{threadName(thread)}</span>
         {working && <Badge size="xs" tone="accent" icon={ic(Target)}>в работе</Badge>}
         <License badge={licenseBadge(v)} />
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: SP.xxs, color: C.textMuted }}>
-          {list.length > 1 && (
-            <IconButton size="sm" title="Предыдущая версия" ariaLabel="Предыдущая версия" disabled={idx <= 0}
-              onClick={() => setNav({ at, view: idx - 1 })}>{ic(ChevronLeft)}</IconButton>
-          )}
-          <span data-audio-nav="" style={{ fontSize: FS.xs, whiteSpace: 'nowrap' }}>{navText(v, list)}</span>
-          {list.length > 1 && (
-            <IconButton size="sm" title="Следующая версия" ariaLabel="Следующая версия" disabled={idx >= list.length - 1}
-              onClick={() => setNav({ at, view: idx + 1 })}>{ic(ChevronRight)}</IconButton>
-          )}
-        </span>
+        <span data-audio-nav="" style={{ marginLeft: 'auto', fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>{versionTag(thread, v)}</span>
       </div>
       {done && <Note>{done}</Note>}
 
-      <VersionBody key={v.id} scope={scope} sessionId={sessionId} thread={thread} version={v} selectable={working} />
+      <VersionBody scope={scope} sessionId={sessionId} thread={thread} version={v} />
 
       <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap', alignItems: 'center' }}>
         {/* Не primary: акцент в ленте — у ▶ и главного действия, а не у каждой карточки */}
@@ -192,6 +177,8 @@ export function ThreadCard({ scope, sessionId, thread, focused, events }: {
   );
 }
 
+// Якорь нити { threadId, versionId }: карточка этой версии. Без версии (черновик «Новый звук») —
+// пунктир до первого запуска, потом молчит: варианты рисуют якоря запусков ниже
 export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const rec = recordOf(ctx.item);
   // Личный чат вне проекта: ctx.projectId = null, область — personal
@@ -204,7 +191,11 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
     // Нить удалили или модуль выключен — якорь в истории остался; рисуем след
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
-  return <ThreadCard scope={scope} sessionId={ctx.sessionId} thread={thread} focused={state.focus === thread.id} events={state.events} />;
+  const focused = state.focus === thread.id;
+  const versionId = str(rec?.data.versionId);
+  const v = versionId ? thread.versions.find(x => x.id === versionId) : undefined;
+  if (v) return <VersionCard scope={scope} sessionId={ctx.sessionId} thread={thread} version={v} focused={focused} events={state.events} />;
+  return thread.versions.length || thread.launches.length ? null : <DraftBox thread={thread} focused={focused} />;
 }
 
 // ── Запуск и его варианты ──
@@ -244,40 +235,11 @@ function RunningLine({ scope, sessionId, threadId, jobId }: { scope: string; ses
   );
 }
 
-function Variant({ scope, sessionId, thread, version, n, focused }: {
-  scope: string; sessionId: string; thread: AudioThread; version: AudioThreadVersion; n: number; focused: boolean;
-}) {
-  const [busy, setBusy] = useState(false);
-  const current = thread.currentVersionId === version.id;
-  const working = focused && current;
-  return (
-    <div data-audio-variant={n} data-current={working ? 'true' : 'false'} style={{
-      display: 'flex', flexDirection: 'column', gap: SP.xs, padding: SP.sm, minWidth: 0,
-      border: `1px solid ${working ? C.accent : C.borderLight}`, borderRadius: R.lg,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm }}>
-        <b style={{ color: C.textHeading }}>Вариант {n}</b>
-        <span style={{ color: C.textMuted }}>· версия {version.number}</span>
-        {working && <Badge size="xs" tone="accent" icon={ic(Target)}>в работе</Badge>}
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
-          {!working && (
-            <Button size="xs" variant="primary" loading={busy} title="Станет текущей версией нити"
-              onClick={() => { setBusy(true); void takeVersion(scope, sessionId, thread, version.id).finally(() => setBusy(false)); }}>
-              Взять
-            </Button>
-          )}
-        </span>
-      </div>
-      <VersionBody scope={scope} sessionId={sessionId} thread={thread} version={version} selectable={false} compact />
-      <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
-        <SaveActions scope={scope} sessionId={sessionId} thread={thread} version={version} />
-      </div>
-    </div>
-  );
-}
-
-export function LaunchCard({ scope, sessionId, thread, focused, data }: {
+// Запуск: пока идёт — одна карточка с ходом (очередь, «Отменить»), по готовности — карточка версии
+// на каждый вариант, на месте запуска в ленте
+export function LaunchCard({ scope, sessionId, thread, focused, data, events }: {
   scope: string; sessionId: string; thread: AudioThread; focused: boolean; data: Record<string, unknown>;
+  events?: Parameters<typeof doneText>[2];
 }) {
   const jobId = str(data.jobId)!;
   const launch = launchOf(thread, jobId);
@@ -290,29 +252,24 @@ export function LaunchCard({ scope, sessionId, thread, focused, data }: {
   const info = [str(data.model), count > 1 ? `вариантов: ${count}` : null, price].filter(Boolean).join(' · ');
   const prompt = launch?.prompt ?? null;
   const endNote = launchEndNote(status, versions.length, count);
-  const skeletons = status === 'running' ? Math.max(0, Math.min(count, 4) - versions.length) : 0;
 
   return (
-    <div data-audio-launch={status} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0, maxWidth: 560 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm, color: C.textSecondary }}>
-        <span style={{ display: 'inline-flex', alignSelf: 'center', color: C.textMuted }}>{ic(Sparkles)}</span>
-        <b style={{ color: C.textHeading }}>{agent ? 'Claude' : 'Вы'}: {op?.label ?? 'звук'}</b>
-        <span>{threadName(thread)}{info ? ` · ${info}` : ''}</span>
-        <License badge={licenseBadgeOf(str(data.license) ?? launch?.license)} />
-        {prompt && <span style={{ color: C.textMuted, fontStyle: 'italic', overflowWrap: 'anywhere' }}>«{prompt}»</span>}
-      </div>
+    <div data-audio-launch={status} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0, width: '100%', maxWidth: 560 }}>
+      {versions.map(v => (
+        <VersionCard key={v.id} scope={scope} sessionId={sessionId} thread={thread} version={v} focused={focused} events={events} />
+      ))}
 
-      {status === 'running' && <RunningLine scope={scope} sessionId={sessionId} threadId={thread.id} jobId={jobId} />}
-
-      {(versions.length > 0 || skeletons > 0) && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-          {versions.map((v, i) => (
-            <Variant key={v.id} scope={scope} sessionId={sessionId} thread={thread} version={v} n={v.variant ?? i + 1} focused={focused} />
-          ))}
-          {Array.from({ length: skeletons }, (_, i) => (
-            <div key={i} data-audio-variant="skeleton" className="cc-skel" style={{ height: SP.xxxl, borderRadius: R.lg }} />
-          ))}
-        </div>
+      {status === 'running' && (
+        <Frame current={false} testId="running">
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm, color: C.textSecondary }}>
+            <span style={{ display: 'inline-flex', alignSelf: 'center', color: C.textMuted }}>{ic(Sparkles)}</span>
+            <b style={{ color: C.textHeading }}>{agent ? 'Claude' : 'Вы'}: {op?.label ?? 'звук'}</b>
+            <span>{threadName(thread)}{info ? ` · ${info}` : ''}</span>
+            <License badge={licenseBadgeOf(str(data.license) ?? launch?.license)} />
+            {prompt && <span style={{ color: C.textMuted, fontStyle: 'italic', overflowWrap: 'anywhere' }}>«{prompt}»</span>}
+          </div>
+          <RunningLine scope={scope} sessionId={sessionId} threadId={thread.id} jobId={jobId} />
+        </Frame>
       )}
 
       {endNote && <Note>{endNote}</Note>}
@@ -330,5 +287,5 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   if (!on || !ctx.sessionId || !thread || !rec || !str(rec.data.jobId)) {
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
-  return <LaunchCard scope={scope} sessionId={ctx.sessionId} thread={thread} focused={state.focus === thread.id} data={rec.data} />;
+  return <LaunchCard scope={scope} sessionId={ctx.sessionId} thread={thread} focused={state.focus === thread.id} data={rec.data} events={state.events} />;
 }

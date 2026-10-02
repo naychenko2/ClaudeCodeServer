@@ -31,7 +31,8 @@ import { VoicesTab } from '../voices/VoicesTab';
 import { CloneRefusalNote } from './CloneRefusalNote';
 import { ConcatFields } from './ConcatFields';
 import {
-  inputsKey, LIBRARY_VOICE_OPS, mergeInputs, migrateLocal, readInputs, saveSettings, serverPiece, toServerInputs, writeInputs,
+  inputsKey, LIBRARY_VOICE_OPS, mergeInputs, migrateLocal, readInputs, rememberMode, saveSettings, serverPiece, toServerInputs,
+  writeInputs,
   type PanelInputs,
 } from './inputs';
 import {
@@ -126,7 +127,15 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     });
   };
   const change = (patch: SettingsPatch, debounced = false) => {
-    const next = nextSettings(state, patch);
+    const prefs = getPrefs(scope);
+    const next = nextSettings(state, patch, prefs, catalog);
+    if (next.mode !== state.mode) {
+      // Выбор уходящего режима: у нити — в его префы, без нити — недосохранённая правка в те же префы
+      if (thread) {
+        const cur = nextSettings(state, {});
+        void rememberMode(scope, sessionId, cur, prefs[cur.mode]);
+      } else flushLater.current?.();
+    }
     setPending(next);
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;

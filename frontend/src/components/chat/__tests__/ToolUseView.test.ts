@@ -178,7 +178,7 @@ describe('ToolUseView — таймер и статус после F5', () => {
 
   it('идущий инструмент с "result": null — крутится, а не «готово»', () => {
     const html = renderIn([user('в'), bash('t1')], 't1', true);
-    expect(html).toContain('tool-spinner');
+    expect(html).toContain('cc-live-dot');
     expect(html).not.toContain('готово');
     expect(html).not.toContain('прервано');
   });
@@ -187,7 +187,7 @@ describe('ToolUseView — таймер и статус после F5', () => {
     const html = renderIn([user('в'), bash('t1', { bgDone: true }), { kind: 'interrupted', timestamp: 2 }], 't1', false);
     expect(html).toContain('прервано');
     expect(html).not.toContain('готово');
-    expect(html).not.toContain('tool-spinner');
+    expect(html).not.toContain('cc-live-dot');
   });
 
   it('оборванный ход + следующий ход: старая карточка «прервано» и не тикает, новая идёт', () => {
@@ -196,7 +196,7 @@ describe('ToolUseView — таймер и статус после F5', () => {
     expect(old).toContain('прервано');
     expect(old).not.toContain('идёт');
     expect(old).not.toContain('progressbar');
-    expect(renderIn(raw, 't2', true)).toContain('tool-spinner');
+    expect(renderIn(raw, 't2', true)).toContain('cc-live-dot');
   });
 
   it('завершённый — «готово» с длительностью по отметкам сервера', () => {
@@ -292,28 +292,30 @@ describe('ToolUseView — витрина Веры', () => {
   const wait = (over: Partial<ToolItem> = {}): ToolItem => ({
     kind: 'tool_use', id: 'w1', name: 'mcp__local-media__local_jobs_wait', input: { job_ids: ['lm_x', 'lm_y'] }, startedAt: 1_000, ...over,
   });
-  // Пустое место под спиннер у карточки без спиннера
-  const SLOT = 'aria-hidden="true" style="width:18px;flex-shrink:0"';
+  // Пустое место под живую точку у готовой карточки
+  const SLOT = 'aria-hidden="true" style="width:18px;flex-shrink:0;display:flex;justify-content:center"';
 
-  it('п. 2: у готовой карточки место под спиннер держится той же ширины', () => {
+  it('п. 2: у готовой карточки место под точку держится той же ширины', () => {
     const done = render(wait({ result: '{"all_done":true}', finishedAt: 16_000 }), undefined, false);
-    expect(done).not.toContain('tool-spinner');
+    expect(done).not.toContain('cc-live-dot');
     expect(done).toContain(SLOT);
   });
 
-  it('п. 3: полоса уже видна — спиннер убран, остаётся только место под него', () => {
+  it('вариант B: процента нет — живая точка и никакой полосы; с процентом — короткая полоса', () => {
+    const idle = render(wait());
+    expect(idle).toContain('cc-live-dot');
+    expect(idle).not.toContain('progressbar');
+    expect(idle).not.toContain('cc-progress-run');
     const html = render(wait({ progress: { stage: 'running', percent: 40, exact: true } }));
     expect(html).toContain('progressbar');
-    expect(html).not.toContain('tool-spinner');
-    expect(html).toContain(SLOT);
-    // До порога и без полосы — только спиннер
-    expect(render(wait())).toContain('tool-spinner');
+    expect(html).toContain('max-width:200px');
+    expect(html).toContain('cc-live-dot');
   });
 
-  it('п. 4: ожидание в очереди — неподвижная пустая дорожка, а не бегущий отрезок', () => {
+  it('п. 4: ожидание в очереди — только точка, полосы нет', () => {
     const html = render(wait({ progress: { stage: 'queued', queuePosition: 2, percent: 0 } }));
-    expect(html).toContain('progressbar');
-    expect(html).not.toContain('cc-progress-run');
+    expect(html).not.toContain('progressbar');
+    expect(html).toContain('cc-live-dot');
     expect(html).toContain('2-я в очереди');
   });
 
@@ -341,5 +343,77 @@ describe('ToolUseView — витрина Веры', () => {
     const bash: ToolItem = { kind: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'sleep 99' }, startedAt: 1_000, started: true };
     const html = render(bash, [bash, { kind: 'interrupted', ts: 71_000 }], false);
     expect(html).toContain('прервано · 1:10');
+  });
+});
+
+// Вариант B: строка этапов прогона тестов и итог с цифрами на закрытой карточке
+describe('ToolUseView — этапы и итог run_tests', () => {
+  afterEach(() => { viewport.mobile = false; });
+  const render = (item: ToolItem, items: unknown[] = [item], busy = true) =>
+    renderToStaticMarkup(createElement(ToolLivenessContext.Provider, { value: toolLiveness(items as ToolItem[], busy) },
+      createElement(ToolUseView, { item, online: true })));
+  const run = (over: Partial<ToolItem>): ToolItem => ({
+    kind: 'tool_use', id: 'rt', name: 'mcp__tests__run_tests', input: { target: 'backend/App.Tests' }, startedAt: 0, ...over,
+  });
+  const done3 = [
+    { stage: 'build', label: 'сборка', startedAt: 0, endedAt: 62_000 },
+    { stage: 'list', label: 'подсчёт', startedAt: 62_000, endedAt: 64_000 },
+    { stage: 'running', label: 'тесты', startedAt: 64_000, endedAt: 135_000 },
+  ];
+
+  it('готово с упавшими: счётчики в шапке, «упало» красным, этапы с галочками без раскрытия', () => {
+    const html = render(run({ result: 'итог', finishedAt: 135_000, stages: done3, totals: { passed: 174, failed: 3, total: 177 } }), undefined, false);
+    expect(html).toContain('готово · 2:15');
+    expect(html).toContain('174 из 177 · <span style="color:var(--c-danger-text)">упало 3</span>');
+    expect(html).toContain('✓ сборка 1:02 · ✓ подсчёт 0:02 · ✓ тесты 1:11');
+  });
+
+  it('готово без упавших — «177 из 177» без «упало»', () => {
+    const html = render(run({ result: 'итог', finishedAt: 135_000, stages: done3, totals: { passed: 177, failed: 0, total: 177 } }), undefined, false);
+    expect(html).toContain('177 из 177');
+    expect(html).not.toContain('упало');
+  });
+
+  it('прервано на сборке: этап крестиком и красным, счётчиков нет', () => {
+    const stages = [
+      { stage: 'queued', label: 'очередь', startedAt: 0, endedAt: 500 },
+      { stage: 'build', label: 'сборка', startedAt: 500, endedAt: 70_500, failed: true },
+    ];
+    const item = run({ stages });
+    const html = render(item, [item, { kind: 'interrupted', ts: 70_500 }], false);
+    expect(html).toContain('прервано · 1:10');
+    expect(html).toContain('✕ сборка 1:10');
+    expect(html).not.toContain('очередь'); // очередь короче 2 с не показываем
+    expect(html).not.toContain(' из ');
+  });
+
+  it('идёт: текущий этап выделен и не режется, подпись прогресса при нём, полоса под этапами', () => {
+    const item = run({
+      stages: [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 102_000 }, { stage: 'running', label: 'тесты', startedAt: 102_000 }],
+      progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true },
+    });
+    const html = render(item);
+    expect(html).toContain('✓ сборка 1:42');
+    expect(html).toContain('flex-shrink:0');
+    expect(html).toContain('font-weight:600">тесты');
+    expect(html).toContain('412 из 7951 · <span style="color:var(--c-danger-text)">упало 2</span>');
+    expect(html).toContain('progressbar');
+    expect(html).toContain('cc-live-dot');
+  });
+
+  it('после F5: этапы и итог приходят из истории вызова', () => {
+    const items = normalizeHistory([
+      { kind: 'tool_use', id: 'rt', name: 'mcp__tests__run_tests', input: {}, result: 'итог', startedAt: 0, finishedAt: 135_000, stages: done3, totals: { passed: 174, failed: 3, total: 177 } },
+    ]);
+    const html = render(items[0] as ToolItem, items, false);
+    expect(html).toContain('✓ тесты 1:11');
+    expect(html).toContain('174 из 177');
+  });
+
+  it('мобила: итог строкой под шапкой, ниже строка этапов', () => {
+    viewport.mobile = true;
+    const html = render(run({ result: 'итог', finishedAt: 135_000, stages: done3, totals: { passed: 177, failed: 0, total: 177 } }), undefined, false);
+    expect(html.indexOf('готово · 2:15')).toBeLessThan(html.indexOf('✓ сборка'));
+    expect(html).toContain('177 из 177');
   });
 });

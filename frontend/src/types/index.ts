@@ -1997,6 +1997,28 @@ export interface ToolProgress {
   lastToolKind?: string | null;
   toolUses?: number | null;
   durationMs?: number | null;
+  // run_tests: полный снимок этапов и (в последнем событии) итоговые счётчики — редьюсер
+  // переносит их в поля карточки stages/totals, они же лежат в истории вызова
+  stages?: ToolStage[] | null;
+  totals?: ToolRunTotals | null;
+}
+
+// Этап долгого инструмента (run_tests, ToolStage на бэке): ключ queued | build | list | stand |
+// running, короткая подпись, начало и конец — Unix-мс по часам сервера. endedAt нет — этап идёт
+// (или вызов оборвался, не закрыв его); failed — этап кончился неудачей (крестик, а не галочка)
+export interface ToolStage {
+  stage: string;
+  label: string;
+  startedAt: number;
+  endedAt?: number | null;
+  failed?: boolean | null;
+}
+
+// Итоговые счётчики прогона тестов для закрытой карточки: «174 из 177 · упало 3»
+export interface ToolRunTotals {
+  passed: number;
+  failed: number;
+  total: number;
 }
 
 // Элементы чата
@@ -2035,8 +2057,9 @@ export type ChatItem =
   // workflowAborted — workflow восстановлен из истории прерванным (агенты уже не завершатся);
   // startedAt/finishedAt — Unix-мс по часам сервера, нет у старых историй;
   // started — пришёл tool_started (фактический старт Bash/агента), startedAt уже сдвинут на него;
-  // progress — последний tool_progress (только живая лента, в историю не пишется)
-  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean; workflowAborted?: boolean; bgDone?: boolean; bgAborted?: boolean; startedAt?: number; finishedAt?: number; started?: boolean; progress?: ToolProgress }
+  // progress — последний tool_progress (только живая лента, в историю не пишется);
+  // stages/totals — этапы и итог run_tests: из tool_progress вживую и из истории после F5
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean; workflowAborted?: boolean; bgDone?: boolean; bgAborted?: boolean; startedAt?: number; finishedAt?: number; started?: boolean; progress?: ToolProgress; stages?: ToolStage[]; totals?: ToolRunTotals }
   // decision — вердикт пользователя (только живая лента: permission_request в history не персистится)
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean; decision?: 'allowed' | 'denied' | 'always' }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }

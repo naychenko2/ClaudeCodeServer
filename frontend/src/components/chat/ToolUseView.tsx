@@ -5,9 +5,8 @@ import { C, FONT, FS, SP } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
-import { ProgressBar } from '../ui';
-import { PROGRESS_H } from '../ui/ProgressBar';
-import { awaitsToolStart, formatClock, isQueued, shownFor, tickShownClock, toolClockMs, toolProgressPercent, toolProgressText, TOOL_TIMER_MIN_MS, type ShownClock } from '../../lib/toolTiming';
+import { LiveDot, ProgressBar } from '../ui';
+import { awaitsToolStart, formatClock, isQueued, shownFor, stageCaptionOf, stageViews, tickShownClock, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type ShownClock, type StageView } from '../../lib/toolTiming';
 import { toolLabel, toolWord, toolCardLabel, testRunArg, localJobsWaitArg, RUN_TESTS_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
 import { useIsMobile } from '../../lib/breakpoints';
 import { CodeBlockFrame } from './CodeCopyButton';
@@ -31,22 +30,25 @@ function useRunningElapsed(startedAt: number | undefined, running: boolean): num
   return shownFor(clock, startedAt);
 }
 
-// Высота строки подписи прогресса под шапкой (мобила): фиксированная, чтобы приход
+// Высота строки подписи прогресса и строки этапов под шапкой: фиксированная, чтобы приход
 // и смена текста не двигали ленту
 const CAPTION_LINE_H = 16;
 
-// Спиннер карточки: кольцо — заметной дорожкой прогресса (на тёмном фоне кольцо цвета
-// границы почти не читалось). Ширина места под него — SPINNER_W: у готовой карточки
-// остаётся пустое место той же ширины, и шапка при завершении не прыгает вбок.
-// По высоте кольцо в раскладку не входит (отрицательные поля на половину размера, центр
-// остаётся на месте): оно выше строки текста, и на пороге 2 с, когда спиннер сменяется
-// полосой, шапка теряла бы 3 px
-const SPINNER_W = 18;
-function ToolSpinner() {
-  return <div className="tool-spinner" style={{ borderColor: C.progressTrack, borderTopColor: C.accent, margin: `${-SPINNER_W / 2}px 0` }} />;
-}
-function SpinnerSlot() {
-  return <span aria-hidden style={{ width: SPINNER_W, flexShrink: 0 }} />;
+// Место слева в шапке: пока инструмент идёт — живая точка (LiveDot), у готовой карточки —
+// пустое место той же ширины, и шапка при завершении не прыгает вбок. Бегущей полосы нет
+// вовсе: пока сколько осталось неизвестно, живость показывает точка, а полоса появляется
+// только с процентом. Строки под шапкой отступают на это место плюс зазор шапки
+const LEAD_W = 18;
+const HEAD_GAP = 10;
+const BELOW_PAD = LEAD_W + HEAD_GAP;
+// Определённая полоса короткая: на всю ширину ленты она тянула взгляд сильнее самой работы
+const BAR_MAX_W = 200;
+function LeadSlot({ live }: { live: boolean }) {
+  return (
+    <span aria-hidden={!live} style={{ width: LEAD_W, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
+      {live && <LiveDot />}
+    </span>
+  );
 }
 
 // «упало K» — единственный тревожный сигнал живой карточки: выделен цветом ошибки
@@ -54,6 +56,30 @@ const FAILED_RE = /(упало [1-9]\d*)/;
 function ProgressCaption({ text }: { text: string }) {
   return <>{text.split(FAILED_RE).map((part, i) =>
     i % 2 ? <span key={i} style={{ color: C.dangerText }}>{part}</span> : part)}</>;
+}
+
+// Строка этапов прогона: «✓ сборка 1:42 · ✓ подсчёт 0:03 · тесты 2:13 · 412 из 7951».
+// Прошедшие прижимаются и режутся многоточием, текущий этап с подписью прогресса — никогда:
+// даже на 320 px видно, что идёт сейчас. Этап, на котором оборвалось, — крестиком и красным
+function StageLine({ stages, caption }: { stages: StageView[]; caption: string | null }) {
+  const clock = (s: StageView) => s.ms != null ? ` ${formatClock(s.ms)}` : '';
+  const tail = stages[stages.length - 1].state === 'done' ? null : stages[stages.length - 1];
+  const past = (tail ? stages.slice(0, -1) : stages).map(s => `✓ ${s.label}${clock(s)}`).join(' · ');
+  return (
+    <div style={{ display: 'flex', minWidth: 0, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+      {past && <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{past}</span>}
+      {tail && (
+        <span style={{ flexShrink: 0 }}>
+          {/* Неразрывный пробел: ведущий обычный у флекс-элемента схлопывается («1:42· тесты») */}
+          {past ? ' · ' : ''}
+          {tail.state === 'failed'
+            ? <span style={{ color: C.dangerText }}>✕ {tail.label}{clock(tail)}</span>
+            : <span style={{ color: C.textSecondary, fontWeight: 600 }}>{tail.label}{clock(tail)}</span>}
+          {caption && <> · <ProgressCaption text={caption} /></>}
+        </span>
+      )}
+    </div>
+  );
 }
 
 // Иконка и цвет по типу инструмента — чтобы read/edit/bash/web/mcp различались с первого взгляда
@@ -241,24 +267,41 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // «прервано» тоже с длительностью: до момента обрыва (ToolLiveness.abortedAt)
   const elapsed = toolClockMs(item, running, shownElapsed, aborted ? liveness?.abortedAt?.get(item.id) : null);
   const showClock = elapsed != null && elapsed >= TOOL_TIMER_MIN_MS;
-  // Живой прогресс поверх таймера (tool_progress: сабагент, локальная генерация) — подпись
-  // и, если источник даёт оценку, определённая полоса вместо бегущей
+  // Живой прогресс поверх таймера (tool_progress: сабагент, тесты, локальная генерация) —
+  // подпись и, только если источник знает процент, короткая определённая полоса. Ожидание в
+  // очереди полосы не даёт вовсе: ничего не выполняется, живость показывает точка
   const progressText = running ? toolProgressText(item.progress) : null;
-  const progressPct = running ? toolProgressPercent(item.progress) : null;
-  // Ожидание в очереди: ничего не выполняется — вместо бегущей полосы пустая дорожка
-  const queued = running && isQueued(item.progress);
-  const barShown = running && (progressPct != null || showClock);
-  // Один индикатор «идёт» за раз: до порога — спиннер, с порога — полоса и время
-  const spinning = !settled && !aborted && !(running && (showClock || barShown));
+  const progressPct = running && !isQueued(item.progress) ? toolProgressPercent(item.progress) : null;
+  // Строка этапов прогона тестов (этапы шлёт сервер, они же в истории вызова): идёт — «сейчас»
+  // по часам карточки, закрыта — до результата или до обрыва
+  const stages = useMemo(() => stageViews(item.stages, {
+    running,
+    aborted,
+    now: running && typeof item.startedAt === 'number' && shownElapsed != null ? item.startedAt + shownElapsed : null,
+    endAt: aborted ? liveness?.abortedAt?.get(item.id) ?? null : item.finishedAt ?? null,
+  }), [item.stages, item.startedAt, item.finishedAt, item.id, running, aborted, shownElapsed, liveness]);
+  const hasStages = stages.length > 0;
+  // С этапами подпись прогресса едет при текущем этапе, а не в шапке (тесты — счётчик,
+  // очередь — «занято 2»); «сборка» и «подсчёт» сами себе подпись — при них только счётчик этапа
+  const stageCaption = hasStages ? stageCaptionOf(item.progress) : null;
   // На мобиле подпись прогресса и итог — отдельной строкой под шапкой у ВСЕХ карточек
   // (шапка остаётся описанию, итог у всех стоит на одном месте). Строка держится с начала
   // выполнения, поэтому завершение ленту не сдвигает
   const isMobile = useIsMobile();
   const captionBelow = isMobile;
-  // Итог завершённой или оборванной карточки — в шапке либо (мобила) строкой подписи
+  const headCaption = hasStages ? null : progressText;
+  // Итог завершённой или оборванной карточки — в шапке либо (мобила) строкой подписи. У
+  // прогона тестов — со счётчиками: «готово · 2:15 · 174 из 177 · упало 3»
   const statusText = `${item.isError ? 'ошибка' : item.bgAborted || aborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово'}`
     + (showClock ? ` · ${formatClock(elapsed)}` : '');
   const statusColor = item.isError || item.bgAborted || aborted ? C.dangerText : C.textMuted;
+  const totals = totalsText(item.totals);
+  const status = (
+    <>
+      {statusText}
+      {totals && <span style={{ color: C.textMuted }}> · <ProgressCaption text={totals} /></span>}
+    </>
+  );
 
   return (
     <div>
@@ -266,7 +309,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
         onClick={() => hasBody && setOpen(o => !o)}
       >
-        {spinning ? <ToolSpinner /> : <SpinnerSlot />}
+        <LeadSlot live={!settled && !aborted} />
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: meta.color }}>
           {meta.icon}
           <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>{displayName}</span>
@@ -302,9 +345,9 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
               );
             })()
           : <span style={{ flex: 1 }} />}
-        {progressText && !captionBelow && (
-          <span title={progressText} style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-            <ProgressCaption text={progressText} />
+        {headCaption && !captionBelow && (
+          <span title={headCaption} style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            <ProgressCaption text={headCaption} />
           </span>
         )}
         {running && showClock && (
@@ -314,41 +357,36 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         )}
         {(settled || aborted) && !captionBelow && (
           <span style={{ fontSize: FS.xs, color: statusColor, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-            {statusText}
+            {status}
           </span>
         )}
         {hasBody && (
           <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
         )}
       </div>
-      {/* Сколько осталось, неизвестно (CLI прогресса не отдаёт) — неопределённая полоса;
-          есть оценка из tool_progress — определённая, приглушённая (это прогноз, не факт).
-          Место под неё держим всё время, пока инструмент идёт, а не с порога в 2 с:
-          иначе строка прыгала бы посреди выполнения */}
-      {running && (
-        <div style={{ margin: `${SP.xxs}px 0 ${SP.xs}px` }}>
-          {/* Строка подписи держится с начала выполнения, пустая до первого прогресса */}
-          {captionBelow && (
-            <div title={progressText ?? undefined} style={{ height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-              {progressText && <ProgressCaption text={progressText} />}
-            </div>
-          )}
-          <div style={{ height: PROGRESS_H.thin }}>
-            {/* Очередь — пустая неподвижная дорожка (ничего не выполняется); настоящие шаги
-                ComfyUI (exact) — сплошная заливка, оценка по ETA — пунктир */}
-            {barShown && (queued
-              ? <ProgressBar value={0} size="thin" label={progressText ?? 'В очереди'} />
-              : progressPct != null
-                ? <ProgressBar value={progressPct} estimate={item.progress?.exact !== true} size="thin" transition="width .5s linear" label={progressText ?? undefined} />
-                : <ProgressBar value={0} indeterminate size="thin" />)}
-          </div>
+      {/* Мобила: строка подписи держится с начала выполнения (пустая до первого прогресса), а
+          итог «готово · M:SS» встаёт на её место той же высоты — завершение ленту не двигает.
+          У прогона тестов подпись едет в строке этапов, поэтому отдельной строки нет */}
+      {captionBelow && running && !hasStages && (
+        <div title={progressText ?? undefined} style={{ margin: `${SP.xxs}px 0 0`, paddingLeft: BELOW_PAD, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+          {progressText && <ProgressCaption text={progressText} />}
         </div>
       )}
-      {/* Мобила: итог «готово · M:SS» встаёт на место строки подписи той же высоты — при
-          завершении уходит только полоса, как на десктопе, а лента не прыгает вверх */}
       {captionBelow && (settled || aborted) && (
-        <div style={{ margin: `${SP.xxs}px 0 0`, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: statusColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-          {statusText}
+        <div style={{ margin: `${SP.xxs}px 0 0`, paddingLeft: BELOW_PAD, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: statusColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+          {status}
+        </div>
+      )}
+      {/* Строка этапов — и пока идёт, и на закрытой карточке без раскрытия (после F5 — из
+          истории). Полоса — только с процентом: короткая, под этапами; настоящие шаги
+          (exact) — сплошная, оценка — пунктир */}
+      {(hasStages || progressPct != null) && (
+        <div style={{ paddingLeft: BELOW_PAD, paddingBottom: SP.xxs }}>
+          {hasStages && <StageLine stages={stages} caption={running ? stageCaption : null} />}
+          {progressPct != null && (
+            <ProgressBar value={progressPct} estimate={item.progress?.exact !== true} size="thin" transition="width .5s linear"
+              label={progressText ?? undefined} style={{ maxWidth: BAR_MAX_W, margin: `${SP.xxs}px 0` }} />
+          )}
         </div>
       )}
       {/* Медиа (изображения + видео) — сразу под шапкой, без клика */}

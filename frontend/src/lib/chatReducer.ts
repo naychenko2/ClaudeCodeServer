@@ -7,6 +7,7 @@ import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImpleme
 import { handsStatusFeedLine } from './localHands';
 import { isBgLaunchResult } from './agentTail';
 import { RUN_TESTS_TOOL, testRunKindLabel } from './toolLabels';
+import { isFinalStages } from './toolTiming';
 
 // Live-состояние режима «Командная реализация» из REST-гидратации (Session.teamImplement):
 // та же нормализация полей, что у события team_implement в редьюсере. Освежение по REST
@@ -605,13 +606,24 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
     // Живой прогресс (сабагент, локальная генерация): только идущей карточке — опоздавший
     // после результата снимок «готово» не перебивает
     case 'tool_progress': {
-      const { type: _t, toolUseId, sessionId: _s, ...rest } = msg;
+      const { type: _t, toolUseId, sessionId: _s, stages, totals, ...rest } = msg;
+      // Последнее событие прогона тестов (этапы закрыты, итог) — без stage: подпись прогресса
+      // оно не трогает. Этапы и итог принимаются и после результата (событие идёт мимо CLI и
+      // может его обогнать или отстать), но снимок без итога итог не стирает
+      const final = stages != null && rest.stage == null;
       // Сабагент гоняет тесты: CLI присылает только имя инструмента, вид прогона берём из
       // аргумента kind его последнего вызова run_tests — подпись «сейчас «тесты · vitest»».
       // Вызова ещё нет в ленте — вид дорисует его приход (withRunTestsKind в tool_use)
-      return withItems(withRunTestsKind(prev.items.map(it =>
-        it.kind === 'tool_use' && it.id === toolUseId && it.result == null ? { ...it, progress: rest } : it
-      ), toolUseId));
+      return withItems(withRunTestsKind(prev.items.map(it => {
+        if (it.kind !== 'tool_use' || it.id !== toolUseId) return it;
+        let next = it;
+        // Финальный снимок (итог есть либо последний этап закрыт) поздним живым не
+        // перетирается: иначе «✕ сборка» оборванного прогона вернулась бы в «✓ сборка»
+        if (stages != null && !(isFinalStages(it.stages, it.totals) && !isFinalStages(stages, totals)))
+          next = { ...next, stages, ...(totals != null ? { totals } : {}) };
+        if (it.result == null && !final) next = { ...next, progress: rest };
+        return next;
+      }), toolUseId));
     }
 
     case 'tool_result':

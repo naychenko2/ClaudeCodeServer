@@ -45,6 +45,7 @@ export { FileTypeTile } from './FileTypeTile';
 export { FileStatusBadge } from './FileStatusBadge';
 export type { FileStatus } from './FileStatusBadge';
 export { Dot } from './Dot';
+export { LiveDot } from './LiveDot';
 export { IntroDot } from './IntroDot';
 export { Badge, TONE_DOT } from './Badge';
 export type { BadgeTone, BadgeSize } from './Badge';

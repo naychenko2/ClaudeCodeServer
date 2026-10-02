@@ -8,7 +8,7 @@
 
 import { isBgLaunchResult } from './agentTail';
 import { RUN_TESTS_TOOL, toolLabel, toolWord } from './toolLabels';
-import type { ToolProgress } from '../types';
+import type { ToolProgress, ToolRunTotals, ToolStage } from '../types';
 
 // Имя инструмента внутри подписи «сейчас …». Русское — со строчной: это середина фразы.
 // Незнакомый MCP — в кавычках: его «server · tool» иначе сливался с разделителями подписи
@@ -62,6 +62,61 @@ export function isQueued(p: ToolProgress | null | undefined): boolean {
 
 // Короткие вызовы (Read, Grep) таймером не шумят: полоса и время появляются с этого порога
 export const TOOL_TIMER_MIN_MS = 2000;
+
+// Очередь короче этого в строке этапов не показываем: слот взят почти сразу — это не событие
+export const QUEUE_STAGE_MIN_MS = 2000;
+
+// Этап в строке этапов карточки: done — ✓ с длительностью, current — идёт (выделен, не
+// режется), failed — ✕ (сборка упала, прогон оборван на нём). ms null — длительность не
+// восстановить (старая история, этап без конца)
+export interface StageView { key: string; label: string; ms: number | null; state: 'done' | 'current' | 'failed' }
+
+// Строка этапов run_tests из снимка сервера. now — «сейчас» по часам карточки (идёт), endAt —
+// конец вызова (finishedAt результата или момент обрыва): им закрывается этап, который сервер
+// не успел закрыть. aborted — вызов оборван: незакрытый последний этап — на нём и оборвалось
+export function stageViews(
+  stages: readonly ToolStage[] | null | undefined,
+  opts: { running: boolean; aborted: boolean; now: number | null; endAt: number | null },
+): StageView[] {
+  if (!stages?.length) return [];
+  const views: StageView[] = [];
+  stages.forEach((s, i) => {
+    const last = i === stages.length - 1;
+    const open = s.endedAt == null;
+    const end = !open ? s.endedAt! : last ? (opts.running ? opts.now : opts.endAt) : null;
+    const ms = end != null ? Math.max(0, end - s.startedAt) : null;
+    if (s.stage === 'queued' && (ms == null || ms < QUEUE_STAGE_MIN_MS)) return;
+    const state = s.failed === true || (last && open && opts.aborted) ? 'failed'
+      : last && open && opts.running ? 'current' : 'done';
+    views.push({ key: `${s.stage}-${s.startedAt}`, label: s.label, ms, state });
+  });
+  return views;
+}
+
+// Финальный ли снимок этапов: итог есть либо последний этап закрыт. Живой снимок всегда держит
+// последний этап открытым — закрывает его только конец прогона (TestRunStages.Finish)
+export function isFinalStages(
+  stages: readonly ToolStage[] | null | undefined,
+  totals: ToolRunTotals | null | undefined,
+): boolean {
+  return totals != null || (stages != null && stages.length > 0 && stages[stages.length - 1].endedAt != null);
+}
+
+// Подпись при текущем этапе в строке этапов. Тесты — подпись прогресса целиком («тесты 12 из
+// 177»); очередь — только подробность из скобок («занято 2»): слово «очередь» уже в этапе.
+// «Сборка» и «подсчёт» сами себе подпись
+export function stageCaptionOf(p: ToolProgress | null | undefined): string | null {
+  if (!p?.label) return null;
+  if (p.stage === 'running') return p.label;
+  if (p.stage === 'queued') return /\(([^)]+)\)\s*$/.exec(p.label)?.[1] ?? p.label;
+  return null;
+}
+
+// Итог прогона на закрытой карточке: «174 из 177 · упало 3», без упавших — «177 из 177»
+export function totalsText(t: ToolRunTotals | null | undefined): string | null {
+  if (!t) return null;
+  return `${t.passed} из ${t.total}` + (t.failed > 0 ? ` · упало ${t.failed}` : '');
+}
 
 // M:SS, с часа — H:MM:SS
 export function formatClock(ms: number): string {

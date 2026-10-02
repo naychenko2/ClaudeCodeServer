@@ -305,6 +305,17 @@ body {
   .cc-progress-run { animation: none; width: 100% !important; opacity: 0.5; }
 }
 
+/* === Живая точка LiveDot: идёт, а сколько осталось — неизвестно. Медленно и бледно:
+   движение заметно краем глаза, но не тянет взгляд, как бегущая полоса === */
+@keyframes cc-live-dot {
+  0%, 100% { opacity: .3; }
+  50%      { opacity: 1; }
+}
+.cc-live-dot { animation: cc-live-dot 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .cc-live-dot { animation: none; opacity: .7; }
+}
+
 /* === Индикатор ожидания ответа (WaitingIndicator) === */
 @keyframes cc-pulse-ring {
   0%   { box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.45); }

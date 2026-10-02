@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { awaitsToolStart, formatClock, isQueued, isToolGroupDone, shownFor, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText } from '../toolTiming';
+import { awaitsToolStart, formatClock, isQueued, isToolGroupDone, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText } from '../toolTiming';
 
 // Дефект Киры: карточка разрешения встаёт ПОСЛЕ группы и сворачивала её в «N действий»
 // вместе с живым Bash и таймером
@@ -299,5 +299,17 @@ describe('toolLiveness', () => {
     const l = toolLiveness([user, outer, mid, tool('leaf', { parentToolUseId: 'mid' })], true);
     expect(new Set(l.dead)).toEqual(new Set(['mid', 'leaf']));
     expect(l.live.size).toBe(0);
+  });
+});
+
+// Подпись при текущем этапе строки этапов (Вера №2): на очереди подробность «занято 2» не
+// пропадает, а «ждёт очереди сборок» не дублирует слово этапа
+describe('stageCaptionOf', () => {
+  it('очередь — подробность из скобок, тесты — подпись целиком, сборка — без подписи', () => {
+    expect(stageCaptionOf({ stage: 'queued', label: 'ждёт очереди сборок (занято 2)' })).toBe('занято 2');
+    expect(stageCaptionOf({ stage: 'queued', label: 'ждёт слота' })).toBe('ждёт слота');
+    expect(stageCaptionOf({ stage: 'running', label: '12 из 177' })).toBe('12 из 177');
+    expect(stageCaptionOf({ stage: 'build', label: 'сборка' })).toBeNull();
+    expect(stageCaptionOf(null)).toBeNull();
   });
 });

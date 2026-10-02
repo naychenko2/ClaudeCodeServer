@@ -256,6 +256,38 @@ describe('applyServerMessage: инструменты', () => {
     expect(late.items[0]).toMatchObject({ progress: { toolUses: 3 } });
   });
 
+  // Этапы и итог прогона тестов: снимок этапов — на карточку и вживую, и после результата
+  // (событие идёт мимо CLI и может отстать); итоговое событие без stage подпись не трогает,
+  // опоздавший снимок без итога итог не стирает
+  it('tool_progress с этапами: этапы и итог на карточке, итог не стирается опоздавшим снимком', () => {
+    const initial = state({ items: [toolUse('rt', { name: 'mcp__tests__run_tests' })] });
+    const open = [{ stage: 'build', label: 'сборка', startedAt: 0 }];
+    const closed = [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 9_000 }, { stage: 'running', label: 'тесты', startedAt: 9_000, endedAt: 20_000 }];
+    const live = run([{ type: 'tool_progress', toolUseId: 'rt', stage: 'build', label: 'сборка', stages: open }], initial);
+    expect(live.items[0]).toMatchObject({ stages: open, progress: { stage: 'build', label: 'сборка' } });
+    expect(live.items[0]).not.toHaveProperty('progress.stages');
+
+    const final = run([
+      { type: 'tool_progress', toolUseId: 'rt', stage: 'running', label: '5 из 5', percent: 99, exact: true, stages: closed.slice(0, 1).concat({ ...closed[1], endedAt: undefined }) },
+      { type: 'tool_result', toolUseId: 'rt', content: 'ok', isError: false },
+      { type: 'tool_progress', toolUseId: 'rt', stages: closed, totals: { passed: 5, failed: 0, total: 5 } },
+      { type: 'tool_progress', toolUseId: 'rt', stage: 'running', label: '4 из 5', stages: open },
+    ], live);
+    expect(final.items[0]).toMatchObject({ stages: closed, totals: { passed: 5, failed: 0, total: 5 }, progress: { label: '5 из 5' } });
+  });
+
+  // Оборвано на сборке: итога нет, но последний этап закрыт неудачей — снимок финальный,
+  // опоздавший живой («сборка» открыта) не возвращает «✓ сборка» вместо «✕ сборка»
+  it('tool_progress: финальный снимок без итога не перетирается опоздавшим живым', () => {
+    const initial = state({ items: [toolUse('rt', { name: 'mcp__tests__run_tests' })] });
+    const failed = [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 70_000, failed: true }];
+    const next = run([
+      { type: 'tool_progress', toolUseId: 'rt', stages: failed },
+      { type: 'tool_progress', toolUseId: 'rt', stage: 'build', label: 'сборка', stages: [{ stage: 'build', label: 'сборка', startedAt: 0 }] },
+    ], initial);
+    expect(next.items[0]).toMatchObject({ stages: failed });
+  });
+
   it('tool_progress сабагента на run_tests: вид прогона из его последнего вызова run_tests', () => {
     const initial = state({ items: [
       toolUse('agent', { name: 'Task' }),

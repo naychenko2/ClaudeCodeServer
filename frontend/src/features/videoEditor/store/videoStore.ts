@@ -339,18 +339,21 @@ export async function patchFilm(scope: string, sessionId: string, path: string, 
   }
 }
 
-// Сборка: статус едет в FilmState.build (video_film_changed); ответ POST кладём сразу, не дожидаясь события
-export async function buildFilm(scope: string, sessionId: string, path: string): Promise<boolean> {
+// Сборка: статус едет в FilmState.build (video_film_changed); ответ POST кладём сразу, не дожидаясь
+// события. Отказ возвращается с кодом: 503 dsp_unavailable делает «Собрать» серым с причиной
+export async function buildFilm(scope: string, sessionId: string, path: string): Promise<{ ok: boolean; code: string | null; text: string }> {
   try {
     const b = await videoApi.buildFilm(scope, sessionId, path);
     const k = filmKey(sessionId, path);
     const cur = _films.get(k);
     if (cur?.state) _films.set(k, { ...cur, state: { ...cur.state, build: b } });
     emit();
-    return true;
+    return { ok: true, code: null, text: '' };
   } catch (e) {
-    showToast(errorText(e), '', 'error');
-    return false;
+    const code = (e as { body?: { code?: unknown } } | null)?.body?.code;
+    const text = errorText(e, 'Сборка не запустилась');
+    if (code !== 'dsp_unavailable') showToast(text, '', 'error');
+    return { ok: false, code: typeof code === 'string' ? code : null, text };
   }
 }
 

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
+using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.VideoEditor.Films;
 
 namespace ClaudeHomeServer.Services.VideoEditor;
@@ -66,5 +67,6 @@ public sealed class VideoEditorSubsystem : IAppSubsystem
         services.AddFilms();
         // Агент: MCP-сервер video-editor (ADR-022 §5) и блок хвоста хода; сервисы — те же, что у ручек человека
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.VideoEditorToolset>();
+        services.AddPromptSectionContributor<Chats.VideoEditorStateContributor>();
     }
 }

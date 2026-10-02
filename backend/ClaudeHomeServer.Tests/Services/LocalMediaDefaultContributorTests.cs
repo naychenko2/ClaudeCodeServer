@@ -16,28 +16,31 @@ public class LocalMediaDefaultContributorTests
     }
 
     private static readonly string[] AllFlags =
-        [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor, FeatureFlagKeys.AudioEditor];
+        [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor, FeatureFlagKeys.AudioEditor, FeatureFlagKeys.VideoEditor];
 
     private static LocalMediaDefaultContributor Contributor(
         string[]? flags = null, bool localMedia = true, bool images = true, bool agentLaunch = true,
-        bool audioAgentLaunch = true) =>
+        bool audioAgentLaunch = true, bool videoAgentLaunch = true) =>
         new(new Flags(flags ?? AllFlags), new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["LocalMedia:Enabled"] = localMedia ? "true" : "false",
             ["Subsystems:images:Enabled"] = images ? "true" : "false",
             ["ImageEditor:AgentLaunch"] = agentLaunch ? "true" : "false",
             ["AudioEditor:AgentLaunch"] = audioAgentLaunch ? "true" : "false",
+            ["VideoEditor:AgentLaunch"] = videoAgentLaunch ? "true" : "false",
         }).Build());
 
     private static PromptSessionContext Project(bool hasLocalMediaMcp = true, bool unattended = false,
-        Session? session = null, bool hasAudioEditorMcp = false) =>
+        Session? session = null, bool hasAudioEditorMcp = false, bool hasVideoEditorMcp = false) =>
         new(session ?? new Session { ProjectId = "p1", OwnerId = "u1" }, "u1", null, "/root",
-            HasLocalMediaMcp: hasLocalMediaMcp, HasAudioEditorMcp: hasAudioEditorMcp, Unattended: unattended);
+            HasLocalMediaMcp: hasLocalMediaMcp, HasAudioEditorMcp: hasAudioEditorMcp, HasVideoEditorMcp: hasVideoEditorMcp,
+            Unattended: unattended);
 
     private static PromptSessionContext Personal(bool unattended = false, bool hasImageEditorMcp = true,
-        bool hasAudioEditorMcp = false) =>
+        bool hasAudioEditorMcp = false, bool hasVideoEditorMcp = false) =>
         new(new Session { OwnerId = "u1" }, "u1", null, null,
-            HasImageEditorMcp: hasImageEditorMcp, HasAudioEditorMcp: hasAudioEditorMcp, Unattended: unattended);
+            HasImageEditorMcp: hasImageEditorMcp, HasAudioEditorMcp: hasAudioEditorMcp, HasVideoEditorMcp: hasVideoEditorMcp,
+            Unattended: unattended);
 
     [Fact]
     public void Проект_с_local_media_и_флагом_видит_правило() =>
@@ -237,6 +240,59 @@ public class LocalMediaDefaultContributorTests
         (await contributor.BuildAsync(Project(hasAudioEditorMcp: audio), null))!.Sections[0].Text
             .Should().Be(LocalMediaDefaultContributor.ProjectRule, why);
         (await contributor.BuildAsync(Personal(hasAudioEditorMcp: audio), null))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.PersonalRule, why);
+    }
+
+    // ── Модуль «Видео» (ADR-022 §5): видео — через video_*, прямые local_*_to_video только по прямой просьбе ──
+
+    [Fact]
+    public async Task Проект_с_модулем_видео_видео_через_video_shoot_а_картинки_и_звук_прежние()
+    {
+        var text = (await Contributor().BuildAsync(Project(hasVideoEditorMcp: true), "сними"))!.Sections[0].Text;
+
+        text.Should().Contain(LocalMediaDefaultContributor.ProjectVideoEditorRule)
+            .And.Contain("video_shoot передавай с provider local")
+            .And.Contain("Прямые local_text_to_video, local_image_to_video, local_reference_to_video — только если человек явно попросил")
+            .And.NotContain("Видео: local_text_to_video, local_image_to_video, local_reference_to_video.");
+        text.Should().Contain("озвучка — local_speech", "модуль звука не доехал — звук прежний");
+        text.Should().Contain("local_generate_image", "картинки модуль видео не трогает");
+    }
+
+    [Fact]
+    public async Task Личный_чат_с_модулем_видео_облако_через_video_shoot()
+    {
+        var text = (await Contributor().BuildAsync(Personal(hasVideoEditorMcp: true), "сними"))!.Sections[0].Text;
+
+        text.Should().Contain(LocalMediaDefaultContributor.PersonalVideoEditorRule)
+            .And.NotContain(LocalMediaDefaultContributor.PersonalNoVideoRule);
+    }
+
+    [Fact]
+    public async Task Модули_звука_и_видео_вместе_правят_свои_абзацы()
+    {
+        var text = (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true, hasVideoEditorMcp: true), null))!.Sections[0].Text;
+
+        text.Should().Contain(LocalMediaDefaultContributor.ProjectVideoEditorRule).And.Contain(LocalMediaDefaultContributor.ProjectAudioEditorRule);
+    }
+
+    // Без доставленного сервера, без флага модуля или без video_shoot — прежние варианты
+    [Theory]
+    [InlineData("сервер не доставлен")]
+    [InlineData("флаг video-editor выключен")]
+    [InlineData("VideoEditor:AgentLaunch=false")]
+    public async Task Без_модуля_видео_прежние_тексты(string why)
+    {
+        var contributor = why switch
+        {
+            "флаг video-editor выключен" => Contributor(flags: [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor]),
+            "VideoEditor:AgentLaunch=false" => Contributor(videoAgentLaunch: false),
+            _ => Contributor(),
+        };
+        var video = why != "сервер не доставлен";
+
+        (await contributor.BuildAsync(Project(hasVideoEditorMcp: video), null))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.ProjectRule, why);
+        (await contributor.BuildAsync(Personal(hasVideoEditorMcp: video), null))!.Sections[0].Text
             .Should().Be(LocalMediaDefaultContributor.PersonalRule, why);
     }
 }

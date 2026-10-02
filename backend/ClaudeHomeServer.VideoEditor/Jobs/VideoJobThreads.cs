@@ -64,7 +64,7 @@ public sealed class VideoJobThreads(
                 new VideoLaunchDto(jobId, store.Now(), VideoLaunchStatus.Running, false, initiator, quote.Provider,
                     quote.Model, quote.Count, prompt?.Trim(), quote.License, null),
                 new VideoThreadEvent(store.Now(), VideoThreadEventKinds.Launched,
-                    $"{(agent ? "Ты запустил" : "Человек запустил вручную")}: {what} · {quote.Provider}/{quote.Model} · " +
+                    $"{(agent ? "Claude запустил" : "Вы запустили")}: {what} · {quote.Provider}/{quote.Model} · " +
                     $"вариантов: {quote.Count}", sceneId, jobId));
             if (written.Status != VideoThreadWriteStatus.Ok) return;
 

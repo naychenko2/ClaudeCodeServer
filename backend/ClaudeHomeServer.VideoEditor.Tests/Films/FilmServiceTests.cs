@@ -234,14 +234,14 @@ public sealed class FilmServiceTests : IDisposable
     }
 
     [Fact]
-    public void Неизвестная_схема_читается_а_правка_отказывает_с_причиной()
+    public async Task Неизвестная_схема_читается_а_правка_отказывает_с_причиной()
     {
         Directory.CreateDirectory(_w.Full("video/a"));
         File.WriteAllText(_w.Full("video/a/a.film"), """{ "schema": 9, "aspect": "16:9", "items": [], "cuts": [], "builds": [] }""");
 
         var state = _w.Service.State(Owner, _w.Scope, "video/a/a.film");
-        var patch = _w.Service.PatchAsync(Owner, _w.Scope, "video/a/a.film",
-            new FilmPatch(state.Value!.Revision, [new FilmPatchOp(FilmPatchOps.Music, Music: null)]), VideoInitiators.Human, default).Result;
+        var patch = await _w.Service.PatchAsync(Owner, _w.Scope, "video/a/a.film",
+            new FilmPatch(state.Value!.Revision, [new FilmPatchOp(FilmPatchOps.Music, Music: null)]), VideoInitiators.Human, default);
 
         state.IsOk.Should().BeTrue("для чтения файл отдаётся");
         state.Value.Document.Schema.Should().Be(9);

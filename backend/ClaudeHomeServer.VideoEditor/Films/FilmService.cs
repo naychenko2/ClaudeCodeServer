@@ -244,7 +244,7 @@ public sealed class FilmService(
         if (string.IsNullOrWhiteSpace(sessionId) || !threads.OwnChat(ownerId, scope.Key, sessionId)) return;
         var agent = initiator == VideoInitiators.Agent;
         var what = string.Join(", ", ops.Select(o => o.Op).Distinct());
-        await threads.NoteAsync(sessionId.Trim(), $"{(agent ? "Claude правил" : "Вы правили")} фильм {FilmPaths.NameOf(filmPath)}: {what}",
+        await threads.NoteAsync(sessionId.Trim(), $"{(agent ? "Claude поправил" : "Вы поправили")} фильм {FilmPaths.NameOf(filmPath)}: {what}",
             new { kind = "film_patch", filmPath, ops = ops.Select(o => o.Op).ToArray(), initiator }, ct);
     }
 

@@ -75,7 +75,7 @@ public sealed class FilmSceneSaver(
 
 
         // Версия → файл проекта: сцена помнит, какая версия в каком файле лежит
-        var text = $"{(initiator == VideoInitiators.Agent ? "Ты сохранил" : "Человек сохранил")} сцену «{scene.Name}» в проект: {clipPath}";
+        var text = $"{(initiator == VideoInitiators.Agent ? "Claude сохранил" : "Вы сохранили")} сцену «{scene.Name}» в проект: {clipPath}";
         var written = threads.Store.AddSavedFile(ownerId, req.SessionId, scene.SceneId,
             new VideoSavedFileDto(version.VersionId, clipPath),
             new VideoThreadEvent(threads.Store.Now(), VideoThreadEventKinds.Saved, text, scene.SceneId));

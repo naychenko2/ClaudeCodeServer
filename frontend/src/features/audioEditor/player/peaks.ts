@@ -1,7 +1,10 @@
 // Пики волны: по одному числу 0…1 на столбик. Сырые данные — каналы WebAudio-декода
 // (useBrowserPeaks) или готовый массив пиков с сервера (шаг 2.8б).
 
-/** Максимум модуля по корзинам из всех каналов, нормированный к самому громкому. */
+/**
+ * Огибающая по RMS корзин из всех каналов, нормированная к самой громкой. Максимум модуля
+ * не годится: у плотно сведённой песни он в каждой корзине ≈1 и все столбики одной высоты.
+ */
 export function computePeaks(channels: ArrayLike<number>[], count: number): number[] {
   const len = channels.reduce((m, c) => Math.max(m, c.length), 0);
   if (!len || count <= 0) return [];
@@ -9,14 +12,15 @@ export function computePeaks(channels: ArrayLike<number>[], count: number): numb
   for (let i = 0; i < count; i++) {
     const from = Math.floor((i * len) / count);
     const to = Math.max(from + 1, Math.floor(((i + 1) * len) / count));
-    let peak = 0;
+    let sum = 0;
+    let n = 0;
     for (const ch of channels) {
       for (let j = from; j < to && j < ch.length; j++) {
-        const v = Math.abs(ch[j]);
-        if (v > peak) peak = v;
+        sum += ch[j] * ch[j];
+        n++;
       }
     }
-    out[i] = peak;
+    out[i] = n ? Math.sqrt(sum / n) : 0;
   }
   return normalize(out);
 }

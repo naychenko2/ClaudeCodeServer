@@ -35,7 +35,8 @@ public class FfmpegAudioDspTests
         Wave(seconds, rate, channels, t => t < silenceSeconds ? 0 : amplitude);
 
     // Синус 440 Гц с амплитудой, заданной от времени
-    private static byte[] Wave(double seconds, int rate, int channels, Func<double, double> amplitudeAt)
+    private static byte[] Wave(double seconds, int rate, int channels, Func<double, double> amplitudeAt,
+        Func<double, double, double>? shape = null)
     {
         var frames = (int)(seconds * rate);
         var data = frames * channels * 2;
@@ -47,7 +48,9 @@ public class FfmpegAudioDspTests
         w.Write("data"u8); w.Write(data);
         for (var i = 0; i < frames; i++)
         {
-            var v = amplitudeAt(i / (double)rate) * Math.Sin(2 * Math.PI * 440 * i / rate);
+            var t = i / (double)rate;
+            var v = amplitudeAt(t) * Math.Sin(2 * Math.PI * 440 * i / rate);
+            if (shape is not null) v = shape(t, v);
             for (var c = 0; c < channels; c++) w.Write((short)Math.Round(v * short.MaxValue));
         }
         return ms.ToArray();
@@ -55,9 +58,10 @@ public class FfmpegAudioDspTests
 
     private static async Task<float> PeakAsync(FfmpegAudioDsp dsp, byte[] audio)
     {
-        var peaks = await dsp.PeaksAsync(audio, 1, default);
+        var peaks = await dsp.PeaksAsync(audio, 20, default);
         peaks.Error.Should().BeNull();
-        return peaks.Peaks![0];
+        // Пики сервера — RMS по корзинам; максимум по ним ×√2 возвращает амплитуду синуса
+        return peaks.Peaks!.Max() * MathF.Sqrt(2);
     }
 
     private static async Task<AudioDspInfo> ProbeOk(FfmpegAudioDsp dsp, AudioDspOutput output)
@@ -92,7 +96,19 @@ public class FfmpegAudioDspTests
         peaks.Peaks.Should().HaveCount(10);
         peaks.Seconds.Should().BeApproximately(2.0, 0.01);
         peaks.Peaks!.Take(4).Should().AllSatisfy(p => p.Should().BeLessThan(0.01f));
-        peaks.Peaks!.Skip(6).Should().AllSatisfy(p => p.Should().BeApproximately(0.5f, 0.03f));
+        peaks.Peaks!.Skip(6).Should().AllSatisfy(p => p.Should().BeApproximately(0.354f, 0.03f));
+    }
+
+    [SkippableFact]
+    public async Task Peaks_сжатая_песня_с_одинаковым_максимумом_даёт_разные_столбики()
+    {
+        // Обе половины упираются в 1.0 по максимуму модуля (как плотно сведённая песня), но
+        // вторая — почти меандр и заметно громче по RMS
+        var dsp = Dsp();
+        var audio = Wave(2.0, 44100, 1, _ => 1.0, (t, s) => t < 1.0 ? s : Math.Clamp(s * 30, -1, 1));
+        var peaks = (await dsp.PeaksAsync(audio, 2, default)).Peaks!;
+
+        peaks[1].Should().BeGreaterThan(peaks[0] * 1.2f);
     }
 
     [SkippableFact]
@@ -133,7 +149,7 @@ public class FfmpegAudioDspTests
 
         peaks[0].Should().BeLessThan(0.15f);
         peaks[^1].Should().BeLessThan(0.15f);
-        peaks[10].Should().BeApproximately(0.5f, 0.03f);
+        peaks[10].Should().BeApproximately(0.354f, 0.03f);
     }
 
     [SkippableFact]
@@ -235,9 +251,9 @@ public class FfmpegAudioDspTests
         output.Error.Should().BeNull();
         var peaks = (await dsp.PeaksAsync(output.Audio!, 30, default)).Peaks!;
 
-        peaks[5].Should().BeApproximately(0.5f, 0.03f);
+        peaks[5].Should().BeApproximately(0.354f, 0.03f);
         peaks[15].Should().BeLessThan(0.01f);
-        peaks[25].Should().BeApproximately(0.5f, 0.03f);
+        peaks[25].Should().BeApproximately(0.354f, 0.03f);
     }
 
     [SkippableFact]

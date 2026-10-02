@@ -32,6 +32,23 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     private static IConfiguration Config(bool agentLaunch) => new ConfigurationBuilder().AddInMemoryCollection(
         new Dictionary<string, string?> { ["VideoEditor:AgentLaunch"] = agentLaunch ? "true" : "false" }).Build();
 
+    // Регрессия зависания старта: контрибьютор секций собирается при сборке контейнера, и всё, что он тянет в
+    // конструктор, обязано обходиться без SessionManager. FilmService (через VideoJobThreads → справочник чатов) вёл
+    // обратно к реестру секций — бесконечная рекурсия при разрешении сервисов и тихое зависание приложения
+    [Fact]
+    public void Конструктор_берёт_только_хранилища_и_не_тянет_сервисы_ведущие_к_SessionManager()
+    {
+        var allowed = new[]
+        {
+            typeof(IFeatureFlagGate), typeof(VideoThreadStore), typeof(ClaudeHomeServer.Services.VideoEditor.Prefs.VideoPrefsService),
+            typeof(ClaudeHomeServer.Services.VideoEditor.Films.FilmSideStore), typeof(IConfiguration),
+        };
+
+        var parameters = typeof(VideoEditorStateContributor).GetConstructors().Single().GetParameters().Select(p => p.ParameterType);
+
+        parameters.Should().BeSubsetOf(allowed);
+    }
+
     [Fact]
     public void Блок_есть_только_когда_сервер_доехал_и_флаг_включён()
     {

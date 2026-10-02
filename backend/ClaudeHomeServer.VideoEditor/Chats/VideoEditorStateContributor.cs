@@ -27,7 +27,7 @@ public sealed class VideoEditorStateContributor(
     IFeatureFlagGate flags,
     VideoThreadStore? threads = null,
     VideoPrefsService? prefs = null,
-    FilmService? films = null,
+    FilmSideStore? side = null,
     IConfiguration? config = null) : IPromptSectionContributor
 {
     // Без video_shoot правила про него сослались бы на несуществующий инструмент
@@ -53,18 +53,29 @@ public sealed class VideoEditorStateContributor(
         var session = sessionContext.Session;
         var scope = VideoEditScope.Of(session);
         var (state, fresh) = threads?.TakeForTurn(ownerId, session.Id) ?? (VideoThreadsState.Empty, []);
-        var spent = SpentOf(ownerId, session, scope, state);
+        var spent = SpentOf(ownerId, scope, state);
         var block = Render(state, fresh, prefs?.Get(ownerId, scope), spent, _agentLaunch, scope.IsPersonal);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, block, Title, InTurnTail: true)]));
     }
 
-    // «Потрачено на фильм» открытого фильма: отображение, не потолок. Нет фильма или он не читается — null
-    private VideoSpentDto? SpentOf(string ownerId, Models.Session session, VideoEditScope scope, VideoThreadsState state)
+    // «Потрачено на фильм» открытого фильма: отображение, не потолок. Берётся из состояния фильма вне файла
+    // (там же накоплено по всем чатам) плюс версии сцен ЭТОГО чата, которые счёт ещё не подхватил. Читает только
+    // хранилища: тянуть сюда FilmService нельзя — он ведёт к SessionManager, а тот — к реестру секций, то есть
+    // к этому же контрибьютору (цикл при сборке контейнера, тихое зависание старта)
+    private VideoSpentDto? SpentOf(string ownerId, VideoEditScope scope, VideoThreadsState state)
     {
-        if (films is null || scope.Project is null || state.Focus.FilmPath is not { } path) return null;
-        try { return films.State(ownerId, scope, path).Value?.Spent; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        if (side is null || scope.Project is null || state.Focus.FilmPath is not { } path) return null;
+        var spends = side.Get(ownerId, scope.Key, path).Spends.ToDictionary(s => s.VersionId);
+        var folder = FilmPaths.FolderOf(path);
+        foreach (var scene in state.Scenes.Where(s => s.FilmRef?.Path == path || FilmPaths.Normalize(s.Folder) == folder))
+            foreach (var version in scene.Versions)
+                if (version.Cost is { } cost && !spends.ContainsKey(version.VersionId))
+                    spends[version.VersionId] = new FilmSpendEntry(version.VersionId, cost.Currency, cost.Amount, 0, version.CreatedAt);
+        return new VideoSpentDto(
+            spends.Values.Where(s => s.Currency == "usd").Sum(s => s.Amount),
+            spends.Values.Where(s => s.Currency == "credits").Sum(s => s.Amount),
+            spends.Values.Sum(s => s.LocalSeconds));
     }
 
     public static string Render(VideoThreadsState state, IReadOnlyList<VideoThreadEvent> fresh, VideoPrefsDto? prefs,

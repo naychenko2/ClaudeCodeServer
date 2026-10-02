@@ -16,3 +16,7 @@ export function settingsToggle(place: SettingsPlace, opened: boolean): { on: boo
 // Сводка на телефоне: «2 вар. · ≈ $0.08», кредиты коротко («≈ 4 кр.») — иначе режутся на 360
 export const mobileSummary = (count: number, price: string | null) =>
   price ? `${count} вар. · ${price.replace(/ кредит\S*$/, ' кр.')}` : `${count} вар.`;
+
+// Цена на кнопке запуска на телефоне (флаг image-panel-v5): у бесплатного без времени и
+// очереди — «Сгенерировать · Бесплатно · ≈ 40 с» на 360 обрезается; они есть в панели
+export const mobileSendPrice = (price: string) => (price.startsWith('Бесплатно') ? 'Бесплатно' : price);

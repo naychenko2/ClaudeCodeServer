@@ -12,12 +12,14 @@ import { SEG_MUTED_BORDER, type SegmentOptionState } from './Segmented';
 // SegmentedToggle с точно такой же геометрией — единая точка закрывает оба).
 // disabled группы — «занято» (курсор ожидания), disabled/muted/title опции — про
 // отдельный сегмент (см. SegmentOptionState).
-export function InlineSegmented<T extends string>({ value, options, onChange, disabled, isMobile }: {
+// touchWidth — на телефоне сегмент не уже тач-цели (короткие подписи «1:1», «16:9»)
+export function InlineSegmented<T extends string>({ value, options, onChange, disabled, isMobile, touchWidth }: {
   value: T | null;
   options: ({ value: T; label: string; tone?: { bg: string; fg: string }; icon?: ReactNode } & SegmentOptionState)[];
   onChange: (v: T) => void;
   disabled?: boolean;
   isMobile?: boolean;
+  touchWidth?: boolean;
 }) {
   return (
     <div style={{
@@ -42,6 +44,7 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
               fontFamily: 'inherit', fontSize: FS.xs, fontWeight: 600,
               padding: `${SP.xs}px ${SP.sm}px`,
               minHeight: isMobile ? TB.iconHitMobile : TB.iconHitDesktop,
+              ...(isMobile && touchWidth ? { minWidth: TB.iconHitMobile, justifyContent: 'center' } : null),
               background: tone ? tone.bg : 'transparent',
               color: tone ? tone.fg : C.textMuted,
               transition: 'background 0.12s, color 0.12s',

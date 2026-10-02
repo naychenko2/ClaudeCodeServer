@@ -8,7 +8,7 @@
 
 import { useEffect } from 'react';
 import { Image as ImageIcon, RotateCw, Sparkles } from 'lucide-react';
-import { requestStrip, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
+import { requestStrip, useIsMobile, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { ComposerEmptySubmit, ComposerModeApi, ComposerModeCtx } from '../../../lib/subsystems/registryCore';
 import { enterScope } from '../scope';
 import { createDraft } from '../thread/actions';
@@ -16,6 +16,7 @@ import { getStoredImageMode, modeAware } from '../thread/modeState';
 import { currentVersion, isEmptyThread, isLegacyThread, lastLaunchPrompt, ORIGIN, threadName, versionName } from '../thread/model';
 import { getFocusedThread, getImageModeRequest, imageDraftKey, IMAGES_STRIP, useThreads } from '../thread/threadStore';
 import { launchMode, launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
+import { mobileSendPrice } from '../strip/settingsToggle';
 import { setImageComposerText } from './composerText';
 
 function useFocused(ctx: ComposerModeCtx) {
@@ -29,10 +30,18 @@ const createMode = (sessionId: string | null) => modeAware() && getStoredImageMo
 // Режим поля есть: выбрана картинка или чат в «Создать»
 export const imageModeAvailable = (ctx: ComposerModeCtx) => !!getFocusedThread(ctx.sessionId) || createMode(ctx.sessionId);
 
+// Цена на кнопке: с флагом image-panel-v5 на телефоне — без времени и очереди
+function useSendPrice(price: string | null | undefined, v5: boolean): string | null {
+  const mobile = useIsMobile();
+  if (!price) return null;
+  return v5 && mobile ? mobileSendPrice(price) : price;
+}
+
 // «✦ Изменить · ≈ $0.15», у черновика «✦ Сгенерировать · …», у локальной модели «бесплатно»
 function SubmitLabel({ ctx }: { ctx: ComposerModeCtx }) {
   const thread = useFocused(ctx);
   const L = useThreadLaunch(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId, thread);
+  const price = useSendPrice(L.price, !!L.imageMode);
   // С режимом глагол — по режиму: в «Создать» и при выбранной картинке рисуем новую
   const verb = L.imageMode
     ? L.imageMode === 'create' ? 'Сгенерировать' : 'Изменить'
@@ -40,7 +49,7 @@ function SubmitLabel({ ctx }: { ctx: ComposerModeCtx }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap' }}>
       <Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-      {verb}{L.price ? ` · ${L.price}` : ''}
+      {verb}{price ? ` · ${price}` : ''}
     </span>
   );
 }
@@ -49,10 +58,11 @@ function SubmitLabel({ ctx }: { ctx: ComposerModeCtx }) {
 function AgainLabel({ ctx }: { ctx: ComposerModeCtx }) {
   const thread = useFocused(ctx);
   const L = useThreadLaunch(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId, thread);
+  const price = useSendPrice(L.price, !!L.imageMode);
   return (
     <span data-images-again="" style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap' }}>
       <RotateCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-      Ещё {L.count}{L.price ? ` · ${L.price}` : ''}
+      Ещё {L.count}{price ? ` · ${price}` : ''}
     </span>
   );
 }

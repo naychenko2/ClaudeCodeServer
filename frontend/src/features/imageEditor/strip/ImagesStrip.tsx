@@ -14,7 +14,7 @@
 // после снятия картинки в «Править»; на телефоне сводка сжата до «▴», свёрнутая строка
 // показывает иконку режима.
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, SlidersHorizontal, Sparkles, User, X } from 'lucide-react';
 import {
   Button, Chip, IconButton, ReleaseNotice, C, FS, R, SP, ICON_SIZE, REVEAL_PANEL_EVENT, isGenPanelKey, markGenPanelDismissed,
@@ -45,6 +45,22 @@ function Thumb({ src, round }: { src: string | null; round?: boolean }) {
   );
 }
 
+// Полоса v5 на десктопе тесна (панель стоит колонкой рядом): ширина меньше порога
+const TIGHT_BAR = 760;
+function useTightBar(bar: RefObject<HTMLDivElement | null>, on: boolean): boolean {
+  const [tight, setTight] = useState(false);
+  useEffect(() => {
+    const el = bar.current;
+    if (!on || !el) { setTight(false); return; }
+    const check = () => setTight(el.getBoundingClientRect().width < TIGHT_BAR);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [bar, on]);
+  return tight;
+}
+
 export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const { sessionId, isMobile, collapsed, setCollapsed, switcher } = ctx;
   const projectId = enterScope(ctx.projectId, sessionId);
@@ -56,6 +72,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const v5mode = L.imageMode;
   const [drafting, setDrafting] = useState(false);
   const bar = useRef<HTMLDivElement>(null);
+  const tight = useTightBar(bar, !!v5mode && !isMobile && !collapsed);
   const offer = useSyncExternalStore(imageReleaseUndo.subscribe, imageReleaseUndo.current, imageReleaseUndo.current);
   const undo = v5mode && offer && offer.snapshot.sessionId === sessionId ? offer : null;
   const { current: character, photo } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
@@ -175,12 +192,22 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
             isMobile={isMobile} compact={isMobile} quiet={isMobile} bar={bar} />
         )}
         {thread ? (
-          <span style={{ display: 'inline-flex', minWidth: isMobile ? 0 : 72, flex: '0 1 auto' }}>
-            {/* На телефоне чип — миниатюра без имени: место нужно сводке с ценой */}
+          <span data-images-chip="focus" style={{
+            display: 'inline-flex', minWidth: isMobile ? 0 : 72,
+            // v5 на десктопе чип не сжимается до своего потолка — сжимается сводка справа
+            ...(!v5mode ? { flex: '0 1 auto' } : isMobile ? { flex: '0 1 auto', alignItems: 'center' } : { flex: '0 0 auto', maxWidth: 220 }),
+          }}>
+            {/* На телефоне чип — миниатюра без имени: место нужно сводке с ценой. v5: «снять
+                выбор» — отдельная кнопка 40×40 (крестик чипа пальцем не попасть); в тесной
+                полосе десктопа приставка «Работаем с:» уходит, остаётся имя */}
             <Chip selected leading={src ? <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : ic(Sparkles)}
-              maxW="100%" title={`${focusLabel(thread, true, personal)} — ${personal ? 'режим «Картинка» работает с этой версией' : 'режим «Картинка» и Claude работают с этой версией'}. ✕ — снять выбор`} onRemove={release}>
-              {isMobile ? null : <>Работаем с: <b>{focusLabel(thread, true, personal)}</b></>}
+              maxW="100%" title={`${focusLabel(thread, true, personal)} — ${personal ? 'режим «Картинка» работает с этой версией' : 'режим «Картинка» и Claude работают с этой версией'}. ✕ — снять выбор`}
+              onRemove={v5mode && isMobile ? undefined : release}>
+              {isMobile ? null : <>{!tight && 'Работаем с: '}<b>{focusLabel(thread, true, personal)}</b></>}
             </Chip>
+            {v5mode && isMobile && (
+              <IconButton size="lg" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>
+            )}
           </span>
         ) : v5mode ? (
           // «Создать» без черновика: первая отправка из поля ввода сама заведёт карточку

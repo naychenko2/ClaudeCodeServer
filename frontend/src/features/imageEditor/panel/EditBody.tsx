@@ -69,7 +69,7 @@ export function EditBody({ projectId, sessionId, thread, L, catalog, isMobile, o
         <>
           <Label>До пропорций</Label>
           <div style={{ display: 'flex' }}>
-            <InlineSegmented value={L.choice.ratio} isMobile={isMobile}
+            <InlineSegmented value={L.choice.ratio} isMobile={isMobile} touchWidth
               options={OUTPAINT_RATIOS.map(r => ({ value: r, label: r }))}
               onChange={ratio => setPanelChoice(projectId, { ratio })} />
           </div>
@@ -77,12 +77,12 @@ export function EditBody({ projectId, sessionId, thread, L, catalog, isMobile, o
       )}
       {noSamples
         ? <NoSamplesSection title="Персонаж и образцы" hint={noSamples} />
-        : <SamplesField projectId={projectId} L={L} catalog={catalog} onCharacters={onCharacters} />}
+        : <SamplesField projectId={projectId} L={L} catalog={catalog} onCharacters={onCharacters} isMobile={isMobile} />}
       {L.quickAction
         ? <BodyHint icon="info">Текст в поле ввода не нужен — достаточно нажать «{runVerb(L.op)}» внизу.{isOneVariant(L.op) ? ' Даёт один вариант.' : ''}</BodyHint>
         : <BodyHint>{L.op === 'inpaint' ? 'Что сделать с отмеченным' : 'Что изменить'} — в поле ввода чата</BodyHint>}
       <ExecutorField L={L} catalog={catalog} isMobile={isMobile} />
-      <MoreSettings summary={more}>
+      <MoreSettings summary={more} isMobile={isMobile}>
         {autoModel && (
           <>
             <Label>Режим подбора</Label>

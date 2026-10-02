@@ -18,13 +18,13 @@ export function CreateBody({ projectId, L, catalog, isMobile, onCharacters }: {
   const ratio = getCreateRatio(projectId);
   return (
     <div data-image-body="create" style={{ fontSize: FS.sm }}>
-      <SamplesField projectId={projectId} L={L} catalog={catalog} onCharacters={onCharacters} />
+      <SamplesField projectId={projectId} L={L} catalog={catalog} onCharacters={onCharacters} isMobile={isMobile} />
       <BodyHint>Что нарисовать — в поле ввода чата</BodyHint>
       <ExecutorField L={L} catalog={catalog} isMobile={isMobile} />
-      <MoreSettings summary={[`пропорции: ${ratio ?? 'как у модели'}`]}>
+      <MoreSettings summary={[`пропорции: ${ratio ?? 'как у модели'}`]} isMobile={isMobile}>
         <Label>Пропорции новой картинки</Label>
         <div style={{ display: 'flex', paddingBottom: SP.xs }}>
-          <InlineSegmented<OutpaintRatio | typeof MODEL_RATIO> value={ratio ?? MODEL_RATIO} isMobile={isMobile}
+          <InlineSegmented<OutpaintRatio | typeof MODEL_RATIO> value={ratio ?? MODEL_RATIO} isMobile={isMobile} touchWidth
             options={[{ value: MODEL_RATIO, label: 'Как у модели' }, ...OUTPAINT_RATIOS.map(r => ({ value: r, label: r }))]}
             onChange={v => setCreateRatio(projectId, v === MODEL_RATIO ? null : v)} />
         </div>

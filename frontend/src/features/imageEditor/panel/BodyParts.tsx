@@ -11,7 +11,7 @@ import { imageEditorApi, type ImageEditCatalog } from '../api';
 import { useCharacters } from '../characters/useCharacters';
 import { maxSamples } from '../editorInputs';
 import { isPersonalScope } from '../scope';
-import { SampleChips, useCharacter } from '../strip/settings/CharacterSection';
+import { SampleChips, touchWrap, useCharacter } from '../strip/settings/CharacterSection';
 import { ic, Label, type Launch } from '../strip/settings/primitives';
 import { setPrefs } from '../thread/prefs';
 import { executorRows, executorSettings, executorSummary, executorValue } from './executorRows';
@@ -37,7 +37,9 @@ export function BodyHint({ icon = 'send', children }: { icon?: 'send' | 'info'; 
 }
 
 // «Персонаж ▾»: персонажи проекта меню прямо в «Настройках», вкладка «Персонажи» — библиотека
-function CharacterPick({ projectId, slug, onCharacters }: { projectId: string; slug: string | null; onCharacters: () => void }) {
+function CharacterPick({ projectId, slug, onCharacters, touch }: {
+  projectId: string; slug: string | null; onCharacters: () => void; touch: boolean;
+}) {
   const { list } = useCharacters(projectId);
   const { current, photo, name } = useCharacter(projectId, slug);
   const [at, setAt] = useState<DOMRect | null>(null);
@@ -46,13 +48,13 @@ function CharacterPick({ projectId, slug, onCharacters }: { projectId: string; s
   const api = imageEditorApi();
   return (
     <>
-      <span data-image-character-pick="" style={{ display: 'inline-flex' }} onClick={open}>
+      <span data-image-character-pick="" style={touchWrap(touch)} onClick={open}>
         {slug
-          ? <Chip selected leading={thumb(photo)} maxW={170} title="Фото персонажа уходят в каждую генерацию · нажмите, чтобы сменить"
+          ? <Chip selected touch={touch} leading={thumb(photo)} maxW={170} title="Фото персонажа уходят в каждую генерацию · нажмите, чтобы сменить"
               onRemove={() => setPrefs(projectId, { characterSlug: null })}>
               {current?.name ?? name}{current ? ` · ${current.photos.length} фото` : ''}
             </Chip>
-          : <Chip dashed leading={ic(User)} title="Персонажи проекта">
+          : <Chip dashed touch={touch} leading={ic(User)} title="Персонажи проекта">
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>Персонаж{ic(ChevronDown)}</span>
             </Chip>}
       </span>
@@ -76,8 +78,8 @@ function CharacterPick({ projectId, slug, onCharacters }: { projectId: string; s
 }
 
 // «Персонаж и образцы»: главное поле «Создать» и «Изменить». В личном чате персонажей нет
-export function SamplesField({ projectId, L, catalog, onCharacters }: {
-  projectId: string; L: Launch; catalog: ImageEditCatalog; onCharacters: () => void;
+export function SamplesField({ projectId, L, catalog, onCharacters, isMobile }: {
+  projectId: string; L: Launch; catalog: ImageEditCatalog; onCharacters: () => void; isMobile: boolean;
 }) {
   const personal = isPersonalScope(projectId);
   const max = maxSamples(catalog.limits.maxReferences, L.model?.caps?.maxReferences);
@@ -88,8 +90,8 @@ export function SamplesField({ projectId, L, catalog, onCharacters }: {
         {personal ? 'Образцы' : 'Персонаж и образцы'}
       </FieldLabel>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
-        {!personal && <CharacterPick projectId={projectId} slug={L.prefs.characterSlug} onCharacters={onCharacters} />}
-        {max > 0 && <SampleChips projectId={projectId} max={max} />}
+        {!personal && <CharacterPick projectId={projectId} slug={L.prefs.characterSlug} onCharacters={onCharacters} touch={isMobile} />}
+        {max > 0 && <SampleChips projectId={projectId} max={max} touch={isMobile} />}
       </div>
     </div>
   );
@@ -117,14 +119,14 @@ export function ExecutorField({ L, catalog, isMobile }: { L: Launch; catalog: Im
   );
 }
 
-// «› Ещё настройки · N» со сводкой справа; раскрывается на месте
-export function MoreSettings({ summary, children }: { summary: string[]; children: ReactNode }) {
+// «› Ещё настройки · N» со сводкой справа; раскрывается на месте. На телефоне строка — тач-цель не ниже 40
+export function MoreSettings({ summary, children, isMobile }: { summary: string[]; children: ReactNode; isMobile: boolean }) {
   const [open, setOpen] = useState(false);
   if (!summary.length) return null;
   return (
     <div data-image-more="">
       <Button size="sm" variant="ghost" fullWidth leftIcon={ic(open ? ChevronDown : ChevronRight)} onClick={() => setOpen(o => !o)}
-        style={{ marginTop: SP.xs, justifyContent: 'flex-start', fontWeight: 400 }}>
+        style={{ marginTop: SP.xs, justifyContent: 'flex-start', fontWeight: 400, ...(isMobile ? { minHeight: 40 } : null) }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flex: 1, minWidth: 0 }}>
           <span style={{ flexShrink: 0 }}>Ещё настройки · {summary.length}</span>
           <span style={{ flex: 1, minWidth: 0, textAlign: 'right', color: C.textMuted, fontSize: FS.xs, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

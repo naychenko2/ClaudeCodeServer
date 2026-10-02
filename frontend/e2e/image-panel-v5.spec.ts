@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import {
   CAT, Counter, H, brush, catThread, heroThread, imageComposer, input, newWorld, openChat, panel, shot, strip, w,
@@ -27,8 +27,9 @@ async function open(page: Page, vp: { width: number; height: number }, theme: 'l
 const seg = (page: Page, i: 0 | 1) => strip(page).locator('[data-images-mode-switch] button').nth(i);
 const sendBtn = (page: Page) => page.getByRole('button', { name: /^(Изменить|Сгенерировать)( отмеченное)? · / });
 const summary = (page: Page) => page.locator('[data-images-settings-toggle] button');
-// ✕ на чипе «Работаем с»
-const chipX = (page: Page) => strip(page).getByText('×', { exact: true }).first();
+// ✕ на чипе «Работаем с»; на телефоне — отдельная кнопка 40×40 рядом с миниатюрой
+const chipX = (page: Page) => strip(page).getByRole('button', { name: 'Снять выбор картинки' })
+  .or(strip(page).getByText('×', { exact: true })).first();
 const release = (page: Page) => page.locator('[data-images-release]');
 
 // Панель «Картинки»: на 360 полоса свёрнута в строку — её сводка открывает шторку
@@ -85,7 +86,8 @@ test.describe('сценарии v5 со счётом кликов', () => {
     await expect(page.getByRole('button', { name: /^С компьютера/ })).toBeVisible();
     await shot(page, SHOTS, 'w1440-light-pick');
     await c.click('b', page.getByRole('button', { name: /^hero\.png/ }));
-    await expect(strip(page)).toContainText('Работаем с:');
+    // Выбор открыл панель колонкой — в тесной полосе чип без приставки «Работаем с:»
+    await expect(strip(page).locator('[data-images-chip="focus"]')).toContainText('hero.png');
     await input(page).fill('вечер, тёплый свет из окна');
     await c.click('b', sendBtn(page));
     await expect.poll(() => w().jobs.length).toBe(1);
@@ -337,3 +339,77 @@ for (const theme of ['light', 'dark'] as const) {
     }
   });
 }
+
+// Дизайн-проверка Майи (карточка 64c67e83): тач-цели 360, подпись кнопки запуска на 360,
+// имя в чипе «Работаем с» на 1440 при открытой панели
+const box = async (l: Locator) => (await l.boundingBox())!;
+for (const theme of ['light', 'dark'] as const) {
+  test(`360: тач-цели панели и полосы, подпись запуска, тема ${theme}`, async ({ page }) => {
+    // Крестик чипа «Работаем с» в полосе
+    await open(page, M, theme, H, 'edit', [heroThread(), catThread()]);
+    await imageComposer(page);
+    const x = await box(chipX(page));
+    expect(x.width, 'крестик чипа: ширина').toBeGreaterThanOrEqual(40);
+    expect(x.height, 'крестик чипа: высота').toBeGreaterThanOrEqual(40);
+    const sb = await box(strip(page));
+    expect(x.x + x.width, 'крестик внутри полосы').toBeLessThanOrEqual(sb.x + sb.width);
+    await shot(page, SHOTS, `m360-${theme}-strip-chip-x`);
+    await page.goto('about:blank');
+
+    // «Создать» на пустом поле: подпись кнопки целиком, цена без времени
+    await open(page, M, theme, null, 'create', [heroThread()]);
+    await imageComposer(page);
+    await input(page).fill('маяк на закате');
+    const send = sendBtn(page);
+    await expect(send).toHaveText(/Сгенерировать · Бесплатно$/);
+    const clip = await send.evaluate(btn => {
+      const b = btn.getBoundingClientRect();
+      const label = [...btn.querySelectorAll('span')].find(s => s.textContent?.includes('Сгенерировать'))!;
+      const l = label.getBoundingClientRect();
+      return { overflow: label.scrollWidth - label.clientWidth, labelRight: l.right, btnRight: b.right, vw: window.innerWidth };
+    });
+    expect(clip.overflow, 'подпись не обрезана').toBeLessThanOrEqual(0);
+    expect(clip.labelRight, 'подпись внутри кнопки').toBeLessThanOrEqual(clip.btnRight + 0.5);
+    expect(clip.btnRight, 'кнопка в экране').toBeLessThanOrEqual(clip.vw);
+    await shot(page, SHOTS, `m360-${theme}-send`);
+
+    // Шторка «Создать»: персонаж, образец, «Ещё настройки», пропорции
+    await openPanel(page);
+    const body = page.locator('[data-gen-sheet="sheet"] [data-image-body="create"]');
+    await expect(body).toBeVisible();
+    for (const [name, l] of [
+      ['«Персонаж ▾»', body.locator('[data-image-character-pick]')],
+      ['«Образец»', body.locator('[data-sample-add]')],
+      ['«Ещё настройки»', body.locator('[data-image-more] > button')],
+    ] as const) expect((await box(l)).height, `${name}: высота`).toBeGreaterThanOrEqual(40);
+    await body.locator('[data-image-more] > button').click();
+    const ratios = body.locator('[data-image-more-body] button');
+    await expect(ratios).toHaveCount(4);
+    for (const r of ['1:1', '16:9', '9:16']) {
+      const b = await box(ratios.filter({ hasText: r }));
+      expect(b.width, `пропорция ${r}: ширина`).toBeGreaterThanOrEqual(40);
+      expect(b.height, `пропорция ${r}: высота`).toBeGreaterThanOrEqual(40);
+    }
+    await shot(page, SHOTS, `m360-${theme}-panel-create-more`);
+  });
+}
+
+test('1440: при открытой панели имя в чипе «Работаем с» читаемо', async ({ page }) => {
+  await open(page, W, 'light', H, 'edit', [heroThread(), catThread()]);
+  await imageComposer(page);
+  await summary(page).click();
+  await expect(panel(page)).toBeVisible();
+  const chip = strip(page).locator('[data-images-chip="focus"]');
+  const name = chip.locator('b');
+  await expect(name).toHaveText(/^hero\.png/);
+  // Полоса тесна — приставка «Работаем с:» ушла, имя осталось
+  await expect(chip).not.toContainText('Работаем с');
+  // Имя целиком на виду (не обрезано многоточием), чип не уже 96
+  await expect.poll(() => name.evaluate(b => {
+    const r = b.getBoundingClientRect();
+    const cut = b.parentElement!.getBoundingClientRect();
+    return Math.round(r.right - Math.min(r.right, cut.right));
+  }), { message: 'обрезанная часть имени' }).toBe(0);
+  expect((await box(chip)).width, 'ширина чипа').toBeGreaterThanOrEqual(96);
+  await shot(page, SHOTS, 'w1440-light-chip-panel-open');
+});

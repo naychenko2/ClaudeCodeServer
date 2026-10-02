@@ -266,6 +266,14 @@ describe('ExecutorList — группы и строки', () => {
     expect(out).toContain('сейчас Qwen');
   });
 
+  it('замок перед именем — только у закрытой строки', () => {
+    const out = html(createElement(ExecutorList, { rows: [...rows.slice(0, 3), { ...rows[3], locked: true }], value: 'auto', onChange: noop }));
+    expect(out.match(/data-executor-lock/g)).toHaveLength(1);
+    expect(out.indexOf('data-executor-lock')).toBeGreaterThan(out.indexOf('fal · FLUX Kontext'));
+    expect(out.indexOf('data-executor-lock')).toBeLessThan(out.indexOf('Higgsfield · Soul'));
+    expect(html(createElement(ExecutorList, { rows, value: 'auto', onChange: noop }))).not.toContain('data-executor-lock');
+  });
+
   it('подпись и причина переносятся, а не режутся многоточием', () => {
     const out = html(createElement(ExecutorList, { rows, value: 'auto', onChange: noop }));
     const reason = out.match(/<span style="([^"]*)">не умеет/)![1];

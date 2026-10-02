@@ -7,9 +7,11 @@ import type { AudioCatalog } from '../api';
 import { executorPatch, executorRows, executorSummary, executorValue } from './executorRows';
 import type { PanelState, SettingsPatch } from './model';
 
-export function ExecutorField({ catalog, state, price, onChange, isMobile }: {
+export function ExecutorField({ catalog, state, personal, price, onChange, isMobile }: {
   catalog: AudioCatalog;
   state: PanelState;
+  // Личный чат: «Локально» с замком
+  personal: boolean;
   // Первая строка цены низа: «Бесплатно», «≈ $0.1 за 1000 симв.»
   price: string;
   onChange: (patch: SettingsPatch) => void;
@@ -24,7 +26,7 @@ export function ExecutorField({ catalog, state, price, onChange, isMobile }: {
         open={open} onToggle={() => setOpen(o => !o)} isMobile={isMobile} />
       {open && (
         <div style={{ marginTop: SP.xs }}>
-          <ExecutorList rows={executorRows(catalog, state.op)} value={executorValue(catalog, state)} isMobile={isMobile}
+          <ExecutorList rows={executorRows(catalog, state.op, personal)} value={executorValue(catalog, state)} isMobile={isMobile}
             onChange={id => onChange(executorPatch(id))} />
         </div>
       )}

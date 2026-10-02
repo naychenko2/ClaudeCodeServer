@@ -377,7 +377,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
 
         {!noAi && catalog.providers.length > 0 && (
           <>
-            <ExecutorField catalog={catalog} state={state} price={foot.price?.[0] ?? ''} onChange={change} isMobile={ctx.isMobile} />
+            <ExecutorField catalog={catalog} state={state} personal={personal} price={foot.price?.[0] ?? ''} onChange={change} isMobile={ctx.isMobile} />
             {license && <div data-sound-license=""><Hint warn>{license}</Hint></div>}
             {heavy && <div data-sound-heavy=""><Hint warn>{heavy}</Hint></div>}
           </>

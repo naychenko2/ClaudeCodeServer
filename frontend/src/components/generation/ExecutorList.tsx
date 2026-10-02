@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, Lock } from 'lucide-react';
 import { C, FS, R, SP } from '../../lib/design';
 import { Badge, type BadgeTone } from '../ui/Badge';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -29,6 +29,8 @@ export interface ExecutorRow {
   price: string;
   badges?: readonly ExecutorBadge[];
   disabled?: boolean;
+  // Замок перед именем: путь закрыт самим местом («Локально» в личном чате), а не сбоем поставщика
+  locked?: boolean;
   // Почему серая: «не умеет «Изменить» — только новая картинка». Встаёт вместо sub
   reason?: string;
 }
@@ -136,6 +138,7 @@ function ExecutorRowView({ row, on, onPick, isMobile }: { row: ExecutorRow; on: 
       }} />
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+          {row.locked && <Lock data-executor-lock="" size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} aria-label="Закрыто" />}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: on ? 600 : 400 }}>{row.name}</span>
           {row.badges?.map(b => <Badge key={b.label} size="xs" tone={b.tone ?? 'neutral'}>{b.label}</Badge>)}
         </span>

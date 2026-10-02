@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AudioCatalog, AudioModelInfo, AudioProvider } from '../api';
-import { AUTO_EXECUTOR, executorPatch, executorRows, executorSummary, executorValue } from './executorRows';
+import { AUTO_EXECUTOR, FAL_NOTE, executorPatch, executorRows, executorSummary, executorValue } from './executorRows';
 import { nextSettings, resolvePanel, splitSchema, tuckSchema, type PanelState } from './model';
 import type { AudioParamSchema } from '../api';
 import { composerHintOf, OP_GROUP, opOptions } from './opGroups';
@@ -108,8 +108,25 @@ describe('список «Исполнитель»', () => {
   it('цены: локально — бесплатно, облако — ориентир каталога; недоступный — серый с причиной', () => {
     const rows = executorRows(CATALOG, 'speak');
     expect(rows.find(r => r.id === 'local|qwen')?.price).toBe('бесплатно');
-    expect(rows.find(r => r.id === 'fal|fal-ai/minimax/speech')).toMatchObject({ price: '$0.1 за 1000 симв.', sub: 'fal' });
+    expect(rows.find(r => r.id === 'fal|fal-ai/minimax/speech')).toMatchObject({ price: '$0.1 за 1000 симв.' });
     expect(rows.find(r => r.id === 'yandex|speechkit')).toMatchObject({ disabled: true, reason: 'Ключ не задан' });
+  });
+
+  it('подпись «отобранные · остальные — по запросу» — один раз, у первой строки fal', () => {
+    const sep = executorRows(CATALOG, 'separate');
+    expect(sep.find(r => r.id === 'fal|fal-ai/demucs')?.sub).toBe(`fal · ${FAL_NOTE}`);
+    expect(sep.find(r => r.id === 'fal|fal-ai/sam-audio')?.sub).toBe('fal');
+    expect(sep.filter(r => r.sub?.includes(FAL_NOTE))).toHaveLength(1);
+    expect(executorRows(CATALOG, 'speak').find(r => r.id === 'yandex|speechkit')?.sub).toBe('Яндекс');
+  });
+
+  it('в личном чате «Локально» — с замком, причина каталога остаётся; в проекте замка нет', () => {
+    const reason = 'Локальные модели работают только в чате проекта';
+    const personal = { ...CATALOG, providers: [FAL, { ...LOCAL, available: false, reason }] };
+    const rows = executorRows(personal, 'speak', true);
+    expect(rows.find(r => r.id === 'local|qwen')).toMatchObject({ locked: true, disabled: true, reason });
+    expect(rows.find(r => r.id === 'fal|fal-ai/minimax/speech')?.locked).toBeUndefined();
+    expect(executorRows(CATALOG, 'speak').some(r => r.locked)).toBe(false);
   });
 
   it('«Авто · сейчас X» — по порядку перебора сервера, а не по списку каталога', () => {

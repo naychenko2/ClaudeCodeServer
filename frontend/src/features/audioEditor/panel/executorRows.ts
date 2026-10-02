@@ -45,9 +45,13 @@ function badges(m: AudioModelInfo, op: AudioOp): ExecutorBadge[] {
   return out;
 }
 
+// У fal в каталоге не весь его зоопарк, а отобранные модели: подпись встаёт у первой строки fal
+export const FAL_NOTE = 'отобранные · остальные — по запросу';
+
 // Строки списка: «Авто», затем свои видеокарты, затем облако; внутри — порядок каталога.
-// Поставщик без модели под операцию в список не попадает; недоступный — серый с причиной
-export function executorRows(catalog: AudioCatalog, op: AudioOp): ExecutorRow[] {
+// Поставщик без модели под операцию в список не попадает; недоступный — серый с причиной.
+// В личном чате «Локально» закрыт самим местом — строка с замком, причина остаётся
+export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = false): ExecutorRow[] {
   const auto = autoPick(catalog, op);
   const rows: ExecutorRow[] = [{
     id: AUTO_EXECUTOR, group: 'auto', name: 'Авто',
@@ -59,18 +63,20 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp): ExecutorRow[] 
   const ordered = [...providers.filter(isLocal), ...providers.filter(p => !isLocal(p))];
   for (const p of ordered) {
     const why = p.available ? null : p.reason ?? 'Поставщик сейчас недоступен';
-    for (const m of p.models.filter(x => supports(x, op))) {
+    const locked = personal && p.key === 'local';
+    p.models.filter(x => supports(x, op)).forEach((m, i) => {
       const b = badges(m, op);
       rows.push({
         id: rowId(p.key, m.id),
         group: isLocal(p) ? 'local' : 'cloud',
         name: m.label,
-        sub: isLocal(p) ? undefined : p.label,
+        sub: isLocal(p) ? undefined : p.key === 'fal' && i === 0 ? `${p.label} · ${FAL_NOTE}` : p.label,
         price: rowPrice(p, m),
         ...(b.length ? { badges: b } : null),
         ...(why ? { disabled: true, reason: why } : null),
+        ...(locked ? { locked: true } : null),
       });
-    }
+    });
   }
   return rows;
 }

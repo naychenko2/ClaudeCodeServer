@@ -7,7 +7,7 @@ import { useIsMobile } from '../lib/breakpoints';
 import { GenerationModeSwitch, type GenerationModeOption } from '../components/generation/GenerationModeSwitch';
 import { GenerationPickMenu, type GenerationPickRow } from '../components/generation/GenerationPickMenu';
 import { ExecutorList, ExecutorSummaryRow, type ExecutorRow } from '../components/generation/ExecutorList';
-import { GenerationFootView, type GenerationFoot } from '../components/generation/GenerationPanel';
+import { GenerationFootView, GenerationPanel, type GenerationFoot } from '../components/generation/GenerationPanel';
 import { ByClaude } from '../components/generation/ByClaude';
 import { ReleaseNotice } from '../components/generation/ReleaseNotice';
 import { useReleaseUndo } from '../components/generation/useReleaseUndo';
@@ -186,6 +186,21 @@ export function GenSharedKitSection() {
                   </div>
                 </div>
               ))}
+            </div>
+          </Block>
+
+          <Block label="Панель «Звук» с заготовкой из «Видео»: строка «↩ К фильму», контекст нового звука, низ">
+            <div style={{ width: narrow ? '100%' : 380, maxWidth: '100%', height: 420, display: 'flex' }}>
+              <GenerationPanel<'settings'>
+                title="Звук" subtitle="Музыка · Песня" icon={<Music size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                tabs={[{ value: 'settings', label: 'Настройки' }]} tab="settings" onTabChange={noop}
+                layout="column" width={narrow ? 320 : 380} onWidthChange={noop}
+                returnLink={{ label: 'К фильму «утро-в-горах»', onClick: noop }}
+                context={<span>Новый звук · заготовка из «Видео»: под фильм «утро-в-горах»</span>}
+                foot={{ count: 1, maxCount: 3, onCountChange: noop, price: ['≈ $0.10', '1 × $0.10 · 32 с'], runLabel: 'Сочинить', onRun: noop }}
+              >
+                <div style={{ fontSize: FS.sm, color: C.textSecondary, paddingTop: SP.sm }}>Длительность 32 с · «Инструментал» · стиль по текстам сцен</div>
+              </GenerationPanel>
             </div>
           </Block>
 

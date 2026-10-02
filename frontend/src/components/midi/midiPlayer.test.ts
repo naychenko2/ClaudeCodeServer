@@ -128,6 +128,62 @@ describe('midiPlayer', () => {
     expect(planned).toEqual([...d.tracks[0].notes, ...d.tracks[2].notes]);
   });
 
+  // Tone.start ждёт ручного release; startCalled — play дошёл до Tone.start
+  function deferToneStart() {
+    let release!: () => void;
+    let started!: () => void;
+    const startCalled = new Promise<void>(r => { started = r; });
+    fake.Tone.start = vi.fn(() => {
+      started();
+      return new Promise<void>(r => { release = r; });
+    }) as unknown as typeof fake.Tone.start;
+    return { startCalled, release: () => release() };
+  }
+
+  it('stop во время ожидания Tone.start отменяет play', async () => {
+    const gate = deferToneStart();
+    const playing = play('a', doc([track(0, 'piano', [60])]));
+    stop('a');
+    await gate.startCalled;
+    gate.release();
+    await playing;
+
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(fake.parts).toEqual([]);
+    expect(fake.nodes).toEqual([]);
+    expect(fake.transport.start).not.toHaveBeenCalled();
+    expect(getState()).toEqual({ ownerId: null, playing: false, positionSec: 0 });
+  });
+
+  it('stop чужого владельца не отменяет ожидающий play', async () => {
+    const gate = deferToneStart();
+    const playing = play('a', doc([track(0, 'piano', [60])]));
+    stop('b');
+    await gate.startCalled;
+    gate.release();
+    await playing;
+
+    expect(fake.transport.start).toHaveBeenCalledTimes(1);
+    expect(getState()).toEqual({ ownerId: 'a', playing: true, positionSec: 0 });
+  });
+
+  it('другой документ того же владельца играет с начала, а не с паузы', async () => {
+    const docA = doc([track(0, 'piano', [60])]);
+    const docB = doc([track(0, 'piano', [62])]);
+
+    await play('a', docA);
+    fake.transport.seconds = 2;
+    pause('a');
+    await play('a', docB);
+    expect(getState()).toEqual({ ownerId: 'a', playing: true, positionSec: 0 });
+
+    // Контраст: тот же документ после паузы продолжает с места
+    fake.transport.seconds = 2;
+    pause('a');
+    await play('a', docB);
+    expect(getState()).toEqual({ ownerId: 'a', playing: true, positionSec: 2 });
+  });
+
   it('getState и subscribe отражают play, pause и stop', async () => {
     const seen: MidiPlayerState[] = [];
     const unsubscribe = subscribe(s => seen.push(s));

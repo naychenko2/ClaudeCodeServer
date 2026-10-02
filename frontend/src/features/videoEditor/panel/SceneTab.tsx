@@ -48,7 +48,9 @@ export function SceneTab({ m, isMobile, prevScene, claudeFrames }: {
   const [slot, setSlot] = useState<'A' | 'B' | null>(null);
   const [expanded, setExpanded] = useState(false);
   const draft = useGenDraft(m.draftKey);
-  useEffect(() => { setSlot(null); setExpanded(false); }, [scene?.sceneId]);
+  // Смена сцены сбрасывает меню кадра и развёрнутый текст (состояние подправляется в рендере, не в эффекте)
+  const [shownScene, setShownScene] = useState(scene?.sceneId);
+  if (shownScene !== scene?.sceneId) { setShownScene(scene?.sceneId); setSlot(null); setExpanded(false); }
   const film = useFilm(scope, scene?.filmRef ? sessionId : null, scene?.filmRef?.path ?? null);
   const lockAspect = !!scene?.filmRef && scene.filmRef.position > 0 && film.state ? film.state.document.aspect : null;
   const stale = staleNotes(scene);
@@ -74,7 +76,7 @@ export function SceneTab({ m, isMobile, prevScene, claudeFrames }: {
       onPick={f => pickFrame(s, f)}
       onEdit={() => { if (scene && sessionId) void editFrame(scope, sessionId, scene, s); setSlot(null); }}
       onDraw={() => { if (sessionId) void drawInImages(scope, sessionId, s); setSlot(null); }}
-      onUpload={file => { void uploadFrame(scope, scene, file).then(f => { if (f) pickFrame(s, f); }); }}
+      onUpload={file => { void uploadFrame(scope, sessionId, scene, file).then(f => { if (f) pickFrame(s, f); }); }}
       onClose={() => setSlot(null)} />
   );
 

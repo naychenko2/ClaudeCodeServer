@@ -15,7 +15,7 @@ import {
   getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs, VIDEO_PANEL, VIDEO_STRIP,
   type PendingSettings,
 } from '../store/videoStore';
-import { resolveScene, settingsOf, type ResolvedScene } from './model';
+import { PERSONAL_LOCAL_REASON, resolveScene, settingsOf, type ResolvedScene } from './model';
 
 const SAVE_DELAY = 500;
 const CONTENT_KEYS = ['frameA', 'frameB', 'text'];
@@ -166,6 +166,10 @@ export interface RunInput { scope: string; sessionId: string; scene: VideoScene;
 
 // Запуск строго по котировке: настройки уходят в сцену ДО запуска (сервер берёт текст и кадры из нити).
 // Просьба из поля ввода добавляется к тексту сцены строкой (в запуске для неё поля нет)
+// Съёмка: код local_unavailable_personal — человеку понятная причина, а не общий текст бэкенда
+const runErrorText = (e: unknown) =>
+  errorCode(e) === ERR.localPersonal ? PERSONAL_LOCAL_REASON : errorText(e, 'Съёмка не запустилась');
+
 export async function runScene(i: RunInput, extraText = ''): Promise<boolean> {
   const { scope, sessionId, scene, quote } = i;
   if (extraText.trim()) {
@@ -179,7 +183,7 @@ export async function runScene(i: RunInput, extraText = ''): Promise<boolean> {
     clearGenDraft(sceneDraftKey(scene.sceneId));
     return true;
   } catch (e) {
-    setFailure(sessionId, { sceneId: scene.sceneId, text: errorText(e, 'Съёмка не запустилась'), retry: retryOf(e) });
+    setFailure(sessionId, { sceneId: scene.sceneId, text: runErrorText(e), retry: retryOf(e) });
     if (errorCode(e) === ERR.quoteNotFound) showToast('Цена устарела — она пересчитана, нажмите ещё раз', '', 'info');
     return false;
   }
@@ -218,16 +222,27 @@ export function downloadClip(scope: string, sessionId: string, scene: VideoScene
 
 export const framesFolder = (scene: VideoScene | null) => `${scene?.folder || 'video'}/кадры`;
 
-// Файл с компьютера → картинка проекта в video/…/кадры/: кадром становится файл проекта.
-// У личного чата файлов проекта нет — загрузки нет (нужна ручка сервера)
-export async function uploadFrame(scope: string, scene: VideoScene | null, file: File): Promise<FrameRef | null> {
-  if (isPersonalScope(scope)) return null;
-  const dir = framesFolder(scene);
+// Причина отказа загрузки кадра: 413 — слишком большой, 400 invalid_request — не картинка
+export function uploadErrorText(e: unknown): string {
+  const err = e as { status?: unknown } | null;
+  if (err?.status === 413) return 'Файл больше 20 МБ';
+  if (err?.status === 400 && errorCode(e) === 'invalid_request') return 'Это не картинка';
+  return errorText(e, 'Не удалось загрузить кадр');
+}
+
+// Файл с компьютера. Проектный чат: картинка проекта в video/…/кадры/, кадром становится файл проекта.
+// Личный чат: файла проекта нет — сервер кладёт файл в рабочую папку чата и отдаёт готовый FrameRef
+export async function uploadFrame(scope: string, sessionId: string | null, scene: VideoScene | null, file: File): Promise<FrameRef | null> {
   try {
+    if (isPersonalScope(scope)) {
+      if (!sessionId) return null;
+      return await videoApi.uploadFrame(sessionId, file);
+    }
+    const dir = framesFolder(scene);
     await api.files.upload(scope, file, dir);
     return { kind: 'file', path: `${dir}/${file.name}` };
   } catch (e) {
-    showToast(errorText(e, 'Не удалось загрузить кадр'), '', 'error');
+    showToast(uploadErrorText(e), '', 'error');
     return null;
   }
 }

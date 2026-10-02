@@ -29,6 +29,8 @@ public sealed class SafeMediaDownloader
     // Самый длинный звук поставщиков — песня ElevenLabs до 10 минут: WAV 48 кГц/24 бит/стерео за
     // 10 минут ≈ 173 МБ, потолок оставляет запас на такой файл и не пускает в память больше
     public const long AudioMaxBytes = 200L * 1024 * 1024;
+    // Клип сцены (ADR-022 §3): видео весит на порядок больше аудио
+    public const long VideoMaxBytes = 300L * 1024 * 1024;
     public const int MaxRedirects = 3;
 
     public static SafeMediaDownloader Shared { get; } = new(CreateHandler());

@@ -355,6 +355,16 @@ export function GenerationFootView({ foot: f, touch }: { foot: GenerationFoot; t
   // На телефоне кнопки низа — тач-цели 44 px: главная — размера md, остальные растянуты по высоте
   const hit = touch ? { height: TOUCH_MIN, minHeight: TOUCH_MIN } : undefined;
   const showCount = !f.noCount && f.count !== undefined;
+  // Цена ровно в две строки: строки не переносятся, а режутся многоточием
+  const priceNode = f.price ? (
+    <span title={`${f.price[0]} · ${f.price[1]}`} data-gen-foot-price="" style={{
+      flex: touch ? '1 1 100%' : 1, minWidth: 0, fontSize: FS.sm, lineHeight: 1.35, color: C.textSecondary,
+      whiteSpace: 'nowrap',
+    }}>
+      <b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', color: C.textHeading }}>{f.price[0]}</b>
+      <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.price[1]}</span>
+    </span>
+  ) : touch ? null : <span style={{ flex: 1 }} />;
   return (
     <>
       {f.reason && (
@@ -409,7 +419,10 @@ export function GenerationFootView({ foot: f, touch }: { foot: GenerationFoot; t
           )}
         </div>
       ) : (
-        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+        <div data-gen-foot-run="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: touch ? 'wrap' : 'nowrap' }}>
+          {/* Телефон: цена — отдельной строкой во всю ширину (тач-степпер 44+N+44 и кнопка md съедали её колонку),
+              «− N +» и запуск — строкой ниже */}
+          {touch && priceNode}
           {showCount && <Stepper
             ariaLabel="Сколько вариантов"
             value={f.count!}
@@ -419,16 +432,7 @@ export function GenerationFootView({ foot: f, touch }: { foot: GenerationFoot; t
             touch={touch}
             onChange={n => f.onCountChange?.(n)}
           />}
-          {/* Цена ровно в две строки: строки не переносятся, а режутся многоточием */}
-          {f.price ? (
-            <span title={`${f.price[0]} · ${f.price[1]}`} style={{
-              flex: 1, minWidth: 0, fontSize: FS.sm, lineHeight: 1.35, color: C.textSecondary,
-              whiteSpace: 'nowrap',
-            }}>
-              <b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', color: C.textHeading }}>{f.price[0]}</b>
-              <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.price[1]}</span>
-            </span>
-          ) : <span style={{ flex: 1 }} />}
+          {touch ? <span style={{ flex: 1 }} /> : priceNode}
           <Button
             size={touch ? 'md' : 'xs'}
             disabled={!!f.reason || !!f.runDisabled}

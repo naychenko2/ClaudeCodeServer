@@ -39,6 +39,10 @@ import { useHasChatContext } from '../../lib/chatContext';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { getTaskById } from '../../lib/tasks';
 
+// Ленте чата в разделённом центре (файл, задача, ридер рядом) уже этой ширины композер не вмещает: поле ввода
+// сжимается до буквы в строке. Это минимум колонки, а не желаемая ширина — резиновая соседка уступает первой
+const CHAT_SPLIT_MIN = 320;
+
 export type SidebarMode = 'pinned' | 'collapsed';
 
 interface Props {
@@ -210,7 +214,7 @@ export function DesktopWorkspace(p: Props) {
     setDragging('split');
     startPointerDrag(
       ev => {
-        const chatW = Math.max(200, Math.min(rect.width - 200, ev.clientX - rect.left));
+        const chatW = Math.max(CHAT_SPLIT_MIN, Math.min(rect.width - 200, ev.clientX - rect.left));
         setChatFlex(chatW / (rect.width - chatW));
       },
       { onEnd: () => setDragging(null) },
@@ -465,7 +469,7 @@ export function DesktopWorkspace(p: Props) {
           слева, детали встают справа (тот же приём и тот же сплиттер, что у файла и ридера) */}
       {taskSplit && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
-          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: CHAT_SPLIT_MIN }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {chatPanel(false)}
             </div>
@@ -525,7 +529,7 @@ export function DesktopWorkspace(p: Props) {
           смотреть, не бросая разговор, — то, ради чего кадр в центр и уводят */}
       {videoSplitCenter && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
-          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: CHAT_SPLIT_MIN }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {chatPanel(false)}
             </div>
@@ -550,7 +554,7 @@ export function DesktopWorkspace(p: Props) {
       {/* Split чат|файл — ДВА острова, ресайз живёт в зазоре между ними */}
       {p.openFile && !p.fileFullscreen && !p.isTablet && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
-          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: CHAT_SPLIT_MIN }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {chatPanel(false)}
             </div>
@@ -576,7 +580,7 @@ export function DesktopWorkspace(p: Props) {
           (файл и ридер взаимно вытесняют друг друга — одновременно не бывают) */}
       {!p.openFile && p.readerState.open && !p.readerState.expanded && !p.isTablet && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
-          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: CHAT_SPLIT_MIN }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {chatPanel(false)}
             </div>

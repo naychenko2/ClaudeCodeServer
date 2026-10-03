@@ -1,9 +1,12 @@
 // Подписи объектов контекста: сервер отдаёт путь файла проекта («img/hero.png»), человеку нужно имя («hero.png»).
-// Пометка « · черновик» в подпись хода не едет: «✦ Снимаем Сцена 1…», а не «…Сцена 1 · черновик…»
-export const baseName = (label: string): string => {
+// Пометка « · черновик» видна на экране (чип, «С чем», панель), а в подпись хода не едет: «✦ Снимаем Сцена 1…»,
+// а не «…Сцена 1 · черновик…» — там зовём без keepDraft
+export const baseName = (label: string, keepDraft = false): string => {
+  const draft = / · черновик$/.test(label) ? ' · черновик' : '';
   const bare = label.replace(/ · черновик$/, '');
   const i = bare.lastIndexOf('/');
-  return i >= 0 && i < bare.length - 1 ? bare.slice(i + 1) : bare;
+  const name = i >= 0 && i < bare.length - 1 ? bare.slice(i + 1) : bare;
+  return keepDraft ? name + draft : name;
 };
 
 // Безымянные черновики: «Новая картинка · черновик», «Новый звук · черновик». Их название в подпись хода не

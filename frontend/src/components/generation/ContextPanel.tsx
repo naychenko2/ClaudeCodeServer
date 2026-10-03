@@ -148,7 +148,7 @@ function WithSection(p: ContextPanelProps) {
             <Thumb item={primary} icon={p.iconOf(primary.kind)} size={44} />
             <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
               <span data-ctx-label="" style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {baseName(primary.label)}{primary.by === 'agent' && <span title="Взял в работу Claude" style={{ color: C.accent, marginLeft: SP.xs }}>✦</span>}
+                {baseName(primary.label, true)}{primary.by === 'agent' && <span title="Взял в работу Claude" style={{ color: C.accent, marginLeft: SP.xs }}>✦</span>}
               </span>
               {(p.sub ?? primary.version) && <span data-ctx-version="" style={{ fontSize: FS.xs, color: C.textMuted }}>{p.sub ?? primary.version}</span>}
             </span>
@@ -234,7 +234,7 @@ function PlusSection({ p }: { p: ContextPanelProps }) {
                   border: `1px ${g ? 'dashed' : 'solid'} ${C.border}`, opacity: g || r.missing ? 0.55 : 1, fontSize: FS.sm, color: C.textSecondary,
                 }}>
                 <Thumb item={r} icon={p.iconOf(r.kind)} size={18} round={r.role === 'char' || r.role === 'character'} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, textDecoration: g ? 'line-through' : undefined }}>{baseName(r.label)}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, textDecoration: g ? 'line-through' : undefined }}>{baseName(r.label, true)}</span>
                 {role && <span style={{ color: C.textMuted, flexShrink: 0 }}>· {role}</span>}
                 <IconButton size="xs" title={`Отключить «${r.label}»`} ariaLabel={`Отключить «${r.label}»`} onClick={() => p.onDetach(r.id)}>
                   <X size={ICON_SIZE.xs - 3} strokeWidth={ICON_STROKE} />

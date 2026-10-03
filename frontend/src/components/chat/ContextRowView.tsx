@@ -202,7 +202,7 @@ function PrimaryChip({ p, form, icon, onOpen, onRelease, onAgentTip }: {
   return (
     <RowChip kind="primary" max={form === 1 ? NOM.o1 : CAP.o2} title={title} onClick={onOpen} borderColor={C.accentMuted} dim={p.missing}>
       <Thumb item={p} icon={icon} />
-      <span data-chip-label="" style={ellipsis}>{baseName(p.label)}</span>
+      <span data-chip-label="" style={ellipsis}>{baseName(p.label, true)}</span>
       {p.version && <span style={{ color: C.textMuted, flexShrink: 0 }}>· {p.version}</span>}
       {agent && <AgentMark title="Взял в работу Claude" onClick={onAgentTip} />}
       <XBtn title={`Снять «${p.label}» с работы`} onClick={onRelease} />
@@ -249,7 +249,7 @@ function RefPill({ r, gray, icon, grayHint, onDetach }: {
   return (
     <RowChip kind="ref" max={CAP.ref} title={title} dim={gray || r.missing} dashed={gray}>
       <Thumb item={r} icon={icon} round={r.role === 'char' || r.role === 'character'} />
-      <span style={{ ...ellipsis, textDecoration: gray ? 'line-through' : undefined }}>{baseName(r.label)}</span>
+      <span style={{ ...ellipsis, textDecoration: gray ? 'line-through' : undefined }}>{baseName(r.label, true)}</span>
       {r.by === 'agent' && <AgentMark title="Подключил Claude" />}
       <XBtn title={`Отключить «${r.label}»`} onClick={onDetach} />
     </RowChip>

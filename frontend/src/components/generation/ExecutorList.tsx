@@ -18,21 +18,44 @@ export const EXECUTOR_GROUP_LABEL: Record<Exclude<ExecutorGroup, 'auto'>, string
 };
 const GROUP_ORDER: readonly ExecutorGroup[] = ['auto', 'local', 'cloud'];
 
-export interface ExecutorBadge { label: string; tone?: BadgeTone }
+// Тон бейджа в контракте сервера (ADR-023): good / warn вместо success / warning кита
+export type ExecutorBadgeTone = BadgeTone | 'good' | 'warn';
+export interface ExecutorBadge { label: string; tone?: ExecutorBadgeTone }
+
+const TONE_ALIAS: Partial<Record<ExecutorBadgeTone, BadgeTone>> = { good: 'success', warn: 'warning' };
+export const badgeTone = (t: ExecutorBadgeTone | undefined): BadgeTone => (t && (TONE_ALIAS[t] ?? (t as BadgeTone))) || 'neutral';
+
+export type ExecutorUnit = 'free' | 'usd' | 'credits' | 'rub';
 
 export interface ExecutorRow {
   id: string;
   group: ExecutorGroup;
   name: string;
   sub?: string;
-  // «бесплатно · ~40 с», «$0.04 / шт.»
+  // «бесплатно · ~40 с», «$0.04 / шт.»: готовая подпись только для показа, не для разбора
   price: string;
+  // Цена полями (контракт ExecutorRowDto): бесплатность и сумма за единицу работы
+  free?: boolean;
+  amount?: number | null;
+  unit?: ExecutorUnit | null;
+  etaSeconds?: number | null;
   badges?: readonly ExecutorBadge[];
   disabled?: boolean;
   // Замок перед именем: путь закрыт самим местом («Локально» в личном чате), а не сбоем поставщика
   locked?: boolean;
   // Почему серая: «не умеет «Изменить» — только новая картинка». Встаёт вместо sub
   reason?: string;
+}
+
+// Короткая цена для чипа и меню: из полей, а не из подписи price
+export function rowPriceShort(r: Pick<ExecutorRow, 'price' | 'free' | 'amount' | 'unit'>): string {
+  if (r.free) return 'бесплатно';
+  if (r.amount != null) {
+    if (r.unit === 'usd') return `$${r.amount}`;
+    if (r.unit === 'credits') return `${r.amount} кр.`;
+    if (r.unit === 'rub') return `${r.amount} ₽`;
+  }
+  return r.price;
 }
 
 // Строки по группам в порядке Авто → своя видеокарта → облако, пустые группы
@@ -73,7 +96,7 @@ export function ExecutorSummaryRow({ label = 'Чем', name, parts = [], price, 
         <b style={{ color: C.textHeading, fontWeight: 600 }}>{name}</b>
         {parts.map(p => ` · ${p}`).join('')}
       </span>
-      {price && <Badge size="xs" tone={price.tone ?? 'neutral'}>{price.label}</Badge>}
+      {price && <Badge size="xs" tone={badgeTone(price.tone)}>{price.label}</Badge>}
       <Chevron size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} aria-hidden />
     </button>
   );
@@ -140,7 +163,7 @@ function ExecutorRowView({ row, on, onPick, isMobile }: { row: ExecutorRow; on: 
         <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
           {row.locked && <Lock data-executor-lock="" size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} aria-label="Закрыто" />}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: on ? 600 : 400 }}>{row.name}</span>
-          {row.badges?.map(b => <Badge key={b.label} size="xs" tone={b.tone ?? 'neutral'}>{b.label}</Badge>)}
+          {row.badges?.map(b => <Badge key={b.label} size="xs" tone={badgeTone(b.tone)}>{b.label}</Badge>)}
         </span>
         {/* Подпись и причина переносятся, а не режутся: в хвосте смысл («при отказе — облако
             с вашего согласия»), а на таче title нет */}

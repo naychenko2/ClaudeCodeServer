@@ -7,7 +7,7 @@ import type { Project, Session } from '../../types';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
 import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
-import { selectRowAction } from '../../lib/chatContext/rowExec';
+import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
 import { getKindApi } from '../../lib/chatContext/registry';
 import {
   clearContext, detachRef, ensureChatContext, releasePrimary, undoReleasePrimary, useChatContext, useReleaseOffer,
@@ -99,13 +99,16 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
   const kindCtx = { projectId: project?.id ?? null, sessionId, isMobile };
 
   // Выбранное действие объекта: предвыбор → память → умолчание (Р1). «Чем» есть только у run-действия
-  let action: ContextAction | null = null;
-  let exec: RowExec | null = null;
-  if (primary) {
-    const sel = selectRowAction(getKindApi(primary.kind), kindCtx, primary, refs);
-    action = sel.action;
-    if (sel.executors) exec = { rows: sel.executors.rows, value: sel.executors.value, onChange: sel.executors.onChange, title: 'Чем выполнить' };
-  }
+  // executors() вида зовётся на каждый рендер намеренно: выбранный исполнитель живёт в сторе вертикали,
+  // а в зависимости мемо он не входит. Цену вызова держит контракт (types.ts): вид отдаёт стабильную модель
+  const sel = primary ? selectRowAction(getKindApi(primary.kind), kindCtx, primary, refs) : null;
+  const action: ContextAction | null = sel?.action ?? null;
+  const exec: RowExec | null = sel?.executors
+    ? {
+        rows: sel.executors.rows, value: sel.executors.value, onChange: sel.executors.onChange,
+        title: execMenuTitle(action),
+      }
+    : null;
 
   return (
     <div ref={ref}>

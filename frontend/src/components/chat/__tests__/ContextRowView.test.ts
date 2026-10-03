@@ -17,7 +17,7 @@ const git: RowGit = {
   onCommitOwn: () => {}, onCommitAll: () => {}, onPublish: () => {}, onShowChanges: () => {},
 };
 const exec: RowExec = {
-  rows: [{ id: 'auto', group: 'auto', name: 'Qwen-Image Edit', sub: 'локально', price: 'бесплатно · ~40 с' }],
+  rows: [{ id: 'auto', group: 'auto', name: 'Qwen-Image Edit', sub: 'локально', price: 'бесплатно · ~40 с', free: true, amount: null, unit: 'free', etaSeconds: 40 }],
   value: 'auto', onChange: () => {}, title: 'Чем выполнить',
 };
 const props = (over: Partial<ContextRowViewProps> = {}): ContextRowViewProps => ({
@@ -96,9 +96,27 @@ describe('ContextRowView', () => {
     expect(h).toContain('>3<');
   });
 
-  it('плашка «Вернуть» после снятия объекта', () => {
-    expect(html(props({ offer: { text: 'hero.png' } }))).toContain('Вернуть');
+  it('плашка «Вернуть» после снятия объекта: текст по макету, отсчёт от срока из стора', () => {
+    const h = html(props({ offer: { text: 'hero.png', until: Date.now() + 3200 } }));
+    expect(h).toContain('Вернуть');
+    expect(h).toContain('Выбор снят — поле снова «Чат»');
+    expect(h).toContain('>4 с<');
     expect(html(props())).not.toContain('data-undo');
+  });
+
+  it('чип «Чем» берёт цену и тон из полей строки, а не из подписи price', () => {
+    const cloud: RowExec = {
+      ...exec, value: 'k',
+      rows: [{ id: 'k', group: 'cloud', name: 'FLUX Kontext', price: 'бесплатно · но это подпись', free: false, amount: 0.04, unit: 'usd' }],
+    };
+    const h = html(props({ exec: cloud }));
+    expect(h).toContain('$0.04');
+    expect(h).not.toContain('бесплатно');
+    // Тон «бесплатно» (зелёный) — от free, а не от слова в подписи
+    expect(h).not.toContain('var(--c-success-bg)');
+    const free = html(props({ exec }));
+    expect(free).toContain('бесплатно');
+    expect(free).toContain('var(--c-success-bg)');
   });
 
   it('факты лестницы собираются из модели', () => {

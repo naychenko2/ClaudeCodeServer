@@ -51,7 +51,11 @@ function ensureLive() {
   if (_unsub) return;
   const offEvents = chatContextApi.subscribe(ev => {
     // Чат, который не показываем, не кэшируем: прочитаем, когда понадобится
-    if (_entries.has(ev.sessionId)) apply(ev.sessionId, ev.context);
+    if (!_entries.has(ev.sessionId)) return;
+    // Рассылка на бэкенде идёт без ожидания: события приходят не по порядку, берём только более новую ревизию
+    const known = _entries.get(ev.sessionId)!;
+    if (known.loaded && ev.context.revision <= known.state.revision) return;
+    apply(ev.sessionId, ev.context);
   });
   // После обрыва события могли потеряться — перечитываем всё, что показано
   const offRe = onReconnected(() => {

@@ -12,7 +12,7 @@ import { roleLabel } from '../../lib/chatContext/roleLabels';
 import type { ChatContextPrimary, ChatContextRef } from '../../lib/chatContext/types';
 import { Badge, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { groupExecutorRows, EXECUTOR_GROUP_LABEL, type ExecutorRow } from '../generation/ExecutorList';
+import { groupExecutorRows, rowPriceShort, EXECUTOR_GROUP_LABEL, type ExecutorRow } from '../generation/ExecutorList';
 
 export const ROW_H = 30;
 export const ROW_H_MOBILE = 32;
@@ -39,7 +39,8 @@ export interface RowExec {
   title: string;
 }
 
-export interface RowOffer { text: string }
+// until — срок плашки в сторе (мс, Date.now()): отсчёт «N с» считается от него
+export interface RowOffer { text: string; until?: number }
 
 export interface ContextRowViewProps {
   // Ширина строки в CSS-пикселях; null — ещё не измерена (берём самую широкую форму)
@@ -94,6 +95,7 @@ function RowChip({ kind, max, title, onClick, borderColor, dim, dashed, mono, ch
   return (
     <span
       data-chip={kind}
+      {...(dashed ? { 'data-gray': '' } : null)}
       title={title}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -207,8 +209,8 @@ function ExecChip({ e, form, onOpen }: { e: RowExec; form: 1 | 2 | 3; onOpen: (r
   const row = e.rows.find(r => r.id === e.value) ?? e.rows[0];
   if (!row) return null;
   const auto = row.group === 'auto';
-  const price = row.price.split(' · ')[0];
-  const free = row.badges?.some(b => b.tone === 'success') ?? /^бесплатно/.test(row.price);
+  const price = rowPriceShort(row);
+  const free = !!row.free;
   const full = `${auto ? 'Авто · ' : ''}${row.sub ? `${row.sub} · ` : ''}${row.name}`;
   const title = `Чем: ${full} · ${price} — сменить исполнителя`;
   const open = (ev: { currentTarget: HTMLElement }) => onOpen(ev.currentTarget.getBoundingClientRect());
@@ -279,7 +281,7 @@ function ExecMenuBody({ e, close }: { e: RowExec; close: () => void }) {
           {g.rows.map(r => (
             <MenuItem key={r.id} disabled={r.disabled}
               icon={<span style={{ width: 12, height: 12, borderRadius: R.max, border: `2px solid ${r.id === e.value ? C.accent : C.border}`, background: r.id === e.value ? C.accent : 'transparent' }} />}
-              label={<span style={{ display: 'flex', gap: SP.sm, alignItems: 'center' }}><span style={{ flex: 1, minWidth: 0 }}>{r.name}</span><Badge size="xs" tone={/^бесплатно/.test(r.price) ? 'success' : 'neutral'}>{r.price.split(' · ')[0]}</Badge></span>}
+              label={<span style={{ display: 'flex', gap: SP.sm, alignItems: 'center' }}><span style={{ flex: 1, minWidth: 0 }}>{r.name}</span><Badge size="xs" tone={r.free ? 'success' : 'neutral'}>{rowPriceShort(r)}</Badge></span>}
               hint={r.reason ?? r.sub ?? r.price}
               onClick={() => { close(); e.onChange(r.id); }} />
           ))}
@@ -311,19 +313,22 @@ function RefsMenuBody({ refs, grayIds, grayHint, iconOf, onDetach, onClear, clos
 }
 
 function UndoNotice({ offer, onUndo }: { offer: RowOffer; onUndo: () => void }) {
-  const [left, setLeft] = useState(4);
+  const secondsLeft = () => (offer.until ? Math.max(0, Math.ceil((offer.until - Date.now()) / 1000)) : 0);
+  const [left, setLeft] = useState(secondsLeft);
   useEffect(() => {
-    const t = setInterval(() => setLeft(v => Math.max(0, v - 1)), 1000);
+    setLeft(secondsLeft());
+    const t = setInterval(() => setLeft(secondsLeft()), 250);
     return () => clearInterval(t);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offer.until]);
   return (
     <div data-context-notice="" role="status" style={{
       display: 'flex', alignItems: 'center', gap: SP.sm, height: 28, margin: `0 0 ${SP.xs}px`, padding: `0 ${SP.sm}px`,
       border: `1px solid ${C.border}`, borderRadius: R.lg, background: C.bgPanel, fontSize: FS.sm, color: C.textSecondary,
     }}>
       <Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-      <span style={{ ...ellipsis, flex: 1 }}>{offer.text ? `Выбор снят — поле снова «Чат»` : 'Выбор снят'}</span>
-      <span style={{ color: C.textMuted, flexShrink: 0 }}>{left} с</span>
+      <span style={{ ...ellipsis, flex: 1 }}>Выбор снят — поле снова «Чат»</span>
+      {offer.until && <span style={{ color: C.textMuted, flexShrink: 0 }}>{left} с</span>}
       <button type="button" data-undo="" onClick={onUndo} style={{
         display: 'inline-flex', alignItems: 'center', gap: SP.xs, border: 'none', background: 'transparent', cursor: 'pointer',
         color: C.accent, fontSize: FS.sm, fontWeight: 600, fontFamily: 'inherit', padding: 0, flexShrink: 0,

@@ -18,10 +18,10 @@ const git: RowGit = {
 };
 const exec: RowExec = {
   rows: [
-    { id: 'auto', group: 'auto', name: 'Qwen-Image Edit', sub: 'локально', price: 'бесплатно', badges: [{ label: 'бесплатно', tone: 'success' }] },
-    { id: 'kontext', group: 'cloud', name: 'FLUX Kontext', sub: 'fal', price: '$0.04 / шт.' },
+    { id: 'auto', group: 'auto', name: 'Qwen-Image Edit', sub: 'локально', price: 'бесплатно · ~40 с', free: true, amount: null, unit: 'free', etaSeconds: 40, badges: [{ label: 'без RU', tone: 'warn' }] },
+    { id: 'kontext', group: 'cloud', name: 'FLUX Kontext', sub: 'fal', price: '$0.04 / шт.', free: false, amount: 0.04, unit: 'usd', badges: [{ label: 'RU', tone: 'good' }] },
   ],
-  value: 'auto', onChange: noop, title: 'Чем выполнить',
+  value: 'auto', onChange: noop, title: 'Чем выполнить «Изменить»',
 };
 const item = { ref: {}, addedAt: '', missing: false };
 const primary = (over: Partial<ChatContextPrimary> = {}): ChatContextPrimary =>

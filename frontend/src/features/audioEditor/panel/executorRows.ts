@@ -29,6 +29,9 @@ export function autoPick(catalog: AudioCatalog, op: AudioOp): { provider: AudioP
 // «локально · Qwen3-TTS», «fal · MiniMax Speech»
 const where = (p: AudioProvider, m: AudioModelInfo | null) => [onOwnGpu(p) ? 'локально' : p.label, m?.label].filter((x): x is string => !!x);
 
+// Бесплатна ли строка: флагом для окраски чипа, подпись цены остаётся в rowPrice
+export const rowFree = (p: AudioProvider, m: AudioModelInfo | null) => p.priceUnit === 'free' || m?.caps.priceUnit === 'free';
+
 export function rowPrice(p: AudioProvider, m: AudioModelInfo | null): string {
   return unitLabel(p, m) ?? providerUnit(p);
 }
@@ -57,6 +60,7 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
     id: AUTO_EXECUTOR, group: 'auto', name: 'Авто',
     sub: auto ? `сначала локальные модели · сейчас ${where(auto.provider, auto.model).join(' · ')}` : 'сейчас некому — нет поставщика с этой операцией',
     price: auto ? rowPrice(auto.provider, auto.model) : '—',
+    free: !!auto && rowFree(auto.provider, auto.model),
     ...(auto ? null : { disabled: true, reason: 'Нет доступного поставщика для этой операции' }),
   }];
   const providers = catalog.providers;
@@ -72,6 +76,7 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
         name: m.label,
         sub: onOwnGpu(p) ? undefined : p.key === 'fal' && i === 0 ? `${p.label} · ${FAL_NOTE}` : p.label,
         price: rowPrice(p, m),
+        free: rowFree(p, m),
         ...(b.length ? { badges: b } : null),
         ...(why ? { disabled: true, reason: why } : null),
         ...(locked ? { locked: true } : null),

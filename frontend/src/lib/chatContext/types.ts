@@ -118,7 +118,8 @@ export interface ContextKindApi {
   editor?: (ctx: ContextKindCtx, item: ChatContextItem) => { label: string; hint: string; open: () => void } | null;
   // Листание версий основного объекта (‹ ›) в секции «С чем» панели; null/нет — стрелок нет, версия одна
   step?: (ctx: ContextKindCtx, item: ChatContextItem) => { prev: (() => void) | null; next: (() => void) | null } | null;
-  // Строки «Чем» под выбранное run-действие
+  // Строки «Чем» под выбранное run-действие. Хост зовёт на каждый рендер строки и панели: вид обязан
+  // отдавать дешёвую чистую модель (строки каталога кэшируются у вертикали), а не строить её заново
   executors?: (ctx: ContextKindCtx, actionId: string) => ExecutorListModel | null;
   params?: (ctx: ContextKindCtx, actionId: string) => readonly LaunchParam[];
   // Вход «＋» композера и empty-state ленты

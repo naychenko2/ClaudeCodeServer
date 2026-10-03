@@ -63,6 +63,19 @@ describe('стор контекста чата', () => {
     off();
   });
 
+  it('события не по порядку: принимается только ревизия больше известной, равная — нет', async () => {
+    await showChat('s1', dto(5));
+    const off = __subscribeForTests();
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', context: dto(7, false) });
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', context: dto(6) });
+    expect(getChatContextState('s1').revision).toBe(7);
+    expect(getChatContextState('s1').primary).toBeNull();
+    // Та же ревизия с другим содержимым — дубль или гонка, состояние не меняется
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', context: dto(7, true) });
+    expect(getChatContextState('s1').primary).toBeNull();
+    off();
+  });
+
   it('после переподключения показанный чат перечитывается', async () => {
     await showChat('s1', dto(5));
     const off = __subscribeForTests();

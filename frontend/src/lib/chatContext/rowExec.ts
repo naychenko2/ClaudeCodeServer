@@ -21,3 +21,7 @@ export function selectRowAction(
   const executors = action ? api?.executors?.(ctx, action.id) ?? null : null;
   return { action, executors };
 }
+
+// Заголовок меню «Чем» по макету: «Чем выполнить «Стемы»»
+export const execMenuTitle = (action: ContextAction | null): string =>
+  action ? `Чем выполнить «${action.label}»` : 'Чем выполнить';

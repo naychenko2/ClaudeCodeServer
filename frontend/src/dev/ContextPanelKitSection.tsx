@@ -26,7 +26,7 @@ const REFS = [ref('anya', 'Аня', { role: 'char' }), ref('palette', 'palette.p
 const edit: ContextAction = { id: 'edit', kind: 'run', label: 'Изменить', hint: 'Изменить картинку', op: 'edit' };
 const exec = {
   rows: [
-    { id: 'auto', group: 'auto' as const, name: 'Qwen-Image Edit', sub: 'локально', price: 'бесплатно · ~40 с', badges: [{ label: 'бесплатно', tone: 'success' as const }] },
+    { id: 'auto', group: 'auto' as const, name: 'Qwen-Image Edit', sub: 'локально', price: 'бесплатно · ~40 с', free: true, amount: null, unit: 'free' as const, etaSeconds: 40, badges: [{ label: 'без RU', tone: 'warn' as const }] },
     { id: 'kontext', group: 'cloud' as const, name: 'FLUX Kontext', sub: 'fal', price: '$0.04 / шт.' },
   ],
   value: 'auto', onChange: noop,

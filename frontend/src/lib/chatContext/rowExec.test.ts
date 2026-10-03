@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { objectKey, rememberAction, resetActionMemory } from './actionMemory';
-import { selectRowAction } from './rowExec';
+import { execMenuTitle, selectRowAction } from './rowExec';
 import type { ChatContextPrimary, ContextAction, ContextKindApi } from './types';
 
 const primary = (by: 'human' | 'agent'): ChatContextPrimary => ({
@@ -40,5 +40,12 @@ describe('«Чем» в строке контекста (Р2)', () => {
   it('вид без реестра (вертикаль выключена): действий и «Чем» нет', () => {
     const sel = selectRowAction(null, ctx, primary('human'), []);
     expect(sel).toEqual({ action: null, executors: null });
+  });
+});
+
+describe('заголовок меню «Чем»', () => {
+  it('называет выбранное действие', () => {
+    expect(execMenuTitle(run('stems'))).toBe('Чем выполнить «stems»');
+    expect(execMenuTitle(null)).toBe('Чем выполнить');
   });
 });

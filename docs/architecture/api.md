@@ -234,6 +234,27 @@ GET                 …/voices/{slug}/files/{file}       образец или �
 `audio_state`, `audio_focus`, `audio_new`, `audio_voices`, `audio_suggest_prompt`, а при
 `AudioEditor:AgentLaunch` ещё `audio_generate`, `audio_concat`, `audio_cancel`; сохранения у агента нет.
 
+## Контекст чата (ADR-023)
+
+Основной объект и референсы чата; владелец — из `sub`, сессия — `GetOwned` (чужая — `404`), область
+(проект или личный чат) вертикаль выводит сама. Запись — только при флаге `composer-context-row` владельца
+(выключен — `404`, будто ручки нет); чтение и `saved-files` открыты. Локальный проект (ADR-016): чтение пустое,
+запись — `400 project_local_unsupported`. Тела и примеры — [ADR-023-contracts.md](../adr/ADR-023-contracts.md).
+
+```
+GET     /api/chats/{sid}/context                       → ChatContextDto { revision, primary, refs[] }
+PUT     /api/chats/{sid}/context/primary               { kind|null, ref, revision? } → ChatContextDto  (null — снять основной)
+POST    /api/chats/{sid}/context/refs                  { kind, ref, role?, revision? } → ChatContextDto
+DELETE  /api/chats/{sid}/context/refs/{itemId}?revision=   → ChatContextDto
+DELETE  /api/chats/{sid}/context?revision=             → ChatContextDto  (очистить всё)
+GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, savedAt}]  (для «Зафиксировать только этот чат»)
+```
+
+`409 context_changed` — ревизия клиента устарела, тело — свежий DTO; `400` — `kind_unknown`, `ref_invalid`,
+`role_not_accepted`, `kind_not_primary`, `refs_limit`. `saved-files` склеивают `IChatSavedFiles` вертикалей
+(картинки и звуки): следы сохранений лежат в самих нитях. Событие в группу владельца — `chat_context_changed`
+(полный DTO). Агенту — MCP-сервер `turn-context`: [mcp-servers.md](mcp-servers.md).
+
 ## SignalR-хаб `/hubs/session`
 
 Вторая половина контракта с фронтом: REST отдаёт состояние, хаб — живой ход. Источник правды —

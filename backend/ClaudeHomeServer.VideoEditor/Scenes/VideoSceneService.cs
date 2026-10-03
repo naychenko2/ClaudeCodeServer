@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Jobs;
 using ClaudeHomeServer.Services.VideoEditor.Prefs;
@@ -23,14 +24,15 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
     public VideoThreadStore Store => threads.Store;
 
     public async Task<Call> AddAsync(string ownerId, VideoEditScope scope, string sessionId, string? rawFolder,
-        VideoSceneSettingsDto? given, string? name, long? revision, CancellationToken ct)
+        VideoSceneSettingsDto? given, string? name, long? revision, CancellationToken ct,
+        ContextActor by = ContextActor.Human)
     {
         if (FolderProblem(scope, rawFolder, out var folder) is { } badFolder) return badFolder;
         var settings = given ?? prefs.ForNewScene(ownerId, scope);
         if (SettingsProblem(scope, settings) is { } badSettings) return badSettings;
 
-        var written = Store.AddScene(ownerId, sessionId, folder, settings, revision,
-            string.IsNullOrWhiteSpace(name) ? null : name.Trim());
+        var written = threads.Tracked(ownerId, sessionId, () => Store.AddScene(ownerId, sessionId, folder, settings, revision,
+            string.IsNullOrWhiteSpace(name) ? null : name.Trim()), by);
         if (written is { Status: VideoThreadWriteStatus.Ok, Scene: { } scene })
             await threads.AnchorAsync(sessionId, scene, ct);
         return await PublishedAsync(ownerId, scope, sessionId, written);
@@ -39,14 +41,15 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
     // Фокус: сцена в работе и открытый фильм. Фильм — только у проекта и только внутри video/**: путь хранится
     // как есть, диска не касаемся
     public async Task<Call> FocusAsync(string ownerId, VideoEditScope scope, string sessionId, VideoFocusDto focus,
-        long? revision)
+        long? revision, ContextActor by = ContextActor.Human)
     {
         if (focus.FilmPath is not null && (scope.IsPersonal || !InsideAllowed(focus.FilmPath)))
             return Call.Refuse(scope.IsPersonal ? VideoEditorErrors.PersonalScopeNoFilms : VideoEditorErrors.OutsideAllowedFolders,
                 scope.IsPersonal ? "Фильмы — только в чате проекта" : "Фильм должен лежать в video/");
         var clean = new VideoFocusDto(string.IsNullOrWhiteSpace(focus.SceneId) ? null : focus.SceneId.Trim(),
             string.IsNullOrWhiteSpace(focus.FilmPath) ? null : focus.FilmPath.Trim());
-        return await PublishedAsync(ownerId, scope, sessionId, Store.SetFocus(ownerId, sessionId, clean, revision));
+        return await PublishedAsync(ownerId, scope, sessionId,
+            threads.Tracked(ownerId, sessionId, () => Store.SetFocus(ownerId, sessionId, clean, revision), by));
     }
 
     public async Task<Call> SettingsAsync(string ownerId, VideoEditScope scope, string sessionId, string sceneId,
@@ -58,9 +61,10 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
 
     // «Продолжить от версии»: версия становится текущей, сцена — в работе. Ничего не удаляет
     public async Task<Call> CurrentAsync(string ownerId, VideoEditScope scope, string sessionId, string sceneId,
-        string versionId, long? revision) =>
+        string versionId, long? revision, ContextActor by = ContextActor.Human) =>
         await PublishedAsync(ownerId, scope, sessionId,
-            Store.SetCurrentVersion(ownerId, sessionId, sceneId, versionId.Trim(), revision, focus: true));
+            threads.Tracked(ownerId, sessionId,
+                () => Store.SetCurrentVersion(ownerId, sessionId, sceneId, versionId.Trim(), revision, focus: true), by));
 
     // Запись прошла — свежие нити уходят владельцу
     public async Task<Call> PublishedAsync(string ownerId, VideoEditScope scope, string sessionId, VideoThreadWrite written)

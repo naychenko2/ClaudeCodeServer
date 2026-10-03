@@ -33,6 +33,10 @@ public sealed class VideoEditorSubsystem : IAppSubsystem
         services.AddSingleton<Prefs.VideoPrefsService>();
         // Виды «video-scene» и «video-film» контекста чата (ADR-023, фаза 3): Validate/Describe, кадры сцены, засев
         services.AddContextKindProvider<ChatContext.VideoContextKind>();
+        // Съёмка и сборка по ревизии контекста (КТ-5): единственная точка, где вход берётся из стора
+        services.AddSingleton<ChatContext.VideoContextLaunch>();
+        // Сохранённые в чате файлы для «Зафиксировать только этот чат» (ADR-023 §3.3)
+        services.AddSingleton<IChatSavedFiles, ChatContext.VideoSavedFiles>();
         // Рабочая папка задач (7 дней, вне бэкапа); клипы версий живых сцен чистка не трогает
         services.AddSingleton(sp =>
         {

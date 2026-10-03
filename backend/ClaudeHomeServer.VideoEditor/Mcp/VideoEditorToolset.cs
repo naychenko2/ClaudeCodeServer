@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -149,13 +150,13 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
         VideoSceneService.Call call;
         if (versionId is not null)
-            call = await _scenes.CurrentAsync(owner, scope, session.Id, sceneId!, versionId, null);
+            call = await _scenes.CurrentAsync(owner, scope, session.Id, sceneId!, versionId, null, ContextActor.Agent);
         else
         {
             var focus = new VideoFocusDto(
                 sceneGiven ? sceneId : current.Focus.SceneId,
                 filmGiven ? Str(args, "filmPath") : current.Focus.FilmPath);
-            call = await _scenes.FocusAsync(owner, scope, session.Id, focus, null);
+            call = await _scenes.FocusAsync(owner, scope, session.Id, focus, null, ContextActor.Agent);
         }
         return await ThreadsResultAsync(call, owner, session, scope,
             "Человек видит в панели «Видео», что ты взял в работу; панель сама не двигается и выбор можно снять.");
@@ -169,7 +170,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             return Deny("В чате вне проекта папок нет: вызови video_new без folder.");
         if (ApplySettings(args, _prefs.ForNewScene(owner, scope), out var settings) is { } bad) return Deny(bad);
 
-        var call = await _scenes.AddAsync(owner, scope, session.Id, folder, settings, Str(args, "name"), null, ct);
+        var call = await _scenes.AddAsync(owner, scope, session.Id, folder, settings, Str(args, "name"), null, ct, ContextActor.Agent);
         return await ThreadsResultAsync(call, owner, session, scope,
             "Сцена заведена и в работе. Снять её — video_shoot; человек видит карточку сцены в ленте.");
     }

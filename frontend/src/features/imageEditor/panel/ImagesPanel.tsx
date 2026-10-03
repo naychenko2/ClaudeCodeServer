@@ -127,7 +127,7 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
         <div style={{ height: SP.sm }} />
         <ImageModeSwitch projectId={projectId} sessionId={sessionId} mode={L.imageMode} thread={thread} threads={state.threads} isMobile={ctx.isMobile} />
         {L.imageMode === 'create' || !thread
-          ? <CreateBody projectId={projectId} L={L} catalog={L.catalog} isMobile={isMobile} onCharacters={() => setTab('characters')} />
+          ? <CreateBody projectId={projectId} sessionId={sessionId} L={L} catalog={L.catalog} isMobile={isMobile} onCharacters={() => setTab('characters')} />
           : (
             <EditBody projectId={projectId} sessionId={sessionId} thread={thread} L={L} catalog={L.catalog} isMobile={isMobile}
               onCharacters={() => setTab('characters')} />
@@ -136,7 +136,7 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
     );
   } else {
     body = (
-      <SettingsSections projectId={projectId} L={L} catalog={L.catalog} thread={thread} onCharacters={() => setTab('characters')} />
+      <SettingsSections projectId={projectId} sessionId={sessionId} L={L} catalog={L.catalog} thread={thread} onCharacters={() => setTab('characters')} />
     );
   }
 

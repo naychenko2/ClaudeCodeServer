@@ -10,12 +10,12 @@ import { hasMaskMark } from '../marks';
 import { buildQuoteBody } from '../thread/quoteBody';
 import { footPrice, isOneVariant, launchMarks, modeOp, quickOf } from '../panel/panelOp';
 import { loadCatalog } from '../thread/catalog';
-import { getPrefs } from '../thread/prefs';
 import { enterScope } from '../scope';
 import { threadHasImage } from '../thread/model';
-import { getSamples, getThreadMarks, isWholeImage, openEditor } from '../thread/threadStore';
+import { getThreadMarks, isWholeImage, openEditor } from '../thread/threadStore';
 import { launchThread, resolveModel } from '../thread/useThreadLaunch';
 import { sharedQuote } from '../useQuote';
+import { contextInputCounts } from './samples';
 import { ASPECT_AUTO, ASPECT_OPTIONS } from './actions';
 import { settingsOf } from './executors';
 import { threadOfPrimary } from './state';
@@ -53,7 +53,6 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
   const catalog = await loadCatalog(scope);
   if (!catalog) throw new Error('Каталог поставщиков недоступен');
   const op = req.op as ImageEditOp;
-  const prefs = getPrefs(scope);
   const settings = settingsOf(scope, thread, op);
   const { pv, m } = resolveModel(catalog, settings);
   if (!pv || !m) throw new Error('Рисовать нечем');
@@ -72,7 +71,7 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
   const body = buildQuoteBody({
     provider: route?.provider ?? pv.key, model: route?.model ?? m.id, mode: 'auto', op: eff, count,
     hasImage, marks, withMask: eff === 'inpaint' && hasMask, removal: eff === 'inpaint' && isRemovalPrompt(req.text),
-    references: own ? 0 : getSamples(scope).length, hasCharacter: !own && !!prefs.characterSlug,
+    ...(own ? { references: 0, hasCharacter: false } : contextInputCounts(ctx.sessionId)),
     size, context: { sessionId: ctx.sessionId, contextRevision: req.contextRevision },
   });
   const q = await sharedQuote(imageEditorApi(), scope, body);

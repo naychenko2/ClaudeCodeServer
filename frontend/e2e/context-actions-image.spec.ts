@@ -246,3 +246,93 @@ for (const { name, vp } of VIEWPORTS) {
     });
   }
 }
+
+// ── 2к-3: отметки, образцы с диска и персонаж как референсы (макет composer-actions-v1, сценарий 4) ──
+
+// Картинка нити: у файла из мока маршрута нет, а размер холста редактору нужен — отдаём svg с натуральным размером
+const HERO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#7aa"/></svg>';
+async function routeHero(page: Page) {
+  await page.route(u => decodeURIComponent(u.href).includes('hero.png'), r => r.fulfill({ contentType: 'image/svg+xml', body: HERO_SVG }));
+}
+
+const MARKS_VIEWPORTS = [VIEWPORTS[0], VIEWPORTS[2]] as const;
+
+for (const { name, vp } of MARKS_VIEWPORTS) {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`4 · отметки: «Отметить» → редактор → две отметки → «Готово» → «Изменить отмеченное» → текст → запуск · ${name} · ${theme}`, async ({ page }) => {
+      await openFeed(page, vp, theme, { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }) });
+      await routeHero(page);
+      await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+      await expect(actions(page).locator('[data-action-chip="edit"]')).toContainText('Изменить');
+      await expect(page.locator('[data-composer-note]')).toHaveCount(0);
+
+      await actions(page).locator('[data-action-chip="mark"]').click();
+      const canvas = page.locator('svg[viewBox="0 0 400 300"]').last();
+      await expect(canvas).toBeVisible({ timeout: 15_000 });
+      const box = (await canvas.boundingBox())!;
+      for (const fy of [0.3, 0.6]) {
+        await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * fy);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * fy, { steps: 4 });
+        await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * fy, { steps: 4 });
+        await page.mouse.up();
+      }
+      await page.getByRole('button', { name: 'Готово' }).click();
+
+      await expect(actions(page).locator('[data-action-chip="edit"]')).toContainText('Изменить отмеченное', { timeout: 10_000 });
+      // Метка «Отмечено: N ✕» — только на компьютере: на телефоне место нужно кнопке запуска
+      if (name === '360') await expect(page.locator('[data-composer-note]')).toHaveCount(0);
+      else await expect(page.locator('[data-composer-note]')).toContainText('Отмечено: 2');
+      await expect(page.locator('[data-composer-mode-bar]')).toContainText('✦ Изменить');
+      await page.locator('[data-composer-input] textarea').fill('убери лишнее');
+      await expect(runBtn(page)).toBeEnabled();
+      await shot(page, `s4-${name}-${theme}.png`);
+      await runBtn(page).click();
+      await expect(page.locator('[data-composer-mode-bar]')).toContainText(/Изменя|Готово|✦ Изменить/, { timeout: 10_000 });
+      // Запуск снимает отметки: чип снова «Изменить», метки нет
+      await expect(actions(page).locator('[data-action-chip="edit"]')).not.toContainText('отмеченное', { timeout: 10_000 });
+      await expect(page.locator('[data-composer-note]')).toHaveCount(0);
+    });
+  }
+}
+
+test('метка «Отмечено: N ✕»: ✕ снимает отметки, чип возвращается к «Изменить»', async ({ page }) => {
+  await openFeed(page, D, 'light', { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }) });
+  await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+  await page.evaluate(async () => {
+    const store = await import(/* @vite-ignore */ '/src/features/imageEditor/thread/threadStore.ts');
+    const m = { type: 'mask', points: [[1, 1], [9, 9]], width: 4 };
+    store.setThreadMarks('thread-hero', [m, m], { w: 100, h: 100 });
+  });
+  await expect(page.locator('[data-composer-note]')).toContainText('Отмечено: 2');
+  await page.locator('[data-composer-note]').getByText('×').click();
+  await expect(page.locator('[data-composer-note]')).toHaveCount(0);
+  await expect(actions(page).locator('[data-action-chip="edit"]')).not.toContainText('отмеченное');
+});
+
+for (const { name, vp } of MARKS_VIEWPORTS) {
+  test(`образец с компьютера: «Добавить из…» → «С компьютера» → роль → референс в «Плюс» → переживает перезагрузку · ${name}`, async ({ page }) => {
+    const openPanel = async () => {
+      await page.locator('[data-context-row] [data-chip="primary"]').click();
+      await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
+    };
+    await openFeed(page, vp, 'light', { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }) });
+    await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+    await openPanel();
+    await panelCtx(page).getByRole('button', { name: /Добавить из/ }).click();
+    await page.getByText('С компьютера').click();
+    await page.locator('input[data-ctx-upload]').setInputFiles({ name: 'cat.png', mimeType: 'image/png', buffer: Buffer.from('x') });
+    await page.getByRole('menuitem', { name: 'Как образец стиля' }).or(page.getByText('Как образец стиля', { exact: true })).first().click();
+    await expect(panelCtx(page).locator('[data-ctx-ref="on"]')).toContainText('образец', { timeout: 10_000 });
+    const post = w().mutations.find(m => m.method === 'POST' && m.path === '/refs');
+    expect(post?.body).toMatchObject({ kind: 'image', role: 'style', ref: { upload: expect.stringMatching(/^up/) } });
+
+    // Перезагрузка: образец лежит в контексте на сервере, а не в памяти вкладки
+    await page.reload();
+    await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
+    await registerFull(page);
+    await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+    await openPanel();
+    await expect(panelCtx(page).locator('[data-ctx-ref="on"]')).toContainText('образец', { timeout: 10_000 });
+  });
+}

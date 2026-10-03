@@ -12,13 +12,14 @@ import { getCatalog, loadCatalog } from '../thread/catalog';
 import { createDraft } from '../thread/actions';
 import { ensurePrefs, subscribePrefs } from '../thread/prefs';
 import { threadHasImage } from '../thread/model';
-import { subscribeThreadStore, useThreadStoreVersion } from '../thread/threadStore';
+import { getThreadMarks, setThreadMarks, subscribeThreadStore, useThreadStoreVersion } from '../thread/threadStore';
 import { activeSrc, versionSrc } from '../thread/useThreadLaunch';
 import { openEditor } from '../thread/threadStore';
 import type { ImageEditOp } from '../api';
 import { executorModel, settingsOf } from './executors';
 import { launchAction, paramsFor, quoteAction } from './run';
-import { imageRefRoles } from './roles';
+import { imageRefRoles, IMAGE_SAMPLE_ROLES } from './roles';
+import { SAMPLE_ACCEPT, uploadSampleRef } from './samples';
 import { actionOf, IMAGE_KIND, imageActions, threadOfPrimary } from './state';
 
 const CHARACTER_KIND = 'image-character';
@@ -94,6 +95,25 @@ export const imageKindApi: ContextKindApi = {
     if (!found?.action.op) return [];
     const op = found.action.op as ImageEditOp;
     return paramsFor(getCatalog(found.scope), settingsOf(found.scope, found.thread, op), op);
+  },
+  // «С компьютера»: образец ложится в рабочую папку чата и встаёт референсом (стиль, объект или лицо)
+  upload: (ctx, primary) => primary.kind !== IMAGE_KIND ? null : {
+    kind: IMAGE_KIND,
+    accept: SAMPLE_ACCEPT,
+    hint: 'ляжет в рабочую папку чата',
+    roles: IMAGE_SAMPLE_ROLES,
+    send: file => uploadSampleRef(enterScope(ctx.projectId, ctx.sessionId), file),
+  },
+  note: (ctx, primary) => {
+    const thread = threadOfPrimary(ctx.sessionId, primary);
+    const n = thread ? getThreadMarks(thread.id).marks.length : 0;
+    return thread && n > 0
+      ? {
+        label: `Отмечено: ${n}`,
+        hint: 'Отмечено в редакторе: пойдёт в «Изменить отмеченное». ✕ — снять отметки',
+        clear: () => setThreadMarks(thread.id, [], null),
+      }
+      : null;
   },
   create: {
     title: 'Картинка',

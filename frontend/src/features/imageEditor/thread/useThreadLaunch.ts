@@ -13,6 +13,7 @@ import {
   effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, providerTitle, variantsWord,
 } from '../format';
 import { currentModel } from '../ProviderModelPicker';
+import { contextInputCounts } from '../context/samples';
 import { exportAnnotated, exportMask, hasMaskMark, marksToJson } from '../marks';
 import {
   quickAvailability, quickPlan, quickUsesOwnModel, samplesToJobInput,
@@ -195,12 +196,15 @@ export async function launchThread(
   const aspectRatio = plan.aspectRatio
     ?? (cx ? (fromScratch ? cx.aspect : null) : mode === 'create' && fromScratch ? getCreateRatio(projectId) : null);
   try {
+    // Запуск по ревизии берёт образцы и персонажа из контекста чата; без неё — из памяти вкладки и prefs
+    const inputCounts = () => noSamples ? { references: 0, hasCharacter: false }
+      : cx ? contextInputCounts(sessionId) : { references: getSamples(projectId).length, hasCharacter: !!prefs.characterSlug };
     const q = await api.quote(projectId, buildQuoteBody({
       provider: route?.provider ?? pv.key, model: route?.model ?? m.id,
       mode: route ? 'auto' : effectiveMode(m, choice.mode), op: plan.op,
       count: one ? 1 : route?.count ?? settings.count,
       hasImage, marks, withMask, removal: plan.removal,
-      references: noSamples ? 0 : getSamples(projectId).length, hasCharacter: !noSamples && !!prefs.characterSlug,
+      ...inputCounts(),
       size, context: cx ? { sessionId, contextRevision: cx.contextRevision } : null,
     }));
     const legacy = isLegacyThread(thread);
@@ -211,7 +215,7 @@ export async function launchThread(
     // без правок (файл проекта) по sourcePath не читает — тот лишь сторож пути и родословная
     const source = src ? await fetch(src).then(r => r.blob()) : undefined;
     const file = version ? (version.id === 'origin' ? originFile(thread) : null) : thread.file;
-    const samples = noSamples ? { references: [], referencePaths: [] } : samplesToJobInput(getSamples(projectId));
+    const samples = noSamples || cx ? { references: [], referencePaths: [] } : samplesToJobInput(getSamples(projectId));
     let mask: Blob | undefined;
     let annotated: Blob | undefined;
     if (src && size && withMask) mask = (await exportMask(marks, size.w, size.h)) ?? undefined;
@@ -224,7 +228,7 @@ export async function launchThread(
       marks: withMarks && size ? marksToJson(marks, size.w, size.h) : undefined,
       sourcePath: !fromScratch && !stepId && file ? file : undefined,
       source, mask, annotated, ...samples,
-      characterSlug: noSamples ? undefined : prefs.characterSlug ?? undefined,
+      characterSlug: noSamples || cx ? undefined : prefs.characterSlug ?? undefined,
       matchSourceSize: settings.matchSourceSize,
       ...(aspectRatio ? { aspectRatio } : null),
       sessionId, threadId: thread.id, baseStepId: stepId ?? undefined, versionId: version?.id,

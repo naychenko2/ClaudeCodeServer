@@ -128,8 +128,8 @@ export async function mockApi(page: Page) {
       if (p === `${base}/primary` && method === 'PUT') {
         c.primary = body.kind === null ? null : primary({ kind: body.kind, ref: body.ref, label: 'hero.png', version: 'v2' });
       } else if (p === `${base}/refs` && method === 'POST') {
-        const r = body.ref as { path?: string; slug?: string };
-        c.refs = [...c.refs, ref(`r${c.refs.length + 1}`, r.slug === 'anya' ? 'Аня' : String(r.path ?? r.slug ?? 'ref').split('/').pop()!, { kind: body.kind, ref: body.ref, role: body.role ?? null })];
+        const r = body.ref as { path?: string; slug?: string; upload?: string };
+        c.refs = [...c.refs, ref(`r${c.refs.length + 1}`, r.slug === 'anya' ? 'Аня' : r.upload ? 'образец' : String(r.path ?? r.slug ?? 'ref').split('/').pop()!, { kind: body.kind, ref: body.ref, role: body.role ?? null })];
       } else if (p.startsWith(`${base}/refs/`) && method === 'DELETE') {
         const id = decodeURIComponent(p.slice(`${base}/refs/`.length));
         c.refs = c.refs.filter(x => x.id !== id);

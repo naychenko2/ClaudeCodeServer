@@ -1,7 +1,7 @@
 // Общие кирпичи секций настроек картинок: подпись секции, выбор в две строки, иконка.
 // Секции собирают и карточка над полосой «Картинки», и боковая панель генерации (ADR-021 §3).
 
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { User } from 'lucide-react';
 import { Button, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { useThreadLaunch } from '../../thread/useThreadLaunch';
@@ -9,6 +9,10 @@ import type { useThreadLaunch } from '../../thread/useThreadLaunch';
 export type Launch = ReturnType<typeof useThreadLaunch>;
 
 export const ic = (I: typeof User, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
+
+// Обёртка чипа: на телефоне тач-цель не ниже 40 — чип touch сам по себе 36
+export const touchWrap = (touch?: boolean): CSSProperties =>
+  (touch ? { display: 'inline-flex', alignItems: 'center', minHeight: 40 } : { display: 'inline-flex' });
 
 export function Label({ children }: { children: ReactNode }) {
   return (

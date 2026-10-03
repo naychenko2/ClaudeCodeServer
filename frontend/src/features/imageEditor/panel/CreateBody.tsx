@@ -12,13 +12,13 @@ import { getCreateRatio, setCreateRatio } from './panelOp';
 
 const MODEL_RATIO = 'model';
 
-export function CreateBody({ projectId, L, catalog, isMobile, onCharacters }: {
-  projectId: string; L: Launch; catalog: ImageEditCatalog; isMobile: boolean; onCharacters: () => void;
+export function CreateBody({ projectId, sessionId, L, catalog, isMobile, onCharacters }: {
+  projectId: string; sessionId?: string | null; L: Launch; catalog: ImageEditCatalog; isMobile: boolean; onCharacters: () => void;
 }) {
   const ratio = getCreateRatio(projectId);
   return (
     <div data-image-body="create" style={{ fontSize: FS.sm }}>
-      <SamplesField projectId={projectId} L={L} catalog={catalog} onCharacters={onCharacters} isMobile={isMobile} />
+      <SamplesField projectId={projectId} sessionId={sessionId} L={L} catalog={catalog} onCharacters={onCharacters} isMobile={isMobile} />
       <BodyHint>Что нарисовать — в поле ввода чата</BodyHint>
       <ExecutorField L={L} catalog={catalog} isMobile={isMobile} />
       <MoreSettings summary={[`пропорции: ${ratio ?? 'как у модели'}`]} isMobile={isMobile}>

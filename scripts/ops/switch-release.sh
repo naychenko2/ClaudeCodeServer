@@ -25,10 +25,13 @@ RELEASES_KEEP=5
 # mtime папки приложения, и дата каталога снимка не равна моменту снимка.
 # Трогает только каталоги со строгим именем-меткой прямо внутри $dir (симлинки и всё
 # прочее — мимо); $protect — имя, которое не удаляется ни при каких $keep.
-# Ошибки удаления не фатальны: выкатка к этому моменту уже удалась.
+# Ошибки удаления не фатальны: выкатка к этому моменту уже удалась. Поэтому оба вызова —
+# в подоболочке: ошибка раскрытия внутри прервала бы составную команду вызывающего вместе
+# с её exit 0, и удачная выкатка ушла бы в ветку отката (или --rotate — в самоотвязку).
 rotate_releases() {
   local dir=$1 keep=$2 dry=$3 protect=${4:-}
   case "$keep" in ''|*[!0-9]*) keep=5 ;; esac
+  keep=$((10#$keep))   # «08» иначе читается как восьмеричное и роняет $((…)) ошибкой раскрытия
   [ "$keep" -ge 1 ] || keep=5   # ноль унёс бы и свежий снимок — откатываться стало бы не на что
   local names=() n i total cut
   while IFS= read -r n; do names+=("$n"); done < <(
@@ -63,7 +66,7 @@ rotate_releases() {
 if [ "${1:-}" = "--rotate" ]; then
   log() { echo "$*"; }
   dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
-  rotate_releases "${CCS_RELEASES_DIR:-/opt/ccs/releases}" "${CCS_RELEASES_KEEP:-$RELEASES_KEEP}" "$dry"
+  ( rotate_releases "${CCS_RELEASES_DIR:-/opt/ccs/releases}" "${CCS_RELEASES_KEEP:-$RELEASES_KEEP}" "$dry" )
   exit 0
 fi
 
@@ -146,7 +149,7 @@ if [ "$ok" = "1" ]; then
   log "=== ГОТОВО: $(head -2 "$APP/build-id.txt" | tr '\n' ' ') отвечает. Предыдущая — $PREV ==="
   # Только после удачного health: при откате (ветка ниже) ничего не удаляем.
   # Свежий снимок $PREV — точка отката этой выкатки — защищён явно.
-  rotate_releases "$RELEASES" "$RELEASES_KEEP" 0 "$STAMP"
+  ( rotate_releases "$RELEASES" "$RELEASES_KEEP" 0 "$STAMP" )
   exit 0
 fi
 

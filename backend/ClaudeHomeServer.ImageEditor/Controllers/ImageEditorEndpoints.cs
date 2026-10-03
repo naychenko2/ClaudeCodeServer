@@ -95,7 +95,8 @@ public abstract class ImageEditorEndpoints(
             Initiator: ImageEditInitiator.Human,
             ThreadSessionId: form.SessionId,
             ThreadId: form.ThreadId,
-            VersionId: form.VersionId);
+            VersionId: form.VersionId,
+            ContextRevision: form.ContextRevision);
 
         var started = await launcher.LaunchAsync(UserId, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -187,6 +188,9 @@ public abstract class ImageEditorEndpoints(
         public string? ThreadId { get; set; }
         // Версия нити, от которой правка; не передано — текущая. Чужая — 404 version_not_found
         public string? VersionId { get; set; }
+        // Ревизия контекста чата (ADR-023 §Д2.1): с ней входы берутся из стора, а Source, References,
+        // ReferencePaths, CharacterSlug, ThreadId и VersionId тела игнорируются; не совпала — 409 context_changed
+        public long? ContextRevision { get; set; }
     }
 
     // Строковой проверки SafePath мало: символическая ссылка внутри проекта (refs → /etc)

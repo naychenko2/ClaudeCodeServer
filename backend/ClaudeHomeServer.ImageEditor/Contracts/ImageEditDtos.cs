@@ -63,7 +63,11 @@ public record ImageEditQuoteRequest(
     int? Width,
     int? Height,
     bool HasAnnotations = false,
-    bool Removal = false);
+    bool Removal = false,
+    // Чат и ревизия контекста (ADR-023 §Д2.1): с ContextRevision сервер берёт References, HasCharacter,
+    // Width/Height из стора контекста, а эти поля тела игнорирует; ревизия устарела — 409 context_changed
+    string? SessionId = null,
+    long? ContextRevision = null);
 
 // Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска».
 // EtaSeconds и QueueLength — у поставщика без цены (локальные модели, Unit = free): время
@@ -79,7 +83,9 @@ public record ImageEditQuoteDto(
     string Model,
     ImageEditEstimateDto Estimate,
     DateTime ExpiresAt,
-    int? ExpectedSeconds);
+    int? ExpectedSeconds,
+    // Строки исполнителей для «Чем» строки и панели контекста (ADR-023 §Д2.1, Р2); null — котировка без контекста
+    IReadOnlyList<Protocol.ExecutorRowDto>? Executors = null);
 
 public static class ImageEditEstimateSources
 {

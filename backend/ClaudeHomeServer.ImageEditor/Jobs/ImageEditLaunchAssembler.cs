@@ -206,4 +206,6 @@ public sealed record ImageEditLaunchRequest(
     ImageEditInitiator Initiator = ImageEditInitiator.Human,
     string? ThreadSessionId = null,
     string? ThreadId = null,
-    string? VersionId = null);
+    string? VersionId = null,
+    // Ревизия контекста чата, на которой человек видел цену (ADR-023 §Д2.1); null — запуск без контекста
+    long? ContextRevision = null);

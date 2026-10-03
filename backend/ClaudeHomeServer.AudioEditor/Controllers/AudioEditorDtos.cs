@@ -80,7 +80,9 @@ public sealed record AudioDspEditRequest(
 
 // Сведение N из M стемов версии-основы: Stems — роли «stem:<имя>» с громкостью и выключением
 public sealed record AudioMixRequest(
-    IReadOnlyList<Engines.AudioMixStemInput>? Stems, string? BaseVersionId = null, string? Format = null, long? Revision = null);
+    IReadOnlyList<Engines.AudioMixStemInput>? Stems, string? BaseVersionId = null, string? Format = null, long? Revision = null,
+    // Ревизия контекста чата (ADR-023 §Д2.1); threadId маршрута сверяется со стором
+    long? ContextRevision = null);
 
 // Стык склейки: Kind — butt | pause | crossfade
 public sealed record AudioJointRequest(string? Kind, double Seconds = 0);
@@ -93,7 +95,9 @@ public sealed record AudioConcatRequest(
     bool? NormalizeLoudness = null,
     string? Name = null,
     string? Format = null,
-    string? Folder = null);
+    string? Folder = null,
+    // Ревизия контекста чата (ADR-023 §Д2.1): с ней Pieces игнорируется — куски это референсы роли piece
+    long? ContextRevision = null);
 
 // Поля multipart запуска. Исходный звук сервер берёт сам — главный файл версии-основы нити
 // (BaseVersionId, не задана — текущая). Образец голоса или эталон мастеринга — загрузкой Reference
@@ -122,4 +126,6 @@ public sealed class AudioStartJobForm
     public string? VoiceIndexPath { get; set; }
     // Голос из библиотеки «Голоса»: voice:<slug>
     public string? Voice { get; set; }
+    // Ревизия контекста чата (ADR-023 §Д2.1)
+    public long? ContextRevision { get; set; }
 }

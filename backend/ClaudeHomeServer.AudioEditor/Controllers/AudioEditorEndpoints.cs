@@ -184,7 +184,8 @@ public abstract class AudioEditorEndpoints(
             VoiceModel: voiceModel,
             VoiceIndex: voiceIndex,
             Seed: form.Seed,
-            Voice: form.Voice);
+            Voice: form.Voice,
+            ContextRevision: form.ContextRevision);
         return Map(await jobs.StartAsync(UserId, scope, input, ct), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 

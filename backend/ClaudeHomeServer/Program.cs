@@ -2,6 +2,7 @@
 using System.Net;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
@@ -871,6 +872,7 @@ builder.Services.AddHttpClient("safe-download")
 // Сам `VideoSubsystem.Register` подключает и платформенный `IMemoryCache` для своих
 // провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
 // больше не держим.
+builder.Services.AddChatContext();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),

@@ -301,6 +301,16 @@ describe('ToolUseView — прогон тестов (run_tests)', () => {
     expect(html).toContain('87 из 171 файла · ');
     expect(html).toContain('упало 2');
   });
+
+  // Регрессия с боя: длинный фильтр, «идёт 1:0» — последняя цифра под полосой прокрутки ленты
+  // Живой «идёт M:SS» статикой не отрисовать (секунды тикают эффектом) — проверяем итог
+  // «готово · M:SS», он стоит на том же месте шапки по тем же правилам
+  it('длинный фильтр: время справа не ужимается и не переносится, у шапки запас справа под полосу', () => {
+    const filter = 'FullyQualifiedName~DevServer|FullyQualifiedName~DevServerPortMemory|FullyQualifiedName~DevServerLaunchPolicy';
+    const html = renderTool(run({ target: 'backend/ClaudeHomeServer.Tests', filter }, { result: 'dotnet test: все тесты прошли', finishedAt: 62_000 }));
+    expect(html).toMatch(/<span style="[^"]*flex-shrink:0;white-space:nowrap;font-variant-numeric:tabular-nums">готово(<!-- -->)? · 1:01/);
+    expect(html).toContain('padding:3px 8px 3px 0;min-width:0;display:flex');
+  });
 });
 
 // Правки по витрине Веры (пункты 2–9)
@@ -459,6 +469,19 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     expect(html.match(/role="progressbar"/g)?.length).toBe(1);
     expect(html).not.toContain('max-width:200px');
     expect(html).toContain('cc-live-dot');
+  });
+
+  // Регрессия с 320 px: хвост «упало 2» строки этапов уезжал под полосу прокрутки ленты.
+  // Счётчики не режутся и не переносятся, у строки этапов тот же запас справа, что у шапки
+  it('320 px: счётчики при текущем этапе не ужимаются, у строки этапов запас справа под полосу', () => {
+    viewport.mobile = true;
+    const item = run({
+      stages: [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 102_000 }, { stage: 'running', label: 'тесты', startedAt: 102_000 }],
+      progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true },
+    });
+    const html = render(item);
+    expect(html).toMatch(/<div style="padding-left:\d+px;padding-right:8px;padding-bottom:\d+px"><div style="display:flex/);
+    expect(html).toMatch(/<span style="flex-shrink:0;white-space:nowrap">[^]*412 из 7951 · <span style="color:var\(--c-danger-text\)">упало 2<\/span><\/span><\/div>/);
   });
 
   it('после F5: этапы и итог приходят из истории вызова', () => {

@@ -71,7 +71,7 @@ function StageLine({ stages, caption, pct }: { stages: StageView[]; caption: str
     <div style={{ display: 'flex', minWidth: 0, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
       {past && <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{past}</span>}
       {tail && (
-        <span style={{ flexShrink: 0 }}>
+        <span style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
           {/* Неразрывный пробел: ведущий обычный у флекс-элемента схлопывается («1:42· тесты») */}
           {past ? ' · ' : ''}
           {tail.state === 'failed'
@@ -316,7 +316,10 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   return (
     <div>
       <div
-        style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
+        // Справа — запас под полосу прокрутки ленты: таймер и итог прижаты к правому краю
+        // колонки, и полоса-накладка (её ширина в замере 0, рисуется поверх) съедала
+        // последнюю цифру «идёт 1:0». minWidth: 0 — шапка не шире колонки при любом аргументе
+        style={{ padding: `3px ${SP.sm}px 3px 0`, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
         onClick={() => hasBody && setOpen(o => !o)}
       >
         <LeadSlot live={!settled && !aborted} />
@@ -369,12 +372,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
           </span>
         )}
         {running && showClock && (
-          <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
             идёт {formatClock(elapsed)}
           </span>
         )}
         {(settled || aborted) && !captionBelow && (
-          <span style={{ fontSize: FS.xs, color: statusColor, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ fontSize: FS.xs, color: statusColor, flexShrink: 0, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
             {status}
           </span>
         )}
@@ -396,9 +399,11 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         </div>
       )}
       {/* Строка этапов — и пока идёт, и на закрытой карточке без раскрытия (после F5 — из
-          истории). Процент — подчёркиванием текущего этапа, отдельной строки под полосу нет */}
+          истории). Процент — подчёркиванием текущего этапа, отдельной строки под полосу нет.
+          Справа тот же запас под полосу прокрутки ленты, что у шапки: иначе на 320 px хвост
+          «упало K» уезжал под полосу-накладку */}
       {hasStages && (
-        <div style={{ paddingLeft: BELOW_PAD, paddingBottom: SP.xxs }}>
+        <div style={{ paddingLeft: BELOW_PAD, paddingRight: SP.sm, paddingBottom: SP.xxs }}>
           <StageLine stages={stages} caption={running ? stageCaption : null} pct={progressPct} />
         </div>
       )}

@@ -66,6 +66,7 @@ import type {
 import { ColorsSection } from './ColorsSection';
 import { ToolProgressSection } from './ToolProgressSection';
 import { DuckSection } from './DuckSection';
+import { ProjectDockDemo } from './ProjectDockDemo';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -3211,100 +3212,22 @@ function HeadersSection() {
           </p>
         </SubBlock>
 
-        {/* 2. ProjectRail — док проектов ВТОРОЙ левой рельсой (под рельсой
-            панелей). Вертикальная капсула той же геометрии: «+» новый проект,
-            закреплённые, недавние, поиск с «+N». Настройки активного проекта
-            живут в подписи его иконки (RailFlyout), а не отдельной кнопкой. */}
-        <SubBlock label="ProjectRail — док проектов (вторая левая рельса)">
-          <div style={{
-            width: 40, boxSizing: 'border-box',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.xs + 2,
-            paddingTop: SP.xs, paddingBottom: SP.xs,
-            background: C.bgMain,
-            borderTop: `1px solid ${C.border}`,
-            borderBottom: `1px solid ${C.border}`,
-            borderRight: `1px solid ${C.border}`,
-            borderTopRightRadius: ISLAND.radius, borderBottomRightRadius: ISLAND.radius,
-            boxShadow: ISLAND.shadow,
-          }}>
-            {/* Новый проект */}
-            <div style={{
-              width: 32, height: 32, borderRadius: R.md, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted,
-            }}>
-              <Plus size={17} strokeWidth={ICON_STROKE} />
-            </div>
-            <div style={{ width: 22, height: 1, background: C.border }} />
-
-            {/* Закреплённые, затем недавние. Кнопка — IconButton md variant="media":
-                картинка занимает бокс целиком, а состояние показывает сама — текущий
-                проект в полном цвете, прочие до наведения приглушённые (ProjectIcon
-                muted: grayscale-картинка либо бледный контур с инициалами). */}
-            {[
-              { initials: 'CC', color: AGENT_COLORS.blue,   active: true,  status: undefined, sepBefore: false },
-              { initials: 'B',  color: AGENT_COLORS.green,  active: false, status: 'working', sepBefore: false },
-              { initials: 'Д',  color: AGENT_COLORS.orange, active: false, status: 'waiting', sepBefore: true },
-              { initials: 'P',  color: AGENT_COLORS.pink,   active: false, status: undefined, sepBefore: false },
-            ].map(p => (
-              <Fragment key={p.initials}>
-                {p.sepBefore && <div style={{ width: 22, height: 2, background: C.divider, borderRadius: 1 }} />}
-                <div style={{
-                  width: 32, height: 32, borderRadius: R.md, cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  position: 'relative',
-                  background: p.active ? p.color : 'transparent',
-                  color: p.active ? C.onDark : C.textMuted,
-                  border: p.active ? undefined : `1px solid ${C.border}`,
-                  boxSizing: 'border-box',
-                  fontWeight: p.active ? 700 : 600, fontSize: 12,
-                }}>
-                  {p.initials}
-                  {/* Статус-точка: working=success / waiting=accent */}
-                  {p.status && (
-                    <span style={{
-                      position: 'absolute', top: -2, right: -2,
-                      width: 8, height: 8, borderRadius: R.full,
-                      background: p.status === 'working' ? C.success : C.accent,
-                      border: `2px solid ${C.bgMain}`, boxSizing: 'content-box',
-                    }} />
-                  )}
-                </div>
-              </Fragment>
-            ))}
-
-            <div style={{ width: 22, height: 1, background: C.border }} />
-            {/* Поиск: кружок — сколько проектов не поместилось */}
-            <div style={{
-              width: 32, height: 32, borderRadius: R.md, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted,
-            }}>
-              <div style={{ position: 'relative', display: 'flex' }}>
-                <Search size={17} strokeWidth={ICON_STROKE} />
-                <span style={{
-                  position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-                  borderRadius: 7, background: C.accent, color: C.onAccent,
-                  fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-                }}>
-                  7
-                </span>
-              </div>
-            </div>
-          </div>
+        {/* 2. ProjectRail — док проектов у левой кромки, НАД рельсой панелей.
+            Без капсулы: оправа — признак рельсы панелей, голый столбец — дока. */}
+        <SubBlock label="ProjectRail — док проектов (над рельсой панелей)">
+          <ProjectDockDemo />
           <p style={{
             margin: 0, marginTop: SP.sm,
             fontSize: FS.xs, color: C.textMuted,
             fontFamily: FONT.mono, lineHeight: 1.5,
           }}>
-            Вторая капсула у левой кромки, под рельсой панелей. Порядок СТАБИЛЬНЫЙ:
-            закреплённые (Pin) сверху, недавние — append-only, активный остаётся на
-            своей позиции и остаётся единственным в полном цвете — прочие обесцвечены
-            и возвращают цвет под курсором (там же лёгкий подъём). Статус-точки
-            рисуются ПОВЕРХ кнопки, поэтому «агент ждёт» виден и у серой иконки:
-            working (зелёная) / waiting (оранжевая). Вертикальный drag-and-drop —
-            сторона разделителя решает пин/недавние, место вставки показывает линия
-            (иконки не расступаются); правый клик — контекст-меню; что не влезло по
-            высоте, уходит в «+N» на лупе. Подпись при наведении и настройки
-            активного проекта — общий RailFlyout, см. блок ниже.
+            Голый столбец у левой кромки над рельсой панелей, ярлык «Проекты». Порядок
+            СТАБИЛЬНЫЙ: закреплённые сверху, недавние — append-only. Выбранный — в цвете
+            и с кольцом, прочие спят контуром и просыпаются все разом, когда курсор
+            заходит в док. Полоска у кромки окна: средняя под курсором, короткая у
+            непрочитанного. Точки статуса — поверх кнопки. Плюс внизу — палитра
+            (переход, новый проект), кружок «+N» — сколько не влезло по высоте; высоту
+            под док отдаёт рельса панелей (PanelRail.header).
           </p>
         </SubBlock>
 

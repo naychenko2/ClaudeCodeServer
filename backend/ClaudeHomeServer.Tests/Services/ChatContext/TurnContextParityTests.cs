@@ -116,9 +116,9 @@ public sealed class TurnContextParityTests : IDisposable
 
         tail.Should().Contain("С чем: картинка t3 — hero_Final.PNG · версия 2 (поставил человек)");
         tail.Should().Contain("Чем: Авто · локально · Qwen-Image Edit · бесплатно", "«Чем» остаётся в хвосте (исключение Р2)");
-        tail.Should().Contain("Аня Ковалёва — персонаж (character)");
-        tail.Should().Contain("образец стиля (style) ✦ поставил Claude");
-        tail.Should().Contain("картинка недоступна — образец стиля (style) (недоступен)");
+        tail.Should().Contain("Аня Ковалёва [anya] — персонаж (character)");
+        tail.Should().Contain("hero_Final.PNG [t4] · версия 2 — образец стиля (style) ✦ поставил Claude");
+        tail.Should().Contain("картинка недоступна [t9] — образец стиля (style) (недоступен)");
         tail.Should().EndWith(TurnContextContributor.Footer);
     }
 
@@ -133,7 +133,50 @@ public sealed class TurnContextParityTests : IDisposable
 
         var tail = await TailAsync();
 
-        tail.Should().Contain("файл проекта, для тебя (не вход генератора)");
+        tail.Should().Contain("notes.md [notes.md] — файл проекта, для тебя (не вход генератора)");
+    }
+
+    [Fact]
+    public async Task Референсы_печатают_идентификатор_путь_файла_и_slug()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "art"));
+        File.WriteAllText(Path.Combine(_root, "art", "style.png"), "x");
+        _store.SetPrimary(Owner, Chat, Item("image", new JsonObject { ["threadId"] = "t3" }, null, ContextActor.Human), null);
+        _store.AddRef(Owner, Chat, Item("project-file", new JsonObject { ["path"] = "art/style.png" }, "style", ContextActor.Human), null);
+        _store.AddRef(Owner, Chat, Item("image-character", new JsonObject { ["slug"] = "anya" }, "character", ContextActor.Human), null);
+
+        var tail = await TailAsync();
+
+        tail.Should().Contain("style.png [art/style.png]").And.Contain("Аня Ковалёва [anya]");
+    }
+
+    // Отключаемость (ADR-023 §4): вид выключенной вертикали не зарегистрирован — в хвост не идёт, в DTO остаётся
+    [Fact]
+    public async Task Элементы_без_провайдера_в_хвост_не_идут_а_в_DTO_остаются_missing()
+    {
+        var withAudio = new ContextKindRegistry([new FakeKind(), new ProjectFileContextKind(), new AudioKind()]);
+        var store = new ChatContextStore(Path.Combine(_root, "ctx2"), withAudio);
+        store.SetPrimary(Owner, Chat, Item("image", new JsonObject { ["threadId"] = "t3" }, null, ContextActor.Human), null);
+        store.AddRef(Owner, Chat, Item("audio", new JsonObject { ["threadId"] = "a1" }, null, ContextActor.Human), null);
+        var projects = new Mock<IProjectManager>();
+        var services = new ServiceCollection().AddSingleton<IChatContextStore>(store).BuildServiceProvider();
+        var contributor = new TurnContextContributor(services, _registry, _flag, projects.Object);
+
+        var tail = (await contributor.BuildAsync(Ctx(), "привет"))!.Sections.Single().Text;
+
+        tail.Should().NotContain("звук").And.NotContain("аудио").And.NotContain("Плюс:");
+        tail.Should().Contain("С чем: картинка t3");
+        var dto = ChatContextDtoBuilder.Build(_registry, new ContextScope(Owner, _session, null), store.Get(Owner, Chat));
+        dto.Refs.Should().ContainSingle().Which.Missing.Should().BeTrue();
+    }
+
+    private sealed class AudioKind : IContextKindProvider
+    {
+        public IReadOnlyList<string> Kinds { get; } = ["audio"];
+        public string? Validate(ContextScope scope, string kind, JsonObject reference) => null;
+        public ContextItemSummary Describe(ContextScope scope, ContextItem item) => new("аудио", null, null, false);
+        public IReadOnlyList<ContextRoleSpec> AcceptedRefs(ContextScope scope, ContextItem primary, string? op) => [];
+        public string? DescribeExecutor(ContextScope scope, ContextItem primary) => null;
     }
 
     [Fact]

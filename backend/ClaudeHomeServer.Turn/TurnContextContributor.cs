@@ -62,7 +62,7 @@ public sealed class TurnContextContributor(
     private bool HasContext(string ownerId, Session session)
     {
         var state = store.Get(ownerId, session.Id);
-        return state.Primary is not null || state.Refs.Count > 0;
+        return (state.Primary is { } p && registry.IsRegistered(p.Kind)) || state.Refs.Any(r => registry.IsRegistered(r.Kind));
     }
 
     private static bool HasGit(PromptSessionContext ctx) =>
@@ -81,23 +81,26 @@ public sealed class TurnContextContributor(
         var scope = new ContextScope(ownerId, session, project);
         var state = store.Get(ownerId, session.Id);
         var dto = ChatContextDtoBuilder.Build(registry, scope, state);
+        // Отключаемость (ADR-023 §4): элементы выключенной вертикали в хвост не идут, в DTO они остаются с missing
+        var primaryDto = dto.Primary is { } dp && registry.IsRegistered(dp.Kind) ? dp : null;
+        var refDtos = dto.Refs.Where(r => registry.IsRegistered(r.Kind)).ToList();
 
         var sb = new StringBuilder();
         sb.AppendLine("## Контекст хода");
         if (WhereLine(sessionContext) is { } where) sb.AppendLine(where);
 
-        var hasContext = dto.Primary is not null || dto.Refs.Count > 0;
+        var hasContext = primaryDto is not null || refDtos.Count > 0;
         if (hasContext)
         {
-            sb.AppendLine("С чем: " + (dto.Primary is { } primary ? PrimaryText(primary) : "ничего не выбрано"));
+            sb.AppendLine("С чем: " + (primaryDto is { } primary ? PrimaryText(primary) : "ничего не выбрано"));
             if (state.Primary is { } p && registry.Find(p.Kind)?.DescribeExecutor(scope, p) is { Length: > 0 } executor)
                 sb.AppendLine("Чем: " + executor);
-            if (dto.Refs.Count > 0)
+            if (refDtos.Count > 0)
             {
                 var accepted = state.Primary is { } ap && registry.Find(ap.Kind) is { } owner
                     ? owner.AcceptedRefs(scope, ap, null)
                     : [];
-                sb.AppendLine("Плюс: " + string.Join("; ", dto.Refs.Select(r => RefText(r, accepted))));
+                sb.AppendLine("Плюс: " + string.Join("; ", refDtos.Select(r => RefText(r, accepted))));
             }
             sb.AppendLine(Footer);
         }
@@ -130,6 +133,8 @@ public sealed class TurnContextContributor(
     private static string RefText(ChatContextRefDto item, IReadOnlyList<ContextRoleSpec> accepted)
     {
         var sb = new StringBuilder(item.Label);
+        // Идентификатор нужен агенту, чтобы назвать референс в вызове (путь файла, slug персонажа или голоса)
+        if (IdOf(item.Ref) is { } id) sb.Append(" [").Append(id).Append(']');
         if (VersionText(item.Version) is { } version) sb.Append(" · ").Append(version);
         if (item.Role is null)
             sb.Append(" — ").Append(Noun(item.Kind)).Append(", для тебя (не вход генератора)");
@@ -148,6 +153,7 @@ public sealed class TurnContextContributor(
     private static string? IdOf(System.Text.Json.Nodes.JsonObject reference) =>
         reference["threadId"] is { } t && t.GetValueKind() == System.Text.Json.JsonValueKind.String ? t.GetValue<string>()
         : reference["slug"] is { } s && s.GetValueKind() == System.Text.Json.JsonValueKind.String ? s.GetValue<string>()
+        : reference["path"] is { } f && f.GetValueKind() == System.Text.Json.JsonValueKind.String ? f.GetValue<string>()
         : null;
 
     private static readonly Regex VersionNumber = new(@"^v(\d+)$", RegexOptions.Compiled);

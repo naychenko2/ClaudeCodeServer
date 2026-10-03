@@ -47,6 +47,29 @@ public sealed class FilmAssemblerTests : IDisposable
         _w.WriteFilm(path, doc);
     }
 
+    // Правка → сразу сборка: строка «поправил» обязана встать в ленте РАНЬШЕ строки «собрал», а не через 5 с после неё
+    [Fact]
+    public async Task Строка_правки_идёт_в_ленте_раньше_строки_сборки()
+    {
+        ThreeClipFilm();
+        var feed = new FilmPatchFeed(_w.JobThreads, NullLogger<FilmPatchFeed>.Instance, null, TimeSpan.FromHours(1), TimeSpan.FromHours(2));
+        var svc = new FilmService(_w.Films, _w.Side, _w.JobThreads, _w.Registry, NullLogger<FilmService>.Instance, _dsp, patchFeed: feed);
+        var revision = _w.Films.ReadFile(_w.Full("video/a/a.film")).Revision;
+        var patched = await svc.PatchAsync(Owner, _w.Scope, "video/a/a.film",
+            new FilmPatch(revision, [new FilmPatchOp(FilmPatchOps.Trim, Index: 0, Trim: [0, 2])]), VideoInitiators.Human, default, FilmWorld.Session);
+        patched.IsOk.Should().BeTrue(patched.Error);
+        var assembler = new FilmAssembler(svc, _w.Registry, new ConfigurationBuilder().Build(), NullLogger<FilmAssembler>.Instance, _dsp, _spend);
+
+        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human, FilmWorld.Session).IsOk.Should().BeTrue();
+        await assembler.WhenIdleAsync();
+        await feed.FlushAllAsync();
+
+        var lines = _w.Feed.Records.Select(r => r.Record.Fallback).ToList();
+        lines.Should().HaveCount(2);
+        lines[0].Should().Contain("подрезали");
+        lines[1].Should().Contain("собрали");
+    }
+
     [Fact]
     public async Task Сборка_пишет_film_mp4_строку_builds_с_хешем_и_нулевую_трату()
     {

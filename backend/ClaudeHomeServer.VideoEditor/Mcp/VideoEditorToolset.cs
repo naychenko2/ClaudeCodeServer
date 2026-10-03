@@ -326,7 +326,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
         // Тот же сервис, что у ручки «Сохранить сцену»; тихую строку и пометку «✦ Claude» пишет он сам
         var saved = await _saver.SaveAsync(owner, scope,
-            new SaveSceneRequest(session.Id, sceneId, Str(args, "versionId"), Str(args, "folder"), Str(args, "fileName")),
+            new SaveSceneRequest(session.Id, sceneId, Str(args, "versionId"), Str(args, "folder"), Str(args, "fileName"), Str(args, "filmPath")),
             VideoInitiators.Agent, ct);
         if (saved.Value is not { } done) return FilmFail(saved.ErrorCode, saved.Error, saved.Conflict);
         return Json(new

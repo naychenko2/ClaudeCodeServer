@@ -40,7 +40,17 @@ public sealed class FilmSceneSaver(
             return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.VersionNotFound, "Версии нет в этой сцене");
 
         // Папка фильма: из запроса, иначе папка сцены; только video/<фильм> и только внутри проекта
-        var folder = FilmPaths.Normalize(req.Folder) ?? FilmPaths.Normalize(scene.Folder);
+        // Путь открытого фильма (необязательный): сцена встаёт в него, папка сцены = папка фильма
+        string? explicitFilm = null;
+        if (!string.IsNullOrWhiteSpace(req.FilmPath))
+        {
+            var openFilm = FilmService.ResolveFilm(scope, req.FilmPath);
+            if (!openFilm.IsOk) return FilmCallResult<SaveSceneResult>.Fail(openFilm.ErrorCode!, openFilm.Error!);
+            explicitFilm = openFilm.Value!.Relative;
+        }
+        var folder = explicitFilm is not null
+            ? FilmPaths.FolderOf(explicitFilm)
+            : FilmPaths.Normalize(req.Folder) ?? FilmPaths.Normalize(scene.Folder);
         if (folder is null)
             return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.InvalidRequest, "Не указана папка фильма: video/<фильм>");
         if (!folder.StartsWith(FilmPaths.VideoRoot + "/", StringComparison.Ordinal) || !FilmPaths.IsAllowed(folder))
@@ -80,14 +90,20 @@ public sealed class FilmSceneSaver(
             new VideoSavedFileDto(version.VersionId, clipPath),
             new VideoThreadEvent(threads.Store.Now(), VideoThreadEventKinds.Saved, text, scene.SceneId));
 
-        var added = await AddToFilmAsync(ownerId, scope, folder, clipPath, scene, version, snapshotFrames, initiator, ct);
+        var added = await AddToFilmAsync(ownerId, scope, folder, explicitFilm, clipPath, scene, version, snapshotFrames, initiator, ct);
 
         if (written.Status == VideoThreadWriteStatus.Ok)
             await threads.BroadcastAsync(ownerId, scope.Key, req.SessionId, written.State);
+        // Копилка правок этого фильма — раньше строки сохранения: порядок ленты = порядок событий
+        var feedFilm = explicitFilm ?? DefaultFilmPath(folder);
+        await service.FlushPatchFeedAsync(req.SessionId, feedFilm);
         await threads.SavedAsync(req.SessionId, text,
             new { sceneId = scene.SceneId, versionId = version.VersionId, path = clipPath, framePaths, addedToFilm = added, initiator }, ct);
         return FilmCallResult<SaveSceneResult>.Ok(new SaveSceneResult(clipPath, framePaths, added));
     }
+
+    private static string DefaultFilmPath(string folder) =>
+        $"{folder}/{folder[(folder.LastIndexOf('/') + 1)..]}{FilmPaths.FilmExtension}";
 
     private static int IndexOf(VideoThreadsState state, string sceneId)
     {
@@ -174,15 +190,15 @@ public sealed class FilmSceneSaver(
         return null;
     }
 
-    // Новый файл сцены встаёт в фильм своей папки (файл <папка>/<имя папки>.film; нет — заводится). Фильм
+    // Новый файл сцены встаёт в фильм своей папки (файл <папка>/<имя папки>.film или открытый фильм из запроса; нет — заводится). Фильм
     // невалидный, чужой схемы или с этой сценой — не добавляем: сохранение клипа от этого не страдает
-    private async Task<bool> AddToFilmAsync(string ownerId, VideoEditScope scope, string folder, string clipPath,
-        VideoSceneDto scene, VideoClipVersionDto version, Dictionary<FrameRef, string?> frames, string initiator,
+    private async Task<bool> AddToFilmAsync(string ownerId, VideoEditScope scope, string folder, string? explicitFilm,
+        string clipPath, VideoSceneDto scene, VideoClipVersionDto version, Dictionary<FrameRef, string?> frames, string initiator,
         CancellationToken ct)
     {
         try
         {
-            var filmPath = $"{folder}/{folder[(folder.LastIndexOf('/') + 1)..]}{FilmPaths.FilmExtension}";
+            var filmPath = explicitFilm ?? DefaultFilmPath(folder);
             var resolved = FilmService.ResolveFilm(scope, filmPath);
             if (!resolved.IsOk) return false;
             var film = resolved.Value!;

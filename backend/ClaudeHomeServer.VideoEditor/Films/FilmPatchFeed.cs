@@ -79,6 +79,24 @@ public sealed class FilmPatchFeed(
         foreach (var (key, pending) in all) await WriteAsync(key, pending);
     }
 
+    // Дописать серии этого фильма в этом чате (от любого инициатора) СЕЙЧАС: перед строкой сборки или сохранения
+    // сцены, чтобы «поправил» шло в ленте раньше «собрал», а не через 5 с после него
+    public async Task FlushAsync(string sessionId, string filmPath)
+    {
+        List<(Key, Pending)> mine;
+        lock (_gate)
+        {
+            mine = _pending.Where(p => p.Key.SessionId == sessionId && p.Key.FilmPath == filmPath)
+                .Select(p => (p.Key, p.Value)).ToList();
+            foreach (var (key, pending) in mine)
+            {
+                _pending.Remove(key);
+                pending.Timer?.Dispose();
+            }
+        }
+        foreach (var (key, pending) in mine) await WriteAsync(key, pending);
+    }
+
     private async Task FlushAsync(Key key)
     {
         Pending? pending;

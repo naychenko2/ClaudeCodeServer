@@ -209,6 +209,7 @@ public sealed partial class VideoEditorToolset
                 ["versionId"] = Str("Версия; не указана — текущая"),
                 ["folder"] = Str("Папка фильма в video/**; не указана — папка сцены или по имени сцены"),
                 ["fileName"] = Str("Имя файла .mp4; не указано — scene-NN.mp4"),
+                ["filmPath"] = Str("Полный путь открытого фильма video/<папка>/<имя>.film: сцена встанет в него, папка = папка фильма"),
             }, "sceneId")),
 
         new(ToolFilmEdit,

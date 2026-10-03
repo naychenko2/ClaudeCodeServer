@@ -52,7 +52,7 @@ public sealed class VideoEditWorkspace(string root)
     // поэтому ".." и чужие папки отсекаются шаблоном, а не чисткой строки
     public const string FramesDirName = "frames";
     private static readonly System.Text.RegularExpressions.Regex FrameRefPattern =
-        new(@"^frames/[0-9a-f]{32}\.(png|jpg|webp)$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        new(@"^frames/[0-9a-f]{32}\.(png|jpg|webp)\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     public static bool IsFrameRef(string? path) => path is not null && FrameRefPattern.IsMatch(path);
 

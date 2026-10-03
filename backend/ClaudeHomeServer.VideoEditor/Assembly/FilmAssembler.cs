@@ -265,6 +265,7 @@ public sealed class FilmAssembler(
             log.LogWarning("Видео: сборка фильма {Path} без записи в ленту — чат {SessionId} не принадлежит владельцу (initiator {Initiator})", film.Relative, sessionId, initiator);
             return;
         }
+        await films.FlushPatchFeedAsync(sessionId, film.Relative);
         var name = FilmPaths.NameOf(film.Relative);
         var data = new { filmPath = film.Relative, file = status.File, state = status.State, error = status.Error, initiator };
         if (status.State == FilmBuildStates.Done)

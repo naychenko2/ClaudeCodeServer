@@ -28,6 +28,9 @@ public class PersonalVideoEditorController(
     VideoSceneService scenes)
     : VideoEditorEndpoints(engines, jobs, threads, prefs, workspace, scenes)
 {
+    // Копия в поле: параметр, переданный и в базу, и использованный в методах, даёт CS9107 (двойной захват)
+    private readonly VideoEditWorkspace _workspace = workspace;
+
     [HttpGet(VideoEditorRoutes.State)]
     public IActionResult State(string sessionId) =>
         Gate(sessionId, out var scope, out var denied) ? StateIn(scope, sessionId) : denied;
@@ -106,7 +109,7 @@ public class PersonalVideoEditorController(
         if (VideoFrameFiles.ExtensionBySignature(bytes) is not { } extension)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Кадр — png, jpg или webp");
         var fileName = VideoEditWorkspace.CleanFileName(file.FileName);
-        return Ok(FrameRef.File(workspace.SaveFrame(UserId, bytes, extension, fileName), fileName));
+        return Ok(FrameRef.File(_workspace.SaveFrame(UserId, bytes, extension, fileName), fileName));
     }
 
     // Байты загруженного кадра для превью: имя строго по шаблону рабочей папки, чужой чат — 404 гейта; тип — по
@@ -116,7 +119,7 @@ public class PersonalVideoEditorController(
     {
         if (!Gate(sessionId, out _, out var denied)) return denied;
         var relative = $"{VideoEditWorkspace.FramesDirName}/{name}";
-        if (workspace.FindFrame(UserId, relative) is not { } full)
+        if (_workspace.FindFrame(UserId, relative) is not { } full)
             return Error(StatusCodes.Status404NotFound, VideoEditorErrors.FileNotFound, "Кадр не найден");
         var bytes = System.IO.File.ReadAllBytes(full);
         var contentType = VideoFrameFiles.ExtensionBySignature(bytes) switch
@@ -128,7 +131,7 @@ public class PersonalVideoEditorController(
         };
         if (contentType is null)
             return Error(StatusCodes.Status404NotFound, VideoEditorErrors.FileNotFound, "Кадр не найден");
-        if (workspace.FindFrameName(UserId, relative) is { } fileName)
+        if (_workspace.FindFrameName(UserId, relative) is { } fileName)
             Response.Headers.ContentDisposition = "inline; filename*=UTF-8''" + Uri.EscapeDataString(fileName);
         return File(bytes, contentType);
     }

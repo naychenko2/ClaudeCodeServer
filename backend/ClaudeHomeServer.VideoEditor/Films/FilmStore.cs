@@ -72,8 +72,15 @@ public sealed class FilmStore
                 // Ещё раз перед самым rename: правка из другого процесса за время записи temp не затирается
                 if (!create && File.Exists(fullPath) && FilmFormat.RevisionOf(File.ReadAllBytes(fullPath)) != current.Revision)
                     return new Write(WriteStatus.Conflict, ReadFile(fullPath));
-                if (create && File.Exists(fullPath)) return new Write(WriteStatus.NameTaken, ReadFile(fullPath));
-                File.Move(tmp, fullPath, overwrite: true);
+                // Создание — Move без перезаписи (атомарный «создать, если нет», как у сборки): занятое другим процессом
+                // имя в окне после проверки под замком не затирается. Прямой FileMode.CreateNew писал бы в целевой
+                // файл на месте, и читатель увидел бы недописанный .film — потому temp + Move
+                if (create)
+                {
+                    try { File.Move(tmp, fullPath, overwrite: false); }
+                    catch (IOException) when (File.Exists(fullPath)) { return new Write(WriteStatus.NameTaken, ReadFile(fullPath)); }
+                }
+                else File.Move(tmp, fullPath, overwrite: true);
             }
             finally
             {

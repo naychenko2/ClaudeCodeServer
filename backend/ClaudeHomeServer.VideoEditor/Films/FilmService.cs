@@ -30,6 +30,10 @@ public sealed class FilmService(
     public FilmStore Films => films;
     public VideoJobThreads Threads => threads;
 
+    // Сбросить копилку правок фильма в ленту (перед строкой сборки / сохранения сцены); без копилки — ничего
+    public Task FlushPatchFeedAsync(string sessionId, string filmPath) =>
+        patchFeed is null ? Task.CompletedTask : patchFeed.FlushAsync(sessionId.Trim(), filmPath);
+
     // ── Путь фильма и корень проекта ──────────────────────────────────────────────
 
     public sealed record Resolved(Project Project, string Relative, string Full);

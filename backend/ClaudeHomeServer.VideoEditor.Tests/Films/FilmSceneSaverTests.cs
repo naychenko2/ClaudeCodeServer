@@ -52,6 +52,34 @@ public sealed class FilmSceneSaverTests : IDisposable
     }
 
     [Fact]
+    public async Task Открытый_фильм_с_произвольным_именем_получает_сцену()
+    {
+        var (scene, version) = _w.SceneWithClip();
+        _w.WriteFilm("video/утро/черновик.film", Doc());
+
+        var result = await Saver().SaveAsync(Owner, _w.Scope,
+            new SaveSceneRequest(Session, scene.SceneId, version.VersionId, "video/другая", null, "video/утро/черновик.film"),
+            VideoInitiators.Human, default);
+
+        result.IsOk.Should().BeTrue(result.Error);
+        result.Value!.Path.Should().Be("video/утро/scene-01.mp4", "папка сцены = папка фильма, folder из запроса игнорируется");
+        result.Value.AddedToFilm.Should().BeTrue();
+        _w.Films.ReadFile(_w.Full("video/утро/черновик.film")).Document!.Items.Should().ContainSingle(i => i.File == result.Value.Path);
+        File.Exists(_w.Full("video/утро/утро.film")).Should().BeFalse("по имени папки фильм не заводится");
+    }
+
+    [Fact]
+    public async Task Путь_фильма_вне_video_отклоняется()
+    {
+        var (scene, version) = _w.SceneWithClip();
+
+        var result = await Saver().SaveAsync(Owner, _w.Scope,
+            new SaveSceneRequest(Session, scene.SceneId, version.VersionId, null, null, "docs/x.film"), VideoInitiators.Human, default);
+
+        result.IsOk.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Повторное_сохранение_идёт_в_v2_и_ничего_не_затирает()
     {
         var (scene, version) = _w.SceneWithClip();

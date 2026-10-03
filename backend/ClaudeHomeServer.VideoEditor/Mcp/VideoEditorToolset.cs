@@ -123,6 +123,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             ToolSuggestPrompt => SuggestPrompt(arguments),
             ToolShoot => await ShootAsync(arguments, owner, session, scope, ct),
             ToolCancel => await CancelAsync(arguments, owner, session, scope, ct),
+            ToolWait => await WaitAsync(arguments, owner, session, scope, ct),
             ToolSaveScene => await SaveSceneAsync(arguments, owner, session, scope, ct),
             ToolFilmEdit => await FilmEditAsync(arguments, owner, session, scope, ct),
             ToolFilmBuild => FilmBuild(arguments, owner, session, scope),
@@ -295,9 +296,9 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             sceneId,
             quote = new { q.Provider, q.Model, q.Count, q.DurationSec, q.Price, q.License },
             note = "Съёмка идёт отдельно от хода: остановка разговора её не отменяет, отмена — video_cancel. "
-                + "Результат — версии сцены в video_state (запуск running → done); не выдумывай результат, пока он не готов. "
+                + "Результат — версии сцены в video_state (запуск running → done); ждать — video_wait (цикл до allDone); не выдумывай результат, пока он не готов. "
                 + "Каждый вариант станет версией сцены. После сцены спроси человека «Снимать следующую?»; "
-                + "подряд снимать можно только по его явному «сними все».",
+                + "подряд снимать можно только по его явному «сними все» — тогда после последней сцены сохрани и собери фильм сам.",
         });
     }
 
@@ -314,6 +315,54 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             ? Deny("Задача не найдена.")
             : Json(new { cancelled.JobId, cancelled.Status, cancelled.Charged, variants = cancelled.Variants.Count });
     }
+
+    // Ожидание съёмок по образцу jobs_wait: опрос с коротким потолком, чтобы агент дожидался циклом внутри хода.
+    // Только чтение — гейта делегированного хода нет; чужая и несуществующая задача неотличимы
+    internal static readonly TimeSpan WaitPoll = TimeSpan.FromMilliseconds(500);
+    private const int WaitMaxSeconds = 15;
+
+    private async Task<McpToolCallResult> WaitAsync(JsonObject args, string owner, Session session, VideoEditScope scope,
+        CancellationToken ct)
+    {
+        if (!TryInt(args, "timeoutSeconds", out var timeout)) return Deny("timeoutSeconds — целое число секунд.");
+        var budget = TimeSpan.FromSeconds(Math.Clamp(timeout ?? WaitMaxSeconds, 0, WaitMaxSeconds));
+
+        List<string> ids;
+        if (args["jobIds"] is JsonArray array)
+            ids = [.. array.Select(n => n?.GetValue<string>()).Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id!).Distinct()];
+        else if (args["jobIds"] is null)
+            ids = [.. Store.Get(owner, session.Id).Scenes.SelectMany(s => s.Launches)
+                .Where(l => l.Status == VideoLaunchStatus.Running).Select(l => l.JobId).Distinct()];
+        else
+            return Deny("jobIds — массив jobId из video_shoot.");
+
+        foreach (var id in ids)
+            if (_jobs.Get(owner, scope.Key, id) is not { } known || known.ChatSessionId != session.Id)
+                return Deny($"Задача {id} не найдена.");
+
+        var deadline = DateTime.UtcNow + budget;
+        List<VideoJobDto> jobs;
+        while (true)
+        {
+            jobs = [.. ids.Select(id => _jobs.Get(owner, scope.Key, id)).OfType<VideoJobDto>()];
+            if (jobs.All(IsJobTerminal) || DateTime.UtcNow >= deadline) break;
+            var left = deadline - DateTime.UtcNow;
+            await Task.Delay(left < WaitPoll ? left : WaitPoll, ct);
+        }
+
+        var allDone = jobs.All(IsJobTerminal);
+        return Json(new
+        {
+            allDone,
+            jobs = jobs.Select(j => new { j.JobId, j.Status, j.Provider, j.Model, j.Count, variants = j.Variants.Count, j.QueuePosition, j.EtaSeconds, j.Error }),
+            note = allDone
+                ? ids.Count == 0 ? "Идущих съёмок нет." : "Съёмки закончились: результат — версии сцен в video_state."
+                : "Съёмка ещё идёт: вызови video_wait снова, не заканчивай ход на ожидании.",
+        });
+    }
+
+    private static bool IsJobTerminal(VideoJobDto job) =>
+        job.Status is VideoJobStatuses.Completed or VideoJobStatuses.Failed or VideoJobStatuses.Cancelled;
 
     // ── video_save_scene, video_film_edit, video_film_build ────────────────────
 

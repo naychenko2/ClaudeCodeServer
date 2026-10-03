@@ -24,13 +24,13 @@ public sealed class VideoEditorToolsetTests
     // ── Состав ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Состав_ровно_десять_инструментов_и_ровно_список_автодопуска()
+    public void Состав_ровно_одиннадцать_инструментов_и_ровно_список_автодопуска()
     {
         using var w = new AgentWorld();
 
         var names = w.Toolset.ToolsFor(w.Ctx()).Select(t => t.Name).ToList();
 
-        names.Should().BeEquivalentTo([ToolState, ToolFocus, ToolNew, ToolSceneSet, ToolSuggestPrompt, ToolShoot, ToolCancel,
+        names.Should().BeEquivalentTo([ToolState, ToolFocus, ToolNew, ToolSceneSet, ToolSuggestPrompt, ToolShoot, ToolCancel, ToolWait,
             ToolSaveScene, ToolFilmEdit, ToolFilmBuild]);
         names.Select(n => $"mcp__{ServerName}__{n}").Should().BeEquivalentTo(
             ClaudeHomeServer.Services.VideoEditor.VideoEditorAgentTools.AutoAllowTools);
@@ -219,6 +219,52 @@ public sealed class VideoEditorToolsetTests
 
         (await w.Call(ToolShoot, new JsonObject { ["sceneId"] = "нет-такой" })).Text.Should().Contain("нет в этом чате");
         (await w.Call(ToolCancel, new JsonObject { ["jobId"] = "нет-такой" })).Text.Should().Contain("не найдена");
+    }
+
+    [Fact]
+    public async Task Ожидание_съёмки_возвращает_allDone_true_когда_задача_закончилась()
+    {
+        using var w = new AgentWorld();
+        var scene = w.NewScene();
+        var started = await w.Call(ToolShoot, new JsonObject { ["sceneId"] = scene.SceneId });
+        var jobId = System.Text.Json.Nodes.JsonNode.Parse(started.Text)!["jobId"]!.GetValue<string>();
+        await w.WaitJobsAsync();
+
+        var result = await w.Call(ToolWait, new JsonObject { ["jobIds"] = new JsonArray(jobId), ["timeoutSeconds"] = 1 });
+
+        result.IsError.Should().BeFalse();
+        var json = System.Text.Json.Nodes.JsonNode.Parse(result.Text)!;
+        json["allDone"]!.GetValue<bool>().Should().BeTrue();
+        json["jobs"]!.AsArray().Single()!["status"]!.GetValue<string>().Should().Be("completed");
+    }
+
+    [Fact]
+    public async Task Ожидание_идущей_съёмки_укладывается_в_потолок_и_даёт_allDone_false()
+    {
+        using var w = new AgentWorld(blocking: true);
+        var scene = w.NewScene();
+        var started = await w.Call(ToolShoot, new JsonObject { ["sceneId"] = scene.SceneId });
+        var jobId = System.Text.Json.Nodes.JsonNode.Parse(started.Text)!["jobId"]!.GetValue<string>();
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await w.Call(ToolWait, new JsonObject { ["timeoutSeconds"] = 1 });
+        watch.Stop();
+
+        System.Text.Json.Nodes.JsonNode.Parse(result.Text)!["allDone"]!.GetValue<bool>().Should().BeFalse();
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10), "потолок ожидания — секунды, а не минуты съёмки");
+        await w.Call(ToolCancel, new JsonObject { ["jobId"] = jobId });
+        await w.WaitJobsAsync();
+    }
+
+    [Fact]
+    public async Task Ожидание_чужой_задачи_отказ_как_у_несуществующей()
+    {
+        using var w = new AgentWorld();
+
+        var result = await w.Call(ToolWait, new JsonObject { ["jobIds"] = new JsonArray("нет-такой") });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("не найдена");
     }
 
     // ── Сохранение и фильмы ────────────────────────────────────────────────────

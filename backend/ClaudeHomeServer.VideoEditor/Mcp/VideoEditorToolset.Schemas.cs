@@ -25,6 +25,7 @@ public sealed partial class VideoEditorToolset
     public const string ToolSuggestPrompt = "video_suggest_prompt";
     public const string ToolShoot = "video_shoot";
     public const string ToolCancel = "video_cancel";
+    public const string ToolWait = "video_wait";
     public const string ToolSaveScene = "video_save_scene";
     public const string ToolFilmEdit = "video_film_edit";
     public const string ToolFilmBuild = "video_film_build";
@@ -173,7 +174,8 @@ public sealed partial class VideoEditorToolset
             + "длительность и число вариантов по умолчанию — выбор человека: не передавай их без его просьбы. "
             + "Каждый вариант станет версией сцены. Идёт отдельно от хода; результат — в video_state. "
             + "Частные параметры модели — в params (неизвестный ключ — отказ с именем поля). "
-            + "После каждой сцены спрашивай человека «Снимать следующую?»; подряд — только по явному «сними все».",
+            + "После каждой сцены спрашивай человека «Снимать следующую?»; подряд — только по явному «сними все» "
+            + "(тогда дождись video_wait, сохрани и собери фильм без вопросов).",
             Obj(new JsonObject
             {
                 ["sceneId"] = Str("Сцена этого чата (sceneId из video_state)"),
@@ -198,6 +200,25 @@ public sealed partial class VideoEditorToolset
         new(ToolCancel,
             "Отменяет съёмку этого чата. Готовые варианты остаются версиями; остановленное до принятия поставщиком не списывается.",
             Obj(new JsonObject { ["jobId"] = Str("jobId из результата video_shoot") }, "jobId")),
+
+        new(ToolWait,
+            "Ждёт конца съёмок до timeoutSeconds (не больше 15 с) и возвращает их состояние. allDone=false — вызови ещё "
+            + "раз, пока не станет true: съёмка идёт минутами и дольше хода, поэтому «Сними все» доводи циклом «video_wait → "
+            + "video_shoot следующей сцены → … → video_save_scene → video_film_build», не заканчивая ход на ожидании. "
+            + "jobIds не указаны — все идущие съёмки этого чата. Ничего не тратит и не меняет.",
+            Obj(new JsonObject
+            {
+                ["jobIds"] = new JsonObject
+                {
+                    ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["maxItems"] = 12,
+                    ["description"] = "jobId из video_shoot; не указаны — все идущие съёмки этого чата",
+                },
+                ["timeoutSeconds"] = new JsonObject
+                {
+                    ["type"] = "integer", ["minimum"] = 0, ["maximum"] = 15,
+                    ["description"] = "Сколько ждать, с (по умолчанию 15, не больше 15)",
+                },
+            })),
 
         new(ToolSaveScene,
             "Сохраняет версию сцены в проект: клип video/<папка>/scene-NN.mp4 (занято — .v2, перезаписи нет) и кадры в "

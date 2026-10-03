@@ -41,8 +41,8 @@ public sealed class FilmFrameFollower(VideoJobThreads threads, ILogger<FilmFrame
 
         var moved = settings with
         {
-            FrameA = a ? FrameRef.Image(evt.ThreadId, evt.VersionId) : settings.FrameA,
-            FrameB = b ? FrameRef.Image(evt.ThreadId, evt.VersionId) : settings.FrameB,
+            FrameA = a ? FrameRef.Image(evt.ThreadId, evt.VersionId, initiator: evt.Initiator) : settings.FrameA,
+            FrameB = b ? FrameRef.Image(evt.ThreadId, evt.VersionId, initiator: evt.Initiator) : settings.FrameB,
         };
         // Клип уже снят — это «переснять»: строка для хода и тихая строка в ленте; иначе кадр просто переехал
         var shot = scene.CurrentVersionId is not null;

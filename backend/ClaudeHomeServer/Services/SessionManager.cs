@@ -1945,7 +1945,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             Fallback = record.Fallback, Timestamp = ts,
         };
         await AppendStoredAsync(sessionId, stored,
-            new ModuleRecordMessage(stored.Module, stored.RecordType, stored.Data, stored.Fallback, ts));
+            new ModuleRecordMessage(stored.Module, stored.RecordType, stored.Data, stored.Fallback, ts), inTurn: true);
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return true;
@@ -9553,7 +9553,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Запись StoredMessage в историю сессии ВНЕ хода + broadcast (обобщение паттерна
     // PublishFalCostAsync): активная сессия → через Accumulator + SaveSnapshot;
     // неактивная → LoadAsync + append + SaveAsync под локом. Используется совещаниями.
-    public async Task AppendStoredAsync(string sessionId, StoredMessage stored, ServerMessage broadcast)
+    public async Task AppendStoredAsync(string sessionId, StoredMessage stored, ServerMessage broadcast, bool inTurn = false)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
@@ -9564,7 +9564,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             if (entry.Accumulator is { } acc)
             {
-                acc.Append(stored);
+                if (inTurn) acc.AppendInTurn(stored);
+                else acc.Append(stored);
                 try { await acc.SaveSnapshotAsync(_history); }
                 catch (Exception ex)
                 {

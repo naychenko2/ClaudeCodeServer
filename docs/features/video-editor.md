@@ -46,6 +46,7 @@ MCP-сервер `video-editor` едет в любой чат владельца
 | `video_suggest_prompt` | предложить текст сцены человеку | всегда |
 | `video_shoot` | снять сцену: `sceneId` обязателен, котировка внутри, частные параметры модели — в `params` | `VideoEditor:AgentLaunch` |
 | `video_cancel` | отменить съёмку чата | `VideoEditor:AgentLaunch` |
+| `video_wait` | дождаться конца съёмок (до 15 с за вызов, `allDone`) | `VideoEditor:AgentLaunch` |
 | `video_save_scene` | сохранить версию в проект | `VideoEditor:AgentLaunch` |
 | `video_film_edit` | патч фильма под `revision` из `video_state` | `VideoEditor:AgentLaunch` |
 | `video_film_build` | собрать фильм | `VideoEditor:AgentLaunch` |

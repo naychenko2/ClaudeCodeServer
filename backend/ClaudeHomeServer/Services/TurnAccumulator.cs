@@ -573,6 +573,23 @@ internal class TurnAccumulator
         lock (_lock) _history.Add(message);
     }
 
+    // Запись модуля (ADR-019 §2): идёт после того, что ход уже написал. Посреди хода — в ход следом за буферами
+    // (как вызов инструмента), иначе она легла бы в _history раньше сообщения человека, которое ход ещё держит в
+    // _currentTurn, и после перезагрузки встала бы выше вызвавшего её сообщения. Между ходами — в историю
+    public void AppendInTurn(StoredMessage message)
+    {
+        lock (_lock)
+        {
+            if (_currentTurn.Count == 0 && _textBuf.Length == 0 && _thinkingBuf.Length == 0)
+            {
+                _history.Add(message);
+                return;
+            }
+            FlushBuffers();
+            _currentTurn.Add(message);
+        }
+    }
+
     // Снапшот: новый список; элементы разделяются (StoredToolUseMessage и карточки
     // вопроса/плана мутируются позже), но их поля — атомарные ссылки/bool,
     // поэтому глубокая копия не нужна.

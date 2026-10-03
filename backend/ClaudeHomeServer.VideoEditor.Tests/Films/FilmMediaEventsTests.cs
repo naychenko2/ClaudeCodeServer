@@ -52,7 +52,7 @@ public sealed class FilmMediaEventsTests : IDisposable
         await _hub.PublishAsync(Image("t1", "v2"));
 
         var after = _w.Threads.Get(Owner, Session).Scenes.Single(s => s.SceneId == scene.SceneId).Settings;
-        after.FrameA.Should().Be(FrameRef.Image("t1", "v2"));
+        after.FrameA.Should().Be(FrameRef.Image("t1", "v2", initiator: "human"));
         after.FrameB.Should().Be(FrameRef.Image("t2", "v9"), "кадр другой нити не трогаем");
     }
 
@@ -83,7 +83,7 @@ public sealed class FilmMediaEventsTests : IDisposable
 
         _w.Feed.Records.Should().ContainSingle(r => r.Record.RecordType == VideoThreadRecordTypes.Note);
         _w.Threads.Get(Owner, Session).Scenes.Single(s => s.SceneId == scene.SceneId).Settings.FrameA
-            .Should().Be(FrameRef.Image("t1", "v3"));
+            .Should().Be(FrameRef.Image("t1", "v3", initiator: "human"));
     }
 
     [Fact]
@@ -106,9 +106,24 @@ public sealed class FilmMediaEventsTests : IDisposable
         await _hub.PublishAsync(Image("t1", "v2"));
 
         var scene = _w.Threads.Get(Owner, Session).Scenes.Single(s => s.SceneId == added.Scene!.SceneId);
-        scene.Settings.FrameA.Should().Be(FrameRef.Image("t1", "v2"));
+        scene.Settings.FrameA.Should().Be(FrameRef.Image("t1", "v2", initiator: "human"));
         _w.Feed.Records.Should().BeEmpty("снимать нечего — переснимать тоже");
         _w.Threads.Get(Owner, Session).Events.Should().BeEmpty();
+    }
+
+    // Метку «✦ Claude» у кадра ставит фронт по initiator: правка человека в «Картинках» без метки, правка агента с меткой
+    [Theory]
+    [InlineData("human")]
+    [InlineData("agent")]
+    public async Task Кадр_переходит_на_версию_с_initiator_того_кто_её_сделал(string who)
+    {
+        var (scene, _) = _w.SceneWithClip(settings: Frames(FrameRef.Image("t1", "v1")));
+
+        await _hub.PublishAsync(new ImageVersionAdded(Owner, Session, ProjectId, "t1", "v2", who));
+
+        var frame = _w.Threads.Get(Owner, Session).Scenes.Single(s => s.SceneId == scene.SceneId).Settings.FrameA!;
+        frame.VersionId.Should().Be("v2");
+        frame.Initiator.Should().Be(who);
     }
 
     [Fact]

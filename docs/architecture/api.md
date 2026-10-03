@@ -292,7 +292,7 @@ POST                …/films/music?path=                { sessionId } — «С�
 
 **Агент** — MCP-сервер `video-editor` (`POST /mcp/video-editor/{sessionId}`, любой чат владельца при флаге).
 Всегда: `video_state`, `video_focus`, `video_new`, `video_scene_set`, `video_suggest_prompt`; при
-`VideoEditor:AgentLaunch` ещё `video_shoot`, `video_cancel`, `video_save_scene`, `video_film_edit`,
+`VideoEditor:AgentLaunch` ещё `video_shoot`, `video_cancel`, `video_wait`, `video_save_scene`, `video_film_edit`,
 `video_film_build`. Каждый инструмент зовёт тот же сервис, что ручка выше, и пишет ту же карточку в ленту с
 `initiator = agent` (пометка «✦ Claude»); пять пишущих и тратящих отказывают делегированному ходу (fail-closed),
 потолка трат и лимита запусков за ход нет.

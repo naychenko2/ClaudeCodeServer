@@ -245,7 +245,7 @@ public sealed class VideoEditorToolsetFeedParityTests
         var covered = Cases.Select(c => c.Name).ToHashSet();
 
         covered.Should().BeEquivalentTo(VideoEditorToolset.Schemas.Select(s => s.Name)
-            .Where(n => n != VideoEditorToolset.ToolState && n != VideoEditorToolset.ToolSuggestPrompt),
+            .Where(n => n != VideoEditorToolset.ToolState && n != VideoEditorToolset.ToolSuggestPrompt && n != VideoEditorToolset.ToolWait),
             "каждый инструмент, который что-то меняет, обязан быть в матрице");
     }
 }

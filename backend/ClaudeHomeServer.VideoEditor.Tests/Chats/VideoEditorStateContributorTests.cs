@@ -84,6 +84,19 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     }
 
     [Fact]
+    public async Task Сними_все_означает_снять_оставшиеся_сохранить_и_собрать_без_вопросов()
+    {
+        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir));
+
+        var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
+
+        text.Should().Contain(VideoEditorStateContributor.PaceRule);
+        VideoEditorStateContributor.PaceRule.Should()
+            .Contain("«Сними все» означает").And.Contain("video_save_scene").And.Contain("video_film_build")
+            .And.Contain("video_wait").And.Contain("не спрашивая");
+    }
+
+    [Fact]
     public async Task Личный_чат_получает_правило_без_локальных_моделей()
     {
         var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir));

@@ -101,7 +101,7 @@ ffmpeg без ИИ) и швы к «Картинкам» и «Звуку» — б
 - **Потолка трат и лимита запусков за ход нет** (решение Андрея): `MaxLaunchesPerTurn` из звука не переносить; темп
   держит правило «после сцены — спроси» в блоке хвоста.
 - **Состав `tools/list`** — только сессия, флаг владельца и `VideoEditor:AgentLaunch`; пять пишущих и тратящих
-  (`shoot`, `cancel`, `save_scene`, `film_edit`, `film_build`) идут через `IDelegatedTurnGate` в `CallAsync`, не в составе.
+  (`shoot`, `cancel`, `save_scene`, `film_edit`, `film_build`; `video_wait` — только чтение) идут через `IDelegatedTurnGate` в `CallAsync`, не в составе.
 - **Запись агента** — только `video/**` и `music/**`, `CreateNew`, `.film` под ревизией (её агент берёт из `video_state`).
 - Новая операция над нитями сцен — в `VideoSceneService`, а не в контроллере: иначе ручка и инструмент разойдутся.
 

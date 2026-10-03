@@ -462,21 +462,36 @@ function ModePill({
   );
 }
 
-// Полоска-индикатор лимита подписки по верхней кромке карточки композера.
-// Absolute внутри карточки — не сдвигает ленту и композер (никаких «прыжков» высоты).
-// Толщина одна (3px) и для warn, и для danger — серьёзность несёт только цвет
-// (RATE_COLORS[level].fill). Детали — в поповере: hover на desktop, tap на mobile.
+// Плашка упёршегося лимита подписки (danger) над карточкой композера: окно, что
+// происходит и когда сброс — текстом, без наведения. Перерасход тоже danger (см.
+// rateLevel), но сообщения при нём уходят — говорим «идёт перерасход», а не «не уйдёт».
+function RateLimitNotice({ w }: { w: RateWindow }) {
+  const reset = fmtReset(w.resetsAt);
+  return (
+    <Notice
+      tone="danger"
+      icon={Ban}
+      title={`${windowLabel(w.limitType)}: ${w.isUsingOverage ? 'лимит исчерпан, идёт перерасход' : 'лимит достигнут'}`}
+      style={{ margin: `0 ${SP.sm}px ${SP.xs}px` }}
+    >
+      {reset && <>Сброс {reset}.</>}
+    </Notice>
+  );
+}
+
+// Полоска-прогресс лимита подписки по верхней кромке карточки композера — только warn:
+// ширина заливки = доля окна, дорожка под ней показывает, сколько осталось. Упёршийся
+// лимит (danger) рисуется плашкой RateLimitNotice над карточкой — тонкую полоску там
+// легко проглядеть. Absolute внутри карточки — не сдвигает ленту и композер.
+// Детали — в поповере: hover на desktop, tap на mobile.
 const RATE_STRIPE_H = 3;
 function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
   const [open, setOpen] = useState(false);
   const c = RATE_COLORS[w.level];
-  const reached = w.level === 'danger';
   const reset = fmtReset(w.resetsAt);
-  // Оверрасход всегда даёт level=danger (см. rateLevel), поэтому «+» уместен только в
-  // danger-ветке, а не в warn — здесь его нет
-  const detail = reached
-    ? `${windowLabel(w.limitType)} — лимит достигнут${reset ? ` · сброс ${reset}` : ''}`
-    : `${windowLabel(w.limitType)} — ${w.pct}%${reset ? ` · сброс ${reset}` : ''}`;
+  const detail = `${windowLabel(w.limitType)} — ${w.pct}%${reset ? ` · сброс ${reset}` : ''}`;
+  // Без процента (warn пришёл одним статусом allowed_warning) долю не знаем — полоса целиком
+  const fillPct = w.hasUtil ? w.pct : 100;
   // desktop — hover; mobile — tap с overlay для закрытия по нажатию вне
   const hostEvents = isMobile
     ? { onClick: () => setOpen(o => !o) }
@@ -493,7 +508,7 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
           // Высота хит-зоны = верхний padding карточки (mobile 8 / desktop 7), чтобы
           // зона hover/tap полоски не залезала на первую строку поля ввода
           position: 'absolute', top: 0, left: 0, right: 0, height: isMobile ? 8 : 7,
-          zIndex: 3, cursor: reached ? 'default' : 'pointer',
+          zIndex: 3, cursor: 'pointer',
         }}
       >
         {/* Маска повторяет скругление верхних углов карточки — полоска садится по кромке */}
@@ -502,7 +517,9 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
           borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
           overflow: 'hidden', pointerEvents: 'none',
         }}>
-          <div style={{ height: RATE_STRIPE_H, width: '100%', background: c.fill }} />
+          <div style={{ height: RATE_STRIPE_H, background: c.bg }}>
+            <div style={{ height: '100%', width: `${fillPct}%`, background: c.fill }} />
+          </div>
         </div>
         {open && (
           <div style={{
@@ -513,9 +530,7 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: FONT.sans, fontSize: 12.5, color: c.text, lineHeight: 1.35 }}>
               <span style={{ flexShrink: 0, display: 'flex', color: c.text }}>
-                {reached
-                  ? <Ban size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                  : <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+                <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </span>
               <span>{detail}</span>
             </div>
@@ -1484,7 +1499,7 @@ export function Composer({
 
   // Полоска лимита закрывает верх белого поля — содержимое сдвигаем вниз на половину её
   // толщины, чтобы оно стояло по центру видимой части. Высота карточки при этом та же
-  const stripeShift = rateWindow && rateWindow.level !== 'normal' ? RATE_STRIPE_H / 2 : 0;
+  const stripeShift = rateWindow?.level === 'warn' ? RATE_STRIPE_H / 2 : 0;
   // Стили контейнера — поле всегда активно (доступно для ввода и во время генерации)
   const containerStyle: React.CSSProperties = {
     position: 'relative',
@@ -2431,6 +2446,7 @@ export function Composer({
           Задачи и отложенные сообщения дождутся устройства сами.
         </Notice>
       )}
+      {rateWindow?.level === 'danger' && <RateLimitNotice w={rateWindow} />}
       {/* Раскрывашка «Обсудить с командой» — над полем композера */}
       {canDiscuss && (
         <TeamDrawer
@@ -2492,8 +2508,8 @@ export function Composer({
           Отпустите — прикрепим к сообщению
         </div>
       )}
-      {/* Полоска-индикатор лимита подписки по кромке карточки (warn/danger) */}
-      {rateWindow && rateWindow.level !== 'normal' && <RateStripe w={rateWindow} isMobile={isMobile} />}
+      {/* Полоска-прогресс лимита подписки по кромке карточки (warn; danger — плашкой выше) */}
+      {rateWindow?.level === 'warn' && <RateStripe w={rateWindow} isMobile={isMobile} />}
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
       {showSkillsDropdown && skills.length > 0 && (
         <SkillsDropdown

@@ -116,6 +116,36 @@ public sealed class ImageContextKindTests : IDisposable
     }
 
     [Fact]
+    public async Task Усыновление_файла_агентом_без_фокуса_попадает_в_контекст()
+    {
+        _flags.On = true;
+        // Файл контекста уже существует (ревизия > 0), основного объекта нет
+        _context.SetPrimary(Owner, Chat, null, null);
+
+        await _service.AdoptFileAsync(Owner, Project, Chat, "gen/a.png", CancellationToken.None);
+
+        var thread = _threads.Get(Owner, Chat).Threads.Single();
+        var primary = _context.Get(Owner, Chat).Primary;
+        primary.Should().NotBeNull("усыновлённая нить стала фокусом вертикали — контекст обязан её показать");
+        ChatContextFocusMirror.ThreadOf(primary!).Should().Be(thread.Id);
+        primary!.By.Should().Be(ContextActor.Agent);
+    }
+
+    [Fact]
+    public async Task Усыновление_файла_не_уводит_контекст_от_выбора_человека()
+    {
+        _flags.On = true;
+        var mine = NewThread();
+        await _service.FocusAsync(Owner, Project, Chat, mine, _threads.Get(Owner, Chat).Revision);
+
+        await _service.AdoptFileAsync(Owner, Project, Chat, "gen/a.png", CancellationToken.None);
+
+        var primary = _context.Get(Owner, Chat).Primary!;
+        ChatContextFocusMirror.ThreadOf(primary).Should().Be(mine);
+        primary.By.Should().Be(ContextActor.Human, "выбор человека усыновление не трогает");
+    }
+
+    [Fact]
     public async Task Без_флага_стор_контекста_не_трогается()
     {
         _flags.On = false;

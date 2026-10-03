@@ -83,6 +83,11 @@ public sealed class ImageThreadService(
         return written;
     }
 
+    // Усыновление открывает нить с фокусом и возвращает выбор человека; в контекст чата (при флаге) идёт только
+    // итоговая разница: вернули прежний фокус — контекст не трогаем, остался на усыновлённой — отражаем
+    private void SyncNetFocus(string ownerId, string sessionId, string? before, string? after) =>
+        mirror?.Sync(ownerId, sessionId, ChatContext.ImageContextKind.Kind, before, after, ContextActor.Agent);
+
     // Чат этой области (область уже своя — её проверил вызывающий): владение следует из области.
     // scopeKey — id проекта или ImageEditScope.Personal у личного чата вне проекта. Ключ Personal
     // общий у всех владельцев, и владения он не доказывает: его держат гейт личного маршрута и
@@ -218,6 +223,7 @@ public sealed class ImageThreadService(
             if (before.Focus is not null && state.Focus != before.Focus
                 && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
                 state = back.State;
+            SyncNetFocus(ownerId, sessionId, before.Focus, state.Focus);
             await BroadcastAsync(ownerId, projectId, sessionId, state);
             return;
         }
@@ -288,6 +294,7 @@ public sealed class ImageThreadService(
         if (before.Focus is not null && state.Focus != before.Focus
             && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
             state = back.State;
+        SyncNetFocus(ownerId, sessionId, before.Focus, state.Focus);
         await BroadcastAsync(ownerId, projectId, sessionId, state);
     }
 

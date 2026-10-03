@@ -1,10 +1,12 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.AudioEditor.ChatContext;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Media;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -105,6 +107,50 @@ public sealed class AudioContextKindTests : IDisposable
 
         _jobs.Tracked(Owner, Chat, () => _threads.SetFocus(Owner, Chat, null, null), ContextActor.Agent);
         _context.Get(Owner, Chat).Primary.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Усыновление_звука_агентом_без_фокуса_попадает_в_контекст()
+    {
+        _flags.On = true;
+        _context.SetPrimary(Owner, Chat, null, null);
+        var adopter = Adopter();
+
+        await adopter.AdoptAsync(new LocalMediaAdoption(Owner, "p-1", Chat, "music_edit", "lm_a",
+            [new LocalMediaAdoptedFile("gen/a.mp3", "audio/mpeg")]), CancellationToken.None);
+
+        var thread = _threads.Get(Owner, Chat).Threads.Single();
+        var primary = _context.Get(Owner, Chat).Primary;
+        primary.Should().NotBeNull("усыновлённая нить стала фокусом вертикали — контекст обязан её показать");
+        ChatContextFocusMirror.ThreadOf(primary!).Should().Be(thread.Id);
+        primary!.By.Should().Be(ContextActor.Agent);
+    }
+
+    [Fact]
+    public async Task Усыновление_звука_не_уводит_контекст_от_выбора_человека()
+    {
+        _flags.On = true;
+        var mine = _threads.Open(Owner, Chat, "mine.mp3", null, null).Thread!.Id;
+        _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem("audio", mine, ContextActor.Human), null);
+
+        await Adopter().AdoptAsync(new LocalMediaAdoption(Owner, "p-1", Chat, "music_edit", "lm_a",
+            [new LocalMediaAdoptedFile("gen/a.mp3", "audio/mpeg")]), CancellationToken.None);
+
+        var primary = _context.Get(Owner, Chat).Primary!;
+        ChatContextFocusMirror.ThreadOf(primary).Should().Be(mine);
+        primary.By.Should().Be(ContextActor.Human, "выбор человека усыновление не трогает");
+    }
+
+    private LocalAudioAdopter Adopter()
+    {
+        var directory = new Moq.Mock<ISessionDirectory>();
+        directory.Setup(d => d.GetById(Chat)).Returns(new Session { Id = Chat, OwnerId = Owner, ProjectId = "p-1" });
+        directory.Setup(d => d.ResolveOwnerId(Moq.It.IsAny<Session>())).Returns(Owner);
+        var projects = new Moq.Mock<IProjectManager>();
+        projects.Setup(p => p.GetById("p-1")).Returns(new Project { Id = "p-1", OwnerId = Owner, RootPath = _root });
+        var gate = new Moq.Mock<IFeatureFlagGate>();
+        gate.Setup(g => g.IsEnabled(Owner, Moq.It.IsAny<string>())).Returns(true);
+        return new LocalAudioAdopter(_threads, _jobs, directory.Object, projects.Object, gate.Object);
     }
 
     [Fact]

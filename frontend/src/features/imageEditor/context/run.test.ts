@@ -15,9 +15,16 @@ const win = Object.assign(new EventTarget(), {
 });
 vi.stubGlobal('window', win);
 
+vi.mock('../marks', async orig => ({
+  ...(await orig<typeof import('../marks')>()),
+  exportMask: async () => new Blob(['mask']),
+  exportAnnotated: async () => new Blob(['annotated']),
+}));
+vi.stubGlobal('Image', class { onload: (() => void) | null = null; onerror: (() => void) | null = null; set src(_v: string) { queueMicrotask(() => this.onload?.()); } });
+
 const { imageEditorApi } = await import('../api');
 const { __resetPrefs, getPrefs, prefsApi } = await import('../thread/prefs');
-const { __applyThreads, __resetThreadStore } = await import('../thread/threadStore');
+const { __applyThreads, __resetThreadStore, setThreadMarks } = await import('../thread/threadStore');
 const { __applyChatContext, __resetChatContextStore } = await import('../../../lib/chatContext/store');
 const { threadsApi } = await import('../thread/threadsApi');
 const { loadCatalog } = await import('../thread/catalog');
@@ -39,8 +46,8 @@ const context = (revision: number): ChatContextDto => ({
   primary: { id: 'i1', kind: 'image', ref: { threadId: 't1' }, by: 'human', addedAt: '2026-10-01T00:00:00Z', label: 'hero.png', version: null, thumb: null, missing: false, role: null },
 });
 
-let started: { op?: unknown; contextRevision?: number; aspectRatio?: string; threadId?: string }[];
-let quoted: { op: string; count: number; sessionId?: string | null; contextRevision?: number | null }[];
+let started: { op?: unknown; contextRevision?: number; aspectRatio?: string; threadId?: string; marks?: string; mask?: boolean; annotated?: boolean }[];
+let quoted: { op: string; count: number; hasMask: boolean; hasAnnotations?: boolean; sessionId?: string | null; contextRevision?: number | null }[];
 
 beforeEach(async () => {
   storage.clear();
@@ -56,7 +63,7 @@ beforeEach(async () => {
   const realQuote = api.quote.bind(api);
   vi.spyOn(api, 'quote').mockImplementation(async (p, req) => { quoted.push(req); return realQuote(p, req); });
   vi.spyOn(api, 'startJob').mockImplementation(async (_p, req) => {
-    started.push({ contextRevision: req.contextRevision, aspectRatio: req.aspectRatio, threadId: req.threadId });
+    started.push({ contextRevision: req.contextRevision, aspectRatio: req.aspectRatio, threadId: req.threadId, marks: req.marks, mask: !!req.mask, annotated: !!req.annotated });
     return { jobId: 'j1' } as never;
   });
   vi.stubGlobal('fetch', vi.fn(async () => ({ blob: async () => new Blob([]) })));
@@ -70,7 +77,8 @@ describe('запуск действия картинки', () => {
   it('«Изменить»: ревизия контекста уходит и в котировку, и в запуск; в нить основного объекта', async () => {
     const h = await imageKindApi.launch!(CTX, { op: 'edit', text: 'добавь шляпу', params: { variants: 3 }, contextRevision: 7 });
     expect(h.id).toBe('j1');
-    expect(started).toEqual([{ contextRevision: 7, aspectRatio: undefined, threadId: 't1' }]);
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({ contextRevision: 7, aspectRatio: undefined, threadId: 't1', marks: undefined, mask: false });
     expect(quoted).toHaveLength(1);
     expect(quoted[0]).toMatchObject({ op: 'edit', count: 3, sessionId: S, contextRevision: 7 });
   });
@@ -93,6 +101,48 @@ describe('запуск действия картинки', () => {
     __applyChatContext(S, { ...context(10), primary: { ...context(10).primary!, ref: { threadId: 'нет' } } });
     await expect(imageKindApi.launch!(CTX, { op: 'edit', text: 'x', params: {}, contextRevision: 10 })).rejects.toThrow();
     expect(started).toHaveLength(0);
+  });
+});
+
+const BRUSH = { type: 'mask', points: [[1, 1], [9, 9]], width: 4 } as const;
+const ARROW = { type: 'arrow', x1: 1, y1: 1, x2: 9, y2: 9 } as const;
+const SIZE = { w: 100, h: 100 };
+
+describe('запуск чипа с отметками: маска и аннотации уходят в котировку и запуск', () => {
+  it('кисть и стрелка: «Изменить» становится инпейнтом, котировка и запуск несут маску и аннотации, отметки уходят в задачу', async () => {
+    setThreadMarks('t1', [BRUSH, ARROW], SIZE);
+    await imageKindApi.launch!(CTX, { op: 'inpaint', text: 'убери', params: { variants: 1 }, contextRevision: 7 });
+    expect(quoted[0]).toMatchObject({ op: 'inpaint', hasMask: true, hasAnnotations: true });
+    expect(JSON.parse(started[0].marks!)).toHaveLength(2);
+    expect(started[0]).toMatchObject({ mask: true, annotated: true });
+  });
+
+  it('только стрелка: маски нет, аннотации есть, операция — правка', async () => {
+    setThreadMarks('t1', [ARROW], SIZE);
+    await imageKindApi.launch!(CTX, { op: 'edit', text: 'сюда', params: { variants: 1 }, contextRevision: 7 });
+    expect(quoted[0]).toMatchObject({ op: 'edit', hasMask: false, hasAnnotations: true });
+    expect(JSON.parse(started[0].marks!)).toHaveLength(1);
+    expect(started[0]).toMatchObject({ mask: false, annotated: true });
+  });
+
+  it('цена и запуск быстрой операции совпадают: стрелки «Увеличить» не нужны ни там, ни там', async () => {
+    setThreadMarks('t1', [ARROW], SIZE);
+    await imageKindApi.quote!(CTX, { op: 'upscale', text: '', params: {}, contextRevision: 7 });
+    await imageKindApi.launch!(CTX, { op: 'upscale', text: '', params: {}, contextRevision: 7 });
+    expect(quoted).toHaveLength(2);
+    expect(quoted[0]).toMatchObject({ op: 'upscale', hasMask: false, hasAnnotations: false });
+    expect(quoted[1]).toEqual(quoted[0]);
+    expect(started[0].marks).toBeUndefined();
+  });
+
+  it('ключ цены меняется от отметок: priceSalt различает пустой холст, стрелку и кисть', () => {
+    const salt = () => imageKindApi.priceSalt!(CTX, 'edit');
+    const empty = salt();
+    setThreadMarks('t1', [ARROW], SIZE);
+    const arrow = salt();
+    setThreadMarks('t1', [ARROW, BRUSH], SIZE);
+    const both = salt();
+    expect(new Set([empty, arrow, both]).size).toBe(3);
   });
 });
 

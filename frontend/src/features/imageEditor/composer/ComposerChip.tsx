@@ -16,7 +16,6 @@ import { enterChat, getEditor, getThreadMarks, openEditor, setThreadMarks, useTh
 import { usePrefs } from '../thread/prefs';
 import { getStoredImageMode, effectiveImageMode, useImageModeVersion } from '../thread/modeState';
 import { threadHasImage } from '../thread/useThreadLaunch';
-import { IMAGE_COMPOSER_MODE } from './imageMode';
 import { editChoice, editPickOf } from '../panel/panelOp';
 import { IMAGE_COMPOSER_MODE } from './imageMode';
 

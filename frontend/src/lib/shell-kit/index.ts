@@ -45,7 +45,7 @@ export type {
 } from '../chatContext/types';
 
 export {
-  useChatContext, getChatContextState, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
+  useChatContext, getChatContextState, refreshChatContext, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
 } from '../chatContext/store';
 export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
 export { refOf, rolesFor } from '../chatContext/fill';

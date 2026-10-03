@@ -191,3 +191,6 @@ export function __subscribeForTests() { return subscribe(() => {}); }
 export const __offerForTests = (sessionId: string) => _undo.get(sessionId)?.current() ?? null;
 
 export const ensureChatContext = (sessionId: string) => load(sessionId);
+
+// Перечитать контекст чата: вертикаль завела объект (черновик), а событие рассылки могло опоздать или потеряться
+export const refreshChatContext = (sessionId: string) => load(sessionId, true);

@@ -2,7 +2,7 @@
 // поля ввода (котировка → задача строго по quoteId, ADR-021 §2).
 
 import {
-  autoRevealGenerationPanel, clearGenDraft, createReleaseUndo, dropAgentPick, followSelection, requestStrip,
+  autoRevealGenerationPanel, clearGenDraft, createReleaseUndo, dropAgentPick, followSelection, refreshChatContext, requestStrip,
   showToast,
 } from 'aihome_shell/kit';
 import { audioApi, nameTakenSuggestion, type AudioMode, type AudioOp, type AudioThread } from '../api';
@@ -87,6 +87,8 @@ export async function createDraft(scope: string, sessionId: string, mode: AudioM
   const ok = await mutate(scope, sessionId, rev => audioApi.open(scope, sessionId, { draftFolder: '', mode, revision: rev }));
   if (ok) {
     requestSoundMode(sessionId);
+    // Черновик становится основным объектом на сервере; состояние контекста не ждёт события рассылки
+    void refreshChatContext(sessionId);
     autoRevealGenerationPanel(SOUND_PANEL, sessionId, 'settings');
   }
   return ok;

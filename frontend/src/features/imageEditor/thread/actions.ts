@@ -3,7 +3,7 @@
 // тексты тостов — из записки v3, раздел «Тексты».
 
 import {
-  api as appApi, autoRevealGenerationPanel, createReleaseUndo, dropAgentPick, followSelection, showToast,
+  api as appApi, autoRevealGenerationPanel, createReleaseUndo, dropAgentPick, followSelection, refreshChatContext, showToast,
 } from 'aihome_shell/kit';
 import { IMAGES_PANEL } from '../characters/panel';
 import { revealImagesPanel } from '../context/reveal';
@@ -129,6 +129,8 @@ export async function createDraft(projectId: string, sessionId: string, folder: 
   if (ok) {
     noteImageMode(sessionId, 'create');
     requestImageMode(sessionId);
+    // Черновик становится основным объектом на сервере; состояние контекста не ждёт события рассылки
+    void refreshChatContext(sessionId);
   }
   return revealPanel(ok, sessionId, how);
 }

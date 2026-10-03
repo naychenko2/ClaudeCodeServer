@@ -121,6 +121,14 @@ public class ChatContextContractsTests
         foreach (var key in ((JsonObject)ExampleNode(label)).Select(kv => kv.Key))
             props.Should().Contain(key, $"поле «{key}» примера «{label}» должно быть у {form.Name}");
         props.Should().Contain("ContextRevision");
+
+        // обратная сверка: поле формы, которого нет в примере, обязано быть названо в контракте в обратных кавычках
+        // (прозой «не нужны»/«остаются»); совсем не описанное поле — красный
+        var keys = ((JsonObject)ExampleNode(label)).Select(kv => kv.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var doc = File.ReadAllText(FindContractsFile());
+        foreach (var prop in form.GetProperties().Select(p => p.Name).Where(n => !keys.Contains(n)))
+            Regex.IsMatch(doc, "`" + Regex.Escape(prop) + "`", RegexOptions.IgnoreCase)
+                .Should().BeTrue($"поле формы {form.Name}.{prop} нет ни в примере «{label}», ни в тексте контракта");
     }
 
     private static void AssertRoundTrip<T>(string label)

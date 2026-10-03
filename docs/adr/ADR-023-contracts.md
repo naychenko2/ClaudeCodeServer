@@ -124,7 +124,7 @@
 
 ### Котировка картинки: тело
 
-С ревизией `references`, `hasCharacter`, `width`, `height` не нужны (сервер считает по стору); остаются `op`, `count`,
+С ревизией `references`, `hasCharacter`, `width`, `height` не нужны (сервер считает по стору; в записи они необязательны — по умолчанию `0`/`false`/`null`); остаются `op`, `count`,
 `provider`/`model`, `hasMask`, `hasAnnotations`, `removal`.
 
 ```json image-quote-request
@@ -150,6 +150,7 @@
 
 `executors` — строки «Чем» для `op` запроса; их читает строка контекста и панель (решение Р2). `group` — `auto` | `local` |
 `cloud`; у строки «Авто» `sub` несёт «сейчас: …»; серая строка — `disabled: true` и `reason` вместо `sub`.
+Цена — полями: `free`, `amount` + `unit` (у бесплатных `amount: null`), `etaSeconds` (у локальных); `price` — готовая подпись для показа, фронт её не разбирает. `badges` — `[{label, tone}]` (`tone`: `neutral` | `good` | `warn` | `info`): RU / без RU, лицензия, «тяжёлая». Наполнение строк — этапы 2б-3 (картинки) и 2б-4 (звук); пока `executors` может быть `null`.
 
 ```json image-quote
 {
@@ -160,9 +161,9 @@
   "expiresAt": "2026-10-03T11:00:00Z",
   "expectedSeconds": 40,
   "executors": [
-    { "id": "auto", "group": "auto", "name": "Авто", "sub": "сейчас: локально · Qwen-Image Edit", "price": "бесплатно · ~40 с", "disabled": false, "locked": false, "reason": null },
-    { "id": "local:qwen-image-edit", "group": "local", "name": "Qwen-Image Edit", "sub": null, "price": "бесплатно · ~40 с", "disabled": false, "locked": false, "reason": null },
-    { "id": "fal:flux-kontext", "group": "cloud", "name": "fal · FLUX Kontext", "sub": null, "price": "$0.04 / шт.", "disabled": true, "locked": false, "reason": "не умеет «Изменить отмеченное» — только новая картинка" }
+    { "id": "auto", "group": "auto", "name": "Авто", "sub": "сейчас: локально · Qwen-Image Edit", "price": "бесплатно · ~40 с", "free": true, "amount": null, "unit": "free", "etaSeconds": 40, "badges": [{ "label": "без RU", "tone": "warn" }], "disabled": false, "locked": false, "reason": null },
+    { "id": "local:qwen-image-edit", "group": "local", "name": "Qwen-Image Edit", "sub": null, "price": "бесплатно · ~40 с", "free": true, "amount": null, "unit": "free", "etaSeconds": 40, "badges": [{ "label": "без RU", "tone": "warn" }, { "label": "apache-2.0", "tone": "neutral" }], "disabled": false, "locked": false, "reason": null },
+    { "id": "fal:flux-kontext", "group": "cloud", "name": "fal · FLUX Kontext", "sub": null, "price": "$0.04 / шт.", "free": false, "amount": 0.04, "unit": "usd", "etaSeconds": null, "badges": [{ "label": "RU", "tone": "good" }], "disabled": true, "locked": false, "reason": "не умеет «Изменить отмеченное» — только новая картинка" }
   ]
 }
 ```
@@ -171,7 +172,7 @@
 
 `multipart/form-data` на `POST …/image-editor/jobs`; здесь — поля формы как JSON-объект. С ревизией `source`,
 `references`, `referencePaths`, `characterSlug`, `threadId`, `versionId` не нужны; остаются `quoteId`, `prompt`, `marks`,
-`aspectRatio`, `matchSourceSize`.
+`aspectRatio`, `matchSourceSize`. Остальные поля формы, которых нет в примере: `sourcePath`, `source`, `mask`, `annotated`, `referenceRoles`, `referencePathRoles`, `baseStepId` — клиент шлёт их по месту (маска, аннотации, роли референсов, шаг истории).
 
 ```json image-job-form
 {
@@ -226,7 +227,7 @@
   "expiresAt": "2026-10-03T11:00:00Z",
   "recreateVoice": null,
   "executors": [
-    { "id": "auto", "group": "auto", "name": "Авто", "sub": "сейчас: локально · Qwen3-TTS", "price": "бесплатно · ~20 с", "disabled": false, "locked": false, "reason": null }
+    { "id": "auto", "group": "auto", "name": "Авто", "sub": "сейчас: локально · Qwen3-TTS", "price": "бесплатно · ~20 с", "free": true, "amount": null, "unit": "free", "etaSeconds": 20, "badges": [{ "label": "RU", "tone": "good" }, { "label": "apache-2.0", "tone": "neutral" }], "disabled": false, "locked": false, "reason": null }
   ]
 }
 ```
@@ -234,7 +235,7 @@
 ### Запуск звука: поля формы
 
 С ревизией `threadId`, `baseVersionId`, `voice`, `referencePath`, `clipPaths` не нужны; остаются `quoteId`, `text`,
-`prompt`, `lyrics`, `language`, `durationSec`, `startSec`/`endSec` (выделение на волне), `params`.
+`prompt`, `lyrics`, `language`, `durationSec`, `startSec`/`endSec` (выделение на волне), `params`. Остальные поля формы, которых нет в примере: `seed`, `reference`, `clips`, `voiceModelPath`, `voiceIndexPath` — клиент шлёт их по месту.
 
 ```json audio-job-form
 {

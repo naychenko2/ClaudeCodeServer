@@ -5,7 +5,7 @@
 import { Image as ImageIcon } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
-  SubsystemManifest, FileViewerToolbarCtx, ChatItemToolCtx, ComposerChipApi, ComposerChipCtx, ComposerStripCtx,
+  ContextOpenerApi, SubsystemManifest, FileViewerToolbarCtx, ChatItemToolCtx, ComposerChipApi, ComposerChipCtx, ComposerStripCtx,
   WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
 import { isEditableImage } from './format';
@@ -17,6 +17,7 @@ import { ImageComposerChip } from './composer/ComposerChip';
 import { ImagesPanel } from './panel/ImagesPanel';
 import { IMAGE_COMPOSER_MODE, imageMode } from './composer/imageMode';
 import { imageKindApi } from './context/kind';
+import { imageRefOfPath } from './context/opener';
 import { takeMarksAttachment } from './composer/marksAttachment';
 import { ImagesStrip, imagesStripStatus } from './strip/ImagesStrip';
 import { ThreadAnchor } from './thread/ThreadCard';
@@ -36,6 +37,16 @@ export const manifest: SubsystemManifest = {
     // ImageEditorOpenerApi: вход из дерева файлов — последний активный чат проекта
     'image-editor': [
       { name: 'opener', action: { isEditable: isEditableImage, open: openFromTree } },
+    ],
+    // Вход из «Файлов» в контекст хода (ADR-023): картинка проекта становится нитью-основным объектом
+    'context-opener': [
+      {
+        name: 'image',
+        action: {
+          isOpenable: isEditableImage,
+          toRef: ({ projectId, sessionId, path }) => imageRefOfPath(projectId, sessionId, path),
+        } satisfies ContextOpenerApi as unknown as Record<string, unknown>,
+      },
     ],
     // Карточки ленты: ключ — имя инструмента или kind записи (image_launch и
     // image_file_moved — история архивных чатов картинки v2)

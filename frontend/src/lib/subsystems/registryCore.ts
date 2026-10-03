@@ -191,6 +191,15 @@ export interface ImageEditorOpenerApi {
   isEditable: (path: string) => boolean;
   open: (req: ImageEditorOpenRequest) => void;
 }
+// Action-слот `context-opener` (ADR-023, 2к-2): вход из дерева файлов в контекст хода. Вертикаль
+// превращает путь в объект контекста (ссылку на свой вид): картинка — в нить `image` с файлом. Слот
+// обобщает `image-editor`/`opener`: тот открывает попап редактора, этот наполняет контекст
+export const SLOT_CONTEXT_OPENER = 'context-opener';
+export interface ContextOpenerApi {
+  isOpenable: (path: string) => boolean;
+  // null — не вышло (ошибка уже показана тостом вертикалью)
+  toRef: (req: { projectId: string; sessionId: string; path: string }) => Promise<{ kind: string; ref: Record<string, unknown> } | null>;
+}
 // Render-слот `file-viewer-toolbar`: кнопки под просмотром файла
 export interface FileViewerToolbarCtx {
   projectId: string;

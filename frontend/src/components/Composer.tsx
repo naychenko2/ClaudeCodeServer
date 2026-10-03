@@ -2,7 +2,7 @@ import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, us
 import type { Project } from '../types';
 import { canRunTurn } from '../lib/projectCapabilities';
 import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, MessageSquare, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
-import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
+import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z, composerLip } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
@@ -2668,14 +2668,10 @@ export function Composer({
       flexWrap: 'nowrap', minWidth: 0,
       ...(isMobile
         ? { marginTop: 7, padding: '0 2px' }
-        : {
-            margin: '-12px 0 0', padding: '15px 8px 4px',
-            background: C.bgMain, border: `1px solid ${C.borderLight}`,
-            borderRadius: `0 0 ${R.xxl}px ${R.xxl}px`,
-            // Низ фигуры обводит та же тень, что у панелей-островов: губа стоит с
-            // ними на одной линии, и обрыв без тени рядом с их мягким низом виден
-            boxShadow: SHADOW.island,
-          }),
+        // Нижняя губа; верхнюю (полосы над композером) строит тот же composerLip —
+        // отступы у них общие. Тень снизу — как у панелей-островов: губа стоит с ними
+        // на одной линии, и обрыв без тени рядом с их мягким низом виден
+        : composerLip('bottom')),
     }}>
       <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
         {modeButton}

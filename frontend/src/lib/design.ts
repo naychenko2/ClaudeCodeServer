@@ -202,6 +202,46 @@ export const ISLAND = {
   projectInkAlpha: 'var(--canvas-project-alpha)',
 } as const
 
+// === Губы композера (десктоп и планшет) ===
+// Белое поле ввода обнимают две «губы»: снизу ряд кнопок (режим, модель…), сверху
+// полоса над композером (Git / Картинки / Руки). Губа заезжает под поле на overlap,
+// поэтому со стороны поля её поле = overlap + gap, а с открытой стороны — edge.
+// Геометрия у обеих одна — отступы сходятся по построению, а не подгонкой цифр.
+// На телефоне губ нет: ряд кнопок и полосы стоят отдельно.
+export const COMPOSER_LIP = {
+  overlap: 12,  // заезд под поле ввода
+  gap:     3,   // видимый зазор между полем ввода и рядом губы
+  edge:    4,   // поле губы с открытой стороны
+  padX:    8,   // поля губы по бокам
+  row:     32,  // высота ряда содержимого
+  rowMini: 20,  // ряд свёрнутой строки полосы (ушка): переключатель «Git ▾» ужат до 20
+  edgeTab: 2,   // поле ушка с открытой стороны — тоньше, чем у полной губы
+  tabInset: 14, // отступ ушка от левого края поля ввода
+} as const
+
+// Готовый стиль губы. Высота задана явно, чтобы губа не зависела от роста кнопок
+// внутри: развёрнутая полоса — одной высоты с нижней губой. Свёрнутая строка полосы
+// становится ушком (tab): низкий ряд rowMini и ширина по содержимому — закладка слева,
+// а не вторая строка поля во всю ширину.
+export function composerLip(side: 'top' | 'bottom', { row, tab = false }: { row?: number; tab?: boolean } = {}) {
+  const { overlap, gap, padX, tabInset } = COMPOSER_LIP;
+  const edge = tab ? COMPOSER_LIP.edgeTab : COMPOSER_LIP.edge;
+  row ??= tab ? COMPOSER_LIP.rowMini : COMPOSER_LIP.row;
+  const top = side === 'top';
+  const inner = overlap + gap;
+  return {
+    boxSizing: 'border-box' as const,
+    height: row + edge + inner + 2,   // + рамка 1px сверху и снизу
+    padding: top ? `${edge}px ${padX}px ${inner}px` : `${inner}px ${padX}px ${edge}px`,
+    background: C.bgMain, border: `1px solid ${C.borderLight}`,
+    borderRadius: top ? `${R.xxl}px ${R.xxl}px 0 0` : `0 0 ${R.xxl}px ${R.xxl}px`,
+    // Тень обводит открытую сторону: вниз — как у островов, вверх — та же, но подъёмом
+    boxShadow: top ? SHADOW.lift : SHADOW.island,
+    ...(top ? { marginBottom: -overlap } : { marginTop: -overlap }),
+    ...(tab ? { width: 'fit-content', maxWidth: `calc(100% - ${tabInset * 2}px)`, marginLeft: tabInset } : null),
+  };
+}
+
 // === Слои (z-index) ===
 export const Z = {
   // Кадр эфира, вставленный в панель или центральный остров. Живёт оверлеем НАД

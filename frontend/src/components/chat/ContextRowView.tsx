@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 import { ChevronDown, ChevronRight, Cpu, Eye, GitBranch, Plus, RotateCcw, Send, Trash2, X, Check, Info } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW, Z } from '../../lib/design';
 import { plural } from '../../lib/plural';
-import { contextRowLadder, CAP, ladderRungs, NOM, type LadderFacts, type LadderPick } from '../../lib/chatContext/ladder';
+import { contextRowLadder, CAP, gitChipBox, ladderRungs, NOM, type LadderFacts, type LadderPick } from '../../lib/chatContext/ladder';
 import { unusedBy } from '../../lib/chatContext/fill';
 import { roleLabel } from '../../lib/chatContext/roleLabels';
 import { baseName } from '../../lib/chatContext/labels';
@@ -165,7 +165,8 @@ function GitChip({ g, form, onOpen }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: 
   const clean = !g.changes && !g.publishN;
   const up = g.publishN > 0 ? <span style={{ color: C.accent, fontWeight: 600, flexShrink: 0 }}>↑{g.publishN}</span> : null;
   const count = g.changes ? <span style={{ fontWeight: 600, flexShrink: 0 }}>{g.changes}</span> : null;
-  const max = form === 0 ? NOM.g0 : form === 3 ? CAP.g3 : NOM[`g${form}` as 'g1'];
+  const box = gitChipBox(form);
+  const max = box.chip;
   const open = (e: { currentTarget: HTMLElement }) => onOpen(e.currentTarget.getBoundingClientRect());
   if (form === 0) {
     // Телефон: иконка с бейджем-счётчиком
@@ -180,7 +181,7 @@ function GitChip({ g, form, onOpen }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: 
   return (
     <RowChip kind="git" max={max} title={gitTitle(g)} onClick={open} mono>
       {icon}
-      {form >= 2 && <span style={{ ...ellipsis, maxWidth: form === 3 ? 136 : 76 }}>{g.label}</span>}
+      {form >= 2 && <span style={box.label === null ? ellipsis : { ...ellipsis, maxWidth: box.label }}>{g.label}</span>}
       <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>
       {form === 3
         ? (g.changes ? <span style={{ flexShrink: 0 }}>{changesWord(g.changes)}</span> : (g.publishN ? null : <span style={{ flexShrink: 0 }}>чисто</span>))

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contextRowLadder, ladderNominal, ladderRungs, type LadderFacts } from './ladder';
+import { contextRowLadder, gitChipBox, ladderNominal, ladderRungs, type LadderFacts } from './ladder';
 
 // Типовое состояние макета: проект, объект, «Чем», два референса
 const typical: LadderFacts = { project: true, hasPrimary: true, hasExec: true, refs: 2 };
@@ -77,5 +77,13 @@ describe('contextRowLadder', () => {
   it('телефон: ветка иконкой 34 px', () => {
     const mob: LadderFacts = { ...typical, mobile: true };
     expect(ladderNominal(mob, { g: 3, o: 2, e: 3, k: 0 })).toBe(ladderNominal(typical, { g: 3, o: 2, e: 3, k: 0 }) - 262 + 34);
+  });
+});
+
+describe('gitChipBox', () => {
+  it('на полной форме ветка по содержимому, на тесных ступенях режется', () => {
+    expect(gitChipBox(3).label).toBeNull();
+    expect(gitChipBox(3).chip).toBeGreaterThan(300);
+    expect(gitChipBox(2)).toEqual({ chip: 150, label: 76 });
   });
 });

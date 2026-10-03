@@ -43,6 +43,19 @@ test('1440: строка из ветки, объекта и референсов
   await shot(page, 'row-1440.png');
 });
 
+test('1440: ветка при свободном месте без многоточия, имя целиком', async ({ page }) => {
+  newWorld({ ctx: { primary: primary(), refs: [ref('r1', 'Аня')] } });
+  await openChat(page, { vp: D });
+  await expect(row(page)).toBeVisible({ timeout: 30_000 });
+  const cut = await chip(page, 'git').locator('span').first().evaluate(() => {
+    const el = document.querySelector('[data-chip="git"] span') as HTMLElement | null;
+    return el ? el.scrollWidth > el.clientWidth + 1 : false;
+  });
+  expect(cut, 'имя ветки не режется').toBe(false);
+  await expect(chip(page, 'git')).toContainText('feat/video-editor');
+  await shot(page, 'git-1440.png');
+});
+
 test('360: строка 32 px прокручивается, ветка иконкой с бейджем', async ({ page }) => {
   newWorld({ ctx: { primary: primary(), refs: [ref('r1', 'Аня'), ref('r2', 'palette.png')] } });
   await openChat(page, { vp: M });

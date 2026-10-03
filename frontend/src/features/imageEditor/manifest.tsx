@@ -106,7 +106,7 @@ export const manifest: SubsystemManifest = {
       // персонажи остаются вкладкой «Картинок»
       {
         name: CHARACTERS_PANEL,
-        render: (ctx: WorkspacePanelDefCtx) => <CharactersContextPanel ctx={ctx} />,
+        render: (ctx: WorkspacePanelDefCtx) => <CharactersContextPanel ctx={ctx} layout={ctx.isMobile ? 'sheet' : 'column'} />,
         action: {
           title: 'Персонажи',
           icon: <Contact size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,

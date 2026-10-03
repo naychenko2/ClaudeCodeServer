@@ -112,7 +112,7 @@ export const manifest: SubsystemManifest = {
       // без флага библиотека остаётся вкладкой «Звука», а у личного чата голосов нет
       {
         name: VOICES_KEY,
-        render: (ctx: WorkspacePanelDefCtx) => <VoicesContextPanel ctx={ctx} />,
+        render: (ctx: WorkspacePanelDefCtx) => <VoicesContextPanel ctx={ctx} layout={ctx.isMobile ? 'sheet' : 'column'} />,
         action: {
           title: 'Голоса',
           icon: <Mic size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,

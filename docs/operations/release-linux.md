@@ -3,7 +3,8 @@
 Прод крутится на отдельной Linux-машине, бэкенд — systemd-юнит `ccs.service`,
 публикация — в `/opt/ccs/app`. Процедура отличается от Windows-прода (там
 `deploy-agent.ps1` через Task Scheduler; ADR-010); здесь — bash-скрипты в
-`scripts/ops/` плюс парные им `/opt/ccs/switch-release.sh` и
+`scripts/ops/` плюс парные им `/opt/ccs/switch-release.sh` (источник —
+[`scripts/ops/switch-release.sh`](../../scripts/ops/switch-release.sh)) и
 `/opt/ccs/check-release.sh` на самой машине.
 
 > **Прод не перезапускать руками без `watch_start`** — даже если деплой
@@ -18,8 +19,8 @@
 | `/opt/ccs/app/` | рабочая папка бэкенда, обновляется `publish-linux.sh` | rsync из staging |
 | `/opt/ccs/app/build-id.txt` | маркер сборки: `timestamp`, `sha=<sha8>`, `ref=`, `dirty=`, `builtAt=` | `publish-linux.sh:95-96` |
 | `/opt/ccs/staging/` | временная папка сборки, удаляется после rsync | `publish-linux.sh` |
-| `/opt/ccs/releases/<timestamp>/` | снимок предыдущего билда целиком | `switch-release.sh` |
-| `/opt/ccs/switch-release.sh` | swap + systemd restart + health-гейт + автооткат | руками не правится; парный к `check-release.sh` |
+| `/opt/ccs/releases/<timestamp>/` | снимок предыдущего билда целиком (≈170 МБ); хранятся 5 последних | `switch-release.sh` (ротация — он же) |
+| `/opt/ccs/switch-release.sh` | swap + systemd restart + health-гейт + автооткат + ротация снимков | копия `scripts/ops/switch-release.sh`, ставится по разделу ниже; на машине руками не правится |
 | `/opt/ccs/check-release.sh` | проверка «прод на сборке X»: `exit 0` если `build-id.txt` содержит нужный sha8 и health 2xx | парный к `switch-release.sh` |
 | `/opt/ccs/deploy-<timestamp>.log` | лог выкатки (фазы, health-попытки, автооткат при провале) | `switch-release.sh` |
 
@@ -63,6 +64,40 @@
 5. **После будильника сторожа** — прод на новой сборке, health зелёный
    (204 + `X-Build` = свежий `build-id.txt`). Лог выкатки в
    `/opt/ccs/deploy-<ts>.log` фиксирует фазы и финальный результат.
+
+## Ротация снимков и установка скрипта
+
+Источник правды `switch-release.sh` — репозиторий (`scripts/ops/`); `/opt/ccs/switch-release.sh`
+— его установленная копия. Правка скрипта = коммит в репозитории, затем на хосте:
+
+```bash
+install -m 755 scripts/ops/switch-release.sh /opt/ccs/switch-release.sh
+bash -n /opt/ccs/switch-release.sh
+```
+
+(Не во время выкатки: bash читает скрипт по мере исполнения.)
+
+**Ротация.** После **успешного** health-гейта скрипт оставляет в `/opt/ccs/releases`
+`RELEASES_KEEP` (по умолчанию **5**) самых свежих снимков, остальные удаляет:
+
+- порядок — по имени каталога (метка `YYYYMMDD-HHMMSS`), а не по mtime: `cp -a` переносит
+  mtime папки приложения, дата каталога снимка не равна моменту снимка;
+- удаляются только каталоги со строгим именем-меткой прямо внутри `releases/`; симлинки и
+  посторонние имена не трогаются;
+- свежий снимок этой выкатки (откатная точка) защищён явно и входит в 5 всегда; при
+  невозможном значении (`0`, не число) берётся 5;
+- при провале health (автооткат) и при отказе до остановки ротация **не запускается**;
+  ошибка удаления выкатку не валит;
+- число меняется правкой константы `RELEASES_KEEP` в начале скрипта: окружение вызывающего в
+  `systemd-run`-юнит не попадает.
+
+Разовый запуск без выкатки (в т. ч. для проверки):
+
+```bash
+/opt/ccs/switch-release.sh --rotate --dry-run   # показать, что удалилось бы
+/opt/ccs/switch-release.sh --rotate             # выполнить
+CCS_RELEASES_DIR=/tmp/x CCS_RELEASES_KEEP=3 /opt/ccs/switch-release.sh --rotate  # проверка на другом каталоге
+```
 
 ## Зачем сторож (`watch_start`)
 

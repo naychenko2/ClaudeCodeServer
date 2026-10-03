@@ -140,7 +140,8 @@ public sealed class ProjectServicesApi(
         var candidates = discovered
             .Where(s => !running.ContainsKey(s.Id))
             .Select(s => (s.Id, Port: s.SuggestedPort is > 0 ? s.SuggestedPort : portMemory.Get(projectId, s.Id)))
-            .Where(c => c.Port is > 0)
+            // Порт боя или Dify слушается всегда — сервис с ним не «поднят снаружи», а запрещён
+            .Where(c => c.Port is > 0 && !DevServerLaunchPolicy.IsForbidden(c.Port.Value))
             .ToList();
         if (candidates.Count == 0) return [];
 
@@ -169,11 +170,15 @@ public sealed class ProjectServicesApi(
         var port = await discovery.ResolvePortAsync(project, svc.Id, files);
         if (port is not > 0)
             return ProjectServicesResult.Error(400, "У сервиса не задан порт — непонятно, где он слушает");
+        // До пробы: порт боя или Dify слушается всегда, и проба лишь подтвердила бы туннель туда
+        if (DevServerLaunchPolicy.IsForbidden(port.Value))
+            return ProjectServicesResult.Error(400, DevServerLaunchPolicy.ForbiddenReason(port.Value));
 
         if (!await LoopbackResolver.IsListeningAsync(port.Value))
             return ProjectServicesResult.Error(400, $"На порту {port} никто не слушает");
 
-        devServer.SetActiveExternal(project.Id, svc.Id, port.Value);
+        if (!devServer.SetActiveExternal(project.Id, svc.Id, port.Value))
+            return ProjectServicesResult.Error(400, DevServerLaunchPolicy.ForbiddenReason(port.Value));
         log.LogInformation("Проект {ProjectId}: превью указывает на внешний сервис {ServiceId} (:{Port})",
             project.Id, svc.Id, port);
         return ProjectServicesResult.Ok(new { activeServiceId = svc.Id, port });
@@ -221,13 +226,14 @@ public sealed class ProjectServicesApi(
         {
             if (!byId.TryGetValue(id, out var member)) continue;
             // Участник уже поднят снаружи — запускать нечего, иначе упрёмся в занятый порт
+            // Запрещённый порт (бой, Dify) «поднятым снаружи» не считается: участник идёт в
+            // обычный запуск, и тот откажет с понятной причиной
             if (member.SuggestedPort is > 0 &&
                 devServer.GetRunning(projectId, userId).All(r => r.ServiceId != id) &&
-                await LoopbackResolver.IsListeningAsync(member.SuggestedPort.Value))
-            {
-                devServer.SetActiveExternal(projectId, id, member.SuggestedPort.Value);
+                !DevServerLaunchPolicy.IsForbidden(member.SuggestedPort.Value) &&
+                await LoopbackResolver.IsListeningAsync(member.SuggestedPort.Value) &&
+                devServer.SetActiveExternal(projectId, id, member.SuggestedPort.Value))
                 continue;
-            }
             results.Add((id, cwdAllowed?.Invoke(member.Cwd) == false ? BadCwd : await devServer.StartAsync(projectId, userId, id, member.Name,
                 member.Command, member.Args, member.Cwd, member.SuggestedPort, member.AutoPort, member.Env)));
         }
@@ -373,7 +379,10 @@ public sealed class ProjectServicesApi(
         foreach (var id in ids)
         {
             if (devServer.GetRunningPort(project.Id, id, userId) is > 0 and var running) return running;
-            if (byId.TryGetValue(id, out var member) && member.SuggestedPort is > 0) return member.SuggestedPort;
+            // Порт боя или Dify из конфигурации — не порт сервиса: внешняя ссылка и «остановить
+            // чужой» не должны на него указывать (память портов такие не отдаёт сама)
+            if (byId.TryGetValue(id, out var member) && member.SuggestedPort is > 0 and var suggested
+                && !DevServerLaunchPolicy.IsForbidden(suggested)) return suggested;
             if (portMemory.Get(project.Id, id) is > 0 and var remembered) return remembered;
         }
         return null;

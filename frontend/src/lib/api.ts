@@ -159,9 +159,11 @@ export interface RemoteCommandResult {
 const REMOTE_COMMAND_TIMEOUT_MS = 200_000;
 
 // Потолок ожидания preview/start. DevServerService.StartAsync (у сервера и у агента один) ждёт
-// порт 60 попыток: пауза 500 мс плюс проба соединения — до 400 мс на IPv4 и столько же на IPv6
-// (LoopbackResolver.ConnectTimeout). Сверху запас на старт процесса и дорогу.
-const DEV_SERVER_PORT_WAIT_MS = 60 * (500 + 2 * 400);
+// порт по часам: не дольше DevServerLaunchPolicy.DotnetRunReadyTimeout (300 с, `dotnet run`
+// со сборкой; прочим — 120 с), плюс одна последняя итерация (пауза 500 мс и проба до 400 мс
+// на IPv4 и IPv6). Сверху запас на старт процесса и дорогу. Меняется серверный потолок —
+// меняй и этот: обрыв раньше сервера покажет «нет связи» поверх живого старта.
+const DEV_SERVER_PORT_WAIT_MS = 300_000;
 const PREVIEW_START_TIMEOUT_MS = DEV_SERVER_PORT_WAIT_MS + 30_000;
 
 // Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку

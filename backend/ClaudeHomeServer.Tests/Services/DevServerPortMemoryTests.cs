@@ -90,6 +90,27 @@ public class DevServerPortMemoryTests : IDisposable
     }
 
     /// <summary>
+    /// Порт боя или Dify не запоминается и не отдаётся, даже если лежит в файле с прошлых
+    /// версий: иначе после перезапуска продукта Dify показался бы «поднятым снаружи» сервисом.
+    /// </summary>
+    [Theory]
+    [InlineData(80)]
+    [InlineData(443)]
+    [InlineData(8080)]
+    public void Запрещённый_порт_не_запоминается_и_не_отдаётся(int port)
+    {
+        var sut = New();
+        sut.Remember("p1", "svc", port, 4242);
+        sut.Get("p1", "svc").Should().BeNull();
+
+        File.WriteAllText(Path.Combine(_dir, "dev-server-ports.json"),
+            $$"""{ "p1:old": { "port": {{port}}, "pid": 4242 } }""");
+        var reloaded = New();
+        reloaded.Get("p1", "old").Should().BeNull("запись из файла до запрета");
+        reloaded.GetRun("p1", "old").Should().BeNull();
+    }
+
+    /// <summary>
     /// PID помним вместе с портом: после перезапуска продукта он единственный способ
     /// отличить свой осиротевший процесс от постороннего, занявшего тот же порт.
     /// </summary>

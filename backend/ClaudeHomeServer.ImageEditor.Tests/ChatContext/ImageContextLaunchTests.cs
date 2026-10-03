@@ -35,6 +35,8 @@ public sealed class ImageContextLaunchTests : IDisposable
     private readonly QuoteJobs _jobs = new();
     private readonly Session _session = new() { Id = Chat, OwnerId = Owner, ProjectId = ProjectId };
     private readonly ImageEditScope _scope;
+    private readonly Session _stranger = new() { Id = "chat-stranger", OwnerId = "owner-2", ProjectId = ProjectId };
+    private readonly Session _otherProject = new() { Id = "chat-other-project", OwnerId = Owner, ProjectId = "p-2" };
 
     // Котировки: по id отдаёт заранее заданные операцию и ревизию; всё остальное тут не нужно
     private sealed class QuoteJobs : IImageEditJobs
@@ -65,7 +67,9 @@ public sealed class ImageContextLaunchTests : IDisposable
 
         var directory = new Mock<ISessionDirectory>();
         directory.Setup(d => d.GetById(Chat)).Returns(_session);
-        directory.Setup(d => d.ResolveOwnerId(It.IsAny<Session>())).Returns(Owner);
+        directory.Setup(d => d.GetById("chat-stranger")).Returns(_stranger);
+        directory.Setup(d => d.GetById("chat-other-project")).Returns(_otherProject);
+        directory.Setup(d => d.ResolveOwnerId(It.IsAny<Session>())).Returns((Session s) => s.OwnerId ?? Owner);
         _context = new ImageContextLaunch(_store, registry, directory.Object, _threads, workspace: _workspace);
         _assembler = new ImageEditLaunchAssembler([HiggsfieldImageEditorTests.Create().Editor], _jobs, new SkiaImageRaster(),
             threads: new ImageThreadService(_threads, NullLogger<ImageThreadService>.Instance, directory.Object),
@@ -150,6 +154,15 @@ public sealed class ImageContextLaunchTests : IDisposable
         _context.Resolve(Owner, _scope, "чужой", 0, ImageEditOp.Edit).ErrorCode.Should().Be(ImageEditErrorCodes.ChatNotFound);
         _context.Resolve(Owner, _scope, Chat, _store.Get(Owner, Chat).Revision, ImageEditOp.Edit).ErrorCode
             .Should().Be(ImageEditErrorCodes.InvalidRequest, "основного объекта-картинки нет");
+    }
+
+    [Fact]
+    public void Resolve_существующий_чат_чужого_владельца_и_чат_другого_проекта_отказ_как_несуществующий()
+    {
+        _context.Resolve(Owner, _scope, "chat-stranger", 0, ImageEditOp.Edit).ErrorCode
+            .Should().Be(ImageEditErrorCodes.ChatNotFound, "сессия есть, но владелец другой (ResolveOwnerId != ownerId)");
+        _context.Resolve(Owner, _scope, "chat-other-project", 0, ImageEditOp.Edit).ErrorCode
+            .Should().Be(ImageEditErrorCodes.ChatNotFound, "сессия своя, но из другой области (scope.Key)");
     }
 
     // ── Запуск по ревизии ──

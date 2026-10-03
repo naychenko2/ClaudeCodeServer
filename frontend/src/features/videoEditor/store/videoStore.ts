@@ -3,7 +3,7 @@
 // проекта (кеш FilmState + video_film_changed) и локальное состояние экрана.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { onReconnected, showToast } from 'aihome_shell/kit';
+import { onReconnected, refreshChatContext, showToast } from 'aihome_shell/kit';
 import {
   conflictState, EMPTY_THREADS, errorText, filmConflict, videoApi,
   type FilmBuildStatus, type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent,
@@ -274,6 +274,8 @@ export async function mutate(
   if (ownFocus) _own.set(sessionId, (_own.get(sessionId) ?? 0) + 1);
   try {
     apply(sessionId, scope, await run(getThreadsState(sessionId).revision));
+    // Смена фокуса «Видео» ставит сцену/фильм основным объектом на сервере: контекст чата не ждёт события рассылки
+if (ownFocus) void refreshChatContext(sessionId);
     return true;
   } catch (e) {
     const st = conflictState(e);

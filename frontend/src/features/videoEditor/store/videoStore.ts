@@ -150,11 +150,11 @@ const frameSig = (f: unknown) => JSON.stringify(f ?? null);
 export function noteAgentFrames(sessionId: string, prev: VideoThreadsState | null, next: VideoThreadsState) {
   if (!prev || (_mut.get(sessionId) ?? 0) > 0) return;
   for (const sc of next.scenes) {
-    const was = prev.scenes.find(x => x.sceneId === sc.sceneId);
-    if (!was) continue;
+    // Новая сцена с кадрами (video_new) — тоже правка агента: её завёл не мой клик
+    const was = prev.scenes.find(x => x.sceneId === sc.sceneId)?.settings;
     const slots: Slot[] = [];
-    if (frameSig(was.settings.frameA) !== frameSig(sc.settings.frameA) && sc.settings.frameA) slots.push('A');
-    if (frameSig(was.settings.frameB) !== frameSig(sc.settings.frameB) && sc.settings.frameB) slots.push('B');
+    if (frameSig(was?.frameA) !== frameSig(sc.settings.frameA) && sc.settings.frameA) slots.push('A');
+    if (frameSig(was?.frameB) !== frameSig(sc.settings.frameB) && sc.settings.frameB) slots.push('B');
     if (!slots.length) continue;
     const byScene = _agentEdits.get(sessionId) ?? new Map<string, Set<Slot>>();
     const set = byScene.get(sc.sceneId) ?? new Set<Slot>();

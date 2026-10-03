@@ -366,6 +366,10 @@ for (const theme of ['light', 'dark'] as const) {
         const put = page.waitForRequest(r => r.method() === 'PUT' && /\/scenes\/[^/]+\/settings/.test(r.url()) && r.postData()!.includes('frames/0123456789abcdef'));
         await panel(page).locator('[data-video-frame-menu="A"] input[type="file"]').setInputFiles(png);
         await put;
+        // Превью — по ручке кадра чата (не файлы проекта), подпись — имя файла, а не путь рабочей папки
+        await expect.poll(() => w().frameGets).toContain(`/video-editor/chats/${S}/frames/0123456789abcdef0123456789abcdef.png`);
+        await expect(panel(page).locator('[data-video-frame="A"]')).toContainText('кадр.png');
+        await expect(panel(page).locator('[data-video-frame="A"]')).not.toContainText('0123456789abcdef');
         await shot(page, SHOTS, shotName('personal-upload'));
         await panel(page).locator('[data-video-frame="A"] button').click();
         w().uploadFail = 'notImage';

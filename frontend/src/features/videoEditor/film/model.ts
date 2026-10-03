@@ -63,7 +63,7 @@ export function staleReasons(f: FilmState): string[] {
     else if (m.stale) out.push(`сцена ${m.index + 1}: текст или кадр изменён`);
   }
   // Устарел по признаку сервера, а причин по строкам нет (правили склейки, подрезку, музыку, порядок)
-  if (!out.length && f.stale) out.push('фильм изменён после сборки');
+  if (!out.length && f.stale) out.push('порядок, склейки, подрезка или музыка');
   return out;
 }
 

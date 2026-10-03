@@ -39,9 +39,12 @@ import { useHasChatContext } from '../../lib/chatContext';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { getTaskById } from '../../lib/tasks';
 
-// Ленте чата в разделённом центре (файл, задача, ридер рядом) уже этой ширины композер не вмещает: поле ввода
-// сжимается до буквы в строке. Это минимум колонки, а не желаемая ширина — резиновая соседка уступает первой
-const CHAT_SPLIT_MIN = 320;
+// Ленте чата в разделённом центре (файл, задача, ридер рядом) уже этой ширины композер не вмещает: кнопки режимов
+// и голоса съедают строку, поле ввода сжимается до слова. Это минимум колонки, а не желаемая ширина: на узком центре
+// соседка (минимум 200) всё равно остаётся, поэтому минимум ленты — это то, что остаётся от неё
+const CHAT_SPLIT_MIN_PX = 400;
+const SPLIT_SIDE_MIN_PX = 200;
+const CHAT_SPLIT_MIN = `min(${CHAT_SPLIT_MIN_PX}px, calc(100% - ${SPLIT_SIDE_MIN_PX}px))`;
 
 export type SidebarMode = 'pinned' | 'collapsed';
 
@@ -214,7 +217,7 @@ export function DesktopWorkspace(p: Props) {
     setDragging('split');
     startPointerDrag(
       ev => {
-        const chatW = Math.max(CHAT_SPLIT_MIN, Math.min(rect.width - 200, ev.clientX - rect.left));
+        const chatW = Math.max(Math.min(CHAT_SPLIT_MIN_PX, rect.width - SPLIT_SIDE_MIN_PX), Math.min(rect.width - SPLIT_SIDE_MIN_PX, ev.clientX - rect.left));
         setChatFlex(chatW / (rect.width - chatW));
       },
       { onEnd: () => setDragging(null) },

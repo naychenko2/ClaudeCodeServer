@@ -48,8 +48,8 @@ describe('сборка и «обновлена»', () => {
     const builds = [{ file: 'video/утро/film.mp4', sourceHash: 'ab', at: '2026-10-02T16:00:00Z' }];
     const f = film({ document: { ...film().document, builds }, stale: true, marks: [] });
     expect(staleFilm(f)).toBe(true);
-    expect(staleReasons(f)).toEqual(['фильм изменён после сборки']);
-    expect(buildView(f)).toEqual({ kind: 'done', file: 'video/утро/film.mp4', stale: ['фильм изменён после сборки'] });
+    expect(staleReasons(f)).toEqual(['порядок, склейки, подрезка или музыка']);
+    expect(buildView(f)).toEqual({ kind: 'done', file: 'video/утро/film.mp4', stale: ['порядок, склейки, подрезка или музыка'] });
     // сервер сказал «не устарел» — метки строк его не перебивают
     expect(staleFilm(film({ document: { ...film().document, builds }, stale: false, marks: [{ index: 0, claude: false, updated: true, stale: false }] }))).toBe(false);
   });

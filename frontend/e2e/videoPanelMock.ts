@@ -117,6 +117,8 @@ export interface World {
   filmNoSession: string[];
   // Тела запросов «Сохранить сцену»
   saves: Record<string, unknown>[];
+  // Запросы превью кадра личного чата
+  frameGets: string[];
   // Запросы «Новый фильм» (POST films)
   filmCreates: string[];
   // Отказ загрузки кадра в личном чате: 400 «не картинка», 413 «больше 20 МБ»
@@ -138,7 +140,7 @@ export const w = () => world;
 export function newWorld(o: Partial<Pick<World, 'personal' | 'focus' | 'scenes' | 'autoFinish' | 'dsp' | 'feed'>> & { films?: Film[] } = {}): World {
   world = {
     personal: !!o.personal, focus: o.focus ?? {}, revision: 1, scenes: o.scenes ?? [], films: new Map((o.films ?? []).map(f => [f.path, f])),
-    feed: o.feed ?? [], quotes: [], jobs: [], patches: [], filmNoSession: [], saves: [], filmCreates: [], uploadFail: null, hubs: [], imageThreads: [], imageRevision: 1, autoFinish: o.autoFinish ?? true,
+    feed: o.feed ?? [], quotes: [], jobs: [], patches: [], filmNoSession: [], saves: [], frameGets: [], filmCreates: [], uploadFail: null, hubs: [], imageThreads: [], imageRevision: 1, autoFinish: o.autoFinish ?? true,
     dsp: o.dsp ?? true, audioThreads: [], musicFor: null,
   };
   return world;
@@ -447,10 +449,12 @@ export async function mockApi(page: Page, trace = false) {
     }
     if (/\/video-editor\/(?:chats\/[^/]+\/)?jobs\/[^/]+$/.test(p)) return json({ jobId: 'x', status: 'running' });
     if (p.startsWith(`${vb}/films`) && method !== 'GET' && !url.searchParams.get('sessionId')) world.filmNoSession.push(`${method} ${p}`);
+    // Превью кадра личного чата: байты из рабочей папки чата (GET frames/<имя>)
+    if (method === 'GET' && p.startsWith(`${vb}/frames/`)) { world.frameGets.push(p); return r.fulfill({ contentType: 'image/png', body: PNG_A }); }
     if (p === `${vb}/frames/upload` && method === 'POST') {
       if (world.uploadFail === 'notImage') return json({ error: 'Файл не картинка', code: 'invalid_request' }, 400);
       if (world.uploadFail === 'tooBig') return json({ error: 'Слишком большой файл' }, 413);
-      return json({ kind: 'file', path: 'frames/0123456789abcdef0123456789abcdef.png' });
+      return json({ kind: 'file', path: 'frames/0123456789abcdef0123456789abcdef.png', fileName: 'кадр.png' });
     }
     if (p === `${vb}/films`) {
       if (method === 'POST') {

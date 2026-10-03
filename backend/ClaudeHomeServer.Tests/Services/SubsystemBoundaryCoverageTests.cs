@@ -251,6 +251,7 @@ public class SubsystemBoundaryCoverageTests
             // в Core (CoreAllowedNamespaces) и своей вертикали не имеют.
             "ClaudeHomeServer.Services.Higgsfield",   // IHiggsfieldAccess
             "ClaudeHomeServer.Services.Media",        // ProjectLinkGuard
+            "ClaudeHomeServer.Services.ChatContext",  // ADR-023: стор и контракты контекста чата
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

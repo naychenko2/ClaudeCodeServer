@@ -1733,6 +1733,10 @@ public class SubsystemBoundaryTests
         // вертикалях (CodeGraph, Notes). Прецедент IKnowledgeSyncParticipant: тот же
         // приём — контракт в Core, реализации по вертикалям, реестр через IEnumerable<>.
         "ClaudeHomeServer.Services.Turn",
+        // ADR-023 (контекст хода): стор контекста чата, контракты видов объектов
+        // (IContextKindProvider) и DTO — спина: вертикали объявляют виды, а спина
+        // знает только строки Kind и не ссылается на вертикали.
+        "ClaudeHomeServer.Services.ChatContext",
         // Этап 5, волна D (Notes): INoteTaskBridge + узкие Core-типы (NoteTaskRef/
         // NoteTaskCreateRequest/NoteTaskUpdateRequest/NoteTaskStatus/NoteTaskKind/
         // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes

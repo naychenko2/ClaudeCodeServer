@@ -25,6 +25,8 @@ import { useFeature, FLAGS } from '../lib/featureFlags';
 import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem, type RevealPanelDetail } from '../lib/subsystems/registry';
 import { markGenPanelDismissed } from '../lib/genPanelDismissed';
+import { LEGACY_GEN_PANEL_KEYS } from '../lib/genPanelKeys';
+import { ContextPanelHost } from '../components/generation/ContextPanelHost';
 import type { WorkspacePanelDefApi, WorkspacePanelDefCtx, WorkspacePanelNotesCtx, WorkspacePanelArchCtx, WorkspaceCenterDocCtx } from '../lib/subsystems/registryCore';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
@@ -299,6 +301,8 @@ function histReducer(s: FileHistoryState, a: FileHistoryAction): FileHistoryStat
   }
 }
 
+const isLegacyGenPanel = (k: string) => LEGACY_GEN_PANEL_KEYS.includes(k);
+
 export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
   // Гейт подсистемы «Заметки»: при выключенной notes панель «notes» (notes/ репы)
   // не должна появляться в рельсе панелей и принимать клики. Рельсу собирает
@@ -313,6 +317,8 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // ключ зарезервирован в panelCatalog, тело рисует подсистема. Выключенная подсистема
   // вкладов не отдаёт — контента нет, и keyAvailable прячет кнопку в рельсе
   const panelDefs = useSlot<WorkspacePanelDefCtx, WorkspacePanelDefApi>(SLOT_WORKSPACE_PANEL_DEF)
+  // Единая панель «Контекст» (ADR-023 §Д1): с флагом вместо «Картинок» и «Звука», тело рисует оболочка
+  const ctxPanelOn = useFeature(FLAGS.composerContextRow)
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -2025,8 +2031,12 @@ const windowWidth = useWindowWidth();
             terminal: <DeviceAgentGate project={project}><TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} /></DeviceAgentGate>,
             preview: <DeviceAgentGate project={project}><PreviewPanelContent projectId={project.id} project={project} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} /></DeviceAgentGate>,
             video: <VideoPanel />,
+            ...(ctxPanelOn && activeSession ? {
+              chatContext: <ContextPanelHost session={activeSession} project={project}
+                onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,
+            } : {}),
             ...Object.fromEntries(panelDefs.flatMap(d => (
-              d.name && isPanelKey(d.name) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
+              d.name && isPanelKey(d.name) && d.render && !(ctxPanelOn && isLegacyGenPanel(d.name)) && (d.action?.isAvailable?.(project.id) ?? true)
                 ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => { markGenPanelDismissed(activeSessionId, d.name!); closePanelKey(d.name as PanelKey); } })]]
                 : []
             ))),

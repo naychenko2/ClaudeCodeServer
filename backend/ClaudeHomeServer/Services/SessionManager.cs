@@ -1163,6 +1163,20 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             VideoEditor.VideoEditorAgentTools.AutoAllowTools);
     }
 
+    // MCP-сервер «Контекст чата» (ADR-023 §3.2) — по тем же правилам, что audio-editor: любой чат владельца,
+    // флаг composer-context-row (свойство владельца), тулсет в реестре, все три точки сборки контекста. От хода и
+    // содержимого контекста состав не зависит (McpToolsetStabilityTests).
+    internal TurnContextMcpContext? BuildTurnContextContext(string? ownerId, Session session)
+    {
+        if (ownerId is null) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow)) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.TurnContextName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new TurnContextMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
+            Services.ChatContext.TurnContextAgentTools.AutoAllowTools);
+    }
+
     // MCP-сервер локальной генерации (ComfyUI на своей GPU). Узел есть в конфиге хода, только когда:
     //   1) включён машинный тумблер LocalMedia:Enabled и подсистема images (там живёт движок);
     //   2) чат проекта, чьи файлы на сервере: результат пишется в папку проекта
@@ -1223,7 +1237,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null,
         HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null,
         LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null,
-        AudioEditorMcpContext? audioEditor = null, VideoEditorMcpContext? videoEditor = null) =>
+        AudioEditorMcpContext? audioEditor = null, VideoEditorMcpContext? videoEditor = null,
+        TurnContextMcpContext? turnContext = null) =>
         architecture is { UseHttp: true }
         || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
@@ -1232,7 +1247,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         || watch is { UseHttp: true } || webSearch is { UseHttp: true }
         || higgsfield is { UseHttp: true } || imageEditor is { UseHttp: true }
         || localMedia is { UseHttp: true } || audioEditor is { UseHttp: true }
-        || videoEditor is { UseHttp: true };
+        || videoEditor is { UseHttp: true }
+        || turnContext is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -4073,6 +4089,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var imageEditorMcp = BuildImageEditorContext(ownerId, session);
         var audioEditorMcp = BuildAudioEditorContext(ownerId, session);
         var videoEditorMcp = BuildVideoEditorContext(ownerId, session);
+        var turnContextMcp = BuildTurnContextContext(ownerId, session);
         var localMediaMcp = BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
@@ -4115,7 +4132,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                 workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp),
+                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
@@ -4128,6 +4145,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ImageEditorMcp: imageEditorMcp,
             AudioEditorMcp: audioEditorMcp,
             VideoEditorMcp: videoEditorMcp,
+            TurnContextMcp: turnContextMcp,
             LocalMediaMcp: localMediaMcp,
             // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
             // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
@@ -5588,6 +5606,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var imageEditorMcp = BuildImageEditorContext(entry.Info.OwnerId, entry.Info);
             var audioEditorMcp = BuildAudioEditorContext(entry.Info.OwnerId, entry.Info);
             var videoEditorMcp = BuildVideoEditorContext(entry.Info.OwnerId, entry.Info);
+            var turnContextMcp = BuildTurnContextContext(entry.Info.OwnerId, entry.Info);
             var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
             var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
@@ -5623,7 +5642,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, dify: difyMcp, watch: watchMcp, webSearch: webSearchMcp,
-                    higgsfield: higgsfieldMcp, imageEditor: imageEditorMcp, audioEditor: audioEditorMcp, videoEditor: videoEditorMcp),
+                    higgsfield: higgsfieldMcp, imageEditor: imageEditorMcp, audioEditor: audioEditorMcp, videoEditor: videoEditorMcp,
+                    turnContext: turnContextMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
@@ -5632,6 +5652,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ImageEditorMcp: imageEditorMcp,
                 AudioEditorMcp: audioEditorMcp,
                 VideoEditorMcp: videoEditorMcp,
+                TurnContextMcp: turnContextMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
                 MainRootPath: null,
                 LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId));
@@ -5655,6 +5676,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var imageEditorMcp = BuildImageEditorContext(project.OwnerId, entry.Info);
             var audioEditorMcp = BuildAudioEditorContext(project.OwnerId, entry.Info);
             var videoEditorMcp = BuildVideoEditorContext(project.OwnerId, entry.Info);
+            var turnContextMcp = BuildTurnContextContext(project.OwnerId, entry.Info);
             var localMediaMcp = BuildLocalMediaContext(project.OwnerId, project.Id, persona.Persona);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
@@ -5695,7 +5717,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp),
+                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ArchitectureMcp: architectureMcp,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
@@ -5706,6 +5728,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ImageEditorMcp: imageEditorMcp,
                 AudioEditorMcp: audioEditorMcp,
                 VideoEditorMcp: videoEditorMcp,
+                TurnContextMcp: turnContextMcp,
                 LocalMediaMcp: localMediaMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).

@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -303,6 +304,46 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         tail.Text.Should().Contain("«лампа»");
     }
 
+    // Хвост «Контекст хода» (ADR-023 §3.1, 2б-2): секция turn-context едет только хвостом при любой настройке
+    // RecallInTurnText, а системный блок не зависит от того, что в контексте чата
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TurnContext_ВсегдаХвостомХода_СистемныйБлокНеЗависитОтКонтекста(bool recallInTurnText)
+    {
+        var first = await RunTurnContextTurnAsync(recallInTurnText, "МАРКЕР_КОНТЕКСТА_ОДИН.md");
+        var second = await RunTurnContextTurnAsync(recallInTurnText, "МАРКЕР_КОНТЕКСТА_ДВА.md");
+
+        first.SystemPrompt.Should().NotContain("МАРКЕР_КОНТЕКСТА").And.NotContain("## Контекст хода",
+            "контекст хода меняется от хода к ходу и в системном блоке обнулял бы prefix cache");
+        first.SystemPrompt.Should().Be(second.SystemPrompt);
+
+        var tail = first.Sections.Should().ContainSingle(s => s.Key == "turn-context").Subject;
+        tail.Kind.Should().Be("turn", "секция едет вклейкой в текст хода");
+        tail.Title.Should().Be("Контекст хода");
+        tail.Text.Should().Contain("МАРКЕР_КОНТЕКСТА_ОДИН.md");
+    }
+
+    private Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTurnContextTurnAsync(
+        bool recallInTurnText, string label)
+    {
+        var item = new ClaudeHomeServer.Services.ChatContext.ContextItem("ci_1", "project-file",
+            new System.Text.Json.Nodes.JsonObject { ["path"] = label }, null,
+            ClaudeHomeServer.Services.ChatContext.ContextActor.Human, DateTime.UtcNow);
+        var store = new Moq.Mock<ClaudeHomeServer.Services.ChatContext.IChatContextStore>();
+        store.Setup(x => x.Get(Moq.It.IsAny<string>(), Moq.It.IsAny<string>()))
+            .Returns(new ClaudeHomeServer.Services.ChatContext.ChatContextState(1, item, []));
+        var contributor = new TurnContextContributor(
+            new ServiceCollection()
+                .AddSingleton(store.Object).BuildServiceProvider(),
+            new ClaudeHomeServer.Services.ChatContext.ContextKindRegistry(
+                [new ClaudeHomeServer.Services.ChatContext.ProjectFileContextKind()]),
+            new ContextRowFlag(), new Moq.Mock<ClaudeHomeServer.Services.IProjectManager>().Object);
+        return RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            new Session { Model = "qwen-test-27b", OwnerId = "u1" });
+    }
+
     // Порядок хвоста (шаг 3 «локальная по умолчанию»): правило local-media-default едет хвостом
     // сразу после блока «Картинки в этом чате» и ссылается на него; в системный блок не попадает
     [Theory]
@@ -505,9 +546,15 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         section.Should().BeNull($"{why}: video_* у хода нет («No such tool available»)");
     }
 
+    // Все флаги, кроме строки контекста: тексты без неё должны быть прежними
     private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {
-        public bool IsEnabled(string userId, string key) => true;
+        public bool IsEnabled(string userId, string key) => key != FeatureFlagKeys.ComposerContextRow;
+    }
+
+    private sealed class ContextRowFlag : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.ComposerContextRow;
     }
 
     private async Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTailTurnAsync(

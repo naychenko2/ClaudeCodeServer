@@ -44,17 +44,32 @@ public sealed class AudioEditorStateContributor(
         var session = sessionContext.Session;
         var scope = AudioEditScope.Of(session);
         var state = threads?.Get(ownerId, session.Id) ?? AudioThreadsState.Empty;
-        var block = Render(state, mode => prefs?.Get(ownerId, scope, mode), _agentLaunch, scope.IsPersonal);
+        // При строке контекста «В работе» и «Выбор человека» отдаёт хвост «Контекст хода»; остаётся правило приоритета
+        var row = flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
+        var block = Render(state, mode => prefs?.Get(ownerId, scope, mode), _agentLaunch, scope.IsPersonal, row);
+        if (block is null) return Task.FromResult<PromptSectionContribution?>(null);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, block, Title, InTurnTail: true)]));
     }
 
-    public static string Render(AudioThreadsState state, Func<string, AudioModePrefs?> prefs, bool agentLaunch,
-        bool personal)
+    // null — блок пуст: при строке контекста без audio_generate не остаётся ни одной строки
+    public static string? Render(AudioThreadsState state, Func<string, AudioModePrefs?> prefs, bool agentLaunch,
+        bool personal, bool contextRow = false)
     {
+        if (contextRow)
+            return agentLaunch ? "## Звук в этом чате\n" + PriorityRuleFor(personal, contextRow: true) : null;
         var lines = new List<string> { "## Звук в этом чате", FocusText(state), ChoiceText(prefs) };
-        if (agentLaunch) lines.Add(personal ? PersonalPriorityRule : PriorityRule);
+        if (agentLaunch) lines.Add(PriorityRuleFor(personal, contextRow: false));
         return string.Join("\n", lines);
+    }
+
+    // При строке контекста ссылка на полосу «Звук» переписана на контекст хода; без неё — константы как были
+    public static string PriorityRuleFor(bool personal, bool contextRow)
+    {
+        var rule = personal ? PersonalPriorityRule : PriorityRule;
+        return contextRow
+            ? rule.Replace("уважают выбор человека в полосе «Звук»", "уважают выбор человека в строке контекста")
+            : rule;
     }
 
     // «В работе: звук t1 — файл voice/intro.mp3 · версия 3» — без списка нитей: его отдаёт audio_state

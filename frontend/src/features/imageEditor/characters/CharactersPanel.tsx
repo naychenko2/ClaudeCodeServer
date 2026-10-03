@@ -5,7 +5,9 @@
 
 import { useMemo, useState } from 'react';
 import { Pencil, UserPlus, Users } from 'lucide-react';
-import { Button, EmptyState, IconButton, showToast, C, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
+import {
+  Button, ContextAddButton, EmptyState, IconButton, refOf, showToast, useChatContext, C, FS, R, SP, ICON_SIZE, ICON_STROKE,
+} from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditCharacter } from '../api';
 import { setPrefs, usePrefs } from '../thread/prefs';
 import { CharacterForm } from './CharacterForm';
@@ -17,12 +19,16 @@ export type CharacterEditing = { kind: 'new' } | { kind: 'edit'; slug: string } 
 
 // В панели «Картинки» форму держит хозяин (editing/onEditing): «＋ Персонаж» живёт в её
 // закреплённом низу, а не кнопкой над списком
-export function CharactersPanel({ projectId, editing: outer, onEditing }: {
+export function CharactersPanel({ projectId, editing: outer, onEditing, contextSessionId }: {
   projectId: string; editing?: CharacterEditing; onEditing?: (e: CharacterEditing) => void;
+  // Панель при флаге composer-context-row (ADR-023, 2к-2): вместо «Подключить к работе» — «В контекст» /
+  // «В контексте ✓» по контексту этого чата. Без флага персонаж по-прежнему подключается к проекту
+  contextSessionId?: string | null;
 }) {
   const api = useMemo(() => imageEditorApi(), []);
   const { list, error } = useCharacters(projectId);
   const prefs = usePrefs(projectId);
+  const ctx = useChatContext(contextSessionId ?? null);
   const [own, setOwn] = useState<CharacterEditing>(null);
   const controlled = onEditing !== undefined;
   const editing = controlled ? outer ?? null : own;
@@ -72,7 +78,8 @@ export function CharactersPanel({ projectId, editing: outer, onEditing }: {
           : <EmptyState compact icon={ic(Users)} title="Персонажей пока нет"
               subtitle="Персонаж — 3–10 фото лица. Подключённый персонаж уходит в каждую генерацию картинки." />)}
         {list?.map(c => {
-          const on = prefs.characterSlug === c.slug;
+          const candidate = { kind: 'image-character', ref: { slug: c.slug } };
+          const on = contextSessionId ? !!refOf(ctx, candidate) : prefs.characterSlug === c.slug;
           const photo = c.photos[0];
           return (
             <div key={c.slug} data-character={c.slug} style={{
@@ -91,9 +98,13 @@ export function CharactersPanel({ projectId, editing: outer, onEditing }: {
                 <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
                 <span style={{ fontSize: FS.xs, color: C.textMuted }}>{c.photos.length} фото</span>
               </span>
-              <Button size="sm" variant={on ? 'secondary' : 'ghostAccent'} onClick={() => toggle(c)}>
-                {on ? 'Отключить' : 'Подключить к работе'}
-              </Button>
+              {contextSessionId
+                ? <ContextAddButton sessionId={contextSessionId} projectId={projectId} candidate={candidate} size="sm" toggle />
+                : (
+                  <Button size="sm" variant={on ? 'secondary' : 'ghostAccent'} onClick={() => toggle(c)}>
+                    {on ? 'Отключить' : 'Подключить к работе'}
+                  </Button>
+                )}
               <IconButton size="sm" title="Изменить" ariaLabel={`Изменить «${c.name}»`} onClick={() => setEditing({ kind: 'edit', slug: c.slug })}>
                 {ic(Pencil, ICON_SIZE.xs)}
               </IconButton>

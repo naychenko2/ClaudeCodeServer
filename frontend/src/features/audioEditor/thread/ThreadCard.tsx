@@ -12,6 +12,7 @@ import {
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { audioApi, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
 import { opInfo } from '../ops';
+import { CardContextActions, useCardFill, useFocusedThreadId } from '../context/CardFill';
 import { audioScope, isPersonalScope } from '../scope';
 import { downloadFile, saveVersion, selectThreadByHuman, takeVersion } from './actions';
 import {
@@ -144,16 +145,18 @@ export function VersionCard({ scope, sessionId, thread, version: v, focused, eve
   events?: Parameters<typeof doneText>[2];
 }) {
   const [busy, setBusy] = useState(false);
-  const working = focused && v.id === thread.currentVersionId;
+  const fill = useCardFill(sessionId, thread, v.id);
+  // При флаге composer-context-row «в работе» — из контекста чата, а не из фокуса нитей
+  const working = fill.on ? fill.working : focused && v.id === thread.currentVersionId;
   const done = doneText(thread, v, events);
   const Icon = modeIcon(thread);
 
   return (
-    <Frame current={working} testId={v.id} onPick={() => { void selectThreadByHuman(scope, sessionId, thread.id, focused); }}>
+    <Frame current={working} testId={v.id} onPick={() => { void (fill.on ? fill.pick() : selectThreadByHuman(scope, sessionId, thread.id, focused)); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm, minWidth: 0 }}>
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(Icon, ICON_SIZE.sm)}</span>
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere', minWidth: 0 }}>{threadName(thread)}</span>
-        {working && <Badge size="xs" tone="accent" icon={ic(Target)}>в работе</Badge>}
+        {working && <Badge size="xs" tone="accent" icon={ic(Target)}>{fill.byAgent ? 'в работе ✦' : 'в работе'}</Badge>}
         <License badge={licenseBadge(v)} />
         <span data-audio-nav="" style={{ marginLeft: 'auto', fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>{versionTag(thread, v)}</span>
       </div>
@@ -163,14 +166,16 @@ export function VersionCard({ scope, sessionId, thread, version: v, focused, eve
 
       <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap', alignItems: 'center' }}>
         {/* Не primary: акцент в ленте — у ▶ и главного действия, а не у каждой карточки */}
-        {!working && (
+        {fill.on
+          ? <CardContextActions sessionId={sessionId} projectId={scope} thread={thread} versionId={v.id} fill={fill} />
+          : !working && (
           <Button size="sm" variant="secondary" leftIcon={ic(Target)} loading={busy}
             title="Полоса «Звук» и следующий запуск пойдут от этой версии"
             onClick={() => { setBusy(true); void takeVersion(scope, sessionId, thread, v.id).finally(() => setBusy(false)); }}>
             Работать с этой
           </Button>
         )}
-        {hasMain(v) && <ProcessMenu scope={scope} sessionId={sessionId} thread={thread} version={v} />}
+        {!fill.on && hasMain(v) && <ProcessMenu scope={scope} sessionId={sessionId} thread={thread} version={v} />}
         <SaveActions scope={scope} sessionId={sessionId} thread={thread} version={v} />
       </div>
     </Frame>
@@ -185,13 +190,14 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const scope = audioScope(ctx.projectId);
   const state = useAudioThreads(scope, ctx.sessionId);
   const on = useFeature(FLAGS.audioEditor);
+  const focusId = useFocusedThreadId(ctx.sessionId ?? null, state.focus);
   const threadId = str(rec?.data.threadId);
   const thread = threadId ? state.threads.find(t => t.id === threadId) : undefined;
   if (!on || !ctx.sessionId || !thread) {
     // Нить удалили или модуль выключен — якорь в истории остался; рисуем след
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
-  const focused = state.focus === thread.id;
+  const focused = focusId === thread.id;
   const versionId = str(rec?.data.versionId);
   const v = versionId ? thread.versions.find(x => x.id === versionId) : undefined;
   if (v) return <VersionCard scope={scope} sessionId={ctx.sessionId} thread={thread} version={v} focused={focused} events={state.events} />;

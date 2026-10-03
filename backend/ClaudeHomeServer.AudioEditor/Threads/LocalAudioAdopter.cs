@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Media;
 
@@ -55,6 +56,7 @@ public sealed class LocalAudioAdopter(
         if (before is not null && last.Focus != before
             && store.SetFocus(adoption.OwnerId, session.Id, before, last.Revision) is { Status: AudioThreadWriteStatus.Ok } back)
             last = back.State;
+        threads.SyncFocus(adoption.OwnerId, session.Id, before, last.Focus, ContextActor.Agent);
         await threads.BroadcastAsync(adoption.OwnerId, scope.Key, session.Id, last);
     }
 

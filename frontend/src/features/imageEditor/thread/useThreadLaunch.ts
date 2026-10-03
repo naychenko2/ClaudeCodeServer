@@ -6,22 +6,26 @@
 
 import { useCallback, useMemo } from 'react';
 import { api as appApi, clearGenDraft, FLAGS, followChat, showToast, useFeature } from 'aihome_shell/kit';
-import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditQuoteRequest } from '../api';
+import {
+  AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditOp, type ImageEditQuoteRequest,
+} from '../api';
 import {
   effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, providerTitle, variantsWord,
 } from '../format';
 import { currentModel } from '../ProviderModelPicker';
-import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson } from '../marks';
+import { contextInputCounts } from '../context/samples';
+import { exportAnnotated, exportMask, hasMaskMark, marksToJson } from '../marks';
 import {
   quickAvailability, quickPlan, quickUsesOwnModel, samplesToJobInput,
-  type LaunchAction, type LaunchPlan, type QuickAction, type QuickRoute,
+  type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type QuickRoute,
 } from '../editorInputs';
 import { isPersonalScope } from '../scope';
 import {
-  activeChoice, effectiveMode, footPrice, getCreateRatio, isOneVariant, launchMarks, modeOp, opBlockReason, queueText, quickOf,
+  activeChoice, DEFAULT_CHOICE, effectiveMode, footPrice, getCreateRatio, isOneVariant, launchMarks, modeOp, opBlockReason, queueText, quickOf,
   resolveOp, runVerb, usePanelChoiceVersion, type PanelChoice,
 } from '../panel/panelOp';
 import { useQuote } from '../useQuote';
+import { buildQuoteBody, marksSent } from './quoteBody';
 import { getCatalog, loadCatalog, useCatalog } from './catalog';
 import { effectiveSettings, getPrefs, modeSettings, setModeSettings, setPrefs, usePrefs, type ProjectPrefs } from './prefs';
 import { effectiveImageMode, getStoredImageMode, modeAware, noteLastEdited, useImageModeVersion, type ImageMode } from './modeState';
@@ -54,7 +58,7 @@ export function activeSrc(projectId: string, t: ImageThread): string | null {
 export { threadHasImage } from './model';
 
 // Поставщик и модель по настройкам: модель не выбрана — умолчание админа у его поставщика
-function resolveModel(catalog: ImageEditCatalog | null, settings: ImageThreadSettings) {
+export function resolveModel(catalog: ImageEditCatalog | null, settings: ImageThreadSettings) {
   const pv = catalog ? effectiveProvider(catalog, settings.provider ?? 'settings') : null;
   const fallback = pv && pv.key === catalog?.default.provider ? catalog.default.model : AUTO_MODEL;
   return { pv, m: currentModel(pv, settings.model ?? fallback) };
@@ -104,18 +108,34 @@ export function panelRoute(choice: PanelChoice, hasImage: boolean, hasMask: bool
   return { op, quick: quickOf(op), one: isOneVariant(op), reason };
 }
 
+// Запуск действия чипа (ADR-023 §Д2): операция, число вариантов и пропорции решены действием,
+// а не выбором панели; contextRevision уходит в котировку и запуск. Отказ ревизии (409
+// context_changed) пробрасывается вызывающему: контекст перечитывает хост, запуск не повторяется
+export interface ContextLaunch {
+  op: ImageEditOp;
+  count: number;
+  // Пропорции дорисовки или новой картинки; null — как решит модель
+  aspect: string | null;
+  contextRevision: number;
+  onJob?: (jobId: string) => void;
+}
+
 // Запуск в нить; true — задача запущена, причина отказа уже показана тостом.
 // provider — поставщик только на этот запуск («Взять fal»), выбор в полосе не меняется
 export async function launchThread(
-  projectId: string, sessionId: string, thread: ImageThread, requested: LaunchAction, opts?: { provider?: string },
+  projectId: string, sessionId: string, thread: ImageThread, requested: LaunchAction,
+  opts?: { provider?: string; ctx?: ContextLaunch },
 ): Promise<boolean> {
   let action = requested;
   const api = imageEditorApi();
   const prefs = getPrefs(projectId);
   // Быстрое действие — правка выбранной картинки: в любом режиме идёт выбором «Править»
-  const chatMode = launchMode(sessionId, thread);
+  const cx = opts?.ctx;
+  // Действие чипа: «Нарисовать» — режим «Создать», остальное — «Править»
+  const chatMode = cx ? (cx.op === 'generate' ? 'create' : 'edit') as ImageMode : launchMode(sessionId, thread);
   const mode = chatMode && requested.kind !== 'prompt' && threadHasImage(thread) ? 'edit' : chatMode;
-  const settings = launchSettings(mode, prefs, thread.settings);
+  const baseSettings = launchSettings(mode, prefs, thread.settings);
+  const settings = cx ? { ...baseSettings, count: cx.count } : baseSettings;
   const catalog = await loadCatalog(projectId);
   const { pv, m } = resolveModel(catalog, settings);
   if (!pv || !m) {
@@ -128,7 +148,9 @@ export async function launchThread(
   const hasImage = threadHasImage(thread);
   const hasMask = hasImage && hasMaskMark(marks);
   // Операция панели «Картинки» (без флага — всегда «Авто»): у промпта она решает, что делать
-  const choice = activeChoice(projectId, mode);
+  const choice: PanelChoice = cx
+    ? { op: cx.op, mode: 'auto', ratio: (cx.aspect ?? DEFAULT_CHOICE.ratio) as OutpaintRatio }
+    : activeChoice(projectId, mode);
   const pr = panelRoute(choice, hasImage, hasMask, !!mode);
   let one = false;
   if (action.kind === 'prompt') {
@@ -169,18 +191,22 @@ export async function launchThread(
   // Модели без канала образцов (Bria Expand, убрать фон) образцы и персонажа не шлём
   const noSamples = own || route?.maxReferences === 0;
   const withMask = plan.useMask && hasMask;
-  const withMarks = !fromScratch && (action.kind === 'prompt' || action.kind === 'removeMarked') && hasImage && marks.length > 0;
+  const withMarks = marksSent(plan.op, hasImage, marks);
   // Пропорции новой картинки из «Ещё настроек» «Создать»; у дорисовки — свои
-  const aspectRatio = plan.aspectRatio ?? (mode === 'create' && fromScratch ? getCreateRatio(projectId) : null);
+  const aspectRatio = plan.aspectRatio
+    ?? (cx ? (fromScratch ? cx.aspect : null) : mode === 'create' && fromScratch ? getCreateRatio(projectId) : null);
   try {
-    const q = await api.quote(projectId, {
+    // Запуск по ревизии берёт образцы и персонажа из контекста чата; без неё — из памяти вкладки и prefs
+    const inputCounts = () => noSamples ? { references: 0, hasCharacter: false }
+      : cx ? contextInputCounts(sessionId) : { references: getSamples(projectId).length, hasCharacter: !!prefs.characterSlug };
+    const q = await api.quote(projectId, buildQuoteBody({
       provider: route?.provider ?? pv.key, model: route?.model ?? m.id,
       mode: route ? 'auto' : effectiveMode(m, choice.mode), op: plan.op,
       count: one ? 1 : route?.count ?? settings.count,
-      hasMask: withMask, hasAnnotations: withMarks && hasAnnotationMark(marks), removal: plan.removal,
-      references: noSamples ? 0 : getSamples(projectId).length, hasCharacter: !noSamples && !!prefs.characterSlug,
-      width: size?.w ?? null, height: size?.h ?? null,
-    });
+      hasImage, marks, withMask, removal: plan.removal,
+      ...inputCounts(),
+      size, context: cx ? { sessionId, contextRevision: cx.contextRevision } : null,
+    }));
     const legacy = isLegacyThread(thread);
     const version = legacy ? null : currentVersion(thread);
     const stepId = activeStepOf(thread);
@@ -189,7 +215,7 @@ export async function launchThread(
     // без правок (файл проекта) по sourcePath не читает — тот лишь сторож пути и родословная
     const source = src ? await fetch(src).then(r => r.blob()) : undefined;
     const file = version ? (version.id === 'origin' ? originFile(thread) : null) : thread.file;
-    const samples = noSamples ? { references: [], referencePaths: [] } : samplesToJobInput(getSamples(projectId));
+    const samples = noSamples || cx ? { references: [], referencePaths: [] } : samplesToJobInput(getSamples(projectId));
     let mask: Blob | undefined;
     let annotated: Blob | undefined;
     if (src && size && withMask) mask = (await exportMask(marks, size.w, size.h)) ?? undefined;
@@ -197,16 +223,18 @@ export async function launchThread(
       const img = await loadImage(src).catch(() => null);
       if (img) annotated = (await exportAnnotated(img, marks, size.w, size.h).catch(() => null)) ?? undefined;
     }
-    await api.startJob(projectId, {
+    const started = await api.startJob(projectId, {
       quoteId: q.quoteId, prompt: plan.prompt,
       marks: withMarks && size ? marksToJson(marks, size.w, size.h) : undefined,
       sourcePath: !fromScratch && !stepId && file ? file : undefined,
       source, mask, annotated, ...samples,
-      characterSlug: noSamples ? undefined : prefs.characterSlug ?? undefined,
+      characterSlug: noSamples || cx ? undefined : prefs.characterSlug ?? undefined,
       matchSourceSize: settings.matchSourceSize,
       ...(aspectRatio ? { aspectRatio } : null),
       sessionId, threadId: thread.id, baseStepId: stepId ?? undefined, versionId: version?.id,
+      ...(cx ? { contextRevision: cx.contextRevision } : null),
     });
+    cx?.onJob?.(started.jobId);
     // Пометки ушли с запуском
     if (withMarks || withMask) setThreadMarks(thread.id, [], null);
     // Правили эту картинку — отметка «правили последней» в меню «Что править?»
@@ -218,6 +246,8 @@ export async function launchThread(
     followChat(sessionId);
     return true;
   } catch (e) {
+    // Контекст сменился: причину показывает хост (свежий DTO уже в сторе), запуск не повторяется
+    if (cx) throw e;
     showToast(`Генерация не запущена: ${(e as Error).message}`, '', 'error');
     return false;
   }
@@ -238,7 +268,6 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   const marks = imgMode ? launchMarks(drawn, whole) : drawn;
   const hasImage = threadHasImage(thread);
   const hasMask = hasImage && hasMaskMark(marks);
-  const hasAnnotations = hasImage && hasAnnotationMark(marks);
   // Операция и режим панели «Картинки»
   usePanelChoiceVersion();
   const choice = activeChoice(projectId, imgMode);
@@ -260,17 +289,14 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
     || (!pv || !m ? 'Рисовать нечем: администратор не настроил поставщиков картинок' : '')
     || (blocked ? `${m!.label}: ${blocked.charAt(0).toLowerCase()}${blocked.slice(1)}` : '');
 
+  const body = (provider: string, model: string, withMaskNow: boolean, refs: number, character: boolean) => buildQuoteBody({
+    provider, model, mode, op: pr.op, count, hasImage, marks, withMask: withMaskNow, removal: false,
+    references: refs, hasCharacter: character, size, context: null,
+  });
   const quoteReq: ImageEditQuoteRequest | null = pr.reason ? null
-    : route ? {
-      provider: route.provider, model: route.model, mode, op: pr.op, count,
-      hasMask: false, hasAnnotations: false, references, hasCharacter: !own && !!prefs.characterSlug,
-      width: size?.w ?? null, height: size?.h ?? null,
-    }
-    : pv && m && !blocked && !pr.quick ? {
-      provider: pv.key, model: m.id, mode, op: pr.op, count,
-      hasMask: withMask, hasAnnotations: !fromScratch && hasAnnotations, references, hasCharacter: !!prefs.characterSlug,
-      width: size?.w ?? null, height: size?.h ?? null,
-    } : null;
+    : route ? body(route.provider, route.model, false, references, !own && !!prefs.characterSlug)
+    : pv && m && !blocked && !pr.quick ? body(pv.key, m.id, withMask, references, !!prefs.characterSlug)
+    : null;
   const { quote, loading, stale } = useQuote(api, projectId, quoteReq);
   const hint = route ? route.priceHint : m?.priceHint ?? null;
   // Пока котировка едет — прошлая цена той же модели, затем ориентир из каталога, чтобы цена

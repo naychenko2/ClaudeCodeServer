@@ -9,14 +9,17 @@
 // Это настройка вида, как ширина панели: живёт в localStorage, серверных префов и
 // UpdatedAt чата не трогает. Ключ — `{sessionId}:{panelKey}`, общий список на все
 // чаты; удаление чата его не чистит, поэтому держим не больше MAX_KEYS последних.
+import { genPanelKeys, toGenPanelKey } from './genPanelKeys';
 import { revealWorkspacePanel } from './subsystems/registryCore';
 
 const STORAGE_KEY = 'cc_gen_panel_dismissed';
 export const MAX_KEYS = 500;
-export const GEN_PANEL_KEYS: readonly string[] = ['images', 'sound', 'videoEditor'];
+// Ключи панелей генерации: без флага composer-context-row — «images», «sound», с флагом — одна
+// «chatContext». Функция, а не константа: набор зависит от флага пользователя
+export { genPanelKeys };
 
 export function isGenPanelKey(key: string): boolean {
-  return GEN_PANEL_KEYS.includes(key);
+  return genPanelKeys().includes(key);
 }
 
 // Порядок — от старых к свежим: вытесняются ключи с начала
@@ -36,14 +39,15 @@ function write(keys: string[]) {
 const keyOf = (sessionId: string, panelKey: string) => `${sessionId}:${panelKey}`;
 
 export function isGenPanelDismissed(sessionId: string, panelKey: string): boolean {
-  return read().includes(keyOf(sessionId, panelKey));
+  return read().includes(keyOf(sessionId, toGenPanelKey(panelKey)));
 }
 
 // Человек закрыл панель в чате. Чужие ключи и вызов без чата пропускаются, чтобы
 // хост мог звать это на любом закрытии панели, не разбирая ключ сам
 export function markGenPanelDismissed(sessionId: string | null | undefined, panelKey: string) {
-  if (!sessionId || !isGenPanelKey(panelKey)) return;
-  const k = keyOf(sessionId, panelKey);
+  const key = toGenPanelKey(panelKey);
+  if (!sessionId || !isGenPanelKey(key)) return;
+  const k = keyOf(sessionId, key);
   const keys = read().filter(x => x !== k);
   keys.push(k);
   write(keys.length > MAX_KEYS ? keys.slice(keys.length - MAX_KEYS) : keys);
@@ -52,7 +56,9 @@ export function markGenPanelDismissed(sessionId: string | null | undefined, pane
 // Выбор картинки/звука человеком: открыть панель, если в этом чате её не закрывали.
 // true — панель запрошена
 export function autoRevealGenerationPanel(panelKey: string, sessionId: string | null | undefined, tab?: string): boolean {
-  if (!sessionId || !isGenPanelKey(panelKey) || isGenPanelDismissed(sessionId, panelKey)) return false;
-  revealWorkspacePanel(panelKey, tab, { sessionId });
+  const key = toGenPanelKey(panelKey);
+  if (!sessionId || !isGenPanelKey(key) || isGenPanelDismissed(sessionId, key)) return false;
+  // Вкладок у «Контекста» нет: при переводе старого ключа вкладка отбрасывается
+  revealWorkspacePanel(key, key === panelKey ? tab : undefined, { sessionId });
   return true;
 }

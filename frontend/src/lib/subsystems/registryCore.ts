@@ -18,6 +18,7 @@ import type { AuthState, ChatItem, NoteDetail, Persona, Session } from '../../ty
 import type { HubTabValue } from '../../components/hubTabsModel';
 import { subscribeFlags } from '../featureFlags';
 import { noteReveal, openGenPanel } from '../genPanelOpen';
+import { CONTEXT_PANEL_KEY, toGenPanelKey } from '../genPanelKeys';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
 // Вклад в слот. Ровно два вида:
@@ -190,6 +191,15 @@ export interface ImageEditorOpenerApi {
   isEditable: (path: string) => boolean;
   open: (req: ImageEditorOpenRequest) => void;
 }
+// Action-слот `context-opener` (ADR-023, 2к-2): вход из дерева файлов в контекст хода. Вертикаль
+// превращает путь в объект контекста (ссылку на свой вид): картинка — в нить `image` с файлом. Слот
+// обобщает `image-editor`/`opener`: тот открывает попап редактора, этот наполняет контекст
+export const SLOT_CONTEXT_OPENER = 'context-opener';
+export interface ContextOpenerApi {
+  isOpenable: (path: string) => boolean;
+  // null — не вышло (ошибка уже показана тостом вертикалью)
+  toRef: (req: { projectId: string; sessionId: string; path: string }) => Promise<{ kind: string; ref: Record<string, unknown> } | null>;
+}
 // Render-слот `file-viewer-toolbar`: кнопки под просмотром файла
 export interface FileViewerToolbarCtx {
   projectId: string;
@@ -218,6 +228,8 @@ export interface ChatCardBadgeApi { open?: (session: Session) => boolean }
 // Имена слотов — одной точкой: каркас и модули ссылаются на константы, а не на строки.
 export const SLOT_COMPOSER_STRIP = 'composer-strip';
 export const SLOT_COMPOSER_MODE = 'composer-mode';
+// Вид объекта контекста чата (ADR-023): вклад — ContextKindApi, имя вклада — не обязательно
+export const SLOT_CONTEXT_KIND = 'context-kind';
 export const SLOT_COMPOSER_CHIP = 'composer-chip';
 export const SLOT_WORKSPACE_PANEL_DEF = 'workspace-panel-def';
 
@@ -350,7 +362,10 @@ export interface RevealPanelOptions {
 }
 
 // true — запрос ушёл; false — ifOpen, а открытой панели генерации нет
-export function revealWorkspacePanel(key: string, tab?: string, opts: RevealPanelOptions = {}): boolean {
+export function revealWorkspacePanel(requested: string, tab?: string, opts: RevealPanelOptions = {}): boolean {
+  // При флаге composer-context-row «Картинки»/«Звук» — это панель «Контекст» (вкладок у неё нет)
+  const key = toGenPanelKey(requested);
+  if (key !== requested) tab = undefined;
   const detail: RevealPanelDetail = { key };
   if (tab !== undefined) detail.tab = tab;
   if (opts.sessionId !== undefined) detail.sessionId = opts.sessionId;
@@ -366,6 +381,13 @@ export function revealWorkspacePanel(key: string, tab?: string, opts: RevealPane
   noteReveal(key, !!detail.peek);
   window.dispatchEvent(new CustomEvent<RevealPanelDetail>(REVEAL_PANEL_EVENT, { detail }));
   return true;
+}
+
+// Показать панель «Контекст» чата (ADR-023 §Д1): тонкая обёртка над revealWorkspacePanel. Открытая
+// панель на повторный показ мигает карточкой «С чем» — запрос ловит она сама. Вертикали зовут
+// её, а не revealWorkspacePanel с ключами генерации: их запрещает сторож features/**
+export function revealContextPanel(sessionId: string, opts: { target?: string; ifOpen?: boolean } = {}): boolean {
+  return revealWorkspacePanel(CONTEXT_PANEL_KEY, undefined, { sessionId, ...opts });
 }
 
 // ---- Хранилище ----

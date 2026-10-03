@@ -26,6 +26,8 @@ public static class PromptSectionContributorsDi
         // разбиение размажет логику слоя персоны между файлами. См. отчёт задачи.
         services.AddPromptSectionContributor<PersonaRecallContributor>();
         services.AddPromptSectionContributor<PersonaLayerContributor>();
+        // Хвост «Контекст хода» (ADR-023 §3.1): стор и реестр видов — из спины (AddChatContext)
+        services.AddPromptSectionContributor<TurnContextContributor>();
         return services;
     }
 }

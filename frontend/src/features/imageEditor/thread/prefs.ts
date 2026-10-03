@@ -219,6 +219,8 @@ export function ensurePrefs(projectId: string): Promise<void> {
   return load(projectId);
 }
 
+export const subscribePrefs = (fn: () => void) => { _listeners.add(fn); return () => { _listeners.delete(fn); }; };
+
 export function usePrefs(projectId: string): ProjectPrefs {
   useSyncExternalStore(
     fn => { _listeners.add(fn); return () => { _listeners.delete(fn); }; },

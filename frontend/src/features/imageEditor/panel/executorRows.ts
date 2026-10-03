@@ -43,6 +43,13 @@ export function rowPrice(pv: ImageEditProvider, m: ImageEditModel | null): strin
   return pv.priceUnit === 'usd' ? '$ за картинку' : pv.priceUnit === 'credits' ? 'кредиты' : '';
 }
 
+// Бесплатна ли строка: та же логика, что у подписи цены, но флагом для окраски чипа
+export function rowFree(pv: ImageEditProvider, m: ImageEditModel | null): boolean {
+  if (onOwnGpu(pv)) return true;
+  const h = m?.priceHint;
+  return !!h && isFreeUnit(h.unit);
+}
+
 const rowName = (pv: ImageEditProvider, m: ImageEditModel) =>
   m.id === AUTO_MODEL ? `${pv.label} · Авто` : onOwnGpu(pv) ? m.label : `${pv.label} · ${m.label}`;
 
@@ -73,7 +80,7 @@ export function executorRows(catalog: ImageEditCatalog, task: ExecutorTask): Exe
   const rows: ExecutorRow[] = [];
   if (admin) {
     const now = autoNow(catalog);
-    rows.push({ id: AUTO_EXECUTOR, group: 'auto', name: 'Авто', sub: now ? `как в настройках · сейчас ${now}` : 'как в настройках', price: rowPrice(admin, adminModel) });
+    rows.push({ id: AUTO_EXECUTOR, group: 'auto', name: 'Авто', sub: now ? `как в настройках · сейчас ${now}` : 'как в настройках', price: rowPrice(admin, adminModel), free: rowFree(admin, adminModel) });
   }
   // Сначала своя видеокарта, потом облако; внутри — порядок каталога
   const ordered = [...catalog.providers.filter(onOwnGpu), ...catalog.providers.filter(p => !onOwnGpu(p))];
@@ -87,6 +94,7 @@ export function executorRows(catalog: ImageEditCatalog, task: ExecutorTask): Exe
         name: rowName(pv, m),
         sub: m.id === AUTO_MODEL ? 'подберём модель под задачу' : undefined,
         price: rowPrice(pv, m.id === AUTO_MODEL ? null : m),
+        free: rowFree(pv, m.id === AUTO_MODEL ? null : m),
         ...(down ? { badges: [{ label: down, tone: 'warning' as const }] } : null),
         ...(why ? { disabled: true, reason: why } : null),
       });

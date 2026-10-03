@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -77,6 +78,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
     private readonly IAudioAgentEdits? _edits;
     private readonly IAudioVoiceLibrary? _library;
     private readonly bool _agentLaunch;
+    private readonly ChatContext.AudioContextLaunch? _context;
 
     // Платные запуски агентом в текущем ходу: sessionId → число. Сброс — TurnCompleted этой сессии
     private readonly Dictionary<string, int> _launches = new(StringComparer.Ordinal);
@@ -96,8 +98,10 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         IAudioAgentEdits? edits = null,
         IAudioVoiceLibrary? library = null,
         ITurnEventBus? events = null,
-        IConfiguration? config = null)
+        IConfiguration? config = null,
+        ChatContext.AudioContextLaunch? context = null)
     {
+        _context = context;
         _sessions = sessions;
         _flags = flags;
         _projects = projects;
@@ -176,14 +180,15 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             if (scope.Project is not { } project) return Deny(NoProjectFiles);
             if (ProjectAudioPath(project, file) is not { } path)
                 return Deny($"Звуковой файл не найден в проекте: {file}");
-            written = Store.Open(ownerId, session.Id, path, null, null);
+            written = _threads.Tracked(ownerId, session.Id, () => Store.Open(ownerId, session.Id, path, null, null), ContextActor.Agent);
             if (written is { Status: AudioThreadWriteStatus.Ok, Existing: false, Thread: { } created })
                 await _threads.AnchorAsync(session.Id, created, ct);
         }
         else if (versionId is not null)
-            written = Store.SetCurrentVersion(ownerId, session.Id, threadId!, versionId, null, focus: true);
+            written = _threads.Tracked(ownerId, session.Id,
+                () => Store.SetCurrentVersion(ownerId, session.Id, threadId!, versionId, null, focus: true), ContextActor.Agent);
         else
-            written = Store.SetFocus(ownerId, session.Id, threadId, null);
+            written = _threads.Tracked(ownerId, session.Id, () => Store.SetFocus(ownerId, session.Id, threadId, null), ContextActor.Agent);
 
         return written.Status switch
         {
@@ -211,7 +216,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         }
 
         var settings = mode is null ? null : _prefs.ForNewThread(ownerId, scope, mode);
-        var written = Store.Open(ownerId, session.Id, null, folder, null, settings);
+        var written = _threads.Tracked(ownerId, session.Id, () => Store.Open(ownerId, session.Id, null, folder, null, settings), ContextActor.Agent);
         if (written is not { Status: AudioThreadWriteStatus.Ok, Thread: { } thread })
             return Deny("Звуки чата как раз меняются — повтори позже.");
         await _threads.AnchorAsync(session.Id, thread, ct);
@@ -384,6 +389,13 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             // Голос из библиотеки разворачивает поставщик при запуске (ADR-021 §5); протухший клон MiniMax —
             // отказ, пересоздаёт его только человек кнопкой с ценой
             libraryVoice = AudioVoiceRefs.Prefix + fromLibrary.Slug;
+        }
+        else if (!args.ContainsKey("voice") && _context is not null
+            && _flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow)
+            && _context.AgentVoice(ownerId, session.Id, q.Op) is { } contextVoice)
+        {
+            // Агент без voice берёт голос контекста чата; явный аргумент, в том числе пустой, его заменяет
+            libraryVoice = contextVoice;
         }
         else if (Str(args, "voice") is { } voice)
         {

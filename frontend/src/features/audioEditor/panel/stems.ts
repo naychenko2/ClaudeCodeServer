@@ -12,6 +12,8 @@ export const STEM_SETS: readonly { value: AudioStemSet; label: string; full: str
   { value: 'karaoke', label: 'Караоке', full: 'караоке' },
 ];
 
+export const isStemSet = (v: unknown): v is AudioStemSet => STEM_SETS.some(s => s.value === v);
+
 const stemModel = (p: AudioProvider | null, set: AudioStemSet): AudioModelInfo | null =>
   p?.models.find(m => m.caps.ops.includes('separate') && m.caps.stemSet === set) ?? null;
 

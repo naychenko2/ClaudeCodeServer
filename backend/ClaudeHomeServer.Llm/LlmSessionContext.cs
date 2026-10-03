@@ -179,6 +179,11 @@ public sealed record AudioEditorMcpContext(string ApiUrl, Func<string> TokenFact
 // модуль не загружен. Свойства сессии, владельца и процесса, не хода.
 public sealed record VideoEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
     IReadOnlyList<string>? AutoAllowTools = null);
+// Контекст MCP-сервера «Контекст чата» (ADR-023 §3.2): тулсет живёт в Main, сессия едет хвостом URL
+// (/mcp/turn-context/{sessionId}), в любом чате владельца. null — флаг composer-context-row выключен или
+// тулсета нет в реестре. Свойства сессии и владельца, не хода: от содержимого контекста состав не зависит.
+public sealed record TurnContextMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
+    IReadOnlyList<string>? AutoAllowTools = null);
 // Контекст MCP-сервера локальной генерации (local-media: ComfyUI на своей GPU). null — чат без
 // владельца или вне проекта, тумблер LocalMedia:Enabled выключен, подсистема images выключена,
 // проект локальный или персона ReadOnly (сервер пишет файлы в проект). Всё это — свойства
@@ -424,4 +429,6 @@ public sealed record LlmSessionContext(
     // MCP-сервер модуля «Звук» (ADR-021 §5): null — флаг audio-editor выключен или модуль не загружен
     AudioEditorMcpContext? AudioEditorMcp = null,
     // MCP-сервер модуля «Видео» (ADR-022 §5): null — флаг video-editor выключен или модуль не загружен
-    VideoEditorMcpContext? VideoEditorMcp = null);
+    VideoEditorMcpContext? VideoEditorMcp = null,
+    // MCP-сервер «Контекст чата» (ADR-023 §3.2)
+    TurnContextMcpContext? TurnContextMcp = null);

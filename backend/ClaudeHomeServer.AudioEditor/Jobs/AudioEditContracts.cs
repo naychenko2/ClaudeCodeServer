@@ -40,12 +40,17 @@ public static class AudioEditErrorCodes
     public const string VoiceCloneMissing = "voice_clone_missing";
     // Обработка без ИИ недоступна: нет ffmpeg на хосте или выключена подсистема images (ADR-021 §2)
     public const string DspUnavailable = "dsp_unavailable";
+    // Ревизия контекста чата устарела (ADR-023 §Д2.1): тело 409 — свежий ChatContextDto
+    public const string ContextChanged = "context_changed";
 }
 
 public sealed record AudioEditCallResult<T>(T? Value, string? ErrorCode, string? Error)
 {
     // Котировка пересоздания клона при отказе voice_clone_stale / voice_clone_missing
     public AudioQuoteDto? Recreate { get; init; }
+
+    // Свежий контекст чата при отказе context_changed: ручка отдаёт его телом 409
+    public Protocol.ChatContextDto? Context { get; init; }
 
     public static AudioEditCallResult<T> Ok(T value) => new(value, null, null);
     public static AudioEditCallResult<T> Fail(string code, string error) => new(default, code, error);
@@ -69,7 +74,10 @@ public sealed record AudioQuoteRequest(
     int? DurationSec = null,
     JsonObject? Fields = null,
     string? Prompt = null,
-    string? Lyrics = null);
+    string? Lyrics = null,
+    // Ревизия контекста чата (ADR-023 §Д2.1): с ней нить, версия, голос и входы берутся из стора, а ThreadId
+    // тела игнорируется; ревизия устарела — 409 context_changed. Фиксируется в котировке
+    long? ContextRevision = null);
 
 // Цена: Amount в единицах Unit (AudioPriceUnits.*), null — станет известна после запуска.
 // Source — AudioEstimateSources.*, Eta — секунды на все варианты, QueueLength — очередь поставщика
@@ -88,7 +96,9 @@ public sealed record AudioQuoteDto(
     bool Heavy,
     DateTime ExpiresAt,
     // Котировка пересоздания клона: slug голоса из библиотеки
-    string? RecreateVoice = null);
+    string? RecreateVoice = null,
+    // Строки исполнителей для «Чем» строки и панели контекста (ADR-023 §Д2.1, Р2)
+    IReadOnlyList<Protocol.ExecutorRowDto>? Executors = null);
 
 // Запуск по котировке: содержимое операции (текст, слова, входы). Params поверх полей из цепочки —
 // частные параметры модели. BaseVersionId — версия нити, от которой запускают (null — текущая).
@@ -113,7 +123,10 @@ public sealed record AudioJobInput(
     byte[]? VoiceModel = null,
     byte[]? VoiceIndex = null,
     long? Seed = null,
-    string? Voice = null);
+    string? Voice = null,
+    // Ревизия контекста чата (ADR-023 §Д2.1): с ней ThreadId, BaseVersionId, Voice и входы-пути тела
+    // игнорируются; не совпала со стором или с ревизией котировки — 409 context_changed
+    long? ContextRevision = null);
 
 public sealed record AudioJobCreatedDto(string JobId);
 

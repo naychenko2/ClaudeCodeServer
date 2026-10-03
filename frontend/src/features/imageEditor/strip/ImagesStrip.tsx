@@ -21,7 +21,8 @@ import {
   useGenerationSheet, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
-import { IMAGES_PANEL, revealWorkspacePanel } from '../characters/panel';
+import { IMAGES_PANEL } from '../characters/panel';
+import { revealImagesPanel } from '../context/reveal';
 import { ImagesPanel } from '../panel/ImagesPanel';
 import { useImagesPanelShown } from '../panel/panelOpen';
 import { createDraft, imageReleaseUndo, releaseFocus, undoImageRelease } from '../thread/actions';
@@ -81,7 +82,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const [sheet, setSheet] = useState(false);
   const panelShown = useImagesPanelShown();
   const toggle = settingsToggle(inSheet ? 'sheet' : 'panel', inSheet ? sheet : panelShown);
-  const openSettings = () => (inSheet ? setSheet(true) : revealWorkspacePanel(IMAGES_PANEL, 'settings'));
+  const openSettings = () => (inSheet ? setSheet(true) : revealImagesPanel(sessionId, 'settings'));
 
   useEffect(() => { setSheet(false); }, [sessionId]);
   // Показ панели извне (автооткрытие по выбору картинки, вкладка «Персонажи») на телефоне
@@ -255,14 +256,14 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
         {!isMobile && !personal && (L.prefs.characterSlug
           ? (
             <IconButton size="sm" title={`Персонаж: ${character?.name ?? L.prefs.characterSlug} — фото уходят в запрос`}
-              ariaLabel="Персонаж" onClick={() => revealWorkspacePanel(IMAGES_PANEL, 'characters')}
+              ariaLabel="Персонаж" onClick={() => revealImagesPanel(sessionId, 'characters')}
               style={{ padding: 0, borderRadius: R.full, border: `1.5px solid ${C.accent}`, overflow: 'hidden' }}>
               {photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} /> : ic(User)}
             </IconButton>
           )
           : (
             <IconButton size="sm" title="Подключить персонажа" ariaLabel="Подключить персонажа"
-              onClick={() => revealWorkspacePanel(IMAGES_PANEL, 'characters')}>{ic(User)}</IconButton>
+              onClick={() => revealImagesPanel(sessionId, 'characters')}>{ic(User)}</IconButton>
           ))}
         {/* Телефон v5: вторая «▴» рядом со сводкой путалась бы с ней (как у «Звука») */}
         {!(v5mode && isMobile) && (

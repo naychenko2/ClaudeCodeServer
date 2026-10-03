@@ -91,9 +91,10 @@ interface Props<T extends string> {
   title: string;
   subtitle?: string;
   icon: ReactNode;
-  tabs: TabItem<T>[];
-  tab: T;
-  onTabChange: (t: T) => void;
+  // Вкладок нет у панели «Контекст»: библиотеки там — отдельные панели зоны (ADR-023 §Д1)
+  tabs?: TabItem<T>[];
+  tab?: T;
+  onTabChange?: (t: T) => void;
   context?: ReactNode;              // строка «Работаем с: …» над телом
   contextAction?: ReactNode;        // кнопка в конце строки контекста («Снять выбор» ✕)
   // Ключ панели в рабочей области («images», «sound»): каркас отмечает её открытой, пока
@@ -127,7 +128,7 @@ interface Props<T extends string> {
 
 const icon = (Ico: typeof X) => <Ico size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
-export function GenerationPanel<T extends string>(p: Props<T>) {
+export function GenerationPanel<T extends string = string>(p: Props<T>) {
   const narrow = useGenerationSheet();
   const inShell = useHasPanelHeader();
   const [ownCollapsed, setOwnCollapsed] = useState(false);
@@ -156,7 +157,7 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
   useEffect(() => (p.panelKey && openView ? holdGenPanelOpen(p.panelKey, openView) : undefined), [p.panelKey, openView]);
   const draft = useGenDraft(p.draftKey ?? null);
 
-  if (view === 'spine' && !inShell) return <Spine {...p} onExpand={() => setCollapsed(false)} onTab={t => { p.onTabChange(t); setCollapsed(false); }} />;
+  if (view === 'spine' && !inShell) return <Spine {...p} onExpand={() => setCollapsed(false)} onTab={t => { p.onTabChange?.(t); setCollapsed(false); }} />;
 
   // Шторка — телефонная раскладка: тач-цели не ниже 40 (гайд, чек-лист)
   const touch = sheet;
@@ -212,7 +213,9 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
   const content = (
     <>
       {p.returnLink && <ReturnRow link={p.returnLink} />}
-      <Tabs ariaLabel={`Панель «${p.title}»`} value={p.tab} items={p.tabs} onChange={p.onTabChange} transparent={sheet} />
+      {p.tabs && p.tab !== undefined && p.onTabChange && (
+        <Tabs ariaLabel={`Панель «${p.title}»`} value={p.tab} items={p.tabs} onChange={p.onTabChange} transparent={sheet} />
+      )}
       {p.context && (
         <div style={{
           flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: PAD.row, minWidth: 0,
@@ -463,7 +466,7 @@ function Spine<T extends string>(p: Props<T> & { onExpand: () => void; onTab: (t
     }}>
       <IconButton active title={`Развернуть панель «${p.title}»`} onClick={p.onExpand}>{p.icon}</IconButton>
       <span style={{ width: SPINE_DIVIDER_W, height: 1, background: C.divider, margin: `${SP.xxs}px 0` }} />
-      {p.tabs.map(t => (
+      {p.tabs?.map(t => (
         <IconButton key={t.value} active={t.value === p.tab} title={t.label} onClick={() => p.onTab(t.value)}>
           {t.icon}
         </IconButton>

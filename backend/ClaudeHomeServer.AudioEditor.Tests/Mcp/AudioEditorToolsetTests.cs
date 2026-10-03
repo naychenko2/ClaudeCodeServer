@@ -2,6 +2,8 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.AudioEditor;
+using ClaudeHomeServer.Services.AudioEditor.ChatContext;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.AudioEditor.Engines;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Voices;
@@ -40,6 +42,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
     private readonly Dictionary<string, Session> _sessions = new();
     private readonly List<AudioEditJobService> _services = [];
     private AudioEditJobService _jobs = null!;
+    private ChatContextStore _ctxStore = null!;
 
     public AudioEditorToolsetTests()
     {
@@ -62,10 +65,17 @@ public sealed class AudioEditorToolsetTests : IDisposable
     }
 
     private AudioEditorToolset Toolset(IAudioEngine[]? engines = null, bool agentLaunch = true, bool withGate = true,
-        IAudioDsp? dsp = null, VoiceLibrary? library = null, bool withEdits = false)
+        IAudioDsp? dsp = null, VoiceLibrary? library = null, bool withEdits = false,
+        AudioContextLaunch? context = null, string[]? extraFlags = null)
     {
         engines ??= [new FakeEngine("fal")];
-        var threads = new AudioJobThreads(_store, NullLogger<AudioJobThreads>.Instance);
+        var contextFlags = new Mock<IFeatureFlagGate>();
+        contextFlags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ComposerContextRow))
+            .Returns(() => extraFlags?.Contains(FeatureFlagKeys.ComposerContextRow) == true);
+        _ctxStore = new ChatContextStore(Path.Combine(_dir, "chat-context"),
+            new ContextKindRegistry([new AudioContextKind(_store)]));
+        var mirror = new ChatContextFocusMirror(_ctxStore, contextFlags.Object, NullLogger<ChatContextFocusMirror>.Instance);
+        var threads = new AudioJobThreads(_store, NullLogger<AudioJobThreads>.Instance, mirror: mirror);
         _jobs = new AudioEditJobService(engines, _workspace, NullLogger<AudioEditJobService>.Instance, threads, _prefs,
             voices: library);
         _services.Add(_jobs);
@@ -76,6 +86,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
             .Returns((string id, string owner) => _sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
         var flags = new Mock<IFeatureFlagGate>();
         flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.AudioEditor)).Returns(true);
+        foreach (var key in extraFlags ?? []) flags.Setup(f => f.IsEnabled(It.IsAny<string>(), key)).Returns(true);
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
         var config = new ConfigurationBuilder()
@@ -84,7 +95,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
         return new AudioEditorToolset(accessor.Object, flags.Object, projects.Object, engines, threads, _jobs, _prefs,
             _workspace, withGate ? _turnGate.Object : null, concat,
             edits: withEdits ? new AudioAgentEdits(new DspAudioEngine(threads, _workspace, NullLogger<DspAudioEngine>.Instance, dsp)) : null,
-            library: library, events: _bus, config: config);
+            library: library, events: _bus, config: config, context: context);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -346,6 +357,34 @@ public sealed class AudioEditorToolsetTests : IDisposable
         engine.LastRequest.Params?.ContainsKey("voice").Should().NotBe(true);
     }
 
+    // Голос контекста агент берёт под флагом строки контекста composer-context-row, а не старым chat-context
+    [Theory]
+    [InlineData(FeatureFlagKeys.ComposerContextRow, true)]
+    [InlineData(FeatureFlagKeys.ChatContext, false)]
+    public async Task Голос_контекста_у_агента_зависит_от_флага_строки_контекста(string flag, bool taken)
+    {
+        var library = new VoiceLibrary();
+        var scope = AudioEditScope.Of(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
+        byte[] wav = [.. "RIFF"u8, 0, 0, 0, 0, .. "WAVE"u8, 1];
+        var slug = library.CreateFromSamples(scope, "Аня", "текст", [new VoiceSampleUpload(wav)]).Value!.Manifest.Slug;
+        var registry = new ContextKindRegistry([new AudioContextKind(_store)]);
+        var store = new ChatContextStore(Path.Combine(_dir, "ctx"), registry);
+        var directory = new Mock<ISessionDirectory>();
+        directory.Setup(d => d.GetById(ChatId)).Returns(_sessions[ChatId]);
+        var launch = new AudioContextLaunch(store, registry, directory.Object);
+        store.AddRef(Owner, ChatId, new ContextItem("ci_voice", AudioContextKind.VoiceKind, new JsonObject { ["slug"] = slug },
+            "voice", ContextActor.Human, DateTime.UtcNow), null);
+        var engine = new FakeEngine("fal") { TakesLibraryVoices = true };
+        var toolset = Toolset([engine], library: library, context: launch, extraFlags: [flag]);
+
+        var result = await Call(toolset, AudioEditorToolset.ToolGenerate, Gen(Draft()));
+        await WaitIdleAsync();
+
+        result.IsError.Should().BeFalse(result.Text);
+        if (taken) engine.LastRequest!.Voice!.Slug.Should().Be(slug);
+        else engine.LastRequest!.Voice.Should().BeNull("флаг строки контекста выключен — голос контекста не берётся");
+    }
+
     // ── Сохранения у агента нет ────────────────────────────────────────────────
 
     [Fact]
@@ -506,6 +545,35 @@ public sealed class AudioEditorToolsetTests : IDisposable
 
         ok["thread"]!["file"]!.GetValue<string>().Should().Be("audio/intro.wav");
         _store.Get(Owner, ChatId).Focus.Should().Be(ok["focus"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_audio_focus_ставит_основной_объект_от_агента_а_выбор_человека_гасит_звёздочку()
+    {
+        var toolset = Toolset(extraFlags: [FeatureFlagKeys.ComposerContextRow]);
+
+        var focus = Parse(await Call(toolset, AudioEditorToolset.ToolFocus, new JsonObject { ["file"] = "audio/intro.wav" }));
+
+        var threadId = focus["focus"]!.GetValue<string>();
+        var primary = _ctxStore.Get(Owner, ChatId).Primary!;
+        primary.Kind.Should().Be("audio");
+        ChatContextFocusMirror.ThreadOf(primary).Should().Be(threadId);
+        primary.By.Should().Be(ContextActor.Agent, "audio_focus — выбор агента: чип ✦");
+
+        // Человек выбрал тот же объект — звёздочка гаснет (ADR-023 §2.4)
+        _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("audio", threadId, ContextActor.Human), null);
+        _ctxStore.Get(Owner, ChatId).Primary!.By.Should().Be(ContextActor.Human);
+    }
+
+    [Fact]
+    public async Task Без_строки_контекста_audio_focus_стор_контекста_не_трогает()
+    {
+        var toolset = Toolset();
+
+        (await Call(toolset, AudioEditorToolset.ToolFocus, new JsonObject { ["file"] = "audio/intro.wav" })).IsError.Should().BeFalse();
+
+        _ctxStore.Get(Owner, ChatId).Primary.Should().BeNull();
+        _ctxStore.Get(Owner, ChatId).Revision.Should().Be(0);
     }
 
     [Fact]

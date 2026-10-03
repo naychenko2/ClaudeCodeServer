@@ -14,7 +14,10 @@ import type { MouseEvent, ReactNode } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { C, FS, SP } from '../../lib/design';
 import { reportShownStrip, useComposerStrip } from '../../lib/composerStrips';
-import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
+import { SLOT_COMPOSER_STRIP, SLOT_CONTEXT_KIND, useSlot } from '../../lib/subsystems/registry';
+import type { ContextKindApi } from '../../lib/chatContext/types';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { useIsMobile } from '../../lib/breakpoints';
 import type { ComposerStripApi, ComposerStripCtx, ComposerStripShortcut, SlotContribution } from '../../lib/subsystems/registry';
 import { Button, Dot, IconButton, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_STROKE } from '../ui/icons';
@@ -39,11 +42,35 @@ function ItemLabel({ title, status }: { title: string; status: ReactNode }) {
 // каркаса: меню «＋» композера и пустой ленты (ADR-021 п.1). Хост полос берёт их сам
 export function useStripShortcuts(projectId: string | null, sessionId: string | null): ComposerStripShortcut[] {
   const fromSlot = useSlot<ComposerStripCtx, ComposerStripApi>(SLOT_COMPOSER_STRIP);
+  const kinds = useSlot<never, ContextKindApi>(SLOT_CONTEXT_KIND);
+  const contextRow = useFeature(FLAGS.composerContextRow);
+  const isMobile = useIsMobile();
   const avail = { projectId, sessionId };
-  return fromSlot
+  const own = fromSlot
     .filter(c => c.name && c.action && (c.action.isAvailable?.(avail) ?? true))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .flatMap(c => c.action!.shortcuts?.(avail) ?? []);
+  return contextRow ? [...own, ...createShortcuts(kinds, own, { projectId, sessionId, isMobile })] : own;
+}
+
+// Входы «＋» и пустой ленты от видов контекста (ADR-023, `create` вида): «Картинка» заводит черновик и
+// становится основным объектом. Вид без чата не нужен, ярлык с тем же ключом, что у полосы, не дублируем
+export function createShortcuts(
+  kinds: readonly { name?: string; order?: number; action?: ContextKindApi }[],
+  existing: readonly Pick<ComposerStripShortcut, 'key'>[],
+  o: { projectId: string | null; sessionId: string | null; isMobile: boolean },
+): ComposerStripShortcut[] {
+  const { sessionId } = o;
+  if (!sessionId) return [];
+  return kinds
+    .filter(c => c.action?.create)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map(c => ({ name: c.name ?? c.action!.kinds[0], create: c.action!.create! }))
+    .filter(c => !existing.some(e => e.key === `create:${c.name}`))
+    .map(({ name, create }) => ({
+      key: `create:${name}`, title: create.title, hint: create.hint, icon: create.icon,
+      onSelect: () => create.run({ projectId: o.projectId, sessionId, isMobile: o.isMobile }),
+    }));
 }
 
 // Ярлыки в меню полос: ярлык с ключом самой полосы («Звук») — не второй пункт, а действие её

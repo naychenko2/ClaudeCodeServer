@@ -12,9 +12,9 @@ import { GitBranch, FolderGit2, Check, CloudUpload, ChevronDown, ChevronUp, Mess
 import type { Project, Session } from '../types';
 import { C, FONT, R, SP } from '../lib/design';
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../lib/breakpoints';
-import { basename } from '../lib/paths';
 import { plural } from '../lib/plural';
-import { ensureGit, useGitState, loadUnpushedLog, clearGitError, workingDiffStat, gitStripIdle, gitStripStatus } from '../lib/git';
+import { clearGitError, gitStripIdle } from '../lib/git';
+import { useGitChip } from '../hooks/useGitChip';
 import type { TurnTree } from '../lib/turnWorktree';
 import { wsPanels } from '../pages/workspace/panelStackState';
 import { PublishDialog } from './PublishDialog';
@@ -50,8 +50,7 @@ export function ProjectGitBar({
   collapsed?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
 }) {
-  const st = useGitState(project.id);
-  const status = st.status;
+  const { st, status, worktreeBranch, diff, behind, publishN, canPublish, treeActive, isEmpty, strip, label: gitLabel } = useGitChip(project, session, turnTree);
   const { reveal } = wsPanels.use();
   const [publishConfirm, setPublishConfirm] = useState(false);
   // Диалог стиля сообщений коммита — общий с панелью «Изменения»; открывается из
@@ -59,16 +58,6 @@ export function ProjectGitBar({
   const [promptOpen, setPromptOpen] = useState(false);
   // rect кнопки «Зафиксировать» — открытое меню выбора области коммита (null = закрыто)
   const [commitMenu, setCommitMenu] = useState<DOMRect | null>(null);
-  // Чат в отдельном worktree: запросы стора уже идут в его дерево (gitSessionContext),
-  // перечитываем статус при переключении дерева у активной сессии
-  const worktreeBranch = session?.worktreeBranch ?? null;
-
-  // Статус + стек незапушенных (для кнопки «Опубликовать»); realtime держит их свежими
-  useEffect(() => {
-    ensureGit(project.id, true);
-    void loadUnpushedLog(project.id);
-  }, [project.id, worktreeBranch]);
-
   // Меню коммита в anchor-режиме само не ловит Esc — закрываем на вызывающей стороне
   useEffect(() => {
     if (!commitMenu) return;
@@ -126,24 +115,14 @@ export function ProjectGitBar({
     try { localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
   }, []);
 
-  const diff = workingDiffStat(status);
-  const ahead = status?.ahead ?? 0;
-  const behind = status?.behind ?? 0;
-  const publishN = ahead > 0 ? ahead : st.unpushed.length;
-  const canPublish = publishN > 0;
-
   // Нечего ни фиксировать, ни публиковать — бар не показываем, ЕСЛИ нет активного
   // дерева. Активное дерево (чата или хода) держит бар даже при пустом диффе.
   // Вне git-репозитория бару по-прежнему делать нечего
-  const treeActive = !!worktreeBranch || !!turnTree;
-  const isEmpty = diff.files === 0 && !canPublish;
   // С переключателем полос бар виден и чистым: иначе пропал бы сам переключатель
   if (!status?.isRepo || (!treeActive && isEmpty && !switcher)) return null;
-  const strip = gitStripStatus(status, st.unpushed.length);
   const toneColor = strip.tone === 'changes' ? C.warning : strip.tone === 'ahead' ? C.accent : C.success;
 
-  // Метка: ветка worktree чата > имя папки (проект сам открыт как worktree) > ветка
-  const label = worktreeBranch ?? (status.isWorktree ? basename(project.rootPath) : (status.branch ?? '—'));
+  const label = gitLabel;
 
   // Открыть панель «Изменения» на скоупе «Не зафиксировано» (working). Панель
   // живёт в любой из зон, поэтому просим стор её показать: reveal открывает

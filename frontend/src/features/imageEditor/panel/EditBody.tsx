@@ -77,7 +77,7 @@ export function EditBody({ projectId, sessionId, thread, L, catalog, isMobile, o
       )}
       {noSamples
         ? <NoSamplesSection title="Персонаж и образцы" hint={noSamples} />
-        : <SamplesField projectId={projectId} L={L} catalog={catalog} onCharacters={onCharacters} isMobile={isMobile} />}
+        : <SamplesField projectId={projectId} sessionId={sessionId} L={L} catalog={catalog} onCharacters={onCharacters} isMobile={isMobile} />}
       {L.quickAction
         ? <BodyHint icon="info">Текст в поле ввода не нужен — достаточно нажать «{runVerb(L.op)}» внизу.{isOneVariant(L.op) ? ' Даёт один вариант.' : ''}</BodyHint>
         : <BodyHint>{L.op === 'inpaint' ? 'Что сделать с отмеченным' : 'Что изменить'} — в поле ввода чата</BodyHint>}

@@ -50,6 +50,8 @@ function subscribe(fn: () => void) {
   return () => { _listeners.delete(fn); };
 }
 const getVersion = () => _version;
+// Подписка вне React: мост вида контекста пересчитывает действия при смене нитей и отметок
+export const subscribeThreadStore = subscribe;
 
 // Фокус меняет полосу над композером: выбрали картинку — «Картинки», сняли — прежняя.
 // С флагом image-panel-v5 снятие полосу не уводит: дальше рисуем новую («Создать»), над

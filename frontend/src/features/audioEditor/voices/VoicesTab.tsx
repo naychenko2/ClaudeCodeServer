@@ -7,8 +7,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, ChevronUp, Lock, Mic, Pencil, Plus, Trash2, X } from 'lucide-react';
 import {
-  Badge, Button, ConfirmDialog, EmptyState, Field, IconButton, TextArea, TextField, showToast, useFeature,
-  FLAGS, C, FS, R, SP, ICON_SIZE, ICON_STROKE,
+  Badge, Button, ConfirmDialog, ContextAddButton, EmptyState, Field, IconButton, TextArea, TextField, refOf, showToast, useChatContext,
+  useFeature, FLAGS, C, FS, R, SP, ICON_SIZE, ICON_STROKE,
 } from 'aihome_shell/kit';
 import { AudioPlayer } from '../player';
 import { isPersonalScope } from '../scope';
@@ -19,6 +19,7 @@ import {
   voicesView, voiceSubtitle, whereWorks, type WhereStatus,
 } from './model';
 import { RecreateButton } from './RecreateButton';
+import { TRAIN_HINT, TrainVoiceForm } from './TrainVoiceForm';
 import { EMPTY_SAMPLES, SamplesPicker, toDraft, type SamplesValue } from './SamplesPicker';
 
 export interface VoicesTabProps {
@@ -28,6 +29,9 @@ export interface VoicesTabProps {
   // Выбранный в панели голос (slug) — подсвечивается в списке
   selected?: string | null;
   onPick: (slug: string) => void;
+  // Панель «Голоса» при флаге composer-context-row (ADR-023, 2з-3): вместо «Выбрать» — «В контекст» / «В контексте ✓»
+  // по контексту этого чата и кнопка «Обучить голос» под списком. Без флага вкладка «Звука» работает как раньше
+  contextSessionId?: string | null;
 }
 
 const ic = (I: typeof Mic, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -45,12 +49,16 @@ export function VoicesTab(props: VoicesTabProps) {
   return enabled ? <VoicesTabBody {...props} /> : null;
 }
 
-function VoicesTabBody({ scope, sessionId, selected = null, onPick }: VoicesTabProps) {
+function VoicesTabBody({ scope, sessionId, selected = null, onPick, contextSessionId = null }: VoicesTabProps) {
   const personal = isPersonalScope(scope);
   const [list, setList] = useState<VoicesList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [training, setTraining] = useState(false);
+  const chat = useChatContext(contextSessionId);
+  const candidate = (slug: string) => ({ kind: 'audio-voice', ref: { slug } });
+  const isPicked = (slug: string) => (contextSessionId ? !!refOf(chat, candidate(slug)) : selected === slug);
 
   const load = useCallback(() => {
     if (personal) return;
@@ -81,6 +89,15 @@ function VoicesTabBody({ scope, sessionId, selected = null, onPick }: VoicesTabP
       action={<Button size="sm" variant="secondary" onClick={load}>Повторить</Button>} />;
   }
 
+  const train = contextSessionId && (training
+    ? <TrainVoiceForm scope={scope} sessionId={sessionId} onClose={() => setTraining(false)} />
+    : (
+      <div data-train-entry="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+        <Button size="sm" variant="secondary" fullWidth leftIcon={ic(Mic)} onClick={() => setTraining(true)}>Обучить голос</Button>
+        <span style={{ fontSize: FS.xs, color: C.textMuted }}>{TRAIN_HINT}</span>
+      </div>
+    ));
+
   const form = creating && (
     <NewVoiceForm scope={scope}
       onSaved={v => { put(v); setCreating(false); setOpen(v.slug); showToast(`Голос «${v.name}» добавлен в voices/`, '', 'info'); }}
@@ -95,6 +112,7 @@ function VoicesTabBody({ scope, sessionId, selected = null, onPick }: VoicesTabP
             action={<Button size="sm" variant="primary" leftIcon={ic(Plus)} onClick={() => setCreating(true)}>Голос</Button>} />
         )}
         {form}
+        {train}
       </div>
     );
   }
@@ -102,7 +120,8 @@ function VoicesTabBody({ scope, sessionId, selected = null, onPick }: VoicesTabP
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
       {view.voices.map(v => (
-        <VoiceCard key={v.slug} scope={scope} voice={v} expanded={open === v.slug} picked={selected === v.slug}
+        <VoiceCard key={v.slug} scope={scope} voice={v} expanded={open === v.slug} picked={isPicked(v.slug)}
+          contextSessionId={contextSessionId}
           onToggle={() => setOpen(o => (o === v.slug ? null : v.slug))}
           onPick={() => onPick(v.slug)} onChanged={put}
           onDeleted={() => { drop(v.slug); if (open === v.slug) setOpen(null); }} />
@@ -110,12 +129,14 @@ function VoicesTabBody({ scope, sessionId, selected = null, onPick }: VoicesTabP
       {form || (
         <Button size="sm" variant="dashed" fullWidth leftIcon={ic(Plus)} onClick={() => setCreating(true)}>Голос</Button>
       )}
+      {train}
     </div>
   );
 }
 
-function VoiceCard({ scope, voice: v, expanded, picked, onToggle, onPick, onChanged, onDeleted }: {
+function VoiceCard({ scope, voice: v, expanded, picked, contextSessionId, onToggle, onPick, onChanged, onDeleted }: {
   scope: string;
+  contextSessionId: string | null;
   voice: AudioVoice;
   expanded: boolean;
   picked: boolean;
@@ -151,14 +172,15 @@ function VoiceCard({ scope, voice: v, expanded, picked, onToggle, onPick, onChan
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(expanded ? ChevronUp : ChevronDown, ICON_SIZE.sm)}</span>
       </button>
       {expanded && (
-        <VoiceDetails scope={scope} voice={v} picked={picked} onPick={onPick} onChanged={onChanged} onDeleted={onDeleted} />
+        <VoiceDetails scope={scope} voice={v} picked={picked} contextSessionId={contextSessionId} onPick={onPick} onChanged={onChanged} onDeleted={onDeleted} />
       )}
     </div>
   );
 }
 
-function VoiceDetails({ scope, voice: v, picked, onPick, onChanged, onDeleted }: {
+function VoiceDetails({ scope, voice: v, picked, contextSessionId, onPick, onChanged, onDeleted }: {
   scope: string;
+  contextSessionId: string | null;
   voice: AudioVoice;
   picked: boolean;
   onPick: () => void;
@@ -308,9 +330,13 @@ function VoiceDetails({ scope, voice: v, picked, onPick, onChanged, onDeleted }:
       {error && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap', alignItems: 'center' }}>
-        <Button size="sm" variant={picked ? 'secondary' : 'primary'} leftIcon={picked ? ic(Check) : undefined} disabled={picked} onClick={onPick}>
-          {picked ? 'Выбран' : 'Выбрать'}
-        </Button>
+        {contextSessionId
+          ? <ContextAddButton sessionId={contextSessionId} projectId={scope} candidate={{ kind: 'audio-voice', ref: { slug: v.slug } }} size="sm" toggle />
+          : (
+            <Button size="sm" variant={picked ? 'secondary' : 'primary'} leftIcon={picked ? ic(Check) : undefined} disabled={picked} onClick={onPick}>
+              {picked ? 'Выбран' : 'Выбрать'}
+            </Button>
+          )}
         <span style={{ flex: 1 }} />
         {!renaming && (
           <IconButton size="sm" title={v.kind === 'samples' ? 'Переименовать и расшифровка' : 'Переименовать'} ariaLabel={`Переименовать «${v.name}»`}

@@ -3,8 +3,10 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
@@ -72,6 +74,10 @@ public class ImageEditorToolsetTests : IDisposable
     private void AddChat(string id, string owner, string? projectId) =>
         _sessions[id] = new Session { Id = id, OwnerId = owner, ProjectId = projectId };
 
+    // Строка контекста владельца (ADR-023): выбор человека — «Чем» контекста хода, персонаж префов не читается
+    private bool _contextRow;
+    private ChatContextStore _ctxStore = null!;
+
     private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true,
         IImagePlaceSettings? placeSettings = null)
     {
@@ -85,20 +91,26 @@ public class ImageEditorToolsetTests : IDisposable
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
         var prefs = new ImageProjectPrefsService(_prefsStore, NullLogger<ImageProjectPrefsService>.Instance, projects.Object);
+        var flags = new Mock<IFeatureFlagGate>();
+        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor))
+            .Returns((string user, string _) => _flagOn.Contains(user));
+        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ComposerContextRow)).Returns(() => _contextRow);
+        // Контекст чата (ADR-023): стор и раскладка входов, как в регистрации модуля
+        var registry = new ContextKindRegistry([new ImageContextKind(_store, null, editors, workspace), new ProjectFileContextKind()]);
+        _ctxStore = new ChatContextStore(Path.Combine(_dir, "chat-context"), registry);
+        var mirror = new ChatContextFocusMirror(_ctxStore, flags.Object, NullLogger<ChatContextFocusMirror>.Instance);
         var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster,
-            prefs: prefs);
-        var launcher = new ImageEditLaunchAssembler(editors, _jobs, new SkiaImageRaster(), threads);
+            prefs: prefs, mirror: mirror);
+        var context = new ImageContextLaunch(_ctxStore, registry, directory.Object, _store, workspace: workspace);
+        var launcher = new ImageEditLaunchAssembler(editors, _jobs, new SkiaImageRaster(), threads, context: context);
 
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string id, string owner) => _sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor))
-            .Returns((string user, string _) => _flagOn.Contains(user));
-
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         return new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, threads, launcher,
-            withGate ? _turnGate.Object : null, _jobs, placeSettings: placeSettings, events: _bus, config: config, prefs: prefs);
+            withGate ? _turnGate.Object : null, _jobs, placeSettings: placeSettings, events: _bus, config: config, prefs: prefs,
+            context: context);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -807,6 +819,129 @@ public class ImageEditorToolsetTests : IDisposable
         choice["text"]!.GetValue<string>().Should()
             .Be("Выбор человека в полосе «Картинки»: поставщик local, модель qwen-image-2.1, вариантов 3, персонаж не подключён");
         choice["rule"]!.GetValue<string>().Should().Contain("не передавай provider/model/character");
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_image_new_говорит_о_строке_контекста_и_без_персонажа()
+    {
+        _contextRow = true;
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, false, "anya"));
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolNew);
+
+        result.IsError.Should().BeFalse(result.Text);
+        var choice = Parse(result)["humanChoice"]!;
+        choice["text"]!.GetValue<string>().Should()
+            .Be("Выбор человека в строке контекста: поставщик local, модель qwen-image-2.1, вариантов 3");
+        choice["rule"]!.GetValue<string>().Should().Be(ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor.ChoiceRuleContextRow);
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_image_generate_не_читает_персонажа_из_префов_проекта()
+    {
+        _contextRow = true;
+        var slug = Character();
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, true, slug));
+        var (toolset, media) = WithLocal();
+        var draft = Draft();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот в шляпе"));
+
+        result.IsError.Should().BeFalse(result.Text);
+        await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 0,
+            "персонаж префов проекта при строке контекста не едет в генерацию — он ref контекста");
+    }
+
+    // ── Образцы контекста у агента (ADR-023 §Д2.1, 2б-3) ──
+
+    private JsonObject LocalGen(string threadId) =>
+        new() { ["threadId"] = threadId, ["prompt"] = "кот", ["provider"] = LocalImageEditor.ProviderKey, ["count"] = 1 };
+
+    private void ContextWithStyleRef(string threadId)
+    {
+        _ctxStore.SetPrimary(Owner, ChatId, new ContextItem("p", "image", new JsonObject { ["threadId"] = threadId }, null,
+            ContextActor.Human, DateTime.UtcNow), null);
+        _ctxStore.AddRef(Owner, ChatId, new ContextItem("r", "project-file", new JsonObject { ["path"] = "images/hero.png" },
+            "style", ContextActor.Human, DateTime.UtcNow), null);
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_image_generate_без_references_берёт_образцы_контекста()
+    {
+        _contextRow = true;
+        var (toolset, media) = WithLocal();
+        var draft = Draft();
+        ContextWithStyleRef(draft);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, LocalGen(draft));
+
+        result.IsError.Should().BeFalse(result.Text);
+        await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 1, "образец стиля из контекста уехал в запуск");
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_image_focus_ставит_основной_объект_от_агента_а_выбор_человека_гасит_звёздочку()
+    {
+        _contextRow = true;
+        var toolset = Toolset();
+
+        var focus = await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" });
+
+        focus.IsError.Should().BeFalse(focus.Text);
+        var threadId = Parse(focus)["focus"]!.GetValue<string>();
+        var primary = _ctxStore.Get(Owner, ChatId).Primary!;
+        primary.Kind.Should().Be("image");
+        ChatContextFocusMirror.ThreadOf(primary).Should().Be(threadId);
+        primary.By.Should().Be(ContextActor.Agent, "image_focus — выбор агента: чип ✦");
+
+        // Человек выбрал тот же объект — звёздочка гаснет (ADR-023 §2.4)
+        _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("image", threadId, ContextActor.Human), null);
+        _ctxStore.Get(Owner, ChatId).Primary!.By.Should().Be(ContextActor.Human);
+    }
+
+    [Fact]
+    public async Task Без_строки_контекста_image_focus_стор_контекста_не_трогает()
+    {
+        var toolset = Toolset();
+
+        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" })).IsError.Should().BeFalse();
+
+        _ctxStore.Get(Owner, ChatId).Primary.Should().BeNull();
+        _ctxStore.Get(Owner, ChatId).Revision.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_пустой_references_агента_заменяет_контекст()
+    {
+        _contextRow = true;
+        var (toolset, media) = WithLocal();
+        var draft = Draft();
+        ContextWithStyleRef(draft);
+        var args = LocalGen(draft);
+        args["references"] = new JsonArray();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
+
+        result.IsError.Should().BeFalse(result.Text);
+        await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 0, "явный пустой массив — без образцов");
+    }
+
+    [Fact]
+    public async Task Без_строки_контекста_образцы_контекста_агенту_не_подмешиваются()
+    {
+        var (toolset, media) = WithLocal();
+        var draft = Draft();
+        ContextWithStyleRef(draft);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, LocalGen(draft));
+
+        result.IsError.Should().BeFalse(result.Text);
+        await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 0);
     }
 
     [Fact]

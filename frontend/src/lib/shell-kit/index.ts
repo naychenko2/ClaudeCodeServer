@@ -35,8 +35,25 @@ export {
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
-export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel } from '../subsystems/registryCore';
+export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel, revealContextPanel, SLOT_CONTEXT_KIND } from '../subsystems/registryCore';
 export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions, PanelReturnTo } from '../subsystems/registryCore';
+
+// ─── chatContext (ADR-023): контракты вида контекста хода ────────────────────
+export type {
+  ChatContextDto, ChatContextItem, ChatContextPrimary, ChatContextRef, ContextKindApi, ContextKindCtx, KindState,
+  ContextAction, ActionKind, LaunchParam, ExecutorListModel, ActionResult, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
+} from '../chatContext/types';
+
+export {
+  useChatContext, getChatContextState, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
+} from '../chatContext/store';
+export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
+export { refOf, rolesFor } from '../chatContext/fill';
+export type { ContextCandidate } from '../chatContext/fill';
+export type { ContextRole, ContextUpload, ContextNote } from '../chatContext/types';
+export { notifyKindChanged } from '../chatContext/actionRun';
+export { ReportedError } from '../chatContext/errors';
+export { setContextReturn, useContextReturn, clearContextReturn } from '../chatContext/contextReturn';
 
 // ─── genPanelDismissed ───────────────────────────────────────────────────────
 // Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл
@@ -202,6 +219,8 @@ export type {
   GenerationFoot, GenerationFootProgress, GenerationFootResult, GenerationPanelView,
 } from '../../components/generation/GenerationPanel';
 export { ByClaude } from '../../components/generation/ByClaude';
+// «В контекст ▾» (ADR-023, 2к-2): кнопка наполнения контекста с выбором роли
+export { ContextAddButton } from '../../components/generation/ContextAddButton';
 // Общий слой панелей: переключатель режима, меню выбора источника, «Вернуть» после снятия выбора
 export { GenerationModeSwitch } from '../../components/generation/GenerationModeSwitch';
 export type { GenerationModeOption } from '../../components/generation/GenerationModeSwitch';

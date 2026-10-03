@@ -2,7 +2,8 @@
 // тумблером на бэке: манифест помечен core, доступность решает сам вклад (руки проекта,
 // ответ сервера).
 
-import { registerSubsystem, type ComposerStripApi, type ComposerStripCtx, type SubsystemManifest } from '../../lib/subsystems/registryCore';
+import { registerSubsystem, type ComposerChipCtx, type ComposerStripApi, type ComposerStripCtx, type SubsystemManifest } from '../../lib/subsystems/registryCore';
+import { HandsChip } from './HandsChip';
 import { HandsStrip, handsStripIcon, handsStripStatus } from './HandsStripView';
 import { HANDS_STRIP, handsStripAvailable, subscribeHandsStrip } from './handsStrip';
 
@@ -24,6 +25,10 @@ export const handsManifest: SubsystemManifest = {
           status: handsStripStatus,
         } satisfies ComposerStripApi as unknown as Record<string, unknown>,
       },
+    ],
+    // При строке контекста полос нет: руки живут пилюлей в губе поля (сам вклад молчит без флага)
+    'composer-chip': [
+      { name: 'hands-chip', order: 90, render: (ctx: ComposerChipCtx) => <HandsChip ctx={ctx} /> },
     ],
   },
 };

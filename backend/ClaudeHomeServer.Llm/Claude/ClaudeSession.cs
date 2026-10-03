@@ -782,6 +782,12 @@ public class ClaudeSession : ILlmSessionAdapter
 
     internal static bool IsVideoEditorAutoAllowed(VideoEditorMcpContext? context, string toolName) =>
         context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
+    // MCP-сервер «Контекст чата»: null — флаг composer-context-row выключен или тулсета нет в реестре (ADR-023 §3.2)
+    private readonly TurnContextMcpContext? _turnContextMcp;
+    private bool TurnContextHttpOn() => _turnContextMcp is { UseHttp: true } && HttpMcpOnNow();
+
+    internal static bool IsTurnContextAutoAllowed(TurnContextMcpContext? context, string toolName) =>
+        context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
     // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
     private readonly LocalMediaMcpContext? _localMediaMcp;
     // Локальная генерация: условие как у higgsfield — схема адреса допускает http И рубильник включён
@@ -948,6 +954,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _imageEditorMcp = context.ImageEditorMcp;
         _audioEditorMcp = context.AudioEditorMcp;
         _videoEditorMcp = context.VideoEditorMcp;
+        _turnContextMcp = context.TurnContextMcp;
         _localMediaMcp = context.LocalMediaMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
@@ -1034,6 +1041,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasAudioEditor = AudioEditorHttpOn();
         // Видео: как у звука — stdio-ветки нет
         var hasVideoEditor = VideoEditorHttpOn();
+        var hasTurnContext = TurnContextHttpOn();
         // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
         var hasLocalMedia = LocalMediaHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
@@ -1133,6 +1141,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
             hasAudioEditor = hasAudioEditor && Keep(McpEndpoints.AudioEditorName);
             hasVideoEditor = hasVideoEditor && Keep(McpEndpoints.VideoEditorName);
+            hasTurnContext = hasTurnContext && Keep(McpEndpoints.TurnContextName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
@@ -1143,7 +1152,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasLocalMedia && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasTurnContext && !hasLocalMedia && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -1869,6 +1878,24 @@ public class ClaudeSession : ILlmSessionAdapter
                 shapes[McpEndpoints.VideoEditorName] = "t:http";
             }
 
+            if (hasTurnContext)
+            {
+                // Контекст чата (ADR-023 §3.2): тулсет Main, http-ветка только; сессия — хвостом URL
+                servers[McpEndpoints.TurnContextName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_turnContextMcp!.ApiUrl, McpEndpoints.TurnContextName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_turnContextMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (3 инструмента), вариативен только транспорт
+                shapes[McpEndpoints.TurnContextName] = "t:http";
+            }
+
             if (hasLocalMedia)
             {
                 // Локальная генерация (ComfyUI на своей GPU): http-ветка только, stdio-отката нет.
@@ -2578,6 +2605,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Звук (ADR-021 §5) — так же: запуски видны нитью и карточкой с ценой
         if (ruleDecision == null && IsAudioEditorAutoAllowed(_audioEditorMcp, toolName)) return "allow";
         if (ruleDecision == null && IsVideoEditorAutoAllowed(_videoEditorMcp, toolName)) return "allow";
+        if (ruleDecision == null && IsTurnContextAutoAllowed(_turnContextMcp, toolName)) return "allow";
         // План текущего хода (BuiltInTaskPlanTools) — тоже без карточки: побочных эффектов
         // вне сессии у него нет, а спрашивать пришлось бы на КАЖДЫЙ шаг плана. В голосовом
         // режиме и hands-free отвечать на такую карточку вовсе некому — ход завис бы в

@@ -2,12 +2,13 @@
 // поля ввода (котировка → задача строго по quoteId, ADR-021 §2).
 
 import {
-  autoRevealGenerationPanel, clearGenDraft, createReleaseUndo, dropAgentPick, followSelection, requestStrip, revealWorkspacePanel,
+  autoRevealGenerationPanel, clearGenDraft, createReleaseUndo, dropAgentPick, followSelection, requestStrip,
   showToast,
 } from 'aihome_shell/kit';
 import { audioApi, nameTakenSuggestion, type AudioMode, type AudioOp, type AudioThread } from '../api';
 import type { MixPlan } from '../player/mix';
 import { isPersonalScope } from '../scope';
+import { revealSoundPanel } from '../context/reveal';
 import { draftStem, mixRequest } from './model';
 import { opInfo } from '../ops';
 import { rememberMode, saveSettings } from '../panel/inputs';
@@ -136,7 +137,7 @@ export async function startConcat(scope: string, sessionId: string | null): Prom
   const focus = getFocusedThread(sessionId);
   if (sessionId && focus && !await focusThread(scope, sessionId, null)) return false;
   if (!changeSoundSettings(scope, sessionId, { mode: 'process', operation: 'concat' })) return false;
-  revealWorkspacePanel(SOUND_PANEL, 'settings');
+  revealSoundPanel(sessionId, 'settings');
   return true;
 }
 
@@ -146,7 +147,7 @@ export async function startConcat(scope: string, sessionId: string | null): Prom
 export function openSoundShortcut(sessionId: string | null) {
   // Чата ещё нет — закрыть панель в нём не могли: открываем всегда
   if (!sessionId) {
-    revealWorkspacePanel(SOUND_PANEL, 'settings');
+    revealSoundPanel(null, 'settings');
     return;
   }
   requestStrip(sessionId, SOUND_STRIP);
@@ -201,7 +202,7 @@ export async function takeVersion(scope: string, sessionId: string, thread: Audi
   const ok = await mutate(scope, sessionId, rev => audioApi.current(scope, sessionId, thread.id, versionId, rev));
   if (ok) {
     dropAgentPick(sessionId, soundDraftKey(thread.id));
-    revealWorkspacePanel(SOUND_PANEL, 'settings', { sessionId, target: soundDraftKey(thread.id) });
+    revealSoundPanel(sessionId, 'settings', soundDraftKey(thread.id));
   }
   return ok;
 }

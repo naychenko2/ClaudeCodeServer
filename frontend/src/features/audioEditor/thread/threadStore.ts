@@ -6,7 +6,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import {
-  dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, revealWorkspacePanel, showToast,
+  dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, showToast,
 } from 'aihome_shell/kit';
 import {
   audioApi, conflictState, EMPTY_THREADS,
@@ -18,9 +18,10 @@ import type { ConcatPiece } from '../panel/inputs';
 import { isCreateMode } from '../ops';
 import type { ChosenMode, PendingSettings } from './modeState';
 import { threadName } from './model';
+import { SOUND_PANEL, SOUND_STRIP } from './panelKey';
+import { revealSoundPanel } from '../context/reveal';
 
-export const SOUND_STRIP = 'sound';
-export const SOUND_PANEL = 'sound';
+export { SOUND_PANEL, SOUND_STRIP };
 // Ключ элемента для черновиков и выбора: панель + нить
 export const soundDraftKey = (threadId: string) => `${SOUND_PANEL}:${threadId}`;
 
@@ -275,7 +276,7 @@ export function requestOperation(sessionId: string, threadId: string, op: AudioO
   const seq = (_opRequests.get(sessionId)?.seq ?? 0) + 1;
   _opRequests.set(sessionId, { threadId, op, seq, ...(piece ? { piece } : {}) });
   emit();
-  revealWorkspacePanel(SOUND_PANEL, 'settings');
+  revealSoundPanel(sessionId, 'settings');
 }
 
 export const getOperationRequest = (sessionId: string | null): OperationRequest | null =>

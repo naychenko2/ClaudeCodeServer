@@ -6,6 +6,26 @@ import type { Page, Route, WebSocketRoute } from '@playwright/test';
 
 export const P = 'proj-ctx';
 export const S = 'chat-ctx';
+const caps = (ops: string[], extra: Record<string, unknown> = {}) => ({
+  ops, languages: ['ru', 'en'], voiceKinds: ['preset'], producesFiles: ['audio'], license: { label: 'Apache-2.0', kind: 'permissive' },
+  priceUnit: 'free', maxTextChars: 5000, minDurationSec: 10, maxDurationSec: 240, ...extra,
+});
+const stemCaps = (set: string) => caps(['separate'], { languages: [], languageNeutral: true, stemSet: set, license: { label: 'MIT', kind: 'permissive' } });
+// Каталог звука мока: «Стемы» разбирают три локальные модели (по набору), озвучка и песня — по одной
+const AUDIO_CATALOG = {
+  autoModelId: 'auto', maxCount: 4, autoProviders: ['local'],
+  providers: [{
+    key: 'local', label: 'Локальные модели', priceUnit: 'free', available: true, reason: null,
+    models: [
+      { id: 'qwen3-tts', label: 'Qwen3-TTS', caps: caps(['speak', 'designVoice', 'cloneVoice']) },
+      { id: 'ace-step-1.5-xl', label: 'ACE-Step 1.5 XL', caps: caps(['song']) },
+      { id: 'bs-roformer', label: 'BS-RoFormer', caps: stemCaps('vocals') },
+      { id: 'htdemucs-ft-4stems', label: 'HTDemucs · 4 стема', caps: stemCaps('4') },
+      { id: 'htdemucs-6stems', label: 'HTDemucs · 6 стемов', caps: stemCaps('6') },
+    ],
+  }],
+};
+
 export const now = new Date('2026-10-03T10:00:00Z').toISOString();
 
 type Item = { id: string; kind: string; ref: Record<string, unknown>; by: 'human' | 'agent'; addedAt: string; label: string; version: string | null; thumb: string | null; missing: boolean };
@@ -17,6 +37,16 @@ export const primary = (over: Partial<Primary> = {}): Primary =>
   ({ id: 'p1', kind: 'image', ref: { threadId: 'thread-hero', versionId: 'v2' }, by: 'human', addedAt: now, label: 'hero.png', version: 'v2', thumb: null, missing: false, role: null, ...over });
 export const ref = (id: string, label: string, over: Partial<Ref> = {}): Ref =>
   ({ id, kind: 'image', ref: { path: `assets/${label}` }, by: 'human', addedAt: now, label, version: null, thumb: null, missing: false, role: 'style', usedBy: ['edit'], ...over });
+
+// Операции, которые берёт референс (зеркало AcceptedRefs звука): серость в строке и панели считается по операции действия
+export const usedByOf = (kind: string, role: string | null): string[] =>
+  kind === 'audio-voice' ? ['speak', 'dialogue', 'convertVoice']
+    : (kind === 'audio' || kind === 'project-file') && role === 'reference' ? ['cloneVoice', 'convertVoice', 'cover', 'master']
+    : (kind === 'audio' || kind === 'project-file') && role === 'piece' ? ['concat']
+    : ['edit'];
+
+export const voiceRef = (id = 'rv') =>
+  ref(id, 'Марина', { kind: 'audio-voice', ref: { slug: 'marina' }, role: 'voice', usedBy: usedByOf('audio-voice', 'voice') });
 
 export interface World {
   ctx: Ctx;
@@ -36,6 +66,9 @@ export interface World {
   audio: Record<string, unknown>[] | null;
   audioRevision: number;
   audioEdits: Record<string, unknown>[];
+  // Котировки и запуски звука (тела как пришли): quote — JSON, jobs — поля формы
+  audioQuotes: Record<string, unknown>[];
+  audioJobs: Record<string, string>[];
 }
 
 let world: World;
@@ -46,7 +79,7 @@ export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles'
     ctx: { revision: 1, primary: null, refs: [], ...o.ctx },
     flags: { 'composer-context-row': true, 'chat-context': true, ...o.flags },
     hands: o.hands ?? true, savedFiles: o.savedFiles ?? [], mutations: [], invocations: [], hubs: [], personal: o.personal ?? false, feed: o.feed ?? [],
-    threads: o.threads ?? null, threadsRevision: 1, audio: o.audio ?? null, audioRevision: 1, audioEdits: [],
+    threads: o.threads ?? null, threadsRevision: 1, audio: o.audio ?? null, audioRevision: 1, audioEdits: [], audioQuotes: [], audioJobs: [],
   };
   return world;
 }
@@ -54,6 +87,26 @@ export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles'
 export function hubSend(msg: Record<string, unknown>) {
   for (const h of world.hubs) h.send(JSON.stringify({ type: 1, target: 'message', arguments: [msg] }) + '\u001e');
 }
+const VOICE = {
+  slug: 'marina', name: 'Марина', kind: 'samples', path: 'voices/marina', samples: [{ file: 'a.wav' }], transcript: null,
+  createdAt: now, providers: [], needsAttention: false,
+};
+
+// Задача звука завершилась: «Стемы» дают новую версию со стемами и делают её текущей, как сервер
+function finishAudioJob(jobId: string, op: string, threadId: string) {
+  const t = world.audio?.find(x => x.id === threadId) as { versions: Record<string, unknown>[]; currentVersionId: string; settings?: Record<string, unknown> } | undefined;
+  if (!t) return;
+  const n = t.versions.length;
+  const id = `v${n}`;
+  const roles = op === 'separate' ? ['main', 'stem:vocals', 'stem:drums', 'stem:bass', 'stem:other'] : ['main'];
+  t.versions.push({ id, number: n, jobId, variant: 1, baseVersionId: t.currentVersionId, license: null, createdAt: now, files: roles.map(role => ({ role, path: `${id}/${role}.mp3` })) });
+  t.currentVersionId = id;
+  world.audioRevision++;
+  const state = { focus: threadId, revision: world.audioRevision, threads: world.audio };
+  hubSend({ type: 'audio_thread_changed', sessionId: S, scopeKey: P, state });
+  hubSend({ type: 'audio_edit_completed', sessionId: S, scopeKey: P, jobId, variants: [1], cost: null, error: null, chatSessionId: S, threadId, initiator: 'human' });
+}
+
 const pushCtx = () => hubSend({ type: 'chat_context_changed', sessionId: S, context: world.ctx });
 
 const PROJECT = () => ({
@@ -123,8 +176,28 @@ export async function mockApi(page: Page) {
     }
     // ── нити звука: состояние, правка без ИИ (новая версия), пики; прочее отдаёт снимок ──
     const ab = `/projects/${P}/audio-editor`;
+    if (world.audio && p === `${ab}/voices`) return json({ available: true, voices: [VOICE] });
     if (world.audio && p.startsWith(ab)) {
       const snapshot = () => ({ focus: null, revision: world.audioRevision, threads: world.audio });
+      if (p === `${ab}/quote` && method === 'POST') {
+        const body = r.request().postDataJSON();
+        world.audioQuotes.push(body);
+        return json({
+          quoteId: `q${world.audioQuotes.length}`, mode: body.mode, op: body.operation, provider: body.provider ?? 'local', model: body.model ?? 'auto',
+          count: body.count ?? 1, voiceKind: null, price: { amount: null, unit: 'free', approx: false, source: 'local', eta: 40, queueLength: 0 },
+          license: 'MIT', heavy: false, expiresAt: '2026-10-03T11:00:00Z',
+        });
+      }
+      if (p === `${ab}/jobs` && method === 'POST') {
+        const raw = r.request().postData() ?? '';
+        const fields: Record<string, string> = {};
+        for (const m of raw.matchAll(/name="([^"]+)"\r\n\r\n([^\r]*)\r\n/g)) fields[m[1]] = m[2];
+        world.audioJobs.push(fields);
+        const op = String(world.audioQuotes.at(-1)?.operation ?? '');
+        const jobId = `job${world.audioJobs.length}`;
+        setTimeout(() => finishAudioJob(jobId, op, String((world.ctx.primary?.ref as { threadId?: string } | undefined)?.threadId ?? '')), 80);
+        return json({ jobId });
+      }
       if (p.endsWith('/peaks')) return json({ peaks: Array.from({ length: 120 }, (_, i) => 0.2 + 0.7 * Math.abs(Math.sin(i / 7))), seconds: 12 });
       const em = /\/threads\/([^/]+)\/edit$/.exec(p);
       if (em && method === 'POST') {
@@ -141,7 +214,7 @@ export async function mockApi(page: Page) {
       if (p.endsWith('/state')) {
         return json({
           threads: snapshot(),
-          catalog: { providers: [], autoModelId: 'auto', maxCount: 4 }, prefs: { voice: null, music: null, process: null },
+          catalog: AUDIO_CATALOG, prefs: { voice: null, music: null, process: null },
         });
       }
       return json(snapshot());
@@ -155,10 +228,12 @@ export async function mockApi(page: Page) {
       world.mutations.push({ method, path: p.slice(base.length) || '/', body });
       const c = world.ctx;
       if (p === `${base}/primary` && method === 'PUT') {
-        c.primary = body.kind === null ? null : primary({ kind: body.kind, ref: body.ref, label: 'hero.png', version: 'v2' });
+        c.primary = body.kind === null ? null : primary({ kind: body.kind, ref: body.ref, label: body.kind === 'audio' ? 'intro.mp3' : 'hero.png', version: 'v2' });
       } else if (p === `${base}/refs` && method === 'POST') {
         const r = body.ref as { path?: string; slug?: string; upload?: string };
-        c.refs = [...c.refs, ref(`r${c.refs.length + 1}`, r.slug === 'anya' ? 'Аня' : r.upload ? 'образец' : String(r.path ?? r.slug ?? 'ref').split('/').pop()!, { kind: body.kind, ref: body.ref, role: body.role ?? null })];
+        const names: Record<string, string> = { anya: 'Аня', marina: 'Марина' };
+        c.refs = [...c.refs, ref(`r${c.refs.length + 1}`, (r.slug && names[r.slug]) || (r.upload ? 'образец' : String(r.path ?? r.slug ?? 'ref').split('/').pop()!),
+          { kind: body.kind, ref: body.ref, role: body.role ?? null, usedBy: usedByOf(body.kind, body.role ?? null) })];
       } else if (p.startsWith(`${base}/refs/`) && method === 'DELETE') {
         const id = decodeURIComponent(p.slice(`${base}/refs/`.length));
         c.refs = c.refs.filter(x => x.id !== id);

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { objectKey, rememberAction, resetActionMemory } from './actionMemory';
+import { setRunParam } from './actionRun';
 import { execMenuTitle, selectRowAction } from './rowExec';
 import type { ChatContextPrimary, ContextAction, ContextKindApi } from './types';
 
@@ -47,5 +48,37 @@ describe('заголовок меню «Чем»', () => {
   it('называет выбранное действие', () => {
     expect(execMenuTitle(run('stems'))).toBe('Чем выполнить «stems»');
     expect(execMenuTitle(null)).toBe('Чем выполнить');
+  });
+});
+
+describe('«Чем» и ответ вопроса действия', () => {
+  const stems: ContextAction = {
+    id: 'stems', kind: 'run', label: 'Стемы', hint: 'Стемы', op: 'separate',
+    question: { param: 'stemSet', title: 'Набор', options: [{ value: 'vocals', label: 'Вокал + минус' }, { value: '4', label: '4' }] },
+  };
+  const seen: (string | null | undefined)[] = [];
+  const withQuestion: ContextKindApi = {
+    kinds: ['audio'], icon: () => null, preview: () => null, actions: () => [stems],
+    executors: (_c, _id, answer) => { seen.push(answer); return model; },
+  };
+  const audio = { ...primary('human'), kind: 'audio' };
+
+  it('вид получает первый вариант вопроса, пока человек не выбрал', () => {
+    seen.length = 0;
+    selectRowAction(withQuestion, ctx, audio, []);
+    expect(seen.at(-1)).toBe('vocals');
+  });
+
+  it('и выбранный человеком ответ той же области, что у кнопки и панели', () => {
+    seen.length = 0;
+    setRunParam('s1', `${objectKey(audio)}:stems`, 'stemSet', '4');
+    selectRowAction(withQuestion, ctx, audio, []);
+    expect(seen.at(-1)).toBe('4');
+  });
+
+  it('у действия без вопроса ответа нет', () => {
+    seen.length = 0;
+    selectRowAction({ ...withQuestion, actions: () => [run('denoise')] }, ctx, audio, []);
+    expect(seen.at(-1)).toBeNull();
   });
 });

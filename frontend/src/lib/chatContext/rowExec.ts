@@ -2,6 +2,7 @@
 // «Чем» рисуется только при выбранном run-действии (Р2): в «Чате» сообщение уходит Claude,
 // исполнитель не нужен, и чипа в строке нет вовсе.
 import { objectKey, resolveAction } from './actionMemory';
+import { questionValue, runEntry } from './actionRun';
 import type {
   ChatContextPrimary, ChatContextRef, ContextAction, ContextKindApi, ContextKindCtx, ExecutorListModel,
 } from './types';
@@ -18,7 +19,9 @@ export function selectRowAction(
   const actions = api?.actions(ctx, { primary, refs }) ?? [];
   const { actionId } = resolveAction(ctx.sessionId, objectKey(primary), primary.by, actions, false);
   const action = actionId ? actions.find(a => a.id === actionId) ?? null : null;
-  const executors = action ? api?.executors?.(ctx, action.id) ?? null : null;
+  // Ответ вопроса действия читаем из состояния запуска той же области, что у кнопки и панели
+  const answer = action?.question ? questionValue(action, runEntry(ctx.sessionId, `${objectKey(primary)}:${action.id}`).values) : null;
+  const executors = action ? api?.executors?.(ctx, action.id, answer) ?? null : null;
   return { action, executors };
 }
 

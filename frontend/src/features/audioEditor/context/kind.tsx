@@ -4,7 +4,7 @@
 
 import { AudioLines, Mic } from 'lucide-react';
 import {
-  C, ICON_SIZE, ICON_STROKE, R, SP, notifyKindChanged,
+  C, FLAGS, getFlag, ICON_SIZE, ICON_STROKE, R, SP, notifyKindChanged,
   type ChatContextItem, type ContextKindApi, type ContextKindCtx,
 } from 'aihome_shell/kit';
 import type { AudioOp } from '../api';
@@ -15,6 +15,8 @@ import { useServerPeaks } from '../thread/serverPeaks';
 import { ensureAudioThreads, openEditor, subscribeAudioStore, getCatalog, useAudioStoreVersion } from '../thread/threadStore';
 import { executorModel } from './executors';
 import { launchAction, paramsFor, quoteAction } from './run';
+import { migrateLegacyVoice } from './legacyInputs';
+import { audioRefRoles } from './roles';
 import { actionOf, audioActions, AUDIO_KIND, threadOfPrimary, versionOfPrimary } from './state';
 
 const VOICE_KIND = 'audio-voice';
@@ -62,8 +64,11 @@ export const audioKindApi: ContextKindApi = {
     : <AudioLines size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
   actions: (ctx, s) => {
     warm(ctx);
+    const thread = threadOfPrimary(ctx.sessionId, s.primary);
+    if (thread && getFlag(FLAGS.composerContextRow)) migrateLegacyVoice(audioScope(ctx.projectId), ctx.sessionId, thread.id, s.refs);
     return audioActions(ctx, s);
   },
+  refRoles: (_ctx, primary, candidateKind) => (primary.kind === AUDIO_KIND ? audioRefRoles(candidateKind) : []),
   preview: (ctx, item) => <AudioPreview ctx={ctx} item={item} />,
   editor: (ctx, item) => {
     const thread = threadOfPrimary(ctx.sessionId, item as never);
@@ -74,12 +79,12 @@ export const audioKindApi: ContextKindApi = {
       open: () => openEditor(ctx.sessionId, thread.id, versionOfPrimary(thread, item as never)?.id ?? null),
     };
   },
-  executors: (ctx, actionId) => {
+  executors: (ctx, actionId, answer) => {
     const found = actionOf(ctx, actionId);
     if (!found?.action.op) return null;
     return executorModel({
       sessionId: ctx.sessionId, op: found.action.op as AudioOp, catalog: getCatalog(found.scope),
-      personal: isPersonalScope(found.scope), notify: notifyKindChanged,
+      personal: isPersonalScope(found.scope), notify: notifyKindChanged, stemSet: answer,
     });
   },
   params: (ctx, actionId) => {

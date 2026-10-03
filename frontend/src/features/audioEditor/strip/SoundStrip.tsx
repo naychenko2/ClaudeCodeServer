@@ -12,13 +12,14 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { AudioLines, ChevronDown, ChevronRight, ChevronUp, Cpu, Sparkles, X } from 'lucide-react';
 import type { User } from 'lucide-react';
 import {
-  Button, Chip, IconButton, ReleaseNotice, C, FS, R, SP, ICON_SIZE, ICON_STROKE, revealWorkspacePanel, useGenerationSheet,
+  Button, Chip, IconButton, ReleaseNotice, C, FS, R, SP, ICON_SIZE, ICON_STROKE, useGenerationSheet,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
+import { revealSoundPanel } from '../context/reveal';
 import { audioScope, isPersonalScope } from '../scope';
 import { createDraft, releaseFocus, soundReleaseUndo, undoSoundRelease } from '../thread/actions';
 import {
-  getCatalog, getFocusedThread, getJobsOf, SOUND_PANEL, useAudioThreads,
+  getCatalog, getFocusedThread, getJobsOf, useAudioThreads,
 } from '../thread/threadStore';
 import { soundSource } from '../thread/modeState';
 import type { AudioThread } from '../api';
@@ -78,7 +79,7 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
   // Уже 800 панель встаёт шторкой над полем ввода, а не колонкой справа
   const narrow = useGenerationSheet();
 
-  const openSettings = () => revealWorkspacePanel(SOUND_PANEL, 'settings');
+  const openSettings = () => revealSoundPanel(sessionId, 'settings');
   const draft = async () => {
     if (!sessionId) return;
     setDrafting(true);

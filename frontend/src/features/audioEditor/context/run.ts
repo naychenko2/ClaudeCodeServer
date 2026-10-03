@@ -2,16 +2,17 @@
 // запуском задачи и ручками без ИИ (`mix`, `concat`). Входы — нить, версия, голос, образец и куски —
 // сервер читает из стора контекста по ревизии, поэтому здесь только `op`, текст, `params` и `contextRevision`.
 
-import { ReportedError, getChatContextState, revealWorkspacePanel } from 'aihome_shell/kit';
+import { ReportedError, getChatContextState } from 'aihome_shell/kit';
 import type { ActionQuote, ContextKindCtx, LaunchHandle, LaunchParam, LaunchRequest } from 'aihome_shell/kit';
 import { audioApi, type AudioCatalog, type AudioJobInput, type AudioOp, type AudioQuoteRequest, type AudioStemSet } from '../api';
 import { isNoAi, opInfo } from '../ops';
-import { STEM_SETS } from '../panel/stems';
+import { isStemSet } from '../panel/stems';
 import { pieceSeconds } from '../panel/piece';
 import { audioScope } from '../scope';
 import { isStem, priceText } from '../thread/model';
-import { getCatalog, getSelection, mutate, SOUND_PANEL } from '../thread/threadStore';
+import { getCatalog, getSelection, mutate } from '../thread/threadStore';
 import { getChoice } from './executors';
+import { revealSoundPanel } from './reveal';
 import { threadOfPrimary, versionOfPrimary } from './state';
 
 // Варианты — только у операций, что создают звук (голос, музыка); обработка даёт один результат
@@ -35,7 +36,6 @@ export function stemModelFor(
   return null;
 }
 
-export const isStemSet = (v: unknown): v is AudioStemSet => STEM_SETS.some(s => s.value === v);
 
 interface Resolved { op: AudioOp; scope: string; sessionId: string; threadId: string; quote: AudioQuoteRequest; job: Omit<AudioJobInput, 'quoteId'> }
 
@@ -122,7 +122,7 @@ function doneHandle(id: string, summary: string, open: () => void): LaunchHandle
   return { id, watch: on => { on({ result: { summary, open } }); return () => {}; } };
 }
 
-const openSound = (sessionId: string) => () => revealWorkspacePanel(SOUND_PANEL, 'settings', { sessionId });
+const openSound = (sessionId: string) => () => { revealSoundPanel(sessionId, 'settings'); };
 
 export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Promise<LaunchHandle> {
   const op = req.op as AudioOp;

@@ -133,8 +133,10 @@ export interface ContextKindApi {
   // Листание версий основного объекта (‹ ›) в секции «С чем» панели; null/нет — стрелок нет, версия одна
   step?: (ctx: ContextKindCtx, item: ChatContextItem) => { prev: (() => void) | null; next: (() => void) | null } | null;
   // Строки «Чем» под выбранное run-действие. Хост зовёт на каждый рендер строки и панели: вид обязан
-  // отдавать дешёвую чистую модель (строки каталога кэшируются у вертикали), а не строить её заново
-  executors?: (ctx: ContextKindCtx, actionId: string) => ExecutorListModel | null;
+  // отдавать дешёвую чистую модель (строки каталога кэшируются у вертикали), а не строить её заново.
+  // answer — выбранный ответ вопроса действия (question): у «Стемов» набор дорожек меняет, кого берёт «Авто»;
+  // у действий без вопроса null
+  executors?: (ctx: ContextKindCtx, actionId: string, answer?: string | null) => ExecutorListModel | null;
   params?: (ctx: ContextKindCtx, actionId: string) => readonly LaunchParam[];
   // Роли, под которыми объект вида candidateKind входит референсом в основной объект ЭТОГО вида. Зеркало
   // AcceptedRefs провайдера на бэкенде (он и принимает роль: чужая — 400 role_not_accepted). Пусто —

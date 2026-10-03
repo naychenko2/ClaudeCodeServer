@@ -89,12 +89,10 @@ const CALL = /revealWorkspacePanel\(\s*(?:['"](?:images|sound|videoEditor|chatCo
 
 // Старые вызовы под выключенным флагом: список сужается в 2к, 2з, 3ф и пустеет в 4б. Число вызовов в
 // файле зафиксировано — новый вызов в старом файле тоже краснит скан. У картинок (2к-2) вызов один, в
-// context/reveal.ts: при флаге он идёт в revealContextPanel / «Персонажи», без флага — в «Картинки»
+// context/reveal.ts: при флаге он идёт в revealContextPanel / «Персонажи», без флага — в «Картинки». У звука (2з-3) так же: context/reveal.ts
 const LEGACY_REVEAL_CALLS: Readonly<Record<string, number>> = {
   'imageEditor/context/reveal.ts': 1,
-  'audioEditor/thread/actions.ts': 3,
-  'audioEditor/thread/threadStore.ts': 1,
-  'audioEditor/strip/SoundStrip.tsx': 1,
+  'audioEditor/context/reveal.ts': 1,
 };
 
 function sources(dir: string, out: string[] = []): string[] {

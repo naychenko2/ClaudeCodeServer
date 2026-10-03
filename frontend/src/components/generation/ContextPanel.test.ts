@@ -21,7 +21,7 @@ const edit = { id: 'edit', kind: 'run' as const, label: 'Изменить', hint
 const row = { id: 'auto', group: 'auto' as const, name: 'Авто', sub: 'локально', price: 'бесплатно · ~40 с' };
 
 const panel = (o: Partial<Props> = {}) => renderToStaticMarkup(createElement(ContextPanel, {
-  isMobile: false, git: null, primary: null, refs: [], iconOf: () => null, preview: null, editor: null, step: null,
+  isMobile: false, git: null, primary: null, refs: [], iconOf: () => null, editor: null, step: null,
   ret: null, onReturn: () => {}, action: null, exec: null, params: [], onParam: () => {}, addFrom: [],
   run: stubActionRun(null), flash: 0, onRelease: () => {}, onDetach: () => {}, onClear: () => {}, layout: 'column', ...o,
 }));
@@ -82,14 +82,13 @@ describe('секции панели «Контекст»', () => {
     expect(html).toContain('✦ Изменить');
   });
 
-  it('«Чем»: цена и тон — из полей free/amount/unit, подпись price не разбирается', () => {
-    const cloud = { ...row, id: 'k', group: 'cloud' as const, name: 'FLUX', price: 'бесплатно · но это подпись', free: false, amount: 0.04, unit: 'usd' as const };
-    const html = panel({ primary, action: edit, run: stubActionRun(edit), exec: { rows: [cloud], value: 'k', onChange: () => {} } });
-    expect(html).toContain('$0.04');
-    expect(html).not.toContain('var(--c-success-bg)');
-    const free = panel({ primary, action: edit, run: stubActionRun(edit), exec: { rows: [{ ...row, free: true, amount: null, unit: 'free' as const }], value: 'auto', onChange: () => {} } });
-    expect(free).toContain('бесплатно');
-    expect(free).toContain('var(--c-success-bg)');
+  it('«Чем»: список раскрыт сразу — группы, выбранная строка и цена справа, без свёрнутой сводки', () => {
+    const cloud = { ...row, id: 'k', group: 'cloud' as const, name: 'FLUX', price: '$0.04 / шт.', free: false };
+    const html = panel({ primary, action: edit, run: stubActionRun(edit), exec: { rows: [row, cloud], value: 'k', onChange: () => {} } });
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain('Облако');
+    expect(html).toContain('$0.04 / шт.');
+    expect(html).toContain('aria-checked="true"');
   });
 
   it('действие выбрано, а исполнителей ещё нет (executors = null): текст про расчёт цены, не про «Чат»', () => {
@@ -102,7 +101,7 @@ describe('секции панели «Контекст»', () => {
     const run = { ...stubActionRun(edit), labelParts: { name: '✦ Изменить', tail: ' · ×3 · $0.12' } };
     const html = panel({ primary, action: edit, run });
     expect(html).toMatch(/data-run-label-name[^>]*text-overflow:ellipsis/);
-    expect(html).toMatch(/data-run-label-tail[^>]*white-space:nowrap;flex-shrink:0[^>]*> · ×3 · \$0\.12/);
+    expect(html).toMatch(/data-run-label-tail[^>]*white-space:pre;flex-shrink:0[^>]*> · ×3 · \$0\.12/);
   });
 
   it('в «Чате» серых референсов нет', () => {

@@ -8,7 +8,7 @@ import type { ContextRole } from 'aihome_shell/kit';
 export const IMAGE_SAMPLE_ROLES: readonly ContextRole[] = [
   { role: 'style', label: 'Как образец стиля' },
   { role: 'object', label: 'Как объект' },
-  { role: 'face', label: 'Как лицо' },
+  { role: 'face', label: 'Как персонажа' },
 ];
 export const CHARACTER_ROLES: readonly ContextRole[] = [{ role: 'character', label: 'Как персонажа' }];
 

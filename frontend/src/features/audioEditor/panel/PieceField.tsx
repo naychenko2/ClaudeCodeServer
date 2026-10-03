@@ -23,7 +23,8 @@ function Num({ label, value, onChange, disabled }: { label: string; value: strin
   );
 }
 
-export function PieceField({ binding, aside }: { binding: PieceBinding; aside?: string }) {
+// inEditor — поле стоит в редакторе звука: волна там же, а не «в ленте»
+export function PieceField({ binding, aside, inEditor }: { binding: PieceBinding; aside?: string; inEditor?: boolean }) {
   const { sessionId, threadId, versionId } = binding;
   const sel = readPiece(sessionId, threadId);
   const [draft, setDraft] = useState<PieceText>(() => pieceText(sel));
@@ -55,12 +56,12 @@ export function PieceField({ binding, aside }: { binding: PieceBinding; aside?: 
       {sel ? (
         <div data-piece-linked="" style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginTop: SP.xxs }}>
           <span style={{ flex: 1, minWidth: 0, fontSize: FS.xs, color: C.textMuted }}>
-            = выделение на волне в ленте · {sel.end === TO_END ? `${fmtTime(sel.start)} – до конца` : fmtSelection(sel, sel.end)}
+            = выделение на волне{inEditor ? '' : ' в ленте'} · {sel.end === TO_END ? `${fmtTime(sel.start)} – до конца` : fmtSelection(sel, sel.end)}
           </span>
           <IconButton size="xs" title="Снять кусок" ariaLabel="Снять кусок" onClick={() => setSelection(sessionId, threadId, null)}>{ic(X)}</IconButton>
         </div>
       ) : (
-        <Hint>Протяните по волне карточки в ленте или впишите время: можно «1:06.2»</Hint>
+        <Hint>{inEditor ? 'Протяните по волне или впишите время' : 'Протяните по волне карточки в ленте или впишите время'}: можно «1:06.2»</Hint>
       )}
     </div>
   );

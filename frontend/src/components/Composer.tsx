@@ -1900,7 +1900,8 @@ export function Composer({
           fontSize: isMobile ? 16 : 15, // 16px — чтобы iOS не зумил при фокусе
           color: C.textPrimary,
           background: 'transparent',
-          minHeight: activeMode ? 78 : 34,
+          // Режим действия — 118 px поля целиком (макет): строка чипов, одна-две строки текста и кнопка запуска
+          minHeight: actionMode ? 40 : activeMode ? 78 : 34,
           maxHeight: 200,
           lineHeight: '1.5',
           padding: isMobile ? '6px 8px' : '6px 4px',

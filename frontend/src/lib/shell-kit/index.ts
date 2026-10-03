@@ -53,6 +53,8 @@ export type { ContextCandidate } from '../chatContext/fill';
 export type { ContextRole, ContextUpload, ContextNote } from '../chatContext/types';
 export { notifyKindChanged } from '../chatContext/actionRun';
 export { ReportedError } from '../chatContext/errors';
+export { etaTicker, etaFraction } from '../chatContext/etaProgress';
+export type { EtaState } from '../chatContext/etaProgress';
 export { setContextReturn, useContextReturn, clearContextReturn } from '../chatContext/contextReturn';
 
 // ─── genPanelDismissed ───────────────────────────────────────────────────────

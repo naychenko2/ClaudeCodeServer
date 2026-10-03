@@ -96,7 +96,7 @@ export function CharactersPanel({ projectId, editing: outer, onEditing, contextS
               </span>
               <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                 <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
-                <span style={{ fontSize: FS.xs, color: C.textMuted }}>{c.photos.length} фото</span>
+                <span style={{ fontSize: FS.xs, color: C.textMuted }}>{c.photos.length} фото{contextSessionId && on ? ' · в контексте · персонаж' : ''}</span>
               </span>
               {contextSessionId
                 ? <ContextAddButton sessionId={contextSessionId} projectId={projectId} candidate={candidate} size="sm" toggle />

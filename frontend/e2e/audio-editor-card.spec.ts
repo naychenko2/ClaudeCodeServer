@@ -205,7 +205,7 @@ test('карточка на версию: A/B, выделение, сведен�
   await peaks;
   await expect(card.locator('[data-audio-nav]')).toHaveText('версия 2 · вариант 1 из 2');
   await expect(card.locator('[data-audio-license="CC BY-NC"]')).toBeVisible();
-  await expect(card.getByText('в работе')).toBeVisible();
+  await expect(card.getByText('В работе')).toBeVisible();
   await expect(card.locator('[data-stem-row]')).toHaveCount(3);
   await expect(card.locator('[data-audio-file]')).toHaveCount(2);
   await expect(card.getByText('Сохранятся папкой')).toBeVisible();

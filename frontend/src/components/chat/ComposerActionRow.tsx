@@ -4,14 +4,22 @@
 // Здесь только отрисовка по готовой модели: операций и подписей вертикалей хост не знает, цену и подпись
 // кнопки считает useActionRun.
 import { useState, type KeyboardEvent } from 'react';
-import { ChevronDown, MessageSquare, Pencil } from 'lucide-react';
+import {
+  Activity, Brush, ChevronDown, Expand, Film, Image as ImageIcon, Layers, Link, Maximize2, MessageSquare, Mic, Music, Pencil, Scissors,
+  SlidersHorizontal, Sparkles, Users, type LucideIcon,
+} from 'lucide-react';
 import { actionChips, chipSelectable, CHAT_CHIP_ID, type ActionChip } from '../../lib/chatContext/actionChips';
-import type { ContextAction } from '../../lib/chatContext/types';
+import type { ContextAction, ContextActionIcon } from '../../lib/chatContext/types';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { InlineSegmented, Menu, MenuItem } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 
 export const ACTION_CHIP_H = 26;
+
+const CHIP_ICON: Readonly<Record<ContextActionIcon, LucideIcon>> = {
+  spark: Sparkles, scissors: Scissors, maximize: Maximize2, expand: Expand, brush: Brush, image: ImageIcon, mic: Mic, users: Users,
+  activity: Activity, layers: Layers, music: Music, link: Link, sliders: SlidersHorizontal, film: Film,
+};
 
 export interface ComposerActionRowProps {
   actions: readonly ContextAction[];
@@ -55,7 +63,10 @@ function Chip({ c, selected, onPick }: {
       }}
     >
       {c.kind === 'chat' && <MessageSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
-      {c.kind === 'editor' && <Pencil size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
+      {(() => {
+        const Icon = c.action?.icon ? CHIP_ICON[c.action.icon] : c.kind === 'editor' ? Pencil : null;
+        return Icon ? <Icon size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> : null;
+      })()}
       {c.label}
       {c.kind === 'menu' && <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
     </span>

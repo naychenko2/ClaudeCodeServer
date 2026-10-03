@@ -32,6 +32,8 @@ export interface ExecutorRow {
   group: ExecutorGroup;
   name: string;
   sub?: string;
+  // У «Авто»: кого он возьмёт сейчас («локально · Qwen-Image Edit»); строка «Чем» не склеивает это из sub
+  now?: string;
   // «бесплатно · ~40 с», «$0.04 / шт.»: готовая подпись только для показа, не для разбора
   price: string;
   // Цена полями (контракт ExecutorRowDto): бесплатность и сумма за единицу работы

@@ -51,7 +51,24 @@ const speak = (id: string, label: string, op: AudioOp): ContextAction => ({
   placeholder: 'Текст для озвучки…',
 });
 
-export function buildAudioActions(i: AudioActionInput): readonly ContextAction[] {
+// Глагол хода и значок чипа по id действия (макет composer-actions-v1)
+const LOOK: Readonly<Record<string, Pick<ContextAction, 'verb' | 'icon'>>> = {
+  speak: { verb: 'Озвучиваем', icon: 'mic' },
+  speakMore: { verb: 'Озвучиваем', icon: 'mic' },
+  song: { verb: 'Пишем песню', icon: 'music' },
+  sfx: { verb: 'Делаем звук', icon: 'activity' },
+  convert: { verb: 'Меняем голос в', icon: 'users' },
+  denoise: { verb: 'Чистим', icon: 'activity' },
+  stems: { verb: 'Делим на стемы', icon: 'layers' },
+  repaint: { verb: 'Перегенерируем кусок', icon: 'spark' },
+  concat: { verb: 'Склеиваем', icon: 'link' },
+  mix: { verb: 'Сводим', icon: 'sliders' },
+};
+
+export const buildAudioActions = (i: AudioActionInput): readonly ContextAction[] =>
+  rawAudioActions(i).map(a => ({ ...a, ...LOOK[a.id] }));
+
+function rawAudioActions(i: AudioActionInput): readonly ContextAction[] {
   const speakOp = resolveSpeakOp(i.refs);
   const stems = (): ContextAction => {
     const sets = STEM_SETS.filter(s => !i.stemSets || i.stemSets.includes(s.value));
@@ -76,7 +93,7 @@ export function buildAudioActions(i: AudioActionInput): readonly ContextAction[]
         speak('speak', 'Озвучить', speakOp),
         {
           id: 'song', kind: 'run', label: 'Песня', op: 'song', text: 'required',
-          hint: 'Сочинить песню по описанию стиля', placeholder: 'Стиль: жанр, настроение, инструменты, голос…',
+          hint: 'Сочинить песню по описанию стиля', placeholder: 'Стиль и слова песни…',
         },
         {
           id: 'sfx', kind: 'run', label: 'Эффект', op: 'sfx', text: 'required',

@@ -163,7 +163,7 @@ for (const { name, vp } of VIEWPORTS) {
         // «Стемы» выбраны, «Перегенерировать кусок» серый без выделения, «Склеить» серая без кусков
         await expect(actions(page).locator('[data-action-chip="stems"]')).toHaveAttribute('aria-checked', 'true');
         await expect(repaint(page)).toHaveAttribute('aria-disabled', 'true');
-        await expect(card(page)).toContainText('в работе');
+        await expect(card(page)).toContainText('В работе');
         // Телефон: «Работать с этой» панель не поднимает; десктоп — открывает «Контекст»
         if (name === '360') await expect(page.locator('[data-context-panel]')).toHaveCount(0);
         // Вопрос «Набор» под чипами, голос Марины серый («Стемы» голоса не берут)

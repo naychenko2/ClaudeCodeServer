@@ -60,7 +60,8 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
   const auto = autoPick(catalog, op, stemSet);
   const rows: ExecutorRow[] = [{
     id: AUTO_EXECUTOR, group: 'auto', name: 'Авто',
-    sub: auto ? `сначала локальные модели · сейчас ${where(auto.provider, auto.model).join(' · ')}` : 'сейчас некому — нет поставщика с этой операцией',
+    sub: auto ? `сейчас: ${where(auto.provider, auto.model).join(' · ')}` : 'сейчас некому — нет поставщика с этой операцией',
+    ...(auto ? { now: where(auto.provider, auto.model).join(' · ') } : null),
     price: auto ? rowPrice(auto.provider, auto.model) : '—',
     free: !!auto && rowFree(auto.provider, auto.model),
     ...(auto ? null : { disabled: true, reason: 'Нет доступного поставщика для этой операции' }),

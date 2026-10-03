@@ -41,7 +41,7 @@ describe('строки «Исполнитель»', () => {
     const rows = executorRows(CATALOG, CREATE);
     expect(rows.map(r => `${r.group}:${r.name}`)).toEqual([
       'auto:Авто',
-      'local:Локальные модели · Авто', 'local:Qwen-Image 2.1', 'local:Улучшить лица',
+      'local:Локальные модели · Авто', 'local:Qwen-Image 2.1',
       'cloud:fal · Авто', 'cloud:fal · FLUX Kontext', 'cloud:fal · FLUX Fill',
       'cloud:Higgsfield · Soul',
     ]);
@@ -57,16 +57,17 @@ describe('строки «Исполнитель»', () => {
   });
 
   it('«Авто» говорит, кем рисуем сейчас', () => {
-    expect(row(CREATE, 'auto').sub).toBe('как в настройках · сейчас локально');
+    expect(row(CREATE, 'auto')).toMatchObject({ sub: expect.stringMatching(/^сейчас: локально/), now: expect.stringMatching(/^локально/) });
     const fal = { ...CATALOG, default: { provider: 'fal', model: 'fal-ai/flux-pro/kontext' } };
-    expect(executorRows(fal, CREATE)[0]).toMatchObject({ sub: 'как в настройках · сейчас fal · FLUX Kontext', price: '$0.04 / шт.' });
+    expect(executorRows(fal, CREATE)[0]).toMatchObject({ sub: 'сейчас: fal · FLUX Kontext', now: 'fal · FLUX Kontext', price: '$0.04 / шт.' });
   });
 
   it('модель, которая не возьмёт задачу, серая с причиной', () => {
     expect(row(CREATE, 'fal|fal-ai/flux-pro/v1/fill')).toMatchObject({ disabled: true, reason: 'Только правит готовую картинку — сначала загрузите её' });
     expect(row(EDIT, 'fal|fal-ai/flux-pro/v1/fill').disabled).toBeUndefined();
     expect(row(INPAINT, 'fal|fal-ai/flux-pro/kontext')).toMatchObject({ disabled: true, reason: 'Не правит по маске — сотрите кисть или возьмите другую модель' });
-    expect(row(EDIT, 'local|face-detailer')).toMatchObject({ disabled: true, reason: 'Запускается кнопкой «Улучшить лица» в быстрых действиях' });
+    // Модель одного быстрого действия в чужой список не попадает: серая строка с причиной только шумит
+    expect(row(EDIT, 'local|face-detailer')).toBeUndefined();
     // «Авто» не серое никогда: модель подберёт сервер
     expect(executorRows(CATALOG, INPAINT).filter(r => r.name.endsWith('Авто')).every(r => !r.disabled)).toBe(true);
   });

@@ -65,7 +65,7 @@ export function CardContextActions({ sessionId, projectId, thread, versionId, fi
   const candidate = imageRefOf(thread.id, versionId);
   return (
     <>
-      <Button size={size} variant="primary" leftIcon={<Target size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      <Button size={size} variant="secondary" leftIcon={<Target size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
         title="Картинка станет основной в контексте хода: чипы действий и панель «Контекст»"
         onClick={() => { void fill.work(); }}>
         Работать с этой

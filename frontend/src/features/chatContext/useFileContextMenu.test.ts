@@ -48,6 +48,22 @@ describe('пункты «Файлов» для контекста хода', () 
     expect(h).not.toContain('как объект');
   });
 
+  it('звуковой файл при картинке в работе: образцы стиля не предлагаются, кнопка серая с причиной', () => {
+    const h = html('speech.wav');
+    expect(h).toContain('такой референс не берёт');
+    expect(h).not.toContain('образец стиля');
+  });
+
+  it('картинка при звуке в работе — тоже серая; звуковой файл звук берёт ролями звука', () => {
+    const audioPrimary = { ...primary, kind: 'audio', label: 'song.mp3' };
+    registerSubsystem({
+      key: 'file-menu-test-audio', title: 'a', order: 2, noPill: true, core: true,
+      slots: { 'context-kind': [{ name: 'audio', action: { kinds: ['audio'], refRoles: () => [{ role: 'piece', label: 'Как кусок склейки' }] } as never }] },
+    });
+    expect(html('a.png', state([], audioPrimary))).toContain('такой референс не берёт');
+    expect(html('speech.wav', state([], audioPrimary))).toContain('>В контекст<');
+  });
+
   it('нет вкладчика context-opener — «Работать с этой» нет даже у картинки', () => {
     expect(html('a.png', state(), false)).not.toContain('Работать с этой');
   });

@@ -1,7 +1,7 @@
 // Параметры, цена и запуск действия картинки (ADR-023 §Д2, §Д2.1): тонкий слой над существующими
 // котировкой (`api.quote`) и запуском в нить (`launchThread`) — своей логики запуска здесь нет.
 
-import { getChatContextState, ReportedError } from 'aihome_shell/kit';
+import { etaTicker, getChatContextState, ReportedError, showToast } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditCatalog, type ImageEditOp } from '../api';
 import type { ActionQuote, ContextKindCtx, LaunchHandle, LaunchParam, LaunchRequest } from 'aihome_shell/kit';
 import { isRemovalPrompt, priceSum } from '../format';
@@ -23,10 +23,11 @@ import { threadOfPrimary } from './state';
 // Параметры панели: варианты — у всех операций с несколькими вариантами; пропорции — только у «Нарисовать»
 // (у «Дорисовать» пропорции — вопрос под чипами)
 export function paramsFor(catalog: ImageEditCatalog | null, settings: { provider: string | null; model: string | null; count: number }, op: ImageEditOp): LaunchParam[] {
+  // Умолчание — один вариант (макет composer-actions-v1); выбранное человеком хост помнит между запусками чата
   if (isOneVariant(op)) return [];
   const { m } = resolveModel(catalog, { ...settings, matchSourceSize: true });
   const max = Math.max(1, m?.caps?.maxCount ?? catalog?.limits.maxCount ?? 4);
-  const out: LaunchParam[] = [{ kind: 'variants', min: 1, max, value: Math.min(max, Math.max(1, settings.count)) }];
+  const out: LaunchParam[] = [{ kind: 'variants', min: 1, max, value: 1 }];
   if (op === 'generate') out.push({ kind: 'aspect', options: [ASPECT_AUTO, ...ASPECT_OPTIONS], value: ASPECT_AUTO });
   return out;
 }
@@ -79,7 +80,8 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
   const free = e.unit === 'free';
   return {
     price: free ? 'бесплатно' : priceSum(e.amount, e.unit, e.approx, e),
-    detail: footPrice(e, count).join(' · '),
+    // Первая строка пары — та же цена, что жирным над ней; расшифровка — вторая («~40 с · очередь GPU: 0»)
+    detail: footPrice(e, count)[1],
   };
 }
 
@@ -88,7 +90,7 @@ export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Pro
   const { thread, scope } = currentThread(ctx);
   const settings = settingsOf(scope, thread, req.op as ImageEditOp);
   let jobId: string | null = null;
-  const watcher = jobWatcher(ctx.sessionId, thread.id);
+  const watcher = jobWatcher(ctx.sessionId, thread.id, scope);
   const ok = await launchThread(scope, ctx.sessionId, thread, { kind: 'prompt', prompt: req.text }, {
     ctx: {
       op: req.op as ImageEditOp, count: countOf(req, settings.count), aspect: aspectOf(req),
@@ -96,40 +98,49 @@ export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Pro
     },
   });
   if (!ok || !jobId) { watcher.dispose(); throw new ReportedError('Генерация не запущена'); }
-  return { id: jobId, watch: watcher.watch };
+  return { id: jobId, watch: watcher.watch, cancel: watcher.cancel };
 }
 
 // События задачи начинаем слушать, как только известен jobId, — до возврата дескриптора: быстрая
 // задача могла завершиться раньше, чем хост подпишется
-type Ev = { progress?: number; result?: { summary: string; open?: () => void }; error?: string };
+type Ev = { progress?: number; result?: { summary: string; open?: () => void }; error?: string; cancelled?: boolean };
 
-function jobWatcher(sessionId: string, threadId: string) {
+function jobWatcher(sessionId: string, threadId: string, scope: string) {
   let off: (() => void) | null = null;
+  let jobId = '';
+  const ticker = etaTicker(f => emit({ progress: f }));
   let listener: ((e: Ev) => void) | null = null;
   const buffered: Ev[] = [];
   const emit = (e: Ev) => { if (listener) listener(e); else buffered.push(e); };
   return {
-    attach(jobId: string) {
+    attach(id: string) {
+      jobId = id;
       off = imageEditorApi().subscribe(ev => {
         if (ev.jobId !== jobId) return;
-        // Стадии грубые: точного процента у поставщиков нет
-        if (ev.type === 'image_edit_progress') emit({ progress: ev.stage === 'queued' ? 0.05 : ev.stage === 'running' ? 0.5 : 0.9 });
-        else if (ev.type === 'image_edit_completed') {
+        // Точного процента у поставщиков нет: полоса идёт от ожидаемой длительности прогона
+        if (ev.type === 'image_edit_progress') {
+          ticker.update({ run: ev.run, runs: ev.runs, etaSeconds: ev.etaSeconds, queued: ev.stage === 'queued' }, ev.stage === 'running');
+        } else if (ev.type === 'image_edit_completed') {
           const n = ev.variants.length;
+          ticker.stop();
           emit({ result: { summary: n > 1 ? `Готово: ${n} варианта` : 'Готово', open: () => openThread(sessionId, threadId) } });
           off?.();
         } else {
-          emit({ error: ev.error ?? 'Картинка не нарисовалась' });
+          ticker.stop();
+          emit(ev.outcome === 'cancelled' ? { cancelled: true } : { error: ev.error ?? 'Картинка не нарисовалась' });
           off?.();
         }
       });
     },
+    cancel() {
+      return imageEditorApi().cancelJob(scope, jobId).then(() => {}, e => { showToast(`Не удалось отменить: ${(e as Error).message}`, '', 'error'); });
+    },
     watch(on: (e: Ev) => void) {
       listener = on;
       buffered.splice(0).forEach(on);
-      return () => { listener = null; off?.(); };
+      return () => { listener = null; ticker.stop(); off?.(); };
     },
-    dispose() { off?.(); },
+    dispose() { ticker.stop(); off?.(); },
   };
 }
 

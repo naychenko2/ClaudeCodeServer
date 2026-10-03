@@ -12,7 +12,7 @@ import { roleLabel } from '../../lib/chatContext/roleLabels';
 import { attachRef, detachRef, setPrimary, useChatContext } from '../../lib/chatContext/store';
 import type { ChatContextDto } from '../../lib/chatContext/types';
 import { revealContextPanel, type ContextOpenerApi } from '../../lib/subsystems/registryCore';
-import { useSlotItem } from '../../lib/subsystems/registry';
+import { useSlot } from '../../lib/subsystems/registryCore';
 import { showToast } from '../../lib/toast';
 import { NO_PRIMARY_REASON, NO_ROLE_REASON } from '../../components/generation/ContextAddButton';
 
@@ -20,10 +20,18 @@ const ic = (I: typeof Check) => <I size={15} strokeWidth={ICON_STROKE} />;
 
 export const PROJECT_FILE_KIND = 'project-file';
 
+const AUDIO_FILE = /\.(wav|mp3|flac|ogg|m4a)$/i;
+
+// Звуковой файл берёт только основной звук, остальные файлы — не звук: референс другого вида бэкенд принял бы
+// (kind у обоих «project-file»), но смысла в нём нет — «образец стиля» из .wav
+const takesFile = (primaryKind: string, path: string) => AUDIO_FILE.test(path) === (primaryKind === 'audio');
+
 export function useFileContextMenu(projectId: string, path: string | null, online: boolean, close: () => void): { on: boolean; items: ReactNode[] } {
   const flag = useFeature(FLAGS.composerContextRow);
   const chat = useActiveChatForContext();
-  const opener = useSlotItem<never, ContextOpenerApi>('context-opener', 'image')?.action;
+  // Вход в контекст у каждой вертикали свой (картинка, звук): берём того, кто принимает этот файл
+  const openers = useSlot<never, ContextOpenerApi>('context-opener');
+  const opener = path ? openers.map(o => o.action).find(a => a?.isOpenable(path)) : undefined;
   const state = useChatContext(flag && chat ? chat.sessionId : null);
   const on = flag && !!chat && online;
   if (!on || !chat || !path) return { on, items: [] };
@@ -39,13 +47,13 @@ export function fileContextItems({ projectId, sessionId, path, state, opener, cl
 
   if (opener?.isOpenable(path)) {
     items.push(
-      <MenuItem key="ctx-work" icon={ic(Target)} label="Работать с этой" hint="картинка станет основной в контексте хода"
+      <MenuItem key="ctx-work" icon={ic(Target)} label="Работать с этой" hint="станет основным объектом в контексте хода"
         onClick={() => {
           close();
           void opener.toRef({ projectId, sessionId, path }).then(async r => {
             if (!r) return;
             if (await setPrimary(sessionId, r) !== 'failed') revealContextPanel(sessionId);
-          }).catch((e: Error) => showToast('Не удалось взять картинку в работу', e.message, 'error'));
+          }).catch((e: Error) => showToast('Не удалось взять файл в работу', e.message, 'error'));
         }} />,
     );
   }
@@ -60,7 +68,7 @@ export function fileContextItems({ projectId, sessionId, path, state, opener, cl
     return items;
   }
 
-  const roles = rolesFor({ projectId, sessionId, isMobile: false }, state, PROJECT_FILE_KIND);
+  const roles = state.primary && !takesFile(state.primary.kind, path) ? [] : rolesFor({ projectId, sessionId, isMobile: false }, state, PROJECT_FILE_KIND);
   if (!state.primary || roles.length === 0) {
     items.push(<MenuItem key="ctx-add" label="В контекст" disabled hint={state.primary ? NO_ROLE_REASON : NO_PRIMARY_REASON} hintWrap />);
   } else if (roles.length === 1) {

@@ -241,11 +241,11 @@ function NumRow({ label, value, onChange, unit }: { label: string; value: string
   );
 }
 
-export function TrimFields({ t, set, piece }: { t: TrimInputs; set: (patch: Partial<TrimInputs>) => void; piece: PieceBinding | null }) {
+export function TrimFields({ t, set, piece, inEditor }: { t: TrimInputs; set: (patch: Partial<TrimInputs>) => void; piece: PieceBinding | null; inEditor?: boolean }) {
   const n = (s: string) => Number(s.replace(',', '.')) || 0;
   return (
     <div data-op-fields="trim">
-      {piece && <PieceField binding={piece} aside="без ИИ · каждая правка — новая версия" />}
+      {piece && <PieceField binding={piece} aside="без ИИ · каждая правка — новая версия" inEditor={inEditor} />}
       <Label>Громкость</Label>
       <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
         <NumRow label="Громкость" unit="дБ" value={t.gainDb ? String(t.gainDb) : ''} onChange={s => set({ gainDb: n(s) })} />

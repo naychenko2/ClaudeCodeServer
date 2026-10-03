@@ -242,7 +242,7 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
           <span style={{ color: C.textSecondary }}>· {draft ? `сохранять в ${folder ? `${folder}/` : 'корень проекта'}` : versionLabel(thread, pos, saved)}</span>
         )}
         {stack?.old && <Badge size="xs" tone="neutral">старая стопка</Badge>}
-        {focused && isCurrent && <Badge size="xs" tone="accent">{fill.byAgent ? 'в работе ✦' : 'в работе'}</Badge>}
+        {focused && isCurrent && <Badge size="xs" tone="accent">{fill.byAgent ? 'В работе ✦' : 'В работе'}</Badge>}
         {chain.length > 1 && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: SP.xxs, color: C.textMuted }}>
             <IconButton size="xs" title="Предыдущий шаг" ariaLabel="Предыдущий шаг" disabled={idx <= 0} onClick={() => setView(idx - 1)}>

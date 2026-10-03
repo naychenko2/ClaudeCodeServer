@@ -31,20 +31,19 @@ const exec = {
   ],
   value: 'auto', onChange: noop,
 };
-const preview = <img src={heroPng} alt="" style={{ height: 150, objectFit: 'cover' }} />;
 const addFrom = [
   { id: 'files', label: 'Из файлов проекта', hint: 'выберите файл в «Файлах»', run: noop },
   { id: 'chars', label: 'Из «Персонажей»', hint: 'ролью «персонаж»', run: noop },
 ];
 
 const props = (over: Partial<ContextPanelProps>): ContextPanelProps => ({
-  isMobile: false, git, primary: null, refs: [], iconOf: () => null, preview: null, editor: null, step: null, ret: null,
+  isMobile: false, git, primary: null, refs: [], iconOf: () => null, editor: null, step: null, ret: null,
   onReturn: noop, action: null, exec: null, params: [], onParam: noop, addFrom, run: stubActionRun(null), flash: 0,
   onRelease: noop, onDetach: noop, onClear: noop, onClose: noop, layout: 'column', ...over,
 });
 
 const FULL: Partial<ContextPanelProps> = {
-  primary: primary(), refs: REFS, preview, action: edit, run: stubActionRun(edit),
+  primary: primary(), refs: REFS, action: edit, run: stubActionRun(edit),
   editor: { label: 'Открыть редактор', hint: 'маска и «Без ИИ»: обрезать, повернуть, формат', open: noop },
   step: { prev: noop, next: null },
   exec,
@@ -74,11 +73,11 @@ export function ContextPanelKitSection() {
           <ContextPanel {...props({ git: null })} />
         </Frame>
         <Frame caption="Объект в «Чате»: «Чем» и «Параметры» — пустые состояния Р2">
-          <ContextPanel {...props({ primary: primary(), preview, refs: REFS.map(r => ({ ...r, usedBy: [] })) })} />
+          <ContextPanel {...props({ primary: primary(), refs: REFS.map(r => ({ ...r, usedBy: [] })) })} />
         </Frame>
         <Frame caption="Объект от агента ✦ и ссылка «назад» к сцене">
           <ContextPanel {...props({
-            primary: primary({ by: 'agent', label: 'кот.png', version: 'версия 1', thumb: aiHomePng }), preview,
+            primary: primary({ by: 'agent', label: 'кот.png', version: 'версия 1', thumb: aiHomePng }),
             ret: { prev: primary({ id: 'scene', kind: 'video-scene', label: 'Утро' }), label: 'К сцене «Утро»' },
           })} />
         </Frame>

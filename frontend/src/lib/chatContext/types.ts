@@ -72,12 +72,20 @@ export type ActionKind = 'run' | 'editor' | 'menu';
 
 export interface ContextMenuItem { id: string; label: string; disabledReason?: string; run: () => void }
 
+// Значок чипа действия: закрытый набор имён, рисует хост
+export type ContextActionIcon =
+  | 'spark' | 'scissors' | 'maximize' | 'expand' | 'brush' | 'image' | 'mic' | 'users' | 'activity' | 'layers'
+  | 'music' | 'link' | 'sliders' | 'film';
+
 export interface ContextAction {
   // Стабильный на вид: 'edit', 'removeBg', 'stems', 'shoot', 'build'
   id: string;
   // run — режим (радио); editor — вход в редактор; menu — меню
   kind: ActionKind;
   label: string;
+  icon?: ContextActionIcon;
+  // Глагол хода: «Изменяем» → «✦ Изменяем hero.png… 40 %»; нет — «✦ Изменить…»
+  verb?: string;
   // Тултип чипа
   hint: string;
   // Только у run: уже резолвленная операция вертикали ('inpaint', 'separate', 'shoot')
@@ -129,6 +137,10 @@ export interface ContextKindApi {
   actions: (ctx: ContextKindCtx, s: KindState) => readonly ContextAction[];
   // Только картинка, волна, кадр
   preview: (ctx: ContextKindCtx, item: ChatContextItem) => ReactNode;
+  // Адрес миниатюры объекта этого вида (версия нити и т.п.); нет — иконка вида
+  thumb?: (ctx: ContextKindCtx, item: ChatContextItem) => string | null;
+  // Вторая строка карточки «С чем»: «версия 2 из 3 · отмечено: 2»; нет — берётся version из DTO
+  sub?: (ctx: ContextKindCtx, item: ChatContextItem) => string | null;
   editor?: (ctx: ContextKindCtx, item: ChatContextItem) => { label: string; hint: string; open: () => void } | null;
   // Листание версий основного объекта (‹ ›) в секции «С чем» панели; null/нет — стрелок нет, версия одна
   step?: (ctx: ContextKindCtx, item: ChatContextItem) => { prev: (() => void) | null; next: (() => void) | null } | null;
@@ -147,6 +159,8 @@ export interface ContextKindApi {
   upload?: (ctx: ContextKindCtx, primary: ChatContextPrimary) => ContextUpload | null;
   // Метка состояния основного объекта в панели кнопок поля (десктоп): «Отмечено: 2 ✕»
   note?: (ctx: ContextKindCtx, primary: ChatContextPrimary) => ContextNote | null;
+  // «Из ленты чата» в «Добавить из…»: объекты этого вида, что есть в ленте и могут встать референсом
+  feed?: (ctx: ContextKindCtx) => readonly { id: string; label: string; hint?: string; candidate: { kind: string; ref: Record<string, unknown> } }[];
   // Вход «＋» композера и empty-state ленты
   create?: { title: string; hint?: string; icon: ReactNode; run: (ctx: ContextKindCtx) => void };
   // Запуск действия: op + params + contextRevision; входы бэкенд читает из стора по ревизии
@@ -174,7 +188,9 @@ export interface ActionQuote {
 export interface LaunchHandle {
   id: string;
   // Подписка на прогресс 0..1 и итог; отписка — возвращаемая функция
-  watch: (on: (e: { progress?: number; result?: ActionResult; error?: string }) => void) => () => void;
+  watch: (on: (e: { progress?: number; result?: ActionResult; error?: string; cancelled?: boolean }) => void) => () => void;
+  // «Остановить» в низу панели; нет — остановить нельзя (правка без ИИ идёт одним запросом)
+  cancel?: () => void | Promise<void>;
 }
 
 export interface ActionResult { summary: string; open?: () => void }
@@ -199,6 +215,8 @@ export interface ActionRun {
   progress: number | null;
   result: ActionResult | null;
   run: (text: string) => Promise<void>;
+  // Остановить идущий запуск; null — не идёт или остановка недоступна
+  stop: (() => void) | null;
   // Текст поля ввода: его публикует поле, панель запускает с ним же
   text: string;
   setText: (text: string) => void;

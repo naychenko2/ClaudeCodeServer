@@ -151,8 +151,10 @@ function VoiceCard({ scope, voice: v, expanded, picked, contextSessionId, onTogg
       borderRadius: R.lg, border: `1px solid ${picked ? C.accent : C.borderLight}`,
       background: picked ? C.accentMuted : C.bgPanel, minWidth: 0,
     }}>
+      {/* «В контекст» стоит в строке списка (макет): кнопка не вложена в кнопку раскрытия */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, paddingRight: contextSessionId ? SP.sm : 0 }}>
       <button type="button" onClick={onToggle} aria-expanded={expanded} style={{
-        all: 'unset', boxSizing: 'border-box', width: '100%', cursor: 'pointer',
+        all: 'unset', boxSizing: 'border-box', flex: 1, minWidth: 0, cursor: 'pointer',
         display: 'flex', alignItems: 'center', gap: SP.sm, padding: SP.sm,
       }}>
         <span aria-hidden style={{
@@ -171,6 +173,10 @@ function VoiceCard({ scope, voice: v, expanded, picked, contextSessionId, onTogg
         )}
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(expanded ? ChevronUp : ChevronDown, ICON_SIZE.sm)}</span>
       </button>
+      {contextSessionId && (
+        <ContextAddButton sessionId={contextSessionId} projectId={scope} candidate={{ kind: 'audio-voice', ref: { slug: v.slug } }} size="xs" toggle />
+      )}
+      </div>
       {expanded && (
         <VoiceDetails scope={scope} voice={v} picked={picked} contextSessionId={contextSessionId} onPick={onPick} onChanged={onChanged} onDeleted={onDeleted} />
       )}

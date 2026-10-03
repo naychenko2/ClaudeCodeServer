@@ -149,7 +149,7 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(actions(page)).toBeVisible();
         expect(await ids(page)).toEqual(['__chat', 'edit', 'removeBg', 'upscale', 'outpaint', 'mark']);
         await expect(actions(page).locator('[data-action-chip="edit"]')).toHaveAttribute('aria-checked', 'true');
-        await expect(card(page)).toContainText('в работе');
+        await expect(card(page)).toContainText('В работе');
         // На телефоне «Работать с этой» панель не поднимает: шторка закрыла бы поле ввода
         if (name === '360') await expect(panelCtx(page)).toHaveCount(0);
         // Кнопка серая, пока нет текста
@@ -199,7 +199,7 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(actions(page).locator('[data-action-chip="__chat"]')).toHaveAttribute('aria-checked', 'true');
         await expect(page.locator('[data-context-row] [data-chip="exec"]'), 'в «Чате» исполнителя нет').toHaveCount(0);
         // Карточка объекта агента помечена ✦, панель от действий агента не двигается
-        await expect(card(page)).toContainText('в работе ✦');
+        await expect(card(page)).toContainText('В работе ✦');
         await expect(panelCtx(page)).toHaveCount(0);
         await actions(page).locator('[data-action-chip="upscale"]').click();
         await expect(page.locator('[data-context-row] [data-chip="exec"]')).toBeVisible({ timeout: 10_000 });

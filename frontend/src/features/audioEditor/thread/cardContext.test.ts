@@ -68,7 +68,7 @@ describe('карточка звука по флагу composer-context-row', () 
     __applyChatContext(S, { revision: 1, primary: primary('human'), refs: [] });
     const html = card('v1');
     expect(html).toContain('data-current="true"');
-    expect(html).toContain('в работе');
+    expect(html).toContain('В работе');
     expect(html).not.toContain('Работать с этой');
     expect(html).not.toContain('data-audio-process');
   });
@@ -76,9 +76,9 @@ describe('карточка звука по флагу composer-context-row', () 
   it('основной объект выбрал агент — «в работе ✦»; другая версия той же нити не подсвечена', () => {
     setAllFlags({ 'audio-editor': true, 'composer-context-row': true });
     __applyChatContext(S, { revision: 1, primary: primary('agent'), refs: [] });
-    expect(card('v1')).toContain('в работе ✦');
+    expect(card('v1')).toContain('В работе ✦');
     const other = card('origin');
     expect(other).toContain('data-current="false"');
-    expect(other).not.toContain('в работе');
+    expect(other).not.toContain('В работе');
   });
 });

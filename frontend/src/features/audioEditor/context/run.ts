@@ -2,9 +2,9 @@
 // запуском задачи и ручками без ИИ (`mix`, `concat`). Входы — нить, версия, голос, образец и куски —
 // сервер читает из стора контекста по ревизии, поэтому здесь только `op`, текст, `params` и `contextRevision`.
 
-import { ReportedError, getChatContextState } from 'aihome_shell/kit';
+import { ReportedError, etaTicker, getChatContextState, showToast } from 'aihome_shell/kit';
 import type { ActionQuote, ContextKindCtx, LaunchHandle, LaunchParam, LaunchRequest } from 'aihome_shell/kit';
-import { audioApi, type AudioCatalog, type AudioJobInput, type AudioOp, type AudioQuoteRequest, type AudioStemSet } from '../api';
+import { audioApi, type AudioCatalog, type AudioQuote, type AudioJobInput, type AudioOp, type AudioQuoteRequest, type AudioStemSet } from '../api';
 import { isNoAi, opInfo } from '../ops';
 import { isStemSet } from '../panel/stems';
 import { pieceSeconds } from '../panel/piece';
@@ -18,7 +18,8 @@ import { threadOfPrimary, versionOfPrimary } from './state';
 // Варианты — только у операций, что создают звук (голос, музыка); обработка даёт один результат
 export function paramsFor(catalog: AudioCatalog | null, op: AudioOp): LaunchParam[] {
   const mode = opInfo(op)?.mode;
-  if (isNoAi(op) || (mode !== 'voice' && mode !== 'music')) return [];
+  // У песни вариантов нет (макет): модель отдаёт один трек
+  if (isNoAi(op) || op === 'song' || (mode !== 'voice' && mode !== 'music')) return [];
   return [{ kind: 'variants', min: 1, max: Math.max(1, catalog?.maxCount ?? 4), value: 1 }];
 }
 
@@ -84,35 +85,57 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
   if (isNoAi(req.op as AudioOp)) return { price: 'бесплатно', detail: 'Без ИИ · на сервере' };
   const r = resolveRequest(ctx, req);
   const q = await audioApi.quote(r.scope, r.sessionId, r.quote);
-  return { price: priceText(q.price) ?? 'цена станет известна после запуска', detail: `${q.provider} · ${q.model}` };
+  return { price: priceText(q.price) ?? 'цена станет известна после запуска', detail: quoteDetail(getCatalog(r.scope), q) };
+}
+
+// «Qwen3-TTS · ~40 с · очередь GPU: 0»: имена из каталога (id поставщика и модели пользователю не показываем)
+const etaShort = (sec: number) => (sec < 90 ? `~${Math.max(1, Math.round(sec))} с` : `~${Math.round(sec / 60)} мин`);
+
+export function quoteDetail(catalog: AudioCatalog | null, q: Pick<AudioQuote, 'provider' | 'model' | 'price'>): string {
+  const pv = catalog?.providers.find(p => p.key === q.provider);
+  const model = pv?.models.find(m => m.id === q.model)?.label ?? q.model;
+  const free = q.price.unit === 'free';
+  return [
+    model,
+    q.price.eta != null && q.price.eta > 0 ? etaShort(q.price.eta) : null,
+    free && q.price.queueLength != null ? `очередь GPU: ${q.price.queueLength}` : null,
+  ].filter(Boolean).join(' · ');
 }
 
 // События задачи начинаем слушать, как только известен jobId, — до возврата дескриптора: быстрая
 // задача могла завершиться раньше, чем хост подпишется
-type Ev = { progress?: number; result?: { summary: string; open?: () => void }; error?: string };
+type Ev = { progress?: number; result?: { summary: string; open?: () => void }; error?: string; cancelled?: boolean };
 
-function jobWatcher(jobId: string, open: () => void) {
+function jobWatcher(jobId: string, open: () => void, scope: string, sessionId: string) {
   let off: (() => void) | null = null;
   let listener: ((e: Ev) => void) | null = null;
   const buffered: Ev[] = [];
   const emit = (e: Ev) => { if (listener) listener(e); else buffered.push(e); };
+  // Точного процента у поставщиков нет: полоса идёт от ожидаемой длительности (в очереди стоит)
+  const ticker = etaTicker(f => emit({ progress: f }));
   off = audioApi.subscribe(ev => {
     if (!('jobId' in ev) || ev.jobId !== jobId) return;
-    if (ev.type === 'audio_edit_progress') emit({ progress: ev.stage === 'queued' ? 0.05 : ev.stage === 'running' ? 0.5 : 0.9 });
-    else if (ev.type === 'audio_edit_completed') {
+    if (ev.type === 'audio_edit_progress') {
+      ticker.update({ etaSeconds: ev.etaSeconds, queued: ev.stage === 'queued' }, ev.stage === 'running');
+    } else if (ev.type === 'audio_edit_completed') {
+      ticker.stop();
       if (ev.error) emit({ error: ev.error });
       else emit({ result: { summary: ev.variants.length > 1 ? `Готово: ${ev.variants.length} варианта` : 'Готово', open } });
       off?.();
     } else if (ev.type === 'audio_edit_failed') {
-      emit({ error: ev.error ?? 'Звук не получился' });
+      ticker.stop();
+      emit(ev.outcome === 'cancelled' ? { cancelled: true } : { error: ev.error ?? 'Звук не получился' });
       off?.();
     }
   });
   return {
+    cancel() {
+      return audioApi.cancelJob(scope, sessionId, jobId).then(() => {}, e => { showToast(`Не удалось отменить: ${(e as Error).message}`, '', 'error'); });
+    },
     watch(on: (e: Ev) => void) {
       listener = on;
       buffered.splice(0).forEach(on);
-      return () => { listener = null; off?.(); };
+      return () => { listener = null; ticker.stop(); off?.(); };
     },
   };
 }
@@ -151,5 +174,6 @@ export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Pro
   const quote = await audioApi.quote(r.scope, r.sessionId, r.quote);
   const { jobId } = await audioApi.startJob(r.scope, r.sessionId, { ...r.job, quoteId: quote.quoteId });
   if (!jobId) throw new ReportedError('Запуск не удался');
-  return { id: jobId, watch: jobWatcher(jobId, open).watch };
+  const watcher = jobWatcher(jobId, open, r.scope, r.sessionId);
+  return { id: jobId, watch: watcher.watch, cancel: watcher.cancel };
 }

@@ -87,7 +87,7 @@ describe('каталог картинки: состав по состояния�
   it('вопрос «Пропорции» — только то, что принимает сервер, первое значение предвыбрано', () => {
     const q = buildImageActions(base).find(a => a.id === 'outpaint')!.question!;
     expect(q.options.map(o => o.value)).toEqual([...ASPECT_OPTIONS]);
-    expect(q.options[0].value).toBe('1:1');
+    expect(q.options[0].value).toBe('16:9');
   });
 
   it('операцию, которой не умеет ни один поставщик, делает серой с причиной, умолчание на «Изменить»', () => {

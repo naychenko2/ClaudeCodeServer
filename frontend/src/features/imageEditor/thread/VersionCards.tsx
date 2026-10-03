@@ -105,11 +105,11 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
     <Shell current={current} testId={String(version.number)}
       onPick={() => { void (fill.on ? fill.pick() : pickByHuman(projectId, sessionId, thread.id, focused)); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
-        {current && <Badge size="xs" tone="accent" icon={ic(Target)}>{fill.byAgent ? 'в работе ✦' : 'в работе'}</Badge>}
         <span title={name} style={{
           fontSize: FS.sm, fontWeight: 600, color: C.textHeading, minWidth: 0, flex: 1,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{name}</span>
+        {current && <Badge size="xs" tone="accent" icon={ic(Target)}>{fill.byAgent ? 'В работе ✦' : 'В работе'}</Badge>}
         {!personal && <Badge size="xs" tone={saved ? 'success' : 'warning'}>{saved ? 'в проекте' : 'черновик'}</Badge>}
       </div>
       {done && <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{done}</div>}

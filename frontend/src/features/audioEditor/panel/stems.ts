@@ -7,8 +7,8 @@ import type { SettingsPatch } from './model';
 
 export const STEM_SETS: readonly { value: AudioStemSet; label: string; full: string }[] = [
   { value: 'vocals', label: 'Вокал + минус', full: 'вокал и минус' },
-  { value: '4', label: '4', full: '4 дорожки' },
-  { value: '6', label: '6', full: '6 дорожек' },
+  { value: '4', label: '4 стема', full: '4 дорожки' },
+  { value: '6', label: '6 стемов', full: '6 дорожек' },
   { value: 'karaoke', label: 'Караоке', full: 'караоке' },
 ];
 

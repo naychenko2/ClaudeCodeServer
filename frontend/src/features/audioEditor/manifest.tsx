@@ -6,7 +6,7 @@
 import { AudioLines, Mic } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
-  ChatItemToolCtx, ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SlotContribution, SubsystemManifest,
+  ChatItemToolCtx, ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, ContextOpenerApi, SlotContribution, SubsystemManifest,
   WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
 import { AudioConcatCard, AudioFocusLine, AudioLaunchCard, AudioPromptCard, AudioServiceLine } from './feed/AgentCards';
@@ -18,6 +18,7 @@ import { VoicesContextPanel } from './voices/VoicesContextPanel';
 import { VOICES_KEY } from './thread/panelKey';
 import { soundMode } from './composer/soundMode';
 import { audioKindApi } from './context/kind';
+import { audioRefOfPath, isAudioFile } from './context/opener';
 import { SoundStrip, soundStripStatus } from './strip/SoundStrip';
 import { openSoundShortcut } from './thread/actions';
 import { RECORD_LAUNCH, RECORD_THREAD, recordKey } from './thread/records';
@@ -83,6 +84,16 @@ export const manifest: SubsystemManifest = {
     'composer-chip': [
       { name: 'sound-watch', render: (ctx: ComposerChipCtx) => <SoundChatWatcher ctx={ctx} /> },
       { name: 'sound-sheet', render: (ctx: ComposerChipCtx) => <SoundSheet ctx={ctx} /> },
+    ],
+    // Вход из «Файлов» в контекст хода (ADR-023): звуковой файл проекта становится нитью-основным объектом
+    'context-opener': [
+      {
+        name: 'audio',
+        action: {
+          isOpenable: isAudioFile,
+          toRef: ({ projectId, sessionId, path }) => audioRefOfPath(projectId, sessionId, path),
+        } satisfies ContextOpenerApi as unknown as Record<string, unknown>,
+      },
     ],
     // Вид «звук» контекста хода (ADR-023): чипы действий, волна, «Чем» и параметры панели «Контекст»
     'context-kind': [{ name: 'audio', action: audioKindApi as unknown as Record<string, unknown> }],

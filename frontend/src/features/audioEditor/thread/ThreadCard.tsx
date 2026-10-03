@@ -156,7 +156,7 @@ export function VersionCard({ scope, sessionId, thread, version: v, focused, eve
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm, minWidth: 0 }}>
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(Icon, ICON_SIZE.sm)}</span>
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere', minWidth: 0 }}>{threadName(thread)}</span>
-        {working && <Badge size="xs" tone="accent" icon={ic(Target)}>{fill.byAgent ? 'в работе ✦' : 'в работе'}</Badge>}
+        {working && <Badge size="xs" tone="accent" icon={ic(Target)}>{fill.byAgent ? 'В работе ✦' : 'В работе'}</Badge>}
         <License badge={licenseBadge(v)} />
         <span data-audio-nav="" style={{ marginLeft: 'auto', fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>{versionTag(thread, v)}</span>
       </div>

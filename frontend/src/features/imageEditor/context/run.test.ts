@@ -171,7 +171,7 @@ describe('цена, «Чем» и параметры', () => {
     __applyChatContext(S, { ...context(9), primary: { ...context(9).primary!, ref: { threadId: 'd1' } } });
     const draw = imageKindApi.params!(CTX, 'draw');
     expect(draw.map(p => p.kind)).toEqual(['variants', 'aspect']);
-    expect(draw[1]).toMatchObject({ options: ['авто', '1:1', '16:9', '9:16'], value: 'авто' });
+    expect(draw[1]).toMatchObject({ options: ['авто', '16:9', '9:16', '1:1'], value: 'авто' });
   });
 
   it('действия: у нити с файлом — пять чипов; нить не найдена — действий нет (остаётся «Чат | Картинка»)', () => {

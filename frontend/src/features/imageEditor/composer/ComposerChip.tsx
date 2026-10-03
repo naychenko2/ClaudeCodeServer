@@ -34,6 +34,8 @@ export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
   // Панель v5: у «Изменить» над картинкой — кисть, редактор открывается сразу с ней.
   // Отметок на телефоне нет, а с отметками чип ниже и так ведёт в редактор
   const v5 = useFeature(FLAGS.imagePanelV5);
+  // При строке контекста отметки несёт метка «Отмечено: N ✕» поля (десктоп) и чип «Изменить отмеченное»: второй чип — дубль
+  const ctxRow = useFeature(FLAGS.composerContextRow);
   useImageModeVersion();
   const mobile = useIsMobile();
   const prefs = usePrefs(projectId);
@@ -51,7 +53,7 @@ export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
           </Chip>
         </span>
       )}
-      {thread && n > 0 && (
+      {thread && n > 0 && !ctxRow && (
         <span style={{ display: 'inline-flex', paddingTop: SP.sm }}>
         <Chip leading={<Brush size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} maxW={260}
           title={isPersonalScope(projectId)

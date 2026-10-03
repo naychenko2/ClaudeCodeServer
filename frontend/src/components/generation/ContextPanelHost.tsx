@@ -9,7 +9,10 @@ import { useActionMemoryVersion } from '../../lib/chatContext/actionMemory';
 import { useActionRun } from '../../lib/chatContext/useActionRun';
 import { clearContextReturn, useContextReturn } from '../../lib/chatContext/contextReturn';
 import { getGitActions } from '../../lib/chatContext/gitActions';
-import { getKindApi } from '../../lib/chatContext/registry';
+import { getKindApi, getKindRegistry } from '../../lib/chatContext/registry';
+import { withThumb } from '../../lib/chatContext/thumbs';
+import { objectKey } from '../../lib/chatContext/actionMemory';
+import { rolesFor, type ContextCandidate } from '../../lib/chatContext/fill';
 import { selectRowAction } from '../../lib/chatContext/rowExec';
 import {
   attachRef, clearContext, detachRef, ensureChatContext, releasePrimary, setPrimary, useChatContext,
@@ -84,8 +87,10 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
     return () => window.removeEventListener(REVEAL_PANEL_EVENT, on);
   }, [sessionId]);
 
-  const { primary, refs } = ctx;
   const kindCtx: ContextKindCtx = { projectId: project?.id ?? null, sessionId, isMobile };
+  // Миниатюры сервер не присылает: адрес собираем здесь (вид объекта или путь файла проекта)
+  const primary = ctx.primary ? withThumb(kindCtx, ctx.primary) : null;
+  const refs = ctx.refs.map(r => withThumb(kindCtx, r));
   const api = primary ? getKindApi(primary.kind) : null;
   // executors() вида зовётся на каждый рендер намеренно (контракт types.ts): выбранный исполнитель живёт
   // в сторе вертикали и в зависимости мемо не входит
@@ -102,6 +107,19 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
   const fileInput = useRef<HTMLInputElement>(null);
   const menuAt = useRef<DOMRect | null>(null);
   const [rolePick, setRolePick] = useState<{ files: File[]; at: DOMRect } | null>(null);
+  // «Из ленты чата»: объекты видов, что уже лежат в ленте; роль спрашиваем, если у основного их несколько
+  const [feedMenu, setFeedMenu] = useState<{ at: DOMRect; items: { id: string; label: string; hint?: string; candidate: ContextCandidate }[] } | null>(null);
+  const [feedRole, setFeedRole] = useState<{ candidate: ContextCandidate; at: DOMRect } | null>(null);
+  const feedItems = () => {
+    const seen = new Set<unknown>();
+    return [...getKindRegistry().values()]
+      .filter(a => (seen.has(a) ? false : (seen.add(a), true)))
+      .flatMap(a => a.feed?.(kindCtx) ?? [])
+      .filter(it => rolesFor(kindCtx, ctx, it.candidate.kind).length > 0)
+      .filter(it => !refs.some(r => objectKey(r) === objectKey(it.candidate)))
+      // Сам себя референсом положить нельзя: нить основного объекта не предлагаем
+      .filter(it => !primary || it.candidate.kind !== primary.kind || it.candidate.ref.threadId !== primary.ref.threadId);
+  };
   const addFiles = async (files: File[], role: string) => {
     if (!upload) return;
     for (const f of files) {
@@ -114,6 +132,7 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
   };
 
   const addFrom: AddFromItem[] = [
+    { id: 'feed', label: 'Из ленты чата', hint: 'картинки и звуки этого чата', run: (at: DOMRect | null) => { setFeedMenu({ at: at ?? new DOMRect(window.innerWidth / 2, window.innerHeight / 2, 0, 0), items: feedItems() }); } },
     ...(upload ? [{ id: 'computer', label: 'С компьютера', hint: upload.hint, run: (at: DOMRect | null) => { menuAt.current = at; fileInput.current?.click(); } }] : []),
     ...(project ? [{ id: 'files', label: 'Из файлов проекта', hint: 'выберите файл в «Файлах» и нажмите «В контекст»', run: () => { revealWorkspacePanel('files'); } }] : []),
     ...(project ? [{ id: 'characters', label: 'Из «Персонажей»', hint: 'ролью «персонаж»', run: () => { revealWorkspacePanel('characters'); } }] : []),
@@ -132,6 +151,27 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
           else setRolePick({ files, at: menuAt.current ?? new DOMRect(window.innerWidth / 2, window.innerHeight / 2, 0, 0) });
         }} />
     )}
+    {feedMenu && (
+      <Menu anchor={feedMenu.at} onClose={() => setFeedMenu(null)} minWidth={240} maxHeight={320}>
+        {feedMenu.items.length === 0 && <MenuItem label="В ленте нечего добавить" hint="картинки и звуки ленты, которые берёт основной объект" disabled onClick={() => {}} />}
+        {feedMenu.items.map(it => (
+          <MenuItem key={`${it.candidate.kind}:${it.id}`} label={it.label} hint={it.hint} onClick={() => {
+            const at = feedMenu.at;
+            setFeedMenu(null);
+            const roles = rolesFor(kindCtx, ctx, it.candidate.kind);
+            if (roles.length === 1) void attachRef(sessionId, { ...it.candidate, role: roles[0].role });
+            else setFeedRole({ candidate: it.candidate, at });
+          }} />
+        ))}
+      </Menu>
+    )}
+    {feedRole && (
+      <Menu anchor={feedRole.at} onClose={() => setFeedRole(null)} minWidth={220}>
+        {rolesFor(kindCtx, ctx, feedRole.candidate.kind).map(r => (
+          <MenuItem key={r.role} label={r.label} onClick={() => { const { candidate } = feedRole; setFeedRole(null); void attachRef(sessionId, { ...candidate, role: r.role }); }} />
+        ))}
+      </Menu>
+    )}
     {rolePick && upload && (
       <Menu anchor={rolePick.at} onClose={() => setRolePick(null)} minWidth={220}>
         {upload.roles.map(r => (
@@ -145,7 +185,7 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
       primary={primary}
       refs={refs}
       iconOf={iconOf}
-      preview={primary && api ? api.preview(kindCtx, primary) : null}
+      sub={primary ? api?.sub?.(kindCtx, primary) ?? null : null}
       editor={primary ? api?.editor?.(kindCtx, primary) ?? null : null}
       step={primary ? api?.step?.(kindCtx, primary) ?? null : null}
       ret={ret}

@@ -132,9 +132,9 @@ describe('список «Исполнитель»', () => {
   });
 
   it('«Авто · сейчас X» — по порядку перебора сервера, а не по списку каталога', () => {
-    expect(executorRows(CATALOG, 'speak')[0]).toMatchObject({ name: 'Авто', sub: 'сначала локальные модели · сейчас локально · QWEN', price: 'бесплатно' });
+    expect(executorRows(CATALOG, 'speak')[0]).toMatchObject({ name: 'Авто', sub: 'сейчас: локально · QWEN', now: 'локально · QWEN', price: 'бесплатно' });
     const cloudFirst = { ...CATALOG, autoProviders: ['fal', 'local'] };
-    expect(executorRows(cloudFirst, 'speak')[0]).toMatchObject({ sub: 'сначала локальные модели · сейчас fal · FAL-AI/MINIMAX/SPEECH', price: '$0.1 за 1000 симв.' });
+    expect(executorRows(cloudFirst, 'speak')[0]).toMatchObject({ sub: 'сейчас: fal · FAL-AI/MINIMAX/SPEECH', now: 'fal · FAL-AI/MINIMAX/SPEECH', price: '$0.1 за 1000 симв.' });
   });
 
   it('бейджи: RU, ограничивающая лицензия, тяжёлая; свободная лицензия и язык обработки — без бейджа', () => {

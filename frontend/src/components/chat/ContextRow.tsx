@@ -9,6 +9,7 @@ import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
 import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
 import { getKindApi } from '../../lib/chatContext/registry';
+import { withThumb } from '../../lib/chatContext/thumbs';
 import {
   clearContext, detachRef, ensureChatContext, releasePrimary, undoReleasePrimary, useChatContext, useReleaseOffer,
 } from '../../lib/chatContext/store';
@@ -97,8 +98,10 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
   const [ref, width] = useContainerWidth<HTMLDivElement>();
   useEffect(() => { void ensureChatContext(sessionId); }, [sessionId]);
 
-  const { primary, refs } = ctx;
   const kindCtx = { projectId: project?.id ?? null, sessionId, isMobile };
+  // Миниатюры сервер не присылает: адрес собираем здесь (вид объекта или путь файла проекта)
+  const primary = ctx.primary ? withThumb(kindCtx, ctx.primary) : null;
+  const refs = ctx.refs.map(r => withThumb(kindCtx, r));
 
   // Выбранное действие объекта: предвыбор → память → умолчание (Р1). «Чем» есть только у run-действия
   // executors() вида зовётся на каждый рендер намеренно: выбранный исполнитель живёт в сторе вертикали,

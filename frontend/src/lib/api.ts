@@ -1,5 +1,6 @@
 import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { readStoredToken, request } from './offline';
+import { forgetChatContextSession } from './chatContext/forget';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -1477,7 +1478,8 @@ export const api = {
         body: JSON.stringify(data),
       }),
     delete: (projectId: string, sessionId: string) =>
-      request<void>(`/projects/${projectId}/sessions/${sessionId}`, { method: 'DELETE' }),
+      request<void>(`/projects/${projectId}/sessions/${sessionId}`, { method: 'DELETE' })
+        .then(r => { forgetChatContextSession(sessionId); return r; }),
     // Состав контекста чата (фича chat-context) с признаками missing. live: true —
     // обязательный: офлайн-кэш после переключения чата подставил бы чужой/старый состав
     getContext: (projectId: string, sessionId: string) =>
@@ -1714,7 +1716,8 @@ export const api = {
     // отдельного сигнала не приходит
     dropWindow1M: (id: string) =>
       request<Session>(`/chats/${id}/window-1m/drop`, { method: 'POST' }),
-    delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
+    delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' })
+      .then(r => { forgetChatContextSession(id); return r; }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     // Вложение локального проекта ложится на машину проекта через агента: сервер на свой
     // маршрут для него отвечает отказом G1

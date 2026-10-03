@@ -44,6 +44,12 @@ export type {
   ContextAction, ActionKind, LaunchParam, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
 } from '../chatContext/types';
 
+export {
+  useChatContext, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
+} from '../chatContext/store';
+export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
+export { setContextReturn, useContextReturn, clearContextReturn } from '../chatContext/contextReturn';
+
 // ─── genPanelDismissed ───────────────────────────────────────────────────────
 // Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл
 // её в этом чате (ADR-021 §3)

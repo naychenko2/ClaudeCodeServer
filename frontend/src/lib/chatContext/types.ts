@@ -130,7 +130,7 @@ export interface ContextKindApi {
 export type LaunchParams = Readonly<Record<string, string | number | boolean>>;
 
 export interface QuoteRequest { op: string; text: string; params: LaunchParams; contextRevision: number }
-export interface LaunchRequest extends QuoteRequest {}
+export type LaunchRequest = QuoteRequest;
 
 export interface ActionQuote {
   // Подпись цены: «$0.12», «бесплатно»

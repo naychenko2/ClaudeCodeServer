@@ -138,6 +138,10 @@ interface Props {
   // проектов левой зоны. Живёт своей жизнью (сам решает, что показывать) — рельса
   // лишь отдаёт ему остаток высоты и держит общий вертикальный ритм островов.
   footer?: ReactNode;
+  // Последняя кнопка столбца — после панелей, перед ящиком «…», без своей черты. Не
+  // панель (нет ключа, раскладки, ящика и перестановки), а самостоятельный контрол —
+  // сейчас утка-пасхалка. Рисует его вызывающий, обычно RailIconButton той же стороны.
+  tail?: ReactNode;
   // Рельса как место дропа: пока панель тащат, вся рельса принимает её и на
   // отпускание закрывает, оставляя иконку здесь. Иначе убрать панель во время
   // перетаскивания было нечем — приходилось бросать её обратно и жать крестик.
@@ -487,7 +491,7 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
   );
 }
 
-export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer }: Props) {
+export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer, tail }: Props) {
   const isLeft = side === 'left';
   const dropping = !!drop?.active;
 
@@ -634,7 +638,7 @@ export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCe
           ящика внизу остаётся собственной мишенью («спрятать кнопку»). Пустая полоса
           капсулы вокруг них не принимает ничего: дроп мимо кнопок — это промах, а не
           команда убрать панель. */}
-      {columnSections.length > 0 && (
+      {(columnSections.length > 0 || tail) && (
       <div ref={colRef} {...dropProps} style={{
         position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center',
         gap: RAIL_ITEM_GAP,
@@ -645,6 +649,10 @@ export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCe
             {s.node}
           </Fragment>
         ))}
+
+        {/* Хвост — последней кнопкой столбца, без своей черты. В расчёт места вставки
+            он не входит: там перебираются только узлы с data-rail-item */}
+        {tail}
 
         {/* Место, куда встанет кнопка, — линия в зазоре между иконками, тем же знаком,
             что у панелей в раскладке и у проектов в доке. Раньше на время дропа
@@ -683,7 +691,7 @@ export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCe
           (все кнопки в ящике) иначе оставил бы черту у самой кромки капсулы. */}
       {showOverflow && (
         <>
-          {columnSections.length > 0 && <RailSep margin="2px 0 1px" />}
+          {(columnSections.length > 0 || tail) && <RailSep margin="2px 0 1px" />}
           <RailOverflow side={side} overflow={overflow} collapse={collapseToggle} />
         </>
       )}

@@ -98,6 +98,9 @@ interface Props {
   // панелей он отношения не имеет, но живёт в той же вертикали у края окна, поэтому
   // держит зону на экране даже когда открывать в ней нечего.
   railFooter?: ReactNode;
+  // Последняя кнопка столбца рельсы, перед ящиком «…» (см. PanelRail.tail): не
+  // панель, раскладка её не знает. Сейчас это утка-пасхалка правой зоны.
+  railTail?: ReactNode;
   // Плавающий режим («Стена»): открытые панели не занимают место в раскладке, а
   // всплывают поверх контента у своей рельсы и закрываются кликом мимо них. Кнопки,
   // раскладка и перенос между зонами — те же, что в обычном режиме (общий стор).
@@ -110,7 +113,7 @@ interface Props {
 export function PanelZone({
   side, panels, railBadges, panelStack,
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, compact, sessionPanels,
-  railFooter, floating, centerFileOpen,
+  railFooter, railTail, floating, centerFileOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, openIn, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, markActive, releaseCompactSide, registerOpener, moveTo, registerZoneKeys, zoneKeys } = usePanels();
@@ -1055,6 +1058,7 @@ export function PanelZone({
         onMouseLeave: () => peeked.hide(),
       } : undefined}
       footer={railFooter}
+      tail={railTail}
       // Состав групп — RAIL_GROUPS: тот же список задаёт и пределы перестановки
       // кнопок, поэтому он один на оба применения. Разделители PanelRail рисует сам и
       // убирает вместе с пустой группой — выключенные инструменты уносят и свою черту.

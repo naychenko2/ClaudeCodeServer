@@ -3,7 +3,7 @@ import { Sparkles } from 'lucide-react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { C, FONT, FS, R, SP, PANEL_ANIM, CONTENT_MAX_W } from '../../lib/design';
+import { C, FONT, FS, R, SP, PANEL_ANIM, CONTENT_MAX_W, FAB_CLEAR_PAD } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
@@ -580,9 +580,12 @@ const mobileActivityCard: React.CSSProperties = {
   borderRadius: R.xl, padding: SP.md, margin: SP.md,
 };
 // Раскрытая «Активность» («Показать всё») забирает пространство списка — так же, как в
-// хабе разворот ленты вытесняет витрину. Прокрутка тут своя, потолок ленты снимается.
+// хабе разворот ленты вытесняет витрину. Прокрутка тут своя, потолок ленты снимается —
+// а с ним и отступ ленты под круглешок AI, поэтому запас под кнопку (FAB_CLEAR_PAD) несёт
+// сама карточка: иначе последняя строка и «Показать ещё» остаются под кнопкой
 const mobileActivityCardOpen: React.CSSProperties = {
   flex: 1, minHeight: 0, overflowY: 'auto',
   background: C.bgCard, border: `1px solid ${C.borderLight}`,
   borderRadius: R.xl, padding: SP.md, margin: SP.md,
+  paddingBottom: `max(${SP.md}px, ${FAB_CLEAR_PAD})`,
 };

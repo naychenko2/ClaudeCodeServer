@@ -10,7 +10,7 @@
 // в хостовой сборке (tsc/vitest/vite) — через алиас на этот файл.
 
 // ─── design ──────────────────────────────────────────────────────────────────
-export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W, COMPOSER_LIP, composerLip } from '../design';
+export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W, COMPOSER_LIP, composerLip, FAB_CLEAR_PAD } from '../design';
 
 // ─── api ─────────────────────────────────────────────────────────────────────
 export { api } from '../api';

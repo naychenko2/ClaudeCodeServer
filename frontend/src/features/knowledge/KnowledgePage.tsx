@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AuthState, KnowledgeBaseSummary } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { C, FONT, ISLAND, R } from '../../lib/design';
+import { C, FONT, ISLAND, R, FAB_CLEAR_PAD } from '../../lib/design';
 import { useKnowledge, useKnowledgeConfigured, ensureKnowledgeLoaded, bumpKnowledge } from '../../lib/knowledge';
 import { api } from '../../lib/api';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
@@ -127,7 +127,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
   const sidebar = (
     <>
       {sidebarControls}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: FAB_CLEAR_PAD }}>
         <KnowledgeList
           items={filtered}
           selectedId={selectedId}

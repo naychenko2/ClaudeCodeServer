@@ -1,0 +1,169 @@
+using System.Text.Json.Nodes;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.AudioEditor;
+using ClaudeHomeServer.Services.AudioEditor.Catalog;
+using ClaudeHomeServer.Services.AudioEditor.ChatContext;
+using ClaudeHomeServer.Services.AudioEditor.Jobs;
+using ClaudeHomeServer.Services.AudioEditor.Threads;
+using ClaudeHomeServer.Services.AudioEditor.Voices;
+using ClaudeHomeServer.Services.ChatContext;
+using FluentAssertions;
+using Moq;
+
+namespace ClaudeHomeServer.AudioEditor.Tests.ChatContext;
+
+// Роли референсов, вид audio-voice и «Чем» звука (ADR-023 §1, 2б-1)
+public sealed class AudioContextRefsTests : IDisposable
+{
+    private const string Owner = "owner-1";
+    private const string Chat = "chat-1";
+
+    private static readonly byte[] Wav = [.. "RIFF"u8, 0, 0, 0, 0, .. "WAVE"u8, 1, 2, 3];
+
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "audio-refs-" + Guid.NewGuid().ToString("N"));
+    private readonly string _project;
+    private readonly AudioThreadStore _threads;
+    private readonly Session _session = new() { Id = Chat, OwnerId = Owner };
+
+    public AudioContextRefsTests()
+    {
+        _project = Path.Combine(_root, "project");
+        Directory.CreateDirectory(_project);
+        _threads = new AudioThreadStore(Path.Combine(_root, "audio"));
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
+    }
+
+    private AudioContextKind Kind(params IAudioEngine[] engines) => new(_threads, engines);
+
+    private ContextScope Scope => new(Owner, _session, new Project { Id = "p-1", RootPath = _project, OwnerId = Owner });
+    private ContextScope Personal => new(Owner, _session, null);
+
+    private static JsonObject Slug(string slug) => new() { ["slug"] = slug };
+
+    private static ContextItem Primary(string threadId) =>
+        new("p", "audio", new JsonObject { ["threadId"] = threadId }, null, ContextActor.Human, DateTime.UtcNow);
+
+    private string NewThread(AudioThreadSettings? settings = null) =>
+        _threads.Open(Owner, Chat, null, "", null, settings).Thread!.Id;
+
+    private string NewVoice(string name = "Аня") =>
+        VoiceStore.CreateFromSamples(_project, name, null, [new VoiceSampleUpload(Wav)], DateTime.UtcNow).Value!.Manifest.Slug;
+
+    [Fact]
+    public void Validate_голоса_принимает_свой_и_отказывает_пропавшему_битому_и_личному_чату()
+    {
+        var slug = NewVoice();
+        var kind = Kind();
+
+        kind.Validate(Scope, "audio-voice", Slug(slug)).Should().BeNull();
+        kind.Validate(Scope, "audio-voice", Slug("net-takogo")).Should().Contain("не найден");
+        kind.Validate(Scope, "audio-voice", Slug("../x")).Should().NotBeNull("слаг только по белому списку");
+        kind.Validate(Scope, "audio-voice", new JsonObject()).Should().NotBeNull();
+        kind.Validate(Personal, "audio-voice", Slug(slug)).Should().Contain("личном чате");
+    }
+
+    [Fact]
+    public void Describe_голоса_называет_по_имени_и_помечает_пропавший()
+    {
+        var slug = NewVoice("Аня");
+        var kind = Kind();
+        ContextItem Item(string s) => new("v", "audio-voice", Slug(s), "voice", ContextActor.Human, DateTime.UtcNow);
+
+        kind.Describe(Scope, Item(slug)).Should().Be(new ContextItemSummary("Аня", null, null, false));
+        kind.Describe(Scope, Item("net-takogo")).Missing.Should().BeTrue();
+        kind.Describe(Personal, Item(slug)).Missing.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_audio_отказывает_чужой_нити_и_чужому_владельцу()
+    {
+        var id = NewThread();
+        var kind = Kind();
+        kind.Validate(Scope, "audio", new JsonObject { ["threadId"] = id }).Should().BeNull();
+        kind.Validate(Scope, "audio", new JsonObject { ["threadId"] = "чужая" }).Should().NotBeNull();
+        kind.Validate(Scope with { OwnerId = "чужой" }, "audio", new JsonObject { ["threadId"] = id }).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AcceptedRefs_без_операции_отдаёт_полную_таблицу_ролей_по_таблице_ADR()
+    {
+        var table = Kind().AcceptedRefs(Scope, Primary(NewThread()), null);
+
+        table.Select(r => r.Role).Should().Equal("voice", "reference", "piece");
+        table.Single(r => r.Role == "voice").Kinds.Should().Equal("audio-voice");
+        table.Single(r => r.Role == "voice").Ops.Should().Equal("speak", "dialogue", "convertVoice");
+        table.Single(r => r.Role == "reference").Kinds.Should().Equal("audio", "project-file");
+        table.Single(r => r.Role == "piece").Ops.Should().Equal("concat");
+    }
+
+    [Fact]
+    public void AcceptedRefs_по_операции_оставляет_только_берущие_её_роли_и_серая_операция_пуста()
+    {
+        var kind = Kind();
+        var primary = Primary(NewThread());
+
+        kind.AcceptedRefs(Scope, primary, "convertVoice").Select(r => r.Role).Should().Equal("voice", "reference");
+        kind.AcceptedRefs(Scope, primary, "speak").Select(r => r.Role).Should().Equal("voice");
+        kind.AcceptedRefs(Scope, primary, "separate").Should().BeEmpty();
+        kind.AcceptedRefs(Scope, new ContextItem("i", "image", new JsonObject(), null, ContextActor.Human, DateTime.UtcNow), null)
+            .Should().BeEmpty("основной вид чужой");
+    }
+
+    [Fact]
+    public void DescribeExecutor_берёт_поставщика_и_модель_нити_и_цену_из_каталога()
+    {
+        var info = AudioCatalog.Local[0].Info;
+        var engine = new Mock<IAudioEngine>();
+        engine.SetupGet(e => e.Key).Returns("local");
+        engine.SetupGet(e => e.Label).Returns("Локально");
+        engine.SetupGet(e => e.Models).Returns([info]);
+        var id = NewThread(new AudioThreadSettings(AudioModes.Voice, "speak", "local", info.Id, null));
+
+        Kind(engine.Object).DescribeExecutor(Scope, Primary(id)).Should().Be($"Локально · {info.Label} · бесплатно");
+    }
+
+    [Fact]
+    public void DescribeExecutor_без_настроек_честно_скромен()
+    {
+        Kind().DescribeExecutor(Scope, Primary(NewThread())).Should().Be("Авто · Авто");
+    }
+
+    // Роль спрашивается у владельца ОСНОВНОГО объекта, а не у вида референса: картинка в контексте звука
+    // роли «style» не получает, даже если вид картинки сам готов её принять
+    [Fact]
+    public void Usedby_картинка_в_контексте_звука_серая_а_голос_берёт_операции_звука()
+    {
+        var voice = NewVoice();
+        var registry = new ContextKindRegistry([Kind(), new AnyPrimaryImageStub(), new ProjectFileContextKind()]);
+        var state = new ChatContextState(1, Primary(NewThread()),
+        [
+            new ContextItem("img", "image", new JsonObject { ["threadId"] = "t" }, "style", ContextActor.Human, DateTime.UtcNow),
+            new ContextItem("v", "audio-voice", Slug(voice), "voice", ContextActor.Human, DateTime.UtcNow),
+            new ContextItem("v-stems", "audio-voice", Slug(voice), null, ContextActor.Human, DateTime.UtcNow),
+        ]);
+
+        var dto = ChatContextDtoBuilder.Build(registry, Scope, state);
+
+        dto.Refs.Single(r => r.Id == "img").UsedBy.Should().BeEmpty();
+        dto.Refs.Single(r => r.Id == "v").UsedBy.Should().Equal("speak", "dialogue", "convertVoice");
+        dto.Refs.Single(r => r.Id == "v-stems").UsedBy.Should().BeEmpty("голос при «Стемах» не вход");
+    }
+
+    // Вид «image», который принимает style при любом основном: наблюдает, у кого спросили роль
+    private sealed class AnyPrimaryImageStub : IContextKindProvider
+    {
+        public IReadOnlyList<string> Kinds { get; } = ["image"];
+        public string? Validate(ContextScope scope, string kind, JsonObject reference) => null;
+        public ContextItemSummary Describe(ContextScope scope, ContextItem item) => new("img", null, null, false);
+
+        public IReadOnlyList<ContextRoleSpec> AcceptedRefs(ContextScope scope, ContextItem primary, string? op) =>
+            [new ContextRoleSpec("style", "Стиль", ["image"], ["generate"])];
+
+        public string? DescribeExecutor(ContextScope scope, ContextItem primary) => null;
+    }
+}

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
@@ -130,6 +131,48 @@ public sealed class ImageContextKindTests : IDisposable
         primary.Should().NotBeNull();
         ChatContextFocusMirror.ThreadOf(primary!).Should().Be(a);
         primary!.By.Should().Be(ContextActor.Agent);
+    }
+
+    // Правило ADR-023, Дополнение 3: агент не перезаписывает выбор человека. Две ветки защиты: стор не даёт
+    // агенту затереть By=Human в записанном файле, а зеркало фокуса — в засеянном состоянии без файла
+    [Fact]
+    public async Task Фокус_агента_не_перезаписывает_выбор_человека()
+    {
+        _flags.On = true;
+        var a = NewThread();
+        await _service.FocusAsync(Owner, Project, Chat, a, _threads.Get(Owner, Chat).Revision);
+        var before = _context.Get(Owner, Chat);
+        var chosen = before.Primary!;
+        chosen.By.Should().Be(ContextActor.Human);
+
+        await _service.AgentFocusAsync(Owner, Project, Chat, a, CancellationToken.None);
+
+        var primary = _context.Get(Owner, Chat).Primary!;
+        ChatContextFocusMirror.ThreadOf(primary).Should().Be(a);
+        primary.By.Should().Be(ContextActor.Human, "выбор человека агент не затирает");
+        primary.Id.Should().Be(chosen.Id, "основной объект не пересоздаётся");
+        _context.Get(Owner, Chat).Revision.Should().Be(before.Revision, "запись в стор не идёт вовсе");
+    }
+
+    [Fact]
+    public async Task Фокус_агента_не_перезаписывает_засеянный_выбор_человека_из_старого_файла()
+    {
+        _flags.On = true;
+        // Файл контекста ещё не создан: основной объект — засев из старого Focus нитей (его выбрал человек)
+        var a = NewThread(focus: true);
+        var directory = new Moq.Mock<ISessionDirectory>();
+        directory.Setup(d => d.GetById(Chat)).Returns(_session);
+        var seeder = new ChatContextSeeder([_kind], directory.Object, new Moq.Mock<IProjectManager>().Object);
+        var context = new ChatContextStore(Path.Combine(_root, "ctx-agent"), new ContextKindRegistry([_kind]), seeder: seeder);
+        var service = new ImageThreadService(_threads, NullLogger<ImageThreadService>.Instance,
+            mirror: new ChatContextFocusMirror(context, _flags, NullLogger<ChatContextFocusMirror>.Instance));
+        context.Get(Owner, Chat).Primary!.By.Should().Be(ContextActor.Human);
+
+        await service.AgentFocusAsync(Owner, Project, Chat, a, CancellationToken.None);
+
+        var state = context.Get(Owner, Chat);
+        ChatContextFocusMirror.ThreadOf(state.Primary!).Should().Be(a);
+        state.Primary!.By.Should().Be(ContextActor.Human, "выбор человека агент не перезаписывает");
     }
 
     [Fact]

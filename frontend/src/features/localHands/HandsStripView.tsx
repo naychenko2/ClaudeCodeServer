@@ -8,16 +8,16 @@
 // (статус, версия, папки, обновления) сюда не выносим — они живут в настройках проекта.
 
 import { useState, type MouseEvent, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp, Eye, MonitorSmartphone, Square } from 'lucide-react';
+import { ChevronDown, Eye, MonitorSmartphone, Square } from 'lucide-react';
 import { interruptSession } from '../../lib/signalr';
 import {
   HANDS_ANY_WINDOW_TEXT, handsBadgeStatus, handsProviderLabel, handsProviderVision, handsStripSummary, handsStripView,
   type HandsBadgeTone,
 } from '../../lib/localHands';
-import { C, FS, R, SP } from '../../lib/design';
+import { C, FS, R, SP, COMPOSER_LIP, composerLip } from '../../lib/design';
 import { TABLET_WIDE_MIN, useWindowWidth } from '../../lib/breakpoints';
 import { useNarrowContainer } from '../../hooks/useContainerWidth';
-import { Button, Dot, IconButton, Menu, Modal, Notice } from '../../components/ui';
+import { Button, Dot, Menu, Modal, Notice } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { ComposerStripCtx } from '../../lib/subsystems/registryCore';
 import { useProviders } from '../../lib/models';
@@ -140,8 +140,11 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
         onClick={() => setCollapsed?.(false)}
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed?.(false); } }}
         style={{
-          ...shell, gap: SP.sm, height: 30, margin: `${SP.xs}px 0 6px`, padding: '0 6px 0 4px',
-          borderRadius: R.lg, cursor: 'pointer',
+          ...shell, gap: SP.sm, cursor: 'pointer',
+          // Вне телефона свёрнутая строка — верхняя губа композера с низким рядом, как у Git
+          ...(isMobile
+            ? { height: 30, margin: `${SP.xs}px 0 6px`, padding: '0 6px 0 4px', borderRadius: R.lg }
+            : { marginTop: SP.xs, ...composerLip('top', { tab: true }) }),
         }}>
         {title}
         {dot}
@@ -154,8 +157,7 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
           </span>
         )}
         {!miniSummary && <span style={{ flex: 1 }} />}
-        {stopBtn(24)}
-        <ChevronUp size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
+        {stopBtn(COMPOSER_LIP.rowMini)}
       </div>
     );
   }
@@ -178,10 +180,11 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
 
   return (
     <div {...attrs} data-hands-strip="full" ref={narrowRef} style={{
-      ...shell, borderRadius: R.xxl,
-      ...(slim
-        ? { height: 44, margin: '6px 0', padding: '0 6px', gap: 6 }
-        : { height: 51, margin: '10px 0 8px', padding: `0 ${SP.sm}px`, gap: SP.sm }),
+      ...shell,
+      // Вне телефона — верхняя губа композера: заезжает под поле ввода, как нижний ряд
+      ...(isMobile
+        ? { height: 44, margin: '6px 0', padding: '0 6px', gap: 6, borderRadius: R.xxl }
+        : { marginTop: slim ? 6 : 10, gap: slim ? 6 : SP.sm, ...composerLip('top') }),
     }}>
       {title}
       {chip}
@@ -198,11 +201,6 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
       )}
       <span style={{ flex: 1 }} />
       {stopBtn(slim ? 32 : 28)}
-      {setCollapsed && (
-        <IconButton size={slim ? 'md' : 'sm'} title="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
-          <ChevronDown size={15} strokeWidth={ICON_STROKE} />
-        </IconButton>
-      )}
       {overlays}
     </div>
   );

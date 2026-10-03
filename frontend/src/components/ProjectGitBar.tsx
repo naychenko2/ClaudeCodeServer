@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { GitBranch, FolderGit2, Check, CloudUpload, ChevronDown, ChevronUp, MessageSquare, Sparkles } from 'lucide-react';
 import type { Project, Session } from '../types';
-import { C, FONT, R, SP } from '../lib/design';
+import { C, FONT, R, SP, composerLip } from '../lib/design';
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../lib/breakpoints';
 import { basename } from '../lib/paths';
 import { plural } from '../lib/plural';
@@ -168,18 +168,18 @@ export function ProjectGitBar({
   const showMicro = hosted ? !!hostCollapsed || autoMicro : isCompact && (collapsed || microOnly);
   const expand = () => (hosted ? onCollapsedChange!(false) : setCollapsedPersist(false));
 
+  // Вне телефона полоса — верхняя губа композера: заезжает под поле ввода, как нижний
+  // ряд кнопок, и геометрию берёт у него же (composerLip). На телефоне губ нет —
+  // остаётся отдельная плашка.
+  const lip = ww > MOBILE_MAX;
+
   // Базовый контейнер плашки: общий для slim и full, геометрия — параметром.
-  // Микрострока использует свой собственный, упрощённый layout (28, без рамки).
-  const shellStyle = slim
-    ? {
-        // Slim-планшет: 44 + поля 6/6 = 56px вместо десктопных 51 + 10/8 = 69px
+  const shellStyle = lip
+    ? { display: 'flex', alignItems: 'center', gap: slim ? 8 : 12, marginTop: slim ? 6 : 10, ...composerLip('top') }
+    : {
+        // Телефон: 44 + поля 6/6 = 56px
         display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0',
         height: 44, padding: '0 6px 0 10px',
-        background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
-      }
-    : {
-        display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 8px',
-        height: 51, padding: '0 8px 0 12px',
         background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
       };
 
@@ -335,10 +335,11 @@ export function ProjectGitBar({
 
   // Шеврон сворачивания (только планшет, только в slim-баре). Декор, не действие —
   // кнопка во всю зону тапа, шеврон — на правом краю, чтобы намерение читалось.
-  const collapseBtn = (hosted || (isCompact && !microOnly)) ? (
+  // С хостом полос кнопки нет: сворачивание — пункт меню переключателя «Git ▾»
+  const collapseBtn = (!hosted && isCompact && !microOnly) ? (
     <button
       type="button"
-      onClick={() => (hosted ? onCollapsedChange!(true) : setCollapsedPersist(true))}
+      onClick={() => setCollapsedPersist(true)}
       title="Свернуть полосу в строку"
       aria-label="Свернуть полосу в строку"
       style={{
@@ -370,6 +371,9 @@ export function ProjectGitBar({
   const MicroTag = switcher || autoMicro ? 'div' : 'button';
   const microRow = (
     <MicroTag
+      // Свой key: иначе при развороте React переиспользует этот же div под полную
+      // полосу, и цвет наведения, выставленный onMouseEnter напрямую в style, залипает
+      key="mini"
       {...(autoMicro
         ? {}
         : switcher
@@ -379,17 +383,24 @@ export function ProjectGitBar({
       onClick={autoMicro ? undefined : expand}
       title={autoMicro ? undefined : 'Развернуть полосу «Git»'}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8, margin: hosted ? '4px 0 6px' : '4px 0',
+        display: 'flex', alignItems: 'center', gap: 8,
         width: '100%', boxSizing: 'border-box', minWidth: 0,
-        background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
-        padding: switcher ? '0 6px 0 4px' : '0 8px 0 10px', height: hosted ? 30 : 28,
+        // Вне телефона свёрнутая строка — та же губа, но с низким рядом: иначе ⌄ не
+        // уменьшает полосу, а только пустит её ряд
+        ...(lip
+          ? { marginTop: 4, ...composerLip('top', { tab: true }) }
+          : {
+              margin: hosted ? '4px 0 6px' : '4px 0',
+              background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
+              padding: switcher ? '0 6px 0 4px' : '0 8px 0 10px', height: hosted ? 30 : 28,
+            }),
         cursor: autoMicro ? 'default' : 'pointer',
         // Не скрываем по hover — на тач-экране hover'а нет, и без подложки кнопка
         // выглядит как обычная подпись. Десктопный курсор получает лёгкий tint.
         transition: 'background 0.12s',
       }}
       onMouseEnter={autoMicro ? undefined : e => { e.currentTarget.style.background = C.bgSelected; }}
-      onMouseLeave={autoMicro ? undefined : e => { e.currentTarget.style.background = C.bgPanel; }}
+      onMouseLeave={autoMicro ? undefined : e => { e.currentTarget.style.background = lip ? C.bgMain : C.bgPanel; }}
     >
       {switcher}
       {worktreeBranch
@@ -410,7 +421,7 @@ export function ProjectGitBar({
       {diff.added > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.diffAddText, fontWeight: 700, flexShrink: 0 }}>+{diff.added}</span>}
       {diff.deleted > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.diffRemText, fontWeight: 700, flexShrink: 0 }}>−{diff.deleted}</span>}
       {publishN > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.accent, fontWeight: 700, flexShrink: 0 }}>↑{publishN}</span>}
-      {!autoMicro && <ChevronUp size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+      {!autoMicro && !hosted && <ChevronUp size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
     </MicroTag>
   );
 
@@ -441,7 +452,7 @@ export function ProjectGitBar({
     // поток ChatPanel), а самой плашке нужен свой height и фон без лишних наследников
     <>
     {showMicro ? microRow : (
-    <div data-git-strip="full" data-git-tone={strip.tone} style={{ ...shellStyle, ...(switcher ? { paddingLeft: slim ? 6 : 8, gap: slim ? 6 : 8 } : null) }}>
+    <div key="full" data-git-strip="full" data-git-tone={strip.tone} style={{ ...shellStyle, ...(switcher ? { gap: slim ? 6 : 8, ...(lip ? null : { paddingLeft: 6 }) } : null) }}>
       {/* Заголовок-селектор полос (composer-strip). Когда переключатель есть, он заменяет
           отдельную плашку «Git ▾» сверху — единая плашка с веткой и действиями */}
       {switcher}

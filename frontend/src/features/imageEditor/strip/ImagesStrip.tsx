@@ -9,10 +9,10 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  AlertTriangle, ChevronDown, ChevronUp, FolderOpen, Image as ImageIcon, Minus, Plus, SlidersHorizontal, Sparkles, Upload, User, X,
+  AlertTriangle, ChevronDown, FolderOpen, Image as ImageIcon, Minus, Plus, SlidersHorizontal, Sparkles, Upload, User, X,
 } from 'lucide-react';
 import {
-  Button, Checkbox, Chip, IconButton, Menu, MenuItem, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, ICON_STROKE, api as appApi,
+  Button, Checkbox, Chip, IconButton, Menu, MenuItem, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, ICON_STROKE, api as appApi, COMPOSER_LIP, composerLip,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ReferenceRole } from '../api';
@@ -306,9 +306,11 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
         onClick={() => setCollapsed(false)}
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(false); } }}
         style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm, height: 30, margin: '4px 0 6px', padding: '0 6px 0 4px',
-          boxSizing: 'border-box', minWidth: 0, cursor: 'pointer',
-          background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
+          display: 'flex', alignItems: 'center', gap: SP.sm, boxSizing: 'border-box', minWidth: 0, cursor: 'pointer',
+          // Вне телефона свёрнутая строка — верхняя губа композера с низким рядом, как у Git
+          ...(isMobile
+            ? { height: 30, margin: '4px 0 6px', padding: '0 6px 0 4px', background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg }
+            : { marginTop: 4, ...composerLip('top', { tab: true }) }),
         }}>
         {title}
         <Thumb src={src} />
@@ -317,10 +319,10 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
         </span>
         {thread && (
           <span style={{ display: 'inline-flex' }} onClick={e => e.stopPropagation()}>
-            <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>
+            <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}
+              style={isMobile ? undefined : { width: COMPOSER_LIP.rowMini, height: COMPOSER_LIP.rowMini }}>{ic(X)}</IconButton>
           </span>
         )}
-        <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ChevronUp, ICON_SIZE.sm)}</span>
       </div>
     );
   }
@@ -332,8 +334,10 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   return (
     <div ref={shell} data-composer-strip="images" data-images-strip="full" style={{
       position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 8, boxSizing: 'border-box', minWidth: 0,
-      height: isMobile ? 44 : 51, margin: isMobile ? '6px 0' : '10px 0 8px', padding: isMobile ? '0 6px' : '0 8px',
-      background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
+      // Вне телефона — верхняя губа композера: заезжает под поле ввода, как нижний ряд
+      ...(isMobile
+        ? { height: 44, margin: '6px 0', padding: '0 6px', background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl }
+        : { marginTop: 10, ...composerLip('top') }),
     }}>
       {title}
       {thread ? (
@@ -384,9 +388,6 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
           <IconButton size="sm" title="Подключить персонажа" ariaLabel="Подключить персонажа"
             onClick={() => openCharacters(isMobile, () => setCharSheet(true))}>{ic(User)}</IconButton>
         ))}
-      <IconButton size="sm" title="Свернуть полосу в строку" ariaLabel="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
-        {ic(ChevronDown, ICON_SIZE.sm)}
-      </IconButton>
 
       {open && settings && !isMobile && (
         <div data-images-settings-card="" style={{

@@ -51,12 +51,18 @@ async function handOff(h: Handoff): Promise<boolean> {
 }
 
 // Кадр сцены: нить «Картинок» (черновик «Нарисовать» или файл «Править») → основной объект
+// Точку возврата надо снять ДО создания нити: создание сдвигает основной объект на черновик, и после него
+// сцену уже не узнать
+export const sceneReturnPoint = (sessionId: string, sceneId: string) =>
+  currentIf(sessionId, SCENE_KIND, r => r.sceneId === sceneId);
+
 export function sceneToImages(p: {
   sessionId: string; sceneId: string; sceneName: string; threadId: string; draw: boolean; reveal: boolean;
+  prev?: ChatContextItem | null;
 }): Promise<boolean> {
   return handOff({
     sessionId: p.sessionId, kind: IMAGE_KIND, threadId: p.threadId, ...(p.draw ? { actionId: 'draw' } : {}),
-    prev: currentIf(p.sessionId, SCENE_KIND, r => r.sceneId === p.sceneId),
+    prev: p.prev !== undefined ? p.prev : sceneReturnPoint(p.sessionId, p.sceneId),
     label: `К сцене «${p.sceneName}»`, reveal: p.reveal, failText: 'Не удалось открыть картинку в контексте',
   });
 }

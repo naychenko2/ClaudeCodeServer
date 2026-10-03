@@ -511,6 +511,10 @@ export async function mockApi(page: Page, trace = false) {
     if (p === itb && method === 'GET') return json(imgState());
     if (p === itb && method === 'POST') {
       const b = body();
+      // Как у бэкенда: черновик в несуществующую папку проекта — 400
+      if (!world.personal && !b.file && b.draftFolder && !TREE.some(e => e.path === b.draftFolder && e.isDirectory)) {
+        return json({ error: 'Папка не найдена в проекте', code: 'invalid_request' }, 400);
+      }
       world.imageThreads.push({
         id: `img-${world.imageThreads.length + 1}`, file: b.file ?? null, lineage: [], draftFolder: b.file ? null : b.draftFolder, stacks: [], currentStackId: null,
         currentStepId: null, settings: null, pendingJobId: null, createdAt: now,
@@ -542,6 +546,15 @@ export async function mockApi(page: Page, trace = false) {
       return json(TREE.filter(e => ((e.path as string).includes('/') ? (e.path as string).slice(0, (e.path as string).lastIndexOf('/')) : '') === dir));
     }
     if (p === `/projects/${P}/files/upload`) return json({});
+    if (p === `/projects/${P}/files/mkdir` && method === 'POST') {
+      // Родительские папки создаются сами, повтор не ошибка
+      const parts = String(body().path).split('/');
+      parts.forEach((_, i) => {
+        const dir = parts.slice(0, i + 1).join('/');
+        if (!TREE.some(e => e.path === dir)) TREE.push({ name: parts[i], path: dir, isDirectory: true, modified: now, isModified: false });
+      });
+      return json({});
+    }
     if (p === `/projects/${P}/files/stream`) {
       const fp = url.searchParams.get('path') ?? '';
       if (/\.mp4$/.test(fp)) return r.fulfill({ contentType: 'video/mp4', body: MP4 });

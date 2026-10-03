@@ -2,13 +2,15 @@
 // сцена, съёмка по котировке (деньги — только quote → job), снятие выбора, кадры и «Картинки».
 
 import {
-  api, clearGenDraft, createReleaseUndo, followSelection, revealContextPanel, showToast,
+  api, clearContextReturn, clearGenDraft, createReleaseUndo, followSelection, getChatContextState, revealContextPanel, setPrimary, showToast,
+  type ChatContextItem,
 } from 'aihome_shell/kit';
 import {
   ERR, errorCode, errorText, retryOf, videoApi,
   type FrameRef, type SaveSceneResult, type VideoPrefs, type VideoQuote, type VideoScene, type VideoSceneSettings,
 } from '../api';
-import { sceneToImages } from '../context/handoff';
+import { sceneReturnPoint, sceneToImages } from '../context/handoff';
+import { SCENE_KIND } from '../context/state';
 import { isPersonalScope } from '../scope';
 import { frameInputOf, setFrameRef } from '../store/frameRefs';
 import { bindFrame, createImageThread, onFrameReady, type FrameBinding } from '../store/imageFrames';
@@ -261,10 +263,22 @@ async function ensureScene(scope: string, sessionId: string): Promise<VideoScene
 }
 
 // reveal = false на телефоне: шторка панели закрыла бы поле ввода, а чипы действий над ним появляются сами
-async function toImages(sessionId: string, scene: VideoScene, threadId: string, slot: 'A' | 'B', needEdit = false, draw = false, reveal = true) {
+async function toImages(
+  sessionId: string, scene: VideoScene, threadId: string, slot: 'A' | 'B', needEdit = false, draw = false, reveal = true,
+  prev?: ChatContextItem | null,
+) {
   bindFrame(sessionId, { sceneId: scene.sceneId, slot, threadId, ...(needEdit ? { needEdit } : {}) });
   // Нить становится основным объектом, а возврат к сцене держит панель «Контекст»
-  await sceneToImages({ sessionId, sceneId: scene.sceneId, sceneName: scene.name, threadId, draw, reveal });
+  await sceneToImages({ sessionId, sceneId: scene.sceneId, sceneName: scene.name, threadId, draw, reveal, prev });
+}
+
+// Папка кадров в новом проекте не существует, а сервер отказывает черновику в несуществующей папке (400).
+// Создаём её сами; «уже есть» не ошибка. В личном чате папки проекта нет — черновик идёт в рабочую папку чата
+async function ensureFramesFolder(scope: string, scene: VideoScene): Promise<string> {
+  if (isPersonalScope(scope)) return '';
+  const dir = framesFolder(scene);
+  try { await api.files.mkdir(scope, dir); } catch { /* уже есть или создание отклонено — решит сервер при заведении черновика */ }
+  return dir;
 }
 
 // «Нарисовать в «Картинках»»: черновик картинки заводится и становится основным объектом контекста;
@@ -273,10 +287,11 @@ export async function drawInImages(scope: string, sessionId: string, slot: 'A' |
   // Контекст знает сцену сама (основной объект): новую заводить нельзя
   const scene = known ?? await ensureScene(scope, sessionId);
   if (!scene) return;
+  const prev = sceneReturnPoint(sessionId, scene.sceneId);
   try {
-    const id = await createImageThread(scope, sessionId, { draftFolder: framesFolder(scene) });
+    const id = await createImageThread(scope, sessionId, { draftFolder: await ensureFramesFolder(scope, scene) });
     if (!id) { showToast('Не удалось завести картинку', '', 'error'); return; }
-    await toImages(sessionId, scene, id, slot, false, true, reveal);
+    await toImages(sessionId, scene, id, slot, false, true, reveal, prev);
   } catch (e) {
     showToast(errorText(e, 'Не удалось завести картинку'), '', 'error');
   }
@@ -287,14 +302,20 @@ export async function drawInImages(scope: string, sessionId: string, slot: 'A' |
 export async function editFrame(scope: string, sessionId: string, scene: VideoScene, slot: 'A' | 'B', frame?: FrameRef, reveal = true): Promise<void> {
   const f = frame ?? (slot === 'A' ? scene.settings.frameA : scene.settings.frameB);
   if (!f) return;
+  const prev = sceneReturnPoint(sessionId, scene.sceneId);
   try {
     const id = f.kind === 'image' ? f.threadId : await createImageThread(scope, sessionId, { file: f.path });
     if (!id) { showToast('Не удалось открыть кадр в «Картинках»', '', 'error'); return; }
-    await toImages(sessionId, scene, id, slot, f.kind === 'file', false, reveal);
+    await toImages(sessionId, scene, id, slot, f.kind === 'file', false, reveal, prev);
   } catch (e) {
     showToast(errorText(e, 'Не удалось открыть кадр в «Картинках»'), '', 'error');
   }
 }
+
+const isScenePrimary = (sessionId: string, sceneId: string) => {
+  const p = getChatContextState(sessionId).primary;
+  return !!p && p.kind === SCENE_KIND && p.ref.sceneId === sceneId;
+};
 
 let _wired = false;
 // Нить, нарисованная для кадра, получила картинку — она становится кадром (и следует за новыми версиями)
@@ -310,7 +331,13 @@ export function wireFrameBinding() {
     if (!input) return;
     void (async () => {
       if (getFocusedScene(sessionId)?.sceneId !== b.sceneId && !await focusScene(scope, sessionId, b.sceneId)) return;
-      await setFrameRef(sessionId, b.slot, input);
+      // Роли кадров принимает только основной объект «сцена»: пока основной — картинка, сервер ответит 400
+      // role_not_accepted. Кадр привязывается к сцене, а не к тому, что открыто сейчас, — возвращаем сцену основной
+      if (!isScenePrimary(sessionId, b.sceneId)) {
+        if (await setPrimary(sessionId, { kind: SCENE_KIND, ref: { sceneId: b.sceneId } }) !== 'ok') return;
+        clearContextReturn(sessionId);
+      }
+      if (await setFrameRef(sessionId, b.slot, input)) showToast(`Кадр ${b.slot} встал в сцену`, '', 'info');
     })();
   });
 }

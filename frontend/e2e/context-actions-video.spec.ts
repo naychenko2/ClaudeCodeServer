@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FILM, w } from './videoPanelMock';
+import { FILM, P, S, hubSend, w } from './videoPanelMock';
 import { cw, openVideoChat, primaryOf, primaryPuts } from './contextVideoMock';
 
 // 3ф-2: редакторы «Сцена» и «Монтаж» поверх панели «Контекст» (ADR-023). Чип «Монтаж» и «Открыть монтаж» в «С чем»
@@ -124,6 +124,33 @@ for (const { name, vp } of [{ name: '1440', vp: D }, { name: '360', vp: M }] as 
     await ret.click();
     await expect.poll(() => primaryPuts().length).toBe(2);
     expect(primaryPuts()[1]).toMatchObject({ kind: 'video-scene', ref: { sceneId: 'scene-5' } });
+    await expect.poll(() => ids(page)).toEqual(['__chat', 'shoot', 'frameA', 'frameB']);
+  });
+
+  // Приёмка Веры, Д4/Д5/Д9: новый проект без папки video/кадры — папка заводится сама (иначе 400), ссылка
+  // «К сцене» на месте, а готовая картинка встаёт кадром именно в сцену (у основной картинки роль кадра — 400)
+  test(`кадр · ${name}: «Нарисовать в «Картинках»» в новом проекте без папки → «К сцене» → готовая картинка встаёт в слот A`, async ({ page }) => {
+    await open(page, vp, scenePrimary);
+    await actions(page).locator('[data-action-chip="frameA"]').click();
+    await page.getByText('Нарисовать в «Картинках»').click();
+    await expect.poll(() => primaryPuts().length).toBe(1);
+    expect(primaryPuts()[0]).toMatchObject({ kind: 'image', ref: { threadId: 'img-1' } });
+    expect(w().imageThreads[0]).toMatchObject({ draftFolder: 'video/кадры' });
+    await page.locator('[data-context-row] [data-chip="primary"]').click();
+    await expect(page.locator('[data-ctx-return]')).toContainText('К сцене «Сцена 5»');
+
+    // Первая версия готова, пока основной объект — картинка: сцена возвращается основной, кадр встаёт в слот
+    w().imageThreads[0] = {
+      ...w().imageThreads[0], currentVersionId: 'v1',
+      versions: [{ id: 'v1', number: 1, jobId: 'j1', variant: 0, baseVersionId: null, baseStepId: null, steps: [], currentStepId: 'st1', createdAt: new Date().toISOString() }],
+    };
+    w().imageRevision++;
+    hubSend({ type: 'image_thread_changed', sessionId: S, projectId: P, revision: w().imageRevision, state: { focus: 'img-1', revision: w().imageRevision, threads: w().imageThreads } });
+    await expect.poll(() => primaryPuts().length).toBe(2);
+    expect(primaryPuts()[1]).toMatchObject({ kind: 'video-scene', ref: { sceneId: 'scene-5' } });
+    await expect.poll(() => cw().mutations.find(m => m.path === '/refs')?.body).toMatchObject({ kind: 'image', role: 'frame-a', ref: { threadId: 'img-1', versionId: 'v1' } });
+    expect(cw().ctx.refs).toHaveLength(1);
+    await expect(page.locator('[data-ctx-return]')).toHaveCount(0);
     await expect.poll(() => ids(page)).toEqual(['__chat', 'shoot', 'frameA', 'frameB']);
   });
 

@@ -37,3 +37,18 @@ describe('передача хода: исходы setPrimary', () => {
     expect(kit.showToast).not.toHaveBeenCalled();
   });
 });
+
+describe('точка возврата к сцене', () => {
+  it('переданная заранее prev ставится ссылкой, даже когда основной уже сдвинулся на черновик', async () => {
+    kit.setPrimary.mockResolvedValue('ok');
+    const prev = { id: 'p', kind: 'video-scene', ref: { sceneId: 'sc1' }, label: 'утро' };
+    await sceneToImages({ ...args, prev: prev as never });
+    expect(kit.setContextReturn).toHaveBeenCalledWith('s1', { prev, label: 'К сцене «утро»' });
+  });
+
+  it('без prev и без основной сцены ссылки нет', async () => {
+    kit.setPrimary.mockResolvedValue('ok');
+    await sceneToImages(args);
+    expect(kit.setContextReturn).not.toHaveBeenCalled();
+  });
+});

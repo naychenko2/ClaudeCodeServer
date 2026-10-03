@@ -66,7 +66,18 @@ export async function mockContext(page: Page) {
       const body = r.request().postData() ? r.request().postDataJSON() : null;
       ctxWorld.mutations.push({ method, path: p.slice(base.length) || '/', body });
       const c = ctxWorld.ctx;
-      if (p === `${base}/primary` && method === 'PUT') {
+      if (p === `${base}/refs` && method === 'POST') {
+        // Как у бэкенда: роли кадров принимает только основная сцена
+        if (/^frame-[ab]$/.test(body.role) && c.primary?.kind !== 'video-scene') {
+          return r.fulfill({ status: 400, json: { error: 'Роль не принимается основным объектом', code: 'role_not_accepted' } });
+        }
+        c.refs.push({
+          id: `rf-${c.refs.length + 1}-${body.role}`, kind: body.kind, ref: body.ref, by: 'human', addedAt: new Date().toISOString(), label: body.ref.path ?? body.ref.threadId,
+          version: null, thumb: null, missing: false, role: body.role, usedBy: [],
+        });
+      } else if (p.startsWith(`${base}/refs/`) && method === 'DELETE') {
+        c.refs = (c.refs as { id: string }[]).filter(x => x.id !== p.slice(`${base}/refs/`.length));
+      } else if (p === `${base}/primary` && method === 'PUT') {
         c.primary = body.kind === null ? null : primaryOf(body.kind, body.ref);
         trackScene(c.primary);
       } else if (p === base && method === 'DELETE') {

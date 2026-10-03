@@ -1370,6 +1370,9 @@ export interface ProjectService {
   // Составной запуск (Rider multilaunch): id входящих сервисов. Своей команды у
   // группы нет — она поднимает участников, статус и порт производные от них
   members?: string[] | null;
+  // Стенд поднят агентом из чата (инструмент start_stand): только подпись — жизнь стенда от
+  // чата не зависит
+  origin?: { sessionId: string; label: string } | null;
 }
 
 // Одна конфигурация из .claude/launch.json (формат Claude Desktop)

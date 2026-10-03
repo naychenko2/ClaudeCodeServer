@@ -1,13 +1,15 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ProjectServices;
 using ClaudeHomeServer.Services.TestRuns;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
 /// <summary>
 /// Сборка с прогрессом в чате (build: dotnet build / npm run, docs/research/build-stand-progress-2026-10.md,
-/// этап 4). Отдельный сервер, а не инструмент в tests: <c>mcp__tests__build</c> модель читала бы как
-/// «сборка тестов». Маршрут — <c>POST /mcp/dev/{sessionId}</c>: хвост несёт СЕССИЮ-ВЫЗЫВАТЕЛЬ.
+/// этап 4) и дев-стенд (start_stand / stop_stand, этап 5 — <see cref="DevStand"/>). Отдельный сервер,
+/// а не инструменты в tests: <c>mcp__tests__build</c> модель читала бы как «сборка тестов». Маршрут —
+/// <c>POST /mcp/dev/{sessionId}</c>: хвост несёт СЕССИЮ-ВЫЗЫВАТЕЛЬ.
 ///
 /// Вызов синхронный, как у run_tests: ответ — когда сборка кончилась, оборвана «Стопом» (обрыв
 /// HTTP = отмена <c>ct</c>) или серверным потолком (540 с, меньше MCP_TOOL_TIMEOUT хода). Движки —
@@ -27,10 +29,17 @@ public sealed class DevToolset(
     DotnetBuildService? dotnet = null,
     NpmBuildService? npm = null,
     // Живые фазы сборки в ленту; нет — вызов работает без прогресса
-    ISessionBroadcaster? broadcaster = null) : IMcpParameterizedToolset
+    ISessionBroadcaster? broadcaster = null,
+    // Реестр «Сервисов» и их конфигурация (вертикаль ProjectServices): стенд — запись того же
+    // реестра, что у панели. Нет — стенд честно отказывает, сборка работает
+    DevServerService? devServer = null,
+    ProjectServiceDiscovery? discovery = null,
+    TestRunsOptions? options = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.DevName;
     public const string ToolName = "build";
+    public const string StartStandName = "start_stand";
+    public const string StopStandName = "stop_stand";
 
     internal const string LocalProjectReason =
         "Сборку локального проекта запускай Bash'ем на устройстве: build работает только с проектами на сервере.";
@@ -42,7 +51,18 @@ public sealed class DevToolset(
         ReadOnly: "Персона с доступом «Только чтение» не собирает: сборка пишет bin/obj, dist и файлы проекта.",
         NoBash: "Персоне запрещён Bash — значит, и сборка: build исполняет код проекта (задачи MSBuild, скрипты npm).");
 
+    // Стенд исполняет код проекта (сборка и сам процесс) — гейты те же, тексты свои
+    private static readonly ProjectRunCaller.Texts StandRefusals = new(
+        BadRoute: Refusals.BadRoute,
+        ProjectOnly: "Стенд поднимается только в чате проекта.",
+        LocalProject: "Стенд локального проекта поднимай панелью «Сервисы»: start_stand работает только с проектами на сервере.",
+        ReadOnly: "Персона с доступом «Только чтение» не поднимает стенд: сборка пишет bin/obj, а стенд исполняет код проекта.",
+        NoBash: "Персоне запрещён Bash — значит, и стенд: он собирает и исполняет код проекта.");
+
+    // ProjectRunCaller без состояния: у стенда свой экземпляр с теми же зависимостями
     private readonly ProjectRunCaller _caller = new(sessions, projects, personas, broadcaster);
+    private readonly DevStand _stand = new(new ProjectRunCaller(sessions, projects, personas, broadcaster),
+        devServer, discovery, dotnet, npm, (options ?? new TestRunsOptions()).CeilingSeconds);
 
     public string Name => ServerName;
     public string Version => "1.0.0";
@@ -53,6 +73,7 @@ public sealed class DevToolset(
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
+        if (tool is StartStandName or StopStandName) return await CallStandAsync(tool, arguments, context, ct);
         if (tool != ToolName) throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         if (!_caller.TryResolveSession(context, Refusals, out var session, out var error))
             return ProjectRunCaller.Deny(error);
@@ -102,6 +123,19 @@ public sealed class DevToolset(
         // Упавшая сборка — штатный исход вызова (ошибки в тексте), ошибка инструмента — только отказ
         var text = isNpm ? npm.FormatResult(result) : dotnet.FormatResult(result);
         return new McpToolCallResult(text, IsError: result.Refusal is not null);
+    }
+
+    // Стенд: те же гейты вызывателя, что у сборки (стенд собирает и исполняет код проекта)
+    private async Task<McpToolCallResult> CallStandAsync(string tool, JsonObject arguments,
+        McpToolCallContext context, CancellationToken ct)
+    {
+        if (!_caller.TryResolveSession(context, StandRefusals, out var session, out var error))
+            return ProjectRunCaller.Deny(error);
+        if (!_caller.TryResolveProject(session, context.OwnerId, StandRefusals, out var project, out error))
+            return ProjectRunCaller.Deny(error);
+        return tool == StartStandName
+            ? await _stand.StartAsync(session, project, context.OwnerId, arguments, context.ToolUseId, ct)
+            : await _stand.StopAsync(session, project, context.OwnerId, arguments);
     }
 
     // Кончилась ли сборка неудачей на последнем этапе: исключение, «Стоп», потолок, ненулевой код
@@ -177,7 +211,7 @@ public sealed class DevToolset(
         return true;
     }
 
-    // Состав постоянный — один инструмент; описание не зависит ни от хода, ни от сессии
+    // Состав постоянный — три инструмента; описания не зависят ни от хода, ни от сессии
     internal static IReadOnlyList<McpToolSchema> Tools { get; } =
     [
         new(ToolName,
@@ -216,6 +250,61 @@ public sealed class DevToolset(
                             + "без аргументов",
                     },
                 },
+            }),
+        new(StartStandName,
+            "Поднять дев-стенд проекта из рабочего дерева чата с прогрессом в чате: сборка (как у build) → запуск "
+            + "без сборки → готов (порт принимает соединения). Стенд живёт после хода и виден в панели "
+            + "«Сервисы» (логи, превью, «Стоп»); повторный вызов того же сервиса сразу возвращает его адрес. "
+            + "Поднимай стенд им, а не `dotnet run &`/`npm run dev &` в Bash: фоновый процесс Bash умирает вместе "
+            + "с CLI. Порт по умолчанию — свободный из 5500–5699 (в песочнице — из её пула). Умеет сервисы "
+            + "`dotnet run` и скрипты npm/pnpm/yarn; потолок вместе со сборкой — "
+            + $"{TestRunsOptions.DefaultCeilingSeconds / 60} минут. Возвращает URL — для e2e передай его в "
+            + "env.PLAYWRIGHT_BASE_URL у run_tests.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["service"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["maxLength"] = 300,
+                        ["description"] = "id сервиса из панели «Сервисы» (неизвестный id — отказ со списком "
+                            + "доступных) ИЛИ путь к .csproj ОТНОСИТЕЛЬНО корня проекта",
+                    },
+                    ["port"] = new JsonObject
+                    {
+                        ["type"] = "integer",
+                        ["minimum"] = 5500,
+                        ["maximum"] = 5699,
+                        ["description"] = "Порт стенда из 5500–5699; не указан — свободный",
+                    },
+                    ["health_path"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["maxLength"] = 200,
+                        ["description"] = "Путь пробы готовности (например /health): стенд готов, когда он "
+                            + "ответил по HTTP любым кодом",
+                    },
+                },
+                ["required"] = new JsonArray("service"),
+            }),
+        new(StopStandName,
+            "Погасить дев-стенд, поднятый продуктом (start_stand или кнопкой панели «Сервисы»). Процессы, "
+            + "запущенные вне продукта, не трогает.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["service"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["maxLength"] = 300,
+                        ["description"] = "id сервиса, как его вернул start_stand, или тот же service, что ему передавали",
+                    },
+                },
+                ["required"] = new JsonArray("service"),
             }),
     ];
 }

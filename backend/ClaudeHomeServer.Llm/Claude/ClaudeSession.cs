@@ -662,6 +662,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Полное имя инструмента сборки в CLI: в «Авто» разрешается без карточки, как run_tests
     internal const string BuildToolName = "mcp__" + McpEndpoints.DevName + "__build";
 
+    // Дев-стенд (start_stand / stop_stand): в «Авто» разрешается без карточки, как сборка
+    internal const string StartStandToolName = "mcp__" + McpEndpoints.DevName + "__start_stand";
+    internal const string StopStandToolName = "mcp__" + McpEndpoints.DevName + "__stop_stand";
+
     // Игнор служебной папки вложений в git ставится лениво один раз за жизнь сессии:
     // модель кладёт туда картинки для показа в ленте (см. подсказку про картинки в промпте),
     // а у проекта со своим .gitignore правила может не быть — при аплоаде его пишет
@@ -1880,7 +1884,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     },
                     ["alwaysLoad"] = true,
                 };
-                // Состав фиксирован (один инструмент), вариативен только транспорт
+                // Состав фиксирован (build, start_stand, stop_stand), вариативен только транспорт
                 shapes[McpEndpoints.DevName] = "t:http";
             }
 
@@ -2564,7 +2568,9 @@ public class ClaudeSession : ILlmSessionAdapter
         if (ruleDecision == null
             && Info.Mode == ClaudeMode.Auto
             && (string.Equals(toolName, RunTestsToolName, StringComparison.Ordinal)
-                || string.Equals(toolName, BuildToolName, StringComparison.Ordinal)))
+                || string.Equals(toolName, BuildToolName, StringComparison.Ordinal)
+                || string.Equals(toolName, StartStandToolName, StringComparison.Ordinal)
+                || string.Equals(toolName, StopStandToolName, StringComparison.Ordinal)))
             return "allow";
         // Сессия-исполнитель задачи или ход правила автоматизации персоны работают автономно —
         // отвечать на карточку разрешения некому (чат никто не открывал), и без этого исполнитель

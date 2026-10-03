@@ -88,6 +88,8 @@ export function testRunKindLabel(input: unknown): string {
 
 // Сборка (dev: build): вид сборки в шапке — «Сборка · npm»; нет kind — dotnet (как на сервере)
 export const BUILD_TOOL = 'mcp__dev__build';
+// Подъём стенда (dev: start_stand): его этап «сборка» — те же движки, что у build, со счётчиком
+export const START_STAND_TOOL = 'mcp__dev__start_stand';
 export function buildKindLabel(input: unknown): string {
   const kind = (input as { kind?: unknown } | null)?.kind;
   return typeof kind === 'string' && kind ? kind.toLowerCase() : 'dotnet';

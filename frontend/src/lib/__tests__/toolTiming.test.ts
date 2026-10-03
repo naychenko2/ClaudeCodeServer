@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { activeToolLabel, awaitsToolStart, captionLeadMs, formatClock, formatWaitClock, isQueued, isToolGroupDone, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption } from '../toolTiming';
-import { BUILD_TOOL, RUN_TESTS_TOOL, buildArg, toolCardLabel } from '../toolLabels';
+import { BUILD_TOOL, RUN_TESTS_TOOL, START_STAND_TOOL, buildArg, toolCardLabel } from '../toolLabels';
 
 // Дефект Киры: карточка разрешения встаёт ПОСЛЕ группы и сворачивала её в «N действий»
 // вместе с живым Bash и таймером
@@ -330,6 +330,11 @@ describe('stageCaptionOf', () => {
     expect(stageCaptionOf({ stage: 'build', label: '12 из 40 проектов' }, BUILD_TOOL)).toBe('12 из 40 проектов');
     expect(stageCaptionOf({ stage: 'build', label: 'vite build · этап 2 из 6' }, BUILD_TOOL)).toBe('vite build · этап 2 из 6');
     expect(stageCaptionOf({ stage: 'build', label: 'сборка' }, RUN_TESTS_TOOL)).toBeNull();
+  });
+
+  it('у подъёма стенда этап «сборка» несёт тот же счётчик, что у инструмента сборки', () => {
+    expect(stageCaptionOf({ stage: 'build', label: '7 из 12 проектов' }, START_STAND_TOOL)).toBe('7 из 12 проектов');
+    expect(stageCaptionOf({ stage: 'start', label: 'запуск · жду порт' }, START_STAND_TOOL)).toBeNull();
   });
 });
 

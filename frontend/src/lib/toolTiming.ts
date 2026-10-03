@@ -7,7 +7,7 @@
 // после F5 карточка идущего или прерванного инструмента показывала «готово» без времени.
 
 import { isBgLaunchResult } from './agentTail';
-import { BUILD_TOOL, RUN_TESTS_TOOL, isConsoleTool, toolCardLabel, toolLabel, toolWord } from './toolLabels';
+import { BUILD_TOOL, RUN_TESTS_TOOL, START_STAND_TOOL, isConsoleTool, toolCardLabel, toolLabel, toolWord } from './toolLabels';
 import type { ToolProgress, ToolRunTotals, ToolStage } from '../types';
 
 // Имя инструмента внутри подписи «сейчас …». Русское — со строчной: это середина фразы.
@@ -123,11 +123,12 @@ export function isFinalStages(
 // 177»); очередь — только подробность из скобок («занято 2»): слово «очередь» уже в этапе.
 // «Сборка» у тестов сама себе подпись; подсчёт идёт под этапом «тесты» без подписи и процента.
 // У инструмента сборки (build) этап «сборка» — единственный, и его счётчик («12 из 40
-// проектов», «vite build · этап 2 из 6») — вся суть подписи
+// проектов», «vite build · этап 2 из 6») — вся суть подписи; у подъёма стенда (start_stand)
+// сборка идёт теми же движками — тот же счётчик
 export function stageCaptionOf(p: ToolProgress | null | undefined, toolName?: string): string | null {
   if (!p?.label) return null;
   if (p.stage === 'running') return p.label;
-  if (p.stage === 'build' && toolName === BUILD_TOOL) return p.label;
+  if (p.stage === 'build' && (toolName === BUILD_TOOL || toolName === START_STAND_TOOL)) return p.label;
   if (p.stage === 'queued') return /\(([^)]+)\)\s*$/.exec(p.label)?.[1] ?? p.label;
   return null;
 }

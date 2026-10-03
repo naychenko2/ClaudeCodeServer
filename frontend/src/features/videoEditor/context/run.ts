@@ -8,10 +8,10 @@ import type { ActionQuote, ContextKindCtx, LaunchHandle, LaunchParam, LaunchRequ
 import { ERR, errorCode, errorText, videoApi, type FilmBuildStatus, type VideoCatalog, type VideoQuoteRequest } from '../api';
 import { DSP_TEXT } from '../editor/montage/FilmTab';
 import { openProjectFile } from '../film/nav';
-import { currentResolved, runErrorText } from '../scene/actions';
+import { currentResolved, runErrorText, stopJob } from '../scene/actions';
 import { plural, priceLines, modelLabel, snapTo, type ResolvedScene } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
-import { getCatalog, getFilm, setFilmBuild, subscribeVideoStore } from '../store/videoStore';
+import { cancelBuild, getCatalog, getFilm, getJobsOf, setFilmBuild, subscribeVideoStore } from '../store/videoStore';
 import { filmPathOf, sceneOfPrimary } from './state';
 
 // Тело 409 context_changed: хост сам берёт из него свежий контекст, ошибку оставляем как есть
@@ -77,32 +77,46 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
 }
 
 // События задачи начинаем слушать, как только известен jobId, — до возврата дескриптора: быстрая
-// задача могла завершиться раньше, чем хост подпишется
-type Ev = { progress?: number; result?: { summary: string; open?: () => void }; error?: string };
+// задача могла завершиться раньше, чем хост подпишется. Прогресс берём из стора «Видео» — того же, что
+// рисует карточку ленты: первое событие приходит раньше подписки, а стор его уже учёл
+type Ev = { progress?: number; result?: { summary: string; open?: () => void }; error?: string; cancelled?: boolean };
 
-function jobWatcher(jobId: string, open: () => void) {
-  let off: (() => void) | null = null;
+// Доля хода съёмки: та же формула, что у полосы карточки (варианты по очереди)
+export function jobFraction(j: { stage: string; variant: number; count: number }, fallbackCount: number): number {
+  if (j.stage === 'queued') return 0.05;
+  const total = j.count || fallbackCount || 1;
+  return Math.min(0.95, Math.max(0.05, ((j.variant - 1) / total) + 1 / total / 2));
+}
+
+function jobWatcher(scope: string, sessionId: string, sceneId: string, jobId: string, open: () => void) {
   let listener: ((e: Ev) => void) | null = null;
+  let cancelAsked = false;
   const buffered: Ev[] = [];
   const emit = (e: Ev) => { if (listener) listener(e); else buffered.push(e); };
-  off = videoApi.subscribe(ev => {
+  const push = () => {
+    const j = getJobsOf(sessionId, sceneId).find(x => x.jobId === jobId);
+    if (j) emit({ progress: jobFraction(j, 1) });
+  };
+  const offStore = subscribeVideoStore(push);
+  const offApi = videoApi.subscribe(ev => {
     if (!('jobId' in ev) || ev.jobId !== jobId) return;
-    if (ev.type === 'video_edit_progress') emit({ progress: ev.stage === 'queued' ? 0.05 : ev.stage === 'running' ? 0.5 : 0.9 });
-    else if (ev.type === 'video_edit_completed') {
+    if (ev.type === 'video_edit_completed') {
       const n = ev.variants.length;
       if (ev.error) emit({ error: ev.error });
       else emit({ result: { summary: n > 1 ? `Готово: ${n} ${plural(n, 'вариант', 'варианта', 'вариантов')}` : 'Клип снят', open } });
-      off?.();
+      offStore(); offApi?.();
     } else if (ev.type === 'video_edit_failed') {
-      emit({ error: ev.error ?? 'Съёмка не получилась' });
-      off?.();
+      emit(cancelAsked ? { cancelled: true } : { error: ev.error ?? 'Съёмка не получилась' });
+      offStore(); offApi?.();
     }
   });
+  push();
   return {
+    cancel: async () => { cancelAsked = true; await stopJob(scope, sessionId, jobId); },
     watch(on: (e: Ev) => void) {
       listener = on;
       buffered.splice(0).forEach(on);
-      return () => { listener = null; off?.(); };
+      return () => { listener = null; offStore(); offApi?.(); };
     },
   };
 }
@@ -116,7 +130,7 @@ function buildWatcher(sessionId: string, path: string, first: FilmBuildStatus) {
         if (b.state === 'waiting') on({ progress: 0.05 });
         else if (b.state === 'running') on({ progress: Math.max(0.05, b.progress) });
         else if (b.state === 'failed') on({ error: b.error || 'Сборка не получилась' });
-        else if (b.state === 'cancelled') on({ error: 'Сборка отменена' });
+        else if (b.state === 'cancelled') on({ cancelled: true });
         else on({ result: { summary: 'Фильм собран', open: b.file ? () => { void openProjectFile(b.file!); } : undefined } });
       };
       const off = subscribeVideoStore(check);
@@ -128,6 +142,7 @@ function buildWatcher(sessionId: string, path: string, first: FilmBuildStatus) {
 
 async function launchShoot(ctx: ContextKindCtx, req: LaunchRequest): Promise<LaunchHandle> {
   const { scope, body } = quoteBody(ctx, req);
+  const { scene } = currentScene(ctx);
   // Котировка с теми же параметрами, что у запуска: иначе сервер откажет в запуске
   const quote = await videoApi.quote(scope, ctx.sessionId, body);
   const ask = req.text.trim();
@@ -136,7 +151,8 @@ async function launchShoot(ctx: ContextKindCtx, req: LaunchRequest): Promise<Lau
     contextRevision: req.contextRevision,
   });
   if (!jobId) throw new Error('Запуск не удался');
-  return { id: jobId, watch: jobWatcher(jobId, () => { revealContextPanel(ctx.sessionId); }).watch };
+  const w = jobWatcher(scope, ctx.sessionId, scene.sceneId, jobId, () => { revealContextPanel(ctx.sessionId); });
+  return { id: jobId, watch: w.watch, cancel: w.cancel };
 }
 
 async function launchBuild(ctx: ContextKindCtx, req: LaunchRequest): Promise<LaunchHandle> {
@@ -145,7 +161,10 @@ async function launchBuild(ctx: ContextKindCtx, req: LaunchRequest): Promise<Lau
   if (!path || isPersonalScope(scope)) throw new Error('Фильм недоступен');
   const first = await videoApi.buildFilm(scope, ctx.sessionId, path, req.contextRevision);
   setFilmBuild(ctx.sessionId, path, first);
-  return { id: `build:${path}`, watch: buildWatcher(ctx.sessionId, path, first).watch };
+  return {
+    id: `build:${path}`, watch: buildWatcher(ctx.sessionId, path, first).watch,
+    cancel: () => cancelBuild(scope, ctx.sessionId, path),
+  };
 }
 
 export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Promise<LaunchHandle> {

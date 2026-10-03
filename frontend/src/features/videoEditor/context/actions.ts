@@ -44,7 +44,7 @@ export function buildSceneActions(i: SceneActionInput): readonly ContextAction[]
   const reason = frameReason(i.hasFrameA, i.hasFrameB);
   return [
     {
-      id: 'shoot', kind: 'run', op: 'shoot', label: i.shot ? 'Переснять' : 'Снять',
+      id: 'shoot', kind: 'run', op: 'shoot', verb: 'Снимаем', label: i.shot ? 'Переснять' : 'Снять',
       text: i.sceneTextEmpty ? 'required' : 'optional',
       hint: 'Снять клип от кадра A к кадру B: текст поля добавится к тексту сцены',
       placeholder: i.sceneTextEmpty
@@ -60,7 +60,7 @@ export function buildSceneActions(i: SceneActionInput): readonly ContextAction[]
 export function buildFilmActions(i: FilmActionInput): readonly ContextAction[] {
   return [
     {
-      id: 'build', kind: 'run', op: 'build', label: i.built ? 'Пересобрать' : 'Собрать', text: 'none',
+      id: 'build', kind: 'run', op: 'build', verb: 'Собираем', label: i.built ? 'Пересобрать' : 'Собрать', text: 'none',
       hint: 'Собрать фильм в один файл без ИИ: текст не нужен',
       ...(i.empty ? { disabledReason: 'Добавьте в фильм хотя бы одну сцену' } : {}),
     },

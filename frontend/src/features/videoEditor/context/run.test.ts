@@ -17,7 +17,7 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
 vi.mock('../store/imageFrames', async orig => ({ ...await orig<typeof import('../store/imageFrames')>(), onFrameReady: () => () => {} }));
 
 const { videoApi } = await import('../api');
-const { __applyThreads, __resetVideoStore, __setFilm, __setScopeData, getFilm } = await import('../store/videoStore');
+const { __applyThreads, __resetVideoStore, __setFilm, __setScopeData, getFilm, handleEvent } = await import('../store/videoStore');
 const { __applyChatContext, __resetChatContextStore } = await import('../../../lib/chatContext/store');
 const { __resetVideoExecutors, NO_AI_ROW } = await import('./executors');
 const { videoKindApi } = await import('./kind');
@@ -130,6 +130,54 @@ describe('сборка фильма по ревизии контекста', () 
     applyFilm();
     vi.spyOn(videoApi, 'buildFilm').mockRejectedValueOnce(Object.assign(new Error('503'), { status: 503, body: { code: 'dsp_unavailable', error: 'x' } }));
     await expect(run('build')).rejects.toThrow(/Сборка фильмов на этом сервере выключена/);
+  });
+});
+
+describe('«Остановить» и прогресс у съёмки и сборки', () => {
+  const progress = (variant: number, stage = 'running') =>
+    ({ type: 'video_edit_progress', sessionId: S, scopeKey: P, jobId: 'job1', sceneId: 'sc1', stage, variant, count: 2, initiator: 'human' }) as never;
+
+  it('съёмка отдаёт cancel: он зовёт отмену задачи, а пришедшее после этого failed — «отменено»', async () => {
+    applyScene();
+    let onApi: (ev: never) => void = () => {};
+    vi.spyOn(videoApi, 'subscribe').mockImplementation(cb => { onApi = cb as never; return () => {}; });
+    const cancel = vi.spyOn(videoApi, 'cancelJob').mockResolvedValue(undefined as never);
+    const h = await run('shoot');
+    expect(h.cancel).toBeTypeOf('function');
+    const events: object[] = [];
+    h.watch(e => events.push(e));
+    await h.cancel!();
+    expect(cancel).toHaveBeenCalledWith(P, S, 'job1');
+    onApi({ type: 'video_edit_failed', sessionId: S, scopeKey: P, jobId: 'job1', sceneId: 'sc1', initiator: 'human' } as never);
+    expect(events.at(-1)).toEqual({ cancelled: true });
+  });
+
+  it('прогресс берётся из стора: событие, пришедшее до подписки, не теряется', async () => {
+    applyScene();
+    const h = await run('shoot');
+    handleEvent(progress(2));
+    const events: { progress?: number }[] = [];
+    h.watch(e => events.push(e));
+    expect(events.at(-1)?.progress).toBeCloseTo(0.75);
+    handleEvent(progress(1));
+    expect(events.at(-1)?.progress).toBeCloseTo(0.25);
+  });
+
+  it('сборка отдаёт cancel, отменённая сборка — cancelled, а не ошибка', async () => {
+    applyFilm();
+    const cancel = vi.spyOn(videoApi, 'cancelBuild').mockResolvedValue({ state: 'cancelled', progress: 0 } as never);
+    const h = await run('build');
+    const events: object[] = [];
+    h.watch(e => events.push(e));
+    await h.cancel!();
+    expect(cancel).toHaveBeenCalledWith(P, S, FILM_PATH);
+    expect(events.at(-1)).toEqual({ cancelled: true });
+  });
+
+  it('у действий есть глагол: «Снимаем» и «Собираем»', () => {
+    applyScene();
+    expect(videoKindApi.actions(CTX, { primary: sceneCtx(7).primary!, refs: [] })[0].verb).toBe('Снимаем');
+    expect(videoKindApi.actions(CTX, { primary: filmCtx(7).primary!, refs: [] })[0].verb).toBe('Собираем');
   });
 });
 

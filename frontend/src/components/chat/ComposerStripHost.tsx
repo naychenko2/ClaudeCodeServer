@@ -6,18 +6,19 @@
 // и отдаёт его полосе в ctx.switcher: полоса ставит его на место своего заголовка.
 // В меню переключателя у каждой полосы строка состояния; на телефоне то же меню
 // открывается шторкой (прототип docs/mockups/image-editor-v3-strips-prototype.html,
-// вариант C). Сворачивания в меню нет: у каждой полосы своя кнопка ⌄, а свёрнутая
-// строка разворачивается щелчком по ней. Пока полоса одна, переключателя нет —
-// полоса выглядит как раньше.
+// вариант C). Своей кнопки ⌄ у полос нет: «Свернуть в строку» — последний пункт этого
+// меню (шеврон справа путался с меню полосы), свёрнутая строка разворачивается и
+// щелчком по ней. Поэтому переключатель есть всегда, даже у единственной полосы —
+// тогда в меню один пункт сворачивания.
 import { useEffect, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
-import { C, FS, SP } from '../../lib/design';
+import { Check, ChevronDown, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
+import { C, COMPOSER_LIP, FS, SP } from '../../lib/design';
 import { useComposerStrip } from '../../lib/composerStrips';
 import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
 import type { ComposerStripApi, ComposerStripCtx, SlotContribution } from '../../lib/subsystems/registry';
-import { Button, Dot, Menu, MenuItem, Modal } from '../ui';
-import { ICON_STROKE } from '../ui/icons';
+import { Button, Dot, Menu, MenuItem, MenuSep, Modal } from '../ui';
+import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 
 export type ComposerStripContribution = SlotContribution<ComposerStripCtx, ComposerStripApi>;
 
@@ -67,7 +68,7 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
 
   const items = (
     <>
-      {strips.map(s => (
+      {strips.length > 1 && strips.map(s => (
         <MenuItem
           key={s.name}
           icon={s.action!.icon}
@@ -83,12 +84,21 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
           onClick={() => { close(); select(s.name!); }}
         />
       ))}
+      {strips.length > 1 && <MenuSep />}
+      <MenuItem
+        icon={collapsed
+          ? <ChevronsUpDown size={15} strokeWidth={ICON_STROKE} />
+          : <ChevronsDownUp size={15} strokeWidth={ICON_STROKE} />}
+        isMobile={isMobile}
+        label={collapsed ? 'Развернуть полосу' : 'Свернуть в строку'}
+        onClick={() => { close(); setCollapsed(!collapsed); }}
+      />
     </>
   );
 
   // Выбранная картинка, чья полоса скрыта ручным выбором, — точка на «▾»
   const dot = !!pendingFocus && pendingFocus !== active;
-  const switcher = strips.length > 1 ? (
+  const switcher = (
     // Клик по переключателю в свёрнутой строке не должен её разворачивать
     <span data-composer-strip-switcher="" onClick={e => e.stopPropagation()}
       style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, flexShrink: 0 }}>
@@ -96,16 +106,27 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
         <Button
           variant="ghost" size="xs"
           leftIcon={current.action!.icon}
-          title={`${current.action!.title} — сменить полосу над полем ввода`}
-          style={{ fontWeight: 600, color: C.textHeading, border: 'none', paddingLeft: SP.xs, paddingRight: SP.xs }}
+          title={`${current.action!.title} — ${strips.length > 1 ? 'сменить или свернуть полосу' : 'свернуть или развернуть полосу'}`}
+          // Вид — как у чипа режима «Авто» в нижней губе композера: цвет, кегль, зазоры,
+          // шеврон, а на десктопе ещё высота и поля — иконки двух губ встают в одну
+          // вертикаль. В свёрнутой строке-ушке ряд ниже (COMPOSER_LIP.rowMini) — кнопка
+          // ужимается под него, поля те же. На телефоне губ нет, там кнопка остаётся ужатой
+          style={{
+            fontWeight: 600, fontSize: 12.5, color: C.textSecondary, border: 'none', gap: 6,
+            ...(isMobile
+              ? { paddingLeft: SP.xs, paddingRight: SP.xs }
+              : { ...(collapsed
+                ? { height: COMPOSER_LIP.rowMini, minHeight: COMPOSER_LIP.rowMini }
+                : { height: 28, minHeight: 28 }), paddingLeft: 10, paddingRight: 10 }),
+          }}
           onClick={(e: MouseEvent) => {
             if (isMobile) setSheet(true);
             else setMenu((e.currentTarget as HTMLElement).getBoundingClientRect());
           }}
         >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {!isMobile && current.action!.title}
-            <ChevronDown size={12} strokeWidth={ICON_STROKE} color={C.textMuted} />
+            <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.55 }} />
           </span>
         </Button>
         {dot && (
@@ -126,7 +147,7 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
         </Modal>
       )}
     </span>
-  ) : null;
+  );
 
   return <>{current.render!({ projectId, sessionId, isMobile, collapsed, setCollapsed, switcher })}</>;
 }

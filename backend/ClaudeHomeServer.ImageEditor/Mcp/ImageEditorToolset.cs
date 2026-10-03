@@ -207,10 +207,12 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (_prefs is null) return null;
         var prefs = _prefs.Get(ownerId, scope);
         var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus)?.Settings;
+        // Строка контекста: выбор человека — «Чем» контекста хода, персонаж префов проекта не читается
+        var row = _flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
         return new
         {
-            text = Chats.ImageEditorStateContributor.ChoiceText(prefs, focused),
-            rule = Chats.ImageEditorStateContributor.ChoiceRule,
+            text = Chats.ImageEditorStateContributor.ChoiceText(prefs, focused, row),
+            rule = row ? Chats.ImageEditorStateContributor.ChoiceRuleContextRow : Chats.ImageEditorStateContributor.ChoiceRule,
         };
     }
 
@@ -325,7 +327,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var foreign = settings?.Provider is { } chosen && chosen != provider;
         var model = Str(args, "model") ?? (own || foreign ? null : settings?.Model) ?? ImageEditCatalog.AutoModelId;
         var count = Int(args, "count") ?? (!own && settings is { Count: > 0 } s ? s.Count : 1);
-        var character = Str(args, "character") ?? (own ? null : prefs?.CharacterSlug);
+        // При строке контекста персонаж префов проекта не читается: он ref контекста чата
+        var contextRow = _flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
+        var character = Str(args, "character") ?? (own || contextRow ? null : prefs?.CharacterSlug);
 
         var quoteRequest = new ImageEditQuoteRequest(provider, model, mode, op, count,
             HasMask: false,

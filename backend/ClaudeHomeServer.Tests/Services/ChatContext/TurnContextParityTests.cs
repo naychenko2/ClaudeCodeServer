@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace ClaudeHomeServer.Tests.Services.ChatContext;
@@ -45,6 +46,7 @@ public sealed class TurnContextParityTests : IDisposable
     private sealed class FakeKind : IContextKindProvider
     {
         public IReadOnlyList<string> Kinds { get; } = ["image", "image-character"];
+        public bool CanBePrimary(string kind) => kind == "image";
         public string? Validate(ContextScope scope, string kind, JsonObject reference) => null;
 
         public ContextItemSummary Describe(ContextScope scope, ContextItem item) => item.Kind switch
@@ -71,7 +73,8 @@ public sealed class TurnContextParityTests : IDisposable
     private TurnContextContributor Contributor()
     {
         var projects = new Mock<IProjectManager>();
-        return new TurnContextContributor(_store, _registry, _flag, projects.Object);
+        var services = new ServiceCollection().AddSingleton<IChatContextStore>(_store).BuildServiceProvider();
+        return new TurnContextContributor(services, _registry, _flag, projects.Object);
     }
 
     private PromptSessionContext Ctx(string? rootPath = null) => new(_session, Owner, null, rootPath ?? _root);

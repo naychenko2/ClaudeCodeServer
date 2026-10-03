@@ -72,6 +72,9 @@ public class ImageEditorToolsetTests : IDisposable
     private void AddChat(string id, string owner, string? projectId) =>
         _sessions[id] = new Session { Id = id, OwnerId = owner, ProjectId = projectId };
 
+    // Строка контекста владельца (ADR-023): выбор человека — «Чем» контекста хода, персонаж префов не читается
+    private bool _contextRow;
+
     private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true,
         IImagePlaceSettings? placeSettings = null)
     {
@@ -95,6 +98,7 @@ public class ImageEditorToolsetTests : IDisposable
         var flags = new Mock<IFeatureFlagGate>();
         flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor))
             .Returns((string user, string _) => _flagOn.Contains(user));
+        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ComposerContextRow)).Returns(() => _contextRow);
 
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         return new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, threads, launcher,
@@ -807,6 +811,39 @@ public class ImageEditorToolsetTests : IDisposable
         choice["text"]!.GetValue<string>().Should()
             .Be("Выбор человека в полосе «Картинки»: поставщик local, модель qwen-image-2.1, вариантов 3, персонаж не подключён");
         choice["rule"]!.GetValue<string>().Should().Contain("не передавай provider/model/character");
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_image_new_говорит_о_строке_контекста_и_без_персонажа()
+    {
+        _contextRow = true;
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, false, "anya"));
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolNew);
+
+        result.IsError.Should().BeFalse(result.Text);
+        var choice = Parse(result)["humanChoice"]!;
+        choice["text"]!.GetValue<string>().Should()
+            .Be("Выбор человека в строке контекста: поставщик local, модель qwen-image-2.1, вариантов 3");
+        choice["rule"]!.GetValue<string>().Should().Be(ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor.ChoiceRuleContextRow);
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_image_generate_не_читает_персонажа_из_префов_проекта()
+    {
+        _contextRow = true;
+        var slug = Character();
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, true, slug));
+        var (toolset, media) = WithLocal();
+        var draft = Draft();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот в шляпе"));
+
+        result.IsError.Should().BeFalse(result.Text);
+        await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 0,
+            "персонаж префов проекта при строке контекста не едет в генерацию — он ref контекста");
     }
 
     [Fact]

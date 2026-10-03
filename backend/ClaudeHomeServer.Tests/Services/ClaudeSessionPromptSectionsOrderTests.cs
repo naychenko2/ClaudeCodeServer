@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -332,7 +333,9 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         var store = new Moq.Mock<ClaudeHomeServer.Services.ChatContext.IChatContextStore>();
         store.Setup(x => x.Get(Moq.It.IsAny<string>(), Moq.It.IsAny<string>()))
             .Returns(new ClaudeHomeServer.Services.ChatContext.ChatContextState(1, item, []));
-        var contributor = new TurnContextContributor(store.Object,
+        var contributor = new TurnContextContributor(
+            new ServiceCollection()
+                .AddSingleton(store.Object).BuildServiceProvider(),
             new ClaudeHomeServer.Services.ChatContext.ContextKindRegistry(
                 [new ClaudeHomeServer.Services.ChatContext.ProjectFileContextKind()]),
             new ContextRowFlag(), new Moq.Mock<ClaudeHomeServer.Services.IProjectManager>().Object);

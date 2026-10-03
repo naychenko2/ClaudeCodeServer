@@ -62,6 +62,8 @@ public sealed class ImageEditorStateContributor(
             return Task.FromResult<PromptSectionContribution?>(null);
 
         var scope = ImageEditScope.Of(session);
+        // При строке контекста «В работе» и «Выбор человека» отдаёт хвост «Контекст хода»; блок худеет
+        var row = flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
         // У проекта — через проект: персонаж проверяется на его диске; у личной области персонажа нет
         var scopePrefs = session.ProjectId is { } projectId ? prefs?.Get(ownerId, projectId) : prefs?.Get(ownerId, scope);
         string block;
@@ -69,12 +71,12 @@ public sealed class ImageEditorStateContributor(
         {
             var (state, fresh) = threads.TakeForTurn(ownerId, session.Id);
             block = RenderThreads(state, fresh, jobId => jobs?.Get(ownerId, scope.Key, jobId), scopePrefs, _agentLaunch,
-                scope.IsPersonal);
+                scope.IsPersonal, row);
         }
         else if (scopePrefs is not null && HasSavedPrefs(ownerId, session))
-            block = RenderChoice(scopePrefs, _agentLaunch, scope.IsPersonal);
+            block = RenderChoice(scopePrefs, _agentLaunch, scope.IsPersonal, row);
         else if (PersonalAlways(session))
-            block = RenderEmpty();
+            block = RenderEmpty(row);
         else
             return Task.FromResult<PromptSectionContribution?>(null);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
@@ -86,21 +88,27 @@ public sealed class ImageEditorStateContributor(
     // настройки (а без них и без фокуса — проекта), персонаж всегда из проекта
     public static string RenderThreads(ImageThreadsState state, IReadOnlyList<ImageThreadEvent> fresh,
         Func<string, ImageEditJobDto?> job, Prefs.ImageProjectPrefs? prefs = null, bool priorityRule = false,
-        bool personal = false)
+        bool personal = false, bool contextRow = false)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Картинки в этом чате");
-        sb.AppendLine(state.Focus is null
-            ? "В работе: ничего не выбрано"
-            : $"В работе: картинка {state.Focus} — {FocusIsNotBindingText}");
+        // Строка контекста: что в работе и какой выбор человека, говорит хвост «Контекст хода»; фокус
+        // вертикали при этом проекция контекста и здесь только путал бы (поэтому пометки «(в работе)» нитей тоже уходят)
+        if (!contextRow)
+            sb.AppendLine(state.Focus is null
+                ? "В работе: ничего не выбрано"
+                : $"В работе: картинка {state.Focus} — {FocusIsNotBindingText}");
         if (prefs is not null)
         {
-            var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus);
-            sb.AppendLine(ChoiceText(prefs, focused?.Settings));
-            sb.AppendLine(ChoiceRule);
+            if (!contextRow)
+            {
+                var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus);
+                sb.AppendLine(ChoiceText(prefs, focused?.Settings));
+            }
+            sb.AppendLine(contextRow ? ChoiceRuleContextRow : ChoiceRule);
         }
-        if (priorityRule) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
-        foreach (var t in state.Threads.OrderByDescending(t => t.Id == state.Focus))
+        if (priorityRule) sb.AppendLine(PriorityRuleFor(personal, contextRow));
+        foreach (var t in contextRow ? state.Threads.AsEnumerable() : state.Threads.OrderByDescending(t => t.Id == state.Focus))
         {
             var what = t.File is { Length: > 0 } file ? $"файл {file}"
                 : $"новая картинка, ещё не сохранена ({DraftSaveText(t.DraftFolder, personal)})";
@@ -112,7 +120,7 @@ public sealed class ImageEditorStateContributor(
                 : $"; старая стопка: шаг {at} из {steps.Count}";
             var pending = t.PendingJobId is { } p ? "; варианты старой стопки ждут выбора человека" + Outcome(job(p))
                 : t.InterruptedJobId is not null ? "; последняя задача потеряна при перезапуске сервера, варианты недоступны" : "";
-            sb.AppendLine($"- {t.Id}{(t.Id == state.Focus ? " (в работе)" : "")}: {what}{current}{stack}{pending}");
+            sb.AppendLine($"- {t.Id}{(!contextRow && t.Id == state.Focus ? " (в работе)" : "")}: {what}{current}{stack}{pending}");
             RenderVersions(sb, t, job);
         }
         if (fresh.Count > 0)
@@ -125,21 +133,26 @@ public sealed class ImageEditorStateContributor(
     }
 
     // Чат без нитей при явно сохранённом выборе: без списка картинок и журнала «с прошлого сообщения»
-    public static string RenderChoice(Prefs.ImageProjectPrefs prefs, bool priorityRule, bool personal = false)
+    public static string RenderChoice(Prefs.ImageProjectPrefs prefs, bool priorityRule, bool personal = false,
+        bool contextRow = false)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Картинки в этом чате");
-        sb.AppendLine("В работе: ничего не выбрано");
-        sb.AppendLine(ChoiceText(prefs, null));
-        sb.AppendLine(ChoiceRule);
-        if (priorityRule) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
+        if (!contextRow)
+        {
+            sb.AppendLine("В работе: ничего не выбрано");
+            sb.AppendLine(ChoiceText(prefs, null));
+        }
+        sb.AppendLine(contextRow ? ChoiceRuleContextRow : ChoiceRule);
+        if (priorityRule) sb.AppendLine(PriorityRuleFor(personal, contextRow));
         return sb.ToString().TrimEnd();
     }
 
     // Личный чат без нитей и без сохранённого выбора: выбора человека нет, поэтому ни ChoiceText,
     // ни ChoiceRule («это выбор человека») — только правило приоритета
-    public static string RenderEmpty() =>
-        "## Картинки в этом чате\nВ работе: ничего не выбрано\n" + PersonalPriorityRule;
+    public static string RenderEmpty(bool contextRow = false) => contextRow
+        ? "## Картинки в этом чате\n" + PriorityRuleFor(personal: true, contextRow: true)
+        : "## Картинки в этом чате\nВ работе: ничего не выбрано\n" + PersonalPriorityRule;
 
     // Сколько последних версий показывать у картинки: исходник и текущая видны всегда
     public const int MaxVersionsShown = 8;
@@ -186,6 +199,16 @@ public sealed class ImageEditorStateContributor(
     public const string FocusIsNotBindingText =
         "осталась с прошлых сообщений и не обязывает её продолжать";
 
+    // Строка контекста: исполнитель в «Чем» хвоста «Контекст хода» — выбор человека, а персонаж и образцы
+    // берутся из контекста чата (в префах проекта персонаж при строке контекста не читается)
+    public const string ChoiceRuleContextRow =
+        "Исполнитель и модель в «Чем» контекста хода — выбор человека: не передавай provider/model в image_generate, "
+        + "если он сам не просил сменить. Персонаж и образцы бери из контекста хода, а не придумывай.";
+
+    // Фокус остаётся с прошлых сообщений — то же предупреждение для «С чем» строки контекста
+    public const string FocusIsNotBindingTextContextRow =
+        "выбрана в строке контекста и не обязывает её продолжать";
+
     // Критерий «новая картинка или продолжение той, что в работе» — общий для проекта и личного чата
     public const string NewOrContinueRule =
         "Новая картинка или продолжение: просьба с новым сюжетом или предметом («нарисуй собаку», "
@@ -211,22 +234,46 @@ public sealed class ImageEditorStateContributor(
         + "выбирай по нему; без него fal-ai, glif и higgsfield для картинок — только если человек "
         + "в своей просьбе прямо назвал этот сервис. Видео, аудио и музыка — как раньше.\n" + NewOrContinueRule;
 
+    // Правило приоритета; при строке контекста ссылки на полосу «Картинки» и на «картинку в работе» переписаны
+    // на контекст хода. Без строки — константы как были, байт-в-байт
+    public static string PriorityRuleFor(bool personal, bool contextRow)
+    {
+        var rule = personal ? PersonalPriorityRule : PriorityRule;
+        return contextRow ? ForContextRow(rule) : rule;
+    }
+
+    private static string ForContextRow(string rule) => rule
+        .Replace("выбор человека в полосе «Картинки» и цену", "выбор человека в строке контекста и цену")
+        .Replace("выбор человека в полосе (включая local", "выбор человека в строке контекста (включая local")
+        .Replace(NewOrContinueRule,
+            "Картинка в «С чем» " + FocusIsNotBindingTextContextRow + ". "
+            + NewOrContinueRule
+                .Replace("даже если другая картинка в работе", "даже если другая картинка стоит в «С чем»")
+                .Replace("image_generate по картинке в работе — только", "image_generate по картинке из «С чем» — только"));
+
     // «Выбор человека в полосе «Картинки»: поставщик fal, модель auto, вариантов 2, персонаж anya»
     public static string ChoiceText(ImageThreadSettings settings, string? character) =>
         "Выбор человека в полосе «Картинки»: " + SettingsText(settings) + $", персонаж {character ?? "не подключён"}";
 
+    // Строка контекста: выбор человека — это «Чем», персонаж — реф контекста, а не префы проекта
+    public static string ChoiceTextContextRow(ImageThreadSettings settings) =>
+        "Выбор человека в строке контекста: " + SettingsText(settings);
+
     // С выбором по режимам — оба: «Создать» берёт генерация по тексту, «Править» — правка (у
     // картинки в работе — её настройки). Без режимов — прежняя строка, как у старого фронта
-    public static string ChoiceText(Prefs.ImageProjectPrefs prefs, ImageThreadSettings? focused)
+    public static string ChoiceText(Prefs.ImageProjectPrefs prefs, ImageThreadSettings? focused, bool contextRow = false)
     {
         if (!prefs.HasModes)
-            return ChoiceText(focused ?? prefs.EditSettings(), prefs.CharacterSlug);
+            return contextRow ? ChoiceTextContextRow(focused ?? prefs.EditSettings())
+                : ChoiceText(focused ?? prefs.EditSettings(), prefs.CharacterSlug);
         var edit = SettingsText(focused ?? prefs.EditSettings());
         var op = prefs.Edit?.Op is { } o ? $", операция {o}" : "";
-        return "Выбор человека в полосе «Картинки»: "
+        var head = contextRow ? "Выбор человека в строке контекста: " : "Выбор человека в полосе «Картинки»: ";
+        // Персонаж при строке контекста — реф контекста чата, из префов проекта не читается
+        var character = contextRow ? "" : $"; персонаж {prefs.CharacterSlug ?? "не подключён"}";
+        return head
             + $"новая картинка (генерация по тексту) — {SettingsText(prefs.CreateSettings())}; "
-            + $"правка{(focused is null ? "" : " картинки в работе")} — {edit}{op}; "
-            + $"персонаж {prefs.CharacterSlug ?? "не подключён"}";
+            + $"правка{(focused is null ? "" : " картинки в работе")} — {edit}{op}" + character;
     }
 
     private static string SettingsText(ImageThreadSettings settings) =>

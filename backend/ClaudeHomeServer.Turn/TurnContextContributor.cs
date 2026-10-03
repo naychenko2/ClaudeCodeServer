@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -18,13 +19,19 @@ namespace ClaudeHomeServer.Services.Turn;
 // Едет хвостом хода всегда (InTurnTail): в системный блок не попадает, неизменный контекст в ход не
 // повторяется хешем хвоста. «Где» — ветка без числа изменений: оно меняется каждый ход и раздувало бы хвост.
 // «Чем» остаётся в хвосте намеренно (Дополнение 2, Р2): агенту исполнитель нужен для вызова *_generate.
+//
+// Стор контекста берётся из контейнера лениво, а не конструктором: он засевается через ISessionDirectory
+// (SessionManager), а SessionManager сам собирает все контрибьюторы — прямая зависимость замкнула бы круг
+// и повесила резолв при старте.
 public sealed class TurnContextContributor(
-    IChatContextStore store,
+    IServiceProvider services,
     ContextKindRegistry registry,
     IFeatureFlagGate flags,
     IProjectManager projects) : IPromptSectionContributor
 {
     public const string SectionKey = "turn-context";
+
+    private IChatContextStore store => services.GetRequiredService<IChatContextStore>();
 
     public string Key => SectionKey;
     public string Title => "Контекст хода";

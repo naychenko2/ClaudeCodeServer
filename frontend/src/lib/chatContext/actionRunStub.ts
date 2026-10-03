@@ -1,6 +1,5 @@
-// ВРЕМЕННО (1ф-3): заглушка низа панели «Контекст» на типе ActionRun. Живой useActionRun —
-// цена, запуск и прогресс через вклад вида — приходит в 1ф-4 и заменяет эту функцию целиком;
-// до тех пор кнопка не запускает ничего, а цены нет.
+// Фикстура ActionRun для витрины и юнитов: подпись без цены, запуск ничего не делает. Хосты продукта
+// её НЕ импортируют (сторож useActionRunParity.test.ts) — у них один источник, useActionRun.
 import type { ActionRun, ContextAction } from './types';
 
 export function stubActionRun(action: ContextAction | null): ActionRun {
@@ -12,5 +11,11 @@ export function stubActionRun(action: ContextAction | null): ActionRun {
     progress: null,
     result: null,
     run: async () => {},
+    text: '',
+    answer: null,
+    setText: () => {},
+    blocked: action?.disabledReason ?? null,
+    params: [],
+    setParam: () => {},
   };
 }

@@ -322,11 +322,10 @@ function ParamsSection({ p }: { p: ContextPanelProps }) {
 
 // ── Низ ──
 
-// Цена, кнопка и прогресс — по ActionRun (общая точка с полем ввода). В 1ф-3 это заглушка:
-// живой useActionRun приходит в 1ф-4
+// Цена, кнопка и прогресс — по ActionRun (useActionRun: общая точка с полем ввода, подписи здесь нет)
 function Foot({ run, action }: { run: ActionRun; action: ContextAction | null }) {
   const busy = run.state === 'running';
-  const reason = action?.disabledReason;
+  const reason = run.blocked;
   return (
     <div data-ctx-section="foot" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs + 2 }}>
       {!action ? <Empty>{EMPTY.footChat}</Empty> : (
@@ -342,8 +341,8 @@ function Foot({ run, action }: { run: ActionRun; action: ContextAction | null })
             <div data-ctx-result="" style={{ fontSize: FS.sm, color: C.successText }}>✓ {run.result.summary}</div>
           )}
           <div data-ctx-run="">
-            <Button size="xs" fullWidth disabled={!!reason || busy} title={reason}
-              onClick={() => { void run.run(''); }} style={{ whiteSpace: 'nowrap' }}>
+            <Button size="xs" fullWidth disabled={!!reason || busy} title={reason ?? undefined}
+              onClick={() => { run.run(run.text).catch(() => { /* причину уже показал запуск */ }); }} style={{ whiteSpace: 'nowrap' }}>
               {run.label}
             </Button>
           </div>

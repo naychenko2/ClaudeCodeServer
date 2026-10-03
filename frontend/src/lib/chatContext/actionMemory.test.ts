@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  forgetActionMemory, objectKey, pickDefaultAction, presetAction, rememberAction, resetActionMemory, resolveAction,
+  forgetActionMemory, getActionMemoryVersion, objectKey, pickDefaultAction, presetAction, rememberAction, resetActionMemory, resolveAction,
+  takePreset,
 } from './actionMemory';
 import type { ContextAction } from './types';
 
@@ -102,5 +103,38 @@ describe('чистка памяти', () => {
     expect(resolveAction('B', 'image:X', 'human', [run('draw'), run('edit')]).actionId).toBe('edit');
     resetActionMemory();
     expect(resolveAction('B', 'image:X', 'human', [run('draw'), run('edit')]).actionId).toBe('draw');
+  });
+
+  it('действий ещё нет (вертикаль догружается): умолчание не запоминается и появившиеся действия берут первое', () => {
+    expect(resolveAction('s1', 'k', 'human', []).actionId).toBeNull();
+    expect(resolveAction('s1', 'k', 'human', [run('edit')]).actionId).toBe('edit');
+  });
+
+  it('читатели «подглядывают» за предвыбором (consume=false), применяет его только хост поля — один раз', () => {
+    presetAction('s1', 'k', { actionId: 'removeBg', prefill: 'без тени' });
+    const actions = [run('edit'), run('removeBg')];
+    expect(resolveAction('s1', 'k', 'human', actions, false)).toEqual({ actionId: 'removeBg' });
+    // Подглядывание предвыбор не расходует
+    expect(resolveAction('s1', 'k', 'human', actions, false).actionId).toBe('removeBg');
+    expect(takePreset('s1', 'k', 'human', actions)).toEqual({ actionId: 'removeBg', prefill: 'без тени' });
+    expect(takePreset('s1', 'k', 'human', actions)).toBeNull();
+    // Выбор закреплён за объектом
+    expect(resolveAction('s1', 'k', 'human', actions).actionId).toBe('removeBg');
+  });
+
+  it('смена выбора поднимает версию памяти: строка, панель и поле перерисуются', () => {
+    const v = getActionMemoryVersion();
+    rememberAction('s1', 'k', null);
+    expect(getActionMemoryVersion()).toBe(v + 1);
+  });
+
+  it('после запуска выбор переезжает на новую версию, у агентского объекта — «Чат»', async () => {
+    const { noteRunStarted } = await import('./actionMemory');
+    noteRunStarted('s1', 'v1', 'edit');
+    expect(resolveAction('s1', 'v2', 'human', [run('edit'), run('stems')]).actionId).toBe('edit');
+    noteRunStarted('s1', 'v2', 'edit');
+    expect(resolveAction('s1', 'v3', 'agent', [run('edit')]).actionId).toBeNull();
+    noteRunStarted('s1', 'v3', 'edit');
+    expect(resolveAction('s1', 'v4', 'human', [run('stems')]).actionId).toBeNull();
   });
 });

@@ -14,6 +14,7 @@ import {
 } from '../../lib/chatContext/store';
 import type { ContextAction } from '../../lib/chatContext/types';
 import type { TurnTree } from '../../lib/turnWorktree';
+import { useActionMemoryVersion } from '../../lib/chatContext/actionMemory';
 import { revealContextPanel } from '../../lib/subsystems/registryCore';
 import { wsPanels } from '../../pages/workspace/panelStackState';
 import { PublishDialog } from '../PublishDialog';
@@ -92,6 +93,7 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
   const onOpenPrimary = onOpenPrimaryProp ?? (() => { revealContextPanel(sessionId); });
   const ctx = useChatContext(sessionId);
   const offer = useReleaseOffer(sessionId);
+  useActionMemoryVersion();
   const [ref, width] = useContainerWidth<HTMLDivElement>();
   useEffect(() => { void ensureChatContext(sessionId); }, [sessionId]);
 

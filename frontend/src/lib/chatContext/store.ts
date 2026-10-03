@@ -106,6 +106,16 @@ async function mutate(sessionId: string, run: (revision: number) => Promise<Chat
   }
 }
 
+// 409 context_changed у запуска вида: подставляем свежий DTO из тела (перечитывать не нужно) и говорим об
+// этом. false — ошибка не про контекст
+export function acceptConflict(sessionId: string, e: unknown, quiet = false): boolean {
+  const fresh = conflictContext(e);
+  if (!fresh) return false;
+  apply(sessionId, fresh);
+  if (!quiet) showToast('Контекст только что поменяли — цена пересчитана, запустите ещё раз', '', 'info');
+  return true;
+}
+
 export const setPrimary = (sessionId: string, input: Pick<ContextRefInput, 'kind' | 'ref'>) =>
   mutate(sessionId, rev => chatContextApi.setPrimary(sessionId, input, rev));
 

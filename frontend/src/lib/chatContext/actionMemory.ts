@@ -4,6 +4,7 @@
 // пережить возврат (поведение bac70c9aa). Предвыбор (`preset`) — отложенная просьба вертикали:
 // хост применяет его один раз, когда основным становится объект с этим ключом.
 
+import { useSyncExternalStore } from 'react';
 import type { ActionPreset, ChatContextItem, ContextAction, ContextActor } from './types';
 
 interface SessionMemory {
@@ -12,6 +13,19 @@ interface SessionMemory {
   presets: Map<string, ActionPreset>;
 }
 const _memory = new Map<string, SessionMemory>();
+
+// Подписка на выбор чипа: строка, панель и поле ввода живут в разных ветках дерева, а память —
+// вне React. Версия растёт на каждую явную смену (клик, предвыбор, чистка), но не на запись
+// умолчания внутри resolveAction: та идёт из рендера, и сигнал оттуда дал бы петлю
+let _version = 0;
+const _listeners = new Set<() => void>();
+const emit = () => { _version++; _listeners.forEach(fn => fn()); };
+export const subscribeActionMemory = (fn: () => void) => { _listeners.add(fn); return () => { _listeners.delete(fn); }; };
+export const getActionMemoryVersion = () => _version;
+// Хук-сигнал: компонент, читающий resolveAction, перерисуется при смене выбора
+export function useActionMemoryVersion(): number {
+  return useSyncExternalStore(subscribeActionMemory, getActionMemoryVersion, getActionMemoryVersion);
+}
 
 function of(sessionId: string): SessionMemory {
   let m = _memory.get(sessionId);
@@ -42,11 +56,20 @@ export function pickDefaultAction(actions: readonly ContextAction[], by: Context
 // Человек выбрал чип (id действия или null — «Чат»)
 export function rememberAction(sessionId: string, key: string, actionId: string | null) {
   of(sessionId).choice.set(key, actionId);
+  emit();
 }
 
 export function presetAction(sessionId: string, key: string, preset: ActionPreset) {
   of(sessionId).presets.set(key, preset);
+  emit();
 }
+
+// Запуск начат на объекте fromKey действием actionId: по итогу вертикаль ставит новую версию (другой
+// ключ объекта), и выбор переезжает за ней, если у новой версии есть действие с тем же id
+const _carry = new Map<string, { fromKey: string; actionId: string }>();
+export const noteRunStarted = (sessionId: string, fromKey: string, actionId: string) => {
+  _carry.set(sessionId, { fromKey, actionId });
+};
 
 export interface ResolvedAction {
   // id выбранного run-действия; null — «Чат»
@@ -57,14 +80,17 @@ export interface ResolvedAction {
 
 // Какое действие выбрано у объекта. Порядок: предвыбор → память → умолчание. Память,
 // указывающая на пропавшее или недоступное действие, даёт «Чат»; ручной «Чат» держится, пока
-// ключ объекта тот же. Только run-действия бывают выбраны
+// ключ объекта тот же. Только run-действия бывают выбраны. consume=false — «подглядеть»: так читают
+// строка и панель, предвыбор остаётся ждать хоста поля, который один и применяет его (затравка
+// текста и параметры живут у него)
 export function resolveAction(
-  sessionId: string, key: string, by: ContextActor, actions: readonly ContextAction[],
+  sessionId: string, key: string, by: ContextActor, actions: readonly ContextAction[], consume = true,
 ): ResolvedAction {
   const m = of(sessionId);
   const usable = (id: string) => actions.some(a => a.id === id && a.kind === 'run' && !a.disabledReason);
   const preset = m.presets.get(key);
   if (preset && usable(preset.actionId)) {
+    if (!consume) return { actionId: preset.actionId };
     m.presets.delete(key);
     m.choice.set(key, preset.actionId);
     return { actionId: preset.actionId, preset };
@@ -73,13 +99,34 @@ export function resolveAction(
     const id = m.choice.get(key)!;
     return { actionId: id !== null && usable(id) ? id : null };
   }
+  // Объект сменился после запуска: «Чат» у агентского объекта, иначе то же действие, если оно есть
+  const carry = _carry.get(sessionId);
+  if (carry && carry.fromKey !== key) {
+    _carry.delete(sessionId);
+    const id = by !== 'agent' && usable(carry.actionId) ? carry.actionId : null;
+    m.choice.set(key, id);
+    return { actionId: id };
+  }
   const actionId = pickDefaultAction(actions, by);
-  m.choice.set(key, actionId);
+  // Действий ещё нет (вертикаль догружается позже контекста): умолчание не запоминаем, иначе оно
+  // навсегда осело бы как «ручной Чат»
+  if (actions.length > 0) m.choice.set(key, actionId);
   return { actionId };
 }
 
+// Хост поля применяет предвыбор вертикали ОДИН раз и вне рендера (StrictMode зовёт рендер дважды,
+// и расход предвыбора из него пропал бы): выбор встаёт на действие предвыбора, остальные читатели
+// увидят его по сигналу памяти. null — предвыбора нет или действие недоступно
+export function takePreset(
+  sessionId: string, key: string, by: ContextActor, actions: readonly ContextAction[],
+): ActionPreset | null {
+  const { preset } = resolveAction(sessionId, key, by, actions, true);
+  if (preset) emit();
+  return preset ?? null;
+}
+
 // Удаление чата
-export function forgetActionMemory(sessionId: string) { _memory.delete(sessionId); }
+export function forgetActionMemory(sessionId: string) { _memory.delete(sessionId); _carry.delete(sessionId); emit(); }
 
 // Выход из аккаунта: память прошлого владельца вкладка не держит
-export function resetActionMemory() { _memory.clear(); }
+export function resetActionMemory() { _memory.clear(); _carry.clear(); emit(); }

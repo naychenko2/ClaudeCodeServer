@@ -169,4 +169,15 @@ export interface ActionRun {
   progress: number | null;
   result: ActionResult | null;
   run: (text: string) => Promise<void>;
+  // Текст поля ввода: его публикует поле, панель запускает с ним же
+  text: string;
+  setText: (text: string) => void;
+  // Ответ на вопрос выбранного действия (первое значение предвыбрано); null — вопроса нет
+  answer: string | null;
+  // Почему кнопка серая («Напишите текст: …»); null — запускать можно
+  blocked: string | null;
+  // Параметры вида с текущими значениями; правятся через setParam (имя — kind параметра или
+  // question.param)
+  params: readonly LaunchParam[];
+  setParam: (name: string, value: number | string) => void;
 }

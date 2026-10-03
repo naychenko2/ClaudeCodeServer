@@ -16,7 +16,7 @@ export function selectRowAction(
   api: ContextKindApi | null, ctx: ContextKindCtx, primary: ChatContextPrimary, refs: readonly ChatContextRef[],
 ): RowAction {
   const actions = api?.actions(ctx, { primary, refs }) ?? [];
-  const { actionId } = resolveAction(ctx.sessionId, objectKey(primary), primary.by, actions);
+  const { actionId } = resolveAction(ctx.sessionId, objectKey(primary), primary.by, actions, false);
   const action = actionId ? actions.find(a => a.id === actionId) ?? null : null;
   const executors = action ? api?.executors?.(ctx, action.id) ?? null : null;
   return { action, executors };

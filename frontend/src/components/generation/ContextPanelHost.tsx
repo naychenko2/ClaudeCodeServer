@@ -1,11 +1,12 @@
 // Связка панели «Контекст» с живыми данными (ADR-023 §Д1): стор контекста чата, вид из слота
 // context-kind, git-чип, ссылка «назад». Саму отрисовку держит ContextPanel (по готовой модели),
 // чтобы витрина кормила её фикстурами без стора и сети. Хост зовут обе страницы — проект и «Чаты».
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { File as FileIcon } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { useGitChip } from '../../hooks/useGitChip';
-import { stubActionRun } from '../../lib/chatContext/actionRunStub';
+import { useActionMemoryVersion } from '../../lib/chatContext/actionMemory';
+import { useActionRun } from '../../lib/chatContext/useActionRun';
 import { clearContextReturn, useContextReturn } from '../../lib/chatContext/contextReturn';
 import { getGitActions } from '../../lib/chatContext/gitActions';
 import { getKindApi } from '../../lib/chatContext/registry';
@@ -13,7 +14,7 @@ import { selectRowAction } from '../../lib/chatContext/rowExec';
 import {
   clearContext, detachRef, ensureChatContext, releasePrimary, setPrimary, useChatContext,
 } from '../../lib/chatContext/store';
-import type { ContextKindCtx, LaunchParam } from '../../lib/chatContext/types';
+import type { ContextKindCtx } from '../../lib/chatContext/types';
 import { REVEAL_PANEL_EVENT, revealWorkspacePanel, type RevealPanelDetail } from '../../lib/subsystems/registryCore';
 import { wsPanels } from '../../pages/workspace/panelStackState';
 import { PublishDialog } from '../PublishDialog';
@@ -66,6 +67,7 @@ function WithGit(props: Props & { project: Project }) {
 function Core({ session, project, onClose, isMobile = false, contained, layout, git }: Props & { git: RowGit | null }) {
   const sessionId = session.id;
   const ctx = useChatContext(sessionId);
+  useActionMemoryVersion();
   const ret = useContextReturn(sessionId);
   useEffect(() => { void ensureChatContext(sessionId); }, [sessionId]);
 
@@ -87,18 +89,8 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
   // в сторе вертикали и в зависимости мемо не входит
   const sel = primary ? selectRowAction(api, kindCtx, primary, refs) : { action: null, executors: null };
   const action = sel.action;
-
-  // Значения параметров запуска до живого useActionRun (1ф-4) держим здесь: сброс при смене действия
-  const [paramValues, setParamValues] = useState<Record<string, number | string>>({});
-  useEffect(() => { setParamValues({}); }, [action?.id, primary?.id]);
-  const params: readonly LaunchParam[] = useMemo(
-    () => (primary && action ? api?.params?.(kindCtx, action.id) ?? [] : []).map(p => {
-      const v = paramValues[p.kind];
-      return v === undefined || p.kind === 'fromQuestion' ? p : { ...p, value: v } as LaunchParam;
-    }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [api, primary, action, paramValues, sessionId, project?.id, isMobile],
-  );
+  // Подпись, цена, состояние и запуск — те же, что у кнопки поля ввода: один хук на обоих
+  const run = useActionRun(sessionId, kindCtx);
 
   const iconOf = (kind: string): ReactNode =>
     getKindApi(kind)?.icon(kind) ?? <FileIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
@@ -127,10 +119,10 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
       }}
       action={action}
       exec={sel.executors}
-      params={params}
-      onParam={(p, v) => setParamValues(cur => ({ ...cur, [p.kind]: v }))}
+      params={run.params}
+      onParam={(p, v) => run.setParam(p.kind, v)}
       addFrom={addFrom}
-      run={stubActionRun(action)}
+      run={run}
       flash={flash}
       onRelease={() => { void releasePrimary(sessionId, true); }}
       onDetach={id => { void detachRef(sessionId, id); }}

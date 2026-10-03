@@ -27,6 +27,8 @@ public sealed class TestRunsSubsystem : IAppSubsystem
         services.AddSingleton<TestRunService>();
         // Движок сборки `dotnet build` с прогрессом «N из M проектов» — на том же конвейере
         services.AddSingleton<DotnetBuildService>();
+        // Движок сборки `npm run <скрипт>` с прогрессом «этап N из M» — на том же конвейере
+        services.AddSingleton<NpmBuildService>();
         // Подсказка «тесты — через run_tests»: выключенная подсистема не объявляет и секцию
         services.AddPromptSectionContributor<TestRunsHintContributor>();
     }

@@ -25,6 +25,8 @@ public sealed class TestRunsSubsystem : IAppSubsystem
         // всех его движков (тесты, сборка)
         services.AddSingleton<PhasePipeline>();
         services.AddSingleton<TestRunService>();
+        // Движок сборки `dotnet build` с прогрессом «N из M проектов» — на том же конвейере
+        services.AddSingleton<DotnetBuildService>();
         // Подсказка «тесты — через run_tests»: выключенная подсистема не объявляет и секцию
         services.AddPromptSectionContributor<TestRunsHintContributor>();
     }

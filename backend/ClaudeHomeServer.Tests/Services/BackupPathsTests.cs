@@ -59,6 +59,8 @@ public class BackupPathsTests
     [InlineData("sandbox-tmp/turn-1/mcp.json")]
     // Снимки промпта ходов — диагностический лог, восстанавливать нечего
     [InlineData("prompt-snapshots/chat1/1700000000000-abcd.json.gz")]
+    // Память прошлых сборок — подсказка процента, привязана к путям этой машины
+    [InlineData("build-memory/app.csproj-0123456789abcdef-fedcba9876543210.json")]
     [InlineData("backups/ccs-old.zip")]
     [InlineData("backups-secrets/ccs-secrets-1.zip")]
     [InlineData(".backup-staging/users.json")]

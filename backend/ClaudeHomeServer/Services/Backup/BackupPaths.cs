@@ -90,6 +90,9 @@ public static class BackupPaths
         // Снимки промпта ходов — диагностический лог (последние 50 ходов на чат):
         // восстанавливать нечего, а в облако они бы поехали десятками мегабайт
         if (root.Equals("prompt-snapshots", StringComparison.OrdinalIgnoreCase)) return false;
+        // Память прошлых сборок (подсказка процента «N из M»): ключ — хеш пути дерева этой
+        // машины, на другой она бесполезна, а потеря стоит одной сборки без точного процента
+        if (root.Equals(TestRuns.BuildRunMemory.DirName, StringComparison.OrdinalIgnoreCase)) return false;
         // Замеры размера постановки задач — наблюдение, а не настройка (как mcp-status.json):
         // растут линейно с числом запусков, восстанавливать нечего. Сама аналитика расхода
         // (spend/turns-*.jsonl, spend/daily.json) в архив едет — исключён только этот файл.

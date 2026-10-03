@@ -100,6 +100,9 @@ public sealed partial class TestRunService
 
     public TestRunsOptions Options => _options;
 
+    // Конвейер этого движка — для проверки, что он общий со сборкой
+    internal PhasePipeline Pipeline => _pipeline;
+
     // Потолок длины фильтра: он едет одним аргументом ArgumentList, без shell, но бесконечная
     // строка — это мусор, а не выражение фильтра
     public const int MaxFilterLength = 2048;
@@ -171,7 +174,12 @@ public sealed partial class TestRunService
             // Разборщикам вывода нужен английский: локализованный «Пройден» не разобрать
             ["DOTNET_CLI_UI_LANGUAGE"] = "en",
             ["DOTNET_NOLOGO"] = "1",
-        });
+        }) with
+        {
+            // Узлы MSBuild и компилятор — только свои (ProcessSpec.PrivateBuildNodes); фазы
+            // list/test идут с --no-build, так что реюз между фазами ничего не давал
+            PrivateBuildNodes = true,
+        };
     }
 
     // vitest без TTY: CI=1 — строка на файл, без перерисовки; NO_COLOR — без ANSI
@@ -257,8 +265,8 @@ public sealed partial class TestRunService
 
         using var treeLock = _pipeline.TryLockTree(request.WorkingDirectory);
         if (treeLock is null)
-            return Refused(request, "В этом дереве уже идёт прогон тестов — дождись его конца: "
-                + "два прогона подерутся за obj/bin.");
+            return Refused(request, "В этом дереве уже идёт прогон тестов или сборка — дождись его конца: "
+                + "два процесса подерутся за obj/bin.");
 
         var launcher = _launchers.ForProject(request.Project);
         // Стенд из webServer конфига Playwright поднимает сам — проверять заранее нечего
@@ -266,17 +274,18 @@ public sealed partial class TestRunService
             && await StandRefusalAsync(request, ct) is { } down)
             return Refused(request, down);
 
+        // Папка за ссылкой (InTree=false): процесс пишет результаты своими правами, как и без
+        // нас, а хост туда не пишет лог и не читает отчёты — сводка только по выводу
         var artifacts = PhasePipeline.CreateArtifacts(request.WorkingDirectory, ArtifactsSubdir);
-        var artifactsFull = artifacts.Full;
         // Аргумент папки результатов — относительно каталога процесса (у node — каталог цели)
-        var results = Path.GetRelativePath(ProcessDirectory(request), artifactsFull).Replace('\\', '/');
-        using var run = new RunState(this, request.Kind, Path.Combine(artifactsFull, "console.log"), progress,
-            artifacts.Relative, results);
+        var results = Path.GetRelativePath(ProcessDirectory(request), artifacts.Full).Replace('\\', '/');
+        using var run = new RunState(this, request.Kind, PhasePipeline.OpenLog(request.WorkingDirectory, artifacts),
+            progress, artifacts.InTree ? artifacts.Relative : null, results);
         return request.Kind switch
         {
-            TestRunKind.Vitest => await RunVitestPipelineAsync(launcher, request, run, artifactsFull, ct),
-            TestRunKind.Playwright => await RunPlaywrightPipelineAsync(launcher, request, run, artifactsFull, ct),
-            _ => await RunDotnetPipelineAsync(launcher, request, run, artifactsFull, ct),
+            TestRunKind.Vitest => await RunVitestPipelineAsync(launcher, request, run, artifacts, ct),
+            TestRunKind.Playwright => await RunPlaywrightPipelineAsync(launcher, request, run, artifacts, ct),
+            _ => await RunDotnetPipelineAsync(launcher, request, run, artifacts, ct),
         };
     }
 
@@ -425,7 +434,7 @@ public sealed partial class TestRunService
         TestRunPhase phase, RunState run, CancellationToken limit, CancellationToken callerCt)
     {
         var slot = await _pipeline.AcquireAsync(spec,
-            limit => run.Report(new TestRunProgress("queued", $"ждёт очереди сборок (занято {limit})")), limit);
+            busy => run.Report(new TestRunProgress("queued", $"ждёт очереди сборок (занято {busy})")), limit);
         if (slot is not null) return (slot, null);
         // «Погашен» здесь было бы враньём: процесса не было
         return (null, run.Result(null, phase) with
@@ -439,7 +448,7 @@ public sealed partial class TestRunService
     private CancellationTokenSource Ceiling(CancellationToken ct) => PhasePipeline.Ceiling(_options.CeilingSeconds, ct);
 
     private async Task<TestRunResult> RunDotnetPipelineAsync(IProcessLauncher launcher, TestRunRequest request,
-        RunState run, string artifactsFull, CancellationToken ct)
+        RunState run, PhaseArtifacts artifacts, CancellationToken ct)
     {
         using var limit = Ceiling(ct);
         var firstPhase = request.NoBuild ? TestRunPhase.List : TestRunPhase.Build;
@@ -470,13 +479,13 @@ public sealed partial class TestRunService
             run.StartTesting();
             var test = await RunPhaseAsync(launcher, TestRunPhase.Test, request, run, limit.Token);
             if (test.Aborted) return Aborted(run, test, TestRunPhase.Test, ct);
-            var (reports, oversized) = ReadTrxReports(artifactsFull);
+            var (reports, oversized) = ReadTrxReports(request.WorkingDirectory, artifacts);
             return run.Result(test.ExitCode, TestRunPhase.Test) with { Reports = reports, OversizedReports = oversized };
         }
     }
 
     private async Task<TestRunResult> RunVitestPipelineAsync(IProcessLauncher launcher, TestRunRequest request,
-        RunState run, string artifactsFull, CancellationToken ct)
+        RunState run, PhaseArtifacts artifacts, CancellationToken ct)
     {
         using var limit = Ceiling(ct);
         run.Report(new TestRunProgress("list", "подсчёт файлов"));
@@ -494,14 +503,14 @@ public sealed partial class TestRunService
             run.StartTesting();
             var test = await RunPhaseAsync(launcher, TestRunPhase.Test, request, run, limit.Token, heavy);
             if (test.Aborted) return Aborted(run, test, TestRunPhase.Test, ct);
-            var (reports, oversized) = ReadJsonReport(artifactsFull,
+            var (reports, oversized) = ReadJsonReport(request.WorkingDirectory, artifacts,
                 text => VitestJsonReader.Read(text, ProcessDirectory(request)));
             return run.Result(test.ExitCode, TestRunPhase.Test) with { Reports = reports, OversizedReports = oversized };
         }
     }
 
     private async Task<TestRunResult> RunPlaywrightPipelineAsync(IProcessLauncher launcher, TestRunRequest request,
-        RunState run, string artifactsFull, CancellationToken ct)
+        RunState run, PhaseArtifacts artifacts, CancellationToken ct)
     {
         // Потолок общий и для подъёма стенда из webServer: он идёт внутри того же процесса.
         // «Стоп» и потолок гасят ДЕРЕВО процесса по ppid. Стенд — потомок Playwright'а, но на
@@ -516,7 +525,7 @@ public sealed partial class TestRunService
         run.StartTesting(announce: !startsStand);
         var test = await RunPhaseAsync(launcher, TestRunPhase.Test, request, run, limit.Token);
         if (test.Aborted) return Aborted(run, test, TestRunPhase.Test, ct);
-        var (reports, oversized) = ReadJsonReport(artifactsFull, PlaywrightJsonReader.Read);
+        var (reports, oversized) = ReadJsonReport(request.WorkingDirectory, artifacts, PlaywrightJsonReader.Read);
         return run.Result(test.ExitCode, TestRunPhase.Test) with { Reports = reports, OversizedReports = oversized };
     }
 
@@ -539,32 +548,37 @@ public sealed partial class TestRunService
     }
 
     // Сводки всех TRX прогона; битый файл пропускается — остальные сборки важнее, огромный —
-    // не читается в память вовсе
-    private static (IReadOnlyList<TestReport>, IReadOnlyList<string>) ReadTrxReports(string artifactsFull)
+    // не читается в память вовсе. Отчёты пишет процесс агента: читаем по дескриптору под
+    // потолком (TreeFiles), папку за ссылкой — не читаем вовсе
+    private static (IReadOnlyList<TestReport>, IReadOnlyList<string>) ReadTrxReports(string workingDirectory,
+        PhaseArtifacts artifacts)
     {
         var reports = new List<TestReport>();
         var oversized = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(artifactsFull, "*.trx").Order(StringComparer.Ordinal))
+        if (!artifacts.InTree || !Directory.Exists(artifacts.Full)) return (reports, oversized);
+        foreach (var file in Directory.EnumerateFiles(artifacts.Full, "*.trx").Order(StringComparer.Ordinal))
         {
             if (new FileInfo(file).Length > MaxReportBytes)
             {
                 oversized.Add(Path.GetFileName(file));
                 continue;
             }
-            try { reports.Add(TrxSummaryReader.Read(File.ReadAllText(file))); }
+            if (TreeFiles.ReadTextInTree(workingDirectory, file, (int)MaxReportBytes) is not { } text) continue;
+            try { reports.Add(TrxSummaryReader.Read(text)); }
             catch (Exception e) when (e is IOException or System.Xml.XmlException or FormatException) { }
         }
         return (reports, oversized);
     }
 
     // JSON-отчёт vitest/Playwright; нет файла (обрыв, падение до отчёта) или он битый — пусто
-    private static (IReadOnlyList<TestReport>, IReadOnlyList<string>) ReadJsonReport(string artifactsFull,
-        Func<string, TestReport> read)
+    private static (IReadOnlyList<TestReport>, IReadOnlyList<string>) ReadJsonReport(string workingDirectory,
+        PhaseArtifacts artifacts, Func<string, TestReport> read)
     {
-        var file = Path.Combine(artifactsFull, JsonReportName);
-        if (!File.Exists(file)) return ([], []);
+        var file = Path.Combine(artifacts.Full, JsonReportName);
+        if (!artifacts.InTree || !File.Exists(file)) return ([], []);
         if (new FileInfo(file).Length > MaxReportBytes) return ([], [JsonReportName]);
-        try { return ([read(File.ReadAllText(file))], []); }
+        if (TreeFiles.ReadTextInTree(workingDirectory, file, (int)MaxReportBytes) is not { } text) return ([], []);
+        try { return ([read(text)], []); }
         catch (Exception e) when (e is IOException or JsonException or InvalidOperationException or FormatException)
         {
             return ([], []);
@@ -658,7 +672,7 @@ public sealed partial class TestRunService
         private readonly Action<TestRunProgress>? _progress;
         private readonly Stopwatch _watch = Stopwatch.StartNew();
         private readonly Queue<string> _tail = new();
-        private readonly StreamWriter _log;
+        private readonly TextWriter _log;
         private readonly List<string> _buildErrors = [];
         private readonly VsTestConsoleParser.ListCounter _listCounter = new();
         private readonly List<string> _failedNames = [];
@@ -674,19 +688,20 @@ public sealed partial class TestRunService
         private string? _lastLabel;
         private int? _total;
 
-        public RunState(TestRunService owner, TestRunKind kind, string logPath, Action<TestRunProgress>? progress,
-            string artifacts, string results)
+        // log null — лог не пишется (папка за ссылкой или файл подложен), прогон идёт
+        public RunState(TestRunService owner, TestRunKind kind, StreamWriter? log, Action<TestRunProgress>? progress,
+            string? artifacts, string results)
         {
             _owner = owner;
             _kind = kind;
             _progress = progress;
             Artifacts = artifacts;
             Results = results;
-            _log = new StreamWriter(logPath, append: false, new UTF8Encoding(false));
+            _log = log ?? TextWriter.Null;
         }
 
-        // Папка артефактов относительно рабочего дерева — для модели
-        public string Artifacts { get; }
+        // Папка артефактов относительно рабочего дерева — для модели; null — хост её не вёл
+        public string? Artifacts { get; }
 
         // Та же папка относительно каталога процесса — аргумент результатов
         public string Results { get; }
@@ -728,8 +743,25 @@ public sealed partial class TestRunService
             if (announce) Report(first);
         }
 
+        // Итог разбора строки регулярками под вид прогона: считается ВНЕ замка (фаза в этот миг
+        // ещё не известна — разбираются все разборы вида, а нужный выбирает фаза под замком)
+        private readonly record struct ParsedLine(bool ListedFile, VitestFileLine? VitestFile, int? PlaywrightTotal,
+            PlaywrightOutcomeLine? PlaywrightOutcome, TestOutcomeLine? DotnetOutcome);
+
+        private ParsedLine Parse(string line) => _kind switch
+        {
+            TestRunKind.Vitest => new(VitestReporterParser.IsListedFile(line), VitestReporterParser.ParseFileLine(line),
+                null, null, null),
+            TestRunKind.Playwright => new(false, null, PlaywrightListParser.ParseTotal(line),
+                PlaywrightListParser.ParseOutcome(line), null),
+            _ => new(false, null, null, null, VsTestConsoleParser.ParseOutcome(line)),
+        };
+
+        // Разбор строки (регулярки) — до замка: строку печатает код агента, и медленный разбор не
+        // должен держать замок, в который упрётся Result после «Стоп»; под замком — только счётчики
         public void OnLine(string line)
         {
+            var parsed = Parse(line);
             TestRunProgress? toSend = null;
             lock (_gate)
             {
@@ -747,7 +779,7 @@ public sealed partial class TestRunService
                             _buildErrors.Add(line);
                         break;
                     case TestRunPhase.List when _kind == TestRunKind.Vitest:
-                        if (VitestReporterParser.IsListedFile(line)) _listedFiles++;
+                        if (parsed.ListedFile) _listedFiles++;
                         break;
                     case TestRunPhase.List:
                         _listCounter.Feed(line);
@@ -755,9 +787,9 @@ public sealed partial class TestRunService
                     case TestRunPhase.Test:
                         (counted, force) = _kind switch
                         {
-                            TestRunKind.Vitest => OnVitestLine(line),
-                            TestRunKind.Playwright => OnPlaywrightLine(line),
-                            _ => OnDotnetLine(line),
+                            TestRunKind.Vitest => OnVitestLine(parsed.VitestFile),
+                            TestRunKind.Playwright => OnPlaywrightLine(parsed.PlaywrightTotal, parsed.PlaywrightOutcome),
+                            _ => OnDotnetLine(parsed.DotnetOutcome),
                         };
                         break;
                 }
@@ -776,18 +808,18 @@ public sealed partial class TestRunService
             if (toSend is not null) Report(toSend);
         }
 
-        private (bool Counted, bool Force) OnDotnetLine(string line)
+        private (bool Counted, bool Force) OnDotnetLine(TestOutcomeLine? parsed)
         {
-            if (VsTestConsoleParser.ParseOutcome(line) is not { } outcome) return (false, false);
+            if (parsed is not { } outcome) return (false, false);
             _counts = Add(_counts, outcome.Outcome, +1);
             if (outcome.Outcome == TestLineOutcome.Failed && _failedNames.Count < MaxConsoleFailures)
                 _failedNames.Add(outcome.Name);
             return (true, false);
         }
 
-        private (bool Counted, bool Force) OnVitestLine(string line)
+        private (bool Counted, bool Force) OnVitestLine(VitestFileLine? parsed)
         {
-            if (VitestReporterParser.ParseFileLine(line) is not { } file) return (false, false);
+            if (parsed is not { } file) return (false, false);
             _filesDone++;
             var passed = Math.Max(0, file.Tests - file.Failed - file.Skipped);
             // Не загрузившийся файл — одно падение: тестов в нём нет, а прогон красный
@@ -798,14 +830,14 @@ public sealed partial class TestRunService
             return (true, false);
         }
 
-        private (bool Counted, bool Force) OnPlaywrightLine(string line)
+        private (bool Counted, bool Force) OnPlaywrightLine(int? parsedTotal, PlaywrightOutcomeLine? parsed)
         {
-            if (_total is null && PlaywrightListParser.ParseTotal(line) is { } total)
+            if (_total is null && parsedTotal is { } total)
             {
                 _total = total;
                 return (false, true);
             }
-            if (PlaywrightListParser.ParseOutcome(line) is not { } outcome) return (false, false);
+            if (parsed is not { } outcome) return (false, false);
             if (_byTitle.TryGetValue(outcome.Title, out var previous)) _counts = Add(_counts, previous, -1);
             _byTitle[outcome.Title] = outcome.Outcome;
             _counts = Add(_counts, outcome.Outcome, +1);

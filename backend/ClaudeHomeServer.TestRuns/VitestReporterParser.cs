@@ -15,16 +15,24 @@ public static partial class VitestReporterParser
 {
     // Отступ ровно в один пробел, значок исхода файла, путь и скобка со счётчиками. Тесты под
     // файлом идут с отступом в 5 пробелов — сюда не попадают
-    [GeneratedRegex(@"^ (✓|❯|×|↓) (\S.*?) \((\d+) tests?((?: \| \d+ \w+)*)\)(?: [\d.]+m?s)?$")]
+    [GeneratedRegex(@"^ (✓|❯|×|↓) (\S.*?) \((\d+) tests?((?: \| \d+ \w+)*)\)(?: [\d.]+m?s)?$",
+        RegexOptions.None, VsTestConsoleParser.RegexTimeoutMs)]
     private static partial Regex FileLine();
 
-    [GeneratedRegex(@"\| (\d+) (\w+)")]
+    [GeneratedRegex(@"\| (\d+) (\w+)", RegexOptions.None, VsTestConsoleParser.RegexTimeoutMs)]
     private static partial Regex CounterPart();
 
     // Строки длиннее не разбираем: путь файла столько не весит
     public const int MaxLineLength = 4096;
 
+    // Потолок сопоставления сработал — строка не распознана
     public static VitestFileLine? ParseFileLine(string raw)
+    {
+        try { return ParseFileLineCore(raw); }
+        catch (RegexMatchTimeoutException) { return null; }
+    }
+
+    private static VitestFileLine? ParseFileLineCore(string raw)
     {
         if (raw.Length > MaxLineLength || !raw.StartsWith(' ') || raw.StartsWith("  ", StringComparison.Ordinal))
             return null;
@@ -51,11 +59,13 @@ public static partial class VitestReporterParser
     public static bool IsListedFile(string raw)
     {
         var line = raw.TrimEnd('\r');
-        return line.Length is > 0 and < MaxLineLength && !char.IsWhiteSpace(line[0])
-            && !line.StartsWith('(') && !line.Contains("Warning", StringComparison.Ordinal)
-            && SourceFile().IsMatch(line);
+        if (line.Length is 0 or >= MaxLineLength || char.IsWhiteSpace(line[0])
+            || line.StartsWith('(') || line.Contains("Warning", StringComparison.Ordinal))
+            return false;
+        try { return SourceFile().IsMatch(line); }
+        catch (RegexMatchTimeoutException) { return false; }
     }
 
-    [GeneratedRegex(@"\.[cm]?[jt]sx?$")]
+    [GeneratedRegex(@"\.[cm]?[jt]sx?$", RegexOptions.None, VsTestConsoleParser.RegexTimeoutMs)]
     private static partial Regex SourceFile();
 }

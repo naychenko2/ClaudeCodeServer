@@ -187,6 +187,39 @@ public class TestRunServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Артефакты_СсылкаВместоTestRuns_НаружуНичегоНеПишетсяПрогонИдёт()
+    {
+        var outside = TreeLinks.Outside("ccs-testruns-out-");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(_root, ".cc-attachments"));
+            if (!TreeLinks.TryLink(Path.Combine(_root, ".cc-attachments", TestRunService.ArtifactsSubdir), outside,
+                    directory: true))
+                return; // проверка живёт в CI на Linux
+            var launcher = new FakeLauncher(_processes, phase => phase switch
+            {
+                TestRunPhase.List => Ok("list-tests.txt"),
+                TestRunPhase.Test => new Script("console-normal.txt", 1),
+                _ => Ok(),
+            });
+
+            var result = await Service(launcher, new BuildConcurrencyGate(1))
+                .RunDotnetAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+            result.Phase.Should().Be(TestRunPhase.Test, "ссылка в пути артефактов — не повод валить прогон");
+            result.ExitCode.Should().Be(1);
+            result.Reports.Should().BeEmpty("отчёты из папки за ссылкой хост не читает — сводка по выводу");
+            result.ArtifactsPath.Should().BeNull();
+            Directory.EnumerateFileSystemEntries(outside, "*", SearchOption.AllDirectories).Should()
+                .BeEmpty("хост не создал за деревом ни каталога, ни console.log");
+        }
+        finally
+        {
+            try { Directory.Delete(outside, recursive: true); } catch { /* занят */ }
+        }
+    }
+
+    [Fact]
     public async Task Прогресс_ФазыИСчётчик_ПроцентТочныйИНеВыше99()
     {
         var launcher = RealRun();
@@ -401,6 +434,7 @@ public class TestRunServiceTests : IDisposable
         {
             spec.FileName.Should().Be("dotnet");
             spec.Heavy.Should().BeTrue();
+            spec.PrivateBuildNodes.Should().BeTrue("узлы MSBuild прогона не переживают его и не общие с чужими");
             spec.Track.Should().BeTrue();
             spec.RedirectStdin.Should().BeFalse();
             spec.Env.Should().Contain("DOTNET_CLI_UI_LANGUAGE", "en");

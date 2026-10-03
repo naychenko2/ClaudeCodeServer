@@ -21,26 +21,34 @@ public static partial class VsTestConsoleParser
     // не попадают: у первых нет отступа, у вторых двоеточие сразу после слова.
     // Без ленивой группы и необязательного хвоста: та пара давала квадратичный перебор на
     // длинной строке (L-a ревью этапа 2). Хвост « [12 ms]» срезается руками, за один проход
-    [GeneratedRegex(@"^  (Passed|Failed|Skipped) (\S.*)$")]
+    [GeneratedRegex(@"^  (Passed|Failed|Skipped) (\S.*)$", RegexOptions.None, RegexTimeoutMs)]
     private static partial Regex OutcomeLine();
 
     // Строка длиннее — не строка исхода (имя теста с аргументами столько не весит), разбор не
     // тратит на неё время вовсе
     public const int MaxOutcomeLineLength = 8192;
 
+    // Потолок одного сопоставления для ВСЕХ регулярок разбора вывода в TestRuns: вывод пишет код
+    // агента, и шаблон, пропущенный ревью, не должен повесить поток чтения. Сработал —
+    // RegexMatchTimeoutException, и разбор считает строку нераспознанной. Настоящая строка
+    // разбирается за микросекунды, потолок — с запасом на загруженную машину
+    public const int RegexTimeoutMs = 200;
+
     // Ошибка сборки MSBuild/компилятора: «путь(стр,кол): error CS0246: текст [проект]»
-    [GeneratedRegex(@":\s*error\s+[A-Z]+\d*\s*:")]
+    [GeneratedRegex(@":\s*error\s+[A-Z]+\d*\s*:", RegexOptions.None, RegexTimeoutMs)]
     private static partial Regex BuildErrorLine();
 
     // Хвост « [C:\…\App.csproj]», которым MSBuild подписывает ошибку проектом
-    [GeneratedRegex(@"\s+\[[^\[\]]+\.(?:cs|fs|vb)proj\]$")]
+    [GeneratedRegex(@"\s+\[[^\[\]]+\.(?:cs|fs|vb)proj\]$", RegexOptions.None, RegexTimeoutMs)]
     private static partial Regex ProjectSuffix();
 
     // Исход теста в строке (с именем теста) или null, если это не строка исхода
     public static TestOutcomeLine? ParseOutcome(string line)
     {
         if (line.Length > MaxOutcomeLineLength || !line.StartsWith("  ", StringComparison.Ordinal)) return null;
-        var match = OutcomeLine().Match(line.TrimEnd('\r'));
+        Match match;
+        try { match = OutcomeLine().Match(line.TrimEnd('\r')); }
+        catch (RegexMatchTimeoutException) { return null; }
         if (!match.Success) return null;
         var outcome = match.Groups[1].Value switch
         {
@@ -97,8 +105,13 @@ public static partial class VsTestConsoleParser
         var result = new List<string>();
         foreach (var raw in lines)
         {
-            if (!BuildErrorLine().IsMatch(raw)) continue;
-            var line = ProjectSuffix().Replace(raw.Trim(), "");
+            string line;
+            try
+            {
+                if (!BuildErrorLine().IsMatch(raw)) continue;
+                line = ProjectSuffix().Replace(raw.Trim(), "");
+            }
+            catch (RegexMatchTimeoutException) { continue; }
             if (!seen.Add(line)) continue;
             result.Add(line);
             if (result.Count >= max) break;

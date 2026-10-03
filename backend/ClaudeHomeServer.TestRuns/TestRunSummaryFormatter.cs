@@ -20,11 +20,18 @@ public static class TestRunSummaryFormatter
     // Escape-последовательности терминала: CSI (цвета «ESC[31m», курсор) и OSC (ссылки
     // «ESC]8;;…BEL»). Playwright кладёт цвета прямо в error.message JSON-отчёта, и
     // FORCE_COLOR=0 их не убирает — без вычистки модель и карточка видят «\u001b[2mexpect(»
+    // Общая для всех движков (вывод npm-сборки чистится ею же). Потолок сопоставления сработал —
+    // текст остаётся как есть: лучше escape-мусор в строке, чем повисший поток
     private static readonly Regex AnsiEscape = new(
-        @"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])", RegexOptions.Compiled);
+        @"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])", RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(VsTestConsoleParser.RegexTimeoutMs));
 
-    public static string StripAnsi(string text) =>
-        text.Contains('\x1B') ? AnsiEscape.Replace(text, "") : text;
+    public static string StripAnsi(string text)
+    {
+        if (!text.Contains('\x1B')) return text;
+        try { return AnsiEscape.Replace(text, ""); }
+        catch (RegexMatchTimeoutException) { return text; }
+    }
 
     // Подпись вида прогона в итоге и на карточке: «Тесты · vitest»
     public static string KindTitle(TestRunKind kind) => kind switch

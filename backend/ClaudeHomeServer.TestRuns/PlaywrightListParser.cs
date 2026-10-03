@@ -13,27 +13,37 @@ public readonly record struct PlaywrightOutcomeLine(TestLineOutcome Outcome, int
 // строкой с «(retry #1)» — счётчик ведётся по тестам, а не по попыткам.
 public static partial class PlaywrightListParser
 {
-    [GeneratedRegex(@"^\s*Running (\d+) tests? using \d+ workers?")]
+    [GeneratedRegex(@"^\s*Running (\d+) tests? using \d+ workers?", RegexOptions.None, VsTestConsoleParser.RegexTimeoutMs)]
     private static partial Regex RunningLine();
 
     // ok/✓ — прошёл, x/✘ — упал, -/° — пропущен; номер, затем название до хвоста «(5ms)»
-    [GeneratedRegex(@"^\s{2,}(ok|✓|x|✘|-|°)\s+(\d+)\s+(\S.*)$")]
+    [GeneratedRegex(@"^\s{2,}(ok|✓|x|✘|-|°)\s+(\d+)\s+(\S.*)$", RegexOptions.None, VsTestConsoleParser.RegexTimeoutMs)]
     private static partial Regex OutcomeLine();
 
-    [GeneratedRegex(@"\s+\((?:retry #\d+|[\d.]+m?s)\)$")]
+    [GeneratedRegex(@"\s+\((?:retry #\d+|[\d.]+m?s)\)$", RegexOptions.None, VsTestConsoleParser.RegexTimeoutMs)]
     private static partial Regex TrailingParen();
 
     public const int MaxLineLength = 8192;
 
-    // «Running N tests using …» → N; иначе null
+    // «Running N tests using …» → N; иначе null (и когда сработал потолок сопоставления)
     public static int? ParseTotal(string raw)
     {
         if (raw.Length > MaxLineLength) return null;
-        var match = RunningLine().Match(raw);
-        return match.Success ? int.Parse(match.Groups[1].Value) : null;
+        try
+        {
+            var match = RunningLine().Match(raw);
+            return match.Success ? int.Parse(match.Groups[1].Value) : null;
+        }
+        catch (RegexMatchTimeoutException) { return null; }
     }
 
     public static PlaywrightOutcomeLine? ParseOutcome(string raw)
+    {
+        try { return ParseOutcomeCore(raw); }
+        catch (RegexMatchTimeoutException) { return null; }
+    }
+
+    private static PlaywrightOutcomeLine? ParseOutcomeCore(string raw)
     {
         if (raw.Length > MaxLineLength) return null;
         var match = OutcomeLine().Match(raw.TrimEnd('\r'));

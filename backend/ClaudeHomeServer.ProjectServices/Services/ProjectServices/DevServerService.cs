@@ -354,9 +354,10 @@ public sealed class DevServerService : IDisposable
         var tail = instance.OutputTail();
         // Занятый порт — самая частая причина: тот же сервис уже поднят снаружи (Rider,
         // терминал, второй инстанс продукта). Голый хвост лога об этом не говорит.
+        var busyPort = instance.Port;
         var reason = mismatch
-            ?? (DevServerLaunchPolicy.LooksLikePortInUse(tail) && instance.Port > 0
-                ? $"Порт {instance.Port} уже занят — возможно, сервис запущен снаружи."
+            ?? (DevServerLaunchPolicy.LooksLikePortInUse(tail) && busyPort > 0
+                ? $"Порт {busyPort} уже занят — возможно, сервис запущен снаружи."
                 : exited ? $"Процесс завершился с кодом {exitCode}."
                 : DevServerLaunchPolicy.ReadyTimeoutReason(readyWait,
                     builds: DevServerLaunchPolicy.ReadyTimeoutFor(command, args) == DevServerLaunchPolicy.DotnetRunReadyTimeout));
@@ -376,6 +377,13 @@ public sealed class DevServerService : IDisposable
         try { return p.ExitCode; } catch { return -1; }
     }
 
+    /// <summary>PID процесса, либо 0 — объект мог быть уже освобождён.</summary>
+    private static int SafePid(System.Diagnostics.Process p)
+    {
+        try { return p.Id; }
+        catch (InvalidOperationException) { return 0; }
+    }
+
     /// <summary>
     /// Безопасная проверка «процесс завершился».
     ///
@@ -390,13 +398,6 @@ public sealed class DevServerService : IDisposable
     ///
     /// Для вызывающего освобождённый процесс неотличим от завершённого — отвечаем true.
     /// </summary>
-    /// <summary>PID процесса, либо 0 — объект мог быть уже освобождён.</summary>
-    private static int SafePid(System.Diagnostics.Process p)
-    {
-        try { return p.Id; }
-        catch (InvalidOperationException) { return 0; }
-    }
-
     private static bool SafeHasExited(Process p)
     {
         // ObjectDisposedException наследует InvalidOperationException — одного catch хватает

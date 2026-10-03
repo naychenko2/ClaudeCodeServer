@@ -50,15 +50,66 @@ public sealed class PhasePipeline
         public void Dispose() => running.TryRemove(key, out _);
     }
 
+    public const string LogName = "console.log";
+
     // Папка артефактов прогона: Relative — относительно рабочего дерева (для модели),
-    // Full — полный путь хоста. Каталог создаётся сразу
+    // Full — полный путь хоста. Каталог создаёт бэкенд на ХОСТЕ в дереве, которое пишет агент:
+    // ни один каталог от корня до неё не должен быть ссылкой (проверка до создания и после),
+    // иначе хост создавал бы каталоги и писал лог за деревом. Ссылка по пути — InTree=false:
+    // прогон идёт как обычно, но хост в эту папку не пишет и отчёты из неё не читает
     public static PhaseArtifacts CreateArtifacts(string workingDirectory, string subdir)
     {
         var runId = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}";
         var relative = $"{TreeExcludes.AttachmentsDir}/{subdir}/{runId}";
         var full = Path.Combine(workingDirectory, TreeExcludes.AttachmentsDir, subdir, runId);
-        Directory.CreateDirectory(full);
-        return new PhaseArtifacts(runId, relative, full);
+        var inTree = TreeFiles.NoLinksUnder(workingDirectory, full);
+        if (inTree)
+        {
+            try
+            {
+                Directory.CreateDirectory(full);
+                inTree = TreeFiles.NoLinksUnder(workingDirectory, full);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                inTree = false;
+            }
+        }
+        return new PhaseArtifacts(runId, relative, full, inTree);
+    }
+
+    // Полный лог прогона — НОВЫЙ файл console.log в папке артефактов (подложенная ссылка или
+    // файл на его месте — отказ, а не запись сквозь). null — лог не пишется, прогон идёт
+    public static StreamWriter? OpenLog(string workingDirectory, PhaseArtifacts artifacts) =>
+        artifacts.InTree && TreeFiles.CreateNewInTree(workingDirectory, Path.Combine(artifacts.Full, LogName)) is { } stream
+            ? new StreamWriter(stream, new System.Text.UTF8Encoding(false))
+            : null;
+
+    // Потолок создания папки артефактов и лога (CreateArtifactsAsync)
+    public static readonly TimeSpan ArtifactsTimeout = TimeSpan.FromSeconds(5);
+
+    // Папка артефактов и лог — синхронная работа с диском дерева агента, а зовут её под
+    // блокировкой дерева: поэтому в пуле под потолком и токеном. Не уложились или отменено —
+    // прогон идёт без лога (InTree=false, Log=null); опоздавший лог закроется, когда доедет.
+    // Брать их ДО блокировки нельзя без мусора: отказ «дерево занято» оставлял бы пустые папки
+    public static async Task<(PhaseArtifacts Artifacts, StreamWriter? Log)> CreateArtifactsAsync(
+        string workingDirectory, string subdir, TimeSpan timeout, CancellationToken ct)
+    {
+        var work = Task.Run(() =>
+        {
+            var artifacts = CreateArtifacts(workingDirectory, subdir);
+            return (artifacts, OpenLog(workingDirectory, artifacts));
+        }, CancellationToken.None);
+        try
+        {
+            return await work.WaitAsync(timeout, ct);
+        }
+        catch (Exception e) when (e is TimeoutException or OperationCanceledException)
+        {
+            _ = work.ContinueWith(t => { if (t.IsCompletedSuccessfully) t.Result.Item2?.Dispose(); },
+                CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+            return (new PhaseArtifacts("", "", "", InTree: false), null);
+        }
     }
 
     // Серверный потолок включает ожидание очереди: иначе долгая очередь съела бы запас до
@@ -141,8 +192,9 @@ public sealed class PhasePipeline
     }
 }
 
-// Папка артефактов одного прогона (см. PhasePipeline.CreateArtifacts)
-public sealed record PhaseArtifacts(string RunId, string Relative, string Full);
+// Папка артефактов одного прогона (см. PhasePipeline.CreateArtifacts); InTree=false — по пути
+// ссылка, хост туда не пишет и оттуда не читает
+public sealed record PhaseArtifacts(string RunId, string Relative, string Full, bool InTree);
 
 // Итог процесса фазы: код выхода (null — процесс не завершился) и признак гашения
 public readonly record struct PhaseOutcome(int? ExitCode, bool Aborted);

@@ -35,8 +35,14 @@ export {
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
-export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel } from '../subsystems/registryCore';
+export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel, SLOT_CONTEXT_KIND } from '../subsystems/registryCore';
 export type { SubsystemManifest, RevealPanelDetail } from '../subsystems/registryCore';
+
+// ─── chatContext (ADR-023): контракты вида контекста хода ────────────────────
+export type {
+  ChatContextDto, ChatContextItem, ChatContextPrimary, ChatContextRef, ContextKindApi, ContextKindCtx, KindState,
+  ContextAction, ActionKind, LaunchParam, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
+} from '../chatContext/types';
 
 // ─── genPanelDismissed ───────────────────────────────────────────────────────
 // Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл

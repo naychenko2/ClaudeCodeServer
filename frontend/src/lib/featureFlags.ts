@@ -25,6 +25,9 @@ export const FLAGS = {
   // всегда.
   mcpCatalog: 'mcp-catalog',
   chatContext: 'chat-context',
+  // Строка контекста над полем ввода (ADR-023): ветка, с чем работаем, что подключено;
+  // чипы действий заменяют переключатель полос и режимов
+  composerContextRow: 'composer-context-row',
   // Ветвление чата (docs/research/chat-branching-2026-09.md, §7): новый чат с копией
   // истории оригинала до выбранного шага.
   chatBranch: 'chat-branch',

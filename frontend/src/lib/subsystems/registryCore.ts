@@ -218,6 +218,8 @@ export interface ChatCardBadgeApi { open?: (session: Session) => boolean }
 // Имена слотов — одной точкой: каркас и модули ссылаются на константы, а не на строки.
 export const SLOT_COMPOSER_STRIP = 'composer-strip';
 export const SLOT_COMPOSER_MODE = 'composer-mode';
+// Вид объекта контекста чата (ADR-023): вклад — ContextKindApi, имя вклада — не обязательно
+export const SLOT_CONTEXT_KIND = 'context-kind';
 export const SLOT_COMPOSER_CHIP = 'composer-chip';
 export const SLOT_WORKSPACE_PANEL_DEF = 'workspace-panel-def';
 

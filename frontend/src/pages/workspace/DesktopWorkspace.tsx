@@ -434,16 +434,13 @@ export function DesktopWorkspace(p: Props) {
         panels={zonePanels}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
-        railFooter={
-          // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
-          // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
-          // flex: 1 — по высоте этой обёртки док проектов считает число видимых
-          // иконок; без неё они все уезжали бы под лупу «ещё N»
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
-            {wallOn && <WallDock onOpenWall={p.onOpenWall!} />}
-          </div>
-        }
+        // Вертикаль у края окна: док проектов НАД рельсой панелей, под ней — док
+        // стены (вход в режим «Стена»: клик или дроп карточки чата из панели «Чаты»).
+        // Высоту под док проектов меряет рельса: остаток зоны за вычетом её самой
+        railHeader={maxHeight => (
+          <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} maxHeight={maxHeight} />
+        )}
+        railFooter={wallOn ? <WallDock onOpenWall={p.onOpenWall!} /> : undefined}
       />
 
       {/* === Центр: коммит → задача → персона → доска → файл/ридер (split/fullscreen) → чат === */}

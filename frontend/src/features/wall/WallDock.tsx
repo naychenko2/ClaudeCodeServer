@@ -1,5 +1,5 @@
-// Док «Стены» — капсула ПОД доком проектов, в обоих режимах на одном месте:
-// номера чатов стены, лупа (пикер чатов) и приёмник перетаскивания — перетащи
+// Док «Стены» — капсула под рельсой панелей, в обоих режимах на одном месте:
+// номера чатов стены, плюс (пикер чатов) и приёмник перетаскивания — перетащи
 // карточку чата из панели «Чаты», и чат встанет колонкой. Кнопок входа и выхода
 // тут НЕТ: на стену уводит клик по номерку чата, обратно — пилюля «Проекты» в
 // шапке (на стене она подсвечена как активный раздел и гасит режим).
@@ -7,7 +7,7 @@
 // При маунте лениво поднимает состав стены (initWall): addChat шлёт PUT полного
 // состава, и без загруженного снимка дроп затирал бы чужие монеты.
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { AlarmClock, Plus, ZoomIn } from 'lucide-react';
+import { AlarmClock, Plus } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { RailCapsule, RailHat, RailIconButton, RailSep } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -68,7 +68,7 @@ export function WallDock({ onOpenWall, slots = 0 }: {
       document.removeEventListener('drop', onEnd);
     };
   }, []);
-  // Пикер живёт в самом доке: лупа есть в обоих режимах, и держать её состояние
+  // Пикер живёт в самом доке: плюс есть в обоих режимах, и держать его состояние
   // в двух экранах-владельцах было бы дублем
   const [picker, setPicker] = useState(false);
 
@@ -97,7 +97,6 @@ export function WallDock({ onOpenWall, slots = 0 }: {
   return (
     <RailCapsule
       side="left"
-      style={{ marginTop: 8 }}
       onMouseEnter={() => setRailHover(true)}
       onMouseLeave={() => setRailHover(false)}
       // Мишень как у рельсы панелей: пока чат тащат — пунктирная обводка, под
@@ -223,12 +222,11 @@ export function WallDock({ onOpenWall, slots = 0 }: {
       })}
       {chats.length > 0 && <RailSep />}
 
-      {/* Поиск чата для стены — в ОБОИХ режимах: собрать стену можно, не покидая
-          проект. Лупа с плюсом: за кнопкой пикер с поиском по всем чатам, и найденный
-          чат добавляется на стену — плюс про это. Голый «плюс» тут занят мишенью
-          перетаскивания выше */}
-      <RailIconButton side="left" label="Найти чат для стены" onClick={() => setPicker(true)}>
-        <ZoomIn size={16} strokeWidth={ICON_STROKE} />
+      {/* Добавить чат на стену — в ОБОИХ режимах: собрать стену можно, не покидая
+          проект. За плюсом пикер с поиском по всем чатам; тот же плюс несёт мишень
+          перетаскивания — оба пути про одно, «чат встанет на стену» */}
+      <RailIconButton side="left" label="Добавить чат на стену" onClick={() => setPicker(true)}>
+        <Plus size={17} strokeWidth={ICON_STROKE} />
       </RailIconButton>
 
       </>

@@ -238,26 +238,23 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
         {/* Левая зона панелей — ШТАТНАЯ и с той же раскладкой, что у воркспейса:
             PanelZone без пропа panelStack берёт общий стор wsPanels, поэтому
             панель, перетащенная в воркспейсе влево, и здесь окажется слева.
-            Под рельсой — те же два дока: проекты и стена. */}
+            Над рельсой — док проектов, под ней — док стены. */}
         <PanelZone
           side="left"
           floating
           panels={zonePanels}
           sessionPanels={sessionPanels}
-          railFooter={
-            // flex: 1 — обёртка обязана забрать всю высоту под рельсой: по ней док
-            // проектов считает, сколько иконок показать (иначе все уезжают под лупу)
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              {/* Док проектов — ВСЕГДА, даже на пустой стене: с него и начинают
-                  («открыть проект» и «собрать стену» — соседние действия). Активного
-                  проекта без колонок нет, и подсвечивать в ряду просто нечего */}
-              <ProjectRail
-                project={focusedProject}
-                onOpenSettings={() => { if (focusedProject) setEditProject(focusedProject); }}
-              />
-              <WallDock slots={slots} />
-            </div>
-          }
+          // Док проектов — ВСЕГДА, даже на пустой стене: с него и начинают («открыть
+          // проект» и «собрать стену» — соседние действия). Стоит над рельсой, как в
+          // воркспейсе. Активного проекта без колонок нет — подсвечивать нечего
+          railHeader={maxHeight => (
+            <ProjectRail
+              project={focusedProject}
+              onOpenSettings={() => { if (focusedProject) setEditProject(focusedProject); }}
+              maxHeight={maxHeight}
+            />
+          )}
+          railFooter={<WallDock slots={slots} />}
         />
 
         {/* Колонки чатов */}

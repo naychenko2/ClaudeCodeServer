@@ -377,6 +377,21 @@ const tipBtn = (primary: boolean) => ({
 
 type OpenMenu = { kind: 'git' | 'exec' | 'refs'; rect: DOMRect } | null;
 
+// Счётчик загрузок шрифтов страницы: растёт, когда шрифты готовы и после каждой догрузки (`loadingdone`)
+function useFontsEpoch(): number {
+  const [epoch, setEpoch] = useState(0);
+  useEffect(() => {
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    if (!fonts) return;
+    let alive = true;
+    const bump = () => { if (alive) setEpoch(n => n + 1); };
+    void fonts.ready.then(bump);
+    fonts.addEventListener?.('loadingdone', bump);
+    return () => { alive = false; fonts.removeEventListener?.('loadingdone', bump); };
+  }, []);
+  return epoch;
+}
+
 export function ContextRowView(props: ContextRowViewProps) {
   const { git, primary, refs, exec, isMobile, iconOf, actionLabel } = props;
   const [menu, setMenu] = useState<OpenMenu>(null);
@@ -391,7 +406,9 @@ export function ContextRowView(props: ContextRowViewProps) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [shift, setShift] = useState(0);
   const trial = useRef({ sig: '', locked: false });
-  const sig = [props.width, base.index, git?.label, git?.changes, primary?.label, primary?.version, exec?.value, refs.map(r => r.label).join(',')].join('|');
+  // Ширины чипов меряются по реальному шрифту: пока моноширинный не загрузился, запасной шире и «не влезло» ложное
+  const fontsEpoch = useFontsEpoch();
+  const sig = [fontsEpoch, props.width, base.index, git?.label, git?.changes, primary?.label, primary?.version, exec?.value, refs.map(r => r.label).join(',')].join('|');
   const rungs = !props.pick && !isMobile ? ladderRungs(facts) : [];
   const last = rungs.length - 1;
   const at = Math.min(last, Math.max(0, base.index - shift));

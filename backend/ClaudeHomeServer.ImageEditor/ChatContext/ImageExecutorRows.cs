@@ -108,7 +108,7 @@ public static class ImageExecutorRows
         if (m.Id == ImageEditCatalog.AutoModelId || m.Caps is not { } caps) return "";
         var ops = caps.Ops;
         if (ops.Count > 0 && ops.All(o => o == ImageEditOp.EnhanceFaces) && op != ImageEditOp.EnhanceFaces)
-            return "Запускается кнопкой «Улучшить лица» в быстрых действиях";
+            return "Умеет только «Улучшить лица» — для этой задачи не годится";
         var fromScratch = op == ImageEditOp.Generate;
         var image = !fromScratch && hasImage;
         if (!image && !fromScratch && !ops.Contains(ImageEditOp.Generate))

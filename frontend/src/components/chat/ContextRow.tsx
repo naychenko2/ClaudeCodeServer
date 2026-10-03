@@ -1,7 +1,7 @@
 // Строка контекста хода: связка стора контекста (lib/chatContext) и git-чипа с отрисовкой
 // ContextRowView. Рисуется вместо хоста полос над композером, когда включён флаг
 // composer-context-row. Открытость правой панели сюда не приходит: строка от неё не зависит.
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { File as FileIcon } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
@@ -9,6 +9,7 @@ import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
 import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
 import { getKindApi } from '../../lib/chatContext/registry';
+import { getRunVersion, subscribeRun } from '../../lib/chatContext/actionRun';
 import { withThumb } from '../../lib/chatContext/thumbs';
 import {
   clearContext, detachRef, ensureChatContext, releasePrimary, undoReleasePrimary, useChatContext, useReleaseOffer,
@@ -95,6 +96,8 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
   const ctx = useChatContext(sessionId);
   const offer = useReleaseOffer(sessionId);
   useActionMemoryVersion();
+  // Ответ вопроса («набор стемов») живёт в состоянии запуска и меняет строки «Чем»: строка обязана его слушать
+  useSyncExternalStore(subscribeRun, getRunVersion, getRunVersion);
   const [ref, width] = useContainerWidth<HTMLDivElement>();
   useEffect(() => { void ensureChatContext(sessionId); }, [sessionId]);
 

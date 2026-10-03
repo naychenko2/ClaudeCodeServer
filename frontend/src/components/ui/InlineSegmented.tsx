@@ -36,6 +36,7 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
             disabled={disabled || o.disabled}
             aria-pressed={active}
             title={o.title}
+            aria-label={o.title}
             onClick={() => onChange(o.value)}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,

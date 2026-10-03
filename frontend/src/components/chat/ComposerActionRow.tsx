@@ -99,7 +99,7 @@ export function ComposerActionRow({ actions, selectedId, onSelect, question, isM
         <div data-action-question="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
           <span style={{ fontSize: FS.sm, color: C.textMuted, flexShrink: 0 }}>{q.title}:</span>
           <InlineSegmented isMobile={isMobile} value={question.value} onChange={question.onChange}
-            options={q.options.map(o => ({ value: o.value, label: o.label }))} />
+            options={q.options.map(o => ({ value: o.value, label: o.label, title: `${q.title}: ${o.label}` }))} />
         </div>
       )}
       {menu && (

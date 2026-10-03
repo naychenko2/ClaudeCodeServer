@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { etaFraction } from './etaProgress';
 import { baseName } from './labels';
-import { runLabelParts } from './actionRun';
+import { getRunVersion, runLabelParts, setRunParam } from './actionRun';
 import type { ContextAction } from './types';
 
 const edit: ContextAction = { id: 'edit', kind: 'run', label: 'Изменить', verb: 'Изменяем', hint: '' };
@@ -26,5 +26,11 @@ describe('подпись хода и прогресс', () => {
   it('имя файла без папки', () => {
     expect(baseName('a/b/c.png')).toBe('c.png');
     expect(baseName('hero.png')).toBe('hero.png');
+  });
+
+  it('ответ вопроса («набор стемов») поднимает версию запуска — по ней перерисовывается строка «Чем»', () => {
+    const v = getRunVersion();
+    setRunParam('s-q', 'audio:x:stems', 'stemSet', '4');
+    expect(getRunVersion()).toBe(v + 1);
   });
 });

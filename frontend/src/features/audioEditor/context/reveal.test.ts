@@ -16,7 +16,7 @@ const dispatched: { type: string; detail: unknown }[] = [];
 };
 
 import { REVEAL_PANEL_EVENT } from '../../../lib/subsystems/registryCore';
-import { __applyThreads, __resetAudioStore, handleEvent, soundDraftKey } from '../thread/threadStore';
+import { __applyThreads, __resetAudioStore, soundDraftKey } from '../thread/threadStore';
 import { revealSoundPanel } from './reveal';
 
 const reveals = () => dispatched.filter(d => d.type === REVEAL_PANEL_EVENT).map(d => d.detail);

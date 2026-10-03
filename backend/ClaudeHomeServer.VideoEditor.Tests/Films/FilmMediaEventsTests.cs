@@ -73,6 +73,31 @@ public sealed class FilmMediaEventsTests : IDisposable
     }
 
     [Fact]
+    public async Task Две_версии_одной_правки_дают_одну_строку_переснять_а_кадр_идёт_за_последней()
+    {
+        var (scene, _) = _w.SceneWithClip(settings: Frames(FrameRef.Image("t1", "v1")));
+        _w.Feed.Records.Clear();
+
+        await _hub.PublishAsync(Image("t1", "v2"));
+        await _hub.PublishAsync(Image("t1", "v3"));
+
+        _w.Feed.Records.Should().ContainSingle(r => r.Record.RecordType == VideoThreadRecordTypes.Note);
+        _w.Threads.Get(Owner, Session).Scenes.Single(s => s.SceneId == scene.SceneId).Settings.FrameA
+            .Should().Be(FrameRef.Image("t1", "v3"));
+    }
+
+    [Fact]
+    public async Task Одновременные_события_одной_нити_дают_одну_строку()
+    {
+        _w.SceneWithClip(settings: Frames(FrameRef.Image("t1", "v1")));
+        _w.Feed.Records.Clear();
+
+        await Task.WhenAll(Enumerable.Range(2, 8).Select(i => _hub.PublishAsync(Image("t1", "v" + i))));
+
+        _w.Feed.Records.Should().ContainSingle(r => r.Record.RecordType == VideoThreadRecordTypes.Note);
+    }
+
+    [Fact]
     public async Task Клипа_ещё_нет_кадр_просто_переезжает_без_пересъёмки_и_шума()
     {
         var added = _w.Threads.AddScene(Owner, Session, "video/утро", Frames(FrameRef.Image("t1", "v1")), null);

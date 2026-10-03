@@ -9,16 +9,27 @@ namespace ClaudeHomeServer.Services.VideoEditor.Films;
 // клип сцены уже снят, сцена получает «Кадр изменён — переснять» (признак вычисляется из снимка входов версии),
 // а в ленте появляется тихая строка. Узнаёт о версии ТОЛЬКО событием IMediaEvents: нитей картинок модуль не
 // читает. Кадр без follow и кадр-файл не трогаются.
+//
+// Тихая строка «Кадр изменён — переснять» пишется ОДИН раз на смену: если кадр сцены уже «переснять» (вторая версия
+// той же правки, повтор события), строки не будет — «переснять» уже сказано. События обрабатываются по одному:
+// без замка два одновременных события оба увидели бы кадр ещё не устаревшим и написали бы по строке (B15).
 public sealed class FilmFrameFollower(VideoJobThreads threads, ILogger<FilmFrameFollower> log)
 {
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
     public async Task OnImageVersionAsync(ImageVersionAdded evt)
     {
-        foreach (var (owner, sessionId) in threads.Store.Chats())
+        await _gate.WaitAsync();
+        try
         {
-            if (owner != evt.OwnerId) continue;
-            foreach (var scene in threads.Store.Get(owner, sessionId).Scenes)
-                await FollowAsync(owner, sessionId, scene, evt);
+            foreach (var (owner, sessionId) in threads.Store.Chats())
+            {
+                if (owner != evt.OwnerId) continue;
+                foreach (var scene in threads.Store.Get(owner, sessionId).Scenes)
+                    await FollowAsync(owner, sessionId, scene, evt);
+            }
         }
+        finally { _gate.Release(); }
     }
 
     private async Task FollowAsync(string owner, string sessionId, VideoSceneDto scene, ImageVersionAdded evt)
@@ -35,6 +46,9 @@ public sealed class FilmFrameFollower(VideoJobThreads threads, ILogger<FilmFrame
         };
         // Клип уже снят — это «переснять»: строка для хода и тихая строка в ленте; иначе кадр просто переехал
         var shot = scene.CurrentVersionId is not null;
+        // Кадр уже «переснять» до этой версии — строку в ленту не повторяем (журнал для хода и событие остаются)
+        var stale = shot ? VideoStale.Compute(scene) : null;
+        var alreadyStale = stale is not null && (!a || stale.FrameA) && (!b || stale.FrameB);
         var which = a && b ? "A и B" : a ? "A" : "B";
         var text = $"Кадр {which} сцены «{scene.Name}» изменён в «Картинках» — переснять";
         var written = threads.Store.SetSettings(owner, sessionId, scene.SceneId, moved, null,
@@ -42,7 +56,7 @@ public sealed class FilmFrameFollower(VideoJobThreads threads, ILogger<FilmFrame
         if (written.Status != VideoThreadWriteStatus.Ok) return;
         try
         {
-            if (shot)
+            if (shot && !alreadyStale)
                 await threads.NoteAsync(sessionId, $"Кадр изменён — переснять: {scene.Name}",
                     new { sceneId = scene.SceneId, frame = which, threadId = evt.ThreadId, versionId = evt.VersionId });
             await threads.BroadcastAsync(owner, threads.ScopeKeyOf(sessionId), sessionId, written.State);

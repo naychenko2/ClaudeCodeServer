@@ -35,27 +35,31 @@ public sealed class TestsToolset(
     internal const string LocalProjectReason =
         "Тесты локального проекта прогоняй Bash'ем на устройстве: run_tests работает только с проектами на сервере.";
 
+    private static readonly ProjectRunCaller.Texts Refusals = new(
+        BadRoute: "Некорректный маршрут сервера прогона тестов — вызов отклонён.",
+        ProjectOnly: "Прогон тестов работает только в чате проекта.",
+        LocalProject: LocalProjectReason,
+        ReadOnly: "Персона с доступом «Только чтение» тесты не запускает: прогон пишет bin/obj и файлы проекта.",
+        NoBash: "Персоне запрещён Bash — значит, и запуск кода тестов: run_tests исполняет код проекта.");
+
+    private readonly ProjectRunCaller _caller = new(sessions, projects, personas, broadcaster);
+
     public string Name => ServerName;
     public string Version => "1.0.0";
 
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
-        TryResolveSession(context, out _, out _) ? Tools : [];
+        _caller.TryResolveSession(context, Refusals, out _, out _) ? Tools : [];
 
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
         if (tool != ToolName) throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
-        if (!TryResolveSession(context, out var session, out var error)) return Deny(error);
+        if (!_caller.TryResolveSession(context, Refusals, out var session, out var error)) return Deny(error);
         if (runs is null)
             return Deny("Прогон тестов выключен на этом сервере — запусти тесты Bash'ем.");
-        if (!TryResolveProject(session, context.OwnerId, out var project, out error)) return Deny(error);
-        if (session.PersonaId is { } personaId && personas.Get(personaId, context.OwnerId) is { } persona
-            && !PersonaAccessPolicy.AllowsBash(persona))
-            return Deny(persona.Access == PersonaAccess.ReadOnly
-                ? "Персона с доступом «Только чтение» тесты не запускает: прогон пишет bin/obj и файлы проекта."
-                : "Персоне запрещён Bash — значит, и запуск кода тестов: run_tests исполняет код проекта.");
+        if (!_caller.TryResolveProject(session, context.OwnerId, Refusals, out var project, out error)) return Deny(error);
 
-        var root = session.WorktreePath is { Length: > 0 } worktree ? worktree : project.RootPath;
+        var root = ProjectRunCaller.RootOf(session, project);
         if (!TryParseKind(StringArg(arguments, "kind"), out var kind, out error)) return Deny(error);
         var filter = StringArg(arguments, "filter");
         if (TestRunService.LooksLikeOption(filter))
@@ -92,7 +96,7 @@ public sealed class TestsToolset(
         TestRunResult? result = null;
         try
         {
-            result = await runs.RunAsync(request, p => SendProgress(session.Id, context.ToolUseId, p, stages), ct);
+            result = await runs.RunAsync(request, p => _caller.SendProgress(session.Id, context.ToolUseId, p, stages), ct);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -102,8 +106,11 @@ public sealed class TestsToolset(
         finally
         {
             // Этапы и итог — на карточку и в историю вызова и при обрыве: строка этапов
-            // «прервано · сборка 1:10» должна пережить F5
-            SendFinal(session.Id, context.ToolUseId, stages, result);
+            // «прервано · сборка 1:10» должна пережить F5. result null — RunAsync бросил (отмена,
+            // сбой запуска): этап, на котором оборвалось, — неудача
+            _caller.SendFinal(session.Id, context.ToolUseId, stages,
+                failed: result is null || TestRunStages.EndedBadly(result),
+                totals: result is null ? null : TestRunStages.Totals(result));
         }
         // Упавшие тесты — штатный исход вызова, а не ошибка инструмента; ошибка — только отказ
         return new McpToolCallResult(runs.FormatResult(result), IsError: result.Refusal is not null);
@@ -125,7 +132,7 @@ public sealed class TestsToolset(
     }
 
     // Расширения, которые dotnet test принимает целью; каталог допустим отдельно
-    private static readonly string[] TargetExtensions = [".csproj", ".sln", ".slnx", ".slnf"];
+    internal static readonly string[] TargetExtensions = [".csproj", ".sln", ".slnx", ".slnf"];
 
     // Сколько кандидатов в цель показывать в отказе и как глубоко их искать
     private const int MaxCandidatesShown = 10;
@@ -158,7 +165,7 @@ public sealed class TestsToolset(
     }
 
     // Общая проверка пути от модели: не опция и не response-файл, относительный, внутри дерева
-    private static bool TryResolveInside(string root, string raw, string tool, out string full, out string relative,
+    internal static bool TryResolveInside(string root, string raw, string tool, out string full, out string relative,
         out string error)
     {
         full = relative = error = "";
@@ -208,7 +215,7 @@ public sealed class TestsToolset(
 
     // Один кандидат — он и цель; несколько — отказ со списком: угадывать нельзя. Кандидат,
     // похожий на опцию («-», «@»), отсеивается и здесь — второй рубеж после FindFiles
-    private static bool PickSingle(IReadOnlyList<string> found, string what, string none,
+    internal static bool PickSingle(IReadOnlyList<string> found, string what, string none,
         out string? target, out string error)
     {
         target = null;
@@ -232,7 +239,7 @@ public sealed class TestsToolset(
 
     // Файлы по имени в дереве (относительные пути через «/»), обход шириной до SearchDepth
     // уровней мимо служебных и скрытых каталогов (.git, node_modules, bin/obj, worktree'ы в .claude)
-    private static List<string> FindFiles(string root, Func<string, bool> match)
+    internal static List<string> FindFiles(string root, Func<string, bool> match)
     {
         var found = new List<string>();
         var level = new List<string> { root };
@@ -413,103 +420,9 @@ public sealed class TestsToolset(
         return true;
     }
 
-    // Шлёт фазу прогона в чат-вызыватель мимо CLI (CLI notifications/progress в stream-json не
-    // пробрасывает). Потеря события безвредна — следующая фаза пришлёт новое. Каждое событие
-    // несёт полный снимок этапов; смена этапа сразу пишется и в историю вызова
-    private void SendProgress(string sessionId, string? toolUseId, TestRunProgress progress, TestRunStages stages)
-    {
-        if (toolUseId is null) return;
-        var changed = stages.Advance(progress.Stage);
-        var snapshot = stages.Snapshot();
-        if (changed) sessions.RecordToolStages(sessionId, toolUseId, snapshot, totals: null, persist: false);
-        Broadcast(sessionId, new ToolProgressMessage(toolUseId, Stage: progress.Stage, Label: progress.Label,
-            Percent: progress.Percent, Exact: progress.Exact, Stages: snapshot) { SessionId = sessionId });
-    }
+    private static McpToolCallResult Deny(string text) => ProjectRunCaller.Deny(text);
 
-    // Конец прогона (в том числе обрыв): последний этап закрывается, итоговые счётчики уходят
-    // на карточку и сразу на диск — tool_result после «Стопа» может не прийти вовсе.
-    // result null — RunAsync бросил (отмена, сбой запуска): этап, на котором оборвалось, — неудача
-    private void SendFinal(string sessionId, string? toolUseId, TestRunStages stages, TestRunResult? result)
-    {
-        if (toolUseId is null || stages.Snapshot().Count == 0) return;
-        var final = stages.Finish(failed: result is null || TestRunStages.EndedBadly(result));
-        var totals = result is null ? null : TestRunStages.Totals(result);
-        sessions.RecordToolStages(sessionId, toolUseId, final, totals, persist: true);
-        Broadcast(sessionId, new ToolProgressMessage(toolUseId, Stages: final, Totals: totals) { SessionId = sessionId });
-    }
-
-    private void Broadcast(string sessionId, ToolProgressMessage message)
-    {
-        if (broadcaster is null) return;
-        _ = SendAsync();
-
-        async Task SendAsync()
-        {
-            try { await broadcaster.ToSession(sessionId, message); }
-            catch { /* живое событие */ }
-        }
-    }
-
-    // --- Маршрут и контекст: /mcp/tests/{sessionId} ---
-
-    // Один сегмент — id сессии; форма как у local-media (белый список resumeSessionId)
-    private static bool TryParseRoute(string? route, out string sessionId)
-    {
-        sessionId = "";
-        if (route is null || route.Split('/').Length != 1) return false;
-        if (route.Length is < 1 or > 128 || !route.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))
-            return false;
-        sessionId = route;
-        return true;
-    }
-
-    private bool TryResolveSession(McpToolCallContext context, out Session session, out string error)
-    {
-        session = null!;
-        error = "";
-        if (!TryParseRoute(context.RouteTail, out var sessionId))
-        {
-            error = "Некорректный маршрут сервера прогона тестов — вызов отклонён.";
-            return false;
-        }
-        var owned = sessions.GetOwned(sessionId, context.OwnerId);
-        if (owned is null)
-        {
-            error = "Чат-вызыватель не найден или принадлежит другому владельцу — доступ закрыт.";
-            return false;
-        }
-        session = owned;
-        return true;
-    }
-
-    private bool TryResolveProject(Session session, string ownerId, out Project project, out string error)
-    {
-        project = null!;
-        error = "";
-        if (session.ProjectId is null)
-        {
-            error = "Прогон тестов работает только в чате проекта.";
-            return false;
-        }
-        var found = projects.GetById(session.ProjectId);
-        if (found is null || !string.Equals(found.OwnerId, ownerId, StringComparison.Ordinal))
-        {
-            error = "Проект чата не найден.";
-            return false;
-        }
-        if (!ProjectCapabilities.FilesOnServer(found))
-        {
-            error = LocalProjectReason;
-            return false;
-        }
-        project = found;
-        return true;
-    }
-
-    private static McpToolCallResult Deny(string text) => new(text, IsError: true);
-
-    private static string? StringArg(JsonObject arguments, string name) =>
-        arguments[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+    private static string? StringArg(JsonObject arguments, string name) => ProjectRunCaller.StringArg(arguments, name);
 
     // Состав постоянный — один инструмент; описание не зависит ни от хода, ни от сессии
     internal static IReadOnlyList<McpToolSchema> Tools { get; } =
@@ -538,10 +451,11 @@ public sealed class TestsToolset(
                     ["target"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "ОТНОСИТЕЛЬНО корня проекта. dotnet — проект или решение (например "
-                            + "backend/ClaudeHomeServer.Tests или backend/App.slnx); vitest/playwright — каталог с "
-                            + "конфигом (например frontend или web/apps/demo; node_modules — в нём или выше, "
-                            + "в корне монорепы)",
+                        // Без примеров имён: модель подставляла их буквально
+                        ["description"] = "ОТНОСИТЕЛЬНО корня проекта. dotnet — путь к .sln/.slnx/.csproj "
+                            + "(или к каталогу тестового проекта), как он лежит в дереве проекта (имя не "
+                            + "придумывай — возьми из дерева); vitest/playwright — каталог с конфигом "
+                            + "(node_modules — в нём или выше, в корне монорепы)",
                     },
                     ["filter"] = new JsonObject
                     {

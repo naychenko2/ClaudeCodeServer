@@ -31,5 +31,7 @@ public sealed class TestRunsSubsystem : IAppSubsystem
         services.AddSingleton<NpmBuildService>();
         // Подсказка «тесты — через run_tests»: выключенная подсистема не объявляет и секцию
         services.AddPromptSectionContributor<TestRunsHintContributor>();
+        // Подсказка «сборка — через build» (сервер dev): та же форма, свой гейт HasDevMcp
+        services.AddPromptSectionContributor<BuildHintContributor>();
     }
 }

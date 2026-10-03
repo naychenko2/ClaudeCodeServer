@@ -36,7 +36,7 @@ public class TestsMcpNodeTests : IDisposable
 
     private static TestsMcpContext Ctx() => new("http://localhost:5000", () => "svc-tok", UseHttp: true);
 
-    private static LlmProviderRegistry Providers(bool trim)
+    private static LlmProviderRegistry Providers(bool trim, string keep = "tasks")
     {
         var dict = new Dictionary<string, string?>
         {
@@ -47,13 +47,13 @@ public class TestsMcpNodeTests : IDisposable
         if (trim)
         {
             dict["LlmProviders:local:TrimMcpServers"] = "true";
-            dict["LlmProviders:local:KeepMcpServers:0"] = "tasks";
+            dict["LlmProviders:local:KeepMcpServers:0"] = keep;
         }
         return new LlmProviderRegistry(new Microsoft.Extensions.Configuration.ConfigurationBuilder()
             .AddInMemoryCollection(dict).Build());
     }
 
-    private (JsonObject? Servers, string Keys) BuildTurn(TestsMcpContext? tests, bool trim = false)
+    private (JsonObject? Servers, string Keys) BuildTurn(TestsMcpContext? tests, bool trim = false, string keep = "tasks")
     {
         var context = new LlmSessionContext(
             RootPath: Path.Combine(Path.GetTempPath(), "ccs-tests-" + Guid.NewGuid().ToString("N")[..8]),
@@ -64,7 +64,7 @@ public class TestsMcpNodeTests : IDisposable
             TasksMcp: null,
             TestsMcp: tests);
         var session = new ClaudeSession(new Session { Id = "sess-1", Model = "test-model" }, context,
-            providers: Providers(trim));
+            providers: Providers(trim, keep));
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var result = method.Invoke(session, [null, null, false])!;
@@ -110,6 +110,43 @@ public class TestsMcpNodeTests : IDisposable
         (servers?.ContainsKey(McpEndpoints.TestsName) ?? false).Should().BeFalse(
             "tests не в KeepMcpServers провайдера — селективный блок TrimMcpServers гасит узел");
         keys.Should().NotContain("tests");
+    }
+
+    // Сборка (dev: build) едет вторым узлом на том же контексте, что и tests: гейты одни
+    [Fact]
+    public void Контекст_УзелDevНаКаждомХоде_СигнатураСтабильна()
+    {
+        var first = BuildTurn(Ctx());
+        var second = BuildTurn(Ctx());
+
+        foreach (var turn in new[] { first, second })
+        {
+            var node = turn.Servers![McpEndpoints.DevName];
+            node.Should().NotBeNull("контекст есть — узел dev обязан ехать в каждый ход");
+            node!["type"]!.GetValue<string>().Should().Be("http");
+            node["url"]!.GetValue<string>().Should().Be("http://localhost:5000/mcp/dev/sess-1");
+            node["headers"]![McpEndpoints.CallerSessionHeader]!.GetValue<string>().Should().Be("sess-1");
+        }
+        first.Keys.Should().Contain("dev");
+        second.Keys.Should().Be(first.Keys);
+    }
+
+    [Fact]
+    public void БезКонтекста_УзлаDevНет()
+    {
+        var (servers, _) = BuildTurn(null);
+
+        (servers?.ContainsKey(McpEndpoints.DevName) ?? false).Should().BeFalse();
+    }
+
+    // TrimMcpServers гасит dev своим ключом: Keep("tests") оставляет только тесты
+    [Fact]
+    public void TrimMcp_KeepТолькоTests_DevГасится()
+    {
+        var (servers, _) = BuildTurn(Ctx(), trim: true, keep: McpEndpoints.TestsName);
+
+        servers!.ContainsKey(McpEndpoints.TestsName).Should().BeTrue();
+        servers.ContainsKey(McpEndpoints.DevName).Should().BeFalse("dev не в KeepMcpServers провайдера");
     }
 
     // Лаунчер ловит env и сигнатуру хода; процесс — спящий shell, гасится в Dispose

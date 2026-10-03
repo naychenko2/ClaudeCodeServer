@@ -149,6 +149,22 @@ public class ClaudeSessionAutoModeTests
         lock (sent) sent.Should().BeEmpty("в «Авто» прогон тестов идёт без карточки");
     }
 
+    // Сборка (dev: build) в «Авто» — так же, как run_tests: без карточки
+    [Fact]
+    public async Task Авто_Build_РазрешаетБезКарточки()
+    {
+        var info = new Session { Mode = ClaudeMode.Auto };
+        var (session, sent) = NewClaudeSession(info);
+        await using var _ = session;
+
+        var pending = DecideAsync(session, "req-6b", "mcp__dev__build", "");
+        var finished = await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(5)));
+        if (finished != pending) session.RespondPermission("req-6b", "deny");
+
+        (await pending).Should().Be("allow");
+        lock (sent) sent.Should().BeEmpty("в «Авто» сборка идёт без карточки");
+    }
+
     // Остальные режимы на run_tests показывают карточку как раньше
     [Theory]
     [InlineData(ClaudeMode.Default)]
@@ -174,6 +190,7 @@ public class ClaudeSessionAutoModeTests
     // Авто-разрешение точечное: соседний инструмент того же сервера и прочие MCP спрашивают
     [Theory]
     [InlineData("mcp__tests__run_tests_all")]
+    [InlineData("mcp__dev__build_all")]
     [InlineData("mcp__fal__run_model")]
     public async Task Авто_ДругойMcp_ПоказываетКарточку(string toolName)
     {

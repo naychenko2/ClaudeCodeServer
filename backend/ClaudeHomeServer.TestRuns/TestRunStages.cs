@@ -22,6 +22,9 @@ public sealed class TestRunStages(Func<long> clock)
         "build" => "сборка",
         "stand" => "стенд",
         "running" => "тесты",
+        // Подъём дев-стенда (start_stand): запуск процесса и ожидание порта, затем «готов»
+        "start" => "запуск",
+        "ready" => "готов",
         _ => stage,
     };
 

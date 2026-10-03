@@ -689,6 +689,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.LocalMediaToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.TestsToolset>();
+// Сборка с прогрессом (dev: build) — движки той же вертикали TestRuns, гейты как у tests
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.DevToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают

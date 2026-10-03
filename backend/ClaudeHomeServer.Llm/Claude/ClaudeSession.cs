@@ -659,6 +659,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // Полное имя инструмента прогона тестов в CLI: в «Авто» разрешается без карточки
     internal const string RunTestsToolName = "mcp__" + McpEndpoints.TestsName + "__run_tests";
 
+    // Полное имя инструмента сборки в CLI: в «Авто» разрешается без карточки, как run_tests
+    internal const string BuildToolName = "mcp__" + McpEndpoints.DevName + "__build";
+
     // Игнор служебной папки вложений в git ставится лениво один раз за жизнь сессии:
     // модель кладёт туда картинки для показа в ленте (см. подсказку про картинки в промпте),
     // а у проекта со своим .gitignore правила может не быть — при аплоаде его пишет
@@ -1024,6 +1027,9 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasLocalMedia = LocalMediaHttpOn();
         // Прогон тестов: stdio-ветки нет, контекста нет у локального проекта и RO-персоны
         var hasTests = TestsHttpOn();
+        // Сборка (dev: build): гейты те же, что у tests, — один контекст на оба узла; урезается
+        // TrimMcpServers отдельно
+        var hasDev = TestsHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
         bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
@@ -1121,6 +1127,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasTests = hasTests && Keep(McpEndpoints.TestsName);
+            hasDev = hasDev && Keep(McpEndpoints.DevName);
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
             hasFalAi = hasFalAi && Keep("fal-ai");
@@ -1130,7 +1137,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasImageEditor && !hasLocalMedia && !hasTests && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasLocalMedia && !hasTests && !hasDev && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -1859,6 +1866,24 @@ public class ClaudeSession : ILlmSessionAdapter
                 shapes[McpEndpoints.TestsName] = "t:http";
             }
 
+            if (hasDev)
+            {
+                // Сборка (build): http-ветка только, stdio-отката нет; контекст — общий с tests
+                servers[McpEndpoints.DevName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_testsMcp!.ApiUrl, McpEndpoints.DevName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_testsMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (один инструмент), вариативен только транспорт
+                shapes[McpEndpoints.DevName] = "t:http";
+            }
+
             if (hasArchitecture)
             {
                 // C4-модель проекта (arch_*): единственная ветка — http, как у веб-поиска.
@@ -2533,12 +2558,13 @@ public class ClaudeSession : ILlmSessionAdapter
             && autoCmdEl.ValueKind == JsonValueKind.String
             && !IrreversibleCommandGuard.LooksIrreversible(autoCmdEl.GetString()))
             return "allow";
-        // Прогон тестов в «Авто» — как безопасный Bash: без карточки. Только этот инструмент,
-        // другие MCP сюда не расширять. Персону без Bash/ReadOnly режут узел (BuildTestsContext)
-        // и сам вызов (TestsToolset) — авто-разрешение их не обходит.
+        // Прогон тестов и сборка в «Авто» — как безопасный Bash: без карточки. Только эти два
+        // инструмента, другие MCP сюда не расширять. Персону без Bash/ReadOnly режут узел
+        // (BuildTestsContext) и сам вызов (TestsToolset, DevToolset) — авто-разрешение их не обходит.
         if (ruleDecision == null
             && Info.Mode == ClaudeMode.Auto
-            && string.Equals(toolName, RunTestsToolName, StringComparison.Ordinal))
+            && (string.Equals(toolName, RunTestsToolName, StringComparison.Ordinal)
+                || string.Equals(toolName, BuildToolName, StringComparison.Ordinal)))
             return "allow";
         // Сессия-исполнитель задачи или ход правила автоматизации персоны работают автономно —
         // отвечать на карточку разрешения некому (чат никто не открывал), и без этого исполнитель
@@ -3163,6 +3189,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasLocalMediaMcp: _localMediaMcp is not null && McpDelivered("local-media"),
                     HasImageEditorMcp: _imageEditorMcp is not null && McpDelivered(McpEndpoints.ImageEditorName),
                     HasTestsMcp: _testsMcp is not null && McpDelivered(McpEndpoints.TestsName),
+                    HasDevMcp: _testsMcp is not null && McpDelivered(McpEndpoints.DevName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth));
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
@@ -3364,6 +3391,9 @@ public class ClaudeSession : ILlmSessionAdapter
             // поэтому секция стабильная и едет системным блоком, а не хвостом хода
             if (contributorSections.TryGetValue("mcp-tests", out var testsHint))
                 Add("mcp-tests", testsHint.Title ?? "Как запускать тесты", testsHint.Text, group: "mcp");
+            // Подсказка «сборка — через build»: та же форма, гейт HasDevMcp, системный блок
+            if (contributorSections.TryGetValue("mcp-dev", out var devHint))
+                Add("mcp-dev", devHint.Title ?? "Как собирать проект", devHint.Text, group: "mcp");
 
             // Подсказка про показ картинок — только у чата с проектом: локальный путь фронт
             // резолвит относительно RootPath проекта (ChatImage), вне проекта показать нечем.

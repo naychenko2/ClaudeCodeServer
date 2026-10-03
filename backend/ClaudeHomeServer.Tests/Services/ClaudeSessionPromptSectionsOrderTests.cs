@@ -480,6 +480,37 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             $"{why}: подсказка звала бы инструмент, которого у хода нет");
     }
 
+    // Подсказка build (сервер dev): HasDevMcp собирает ClaudeSession из доставки узла dev; секция
+    // постоянная и едет СИСТЕМНЫМ блоком
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BuildHint_СерверДоставлен_СистемнымБлоком(bool recallInTurnText)
+    {
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus,
+                [new ClaudeHomeServer.Services.TestRuns.BuildHintContributor()]),
+            ProjectChat(), c => c with { TestsMcp = TestsMcp });
+
+        systemPrompt.Should().Contain(ClaudeHomeServer.Services.TestRuns.BuildHintContributor.Text);
+        sections.Should().NotContain(s => s.Key == "mcp-dev" && s.Kind == "turn");
+    }
+
+    [Theory]
+    [InlineData("нет узла")]
+    [InlineData("TrimMcpServers без dev")]
+    public async Task BuildHint_СервераНетУХода_ПодсказкиНет(string why)
+    {
+        var (systemPrompt, _) = await RunTailTurnAsync(false, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus,
+                [new ClaudeHomeServer.Services.TestRuns.BuildHintContributor()]),
+            ProjectChat(), why == "нет узла" ? c => c : c => c with { TestsMcp = TestsMcp },
+            why == "нет узла" ? null : TrimToTasks);
+
+        systemPrompt.Should().NotContain(ClaudeHomeServer.Services.TestRuns.BuildHintContributor.Text,
+            $"{why}: подсказка звала бы инструмент, которого у хода нет");
+    }
+
     private static readonly TestsMcpContext TestsMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
 
     private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate

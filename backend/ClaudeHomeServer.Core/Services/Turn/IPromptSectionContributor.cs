@@ -76,6 +76,9 @@ public sealed record PromptSessionContext(
     // MCP-сервер прогона тестов (run_tests) доехал до хода: в нём учтены подсистема, чат
     // проекта на сервере и персона, которой не запрещён Bash; TrimMcpServers — тоже
     bool HasTestsMcp = false,
+    // MCP-сервер сборки (dev: build) доехал до хода: гейты те же, что у tests, а
+    // TrimMcpServers гасит его отдельно (Keep("dev"))
+    bool HasDevMcp = false,
     // Живого человека у хода нет — см. TurnAudience.IsUnattended
     bool Unattended = false);
 

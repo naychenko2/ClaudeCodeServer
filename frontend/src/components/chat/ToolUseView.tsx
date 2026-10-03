@@ -8,7 +8,7 @@ import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContex
 import { LiveDot, ProgressUnderline } from '../ui';
 import { awaitsToolStart, formatClock, isQueued, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
 import { useRunningElapsed } from '../../hooks/useRunningElapsed';
-import { toolLabel, toolWord, toolCardLabel, testRunArg, localJobsWaitArg, consoleCaption, isConsoleTool, RUN_TESTS_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
+import { toolLabel, toolWord, toolCardLabel, testRunArg, buildArg, localJobsWaitArg, consoleCaption, isConsoleTool, RUN_TESTS_TOOL, BUILD_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
 import { useIsMobile } from '../../lib/breakpoints';
 import { CodeBlockFrame } from './CodeCopyButton';
 import { MediaBlock, extractMediaMeta, mediaLabel } from './MediaBlock';
@@ -176,6 +176,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
     : n === 'taskupdate' && inp.taskId != null
       ? `#${inp.taskId}${typeof inp.status === 'string' ? ` → ${TASK_STATUS_RU[inp.status] ?? inp.status}` : ''}`
       : item.name === RUN_TESTS_TOOL ? testRunArg(inp)
+      : item.name === BUILD_TOOL ? buildArg(inp)
       : item.name === LOCAL_JOBS_WAIT_TOOL ? localJobsWaitArg(inp)
       : null;
   // Консольная команда с русской подписью: в шапке — подпись, команда — в теле над выводом
@@ -293,7 +294,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // С этапами подпись прогресса едет при текущем этапе, а не в шапке (тесты — счётчик,
   // очередь — «занято 2»); «сборка» и подсчёт под «тестами» сами себе подпись — при них только
   // счётчик этапа
-  const stageCaption = hasStages ? stageCaptionOf(item.progress) : null;
+  const stageCaption = hasStages ? stageCaptionOf(item.progress, item.name) : null;
   // На мобиле подпись прогресса и итог — отдельной строкой под шапкой у ВСЕХ карточек
   // (шапка остаётся описанию, итог у всех стоит на одном месте). Строка держится с начала
   // выполнения, поэтому завершение ленту не сдвигает

@@ -24,6 +24,7 @@ const MCP_TOOL_LABELS: Record<string, string> = {
   mcp__glif__get_user_skill: 'Скиллы glif',
   mcp__glif__whoami: 'Аккаунт glif',
   mcp__tests__run_tests: 'Тесты',
+  mcp__dev__build: 'Сборка',
   // Локальная генерация на своей GPU (MCP local-media): сырое «local-media · local_jobs_wait»
   // на мобиле съедало всю шапку
   'mcp__local-media__local_generate_image': 'Локальная картинка',
@@ -85,9 +86,27 @@ export function testRunKindLabel(input: unknown): string {
   return typeof kind === 'string' ? TEST_KIND_LABELS[kind.toLowerCase()] ?? kind : 'dotnet';
 }
 
-// Подпись шапки карточки: у прогона тестов — с видом, у прочих — обычное имя
+// Сборка (dev: build): вид сборки в шапке — «Сборка · npm»; нет kind — dotnet (как на сервере)
+export const BUILD_TOOL = 'mcp__dev__build';
+export function buildKindLabel(input: unknown): string {
+  const kind = (input as { kind?: unknown } | null)?.kind;
+  return typeof kind === 'string' && kind ? kind.toLowerCase() : 'dotnet';
+}
+
+// Описание сборки в шапке: цель и скрипт npm, если он не build
+export function buildArg(input: unknown): string {
+  const inp = (input ?? {}) as { target?: unknown; script?: unknown };
+  const parts: string[] = [];
+  if (typeof inp.target === 'string' && inp.target) parts.push(inp.target);
+  if (typeof inp.script === 'string' && inp.script && inp.script !== 'build') parts.push(inp.script);
+  return parts.join(' · ');
+}
+
+// Подпись шапки карточки: у прогона тестов и сборки — с видом, у прочих — обычное имя
 export function toolCardLabel(name: string, input: unknown): string {
-  return name === RUN_TESTS_TOOL ? `${toolLabel(name)} · ${testRunKindLabel(input)}` : toolLabel(name);
+  if (name === RUN_TESTS_TOOL) return `${toolLabel(name)} · ${testRunKindLabel(input)}`;
+  if (name === BUILD_TOOL) return `${toolLabel(name)} · ${buildKindLabel(input)}`;
+  return toolLabel(name);
 }
 
 // Описание прогона тестов в шапке: цель, файлы и фильтр через « · »

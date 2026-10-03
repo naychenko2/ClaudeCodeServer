@@ -666,6 +666,15 @@ public class TestsToolsetTests : IDisposable
         TestsToolset.Tools.Single().Description.Should().Contain("target");
     }
 
+    // Замечание Киры (А): пример «backend/App.slnx» модель подставляла буквально
+    [Fact]
+    public void Схема_ОписаниеЦели_БезВыдуманныхИмён()
+    {
+        var target = TestsToolset.Tools.Single().InputSchema["properties"]!["target"]!["description"]!.GetValue<string>();
+
+        target.Should().NotContain("App.slnx").And.NotContain("например").And.Contain(".slnx");
+    }
+
     [Fact]
     public async Task ВсеГейтыПройдены_ДоходитДоСредыПроекта()
     {
@@ -682,7 +691,7 @@ public class TestsToolsetTests : IDisposable
         result.Text.Should().Contain("Не удалось запустить");
     }
 
-    private static (SessionManager Sessions, ProjectManager Projects, PersonaManager Personas) BuildSessionManager(
+    internal static (SessionManager Sessions, ProjectManager Projects, PersonaManager Personas) BuildSessionManager(
         IConfiguration config)
     {
         var userStore = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);

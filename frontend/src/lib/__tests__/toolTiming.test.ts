@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { activeToolLabel, awaitsToolStart, captionLeadMs, formatClock, formatWaitClock, isQueued, isToolGroupDone, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption } from '../toolTiming';
-import { toolCardLabel } from '../toolLabels';
+import { BUILD_TOOL, RUN_TESTS_TOOL, buildArg, toolCardLabel } from '../toolLabels';
 
 // Дефект Киры: карточка разрешения встаёт ПОСЛЕ группы и сворачивала её в «N действий»
 // вместе с живым Bash и таймером
@@ -324,6 +324,25 @@ describe('stageCaptionOf', () => {
     expect(stageCaptionOf({ stage: 'running', label: '12 из 177' })).toBe('12 из 177');
     expect(stageCaptionOf({ stage: 'build', label: 'сборка' })).toBeNull();
     expect(stageCaptionOf(null)).toBeNull();
+  });
+
+  it('у инструмента сборки этап «сборка» несёт счётчик проектов или этапов npm', () => {
+    expect(stageCaptionOf({ stage: 'build', label: '12 из 40 проектов' }, BUILD_TOOL)).toBe('12 из 40 проектов');
+    expect(stageCaptionOf({ stage: 'build', label: 'vite build · этап 2 из 6' }, BUILD_TOOL)).toBe('vite build · этап 2 из 6');
+    expect(stageCaptionOf({ stage: 'build', label: 'сборка' }, RUN_TESTS_TOOL)).toBeNull();
+  });
+});
+
+describe('карточка сборки (mcp__dev__build)', () => {
+  it('шапка «Сборка · вид», без kind — dotnet', () => {
+    expect(toolCardLabel(BUILD_TOOL, {})).toBe('Сборка · dotnet');
+    expect(toolCardLabel(BUILD_TOOL, { kind: 'npm', target: 'frontend' })).toBe('Сборка · npm');
+  });
+
+  it('аргумент — цель и скрипт npm, если он не build', () => {
+    expect(buildArg({ kind: 'npm', target: 'frontend', script: 'build' })).toBe('frontend');
+    expect(buildArg({ kind: 'npm', target: 'frontend', script: 'build:prod' })).toBe('frontend · build:prod');
+    expect(buildArg({})).toBe('');
   });
 });
 

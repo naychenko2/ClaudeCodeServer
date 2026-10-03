@@ -28,6 +28,8 @@ public static class McpEndpoints
     public const string LocalMediaName = "local-media";
     // Прогон тестов с прогрессом (run_tests): только серверные проекты, на устройство не едет
     public const string TestsName = "tests";
+    // Сборка с прогрессом (build: dotnet/npm): те же гейты, что у tests, на устройство не едет
+    public const string DevName = "dev";
     public const string WidgetsName = "widgets";
     public const string WorkspaceName = "wsp";
     public const string ArchitectureName = "architecture";

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Services.ChatContext;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Threads;
 
@@ -38,6 +39,8 @@ public sealed record AudioThread(
     public string? CurrentVersionId { get; init; }
     public IReadOnlyList<AudioThreadLaunch> Launches { get; init; } = [];
     public AudioThreadSettings? Settings { get; init; }
+    // Файлы, которые человек сохранил из нити (для «Зафиксировать только этот чат», ADR-023 §3.3)
+    public IReadOnlyList<ThreadSavedFile> SavedFiles { get; init; } = [];
     // Имя, предложенное для файла черновика при сохранении (склейка: «podcast-full.mp3»); null — нет
     public string? Name { get; init; }
 

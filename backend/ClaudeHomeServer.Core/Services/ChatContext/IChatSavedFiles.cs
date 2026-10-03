@@ -9,3 +9,6 @@ public interface IChatSavedFiles
 }
 
 public sealed record ChatSavedFile(string Path, string ThreadKind, DateTime SavedAt);
+
+// След сохранения в нити: хранится в самой нити (журнал событий обрезается), отсюда вертикаль читает IChatSavedFiles
+public sealed record ThreadSavedFile(string Path, DateTime SavedAt);

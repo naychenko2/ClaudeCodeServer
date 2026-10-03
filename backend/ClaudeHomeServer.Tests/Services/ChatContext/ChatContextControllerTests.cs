@@ -305,6 +305,26 @@ public class ChatContextControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task Saved_files_склеивает_сохранённые_файлы_картинок_и_звуков_чата_по_времени()
+    {
+        var chat = await Chat();
+        var other = await Chat();
+        var image = NewImageThread(chat, focus: false);
+        var audio = NewAudioThread(chat);
+        Images.MoveToFile(_ownerId, chat.Id, image, "images/hero.png");
+        Audios.MoveToFile(_ownerId, chat.Id, audio, "audio/intro.mp3");
+        var foreign = NewImageThread(other, focus: false);
+        Images.MoveToFile(_ownerId, other.Id, foreign, "images/other.png");
+
+        var resp = await _client.GetAsync($"{Ctx(chat)}/saved-files");
+
+        var items = (await Json(resp)).EnumerateArray().ToList();
+        items.Select(i => (i.GetProperty("path").GetString(), i.GetProperty("threadKind").GetString()))
+            .Should().Equal(("images/hero.png", "image"), ("audio/intro.mp3", "audio"));
+        foreach (var item in items) item.TryGetProperty("savedAt", out _).Should().BeTrue("контракт ручки: {path, threadKind, savedAt}");
+    }
+
+    [Fact]
     public async Task Локальный_проект_читается_пустым_а_запись_отказывает_400()
     {
         var local = _factory.Services.GetRequiredService<ProjectManager>()

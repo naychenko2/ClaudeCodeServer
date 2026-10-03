@@ -29,6 +29,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         services.AddHostedService<Threads.AudioThreadLifecycle>();
         // Вид «audio» контекста чата (ADR-023): Validate/Describe и засев из фокуса звука
         services.AddContextKindProvider<ChatContext.AudioContextKind>();
+        // Сохранённые человеком файлы чата для «Зафиксировать только этот чат» (ADR-023 §3.3)
+        services.AddSingleton<ClaudeHomeServer.Services.ChatContext.IChatSavedFiles, ChatContext.AudioSavedFiles>();
         // Запуск, сведение и склейка по ревизии контекста (КТ-3): единственная точка, где вход берётся из стора
         services.AddSingleton<ChatContext.AudioContextLaunch>();
         // Запуск, оборванный перезапуском, не висит в «Генерируем…»: сверка при старте

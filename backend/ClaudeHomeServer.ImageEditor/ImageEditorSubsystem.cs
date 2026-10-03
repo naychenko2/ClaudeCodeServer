@@ -75,6 +75,8 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddHostedService<Threads.ImageThreadLifecycle>();
         // Вид «image» контекста чата (ADR-023): Validate/Describe и засев из фокуса картинки
         services.AddContextKindProvider<ChatContext.ImageContextKind>();
+        // Сохранённые человеком файлы чата для «Зафиксировать только этот чат» (ADR-023 §3.3)
+        services.AddSingleton<ClaudeHomeServer.Services.ChatContext.IChatSavedFiles, ChatContext.ImageSavedFiles>();
         // Следы нити в ленте и событие image_thread_changed; нить идёт за переименованным файлом.
         // Варианты готовой задачи становятся версиями нити по событию исполнителя
         services.AddSingleton(sp =>

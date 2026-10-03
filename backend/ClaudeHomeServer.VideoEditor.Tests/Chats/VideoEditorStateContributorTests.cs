@@ -93,7 +93,8 @@ public sealed class VideoEditorStateContributorTests : IDisposable
         text.Should().Contain(VideoEditorStateContributor.PaceRule);
         VideoEditorStateContributor.PaceRule.Should()
             .Contain("«Сними все» означает").And.Contain("video_save_scene").And.Contain("video_film_build")
-            .And.Contain("video_wait").And.Contain("не спрашивая");
+            .And.Contain("video_wait").And.Contain("не спрашивая")
+            .And.Contain("сам не переснимай").And.Contain("заверши ход и доложи");
     }
 
     [Fact]

@@ -11,6 +11,7 @@ import { sceneMode } from './composer/sceneMode';
 import { FramePickerHost } from './context/framePicker';
 import { videoKindApi } from './context/kind';
 import { VideoChatWatcher } from './composer/VideoChatWatcher';
+import { VideoEditorHost } from './editor/VideoEditorHost';
 import { LaunchAnchor, QuietLine, SceneAnchor } from './feed/SceneCard';
 import { recordKey } from './feed/records';
 import { RECORD } from './api';
@@ -70,6 +71,7 @@ export const manifest: SubsystemManifest = {
     'composer-chip': [
       { name: 'video-watch', render: (ctx: ComposerChipCtx) => <VideoChatWatcher ctx={ctx} /> },
       { name: 'video-sheet', render: (ctx: ComposerChipCtx) => <VideoSheet ctx={ctx} /> },
+      { name: 'video-editor', render: (ctx: ComposerChipCtx) => <VideoEditorHost ctx={ctx} /> },
       { name: 'video-frame-picker', render: (ctx: ComposerChipCtx) => <FramePickerHost sessionId={ctx.sessionId} /> },
     ],
     // Панель «Видео»: «Сцена» и «Фильм» вкладками, в проекте и в правой колонке личного чата

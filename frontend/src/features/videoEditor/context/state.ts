@@ -7,11 +7,11 @@ import {
 } from 'aihome_shell/kit';
 import type { FilmState, VideoScene } from '../api';
 import { lastBuild } from '../film/model';
-import { drawInImages, editFrame, frameBOf, openFilmPanel, wireFrameBinding } from '../scene/actions';
+import { drawInImages, editFrame, frameBOf, wireFrameBinding } from '../scene/actions';
 import { hasClip } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
 import { frameInputOf, frameOfRef, frameRefOf, setFrameRef, type FrameSlot } from '../store/frameRefs';
-import { ensureVideoThreads, getFilm, getThreadsState, loadFilm, subscribeVideoStore } from '../store/videoStore';
+import { ensureVideoThreads, getFilm, getThreadsState, loadFilm, openVideoEditor, subscribeVideoStore } from '../store/videoStore';
 import { buildFilmActions, buildSceneActions } from './actions';
 import { buildFrameMenu } from './frameMenu';
 import { openFramePicker } from './framePicker';
@@ -101,7 +101,7 @@ export function videoActions(
   return buildFilmActions({
     built: !!film && lastBuild(film.document) !== null,
     empty: !!film && film.document.items.length === 0,
-    openMontage: () => openFilmPanel(ctx.sessionId, path),
+    openMontage: () => openVideoEditor(ctx.sessionId, 'film'),
   });
 }
 

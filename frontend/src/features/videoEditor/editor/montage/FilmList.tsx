@@ -7,10 +7,10 @@ import { AlertTriangle, ArrowDown, ArrowUp, Clapperboard, FolderTree, GripVertic
 import {
   api, Badge, Button, ByClaude, C, Dot, FS, IconButton, Menu, MenuItem, MenuSep, R, SegmentedControl, SHADOW, SP,
 } from 'aihome_shell/kit';
-import type { FilmCut, FilmCutType, FilmItem, FilmItemMark } from '../api';
-import { ic } from '../panel/primitives';
-import { TOUCH } from '../useBoxWidth';
-import { clampTrim, clipLength, CUT_LABEL, CUT_SECS, cutLabel, fileName, TRIM_STEP, trimLabel, trimmedLength } from './model';
+import type { FilmCut, FilmCutType, FilmItem, FilmItemMark } from '../../api';
+import { ic } from '../primitives';
+import { TOUCH } from '../../useBoxWidth';
+import { clampTrim, clipLength, CUT_LABEL, CUT_SECS, cutLabel, fileName, TRIM_STEP, trimLabel, trimmedLength } from '../../film/model';
 
 export interface RowActions {
   onMove: (from: number, to: number) => void;
@@ -18,6 +18,10 @@ export interface RowActions {
   onTrim: (i: number, trim: [number, number]) => void;
   onCut: (i: number, type: FilmCutType, sec: number) => void;
   onReshoot: (i: number) => void;
+  // «Работать со сценой» (редактор «Монтаж»): сцена становится основным объектом контекста; заменяет «Переснять»
+  onWork?: (i: number) => void;
+  // Сцена строки есть в этом чате (иначе «Работать» заведёт новую по снимку из фильма)
+  hasScene?: (i: number) => boolean;
   onReveal: (i: number) => void;
 }
 
@@ -99,7 +103,10 @@ function Row({ scope, it, i, mark, last, highlight, dragging, over, isMobile, tr
       {trimOpen && <Trim scope={scope} it={it} isMobile={isMobile} onDone={t => { a.onTrim(i, t); onTrimToggle(); }} />}
       {menuAt && (
         <Menu onClose={() => setMenuAt(null)} anchor={menuAt} anchorAlign="end" minWidth={240}>
-          <MenuItem icon={ic(Clapperboard)} label="Переснять" hint="Вкладка «Сцена»" onClick={() => { setMenuAt(null); a.onReshoot(i); }} />
+          {a.onWork
+            ? <MenuItem icon={ic(Clapperboard)} label="Работать со сценой" hint={a.hasScene?.(i) === false ? 'Сцены нет в этом чате — заведём новую' : 'Станет основной в контексте'}
+              onClick={() => { setMenuAt(null); a.onWork?.(i); }} />
+            : <MenuItem icon={ic(Clapperboard)} label="Переснять" hint="Вкладка «Сцена»" onClick={() => { setMenuAt(null); a.onReshoot(i); }} />}
           <MenuItem icon={ic(Scissors)} label="Подрезать…" onClick={() => { setMenuAt(null); onTrimToggle(); }} />
           <MenuItem icon={ic(ArrowUp)} label="Раньше" disabled={i === 0} onClick={() => { setMenuAt(null); a.onMove(i, i - 1); }} />
           <MenuItem icon={ic(ArrowDown)} label="Позже" disabled={last} onClick={() => { setMenuAt(null); a.onMove(i, i + 1); }} />

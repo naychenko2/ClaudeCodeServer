@@ -6,7 +6,7 @@
 import { getChatContextState, revealContextPanel } from 'aihome_shell/kit';
 import type { ActionQuote, ContextKindCtx, LaunchHandle, LaunchParam, LaunchRequest } from 'aihome_shell/kit';
 import { ERR, errorCode, errorText, videoApi, type FilmBuildStatus, type VideoCatalog, type VideoQuoteRequest } from '../api';
-import { DSP_TEXT } from '../film/FilmTab';
+import { DSP_TEXT } from '../editor/montage/FilmTab';
 import { openProjectFile } from '../film/nav';
 import { currentResolved, runErrorText } from '../scene/actions';
 import { plural, priceLines, modelLabel, snapTo, type ResolvedScene } from '../scene/model';

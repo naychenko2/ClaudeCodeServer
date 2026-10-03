@@ -286,6 +286,22 @@ export function useVideoThreads(scope: string, sessionId: string | null): VideoT
   return getThreadsState(sessionId);
 }
 
+// ── Редакторы «Сцена» и «Монтаж» (ADR-023, шаг 3ф-2): окно открыто в одном чате за раз ──
+
+export type VideoEditorKind = 'scene' | 'film';
+export interface VideoEditorOpen { sessionId: string; kind: VideoEditorKind }
+let _editor: VideoEditorOpen | null = null;
+export const getVideoEditor = (): VideoEditorOpen | null => _editor;
+export function openVideoEditor(sessionId: string, kind: VideoEditorKind) {
+  _editor = { sessionId, kind };
+  emit();
+}
+export function closeVideoEditor() {
+  if (!_editor) return;
+  _editor = null;
+  emit();
+}
+
 export function useVideoStoreVersion(): number {
   return useSyncExternalStore(subscribe, getVersion, getVersion);
 }

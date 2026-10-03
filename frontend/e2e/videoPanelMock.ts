@@ -284,7 +284,8 @@ function runBuild(f: Film) {
 }
 
 export async function mockApi(page: Page, trace = false) {
-  await page.route('**/hubs/**', async (r: Route) => {
+  // Только корневые /hubs/ и /api/: на dev-сервере Vite исходники лежат и под src/**/api/, glob их бы перехватил
+  await page.route(u => u.pathname.startsWith('/hubs/'), async (r: Route) => {
     if (r.request().url().includes('negotiate')) {
       return r.fulfill({ json: { negotiateVersion: 1, connectionId: 'c', connectionToken: 'c', availableTransports: [{ transport: 'WebSockets', transferFormats: ['Text'] }] } });
     }
@@ -304,7 +305,7 @@ export async function mockApi(page: Page, trace = false) {
       }
     });
   });
-  await page.route('**/api/**', async (r: Route) => {
+  await page.route(u => u.pathname.startsWith('/api/'), async (r: Route) => {
     const url = new URL(r.request().url());
     const p = decodeURIComponent(url.pathname.replace(/^\/api/, ''));
     const method = r.request().method();

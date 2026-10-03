@@ -1,7 +1,7 @@
 // Вклад «видео» в слот context-kind (ADR-023, шаг 3ф-1): чипы действий сцены и фильма, превью основного
 // объекта, «Чем» и параметры панели «Контекст», цена и запуск. Входы запуска бэкенд читает из стора контекста
 // по ревизии, поэтому здесь только `op`, текст, `params` и `contextRevision`. Редакторы «Сцена» и «Монтаж»
-// — шаг 3ф-2: пока «Монтаж» открывает прежнюю панель «Видео» на вкладке «Фильм».
+// — шаг 3ф-2 (editor/): «Монтаж» и «Редактор сцены» открывают окна, а не прежнюю панель «Видео».
 
 import { Clapperboard, Film } from 'lucide-react';
 import {
@@ -11,7 +11,7 @@ import {
 import { videoApi } from '../api';
 import { createScene, currentResolved } from '../scene/actions';
 import { isPersonalScope, videoScope } from '../scope';
-import { getCatalog, useVideoStoreVersion } from '../store/videoStore';
+import { getCatalog, openVideoEditor, useVideoStoreVersion } from '../store/videoStore';
 import { NO_AI_MODEL, shootExecutors } from './executors';
 import { paramsFor, quoteAction, launchAction } from './run';
 import { videoRefRoles } from './roles';
@@ -50,6 +50,12 @@ export const videoKindApi: ContextKindApi = {
   actions: (ctx, s) => videoActions(ctx, s),
   refRoles: (_ctx, primary, candidateKind) => (primary.kind === SCENE_KIND ? videoRefRoles(candidateKind) : []),
   preview: (ctx, item) => <VideoPreview ctx={ctx} item={item} />,
+  // «Открыть редактор» в «С чем»: у сцены — текст, пропорции и звук, у фильма — монтаж
+  editor: (ctx, item) => item.kind === FILM_KIND
+    ? { label: 'Открыть монтаж', hint: 'Порядок сцен, склейки, подрезка, музыка, сценарий', open: () => openVideoEditor(ctx.sessionId, 'film') }
+    : sceneOfPrimary(ctx.sessionId, item as never)
+      ? { label: 'Редактор сцены', hint: 'Текст сцены, пропорции, звук клипа', open: () => openVideoEditor(ctx.sessionId, 'scene') }
+      : null,
   executors: (ctx, actionId) => {
     const found = actionOf(ctx, actionId);
     if (found?.action.op === 'build') return NO_AI_MODEL;

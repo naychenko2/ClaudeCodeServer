@@ -14,14 +14,14 @@ import {
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
 import { filmFolder, filmPathOf, newFilmPath, saveTargetFor, snapshotOf, type SaveTarget } from '../film/model';
-import { progressLabel } from '../panel/useScene';
+import { progressLabel } from '../editor/useScene';
 import { downloadClip, openFilmPanel, openScenePanel, saveScene, selectFilmByHuman, selectSceneByHuman, takeVersion } from '../scene/actions';
 import { currentVersion, modelLabel, plural, staleNotes } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
 import {
   filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, loadFilmList, patchFilm, useFilmList, useVideoStoreVersion, useVideoThreads, type JobProgress,
 } from '../store/videoStore';
-import { ic } from '../panel/primitives';
+import { ic } from '../editor/primitives';
 import { recordOf, str } from './records';
 
 

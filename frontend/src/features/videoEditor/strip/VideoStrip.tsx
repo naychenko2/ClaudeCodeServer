@@ -16,9 +16,9 @@ import { isPersonalScope, videoScope } from '../scope';
 import {
   filmName, getCatalog, getFocusedFilmPath, getFocusedScene, getJobsOf, getPriceHint, useFilm, useVideoStoreVersion, useVideoThreads,
 } from '../store/videoStore';
-import { useSceneQuote } from '../panel/useScene';
+import { useSceneQuote } from '../editor/useScene';
 import { TOUCH, useBoxWidth } from '../useBoxWidth';
-import { ic } from '../panel/primitives';
+import { ic } from '../editor/primitives';
 import { filmChip, sceneChip, staleFilm } from './summary';
 import type { VideoScene } from '../api';
 

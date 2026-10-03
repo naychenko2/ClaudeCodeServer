@@ -10,14 +10,14 @@ import {
   type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
-import { FilmTab, useFilmPanel } from '../film/FilmTab';
+import { FilmTab, useFilmPanel } from '../editor/montage/FilmTab';
 import { backToVideoStrip, flushSettings, releaseFocus, wireFrameBinding } from '../scene/actions';
 import { isPersonalScope, videoScope } from '../scope';
 import { TOUCH } from '../useBoxWidth';
 import { ensureVideoThreads, focusFilm, focusScene, getThreadsState, VIDEO_PANEL } from '../store/videoStore';
-import { ic } from './primitives';
+import { ic } from '../editor/primitives';
 import { SceneTab } from './SceneTab';
-import { useScene } from './useScene';
+import { useScene } from '../editor/useScene';
 
 export type Tab = 'scene' | 'film';
 const isTab = (t: unknown): t is Tab => t === 'scene' || t === 'film';

@@ -9,9 +9,9 @@ import { drawInImages, editFrame, frameBOf, runScene, uploadFrame } from '../sce
 import { executorRows, pickRow, rowId, staleNotes } from '../scene/model';
 import { getAgentFrames, setFailure, useFilm } from '../store/videoStore';
 import { FrameMenu, FrameThumb } from './FrameSlot';
-import { Hint, ic, Label } from './primitives';
-import { SceneText, SceneTextExpanded } from './SceneText';
-import type { SceneModel } from './useScene';
+import { Hint, ic, Label } from '../editor/primitives';
+import { SceneText, SceneTextExpanded } from '../editor/SceneText';
+import type { SceneModel } from '../editor/useScene';
 
 function Executor({ m, isMobile }: { m: SceneModel; isMobile: boolean }) {
   const [open, setOpen] = useState(false);

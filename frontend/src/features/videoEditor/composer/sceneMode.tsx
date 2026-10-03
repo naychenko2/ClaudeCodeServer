@@ -7,7 +7,7 @@ import { FLAGS, getFlag, showToast, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'ai
 import type { ComposerModeApi, ComposerModeCtx } from '../../../lib/subsystems/registryCore';
 import { errorText, videoApi } from '../api';
 import { currentResolved, runScene } from '../scene/actions';
-import { useSceneQuote } from '../panel/useScene';
+import { useSceneQuote } from '../editor/useScene';
 import { PRICE_UNKNOWN } from '../strip/summary';
 import { hasClip, runReason } from '../scene/model';
 import { videoScope, isPersonalScope } from '../scope';

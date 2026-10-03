@@ -10,8 +10,8 @@ import { isPersonalScope } from '../scope';
 import { frameName } from '../scene/model';
 import { frameVersionLabel, imageSrcOf, imageThreadName, useImageFramesVersion } from '../store/imageFrames';
 import { TOUCH } from '../useBoxWidth';
-import { ic } from './primitives';
-import { ProjectPicker } from './ProjectPicker';
+import { ic } from '../editor/primitives';
+import { ProjectPicker } from '../editor/ProjectPicker';
 
 export const IMG_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
 

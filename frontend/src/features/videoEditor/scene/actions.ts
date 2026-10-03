@@ -31,8 +31,11 @@ export function currentResolved(sessionId: string | null, scope: string, scene: 
 
 // Правка поля копится в стоящей правке и уходит на сервер по таймеру (или сразу). Без сцены поля
 // содержимого (кадры, текст) заводят новую сцену, остальное — выбор области (префы)
-export function changeSettings(scope: string, sessionId: string, patch: Partial<VideoSceneSettings>, debounced = false): void {
-  const sceneId = getFocusedScene(sessionId)?.sceneId ?? null;
+// forScene — редактор «Сцена» правит основную сцену контекста, а не сцену серверного фокуса
+export function changeSettings(
+  scope: string, sessionId: string, patch: Partial<VideoSceneSettings>, debounced = false, forScene?: string,
+): void {
+  const sceneId = forScene ?? getFocusedScene(sessionId)?.sceneId ?? null;
   if ('frameA' in patch) clearAgentFrame(sessionId, sceneId, 'A');
   if ('frameB' in patch) clearAgentFrame(sessionId, sceneId, 'B');
   const prev = getPending(sessionId, sceneId);

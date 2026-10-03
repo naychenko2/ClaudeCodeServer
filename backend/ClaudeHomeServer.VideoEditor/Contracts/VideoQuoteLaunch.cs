@@ -46,12 +46,15 @@ public sealed record VideoLaunchRequest(
 public sealed record VideoLaunchResult(string? JobId, string? ErrorCode, string? Error, RetryQuote? Retry);
 
 // «Сохранить сцену» в проект: версия → файл video/<фильм>/scene-NN.mp4 (перезаписи нет → .v2.mp4)
-// вместе с кадрами-нитями в кадры/. Реализация — блок 2
+// вместе с кадрами-нитями в кадры/. Реализация — блок 2. FilmPath — необязательный полный путь открытого фильма
+// (video/<папка>/<любое имя>.film): есть — сцена встаёт именно в него, а папка сцены = папка фильма (Folder игнорируется);
+// нет — прежнее правило: фильм <папка>/<имя папки>.film
 public sealed record SaveSceneRequest(
     string SessionId,
     string SceneId,
     string? VersionId,
     string? Folder,
-    string? FileName);
+    string? FileName,
+    string? FilmPath = null);
 
 public sealed record SaveSceneResult(string Path, IReadOnlyList<string> FramePaths, bool AddedToFilm);

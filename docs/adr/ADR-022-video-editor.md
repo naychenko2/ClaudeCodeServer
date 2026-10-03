@@ -518,8 +518,10 @@ JSON ниже — единственное описание формы для ф
 #### SaveSceneRequest
 
 ```json
-{ "sessionId": "s-1", "sceneId": "scene-1", "versionId": "ver-1", "folder": "video/утро", "fileName": "scene-02.mp4" }
+{ "sessionId": "s-1", "sceneId": "scene-1", "versionId": "ver-1", "folder": "video/утро", "fileName": "scene-02.mp4", "filmPath": "video/утро/черновик.film" }
 ```
+
+`filmPath` — необязательный полный путь открытого фильма (проходит `ResolveFilm`: `video/**`, `ProjectLinkGuard`). Есть — сцена встаёт именно в этот фильм, папка сцены = папка фильма, `folder` игнорируется; нет — прежнее правило (`<папка>/<имя папки>.film`). Нужен, потому что фильм можно создать с любым именем `.film`. Тот же параметр — у MCP-инструмента `video_save_scene`.
 
 #### SaveSceneResult
 

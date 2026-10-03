@@ -2,6 +2,8 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.AudioEditor;
+using ClaudeHomeServer.Services.AudioEditor.ChatContext;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.AudioEditor.Engines;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Voices;
@@ -62,7 +64,8 @@ public sealed class AudioEditorToolsetTests : IDisposable
     }
 
     private AudioEditorToolset Toolset(IAudioEngine[]? engines = null, bool agentLaunch = true, bool withGate = true,
-        IAudioDsp? dsp = null, VoiceLibrary? library = null, bool withEdits = false)
+        IAudioDsp? dsp = null, VoiceLibrary? library = null, bool withEdits = false,
+        AudioContextLaunch? context = null, string[]? extraFlags = null)
     {
         engines ??= [new FakeEngine("fal")];
         var threads = new AudioJobThreads(_store, NullLogger<AudioJobThreads>.Instance);
@@ -76,6 +79,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
             .Returns((string id, string owner) => _sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
         var flags = new Mock<IFeatureFlagGate>();
         flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.AudioEditor)).Returns(true);
+        foreach (var key in extraFlags ?? []) flags.Setup(f => f.IsEnabled(It.IsAny<string>(), key)).Returns(true);
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
         var config = new ConfigurationBuilder()
@@ -84,7 +88,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
         return new AudioEditorToolset(accessor.Object, flags.Object, projects.Object, engines, threads, _jobs, _prefs,
             _workspace, withGate ? _turnGate.Object : null, concat,
             edits: withEdits ? new AudioAgentEdits(new DspAudioEngine(threads, _workspace, NullLogger<DspAudioEngine>.Instance, dsp)) : null,
-            library: library, events: _bus, config: config);
+            library: library, events: _bus, config: config, context: context);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -344,6 +348,34 @@ public sealed class AudioEditorToolsetTests : IDisposable
         engine.LastRequest!.Voice!.Slug.Should().Be(slug);
         engine.LastRequest.Voice.Sample!.Bytes.Should().Equal(wav);
         engine.LastRequest.Params?.ContainsKey("voice").Should().NotBe(true);
+    }
+
+    // Голос контекста агент берёт под флагом строки контекста composer-context-row, а не старым chat-context
+    [Theory]
+    [InlineData(FeatureFlagKeys.ComposerContextRow, true)]
+    [InlineData(FeatureFlagKeys.ChatContext, false)]
+    public async Task Голос_контекста_у_агента_зависит_от_флага_строки_контекста(string flag, bool taken)
+    {
+        var library = new VoiceLibrary();
+        var scope = AudioEditScope.Of(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
+        byte[] wav = [.. "RIFF"u8, 0, 0, 0, 0, .. "WAVE"u8, 1];
+        var slug = library.CreateFromSamples(scope, "Аня", "текст", [new VoiceSampleUpload(wav)]).Value!.Manifest.Slug;
+        var registry = new ContextKindRegistry([new AudioContextKind(_store)]);
+        var store = new ChatContextStore(Path.Combine(_dir, "ctx"), registry);
+        var directory = new Mock<ISessionDirectory>();
+        directory.Setup(d => d.GetById(ChatId)).Returns(_sessions[ChatId]);
+        var launch = new AudioContextLaunch(store, registry, directory.Object);
+        store.AddRef(Owner, ChatId, new ContextItem("ci_voice", AudioContextKind.VoiceKind, new JsonObject { ["slug"] = slug },
+            "voice", ContextActor.Human, DateTime.UtcNow), null);
+        var engine = new FakeEngine("fal") { TakesLibraryVoices = true };
+        var toolset = Toolset([engine], library: library, context: launch, extraFlags: [flag]);
+
+        var result = await Call(toolset, AudioEditorToolset.ToolGenerate, Gen(Draft()));
+        await WaitIdleAsync();
+
+        result.IsError.Should().BeFalse(result.Text);
+        if (taken) engine.LastRequest!.Voice!.Slug.Should().Be(slug);
+        else engine.LastRequest!.Voice.Should().BeNull("флаг строки контекста выключен — голос контекста не берётся");
     }
 
     // ── Сохранения у агента нет ────────────────────────────────────────────────

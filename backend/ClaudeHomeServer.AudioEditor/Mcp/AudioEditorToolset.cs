@@ -391,7 +391,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             libraryVoice = AudioVoiceRefs.Prefix + fromLibrary.Slug;
         }
         else if (!args.ContainsKey("voice") && _context is not null
-            && _flags.IsEnabled(ownerId, FeatureFlagKeys.ChatContext)
+            && _flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow)
             && _context.AgentVoice(ownerId, session.Id, q.Op) is { } contextVoice)
         {
             // Агент без voice берёт голос контекста чата; явный аргумент, в том числе пустой, его заменяет

@@ -258,6 +258,9 @@ JSON ниже — единственное описание формы для ф
 { "kind": "image", "threadId": "t-1", "versionId": "v-3", "follow": true }
 ```
 
+Необязательное `initiator` (`human` | `agent`) кладёт только `FilmFrameFollower`, когда кадр с `follow` перешёл на новую версию
+нити: оно говорит, кто сделал версию. Фронт ставит «✦ Claude» на кадр только при `initiator: "agent"`.
+
 #### FrameRef (file)
 
 ```json

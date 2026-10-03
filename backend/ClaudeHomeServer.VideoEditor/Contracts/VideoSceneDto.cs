@@ -10,19 +10,23 @@ namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
 // переходит на новую версию нити) или Kind = "file" — картинка проекта (Path от корня проекта через «/»).
 // Поля чужого вида не выводятся. FileName — человеческое имя загруженного «С компьютера» файла («кадр-а.png»),
 // для подписи; идентичность кадра он не меняет, сервер кладёт его при загрузке и держит рядом с файлом.
+// Initiator — human | agent: кто сделал версию, на которую кадр перешёл по follow (кладёт только FilmFrameFollower из
+// события «Картинок»); не указан у кадра, выбранного руками или агентом через настройки. По нему фронт ставит «✦ Claude»
+// только у правки агента: сам факт «кадр сменился без моего клика» правку человека в «Картинках» от агентской не отличает.
 public sealed record FrameRef(
     string Kind,
     string? ThreadId = null,
     string? VersionId = null,
     bool? Follow = null,
     string? Path = null,
-    string? FileName = null)
+    string? FileName = null,
+    string? Initiator = null)
 {
     public const string KindImage = "image";
     public const string KindFile = "file";
 
-    public static FrameRef Image(string threadId, string versionId, bool follow = true) =>
-        new(KindImage, ThreadId: threadId, VersionId: versionId, Follow: follow);
+    public static FrameRef Image(string threadId, string versionId, bool follow = true, string? initiator = null) =>
+        new(KindImage, ThreadId: threadId, VersionId: versionId, Follow: follow, Initiator: initiator);
 
     public static FrameRef File(string path, string? fileName = null) => new(KindFile, Path: path, FileName: fileName);
 }

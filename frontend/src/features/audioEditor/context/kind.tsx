@@ -4,7 +4,7 @@
 
 import { AudioLines, Mic } from 'lucide-react';
 import {
-  C, ICON_SIZE, ICON_STROKE, R, SP, notifyKindChanged, revealWorkspacePanel,
+  C, ICON_SIZE, ICON_STROKE, R, SP, notifyKindChanged,
   type ChatContextItem, type ContextKindApi, type ContextKindCtx,
 } from 'aihome_shell/kit';
 import type { AudioOp } from '../api';
@@ -12,7 +12,7 @@ import { AudioWave } from '../player/AudioWave';
 import { audioScope, isPersonalScope } from '../scope';
 import { createDraft } from '../thread/actions';
 import { useServerPeaks } from '../thread/serverPeaks';
-import { ensureAudioThreads, SOUND_PANEL, soundDraftKey, subscribeAudioStore, getCatalog, useAudioStoreVersion } from '../thread/threadStore';
+import { ensureAudioThreads, openEditor, subscribeAudioStore, getCatalog, useAudioStoreVersion } from '../thread/threadStore';
 import { executorModel } from './executors';
 import { launchAction, paramsFor, quoteAction } from './run';
 import { actionOf, audioActions, AUDIO_KIND, threadOfPrimary, versionOfPrimary } from './state';
@@ -71,8 +71,7 @@ export const audioKindApi: ContextKindApi = {
     return {
       label: 'Редактор',
       hint: 'Волна и кусок, монтаж без ИИ: обрезать, затухание',
-      // Отдельный редактор звука появится в 2з-2; пока вход ведёт на панель «Звук»
-      open: () => revealWorkspacePanel(SOUND_PANEL, 'settings', { sessionId: ctx.sessionId, target: soundDraftKey(thread.id) }),
+      open: () => openEditor(ctx.sessionId, thread.id, versionOfPrimary(thread, item as never)?.id ?? null),
     };
   },
   executors: (ctx, actionId) => {

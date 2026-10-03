@@ -32,17 +32,21 @@ export interface World {
   // Нити картинок чата (мок …/image-editor/sessions/S/threads); null — маршрута нет, как раньше
   threads: Record<string, unknown>[] | null;
   threadsRevision: number;
+  // Нити звука чата (мок …/audio-editor/sessions/S/*); null — маршрута нет. edits — тела правок без ИИ
+  audio: Record<string, unknown>[] | null;
+  audioRevision: number;
+  audioEdits: Record<string, unknown>[];
 }
 
 let world: World;
 export const w = () => world;
 
-export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles' | 'personal' | 'feed' | 'threads'>> & { ctx?: Partial<Ctx> } = {}): World {
+export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles' | 'personal' | 'feed' | 'threads' | 'audio'>> & { ctx?: Partial<Ctx> } = {}): World {
   world = {
     ctx: { revision: 1, primary: null, refs: [], ...o.ctx },
     flags: { 'composer-context-row': true, 'chat-context': true, ...o.flags },
     hands: o.hands ?? true, savedFiles: o.savedFiles ?? [], mutations: [], invocations: [], hubs: [], personal: o.personal ?? false, feed: o.feed ?? [],
-    threads: o.threads ?? null, threadsRevision: 1,
+    threads: o.threads ?? null, threadsRevision: 1, audio: o.audio ?? null, audioRevision: 1, audioEdits: [],
   };
   return world;
 }
@@ -116,6 +120,31 @@ export async function mockApi(page: Page) {
         if (t) t.settings = r.request().postDataJSON().settings;
       }
       return json({ focus: null, revision: world.threadsRevision, threads: world.threads });
+    }
+    // ── нити звука: состояние, правка без ИИ (новая версия), пики; прочее отдаёт снимок ──
+    const ab = `/projects/${P}/audio-editor`;
+    if (world.audio && p.startsWith(ab)) {
+      const snapshot = () => ({ focus: null, revision: world.audioRevision, threads: world.audio });
+      if (p.endsWith('/peaks')) return json({ peaks: Array.from({ length: 120 }, (_, i) => 0.2 + 0.7 * Math.abs(Math.sin(i / 7))), seconds: 12 });
+      const em = /\/threads\/([^/]+)\/edit$/.exec(p);
+      if (em && method === 'POST') {
+        const body = r.request().postDataJSON();
+        world.audioEdits.push(body);
+        const t = world.audio.find(x => x.id === decodeURIComponent(em[1])) as { versions: { id: string; number: number }[]; currentVersionId: string };
+        const n = t.versions.length;
+        const id = `v${n}`;
+        t.versions.push({ id, number: n, jobId: `e${n}`, variant: null, baseVersionId: t.currentVersionId, license: null, createdAt: now, files: [{ role: 'main', path: `${id}/main.mp3` }] } as never);
+        t.currentVersionId = id;
+        world.audioRevision++;
+        return json({ threadId: t.id, versionId: id, number: n, jobId: `e${n}`, state: snapshot() });
+      }
+      if (p.endsWith('/state')) {
+        return json({
+          threads: snapshot(),
+          catalog: { providers: [], autoModelId: 'auto', maxCount: 4 }, prefs: { voice: null, music: null, process: null },
+        });
+      }
+      return json(snapshot());
     }
     // ── контекст чата ──
     const base = `/chats/${S}/context`;

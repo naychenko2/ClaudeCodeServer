@@ -54,6 +54,9 @@ const _modeRequests = new Map<string, number>();
 const _composerText = new Map<string, string>();
 // Промпт из карточки агента «Вставить в промпт»: n — повод для затравки поля режима «Звук»
 const _suggested = new Map<string, { n: number; text: string }>();
+// Открытый редактор звука (на весь экран): один на вкладку, как попап «Редактор» у картинок
+export interface AudioEditorOpen { sessionId: string; threadId: string; versionId: string | null }
+let _editor: AudioEditorOpen | null = null;
 let _version = 0;
 const _listeners = new Set<() => void>();
 let _unsub: (() => void) | null = null;
@@ -278,6 +281,21 @@ export function requestOperation(sessionId: string, threadId: string, op: AudioO
 export const getOperationRequest = (sessionId: string | null): OperationRequest | null =>
   (sessionId && _opRequests.get(sessionId)) || null;
 
+// ── Редактор звука ──
+
+export const getEditor = (): AudioEditorOpen | null => _editor;
+
+export function openEditor(sessionId: string, threadId: string, versionId: string | null = null) {
+  _editor = { sessionId, threadId, versionId };
+  emit();
+}
+
+export function closeEditor() {
+  if (!_editor) return;
+  _editor = null;
+  emit();
+}
+
 // ── Режим ярлыков и поля ввода ──
 
 export function getShortcutMode(sessionId: string | null): AudioMode | null {
@@ -365,6 +383,7 @@ export function __resetAudioStore() {
   _pieceField.clear();
   _opRequests.clear();
   _suggested.clear();
+  _editor = null;
   emit();
 }
 

@@ -19,6 +19,7 @@
 // телефоне полосы свёрнуты в строку, на десктопе развёрнуты.
 
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import { forgetComposerModeMemory, resetComposerModeMemory } from './composerModes';
 
 export const DEFAULT_STRIP = 'git';
 const KEY_PREFIX = 'cc-composer-strip:';
@@ -51,6 +52,18 @@ export function subscribeComposerStrips(fn: () => void) {
   return () => { _listeners.delete(fn); };
 }
 export function getComposerStripsVersion() { return _version; }
+
+// Активная полоса, как её показывает хост полос: поле ввода по ней отбирает режимы
+// (ComposerModeApi.strip). Нет записи — хост не смонтирован, режимы не фильтруются
+const _shown = new Map<string, string | null>();
+export function reportShownStrip(sessionId: string, stripId: string | null) {
+  if (_shown.get(sessionId) === stripId && _shown.has(sessionId)) return;
+  _shown.set(sessionId, stripId);
+  emit();
+}
+export function getShownStrip(sessionId: string | null): string | null | undefined {
+  return sessionId ? _shown.get(sessionId) : undefined;
+}
 
 export function getRememberedStrip(sessionId: string): string | null {
   if (_remembered.has(sessionId)) return _remembered.get(sessionId) ?? null;
@@ -199,10 +212,41 @@ export function useComposerStrip(sessionId: string | null, available: readonly s
   return { active, pendingFocus, select, collapsed, setCollapsed };
 }
 
-// Сброс состояния — только для тестов.
-export function __resetComposerStrips() {
+// Чат удалён: его запись во всех сторах полос и память режима поля ввода уходят вместе с ним,
+// ручной выбор и свёрнутость — и из localStorage (ключи по id удалённого чата не нужны никому)
+export function forgetComposerSession(sessionId: string) {
+  _focus.delete(sessionId);
+  _remembered.delete(sessionId);
+  _shown.delete(sessionId);
+  _submitters.delete(sessionId);
+  const prefix = collapsedKey(sessionId, '');
+  const own = [..._collapsed.keys()].filter(k => k.startsWith(prefix));
+  own.forEach(k => _collapsed.delete(k));
+  try {
+    localStorage.removeItem(stripStorageKey(sessionId));
+    own.forEach(k => localStorage.removeItem(k));
+  } catch { /* приватный режим */ }
+  forgetComposerModeMemory(sessionId);
+  emit();
+}
+
+// Серверное событие `chat_deleted` (удаление в другой вкладке, истёкший временный чат):
+// локальный api.delete до этой вкладки не доходит, память чата чистим по событию
+export function forgetComposerOnChatDeleted(msg: { type: string; sessionId?: string }) {
+  if (msg.type === 'chat_deleted' && msg.sessionId) forgetComposerSession(msg.sessionId);
+}
+
+// Выход из аккаунта: полный сброс памяти вкладки (выбрано вместо ключа по владельцу — один вызов
+// у обоих logout, а ключ `${ownerId}:…` пришлось бы протаскивать во все читатели сторов).
+// localStorage не трогаем: он принадлежит устройству, а id чатов глобально уникальны
+export function resetComposerMemory() {
   _focus.clear();
   _remembered.clear();
   _collapsed.clear();
+  _shown.clear();
+  resetComposerModeMemory();
   emit();
 }
+
+// Сброс состояния — только для тестов.
+export const __resetComposerStrips = resetComposerMemory;

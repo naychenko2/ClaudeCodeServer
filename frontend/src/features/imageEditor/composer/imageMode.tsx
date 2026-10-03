@@ -102,6 +102,7 @@ export const imageMode: ComposerModeApi = {
   title: 'Картинка',
   icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
   isAvailable: imageModeAvailable,
+  strip: IMAGES_STRIP,
   // Только по явной просьбе человека: «Нарисовать новую», «Редактировать» / «Нарисовать»
   // из дерева. Выбор картинки агентом — и черновика тоже — режим сам не меняет: человек
   // продолжает разговор с агентом, а не пишет промпт модели

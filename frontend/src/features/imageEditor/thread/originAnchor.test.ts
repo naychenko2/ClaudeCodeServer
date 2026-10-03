@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { OriginAnchor, VersionCard } from './VersionCards';
+import { isHiddenDraft } from './model';
 import type { ImageThread, ImageThreadLaunch, ImageThreadVersion } from './threadsApi';
 
-// Якорь «origin» нити: черновик «Новая картинка» виден только до первого запуска —
-// дальше результат рисует якорь запуска, а пустая карточка лишь дублирует его
+// Якорь «origin» нити: пустой черновик «Новая картинка» в ленте не рисуется вовсе —
+// нить появляется с первой версией (якорь запуска)
 
 const ver = (id: string, patch: Partial<ImageThreadVersion> = {}): ImageThreadVersion => ({
   id, number: 0, jobId: null, variant: null, baseVersionId: null, baseStepId: null,
@@ -28,10 +29,16 @@ const render = (thread: ImageThread) =>
   renderToStaticMarkup(createElement(OriginAnchor, { projectId: 'p1', sessionId: 's1', thread, focused: true }));
 
 describe('OriginAnchor', () => {
-  it('черновик без запусков рисуется', () => {
-    const html = render(draft());
-    expect(html).toContain('data-image-draft');
-    expect(html).toContain('Новая картинка');
+  it('пустой черновик без запусков карточкой в ленте не рисуется', () => {
+    expect(render(draft())).toBe('');
+    expect(render(draft({ draftFolder: 'images' }))).toBe('');
+  });
+
+  it('isHiddenDraft: прячет пустой черновик, но не нить с запуском, файлом или версией', () => {
+    expect(isHiddenDraft(draft())).toBe(true);
+    expect(isHiddenDraft(draft({ pendingJobId: 'j1' }))).toBe(false);
+    expect(isHiddenDraft(draft({ file: 'img/a.png' }))).toBe(false);
+    expect(isHiddenDraft(draft({ versions: [ver('origin'), ver('v1', { number: 1, steps: ['s1'], currentStepId: 's1' })] }))).toBe(false);
   });
 
   it('черновик с идущим запуском не рисуется', () => {

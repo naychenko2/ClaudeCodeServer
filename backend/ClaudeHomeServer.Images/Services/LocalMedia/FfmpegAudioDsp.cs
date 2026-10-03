@@ -80,10 +80,16 @@ public sealed class FfmpegAudioDsp(IConfiguration config, ILogger<FfmpegAudioDsp
         {
             var from = (int)((long)samples * i / points);
             var to = Math.Max(from + 1, (int)((long)samples * (i + 1) / points));
-            var max = 0f;
-            for (var s = from; s < to && s < samples; s++)
-                max = Math.Max(max, Math.Abs(BitConverter.ToSingle(span.Slice(s * 4, 4))));
-            peaks[i] = Math.Min(max, 1f);
+            // Огибающая по RMS, а не по максимуму модуля: у плотно сведённой песни максимум в каждой
+            // корзине упирается в 1 и все столбики выходят одной высоты. Клиент нормирует по максимуму
+            double sum = 0;
+            var count = 0;
+            for (var s = from; s < to && s < samples; s++, count++)
+            {
+                var v = BitConverter.ToSingle(span.Slice(s * 4, 4));
+                sum += (double)v * v;
+            }
+            peaks[i] = count == 0 ? 0f : Math.Min((float)(Math.Sqrt(sum / count)), 1f);
         }
         return new AudioPeaks(peaks, samples / (double)PeaksRate, null);
     }

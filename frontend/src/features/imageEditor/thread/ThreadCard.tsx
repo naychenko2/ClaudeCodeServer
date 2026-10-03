@@ -16,7 +16,7 @@ import { isFreeUnit, money, variantsWord } from '../format';
 import { dismissJob, pickByHuman, saveToProject, savedStepOf, takeVariant, workWith } from './actions';
 import { download } from './download';
 import {
-  chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isLegacyThread, ORIGIN, saveFolder,
+  chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isHiddenDraft, isLegacyThread, ORIGIN, saveFolder,
   stackSaveState, stepOf, threadName, versionLabel,
 } from './model';
 import { recordOf } from './records';
@@ -305,6 +305,8 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
       : <OriginAnchor projectId={projectId} sessionId={ctx.sessionId} thread={thread} focused={focused} />;
   }
   const stack = typeof data.stackId === 'string' ? findStack(thread, data.stackId) : currentStack(thread);
+  // Пустой черновик в ленте не рисуем; пока идёт первый запуск — карточка с «Отменить», как раньше
+  if (isHiddenDraft(thread)) return null;
   return (
     <StackCard projectId={projectId} sessionId={ctx.sessionId} thread={thread} stack={stack}
       focused={focused} events={state.events} />

@@ -92,5 +92,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         // MCP-сервер редактора для агента любого чата проекта (ADR-019 §4): маршрут общий,
         // POST /mcp/image-editor/{sessionId}, реестр Main находит тулсет среди IMcpToolset
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.ImageEditorToolset>();
+        // Агент позвал local_* напрямую: картинка результата получает ту же карточку, что запуск через image_*
+        services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalMediaAdopter, Threads.LocalImageAdopter>();
     }
 }

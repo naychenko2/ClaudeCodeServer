@@ -61,6 +61,7 @@ export function GenSharedKitSection() {
   const [emptyChat, setEmptyChat] = useState(false);
   const [menuAt, setMenuAt] = useState<DOMRect | 'inline' | null>(null);
   const [snd, setSnd] = useState<SndMode>('voice');
+  const [second, setSecond] = useState(false);
   const [exec, setExec] = useState('auto');
   const [execOpen, setExecOpen] = useState(true);
   const undo = useReleaseUndo<{ focus: string; mode: ImgMode }>();
@@ -137,7 +138,7 @@ export function GenSharedKitSection() {
           <Block label={`GenerationModeSwitch — режим: ${mode}${focus ? ` · картинка ${focus}` : ' · картинки нет, «Править» спрашивает'}`}>
             {/* Полоса над полем ввода: плашка «Вернуть» встаёт над ней, меню — над полосой */}
             <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-              {undo.offer && <ReleaseNotice text={undo.offer.text} onUndo={restore} isMobile={narrow} />}
+              {undo.offer && <ReleaseNotice text={undo.offer.text} onUndo={restore} isMobile={narrow} raiseFab />}
               <div ref={bar} style={{
                 display: 'flex', alignItems: 'center', gap: SP.sm, padding: SP.sm, minWidth: 0,
                 border: `1px solid ${C.borderLight}`, borderRadius: R.lg, background: C.bgCard,
@@ -213,6 +214,9 @@ export function GenSharedKitSection() {
 
           <Block label="ReleaseNotice — статично (живая — над полосой выше, 4 с после ✕)">
             <ReleaseNotice text="Звук снят — вернулись к «Музыке»" onUndo={() => {}} isMobile={narrow} />
+            {/* Вторая плашка с подъёмом круга AI: уход любой из двух не сбрасывает подъём, пока видна другая */}
+            <Row label="вторая плашка с подъёмом круга AI"><Toggle checked={second} onChange={setSecond} /></Row>
+            {second && <div data-kit-second-notice=""><ReleaseNotice text="Вторая плашка — подъём круга AI" onUndo={() => {}} isMobile={narrow} raiseFab /></div>}
           </Block>
         </div>
       </div>

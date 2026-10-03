@@ -140,6 +140,24 @@ public sealed class AudioJobThreads(
         }
     }
 
+    // Якорь запуска, который завёл не запуск через редактор, а усыновление результата прямого local_*:
+    // та же запись audio_launch_versions, по ней лента рисует версии нити и итог запуска
+    public Task AnchorLaunchAsync(string sessionId, AudioThread thread, string jobId, string op, string model,
+        string initiator, CancellationToken ct) =>
+        RecordAsync(sessionId, RecordTypes.LaunchVersions, $"Claude запустил: {op} · {model}",
+            new
+            {
+                threadId = thread.Id,
+                jobId,
+                mode = AudioModes.Process,
+                op,
+                provider = "local",
+                model,
+                count = 1,
+                initiator,
+                baseVersionId = (string?)null,
+            }, ct);
+
     // Человек сохранил версию в проект: нить идёт за сохранённым — основным звуком, а у версии из одних
     // стемов за папкой стемов (её путь и отдаёт сохранение). Файл уже в проекте, поэтому сбой следа
     // ответ ручки не портит

@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CSSProperties, HTMLAttributes, MouseEvent, ReactNode } from 'react';
 import { C, R, FONT, FS, SHADOW, Z } from '../../lib/design';
+import { incPopupDepth } from '../../lib/popupEscape';
 import { IconButton } from './IconButton';
 
 // Единое выпадающее меню: карточка + подложка для закрытия по клику вне.
@@ -15,7 +16,18 @@ import { IconButton } from './IconButton';
 //    пока НИ У ОДНОГО предка нет transform/filter/perspective — а карточка
 //    PanelShell держит transform ради анимации появления, и меню внутри панели
 //    уезжало на её смещение и обрезалось overflow острова.
-// Закрытие по Esc/скроллу в anchor-режиме — на вызывающей стороне (поведение, не контрол).
+// Escape закрывает меню само и возвращает фокус на то, что его держало до открытия (якорь).
+// Пока меню открыто, оно числится попапом (popupEscape): в модалке первый Escape закрывает
+// меню, а не саму модалку. Закрытие по скроллу в anchor-режиме — на вызывающей стороне.
+// Чистая часть обработчика вынесена ради теста в окружении node.
+export function handleMenuEscape(e: { key: string; defaultPrevented: boolean; preventDefault: () => void }, onClose: () => void, restoreFocus: () => void): boolean {
+  if (e.key !== 'Escape' || e.defaultPrevented) return false;
+  e.preventDefault();
+  onClose();
+  restoreFocus();
+  return true;
+}
+
 export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
@@ -56,6 +68,21 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   fullWidth?: boolean;
   children: ReactNode;
 }) {
+  const opener = useRef<Element | null>(typeof document !== 'undefined' ? document.activeElement : null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const release = incPopupDepth();
+    const handler = (e: KeyboardEvent) => {
+      handleMenuEscape(e, () => onCloseRef.current(), () => {
+        const el = opener.current;
+        if (el instanceof HTMLElement && el.isConnected && el !== document.body) el.focus();
+      });
+    };
+    document.addEventListener('keydown', handler);
+    return () => { document.removeEventListener('keydown', handler); release(); };
+  }, []);
+
   let pos: CSSProperties;
   if (anchor && anchorSide) {
     // Сбоку от якоря: по горизонтали — от его кромки. По вертикали карточка растёт

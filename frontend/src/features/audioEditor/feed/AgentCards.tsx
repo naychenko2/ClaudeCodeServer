@@ -132,6 +132,11 @@ export const launchOwned = (thread: AudioThread | undefined, jobId: string): boo
 // Итог запуска (готово, сбой, отмена, обрыв) пишется в нить, и запуск сразу уходит якорю
 export type LaunchPhase = 'run' | 'gone';
 
+// Готовая версия без запуска (монтаж без ИИ, склейка): её целиком рисует якорь audio_thread с карточкой этой
+// версии — как у запуска человеком. Своя карточка тут — второй блок на то же действие
+export const versionOwned = (thread: AudioThread | undefined, versionId: string): boolean =>
+  !!thread && thread.versions.some(v => v.id === versionId);
+
 export const launchPhase = (thread: AudioThread | undefined, loaded: boolean): LaunchPhase =>
   !thread && loaded ? 'gone' : 'run';
 
@@ -178,6 +183,7 @@ export function AudioLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
 
   // Монтаж без ИИ: версия готова сразу
   if (ready) {
+    if (versionOwned(thread, ready.versionId)) return null;
     return (
       <Card kind="edit" tone="ok">
         <CardHead icon={ic(Scissors)} title={`Готово: ${title}`} meta="монтаж без ИИ · бесплатно" color={C.successText} />
@@ -237,6 +243,7 @@ export function AudioConcatCard({ ctx }: { ctx: ChatItemToolCtx }) {
   }
   if (!ready) return <DeniedCard kind="concat" result={item.result} title="Склейка не выполнена" />;
   const thread = state.threads.find(t => t.id === ready.threadId);
+  if (versionOwned(thread, ready.versionId)) return null;
   return (
     <Card kind="concat" tone="ok">
       <CardHead icon={ic(ListMusic)} title={`Склеено: ${ready.name ?? 'новый звук'}`}

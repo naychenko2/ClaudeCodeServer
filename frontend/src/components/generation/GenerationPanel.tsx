@@ -158,6 +158,8 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
 
   if (view === 'spine' && !inShell) return <Spine {...p} onExpand={() => setCollapsed(false)} onTab={t => { p.onTabChange(t); setCollapsed(false); }} />;
 
+  // Шторка — телефонная раскладка: тач-цели не ниже 40 (гайд, чек-лист)
+  const touch = sheet;
   const head = (
     <div style={{
       height: HEAD_H, flex: `0 0 ${HEAD_H}px`, display: 'flex', alignItems: 'center', gap: PAD.row,
@@ -174,16 +176,16 @@ export function GenerationPanel<T extends string>(p: Props<T>) {
       )}
       <span style={{ flex: 1 }} />
       {sheet ? (
-        <IconButton size="xs" title={peeked ? 'Поднять шторку' : 'Опустить до цены — лента станет доступна'} onClick={() => setPeeked(!peeked)}>
+        <IconButton size={touch ? 'lg' : 'xs'} title={peeked ? 'Поднять шторку' : 'Опустить до цены — лента станет доступна'} onClick={() => setPeeked(!peeked)}>
           {icon(peeked ? ChevronUp : ChevronDown)}
         </IconButton>
       ) : (
-        <IconButton size="xs" title="Свернуть в корешок" onClick={() => setCollapsed(true)}>
+        <IconButton size={touch ? 'lg' : 'xs'} title="Свернуть в корешок" onClick={() => setCollapsed(true)}>
           {icon(ChevronRight)}
         </IconButton>
       )}
       {p.onClose && (
-        <IconButton size="xs" title="Закрыть панель — сводка останется в полосе" onClick={p.onClose}>
+        <IconButton size={touch ? 'lg' : 'xs'} title="Закрыть панель — сводка останется в полосе" onClick={p.onClose}>
           {icon(X)}
         </IconButton>
       )}

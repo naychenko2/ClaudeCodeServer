@@ -19,7 +19,7 @@ import { enterScope, isPersonalScope } from '../scope';
 import { continueFrom, pickByHuman, saveToProject, versionSaved } from './actions';
 import { download, PERSONAL_DOWNLOAD_HINT } from './download';
 import {
-  downloadName, findVersion, fromVersion, isEmptyThread, launchEndNote, launchOf, launchVersions, ORIGIN, saveFolder,
+  downloadName, findVersion, fromVersion, launchEndNote, launchOf, launchVersions, ORIGIN,
   threadName, versionDone, versionHasImage, versionMeta, versionName, versionPrimary, versionStep,
 } from './model';
 import { recordOf } from './records';
@@ -156,32 +156,15 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   );
 }
 
-// Черновик «Новая картинка» до первого запуска: пунктирная рамка вместо картинки
-function DraftBox({ thread, focused, personal }: { thread: ImageThread; focused: boolean; personal: boolean }) {
-  const folder = saveFolder(thread);
-  return (
-    <div data-image-draft="" style={{
-      width: '100%', boxSizing: 'border-box', padding: SP.lg,
-      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.xs, textAlign: 'center',
-      border: `1.5px dashed ${focused ? C.accent : C.border}`, borderRadius: R.xl, background: C.bgInset,
-      fontSize: FS.sm, color: C.textMuted,
-    }}>
-      <b style={{ color: C.textHeading, fontSize: FS.base }}>Новая картинка</b>
-      {focused ? 'Опишите её в поле ввода — версии лягут в ленту ниже' : 'Ещё не нарисована'}
-      {!personal && <span style={{ fontSize: FS.xs }}>сохранять в {folder ? `${folder}/` : 'корень проекта'}</span>}
-    </div>
-  );
-}
-
 // Якорь нити { threadId, versionId: "origin" }: исходник картинки или черновик
 export function OriginAnchor({ projectId, sessionId, thread, focused }: {
   projectId: string; sessionId: string; thread: ImageThread; focused: boolean;
 }) {
   const origin = findVersion(thread, ORIGIN);
   if (!origin || !versionHasImage(thread, origin)) {
-    // После первого запуска черновик ничего не добавляет: результат — в якоре запуска ниже
-    if (thread.launches?.length || !isEmptyThread(thread)) return null;
-    return <DraftBox thread={thread} focused={focused} personal={isPersonalScope(projectId)} />;
+    // Пустой черновик карточкой в ленте не рисуется: он живёт чипом в полосе «Картинки»,
+    // а нить появляется в ленте с первой версией (якорь запуска ниже)
+    return null;
   }
   return <VersionCard projectId={projectId} sessionId={sessionId} thread={thread} version={origin} focused={focused} />;
 }

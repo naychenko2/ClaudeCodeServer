@@ -15,7 +15,7 @@ const { GenerationPickMenu } = await import('./GenerationPickMenu');
 const { createReleaseUndo, RELEASE_UNDO_MS } = await import('./useReleaseUndo');
 const { handleModeClick, GenerationModeSwitch } = await import('./GenerationModeSwitch');
 const { groupExecutorRows, ExecutorList, ExecutorSummaryRow } = await import('./ExecutorList');
-const { ReleaseNotice } = await import('./ReleaseNotice');
+const { ReleaseNotice, setFabRaise, FAB_RAISE_VAR } = await import('./ReleaseNotice');
 
 const html = (el: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(el);
 const noop = () => {};
@@ -303,5 +303,41 @@ describe('ReleaseNotice', () => {
     const btn = (isMobile: boolean) => html(createElement(ReleaseNotice, { text: 'т', onUndo: noop, isMobile })).match(/<button[^>]*>/)![0];
     expect(btn(true)).toContain('min-height:40px');
     expect(btn(false)).toContain('height:24px');
+  });
+});
+
+describe('подъём круга AI над плашками «Вернуть»', () => {
+  const fakeRoot = () => {
+    const props = new Map<string, string>();
+    const root = { style: {
+      setProperty: (k: string, v: string) => { props.set(k, v); },
+      removeProperty: (k: string) => { props.delete(k); },
+    } } as unknown as HTMLElement;
+    return { root, get: () => props.get(FAB_RAISE_VAR) };
+  };
+
+  it('уход одной из двух плашек не сбрасывает подъём, пока видна вторая', () => {
+    const { root, get } = fakeRoot();
+    const a = Symbol('a'), b = Symbol('b');
+    setFabRaise(a, 40, root);
+    setFabRaise(b, 60, root);
+    expect(get()).toBe('60px');
+    setFabRaise(b, null, root);
+    expect(get()).toBe('40px');
+    setFabRaise(a, null, root);
+    expect(get()).toBeUndefined();
+  });
+
+  it('подъём — максимум из живых плашек, а не последняя записанная', () => {
+    const { root, get } = fakeRoot();
+    const a = Symbol('a'), b = Symbol('b');
+    setFabRaise(a, 80, root);
+    setFabRaise(b, 40, root);
+    expect(get()).toBe('80px');
+    setFabRaise(a, 50, root);
+    expect(get()).toBe('50px');
+    setFabRaise(a, null, root);
+    setFabRaise(b, null, root);
+    expect(get()).toBeUndefined();
   });
 });

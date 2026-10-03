@@ -122,6 +122,7 @@ Core):
 | `HiggsfieldMcpClient` (перенос из модуля картинок) | `Services.Higgsfield` | сам класс в Core | `CallToolAsync`, `PutAsync`, `DownloadBytesAsync`; картиночная обёртка `EditedImage` остаётся в ImageEditor |
 | `ProjectLinkGuard` (перенос) | `Services.Media` | статика | путь внутри проекта без символических ссылок |
 | `ILocalAudioMedia` (новый) | `Services.Media` | `LocalAudioMediaAdapter` в Images, прямо в `ComfyClient` | `Configured`, `Available`, `QueueLengthAsync`, `EtaSeconds(op, …)`, `SubmitAsync(LocalAudioRequest)`, `PollAsync`, `CancelAsync`; входы — байты, выходы — файлы с ролями |
+| `ILocalMediaAdopter` (новый) | `Services.Media` | `LocalAudioAdopter` в AudioEditor, `LocalImageAdopter` в ImageEditor (каждый за своим флагом) | `AdoptAsync(LocalMediaAdoption, ct)`: после сборки задачи чата `LocalMediaService` (Images) отдаёт усыновителям файлы результата, модуль заводит нить и якорь в ленте — та же карточка, что у запуска кнопкой. Зовёт издатель, вне общего замка сборки и без токена запроса. Контракт отказа: молчаливый возврат (флаг выкл., чужой чат/проект, нет подходящих файлов) и исключения усыновитель наружу не пропускает — издатель их гасит, пишет в лог, результат задачи не портится. Форма нити — как у кнопки: стемы одной задачи — одна нить и версия с ролями `stem:*`, `count>1` у картинок — одна нить с вариантами; повтор той же задачи ничего не дублирует |
 | `IAudioDsp` (новый) | `Services.Media` | `FfmpegAudioDsp` в Images | `ProbeAsync` (длина, частота, каналы), `PeaksAsync` (волна), `TrimFadeGainAsync`, `NormalizeAsync` (LUFS), `MixAsync` (стемы с громкостями), `ConvertAsync` (формат, частота) |
 | `ITtsEngine` (новый) | `Services.Media` | `YandexTtsEngine` в Tts поверх `YandexTtsService` | голоса, роли, скорость, лимит 3000, цена в рублях |
 
@@ -235,6 +236,12 @@ Core):
 `progress`, `result` и пометку `stale`. Событие показа несёт прозрачные `preset` (заготовка для чужой
 панели) и `returnTo` (ссылка «↩ К сцене / К фильму»): хост их не разбирает, смысл знает только
 панель-получатель, сервер соседней вертикали о вызывающей панели не знает.
+
+**Слот `emptySubmit` режима поля ввода** (`ComposerMode.emptySubmit`, `registryCore.ts`): запуск при ПУСТОМ
+поле — кнопка отправки берёт его подпись и действие («↻ Ещё 2 · бесплатно» — повтор прошлого запуска). Вкладывает
+сам режим (сегодня — режим картинок, `imageMode.tsx`); возвращает `{ label, run }` или `null`. Без вклада
+(или с `null`) поведение прежнее: на пустом поле кнопка гаснет. Режим звука слот не вкладывает: повтор
+запуска у него живёт на карточке в ленте и в кнопке панели.
 
 ### 4. Перенос картинок на панель — без поломки работающего редактора
 

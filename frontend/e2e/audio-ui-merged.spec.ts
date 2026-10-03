@@ -90,6 +90,8 @@ const anchor = (jobId: string, provider: string, model: string) => record('audio
   price: { amount: 0, unit: 'free', approx: false }, license: 'Apache-2.0', initiator: 'agent', baseVersionId: 'v1',
 }, `Claude запустил: озвучка · ${model}`);
 HISTORY.splice(1, 0, record('audio_thread', { threadId: T, versionId: 'origin' }, 'Звук: podcast-intro.mp3'));
+// Склейка агентом: якорь audio_thread версии c1, как при склейке человеком (AudioConcatService)
+HISTORY.splice(HISTORY.length - 2, 0, record('audio_thread', { threadId: T2, versionId: 'c1' }, 'Звук: склейка-реплик.wav'));
 HISTORY.splice(HISTORY.length - 2, 0,
   anchor('job-done', 'local', 'qwen3-tts'), anchor('job-run', 'fal', 'fal-ai/minimax/speech-02-hd'), anchor('job-fail', 'fal', 'fal-ai/minimax/speech-02-hd'));
 
@@ -207,7 +209,9 @@ for (const vp of [{ name: 'w1440', width: 1440, height: 1000 }, { name: 'm360', 
     await expect(page.getByText('Claude взял в работу')).toBeVisible();
     await expect(page.getByText('Лимит запусков за ход')).toBeVisible();
     await expect(page.getByText('Запуск недоступен на чужом ходу')).toBeVisible();
-    await expect(page.getByText('Склеено: склейка-реплик.wav')).toBeVisible();
+    // Склейка агентом — карточка версии якоря, а не вторая карточка вызова audio_concat
+    await expect(page.getByText('Склеено: склейка-реплик.wav')).toHaveCount(0);
+    await expect(page.locator('[data-audio-card]').filter({ hasText: 'склейка-реплик.wav' })).toHaveCount(1);
     await expect(page.locator('[data-audio-card="launch"]')).toHaveCount(2);
     await expect(page.getByText('Готово: Озвучить')).toHaveCount(0);
     await expect(page.getByText('Не получилось: Озвучить')).toHaveCount(0);

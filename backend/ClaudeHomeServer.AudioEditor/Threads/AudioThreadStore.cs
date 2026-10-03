@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Services.ChatContext;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Threads;
 
@@ -210,6 +211,7 @@ public sealed class AudioThreadStore(string root, TimeProvider? time = null)
             File = path,
             DraftFolder = null,
             Lineage = thread.File is { } old && old != path ? [.. thread.Lineage, old] : thread.Lineage,
+            SavedFiles = [.. thread.SavedFiles.Where(f => f.Path != path), new ThreadSavedFile(path, Now())],
         }, log));
 
     // Сохранили версию без основного звука (только стемы): нить остаётся при своём файле, черновик

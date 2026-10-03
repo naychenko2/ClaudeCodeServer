@@ -3,7 +3,7 @@
 // владельца (audio-editor) проверяют сами входы — каждый вклад через isAvailable с
 // getFlag(FLAGS.audioEditor).
 
-import { AudioLines } from 'lucide-react';
+import { AudioLines, Mic } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
   ChatItemToolCtx, ComposerChipCtx, ComposerStripCtx, ComposerStripShortcut, SlotContribution, SubsystemManifest,
@@ -14,7 +14,10 @@ import { AUDIO_TOOL } from './feed/parse';
 import { SoundChatWatcher } from './composer/SoundChatWatcher';
 import { SoundPanel } from './panel/SoundPanel';
 import { SoundSheet } from './panel/SoundSheet';
+import { VoicesContextPanel } from './voices/VoicesContextPanel';
+import { VOICES_KEY } from './thread/panelKey';
 import { soundMode } from './composer/soundMode';
+import { audioKindApi } from './context/kind';
 import { SoundStrip, soundStripStatus } from './strip/SoundStrip';
 import { openSoundShortcut } from './thread/actions';
 import { RECORD_LAUNCH, RECORD_THREAD, recordKey } from './thread/records';
@@ -81,6 +84,8 @@ export const manifest: SubsystemManifest = {
       { name: 'sound-watch', render: (ctx: ComposerChipCtx) => <SoundChatWatcher ctx={ctx} /> },
       { name: 'sound-sheet', render: (ctx: ComposerChipCtx) => <SoundSheet ctx={ctx} /> },
     ],
+    // Вид «звук» контекста хода (ADR-023): чипы действий, волна, «Чем» и параметры панели «Контекст»
+    'context-kind': [{ name: 'audio', action: audioKindApi as unknown as Record<string, unknown> }],
     // Панель «Звук»: настройки и голоса вкладками, в проекте и в правой колонке личного чата
     'workspace-panel-def': [
       {
@@ -90,6 +95,17 @@ export const manifest: SubsystemManifest = {
           title: 'Звук',
           icon: <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
           isAvailable: () => enabled(),
+        } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
+      },
+      // «Голоса» отдельной панелью (ADR-023 §Д1, 2з-3): только при флаге composer-context-row и только в проекте —
+      // без флага библиотека остаётся вкладкой «Звука», а у личного чата голосов нет
+      {
+        name: VOICES_KEY,
+        render: (ctx: WorkspacePanelDefCtx) => <VoicesContextPanel ctx={ctx} />,
+        action: {
+          title: 'Голоса',
+          icon: <Mic size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          isAvailable: (projectId: string | null) => projectId !== null && enabled() && getFlag(FLAGS.composerContextRow),
         } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],

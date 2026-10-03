@@ -166,6 +166,47 @@ public class LocalMediaDefaultContributorTests
     }
 
     // Внутри варианта текст не зависит от хода: иначе хвост гонял бы разный текст
+    // ── Строка контекста (ADR-023 §3.1, 2б-2): выбор человека виден в «Чем» контекста хода, полос больше нет ──
+
+    private static readonly string[] AllFlagsWithRow = [.. AllFlags, FeatureFlagKeys.ComposerContextRow];
+
+    [Fact]
+    public async Task Без_флага_строки_контекста_тексты_всех_вариантов_прежние_байт_в_байт()
+    {
+        (await Contributor().BuildAsync(Project(), "x"))!.Sections[0].Text.Should().Be(LocalMediaDefaultContributor.ProjectRule);
+        (await Contributor().BuildAsync(Personal(), "x"))!.Sections[0].Text.Should().Be(LocalMediaDefaultContributor.PersonalRule);
+        (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true), "x"))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.ProjectRuleWithAudioEditor);
+        (await Contributor().BuildAsync(Personal(hasAudioEditorMcp: true), "x"))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.PersonalRuleWithAudioEditor);
+        LocalMediaDefaultContributor.ProjectRule.Should().Contain("полосе «Картинки»");
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_ни_один_вариант_не_ссылается_на_полосы()
+    {
+        var contributor = Contributor(flags: AllFlagsWithRow);
+        var texts = new[]
+        {
+            await contributor.BuildAsync(Project(), "x"),
+            await contributor.BuildAsync(Personal(), "x"),
+            await contributor.BuildAsync(Project(hasAudioEditorMcp: true), "x"),
+            await contributor.BuildAsync(Personal(hasAudioEditorMcp: true), "x"),
+        }.Select(c => c!.Sections[0].Text).ToList();
+
+        foreach (var text in texts)
+        {
+            text.Should().NotContain("полосе «Картинки»").And.NotContain("полосе «Звук»")
+                .And.NotContain("виден в блоке «Картинки в этом чате»")
+                .And.NotContain("в блоке «Картинки в этом чате» указан поставщик");
+            text.Should().Contain("«Чем» контекста хода");
+        }
+        texts[0].Should().Contain("Выбор человека в строке контекста, если в «Чем» контекста хода указан исполнитель")
+            .And.Contain(LocalMediaDefaultContributor.BandProviderRuleContextRow);
+        texts[2].Should().Contain("если в «Чем» контекста хода указан поставщик — используй его (не подменяй)");
+        texts[0].Should().Contain("Картинки: если в ходе есть блок «Картинки в этом чате»", "сам блок под флагом остаётся");
+    }
+
     [Fact]
     public async Task Текст_варианта_не_зависит_от_хода()
     {

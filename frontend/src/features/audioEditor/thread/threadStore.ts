@@ -6,7 +6,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import {
-  dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, revealWorkspacePanel, showToast,
+  dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, showToast,
 } from 'aihome_shell/kit';
 import {
   audioApi, conflictState, EMPTY_THREADS,
@@ -18,9 +18,10 @@ import type { ConcatPiece } from '../panel/inputs';
 import { isCreateMode } from '../ops';
 import type { ChosenMode, PendingSettings } from './modeState';
 import { threadName } from './model';
+import { SOUND_PANEL, SOUND_STRIP } from './panelKey';
+import { revealSoundPanel } from '../context/reveal';
 
-export const SOUND_STRIP = 'sound';
-export const SOUND_PANEL = 'sound';
+export { SOUND_PANEL, SOUND_STRIP };
 // Ключ элемента для черновиков и выбора: панель + нить
 export const soundDraftKey = (threadId: string) => `${SOUND_PANEL}:${threadId}`;
 
@@ -54,6 +55,9 @@ const _modeRequests = new Map<string, number>();
 const _composerText = new Map<string, string>();
 // Промпт из карточки агента «Вставить в промпт»: n — повод для затравки поля режима «Звук»
 const _suggested = new Map<string, { n: number; text: string }>();
+// Открытый редактор звука (на весь экран): один на вкладку, как попап «Редактор» у картинок
+export interface AudioEditorOpen { sessionId: string; threadId: string; versionId: string | null }
+let _editor: AudioEditorOpen | null = null;
 let _version = 0;
 const _listeners = new Set<() => void>();
 let _unsub: (() => void) | null = null;
@@ -71,6 +75,8 @@ function subscribe(fn: () => void) {
   return () => { _listeners.delete(fn); };
 }
 const getVersion = () => _version;
+// Подписка вне React (вид контекста хода узнаёт о смене нитей, каталога и выделения)
+export const subscribeAudioStore = subscribe;
 
 // Фокус меняет полосу над композером: выбрали звук — «Звук», сняли — прежняя
 function syncStrip(sessionId: string, prev: string | null, next: string | null) {
@@ -270,11 +276,26 @@ export function requestOperation(sessionId: string, threadId: string, op: AudioO
   const seq = (_opRequests.get(sessionId)?.seq ?? 0) + 1;
   _opRequests.set(sessionId, { threadId, op, seq, ...(piece ? { piece } : {}) });
   emit();
-  revealWorkspacePanel(SOUND_PANEL, 'settings');
+  revealSoundPanel(sessionId, 'settings');
 }
 
 export const getOperationRequest = (sessionId: string | null): OperationRequest | null =>
   (sessionId && _opRequests.get(sessionId)) || null;
+
+// ── Редактор звука ──
+
+export const getEditor = (): AudioEditorOpen | null => _editor;
+
+export function openEditor(sessionId: string, threadId: string, versionId: string | null = null) {
+  _editor = { sessionId, threadId, versionId };
+  emit();
+}
+
+export function closeEditor() {
+  if (!_editor) return;
+  _editor = null;
+  emit();
+}
 
 // ── Режим ярлыков и поля ввода ──
 
@@ -363,6 +384,7 @@ export function __resetAudioStore() {
   _pieceField.clear();
   _opRequests.clear();
   _suggested.clear();
+  _editor = null;
   emit();
 }
 

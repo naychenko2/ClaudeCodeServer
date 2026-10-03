@@ -61,9 +61,20 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
         var text = sessionContext.Session.ProjectId is null
             ? audio ? PersonalRuleWithAudioEditor : PersonalRule
             : audio ? ProjectRuleWithAudioEditor : ProjectRule;
+        // Строка контекста: выбор человека виден в «Чем» хвоста «Контекст хода», а не в полосах и старых блоках
+        if (sessionContext.OwnerId is { Length: > 0 } ownerId && flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow))
+            text = ForContextRow(text);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, text, Title, InTurnTail: true)]));
     }
+
+    // Тексты под строку контекста: ссылки на полосы «Картинки»/«Звук» и на блок «Картинки в этом чате» как
+    // источник выбора переписаны на «Чем» контекста хода. Без строки — константы как были, байт-в-байт
+    public static string ForContextRow(string rule) => rule
+        .Replace("Выбор человека в полосе «Картинки», если там указан поставщик (виден в блоке «Картинки в этом чате»).",
+            "Выбор человека в строке контекста, если в «Чем» контекста хода указан исполнитель.")
+        .Replace(BandProviderRule, BandProviderRuleContextRow)
+        .Replace("если в полосе «Звук» указан поставщик", "если в «Чем» контекста хода указан поставщик");
 
     private const string Head =
         "## Картинки и видео: локальная модель по умолчанию\n"
@@ -82,6 +93,9 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
     // Согласование с ChoiceRule блока «Картинки» («не передавай provider без просьбы»)
     public const string BandProviderRule =
         "если в блоке «Картинки в этом чате» указан поставщик — используй его (не подменяй)";
+
+    public const string BandProviderRuleContextRow =
+        "если в «Чем» контекста хода указан поставщик — используй его (не подменяй)";
 
     public const string ProviderLocalException =
         "image_generate передавай с provider local (это исключение из правила «не передавай provider»)";

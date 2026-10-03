@@ -115,7 +115,7 @@ function LibraryVoice({ value, onClear, onOpen, isMobile }: { value: string; onC
 }
 
 // Список путей проекта (записи для обучения RVC)
-function PathList({ paths, onChange }: { paths: string[]; onChange: (p: string[]) => void }) {
+export function PathList({ paths, onChange }: { paths: string[]; onChange: (p: string[]) => void }) {
   return (
     <div data-field="clips" style={{ marginBottom: SP.sm }}>
       {paths.map((p, i) => (
@@ -241,7 +241,7 @@ function NumRow({ label, value, onChange, unit }: { label: string; value: string
   );
 }
 
-function TrimFields({ t, set, piece }: { t: TrimInputs; set: (patch: Partial<TrimInputs>) => void; piece: PieceBinding | null }) {
+export function TrimFields({ t, set, piece }: { t: TrimInputs; set: (patch: Partial<TrimInputs>) => void; piece: PieceBinding | null }) {
   const n = (s: string) => Number(s.replace(',', '.')) || 0;
   return (
     <div data-op-fields="trim">

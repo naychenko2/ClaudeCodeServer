@@ -2,20 +2,23 @@
 // ImageEditorSubsystem.Key бэкенда: гейт слотов сверяется с активными подсистемами
 // из /api/auth/me. Фич-флаг владельца (image-editor) проверяют сами входы.
 
-import { Image as ImageIcon } from 'lucide-react';
+import { Contact, Image as ImageIcon } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
-  SubsystemManifest, FileViewerToolbarCtx, ChatItemToolCtx, ComposerChipApi, ComposerChipCtx, ComposerStripCtx,
+  ContextOpenerApi, SubsystemManifest, FileViewerToolbarCtx, ChatItemToolCtx, ComposerChipApi, ComposerChipCtx, ComposerStripCtx,
   WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
 import { isEditableImage } from './format';
 import { ImageFileMovedRow, ImageLaunchCard, ImageLaunchRow, ImagePromptCard } from './chat/cards';
 import { IMAGES_PANEL } from './characters/panel';
+import { CHARACTERS_PANEL, CharactersContextPanel } from './characters/CharactersContextPanel';
 import { EditImageButton } from './entry/EditImageButton';
 import { openFromTree } from './entry/openFromTree';
 import { ImageComposerChip } from './composer/ComposerChip';
 import { ImagesPanel } from './panel/ImagesPanel';
 import { IMAGE_COMPOSER_MODE, imageMode } from './composer/imageMode';
+import { imageKindApi } from './context/kind';
+import { imageRefOfPath } from './context/opener';
 import { takeMarksAttachment } from './composer/marksAttachment';
 import { ImagesStrip, imagesStripStatus } from './strip/ImagesStrip';
 import { ThreadAnchor } from './thread/ThreadCard';
@@ -35,6 +38,16 @@ export const manifest: SubsystemManifest = {
     // ImageEditorOpenerApi: вход из дерева файлов — последний активный чат проекта
     'image-editor': [
       { name: 'opener', action: { isEditable: isEditableImage, open: openFromTree } },
+    ],
+    // Вход из «Файлов» в контекст хода (ADR-023): картинка проекта становится нитью-основным объектом
+    'context-opener': [
+      {
+        name: 'image',
+        action: {
+          isOpenable: isEditableImage,
+          toRef: ({ projectId, sessionId, path }) => imageRefOfPath(projectId, sessionId, path),
+        } satisfies ContextOpenerApi as unknown as Record<string, unknown>,
+      },
     ],
     // Карточки ленты: ключ — имя инструмента или kind записи (image_launch и
     // image_file_moved — история архивных чатов картинки v2)
@@ -59,13 +72,16 @@ export const manifest: SubsystemManifest = {
         action: {
           title: 'Картинки',
           icon: <ImageIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-          isAvailable: () => getFlag(FLAGS.imageEditor),
+          // При флаге composer-context-row вход «Картинка» — create вида контекста, полоса не нужна (без дублей)
+          isAvailable: () => getFlag(FLAGS.imageEditor) && !getFlag(FLAGS.composerContextRow),
           status: ({ projectId, sessionId }: { projectId: string | null; sessionId: string | null }) => imagesStripStatus(projectId, sessionId),
         },
       },
     ],
     // Режим поля ввода «Картинка» — только при выбранной картинке
     'composer-mode': [{ name: IMAGE_COMPOSER_MODE, order: 10, action: imageMode as unknown as Record<string, unknown> }],
+    // Вид «картинка» контекста хода (ADR-023): чипы действий, превью, «Чем» и параметры панели «Контекст»
+    'context-kind': [{ name: 'image', action: imageKindApi as unknown as Record<string, unknown> }],
     // Чип пометок и попап «Редактор»
     'composer-chip': [
       {
@@ -84,6 +100,17 @@ export const manifest: SubsystemManifest = {
           title: 'Картинки',
           icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
           isAvailable: () => getFlag(FLAGS.imageEditor),
+        } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
+      },
+      // «Персонажи» отдельной панелью (ADR-023 §Д1, 2к-2): только при флаге composer-context-row — без него
+      // персонажи остаются вкладкой «Картинок»
+      {
+        name: CHARACTERS_PANEL,
+        render: (ctx: WorkspacePanelDefCtx) => <CharactersContextPanel ctx={ctx} />,
+        action: {
+          title: 'Персонажи',
+          icon: <Contact size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          isAvailable: () => getFlag(FLAGS.imageEditor) && getFlag(FLAGS.composerContextRow),
         } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],

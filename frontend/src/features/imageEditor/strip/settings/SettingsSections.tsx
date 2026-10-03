@@ -12,8 +12,8 @@ import type { Launch } from './primitives';
 import { ModelSection, ProviderSection } from './ProviderSection';
 import { BlockedNotice, SizeSection } from './SizeSection';
 
-export function SettingsSections({ projectId, L, catalog, thread, onCharacters }: {
-  projectId: string; L: Launch; catalog: ImageEditCatalog; thread: ImageThread | null;
+export function SettingsSections({ projectId, sessionId, L, catalog, thread, onCharacters }: {
+  projectId: string; sessionId?: string | null; L: Launch; catalog: ImageEditCatalog; thread: ImageThread | null;
   // Показ персонажей — вкладка той же панели
   onCharacters: () => void;
 }) {
@@ -27,7 +27,7 @@ export function SettingsSections({ projectId, L, catalog, thread, onCharacters }
       <ModeSection projectId={projectId} L={L} />
       {noSamples
         ? <NoSamplesSection title={isPersonalScope(projectId) ? 'Образцы' : 'Персонаж и образцы'} hint={noSamples} />
-        : <CharacterSection projectId={projectId} L={L} catalog={catalog} onCharacters={onCharacters} />}
+        : <CharacterSection projectId={projectId} sessionId={sessionId} L={L} catalog={catalog} onCharacters={onCharacters} />}
       <SizeSection L={L} thread={thread} />
       <BlockedNotice L={L} />
     </div>

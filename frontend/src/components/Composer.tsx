@@ -33,13 +33,22 @@ import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
-import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
+import { Button, Chip, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
 import { plusButtonTitle, useStripShortcuts } from './chat/ComposerStripHost';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, getShownStrip, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
 import { composerModeMemory, modeDraftText, modesForStrip, modeSubmitButton, nextComposerMode, nextModeDraft, nextPrefill, type ModeDraftState, type PrefillState } from '../lib/composerModes';
 import { getGenDraftText, setGenDraftText } from '../lib/genDrafts';
+import { ComposerActionRow } from './chat/ComposerActionRow';
+import { ACTION_MODE_ID, actionComposerMode } from '../lib/chatContext/actionMode';
+import { rememberAction, takePreset, useActionMemoryVersion } from '../lib/chatContext/actionMemory';
+import { getKindApi } from '../lib/chatContext/registry';
+import { composerSurfaceFor } from '../lib/chatContext/surface';
+import { useChatContext } from '../lib/chatContext/store';
+import { useActionRun } from '../lib/chatContext/useActionRun';
+import type { ActionPreset, ContextKindCtx } from '../lib/chatContext/types';
+import { FLAGS, useFeature } from '../lib/featureFlags';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -609,10 +618,42 @@ export function Composer({
   // полос: владелец режима и полосы — одна подсистема, её выбор проходит через этот стор
   useSyncExternalStore(subscribeComposerStrips, getComposerStripsVersion, getComposerStripsVersion);
   const modeCtx: ComposerModeCtx = { projectId: project?.id ?? null, sessionId };
+  // Мост (ADR-023 §Д2): при флаге и виде с действиями поле рисует чипы действий, а слот composer-mode для
+  // этого объекта не читается; без действий или без флага — прежний сегмент «Чат | X»
+  const contextRowOn = useFeature(FLAGS.composerContextRow);
+  const turnContext = useChatContext(contextRowOn ? sessionId : null);
+  useActionMemoryVersion();
+  const kindCtx: ContextKindCtx = { projectId: project?.id ?? null, sessionId, isMobile: !!isMobile };
+  const surface = composerSurfaceFor({
+    flag: contextRowOn, primary: turnContext.primary, refs: turnContext.refs,
+    api: turnContext.primary ? getKindApi(turnContext.primary.kind) : null, ctx: kindCtx,
+  });
+  const actionsOn = surface.surface === 'actions';
+  // Метка вида («Отмечено: 2 ✕») — в панели кнопок поля, только на компьютере: на телефоне место нужно кнопке запуска
+  const kindNote = actionsOn && !isMobile && turnContext.primary
+    ? getKindApi(turnContext.primary.kind)?.note?.(kindCtx, turnContext.primary) ?? null : null;
+  // Одна точка запуска с панелью «Контекст»: подпись, цена и run читаются из useActionRun
+  const actionRun = useActionRun(contextRowOn ? sessionId : null, kindCtx);
+  // Предвыбор вертикали применяет один хост поля, и вне рендера: затравка текста уходит в поле режима
+  const [preset, setPreset] = useState<{ key: string; value: ActionPreset } | null>(null);
+  const actionsKey = actionsOn ? surface.objectKey : null;
+  useEffect(() => {
+    if (!actionsOn || !turnContext.primary) return;
+    const taken = takePreset(sessionId, surface.objectKey, turnContext.primary.by, surface.actions);
+    if (!taken) return;
+    setPreset({ key: `${surface.objectKey}:${taken.actionId}:${Date.now()}`, value: taken });
+    if (taken.params) Object.entries(taken.params).forEach(([k, v]) => { if (typeof v !== 'boolean') actionRun.setParam(k, v); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- предвыбор появляется вместе с объектом
+  }, [actionsKey, sessionId]);
+  const actionMode = actionsOn && surface.action && actionRun.action
+    ? actionComposerMode({ action: surface.action, run: actionRun, objectKey: surface.objectKey, preset })
+    : null;
   const availableModes = useSlot<ComposerModeCtx, ComposerModeApi>(SLOT_COMPOSER_MODE)
-    .filter(c => c.name && c.action && c.action.isAvailable(modeCtx));
+    .filter(c => !actionsOn && c.name && c.action && c.action.isAvailable(modeCtx));
   // Режим полосы виден только над ней: «Картинки» не предлагают «Звук» и наоборот
-  const slotModes = modesForStrip(availableModes, getShownStrip(sessionId));
+  const slotModes = actionsOn
+    ? (actionMode ? [{ name: ACTION_MODE_ID, action: actionMode }] : [])
+    : modesForStrip(availableModes, getShownStrip(sessionId));
   const slotChips = useSlot<ComposerChipCtx>(SLOT_COMPOSER_CHIP);
   // Ярлыки полос («Голос», «Музыка») превращают «＋» в меню; без них «＋» прикрепляет сразу
   const stripShortcuts = useStripShortcuts(project?.id ?? null, sessionId);
@@ -625,8 +666,10 @@ export function Composer({
     return () => window.removeEventListener('keydown', onKey);
   }, [plusMenu]);
   const modeMemory = composerModeMemory(sessionId);
-  const [modeId, setModeIdState] = useState<string | null>(() => modeMemory.modeId);
+  const [modeIdState, setModeIdState] = useState<string | null>(() => modeMemory.modeId);
   const setModeId = (id: string | null) => { modeMemory.modeId = id; setModeIdState(id); };
+  // Чипы действий владеют режимом поля: выбранное run-действие — режим, «Чат» — его отсутствие
+  const modeId = actionsOn ? (actionMode ? ACTION_MODE_ID : null) : modeIdState;
   // Полоса сменилась на чужую — поле уходит в «Чат», а не ждёт возврата полосы в режиме
   // Признак считаем в рендере (slotModes пересобирается каждый раз), а эффект зависит только от него
   const modeHiddenByStrip = !!modeId && availableModes.some(c => c.name === modeId) && !slotModes.some(c => c.name === modeId);
@@ -1797,7 +1840,7 @@ export function Composer({
 
   // Сегмент режимов поля: в «Чате» — слева от поля, в режиме подсистемы («Картинка») —
   // в нижней строке действий: поле тогда на всю ширину, три строки как в прототипе полос
-  const modesSeg = slotModes.length > 0 && (
+  const modesSeg = !actionsOn && slotModes.length > 0 && (
         // Сегмент «Чат | …» слева поля. По макету (.mswitch) это радио-группа из
         // двух кнопок — она появляется только при выбранной картинке, иначе первая
         // кнопка «Чат» рисуется одна. Здесь slotModes.length > 0 уже отфильтровано
@@ -2192,7 +2235,9 @@ export function Composer({
   const canSend = hasText || attachments.length > 0
     || teamMech === 'qa' || teamMech === 'review' || teamMech === 'redteam';
   // Кнопка строки режима: при пустом поле — запуск вклада emptySubmit, если он есть
-  const modeSubmit = activeMode ? modeSubmitButton(activeMode, modeCtx, hasText, execBlocked) : null;
+  // Идущий запуск и серое действие гасят кнопку и у моста чипов: их знает useActionRun, не режим
+  const actionHold = actionsOn && (actionRun.state === 'running' || !!actionRun.action?.disabledReason);
+  const modeSubmit = activeMode ? modeSubmitButton(activeMode, modeCtx, hasText, execBlocked || actionHold) : null;
   // Отказ вклада (исключение) причину уже показал сам — поле не трогаем
   const runEmptySubmit = async (run: () => Promise<void> | void) => {
     try { await run(); } catch { /* причина уже показана вкладом */ }
@@ -2637,6 +2682,17 @@ export function Composer({
           Выросшее выше столбца кнопок поле разворачивает правую группу
           вертикально (columnRight) — кнопки прижимаются к низу, «отправить»
           остаётся в правом нижнем углу, поле забирает ширину карточки */}
+      {actionsOn && !talkActive && !isListening && (
+        <ComposerActionRow
+          actions={surface.actions}
+          selectedId={surface.action?.id ?? null}
+          onSelect={id => { rememberAction(sessionId, surface.objectKey, id); textareaRef.current?.focus(); }}
+          question={surface.action?.question && actionRun.answer !== null
+            ? { value: actionRun.answer, onChange: v => actionRun.setParam(surface.action!.question!.param, v) }
+            : null}
+          isMobile={!!isMobile}
+        />
+      )}
       {activeMode?.hint && !talkActive && (
         <div data-composer-mode-hint="" style={{ padding: `${SP.xxs}px ${SP.sm}px 0` }}>{activeMode.hint(modeCtx)}</div>
       )}
@@ -2661,9 +2717,15 @@ export function Composer({
       {activeMode && !talkActive && !isListening && (
         <div data-composer-mode-bar="" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: `0 ${SP.xxs}px ${SP.xxs}px` }}>
           {modesSeg}
+          {kindNote && (
+            <span data-composer-note="" style={{ display: 'inline-flex', minWidth: 0 }}>
+              <Chip title={kindNote.hint} onRemove={kindNote.clear} maxW={220}>{kindNote.label}</Chip>
+            </span>
+          )}
           <span style={{ flex: 1 }} />
           <span data-composer-send={modeSubmit!.kind === 'empty' ? 'empty' : ''} style={{ display: 'inline-flex', minWidth: 0, flexShrink: 1 }}>
             <Button size="sm" pill variant="primary" disabled={modeSubmit!.disabled}
+              title={actionsOn && !hasText ? actionRun.blocked ?? undefined : undefined}
               onClick={() => { if (modeSubmit!.run) void runEmptySubmit(modeSubmit!.run); else void handleSend(); }} style={{ minWidth: 0 }}>
               {modeSubmit!.label ?? <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
             </Button>

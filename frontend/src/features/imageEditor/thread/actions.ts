@@ -3,9 +3,10 @@
 // тексты тостов — из записки v3, раздел «Тексты».
 
 import {
-  api as appApi, autoRevealGenerationPanel, createReleaseUndo, dropAgentPick, followSelection, revealWorkspacePanel, showToast,
+  api as appApi, autoRevealGenerationPanel, createReleaseUndo, dropAgentPick, followSelection, showToast,
 } from 'aihome_shell/kit';
 import { IMAGES_PANEL } from '../characters/panel';
+import { revealImagesPanel } from '../context/reveal';
 import { imageEditorApi, nameTakenSuggestion, type ImageEncodeFormat } from '../api';
 import { nameStem } from '../saveAs';
 import { isPersonalScope } from '../scope';
@@ -60,7 +61,7 @@ function revealPanel(ok: boolean, sessionId: string, how: RevealMode = 'auto'): 
 function openPanel(ok: boolean, sessionId: string, threadId: string): boolean {
   if (!ok) return false;
   dropAgentPick(sessionId, imageDraftKey(threadId));
-  revealWorkspacePanel(IMAGES_PANEL, 'settings', { sessionId, target: imageDraftKey(threadId) });
+  revealImagesPanel(sessionId, 'settings', imageDraftKey(threadId));
   return true;
 }
 

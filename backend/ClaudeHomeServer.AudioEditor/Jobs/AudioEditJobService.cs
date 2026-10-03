@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.Prefs;
 using ClaudeHomeServer.Services.AudioEditor.Schema;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Spend;
 
@@ -63,6 +64,7 @@ public sealed class AudioEditJobService : IDisposable
     private readonly ISessionBroadcaster? _broadcaster;
     private readonly Voices.VoiceLibrary? _voices;
     private readonly IFeatureFlagGate? _flags;
+    private readonly ChatContext.AudioContextLaunch? _context;
     private readonly ILogger<AudioEditJobService> _log;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, Quote> _quotes = new();
@@ -81,8 +83,10 @@ public sealed class AudioEditJobService : IDisposable
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
         Voices.VoiceLibrary? voices = null,
-        IFeatureFlagGate? flags = null)
+        IFeatureFlagGate? flags = null,
+        ChatContext.AudioContextLaunch? context = null)
     {
+        _context = context;
         _engines = engines;
         _workspace = workspace;
         _log = log;
@@ -103,7 +107,8 @@ public sealed class AudioEditJobService : IDisposable
     private sealed record Quote(
         string Id, string OwnerId, string ScopeKey, string Mode, AudioOp Op, string Provider, AudioModelInfo Model,
         int Count, AudioVoiceKind? VoiceKind, AudioPrice Price, JsonObject Fields, DateTime ExpiresAt,
-        string? RecreateVoice = null, Billed? Input = null)
+        string? RecreateVoice = null, Billed? Input = null, long? ContextRevision = null,
+        IReadOnlyList<ExecutorRowDto>? Executors = null)
     {
         public Billed Billed => Input ?? Billed.None;
         public bool Heavy => Model.Caps.IsHeavy(Op);
@@ -161,9 +166,23 @@ public sealed class AudioEditJobService : IDisposable
         if (!AudioModes.IsValid(request.Mode))
             return Fail<AudioQuoteDto>(AudioEditErrorCodes.InvalidRequest, $"Неизвестный режим: {request.Mode}");
 
+        // Ревизия контекста: нить и вид голоса берутся из стора, одноимённые поля запроса игнорируются.
+        // Операция голоса зависит от op, который выбирает цепочка ниже, — вход добираем после неё
+        ChatContextState? contextState = null;
+        var requestThreadId = request.ThreadId;
+        if (request.ContextRevision is { } revision)
+        {
+            if (_context is null)
+                return Fail<AudioQuoteDto>(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
+            var read = _context.Read(ownerId, scope, request.SessionId, revision);
+            if (!read.Ok) return read.Fail<AudioQuoteDto>();
+            contextState = read.State;
+            requestThreadId = ChatContext.AudioContextLaunch.Extract(scope, contextState!, null).ThreadId;
+        }
+
         // Цепочка: явное в запросе → настройки нити → префы режима → умолчание каталога
-        var thread = _threads is not null && _threads.OwnThread(ownerId, scope.Key, request.SessionId, request.ThreadId)
-            ? _threads.Store.Get(ownerId, request.SessionId!).Threads.First(t => t.Id == request.ThreadId).Settings
+        var thread = _threads is not null && _threads.OwnThread(ownerId, scope.Key, request.SessionId, requestThreadId)
+            ? _threads.Store.Get(ownerId, request.SessionId!).Threads.First(t => t.Id == requestThreadId).Settings
             : null;
         var chain = _prefs is not null
             ? _prefs.Resolve(ownerId, scope, request.Mode, thread, CatalogDefault(request.Mode))
@@ -175,7 +194,9 @@ public sealed class AudioEditJobService : IDisposable
         var count = request.Count ?? chain.Count;
         if (count < 1 || count > AudioModePrefs.MaxCount)
             return Fail<AudioQuoteDto>(AudioEditErrorCodes.InvalidRequest, $"Вариантов — от 1 до {AudioModePrefs.MaxCount}");
-        var voiceKind = request.VoiceKind ?? DefaultVoiceKind(op);
+        var voiceKind = contextState is null
+            ? request.VoiceKind ?? DefaultVoiceKind(op)
+            : ChatContext.AudioContextLaunch.Extract(scope, contextState, OpName(op)).VoiceKind ?? DefaultVoiceKind(op);
         var modelId = request.Model ?? chain.Model;
         var providerKey = request.Provider ?? chain.Provider;
 
@@ -224,7 +245,9 @@ public sealed class AudioEditJobService : IDisposable
         }
 
         var quote = new Quote(NewId(), ownerId, scope.Key, request.Mode, op, engine.Key, model, count, voiceKind, price,
-            fields, Now() + QuoteTtl, Input: Billed.Of(request.Text, request.Prompt, request.Lyrics, request.DurationSec));
+            fields, Now() + QuoteTtl, Input: Billed.Of(request.Text, request.Prompt, request.Lyrics, request.DurationSec),
+            ContextRevision: request.ContextRevision,
+            Executors: ChatContext.AudioExecutorRows.Build(_engines, scope, op, voiceKind, engine, model, price, PrefersLocal(ownerId)));
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return AudioEditCallResult<AudioQuoteDto>.Ok(ToDto(quote));
@@ -308,6 +331,20 @@ public sealed class AudioEditJobService : IDisposable
         if (!_quotes.TryGetValue(input.QuoteId, out var quote)
             || quote.OwnerId != ownerId || quote.ScopeKey != scope.Key || quote.ExpiresAt < Now())
             return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.QuoteNotFound, QuoteExpiredText);
+
+        // Ревизия контекста: совпасть и со стором, и с ревизией котировки (цена выписана на состав входов)
+        if (input.ContextRevision is { } revision)
+        {
+            if (_context is null)
+                return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
+            var read = _context.Read(ownerId, scope, input.SessionId, revision);
+            if (!read.Ok) return read.Fail<AudioJobCreatedDto>();
+            if (quote.ContextRevision != revision)
+                return _context.Stale(ownerId, scope, input.SessionId!).Fail<AudioJobCreatedDto>();
+            // Нить, версия-основа и голос — из стора; одноимённые поля тела игнорируются
+            var fromContext = ChatContext.AudioContextLaunch.Extract(scope, read.State!, OpName(quote.Op));
+            input = input with { ThreadId = fromContext.ThreadId, BaseVersionId = fromContext.VersionId, Voice = fromContext.VoiceRef };
+        }
 
         // Ровно поставщик котировки: пропал — отказ, а не сосед
         var engine = AudioCatalog.Available(_engines)
@@ -896,7 +933,7 @@ public sealed class AudioEditJobService : IDisposable
 
     private static AudioQuoteDto ToDto(Quote q) =>
         new(q.Id, q.Mode, q.Op, q.Provider, q.Model.Id, q.Count, q.VoiceKind, q.Price, q.License, q.Heavy, q.ExpiresAt,
-            q.RecreateVoice);
+            q.RecreateVoice, q.Executors);
 
     private static AudioJobDto ToDto(Job j)
     {

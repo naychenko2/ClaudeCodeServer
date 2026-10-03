@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
@@ -29,8 +30,9 @@ public class ImageEditorController(
     ImageEditSteps? steps = null,
     IConfiguration? config = null,
     IImageRaster? raster = null,
-    ImageThreadService? threads = null)
-    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster)
+    ImageThreadService? threads = null,
+    ImageContextLaunch? context = null)
+    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
     [HttpGet("catalog")]
     public IActionResult Catalog(string projectId) =>
@@ -45,6 +47,13 @@ public class ImageEditorController(
     [RequestFormLimits(MultipartBodyLengthLimit = MaxJobBodyBytes)]
     public async Task<IActionResult> Start(string projectId, [FromForm] StartJobForm form, CancellationToken ct) =>
         Gate(projectId, out var scope, out var denied) ? await StartIn(scope, form, ct) : denied;
+
+    // Образец с диска человека в рабочую папку модуля (ADR-023 §2.3): дальше — attachRef({kind: 'image', ref: {upload}})
+    [HttpPost("uploads")]
+    [RequestSizeLimit(MaxUploadBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBodyBytes)]
+    public async Task<IActionResult> Upload(string projectId, IFormFile? file, CancellationToken ct) =>
+        Gate(projectId, out _, out var denied) ? await UploadIn(file, ct) : denied;
 
     [HttpGet("jobs/{jobId}")]
     public IActionResult GetJob(string projectId, string jobId) =>

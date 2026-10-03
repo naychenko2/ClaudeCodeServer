@@ -26,6 +26,7 @@ import { recordOf } from './records';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadVersion } from './threadsApi';
 import { launchThread, versionSrc } from './useThreadLaunch';
+import { CardContextActions, useCardFill, useFocusedThreadId } from '../context/CardFill';
 import { queueText, useJobStatus, useProgress } from './useJobStatus';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -87,7 +88,8 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   model?: string | null;
 }) {
   const [busy, setBusy] = useState(false);
-  const current = focused && thread.currentVersionId === version.id;
+  const fill = useCardFill(sessionId, thread, version.id);
+  const current = fill.on ? fill.working : focused && thread.currentVersionId === version.id;
   const src = versionSrc(projectId, thread, version);
   const saved = versionSaved(thread, version);
   const name = `${threadName(thread)} · ${versionName(version)}`;
@@ -101,9 +103,9 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
 
   return (
     <Shell current={current} testId={String(version.number)}
-      onPick={() => { void pickByHuman(projectId, sessionId, thread.id, focused); }}>
+      onPick={() => { void (fill.on ? fill.pick() : pickByHuman(projectId, sessionId, thread.id, focused)); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
-        {current && <Badge size="xs" tone="accent" icon={ic(Target)}>в работе</Badge>}
+        {current && <Badge size="xs" tone="accent" icon={ic(Target)}>{fill.byAgent ? 'в работе ✦' : 'в работе'}</Badge>}
         <span title={name} style={{
           fontSize: FS.sm, fontWeight: 600, color: C.textHeading, minWidth: 0, flex: 1,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -130,14 +132,15 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
             Скачать
           </Button>
         )}
-        {primary === 'continue' && (
+        {fill.on && <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={version.id} fill={fill} />}
+        {!fill.on && primary === 'continue' && (
           <Button size="xs" variant="secondary" leftIcon={ic(Undo2)} disabled={busy}
             title="Следующая правка пойдёт от этой версии, остальные останутся в ленте"
             onClick={() => { void run(() => continueFrom(projectId, sessionId, thread, version.id)); }}>
             Продолжить от неё
           </Button>
         )}
-        {primary === 'work' && (
+        {!fill.on && primary === 'work' && (
           <Button size="xs" variant="primary" leftIcon={ic(Target)} disabled={busy}
             title="Полоса «Картинки» и режим «Картинка» будут работать с этой версией"
             onClick={() => { void run(() => continueFrom(projectId, sessionId, thread, version.id)); }}>
@@ -207,6 +210,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   // Личный чат вне проекта: ctx.projectId = null, область — personal
   const projectId = enterScope(ctx.projectId, ctx.sessionId);
   const state = useThreads(projectId, ctx.sessionId);
+  const focusId = useFocusedThreadId(ctx.sessionId ?? '', state.focus);
   const [busy, setBusy] = useState(false);
   const data = (rec?.data ?? {}) as LaunchData;
   const jobId = str(data.jobId);
@@ -216,7 +220,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
 
   const launch = launchOf(thread, jobId);
   const versions = launchVersions(thread, jobId);
-  const focused = state.focus === thread.id;
+  const focused = focusId === thread.id;
   const model = str(data.model);
   const count = typeof data.count === 'number' && data.count > 0 ? data.count : 1;
   const prompt = str(data.prompt) ?? launch?.prompt ?? null;

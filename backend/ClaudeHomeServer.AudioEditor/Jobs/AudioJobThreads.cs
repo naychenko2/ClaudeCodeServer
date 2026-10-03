@@ -2,6 +2,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Jobs;
@@ -16,7 +17,8 @@ public sealed class AudioJobThreads(
     ILogger<AudioJobThreads> log,
     ISessionDirectory? directory = null,
     IChatFeed? feed = null,
-    ISessionBroadcaster? broadcaster = null)
+    ISessionBroadcaster? broadcaster = null,
+    ChatContextFocusMirror? mirror = null)
 {
     public const string ModuleKey = "audioeditor";
 
@@ -30,6 +32,38 @@ public sealed class AudioJobThreads(
     }
 
     public AudioThreadStore Store => store;
+
+    // Состояние для DTO (ручка GET, ответы мутаций, событие): при флаге строки контекста фокус — проекция из
+    // контекста чата (основной объект своего вида), без флага — собственное поле. Читатели хода (хвост, MCP)
+    // берут хранилище напрямую и проекции не видят
+    public AudioThreadsState View(string ownerId, string sessionId) => Project(ownerId, sessionId, store.Get(ownerId, sessionId));
+
+    public AudioThreadsState Project(string ownerId, string sessionId, AudioThreadsState state)
+    {
+        if (mirror is null) return state;
+        var focus = mirror.ProjectFocus(ownerId, sessionId, ChatContext.AudioContextKind.Kind, state.Focus,
+            id => state.Threads.Any(t => t.Id == id));
+        return focus == state.Focus ? state : state with { Focus = focus };
+    }
+
+    // Запись, которая может сменить фокус: смена попадает в стор контекста (при флаге)
+    public AudioThreadWrite Tracked(string ownerId, string sessionId, Func<AudioThreadWrite> write, ContextActor by)
+    {
+        var before = store.Get(ownerId, sessionId).Focus;
+        var written = write();
+        if (written.Status == AudioThreadWriteStatus.Ok)
+            mirror?.Sync(ownerId, sessionId, ChatContext.AudioContextKind.Kind, before, written.State.Focus, by);
+        return written;
+    }
+
+    // Итоговая смена фокуса после цепочки записей (усыновление: Open отдаёт фокус новой нити, выбор человека
+    // возвращается): в контекст чата идёт только разница «до → после»
+    public void SyncFocus(string ownerId, string sessionId, string? before, string? after, ContextActor by) =>
+        mirror?.Sync(ownerId, sessionId, ChatContext.AudioContextKind.Kind, before, after, by);
+
+    // Нить исчезла — из контекста чата уходит и она сама, и её референсы
+    public void Forget(string ownerId, string sessionId, string threadId) =>
+        mirror?.Forget(ownerId, sessionId, ChatContext.AudioContextKind.Kind, threadId);
 
     // Своя нить чата своей области; без справочника чатов (тесты без DI) — только по хранилищу владельца
     public bool OwnThread(string ownerId, string scopeKey, string? sessionId, string? threadId)
@@ -181,7 +215,7 @@ public sealed class AudioJobThreads(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId, new AudioThreadChangedMessage(scopeKey, state.Revision, state) { SessionId = sessionId });
+            await broadcaster.ToOwner(ownerId, new AudioThreadChangedMessage(scopeKey, state.Revision, Project(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)
         {

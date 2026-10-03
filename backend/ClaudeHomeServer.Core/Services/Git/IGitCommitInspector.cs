@@ -51,4 +51,30 @@ public interface IGitCommitInspector
 public static class GitRepo
 {
     public static bool IsRepo(string root) => Path.Exists(Path.Combine(root, ".git"));
+
+    // Текущая ветка рабочей папки без запуска git: читаем HEAD (у worktree .git — файл-ссылка «gitdir: …»).
+    // null — не репозиторий, HEAD отсоединён или файл не прочитался
+    public static string? CurrentBranch(string root)
+    {
+        try
+        {
+            var dotGit = Path.Combine(root, ".git");
+            string gitDir;
+            if (Directory.Exists(dotGit)) gitDir = dotGit;
+            else if (File.Exists(dotGit)
+                && File.ReadLines(dotGit).FirstOrDefault() is { } link && link.StartsWith("gitdir:", StringComparison.Ordinal))
+            {
+                var target = link["gitdir:".Length..].Trim();
+                gitDir = Path.IsPathRooted(target) ? target : Path.GetFullPath(Path.Combine(root, target));
+            }
+            else return null;
+            const string prefix = "ref: refs/heads/";
+            var head = File.ReadAllText(Path.Combine(gitDir, "HEAD")).Trim();
+            return head.StartsWith(prefix, StringComparison.Ordinal) ? head[prefix.Length..] : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }

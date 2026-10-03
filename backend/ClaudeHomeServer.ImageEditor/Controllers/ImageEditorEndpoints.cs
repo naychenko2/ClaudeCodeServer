@@ -1,6 +1,8 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ImageEditor.ChatContext;
+using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Media;
 using Microsoft.AspNetCore.Mvc;
@@ -23,7 +25,8 @@ public abstract class ImageEditorEndpoints(
     IImageEditJobs? jobs,
     ImageEditSteps? steps,
     IConfiguration? config,
-    IImageRaster? raster) : ControllerBase
+    IImageRaster? raster,
+    ImageContextLaunch? context = null) : ControllerBase
 {
     // Потолок файла проекта, который ручка transform читает в память; дальше решает растр (100 Мп)
     private const long MaxTransformFileBytes = 100L * 1024 * 1024;
@@ -31,6 +34,9 @@ public abstract class ImageEditorEndpoints(
 
     // Потолок тела запуска: исходник, маска, размеченная копия и до MaxReferences образцов
     protected const long MaxJobBodyBytes = 200L * 1024 * 1024;
+
+    // Потолок тела загрузки образца: одна картинка до MaxFileMb плюс поля формы
+    protected const long MaxUploadBodyBytes = 30L * 1024 * 1024;
 
     protected string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -67,7 +73,37 @@ public abstract class ImageEditorEndpoints(
                 $"Число вариантов — от 1 до {maxCount}");
         if (jobs is null) return JobsUnavailable();
 
-        return Map(await jobs.QuoteAsync(UserId, scope.Key, req, ct), Ok);
+        // По ревизии контекста (ADR-023 §Д2.1): образцы, персонаж и размер — из стора, поля тела игнорируются
+        ImageContextLaunch.Inputs? byContext = null;
+        if (req.ContextRevision is { } revision)
+        {
+            if (context is null) return JobsUnavailable();
+            var resolved = context.Resolve(UserId, scope, req.SessionId, revision, req.Op);
+            if (resolved.ErrorCode is not null) return Map(resolved, _ => Ok());
+            var (inputs, _, sessionId) = resolved.Value;
+            byContext = inputs;
+            var size = await context.BaseSizeAsync(UserId, scope, sessionId, inputs, ct);
+            req = req with
+            {
+                References = inputs.ReferenceCount,
+                HasCharacter = inputs.CharacterSlug is not null,
+                Width = size?.Width,
+                Height = size?.Height,
+            };
+        }
+
+        var quoted = await jobs.QuoteAsync(UserId, scope.Key, req, ct);
+        if (byContext is null) return Map(quoted, Ok);
+        // Строки «Чем» по операции запроса: источник один для строки контекста и панели (КТ-3)
+        return Map(quoted, q => Ok(q with { Executors = ExecutorRows(req.Op, byContext.BaseHasImage, req.HasMask) }));
+    }
+
+    private IReadOnlyList<Protocol.ExecutorRowDto> ExecutorRows(ImageEditOp op, bool hasImage, bool hasMask)
+    {
+        var place = ImagePlaceKeys.ImageEditor;
+        var adminProvider = placeSettings?.ProviderFor(place);
+        var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
+        return ImageExecutorRows.Build(ImageEditCatalog.Build(editors, adminProvider, adminModel), editors, op, hasImage, hasMask);
     }
 
     protected async Task<IActionResult> StartIn(ImageEditScope scope, StartJobForm form, CancellationToken ct)
@@ -95,10 +131,27 @@ public abstract class ImageEditorEndpoints(
             Initiator: ImageEditInitiator.Human,
             ThreadSessionId: form.SessionId,
             ThreadId: form.ThreadId,
-            VersionId: form.VersionId);
+            VersionId: form.VersionId,
+            ContextRevision: form.ContextRevision);
 
         var started = await launcher.LaunchAsync(UserId, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
+    }
+
+    // Образец с диска → рабочая папка модуля → uploadId для ref {upload}. Не картинку и слишком тяжёлый
+    // файл отвергаем здесь, до записи на диск
+    protected async Task<IActionResult> UploadIn(IFormFile? file, CancellationToken ct)
+    {
+        if (context is null) return JobsUnavailable();
+        if (file is null || file.Length == 0)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не передан файл образца");
+        var limits = ImageEditCatalog.DefaultLimits;
+        if (file.Length > limits.MaxFileMb * 1024L * 1024L)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, $"Файл больше {limits.MaxFileMb} МБ");
+        var bytes = await ReadAsync(file, ct);
+        if (ImageFormatSniffer.DetectExtension(bytes) is null)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Образец должен быть картинкой: png, jpeg, webp или gif");
+        return StatusCode(StatusCodes.Status201Created, new { uploadId = context.SaveUpload(UserId, bytes) });
     }
 
     protected IActionResult JobIn(ImageEditScope scope, string jobId)
@@ -187,6 +240,9 @@ public abstract class ImageEditorEndpoints(
         public string? ThreadId { get; set; }
         // Версия нити, от которой правка; не передано — текущая. Чужая — 404 version_not_found
         public string? VersionId { get; set; }
+        // Ревизия контекста чата (ADR-023 §Д2.1): с ней входы берутся из стора, а Source, References,
+        // ReferencePaths, CharacterSlug, ThreadId и VersionId тела игнорируются; не совпала — 409 context_changed
+        public long? ContextRevision { get; set; }
     }
 
     // Строковой проверки SafePath мало: символическая ссылка внутри проекта (refs → /etc)
@@ -217,7 +273,8 @@ public abstract class ImageEditorEndpoints(
         var code = result.ErrorCode ?? ImageEditErrorCodes.InvalidRequest;
         var status = code switch
         {
-            ImageEditErrorCodes.ProviderUnavailable or ImageEditErrorCodes.NameTaken => StatusCodes.Status409Conflict,
+            ImageEditErrorCodes.ProviderUnavailable or ImageEditErrorCodes.NameTaken
+                or ImageEditErrorCodes.ContextChanged => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
                 or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound
                 or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound => StatusCodes.Status404NotFound,
@@ -225,6 +282,8 @@ public abstract class ImageEditorEndpoints(
             ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         };
+        // context_changed несёт свежий контекст: тело то же, что у ручек контекста чата
+        if (result.Payload is { } payload) return StatusCode(status, payload);
         return Error(status, code, result.Error ?? "Запрос не выполнен");
     }
 

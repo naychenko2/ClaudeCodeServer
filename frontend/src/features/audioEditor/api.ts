@@ -178,6 +178,8 @@ export interface AudioQuoteRequest {
   lyrics?: string | null;
   durationSec?: number | null;
   fields?: Record<string, unknown> | null;
+  // Ревизия контекста чата (ADR-023): с ней нить, версия, голос и входы берутся из стора контекста
+  contextRevision?: number | null;
 }
 
 export interface AudioPrice {
@@ -227,6 +229,8 @@ export interface AudioJobInput {
   voiceIndexPath?: string | null;
   // Голос из библиотеки значением voice:<slug>
   voice?: string | null;
+  // Ревизия контекста чата (ADR-023): сервер берёт нить, версию, голос и образец из стора
+  contextRevision?: number | null;
 }
 
 export interface AudioCost { amount: number; unit: string }
@@ -309,12 +313,14 @@ export interface AudioJoint { kind: AudioJointKind; seconds: number }
 export interface AudioConcatPiece { threadId?: string | null; versionId?: string | null; projectFile?: string | null }
 
 export interface AudioConcatRequest {
-  pieces: AudioConcatPiece[];
+  // С contextRevision куски — референсы роли piece из контекста, поле не нужно
+  pieces?: AudioConcatPiece[];
   joint?: AudioJoint | null;
   joints?: (AudioJoint | null)[] | null;
   normalizeLoudness?: boolean;
   name?: string | null;
   format?: AudioFileFormat | null;
+  contextRevision?: number | null;
 }
 
 export interface AudioConcatResult { threadId: string; versionId: string; jobId: string; name: string }
@@ -331,7 +337,11 @@ export interface AudioPeaks { peaks: number[]; seconds: number }
 // role — «stem:<имя>»; muted — в сведение не идёт
 export interface AudioMixStem { role: string; gainDb: number; muted?: boolean }
 
-export interface AudioMixRequest { stems: AudioMixStem[]; baseVersionId?: string | null; format?: string | null; revision?: number | null }
+export interface AudioMixRequest {
+  stems: AudioMixStem[]; baseVersionId?: string | null; format?: string | null; revision?: number | null;
+  // Ревизия контекста чата: версия-основа — из стора, нить маршрута сверяется с ним
+  contextRevision?: number | null;
+}
 
 export interface AudioDspVersion { threadId: string; versionId: string; number: number; jobId: string; state: AudioThreadsState }
 
@@ -427,6 +437,7 @@ export function jobForm(input: AudioJobInput): FormData {
   put('voiceModelPath', input.voiceModelPath);
   put('voiceIndexPath', input.voiceIndexPath);
   put('voice', input.voice);
+  put('contextRevision', input.contextRevision);
   return form;
 }
 

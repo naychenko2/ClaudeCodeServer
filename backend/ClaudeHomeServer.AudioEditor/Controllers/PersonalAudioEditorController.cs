@@ -23,8 +23,9 @@ public class PersonalAudioEditorController(
     AudioPrefsService prefs,
     AudioEditWorkspace workspace,
     Engines.DspAudioEngine dsp,
-    AudioConcatService concat)
-    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat)
+    AudioConcatService concat,
+    ChatContext.AudioContextLaunch? context = null)
+    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat, context)
 {
     [HttpGet("state")]
     public IActionResult State(string sessionId) =>

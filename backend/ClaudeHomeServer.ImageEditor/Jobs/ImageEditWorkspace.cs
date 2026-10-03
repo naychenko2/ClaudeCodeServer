@@ -86,6 +86,40 @@ public sealed class ImageEditWorkspace(string root)
 
     public static string NewStepId() => Guid.NewGuid().ToString("N");
 
+    // ── Образцы с диска человека (ADR-023 §2.3) ──
+    // Загруженный образец живёт папкой {ownerId}/up_{guid}/sample.{ext}: тот же кеш на TTL, что и
+    // задачи, чистка сносит её вместе с ними. uploadId — наш префикс и Guid «N», он же имя папки
+    public const string UploadPrefix = "up_";
+
+    public static bool IsUploadId(string? id) =>
+        id is { Length: 35 } && id.StartsWith(UploadPrefix, StringComparison.Ordinal) && IsStepId(id[UploadPrefix.Length..]);
+
+    public string SaveUpload(string ownerId, byte[] bytes)
+    {
+        var id = UploadPrefix + NewStepId();
+        var dir = JobDir(ownerId, id);
+        Directory.CreateDirectory(dir);
+        var ext = ImageFormatSniffer.DetectExtension(bytes) ?? ".png";
+        File.WriteAllBytes(Path.Combine(dir, "sample" + ext), bytes);
+        return id;
+    }
+
+    // null — нет, истёк, чужой или id не наш
+    public EditedImage? OpenUpload(string ownerId, string uploadId)
+    {
+        if (!IsUploadId(uploadId)) return null;
+        var dir = JobDir(ownerId, uploadId);
+        if (!Directory.Exists(dir)) return null;
+        var file = Directory.EnumerateFiles(dir, "sample.*").FirstOrDefault();
+        if (file is null) return null;
+        var bytes = File.ReadAllBytes(file);
+        return new EditedImage(bytes, ContentTypeOf(ImageFormatSniffer.DetectExtension(bytes)));
+    }
+
+    public bool UploadExists(string ownerId, string uploadId) =>
+        IsUploadId(uploadId) && Directory.Exists(JobDir(ownerId, uploadId))
+        && Directory.EnumerateFiles(JobDir(ownerId, uploadId), "sample.*").Any();
+
     // id шага — только наш Guid "N": он же имя файла, поэтому без белого списка никак
     public static bool IsStepId(string? id) =>
         id is { Length: 32 } && id.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');

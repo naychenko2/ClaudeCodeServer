@@ -33,9 +33,10 @@ import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../componen
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth, MOBILE_MAX, PANEL_INLINE_MAX_SHARE, TABLET_MAX } from '../../lib/breakpoints';
 import {
-  PANEL_META, PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
+  PANEL_META, PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, workspaceKeys,
   isPanelKey, panelRivals, type PanelKey, type RailBadgeInfo, type Zone,
 } from './panelCatalog';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
 import { compactStack, genPanelInZone } from './genPanelPlacement';
 import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, railSequence, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, PANEL_SPLIT_MIN_H, type PanelZonesStore } from './panelStackState';
@@ -113,9 +114,12 @@ interface Props {
 
 export function PanelZone({
   side, panels, railBadges, panelStack,
-  allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, compact, sessionPanels,
+  allowedKeys: allowedKeysProp, hideWhenEmpty, compact, sessionPanels,
   railFooter, floating, centerFileOpen, onUserClose,
 }: Props) {
+  // Набор экрана по умолчанию зависит от флага: с composer-context-row вместо «Картинок» и «Звука» одна «Контекст»
+  const contextOn = useFeature(FLAGS.composerContextRow);
+  const allowedKeys = allowedKeysProp ?? workspaceKeys(contextOn);
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, openIn, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, markActive, releaseCompactSide, registerOpener, moveTo, registerZoneKeys, zoneKeys } = usePanels();
   const zoneState = zones[side];

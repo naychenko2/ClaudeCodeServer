@@ -4,7 +4,7 @@
 // здесь только чистые функции под тестом executorRows.test.ts.
 
 import type { ExecutorBadge, ExecutorRow } from 'aihome_shell/kit';
-import type { AudioCatalog, AudioModelInfo, AudioOp, AudioProvider } from '../api';
+import type { AudioCatalog, AudioModelInfo, AudioOp, AudioProvider, AudioStemSet } from '../api';
 import { opInfo } from '../ops';
 import { autoOrder } from '../strip/summary';
 import { providerUnit, unitLabel, type PanelState, type SettingsPatch } from './model';
@@ -21,13 +21,18 @@ const isAutoModel = (id: string | null | undefined, catalog: AudioCatalog) => !i
 
 // Кого сейчас возьмёт «Авто»: порядок перебора задаёт сервер (с флагом local-media-default
 // локальные первыми), модель — первая у поставщика, умеющая операцию
-export function autoPick(catalog: AudioCatalog, op: AudioOp): { provider: AudioProvider; model: AudioModelInfo | null } | null {
-  const provider = autoOrder(catalog).find(p => p.available && p.models.some(m => supports(m, op)));
-  return provider ? { provider, model: provider.models.find(m => supports(m, op)) ?? null } : null;
+// stemSet — набор «Стемов»: «Авто» берёт только модель, что умеет именно его
+export function autoPick(catalog: AudioCatalog, op: AudioOp, stemSet: AudioStemSet | null = null): { provider: AudioProvider; model: AudioModelInfo | null } | null {
+  const fits = (m: AudioModelInfo) => supports(m, op) && (!stemSet || m.caps.stemSet === stemSet);
+  const provider = autoOrder(catalog).find(p => p.available && p.models.some(fits));
+  return provider ? { provider, model: provider.models.find(fits) ?? null } : null;
 }
 
 // «локально · Qwen3-TTS», «fal · MiniMax Speech»
 const where = (p: AudioProvider, m: AudioModelInfo | null) => [onOwnGpu(p) ? 'локально' : p.label, m?.label].filter((x): x is string => !!x);
+
+// Бесплатна ли строка: флагом для окраски чипа, подпись цены остаётся в rowPrice
+export const rowFree = (p: AudioProvider, m: AudioModelInfo | null) => p.priceUnit === 'free' || m?.caps.priceUnit === 'free';
 
 export function rowPrice(p: AudioProvider, m: AudioModelInfo | null): string {
   return unitLabel(p, m) ?? providerUnit(p);
@@ -51,12 +56,13 @@ export const FAL_NOTE = 'отобранные · остальные — по з�
 // Строки списка: «Авто», затем свои видеокарты, затем облако; внутри — порядок каталога.
 // Поставщик без модели под операцию в список не попадает; недоступный — серый с причиной.
 // В личном чате «Локально» закрыт самим местом — строка с замком, причина остаётся
-export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = false): ExecutorRow[] {
-  const auto = autoPick(catalog, op);
+export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = false, stemSet: AudioStemSet | null = null): ExecutorRow[] {
+  const auto = autoPick(catalog, op, stemSet);
   const rows: ExecutorRow[] = [{
     id: AUTO_EXECUTOR, group: 'auto', name: 'Авто',
     sub: auto ? `сначала локальные модели · сейчас ${where(auto.provider, auto.model).join(' · ')}` : 'сейчас некому — нет поставщика с этой операцией',
     price: auto ? rowPrice(auto.provider, auto.model) : '—',
+    free: !!auto && rowFree(auto.provider, auto.model),
     ...(auto ? null : { disabled: true, reason: 'Нет доступного поставщика для этой операции' }),
   }];
   const providers = catalog.providers;
@@ -64,7 +70,7 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
   for (const p of ordered) {
     const why = p.available ? null : p.reason ?? 'Поставщик сейчас недоступен';
     const locked = personal && p.key === 'local';
-    p.models.filter(x => supports(x, op)).forEach((m, i) => {
+    p.models.filter(x => supports(x, op) && (!stemSet || x.caps.stemSet === stemSet)).forEach((m, i) => {
       const b = badges(m, op);
       rows.push({
         id: rowId(p.key, m.id),
@@ -72,6 +78,7 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
         name: m.label,
         sub: onOwnGpu(p) ? undefined : p.key === 'fal' && i === 0 ? `${p.label} · ${FAL_NOTE}` : p.label,
         price: rowPrice(p, m),
+        free: rowFree(p, m),
         ...(b.length ? { badges: b } : null),
         ...(why ? { disabled: true, reason: why } : null),
         ...(locked ? { locked: true } : null),

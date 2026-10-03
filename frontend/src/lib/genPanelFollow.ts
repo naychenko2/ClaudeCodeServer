@@ -9,20 +9,22 @@
 // открыть, а не выбор; они зовут revealWorkspacePanel без ifOpen.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { GEN_PANEL_KEYS } from './genPanelDismissed';
+import { genPanelKeys, toGenPanelKey } from './genPanelKeys';
 import { revealWorkspacePanel } from './subsystems/registryCore';
 
 // Клик человека по карточке: true — открытая панель переключена (или уже на месте)
+// При флаге ключ всегда chatContext, вкладок у панели нет (§Д1)
 export function followSelection(panelKey: string, sessionId: string, target: string, tab = 'settings'): boolean {
   dropAgentPick(sessionId, target);
-  return revealWorkspacePanel(panelKey, tab, { sessionId, target, ifOpen: true });
+  return revealWorkspacePanel(toGenPanelKey(panelKey), tab, { sessionId, target, ifOpen: true });
 }
 
 // Какую открытую панель заменить при переходе «по выбору»: соперницу из той же группы,
 // чтобы новая встала на её место, а не по правилу рельсы. null — заменять нечего
 export function followHost(openKeys: readonly string[], key: string): string | null {
-  if (!GEN_PANEL_KEYS.includes(key) || openKeys.includes(key)) return null;
-  return openKeys.find(k => k !== key && GEN_PANEL_KEYS.includes(k)) ?? null;
+  const gen = genPanelKeys();
+  if (!gen.includes(key) || openKeys.includes(key)) return null;
+  return openKeys.find(k => k !== key && gen.includes(k)) ?? null;
 }
 
 // Клик по карточке, а не по её кнопке, ссылке или полю: у тех своё действие

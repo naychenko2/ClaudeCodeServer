@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ClaudeHomeServer.Services.ChatContext;
 using System.Text.Json.Serialization;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Threads;
@@ -375,6 +376,7 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             File = path,
             DraftFolder = null,
             Lineage = thread.File is { } old && old != path ? [.. thread.Lineage, old] : thread.Lineage,
+            SavedFiles = [.. thread.SavedFiles.Where(f => f.Path != path), new ThreadSavedFile(path, Now())],
         }, log));
 
     // Файл переименовали через файловый API: пути нитей чата переписываются следом. false —
@@ -389,9 +391,10 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             {
                 var file = t.File is null ? null : move(t.File);
                 var lineage = t.Lineage.Select(move).ToList();
-                if (file == t.File && lineage.SequenceEqual(t.Lineage)) return t;
+                var saved = t.SavedFiles.Select(f => f with { Path = move(f.Path) }).ToList();
+                if (file == t.File && lineage.SequenceEqual(t.Lineage) && saved.SequenceEqual(t.SavedFiles)) return t;
                 changed = true;
-                return t with { File = file, Lineage = lineage };
+                return t with { File = file, Lineage = lineage, SavedFiles = saved };
             }).ToList();
             if (!changed) return false;
             Save(ownerId, sessionId, current with { Threads = threads, Revision = current.Revision + 1 });

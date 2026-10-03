@@ -15,6 +15,10 @@ public interface IImageEditJobs
     Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(
         string ownerId, string projectId, ImageEditJobInput input, CancellationToken ct);
 
+    // Операция и ревизия контекста котировки (ADR-023 §Д2.1): запуск по ревизии читает входы по ней.
+    // null — котировки нет, она истекла или чужая
+    ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId) => null;
+
     ImageEditJobDto? Get(string ownerId, string projectId, string jobId);
 
     // null — задачи нет или она чужая
@@ -40,3 +44,6 @@ public interface IImageEditSaver
     ImageEditCallResult<SaveCheckResponse> Check(
         string projectRoot, string? folder, string? fileName, string extension);
 }
+
+// Что запуск по ревизии знает о своей котировке: операция раскладывает входы, ревизия — сверка
+public sealed record ImageEditQuoteInfo(ImageEditOp Op, long? ContextRevision);

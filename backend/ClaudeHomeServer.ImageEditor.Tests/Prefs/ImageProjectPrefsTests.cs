@@ -251,16 +251,79 @@ public class ImageProjectPrefsTests : IDisposable
     }
 
     private (ImageEditorStateContributor Contributor, PromptSessionContext Context, ImageThreadStore Threads) Contributor(
-        bool agentLaunch = true, bool personal = false, bool flag = true)
+        bool agentLaunch = true, bool personal = false, bool flag = true, bool contextRow = false)
     {
         var threads = new ImageThreadStore(Path.Combine(_dir, ImageThreadStore.DirName));
         var flags = new Mock<IFeatureFlagGate>();
         flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ImageEditor)).Returns(flag);
+        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ComposerContextRow)).Returns(contextRow);
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         var contributor = new ImageEditorStateContributor(flags.Object, threads: threads, prefs: _prefs, config: config);
         var context = new PromptSessionContext(
             new Session { Id = Chat, OwnerId = Owner, ProjectId = personal ? null : ProjectId }, Owner, null, _root);
         return (contributor, context, threads);
+    }
+
+    // ── Строка контекста (ADR-023 §3.1, 2б-2): блок худеет, без флага — прежний текст байт-в-байт ──
+
+    [Fact]
+    public async Task Без_флага_строки_контекста_текст_блока_прежний_байт_в_байт()
+    {
+        var (contributor, context, threads) = Contributor();
+        var opened = threads.Open(Owner, Chat, "images/hero.png", null, 0, new ImageThreadSettings("fal", null, 1, true));
+        var id = opened.Thread!.Id;
+
+        var text = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
+
+        text.Should().Be(
+            "## Картинки в этом чате\n"
+            + $"В работе: картинка {id} — осталась с прошлых сообщений и не обязывает её продолжать\n"
+            + "Выбор человека в полосе «Картинки»: поставщик fal, модель auto, вариантов 1, персонаж не подключён\n"
+            + ImageEditorStateContributor.ChoiceRule + "\n"
+            + ImageEditorStateContributor.PriorityRule + "\n"
+            + $"- {id} (в работе): файл images/hero.png; правка пойдёт от: исходник");
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_блок_без_В_работе_и_Выбора_человека_но_с_правилами_и_списком_нитей()
+    {
+        var (contributor, context, threads) = Contributor(contextRow: true);
+        var opened = threads.Open(Owner, Chat, "images/hero.png", null, 0, new ImageThreadSettings("fal", null, 1, true));
+        var id = opened.Thread!.Id;
+
+        var text = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
+
+        text.Should().NotContain("В работе:").And.NotContain("Выбор человека в полосе").And.NotContain("полос")
+            .And.NotContain("(в работе)", "фокус вертикали — проекция контекста, пометка путала бы");
+        text.Should().Contain(ImageEditorStateContributor.ChoiceRuleContextRow);
+        text.Should().Contain(ImageEditorStateContributor.PriorityRuleFor(personal: false, contextRow: true));
+        text.Should().Contain(ImageEditorStateContributor.FocusIsNotBindingTextContextRow);
+        text.Should().Contain($"- {id}: файл images/hero.png", "список нитей остаётся");
+        text.Should().NotBe(ImageEditorStateContributor.PriorityRule, "правило переписано под строку контекста");
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_личный_чат_без_нитей_только_правило_приоритета()
+    {
+        var (contributor, context, _) = Contributor(personal: true, contextRow: true);
+
+        var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
+
+        text.Should().Be(ImageEditorStateContributor.RenderEmpty(contextRow: true));
+        text.Should().StartWith("## Картинки в этом чате\n").And.NotContain("В работе").And.NotContain("полос");
+        ImageEditorStateContributor.RenderEmpty(contextRow: false)
+            .Should().Contain("В работе: ничего не выбрано", "без флага — как было");
+    }
+
+    [Fact]
+    public void ChoiceText_при_строке_контекста_без_персонажа_из_префов()
+    {
+        var prefs = new ImageProjectPrefs("fal", "m1", 3, true, "anya");
+
+        ImageEditorStateContributor.ChoiceText(prefs, null, contextRow: false)
+            .Should().Be("Выбор человека в полосе «Картинки»: поставщик fal, модель m1, вариантов 3, персонаж anya");
+        ImageEditorStateContributor.ChoiceText(prefs, null, contextRow: true)
+            .Should().Be("Выбор человека в строке контекста: поставщик fal, модель m1, вариантов 3");
     }
 
     [Fact]

@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Llm;
@@ -33,12 +34,12 @@ namespace ClaudeHomeServer.Tests.Services.Turn;
 public class PromptSectionContributorsDiTests
 {
     // Тест 1: быстрый сторож DI — после вызова AddPromptSectionContributors() в контейнере
-    // ровно 5 «чистых» регистраций IPromptSectionContributor (контрибьюторы, оставшиеся
+    // ровно 6 «чистых» регистраций IPromptSectionContributor (контрибьюторы, оставшиеся
     // в Turn после инверсии). CodeGraphContributor и NotesRecallContributor уехали в свои
     // вертикали — их регистрируют CodeGraphSubsystem/NotesSubsystem, а не Turn.
     // НЕ требует зависимостей контрибьюторов — резолва нет, только ServiceDescriptor'ы.
     [Fact]
-    public void AddPromptSectionContributors_RegistersFiveCoreContributors()
+    public void AddPromptSectionContributors_RegistersSixCoreContributors()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -54,8 +55,8 @@ public class PromptSectionContributorsDiTests
                         && d.ServiceType != typeof(IPromptSectionContributor)
                         && d.ImplementationType is not null)
             .ToList();
-        concreteDescriptors.Should().HaveCount(5,
-            "AddPromptSectionContributors должен зарегистрировать ровно 5 чистых контрибьюторов Turn");
+        concreteDescriptors.Should().HaveCount(6,
+            "AddPromptSectionContributors должен зарегистрировать ровно 6 чистых контрибьюторов Turn");
 
         // Канонический список «чистых» контрибьюторов Turn. Новый контрибьютор = новая
         // строка в AddPromptSectionContributors() И здесь, иначе сторож не отличит «забыли
@@ -69,14 +70,15 @@ public class PromptSectionContributorsDiTests
             typeof(PromptSectionsContributor),
             typeof(PersonaBindingsContributor),
             typeof(PersonaLayerContributor),
+            typeof(TurnContextContributor),
         });
 
         // Каждый контрибьютор едет и в общий набор IPromptSectionContributor (через factory).
         var interfaceDescriptors = services
             .Where(d => d.ServiceType == typeof(IPromptSectionContributor))
             .ToList();
-        interfaceDescriptors.Should().HaveCount(5,
-            "набор IPromptSectionContributor должен состоять из 5 элементов (по одному на чистого контрибьютора)");
+        interfaceDescriptors.Should().HaveCount(6,
+            "набор IPromptSectionContributor должен состоять из 6 элементов (по одному на чистого контрибьютора)");
 
         // Все регистрации — singleton (контрибьюторы без состояния, как и шина).
         concreteDescriptors.Should().OnlyContain(d => d.Lifetime == ServiceLifetime.Singleton);
@@ -84,7 +86,7 @@ public class PromptSectionContributorsDiTests
     }
 
     // Тест 2: реальный резолв IEnumerable<IPromptSectionContributor>, проверка Key и Order.
-    // Требует минимального набора зависимостей всех 7 контрибьюторов (см. BuildSut).
+    // Требует минимального набора зависимостей всех 8 контрибьюторов (см. BuildSut).
     //
     // После инверсии DI отдаёт контрибьюторов в порядке РЕГИСТРАЦИИ подсистем, а не по
     // Order. Канонический порядок задаёт САМ Order, а не порядок в IEnumerable — шина
@@ -97,8 +99,8 @@ public class PromptSectionContributorsDiTests
 
         var contributors = provider.GetServices<IPromptSectionContributor>().ToList();
 
-        contributors.Should().HaveCount(7,
-            "полный набор = 5 чистых Turn + CodeGraph + Notes");
+        contributors.Should().HaveCount(8,
+            "полный набор = 6 чистых Turn + CodeGraph + Notes");
 
         // Уникальность Key — две секции с одинаковым Key замазали бы друг друга в снапшоте.
         var keys = contributors.Select(c => c.Key).ToList();
@@ -112,7 +114,7 @@ public class PromptSectionContributorsDiTests
 
         // Сортируем по Order — ровно как шина (TurnEventBus.ApplyAsync: OrderBy(Order)).
         var ordered = contributors.OrderBy(c => c.Order).Select(c => c.Order).ToList();
-        ordered.Should().Equal(new[] { 100, 200, 300, 400, 500, 600, 900 },
+        ordered.Should().Equal(new[] { 100, 200, 300, 400, 500, 600, 690, 900 },
             "канонический порядок секций промпта (dossier-trailer → persona-layer)");
 
         // Парность: каждый Key обязан встретиться ровно один раз И с правильным Order.
@@ -124,6 +126,7 @@ public class PromptSectionContributorsDiTests
         keyToOrder.Should().ContainKey("prompt-sections").WhoseValue.Should().Be(400);
         keyToOrder.Should().ContainKey("persona-bindings").WhoseValue.Should().Be(500);
         keyToOrder.Should().ContainKey("code-graph").WhoseValue.Should().Be(600);
+        keyToOrder.Should().ContainKey("turn-context").WhoseValue.Should().Be(690);
         keyToOrder.Should().ContainKey("persona-layer").WhoseValue.Should().Be(900);
 
         // Инверсия: чужие контрибьюторы живут по своим вертикалям. Проверяем, что их типы
@@ -234,7 +237,7 @@ public class PromptSectionContributorsDiTests
         return Path.Combine(dir!.FullName, "ClaudeHomeServer", "Program.cs");
     }
 
-    // Минимальный DI-граф, достаточный для резолва всех 7 контрибьюторов. По образцу
+    // Минимальный DI-граф, достаточный для резолва всех 8 контрибьюторов. По образцу
     // SessionManagerPromptSectionsProviderTests.BuildSut — там собирается похожий набор.
     private static ServiceProvider BuildSut()
     {
@@ -337,6 +340,9 @@ public class PromptSectionContributorsDiTests
             services.AddSingleton<IPersonaPromptAssembler, PersonaPromptAssemblerAdapter>();
             services.AddSingleton<IPersonaBindingsSource, PersonaBindingsSourceAdapter>();
             services.AddSingleton<IChatHistoryLoader, ChatHistoryLoaderAdapter>();
+            // Хвост «Контекст хода»: реестр видов и стор контекста чата (в проде — AddChatContext)
+            services.AddSingleton<ContextKindRegistry>(new ContextKindRegistry([]));
+            services.AddSingleton<IChatContextStore>(new Mock<IChatContextStore>().Object);
 
             // Логгеры для контрибьюторов с ILogger в конструкторе
             services.AddSingleton<ILogger<NotesRecallContributor>>(NullLogger<NotesRecallContributor>.Instance);
@@ -344,7 +350,7 @@ public class PromptSectionContributorsDiTests
             services.AddSingleton<ILogger<CodeGraphContributor>>(NullLogger<CodeGraphContributor>.Instance);
             services.AddSingleton<ILogger<PersonaRecallContributor>>(NullLogger<PersonaRecallContributor>.Instance);
 
-            // Собственно регистрация контрибьюторов — та же, что в Program.cs: 5 чистых
+            // Собственно регистрация контрибьюторов — та же, что в Program.cs: 6 чистых
             // из Turn + по одному из CodeGraph и Notes (их в проде регистрируют свои
             // *Subsystem.Register; здесь — тот же extension-паттерн, что в подсистемах).
             services.AddPromptSectionContributors();

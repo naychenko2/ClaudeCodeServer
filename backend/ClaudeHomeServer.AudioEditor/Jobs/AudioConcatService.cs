@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using System.Globalization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
@@ -22,7 +23,10 @@ public sealed record AudioConcatInput(
     string? Name = null,
     AudioFormat Format = AudioFormat.Wav,
     string? Folder = null,
-    AudioEditInitiator Initiator = AudioEditInitiator.Human);
+    AudioEditInitiator Initiator = AudioEditInitiator.Human,
+    // Ревизия контекста чата (ADR-023 §Д2.1): с ней Pieces игнорируется — куски это референсы роли piece
+    // по AddedAt; устарела — 409 context_changed
+    long? ContextRevision = null);
 
 public sealed record AudioConcatResultDto(string ThreadId, string VersionId, string JobId, string Name);
 
@@ -40,7 +44,8 @@ public sealed class AudioConcatService(
     AudioJobThreads threads,
     AudioEditWorkspace workspace,
     ILogger<AudioConcatService> log,
-    IAudioDsp? dsp = null)
+    IAudioDsp? dsp = null,
+    ChatContext.AudioContextLaunch? context = null)
 {
     // Кусок на диске крупнее — отказ до чтения: склейка держит все куски в памяти
     public const long MaxPieceBytes = 200L * 1024 * 1024;
@@ -56,10 +61,20 @@ public sealed class AudioConcatService(
         string ownerId, AudioEditScope scope, AudioConcatInput input, CancellationToken ct)
     {
         if (dsp is null || !dsp.Available) return Fail(AudioEditErrorCodes.DspUnavailable, DspUnavailableText);
-        if (input.Pieces.Count < AudioDspLimits.MinConcatPieces) return Invalid("Нужно хотя бы два куска — добавьте ещё один");
-        if (input.Pieces.Count > AudioDspLimits.MaxConcatPieces)
+        var requested = input.Pieces;
+        if (input.ContextRevision is { } revision)
+        {
+            if (context is null) return Fail(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
+            var read = context.Read(ownerId, scope, input.SessionId, revision);
+            if (!read.Ok) return read.Fail<AudioConcatResultDto>();
+            requested = ChatContext.AudioContextLaunch.Extract(scope, read.State!, AudioEditJobService.OpName(AudioOp.Concat)).Pieces;
+            if (requested.Count < AudioDspLimits.MinConcatPieces)
+                return Invalid("В контексте чата меньше двух кусков склейки — добавьте звуки с ролью «Кусок»");
+        }
+        if (requested.Count < AudioDspLimits.MinConcatPieces) return Invalid("Нужно хотя бы два куска — добавьте ещё один");
+        if (requested.Count > AudioDspLimits.MaxConcatPieces)
             return Invalid($"Кусков для склейки — не больше {AudioDspLimits.MaxConcatPieces}");
-        if (input.Joints is { } own && own.Count != input.Pieces.Count - 1)
+        if (input.Joints is { } own && own.Count != requested.Count - 1)
             return Invalid("Своих стыков должно быть на один меньше, чем кусков");
         if (!Enum.IsDefined(input.Format)) return Invalid("Неизвестный формат результата");
         if (FileName(input.Name, input.Format) is not { } name) return Invalid("Имя файла — без папок и не длиннее 120 символов");
@@ -68,9 +83,9 @@ public sealed class AudioConcatService(
         var sessionId = input.SessionId.Trim();
 
         var pieces = new List<Piece>();
-        for (var i = 0; i < input.Pieces.Count; i++)
+        for (var i = 0; i < requested.Count; i++)
         {
-            var (piece, error) = await ResolveAsync(ownerId, scope, sessionId, input.Pieces[i], ct);
+            var (piece, error) = await ResolveAsync(ownerId, scope, sessionId, requested[i], ct);
             if (piece is null) return Invalid($"Кусок {i + 1}: {error}");
             pieces.Add(piece);
         }
@@ -94,8 +109,10 @@ public sealed class AudioConcatService(
         IReadOnlyList<AudioVersionFile> files, CancellationToken ct)
     {
         var store = threads.Store;
-        var opened = store.Open(ownerId, sessionId, null, folder, null,
-            new AudioThreadSettings(AudioModes.Process, AudioEditJobService.OpName(AudioOp.Concat), null, null, null), name);
+        var opened = threads.Tracked(ownerId, sessionId,
+            () => store.Open(ownerId, sessionId, null, folder, null,
+                new AudioThreadSettings(AudioModes.Process, AudioEditJobService.OpName(AudioOp.Concat), null, null, null), name),
+            input.Initiator == AudioEditInitiator.Agent ? ContextActor.Agent : ContextActor.Human);
         var thread = opened.Thread!;
         var who = input.Initiator == AudioEditInitiator.Agent ? SpendInitiators.Agent : SpendInitiators.Human;
         var license = License(pieces);

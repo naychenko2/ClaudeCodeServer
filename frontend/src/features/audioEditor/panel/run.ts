@@ -56,6 +56,15 @@ export function trimWithPiece(t: TrimInputs, piece: AudioSelection | null): Trim
   return { ...t, start: piece ? piece.start : null, end: piece && piece.end !== TO_END ? piece.end : null };
 }
 
+// Правки без ИИ по порядку, каждая — новая версия; false — одна из них не прошла (дальше не идём)
+export async function runTrimSteps(scope: string, sessionId: string, threadId: string, t: TrimInputs): Promise<boolean> {
+  for (const step of trimSteps(t)) {
+    const ok = await mutate(scope, sessionId, async rev => (await audioApi.edit(scope, sessionId, threadId, { ...step, revision: rev })).state);
+    if (!ok) return false;
+  }
+  return true;
+}
+
 // Длительность уходит только операциям, где её задают, и только в пределах модели
 export function musicDuration(s: PanelState, inputs: PanelInputs): number | null {
   return durationRange(s.op, s.model) && inputs.durationSec !== null ? inputs.durationSec : null;
@@ -110,11 +119,7 @@ export async function runPanel(a: RunArgs, onCloneRefusal?: (r: CloneRefusal) =>
     }
     if (s.op === 'trim') {
       if (!thread) return false;
-      for (const step of trimSteps(trimWithPiece(inputs.trim, a.piece))) {
-        const ok = await mutate(scope, sessionId, async rev => (await audioApi.edit(scope, sessionId, thread.id, { ...step, revision: rev })).state);
-        if (!ok) return false;
-      }
-      return true;
+      return runTrimSteps(scope, sessionId, thread.id, trimWithPiece(inputs.trim, a.piece));
     }
     // Котировка несёт ровно то, от чего зависит цена запуска: иначе сервер откажет в запуске
     const input = jobInput(a, '');

@@ -137,7 +137,7 @@ public sealed partial class AudioEditorToolset
                 ["model"] = Str("Модель поставщика из audio_state или auto. " + NotWithoutAsk),
                 ["text"] = Str("Что озвучить (голос) или стиль и описание (музыка, обработка)"),
                 ["lyrics"] = Str("Слова песни с секциями [Verse], [Chorus]…"),
-                ["voice"] = Str("Диктор: id из audio_voices"),
+                ["voice"] = Str("Диктор: id из audio_voices. Не задан — голос из контекста чата, если он там есть; пустая строка — без голоса"),
                 ["language"] = Str("Код языка ISO (ru, en…)"),
                 ["range"] = Obj(new JsonObject
                 {

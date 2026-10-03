@@ -15,9 +15,11 @@ const dispatched: { type: string; detail: unknown }[] = [];
 import {
   MAX_KEYS, autoRevealGenerationPanel, isGenPanelDismissed, markGenPanelDismissed,
 } from './genPanelDismissed';
-import { REVEAL_PANEL_EVENT } from './subsystems/registryCore';
+import { FLAGS, setAllFlags } from './featureFlags';
+import { REVEAL_PANEL_EVENT, revealContextPanel } from './subsystems/registryCore';
 
 beforeEach(() => {
+  setAllFlags({});
   store.clear();
   dispatched.length = 0;
   vi.restoreAllMocks();
@@ -74,5 +76,28 @@ describe('genPanelDismissed', () => {
   it('битое значение в localStorage не роняет стор', () => {
     store.set('cc_gen_panel_dismissed', '{не json');
     expect(autoRevealGenerationPanel('images', 's1')).toBe(true);
+  });
+});
+
+describe('при флаге composer-context-row вся генерация живёт в одной панели chatContext', () => {
+  beforeEach(() => setAllFlags({ [FLAGS.composerContextRow]: true }));
+
+  it('признак «закрыта» ключуется {сессия}:chatContext, старые ключи не мигрируют', () => {
+    markGenPanelDismissed('s1', 'chatContext');
+    expect(JSON.parse(store.get('cc_gen_panel_dismissed')!)).toEqual(['s1:chatContext']);
+    expect(isGenPanelDismissed('s1', 'chatContext')).toBe(true);
+  });
+
+  it('старый вызов с images/sound попадает в chatContext: и признак, и показ', () => {
+    markGenPanelDismissed('s1', 'images');
+    expect(JSON.parse(store.get('cc_gen_panel_dismissed')!)).toEqual(['s1:chatContext']);
+    expect(autoRevealGenerationPanel('sound', 's1', 'music')).toBe(false);
+    expect(autoRevealGenerationPanel('sound', 's2', 'music')).toBe(true);
+    expect(dispatched).toEqual([{ type: REVEAL_PANEL_EVENT, detail: { key: 'chatContext', sessionId: 's2' } }]);
+  });
+
+  it('revealContextPanel — обёртка над показом chatContext без вкладки', () => {
+    revealContextPanel('s1', { target: 'image:t1' });
+    expect(dispatched).toEqual([{ type: REVEAL_PANEL_EVENT, detail: { key: 'chatContext', sessionId: 's1', target: 'image:t1' } }]);
   });
 });

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -24,7 +25,8 @@ public abstract class AudioEditorEndpoints(
     AudioPrefsService prefs,
     AudioEditWorkspace workspace,
     Engines.DspAudioEngine dsp,
-    AudioConcatService concat) : ControllerBase
+    AudioConcatService concat,
+    ChatContext.AudioContextLaunch? context = null) : ControllerBase
 {
     // Владелец — claim sub сервисного JWT. Константой, а не JwtRegisteredClaimNames: своих пакетов у
     // модуля нет (DynamicModulePackagesGuardTests)
@@ -89,6 +91,22 @@ public abstract class AudioEditorEndpoints(
             || jobs.FindQuote(UserId, scope.Key, form.QuoteId.Trim()) is not { } quote)
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.QuoteNotFound, AudioEditJobService.QuoteExpiredText);
 
+        // Ревизия контекста: входы берутся из стора, одноимённые поля тела игнорируются (ADR-023 §Д2.1)
+        ChatContext.AudioContextInputs? fromContext = null;
+        if (form.ContextRevision is { } revision)
+        {
+            if (context is null) return Error(StatusCodes.Status503ServiceUnavailable, AudioEditErrorCodes.Unavailable,
+                ChatContext.AudioContextLaunch.UnavailableText);
+            var read = context.Read(UserId, scope, form.SessionId, revision);
+            if (!read.Ok) return Map(read.Fail<object>(), Ok);
+            fromContext = ChatContext.AudioContextLaunch.Extract(scope, read.State!, AudioEditJobService.OpName(quote.Op));
+            form.ThreadId = fromContext.ThreadId;
+            form.BaseVersionId = fromContext.VersionId;
+            form.Voice = fromContext.VoiceRef;
+            form.ReferencePath = fromContext.Reference?.ProjectFile;
+            form.ClipPaths = null;
+        }
+
         // Нить своя или её нет вовсе: чужая — 404 до запуска, а не тихий запуск без нити
         AudioThread? thread = null;
         if (!string.IsNullOrWhiteSpace(form.ThreadId))
@@ -133,6 +151,19 @@ public abstract class AudioEditorEndpoints(
             var (bytes, path, denied) = await ProjectFileAsync(scope, form.ReferencePath, ct);
             if (denied is not null) return denied;
             reference = new AudioBytes(bytes!, AudioVersionFiles.ContentTypeOf(path!));
+        }
+        else if (fromContext?.Reference is { ThreadId: { } refThread } refPiece)
+        {
+            // Образец контекста — версия звука этого же чата: главный файл, как исходник операции
+            var refVersion = threads.Store.Get(UserId, form.SessionId!.Trim()).Threads.FirstOrDefault(t => t.Id == refThread) is { } rt
+                ? (refPiece.VersionId is null ? rt.CurrentVersion : rt.Version(refPiece.VersionId))
+                : null;
+            var refMain = refVersion?.File(AudioFileRoles.Main);
+            var refPath = refMain is null ? null : AudioVersionFiles.Resolve(workspace, UserId, scope, refVersion!, refMain);
+            if (refPath is null || !System.IO.File.Exists(refPath))
+                return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Образец из контекста не найден или без звука");
+            reference = await ReadAsync(refPath, ct) is { } refBytes ? new AudioBytes(refBytes, AudioVersionFiles.ContentTypeOf(refPath)) : null;
+            if (reference is null) return TooLarge();
         }
         if ((form.Reference is not null || !string.IsNullOrWhiteSpace(form.ReferencePath)) && reference is null) return TooLarge();
 
@@ -183,7 +214,8 @@ public abstract class AudioEditorEndpoints(
             VoiceModel: voiceModel,
             VoiceIndex: voiceIndex,
             Seed: form.Seed,
-            Voice: form.Voice);
+            Voice: form.Voice,
+            ContextRevision: form.ContextRevision);
         return Map(await jobs.StartAsync(UserId, scope, input, ct), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
@@ -195,7 +227,7 @@ public abstract class AudioEditorEndpoints(
 
     // ── Нити ─────────────────────────────────────────────────────────────────────
 
-    protected IActionResult ThreadsIn(string sessionId) => Ok(threads.Store.Get(UserId, sessionId));
+    protected IActionResult ThreadsIn(string sessionId) => Ok(threads.View(UserId, sessionId));
 
     // Взять звук в работу: ровно одно из file и draftFolder. Нить по этому файлу уже есть — фокус на
     // неё, второй не будет. Файл и папка черновика — только у проекта
@@ -226,7 +258,8 @@ public abstract class AudioEditorEndpoints(
         else folder = "";
 
         var settings = req.Mode is null ? null : prefs.ForNewThread(UserId, scope, req.Mode);
-        var written = threads.Store.Open(UserId, sessionId, file, folder, req.Revision, settings);
+        var written = threads.Tracked(UserId, sessionId,
+            () => threads.Store.Open(UserId, sessionId, file, folder, req.Revision, settings), ContextActor.Human);
         if (written is { Status: AudioThreadWriteStatus.Ok, Existing: false, Thread: { } thread })
             await threads.AnchorAsync(sessionId, thread, ct);
         return await ResultAsync(scope, sessionId, written);
@@ -234,11 +267,16 @@ public abstract class AudioEditorEndpoints(
 
     protected async Task<IActionResult> FocusIn(AudioEditScope scope, string sessionId, AudioThreadFocusRequest req) =>
         await ResultAsync(scope, sessionId,
-            threads.Store.SetFocus(UserId, sessionId, string.IsNullOrWhiteSpace(req.ThreadId) ? null : req.ThreadId.Trim(), req.Revision));
+            threads.Tracked(UserId, sessionId, () => threads.Store.SetFocus(UserId, sessionId,
+                string.IsNullOrWhiteSpace(req.ThreadId) ? null : req.ThreadId.Trim(), req.Revision), ContextActor.Human));
 
     // Убрать нить, где нечего терять; у нити с версиями или идущим запуском — 400
-    protected async Task<IActionResult> RemoveIn(AudioEditScope scope, string sessionId, string threadId, long revision) =>
-        await ResultAsync(scope, sessionId, threads.Store.Remove(UserId, sessionId, threadId, revision));
+    protected async Task<IActionResult> RemoveIn(AudioEditScope scope, string sessionId, string threadId, long revision)
+    {
+        var written = threads.Store.Remove(UserId, sessionId, threadId, revision);
+        if (written.Status == AudioThreadWriteStatus.Ok) threads.Forget(UserId, sessionId, threadId);
+        return await ResultAsync(scope, sessionId, written);
+    }
 
     protected async Task<IActionResult> SettingsIn(AudioEditScope scope, string sessionId, string threadId,
         AudioThreadSettingsRequest req)
@@ -260,7 +298,9 @@ public abstract class AudioEditorEndpoints(
         if (string.IsNullOrWhiteSpace(req.VersionId))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Не указана версия");
         return await ResultAsync(scope, sessionId,
-            threads.Store.SetCurrentVersion(UserId, sessionId, threadId, req.VersionId.Trim(), req.Revision, focus: true));
+            threads.Tracked(UserId, sessionId,
+                () => threads.Store.SetCurrentVersion(UserId, sessionId, threadId, req.VersionId.Trim(), req.Revision, focus: true),
+                ContextActor.Human));
     }
 
     // Файл версии для плеера: Range — перемотка без скачивания целиком. Только файлы своих нитей;
@@ -304,7 +344,7 @@ public abstract class AudioEditorEndpoints(
             await threads.BroadcastAsync(UserId, scope.Key, sessionId, written.State);
         return written.Status switch
         {
-            AudioThreadWriteStatus.Ok => Ok(written.State),
+            AudioThreadWriteStatus.Ok => Ok(threads.Project(UserId, sessionId, written.State)),
             AudioThreadWriteStatus.Conflict => StatusCode(StatusCodes.Status409Conflict, new
             {
                 error = "Звуки чата уже поменялись — перечитайте их",
@@ -341,7 +381,8 @@ public abstract class AudioEditorEndpoints(
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Выберите хотя бы один стем");
         if (!TryFormat(req.Format, out var format)) return UnknownFormat();
         return Map(await dsp.MixAsync(UserId, scope,
-            new Engines.AudioMixInput(sessionId, threadId, stems, req.BaseVersionId, format, req.Revision), ct), Ok);
+            new Engines.AudioMixInput(sessionId, threadId, stems, req.BaseVersionId, format, req.Revision,
+                ContextRevision: req.ContextRevision), ct), Ok);
     }
 
     protected async Task<IActionResult> PeaksIn(AudioEditScope scope, string sessionId, string threadId, string versionId,
@@ -351,8 +392,10 @@ public abstract class AudioEditorEndpoints(
     protected async Task<IActionResult> ConcatIn(AudioEditScope scope, string sessionId, AudioConcatRequest? req,
         CancellationToken ct)
     {
-        if (req?.Pieces is not { } pieces)
+        // С ревизией куски берёт сам сервис из контекста (роль piece по AddedAt), поле pieces игнорируется
+        if (req?.Pieces is null && req?.ContextRevision is null)
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Нужно хотя бы два куска — добавьте ещё один");
+        if (req is null) return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Пустой запрос склейки");
         if (!TryFormat(req.Format, out var format)) return UnknownFormat();
         if (!TryJoint(req.Joint, out var joint)) return UnknownJoint();
         var joints = new List<AudioJoint?>();
@@ -361,8 +404,9 @@ public abstract class AudioEditorEndpoints(
             if (!TryJoint(j, out var parsed)) return UnknownJoint();
             joints.Add(parsed);
         }
-        var input = new AudioConcatInput(sessionId, pieces, joint, req.Joints is null ? null : joints,
-            req.NormalizeLoudness ?? true, req.Name, format ?? AudioFormat.Wav, req.Folder);
+        var input = new AudioConcatInput(sessionId, req.Pieces ?? [], joint, req.Joints is null ? null : joints,
+            req.NormalizeLoudness ?? true, req.Name, format ?? AudioFormat.Wav, req.Folder,
+            ContextRevision: req.ContextRevision);
         return Map(await concat.ConcatAsync(UserId, scope, input, ct), Ok);
     }
 
@@ -445,6 +489,8 @@ public abstract class AudioEditorEndpoints(
     {
         if (result.ErrorCode is null && result.Value is not null) return ok(result.Value);
         var code = result.ErrorCode ?? AudioEditErrorCodes.InvalidRequest;
+        if (result.Context is { } fresh)
+            return StatusCode(StatusCodes.Status409Conflict, new Protocol.ChatContextConflictDto(code, fresh));
         var status = code switch
         {
             AudioEditErrorCodes.ProviderUnavailable or AudioEditErrorCodes.NameTaken

@@ -12,6 +12,8 @@ import { useCharacters } from '../characters/useCharacters';
 import { maxSamples } from '../editorInputs';
 import { isPersonalScope } from '../scope';
 import { SampleChips, touchWrap, useCharacter } from '../strip/settings/CharacterSection';
+import { ContextSampleChips, useContextSamples } from '../strip/settings/ContextSampleChips';
+import { characterSlugOf, sampleRefs, setCharacterRef } from '../context/samples';
 import { ic, Label, type Launch } from '../strip/settings/primitives';
 import { setPrefs } from '../thread/prefs';
 import { executorRows, executorSettings, executorSummary, executorValue } from './executorRows';
@@ -37,9 +39,14 @@ export function BodyHint({ icon = 'send', children }: { icon?: 'send' | 'info'; 
 }
 
 // «Персонаж ▾»: персонажи проекта меню прямо в «Настройках», вкладка «Персонажи» — библиотека
-function CharacterPick({ projectId, slug, onCharacters, touch }: {
+function CharacterPick({ projectId, slug, onCharacters, touch, sessionId }: {
   projectId: string; slug: string | null; onCharacters: () => void; touch: boolean;
+  // Есть при флаге composer-context-row: персонаж — референс контекста чата, а не prefs
+  sessionId?: string;
 }) {
+  const setSlug = (next: string | null) => {
+    if (sessionId) void setCharacterRef(sessionId, next); else setPrefs(projectId, { characterSlug: next });
+  };
   const { list } = useCharacters(projectId);
   const { current, photo, name } = useCharacter(projectId, slug);
   const [at, setAt] = useState<DOMRect | null>(null);
@@ -51,7 +58,7 @@ function CharacterPick({ projectId, slug, onCharacters, touch }: {
       <span data-image-character-pick="" style={touchWrap(touch)} onClick={open}>
         {slug
           ? <Chip selected touch={touch} leading={thumb(photo)} maxW={170} title="Фото персонажа уходят в каждую генерацию · нажмите, чтобы сменить"
-              onRemove={() => setPrefs(projectId, { characterSlug: null })}>
+              onRemove={() => setSlug(null)}>
               {current?.name ?? name}{current ? ` · ${current.photos.length} фото` : ''}
             </Chip>
           : <Chip dashed touch={touch} leading={ic(User)} title="Персонажи проекта">
@@ -66,7 +73,7 @@ function CharacterPick({ projectId, slug, onCharacters, touch }: {
                 ? <img src={api.characterPhotoUrl(projectId, c.slug, c.photos[0].file)} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover', display: 'block' }} />
                 : ic(User, ICON_SIZE.sm)}
               label={c.name} hint={`${c.photos.length} фото${c.slug === slug ? ' · подключён' : ''}`}
-              onClick={() => { setAt(null); setPrefs(projectId, { characterSlug: c.slug }); }} />
+              onClick={() => { setAt(null); setSlug(c.slug); }} />
           ))}
           {!!list?.length && <MenuSep />}
           <MenuItem icon={ic(Contact, ICON_SIZE.sm)} label={list?.length ? 'Все персонажи…' : 'Завести персонажа…'} hint="вкладка «Персонажи»"
@@ -78,9 +85,10 @@ function CharacterPick({ projectId, slug, onCharacters, touch }: {
 }
 
 // «Персонаж и образцы»: главное поле «Создать» и «Изменить». В личном чате персонажей нет
-export function SamplesField({ projectId, L, catalog, onCharacters, isMobile }: {
-  projectId: string; L: Launch; catalog: ImageEditCatalog; onCharacters: () => void; isMobile: boolean;
+export function SamplesField({ projectId, L, catalog, onCharacters, isMobile, sessionId }: {
+  projectId: string; L: Launch; catalog: ImageEditCatalog; onCharacters: () => void; isMobile: boolean; sessionId?: string | null;
 }) {
+  const ctx = useContextSamples(sessionId);
   const personal = isPersonalScope(projectId);
   const max = maxSamples(catalog.limits.maxReferences, L.model?.caps?.maxReferences);
   if (personal && max === 0) return null;
@@ -90,8 +98,11 @@ export function SamplesField({ projectId, L, catalog, onCharacters, isMobile }: 
         {personal ? 'Образцы' : 'Персонаж и образцы'}
       </FieldLabel>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
-        {!personal && <CharacterPick projectId={projectId} slug={L.prefs.characterSlug} onCharacters={onCharacters} touch={isMobile} />}
-        {max > 0 && <SampleChips projectId={projectId} max={max} touch={isMobile} />}
+        {!personal && <CharacterPick projectId={projectId} onCharacters={onCharacters} touch={isMobile}
+          slug={ctx ? characterSlugOf(ctx.state) : L.prefs.characterSlug} sessionId={ctx?.sessionId} />}
+        {max > 0 && (ctx
+          ? <ContextSampleChips projectId={projectId} sessionId={ctx.sessionId} refs={sampleRefs(ctx.state)} max={max} touch={isMobile} />
+          : <SampleChips projectId={projectId} max={max} touch={isMobile} />)}
       </div>
     </div>
   );

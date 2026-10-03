@@ -50,6 +50,9 @@ import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
 import { ComposerStripHost } from './chat/ComposerStripHost';
+import { ContextRow } from './chat/ContextRow';
+import { FLAGS, useFeature } from '../lib/featureFlags';
+import { chatContextApi } from '../lib/chatContext/api';
 import { LocalHandsStripFeed } from '../features/localHands/LocalHandsStripFeed';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
@@ -1124,6 +1127,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   }, [isJoined, send, pendingMessage]);
 
   const chipSlot = useSlot<ComposerChipCtx, ComposerChipApi>(SLOT_COMPOSER_CHIP);
+  // Строка контекста заменяет хост полос над композером (ADR-023); без флага — прежние полосы
+  const contextRowOn = useFeature(FLAGS.composerContextRow);
   const handleSend = async (text: string, _attachments?: string[], opts?: { auto?: boolean }) => {
     // Новый вопрос обрывает чтение предыдущего ответа. Прайминг здесь — второе место
     // (первое в тумблере): режим персистится на чате, и «включил вчера — надиктовал
@@ -1179,9 +1184,20 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // именно чтобы отличать «не наше». Подмешанные в промпт, они выглядели инструкцией
   // закоммитить чужую работу — Claude сам сверься с git diff по ходу диалога.
   const handleCommitOwn = useCallback(() => {
-    commitViaChat(style =>
-      `Зафиксируй (git commit) изменения, сделанные в рамках этого чата — только то, что ты правил в этом диалоге, не затрагивая остальные изменения рабочего дерева. Сам придумай осмысленное сообщение коммита по сути изменений.${style}`);
-  }, [commitViaChat]);
+    const base = (style: string, saved: string) =>
+      `Зафиксируй (git commit) изменения, сделанные в рамках этого чата — только то, что ты правил в этом диалоге, не затрагивая остальные изменения рабочего дерева. Сам придумай осмысленное сообщение коммита по сути изменений.${saved}${style}`;
+    if (!contextRowOn) { commitViaChat(style => base(style, '')); return; }
+    // Строка контекста: файлы, которые редакторы сохранили в проект из этого чата, — надёжный
+    // список «своего» (в отличие от ленты file_changed). Пустая ручка или сбой — как раньше
+    void (async () => {
+      let saved = '';
+      try {
+        const files = await chatContextApi.savedFiles(session.id);
+        if (files.length) saved = `\n\nФайлы, сохранённые в проект из этого чата:\n${files.map(f => `- ${f.path}`).join('\n')}`;
+      } catch { /* ручки нет или сбой — коммитим по общим правилам */ }
+      commitViaChat(style => base(style, saved));
+    })();
+  }, [commitViaChat, contextRowOn, session.id]);
 
   // «Всё рабочее дерево»: коммитим все незафиксированные изменения без ограничения
   // диалогом (staged + unstaged, включая правки не из этого чата).
@@ -2879,7 +2895,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               полоса рисуется только активной */}
           {project && !embedded && <LocalHandsStripFeed session={session} project={project} />}
           {/* В личном чате вне проекта Git нет — остаются полосы, доступные без проекта («Картинки») */}
-          {!embedded && (
+          {!embedded && contextRowOn && (
+            <ContextRow session={session} project={project ?? null} turnTree={turnTree} isMobile={isMobile === true}
+              onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />
+          )}
+          {!embedded && !contextRowOn && (
             <ComposerStripHost projectId={project?.id ?? null} sessionId={session.id} isMobile={isMobile === true}
               builtins={project ? [{
                 name: 'git', order: 0,

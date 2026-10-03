@@ -1,7 +1,7 @@
 // Секция «Персонаж и образцы». В личной области (вне проекта) персонажа нет — только образцы
 // с компьютера: источник персонажей и образцов из проекта — его папки.
 
-import { useRef, useState, type CSSProperties } from 'react';
+import { useRef, useState } from 'react';
 import { FolderOpen, Plus, Upload, User } from 'lucide-react';
 import { Button, Chip, Menu, MenuItem, C, SP, ICON_SIZE, api as appApi } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditCatalog, type ReferenceRole } from '../../api';
@@ -12,7 +12,9 @@ import { isPersonalScope } from '../../scope';
 import { setPrefs } from '../../thread/prefs';
 import { modeAware } from '../../thread/modeState';
 import { getSamples, setSamples } from '../../thread/threadStore';
-import { ic, Label, type Launch } from './primitives';
+import { ic, Label, touchWrap, type Launch } from './primitives';
+import { ContextSampleChips, useContextSamples } from './ContextSampleChips';
+import { characterSlugOf as characterSlugIn, sampleRefs, setCharacterRef } from '../../context/samples';
 
 // projectId = null — личная область: персонажей нет, запросов к проекту тоже
 export function useCharacter(projectId: string | null, slug: string | null) {
@@ -22,9 +24,7 @@ export function useCharacter(projectId: string | null, slug: string | null) {
   return { current, photo, name: current?.name ?? slug };
 }
 
-// Обёртка чипа: на телефоне тач-цель не ниже 40 — чип touch сам по себе 36
-export const touchWrap = (touch?: boolean): CSSProperties =>
-  (touch ? { display: 'inline-flex', alignItems: 'center', minHeight: 40 } : { display: 'inline-flex' });
+export { touchWrap };
 
 // Образцы: чипы с миниатюрой, клик — роль, «+ Образец» — с компьютера или из проекта
 // (у личной области — сразу с компьютера). Роль выбирают строкой прямо под чипами.
@@ -108,24 +108,29 @@ export function SampleChips({ projectId, max, initialRoleFor = null, touch }: {
 }
 
 // onCharacters — показ персонажей (панель «Картинки» переключает вкладку)
-export function CharacterSection({ projectId, L, catalog, onCharacters }: {
-  projectId: string; L: Launch; catalog: ImageEditCatalog; onCharacters: () => void;
+export function CharacterSection({ projectId, L, catalog, onCharacters, sessionId }: {
+  projectId: string; L: Launch; catalog: ImageEditCatalog; onCharacters: () => void; sessionId?: string | null;
 }) {
   const personal = isPersonalScope(projectId);
-  const { current, photo, name } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
+  // При флаге персонаж и образцы — референсы контекста чата, prefs и память вкладки не пишутся
+  const ctx = useContextSamples(sessionId);
+  const slug = ctx ? characterSlugIn(ctx.state) : L.prefs.characterSlug;
+  const { current, photo, name } = useCharacter(personal ? null : projectId, slug);
   const max = maxSamples(catalog.limits.maxReferences, L.model?.caps?.maxReferences);
   return (
     <>
       {(!personal || max > 0) && <Label>{personal ? 'Образцы' : 'Персонаж и образцы'}</Label>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
-        {personal ? null : L.prefs.characterSlug
+        {personal ? null : slug
           ? <Chip selected leading={photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : undefined}
               maxW={160} title="Фото персонажа уходят в каждую генерацию" onClick={onCharacters}
-              onRemove={() => setPrefs(projectId, { characterSlug: null })}>
+              onRemove={() => { if (ctx) void setCharacterRef(ctx.sessionId, null); else setPrefs(projectId, { characterSlug: null }); }}>
               {current?.name ?? name}
             </Chip>
           : <Chip dashed leading={ic(User)} title="Персонажи проекта" onClick={onCharacters}>Персонаж</Chip>}
-        {max > 0 && <SampleChips projectId={projectId} max={max} />}
+        {max > 0 && (ctx
+          ? <ContextSampleChips projectId={projectId} sessionId={ctx.sessionId} refs={sampleRefs(ctx.state)} max={max} />
+          : <SampleChips projectId={projectId} max={max} />)}
       </div>
     </>
   );

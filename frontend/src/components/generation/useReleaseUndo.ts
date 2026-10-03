@@ -11,6 +11,8 @@ export interface ReleaseOffer<T> {
   // Что вернуть: прежний фокус, режим, отметки — решает раздел
   snapshot: T;
   text: string;
+  // Когда плашка погаснет (мс, Date.now()): отсчёт на экране идёт от срока, а не от своего таймера
+  until?: number;
 }
 
 export interface ReleaseUndoController<T> {
@@ -30,7 +32,7 @@ export function createReleaseUndo<T>(ms = RELEASE_UNDO_MS): ReleaseUndoControlle
   const subs = new Set<() => void>();
   const set = (next: ReleaseOffer<T> | null) => {
     if (timer) { clearTimeout(timer); timer = null; }
-    offer = next;
+    offer = next ? { ...next, until: Date.now() + ms } : null;
     if (next) timer = setTimeout(() => set(null), ms);
     subs.forEach(fn => fn());
   };

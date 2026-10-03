@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { newWorld, openChat, primary, voiceRef, w, P } from './contextRowMock';
+import { newWorld, openChat, primary, voiceRef, w } from './contextRowMock';
 
 // 2з-3 (в конце файла): наполнение контекста из ленты и «Голосов» — сценарий 5 макета composer-actions-v1 и
 // сценарий 4 макета строки (серый голос при «Стемах») на 1440, 1024 и 360.

@@ -3,14 +3,13 @@
 // failed) и локальное состояние экрана — выделение куска на волне и открытый редактор.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { dropAgentPickOf, noteAgentPick, onReconnected, showToast } from 'aihome_shell/kit';
+import { onReconnected, showToast } from 'aihome_shell/kit';
 import {
   audioApi, conflictState, EMPTY_THREADS,
   type AudioCatalog, type AudioEvent, type AudioPrefs, type AudioStage, type AudioThread,
   type AudioThreadsState,
 } from '../api';
 import type { AudioSelection } from '../player/selection';
-import { threadName } from './model';
 import { SOUND_PANEL } from './panelKey';
 
 export { SOUND_PANEL };
@@ -67,22 +66,12 @@ function apply(sessionId: string, scope: string, state: AudioThreadsState) {
   emit();
 }
 
-// Фокус сменился событием с сервера, а не ответом на свой клик, — его выбрал агент
-// (audio_focus): панель он не двигает
-function noteAgentFocus(sessionId: string, prev: AudioThreadsState | null, next: AudioThreadsState) {
-  if (!prev || prev.focus === next.focus || next.revision < prev.revision) return;
-  if (!next.focus) { dropAgentPickOf(sessionId, SOUND_PANEL); return; }
-  const t = next.threads.find(x => x.id === next.focus);
-  noteAgentPick(sessionId, { panelKey: SOUND_PANEL, target: soundDraftKey(next.focus), label: t ? threadName(t) : 'звук', tab: 'settings' });
-}
-
 // Событие модуля → состояние. Нити — только у уже показанного чата: чужой чат догрузится сам при входе
 export function handleEvent(ev: AudioEvent) {
   switch (ev.type) {
     case 'audio_thread_changed': {
       const e = _entries.get(ev.sessionId);
       if (!e) return;
-      noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
       apply(ev.sessionId, ev.scopeKey, ev.state);
       return;
     }

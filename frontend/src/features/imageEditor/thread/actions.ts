@@ -3,7 +3,7 @@
 // тексты тостов — из записки v3, раздел «Тексты».
 
 import {
-  autoRevealGenerationPanel, dropAgentPick, refreshChatContext, revealContextPanel, showToast,
+  autoRevealGenerationPanel, refreshChatContext, revealContextPanel, showToast,
 } from 'aihome_shell/kit';
 import { IMAGES_PANEL } from '../characters/panel';
 import { imageEditorApi, nameTakenSuggestion, type ImageEncodeFormat } from '../api';
@@ -58,7 +58,6 @@ function revealPanel(ok: boolean, sessionId: string, how: RevealMode = 'auto'): 
 // открывается и закрытая («Панель следует за выбором», правило 4)
 function openPanel(ok: boolean, sessionId: string, threadId: string): boolean {
   if (!ok) return false;
-  dropAgentPick(sessionId, imageDraftKey(threadId));
   revealContextPanel(sessionId, { target: imageDraftKey(threadId) });
   return true;
 }

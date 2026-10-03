@@ -1,11 +1,9 @@
 // Стор «Видео» по чатам (ADR-022): нити сцен с сервера (GET state + video_thread_changed),
 // каталог и префы области, ход съёмки (video_edit_progress → completed / failed), фильмы
 // проекта (кеш FilmState + video_film_changed) и локальное состояние экрана.
-// Фокус, сменившийся событием, а не ответом на свой клик, выбрал агент: панель он не двигает,
-// каркас показывает подсказку «Claude взял в работу» (noteAgentPick, а не reveal).
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { dropAgentPickOf, noteAgentPick, onReconnected, showToast } from 'aihome_shell/kit';
+import { onReconnected, showToast } from 'aihome_shell/kit';
 import {
   conflictState, EMPTY_THREADS, errorText, filmConflict, videoApi,
   type FilmBuildStatus, type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent,
@@ -72,27 +70,6 @@ function apply(sessionId: string, scope: string, state: VideoThreadsState) {
   if (e?.loaded && e.state.revision > state.revision) return;
   _entries.set(sessionId, { scope, state, loaded: true, loading: false });
   emit();
-}
-
-// Фокус сменился событием с сервера, а не ответом на свой клик, — его выбрал агент: панель он не
-// двигает (никакого reveal), а каркас покажет подсказку «Claude взял в работу». Вкладка — явная
-export function noteAgentFocus(sessionId: string, prev: VideoThreadsState | null, next: VideoThreadsState): boolean {
-  if (!prev || next.revision < prev.revision || (_own.get(sessionId) ?? 0) > 0) return false;
-  const was = prev.focus;
-  const now = next.focus;
-  if (was.sceneId !== now.sceneId) {
-    if (!now.sceneId) dropAgentPickOf(sessionId, VIDEO_PANEL);
-    else {
-      const scene = next.scenes.find(s => s.sceneId === now.sceneId);
-      noteAgentPick(sessionId, { panelKey: VIDEO_PANEL, target: sceneDraftKey(now.sceneId), label: scene?.name ?? 'сцена', tab: 'scene' });
-    }
-    return true;
-  }
-  if (was.filmPath !== now.filmPath && now.filmPath) {
-    noteAgentPick(sessionId, { panelKey: VIDEO_PANEL, target: filmTarget(now.filmPath), label: filmName(now.filmPath), tab: 'film' });
-    return true;
-  }
-  return false;
 }
 
 // «video/утро/утро.film» → «утро»
@@ -170,7 +147,6 @@ export function handleEvent(ev: VideoEvent) {
       const e = _entries.get(ev.sessionId);
       if (!e) return;
       noteAgentFrames(ev.sessionId, e.loaded ? e.state : null, ev.state);
-      noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
       apply(ev.sessionId, ev.scopeKey, ev.state);
       return;
     }

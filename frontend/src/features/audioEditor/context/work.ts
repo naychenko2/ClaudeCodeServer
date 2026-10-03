@@ -2,7 +2,7 @@
 // и показывает панель «Контекст»; клик по карточке только переключает уже открытую панель. Запись идёт в стор
 // контекста чата (PUT primary), а не в фокус нитей: сервер зеркалит её сам.
 
-import { dropAgentPick, followSelection, revealContextPanel, setPrimary } from 'aihome_shell/kit';
+import { followSelection, revealContextPanel, setPrimary } from 'aihome_shell/kit';
 import { SOUND_PANEL } from '../thread/panelKey';
 import { soundDraftKey } from '../thread/threadStore';
 import { AUDIO_KIND } from './state';
@@ -15,7 +15,6 @@ export const audioRefOf = (threadId: string, versionId: string | null) =>
 // ввода, а чипы действий появляются над ним сами: там reveal = false
 export async function workWithInContext(sessionId: string, threadId: string, versionId: string | null, reveal = true): Promise<boolean> {
   const target = soundDraftKey(threadId);
-  dropAgentPick(sessionId, target);
   if (await setPrimary(sessionId, audioRefOf(threadId, versionId)) === 'failed') return false;
   if (reveal) revealContextPanel(sessionId, { target });
   return true;

@@ -65,8 +65,7 @@ export { autoRevealGenerationPanel, isGenPanelKey, markGenPanelDismissed } from 
 // ─── genPanelFollow / genDrafts / genPanelOpen ───────────────────────────────
 // Панель генерации следует за выбором: клик по карточке, подсказка выбора агентом,
 // черновики полей по ключу элемента
-export { followSelection, isCardPick, noteAgentPick, dropAgentPick, dropAgentPickOf, useAgentPick } from '../genPanelFollow';
-export type { GenerationAgentPick } from '../genPanelFollow';
+export { followSelection, isCardPick } from '../genPanelFollow';
 export { noteGenDraft, clearGenDraft, useGenDraft } from '../genDrafts';
 export { followPeeked } from '../genPanelOpen';
 

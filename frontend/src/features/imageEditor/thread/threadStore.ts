@@ -3,11 +3,10 @@
 // открытый попап «Редактор».
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { dropAgentPickOf, noteAgentPick, onReconnected, showToast } from 'aihome_shell/kit';
+import { onReconnected, showToast } from 'aihome_shell/kit';
 import type { Sample } from '../editorInputs';
 import type { Mark, Tool } from '../marks';
 import { conflictState, EMPTY_THREADS, threadsApi, type ImageThread, type ImageThreadsState } from './threadsApi';
-import { threadName } from './model';
 import { noteImageMode } from './modeState';
 
 // Ключ элемента выбора агента и черновиков — тот же, что IMAGES_PANEL в characters/panel
@@ -59,21 +58,11 @@ function apply(sessionId: string, projectId: string, state: ImageThreadsState) {
   emit();
 }
 
-// Фокус сменился событием с сервера, а не ответом на свой клик, — его выбрал агент
-// (image_focus): панель он не двигает, каркас покажет подсказку в панели другого раздела
-function noteAgentFocus(sessionId: string, prev: ImageThreadsState | null, next: ImageThreadsState) {
-  if (!prev || prev.focus === next.focus || next.revision < prev.revision) return;
-  if (!next.focus) { dropAgentPickOf(sessionId, PANEL); return; }
-  const t = next.threads.find(x => x.id === next.focus);
-  noteAgentPick(sessionId, { panelKey: PANEL, target: imageDraftKey(next.focus), label: t ? threadName(t) : 'картинка', tab: 'settings' });
-}
-
 function ensureLive() {
   if (_unsub) return;
   const offEvents = threadsApi.subscribe(ev => {
     const e = _entries.get(ev.sessionId);
     if (!e) return;
-    noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
     apply(ev.sessionId, ev.projectId, ev.state);
   });
   // После обрыва события могли потеряться — перечитываем всё, что показано

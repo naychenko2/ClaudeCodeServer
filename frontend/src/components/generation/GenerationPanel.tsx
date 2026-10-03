@@ -7,7 +7,6 @@ import { GEN_PANEL_INLINE_MIN, useWindowWidth } from '../../lib/breakpoints';
 import { holdGenSheetRaised } from '../../lib/genSheet';
 import { useGenDraft } from '../../lib/genDrafts';
 import { followPeeked, holdGenPanelOpen } from '../../lib/genPanelOpen';
-import type { GenerationAgentPick } from '../../lib/genPanelFollow';
 import { useRequestPanelFill } from '../../pages/workspace/panelFill';
 import { Badge, Button, IconButton, PanelHeaderSlot, ProgressBar, ResizeHandle, Stepper, Tabs, useHasPanelHeader } from '../ui';
 import type { TabItem } from '../ui';
@@ -102,8 +101,6 @@ interface Props<T extends string> {
   panelKey?: string;
   // «↩ К сцене 5» — ссылка назад к панели, из которой сюда пришли (returnTo события показа)
   returnLink?: { label: string; onClick: () => void };
-  // Подсказка «✦ Claude взял в работу: имя · Открыть · ✕» под шапкой
-  agentPick?: GenerationAgentPick;
   // Ключ элемента «Работаем с»: есть черновик — в строке контекста пометка «черновик»
   draftKey?: string | null;
   children: ReactNode;              // тело активной вкладки
@@ -209,7 +206,6 @@ export function GenerationPanel<T extends string = string>(p: Props<T>) {
     </div>
   );
 
-  const pick = p.agentPick && <AgentPickRow pick={p.agentPick} />;
   const content = (
     <>
       {p.returnLink && <ReturnRow link={p.returnLink} />}
@@ -243,7 +239,6 @@ export function GenerationPanel<T extends string = string>(p: Props<T>) {
             </span>
           </PanelHeaderSlot>
         )}
-        {pick}
         {content}
         {footBox}
       </div>
@@ -287,7 +282,6 @@ export function GenerationPanel<T extends string = string>(p: Props<T>) {
             <span style={{ width: GRAB.barW, height: GRAB.barH, borderRadius: R.sm, background: C.track }} />
           </button>
           {head}
-          {view === 'sheet' && pick}
           {view === 'sheet' && content}
           {footBox}
         </div>
@@ -314,7 +308,6 @@ export function GenerationPanel<T extends string = string>(p: Props<T>) {
         ariaLabel={`Ширина панели «${p.title}»`}
       />
       {head}
-      {pick}
       {content}
       {footBox}
     </div>
@@ -332,24 +325,6 @@ function ReturnRow({ link }: { link: { label: string; onClick: () => void } }) {
         style={{ minWidth: 0, maxWidth: '100%' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{link.label}</span>
       </Button>
-    </div>
-  );
-}
-
-// «✦ Claude взял в работу: кадр-6.png · Открыть · ✕» — выбор агента в другом разделе
-function AgentPickRow({ pick }: { pick: GenerationAgentPick }) {
-  return (
-    <div data-gen-agent-pick="" style={{
-      flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: PAD.row, minWidth: 0,
-      padding: `${SP.xxs}px ${PAD.row}px ${SP.xxs}px ${PAD.edge}px`, borderBottom: `1px solid ${C.borderLight}`,
-      background: C.accentLight, fontSize: FS.sm, color: C.textSecondary,
-    }}>
-      <span style={{ display: 'inline-flex', color: C.accent, flexShrink: 0 }}>{icon(Sparkles)}</span>
-      <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        Claude взял в работу: <b style={{ color: C.textHeading }}>{pick.label}</b>
-      </span>
-      <Button size="xs" variant="ghost" onClick={pick.onOpen} style={{ flexShrink: 0 }}>Открыть</Button>
-      <IconButton size="xs" title="Скрыть подсказку" ariaLabel="Скрыть подсказку" onClick={pick.onDismiss}>{icon(X)}</IconButton>
     </div>
   );
 }

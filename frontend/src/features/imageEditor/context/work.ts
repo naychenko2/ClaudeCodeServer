@@ -2,7 +2,7 @@
 // объектом и показывает панель «Контекст»; клик по карточке только переключает уже открытую панель.
 // Запись идёт в стор контекста чата (PUT primary), а не в фокус нитей: сервер зеркалит её сам.
 
-import { dropAgentPick, followSelection, revealContextPanel, setPrimary } from 'aihome_shell/kit';
+import { followSelection, revealContextPanel, setPrimary } from 'aihome_shell/kit';
 import { IMAGES_PANEL } from '../characters/panel';
 import { imageDraftKey } from '../thread/threadStore';
 import { IMAGE_KIND } from './state';
@@ -15,7 +15,6 @@ export const imageRefOf = (threadId: string, versionId: string | null) =>
 // поле ввода, а чипы действий появляются над ним сами (макет, сценарий 9): там reveal = false, панель — по чипу строки
 export async function workWithInContext(sessionId: string, threadId: string, versionId: string | null, reveal = true): Promise<boolean> {
   const target = imageDraftKey(threadId);
-  dropAgentPick(sessionId, target);
   if (await setPrimary(sessionId, imageRefOf(threadId, versionId)) === 'failed') return false;
   if (reveal) revealContextPanel(sessionId, { target });
   return true;

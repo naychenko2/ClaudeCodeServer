@@ -9,7 +9,7 @@ vi.stubGlobal('window', { dispatchEvent: (e: Event) => { dispatched.push({ type:
 const { REVEAL_PANEL_EVENT } = await import('./subsystems/registryCore');
 const { __resetGenPanelOpen, followPeeked, holdGenPanelOpen, openGenPanel } = await import('./genPanelOpen');
 const {
-  __resetAgentPicks, agentPickSlot, dropAgentPick, dropAgentPickOf, followHost, followSelection, getAgentPick, isCardPick, noteAgentPick,
+  followHost, followSelection, isCardPick,
 } = await import('./genPanelFollow');
 
 const reveals = () => dispatched.filter(d => d.type === REVEAL_PANEL_EVENT).map(d => d.detail);
@@ -17,7 +17,6 @@ const reveals = () => dispatched.filter(d => d.type === REVEAL_PANEL_EVENT).map(
 beforeEach(() => {
   dispatched.length = 0;
   __resetGenPanelOpen();
-  __resetAgentPicks();
 });
 
 describe('правило 1: клик по карточке', () => {
@@ -73,39 +72,5 @@ describe('правило 1: клик по карточке', () => {
     const card = { contains: () => false };
     const menuItem = { closest: () => menuItem };
     expect(isCardPick(menuItem as unknown as EventTarget, card as unknown as Element)).toBe(false);
-  });
-});
-
-describe('правило 2: выбор агентом', () => {
-  it('подсказка видна в панели другого раздела, в своей — нет; «Открыть» переключает открытую панель', () => {
-    noteAgentPick('s1', { panelKey: 'sound', target: 'sound:t2', label: 'song.mp3', tab: 'settings' });
-    expect(reveals()).toEqual([]);
-    expect(agentPickSlot('s1', 'sound')).toBeUndefined();
-    const slot = agentPickSlot('s1', 'images');
-    expect(slot?.label).toBe('song.mp3');
-    holdGenPanelOpen('chatContext', 'column');
-    slot!.onOpen();
-    expect(reveals()).toEqual([expect.objectContaining({ key: 'chatContext', target: 'sound:t2', follow: true })]);
-    expect(getAgentPick('s1')).toBeNull();
-  });
-
-  it('✕ прячет; выбор человеком того же элемента убирает, другого — нет', () => {
-    noteAgentPick('s1', { panelKey: 'sound', target: 'sound:t2', label: 'song.mp3' });
-    followSelection('sound', 's1', 'sound:t9');
-    expect(getAgentPick('s1')).not.toBeNull();
-    followSelection('sound', 's1', 'sound:t2');
-    expect(getAgentPick('s1')).toBeNull();
-    noteAgentPick('s1', { panelKey: 'sound', target: 'sound:t2', label: 'song.mp3' });
-    agentPickSlot('s1', 'images')!.onDismiss();
-    expect(getAgentPick('s1')).toBeNull();
-  });
-
-  it('агент снял выбор в своём разделе — подсказка о нём уходит, о чужом — остаётся', () => {
-    noteAgentPick('s1', { panelKey: 'sound', target: 'sound:t2', label: 'song.mp3' });
-    dropAgentPickOf('s1', 'images');
-    expect(getAgentPick('s1')).not.toBeNull();
-    dropAgentPickOf('s1', 'sound');
-    expect(getAgentPick('s1')).toBeNull();
-    dropAgentPick('s1');
   });
 });

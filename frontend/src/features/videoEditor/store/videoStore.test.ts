@@ -15,7 +15,6 @@ const dispatched: { type: string; detail: unknown }[] = [];
   dispatchEvent: (e: Event) => { dispatched.push({ type: e.type, detail: (e as CustomEvent).detail }); return true; },
 };
 
-import { __resetAgentPicks, getAgentPick } from '../../../lib/genPanelFollow';
 import { __resetGenPanelOpen, holdGenPanelOpen } from '../../../lib/genPanelOpen';
 import { REVEAL_PANEL_EVENT } from '../../../lib/subsystems/registryCore';
 import { videoApi } from '../api';
@@ -36,7 +35,6 @@ beforeEach(() => {
   ls.clear();
   dispatched.length = 0;
   __resetVideoStore();
-  __resetAgentPicks();
   __resetGenPanelOpen();
   vi.restoreAllMocks();
 });
@@ -60,43 +58,6 @@ describe('стор «Видео»: события → состояние', () =>
     handleEvent({ type: 'video_edit_failed', sessionId: 'c1', scopeKey: 'p1', jobId: 'j1', sceneId: 's1', error: 'fal недоступен', initiator: 'human' });
     expect(getJobsOf('c1', 's1')).toHaveLength(0);
     expect(getFailure('c1', 's1')?.text).toBe('fal недоступен');
-  });
-});
-
-describe('агент не двигает панель', () => {
-  it('фокус сцены, сменённый событием, — подсказка noteAgentPick на вкладку «Сцена», без показа панели', () => {
-    __applyThreads('c1', 'p1', threads(1, [scene('s1'), scene('s2')], { sceneId: 's1' }));
-    holdGenPanelOpen('images', 'column');
-    handleEvent(changed(2, threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' })));
-    expect(reveals()).toEqual([]);
-    expect(getAgentPick('c1')).toMatchObject({ panelKey: VIDEO_PANEL, target: sceneDraftKey('s2'), label: 'Сцена 2', tab: 'scene' });
-  });
-
-  it('правка настроек в полёте не глушит выбор агента — глушит только свой выбор', async () => {
-    __applyThreads('c1', 'p1', threads(1, [scene('s1'), scene('s2')], { sceneId: 's1' }));
-    vi.spyOn(videoApi, 'settings').mockImplementation(async () => {
-      handleEvent(changed(2, threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' })));
-      return threads(3, [scene('s1'), scene('s2')], { sceneId: 's2' });
-    });
-    await mutate('p1', 'c1', rev => videoApi.settings('p1', 'c1', 's1', scene('s1').settings, rev));
-    expect(getAgentPick('c1')?.target).toBe(sceneDraftKey('s2'));
-  });
-
-  it('фильм, открытый агентом, — подсказка на вкладку «Фильм»', () => {
-    __applyThreads('c1', 'p1', threads(1, [scene('s1')], { sceneId: 's1' }));
-    handleEvent(changed(2, threads(2, [scene('s1')], { sceneId: 's1', filmPath: FILM_PATH })));
-    expect(reveals()).toEqual([]);
-    expect(getAgentPick('c1')).toMatchObject({ target: FILM_PATH, label: 'утро', tab: 'film' });
-  });
-
-  it('свой клик подсказки не ставит, даже если событие пришло раньше ответа', async () => {
-    __applyThreads('c1', 'p1', threads(1, [scene('s1'), scene('s2')], { sceneId: 's1' }));
-    vi.spyOn(videoApi, 'focus').mockImplementation(async () => {
-      handleEvent(changed(2, threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' })));
-      return threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' });
-    });
-    await selectSceneByHuman('p1', 'c1', 's2');
-    expect(getAgentPick('c1')).toBeNull();
   });
 });
 

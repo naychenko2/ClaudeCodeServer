@@ -11,11 +11,15 @@ namespace ClaudeHomeServer.Services.ChatContext;
 // Ревизия поднимается на каждую запись, поменявшую состояние. Запись человека несёт ревизию, от
 // которой он считал (чужая — ChatContextConflictException со свежим состоянием); null — без сверки
 // (так пишет агент и сервер). Запись без изменений ревизию не двигает и не рассылается.
+//
+// Засев: пока файла нет, состояние производное — основной объект из фокуса вертикали (ChatContextSeeder),
+// ревизия 0. Чтение ничего не пишет; первая запись применяется поверх засеянного и создаёт файл.
 public sealed class ChatContextStore(
     string root,
     ContextKindRegistry registry,
     IChatContextNotifier? notifier = null,
-    TimeProvider? time = null) : IChatContextStore
+    TimeProvider? time = null,
+    ChatContextSeeder? seeder = null) : IChatContextStore
 {
     public const string DirName = "chat-context";
 
@@ -43,10 +47,14 @@ public sealed class ChatContextStore(
     public ChatContextState SetPrimary(string ownerId, string sessionId, ContextItem? item, long? revision) =>
         Write(ownerId, sessionId, revision, current =>
         {
+            // Ревизия 0 — файла ещё нет, состояние засеяно из фокусов: запись закрепляет его файлом и
+            // событием, даже если совпала с засевом (иначе фронт не узнает, что фокус вертикали сменился)
+            var fresh = current.Revision == 0;
             if (item is null)
-                return current.Primary is null ? current : current with { Primary = null };
+                return current.Primary is null ? (fresh ? current with { } : current) : current with { Primary = null };
             RequireKnown(item.Kind);
-            if (current.Primary is { } p && SameObject(p, item)) return current;
+            if (current.Primary is { } p && SameObject(p, item))
+                return fresh ? current with { Primary = item with { Role = null } } : current;
             return current with
             {
                 Primary = item with { Role = null },
@@ -128,7 +136,8 @@ public sealed class ChatContextStore(
     private ChatContextState Read(string ownerId, string sessionId)
     {
         var state = JsonFileStore.Load<ChatContextState>(PathFor(ownerId, sessionId), Json);
-        return state is null ? new ChatContextState(0, null, []) : state with { Refs = state.Refs ?? [] };
+        if (state is null) return seeder?.Seed(ownerId, sessionId) ?? new ChatContextState(0, null, []);
+        return state with { Refs = state.Refs ?? [] };
     }
 
     private string PathFor(string ownerId, string sessionId)

@@ -10,6 +10,9 @@ public static class ContextKindRegistrationExtensions
     {
         services.AddSingleton<T>();
         services.AddSingleton<IContextKindProvider>(sp => sp.GetRequiredService<T>());
+        // Провайдер, который умеет засеять контекст из фокуса вертикали, попадает и в набор засева
+        if (typeof(IChatContextSeedSource).IsAssignableFrom(typeof(T)))
+            services.AddSingleton<IChatContextSeedSource>(sp => (IChatContextSeedSource)sp.GetRequiredService<T>());
         return services;
     }
 }

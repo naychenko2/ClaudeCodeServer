@@ -63,6 +63,32 @@ public class DockerProcessRunnerCmdlineEstimationTests : IDisposable
         };
     }
 
+    // Сборка инструмента в общем контейнере (scope там нет): запреты реюза узлов MSBuild и
+    // общего компилятора едут через -e, явный spec.Env сильнее; без метки — не едут
+    [Fact]
+    public void BuildDockerExecArgs_PrivateBuildNodes_ЗапретыЕдутВКонтейнер()
+    {
+        var (runner, _) = CreateRunner();
+        var spec = SpecForEstimate(["build"], "0123456789ab") with
+        {
+            FileName = "dotnet",
+            PrivateBuildNodes = true,
+            Env = new Dictionary<string, string> { ["UseSharedCompilation"] = "true" },
+        };
+
+        // Только переменные сборки: в argv едет и токен подписки хоста — в сообщение падения ему нельзя
+        static List<string> BuildEnv(List<string> args) => args
+            .Where(a => a.StartsWith("MSBUILD", StringComparison.Ordinal)
+                || a.StartsWith("DOTNET_CLI_USE_MSBUILD_SERVER", StringComparison.Ordinal)
+                || a.StartsWith("UseSharedCompilation", StringComparison.Ordinal))
+            .ToList();
+
+        BuildEnv(runner.BuildDockerExecArgs(spec)).Should().BeEquivalentTo(
+            "MSBUILDDISABLENODEREUSE=1", "DOTNET_CLI_USE_MSBUILD_SERVER=0", "UseSharedCompilation=true");
+        BuildEnv(runner.BuildDockerExecArgs(spec with { PrivateBuildNodes = false }))
+            .Should().BeEquivalentTo("UseSharedCompilation=true");
+    }
+
     // Главный гейт: Estimate должен учитывать обвязку docker exec (~401 символ без env).
     // Без неё — оценка 20 347, реальная cmdline 20 710: тот самый блокер.
     // Мутация `return DockerPath.Length` или `return 0` ломает тест.

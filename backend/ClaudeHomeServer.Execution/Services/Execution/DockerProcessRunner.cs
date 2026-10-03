@@ -136,6 +136,9 @@ public sealed class DockerProcessRunner : IProcessLauncher
     public List<string> BuildDockerExecArgs(ProcessSpec spec)
     {
         var env = BuildTurnEnv(spec.Env);
+        // Контейнер общий на всех владельцев и scope в нём нет: узлы сборки инструмента —
+        // только свои (ProcessSpec.PrivateBuildNodes)
+        foreach (var (k, v) in LocalProcessRunner.PrivateBuildNodeEnv(spec)) env[k] = v;
         var turnId = spec.TurnId ?? new string('0', 12);
 
         var dockerArgs = new List<string> { "exec" };

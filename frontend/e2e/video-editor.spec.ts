@@ -142,8 +142,8 @@ for (const theme of ['light', 'dark'] as const) {
         await peek(page);
         // Полная карточка одна — у сцены; запуск рисуется компактной строкой без кнопок
         await card(page, 3).getByRole('button', { name: 'Сохранить сцену' }).click();
-        // Папка уходит из открытого фильма: у сцены из панели своей папки нет
-        await expect.poll(() => w().saves.at(-1)).toMatchObject({ folder: 'video/утро-в-горах' });
+        // Уходит путь открытого фильма (он старше папки сцены)
+        await expect.poll(() => w().saves.at(-1)).toMatchObject({ filmPath: 'video/утро-в-горах/утро-в-горах.film' });
         await raise(page);
         await openFilm(page);
         const row3 = panel(page).locator('[data-video-film-row="2"]');

@@ -383,7 +383,7 @@ export async function mockApi(page: Page, trace = false) {
       if (sm[2] === 'save') {
         const b = body();
         world.saves.push(b);
-        if (!b.folder && !s.folder) return json({ error: 'Не указана папка фильма: video/<фильм>', code: 'invalid_request' }, 400);
+        if (!b.folder && !b.filmPath && !s.folder) return json({ error: 'Не указана папка фильма: video/<фильм>', code: 'invalid_request' }, 400);
         const vId = (b.versionId as string) ?? s.currentVersionId!;
         const n = Number(s.sceneId.replace(/\D/g, ''));
         const prev = s.savedFiles.length;

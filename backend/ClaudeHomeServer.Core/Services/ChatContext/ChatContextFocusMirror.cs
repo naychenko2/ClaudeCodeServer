@@ -20,8 +20,10 @@ public sealed class ChatContextFocusMirror(
     // claim — явный выбор агента (image_focus и т.п.): фокус вертикали мог не измениться, потому что человек
     // снял объект в контексте (✕), а нить и так в фокусе у вертикали; тогда, если основной — не эта нить,
     // агент возвращает её основным (✦). Текущий выбор человека на эту нить не затирается: уже основная — не трогаем
+    // refKey — имя поля Ref, где вид хранит идентификатор объекта (threadId у картинки и звука, sceneId у сцены
+    // видео, filmPath у фильма)
     public void Sync(string ownerId, string sessionId, string kind, string? before, string? after, ContextActor by,
-        bool claim = false)
+        bool claim = false, string refKey = ThreadKey)
     {
         if (!Enabled(ownerId)) return;
         if (before == after && !(claim && after is not null)) return;
@@ -30,13 +32,13 @@ public sealed class ChatContextFocusMirror(
             if (before == after)
             {
                 var cur = store.Get(ownerId, sessionId);
-                if (cur.Primary is { } cp && cp.Kind == kind && ThreadOf(cp) == after) return;
-                store.SetPrimary(ownerId, sessionId, NewItem(kind, after!, by), null);
+                if (cur.Primary is { } cp && cp.Kind == kind && ThreadOf(cp, refKey) == after) return;
+                store.SetPrimary(ownerId, sessionId, NewItem(kind, after!, by, null, refKey), null);
                 return;
             }
             if (after is not null)
             {
-                store.SetPrimary(ownerId, sessionId, NewItem(kind, after, by), null);
+                store.SetPrimary(ownerId, sessionId, NewItem(kind, after, by, null, refKey), null);
                 return;
             }
             var current = store.Get(ownerId, sessionId);
@@ -44,7 +46,7 @@ public sealed class ChatContextFocusMirror(
                 // Файла нет: основной — засев из оставшихся фокусов (или пусто); закрепляем его записью,
                 // чтобы фронт получил событие о смене
                 store.SetPrimary(ownerId, sessionId, current.Primary, null);
-            else if (current.Primary is { } p && p.Kind == kind && ThreadOf(p) == before)
+            else if (current.Primary is { } p && p.Kind == kind && ThreadOf(p, refKey) == before)
                 store.SetPrimary(ownerId, sessionId, null, null);
         }
         catch (Exception ex)
@@ -54,22 +56,23 @@ public sealed class ChatContextFocusMirror(
     }
 
     // Нить удалена: убрать её из основного и референсов
-    public void Forget(string ownerId, string sessionId, string kind, string threadId)
+    public void Forget(string ownerId, string sessionId, string kind, string threadId, string refKey = ThreadKey)
     {
         if (!Enabled(ownerId)) return;
-        try { store.Forget(ownerId, sessionId, i => i.Kind == kind && ThreadOf(i) == threadId); }
+        try { store.Forget(ownerId, sessionId, i => i.Kind == kind && ThreadOf(i, refKey) == threadId); }
         catch (Exception ex) { log.LogWarning(ex, "Нить {ThreadId} не убрана из контекста чата {SessionId}", threadId, sessionId); }
     }
 
     // Фокус вертикали для её DTO: при флаге — из основного объекта контекста своего вида (и только
     // если такая нить ещё есть), иначе собственное поле как есть
-    public string? ProjectFocus(string ownerId, string sessionId, string kind, string? own, Func<string, bool> threadExists)
+    public string? ProjectFocus(string ownerId, string sessionId, string kind, string? own, Func<string, bool> threadExists,
+        string refKey = ThreadKey)
     {
         if (!Enabled(ownerId)) return own;
         try
         {
             return store.Get(ownerId, sessionId).Primary is { } p && p.Kind == kind
-                && ThreadOf(p) is { } id && threadExists(id) ? id : null;
+                && ThreadOf(p, refKey) is { } id && threadExists(id) ? id : null;
         }
         catch (Exception ex)
         {
@@ -78,12 +81,15 @@ public sealed class ChatContextFocusMirror(
         }
     }
 
-    public static string? ThreadOf(ContextItem item) =>
-        item.Ref["threadId"] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+    public const string ThreadKey = "threadId";
 
-    public static ContextItem NewItem(string kind, string threadId, ContextActor by, string? versionId = null)
+    public static string? ThreadOf(ContextItem item, string refKey = ThreadKey) =>
+        item.Ref[refKey] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+
+    public static ContextItem NewItem(string kind, string threadId, ContextActor by, string? versionId = null,
+        string refKey = ThreadKey)
     {
-        var reference = new JsonObject { ["threadId"] = threadId };
+        var reference = new JsonObject { [refKey] = threadId };
         if (versionId is not null) reference["versionId"] = versionId;
         return new ContextItem("ci_" + Guid.NewGuid().ToString("N")[..12], kind, reference, null, by, DateTime.UtcNow);
     }

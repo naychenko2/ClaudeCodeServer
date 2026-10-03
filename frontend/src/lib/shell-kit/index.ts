@@ -12,7 +12,7 @@
 import { lazy } from 'react';
 
 // ─── design ──────────────────────────────────────────────────────────────────
-export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W } from '../design';
+export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W, MODAL_W } from '../design';
 
 // ─── api ─────────────────────────────────────────────────────────────────────
 export { api } from '../api';
@@ -50,7 +50,7 @@ export {
 export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
 export { refOf, rolesFor } from '../chatContext/fill';
 export type { ContextCandidate } from '../chatContext/fill';
-export type { ContextRole, ContextUpload, ContextNote } from '../chatContext/types';
+export type { ContextRole, ContextUpload, ContextNote, ContextMenuItem } from '../chatContext/types';
 export { notifyKindChanged } from '../chatContext/actionRun';
 export { ReportedError } from '../chatContext/errors';
 export { etaTicker, etaFraction } from '../chatContext/etaProgress';

@@ -87,7 +87,7 @@ public sealed class FilmSceneSaver(
         // Версия → файл проекта: сцена помнит, какая версия в каком файле лежит
         var text = VideoFeedTexts.SceneSaved(initiator, scene.Name, clipPath);
         var written = threads.Store.AddSavedFile(ownerId, req.SessionId, scene.SceneId,
-            new VideoSavedFileDto(version.VersionId, clipPath),
+            new VideoSavedFileDto(version.VersionId, clipPath, threads.Store.Now()),
             new VideoThreadEvent(threads.Store.Now(), VideoThreadEventKinds.Saved, text, scene.SceneId));
 
         var added = await AddToFilmAsync(ownerId, scope, folder, explicitFilm, clipPath, scene, version, snapshotFrames, initiator, ct);

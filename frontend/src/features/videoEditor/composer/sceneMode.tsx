@@ -7,7 +7,7 @@ import { FLAGS, getFlag, showToast, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'ai
 import type { ComposerModeApi, ComposerModeCtx } from '../../../lib/subsystems/registryCore';
 import { errorText, videoApi } from '../api';
 import { currentResolved, runScene } from '../scene/actions';
-import { useSceneQuote } from '../panel/useScene';
+import { useSceneQuote } from '../editor/useScene';
 import { PRICE_UNKNOWN } from '../strip/summary';
 import { hasClip, runReason } from '../scene/model';
 import { videoScope, isPersonalScope } from '../scope';
@@ -44,7 +44,8 @@ function Hint({ ctx }: { ctx: ComposerModeCtx }) {
 export const sceneMode: ComposerModeApi = {
   title: 'Сцена',
   icon: <Clapperboard size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-  isAvailable: ctx => getFlag(FLAGS.videoEditor) && !!getFocusedScene(ctx.sessionId),
+  // При флаге composer-context-row сцену ведут чипы действий, режим «Сцена» не нужен
+  isAvailable: ctx => getFlag(FLAGS.videoEditor) && !getFlag(FLAGS.composerContextRow) && !!getFocusedScene(ctx.sessionId),
   // Черновик выбранной сцены: клик по другой карточке уносит его с собой
   draftKey: ctx => {
     const s = getFocusedScene(ctx.sessionId);

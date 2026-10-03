@@ -36,4 +36,6 @@ public static class VideoEditorErrors
     public const string FileNotFound = "file_not_found";
     // Кадр сцены прочитать нельзя: файла нет, он вне проекта или кадр из «Картинок» ещё не подключён швом
     public const string FrameUnavailable = "frame_unavailable";
+    // 409: ревизия контекста чата устарела (ADR-023 §Д2.1); тело — свежий ChatContextDto
+    public const string ContextChanged = "context_changed";
 }

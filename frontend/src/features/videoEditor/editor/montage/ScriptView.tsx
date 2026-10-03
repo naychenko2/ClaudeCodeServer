@@ -5,11 +5,11 @@
 import { useState } from 'react';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { Button, C, FS, R, SP, TextArea } from 'aihome_shell/kit';
-import type { FilmDocument, VideoScene } from '../api';
-import { ic } from '../panel/primitives';
-import { changeSettings } from '../scene/actions';
-import { focusScene } from '../store/videoStore';
-import { fileName, sceneOfItem } from './model';
+import type { FilmDocument, VideoScene } from '../../api';
+import { ic } from '../primitives';
+import { changeSettings } from '../../scene/actions';
+import { focusScene } from '../../store/videoStore';
+import { fileName, sceneOfItem } from '../../film/model';
 
 export function ScriptView({ scope, sessionId, doc, scenes, onBack, onReshoot }: {
   scope: string; sessionId: string; doc: FilmDocument; scenes: VideoScene[]; onBack: () => void; onReshoot: (i: number) => void;

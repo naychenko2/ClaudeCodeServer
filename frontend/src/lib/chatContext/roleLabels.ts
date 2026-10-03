@@ -8,6 +8,8 @@ const ROLE_LABELS: Readonly<Record<string, string>> = {
   character: 'персонаж',
   frameA: 'кадр A',
   frameB: 'кадр B',
+  'frame-a': 'кадр A',
+  'frame-b': 'кадр B',
   voice: 'голос',
   reference: 'образец',
   piece: 'кусок',

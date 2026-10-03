@@ -54,7 +54,10 @@ public sealed class VideoEditorStateContributor(
         var scope = VideoEditScope.Of(session);
         var (state, fresh) = threads?.TakeForTurn(ownerId, session.Id) ?? (VideoThreadsState.Empty, []);
         var spent = SpentOf(ownerId, scope, state);
-        var block = Render(state, fresh, prefs?.Get(ownerId, scope), spent, _agentLaunch, scope.IsPersonal);
+        // При строке контекста «В работе», «Открыт фильм» и «Выбор человека» отдаёт хвост «Контекст хода»
+        var row = flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
+        var block = Render(state, fresh, prefs?.Get(ownerId, scope), spent, _agentLaunch, scope.IsPersonal, row);
+        if (block is null) return Task.FromResult<PromptSectionContribution?>(null);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, block, Title, InTurnTail: true)]));
     }
@@ -78,9 +81,11 @@ public sealed class VideoEditorStateContributor(
             spends.Values.Sum(s => s.LocalSeconds));
     }
 
-    public static string Render(VideoThreadsState state, IReadOnlyList<VideoThreadEvent> fresh, VideoPrefsDto? prefs,
-        VideoSpentDto? spent, bool agentLaunch, bool personal)
+    // null — блок пуст: при строке контекста без video_shoot, журнала и трат не остаётся ни одной строки
+    public static string? Render(VideoThreadsState state, IReadOnlyList<VideoThreadEvent> fresh, VideoPrefsDto? prefs,
+        VideoSpentDto? spent, bool agentLaunch, bool personal, bool contextRow = false)
     {
+        if (contextRow) return RenderRow(state, fresh, spent, agentLaunch, personal);
         var sb = new StringBuilder();
         sb.AppendLine("## Видео в этом чате");
         sb.AppendLine(FocusText(state));
@@ -95,6 +100,27 @@ public sealed class VideoEditorStateContributor(
             foreach (var e in fresh) sb.AppendLine("- " + e.Text);
         }
         return sb.ToString().TrimEnd();
+    }
+
+    // Строка контекста: что в работе и какой выбор человека — в блоке «Контекст хода»; остаются траты открытого
+    // фильма (больше их нигде нет), правила приоритета и темпа и журнал «с прошлого сообщения»
+    private static string? RenderRow(VideoThreadsState state, IReadOnlyList<VideoThreadEvent> fresh, VideoSpentDto? spent,
+        bool agentLaunch, bool personal)
+    {
+        var lines = new List<string>();
+        if (state.Focus.FilmPath is { } film && spent is not null)
+            lines.Add($"Потрачено на открытый фильм {film}: {SpentText(spent)}");
+        if (agentLaunch)
+        {
+            lines.Add(personal ? PersonalPriorityRule : PriorityRule);
+            lines.Add(PaceRule);
+        }
+        if (fresh.Count > 0)
+        {
+            lines.Add("С прошлого сообщения:");
+            lines.AddRange(fresh.Select(e => "- " + e.Text));
+        }
+        return lines.Count == 0 ? null : "## Видео в этом чате\n" + string.Join("\n", lines);
     }
 
     // «В работе: сцена sc1 «Сцена 1» · версия 2 (остался с прошлых сообщений…)» — без списка сцен: его отдаёт video_state

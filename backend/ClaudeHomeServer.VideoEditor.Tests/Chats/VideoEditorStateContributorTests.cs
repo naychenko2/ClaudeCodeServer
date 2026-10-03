@@ -150,4 +150,47 @@ public sealed class VideoEditorStateContributorTests : IDisposable
         first.Should().Contain("С прошлого сообщения:").And.Contain("Claude запустил: съёмка");
         second.Should().NotContain("Claude запустил: съёмка");
     }
+
+    // ── Строка контекста (ADR-023 §3.1, 3б-1): блок худеет ──
+
+    private sealed class RowFlags : IFeatureFlagGate
+    {
+        public bool IsEnabled(string userId, string key) => key is FeatureFlagKeys.VideoEditor or FeatureFlagKeys.ComposerContextRow;
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_нет_В_работе_Открыт_фильм_и_Выбор_человека_а_правила_и_журнал_остаются()
+    {
+        var store = new VideoThreadStore(_dir);
+        var scene = store.AddScene("u1", "s1", "", new VideoSceneSettingsDto(null, null, "т", null, null, null, null, null, null), null).Scene!;
+        store.SetFocus("u1", "s1", new VideoFocusDto(scene.SceneId, "video/утро/утро.film"), null);
+        store.SetSettings("u1", "s1", scene.SceneId, scene.Settings, null,
+            new VideoThreadEvent(DateTime.UtcNow, VideoThreadEventKinds.Versions, "Готово: новых версий 1", scene.SceneId));
+        var contributor = new VideoEditorStateContributor(new RowFlags(), store);
+
+        var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
+
+        text.Should().StartWith("## Видео в этом чате\n")
+            .And.NotContain("В работе:").And.NotContain("Открыт фильм:").And.NotContain("Выбор человека");
+        text.Should().Contain(VideoEditorStateContributor.PriorityRule).And.Contain(VideoEditorStateContributor.PaceRule)
+            .And.Contain("С прошлого сообщения:").And.Contain("Готово: новых версий 1");
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_без_запуска_агентом_и_без_журнала_блока_нет()
+    {
+        var contributor = new VideoEditorStateContributor(new RowFlags(), new VideoThreadStore(_dir), config: Config(agentLaunch: false));
+
+        (await contributor.BuildAsync(Ctx(), null)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Без_флага_строки_контекста_текст_блока_прежний()
+    {
+        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir));
+
+        var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
+
+        text.Should().Contain("В работе: ничего не выбрано").And.Contain("Выбор человека в «Видео»");
+    }
 }

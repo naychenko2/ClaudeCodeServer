@@ -4,6 +4,9 @@ import type { ReactNode } from 'react';
 import type { User } from 'lucide-react';
 import { C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 
+// Картинки, которые можно взять кадром (выбор файла из проекта)
+export const IMG_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+
 export const ic = (I: typeof User, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
 export function Label({ children, aside, by }: { children: ReactNode; aside?: ReactNode; by?: ReactNode }) {

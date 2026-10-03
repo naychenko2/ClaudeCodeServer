@@ -8,24 +8,23 @@ import {
   Button, C, FLAGS, FS, IconButton, useFeature, Menu, MenuItem, MenuSep, R, SegmentedControl, SP, TextField, ByClaude, showToast,
   type GenerationFoot,
 } from 'aihome_shell/kit';
-import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
-import { ERR, errorCode, errorText, videoApi, type FilmState, type VideoScene } from '../api';
-import { ProjectPicker } from '../panel/ProjectPicker';
-import { Hint, ic, Label } from '../panel/primitives';
-import { createScene, openScenePanel, selectSceneByHuman } from '../scene/actions';
-import { isPersonalScope, videoScope } from '../scope';
+import type { WorkspacePanelDefCtx } from '../../../../lib/subsystems/registryCore';
+import { ERR, errorCode, errorText, videoApi, type FilmState, type VideoScene } from '../../api';
+import { ProjectPicker } from '../ProjectPicker';
+import { Hint, ic, Label } from '../primitives';
+import { createScene, openScenePanel, selectSceneByHuman } from '../../scene/actions';
+import { isPersonalScope, videoScope } from '../../scope';
 import {
   buildFilm, cancelBuild, filmName, focusFilm, loadFilmList, patchFilm, useFilm, useFilmList, useVideoStoreVersion,
   useVideoThreads,
-} from '../store/videoStore';
-import { filmDuration } from '../strip/summary';
-import { TOUCH, useBoxWidth } from '../useBoxWidth';
-import { composeForFilm, isComposing, isFromSound } from './compose';
+} from '../../store/videoStore';
+import { TOUCH, useBoxWidth } from '../../useBoxWidth';
+import { composeForFilm, isComposing, isFromSound } from '../../film/compose';
 import { FilmList, type RowActions } from './FilmList';
 import {
-  buildView, filmClock, filmFolder, filmStatusSuffix, fileName, MUSIC_MIN_SEC, newFilmPath, sceneOfItem, scenesWord, snapshotOf, spentText,
-} from './model';
-import { openProjectFile } from './nav';
+  buildView, filmClock, filmDuration, filmFolder, filmStatusSuffix, fileName, MUSIC_MIN_SEC, newFilmPath, sceneOfItem, scenesWord, snapshotOf, spentText,
+} from '../../film/model';
+import { openProjectFile } from '../../film/nav';
 import { ScriptView } from './ScriptView';
 
 const MP4_RE = /\.(mp4|webm|mov)$/i;
@@ -61,12 +60,13 @@ export interface FilmPanelModel {
 }
 
 // Шапка, строка контекста и низ вкладки — для каркаса панели
-export function useFilmPanel(projectId: string | null, sessionId: string | null, isMobile = false): FilmPanelModel {
+// pathOverride — редактор «Монтаж» работает с фильмом основного объекта контекста, а не серверного фокуса
+export function useFilmPanel(projectId: string | null, sessionId: string | null, isMobile = false, pathOverride?: string | null): FilmPanelModel {
   const scope = videoScope(projectId);
   const personal = isPersonalScope(scope);
   const threads = useVideoThreads(scope, sessionId);
   useVideoStoreVersion();
-  const path = personal ? null : threads.focus.filmPath ?? null;
+  const path = personal ? null : pathOverride ?? threads.focus.filmPath ?? null;
   const film = useFilm(scope, path ? sessionId : null, path);
   const f = film.state;
   const name = path ? filmName(path) : '';
@@ -222,14 +222,21 @@ function Empty({ title, children }: { title: string; children?: ReactNode }) {
 
 type Picking = null | 'scene' | 'mp4' | 'music';
 
-export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
+export function FilmTab({ ctx, path: pathOverride, editor }: {
+  ctx: WorkspacePanelDefCtx;
+  // Фильм, с которым работает редактор «Монтаж»; без него — фильм серверного фокуса (прежняя панель)
+  path?: string | null;
+  // Редактор «Монтаж»: «Работать со сценой» делает сцену основным объектом контекста (прежняя панель
+  // открывает вкладку «Сцена»); новая сцена тоже уходит в контекст, а окно закрывается
+  editor?: { workWith: (scene: VideoScene) => void; afterNewScene: (created: boolean) => void };
+}) {
   const { sessionId, isMobile } = ctx;
   const scope = videoScope(ctx.projectId);
   const personal = isPersonalScope(scope);
   const threads = useVideoThreads(scope, sessionId);
   useVideoStoreVersion();
   const soundOn = useFeature(FLAGS.audioEditor);
-  const path = personal ? null : threads.focus.filmPath ?? null;
+  const path = personal ? null : pathOverride ?? threads.focus.filmPath ?? null;
   const film = useFilm(scope, path ? sessionId : null, path);
   const films = useFilmList(scope, personal ? null : sessionId);
   const dspBlocked = useBlocked(path);
@@ -309,12 +316,15 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const reshoot = (i: number) => {
     const it = doc.items[i];
     const s = sceneOfItem(scenes, it);
-    if (s) void selectSceneByHuman(scope, sessionId, s.sceneId).then(() => openScenePanel(sessionId));
-    else {
-      // Сцены в этом чате нет: заводим новую по снимку из фильма
-      const fa = it.scene?.frameA;
-      void createScene(scope, sessionId, fa ? { frameA: { kind: 'file', path: fa } } : {}).then(() => openScenePanel(sessionId));
-    }
+    // Сцены в этом чате нет: заводим новую по снимку из фильма
+    const fa = it.scene?.frameA;
+    const fresh = () => createScene(scope, sessionId, fa ? { frameA: { kind: 'file', path: fa } } : {});
+    if (editor) {
+      if (s) editor.workWith(s);
+      else void fresh().then(editor.afterNewScene);
+    // К удалению в 4б: ветка прежней панели «Видео» (VideoPanel), пока она ещё рендерит FilmTab без editor
+    } else if (s) void selectSceneByHuman(scope, sessionId, s.sceneId).then(() => openScenePanel(sessionId));
+    else void fresh().then(() => openScenePanel(sessionId));
   };
   const actions: RowActions = {
     onMove: (from, to) => { void patch([{ op: 'move', from, to }]); setHighlight(to); },
@@ -322,6 +332,7 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     onTrim: (i, trim) => { void patch([{ op: 'trim', index: i, trim }]); },
     onCut: (i, type, sec) => { void patch([{ op: 'cut', index: i, cutType: type, ...(type === 'butt' ? {} : { sec }) }]); },
     onReshoot: reshoot,
+    ...(editor ? { onWork: reshoot, hasScene: (i: number) => !!sceneOfItem(scenes, doc.items[i]) } : {}),
     onReveal: i => { void openProjectFile(doc.items[i].file, true); },
   };
   const addFile = (file: string, scene?: VideoScene | null) => {
@@ -332,7 +343,8 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const savedOutside = scenes.flatMap(s => s.savedFiles.filter(x => !inFilm.has(x.path)).map(x => ({ s, path: x.path })));
   const lastFrameB = doc.items[doc.items.length - 1]?.scene?.frameB;
   const newScene = () => {
-    void createScene(scope, sessionId, lastFrameB ? { frameA: { kind: 'file', path: lastFrameB } } : {}).then(() => openScenePanel(sessionId));
+    void createScene(scope, sessionId, lastFrameB ? { frameA: { kind: 'file', path: lastFrameB } } : {})
+      .then(ok => { if (editor) editor.afterNewScene(ok); else openScenePanel(sessionId); });
   };
 
   if (script) {
@@ -428,7 +440,7 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       {doc.items.length > 0 && (
         <div style={{ marginTop: SP.sm }}>
           <Button size="sm" variant="secondary" leftIcon={ic(Sparkles)} disabled={composing || !soundOn} title={soundOn ? undefined : 'Раздел «Звук» выключен'} style={isMobile ? { minHeight: TOUCH } : undefined}
-            onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f); }}>
+            onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f, !isMobile).then(ok => { if (ok && editor) ctx.onClose(); }); }}>
             {composing ? 'Сочиняем в «Звуке»…' : 'Сочинить под фильм…'}
           </Button>
           <Hint>

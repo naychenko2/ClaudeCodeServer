@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ChatContext;
@@ -16,6 +17,8 @@ public sealed class ProjectFileContextKind : IContextKindProvider
         if (kind != Kind) return $"Вид «{kind}» не принадлежит провайдеру project-file";
         // Личный чат: файлов проекта нет, до RootPath не доходим
         if (scope.Project is null) return "В личном чате нет файлов проекта";
+        // Защита в глубину: локальный проект (ADR-016) — отказ до диска, даже если вызывающий не проверил сам
+        if (ProjectCapabilityGuard.Refusal(scope.Project, ProjectCapabilityArea.FileBound) is { } refusal) return refusal;
         if (PathOf(reference) is not { } path) return "Не указан путь файла";
         var root = scope.Project.RootPath;
         if (ProjectLinkGuard.ResolveInside(root, path) is not null) return null;
@@ -37,6 +40,7 @@ public sealed class ProjectFileContextKind : IContextKindProvider
         var path = PathOf(item.Ref) ?? "";
         var label = Path.GetFileName(path.Replace('\\', '/'));
         var exists = scope.Project is not null
+            && ProjectCapabilityGuard.Allows(scope.Project, ProjectCapabilityArea.FileBound)
             && !string.IsNullOrEmpty(path)
             && ProjectLinkGuard.ResolveInside(scope.Project.RootPath, path) is { } full
             && File.Exists(full);

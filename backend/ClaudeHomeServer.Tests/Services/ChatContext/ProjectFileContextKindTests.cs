@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.Composition;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services.ChatContext;
@@ -52,6 +53,15 @@ public sealed class ProjectFileContextKindTests : IDisposable
         Directory.CreateSymbolicLink(Path.Combine(_root, "link"), _outside);
 
         _kind.Validate(Scope(), "project-file", Ref("link/secret.txt")).Should().Be("Путь идёт через символическую ссылку");
+    }
+
+    [Fact]
+    public void Локальный_проект_отказывает_до_диска_даже_для_существующего_файла()
+    {
+        var local = new ContextScope("owner-1", new Session(), new Project { RootPath = _root, DeviceId = "dev-1" });
+
+        _kind.Validate(local, "project-file", Ref("docs/a.md")).Should().Be(ProjectCapabilityGuard.FilesOnDeviceReason);
+        _kind.Describe(local, Item("docs/a.md")).Missing.Should().BeTrue("локальный файл сервер не видит");
     }
 
     [Fact]

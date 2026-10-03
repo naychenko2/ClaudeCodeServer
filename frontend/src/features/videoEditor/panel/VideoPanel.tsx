@@ -11,7 +11,7 @@ import {
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
 import { FilmTab, useFilmPanel } from '../film/FilmTab';
-import { flushSettings, releaseFocus, wireFrameBinding } from '../scene/actions';
+import { backToVideoStrip, flushSettings, releaseFocus, wireFrameBinding } from '../scene/actions';
 import { isPersonalScope, videoScope } from '../scope';
 import { TOUCH } from '../useBoxWidth';
 import { ensureVideoThreads, focusFilm, focusScene, getThreadsState, VIDEO_PANEL } from '../store/videoStore';
@@ -49,7 +49,7 @@ export function VideoPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const [tab, setTab] = useState<Tab>(first?.tab ?? 'scene');
   // Опущенная шторка держит низ с ценой и запуском на любой вкладке
   const [peeked, setPeeked] = useState(() => followPeeked(VIDEO_PANEL));
-  const agentPick = useAgentPick(sessionId, VIDEO_PANEL);
+  const agentPick = useAgentPick(sessionId, VIDEO_PANEL, { current: tab, set: t => { if (isTab(t)) setTab(t); } });
   const returnTo = usePanelReturnTo(VIDEO_PANEL);
   // Заготовки у «Видео» нет — снимаем всё, что пришло, чтобы не копилось
   const preset = usePendingPreset(VIDEO_PANEL);
@@ -122,7 +122,7 @@ export function VideoPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
           style={ctx.isMobile ? { width: TOUCH, height: TOUCH } : undefined}>{ic(X)}</IconButton>
         : tab === 'film' ? filmPanel.contextAction : undefined}
       panelKey={VIDEO_PANEL}
-      returnLink={returnTo ? { label: returnLabel(returnTo), onClick: () => returnToOrigin(VIDEO_PANEL, returnTo, sessionId ?? undefined) } : undefined}
+      returnLink={returnTo ? { label: returnLabel(returnTo), onClick: () => { returnToOrigin(VIDEO_PANEL, returnTo, sessionId ?? undefined); backToVideoStrip(sessionId); } } : undefined}
       agentPick={agentPick}
       draftKey={tab === 'scene' ? m.draftKey : null}
       foot={foot}

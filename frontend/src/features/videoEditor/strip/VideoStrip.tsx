@@ -36,6 +36,8 @@ const NARROW_W = 480;
 const CHIP_H = 28;
 // Высота полосы и свёрнутой строки на десктопе (на телефоне — тач-цель плюс рамка)
 const FULL_H = 48;
+// Колонка уже этой ширины (открыты «Файлы»): у чипа фильма прячем время, чтобы цена сцены осталась целой
+const TINY_W = 340;
 const MINI_H = 30;
 
 function QueueBadge({ children }: { children: string }) {
@@ -82,6 +84,7 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const hostW = useBoxWidth(host);
   // Узкая колонка: телефон или фактическая ширина меньше порога (до замера — по окну)
   const narrow = isMobile || (hostW > 0 && hostW < NARROW_W);
+  const tiny = hostW > 0 && hostW < TINY_W;
   const h = isMobile ? TOUCH : CHIP_H;
   const offer = useSyncExternalStore(videoReleaseUndo.subscribe, videoReleaseUndo.current, videoReleaseUndo.current);
   const undo = offer && offer.snapshot.sessionId === sessionId ? offer : null;
@@ -144,16 +147,21 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
   }
 
   const sceneLabel = narrow
-    ? <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chip.short}</span>
+    ? (
+      <>
+        <span style={{ minWidth: 0, flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chip.shortName}</span>
+        {chip.shortPrice && <span data-video-chip-price="" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.shortPrice}</span>}
+      </>
+    )
     : (
       <>
         <span style={{ whiteSpace: 'nowrap', flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{chip.name}</span>
-        <span style={{ flex: '0 8 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {chip.model}</span>
-        {chip.meta && <span style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.meta}</span>}
-        {chip.price && <span style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.price}</span>}
+        <span style={{ flex: '0 1000 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {chip.model}</span>
+        {chip.meta && <span data-video-chip-meta="" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.meta}</span>}
+        {chip.price && <span data-video-chip-price="" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.price}</span>}
       </>
     );
-  const filmLabel = !fchip ? null : isMobile
+  const filmLabel = !fchip || tiny ? null : isMobile
     ? <span style={{ whiteSpace: 'nowrap' }}>{fchip.short}</span>
     : (
       <>

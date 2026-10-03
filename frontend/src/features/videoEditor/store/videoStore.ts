@@ -42,6 +42,12 @@ const _prefs = new Map<string, VideoPrefs>();
 const _jobs = new Map<string, JobProgress>();
 const _films = new Map<string, FilmEntry>();
 const _filmLists = new Map<string, FilmSummary[]>();
+// Кадры, которые поменял агент (video_scene_set): метка «✦ Claude» на кадре, пока человек его не тронул.
+// Живёт в сторе сессии: сервер «кто правил кадр» не хранит. sessionId → sceneId → слоты
+type Slot = 'A' | 'B';
+const _agentEdits = new Map<string, Map<string, Set<Slot>>>();
+// Любая своя мутация нитей в полёте: событие, пришедшее за это время, — эхо, а не правка агента
+const _mut = new Map<string, number>();
 // Свои мутации в полёте по чатам: событие, пришедшее раньше ответа, фокус «агентом» не считается
 const _own = new Map<string, number>();
 let _version = 0;
@@ -138,11 +144,41 @@ function applyFilmEvent(scopeKey: string, path: string, state: FilmState) {
 }
 
 // Событие модуля → состояние. Нити — только у уже показанного чата: чужой чат догрузится сам при входе
+const frameSig = (f: unknown) => JSON.stringify(f ?? null);
+
+// Событие, которого человек не вызывал, поменяло кадр сцены — его поменял агент
+export function noteAgentFrames(sessionId: string, prev: VideoThreadsState | null, next: VideoThreadsState) {
+  if (!prev || (_mut.get(sessionId) ?? 0) > 0) return;
+  for (const sc of next.scenes) {
+    const was = prev.scenes.find(x => x.sceneId === sc.sceneId);
+    if (!was) continue;
+    const slots: Slot[] = [];
+    if (frameSig(was.settings.frameA) !== frameSig(sc.settings.frameA) && sc.settings.frameA) slots.push('A');
+    if (frameSig(was.settings.frameB) !== frameSig(sc.settings.frameB) && sc.settings.frameB) slots.push('B');
+    if (!slots.length) continue;
+    const byScene = _agentEdits.get(sessionId) ?? new Map<string, Set<Slot>>();
+    const set = byScene.get(sc.sceneId) ?? new Set<Slot>();
+    slots.forEach(x => set.add(x));
+    byScene.set(sc.sceneId, set);
+    _agentEdits.set(sessionId, byScene);
+  }
+}
+
+export const getAgentFrames = (sessionId: string | null, sceneId: string | null | undefined): ReadonlySet<Slot> | null =>
+  (sessionId && sceneId && _agentEdits.get(sessionId)?.get(sceneId)) || null;
+
+// Человек тронул кадр — метка «✦ Claude» с него снимается
+export function clearAgentFrame(sessionId: string, sceneId: string | null, slot: Slot) {
+  const set = sceneId ? _agentEdits.get(sessionId)?.get(sceneId) : null;
+  if (set?.delete(slot)) emit();
+}
+
 export function handleEvent(ev: VideoEvent) {
   switch (ev.type) {
     case 'video_thread_changed': {
       const e = _entries.get(ev.sessionId);
       if (!e) return;
+      noteAgentFrames(ev.sessionId, e.loaded ? e.state : null, ev.state);
       const byAgent = noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
       apply(ev.sessionId, ev.scopeKey, ev.state, byAgent);
       return;
@@ -257,6 +293,7 @@ export async function mutate(
   // фокусом — эхо своего клика, а не выбор агента
   ownFocus = false,
 ): Promise<boolean> {
+  _mut.set(sessionId, (_mut.get(sessionId) ?? 0) + 1);
   if (ownFocus) _own.set(sessionId, (_own.get(sessionId) ?? 0) + 1);
   try {
     apply(sessionId, scope, await run(getThreadsState(sessionId).revision));
@@ -271,6 +308,9 @@ export async function mutate(
     }
     return false;
   } finally {
+    const m = (_mut.get(sessionId) ?? 1) - 1;
+    if (m <= 0) _mut.delete(sessionId);
+    else _mut.set(sessionId, m);
     if (ownFocus) {
       const n = (_own.get(sessionId) ?? 1) - 1;
       if (n <= 0) _own.delete(sessionId);
@@ -454,6 +494,8 @@ export function __resetVideoStore() {
   _films.clear();
   _filmLists.clear();
   _own.clear();
+  _mut.clear();
+  _agentEdits.clear();
   emit();
 }
 

@@ -11,7 +11,7 @@ import {
 import { isPersonalScope } from '../scope';
 import { bindFrame, createImageThread, onFrameReady, type FrameBinding } from '../store/imageFrames';
 import {
-  ensureVideoThreads, filmTarget, focusFilm, focusScene, getCatalog, getFocusedScene, getPending, getPendingAny, getPrefs,
+  clearAgentFrame, ensureVideoThreads, filmTarget, focusFilm, focusScene, getCatalog, getFocusedScene, getPending, getPendingAny, getPrefs,
   getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs, VIDEO_PANEL, VIDEO_STRIP,
   type PendingSettings,
 } from '../store/videoStore';
@@ -31,6 +31,8 @@ export function currentResolved(sessionId: string | null, scope: string, scene: 
 // содержимого (кадры, текст) заводят новую сцену, остальное — выбор области (префы)
 export function changeSettings(scope: string, sessionId: string, patch: Partial<VideoSceneSettings>, debounced = false): void {
   const sceneId = getFocusedScene(sessionId)?.sceneId ?? null;
+  if ('frameA' in patch) clearAgentFrame(sessionId, sceneId, 'A');
+  if ('frameB' in patch) clearAgentFrame(sessionId, sceneId, 'B');
   const prev = getPending(sessionId, sceneId);
   setPending(sessionId, { sceneId, patch: { ...(prev?.patch ?? {}), ...patch } });
   const t = _timers.get(sessionId);
@@ -143,6 +145,12 @@ export async function selectFilmByHuman(scope: string, sessionId: string, path: 
   const ok = focused || await focusFilm(scope, sessionId, path);
   if (ok) followSelection(VIDEO_PANEL, sessionId, filmTarget(path), 'film');
   return ok;
+}
+
+// «↩ К фильму» / «↩ К сцене» из «Звука» или «Картинок»: пока человек был там, соседняя полоса могла забрать
+// поле ввода (новая версия звука просит свою) — возвращаем «Видео»
+export function backToVideoStrip(sessionId: string | null) {
+  if (sessionId) requestStrip(sessionId, VIDEO_STRIP);
 }
 
 // Кнопки и ссылки («Переснять», «Открыть в панели») — явная просьба: открывают и закрытую панель

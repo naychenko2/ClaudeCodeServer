@@ -16,6 +16,8 @@ describe('чип сцены полосы', () => {
     expect(c.text).toBe('Сцена 5 · Veo 3.1 · 8 с · 2 вар. · ≈ $3.20');
     expect(c.short).toBe('Сц. 5 · ≈ $3.20');
     expect(c.price).toBe('≈ $3.20');
+    // узкий вид отдаёт имя и цену раздельно: режется имя, цена остаётся целой
+    expect([c.shortName, c.shortPrice]).toEqual(['Сц. 5', '≈ $3.20']);
   });
   it('новая сцена без выбора цену не обещает', () => {
     expect(sceneChip(null, r, null).text).not.toContain('уточняется');

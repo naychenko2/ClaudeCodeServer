@@ -10,13 +10,17 @@ const LIST_MAX_H = 260;
 const ROW_H = 40;
 const IMG = /\.(png|jpe?g|webp|gif|bmp)$/i;
 
+// Где человек выбирал в прошлый раз: кадр B открывается там же, где выбрали кадр A (у сцены без папки старт — корень)
+const _lastDir = new Map<string, string>();
+
 // Файлы проекта: папки и подходящие файлы (миниатюры у картинок); стартует в заданной папке
 export function ProjectPicker({ scope, start, accept, emptyText, onBack, onPick }: {
   scope: string; start: string; accept: RegExp; emptyText: string; onBack: () => void; onPick: (path: string) => void;
 }) {
   const mobile = useIsMobile();
   const hit = mobile ? { height: TOUCH, minHeight: TOUCH } : undefined;
-  const [dir, setDir] = useState(start);
+  const memKey = `${scope}|${accept.source}`;
+  const [dir, setDir] = useState(start || _lastDir.get(memKey) || '');
   const [items, setItems] = useState<FileEntry[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -50,7 +54,7 @@ export function ProjectPicker({ scope, start, accept, emptyText, onBack, onPick 
         {err && <div style={{ padding: SP.sm, fontSize: FS.sm, color: C.warningText }}>{err}</div>}
         {items && !err && shown.length === 0 && <div style={{ padding: SP.sm, fontSize: FS.sm, color: C.textMuted }}>{emptyText}</div>}
         {shown.map(i => (
-          <Button key={i.path} variant="ghost" size="sm" onClick={() => (i.isDirectory ? setDir(i.path) : onPick(i.path))}
+          <Button key={i.path} variant="ghost" size="sm" onClick={() => { if (i.isDirectory) setDir(i.path); else { _lastDir.set(memKey, dir); onPick(i.path); } }}
             style={{ width: '100%', justifyContent: 'flex-start', minHeight: mobile ? TOUCH : ROW_H, padding: `${SP.xxs}px ${SP.sm}px` }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
               {i.isDirectory

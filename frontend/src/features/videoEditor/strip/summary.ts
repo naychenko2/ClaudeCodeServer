@@ -26,6 +26,8 @@ export interface SceneChip {
   text: string; short: string; warn: boolean;
   // Части для узкой строки: имя модели режется первым, цена остаётся
   name: string; model: string; meta: string; price: string;
+  // Узкий вид: имя режется, цена остаётся целой — поэтому они раздельно
+  shortName: string; shortPrice: string;
 }
 
 // «Сцена 5 · Veo 3.1 · 8 с · 2 вар. · ≈ $3.20»
@@ -35,8 +37,10 @@ export function sceneChip(scene: VideoScene | null, r: ResolvedScene, price: str
   const shownPrice = price ?? (scene ? PRICE_UNKNOWN : '');
   const meta = [`${r.durationSec} с`, r.count > 1 ? `${r.count} вар.` : null].filter(Boolean).join(' · ');
   const text = [name, model, meta, shownPrice].filter(Boolean).join(' · ');
-  const short = [scene ? scene.name.replace(/^Сцена\s*/i, 'Сц. ') : 'Новая', price ?? (scene ? 'цена…' : null)].filter(Boolean).join(' · ');
-  return { text, short, warn: sceneNotReady(r), name, model, meta, price: shownPrice };
+  const shortName = scene ? scene.name.replace(/^Сцена\s*/i, 'Сц. ') : 'Новая';
+  const shortPrice = price ?? (scene ? 'цена…' : '');
+  const short = [shortName, shortPrice].filter(Boolean).join(' · ');
+  return { text, short, warn: sceneNotReady(r), name, model, meta, price: shownPrice, shortName, shortPrice };
 }
 
 // «утро-в-горах · 4 сцены · 0:32»

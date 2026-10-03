@@ -7,7 +7,7 @@ import { Button, C, ExecutorList, ExecutorSummaryRow, FS, R, SegmentedControl, S
 import type { FrameRef, VideoScene } from '../api';
 import { drawInImages, editFrame, frameBOf, runScene, uploadFrame } from '../scene/actions';
 import { executorRows, pickRow, rowId, staleNotes } from '../scene/model';
-import { setFailure, useFilm } from '../store/videoStore';
+import { getAgentFrames, setFailure, useFilm } from '../store/videoStore';
 import { FrameMenu, FrameThumb } from './FrameSlot';
 import { Hint, ic, Label } from './primitives';
 import { SceneText, SceneTextExpanded } from './SceneText';
@@ -44,8 +44,8 @@ function Executor({ m, isMobile }: { m: SceneModel; isMobile: boolean }) {
   );
 }
 
-export function SceneTab({ m, isMobile, prevScene, claudeFrames }: {
-  m: SceneModel; isMobile: boolean; prevScene: VideoScene | null; claudeFrames?: boolean;
+export function SceneTab({ m, isMobile, prevScene }: {
+  m: SceneModel; isMobile: boolean; prevScene: VideoScene | null;
 }) {
   const { scope, sessionId, scene, r, personal } = m;
   const [slot, setSlot] = useState<'A' | 'B' | null>(null);
@@ -71,7 +71,7 @@ export function SceneTab({ m, isMobile, prevScene, claudeFrames }: {
   const frameProps = (s: 'A' | 'B') => ({
     scope, sessionId, label: s, frame: s === 'A' ? r.frameA : r.frameB, empty: 'из проекта, нарисовать',
     active: slot === s, onClick: () => setSlot(slot === s ? null : s), small: isMobile,
-    stale: s === 'A' ? !!scene?.stale?.frameA : !!scene?.stale?.frameB, claude: claudeFrames,
+    stale: s === 'A' ? !!scene?.stale?.frameA : !!scene?.stale?.frameB, claude: !!getAgentFrames(sessionId, scene?.sceneId)?.has(s),
   });
   const menuFor = (s: 'A' | 'B') => (
     <FrameMenu scope={scope} personal={personal} isMobile={isMobile} slot={s} frame={s === 'A' ? r.frameA : r.frameB} prevB={prevB}
@@ -126,7 +126,7 @@ export function SceneTab({ m, isMobile, prevScene, claudeFrames }: {
       <Label>Длительность</Label>
       {model && model.durations.length > 0
         ? <SegmentedControl<string> value={String(r.durationSec)} onChange={v => m.change({ durationSec: Number(v) })}
-          options={model.durations.map(d => ({ value: String(d), label: `${d} с` }))} />
+          options={model.durations.map(d => ({ value: String(d), label: `${d}\u00A0с` }))} />
         : <DurationFree value={r.durationSec} onChange={d => m.change({ durationSec: d })} />}
       {model && <Hint>{model.label}: {model.durations.join(' / ')} с</Hint>}
 
@@ -154,6 +154,6 @@ export function SceneTab({ m, isMobile, prevScene, claudeFrames }: {
 function DurationFree({ value, onChange }: { value: number; onChange: (d: number) => void }) {
   return (
     <SegmentedControl<string> value={String(value)} onChange={v => onChange(Number(v))}
-      options={[5, 8, 10].map(d => ({ value: String(d), label: `${d} с` }))} />
+      options={[5, 8, 10].map(d => ({ value: String(d), label: `${d}\u00A0с` }))} />
   );
 }

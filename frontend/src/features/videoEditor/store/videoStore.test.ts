@@ -15,16 +15,16 @@ const dispatched: { type: string; detail: unknown }[] = [];
   dispatchEvent: (e: Event) => { dispatched.push({ type: e.type, detail: (e as CustomEvent).detail }); return true; },
 };
 
-import { __resetComposerStrips, getActiveStrip } from '../../../lib/composerStrips';
+import { __resetComposerStrips, getActiveStrip, requestStrip } from '../../../lib/composerStrips';
 import { __resetAgentPicks, getAgentPick } from '../../../lib/genPanelFollow';
 import { __resetGenPanelOpen, holdGenPanelOpen } from '../../../lib/genPanelOpen';
 import { REVEAL_PANEL_EVENT } from '../../../lib/subsystems/registryCore';
 import { videoApi } from '../api';
 import { CATALOG, film, FILM_PATH, PREFS, scene, threads } from '../mocks';
 import { saveFolderFor } from '../film/model';
-import { saveScene, selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
+import { backToVideoStrip, saveScene, selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
 import {
-  __applyThreads, __resetVideoStore, __setFilm, ensureVideoThreads, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent, mutate,
+  __applyThreads, __resetVideoStore, __setFilm, clearAgentFrame, ensureVideoThreads, getAgentFrames, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent, mutate,
   patchFilm, sceneDraftKey, VIDEO_PANEL, VIDEO_STRIP,
 } from './videoStore';
 
@@ -190,5 +190,36 @@ describe('B2: «Сохранить сцену» и «В фильм →» — п�
     const spy = vi.spyOn(videoApi, 'save').mockResolvedValue({ path: 'video/утро/scene-01.mp4', framePaths: [], addedToFilm: true });
     await saveScene('p1', 'c1', scene('s1', { folder: '' }), 'ver-1', saveFolderFor(FILM_PATH, scene('s1', { folder: '' })));
     expect(spy.mock.calls[0][3]).toEqual({ versionId: 'ver-1', folder: 'video/утро' });
+  });
+});
+
+describe('B10: возврат из «Звука» возвращает полосу «Видео»', () => {
+  it('новая версия звука забрала поле ввода — «↩ К фильму» отдаёт его «Видео»', () => {
+    const all = ['git', VIDEO_STRIP, 'sound'];
+    requestStrip('c1', VIDEO_STRIP);
+    requestStrip('c1', 'sound');
+    expect(getActiveStrip('c1', all)).toBe('sound');
+    backToVideoStrip('c1');
+    expect(getActiveStrip('c1', all)).toBe(VIDEO_STRIP);
+  });
+});
+
+describe('B21: кадр, поставленный агентом, — метка «✦ Claude»', () => {
+  const withFrame = (path: string) => scene('s1', { settings: { ...scene('s1').settings, frameA: { kind: 'file', path } } });
+  it('событие без своей мутации, сменившее кадр, ставит метку; человек её снимает', () => {
+    __applyThreads('c1', 'p1', threads(1, [withFrame('a.png')], { sceneId: 's1' }));
+    handleEvent(changed(2, threads(2, [withFrame('b.png')], { sceneId: 's1' })));
+    expect(getAgentFrames('c1', 's1')?.has('A')).toBe(true);
+    clearAgentFrame('c1', 's1', 'A');
+    expect(getAgentFrames('c1', 's1')?.has('A')).toBe(false);
+  });
+  it('эхо своей мутации метку не ставит', async () => {
+    __applyThreads('c1', 'p1', threads(1, [withFrame('a.png')], { sceneId: 's1' }));
+    vi.spyOn(videoApi, 'settings').mockImplementation(async () => {
+      handleEvent(changed(2, threads(2, [withFrame('b.png')], { sceneId: 's1' })));
+      return threads(3, [withFrame('b.png')], { sceneId: 's1' });
+    });
+    await mutate('p1', 'c1', rev => videoApi.settings('p1', 'c1', 's1', withFrame('b.png').settings, rev));
+    expect(getAgentFrames('c1', 's1')).toBeNull();
   });
 });

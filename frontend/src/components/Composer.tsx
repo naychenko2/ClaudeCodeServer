@@ -466,6 +466,7 @@ function ModePill({
 // Absolute внутри карточки — не сдвигает ленту и композер (никаких «прыжков» высоты).
 // Толщина одна (3px) и для warn, и для danger — серьёзность несёт только цвет
 // (RATE_COLORS[level].fill). Детали — в поповере: hover на desktop, tap на mobile.
+const RATE_STRIPE_H = 3;
 function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
   const [open, setOpen] = useState(false);
   const c = RATE_COLORS[w.level];
@@ -501,7 +502,7 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
           borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
           overflow: 'hidden', pointerEvents: 'none',
         }}>
-          <div style={{ height: 3, width: '100%', background: c.fill }} />
+          <div style={{ height: RATE_STRIPE_H, width: '100%', background: c.fill }} />
         </div>
         {open && (
           <div style={{
@@ -1481,6 +1482,9 @@ export function Composer({
   // Столбец только при живом textarea: в разговоре и записи поле низкое, кнопки — ряд
   const columnRight = tallInput && !talkActive && !isListening;
 
+  // Полоска лимита закрывает верх белого поля — содержимое сдвигаем вниз на половину её
+  // толщины, чтобы оно стояло по центру видимой части. Высота карточки при этом та же
+  const stripeShift = rateWindow && rateWindow.level !== 'normal' ? RATE_STRIPE_H / 2 : 0;
   // Стили контейнера — поле всегда активно (доступно для ввода и во время генерации)
   const containerStyle: React.CSSProperties = {
     position: 'relative',
@@ -1489,7 +1493,9 @@ export function Composer({
     background: executorTask ? C.bgPanel : C.bgWhite,
     border: `1px solid ${dragOver || hasText || activeMode ? C.accent : C.border}`,
     borderRadius: R.xxl,
-    padding: isMobile ? '8px 10px' : '7px 8px',
+    padding: isMobile
+      ? `${8 + stripeShift}px 10px ${8 - stripeShift}px`
+      : `${7 + stripeShift}px 8px ${7 - stripeShift}px`,
     // Подъём как у островов, но разлётом ВВЕРХ (SHADOW.lift): композер стоит на
     // самой кромке холста — его губа выровнена по низу соседних островов, и
     // нижнюю половину обычной тени срезал бы край

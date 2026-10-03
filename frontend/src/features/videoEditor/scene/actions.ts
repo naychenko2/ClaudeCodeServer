@@ -2,13 +2,14 @@
 // сцена, съёмка по котировке (деньги — только quote → job), снятие выбора, кадры и «Картинки».
 
 import {
-  api, clearGenDraft, createReleaseUndo, followSelection, requestStrip, revealWorkspacePanel, showToast,
+  api, clearGenDraft, createReleaseUndo, FLAGS, followSelection, getFlag, requestStrip, revealWorkspacePanel, showToast,
 } from 'aihome_shell/kit';
 import {
   ERR, errorCode, errorText, retryOf, videoApi,
   type FrameRef, type SaveSceneResult, type VideoPrefs, type VideoQuote, type VideoScene, type VideoSceneSettings,
 } from '../api';
 import { isPersonalScope } from '../scope';
+import { frameInputOf, setFrameRef } from '../store/frameRefs';
 import { bindFrame, createImageThread, onFrameReady, type FrameBinding } from '../store/imageFrames';
 import {
   clearAgentFrame, ensureVideoThreads, filmTarget, focusFilm, focusScene, getCatalog, getFocusedScene, getPending, getPendingAny, getPrefs,
@@ -176,7 +177,7 @@ export interface RunInput { scope: string; sessionId: string; scene: VideoScene;
 // Запуск строго по котировке: настройки уходят в сцену ДО запуска (сервер берёт текст и кадры из нити).
 // Просьба из поля ввода добавляется к тексту сцены строкой (в запуске для неё поля нет)
 // Съёмка: код local_unavailable_personal — человеку понятная причина, а не общий текст бэкенда
-const runErrorText = (e: unknown) =>
+export const runErrorText = (e: unknown) =>
   errorCode(e) === ERR.localPersonal ? PERSONAL_LOCAL_REASON : errorText(e, 'Съёмка не запустилась');
 
 export async function runScene(i: RunInput, extraText = ''): Promise<boolean> {
@@ -286,8 +287,9 @@ export async function drawInImages(scope: string, sessionId: string, slot: 'A' |
 }
 
 // «Править кадр»: нить кадра — в «Картинки»; кадр-файл берётся в работу и после правки сам встаёт кадром
-export async function editFrame(scope: string, sessionId: string, scene: VideoScene, slot: 'A' | 'B'): Promise<void> {
-  const f = slot === 'A' ? scene.settings.frameA : scene.settings.frameB;
+// frame — кадр из контекста чата (референс роли), когда он не совпадает с настройками сцены
+export async function editFrame(scope: string, sessionId: string, scene: VideoScene, slot: 'A' | 'B', frame?: FrameRef): Promise<void> {
+  const f = frame ?? (slot === 'A' ? scene.settings.frameA : scene.settings.frameB);
   if (!f) return;
   try {
     const id = f.kind === 'image' ? f.threadId : await createImageThread(scope, sessionId, { file: f.path });
@@ -307,6 +309,16 @@ export function wireFrameBinding() {
     const scope = getScopeOf(sessionId);
     if (!scope) return;
     const frame: FrameRef = { kind: 'image', threadId: b.threadId, versionId, follow: true };
+    // Строка контекста: кадр — референс роли `frame-a`/`frame-b`, запуск по ревизии читает только его
+    if (getFlag(FLAGS.composerContextRow)) {
+      const input = frameInputOf(frame, isPersonalScope(scope));
+      if (!input) return;
+      void (async () => {
+        if (getFocusedScene(sessionId)?.sceneId !== b.sceneId && !await focusScene(scope, sessionId, b.sceneId)) return;
+        await setFrameRef(sessionId, b.slot, input);
+      })();
+      return;
+    }
     void (async () => {
       if (getFocusedScene(sessionId)?.sceneId !== b.sceneId) await focusScene(scope, sessionId, b.sceneId);
       changeSettings(scope, sessionId, b.slot === 'A' ? { frameA: frame } : { frameB: frame });

@@ -8,6 +8,8 @@ import type {
   ChatItemToolCtx, ComposerChipCtx, SlotContribution, ComposerStripCtx, ComposerStripShortcut, SubsystemManifest, WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
 import { sceneMode } from './composer/sceneMode';
+import { FramePickerHost } from './context/framePicker';
+import { videoKindApi } from './context/kind';
 import { VideoChatWatcher } from './composer/VideoChatWatcher';
 import { LaunchAnchor, QuietLine, SceneAnchor } from './feed/SceneCard';
 import { recordKey } from './feed/records';
@@ -55,16 +57,20 @@ export const manifest: SubsystemManifest = {
         action: {
           title: 'Видео',
           icon: <Clapperboard size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-          isAvailable: () => enabled(),
+          // При флаге composer-context-row вход «Видео» — create вида контекста, полоса не нужна (без дублей)
+          isAvailable: () => enabled() && !getFlag(FLAGS.composerContextRow),
           status: ({ projectId, sessionId }: { projectId: string | null; sessionId: string | null }) => videoStripStatus(projectId, sessionId),
           shortcuts: videoShortcuts,
         },
       },
     ],
-    // Загрузка сцен чата и шторка панели на телефоне — вкладами, что живут при любой полосе
+    // Вид «видео» контекста хода (ADR-023): чипы сцены и фильма, превью, «Чем» и параметры панели «Контекст»
+    'context-kind': [{ name: 'video', action: videoKindApi as unknown as Record<string, unknown> }],
+    // Загрузка сцен чата, шторка панели на телефоне и окно «Из проекта» меню кадра — вкладами, что живут при любой полосе
     'composer-chip': [
       { name: 'video-watch', render: (ctx: ComposerChipCtx) => <VideoChatWatcher ctx={ctx} /> },
       { name: 'video-sheet', render: (ctx: ComposerChipCtx) => <VideoSheet ctx={ctx} /> },
+      { name: 'video-frame-picker', render: (ctx: ComposerChipCtx) => <FramePickerHost sessionId={ctx.sessionId} /> },
     ],
     // Панель «Видео»: «Сцена» и «Фильм» вкладками, в проекте и в правой колонке личного чата
     'workspace-panel-def': [

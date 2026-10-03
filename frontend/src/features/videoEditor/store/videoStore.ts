@@ -9,7 +9,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
 import {
   conflictState, EMPTY_THREADS, errorText, filmConflict, videoApi,
-  type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent, type VideoFocus,
+  type FilmBuildStatus, type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent, type VideoFocus,
   type VideoPrefs, type VideoScene, type VideoSceneSettings, type VideoThreadsState,
 } from '../api';
 import { isPersonalScope } from '../scope';
@@ -65,6 +65,8 @@ function subscribe(fn: () => void) {
   return () => { _listeners.delete(fn); };
 }
 const getVersion = () => _version;
+// Подписка вне React: вид контекста хода будит хост при смене сцен, каталога и фильмов
+export const subscribeVideoStore = subscribe;
 
 const hasFocus = (f: VideoFocus | undefined) => !!(f?.sceneId || f?.filmPath);
 
@@ -409,15 +411,18 @@ export async function patchFilm(scope: string, sessionId: string, path: string, 
   }
 }
 
-// Сборка: статус едет в FilmState.build (video_film_changed); ответ POST кладём сразу, не дожидаясь
-// события. Отказ возвращается с кодом: 503 dsp_unavailable делает «Собрать» серым с причиной
+// Статус сборки едет в FilmState.build (video_film_changed); ответ POST кладём сразу, не дожидаясь события
+export function setFilmBuild(sessionId: string, path: string, build: FilmBuildStatus) {
+  const k = filmKey(sessionId, path);
+  const cur = _films.get(k);
+  if (cur?.state) _films.set(k, { ...cur, state: { ...cur.state, build } });
+  emit();
+}
+
+// Отказ возвращается с кодом: 503 dsp_unavailable делает «Собрать» серым с причиной
 export async function buildFilm(scope: string, sessionId: string, path: string): Promise<{ ok: boolean; code: string | null; text: string }> {
   try {
-    const b = await videoApi.buildFilm(scope, sessionId, path);
-    const k = filmKey(sessionId, path);
-    const cur = _films.get(k);
-    if (cur?.state) _films.set(k, { ...cur, state: { ...cur.state, build: b } });
-    emit();
+    setFilmBuild(sessionId, path, await videoApi.buildFilm(scope, sessionId, path));
     return { ok: true, code: null, text: '' };
   } catch (e) {
     const code = (e as { body?: { code?: unknown } } | null)?.body?.code;

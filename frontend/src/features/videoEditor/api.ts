@@ -139,6 +139,8 @@ export interface VideoQuoteRequest {
   durationSec?: number;
   aspect?: string;
   sound?: boolean;
+  // Ревизия контекста чата (ADR-023 §Д2.1): сцену и кадры сервер берёт из стора, sceneId может быть пустым
+  contextRevision?: number;
 }
 
 export interface VideoPrice {
@@ -164,7 +166,10 @@ export interface VideoQuote {
 
 export interface RetryQuote { provider: string; model: string; quote: VideoQuote; reason: string }
 
-export interface VideoLaunchRequest { quoteId: string; sessionId: string; sceneId: string; params?: Record<string, unknown>; seed?: number }
+export interface VideoLaunchRequest {
+  quoteId: string; sessionId: string; sceneId: string; params?: Record<string, unknown>; seed?: number;
+  contextRevision?: number;
+}
 
 export interface VideoLaunchResult { jobId?: string; errorCode?: string; error?: string; retry?: RetryQuote }
 
@@ -402,8 +407,12 @@ export const videoApi = {
   // sessionId в query — чат-вызыватель: без него бэкенд не пишет строку ленты у человека
   patchFilm: (scope: string, sessionId: string, path: string, patch: FilmPatch) =>
     json<FilmState>(`${videoBase(scope, sessionId)}/films?${filmQuery(path, sessionId)}`, patch, 'PATCH'),
-  buildFilm: (scope: string, sessionId: string, path: string) =>
-    json<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${filmQuery(path, sessionId)}`, {}),
+  // contextRevision — сборка по ревизии контекста: основной объект обязан быть этим фильмом (409 context_changed)
+  buildFilm: (scope: string, sessionId: string, path: string, contextRevision?: number) => {
+    const q = filmQuery(path, sessionId);
+    if (contextRevision !== undefined) q.set('contextRevision', String(contextRevision));
+    return json<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${q}`, {});
+  },
   buildStatus: (scope: string, sessionId: string, path: string) =>
     request<FilmBuildStatus>(`${videoBase(scope, sessionId)}/films/build?${filmQuery(path, sessionId)}`, { live: true }),
   cancelBuild: (scope: string, sessionId: string, path: string) =>

@@ -31,6 +31,9 @@ function Executor({ m, isMobile }: { m: SceneModel; isMobile: boolean }) {
       <ExecutorSummaryRow name={name} parts={m.r.auto ? ['порядок: ' + catalog.autoProviders.join(' → ')] : []}
         price={sel ? { label: sel.price, tone: m.r.provider?.key === 'local' ? 'success' : 'neutral' } : undefined}
         open={open} onToggle={() => setOpen(o => !o)} isMobile={isMobile} />
+      {!rows.some(x => x.group === 'cloud' && !x.disabled) && (
+        <Hint>Облачных поставщиков нет — нужен ключ: его добавляет администратор в настройках «Поставщики моделей».</Hint>
+      )}
       {open && (
         <div style={{ marginTop: SP.xs }}>
           <ExecutorList rows={rows} value={rowId(m.r)} isMobile={isMobile}
@@ -72,7 +75,7 @@ export function SceneTab({ m, isMobile, prevScene, claudeFrames }: {
   });
   const menuFor = (s: 'A' | 'B') => (
     <FrameMenu scope={scope} personal={personal} isMobile={isMobile} slot={s} frame={s === 'A' ? r.frameA : r.frameB} prevB={prevB}
-      folder={scene?.folder ? `${scene.folder}/кадры` : 'video'}
+      folder={scene?.folder ? `${scene.folder}/кадры` : ''}
       onPick={f => pickFrame(s, f)}
       onEdit={() => { if (scene && sessionId) void editFrame(scope, sessionId, scene, s); setSlot(null); }}
       onDraw={() => { if (sessionId) void drawInImages(scope, sessionId, s); setSlot(null); }}

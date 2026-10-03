@@ -125,6 +125,18 @@ export function imageThreadName(sessionId: string, threadId: string): string | n
   return f ? f.split('/').pop() ?? f : 'Новая картинка';
 }
 
+// Номер версии нити («версия 2»); сырой id человеку не показываем. Нити нет в сторе — null
+export function versionNumberOf(sessionId: string, threadId: string, versionId: string): number | null {
+  const v = _states.get(sessionId)?.threads.find(x => x.id === threadId)?.versions?.find(x => x.id === versionId);
+  return v ? v.number : null;
+}
+
+export function frameVersionLabel(sessionId: string | null, threadId: string, versionId: string): string {
+  if (versionId === 'origin') return 'исходник';
+  const n = sessionId ? versionNumberOf(sessionId, threadId, versionId) : null;
+  return n !== null ? `версия ${n}` : 'версия';
+}
+
 export const imageThreadExists = (sessionId: string, threadId: string) => !!_states.get(sessionId)?.threads.some(x => x.id === threadId);
 // Версия, которую видно в нити сейчас: актуальнее ли кадр, чем она
 export const latestVersionOf = (sessionId: string, threadId: string): string | null => {

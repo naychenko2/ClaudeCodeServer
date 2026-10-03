@@ -7,7 +7,7 @@ import { ArrowLeft, Brush, FolderOpen, Image as ImageIcon, Pencil, Plus, Trash2,
 import { api, Button, C, FS, ICON_SIZE, R, SP, ByClaude } from 'aihome_shell/kit';
 import type { FrameRef } from '../api';
 import { frameName } from '../scene/model';
-import { imageSrcOf, imageThreadName, useImageFramesVersion } from '../store/imageFrames';
+import { frameVersionLabel, imageSrcOf, imageThreadName, useImageFramesVersion } from '../store/imageFrames';
 import { TOUCH } from '../useBoxWidth';
 import { ic } from './primitives';
 import { ProjectPicker } from './ProjectPicker';
@@ -21,7 +21,7 @@ export function useFrameSrc(scope: string, sessionId: string | null, f: FrameRef
   if (f.kind === 'file') return { src: api.files.fileUrl(scope, f.path) || null, name: frameName(f) };
   const named = sessionId ? imageThreadName(sessionId, f.threadId) : null;
   const src = sessionId ? imageSrcOf(scope, sessionId, f.threadId, f.versionId) : null;
-  return { src, name: named ? `${named} · ${f.versionId === 'origin' ? 'исходник' : `версия ${f.versionId}`}` : frameName(f) };
+  return { src, name: named ? `${named} · ${frameVersionLabel(sessionId, f.threadId, f.versionId)}` : frameName(f) };
 }
 
 export function FrameThumb({ scope, sessionId, frame, label, empty, onClick, active, claude, stale, small }: {

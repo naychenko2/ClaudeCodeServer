@@ -40,6 +40,10 @@ describe('причины «Снять» (тексты макета v7)', () => {
     const noText = resolveScene(scene('s1'), { text: '  ' }, PREFS, CATALOG);
     expect(runReason({ ...base, r: noText })).toBe('Напишите текст сцены — что происходит от кадра A к кадру B');
   });
+  it('нечем снимать — причина про поставщика, а не про кадры', () => {
+    const r = resolveScene(null, null, PREFS, CATALOG);
+    expect(runReason({ ...base, providerOk: false, providerReason: 'Снимать нечем', r })).toBe('Снимать нечем');
+  });
   it('личный чат и локальные модели — причина видна', () => {
     const r = resolveScene(scene('s1'), { provider: 'local', model: 'minimax-h3' }, PREFS, CATALOG);
     expect(runReason({ ...base, personal: true, r })).toBe(PERSONAL_LOCAL_REASON);

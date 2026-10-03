@@ -123,3 +123,11 @@ export function newFilmPath(name: string): string | null {
 }
 
 export const filmFolder = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+
+// Папка для «Сохранить сцену» / «В фильм →»: открытый фильм старше папки сцены (у сцены из панели её нет);
+// null — фильма нет и сцена нигде не лежит: человека спрашивают, в какой фильм
+export const saveFolderFor = (filmPath: string | null, scene: Pick<VideoScene, 'folder'>): string | null =>
+  filmPath ? filmFolder(filmPath) || null : scene.folder || null;
+
+// Путь фильма, который сервер ведёт в папке: video/утро → video/утро/утро.film
+export const filmPathOf = (folder: string) => `${folder}/${folder.slice(folder.lastIndexOf('/') + 1)}.film`;

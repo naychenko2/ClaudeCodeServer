@@ -25,7 +25,13 @@ export function ProjectPicker({ scope, start, accept, emptyText, onBack, onPick 
     setErr(null);
     api.files.list(scope, dir).then(
       r => { if (alive) setItems(r); },
-      (e: Error) => { if (alive) { setErr(e.message || 'Папка не открылась'); setItems([]); } },
+      (e: Error) => {
+        if (!alive) return;
+        // Стартовой папки в проекте нет — открываем корень, а не «Not Found»
+        if (dir !== '') { setDir(''); return; }
+        setErr(e.message || 'Папка не открылась');
+        setItems([]);
+      },
     );
     return () => { alive = false; };
   }, [scope, dir]);

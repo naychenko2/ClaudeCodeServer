@@ -97,7 +97,7 @@ export const frameKey = (f: FrameRef | null | undefined): string =>
 
 export const frameName = (f: FrameRef | null | undefined): string => {
   if (!f) return '';
-  return f.kind === 'file' ? f.path.split('/').pop() ?? f.path : `версия ${f.versionId}`;
+  return f.kind === 'file' ? f.path.split('/').pop() ?? f.path : f.versionId === 'origin' ? 'исходник' : 'версия';
 };
 
 // Причина, по которой снять нельзя (макет v7, «Тексты»); null — можно
@@ -107,11 +107,12 @@ export function runReason(p: {
 }): string | null {
   if (!p.sessionId) return 'Сначала начните чат';
   if (p.personal && p.r.provider?.key === LOCAL_PROVIDER) return PERSONAL_LOCAL_REASON;
+  // Нечем снимать — это главная причина, кадры тут вторичны
+  if (!p.providerOk) return p.providerReason || 'Поставщик недоступен';
   if (!p.r.frameA && !p.r.frameB) return 'Нужны оба кадра: выберите кадр A и кадр B выше';
   if (!p.r.frameA) return 'Нужен кадр A: выберите его выше';
   if (!p.r.frameB) return 'Нужен кадр B: выберите его выше';
   if (!p.r.text.trim()) return 'Напишите текст сцены — что происходит от кадра A к кадру B';
-  if (!p.providerOk) return p.providerReason || 'Поставщик недоступен';
   if (p.quoteError) return p.quoteError;
   return null;
 }

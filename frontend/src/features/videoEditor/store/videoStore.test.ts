@@ -21,7 +21,8 @@ import { __resetGenPanelOpen, holdGenPanelOpen } from '../../../lib/genPanelOpen
 import { REVEAL_PANEL_EVENT } from '../../../lib/subsystems/registryCore';
 import { videoApi } from '../api';
 import { CATALOG, film, FILM_PATH, PREFS, scene, threads } from '../mocks';
-import { selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
+import { saveFolderFor } from '../film/model';
+import { saveScene, selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
 import {
   __applyThreads, __resetVideoStore, __setFilm, ensureVideoThreads, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent, mutate,
   patchFilm, sceneDraftKey, VIDEO_PANEL, VIDEO_STRIP,
@@ -135,6 +136,25 @@ describe('клик по карточке: панель следует за вы�
   });
 });
 
+describe('фильм: событие без sessionId', () => {
+  it('сервер шлёт scopeKey + path — состояние применяется без перезагрузки', () => {
+    __applyThreads('c1', 'p1', threads(1, [scene('s1')]));
+    __setFilm('c1', FILM_PATH, film());
+    const building = film({ build: { state: 'waiting', progress: 0 } });
+    handleEvent({ type: 'video_film_changed', scopeKey: 'p1', path: FILM_PATH, state: building } as never);
+    expect(getFilm('c1', FILM_PATH).state?.build?.state).toBe('waiting');
+    handleEvent({ type: 'video_film_changed', scopeKey: 'p1', path: FILM_PATH, state: film({ build: { state: 'running', progress: 0.4 } }) } as never);
+    expect(getFilm('c1', FILM_PATH).state?.build?.progress).toBe(0.4);
+  });
+
+  it('фильм чужой области событием не трогается', () => {
+    __applyThreads('c1', 'p1', threads(1, [scene('s1')]));
+    __setFilm('c1', FILM_PATH, film());
+    handleEvent({ type: 'video_film_changed', scopeKey: 'other', path: FILM_PATH, state: film({ revision: 'zz' }) } as never);
+    expect(getFilm('c1', FILM_PATH).state?.revision).toBe('9f2c');
+  });
+});
+
 describe('фильм: правка под ревизией', () => {
   it('409 revision_conflict — фильм перечитан и показан свежим', async () => {
     __setFilm('c1', FILM_PATH, film());
@@ -151,5 +171,24 @@ describe('фильм: правка под ревизией', () => {
     expect(await patchFilm('p1', 'c1', FILM_PATH, [{ op: 'cut', index: 1, cutType: 'fade', sec: 2 }])).toBe(true);
     expect(spy.mock.calls[0][3]).toEqual({ expectedRevision: '9f2c', ops: [{ op: 'cut', index: 1, cutType: 'fade', sec: 2 }] });
     expect(getFilm('c1', FILM_PATH).state?.revision).toBe('bb22');
+  });
+});
+
+describe('B2: «Сохранить сцену» и «В фильм →» — папка из открытого фильма', () => {
+  it('у сцены из панели папки нет, фильм открыт — папка фильма', () => {
+    const noFolder = scene('s1', { folder: '' });
+    expect(saveFolderFor(FILM_PATH, noFolder)).toBe('video/утро');
+    expect(saveFolderFor(FILM_PATH, scene('s1', { folder: 'video/старая' }))).toBe('video/утро');
+  });
+
+  it('нет фильма: папка сцены, иначе null — тогда человека спрашивают, в какой фильм', () => {
+    expect(saveFolderFor(null, scene('s1', { folder: 'video/утро' }))).toBe('video/утро');
+    expect(saveFolderFor(null, scene('s1', { folder: '' }))).toBeNull();
+  });
+
+  it('saveScene отдаёт серверу ровно переданную папку', async () => {
+    const spy = vi.spyOn(videoApi, 'save').mockResolvedValue({ path: 'video/утро/scene-01.mp4', framePaths: [], addedToFilm: true });
+    await saveScene('p1', 'c1', scene('s1', { folder: '' }), 'ver-1', saveFolderFor(FILM_PATH, scene('s1', { folder: '' })));
+    expect(spy.mock.calls[0][3]).toEqual({ versionId: 'ver-1', folder: 'video/утро' });
   });
 });

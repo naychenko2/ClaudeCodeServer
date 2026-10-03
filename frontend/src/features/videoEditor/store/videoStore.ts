@@ -120,6 +120,23 @@ function applyFilm(sessionId: string, path: string, state: FilmState) {
   emit();
 }
 
+// Событие фильма не привязано к чату (сервер шлёт владельцу scopeKey + path, без sessionId): фильм —
+// файл проекта, его видят все чаты проекта. Кладём состояние в каждую запись этого фильма области
+function applyFilmEvent(scopeKey: string, path: string, state: FilmState) {
+  const tail = `\n${path}`;
+  let touched = false;
+  for (const k of [..._films.keys()]) {
+    if (!k.endsWith(tail)) continue;
+    const sid = k.slice(0, k.length - tail.length);
+    const scope = _entries.get(sid)?.scope;
+    if (scope && scopeKey && scope !== scopeKey) continue;
+    applyFilm(sid, path, state);
+    touched = true;
+  }
+  // Меню фильмов («устарел», число сцен) читает список, а не состояние: перечитываем его
+  if (touched) _filmLists.forEach((_, sid) => { const scope = _entries.get(sid)?.scope; if (scope && (!scopeKey || scope === scopeKey)) void loadFilmList(scope, sid, true); });
+}
+
 // Событие модуля → состояние. Нити — только у уже показанного чата: чужой чат догрузится сам при входе
 export function handleEvent(ev: VideoEvent) {
   switch (ev.type) {
@@ -131,7 +148,7 @@ export function handleEvent(ev: VideoEvent) {
       return;
     }
     case 'video_film_changed':
-      applyFilm(ev.sessionId, ev.path, ev.state);
+      applyFilmEvent(ev.scopeKey, ev.path, ev.state);
       return;
     case 'video_edit_progress':
       _jobs.set(ev.jobId, {

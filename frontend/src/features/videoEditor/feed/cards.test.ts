@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { VideoScene } from '../api';
 import { CATALOG, scene, version } from '../mocks';
-import { quietView, QuietLineView, sceneCardView, SceneCardView, type SceneCardActions } from './SceneCard';
+import { quietView, QuietLineView, LaunchRowView, sceneCardView, SceneCardView, type SceneCardActions } from './SceneCard';
 
 // Дополнение плана 2026-10-02: действие агента рисуется ТОЙ ЖЕ разметкой, что действие человека, —
 // карточку строят запись ленты и стор, отличие только в «✦ Claude»
@@ -18,7 +18,10 @@ const render = (s: VideoScene, who: 'human' | 'agent', o: { jobId?: string; reco
     jobs: o.running ? [{ jobId: 'job-7', sessionId: 'c1', sceneId: s.sceneId, stage: 'running', queuePosition: null, etaSeconds: null, variant: 1, count: 2 }] : [],
     pos: null, catalog: CATALOG,
   });
-  return { v, html: renderToStaticMarkup(createElement(SceneCardView, { v, src: '/clip.mp4', busy: false, a: A })) };
+  const html = o.jobId
+    ? renderToStaticMarkup(createElement(LaunchRowView, { v, a: A }))
+    : renderToStaticMarkup(createElement(SceneCardView, { v, src: '/clip.mp4', busy: false, a: A }));
+  return { v, html };
 };
 
 const shot = (who: 'human' | 'agent', running = false) => scene('s1', {
@@ -53,11 +56,29 @@ describe('карточки «Видео»: агент — та же размет
     expect(a.html.replace(BY, '')).toBe(h.html);
   });
 
-  it('готовый запуск агента: варианты в той же карточке', () => {
+  it('готовый запуск агента: строка без плеера, варианты — в карточке сцены', () => {
     const h = render(shot('human'), 'human', { jobId: 'job-7', record: launchRecord });
     const a = render(shot('agent'), 'agent', { jobId: 'job-7', record: launchRecord });
-    expect(h.html).toContain('data-video-player');
+    expect(h.html).not.toContain('data-video-player');
+    expect(h.html).toContain('Готово: 2 варианта');
     expect(a.html.replace(BY, '')).toBe(h.html);
+  });
+
+  it('одна съёмка — одна полная карточка: плеер только у сцены, у запуска компактная строка', () => {
+    const s = shot('human');
+    const full = render(s, 'human');
+    const row = render(s, 'human', { jobId: 'job-7', record: launchRecord });
+    const players = (full.html + row.html).match(/data-video-player/g) ?? [];
+    expect(players).toHaveLength(1);
+    expect(full.html).toContain('data-video-card="scene"');
+    expect(row.html).toContain('data-video-card="launch"');
+    expect(row.html).not.toContain('Сохранить сцену');
+  });
+
+  it('отменённый запуск: строка «Отменено · деньги не списаны», а не пустая карточка', () => {
+    const s = scene('s1', { launches: [{ jobId: 'job-7', at: '2026-10-02T15:00:00Z', status: 'cancelled', interrupted: false, initiator: 'human', provider: 'fal', model: 'veo-3.1', count: 2 }] });
+    const row = render(s, 'human', { jobId: 'job-7', record: launchRecord });
+    expect(row.html).toContain('Отменено · деньги не списаны');
   });
 
   it('тихие строки сохранения и сборки фильма', () => {

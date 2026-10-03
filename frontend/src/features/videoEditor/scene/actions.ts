@@ -198,9 +198,9 @@ export const takeVersion = (scope: string, sessionId: string, sceneId: string, v
   mutate(scope, sessionId, rev => videoApi.current(scope, sessionId, sceneId, versionId, rev), true);
 
 // «Сохранить сцену» в проект (блок 2 бэкенда)
-export async function saveScene(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined): Promise<SaveSceneResult | null> {
+export async function saveScene(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, folder: string | null): Promise<SaveSceneResult | null> {
   try {
-    const res = await videoApi.save(scope, sessionId, scene.sceneId, { ...(versionId ? { versionId } : {}), ...(scene.folder ? { folder: scene.folder } : {}) });
+    const res = await videoApi.save(scope, sessionId, scene.sceneId, { ...(versionId ? { versionId } : {}), ...(folder ? { folder } : {}) });
     showToast(`Сохранено: ${res.path}`, '', 'info');
     return res;
   } catch (e) {

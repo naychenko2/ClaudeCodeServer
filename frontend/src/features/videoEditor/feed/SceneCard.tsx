@@ -7,19 +7,19 @@
 // Клик по карточке, а не по её кнопке, — выбор человеком: панель следует за ним, только если открыта.
 
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Save } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Save, Zap } from 'lucide-react';
 import {
-  Badge, Button, ByClaude, C, FLAGS, FS, IconButton, ProgressBar, R, SHADOW, SP, ICON_SIZE, isCardPick, showToast, useFeature,
+  Badge, Button, ByClaude, C, FLAGS, FS, IconButton, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
-import { snapshotOf } from '../film/model';
+import { filmFolder, filmPathOf, newFilmPath, saveFolderFor, snapshotOf } from '../film/model';
 import { progressLabel } from '../panel/useScene';
 import { downloadClip, openFilmPanel, openScenePanel, saveScene, selectFilmByHuman, selectSceneByHuman, takeVersion } from '../scene/actions';
 import { currentVersion, modelLabel, plural, staleNotes } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
 import {
-  filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, patchFilm, useVideoStoreVersion, useVideoThreads, type JobProgress,
+  filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, loadFilmList, patchFilm, useFilmList, useVideoStoreVersion, useVideoThreads, type JobProgress,
 } from '../store/videoStore';
 import { ic } from '../panel/primitives';
 import { recordOf, str } from './records';
@@ -64,6 +64,8 @@ export interface SceneCardView {
   // «Veo 3.1 · 2 вар. · ≈ $3.20» — что запустили и почём
   launchLine: string | null;
   failure: string | null;
+  // Итог запуска для компактной строки: «Отменено · деньги не списаны», «Готово: 2 варианта»
+  outcome: string | null;
   versions: VideoClipVersion[];
   index: number;
   version: VideoClipVersion | null;
@@ -103,6 +105,12 @@ export function sceneCardView(p: {
   if (!running && launch && (launch.status === 'failed' || launch.status === 'interrupted')) {
     failure = launch.interrupted ? 'Запуск оборвал перезапуск сервера — готовые варианты сохранены' : `Не получилось: ${launch.error ?? 'причина не пришла'}`;
   }
+  let outcome: string | null = null;
+  if (!running && launch?.status === 'cancelled') {
+    outcome = versions.length ? 'Отменено · готовые варианты сохранены' : 'Отменено · деньги не списаны';
+  } else if (!running && launch?.status === 'done' && versions.length) {
+    outcome = `Готово: ${versions.length} ${plural(versions.length, 'вариант', 'варианта', 'вариантов')} — в карточке сцены`;
+  }
   return {
     kind: jobId ? 'launch' : 'scene',
     sceneId: scene.sceneId,
@@ -112,6 +120,7 @@ export function sceneCardView(p: {
     progress: running ? progressLabel(scene, jobs, count ?? 1) : null,
     launchLine,
     failure,
+    outcome,
     versions,
     index,
     version,
@@ -151,7 +160,7 @@ export interface SceneCardActions {
   onOpenFilm: () => void;
 }
 
-export function SceneCardView({ v, src, busy, a }: { v: SceneCardView; src: string | null; busy: boolean; a: SceneCardActions }) {
+export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; src: string | null; busy: boolean; a: SceneCardActions; chooser?: ReactNode }) {
   return (
     <div data-video-card={v.kind} data-scene={v.sceneId} data-current={v.focused ? 'true' : 'false'}
       onClick={e => { if (isCardPick(e.target, e.currentTarget)) a.onPick(); }}
@@ -200,6 +209,7 @@ export function SceneCardView({ v, src, busy, a }: { v: SceneCardView; src: stri
         {v.canAddToFilm && <Button size="sm" variant="ghost" loading={busy} onClick={a.onAddToFilm}>В фильм →</Button>}
         <Button size="sm" variant="ghost" onClick={a.onReshoot}>{v.version ? 'Переснять' : 'Открыть в панели'}</Button>
       </div>
+      {chooser}
       {v.film && (
         <Line onClick={a.onOpenFilm}>
           {ic(Film)}<span>В фильме «{v.film.name}» · <span style={{ whiteSpace: 'nowrap' }}>место {v.film.position + 1}</span></span>
@@ -210,24 +220,75 @@ export function SceneCardView({ v, src, busy, a }: { v: SceneCardView; src: stri
   );
 }
 
-// «В фильм →»: несохранённая сцена сперва сохраняется (сервер ставит её в открытый фильм сам), иначе
-// файл добавляется в открытый фильм патчем; фильма нет — вкладка «Фильм» с выбором
-export async function addToFilm(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined): Promise<void> {
-  const path = getFocusedFilmPath(sessionId);
+// Запуск в ленте — компактная строка под карточкой сцены: модель, число вариантов, цена, ход и итог.
+// Плеер и варианты живут в ОДНОЙ полной карточке сцены (якорь video_scene), поэтому съёмка не рисует двойника
+export function LaunchRowView({ v, a }: { v: SceneCardView; a: Pick<SceneCardActions, 'onPick'> }) {
+  return (
+    <div data-video-card="launch" data-scene={v.sceneId} data-current={v.focused ? 'true' : 'false'}
+      onClick={e => { if (isCardPick(e.target, e.currentTarget)) a.onPick(); }}
+      style={{
+        display: 'flex', flexDirection: 'column', gap: SP.xs, padding: `${SP.xs}px ${SP.md}px`, width: '100%', maxWidth: CARD_MAX_W, boxSizing: 'border-box',
+        border: `1px solid ${v.focused ? C.accent : C.borderLight}`, borderRadius: R.lg, background: C.bgCard, minWidth: 0, cursor: 'pointer',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', minWidth: 0, fontSize: FS.sm, color: C.textSecondary }}>
+        <span style={{ display: 'inline-flex', color: C.accent }}>{ic(Zap, ICON_SIZE.sm)}</span>
+        <span style={{ color: C.textHeading }}>{v.name}</span>
+        {v.launchLine && <span data-video-launch-line="">{v.launchLine}</span>}
+        <span style={{ flex: 1 }} />
+        {v.byClaude && <ByClaude title={v.progress ? 'Claude снимает эту сцену' : 'Сделал Claude'} />}
+      </div>
+      {v.progress && (
+        <div data-video-card-progress="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+          <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{v.progress.label}</span>
+          {v.progress.p !== undefined && <ProgressBar value={v.progress.p} />}
+        </div>
+      )}
+      {v.failure && <Line>{v.failure}</Line>}
+      {v.outcome && <Line><span data-video-launch-outcome="">{v.outcome}</span></Line>}
+    </div>
+  );
+}
+
+// «В фильм →»: папка фильма известна заранее (открытый фильм или выбор человека). Несохранённая сцена
+// сохраняется в неё — сервер сам ставит клип в фильм папки; уже сохранённая добавляется в фильм патчем
+export async function addToFilm(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, folder: string): Promise<void> {
+  const target = filmPathOf(folder);
   let file = scene.savedFiles.find(x => x.versionId === versionId)?.path ?? null;
   if (!file) {
-    const res = await saveScene(scope, sessionId, scene, versionId);
+    const res = await saveScene(scope, sessionId, scene, versionId, folder);
     if (!res) return;
-    if (res.addedToFilm) { openFilmPanel(sessionId); return; }
+    if (res.addedToFilm) { void loadFilmList(scope, sessionId, true); openFilmPanel(sessionId, target); return; }
     file = res.path;
   }
-  if (!path) {
-    showToast('Выберите или заведите фильм — сцена встанет в него', '', 'info');
-    openFilmPanel(sessionId);
-    return;
-  }
-  if (!getFilm(sessionId, path).state) await loadFilm(scope, sessionId, path);
-  if (await patchFilm(scope, sessionId, path, [{ op: 'add', file, scene: snapshotOf(scene) }])) openFilmPanel(sessionId, path);
+  if (!getFilm(sessionId, target).state) await loadFilm(scope, sessionId, target);
+  if (await patchFilm(scope, sessionId, target, [{ op: 'add', file, scene: snapshotOf(scene) }])) openFilmPanel(sessionId, target);
+}
+
+// «Сохранить сцену»: клип ложится в папку фильма и встаёт в него
+export async function saveToFolder(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, folder: string): Promise<void> {
+  const res = await saveScene(scope, sessionId, scene, versionId, folder);
+  if (res?.addedToFilm) void loadFilmList(scope, sessionId, true);
+}
+
+// Фильма нет — спрашиваем, в какой: фильмы проекта списком и «Новый фильм» по имени
+function FilmChooser({ scope, sessionId, onPick, onCancel }: { scope: string; sessionId: string; onPick: (folder: string) => void; onCancel: () => void }) {
+  const films = useFilmList(scope, sessionId);
+  const [name, setName] = useState('');
+  const p = newFilmPath(name);
+  return (
+    <div data-video-film-chooser="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, padding: SP.sm, border: `1px solid ${C.borderLight}`, borderRadius: R.md }}>
+      <b style={{ fontSize: FS.sm, color: C.textHeading }}>В какой фильм?</b>
+      {films.map(x => (
+        <Button key={x.path} size="sm" variant="ghost" leftIcon={ic(Film)} onClick={() => onPick(filmFolder(x.path))}
+          style={{ justifyContent: 'flex-start' }}>{x.name}</Button>
+      ))}
+      <div style={{ display: 'flex', gap: SP.xs, alignItems: 'center' }}>
+        <div style={{ flex: 1, minWidth: 0 }}><TextField value={name} onChange={setName} placeholder="Новый фильм, например утро-в-горах" /></div>
+        <Button size="sm" disabled={!p} onClick={() => { if (p) onPick(filmFolder(p)); }}>Создать</Button>
+      </div>
+      <div><Button size="xs" variant="ghost" onClick={onCancel}>Отмена</Button></div>
+    </div>
+  );
 }
 
 export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCtx; sceneId: string; jobId?: string | null; record?: Record<string, unknown> }) {
@@ -238,6 +299,7 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   useVideoStoreVersion();
   const [pos, setPos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ask, setAsk] = useState<'save' | 'film' | null>(null);
   const scene = state.scenes.find(s => s.sceneId === sceneId) ?? null;
   if (!scene || !sessionId) return null;
   const v = sceneCardView({
@@ -245,17 +307,30 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   });
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
   const ver = v.version;
+  if (jobId) {
+    return <LaunchRowView v={v} a={{ onPick: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); } }} />;
+  }
+  // Папка — из открытого фильма; нет фильма и у сцены нет папки — человека спрашивают
+  const act = (kind: 'save' | 'film', folder: string) => run(() => (kind === 'save'
+    ? saveToFolder(scope, sessionId, scene, ver?.versionId, folder)
+    : addToFilm(scope, sessionId, scene, ver?.versionId, folder)));
+  const start = (kind: 'save' | 'film') => {
+    const folder = saveFolderFor(getFocusedFilmPath(sessionId), scene);
+    if (folder) void act(kind, folder); else setAsk(kind);
+  };
   return (
     <SceneCardView v={v} busy={busy}
+      chooser={ask && <FilmChooser scope={scope} sessionId={sessionId} onCancel={() => setAsk(null)}
+        onPick={folder => { const k = ask; setAsk(null); void act(k, folder); }} />}
       src={ver ? videoApi.versionFileUrl(scope, sessionId, scene.sceneId, ver.versionId) : null}
       a={{
         onPick: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); },
         onPrev: () => setPos(Math.max(0, v.index - 1)),
         onNext: () => setPos(Math.min(v.versions.length - 1, v.index + 1)),
         onTake: () => { if (ver) void takeVersion(scope, sessionId, scene.sceneId, ver.versionId); },
-        onSave: () => { void run(() => saveScene(scope, sessionId, scene, ver?.versionId)); },
+        onSave: () => start('save'),
         onDownload: () => { if (ver) downloadClip(scope, sessionId, scene, ver.versionId); },
-        onAddToFilm: () => { void run(() => addToFilm(scope, sessionId, scene, ver?.versionId)); },
+        onAddToFilm: () => start('film'),
         onReshoot: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId).then(() => openScenePanel(sessionId)); },
         onOpenFilm: () => { if (v.film) { const p = v.film.path; void selectFilmByHuman(scope, sessionId, p).then(() => openFilmPanel(sessionId, p)); } },
       }} />

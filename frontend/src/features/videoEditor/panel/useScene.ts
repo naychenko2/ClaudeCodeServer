@@ -60,7 +60,8 @@ export function useSceneQuote(scope: string, sessionId: string | null, scene: Vi
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const providerKey = r.provider?.key ?? null;
   const modelId = r.model?.id ?? null;
-  const canQuote = !!sessionId && !!scene && !!catalog && catalog.providers.some(p => p.available);
+  // Без двух кадров сервер отвечает 409: котировку не просим, причина «нужен кадр» видна и так
+  const canQuote = !!sessionId && !!scene && !!catalog && catalog.providers.some(p => p.available) && !!r.frameA && !!r.frameB;
   useEffect(() => {
     setQuote(null);
     setQuoteError(null);

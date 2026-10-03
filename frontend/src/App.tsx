@@ -37,6 +37,7 @@ import { requestOpenModelsSpend } from './lib/modelProvidersNav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { resetChatContextMemory } from './lib/chatContext/forget'
+import { resetComposerMemory } from './lib/composerStrips'
 import { setAllFlags } from './lib/featureFlags'
 import { SUBSYSTEMS, isSubsystemEnabled, setAllSubsystems, useSubsystem } from './lib/subsystems'
 import { getSubsystem, getSubsystemTab } from './lib/subsystems/registry'
@@ -547,6 +548,7 @@ export default function App() {
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       clearMe()
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
+      resetComposerMemory() // память полос и режима поля ввода прежнего пользователя
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
       // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
       // пользователя — при смене аккаунта человек видел бы чужой раздел
@@ -1223,6 +1225,7 @@ export default function App() {
     idbClear() // чистим кэш при смене аккаунта/сервера
     clearMe()
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
+    resetComposerMemory() // память полос и режима поля ввода прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
     // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике
     // cc-unauthorized: иначе следующий вход поднимет раздел прошлого пользователя

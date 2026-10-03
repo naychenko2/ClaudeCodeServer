@@ -143,7 +143,7 @@ export function AdvancedForm({ schema, fields, values, error, loading, onChange,
               {fields.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.xs }}>
                   <span style={{ flex: 1, fontSize: FS.xs, color: C.textMuted }}>Поле не тронуто — модель берёт своё значение по умолчанию</span>
-                  <Button size="xs" variant="secondary" leftIcon={ic(RotateCcw)} onClick={onReset}>Сбросить</Button>
+                  <Button size={isMobile ? 'md' : 'xs'} variant="secondary" leftIcon={ic(RotateCcw)} onClick={onReset}>Сбросить</Button>
                 </div>
               )}
             </>

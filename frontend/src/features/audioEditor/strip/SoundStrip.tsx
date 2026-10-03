@@ -140,7 +140,7 @@ export function SoundStrip({ ctx }: { ctx: ComposerStripCtx }) {
     {undo && (
       <div style={{ position: 'relative', height: 0 }}>
         <div data-sound-release="" style={{ position: 'absolute', left: 0, right: 0, bottom: SP.xs }}>
-          <ReleaseNotice text={undo.text} onUndo={() => { void undoSoundRelease(); }} isMobile={isMobile} />
+          <ReleaseNotice text={undo.text} onUndo={() => { void undoSoundRelease(); }} isMobile={isMobile} raiseFab />
         </div>
       </div>
     )}

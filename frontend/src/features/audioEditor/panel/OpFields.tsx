@@ -95,7 +95,7 @@ function Reference({ title, hint, file, setFile, path, setPath, personal }: {
 }
 
 // Голос из библиотеки «Голоса»: выбирается на вкладке, здесь — что выбрано и как снять
-function LibraryVoice({ value, onClear, onOpen }: { value: string; onClear: () => void; onOpen?: () => void }) {
+function LibraryVoice({ value, onClear, onOpen, isMobile }: { value: string; onClear: () => void; onOpen?: () => void; isMobile?: boolean }) {
   const slug = pickedSlug(value);
   return (
     <div data-field="library-voice" style={{ marginBottom: SP.sm }}>
@@ -104,11 +104,11 @@ function LibraryVoice({ value, onClear, onOpen }: { value: string; onClear: () =
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textPrimary }}>
           {ic(Mic)}
           <span data-picked-voice={slug} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slug}</span>
-          {onOpen && <Button size="xs" variant="ghost" onClick={onOpen}>Сменить</Button>}
-          <IconButton size="xs" title="Не брать голос из библиотеки" ariaLabel="Не брать голос из библиотеки" onClick={onClear}>{ic(X)}</IconButton>
+          {onOpen && <Button size={isMobile ? 'md' : 'xs'} variant="ghost" onClick={onOpen}>Сменить</Button>}
+          <IconButton size={isMobile ? 'lg' : 'xs'} title="Не брать голос из библиотеки" ariaLabel="Не брать голос из библиотеки" onClick={onClear}>{ic(X)}</IconButton>
         </div>
       ) : (
-        onOpen && <Button size="xs" variant="secondary" leftIcon={ic(Mic)} onClick={onOpen}>Выбрать в «Голосах»</Button>
+        onOpen && <Button size={isMobile ? 'md' : 'xs'} variant="secondary" leftIcon={ic(Mic)} onClick={onOpen}>Выбрать в «Голосах»</Button>
       )}
     </div>
   );
@@ -182,12 +182,12 @@ export function VoiceFields(p: OpFieldsProps) {
       {SPEAK_SOURCES.includes(op) && (
         <>
           <Label>Источник голоса</Label>
-          <SegmentedControl<AudioOp> value={op} onChange={p.onOp}
+          <SegmentedControl<AudioOp> value={op} onChange={p.onOp} touch={p.isMobile}
             options={SPEAK_SOURCES.map(o => ({ value: o, label: SOURCE_LABEL[o]! }))} />
           <div style={{ height: SP.sm }} />
         </>
       )}
-      {library && <LibraryVoice value={inputs.voice} onClear={() => setInputs({ voice: '' })} onOpen={p.onOpenVoices} />}
+      {library && <LibraryVoice value={inputs.voice} onClear={() => setInputs({ voice: '' })} onOpen={p.onOpenVoices} isMobile={p.isMobile} />}
       {op === 'cloneVoice' && ref('Образец голоса', 'Чистая речь 5–60 с; длиннее обрежем до 15 с')}
       {op === 'dialogue' && <Replicas list={inputs.replicas} onChange={r => setInputs({ replicas: r })} />}
       {op === 'convertVoice' && caps?.voiceKinds.includes('clone') && ref('Чей голос', 'Образец 1–30 с')}
@@ -215,7 +215,7 @@ export function VoiceFields(p: OpFieldsProps) {
       <SchemaFields fields={p.main} values={p.values} setField={p.setField} />
       {op === 'convertVoice' && s.model?.id === 'seed-vc' && <Hint>В режиме «Речь» Seed-VC сдвиг высоты пока не применяет</Hint>}
       {op !== 'transcribe' && (
-        <Button size="xs" variant="ghost" onClick={() => p.onOp('transcribe')} style={{ paddingLeft: 0, marginTop: SP.xs }}>В текст →</Button>
+        <Button size={p.isMobile ? 'md' : 'xs'} variant="ghost" onClick={() => p.onOp('transcribe')} style={{ paddingLeft: 0, marginTop: SP.xs }}>В текст →</Button>
       )}
     </div>
   );

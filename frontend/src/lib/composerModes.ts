@@ -35,6 +35,9 @@ export function composerModeMemory(sessionId: string): ComposerModeMemory {
 
 export function forgetComposerModeMemory(sessionId: string) { _modeMemory.delete(sessionId); }
 
+// Полный сброс — выход из аккаунта: память прошлого владельца вкладка не держит
+export function resetComposerModeMemory() { _modeMemory.clear(); }
+
 // modes — только доступные сейчас режимы. Тот же повод второй раз режим не навязывает,
 // иначе ручной уход в «Чат» откатывался бы на каждой перерисовке. Память — по каждому
 // режиму и переживает его временное исчезновение: снятый и заново выбранный фокус

@@ -52,6 +52,7 @@ export { refOf, rolesFor } from '../chatContext/fill';
 export type { ContextCandidate } from '../chatContext/fill';
 export type { ContextRole } from '../chatContext/types';
 export { notifyKindChanged } from '../chatContext/actionRun';
+export { ReportedError } from '../chatContext/errors';
 export { setContextReturn, useContextReturn, clearContextReturn } from '../chatContext/contextReturn';
 
 // ─── genPanelDismissed ───────────────────────────────────────────────────────

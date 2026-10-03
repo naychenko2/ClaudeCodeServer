@@ -3,6 +3,7 @@
 // невозможна по построению. Состояние хранится вне React (по чату): поле и панель живут в разных
 // ветках дерева и обязаны видеть один прогресс. Здесь — ядро без React, хук — в useActionRun.ts.
 
+import { isReported } from './errors';
 import { clearRunCarry, noteRunStarted, objectKey, resolveAction } from './actionMemory';
 import { acceptConflict } from './store';
 import { showToast } from '../toast';
@@ -204,7 +205,7 @@ export async function launchAction(d: RunDeps, text: string): Promise<void> {
     // Контекст сменился: DTO уже в сторе, цену пересчитает новый ключ; запуск сам не повторяется
     if (acceptConflict(d.sessionId, err)) { patch(d.sessionId, { state: 'idle', progress: null, quote: null }); throw err; }
     patch(d.sessionId, { state: 'error', progress: null }); clearRunCarry(d.sessionId);
-    showToast((err as Error).message || 'Не удалось запустить', '', 'error');
+    if (!isReported(err)) showToast((err as Error).message || 'Не удалось запустить', '', 'error');
     throw err;
   }
 }
@@ -245,7 +246,8 @@ export function buildActionRun(o: {
   const e = runEntry(sessionId, scope);
   const params = mergeParams(api.params?.(ctx, action.id) ?? [], e.values);
   const lp = launchParams(action, params, e.values);
-  const req: QuoteRequest = { op: action.op ?? action.id, text: e.text, params: lp, contextRevision: revision };
+  const salt = api.priceSalt?.(ctx, action.id);
+  const req: QuoteRequest = { op: action.op ?? action.id, text: e.text, params: lp, contextRevision: revision, ...(salt ? { salt } : null) };
   const price = e.quote?.key === quoteKey(req) ? e.quote.value : null;
   const labelIn = { action, params, price: price?.price ?? null, mobile: ctx.isMobile, state: e.state, progress: e.progress };
   return {

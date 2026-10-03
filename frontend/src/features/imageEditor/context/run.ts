@@ -1,12 +1,13 @@
 // Параметры, цена и запуск действия картинки (ADR-023 §Д2, §Д2.1): тонкий слой над существующими
 // котировкой (`api.quote`) и запуском в нить (`launchThread`) — своей логики запуска здесь нет.
 
-import { getChatContextState } from 'aihome_shell/kit';
-import { imageEditorApi, type ImageEditCatalog, type ImageEditOp, type ImageEditQuoteRequest } from '../api';
+import { getChatContextState, ReportedError } from 'aihome_shell/kit';
+import { imageEditorApi, type ImageEditCatalog, type ImageEditOp } from '../api';
 import type { ActionQuote, ContextKindCtx, LaunchHandle, LaunchParam, LaunchRequest } from 'aihome_shell/kit';
 import { isRemovalPrompt, priceSum } from '../format';
 import { quickAvailability, type QuickAction } from '../editorInputs';
-import { hasAnnotationMark, hasMaskMark } from '../marks';
+import { hasMaskMark } from '../marks';
+import { buildQuoteBody } from '../thread/quoteBody';
 import { footPrice, isOneVariant, launchMarks, modeOp, quickOf } from '../panel/panelOp';
 import { loadCatalog } from '../thread/catalog';
 import { getPrefs } from '../thread/prefs';
@@ -68,15 +69,12 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
   const one = isOneVariant(eff);
   const count = one ? 1 : route ? Math.min(route.count, countOf(req, settings.count)) : countOf(req, settings.count);
   const own = eff === 'enhanceFaces' || route?.maxReferences === 0;
-  const body: ImageEditQuoteRequest = {
+  const body = buildQuoteBody({
     provider: route?.provider ?? pv.key, model: route?.model ?? m.id, mode: 'auto', op: eff, count,
-    hasMask: eff === 'inpaint' && hasMask,
-    hasAnnotations: eff !== 'generate' && hasImage && hasAnnotationMark(marks),
-    removal: eff === 'inpaint' && isRemovalPrompt(req.text),
+    hasImage, marks, withMask: eff === 'inpaint' && hasMask, removal: eff === 'inpaint' && isRemovalPrompt(req.text),
     references: own ? 0 : getSamples(scope).length, hasCharacter: !own && !!prefs.characterSlug,
-    width: size?.w ?? null, height: size?.h ?? null,
-    sessionId: ctx.sessionId, contextRevision: req.contextRevision,
-  };
+    size, context: { sessionId: ctx.sessionId, contextRevision: req.contextRevision },
+  });
   const q = await sharedQuote(imageEditorApi(), scope, body);
   const e = q.estimate;
   const free = e.unit === 'free';
@@ -98,7 +96,7 @@ export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Pro
       contextRevision: req.contextRevision, onJob: id => { jobId = id; watcher.attach(id); },
     },
   });
-  if (!ok || !jobId) { watcher.dispose(); throw new Error('Генерация не запущена'); }
+  if (!ok || !jobId) { watcher.dispose(); throw new ReportedError('Генерация не запущена'); }
   return { id: jobId, watch: watcher.watch };
 }
 

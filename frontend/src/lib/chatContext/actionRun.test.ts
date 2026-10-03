@@ -7,6 +7,7 @@ vi.mock('../toast', () => ({ showToast: h.toast }));
 
 import { objectKey, rememberAction, resetActionMemory, resolveAction } from './actionMemory';
 import { buildActionRun, ensureQuote, resetAllRuns, runBlockReason, runLabel, runLabelParts } from './actionRun';
+import { ReportedError } from './errors';
 import { __applyChatContext, __resetChatContextStore, getChatContextState } from './store';
 import type {
   ChatContextPrimary, ContextAction, ContextKindApi, LaunchHandle, LaunchParam, QuoteRequest,
@@ -158,6 +159,23 @@ describe('409 context_changed и выбор после запуска', () => {
     expect(getChatContextState('s1').revision).toBe(9);
     expect(build(api).state).toBe('idle');
     expect(h.toast).toHaveBeenCalled();
+  });
+
+  it('отказ, причину которого вертикаль уже показала, второго тоста не даёт', async () => {
+    const api = apiOf({ launch: vi.fn().mockRejectedValue(new ReportedError('Генерация не запущена')) as never });
+    __applyChatContext('s1', { revision: 7, primary: primary(), refs: [] });
+    await expect(build(api).run('x')).rejects.toThrow('Генерация не запущена');
+    expect(h.toast).not.toHaveBeenCalled();
+    expect(build(api).state).toBe('error');
+  });
+
+  it('солт вида входит в ключ цены: другие отметки — другой запрос цены', () => {
+    let salt = 'a';
+    const api = apiOf({ priceSalt: () => salt } as never);
+    __applyChatContext('s1', { revision: 7, primary: primary(), refs: [] });
+    const first = JSON.stringify(build(api).req);
+    salt = 'b';
+    expect(JSON.stringify(build(api).req)).not.toBe(first);
   });
 
   it('запрос цены на устаревшей ревизии молча подтягивает свежий контекст, без тоста', async () => {

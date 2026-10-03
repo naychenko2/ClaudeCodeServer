@@ -133,13 +133,16 @@ export interface ContextKindApi {
   create?: { title: string; hint?: string; icon: ReactNode; run: (ctx: ContextKindCtx) => void };
   // Запуск действия: op + params + contextRevision; входы бэкенд читает из стора по ревизии
   launch?: (ctx: ContextKindCtx, req: LaunchRequest) => Promise<LaunchHandle>;
+  // Состояние вида, которое меняет цену, не меняя op и параметры (отметки на холсте): входит в ключ цены
+  priceSalt?: (ctx: ContextKindCtx, actionId: string) => string;
   // Цена по op действия
   quote?: (ctx: ContextKindCtx, req: QuoteRequest) => Promise<ActionQuote>;
 }
 
 export type LaunchParams = Readonly<Record<string, string | number | boolean>>;
 
-export interface QuoteRequest { op: string; text: string; params: LaunchParams; contextRevision: number }
+// salt — состояние вида вне op и параметров, от которого зависит цена (отметки на холсте): входит в ключ цены
+export interface QuoteRequest { op: string; text: string; params: LaunchParams; contextRevision: number; salt?: string }
 export type LaunchRequest = QuoteRequest;
 
 export interface ActionQuote {

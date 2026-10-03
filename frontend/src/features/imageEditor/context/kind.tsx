@@ -102,6 +102,10 @@ export const imageKindApi: ContextKindApi = {
     // Черновик становится основным объектом сам (фокус нити → контекст), панель не прыгает
     run: ctx => { void createDraft(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId, '', 'none'); },
   },
+  priceSalt: (ctx, actionId) => {
+    const input = actionOf(ctx, actionId)?.input;
+    return input ? `${input.marks}:${input.hasMask}` : '';
+  },
   quote: quoteAction,
   launch: launchAction,
 };

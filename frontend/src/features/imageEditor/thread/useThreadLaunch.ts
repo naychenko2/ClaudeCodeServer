@@ -13,7 +13,7 @@ import {
   effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, providerTitle, variantsWord,
 } from '../format';
 import { currentModel } from '../ProviderModelPicker';
-import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson } from '../marks';
+import { exportAnnotated, exportMask, hasMaskMark, marksToJson } from '../marks';
 import {
   quickAvailability, quickPlan, quickUsesOwnModel, samplesToJobInput,
   type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type QuickRoute,
@@ -24,6 +24,7 @@ import {
   resolveOp, runVerb, usePanelChoiceVersion, type PanelChoice,
 } from '../panel/panelOp';
 import { useQuote } from '../useQuote';
+import { buildQuoteBody, marksSent } from './quoteBody';
 import { getCatalog, loadCatalog, useCatalog } from './catalog';
 import { effectiveSettings, getPrefs, modeSettings, setModeSettings, setPrefs, usePrefs, type ProjectPrefs } from './prefs';
 import { effectiveImageMode, getStoredImageMode, modeAware, noteLastEdited, useImageModeVersion, type ImageMode } from './modeState';
@@ -189,20 +190,19 @@ export async function launchThread(
   // Модели без канала образцов (Bria Expand, убрать фон) образцы и персонажа не шлём
   const noSamples = own || route?.maxReferences === 0;
   const withMask = plan.useMask && hasMask;
-  const withMarks = !fromScratch && (action.kind === 'prompt' || action.kind === 'removeMarked') && hasImage && marks.length > 0;
+  const withMarks = marksSent(plan.op, hasImage, marks);
   // Пропорции новой картинки из «Ещё настроек» «Создать»; у дорисовки — свои
   const aspectRatio = plan.aspectRatio
     ?? (cx ? (fromScratch ? cx.aspect : null) : mode === 'create' && fromScratch ? getCreateRatio(projectId) : null);
   try {
-    const q = await api.quote(projectId, {
+    const q = await api.quote(projectId, buildQuoteBody({
       provider: route?.provider ?? pv.key, model: route?.model ?? m.id,
       mode: route ? 'auto' : effectiveMode(m, choice.mode), op: plan.op,
       count: one ? 1 : route?.count ?? settings.count,
-      hasMask: withMask, hasAnnotations: withMarks && hasAnnotationMark(marks), removal: plan.removal,
+      hasImage, marks, withMask, removal: plan.removal,
       references: noSamples ? 0 : getSamples(projectId).length, hasCharacter: !noSamples && !!prefs.characterSlug,
-      width: size?.w ?? null, height: size?.h ?? null,
-      ...(cx ? { sessionId, contextRevision: cx.contextRevision } : null),
-    });
+      size, context: cx ? { sessionId, contextRevision: cx.contextRevision } : null,
+    }));
     const legacy = isLegacyThread(thread);
     const version = legacy ? null : currentVersion(thread);
     const stepId = activeStepOf(thread);
@@ -264,7 +264,6 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   const marks = imgMode ? launchMarks(drawn, whole) : drawn;
   const hasImage = threadHasImage(thread);
   const hasMask = hasImage && hasMaskMark(marks);
-  const hasAnnotations = hasImage && hasAnnotationMark(marks);
   // Операция и режим панели «Картинки»
   usePanelChoiceVersion();
   const choice = activeChoice(projectId, imgMode);
@@ -286,17 +285,14 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
     || (!pv || !m ? 'Рисовать нечем: администратор не настроил поставщиков картинок' : '')
     || (blocked ? `${m!.label}: ${blocked.charAt(0).toLowerCase()}${blocked.slice(1)}` : '');
 
+  const body = (provider: string, model: string, withMaskNow: boolean, refs: number, character: boolean) => buildQuoteBody({
+    provider, model, mode, op: pr.op, count, hasImage, marks, withMask: withMaskNow, removal: false,
+    references: refs, hasCharacter: character, size, context: null,
+  });
   const quoteReq: ImageEditQuoteRequest | null = pr.reason ? null
-    : route ? {
-      provider: route.provider, model: route.model, mode, op: pr.op, count,
-      hasMask: false, hasAnnotations: false, references, hasCharacter: !own && !!prefs.characterSlug,
-      width: size?.w ?? null, height: size?.h ?? null,
-    }
-    : pv && m && !blocked && !pr.quick ? {
-      provider: pv.key, model: m.id, mode, op: pr.op, count,
-      hasMask: withMask, hasAnnotations: !fromScratch && hasAnnotations, references, hasCharacter: !!prefs.characterSlug,
-      width: size?.w ?? null, height: size?.h ?? null,
-    } : null;
+    : route ? body(route.provider, route.model, false, references, !own && !!prefs.characterSlug)
+    : pv && m && !blocked && !pr.quick ? body(pv.key, m.id, withMask, references, !!prefs.characterSlug)
+    : null;
   const { quote, loading, stale } = useQuote(api, projectId, quoteReq);
   const hint = route ? route.priceHint : m?.priceHint ?? null;
   // Пока котировка едет — прошлая цена той же модели, затем ориентир из каталога, чтобы цена

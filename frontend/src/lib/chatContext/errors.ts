@@ -26,3 +26,9 @@ export const chatContextRoutes = {
   ref: (sessionId: string, itemId: string) => `${base(sessionId)}/refs/${encodeURIComponent(itemId)}`,
   savedFiles: (sessionId: string) => `${base(sessionId)}/saved-files`,
 };
+
+// Отказ запуска, причину которого вертикаль уже показала тостом: хост не показывает второй
+export class ReportedError extends Error {
+  readonly reported = true;
+}
+export const isReported = (e: unknown): boolean => (e as { reported?: unknown } | null)?.reported === true;

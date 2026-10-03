@@ -20,7 +20,8 @@ public sealed class FilmService(
     FilmBuildRegistry builds,
     ILogger<FilmService> log,
     IVideoDsp? dsp = null,
-    TimeProvider? time = null)
+    TimeProvider? time = null,
+    FilmPatchFeed? patchFeed = null)
 {
     private const int MaxListed = 200;
 
@@ -261,14 +262,14 @@ public sealed class FilmService(
 
         MarkTouched(ownerId, scope, film.Relative, read.Document!, applied, initiator);
         await AfterWriteAsync(ownerId, scope, film, written.Current, ct);
-        await RecordPatchAsync(ownerId, scope, film.Relative, ops, initiator, sessionId, ct);
+        await RecordPatchAsync(ownerId, scope, film.Relative, ops, applied.Document, initiator, sessionId, ct);
         return StateOf(ownerId, scope, film, written.Current);
     }
 
     // Тихая строка правки фильма. ЕДИНСТВЕННАЯ точка записи ленты для правки — зовут и ручка человека, и тулсет
     // агента (требование Андрея 2026-10-02): recordType один, различается только initiator в data
     private async Task RecordPatchAsync(string ownerId, VideoEditScope scope, string filmPath, IReadOnlyList<FilmPatchOp> ops,
-        string initiator, string? sessionId, CancellationToken ct)
+        FilmDocument after, string initiator, string? sessionId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
         {
@@ -280,9 +281,16 @@ public sealed class FilmService(
             log.LogWarning("Видео: правка фильма {Path} без записи в ленту — чат {SessionId} не принадлежит владельцу (initiator {Initiator})", filmPath, sessionId, initiator);
             return;
         }
-        var what = string.Join(", ", ops.Select(o => o.Op).Distinct());
-        await threads.NoteAsync(sessionId.Trim(), VideoFeedTexts.FilmPatched(initiator, FilmPaths.NameOf(filmPath), what),
-            new { kind = "film_patch", filmPath, ops = ops.Select(o => o.Op).ToArray(), initiator }, ct);
+        var changes = FilmPatchText.Describe(ops, after);
+        var opNames = ops.Select(o => o.Op).Distinct().ToList();
+        // Серия частых правок — одна строка (FilmPatchFeed); без копилки (тесты без DI) строка пишется сразу
+        if (patchFeed is not null)
+        {
+            await patchFeed.AddAsync(sessionId.Trim(), filmPath, initiator, changes, opNames);
+            return;
+        }
+        await threads.NoteAsync(sessionId.Trim(), VideoFeedTexts.FilmPatched(initiator, changes),
+            new { kind = "film_patch", filmPath, ops = opNames, initiator }, ct);
     }
 
     // Операция до патчера: файлы add и music существуют внутри проекта, у add без обрезки длина — по пробе клипа

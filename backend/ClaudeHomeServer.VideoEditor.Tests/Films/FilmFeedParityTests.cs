@@ -96,10 +96,10 @@ public sealed class FilmFeedParityTests
         var agent = await Run(VideoInitiators.Agent);
 
         human["save"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Вы сохранили сцену «"));
-        human["patch"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Вы поправили фильм "));
+        human["patch"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Вы добавили сцену "));
         human["build"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Вы собрали фильм "));
         agent["save"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Сохранил сцену «"));
-        agent["patch"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Поправил фильм "));
+        agent["patch"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Добавил сцену "));
         agent["build"].Select(r => r.Text).Should().Contain(t => t.StartsWith("Собрал фильм "));
         agent.Values.SelectMany(v => v).Select(r => r.Text).Should().NotContain(t => t.Contains("Claude"));
     }

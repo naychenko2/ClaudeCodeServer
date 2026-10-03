@@ -14,6 +14,8 @@ internal static class FilmRegistration
         // Файл .film с атомарной записью под ревизией и состояние вне файла (траты, пометки, музыка в ожидании)
         services.AddSingleton<FilmStore>();
         services.AddSingleton(sp => FilmSideStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        // Копилка тихих строк правки: серия частых правок — одна строка в ленте
+        services.AddSingleton<FilmPatchFeed>();
         services.AddSingleton<FilmService>();
         services.AddSingleton<FilmSceneSaver>();
         // Сборка: реестр заявок — потолок модуля поверх слота общего BuildConcurrencyGate (шов IVideoDsp)

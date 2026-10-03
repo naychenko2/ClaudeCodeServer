@@ -40,18 +40,18 @@ public sealed class ProjectFileContextKindTests : IDisposable
 
     [Fact]
     public void Выход_через_точки_отклоняется() =>
-        _kind.Validate(Scope(), "project-file", Ref("../" + Path.GetFileName(_outside) + "/secret.txt")).Should().NotBeNull();
+        _kind.Validate(Scope(), "project-file", Ref("../" + Path.GetFileName(_outside) + "/secret.txt")).Should().Be("Путь вне проекта");
 
     [Fact]
     public void Абсолютный_путь_отклоняется() =>
-        _kind.Validate(Scope(), "project-file", Ref("/etc/passwd")).Should().NotBeNull();
+        _kind.Validate(Scope(), "project-file", Ref("/etc/passwd")).Should().Be("Путь вне проекта");
 
     [Fact]
     public void Символическая_ссылка_наружу_отклоняется()
     {
         Directory.CreateSymbolicLink(Path.Combine(_root, "link"), _outside);
 
-        _kind.Validate(Scope(), "project-file", Ref("link/secret.txt")).Should().NotBeNull();
+        _kind.Validate(Scope(), "project-file", Ref("link/secret.txt")).Should().Be("Путь идёт через символическую ссылку");
     }
 
     [Fact]

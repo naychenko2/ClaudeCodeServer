@@ -17,9 +17,19 @@ public sealed class ProjectFileContextKind : IContextKindProvider
         // Личный чат: файлов проекта нет, до RootPath не доходим
         if (scope.Project is null) return "В личном чате нет файлов проекта";
         if (PathOf(reference) is not { } path) return "Не указан путь файла";
-        return ProjectLinkGuard.ResolveInside(scope.Project.RootPath, path) is null
-            ? "Путь вне проекта или идёт через символическую ссылку"
-            : null;
+        var root = scope.Project.RootPath;
+        if (ProjectLinkGuard.ResolveInside(root, path) is not null) return null;
+        // Отказ двух родов: лексически путь вне корня — или внутри, но идёт через ссылку
+        return LiesInsideLexically(root, path)
+            ? "Путь идёт через символическую ссылку"
+            : "Путь вне проекта";
+    }
+
+    private static bool LiesInsideLexically(string root, string path)
+    {
+        if (Path.IsPathRooted(path) || path.StartsWith('/') || path.StartsWith('\\')) return false;
+        try { SafePath.Join(root, path); return true; }
+        catch (UnauthorizedAccessException) { return false; }
     }
 
     public ContextItemSummary Describe(ContextScope scope, ContextItem item)

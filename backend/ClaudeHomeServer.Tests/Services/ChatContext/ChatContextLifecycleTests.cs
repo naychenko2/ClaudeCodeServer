@@ -43,6 +43,22 @@ public sealed class ChatContextLifecycleTests : IDisposable
         File.Exists(PathOf(Owner, "x" + Chat)).Should().BeTrue("файл с чужим префиксом цел");
     }
 
+    [Theory]
+    [InlineData("..")]
+    [InlineData("a..b")]
+    [InlineData("c:evil")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    [InlineData("")]
+    public void StatePath_с_недопустимым_sessionId_бросает_ArgumentException(string sessionId)
+    {
+        var lifecycle = new ChatContextLifecycle(_root, NullLogger<ChatContextLifecycle>.Instance);
+
+        var act = () => lifecycle.StatePath(Owner, sessionId);
+
+        act.Should().Throw<ArgumentException>();
+    }
+
     [Fact]
     public async Task Ветвление_на_шине_копирует_файл_под_новый_id()
     {

@@ -2,7 +2,7 @@
 // сверяется с активными подсистемами из /api/auth/me. Фич-флаг владельца (video-editor) проверяют сами
 // входы — каждый вклад через isAvailable с getFlag(FLAGS.videoEditor).
 
-import { FLAGS, getFlag } from '../../lib/featureFlags';
+import { FLAGS, getFlag } from 'aihome_shell/kit';
 import type { ChatItemToolCtx, ComposerChipCtx, ContextOpenerApi, SlotContribution, SubsystemManifest } from '../../lib/subsystems/registryCore';
 import { FramePickerHost } from './context/framePicker';
 import { videoKindApi } from './context/kind';

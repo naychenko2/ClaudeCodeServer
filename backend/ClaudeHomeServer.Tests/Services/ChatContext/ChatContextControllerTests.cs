@@ -31,6 +31,8 @@ public class ChatContextControllerTests : IDisposable
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ImageEditor, true);
         users.SetFeatureFlag(_ownerId, FeatureFlagKeys.AudioEditor, true);
+        // Запись в контекст — только под флагом; по умолчанию тесты работают с включённым, выключенный ставят сами
+        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ComposerContextRow, true);
         _projectRoot = Path.Combine(_factory.TempDir, "ctx_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_projectRoot);
         _projectId = _factory.Services.GetRequiredService<ProjectManager>()
@@ -265,6 +267,36 @@ public class ChatContextControllerTests : IDisposable
         (await Json(put)).GetProperty("error").GetString().Should().Be("project_local_unsupported");
     }
 
+    [Fact]
+    public async Task Без_флага_запись_отвечает_404_а_чтение_и_saved_files_открыты()
+    {
+        SetContextFlag(false);
+        var chat = await Chat();
+        var body = new { kind = "project-file", @ref = new { path = "a.md" } };
+
+        (await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "project-file", @ref = new { path = "a.md" } }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.PostAsJsonAsync($"{Ctx(chat)}/refs", body)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.DeleteAsync($"{Ctx(chat)}/refs/ci_x")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.DeleteAsync(Ctx(chat))).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        (await _client.GetAsync(Ctx(chat))).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _client.GetAsync($"{Ctx(chat)}/saved-files")).StatusCode.Should().Be(HttpStatusCode.OK);
+        File.Exists(StateFile(chat)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task С_флагом_запись_проходит()
+    {
+        SetContextFlag(true);
+        File.WriteAllText(Path.Combine(_projectRoot, "a.md"), "x");
+        var chat = await Chat();
+
+        var resp = await _client.PostAsJsonAsync($"{Ctx(chat)}/refs", new { kind = "project-file", @ref = new { path = "a.md" } });
+
+        resp.StatusCode.Should().NotBe(HttpStatusCode.NotFound, "с флагом ручка существует");
+    }
+
     // ── Двойная запись фокуса ─────────────────────────────────────────────────
 
     [Fact]
@@ -319,9 +351,9 @@ public class ChatContextControllerTests : IDisposable
             .StatusCode.Should().Be(HttpStatusCode.OK);
         (await Json(await _client.GetAsync(ImageThreads(chat)))).GetProperty("focus").GetString().Should().Be(imageId);
 
-        SetContextFlag(false);
         (await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "audio", @ref = new { threadId = audioId } }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
+        SetContextFlag(false);
         (await Json(await _client.GetAsync(ImageThreads(chat)))).GetProperty("focus").GetString().Should().Be(imageId,
             "без флага DTO отдаёт собственное поле");
     }

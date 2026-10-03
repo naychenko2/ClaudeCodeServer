@@ -72,7 +72,8 @@ export const manifest: SubsystemManifest = {
         action: {
           title: 'Картинки',
           icon: <ImageIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-          isAvailable: () => getFlag(FLAGS.imageEditor),
+          // При флаге composer-context-row вход «Картинка» — create вида контекста, полоса не нужна (без дублей)
+          isAvailable: () => getFlag(FLAGS.imageEditor) && !getFlag(FLAGS.composerContextRow),
           status: ({ projectId, sessionId }: { projectId: string | null; sessionId: string | null }) => imagesStripStatus(projectId, sessionId),
         },
       },

@@ -97,6 +97,7 @@ export const imageKindApi: ContextKindApi = {
   },
   create: {
     title: 'Картинка',
+    hint: 'черновик «Новая картинка»',
     icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
     // Черновик становится основным объектом сам (фокус нити → контекст), панель не прыгает
     run: ctx => { void createDraft(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId, '', 'none'); },

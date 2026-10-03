@@ -130,7 +130,7 @@ export interface ContextKindApi {
   // основной такой референс не берёт; одна роль — «В контекст» без вопроса
   refRoles?: (ctx: ContextKindCtx, primary: ChatContextPrimary, candidateKind: string) => readonly ContextRole[];
   // Вход «＋» композера и empty-state ленты
-  create?: { title: string; icon: ReactNode; run: (ctx: ContextKindCtx) => void };
+  create?: { title: string; hint?: string; icon: ReactNode; run: (ctx: ContextKindCtx) => void };
   // Запуск действия: op + params + contextRevision; входы бэкенд читает из стора по ревизии
   launch?: (ctx: ContextKindCtx, req: LaunchRequest) => Promise<LaunchHandle>;
   // Цена по op действия

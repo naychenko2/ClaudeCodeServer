@@ -24,7 +24,7 @@ public sealed class VideoJobThreads(
     public VideoThreadStore Store => store;
 
     // Нити для DTO (ручки, ответы мутаций, событие): составной фокус «Видео» распадается —
-    // сцена и фильм берутся из основного объекта контекста чата (по одному). Читатели хода (хвост, MCP) берут хранилище напрямую и проекции не видят
+    // сцена и фильм берутся из основного объекта контекста чата (по одному). Читатели хода (`video_state`, умолчания путей, хвост) берут её же; сырой Focus нити — внутреннее «до/после» для Sync
     public VideoThreadsStateDto Dto(string ownerId, string sessionId, VideoThreadsState state)
     {
         if (mirror is null) return state.ToDto();

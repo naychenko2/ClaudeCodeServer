@@ -36,8 +36,8 @@ public sealed class AudioJobThreads(
     public AudioThreadStore Store => store;
 
     // Состояние для DTO (ручка GET, ответы мутаций, событие): фокус — проекция из
-    // контекста чата (основной объект своего вида). Читатели хода (хвост, MCP)
-    // берут хранилище напрямую и проекции не видят
+    // контекста чата (основной объект своего вида).
+    // Читатели хода (`*_state`, ответы фокуса) берут её же; сырой Focus нити — внутреннее «до/после» для Sync
     public AudioThreadsState View(string ownerId, string sessionId) => Project(ownerId, sessionId, store.Get(ownerId, sessionId));
 
     public AudioThreadsState Project(string ownerId, string sessionId, AudioThreadsState state)

@@ -170,7 +170,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         return written.Status switch
         {
-            ImageThreadWriteStatus.Ok => Json(Focused(written.State, scope, file is null ? null : HumanChoice(ownerId, scope, written.State))),
+            ImageThreadWriteStatus.Ok => FocusedResult(ownerId, session.Id, scope, withChoice: file is not null),
             ImageThreadWriteStatus.ThreadNotFound => Deny($"Картинки {threadId} нет в этом чате. Список — image_state."),
             _ => Deny("Человек как раз меняет выбор картинки — повтори позже."),
         };
@@ -191,8 +191,15 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         var written = await _threads.AgentOpenAsync(ownerId, scope.Key, session.Id, null, folder, ct);
         return written.Status == ImageThreadWriteStatus.Ok
-            ? Json(Focused(written.State, scope, HumanChoice(ownerId, scope, written.State)))
+            ? FocusedResult(ownerId, session.Id, scope, withChoice: true)
             : Deny("Человек как раз меняет выбор картинки — повтори позже.");
+    }
+
+    // Ответ строится по проекции из контекста: основной объект мог выбрать человек, а не запись нити
+    private McpToolCallResult FocusedResult(string ownerId, string sessionId, ImageEditScope scope, bool withChoice)
+    {
+        var state = _threads.View(ownerId, sessionId);
+        return Json(Focused(state, scope, withChoice ? HumanChoice(ownerId, scope, state) : null));
     }
 
     // humanChoice — настройки, которые картинка унаследовала из полосы «Картинки», и правило
@@ -454,7 +461,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
     private object DescribeState(string ownerId, Session session, ImageEditScope scope)
     {
-        var state = _threads.Get(ownerId, session.Id);
+        var state = _threads.View(ownerId, session.Id);
         var place = ImagePlaceKeys.ImageEditor;
         var admin = _placeSettings?.ProviderFor(place);
         var catalog = ImageEditCatalog.Build(_editors, admin, admin is null ? null : _placeSettings?.ModelFor(place, admin));

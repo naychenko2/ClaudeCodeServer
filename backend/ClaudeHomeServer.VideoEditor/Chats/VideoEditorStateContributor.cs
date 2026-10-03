@@ -1,7 +1,9 @@
 using System.Globalization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Turn;
+using ClaudeHomeServer.Services.VideoEditor.ChatContext;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Films;
 using ClaudeHomeServer.Services.VideoEditor.Mcp;
@@ -26,7 +28,10 @@ public sealed class VideoEditorStateContributor(
     IFeatureFlagGate flags,
     VideoThreadStore? threads = null,
     FilmSideStore? side = null,
-    IConfiguration? config = null) : IPromptSectionContributor
+    IConfiguration? config = null,
+    // Ленивый: зеркало ведёт через стор контекста и засев к SessionManager, а он — к реестру секций, то есть
+    // к этому контрибьютору; прямая зависимость дала бы цикл при сборке контейнера
+    Lazy<ChatContextFocusMirror>? mirror = null) : IPromptSectionContributor
 {
     // Без video_shoot правила про него сослались бы на несуществующий инструмент
     private readonly bool _agentLaunch = config?.GetValue(VideoEditorToolset.AgentLaunchKey, true) ?? true;
@@ -51,6 +56,13 @@ public sealed class VideoEditorStateContributor(
         var session = sessionContext.Session;
         var scope = VideoEditScope.Of(session);
         var (state, fresh) = threads?.TakeForTurn(ownerId, session.Id) ?? (VideoThreadsState.Empty, []);
+        // Открытый фильм — основной объект контекста (его мог выбрать человек), а не запись нити
+        if (mirror is not null)
+        {
+            var film = mirror.Value.ProjectFocus(ownerId, session.Id, VideoContextKind.FilmKind, state.Focus.FilmPath,
+                _ => true, VideoContextKind.FilmKey);
+            state = state with { Focus = state.Focus with { FilmPath = film } };
+        }
         var spent = SpentOf(ownerId, scope, state);
         // «В работе», «Открыт фильм» и «Выбор человека» отдаёт хвост «Контекст хода»
         var block = Render(state, fresh, spent, _agentLaunch, scope.IsPersonal);
@@ -65,7 +77,7 @@ public sealed class VideoEditorStateContributor(
     // к этому же контрибьютору (цикл при сборке контейнера, тихое зависание старта)
     private VideoSpentDto? SpentOf(string ownerId, VideoEditScope scope, VideoThreadsState state)
     {
-        if (side is null || scope.Project is null || state.Focus.FilmPath is not { } path) return null;
+        if (side is null || scope.IsPersonal || state.Focus.FilmPath is not { } path) return null;
         var spends = side.Get(ownerId, scope.Key, path).Spends.ToDictionary(s => s.VersionId);
         var folder = FilmPaths.FolderOf(path);
         foreach (var scene in state.Scenes.Where(s => s.FilmRef?.Path == path || FilmPaths.Normalize(s.Folder) == folder))

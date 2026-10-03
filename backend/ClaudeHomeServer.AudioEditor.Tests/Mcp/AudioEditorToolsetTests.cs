@@ -542,6 +542,22 @@ public sealed class AudioEditorToolsetTests : IDisposable
     }
 
     [Fact]
+    public async Task Audio_state_показывает_основной_объект_контекста_а_не_запись_нити()
+    {
+        var toolset = Toolset();
+        var a = Draft();
+        var b = Draft();
+        _store.SetFocus(Owner, ChatId, a, null);
+        // Человек ставит основным B ручкой контекста: запись нити по-прежнему говорит «A»
+        _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("audio", b, ContextActor.Human), null);
+        _store.Get(Owner, ChatId).Focus.Should().Be(a);
+
+        var state = Parse(await Call(toolset, AudioEditorToolset.ToolState));
+
+        state["focus"]!.GetValue<string>().Should().Be(b, "агент видит выбор человека, а не сырой Focus нити");
+    }
+
+    [Fact]
     public async Task Audio_focus_ставит_основной_объект_от_агента_а_выбор_человека_гасит_звёздочку()
     {
         var toolset = Toolset();

@@ -162,7 +162,7 @@ public sealed class ImageContextKindTests : IDisposable
         ChatContextFocusMirror.ThreadOf(primary).Should().Be(a);
         primary.By.Should().Be(ContextActor.Human, "выбор человека агент не затирает");
         primary.Id.Should().Be(chosen.Id, "основной объект не пересоздаётся");
-        _context.Get(Owner, Chat).Revision.Should().Be(before.Revision, "выбор человека агент не трогает — запись в стор не идёт вовсе");
+        _context.Get(Owner, Chat).Revision.Should().Be(before.Revision, "защищают оба слоя: стор не даёт агенту затереть выбор человека, а зеркало даже не пишет в стор");
     }
 
     [Fact]

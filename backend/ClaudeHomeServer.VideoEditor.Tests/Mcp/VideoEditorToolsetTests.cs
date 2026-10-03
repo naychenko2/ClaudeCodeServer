@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.VideoEditor.ChatContext;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Mcp;
 using ClaudeHomeServer.Services.VideoEditor.Scenes;
@@ -72,6 +74,40 @@ public sealed class VideoEditorToolsetTests
 
         using var off = new AgentWorld(flagOn: false);
         off.Toolset.ToolsFor(off.Ctx()).Should().BeEmpty("флаг video-editor выключен у владельца");
+    }
+
+    // ── Основной объект контекста: агент видит выбор человека, а не запись нити ──
+
+    [Fact]
+    public async Task Video_state_показывает_сцену_из_контекста_а_не_из_записи_нити()
+    {
+        using var w = new AgentWorld(withContext: true);
+        var a = w.NewScene(name: "A");
+        var b = w.NewScene(name: "B");
+        w.F.Threads.SetFocus(w.Owner, w.Chat, new VideoFocusDto(a.SceneId, null), null);
+        // Человек ставит основной сценой B ручкой контекста: запись нити по-прежнему говорит «A»
+        w.F.Context!.SetPrimary(w.Owner, w.Chat,
+            ChatContextFocusMirror.NewItem(VideoContextKind.SceneKind, b.SceneId, ContextActor.Human, refKey: VideoContextKind.SceneKey), null);
+        w.F.Threads.Get(w.Owner, w.Chat).Focus.SceneId.Should().Be(a.SceneId);
+
+        var state = AgentWorld.Parse(await w.Call(ToolState));
+
+        state["focus"]!["sceneId"]!.GetValue<string>().Should().Be(b.SceneId, "агент видит выбор человека, а не сырой Focus нити");
+    }
+
+    [Fact]
+    public async Task Video_state_показывает_фильм_из_контекста_а_не_из_записи_нити()
+    {
+        using var w = new AgentWorld(withContext: true);
+        w.F.WriteFile("video/утро/a.film");
+        w.F.WriteFile("video/утро/b.film");
+        w.F.Threads.SetFocus(w.Owner, w.Chat, new VideoFocusDto(null, "video/утро/a.film"), null);
+        w.F.Context!.SetPrimary(w.Owner, w.Chat,
+            ChatContextFocusMirror.NewItem(VideoContextKind.FilmKind, "video/утро/b.film", ContextActor.Human, refKey: VideoContextKind.FilmKey), null);
+
+        var state = AgentWorld.Parse(await w.Call(ToolState));
+
+        state["focus"]!["filmPath"]!.GetValue<string>().Should().Be("video/утро/b.film", "фильм — основной объект контекста");
     }
 
     // ── Делегированный ход ─────────────────────────────────────────────────────

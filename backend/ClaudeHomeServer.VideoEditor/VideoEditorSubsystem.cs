@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
@@ -74,6 +75,9 @@ public sealed class VideoEditorSubsystem : IAppSubsystem
         services.AddFilms();
         // Агент: MCP-сервер video-editor (ADR-022 §5) и блок хвоста хода; сервисы — те же, что у ручек человека
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.VideoEditorToolset>();
+        // Зеркало фокуса контрибьютору хвоста — только лениво (цикл через SessionManager, см. конструктор)
+        services.TryAddSingleton(sp => new Lazy<ClaudeHomeServer.Services.ChatContext.ChatContextFocusMirror>(
+            () => sp.GetRequiredService<ClaudeHomeServer.Services.ChatContext.ChatContextFocusMirror>()));
         services.AddPromptSectionContributor<Chats.VideoEditorStateContributor>();
     }
 }

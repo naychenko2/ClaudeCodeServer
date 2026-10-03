@@ -137,6 +137,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     private async Task<McpToolCallResult> FocusAsync(JsonObject args, string owner, Session session, VideoEditScope scope)
     {
         var current = Store.Get(owner, session.Id);
+        // Умолчание — основной объект из контекста (его мог выбрать человек), а не запись нити
+        var shown = _threads.View(owner, session.Id).Focus;
         var sceneGiven = args.ContainsKey("sceneId");
         var filmGiven = args.ContainsKey("filmPath");
         var versionId = Str(args, "versionId");
@@ -154,8 +156,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         else
         {
             var focus = new VideoFocusDto(
-                sceneGiven ? sceneId : current.Focus.SceneId,
-                filmGiven ? Str(args, "filmPath") : current.Focus.FilmPath);
+                sceneGiven ? sceneId : shown.SceneId,
+                filmGiven ? Str(args, "filmPath") : shown.FilmPath);
             call = await _scenes.FocusAsync(owner, scope, session.Id, focus, null, ContextActor.Agent);
         }
         return await ThreadsResultAsync(call, owner, session, scope,
@@ -191,12 +193,14 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         VideoEditScope scope, string note)
     {
         if (call.Written is not { } written) return Fail(call.ErrorCode, call.Error);
+        // Фокус в ответе — проекция из контекста: основной объект мог выбрать человек
+        var shown = _threads.Dto(owner, session.Id, written.State).Focus;
         return written.Status switch
         {
             VideoThreadWriteStatus.Ok => Json(new
             {
-                focus = written.State.Focus,
-                scene = (written.Scene ?? written.State.Scenes.FirstOrDefault(s => s.SceneId == written.State.Focus.SceneId)) is { } s
+                focus = shown,
+                scene = (written.Scene ?? written.State.Scenes.FirstOrDefault(s => s.SceneId == shown.SceneId)) is { } s
                     ? DescribeScene(owner, scope, VideoStale.Apply(s))
                     : null,
                 note,
@@ -420,7 +424,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     {
         if (GateTurn(owner, session, "Сборка фильма") is { } denied) return denied;
         if (FilmsRefusal(scope) is { } refusal) return refusal;
-        var path = Str(args, "path") ?? Store.Get(owner, session.Id).Focus.FilmPath;
+        var path = Str(args, "path") ?? _threads.View(owner, session.Id).Focus.FilmPath;
         if (path is null) return Deny("Не указан path, и открытого фильма нет: возьми фильм из video_state (films).");
 
         var started = _assembler.Start(owner, scope, path, VideoInitiators.Agent, session.Id);
@@ -497,7 +501,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
     private object DescribeState(string owner, Session session, VideoEditScope scope)
     {
-        var state = Store.Get(owner, session.Id).ToDto();
+        var state = _threads.View(owner, session.Id);
         var filmsOk = scope.Project is { } project && ClaudeHomeServer.Models.ProjectCapabilities.FilesOnServer(project);
         object? films = null;
         object? openFilm = null;

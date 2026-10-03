@@ -48,9 +48,9 @@ internal sealed class AgentWorld : IDisposable
     public string Chat => FilmWorld.Session;
 
     public AgentWorld(bool blocking = false, bool agentLaunch = true, bool delegatedDenied = false, bool withGate = true,
-        bool flagOn = true)
+        bool flagOn = true, bool withContext = false)
     {
-        F = new FilmWorld(new ToolDsp());
+        F = new FilmWorld(new ToolDsp(), withContext);
         Engine = new FakeEngine("fal", blocking);
         Prefs = new VideoPrefsService(new VideoPrefsStore(Path.Combine(F.Dir, "prefs")));
         Jobs = new VideoEditJobService([Engine], F.Workspace, F.JobThreads, NullLogger<VideoEditJobService>.Instance,

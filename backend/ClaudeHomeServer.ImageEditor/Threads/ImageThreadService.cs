@@ -63,8 +63,8 @@ public sealed class ImageThreadService(
     public ImageThreadsState Get(string ownerId, string sessionId) => store.Get(ownerId, sessionId);
 
     // Состояние для DTO (ручка GET и событие): фокус — проекция из контекста чата
-    // (основной объект своего вида). Читатели хода (хвост, MCP) берут
-    // хранилище напрямую и проекции не видят
+    // (основной объект своего вида).
+    // Читатели хода (`*_state`, ответы фокуса) берут её же; сырой Focus нити — внутреннее «до/после» для Sync
     public ImageThreadsState View(string ownerId, string sessionId) => Project(ownerId, sessionId, store.Get(ownerId, sessionId));
 
     private ImageThreadsState Project(string ownerId, string sessionId, ImageThreadsState state)

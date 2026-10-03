@@ -729,6 +729,8 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var thread = Thread();
         var toolset = Toolset();
+        // Фокус агент видит из контекста чата: человек выбрал эту картинку основной
+        _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("image", thread, ContextActor.Human), null);
 
         var result = await Call(toolset, ImageEditorToolset.ToolState);
 
@@ -879,6 +881,22 @@ public class ImageEditorToolsetTests : IDisposable
         // Человек выбрал тот же объект — звёздочка гаснет (ADR-023 §2.4)
         _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("image", threadId, ContextActor.Human), null);
         _ctxStore.Get(Owner, ChatId).Primary!.By.Should().Be(ContextActor.Human);
+    }
+
+    [Fact]
+    public async Task image_state_показывает_основной_объект_контекста_а_не_запись_нити()
+    {
+        var toolset = Toolset();
+        var a = Draft();
+        var b = Draft();
+        _store.SetFocus(Owner, ChatId, a, _store.Get(Owner, ChatId).Revision);
+        // Человек ставит основным B ручкой контекста: запись нити по-прежнему говорит «A»
+        _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("image", b, ContextActor.Human), null);
+        _store.Get(Owner, ChatId).Focus.Should().Be(a);
+
+        var state = Parse(await Call(toolset, ImageEditorToolset.ToolState));
+
+        state["focus"]!.GetValue<string>().Should().Be(b, "агент видит выбор человека, а не сырой Focus нити");
     }
 
     [Fact]

@@ -227,6 +227,8 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         AudioThreadsState state)
     {
         await _threads.BroadcastAsync(ownerId, scope.Key, sessionId, state);
+        // Фокус в ответе — проекция из контекста: основной объект мог выбрать человек
+        state = _threads.Project(ownerId, sessionId, state);
         var thread = state.Threads.FirstOrDefault(t => t.Id == state.Focus);
         return Json(new
         {
@@ -592,7 +594,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
 
     private object DescribeState(string ownerId, Session session, AudioEditScope scope)
     {
-        var state = Store.Get(ownerId, session.Id);
+        var state = _threads.View(ownerId, session.Id);
         return new
         {
             focus = state.Focus,

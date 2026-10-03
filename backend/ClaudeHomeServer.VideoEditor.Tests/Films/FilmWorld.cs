@@ -1,8 +1,10 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.VideoEditor.Assembly;
+using ClaudeHomeServer.Services.VideoEditor.ChatContext;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Films;
 using ClaudeHomeServer.Services.VideoEditor.Jobs;
@@ -34,9 +36,12 @@ internal sealed class FilmWorld : IDisposable
     public readonly VideoJobThreads JobThreads;
     public readonly Mock<ISessionDirectory> Directory = new();
     public readonly FilmService Service;
+    // Стор контекста чата и зеркало — только при withContext (стенд видит выбор человека через контекст)
+    public readonly ChatContextStore? Context;
+    public readonly ChatContextFocusMirror? Mirror;
     private int _jobs;
 
-    public FilmWorld(IVideoDsp? dsp = null)
+    public FilmWorld(IVideoDsp? dsp = null, bool withContext = false)
     {
         ProjectRoot = Path.Combine(Dir, "project");
         System.IO.Directory.CreateDirectory(ProjectRoot);
@@ -48,7 +53,12 @@ internal sealed class FilmWorld : IDisposable
         var session = new Session { Id = Session, OwnerId = Owner, ProjectId = ProjectId };
         Directory.Setup(d => d.GetById(Session)).Returns(session);
         Directory.Setup(d => d.ResolveOwnerId(session)).Returns(Owner);
-        JobThreads = new VideoJobThreads(Threads, NullLogger<VideoJobThreads>.Instance, Directory.Object, Feed, Broadcaster);
+        if (withContext)
+        {
+            Context = new ChatContextStore(Path.Combine(Dir, "ctx"), new ContextKindRegistry([new VideoContextKind(Threads)]));
+            Mirror = new ChatContextFocusMirror(Context, NullLogger<ChatContextFocusMirror>.Instance);
+        }
+        JobThreads = new VideoJobThreads(Threads, NullLogger<VideoJobThreads>.Instance, Directory.Object, Feed, Broadcaster, Mirror);
         Service = new FilmService(Films, Side, JobThreads, Registry, NullLogger<FilmService>.Instance, dsp);
     }
 

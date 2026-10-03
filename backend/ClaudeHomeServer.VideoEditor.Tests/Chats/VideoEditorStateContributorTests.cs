@@ -1,4 +1,7 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.VideoEditor.ChatContext;
+using ClaudeHomeServer.Services.VideoEditor.Films;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.VideoEditor.Chats;
@@ -42,6 +45,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
         {
             typeof(IFeatureFlagGate), typeof(VideoThreadStore), typeof(ClaudeHomeServer.Services.VideoEditor.Prefs.VideoPrefsService),
             typeof(ClaudeHomeServer.Services.VideoEditor.Films.FilmSideStore), typeof(IConfiguration),
+            typeof(Lazy<ChatContextFocusMirror>), // только ленивый: прямое зеркало замыкает цикл через SessionManager
         };
 
         var parameters = typeof(VideoEditorStateContributor).GetConstructors().Single().GetParameters().Select(p => p.ParameterType);
@@ -161,6 +165,27 @@ public sealed class VideoEditorStateContributorTests : IDisposable
             .And.NotContain("В работе:").And.NotContain("Открыт фильм:").And.NotContain("Выбор человека");
         text.Should().Contain(VideoEditorStateContributor.PriorityRule).And.Contain(VideoEditorStateContributor.PaceRule)
             .And.Contain("С прошлого сообщения:").And.Contain("Готово: новых версий 1");
+    }
+
+    [Fact]
+    public async Task Потрачено_на_фильм_считается_по_фильму_из_контекста_а_не_из_записи_нити()
+    {
+        using var w = new Films.FilmWorld(withContext: true);
+        w.WriteFile("video/утро/a.film");
+        w.WriteFile("video/утро/b.film");
+        w.Threads.SetFocus("u1", "s1", new VideoFocusDto(null, "video/утро/a.film"), null);
+        w.Side.Update("u1", "p1", "video/утро/a.film",
+            side => side with { Spends = [new FilmSpendEntry("v1", "usd", 1.00, 0, DateTime.UtcNow)] });
+        w.Side.Update("u1", "p1", "video/утро/b.film",
+            side => side with { Spends = [new FilmSpendEntry("v2", "usd", 3.25, 0, DateTime.UtcNow)] });
+        // Человек открывает B ручкой контекста: запись нити по-прежнему говорит «A»
+        w.Context!.SetPrimary("u1", "s1",
+            ChatContextFocusMirror.NewItem(VideoContextKind.FilmKind, "video/утро/b.film", ContextActor.Human, refKey: VideoContextKind.FilmKey), null);
+        var contributor = new VideoEditorStateContributor(new Flags(true), w.Threads, w.Side, mirror: new Lazy<ChatContextFocusMirror>(() => w.Mirror!));
+
+        var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
+
+        text.Should().Contain("Потрачено на открытый фильм video/утро/b.film: $3.25").And.NotContain("a.film");
     }
 
     [Fact]

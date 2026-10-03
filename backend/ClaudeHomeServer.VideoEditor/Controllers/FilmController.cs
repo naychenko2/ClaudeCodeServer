@@ -39,6 +39,13 @@ public class FilmController(
             ? FilmHttp.Map(films.State(UserId, scope, path), state => Ok(state))
             : denied;
 
+    [HttpPost(VideoEditorRoutes.FilmCreate)]
+    public async Task<IActionResult> Create(string projectId, [FromBody] FilmCreateRequest? req, CancellationToken ct) =>
+        Gate(projectId, out var scope, out var denied)
+            ? FilmHttp.Map(await films.CreateAsync(UserId, scope, req, ct),
+                state => StatusCode(StatusCodes.Status201Created, state))
+            : denied;
+
     [HttpPatch(VideoEditorRoutes.FilmPatchRoute)]
     public async Task<IActionResult> Patch(string projectId, [FromQuery] string? path, [FromBody] FilmPatch? patch,
         CancellationToken ct, [FromQuery] string? sessionId = null) =>

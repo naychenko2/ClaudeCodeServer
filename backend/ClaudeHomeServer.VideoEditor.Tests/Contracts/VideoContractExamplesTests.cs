@@ -48,6 +48,7 @@ public sealed class VideoContractExamplesTests
         [nameof(FilmDocument)] = typeof(FilmDocument),
         [nameof(FilmSummaryDto)] = typeof(FilmSummaryDto),
         [nameof(FilmStateDto)] = typeof(FilmStateDto),
+        [nameof(FilmCreateRequest)] = typeof(FilmCreateRequest),
         [nameof(FilmPatch)] = typeof(FilmPatch),
         [nameof(FilmBuildStatusDto)] = typeof(FilmBuildStatusDto),
         [nameof(FilmMusicRequest)] = typeof(FilmMusicRequest),

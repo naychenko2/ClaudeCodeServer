@@ -134,8 +134,9 @@ public sealed class FilmService(
             ledger.ClaudeFiles.Contains(item.File),
             read.Status == FilmStore.ReadStatus.Ok && FilmStaleness.IsUpdated(root, doc, item),
             staleScenes.Contains(item.File))).ToList();
+        var stale = read.Status == FilmStore.ReadStatus.Ok && FilmStaleness.IsStale(root, doc);
         return FilmCallResult<FilmStateDto>.Ok(new FilmStateDto(film.Relative, read.Revision, doc, spent, marks,
-            builds.Get(ownerId, scope.Key, film.Relative)));
+            builds.Get(ownerId, scope.Key, film.Relative), stale));
     }
 
     // Траты сцен фильма (версии клипов сцен, чья папка — папка фильма либо сцена уже стоит в нём): копятся в
@@ -190,6 +191,34 @@ public sealed class FilmService(
             foreach (var saved in scene.SavedFiles) files.Add(saved.Path);
         }
         return files;
+    }
+
+    // ── Новый фильм ───────────────────────────────────────────────────────────────
+
+    // Отдельная операция, а не «первый патч по несуществующему пути»: патч всегда под ревизией и существующим
+    // файлом, а создание — CreateNew (чужой фильм не затирается, занятое имя — name_taken). Файл пустой: items: []
+    public async Task<FilmCallResult<FilmStateDto>> CreateAsync(string ownerId, VideoEditScope scope,
+        FilmCreateRequest? req, CancellationToken ct)
+    {
+        if (req is null) return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.InvalidRequest, "Не указан путь фильма");
+        var resolved = ResolveFilm(scope, req.Path);
+        if (!resolved.IsOk) return FilmCallResult<FilmStateDto>.Fail(resolved.ErrorCode!, resolved.Error!);
+        var film = resolved.Value!;
+        var aspect = string.IsNullOrWhiteSpace(req.Aspect) ? "16:9" : req.Aspect.Trim();
+        if (FilmFormat.AspectSize(aspect) is null)
+            return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.InvalidRequest, $"Неизвестное соотношение сторон «{aspect}»");
+
+        var written = films.WriteFile(film.Full,
+            new FilmDocument(FilmDocument.CurrentSchema, aspect, [], [], null, []), null, create: true);
+        switch (written.Status)
+        {
+            case FilmStore.WriteStatus.NameTaken:
+                return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.NameTaken, "Фильм с таким именем уже есть");
+            case FilmStore.WriteStatus.Invalid:
+                return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.FilmInvalid, written.Error ?? "Фильм не прошёл проверку");
+        }
+        await AfterWriteAsync(ownerId, scope, film, written.Current, ct);
+        return StateOf(ownerId, scope, film, written.Current);
     }
 
     // ── Правка патчем ─────────────────────────────────────────────────────────────

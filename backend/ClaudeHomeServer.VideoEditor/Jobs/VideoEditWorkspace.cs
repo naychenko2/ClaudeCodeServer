@@ -56,13 +56,37 @@ public sealed class VideoEditWorkspace(string root)
 
     public static bool IsFrameRef(string? path) => path is not null && FrameRefPattern.IsMatch(path);
 
-    public string SaveFrame(string ownerId, byte[] bytes, string extension)
+    // Человеческое имя исходного файла кладётся рядом: {id}.name (UTF-8) — подпись «кадр-а.png» вместо id
+    private const string NameSidecarExtension = ".name";
+    private const int MaxFileNameLength = 120;
+
+    public string SaveFrame(string ownerId, byte[] bytes, string extension, string? fileName = null)
     {
         var dir = Path.Combine(Root, Safe(ownerId), FramesDirName);
         Directory.CreateDirectory(dir);
-        var name = Guid.NewGuid().ToString("N") + extension;
-        File.WriteAllBytes(Path.Combine(dir, name), bytes);
-        return $"{FramesDirName}/{name}";
+        var id = Guid.NewGuid().ToString("N");
+        File.WriteAllBytes(Path.Combine(dir, id + extension), bytes);
+        if (CleanFileName(fileName) is { } clean)
+            File.WriteAllText(Path.Combine(dir, id + NameSidecarExtension), clean);
+        return $"{FramesDirName}/{id}{extension}";
+    }
+
+    // Только имя без пути и управляющих символов; пусто — null
+    public static string? CleanFileName(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var name = new string(Path.GetFileName(raw.Replace('\\', '/')).Where(c => !char.IsControl(c)).ToArray()).Trim();
+        if (name.Length == 0) return null;
+        return name.Length <= MaxFileNameLength ? name : name[..MaxFileNameLength];
+    }
+
+    // Человеческое имя кадра; нет — null
+    public string? FindFrameName(string ownerId, string? relative)
+    {
+        if (!IsFrameRef(relative)) return null;
+        var stem = Path.GetFileNameWithoutExtension(relative!["frames/".Length..]);
+        var full = Path.Combine(Root, Safe(ownerId), FramesDirName, stem + NameSidecarExtension);
+        return File.Exists(full) ? CleanFileName(File.ReadAllText(full)) : null;
     }
 
     // Полный путь кадра владельца; путь не по шаблону или файла нет — null

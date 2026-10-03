@@ -140,4 +140,41 @@ public class VideoFrameUploadTests : IDisposable
         Png.CopyTo(big, 0);
         (await Upload(chat, big)).StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
     }
+
+    [Fact]
+    public async Task Загрузка_отдаёт_человеческое_имя_а_кадр_читается_превью_с_типом_по_сигнатуре()
+    {
+        var chat = await PersonalChat();
+        var frame = await Json(await Upload(chat, Png, "кадр-а.png"));
+        frame.GetProperty("fileName").GetString().Should().Be("кадр-а.png");
+        var name = frame.GetProperty("path").GetString()!["frames/".Length..];
+
+        var got = await _client.GetAsync($"/api/video-editor/chats/{chat}/frames/{name}");
+        got.StatusCode.Should().Be(HttpStatusCode.OK);
+        got.Content.Headers.ContentType!.MediaType.Should().Be("image/png");
+        (await got.Content.ReadAsByteArrayAsync()).Should().Equal(Png);
+    }
+
+    [Theory]
+    [InlineData("upload")]
+    [InlineData("..%2F..%2Fsecret.png")]
+    [InlineData("0123456789abcdef0123456789abcdef.png")]
+    [InlineData("0123456789abcdef0123456789abcdef.gif")]
+    public async Task Кадр_с_именем_вне_шаблона_или_несуществующий_404(string name)
+    {
+        var chat = await PersonalChat();
+        (await _client.GetAsync($"/api/video-editor/chats/{chat}/frames/{name}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Кадр_чужого_владельца_и_чужого_чата_404()
+    {
+        var chat = await PersonalChat();
+        var frame = await Json(await Upload(chat, Png));
+        var name = frame.GetProperty("path").GetString()!["frames/".Length..];
+        var secondId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+        var strangers = await Sessions.CreateChatAsync(secondId, ClaudeMode.AcceptEdits, name: "Чужой");
+
+        (await _client.GetAsync($"/api/video-editor/chats/{strangers.Id}/frames/{name}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
 }

@@ -8,13 +8,15 @@ namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
 
 // Кадр сцены: Kind = "image" — версия нити редактора картинок (ThreadId, VersionId, Follow: кадр сам
 // переходит на новую версию нити) или Kind = "file" — картинка проекта (Path от корня проекта через «/»).
-// Поля чужого вида не выводятся.
+// Поля чужого вида не выводятся. FileName — человеческое имя загруженного «С компьютера» файла («кадр-а.png»),
+// для подписи; идентичность кадра он не меняет, сервер кладёт его при загрузке и держит рядом с файлом.
 public sealed record FrameRef(
     string Kind,
     string? ThreadId = null,
     string? VersionId = null,
     bool? Follow = null,
-    string? Path = null)
+    string? Path = null,
+    string? FileName = null)
 {
     public const string KindImage = "image";
     public const string KindFile = "file";
@@ -22,7 +24,7 @@ public sealed record FrameRef(
     public static FrameRef Image(string threadId, string versionId, bool follow = true) =>
         new(KindImage, ThreadId: threadId, VersionId: versionId, Follow: follow);
 
-    public static FrameRef File(string path) => new(KindFile, Path: path);
+    public static FrameRef File(string path, string? fileName = null) => new(KindFile, Path: path, FileName: fileName);
 }
 
 // Настройки сцены: что снимать и чем. null у поля — сцена его не задаёт, берётся из префов

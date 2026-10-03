@@ -97,6 +97,12 @@ flowchart TD
 после съёмки». Карточки ленты — `module_record` с `module: "videoeditor"`; жизненный цикл нити — на
 `session/deleted` и `session/branched`.
 
+**Волна правок после приёмки (2026-10-03).** «Устарел» — признак фильма целиком: `FilmStateDto.stale` (тот же
+`FilmStaleness.IsStale`, что и `FilmSummaryDto.stale`). **Новый фильм — отдельная операция** `POST films`
+(`FilmCreateRequest`), а не «первый патч по несуществующему пути»: патч всегда идёт под ревизией существующего файла, а
+создание — `CreateNew` (занятое имя — `name_taken`, чужой фильм не затирается). Кадр личного чата отдаётся
+`GET frames/{name}`, человеческое имя файла лежит рядом (`{id}.name`) и едет в `FrameRef.fileName`.
+
 **Формат `.film`** — JSON с версией схемы, ссылается на **файлы**, не на нити. `items[].scene` — снимок сцены
 для «Сценария» и «Переснять» из чата, где этой сцены нет. `builds[].sourceHash` — хеш сборки: признаки «устарел»
 и «● обновлена» вычисляются из него. `cuts.length == items.length − 1`, иначе файл невалиден; неизвестная
@@ -227,9 +233,9 @@ JSON ниже — единственное описание формы для ф
 Маршруты (`VideoEditorRoutes`; `Price.Unit` — `usd` | `credits` | `free`): проектные `api/projects/{projectId}/video-editor/sessions/{sessionId}/…` и общие
 `…/catalog`, `…/prefs`, `…/quote`, `…/jobs`; личные `api/video-editor/chats/{sessionId}/…`. Хвосты: `state`,
 `scenes`, `scenes/focus`, `scenes/{sceneId}/settings|current|save`, `scenes/{sceneId}/versions/{versionId}/file|poster`,
-`films`, `films/state?path=`, `films/build?path=`; только личные — `frames/upload`
-(`POST` multipart, поле `file`: png/jpg/webp по сигнатуре, до 20 МБ → `FrameRef` вида `file` с путём `frames/<id>.<ext>`
-в рабочей папке владельца; 404 — чужой чат, 400 — не картинка, 413 — больше лимита). В проектном чате кадр кладёт
+`films` (`GET` список, `POST` создать пустой фильм — `FilmCreateRequest` → 201 `FilmStateDto`, занятое имя — 409 `name_taken`), `films/state?path=`, `films/build?path=`; только личные — `frames/{name}` (`GET` байты кадра рабочей папки, `name` строго `<32 hex>.<png|jpg|webp>`, `Content-Type` по сигнатуре, чужой чат или файла нет — 404) и `frames/upload`
+(`POST` multipart, поле `file`: png/jpg/webp по сигнатуре, до 20 МБ → `FrameRef` вида `file` с путём `frames/<id>.<ext>` и `fileName` — человеческим именем исходного файла
+(лежит рядом с кадром, превью — `GET frames/<id>.<ext>`) в рабочей папке владельца; 404 — чужой чат, 400 — не картинка, 413 — больше лимита). В проектном чате кадр кладёт
 фронт через `files/upload` в `video/<фильм>/кадры/`. Коды ошибок (`VideoEditorErrors`): `name_taken`,
 `revision_conflict`, `dsp_unavailable`, `personal_scope_no_films`, `local_unavailable_personal`,
 `project_local_unsupported`, `outside_allowed_folders`, `film_invalid`, `film_schema_unsupported`, а также общие
@@ -247,7 +253,7 @@ JSON ниже — единственное описание формы для ф
 #### FrameRef (file)
 
 ```json
-{ "kind": "file", "path": "video/утро/кадры/кадр-3.png" }
+{ "kind": "file", "path": "video/утро/кадры/кадр-3.png", "fileName": "кадр-а.png" }
 ```
 
 #### VideoSceneSettingsDto
@@ -554,8 +560,15 @@ JSON ниже — единственное описание формы для ф
   },
   "spent": { "usd": 6.4, "credits": 12, "gpuSeconds": 300 },
   "marks": [ { "index": 0, "claude": true, "updated": true, "stale": false } ],
-  "build": { "state": "running", "progress": 0.4, "file": "video/утро/film.mp4", "error": "нет", "startedAt": "2026-10-02T16:00:00Z" }
+  "build": { "state": "running", "progress": 0.4, "file": "video/утро/film.mp4", "error": "нет", "startedAt": "2026-10-02T16:00:00Z" },
+  "stale": true
 }
+```
+
+#### FilmCreateRequest
+
+```json
+{ "path": "video/утро/утро.film", "aspect": "16:9" }
 ```
 
 #### FilmPatch
@@ -589,7 +602,14 @@ JSON ниже — единственное описание формы для ф
 #### FilmMusicDraftDto
 
 ```json
-{ "threadId": "t-1" }
+{
+  "threadId": "t-1",
+  "durationSec": 5,
+  "minDurationSec": 10,
+  "actualDurationSec": 10,
+  "durationNote": "Модели музыки снимают не короче 10 с",
+  "styleText": "Камера медленно приближается к окну; Крупный план рук"
+}
 ```
 
 #### VideoThreadChangedMessage
@@ -616,7 +636,8 @@ JSON ниже — единственное описание формы для ф
     "path": "video/утро/утро.film", "revision": "9f2c",
     "document": { "schema": 1, "aspect": "16:9", "items": [], "cuts": [], "music": { "file": "m.mp3", "volume": 60, "fadeOut": 4 }, "builds": [] },
     "spent": { "usd": 0, "credits": 0, "gpuSeconds": 0 }, "marks": [],
-    "build": { "state": "done", "progress": 1, "file": "film.mp4", "error": "нет", "startedAt": "2026-10-02T16:00:00Z" }
+    "build": { "state": "done", "progress": 1, "file": "film.mp4", "error": "нет", "startedAt": "2026-10-02T16:00:00Z" },
+    "stale": false
   }
 }
 ```

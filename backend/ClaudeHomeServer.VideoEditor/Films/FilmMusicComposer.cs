@@ -21,6 +21,11 @@ public sealed class FilmMusicComposer(
     public const int DefaultVolume = 60;
     public const double DefaultFadeOut = 4;
     private const int MaxNameAttempts = 99;
+    private const int MaxStyleChars = 300;
+
+    // Не короче этого модели музыки «Звука» не снимают (минимум песенных моделей каталога): заготовка под
+    // короткий фильм честно получает «не короче 10 с», а не обещание 0:05
+    public const int MinMusicSeconds = 10;
 
     public async Task<FilmCallResult<FilmMusicDraftDto>> CreateDraftAsync(string ownerId, VideoEditScope scope, string? path,
         FilmMusicRequest? req, CancellationToken ct)
@@ -32,7 +37,8 @@ public sealed class FilmMusicComposer(
                 "Редактор звука выключен: музыку под фильм сочинить нельзя");
         var resolved = FilmService.ResolveFilm(scope, path);
         if (!resolved.IsOk) return FilmCallResult<FilmMusicDraftDto>.Fail(resolved.ErrorCode!, resolved.Error!);
-        if (films.Films.ReadFile(resolved.Value!.Full).Status == FilmStore.ReadStatus.NotFound)
+        var read = films.Films.ReadFile(resolved.Value!.Full);
+        if (read.Status == FilmStore.ReadStatus.NotFound)
             return FilmCallResult<FilmMusicDraftDto>.Fail(VideoEditorErrors.FileNotFound, "Фильм не найден");
         if (!threads.OwnChat(ownerId, scope.Key, req.SessionId.Trim()))
             return FilmCallResult<FilmMusicDraftDto>.Fail(VideoEditorErrors.ChatNotFound, "Чат не найден");
@@ -42,8 +48,22 @@ public sealed class FilmMusicComposer(
             return FilmCallResult<FilmMusicDraftDto>.Fail(VideoEditorErrors.ChatNotFound, "Не удалось завести звук в этом чате");
         var expected = films.ExpectMusic(ownerId, scope, path, req.SessionId.Trim(), draft.ThreadId);
         return expected.IsOk
-            ? FilmCallResult<FilmMusicDraftDto>.Ok(new FilmMusicDraftDto(draft.ThreadId))
+            ? FilmCallResult<FilmMusicDraftDto>.Ok(DraftOf(draft.ThreadId, read.Document))
             : FilmCallResult<FilmMusicDraftDto>.Fail(expected.ErrorCode!, expected.Error!);
+    }
+
+    // Длина и стиль заготовки: длина — фильма, но не короче минимума моделей (причина — в DurationNote), стиль —
+    // из текстов сцен снимков фильма
+    internal static FilmMusicDraftDto DraftOf(string threadId, FilmDocument? doc)
+    {
+        var seconds = doc is null ? 0 : (int)Math.Ceiling(FilmFormat.DurationOf(doc));
+        var actual = Math.Max(seconds, MinMusicSeconds);
+        var texts = doc?.Items.Select(i => i.Scene?.Text?.Trim()).Where(t => !string.IsNullOrEmpty(t)).Distinct().ToList() ?? [];
+        var style = string.Join("; ", texts);
+        if (style.Length > MaxStyleChars) style = style[..MaxStyleChars].TrimEnd() + "…";
+        return new FilmMusicDraftDto(threadId, seconds, MinMusicSeconds, actual,
+            actual > seconds ? $"Модели музыки снимают не короче {MinMusicSeconds} с" : null,
+            style.Length == 0 ? null : style);
     }
 
     // Подписчик AudioVersionAdded: фильмы владельца, ждущие эту нить. Версия без основного файла (одни стемы)

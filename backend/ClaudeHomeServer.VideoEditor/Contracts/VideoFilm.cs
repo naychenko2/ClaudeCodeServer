@@ -46,14 +46,21 @@ public sealed record FilmBuild(string File, string SourceHash, DateTime At);
 
 public sealed record FilmSummaryDto(string Path, string Name, int ItemCount, double DurationSec, bool Stale, bool Valid);
 
-// Revision — хеш содержимого файла (етаг); Stale — признаки по строкам (индекс → причина) из SourceHash
+// Revision — хеш содержимого файла (етаг); Marks — признаки по строкам. Stale — фильм изменён после последней
+// сборки (или не собирался, а строки есть): отпечаток входов из builds[].sourceHash не совпал с текущим. Тот же
+// признак, что FilmSummaryDto.Stale, — список и состояние не расходятся; пустой фильм не устарел
 public sealed record FilmStateDto(
     string Path,
     string Revision,
     FilmDocument Document,
     VideoSpentDto Spent,
     IReadOnlyList<FilmItemMarkDto> Marks,
-    FilmBuildStatusDto? Build);
+    FilmBuildStatusDto? Build,
+    bool Stale = false);
+
+// «Новый фильм»: Path — video/<папка>/<имя>.film. Файл создаётся пустым (items: []), занятое имя — 409 name_taken.
+// Aspect не задан — 16:9. Ответ — FilmStateDto (201)
+public sealed record FilmCreateRequest(string Path, string? Aspect = null);
 
 // Метки строки: «✦ Claude» (Claude = правил агент), «● обновлена» (Updated), «переснять» (Stale)
 public sealed record FilmItemMarkDto(int Index, bool Claude, bool Updated, bool Stale);
@@ -93,7 +100,17 @@ public static class FilmPatchOps
 // нить звука: фильм ждёт из неё музыку, первая готовая версия сама ляжет в music/<фильм>.mp3 и станет музыкой фильма
 public sealed record FilmMusicRequest(string SessionId);
 
-public sealed record FilmMusicDraftDto(string ThreadId);
+// DurationSec — длина фильма (то, под что сочиняется музыка); MinDurationSec — не короче этого модели музыки
+// не снимают; ActualDurationSec = max(DurationSec, MinDurationSec) — что придёт на самом деле, DurationNote —
+// причина, когда они расходятся («не короче 10 с»). StyleText — стиль по текстам сцен фильма, готов для поля
+// «стиль и описание» в «Звуке» (запуск берёт текст и длину из запроса, а не из нити — подставляет фронт)
+public sealed record FilmMusicDraftDto(
+    string ThreadId,
+    int DurationSec = 0,
+    int MinDurationSec = 0,
+    int ActualDurationSec = 0,
+    string? DurationNote = null,
+    string? StyleText = null);
 
 // State — waiting (ждём слот сборки) | running | done | failed | cancelled; Progress 0..1
 public sealed record FilmBuildStatusDto(string State, double Progress, string? File, string? Error, DateTime? StartedAt);

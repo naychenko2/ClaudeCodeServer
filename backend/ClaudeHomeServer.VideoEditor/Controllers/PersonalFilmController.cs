@@ -16,6 +16,7 @@ public class PersonalFilmController(VideoEditScopeGate gate) : ControllerBase
     private string UserId => User.FindFirstValue("sub")!;
 
     [HttpGet(VideoEditorRoutes.Films)]
+    [HttpPost(VideoEditorRoutes.FilmCreate)]
     [HttpGet(VideoEditorRoutes.FilmState)]
     [HttpPatch(VideoEditorRoutes.FilmPatchRoute)]
     [HttpPost(VideoEditorRoutes.FilmBuild)]

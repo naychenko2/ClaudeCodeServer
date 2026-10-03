@@ -105,7 +105,32 @@ public class PersonalVideoEditorController(
         var bytes = buffer.ToArray();
         if (VideoFrameFiles.ExtensionBySignature(bytes) is not { } extension)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Кадр — png, jpg или webp");
-        return Ok(FrameRef.File(workspace.SaveFrame(UserId, bytes, extension)));
+        var fileName = VideoEditWorkspace.CleanFileName(file.FileName);
+        return Ok(FrameRef.File(workspace.SaveFrame(UserId, bytes, extension, fileName), fileName));
+    }
+
+    // Байты загруженного кадра для превью: имя строго по шаблону рабочей папки, чужой чат — 404 гейта; тип — по
+    // сигнатуре файла, а не по имени
+    [HttpGet(VideoEditorRoutes.FrameFile)]
+    public IActionResult FrameFile(string sessionId, string name)
+    {
+        if (!Gate(sessionId, out _, out var denied)) return denied;
+        var relative = $"{VideoEditWorkspace.FramesDirName}/{name}";
+        if (workspace.FindFrame(UserId, relative) is not { } full)
+            return Error(StatusCodes.Status404NotFound, VideoEditorErrors.FileNotFound, "Кадр не найден");
+        var bytes = System.IO.File.ReadAllBytes(full);
+        var contentType = VideoFrameFiles.ExtensionBySignature(bytes) switch
+        {
+            ".png" => "image/png",
+            ".jpg" => "image/jpeg",
+            ".webp" => "image/webp",
+            _ => null,
+        };
+        if (contentType is null)
+            return Error(StatusCodes.Status404NotFound, VideoEditorErrors.FileNotFound, "Кадр не найден");
+        if (workspace.FindFrameName(UserId, relative) is { } fileName)
+            Response.Headers.ContentDisposition = "inline; filename*=UTF-8''" + Uri.EscapeDataString(fileName);
+        return File(bytes, contentType);
     }
 
     private bool Gate(string sessionId, [NotNullWhen(true)] out VideoEditScope? scope,

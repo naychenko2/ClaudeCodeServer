@@ -28,5 +28,7 @@ public static class VideoEditorRoutes
     public const string FilmPatchRoute = "films";                                         // PATCH ?path= FilmPatch → FilmStateDto
     public const string FilmBuild = "films/build";                                        // POST ?path= / GET статус / DELETE отмена → FilmBuildStatusDto
     public const string FrameUpload = "frames/upload";                                    // POST multipart file → FrameRef (только личный чат; в проекте — files/upload в video/<фильм>/кадры/)
+    public const string FrameFile = "frames/{name}";                                      // GET байты кадра рабочей папки (только личный чат): name по шаблону <32 hex>.<png|jpg|webp>
+    public const string FilmCreate = "films";                                             // POST FilmCreateRequest → 201 FilmStateDto (пустой фильм, только проектные)
     public const string FilmMusic = "films/music";                                        // POST ?path= FilmMusicRequest → FilmMusicDraftDto («Сочинить под фильм…»)
 }

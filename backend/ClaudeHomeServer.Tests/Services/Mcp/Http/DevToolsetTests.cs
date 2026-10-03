@@ -365,6 +365,25 @@ public class DevToolsetTests : IDisposable
         DevToolset.EndedBadly(new BuildRunResult(null, 0, Cancelled: true, false, TimeSpan.Zero, [])).Should().BeTrue();
     }
 
+    // Ревью этапа 4 (Светлана, LOW): дев-сервер не завершается сам — build висел бы до потолка,
+    // держа блокировку дерева и слот очереди. Отказ до запуска с подсказкой про start_stand
+    [Theory]
+    [InlineData("dev")]
+    [InlineData("start")]
+    [InlineData("preview")]
+    [InlineData("serve:api")]
+    public async Task Build_СерверныйСкрипт_ОтказСПодсказкойStartStand(string script)
+    {
+        var env = Build();
+        Frontend(env.Project.RootPath);
+
+        var result = await Call(env, new JsonObject { ["kind"] = "npm", ["target"] = "frontend", ["script"] = script });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("start_stand");
+        env.Launchers.Calls.Should().Be(0);
+    }
+
     // ── Стенд (start_stand / stop_stand) ────────────────────────────────────────────
 
     // Сервис-заглушка из .claude/launch.json: печатает адрес слушателя теста и живёт ~30 с —

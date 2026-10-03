@@ -500,6 +500,15 @@ public class McpToolsetStabilityTests
                 $"{name}: состояние хода не должно влиять на состав инструментов");
         }
         checkedAny.Should().BeTrue("хотя бы один тулсет с ToolsFor обязан существовать");
+
+        // ToolsFor тулсетов tests и dev делегирует составу ProjectRunCaller.TryResolveSession: его
+        // тело — тоже часть состава, хоть и живёт в другом файле и не в методе ToolsFor
+        var caller = files.SingleOrDefault(f => Path.GetFileName(f) == "ProjectRunCaller.cs");
+        caller.Should().NotBeNull("общая часть тулсетов tests и dev обязана попасть в проверку");
+        var resolve = MethodBody(File.ReadAllText(caller!), "public bool TryResolveSession(McpToolCallContext");
+        foreach (var forbidden in new[] { "GetActiveTurnDelegation", "TurnDelegation", "_currentTurn", "IsBusy" })
+            resolve.Should().NotContain(forbidden,
+                "ProjectRunCaller.TryResolveSession решает состав tools/list тулсетов tests и dev — без состояния хода");
     }
 
     /// <summary>

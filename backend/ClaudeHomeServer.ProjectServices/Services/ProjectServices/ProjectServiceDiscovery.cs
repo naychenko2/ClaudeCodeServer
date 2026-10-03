@@ -606,12 +606,17 @@ public sealed class ProjectServiceDiscovery
         return "npm";
     }
 
-    private static bool IsServerScript(string name)
+    /// <summary>
+    /// Скрипт package.json поднимает сервер и сам не завершается (dev, start, serve, preview,
+    /// watch и их «:»-варианты). Тем же правилом сборка (dev: build) отказывает таким скриптам.
+    /// </summary>
+    public static bool IsServerScript(string name)
     {
         var l = name.ToLowerInvariant();
-        if (l.StartsWith("pre") || l.StartsWith("post")) return false; // npm-lifecycle хуки
+        // Точный список — до отсева хуков: «preview» начинается с «pre», но хуком не является
         string[] exact = ["dev", "start", "serve", "preview", "watch"];
         if (exact.Contains(l)) return true;
+        if (l.StartsWith("pre") || l.StartsWith("post")) return false; // npm-lifecycle хуки
         return l.StartsWith("dev:") || l.StartsWith("start:") || l.StartsWith("serve:");
     }
 

@@ -98,6 +98,7 @@ public class WorktreeBuildWarmupTests : IDisposable
         spec.Args.Should().Equal("build", "backend/ClaudeHomeServer.Tests", "-m:4", "-v:q", "-nologo");
         spec.WorkingDirectory.Should().Be(Path.GetFullPath(tree));
         spec.RedirectStdin.Should().BeFalse();
+        spec.PrivateBuildNodes.Should().BeTrue("узлы MSBuild прогрева не переживают его и не общие с чужими сборками");
         factory.Projects.Should().Equal(["p-1"], "прогрев идёт в среде проекта — та же изоляция, что у ходов");
     }
 

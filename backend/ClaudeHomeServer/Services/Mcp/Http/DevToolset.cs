@@ -93,6 +93,11 @@ public sealed class DevToolset(
         if (isNpm && !NpmBuildService.IsScriptName(script))
             return ProjectRunCaller.Deny("script — имя скрипта из package.json: латинские буквы, цифры и «:_.-», "
                 + "первым символом буква или цифра, без пробелов, «&», «;» и кавычек.");
+        // Дев-сервер не завершается сам: сборка висела бы до потолка, держа блокировку дерева и
+        // слот очереди сборок
+        if (isNpm && ProjectServiceDiscovery.IsServerScript(script))
+            return ProjectRunCaller.Deny($"Скрипт «{script}» поднимает сервер и сам не завершается — это не сборка. "
+                + "Дев-стенд поднимай инструментом start_stand: он живёт после хода и виден в панели «Сервисы».");
 
         var rawTarget = ProjectRunCaller.StringArg(arguments, "target");
         string? target;

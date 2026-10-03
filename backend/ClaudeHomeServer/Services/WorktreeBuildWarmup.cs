@@ -42,6 +42,9 @@ public sealed class WorktreeBuildWarmup(
         RedirectStdin = false,
         // Сборка тестового проекта — несколько гигабайт на прогон; под общий потолок
         Heavy = true,
+        // Узлы MSBuild и компилятор — только свои: не переживают прогрев и не делятся с чужими
+        // сборками, «Стоп» чужого дерева их не гасит (ProcessSpec.PrivateBuildNodes)
+        PrivateBuildNodes = true,
     };
 
     private BuildConcurrencyGate Gate => gate ?? BuildConcurrencyGate.Instance;

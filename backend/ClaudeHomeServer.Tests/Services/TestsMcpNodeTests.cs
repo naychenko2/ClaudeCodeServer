@@ -149,6 +149,18 @@ public class TestsMcpNodeTests : IDisposable
         servers.ContainsKey(McpEndpoints.DevName).Should().BeFalse("dev не в KeepMcpServers провайдера");
     }
 
+    // Обратная сторона строки Keep(McpEndpoints.DevName): dev в белом списке — узел едет, а tests,
+    // которого в списке нет, гасится. Ключ dev свой, а не «tests»
+    [Fact]
+    public void TrimMcp_KeepТолькоDev_DevОстаётся_TestsГасится()
+    {
+        var (servers, keys) = BuildTurn(Ctx(), trim: true, keep: McpEndpoints.DevName);
+
+        servers!.ContainsKey(McpEndpoints.DevName).Should().BeTrue("dev в KeepMcpServers провайдера");
+        servers.ContainsKey(McpEndpoints.TestsName).Should().BeFalse("tests не в KeepMcpServers провайдера");
+        keys.Should().Contain("dev");
+    }
+
     // Лаунчер ловит env и сигнатуру хода; процесс — спящий shell, гасится в Dispose
     private sealed class EnvCapturingLauncher(List<Process> processes) : IProcessLauncher
     {

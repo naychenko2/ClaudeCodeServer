@@ -16,6 +16,7 @@ import { openFromTree } from './entry/openFromTree';
 import { ImageComposerChip } from './composer/ComposerChip';
 import { ImagesPanel } from './panel/ImagesPanel';
 import { IMAGE_COMPOSER_MODE, imageMode } from './composer/imageMode';
+import { imageKindApi } from './context/kind';
 import { takeMarksAttachment } from './composer/marksAttachment';
 import { ImagesStrip, imagesStripStatus } from './strip/ImagesStrip';
 import { ThreadAnchor } from './thread/ThreadCard';
@@ -66,6 +67,8 @@ export const manifest: SubsystemManifest = {
     ],
     // Режим поля ввода «Картинка» — только при выбранной картинке
     'composer-mode': [{ name: IMAGE_COMPOSER_MODE, order: 10, action: imageMode as unknown as Record<string, unknown> }],
+    // Вид «картинка» контекста хода (ADR-023): чипы действий, превью, «Чем» и параметры панели «Контекст»
+    'context-kind': [{ name: 'image', action: imageKindApi as unknown as Record<string, unknown> }],
     // Чип пометок и попап «Редактор»
     'composer-chip': [
       {

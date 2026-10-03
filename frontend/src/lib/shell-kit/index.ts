@@ -41,13 +41,14 @@ export type { SubsystemManifest, RevealPanelDetail } from '../subsystems/registr
 // ─── chatContext (ADR-023): контракты вида контекста хода ────────────────────
 export type {
   ChatContextDto, ChatContextItem, ChatContextPrimary, ChatContextRef, ContextKindApi, ContextKindCtx, KindState,
-  ContextAction, ActionKind, LaunchParam, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
+  ContextAction, ActionKind, LaunchParam, ExecutorListModel, ActionResult, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
 } from '../chatContext/types';
 
 export {
-  useChatContext, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
+  useChatContext, getChatContextState, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
 } from '../chatContext/store';
 export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
+export { notifyKindChanged } from '../chatContext/actionRun';
 export { setContextReturn, useContextReturn, clearContextReturn } from '../chatContext/contextReturn';
 
 // ─── genPanelDismissed ───────────────────────────────────────────────────────

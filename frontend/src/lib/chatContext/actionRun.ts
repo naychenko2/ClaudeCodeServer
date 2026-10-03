@@ -37,6 +37,8 @@ let _version = 0;
 const emit = () => { _version++; _listeners.forEach(fn => fn()); };
 export const subscribeRun = (fn: () => void) => { _listeners.add(fn); return () => { _listeners.delete(fn); }; };
 export const getRunVersion = () => _version;
+// Внешнее состояние вида (нити, отметки, каталог, настройки) изменилось: хост пересчитает действия, «Чем» и цену
+export const notifyKindChanged = emit;
 
 const fresh = (scope: string): RunEntry => ({
   scope, text: '', values: {}, state: 'idle', progress: null, result: null, quote: null, quoting: null,

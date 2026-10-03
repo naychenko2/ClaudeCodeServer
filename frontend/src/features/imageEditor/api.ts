@@ -84,6 +84,9 @@ export interface ImageEditQuoteRequest {
   hasAnnotations?: boolean;
   // Запрос просит стереть отмеченное кистью
   removal?: boolean;
+  // Чат и ревизия контекста (ADR-023 §Д2.1): с ревизией сервер берёт образцы, персонажа и размер из стора
+  sessionId?: string | null;
+  contextRevision?: number | null;
 }
 
 export interface ImageEditEstimate {
@@ -164,6 +167,8 @@ export interface ImageEditJobInput {
   baseStepId?: string;
   // Версия нити, от которой правка (не передана — текущая); без source сервер сам берёт её картинку
   versionId?: string;
+  // Ревизия контекста чата (ADR-023 §Д2.1): сервер берёт входы из стора, не совпала — 409 context_changed
+  contextRevision?: number;
 }
 
 export interface ImageEditUploadedReference { file: Blob; name: string; role: ReferenceRole }
@@ -196,6 +201,7 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.threadId) form.append('threadId', input.threadId);
   if (input.baseStepId) form.append('baseStepId', input.baseStepId);
   if (input.versionId) form.append('versionId', input.versionId);
+  if (input.contextRevision != null) form.append('contextRevision', String(input.contextRevision));
   return form;
 }
 

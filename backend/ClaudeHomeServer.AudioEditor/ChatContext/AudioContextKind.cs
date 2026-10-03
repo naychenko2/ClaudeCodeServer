@@ -78,9 +78,13 @@ public sealed class AudioContextKind(
 
     // Что принимает основной объект «audio»: op == null — таблица по всем операциям (из неё считается
     // usedBy), иначе только роли, которые берёт эта операция. Другие виды основного — пусто
-    public IReadOnlyList<ContextRoleSpec> AcceptedRefs(ContextScope scope, ContextItem primary, string? op)
+    public IReadOnlyList<ContextRoleSpec> AcceptedRefs(ContextScope scope, ContextItem primary, string? op) =>
+        primary.Kind != Kind ? [] : RolesOf(op);
+
+    // Таблица ролей без привязки к экземпляру: её же читает запуск по ревизии (AudioContextLaunch),
+    // чтобы «референс, который операция не берёт» пропускался по той же таблице, что рисует серый чип
+    internal static IReadOnlyList<ContextRoleSpec> RolesOf(string? op)
     {
-        if (primary.Kind != Kind) return [];
         var table = new (string Role, string Title, string[] Kinds, AudioOp[] Ops)[]
         {
             (AudioContextRoles.Voice, "Голос", [VoiceKind], [AudioOp.Speak, AudioOp.Dialogue, AudioOp.ConvertVoice]),
@@ -123,11 +127,19 @@ public sealed class AudioContextKind(
 
     // AudioPriceHint создают только fal и локальный каталог (free). У fal Unit — единица тарификации
     // (chars|sec|min|run), валюта подразумевается usd; у free Unit — «free». Символы пересчитываются на 1000: «$0.09 / 1000 симв.» вместо «$0.00009 / симв.»
-    internal static string PriceText(AudioPriceHint price) => price.Unit switch
+    internal static string PriceText(AudioPriceHint price)
     {
-        AudioPriceUnits.Chars => ContextPriceText.Format(price.Amount * 1000, AudioPriceUnits.Usd, "1000 симв."),
-        AudioPriceUnits.Sec or AudioPriceUnits.Min or AudioPriceUnits.Run => ContextPriceText.Format(price.Amount, AudioPriceUnits.Usd, price.Unit),
-        _ => ContextPriceText.Format(price.Amount, price.Unit, price.Per),
+        var (amount, unit, per) = PriceParts(price);
+        return ContextPriceText.Format(amount, unit, per);
+    }
+
+    // Цена числом, валютой и «за что» — те же числа, что в подписи PriceText; валюта (free | usd | credits | rub),
+    // единица тарификации fal в неё не попадает
+    internal static (double Amount, string Unit, string Per) PriceParts(AudioPriceHint price) => price.Unit switch
+    {
+        AudioPriceUnits.Chars => (price.Amount * 1000, AudioPriceUnits.Usd, "1000 симв."),
+        AudioPriceUnits.Sec or AudioPriceUnits.Min or AudioPriceUnits.Run => (price.Amount, AudioPriceUnits.Usd, price.Unit),
+        _ => (price.Amount, price.Unit, price.Per),
     };
 
     public ContextItem? SeedPrimary(ContextScope scope)

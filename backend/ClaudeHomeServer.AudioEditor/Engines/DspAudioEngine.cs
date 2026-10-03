@@ -42,7 +42,10 @@ public sealed record AudioMixInput(
     string? BaseVersionId = null,
     AudioFormat? Format = null,
     long? Revision = null,
-    AudioEditInitiator Initiator = AudioEditInitiator.Human);
+    AudioEditInitiator Initiator = AudioEditInitiator.Human,
+    // Ревизия контекста чата (ADR-023 §Д2.1): threadId маршрута обязан быть основным объектом контекста,
+    // BaseVersionId тела игнорируется — основа это версия основного; иначе 409 context_changed
+    long? ContextRevision = null);
 
 public sealed record AudioDspVersionDto(string ThreadId, string VersionId, int Number, string JobId, AudioThreadsState State);
 
@@ -64,7 +67,8 @@ public sealed class DspAudioEngine(
     AudioJobThreads threads,
     AudioEditWorkspace workspace,
     ILogger<DspAudioEngine> log,
-    IAudioDsp? dsp = null)
+    IAudioDsp? dsp = null,
+    ChatContext.AudioContextLaunch? context = null)
 {
     public const string ProviderKey = "dsp";
     public const string Label = "Без ИИ";
@@ -118,7 +122,19 @@ public sealed class DspAudioEngine(
         if (input.Stems.Select(s => s.Role).Distinct(StringComparer.Ordinal).Count() != input.Stems.Count)
             return Invalid("Стем указан дважды");
         if (input.Stems.All(s => s.Muted)) return Invalid("Все стемы выключены — сводить нечего");
-        var (basis, error) = Base(ownerId, scope, input.SessionId, input.ThreadId, input.BaseVersionId, input.Revision);
+        var baseVersionId = input.BaseVersionId;
+        if (input.ContextRevision is { } revision)
+        {
+            if (context is null) return Fail(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
+            var read = context.Read(ownerId, scope, input.SessionId, revision);
+            if (!read.Ok) return read.Fail<AudioDspVersionDto>();
+            var inputs = ChatContext.AudioContextLaunch.Extract(scope, read.State!, null);
+            // Нить маршрута сверяется со стором: основной объект сменился — это тот же 409, что и устаревшая ревизия
+            if (inputs.ThreadId != input.ThreadId.Trim())
+                return context.Stale(ownerId, scope, input.SessionId).Fail<AudioDspVersionDto>();
+            baseVersionId = inputs.VersionId;
+        }
+        var (basis, error) = Base(ownerId, scope, input.SessionId, input.ThreadId, baseVersionId, input.Revision);
         if (error is not null) return error;
         var (thread, version) = basis!.Value;
 

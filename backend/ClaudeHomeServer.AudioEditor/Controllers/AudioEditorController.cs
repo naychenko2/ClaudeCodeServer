@@ -24,8 +24,9 @@ public class AudioEditorController(
     AudioEditWorkspace workspace,
     Engines.DspAudioEngine dsp,
     AudioConcatService concat,
-    IProjectFiles? files = null)
-    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat)
+    IProjectFiles? files = null,
+    ChatContext.AudioContextLaunch? context = null)
+    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat, context)
 {
     private readonly AudioJobThreads _threads = threads;
     private readonly AudioEditWorkspace _workspace = workspace;

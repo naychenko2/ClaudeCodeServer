@@ -29,6 +29,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         services.AddHostedService<Threads.AudioThreadLifecycle>();
         // Вид «audio» контекста чата (ADR-023): Validate/Describe и засев из фокуса звука
         services.AddContextKindProvider<ChatContext.AudioContextKind>();
+        // Запуск, сведение и склейка по ревизии контекста (КТ-3): единственная точка, где вход берётся из стора
+        services.AddSingleton<ChatContext.AudioContextLaunch>();
         // Запуск, оборванный перезапуском, не висит в «Генерируем…»: сверка при старте
         services.AddHostedService<Threads.AudioThreadRecovery>();
         // Префы режима области: data/audio-editor-prefs, их наследуют новые нити и цепочка запуска

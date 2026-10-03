@@ -40,12 +40,17 @@ public static class AudioEditErrorCodes
     public const string VoiceCloneMissing = "voice_clone_missing";
     // Обработка без ИИ недоступна: нет ffmpeg на хосте или выключена подсистема images (ADR-021 §2)
     public const string DspUnavailable = "dsp_unavailable";
+    // Ревизия контекста чата устарела (ADR-023 §Д2.1): тело 409 — свежий ChatContextDto
+    public const string ContextChanged = "context_changed";
 }
 
 public sealed record AudioEditCallResult<T>(T? Value, string? ErrorCode, string? Error)
 {
     // Котировка пересоздания клона при отказе voice_clone_stale / voice_clone_missing
     public AudioQuoteDto? Recreate { get; init; }
+
+    // Свежий контекст чата при отказе context_changed: ручка отдаёт его телом 409
+    public Protocol.ChatContextDto? Context { get; init; }
 
     public static AudioEditCallResult<T> Ok(T value) => new(value, null, null);
     public static AudioEditCallResult<T> Fail(string code, string error) => new(default, code, error);

@@ -78,6 +78,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
     private readonly IAudioAgentEdits? _edits;
     private readonly IAudioVoiceLibrary? _library;
     private readonly bool _agentLaunch;
+    private readonly ChatContext.AudioContextLaunch? _context;
 
     // Платные запуски агентом в текущем ходу: sessionId → число. Сброс — TurnCompleted этой сессии
     private readonly Dictionary<string, int> _launches = new(StringComparer.Ordinal);
@@ -97,8 +98,10 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         IAudioAgentEdits? edits = null,
         IAudioVoiceLibrary? library = null,
         ITurnEventBus? events = null,
-        IConfiguration? config = null)
+        IConfiguration? config = null,
+        ChatContext.AudioContextLaunch? context = null)
     {
+        _context = context;
         _sessions = sessions;
         _flags = flags;
         _projects = projects;
@@ -386,6 +389,13 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             // Голос из библиотеки разворачивает поставщик при запуске (ADR-021 §5); протухший клон MiniMax —
             // отказ, пересоздаёт его только человек кнопкой с ценой
             libraryVoice = AudioVoiceRefs.Prefix + fromLibrary.Slug;
+        }
+        else if (!args.ContainsKey("voice") && _context is not null
+            && _flags.IsEnabled(ownerId, FeatureFlagKeys.ChatContext)
+            && _context.AgentVoice(ownerId, session.Id, q.Op) is { } contextVoice)
+        {
+            // Агент без voice берёт голос контекста чата; явный аргумент, в том числе пустой, его заменяет
+            libraryVoice = contextVoice;
         }
         else if (Str(args, "voice") is { } voice)
         {

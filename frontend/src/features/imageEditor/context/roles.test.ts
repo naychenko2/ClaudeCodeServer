@@ -3,9 +3,9 @@ import { imageRefOf } from './work';
 import { imageRefRoles } from './roles';
 
 describe('роли референсов основной картинки', () => {
-  it('картинка и файл проекта — образцом: стиль, объект, лицо', () => {
+  it('картинка и файл проекта — образцом: стиль, объект, персонаж', () => {
     for (const kind of ['image', 'project-file']) {
-      expect(imageRefRoles(kind).map(r => r.role)).toEqual(['style', 'object', 'face']);
+      expect(imageRefRoles(kind).map(r => r.role)).toEqual(['style', 'object', 'character']);
     }
   });
   it('персонаж — единственная роль (вопроса нет), остальные виды картинка не берёт', () => {

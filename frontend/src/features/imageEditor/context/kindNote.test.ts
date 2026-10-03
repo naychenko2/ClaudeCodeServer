@@ -39,9 +39,9 @@ describe('метка «Отмечено: N ✕»', () => {
 });
 
 describe('«С компьютера»', () => {
-  it('основной объект-картинка берёт образцы ролями стиль, объект, лицо; чужой вид — нет', () => {
+  it('основной объект-картинка берёт образцы ролями стиль, объект, персонаж; чужой вид — нет', () => {
     const up = imageKindApi.upload?.(ctx, primary());
-    expect(up?.roles.map(r => r.role)).toEqual(['style', 'object', 'face']);
+    expect(up?.roles.map(r => r.role)).toEqual(['style', 'object', 'character']);
     expect(up?.kind).toBe('image');
     expect(imageKindApi.upload?.(ctx, primary('audio'))).toBeNull();
   });

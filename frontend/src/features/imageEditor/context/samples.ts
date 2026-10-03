@@ -11,7 +11,7 @@ export const CHARACTER_KIND = 'image-character';
 export const FILE_KIND = 'project-file';
 export const SAMPLE_ACCEPT = 'image/png,image/jpeg,image/webp';
 
-// Образцы: картинки и файлы проекта с ролью образца (стиль, объект, лицо)
+// Образцы: картинки и файлы проекта с ролью образца (стиль, объект, персонаж)
 export const sampleRefs = (state: ChatContextDto): ChatContextRef[] =>
   state.refs.filter(r => (r.kind === IMAGE_KIND || r.kind === FILE_KIND) && r.role !== null);
 

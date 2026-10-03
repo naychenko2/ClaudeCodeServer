@@ -1564,6 +1564,14 @@ export function Composer({
   // чипом: сегмент-иконка открывает раскрывашку настроек (бывшая кнопка), ✕ снимает
   // режим (бывший крестик чипа) — оба действия как раньше, просто в одном контуре
   const teamMechMeta = teamMech ? teamMechanic(teamMech) : null;
+  // Подсказка обычного (однострочного) поля. «Написать Вере…»: имя в дательном; не
+  // склоняется однозначно — фраза без имени
+  const basePlaceholder = teamMechMeta ? teamMechMeta.placeholder
+    : executorTask ? (executorTask.title ? `Написать исполнителю задачи «${executorTask.title}»…` : 'Написать исполнителю…')
+    : addressee ? `Написать ${addressee}…` : 'Написать сообщение…';
+  // Своим слоем рисуем только в пустом однострочном поле: у режимов поле высокое, и их
+  // подсказка в несколько строк задумана
+  const placeholderOverlay = !activeMode && !suggestionVisible && text === '';
   const TeamMechIcon = teamMechMeta?.icon;
   const teamPill = teamMechMeta && TeamMechIcon ? (
     <ModePill
@@ -1791,7 +1799,7 @@ export function Composer({
       <textarea
         autoComplete="off"
         ref={textareaRef}
-        className="cc-composer-input"
+        className={placeholderOverlay ? 'cc-composer-input cc-ph-overlay' : 'cc-composer-input'}
         value={fieldValue}
         onChange={(e) => {
           if (activeMode) { setModeText(e.target.value); return; }
@@ -1802,9 +1810,7 @@ export function Composer({
         onInput={autoResize}
         onPaste={handlePaste}
         // Пока видна ghost-подсказка, обычный плейсхолдер прячем — тексты бы наложились
-        // «Написать Вере…»: имя в дательном; не склоняется однозначно — фраза без имени
-        // Исполнитель на телефоне — коротко: рядом бейдж «к постановщику», длинное не влезает
-        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : executorTask ? (isMobile ? 'Написать…' : executorTask.title ? `Написать исполнителю задачи «${executorTask.title}»…` : 'Написать исполнителю…') : addressee ? `Написать ${addressee}…` : 'Написать сообщение…'}
+        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : basePlaceholder}
         rows={1}
         style={{
           flex: 1,
@@ -1825,6 +1831,19 @@ export function Composer({
           boxSizing: 'border-box',
         }}
       />
+      {placeholderOverlay && (
+        // Подсказка пустого поля — своим слоем, в одну строку с многоточием (нативную
+        // прячет .cc-ph-overlay). Геометрия — как у ghost-подсказки ниже
+        <div aria-hidden style={{
+          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+          padding: isMobile ? '0 8px' : '0 4px', pointerEvents: 'none', boxSizing: 'border-box',
+          fontSize: isMobile ? 16 : 15, lineHeight: '1.5', color: C.textMuted, minWidth: 0,
+        }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+            {basePlaceholder}
+          </span>
+        </div>
+      )}
       {suggestionVisible && promptSuggestion && (
         // Ghost text как в Claude Code Desktop: серый текст подсказки в самом поле
         // + бейдж-клавиша ⇥ (тап — принять; на десктопе также → / Tab).

@@ -219,6 +219,10 @@ body {
   caret-color: var(--c-accent);
 }
 .cc-composer-input::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* Нативную подсказку однострочного поля прячем — её рисует слой Composer с многоточием:
+   у подсказки textarea Chromium не умеет text-overflow, и длинная обрезалась по слову
+   («Написать исполнителю задачи «Чинить» — и конец). Атрибут остаётся для скринридеров */
+.cc-composer-input.cc-ph-overlay::placeholder { color: transparent; }
 
 /* Ползунок усилия рассуждения в композере. Берём нативный input[type=range] ради
    бесплатных клавиатуры, драга и доступности — трек рисуем сами (точки ступеней

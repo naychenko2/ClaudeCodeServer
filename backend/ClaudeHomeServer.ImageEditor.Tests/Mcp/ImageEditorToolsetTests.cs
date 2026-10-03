@@ -91,22 +91,22 @@ public class ImageEditorToolsetTests : IDisposable
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
         var prefs = new ImageProjectPrefsService(_prefsStore, NullLogger<ImageProjectPrefsService>.Instance, projects.Object);
-        var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster,
-            prefs: prefs);
+        var flags = new Mock<IFeatureFlagGate>();
+        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor))
+            .Returns((string user, string _) => _flagOn.Contains(user));
+        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ComposerContextRow)).Returns(() => _contextRow);
         // Контекст чата (ADR-023): стор и раскладка входов, как в регистрации модуля
         var registry = new ContextKindRegistry([new ImageContextKind(_store, null, editors, workspace), new ProjectFileContextKind()]);
         _ctxStore = new ChatContextStore(Path.Combine(_dir, "chat-context"), registry);
+        var mirror = new ChatContextFocusMirror(_ctxStore, flags.Object, NullLogger<ChatContextFocusMirror>.Instance);
+        var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster,
+            prefs: prefs, mirror: mirror);
         var context = new ImageContextLaunch(_ctxStore, registry, directory.Object, _store, workspace: workspace);
         var launcher = new ImageEditLaunchAssembler(editors, _jobs, new SkiaImageRaster(), threads, context: context);
 
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string id, string owner) => _sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor))
-            .Returns((string user, string _) => _flagOn.Contains(user));
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ComposerContextRow)).Returns(() => _contextRow);
-
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         return new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, threads, launcher,
             withGate ? _turnGate.Object : null, _jobs, placeSettings: placeSettings, events: _bus, config: config, prefs: prefs,
@@ -880,6 +880,37 @@ public class ImageEditorToolsetTests : IDisposable
         result.IsError.Should().BeFalse(result.Text);
         await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
         media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 1, "образец стиля из контекста уехал в запуск");
+    }
+
+    [Fact]
+    public async Task При_строке_контекста_image_focus_ставит_основной_объект_от_агента_а_выбор_человека_гасит_звёздочку()
+    {
+        _contextRow = true;
+        var toolset = Toolset();
+
+        var focus = await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" });
+
+        focus.IsError.Should().BeFalse(focus.Text);
+        var threadId = Parse(focus)["focus"]!.GetValue<string>();
+        var primary = _ctxStore.Get(Owner, ChatId).Primary!;
+        primary.Kind.Should().Be("image");
+        ChatContextFocusMirror.ThreadOf(primary).Should().Be(threadId);
+        primary.By.Should().Be(ContextActor.Agent, "image_focus — выбор агента: чип ✦");
+
+        // Человек выбрал тот же объект — звёздочка гаснет (ADR-023 §2.4)
+        _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("image", threadId, ContextActor.Human), null);
+        _ctxStore.Get(Owner, ChatId).Primary!.By.Should().Be(ContextActor.Human);
+    }
+
+    [Fact]
+    public async Task Без_строки_контекста_image_focus_стор_контекста_не_трогает()
+    {
+        var toolset = Toolset();
+
+        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" })).IsError.Should().BeFalse();
+
+        _ctxStore.Get(Owner, ChatId).Primary.Should().BeNull();
+        _ctxStore.Get(Owner, ChatId).Revision.Should().Be(0);
     }
 
     [Fact]

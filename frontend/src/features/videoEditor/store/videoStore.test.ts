@@ -246,4 +246,16 @@ describe('B21: кадр, поставленный агентом, — метка
     await mutate('p1', 'c1', rev => videoApi.settings('p1', 'c1', 's1', withFrame('b.png').settings, rev));
     expect(getAgentFrames('c1', 's1')).toBeNull();
   });
+  describe('initiator версии, на которую кадр перешёл', () => {
+    const img = (versionId: string, initiator?: 'human' | 'agent') =>
+      scene('s1', { settings: { ...scene('s1').settings, frameA: { kind: 'image', threadId: 't1', versionId, follow: true, ...(initiator ? { initiator } : {}) } } });
+    const run = (initiator?: 'human' | 'agent') => {
+      __applyThreads('c1', 'p1', threads(1, [img('v1')], { sceneId: 's1' }));
+      handleEvent(changed(2, threads(2, [img('v2', initiator)], { sceneId: 's1' })));
+      return getAgentFrames('c1', 's1')?.has('A') ?? false;
+    };
+    it('human — правка человека в «Картинках», метки нет', () => expect(run('human')).toBe(false));
+    it('agent — метка есть', () => expect(run('agent')).toBe(true));
+    it('undefined — прежняя эвристика, метка есть', () => expect(run(undefined)).toBe(true));
+  });
 });

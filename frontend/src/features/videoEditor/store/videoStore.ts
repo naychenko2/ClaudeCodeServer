@@ -9,7 +9,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
 import {
   conflictState, EMPTY_THREADS, errorText, filmConflict, videoApi,
-  type FilmPatchOp, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent, type VideoFocus,
+  type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent, type VideoFocus,
   type VideoPrefs, type VideoScene, type VideoSceneSettings, type VideoThreadsState,
 } from '../api';
 import { isPersonalScope } from '../scope';
@@ -146,6 +146,10 @@ function applyFilmEvent(scopeKey: string, path: string, state: FilmState) {
 // Событие модуля → состояние. Нити — только у уже показанного чата: чужой чат догрузится сам при входе
 const frameSig = (f: unknown) => JSON.stringify(f ?? null);
 
+// Версию image-кадра создал человек (правка в «Картинках») — кадр перешёл сам, метки «✦ Claude» нет;
+// без initiator (старые данные) остаётся прежняя эвристика «событие без клика человека»
+const byHuman = (f: FrameRef | undefined) => f?.kind === 'image' && f.initiator === 'human';
+
 // Событие, которого человек не вызывал, поменяло кадр сцены — его поменял агент
 export function noteAgentFrames(sessionId: string, prev: VideoThreadsState | null, next: VideoThreadsState) {
   if (!prev || (_mut.get(sessionId) ?? 0) > 0) return;
@@ -153,8 +157,8 @@ export function noteAgentFrames(sessionId: string, prev: VideoThreadsState | nul
     // Новая сцена с кадрами (video_new) — тоже правка агента: её завёл не мой клик
     const was = prev.scenes.find(x => x.sceneId === sc.sceneId)?.settings;
     const slots: Slot[] = [];
-    if (frameSig(was?.frameA) !== frameSig(sc.settings.frameA) && sc.settings.frameA) slots.push('A');
-    if (frameSig(was?.frameB) !== frameSig(sc.settings.frameB) && sc.settings.frameB) slots.push('B');
+    if (frameSig(was?.frameA) !== frameSig(sc.settings.frameA) && sc.settings.frameA && !byHuman(sc.settings.frameA)) slots.push('A');
+    if (frameSig(was?.frameB) !== frameSig(sc.settings.frameB) && sc.settings.frameB && !byHuman(sc.settings.frameB)) slots.push('B');
     if (!slots.length) continue;
     const byScene = _agentEdits.get(sessionId) ?? new Map<string, Set<Slot>>();
     const set = byScene.get(sc.sceneId) ?? new Set<Slot>();

@@ -13,7 +13,8 @@ import { chatBase, isPersonalScope, PERSONAL_SCOPE, videoBase } from './scope';
 // ── Кадры и настройки сцены ──
 
 export type FrameRef =
-  | { kind: 'image'; threadId: string; versionId: string; follow?: boolean }
+  // initiator — кто создал версию, на которую кадр перешёл (нет у старых данных)
+  | { kind: 'image'; threadId: string; versionId: string; follow?: boolean; initiator?: 'human' | 'agent' }
   // fileName — человеческое имя загруженного «С компьютера» файла: подпись вместо пути рабочей папки
   | { kind: 'file'; path: string; fileName?: string };
 

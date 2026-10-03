@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Chats;
 
@@ -28,7 +29,8 @@ public sealed class ImageThreadService(
     IChatFeed? feed = null,
     ISessionBroadcaster? broadcaster = null,
     ImageEditSteps? steps = null,
-    Prefs.ImageProjectPrefsService? prefs = null)
+    Prefs.ImageProjectPrefsService? prefs = null,
+    ChatContextFocusMirror? mirror = null)
 {
     public const string ModuleKey = "imageeditor";
 
@@ -58,6 +60,29 @@ public sealed class ImageThreadService(
 
     public ImageThreadsState Get(string ownerId, string sessionId) => store.Get(ownerId, sessionId);
 
+    // Состояние для DTO (ручка GET и событие): при флаге строки контекста фокус — проекция из контекста
+    // чата (основной объект своего вида), без флага — собственное поле. Читатели хода (хвост, MCP) берут
+    // хранилище напрямую и проекции не видят
+    public ImageThreadsState View(string ownerId, string sessionId) => Project(ownerId, sessionId, store.Get(ownerId, sessionId));
+
+    private ImageThreadsState Project(string ownerId, string sessionId, ImageThreadsState state)
+    {
+        if (mirror is null) return state;
+        var focus = mirror.ProjectFocus(ownerId, sessionId, ChatContext.ImageContextKind.Kind, state.Focus,
+            id => state.Threads.Any(t => t.Id == id));
+        return focus == state.Focus ? state : state with { Focus = focus };
+    }
+
+    // Запись, которая может сменить фокус: смена попадает в стор контекста (при флаге)
+    private ImageThreadWrite Tracked(string ownerId, string sessionId, Func<ImageThreadWrite> write, ContextActor by)
+    {
+        var before = store.Get(ownerId, sessionId).Focus;
+        var written = write();
+        if (written.Status == ImageThreadWriteStatus.Ok)
+            mirror?.Sync(ownerId, sessionId, ChatContext.ImageContextKind.Kind, before, written.State.Focus, by);
+        return written;
+    }
+
     // Чат этой области (область уже своя — её проверил вызывающий): владение следует из области.
     // scopeKey — id проекта или ImageEditScope.Personal у личного чата вне проекта. Ключ Personal
     // общий у всех владельцев, и владения он не доказывает: его держат гейт личного маршрута и
@@ -77,17 +102,25 @@ public sealed class ImageThreadService(
     public async Task<ImageThreadWrite> OpenAsync(string ownerId, string projectId, string sessionId,
         string? file, string? draftFolder, long revision, CancellationToken ct)
     {
-        var written = store.Open(ownerId, sessionId, file, draftFolder, revision, NewThreadSettings(ownerId, projectId));
+        var written = Tracked(ownerId, sessionId,
+            () => store.Open(ownerId, sessionId, file, draftFolder, revision, NewThreadSettings(ownerId, projectId)), ContextActor.Human);
         if (written.Status == ImageThreadWriteStatus.Ok && written is { Existing: false, Thread: { } thread })
             await AnchorAsync(sessionId, thread, ct);
         return await AfterAsync(ownerId, projectId, sessionId, written);
     }
 
     public Task<ImageThreadWrite> FocusAsync(string ownerId, string projectId, string sessionId, string? threadId, long revision) =>
-        AfterAsync(ownerId, projectId, sessionId, store.SetFocus(ownerId, sessionId, threadId, revision));
+        AfterAsync(ownerId, projectId, sessionId,
+            Tracked(ownerId, sessionId, () => store.SetFocus(ownerId, sessionId, threadId, revision), ContextActor.Human));
 
-    public Task<ImageThreadWrite> RemoveAsync(string ownerId, string projectId, string sessionId, string threadId, long revision) =>
-        AfterAsync(ownerId, projectId, sessionId, store.Remove(ownerId, sessionId, threadId, revision));
+    public Task<ImageThreadWrite> RemoveAsync(string ownerId, string projectId, string sessionId, string threadId, long revision)
+    {
+        var written = store.Remove(ownerId, sessionId, threadId, revision);
+        // Нить исчезла — из контекста чата уходит и она сама, и её референсы
+        if (written.Status == ImageThreadWriteStatus.Ok)
+            mirror?.Forget(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId);
+        return AfterAsync(ownerId, projectId, sessionId, written);
+    }
 
     // Откат стопки — только у нити до 27.09: у новой нити стопок нет, её «откат» — продолжить от версии
     public Task<ImageThreadWrite> RollbackAsync(string ownerId, string projectId, string sessionId, string threadId,
@@ -100,7 +133,9 @@ public sealed class ImageThreadService(
     public Task<ImageThreadWrite> ContinueAsync(string ownerId, string projectId, string sessionId, string threadId,
         string versionId, string? stepId, long revision) =>
         AfterAsync(ownerId, projectId, sessionId,
-            store.SetCurrentVersion(ownerId, sessionId, threadId, versionId, stepId, revision, focus: true));
+            Tracked(ownerId, sessionId,
+                () => store.SetCurrentVersion(ownerId, sessionId, threadId, versionId, stepId, revision, focus: true),
+                ContextActor.Human));
 
     // Агент выбрал версию («поправь вторую»): она становится текущей. Ревизию агент не держит
     public Task<ImageThreadWrite> AgentContinueAsync(string ownerId, string projectId, string sessionId, string threadId,
@@ -138,7 +173,7 @@ public sealed class ImageThreadService(
         for (var attempt = 0; ; attempt++)
         {
             var before = store.Get(ownerId, sessionId);
-            var written = store.SetFocus(ownerId, sessionId, threadId, before.Revision);
+            var written = Tracked(ownerId, sessionId, () => store.SetFocus(ownerId, sessionId, threadId, before.Revision), ContextActor.Agent);
             if (written.Status == ImageThreadWriteStatus.Conflict && attempt < AgentAttempts - 1) continue;
             if (written.Status == ImageThreadWriteStatus.Ok && written.State.Revision != before.Revision)
                 await FocusLineAsync(sessionId, written.State, before, ct);
@@ -155,8 +190,8 @@ public sealed class ImageThreadService(
         for (var attempt = 0; ; attempt++)
         {
             var before = store.Get(ownerId, sessionId);
-            var written = store.Open(ownerId, sessionId, file, draftFolder, before.Revision,
-                NewThreadSettings(ownerId, projectId));
+            var written = Tracked(ownerId, sessionId, () => store.Open(ownerId, sessionId, file, draftFolder, before.Revision,
+                NewThreadSettings(ownerId, projectId)), ContextActor.Agent);
             if (written.Status == ImageThreadWriteStatus.Conflict && attempt < AgentAttempts - 1) continue;
             if (written.Status == ImageThreadWriteStatus.Ok && written.State.Revision != before.Revision)
                 await FocusLineAsync(sessionId, written.State, before, ct);
@@ -568,7 +603,7 @@ public sealed class ImageThreadService(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId, new ImageThreadChangedMessage(projectId, state.Revision, state) { SessionId = sessionId });
+            await broadcaster.ToOwner(ownerId, new ImageThreadChangedMessage(projectId, state.Revision, Project(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)
         {
@@ -582,7 +617,7 @@ public sealed class ImageThreadService(
     {
         if (written.Status == ImageThreadWriteStatus.Ok)
             await BroadcastAsync(ownerId, projectId, sessionId, written.State);
-        return written;
+        return written.Status == ImageThreadWriteStatus.Ok ? written with { State = Project(ownerId, sessionId, written.State) } : written;
     }
 
     // Якорь нити — карточка исходника

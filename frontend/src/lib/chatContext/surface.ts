@@ -1,6 +1,7 @@
 // Мост поля ввода (ADR-023 §Д2): какой интерфейс рисует поле для основного объекта. Вид с `actions` —
 // чипы действий; без объекта или без действий — обычный «Чат». Чистая функция: поле не решает это инлайном.
 
+import { withThumb } from './thumbs';
 import { objectKey, resolveAction } from './actionMemory';
 import type { ChatContextPrimary, ChatContextRef, ContextAction, ContextKindApi, ContextKindCtx } from './types';
 
@@ -24,7 +25,7 @@ export interface SurfaceInput {
 
 export function composerSurfaceFor(i: SurfaceInput): ComposerSurface {
   if (!i.primary || !i.api) return { surface: 'chat' };
-  const actions = i.api.actions(i.ctx, { primary: i.primary, refs: i.refs });
+  const actions = i.api.actions(i.ctx, { primary: i.primary, refs: i.refs.map(r => withThumb(i.ctx, r)) });
   if (actions.length === 0) return { surface: 'chat' };
   const key = objectKey(i.primary);
   const { actionId } = resolveAction(i.ctx.sessionId, key, i.primary.by, actions, false);

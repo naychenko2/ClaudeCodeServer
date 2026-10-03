@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { objectKey, resetActionMemory } from './actionMemory';
 import { composerSurfaceFor } from './surface';
-import type { ChatContextPrimary, ContextAction, ContextKindApi } from './types';
+import type { ChatContextPrimary, ChatContextRef, ContextAction, ContextKindApi } from './types';
 
 const primary = (by: 'human' | 'agent' = 'human'): ChatContextPrimary => ({
   id: 'p1', kind: 'image', ref: { threadId: 't' }, by, addedAt: '', label: 'hero.png', version: 'v2', thumb: null, missing: false, role: null,
@@ -31,6 +31,17 @@ describe('мост поля ввода composerSurfaceFor', () => {
 
   it('вид без вклада в слоте context-kind — обычный «Чат»', () => {
     expect(composerSurfaceFor(input({ api: null })).surface).toBe('chat');
+  });
+
+  it('вид получает референсы с миниатюрами: чипы кадров рисуют их из референса', () => {
+    const ref: ChatContextRef = {
+      id: 'r1', kind: 'project-file', ref: { path: 'a/кадр-5.png' }, by: 'human', addedAt: '', label: 'кадр-5.png', version: null,
+      thumb: null, missing: false, role: 'frame-a', usedBy: [],
+    };
+    let seen: readonly ChatContextRef[] = [];
+    const api: ContextKindApi = { ...apiWith([run('edit')]), actions: (_c, st) => { seen = st.refs; return [run('edit')]; } };
+    composerSurfaceFor(input({ api, refs: [ref] }));
+    expect(seen[0].thumb).toMatch(/кадр-5\.png|%D0%BA/);
   });
 
   it('без объекта строки действий нет', () => {

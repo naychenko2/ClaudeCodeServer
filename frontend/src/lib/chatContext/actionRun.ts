@@ -3,6 +3,7 @@
 // невозможна по построению. Состояние хранится вне React (по чату): поле и панель живут в разных
 // ветках дерева и обязаны видеть один прогресс. Здесь — ядро без React, хук — в useActionRun.ts.
 
+import { withThumb } from './thumbs';
 import { isReported } from './errors';
 import { baseName } from './labels';
 import { clearRunCarry, noteRunStarted, objectKey, resolveAction } from './actionMemory';
@@ -250,7 +251,7 @@ export function buildActionRun(o: {
   const none = { action: null, stop: null, label: '', quote: null, state: 'idle' as const, progress: null, result: null, text: '', answer: null, blocked: null, labelParts: { name: '', tail: '' }, params: [] as readonly LaunchParam[], scope: '', req: null };
   const { sessionId, api, ctx, primary, refs, revision } = o;
   if (!api || !primary) return { ...none, setText: () => {}, setParam: () => {}, run: async () => {} };
-  const actions = api.actions(ctx, { primary, refs });
+  const actions = api.actions(ctx, { primary, refs: refs.map(r => withThumb(ctx, r)) });
   const { actionId } = resolveAction(sessionId, objectKey(primary), primary.by, actions, false);
   const action = actionId ? actions.find(a => a.id === actionId) ?? null : null;
   if (!action) return { ...none, setText: () => {}, setParam: () => {}, run: async () => {} };

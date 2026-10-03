@@ -4,7 +4,7 @@
 
 import { holdStripRequests, revealWorkspacePanel, showToast } from 'aihome_shell/kit';
 import { errorText, videoApi, type FilmState } from '../api';
-import { VIDEO_PANEL } from '../store/videoStore';
+import { VIDEO_PANEL, VIDEO_STRIP } from '../store/videoStore';
 import { soundPreset } from './model';
 
 // Фильм → музыка до запроса: новая музыка после него — «из «Звука»»
@@ -22,7 +22,7 @@ export async function composeForFilm(scope: string, sessionId: string, name: str
     _pending.set(f.path, f.document.music?.file ?? null);
     revealWorkspacePanel('sound', 'settings', {
       sessionId, preset: { ...soundPreset(name, f, draft), thread: draft.threadId },
-      returnTo: { key: VIDEO_PANEL, tab: 'film', target: f.path, label: `К фильму «${name}» — панель «Видео»` },
+      returnTo: { key: VIDEO_PANEL, strip: VIDEO_STRIP, tab: 'film', target: f.path, label: `К фильму «${name}» — панель «Видео»` },
     });
     if (draft.durationNote) showToast(draft.durationNote, '', 'info');
     return true;

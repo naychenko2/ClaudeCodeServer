@@ -42,6 +42,7 @@ describe('«Сочинить под фильм…»: решение v7 №9', ()
     const reveal = dispatched.find(d => d.type === REVEAL_PANEL_EVENT)?.detail as { key: string; opts?: { returnTo?: { key: string; label: string } } } | undefined;
     expect(reveal?.key).toBe('sound');
     expect(JSON.stringify(reveal)).toContain('К фильму «Мой»');
+    expect(JSON.stringify(reveal)).toContain('"strip":"video"');
   });
 
   it('отказ сервера снимает удержание: «Звук» снова может просить полосу', async () => {

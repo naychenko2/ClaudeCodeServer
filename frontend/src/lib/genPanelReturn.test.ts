@@ -5,13 +5,14 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), { innerWidth: 1280, inn
 
 const { revealWorkspacePanel } = await import('./subsystems/registryCore');
 const store = await import('./genPanelReturn');
+const strips = await import('./composerStrips');
 const { parseSoundPreset } = await import('../features/audioEditor/panel/preset');
 const { parseImagesPreset } = await import('../features/imageEditor/panel/preset');
 
 // Читаем состояние без React: тот же стор, что у хуков
 const peek = (key: string) => store.__peek(key);
 
-beforeEach(() => { store.__resetGenPanelReturn(); });
+beforeEach(() => { store.__resetGenPanelReturn(); strips.__resetComposerStrips(); });
 
 describe('приём preset и returnTo панелью-получателем', () => {
   const preset = { mode: 'music', op: 'song', duration: 32, style: 'тёплый эмбиент', instrumental: true };
@@ -42,6 +43,16 @@ describe('приём preset и returnTo панелью-получателем', 
     store.returnToOrigin('sound', returnTo, 's1');
     expect(seen).toEqual([{ key: 'videoEditor', tab: 'film', sessionId: 's1' }]);
     expect(peek('sound').returnTo).toBeNull();
+  });
+
+  it('B10: «↩» возвращает и полосу источника, если «Звук» успел забрать поле ввода', () => {
+    const all = ['git', 'video', 'sound'];
+    const back = { ...returnTo, strip: 'video' };
+    strips.requestStrip('s1', 'video');
+    strips.requestStrip('s1', 'sound');
+    expect(strips.getActiveStrip('s1', all)).toBe('sound');
+    store.returnToOrigin('sound', back, 's1');
+    expect(strips.getActiveStrip('s1', all)).toBe('video');
   });
 
   it('подпись возврата: своя или по вкладке', () => {

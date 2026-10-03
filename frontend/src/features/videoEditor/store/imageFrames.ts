@@ -22,8 +22,10 @@ const threadsUrl = (scope: string, sessionId: string) =>
 
 const _states = new Map<string, ImgState>();
 const _loading = new Set<string>();
-// Нить, нарисованная ради кадра: первая версия станет кадром
-export interface FrameBinding { sceneId: string; slot: 'A' | 'B'; threadId: string }
+// Нить, нарисованная ради кадра: первая версия станет кадром. needEdit — нить открыта на готовом
+// кадре-файле: «исходник» кадром не становится (смена формы ссылки без правки метила сцену «изменён»
+// и теряла превью), ждём настоящую версию правки
+export interface FrameBinding { sceneId: string; slot: 'A' | 'B'; threadId: string; needEdit?: boolean }
 const _bindings = new Map<string, FrameBinding>();
 const _boundListeners = new Set<(sessionId: string, b: FrameBinding, versionId: string) => void>();
 let _version = 0;
@@ -48,7 +50,7 @@ function onImageEvent(m: { type?: string; sessionId?: string; state?: ImgState }
   if (b) {
     const t = m.state.threads.find(x => x.id === b.threadId);
     const v = t && versionWithImage(t);
-    if (v) {
+    if (v && !(b.needEdit && v === 'origin')) {
       _bindings.delete(m.sessionId);
       _boundListeners.forEach(f => f(m.sessionId!, b, v));
     }

@@ -263,11 +263,11 @@ async function ensureScene(scope: string, sessionId: string): Promise<VideoScene
   return scene;
 }
 
-function toImages(sessionId: string, scene: VideoScene, threadId: string, slot: 'A' | 'B') {
-  bindFrame(sessionId, { sceneId: scene.sceneId, slot, threadId });
+function toImages(sessionId: string, scene: VideoScene, threadId: string, slot: 'A' | 'B', needEdit = false) {
+  bindFrame(sessionId, { sceneId: scene.sceneId, slot, threadId, ...(needEdit ? { needEdit } : {}) });
   revealWorkspacePanel('images', 'settings', {
     sessionId, preset: { thread: threadId },
-    returnTo: { key: VIDEO_PANEL, tab: 'scene', target: scene.sceneId, label: `К сцене «${scene.name}» — панель «Видео»` },
+    returnTo: { key: VIDEO_PANEL, strip: VIDEO_STRIP, tab: 'scene', target: scene.sceneId, label: `К сцене «${scene.name}» — панель «Видео»` },
   });
 }
 
@@ -292,7 +292,7 @@ export async function editFrame(scope: string, sessionId: string, scene: VideoSc
   try {
     const id = f.kind === 'image' ? f.threadId : await createImageThread(scope, sessionId, { file: f.path });
     if (!id) { showToast('Не удалось открыть кадр в «Картинках»', '', 'error'); return; }
-    toImages(sessionId, scene, id, slot);
+    toImages(sessionId, scene, id, slot, f.kind === 'file');
   } catch (e) {
     showToast(errorText(e, 'Не удалось открыть кадр в «Картинках»'), '', 'error');
   }

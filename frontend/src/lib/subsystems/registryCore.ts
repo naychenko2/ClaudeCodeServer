@@ -336,7 +336,7 @@ export interface WorkspacePanelDefApi {
 // «Инструментал»). returnTo — откуда пришли: чужая панель рисует ссылку «↩ К сцене / К
 // фильму» и по клику возвращает вызвавшую панель (genPanelReturn)
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
-export interface PanelReturnTo { key: string; tab?: string; target?: string; label?: string }
+export interface PanelReturnTo { key: string; tab?: string; target?: string; label?: string; strip?: string }
 export interface RevealPanelDetail {
   key: string; tab?: string; sessionId?: string; target?: string; follow?: boolean; peek?: boolean;
   preset?: Record<string, unknown>; returnTo?: PanelReturnTo;

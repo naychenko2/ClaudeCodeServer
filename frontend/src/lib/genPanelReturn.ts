@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { REVEAL_PANEL_EVENT, revealWorkspacePanel } from './subsystems/registryCore';
 import type { PanelReturnTo, RevealPanelDetail } from './subsystems/registryCore';
+import { requestStrip } from './composerStrips';
 
 // Приём `preset` и `returnTo` из revealWorkspacePanel на стороне панели-получателя. Слушатель
 // стоит на уровне модуля: закрытая панель монтируется уже ПОСЛЕ события, и собственный
@@ -57,9 +58,11 @@ export function dropReturnTo(key: string) {
 const FALLBACK: Record<string, string> = { scene: 'К сцене', film: 'К фильму' };
 export const returnLabel = (r: PanelReturnTo): string => r.label ?? (r.tab ? FALLBACK[r.tab] : undefined) ?? 'Назад';
 
-// Клик по ссылке: открыть вызвавшую панель на нужном месте и забыть ссылку
+// Клик по ссылке: открыть вызвавшую панель на нужном месте, вернуть её полосу и забыть ссылку
 export function returnToOrigin(from: string, r: PanelReturnTo, sessionId?: string) {
   dropReturnTo(from);
+  // Пока человек был в чужой панели, её полоса могла забрать поле ввода — полоса источника возвращается
+  if (r.strip && sessionId) requestStrip(sessionId, r.strip);
   revealWorkspacePanel(r.key, r.tab, { target: r.target, sessionId });
 }
 

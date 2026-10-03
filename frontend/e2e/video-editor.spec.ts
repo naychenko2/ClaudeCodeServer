@@ -211,6 +211,7 @@ for (const theme of ['light', 'dark'] as const) {
         await expect(sound.getByText(/заготовка из «Видео»/)).toBeVisible();
         await shot(page, SHOTS, shotName('s4-sound'));
         await sound.locator('[data-gen-return] button').click();
+        await expect(page.locator('[data-composer-strip="video"]')).toBeVisible();
         await expect(tab(page, 'Фильм')).toHaveAttribute('aria-selected', 'true');
         // Черновик звука заведён сервером под этот фильм; его первая версия встаёт музыкой сама
         expect(w().musicFor).toBe(FILM);
@@ -228,6 +229,9 @@ for (const theme of ['light', 'dark'] as const) {
         await expect(images).toBeVisible();
         await expect(images.locator('[data-gen-return]')).toContainText('К сцене «Сцена 3»');
         await shot(page, SHOTS, shotName('s5-images'));
+        // M3: открытие кадра без правки не меняет кадр — ни ссылки, ни пометки «изменён»
+        await page.waitForTimeout(500);
+        expect(JSON.stringify(w().scenes[2].settings.frameB)).toContain('"kind":"file"');
         // Правка в «Картинках» дала версию 1 — она сама становится кадром B
         const t = w().imageThreads[0] as { id: string; versions: Record<string, unknown>[]; currentVersionId: string; file: string };
         t.versions.push({ id: 'v1', number: 1, jobId: 'ij1', variant: 0, baseVersionId: 'origin', baseStepId: null, steps: ['st1'], currentStepId: 'st1', createdAt: '2026-10-02T10:05:00Z' });
@@ -235,6 +239,9 @@ for (const theme of ['light', 'dark'] as const) {
         hubSend({ type: 'image_thread_changed', sessionId: S, projectId: P, revision: 9, state: { focus: t.id, revision: 9, threads: w().imageThreads } });
         await expect.poll(() => JSON.stringify(w().scenes[2].settings.frameB)).toContain('"kind":"image"');
         await images.locator('[data-gen-return] button').click();
+        // B10: после «↩ К сцене» полоса над полем ввода снова «Видео»
+        await expect(page.locator('[data-composer-strip="video"]')).toBeVisible();
+        await expect(page.locator('[data-composer-strip="images"]')).toHaveCount(0);
         await expect(panel(page).locator('[data-video-stale]')).toContainText('Кадр B изменён после съёмки — переснимите');
         await shot(page, SHOTS, shotName('s5-stale'));
       });

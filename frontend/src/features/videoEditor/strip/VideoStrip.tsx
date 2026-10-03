@@ -195,7 +195,7 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
         {title}
         <span data-video-chip="scene" style={{ display: 'inline-flex', alignItems: 'center', minWidth: 0, flex: '0 1 auto', gap: SP.xxs }}>
           <Button size="xs" variant="secondary" title="Открыть сцену в панели «Видео»" onClick={open}
-            style={{ minWidth: 0, flex: '0 1 auto', height: h, border: `1px solid ${scene ? C.accent : C.border}`, background: C.bgWhite }}>
+            style={{ minWidth: 0, flex: '0 1 auto', height: h, overflow: 'hidden', border: `1px solid ${scene ? C.accent : C.border}`, background: C.bgWhite }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
               {icFixed(Clapperboard)}
               {sceneLabel}
@@ -212,7 +212,7 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
           <span data-video-chip="film" style={{ display: 'inline-flex', minWidth: 0, flex: '0 1 auto', position: 'relative' }}>
             <Button size="xs" variant="secondary" title={filmStale ? 'Фильм изменён после сборки — пересоберите' : 'Открыть фильм в панели «Видео»'}
               onClick={() => openFilmPanel(sessionId)}
-              style={{ minWidth: 0, flex: '0 1 auto', height: h, border: `1px solid ${C.border}`, background: C.bgWhite }}>
+              style={{ minWidth: 0, flex: '0 1 auto', height: h, overflow: 'hidden', border: `1px solid ${C.border}`, background: C.bgWhite }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
                 {icFixed(Film)}
                 {filmLabel}

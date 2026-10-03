@@ -26,7 +26,10 @@ import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels, openKeysOf } from './workspace/panelStackState';
 import { followHost } from '../lib/genPanelFollow';
-import { CHAT_KEYS, CHAT_RIGHT_KEYS, isPanelKey, type PanelKey } from './workspace/panelCatalog';
+import { CHAT_KEYS, chatRightKeys, isPanelKey, type PanelKey } from './workspace/panelCatalog';
+import { FLAGS, useFeature } from '../lib/featureFlags';
+import { LEGACY_GEN_PANEL_KEYS } from '../lib/genPanelKeys';
+import { ContextPanelHost } from '../components/generation/ContextPanelHost';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
 import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
 import { isGenPanelKey, markGenPanelDismissed } from '../lib/genPanelDismissed';
@@ -288,6 +291,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // здесь нет, поэтому projectId = null — проектные вклады («Персонажи») отказываются
   // сами. Без вкладов контента нет, и рельса кнопок не показывает
   const panelDefs = useSlot<WorkspacePanelDefCtx, WorkspacePanelDefApi>(SLOT_WORKSPACE_PANEL_DEF);
+  // Единая панель «Контекст» вместо «Картинок» и «Звука» (ADR-023 §Д1)
+  const ctxPanelOn = useFeature(FLAGS.composerContextRow);
+  const chatRight = chatRightKeys(ctxPanelOn);
   // Канал выбрали в КАТАЛОГЕ — эфир идёт в боковой панели, а та могла быть закрыта
   // или лежать в ящике рельсы. Раскладка — епархия страницы, поэтому являет панель
   // она, а стор только просит об этом событием.
@@ -307,7 +313,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
       const key = d?.key;
-      if (!isPanelKey(key) || !CHAT_RIGHT_KEYS.includes(key)) return;
+      if (!isPanelKey(key) || !chatRight.includes(key)) return;
       if (isGenPanelKey(key)) setGenZoneFor(activeId);
       // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
       const host = d?.follow ? followHost(chatOpenKeys.current, key) : null;
@@ -316,7 +322,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
-  }, [reveal, replaceWith, activeId]);
+  }, [reveal, replaceWith, activeId, chatRight]);
 
   useEffect(() => {
     setExclusive(isTablet);
@@ -588,13 +594,19 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // раскладку, сохранённую до появления правила.
           right={activeChat && (activeChat.messageCount > 0 || genZoneFor === activeChat.id) ? (
             <PanelZone
-              side="right" allowedKeys={CHAT_RIGHT_KEYS} hideWhenEmpty panelStack={chatPanels}
+              side="right" allowedKeys={chatRight} hideWhenEmpty panelStack={chatPanels}
               onUserClose={k => markGenPanelDismissed(activeChat.id, k)}
-              panels={Object.fromEntries(panelDefs.flatMap(d => (
-                d.name && isPanelKey(d.name) && CHAT_RIGHT_KEYS.includes(d.name) && d.render && (d.action?.isAvailable?.(null) ?? true)
-                  ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => { markGenPanelDismissed(activeChat.id, d.name!); closePanelKey(d.name as PanelKey); } })]]
-                  : []
-              )))}
+              panels={{
+                ...Object.fromEntries(panelDefs.flatMap(d => (
+                  d.name && isPanelKey(d.name) && chatRight.includes(d.name) && d.render && !(ctxPanelOn && LEGACY_GEN_PANEL_KEYS.includes(d.name)) && (d.action?.isAvailable?.(null) ?? true)
+                    ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => { markGenPanelDismissed(activeChat.id, d.name!); closePanelKey(d.name as PanelKey); } })]]
+                    : []
+                ))),
+                ...(ctxPanelOn ? {
+                  chatContext: <ContextPanelHost session={activeChat} project={null}
+                    onClose={() => { markGenPanelDismissed(activeChat.id, 'chatContext'); closePanelKey('chatContext'); }} />,
+                } : {}),
+              }}
               sessionPanels={sessionPanels} compact={isTablet}
             />
           ) : undefined}

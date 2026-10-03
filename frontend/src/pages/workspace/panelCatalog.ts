@@ -17,10 +17,11 @@
 import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb, DraftingCompass, Image as ImageIcon, AudioLines,
+  TableOfContents, Lightbulb, DraftingCompass, Image as ImageIcon, AudioLines, SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
+import { genPanelKeys as liveGenPanelKeys } from '../../lib/genPanelKeys';
 
 // Сторона экрана. Зон ровно две, и обе равноправны: любая панель может лежать
 // в любой из них.
@@ -43,6 +44,10 @@ export const PANEL_KEYS = [
   // Панели генерации (ADR-021 §3): «Картинки» и «Звук» — вклады вертикалей тем же
   // слотом; справа одновременно живёт только одна из них (см. EXCLUSIVE_PANEL_SETS)
   'images', 'sound',
+  // Единая панель «Контекст» чата (ADR-023 §Д1): при флаге composer-context-row заменяет обе
+  // панели генерации. Рисует её оболочка (ContextPanel), а не вертикаль. Ключ `context` занят
+  // панелью «Персона» и сохранён в раскладках — отсюда отдельный ключ
+  'chatContext',
   // Фоновый эфир рядом с работой: живёт и в проекте, и в разделе «Чаты».
   // Каталог каналов панелью НЕ является: он открывается в центральном острове
   // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
@@ -138,6 +143,7 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные
   images:   { title: 'Картинки',  Icon: ImageIcon },
   sound:    { title: 'Звук',      Icon: AudioLines },
+  chatContext: { title: 'Контекст', Icon: SlidersHorizontal },
 
   // Разделы хаба. Ключи намеренно длиннее воркспейсных: рядом живут похожие по
   // смыслу панели проекта, и путать их нельзя. personasList — все персоны
@@ -178,6 +184,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   characters: 'right',
   images: 'right',
   sound: 'right',
+  chatContext: 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
@@ -187,11 +194,21 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 };
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
-export const WORKSPACE_KEYS: readonly PanelKey[] = [
+// Панели генерации в наборе зависят от флага composer-context-row (ctx): с флагом «Картинок» и «Звука»
+// в рельсе нет, вместо них одна «Контекст»; без флага набор прежний
+const GEN_LEGACY: readonly PanelKey[] = ['images', 'sound'];
+const GEN_CONTEXT: readonly PanelKey[] = ['chatContext'];
+const genKeysFor = (ctx: boolean): readonly PanelKey[] => (ctx ? GEN_CONTEXT : GEN_LEGACY);
+
+const workspaceBase = (ctx: boolean): readonly PanelKey[] => [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc', 'video', 'characters',
-  'images', 'sound',
+  ...genKeysFor(ctx),
 ];
+export const WORKSPACE_KEYS: readonly PanelKey[] = workspaceBase(false);
+const WORKSPACE_KEYS_CTX: readonly PanelKey[] = workspaceBase(true);
+// Ссылка стабильна: зона держит набор в зависимостях эффектов
+export const workspaceKeys = (ctx: boolean): readonly PanelKey[] => (ctx ? WORKSPACE_KEYS_CTX : WORKSPACE_KEYS);
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];
 export const NOTES_KEYS: readonly PanelKey[] = ['notesList', 'notesGraph'];
@@ -206,20 +223,25 @@ export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
 export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
 
 // Правая зона раздела «Чаты»: панели сессии плюс панели генерации личного чата
-export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'images', 'sound'];
+export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, ...genKeysFor(false)];
+const CHAT_RIGHT_KEYS_CTX: readonly PanelKey[] = [...SESSION_KEYS, ...genKeysFor(true)];
+export const chatRightKeys = (ctx: boolean): readonly PanelKey[] => (ctx ? CHAT_RIGHT_KEYS_CTX : CHAT_RIGHT_KEYS);
 
 // Панели генерации: справа одна за раз, а в планшетной зоне они держат поток до
-// GEN_PANEL_INLINE_MIN (genPanelPlacement)
-export const GEN_PANEL_KEYS: readonly PanelKey[] = ['images', 'sound'];
+// GEN_PANEL_INLINE_MIN (genPanelPlacement). С флагом composer-context-row — одна «chatContext».
+// Функция, а не константа: набор зависит от флага пользователя; источник один — lib/genPanelKeys.ts,
+// вторая копия в lib/genPanelDismissed.ts отдаёт тот же список
+export const genPanelKeys = (): readonly PanelKey[] => liveGenPanelKeys() as readonly PanelKey[];
 
 // Наборы взаимоисключающих панелей: открытие одной закрывает остальные из её набора
 // в ЛЮБОЙ зоне, при любой ширине окна. «Справа одна панель генерации» (ADR-021 §3):
-// с прочими панелями картинки и звук соседствуют по обычной модели зоны.
-export const EXCLUSIVE_PANEL_SETS: readonly (readonly PanelKey[])[] = [GEN_PANEL_KEYS];
+// с прочими панелями картинки и звук соседствуют по обычной модели зоны. С флагом набор из одного
+// ключа — исключать некого.
+export const exclusivePanelSets = (): readonly (readonly PanelKey[])[] => [genPanelKeys()];
 
 // Соперники панели — те, кого её открытие закрывает
 export function panelRivals(k: PanelKey): PanelKey[] {
-  return EXCLUSIVE_PANEL_SETS.flatMap(set => (set.includes(k) ? set.filter(x => x !== k) : []));
+  return exclusivePanelSets().flatMap(set => (set.includes(k) ? set.filter(x => x !== k) : []));
 }
 
 // Панели ЦЕНТРАЛЬНОЙ ОБЛАСТИ: показывают не проект и не сессию, а то, что открыто

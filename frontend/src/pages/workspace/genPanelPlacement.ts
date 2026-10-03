@@ -5,12 +5,12 @@
 // (уже обычной), а ниже в зоне её нет вовсе — её рисует шторкой полоса над полем ввода.
 
 import { GEN_PANEL_INLINE_MIN, PANEL_INLINE_MAX_SHARE } from '../../lib/breakpoints';
-import { GEN_PANEL_KEYS, type PanelKey } from './panelCatalog';
+import { genPanelKeys, type PanelKey } from './panelCatalog';
 
 // Ширина колонки генерации там, где обычной панели места в потоке нет: 320 + лента 420 на 800
 export const GEN_STACK_W = 320;
 
-const isGen = (k: PanelKey) => GEN_PANEL_KEYS.includes(k);
+const isGen = (k: PanelKey) => genPanelKeys().includes(k);
 
 // Есть ли панель в зоне при этой ширине окна (compact — планшетная зона)
 export const genPanelInZone = (k: PanelKey, compact: boolean, windowWidth: number): boolean =>

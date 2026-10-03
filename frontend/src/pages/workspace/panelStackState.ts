@@ -794,6 +794,8 @@ export function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone
 // пропадала с концами: в своей зоне её нет, в чужой она невидима.
 // null — выселять нечего (сигнал вызывающему не дёргать запись).
 export function evictForeign(zones: PanelZones, zone: Zone, allowed: readonly PanelKey[]): PanelZones | null {
+  const folded = foldGenPanels(zones, zone, allowed);
+  if (folded) return evictForeign(folded, zone, allowed) ?? folded;
   const z = zones[zone];
   const strays = [...z.layout.flat(), ...z.stash.flat()].filter(k => !allowed.includes(k));
   if (strays.length === 0) return null;
@@ -805,6 +807,27 @@ export function evictForeign(zones: PanelZones, zone: Zone, allowed: readonly Pa
     home,
     [zone]: { ...z, layout: drop(z.layout), stash: drop(z.stash) },
   };
+}
+
+// С флагом composer-context-row «Картинки» и «Звук» из набора экрана уходят, а место в раскладке
+// достаётся «Контексту» (ADR-023 §Д1): сохранённая раскладка не теряет панель генерации, вместо
+// двух ключей встаёт один на место первого. Дубль между зонами снимает инвариант «панель в одном
+// месте». null — сворачивать нечего (набор экрана прежний или старых ключей в зоне нет)
+function foldGenPanels(zones: PanelZones, zone: Zone, allowed: readonly PanelKey[]): PanelZones | null {
+  if (!allowed.includes('chatContext') || allowed.includes('images') || allowed.includes('sound')) return null;
+  const z = zones[zone];
+  const legacy = (k: PanelKey) => k === 'images' || k === 'sound';
+  if (![...z.layout.flat(), ...z.stash.flat()].some(legacy)) return null;
+  const fold = (cols: PanelKey[][]) => {
+    let placed = cols.flat().includes('chatContext');
+    return cols.map(c => c.flatMap(k => {
+      if (!legacy(k)) return [k];
+      if (placed) return [];
+      placed = true;
+      return ['chatContext' as PanelKey];
+    })).filter(c => c.length > 0);
+  };
+  return enforceZoneInvariant({ ...zones, [zone]: { ...z, layout: fold(z.layout), stash: fold(z.stash) } });
 }
 
 // Зона «свёрнута»: своих открытых панелей нет, но спрятанный набор есть

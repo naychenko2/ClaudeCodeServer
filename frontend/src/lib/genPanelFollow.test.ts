@@ -104,3 +104,17 @@ describe('правило 2: выбор агентом', () => {
     dropAgentPick('s1');
   });
 });
+
+describe('followHost при флаге composer-context-row', () => {
+  it('панель одна — заменять некого; старые ключи вне набора', async () => {
+    const { FLAGS, setAllFlags } = await import('./featureFlags');
+    setAllFlags({ [FLAGS.composerContextRow]: true });
+    try {
+      expect(followHost(['files', 'chatContext'], 'chatContext')).toBeNull();
+      expect(followHost(['files', 'images'], 'chatContext')).toBeNull();
+      expect(followHost(['files', 'images'], 'sound')).toBeNull();
+    } finally {
+      setAllFlags({});
+    }
+  });
+});

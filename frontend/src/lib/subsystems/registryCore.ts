@@ -47,7 +47,7 @@ export interface SubsystemManifest {
   order: number;
   // Подсистема не получает пилюлю в таббаре хаба (вход — через меню/шорткаты).
   noPill?: boolean;
-  // Вклады самого каркаса (полоса «Руки»): бэковой подсистемы с тумблером у них нет,
+  // Вклады самого каркаса: бэковой подсистемы с тумблером у них нет,
   // гейт включённости не применяется — доступность решают сами вклады.
   core?: boolean;
   tab?: { component: LazyExoticComponent<ComponentType<SubsystemTabProps>> };

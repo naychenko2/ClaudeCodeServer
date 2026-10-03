@@ -450,7 +450,7 @@ export default function App() {
 
   // Секция настроек открытого проекта сохранила своё поле (тумблер рук, MCP, устройство):
   // realtime у проектов нет, поэтому свежий DTO несём сюда сами. Иначе чаты держат прежний
-  // объект до перезагрузки — так включённые в открытом чате руки не доходили до полосы «Руки»
+  // объект до перезагрузки — так включённые в открытом чате руки не доходили до чата
   const handleOpenProjectUpdated = useCallback((fresh: Project) => {
     if (fresh.id !== projectIdRef.current) return
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))

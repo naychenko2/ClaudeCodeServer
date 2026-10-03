@@ -111,10 +111,10 @@ test('меню ветки: «Зафиксировать только этот ч
   expect(sent).toContain('images/hero.v2.png');
 });
 
-test('руки видны пилюлей в губе поля, полосы «Руки» нет', async ({ page }) => {
+test('чипа «Руки» в поле ввода нет, полосы «Руки» тоже', async ({ page }) => {
   newWorld({ ctx: { primary: primary() } });
   await openChat(page, { vp: D });
-  await expect(page.locator('[data-hands-pill]')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('[data-composer-strip="hands"]')).toHaveCount(0);
   await expect(page.locator('[data-git-strip]')).toHaveCount(0);
 });

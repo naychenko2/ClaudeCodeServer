@@ -50,7 +50,6 @@ import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ContextRow } from './chat/ContextRow';
 import { chatContextApi } from '../lib/chatContext/api';
-import { LocalHandsStripFeed } from '../features/localHands/LocalHandsStripFeed';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, type NavSnapshot } from '../lib/nav';
@@ -2875,8 +2874,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
-          {/* Состояние рук чата питает пилюля «Руки» в губе поля: питатель сам ничего не рисует */}
-          {project && !embedded && <LocalHandsStripFeed session={session} project={project} />}
           {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023) */}
           {!embedded && (
             <ContextRow session={session} project={project ?? null} turnTree={turnTree} isMobile={isMobile === true}

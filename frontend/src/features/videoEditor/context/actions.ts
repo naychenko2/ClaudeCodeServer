@@ -20,6 +20,8 @@ export interface SceneActionInput {
   sceneTextEmpty: boolean;
   // Пункты меню кадра: функция, потому что хост зовёт их по клику, а не на каждый рендер
   frameMenu: (slot: FrameSlot) => () => readonly ContextMenuItem[];
+  // Адрес миниатюры кадра слота; нет кадра — null (пустой квадрат на чипе)
+  frameThumb: (slot: FrameSlot) => string | null;
 }
 
 export interface FilmActionInput {
@@ -39,7 +41,7 @@ const frameReason = (a: boolean, b: boolean): string | undefined => {
 export function buildSceneActions(i: SceneActionInput): readonly ContextAction[] {
   const frame = (slot: FrameSlot): ContextAction => ({
     id: slot === 'A' ? 'frameA' : 'frameB', kind: 'menu', label: `Кадр ${slot}`,
-    hint: `Кадр ${slot}: откуда взять`, items: i.frameMenu(slot),
+    hint: `Кадр ${slot}: откуда взять`, items: i.frameMenu(slot), thumb: i.frameThumb(slot),
   });
   const reason = frameReason(i.hasFrameA, i.hasFrameB);
   return [

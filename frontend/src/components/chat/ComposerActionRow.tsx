@@ -35,6 +35,15 @@ const act = (fn: () => void) => (e: KeyboardEvent) => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
 };
 
+const CHIP_THUMB = 16;
+
+function ChipThumb({ url }: { url: string | null }) {
+  const box = { width: CHIP_THUMB, height: CHIP_THUMB, borderRadius: R.sm, flexShrink: 0, boxSizing: 'border-box' } as const;
+  return url
+    ? <img data-chip-thumb="" src={url} alt="" draggable={false} style={{ ...box, objectFit: 'cover', border: `1px solid ${C.border}` }} />
+    : <span data-chip-thumb="empty" aria-hidden style={{ ...box, border: `1px dashed ${C.border}` }} />;
+}
+
 function Chip({ c, selected, onPick }: {
   c: ActionChip; selected: boolean; onPick: (rect: DOMRect | null) => void;
 }) {
@@ -67,6 +76,7 @@ function Chip({ c, selected, onPick }: {
         const Icon = c.action?.icon ? CHIP_ICON[c.action.icon] : c.kind === 'editor' ? Pencil : null;
         return Icon ? <Icon size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> : null;
       })()}
+      {c.kind === 'menu' && c.action?.thumb !== undefined && <ChipThumb url={c.action.thumb} />}
       {c.label}
       {c.kind === 'menu' && <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
     </span>

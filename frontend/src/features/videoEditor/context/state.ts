@@ -93,6 +93,7 @@ export function videoActions(
       hasFrameB: !!frameRefOf(s.refs, 'B'),
       sceneTextEmpty: !scene.settings.text.trim(),
       frameMenu: sceneMenu(ctx, scene, s.refs),
+      frameThumb: slot => frameRefOf(s.refs, slot)?.thumb ?? null,
     });
   }
   const path = filmPathOf(s.primary);

@@ -8,7 +8,7 @@ import {
 // Каталог действий «Видео» (ADR-023 §Д2.2, Р1): сцена не снята / снята и фильм
 
 const noMenu = () => [];
-const scene: SceneActionInput = { shot: false, hasFrameA: true, hasFrameB: true, sceneTextEmpty: false, frameMenu: () => noMenu };
+const scene: SceneActionInput = { shot: false, hasFrameA: true, hasFrameB: true, sceneTextEmpty: false, frameMenu: () => noMenu, frameThumb: () => null };
 const film: FilmActionInput = { built: false, empty: false, openMontage: () => {} };
 
 type Fixture = { kind: 'scene'; input: SceneActionInput } | { kind: 'film'; input: FilmActionInput };
@@ -81,6 +81,12 @@ describe('каталог видео: состав по состояниям', ()
   it('текст поля у «Снять»: просьба поверх текста сцены не обязательна; у сцены без текста — обязательна', () => {
     expect(buildSceneActions(scene)[0].text).toBe('optional');
     expect(buildSceneActions({ ...scene, sceneTextEmpty: true })[0].text).toBe('required');
+  });
+
+  it('чипы кадров несут миниатюру слота; кадра нет — null (пустой квадрат)', () => {
+    const a = buildSceneActions({ ...scene, frameThumb: slot => (slot === 'A' ? '/a.png' : null) });
+    expect(a.find(x => x.id === 'frameA')?.thumb).toBe('/a.png');
+    expect(a.find(x => x.id === 'frameB')?.thumb).toBeNull();
   });
 
   it('чипы кадров — меню без выбора; пункты отдаёт фабрика слота', () => {

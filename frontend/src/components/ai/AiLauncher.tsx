@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { C, FONT, R, Z, SHADOW } from '../../lib/design';
 import { getNav, NAV_CHANGE_EVENT } from '../../lib/nav';
@@ -12,7 +12,13 @@ import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
-import { getFabObstacle, subscribeFabObstacle } from '../../lib/ai/fabObstacle';
+import {
+  getFabObstacles, subscribeFabObstacle, isFabNoRaise, placeFab, unionBox, fabSpotBlocker, stepFabSettle, initialFabSettle,
+  PLACE_HIDDEN, FAB_FULL, FAB_SMALL, FAB_EDGE_INSET, FAB_CLEARANCE,
+  type FabPlacement, type FabSettle,
+} from '../../lib/ai/fabObstacle';
+import { fabControlsAt } from '../../lib/ai/fabProbe';
+import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import { useIsMobile } from '../../lib/breakpoints';
 import { useListAutoFocus } from '../../lib/listAutoFocus';
 import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
@@ -28,54 +34,117 @@ import { useMe } from '../../lib/defaultPersona';
 import { IntroDot } from '../ui';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 
-// Полный размер круглешка — от него считаем налезание (см. useFabObstacleOverlap)
-const FAB_FULL = 54;
-// Зазор между кнопкой и препятствием: ужимаемся, не дожидаясь касания впритык
-const FAB_CLEARANCE = 10;
+// Неопубликованные контролы в углу появляются без единого события, на которое мы
+// подписаны (сменился экран, раскрылась карточка), — их ловит редкий перезамер, и только
+// пока человек ничего не делает: во время взаимодействия хватает событий
+const FAB_POLL_MS = 2000;
 
-// Налезает ли нижнее препятствие (композер чата, футер мастера персон) на угол кнопки.
-// Замер ведём по геометрии ПОЛНОГО размера (54), а не текущего: иначе ужавшаяся кнопка
-// перестала бы пересекаться, выросла обратно и замигала бы туда-сюда.
-// Позиция кнопки задана от правого-нижнего края, поэтому её right/bottom от размера не
-// зависят — левый-верхний угол полного круга достраиваем от них.
-function useFabObstacleOverlap(fabRef: React.RefObject<HTMLElement | null>, active: boolean): boolean {
-  const [overlap, setOverlap] = useState(false);
+// Место кнопки относительно нижнего препятствия (композер чата, футер мастера персон,
+// карточка-приглашение проекта) и реальных контролов в углу: угол → ужатие → прижатие к
+// краю → подъём над препятствием; правила — placeFab.
+// Геометрию угла берём с невидимого якоря (anchorRef) в базовой точке кнопки, а не с
+// самой кнопки: та меняет и размер, и подъём по результату замера, и замер по ней
+// зациклился бы (ужалась — перестала пересекаться — выросла обратно).
+// Замер не применяется напрямую: его пропускает стабилизатор (stepFabSettle), иначе
+// промежуточные кадры переходов двигали бы кнопку туда-обратно.
+function useFabPlacement(anchorRef: React.RefObject<HTMLElement | null>, active: boolean): FabPlacement {
+  const [place, setPlace] = useState<FabPlacement>(PLACE_HIDDEN);
+  // Состояние стабилизатора живёт дольше эффекта: открытие палитры не сбрасывает место
+  const settleRef = useRef<FabSettle>(initialFabSettle());
   useEffect(() => {
-    if (!active) { setOverlap(false); return; }
+    if (!active) return;
     let ro: ResizeObserver | null = null;
+    let recheck = 0;
     const measure = () => {
-      const fab = fabRef.current;
-      const ob = getFabObstacle();
-      if (!fab || !ob) { setOverlap(false); return; }
-      const f = fab.getBoundingClientRect();
-      const o = ob.getBoundingClientRect();
-      if (o.width === 0 && o.height === 0) { setOverlap(false); return; }
-      setOverlap(
-        o.right > f.right - FAB_FULL - FAB_CLEARANCE && o.left < f.right + FAB_CLEARANCE &&
-        o.bottom > f.bottom - FAB_FULL - FAB_CLEARANCE && o.top < f.bottom + FAB_CLEARANCE,
-      );
+      const a = anchorRef.current;
+      if (!a) return;
+      // Базовая точка кнопки — правый-нижний угол круга без подъёма
+      const { right, bottom } = a.getBoundingClientRect();
+      // Скрытое препятствие (композер скрытого чата) — нулевой прямоугольник: ни в
+      // объединение, ни в запрет подъёма не идёт
+      const live = getFabObstacles()
+        .map(n => ({ n, r: n.getBoundingClientRect() }))
+        .filter(x => x.r.width > 0 || x.r.height > 0);
+      const ob = unionBox(live.map(x => x.r));
+      const opts = {
+        noRaise: live.some(x => isFabNoRaise(x.n)),
+        controlsAt: typeof document.elementsFromPoint === 'function' ? fabControlsAt : undefined,
+      };
+      const s = settleRef.current;
+      const { next, recheckIn } = stepFabSettle(s,
+        placeFab(ob, right, bottom, window.innerWidth, opts),
+        fabSpotBlocker(s.shown, ob, right, bottom, window.innerWidth, opts),
+        performance.now());
+      settleRef.current = next;
+      if (next.shown !== s.shown) setPlace(next.shown);
+      clearTimeout(recheck);
+      if (recheckIn !== null) recheck = window.setTimeout(measure, recheckIn);
     };
-    // Наблюдаем само препятствие: композер и растёт в высоту (разнос грипом, длинный
+    // Конец перехода перемеряем, только если он мог сдвинуть угол или препятствие:
+    // переменные --cc-fab-* анимируются на :root, а композер (и кнопка «Вниз») едут
+    // переходом своих обёрток. Прочие переходы (ховеры по всему приложению) мимо —
+    // замер дёргает layout.
+    const onTransitionEnd = (e: TransitionEvent) => {
+      const t = e.target;
+      if (t === document.documentElement ? e.propertyName.startsWith('--cc-fab')
+        : t instanceof Node && getFabObstacles().some(n => t.contains(n))) measure();
+    };
+    // Наблюдаем сами препятствия: композер и растёт в высоту (разнос грипом, длинный
     // текст), и меняет ширину, когда открывается панель — оба случая двигают его кромку
-    // к кнопке. Плюс resize окна: он двигает саму кнопку, а не препятствие.
+    // к кнопке. resize окна и конец переходов двигают либо угол (переменные --cc-fab-*
+    // на :root анимируются), либо само препятствие (композер пустого чата съезжает вниз
+    // с первым сообщением, не меняя размера) — оба после этого перемеряем.
+    // visualViewport — ради iOS: там клавиатура не шлёт window.resize, а WorkspacePage
+    // подгоняет высоту под видимую область, и композер переезжает, не меняя размера.
     const attach = () => {
       ro?.disconnect();
-      const ob = getFabObstacle();
-      if (ob) { ro = ro ?? new ResizeObserver(measure); ro.observe(ob); }
+      const obs = getFabObstacles();
+      if (obs.length) { ro = ro ?? new ResizeObserver(measure); for (const n of obs) ro.observe(n); }
       measure();
     };
+    const vv = window.visualViewport;
     const unsub = subscribeFabObstacle(attach);
     window.addEventListener('resize', measure);
+    vv?.addEventListener('resize', measure);
+    vv?.addEventListener('scroll', measure);
+    document.addEventListener('transitionend', onTransitionEnd, true);
+    // Смену раздела ловим сразу, кадром позже — когда новый экран уже отрисован. Так же
+    // ловим открытие и закрытие меню, шторок и модалок: они монтируются порталом прямо в
+    // body, и смена его детей — ровно их событие (без опроса кнопка пряталась под меню
+    // и возвращалась после него с задержкой до секунды)
+    let raf = 0;
+    const later = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(measure); };
+    window.addEventListener(NAV_CHANGE_EVENT, later);
+    const mo = typeof MutationObserver === 'function' ? new MutationObserver(later) : null;
+    mo?.observe(document.body, { childList: true });
+    // Редкий перезамер (см. FAB_POLL_MS): только на видимой вкладке и без свежего ввода
+    let lastInput = 0;
+    const onInput = () => { lastInput = performance.now(); };
+    const INPUTS = ['pointerdown', 'keydown', 'wheel', 'touchstart', 'scroll'] as const;
+    for (const t of INPUTS) document.addEventListener(t, onInput, { capture: true, passive: true });
+    const poll = window.setInterval(() => {
+      if (!document.hidden && performance.now() - lastInput >= FAB_POLL_MS) measure();
+    }, FAB_POLL_MS);
     attach();
-    return () => { unsub(); ro?.disconnect(); window.removeEventListener('resize', measure); };
-  }, [fabRef, active]);
-  return overlap;
+    return () => {
+      unsub(); ro?.disconnect(); mo?.disconnect();
+      window.removeEventListener('resize', measure);
+      vv?.removeEventListener('resize', measure);
+      vv?.removeEventListener('scroll', measure);
+      document.removeEventListener('transitionend', onTransitionEnd, true);
+      window.removeEventListener(NAV_CHANGE_EVENT, later);
+      for (const t of INPUTS) document.removeEventListener(t, onInput, { capture: true });
+      cancelAnimationFrame(raf);
+      clearInterval(poll);
+      clearTimeout(recheck);
+    };
+  }, [anchorRef, active]);
+  return place;
 }
 
 // AI-хаб (pull-слой): плавающая кнопка + командная палитра. Открывается кликом,
 // хоткеем ⌘/Ctrl+K или событием 'cc-open-ai'. Палитра через getNav() знает текущий
 // раздел и поднимает наверх релевантные действия. Всё гейтится флагом ai-hub в App.
-export const OPEN_AI_EVENT = 'cc-open-ai';
 
 export function AiLauncher() {
   const online = useOnline();
@@ -107,10 +176,38 @@ export function AiLauncher() {
   const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   // Режим «Стены» — кнопка там всегда компактная (см. эффект на NAV_CHANGE_EVENT)
   const [wallMode, setWallMode] = useState(() => getNav()?.screen === 'wall');
-  // Композер чата (или футер мастера персон) дошёл до угла кнопки → ужимаем её
-  const obstacleOverlap = useFabObstacleOverlap(fabRef, !open && !isMobile);
+  // Композер чата (или футер мастера персон) дошёл до угла кнопки → ужимаем её, а угол
+  // занят и ужатой — поднимаем над ним (см. useFabPlacement). Мобилу не исключаем: там
+  // композер во всю ширину и угол занят всегда — без подъёма кнопка легла бы на отправку
+  const fabAnchorRef = useRef<HTMLSpanElement>(null);
+  const fabPlace = useFabPlacement(fabAnchorRef, !open);
+  const obstacleOverlap = fabPlace.small;
   // Компактный круг: на стене всегда, в остальных местах — когда снизу подпёрло
   const fabSmall = wallMode || obstacleOverlap;
+  // Прижатая к краю кнопка (режим edge) стоит inline-стилем — балуны над ней едут следом
+  const balloonEdge: React.CSSProperties | null = fabPlace.edge ? { right: FAB_EDGE_INSET } : null;
+  // Балуны висят над кнопкой: спрятана она (места нет) — прячутся и они, иначе легли бы на композер
+  const balloonsOn = !open && !fabPlace.hidden;
+  // Подъём над препятствием — единственный писатель --cc-fab-raise. Переменная, а не
+  // inline-стиль: по ней же встают балуны над кнопкой.
+  // Layout-эффект, а не обычный: видимость кнопки ставится в том же рендере inline-стилем,
+  // а обычный эффект мог выполниться уже ПОСЛЕ отрисовки. Тогда кадр показа после меню
+  // «Ещё» рисовал кнопку видимой, но с подъёмом, замеренным ещё под меню (блик 699 → 788)
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--cc-fab-raise', `${fabPlace.raise}px`);
+    return () => { root.style.removeProperty('--cc-fab-raise'); };
+  }, [fabPlace.raise]);
+  // Нижний отступ прокручиваемых списков под кнопку (FAB_CLEAR_PAD): на телефоне круг
+  // висит над концом любого списка, и последний контрол без запаса так и оставался бы под
+  // ним — дальше листать некуда. Пишем только мы: нет кнопки (выключен AI-хаб) — нет и отступа
+  useEffect(() => {
+    const root = document.documentElement;
+    if (isMobile) root.style.setProperty('--cc-fab-clear',
+      `calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + ${FAB_SMALL + FAB_CLEARANCE}px)`);
+    else root.style.removeProperty('--cc-fab-clear');
+    return () => { root.style.removeProperty('--cc-fab-clear'); };
+  }, [isMobile]);
   // Лицо AI-хаба: «хозяин контекста», а НЕ собеседник текущего чата.
   // personaId: null осознанно пропускает уровень «персона чата» в резолвере
   // (contextPersona.ts): в проекте кнопка/палитра носят лицо дефолт-персоны проекта (даже
@@ -499,16 +596,16 @@ export function AiLauncher() {
     <>
       {/* Проактивная подсказка (push) — тихий балун у кнопки. При наведении на FAB
           уступает место hover-балуну со списком рекомендаций. */}
-      {!open && suggestion && !fabHover && (
+      {balloonsOn && suggestion && !fabHover && (
         <div
           style={{
-            ...balloonStyle,
+            ...balloonStyle, ...balloonEdge,
             transform: dragX ? `translateX(${dragX}px)` : undefined,
             opacity: dragX ? Math.max(0, 1 - dragX / 200) : 1,
             transition: dragX ? 'none' : 'transform .16s, opacity .16s',
             touchAction: 'pan-y',
           }}
-          role="status"
+          role="status" data-cc-fab=""
           onTouchStart={onSwipeStart}
           onTouchMove={onSwipeMove}
           onTouchEnd={onSwipeEnd}
@@ -534,8 +631,8 @@ export function AiLauncher() {
 
       {/* Балун ждущих чатов: клик по FAB при нескольких ждущих (или наведение на десктопе).
           Переиспользует раскладку hover-балуна: иконка + имя чата + подпись. Клик ведёт в чат. */}
-      {!open && aiAwaiting && (awaitingBalloon || (fabHover && !isMobile)) && (
-        <div ref={awaitingBalloonRef} style={hoverBalloonStyle} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
+      {balloonsOn && aiAwaiting && (awaitingBalloon || (fabHover && !isMobile)) && (
+        <div ref={awaitingBalloonRef} data-cc-fab="" style={{ ...hoverBalloonStyle, ...balloonEdge }} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
           <div style={{ ...balloonHead, marginBottom: 8 }}>
             <span style={{ color: C.warning, display: 'flex' }}><AwaitingIcon size={15} /></span>
             <b style={{ fontSize: 12.5, color: C.textHeading }}>Ждут вашего ответа</b>
@@ -564,8 +661,8 @@ export function AiLauncher() {
       {/* Hover-балун: наведение на FAB → список рекомендованных действий, клик запускает.
           Показываем при наведении, если есть рекомендации. Ждущие чаты важнее — при aiAwaiting
           балун рекомендаций не поднимаем (его место занимает список ждущих). */}
-      {!open && fabHover && recActions.length > 0 && !isMobile && !aiAwaiting && (
-        <div style={hoverBalloonStyle} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
+      {balloonsOn && fabHover && recActions.length > 0 && !isMobile && !aiAwaiting && (
+        <div data-cc-fab="" style={{ ...hoverBalloonStyle, ...balloonEdge }} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
           <div style={{ ...balloonHead, marginBottom: 8 }}>
             <span style={{ color: C.accent, display: 'flex' }}><SparkleIcon size={15} /></span>
             <b style={{ fontSize: 12.5, color: C.textHeading }}>AI рекомендует</b>
@@ -592,10 +689,14 @@ export function AiLauncher() {
           только «работа»; маячок «нужен ответ» и accent-ореол «идеи» — в CSS по data-state.
           Геометрия (размер, наведение, ужимание) осталась inline; ореол и анимации — в CSS,
           т.к. box-shadow/transform анимаций inline-стилем не перебить. */}
+      {/* Якорь замера: базовая точка кнопки (угол без подъёма), см. useFabPlacement */}
+      <span ref={fabAnchorRef} aria-hidden style={{
+        ...fabAnchorStyle, ...(isMobile ? { right: 16 } : {}),
+      }} />
       {!open && (
         <button
           ref={fabRef}
-          className="cc-fab"
+          className="cc-fab" data-cc-fab=""
           data-state={fabState}
           onClick={onFabClick}
           aria-label={fabAriaLabel}
@@ -607,13 +708,19 @@ export function AiLauncher() {
             // при наведении на десктопе — всегда 54. Растёт влево-вверх (угол приклеен к краю).
             // На мобиле размер фиксирован (36, там наведения и распахнутых панелей нет).
             // Композер (или футер мастера персон), дошедший до угла, тоже ужимает кнопку:
-            // она остаётся в углу и просто занимает меньше места, а не уезжает вверх.
+            // она остаётся в углу и просто занимает меньше места. Уезжает вверх (над
+            // композером) только когда угол занят и ужатой — см. useFabPlacement.
             // На «Стене» компактный размер постоянный.
-            ...(fabSmall && !isMobile ? { width: 36, height: 36 } : {}),
+            ...(fabSmall && !isMobile ? { width: FAB_SMALL, height: FAB_SMALL } : {}),
             // Наведение растит кнопку до полного размера — как в компактном режиме панелей.
             // Исключение — подпёртая композером: там расти некуда, круг накрыл бы поле ввода.
-            ...(fabHover && !isMobile && !obstacleOverlap ? { width: 54, height: 54 } : {}),
-            ...(isMobile ? { right: 16, width: 36, height: 36 } : {}),
+            ...(fabHover && !isMobile && !obstacleOverlap ? { width: FAB_FULL, height: FAB_FULL } : {}),
+            ...(isMobile ? { right: 16, width: FAB_SMALL, height: FAB_SMALL } : {}),
+            ...(fabPlace.edge ? { right: FAB_EDGE_INSET } : {}),
+            // Места нет нигде (композер растянут во весь экран) — прячемся, а не ложимся
+            // поверх поля ввода. Палитра остаётся на ⌘K, а на телефоне, где хоткея нет, —
+            // в меню «⋯» шапки чата (пункт «AI-действия», ChatHeaderBar)
+            ...(fabPlace.hidden ? { visibility: 'hidden' as const, pointerEvents: 'none' as const } : {}),
             // Наведение на десктопе: в большом состоянии подъём (--cc-fab-lift = -2px), в
             // малом подъёма нет (0px) — там кнопка вместо этого растёт до 54.
             transform: fabHover && !isMobile ? 'translateY(var(--cc-fab-lift, -2px))' : undefined,
@@ -828,11 +935,12 @@ const fabStyle: React.CSSProperties = {
   // 20px (уютный угол), но когда справа открыт остров-панель во всю высоту, PanelZone ставит
   // 6px и кнопка прижимается плотнее к краю (меньше налезает на остров). Нижний отступ
   // отдельный (--cc-fab-bottom): в компактном режиме он равен отступу холста островов,
-  // чтобы кнопка стояла на одной линии с их нижней кромкой. Из угла кнопка не уезжает
-  // никогда — на подошедший снизу композер она отвечает не подъёмом, а ужиманием
-  // (см. useFabObstacleOverlap). Снизу ещё safe-area.
+  // чтобы кнопка стояла на одной линии с их нижней кромкой. Угол задаёт ТОЛЬКО PanelZone;
+  // на подошедший снизу композер кнопка отвечает ужиманием, а подъёмом (--cc-fab-raise,
+  // его пишет только AiLauncher) — лишь когда угол занят и ужатой (см. useFabPlacement).
+  // Снизу ещё safe-area.
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-raise, 0px))',
   // Базовый размер — var --cc-fab-size: по умолчанию 54 (панель не распахнута), а когда
   // справа распахнута панель во всю высоту, PanelZone ставит 36 (компактный, не мешает).
   // При наведении переопределяется на 54 (см. button inline). Меняется плавно (transition).
@@ -844,6 +952,12 @@ const fabStyle: React.CSSProperties = {
   // Ниже выпадающих меню (Z.dropdown): FAB висит в том же углу, что и попапы кнопок
   // композера, и на Z.modal-1 перекрывал их собой. Выше обычного контента остаётся.
   display: 'grid', placeItems: 'center', zIndex: Z.dropdown - 1,
+};
+// Невидимая точка в базовом углу кнопки (без подъёма) — от неё меряется место
+const fabAnchorStyle: React.CSSProperties = {
+  position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
+  width: 0, height: 0, pointerEvents: 'none', visibility: 'hidden',
 };
 
 const overlayStyle: React.CSSProperties = {
@@ -899,7 +1013,7 @@ const toggleThumb: React.CSSProperties = {
 const balloonStyle: React.CSSProperties = {
   // Над кнопкой в покое — её нижний отступ (var) + текущая высота кнопки (var, −8 нахлёст)
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-size, 54px) - 8px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-raise, 0px) + var(--cc-fab-size, 54px) - 8px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };
@@ -920,7 +1034,7 @@ const balloonGhost: React.CSSProperties = {
 const hoverBalloonStyle: React.CSSProperties = {
   // Показывается на наведении, когда кнопка выросла до 54 — её нижний отступ (var) + высота
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 46px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-raise, 0px) + 46px)',
   width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
   borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

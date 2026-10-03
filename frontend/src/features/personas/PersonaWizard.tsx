@@ -209,11 +209,14 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   // FAB AI-хаба сидит в правом нижнем углу поверх всего — у мастера там же кнопка
   // «Далее» в футере. Отдаём футер FAB как нижнее препятствие тем же каналом, что
   // ChatPanel — композер: кнопка останется в углу, но ужмётся, если футер до неё достаёт.
+  // Подниматься над футером ей нельзя (noRaise): над ним не лента, а поля шага — на
+  // телефоне, где футер во всю ширину, кнопка прячется (AI остаётся в «⋯» и палитре).
   const footerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (step === 9) { setFabObstacle(null); return; }
-    setFabObstacle(footerRef.current);
-    return () => setFabObstacle(null);
+    // На шаге 9 футера нет — узел прошлого шага уже снят его же cleanup'ом
+    const el = footerRef.current;
+    if (step === 9 || !el) return;
+    return setFabObstacle(el, 'main', { noRaise: true });
   }, [step]);
 
   const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);

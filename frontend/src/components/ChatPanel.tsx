@@ -135,7 +135,7 @@ interface Props {
   headerIsland?: boolean;
   // Режим «Стены» (WallColumn): на экране НЕСКОЛЬКО инстансов ChatPanel разом, поэтому
   // глобальные синглтоны одного хозяина (setGitSessionContext, setChatContext,
-  // --cc-fab-bottom) не трогаем — иначе инстансы перебивают друг друга, а анмаунт
+  // препятствие круглешка AI) не трогаем — иначе инстансы перебивают друг друга, а анмаунт
   // любого сбрасывает контекст всем. Git-бар скрыт (воркспейсный инструмент);
   // шапка чата — штатная (канонический вид), ярлык колонки рисует WallColumn.
   embedded?: boolean;
@@ -866,30 +866,23 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // когда композер доходит до него (замер пересечения — в AiLauncher). Публикуем узел
   // САМОГО композера, а не растянутую обёртку: та шириной во всю область чата, и по ней
   // пересечение выходило истинным всегда — круг оставался ужатым при любом окне.
-  const composerObstacleRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    // embedded: препятствие глобальное, несколько колонок стены перебивали бы друг друга
-    if (embedded) return;
-    setFabObstacle(composerObstacleRef.current);
-    return () => setFabObstacle(null);
-    // composerH в зависимостях — им ловим момент, когда композер уже в DOM
-    // (первый замер высоты) и ref наконец не пустой
-  }, [embedded, composerH]);
-  // QA Fold 8: на планшете FAB прижимался к композеру и ужимался (54→36), причём
-  // пилюля «Собеседник» резалась сверху. Поднимаем кнопку над композером вместо
-  // ужимания — `--cc-fab-bottom = composerH + 12` (12 = зазор). Сбрасывается на 20px
-  // при уходе композера. На Стене (embedded) поведение прежнее: глобальный
-  // --cc-fab-bottom трогать нельзя — колонки перебивают друг друга.
-  useEffect(() => {
-    if (embedded) return;
-    const root = document.documentElement;
-    if (composerH > 0) {
-      root.style.setProperty('--cc-fab-bottom', `${composerH + 12}px`);
-    } else {
-      root.style.setProperty('--cc-fab-bottom', '20px');
-    }
-    return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
-  }, [composerH, embedded]);
+  // Ref-колбэк, а не эффект на composerH: переопубликация на каждый рост композера
+  // поднимала его на вершину стека поверх футера мастера персон, и FAB ложился на футер.
+  // Узел публикуется ровно раз при монтировании и снимается при размонтировании.
+  // embedded: ref не вешаем — препятствие глобальное, колонки стены перебивали бы друг друга
+  const composerReleaseRef = useRef<(() => void) | null>(null);
+  const composerObstacleRef = useCallback((el: HTMLDivElement | null) => {
+    composerReleaseRef.current?.();
+    composerReleaseRef.current = el ? setFabObstacle(el) : null;
+  }, []);
+  // Кнопка «Вниз» — сосед композера, который тоже нельзя накрывать (свой слот препятствия).
+  // Ref-колбэк: кнопка монтируется и снимается вместе с showScrollDown, null приходит сам —
+  // тогда снимаем ранее опубликованный узел
+  const scrollDownReleaseRef = useRef<(() => void) | null>(null);
+  const scrollDownObstacleRef = useCallback((el: HTMLButtonElement | null) => {
+    scrollDownReleaseRef.current?.();
+    scrollDownReleaseRef.current = el ? setFabObstacle(el, 'scroll-down') : null;
+  }, []);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project
     ? {
@@ -2918,9 +2911,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           кнопка встаёт над кнопкой отправки — у правого края КОЛОНКИ ЧТЕНИЯ, а не
           контейнера панели: в разделах «Проекты»/«Чаты» контейнер тянется до рельсы
           панелей, и привязка к его краю уносила кнопку в пустоту сбоку от ленты.
-          По вертикали — прямо над композером: круглешок AI приклеен к углу ЭКРАНА и на
-          подошедший композер отвечает ужиманием, а не подъёмом, так что уступать ему
-          место не надо. */}
+          По вертикали — прямо над композером. Круглешок AI приклеен к углу ЭКРАНА; когда
+          угол занят композером (телефон), он поднимается над ним — и над этой кнопкой
+          тоже: она публикуется отдельным слотом препятствия (scroll-down), и FAB уступает
+          их объединению. */}
       {showScrollDown && (
         <div style={{
           position: 'absolute', left: 0, right: 0, bottom: composerH + 14,
@@ -2929,6 +2923,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         }}>
           <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', display: 'flex', justifyContent: 'flex-end' }}>
             <button
+              ref={embedded ? undefined : scrollDownObstacleRef}
               onClick={scrollToBottom}
               title="Вниз чата"
               style={{
@@ -2964,7 +2959,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             композера (ограничен CHAT_MAX_W и центрирован). Внешняя обёртка растянута
             left:0/right:0, и замер по ней всегда давал пересечение с углом кнопки —
             круг был ужат даже когда композер визуально далеко */}
-        <div ref={composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
+        <div ref={embedded ? undefined : composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
           {mode === 'bypass' && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px',

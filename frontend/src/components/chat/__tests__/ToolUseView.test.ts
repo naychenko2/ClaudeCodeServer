@@ -455,6 +455,20 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     expect(html).not.toContain(' из ');
   });
 
+  // Замечание Киры (Б): упавшая сборка (код 1/2) — штатный результат вызова без isError, и
+  // шапка писала «готово · 0:16» над «✕ сборка»
+  it.each([
+    ['mcp__dev__build', { target: 'backend' }],
+    ['mcp__dev__build', { kind: 'npm', target: 'frontend' }],
+    ['mcp__tests__run_tests', { target: 'backend/App.Tests' }],
+  ])('упавшая сборка %s %j: шапка «ошибка · M:SS» красным, а не «готово»', (name, input) => {
+    const stages = [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 16_000, failed: true }];
+    const html = render(run({ name, input, result: 'сборка упала (код выхода 1)', finishedAt: 16_000, stages }), undefined, false);
+    expect(html).toContain('color:var(--c-danger-text);flex-shrink:0;white-space:nowrap;font-variant-numeric:tabular-nums">ошибка · 0:16');
+    expect(html).not.toContain('готово');
+    expect(html).toContain('✕ сборка');
+  });
+
   it('идёт: текущий этап выделен, не режется и подчёркнут на долю процента, подпись прогресса при нём', () => {
     const item = run({
       stages: [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 102_000 }, { stage: 'running', label: 'тесты', startedAt: 102_000 }],

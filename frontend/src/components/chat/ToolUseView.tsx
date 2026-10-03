@@ -303,9 +303,13 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   const headCaption = hasStages ? null : progressText;
   // Итог завершённой или оборванной карточки — в шапке либо (мобила) строкой подписи. У
   // прогона тестов — со счётчиками: «готово · 2:15 · 174 из 177 · упало 3»
-  const statusText = `${item.isError ? 'ошибка' : item.bgAborted || aborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово'}`
+  // Упавшая сборка (dev build, сборка run_tests) — штатный результат вызова, не isError:
+  // неуспех несёт закрытый крестиком этап, и шапка обязана сказать «ошибка», а не «готово»
+  const stageFailed = settled && item.stages?.some(s => s.failed) === true;
+  const failed = item.isError || stageFailed;
+  const statusText = `${failed ? 'ошибка' : item.bgAborted || aborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово'}`
     + (showClock ? ` · ${formatClock(elapsed)}` : '');
-  const statusColor = item.isError || item.bgAborted || aborted ? C.dangerText : C.textMuted;
+  const statusColor = failed || item.bgAborted || aborted ? C.dangerText : C.textMuted;
   const totals = totalsText(item.totals);
   const status = (
     <>

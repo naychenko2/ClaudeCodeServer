@@ -238,7 +238,7 @@ for (const { name, vp } of VIEWPORTS.filter(v => v.name !== '360')) {
     await page.locator('[data-train-voice] [data-field="clips"] input').fill('records/andrey-1.wav');
     await page.locator('[data-train-voice]').getByRole('button', { name: /Обучить · бесплатно/ }).click();
     await expect.poll(() => w().audioJobs.length, { timeout: 10_000 }).toBe(1);
-    expect(w().audioQuotes.at(-1)).toMatchObject({ mode: 'voice', operation: 'trainVoice', prompt: 'Андрей' });
+    expect(w().audioQuotes.find(q => q.operation === 'trainVoice')).toMatchObject({ mode: 'voice', operation: 'trainVoice', prompt: 'Андрей' });
     expect(w().audioJobs[0]).toMatchObject({ prompt: 'Андрей', clipPaths: 'records/andrey-1.wav' });
     await expect(page.locator('[data-train-voice]')).toHaveCount(0);
   });

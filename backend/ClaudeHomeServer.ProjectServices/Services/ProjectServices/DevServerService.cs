@@ -17,6 +17,9 @@ internal sealed class DevServerInstance : IDisposable
     public string Status { get; set; } = "starting"; // starting | started | stopped | error
     public string? Error { get; set; }
     public DateTime LastActivity { get; set; }
+    // Чат, из которого стенд поднят инструментом start_stand, — только подпись в панели
+    // «Сервисы»: владелец записи — пользователь, гасить по концу хода её нельзя
+    public StandOrigin? Origin { get; init; }
 
     // Адреса, объявленные Kestrel строками «Now listening on:», и признак «Application
     // started» (после него все адреса уже названы). По ним видно, что dotnet-приложение
@@ -96,7 +99,14 @@ internal sealed class DevServerInstance : IDisposable
 }
 
 /// <summary>Одна запущенная запись сервиса (для отдачи фронту).</summary>
-public record RunningServiceInfo(string ServiceId, string Name, int? Port, string Status, string? Error);
+public record RunningServiceInfo(string ServiceId, string Name, int? Port, string Status, string? Error,
+    StandOrigin? Origin = null);
+
+/// <summary>
+/// Чат, из которого стенд поднят агентом (start_stand): id сессии и подпись для панели.
+/// Только подпись — время жизни стенда от чата не зависит.
+/// </summary>
+public sealed record StandOrigin(string SessionId, string Label);
 
 /// <summary>
 /// Менеджер сервисов Preview: несколько процессов на проект (ключ = projectId:serviceId).
@@ -127,6 +137,8 @@ public sealed class DevServerService : IDisposable
     // Без резерва два параллельных запуска видели один и тот же свободный порт.
     private readonly object _portLock = new();
     private readonly HashSet<int> _reservedPorts = [];
+    // Ключи сервисов, которые сейчас между проверкой реестра и записью инстанса (см. StartAsync)
+    private readonly ConcurrentDictionary<string, byte> _launching = new();
 
     public DevServerService(IProjectManager projects, ISessionBroadcaster broadcaster, ILogger<DevServerService> log,
         Execution.ILauncherFactory launchers, Execution.ISandboxPortRange sandbox, DevServerPortMemory portMemory)
@@ -175,6 +187,20 @@ public sealed class DevServerService : IDisposable
         lock (_portLock) _reservedPorts.Remove(port);
     }
 
+    /// <summary>
+    /// Отказ по порту, который стенду назвал агент (start_stand): только 55xx–56xx — та же
+    /// конвенция, что у автопорта, мимо боя, Dify и чужих стендов. null — порт годится.
+    /// </summary>
+    public static string? StandPortRefusal(int port) =>
+        DevServerLaunchPolicy.IsForbidden(port) ? DevServerLaunchPolicy.ForbiddenReason(port)
+        : port is < DevServerLaunchPolicy.AutoPortFirst or > DevServerLaunchPolicy.AutoPortLast
+            ? $"Порт {port} вне диапазона стендов {DevServerLaunchPolicy.AutoPortFirst}–{DevServerLaunchPolicy.AutoPortLast}: "
+              + "укажи порт из него или не указывай вовсе — выдам свободный."
+            : null;
+
+    /// <summary>Сервисы проекта поднимаются в песочнице: порт там — только из её пула.</summary>
+    public bool LaunchesSandboxed(ClaudeHomeServer.Models.Project project) => _launchers.ForProject(project).IsSandboxed;
+
     private static string Key(string projectId, string serviceId) => projectId + ":" + serviceId;
 
     /// <summary>
@@ -182,116 +208,137 @@ public sealed class DevServerService : IDisposable
     /// <paramref name="readyTimeout"/> — сколько ждать, пока сервис начнёт слушать порт
     /// (по умолчанию <see cref="DevServerLaunchPolicy.DefaultReadyTimeout"/>, с запасом на
     /// холодную сборку `dotnet run`).
+    /// <paramref name="root"/> — корень рабочего дерева (worktree чата) вместо корня проекта;
+    /// задаёт его только сервер (инструмент start_stand), не клиент. <paramref name="origin"/> —
+    /// подпись чата-инициатора. <paramref name="ct"/> — «Стоп» хода во время подъёма: гасит
+    /// стартующий процесс и убирает его из реестра; уже поднятый сервис отмена не трогает.
     /// </summary>
     public async Task<DevServerStartResult> StartAsync(string projectId, string userId, string serviceId,
         string name, string command, string[] args, string? cwd = null,
         int? port = null, bool autoPort = false, Dictionary<string, string>? env = null,
-        TimeSpan? readyTimeout = null)
+        TimeSpan? readyTimeout = null, string? root = null, StandOrigin? origin = null,
+        CancellationToken ct = default)
     {
         // Боевой инстанс и Dify сервису не отдаём ни при каком конфиге — отказ до запуска
         if (port is { } requested && DevServerLaunchPolicy.IsForbidden(requested))
             return new DevServerStartResult(false, null, "error", DevServerLaunchPolicy.ForbiddenReason(requested));
 
         var key = Key(projectId, serviceId);
-        if (_servers.TryGetValue(key, out var existing))
-        {
-            if (existing.Status == "started")
-            {
-                SetActivePreview(projectId, serviceId);
-                return new DevServerStartResult(true, existing.Port, "started");
-            }
-            if (existing.Status == "starting")
-                return new DevServerStartResult(true, null, "starting");
-            _servers.TryRemove(key, out _);
-            existing.Dispose();
-        }
-
-        var project = _projects.GetById(projectId);
-        if (project is null)
-            return new DevServerStartResult(false, null, "error", "Проект не найден");
-
-        string workingDir;
-        try
-        {
-            workingDir = string.IsNullOrWhiteSpace(cwd)
-                ? project.RootPath
-                // Защита пути через Core-примитив SafePath.Join: ссылка на FileService
-                // — это ссылка на чужую вертикаль, сторож границ её ловит.
-                : SafePath.Join(project.RootPath, cwd);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return new DevServerStartResult(false, null, "error", "Недопустимый рабочий каталог");
-        }
-
-        var launcher = _launchers.ForProject(project);
-        var envVars = new Dictionary<string, string>();
-        if (env != null)
-            foreach (var (k, v) in env) envVars[k] = v;
-
-        // autoPort без явного порта → берём свободный из 55xx–56xx. Явный/авто-порт навязываем
-        // сервису: dotnet-приложению — аргументом `--urls` (env перебивают launchSettings.json и
-        // `Urls` в appsettings), остальным — через окружение (PORT для Node-фреймворков).
-        // В песочнице порт обязан быть из опубликованного пула (иначе он не проброшен на хост
-        // и preview-форвардер на 127.0.0.1 не достучится); хостовый порт не подходит.
-        int? fixedPort = port;
-        var autoPicked = (launcher.IsSandboxed && (fixedPort is null || autoPort)) || (!fixedPort.HasValue && autoPort);
-        if (autoPicked)
-        {
-            fixedPort = ReserveAutoPort(launcher.IsSandboxed);
-            if (fixedPort is null)
-                return new DevServerStartResult(false, null, "error", launcher.IsSandboxed
-                    ? "Исчерпан пул preview-портов песочницы — остановите неиспользуемые dev-серверы или увеличьте Sandbox:PortRangeSize"
-                    : $"Нет свободного порта в диапазоне {DevServerLaunchPolicy.AutoPortFirst}–{DevServerLaunchPolicy.AutoPortLast}.");
-        }
-
+        // Резерв ключа на время от проверки реестра до записи инстанса (как резерв автопорта):
+        // без него два одновременных подъёма одного сервиса оба запускали процесс, второй
+        // перезаписывал первого, и проигравший уходил в «error» панели. Проигравший видит «starting»
+        if (!_launching.TryAdd(key, 0))
+            return new DevServerStartResult(true, null, "starting");
         DevServerInstance instance;
         Process process;
-        // Резерв автопорта держим, пока порт не окажется в инстансе: с этого момента его
-        // видят все следующие выборы через реестр. Не запустилось — резерв снимается тоже.
+        int? fixedPort = port;
         try
         {
-            if (fixedPort.HasValue)
+            if (_servers.TryGetValue(key, out var existing))
             {
-                envVars["PORT"] = fixedPort.Value.ToString();
-                // Наследованный ASPNETCORE_URLS процесса бэкенда не перебиваем (историческое поведение)
-                if (!envVars.ContainsKey("ASPNETCORE_URLS")
-                    && Environment.GetEnvironmentVariable("ASPNETCORE_URLS") is null)
-                    envVars["ASPNETCORE_URLS"] = $"http://localhost:{fixedPort.Value}";
-                args = DevServerLaunchPolicy.BuildArgs(command, args,
-                    DevServerLaunchPolicy.ListenUrl(fixedPort.Value, launcher.IsSandboxed));
+                if (existing.Status == "started")
+                {
+                    SetActivePreview(projectId, serviceId);
+                    return new DevServerStartResult(true, existing.Port, "started");
+                }
+                if (existing.Status == "starting")
+                    return new DevServerStartResult(true, null, "starting");
+                _servers.TryRemove(key, out _);
+                existing.Dispose();
             }
 
-            var turnId = Guid.NewGuid().ToString("N")[..12];
+            var project = _projects.GetById(projectId);
+            if (project is null)
+                return new DevServerStartResult(false, null, "error", "Проект не найден");
+
+            var baseDir = string.IsNullOrWhiteSpace(root) ? project.RootPath : root;
+            string workingDir;
             try
             {
-                process = launcher.Start(new Execution.ProcessSpec
-                {
-                    FileName = command,
-                    Args = args,
-                    WorkingDirectory = workingDir,
-                    Env = envVars,
-                    RedirectStdin = false,
-                    EnableRaisingEvents = true,
-                    TurnId = turnId,
-                });
+                workingDir = string.IsNullOrWhiteSpace(cwd)
+                    ? baseDir
+                    // Защита пути через Core-примитив SafePath.Join: ссылка на FileService
+                    // — это ссылка на чужую вертикаль, сторож границ её ловит.
+                    : SafePath.Join(baseDir, cwd);
             }
-            catch (Exception ex)
+            catch (UnauthorizedAccessException)
             {
-                _log.LogWarning(ex, "Не удалось запустить сервис {ServiceId} ({Command})", serviceId, command);
-                return new DevServerStartResult(false, null, "error", $"Не удалось запустить: {ex.Message}");
+                return new DevServerStartResult(false, null, "error", "Недопустимый рабочий каталог");
             }
 
-            instance = new DevServerInstance(projectId, serviceId, name, process, userId, launcher, turnId);
-            // Известный порт (из конфига/launchSettings) фиксируем до попадания в реестр, но
-            // «started» ставим ТОЛЬКО когда приложение реально слушает порт — иначе iframe
-            // грузится в мёртвый порт (502/пустая страница).
-            if (fixedPort.HasValue) instance.Port = fixedPort.Value;
-            _servers[key] = instance;
+            var launcher = _launchers.ForProject(project);
+            var envVars = new Dictionary<string, string>();
+            if (env != null)
+                foreach (var (k, v) in env) envVars[k] = v;
+
+            // autoPort без явного порта → берём свободный из 55xx–56xx. Явный/авто-порт навязываем
+            // сервису: dotnet-приложению — аргументом `--urls` (env перебивают launchSettings.json и
+            // `Urls` в appsettings), остальным — через окружение (PORT для Node-фреймворков).
+            // В песочнице порт обязан быть из опубликованного пула (иначе он не проброшен на хост
+            // и preview-форвардер на 127.0.0.1 не достучится); хостовый порт не подходит.
+            var autoPicked = (launcher.IsSandboxed && (fixedPort is null || autoPort)) || (!fixedPort.HasValue && autoPort);
+            if (autoPicked)
+            {
+                fixedPort = ReserveAutoPort(launcher.IsSandboxed);
+                if (fixedPort is null)
+                    return new DevServerStartResult(false, null, "error", launcher.IsSandboxed
+                        ? "Исчерпан пул preview-портов песочницы — остановите неиспользуемые dev-серверы или увеличьте Sandbox:PortRangeSize"
+                        : $"Нет свободного порта в диапазоне {DevServerLaunchPolicy.AutoPortFirst}–{DevServerLaunchPolicy.AutoPortLast}.");
+            }
+
+            // Резерв автопорта держим, пока порт не окажется в инстансе: с этого момента его
+            // видят все следующие выборы через реестр. Не запустилось — резерв снимается тоже.
+            try
+            {
+                if (fixedPort.HasValue)
+                {
+                    envVars["PORT"] = fixedPort.Value.ToString();
+                    // Наследованный ASPNETCORE_URLS процесса бэкенда не перебиваем (историческое поведение)
+                    if (!envVars.ContainsKey("ASPNETCORE_URLS")
+                        && Environment.GetEnvironmentVariable("ASPNETCORE_URLS") is null)
+                        envVars["ASPNETCORE_URLS"] = $"http://localhost:{fixedPort.Value}";
+                    args = DevServerLaunchPolicy.BuildArgs(command, args,
+                        DevServerLaunchPolicy.ListenUrl(fixedPort.Value, launcher.IsSandboxed));
+                }
+
+                var turnId = Guid.NewGuid().ToString("N")[..12];
+                try
+                {
+                    process = launcher.Start(new Execution.ProcessSpec
+                    {
+                        FileName = command,
+                        Args = args,
+                        WorkingDirectory = workingDir,
+                        Env = envVars,
+                        RedirectStdin = false,
+                        EnableRaisingEvents = true,
+                        TurnId = turnId,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Не удалось запустить сервис {ServiceId} ({Command})", serviceId, command);
+                    return new DevServerStartResult(false, null, "error", $"Не удалось запустить: {ex.Message}");
+                }
+
+                instance = new DevServerInstance(projectId, serviceId, name, process, userId, launcher, turnId)
+                {
+                    Origin = origin,
+                };
+                // Известный порт (из конфига/launchSettings) фиксируем до попадания в реестр, но
+                // «started» ставим ТОЛЬКО когда приложение реально слушает порт — иначе iframe
+                // грузится в мёртвый порт (502/пустая страница).
+                if (fixedPort.HasValue) instance.Port = fixedPort.Value;
+                _servers[key] = instance;
+            }
+            finally
+            {
+                if (autoPicked && fixedPort is { } reserved) ReleasePort(reserved);
+            }
         }
         finally
         {
-            if (autoPicked && fixedPort is { } reserved) ReleasePort(reserved);
+            _launching.TryRemove(key, out _);
         }
         process.Exited += (_, _) => OnExited(key);
 
@@ -306,6 +353,12 @@ public sealed class DevServerService : IDisposable
         string? mismatch = null;
         while (DateTime.UtcNow < deadline)
         {
+            // «Стоп» хода во время подъёма: процесс гасится ниже, вместе с прочими неудачами
+            if (ct.IsCancellationRequested)
+            {
+                mismatch = "Подъём остановлен («Стоп»).";
+                break;
+            }
             // Наш инстанс могли убрать из реестра, пока мы ждём: уборщик CleanupStale
             // (тик раз в минуту), повторный запуск того же сервиса или остановка. Тогда
             // его процесс уже освобождён, и ждать нечего — иначе дальше по циклу мы
@@ -345,7 +398,9 @@ public sealed class DevServerService : IDisposable
                 mismatch = m;
                 break;
             }
-            await Task.Delay(500);
+            // Отмена будит ожидание сразу; сам выход — проверкой в начале витка
+            try { await Task.Delay(500, ct); }
+            catch (OperationCanceledException) { }
         }
 
         // Не поднялся: честная ошибка с хвостом вывода процесса.
@@ -488,7 +543,8 @@ public sealed class DevServerService : IDisposable
         {
             if (!k.StartsWith(prefix, StringComparison.Ordinal)) continue;
             if (inst.UserId != userId) continue;
-            list.Add(new RunningServiceInfo(inst.ServiceId, inst.Name, inst.Port == 0 ? null : inst.Port, inst.Status, inst.Error));
+            list.Add(new RunningServiceInfo(inst.ServiceId, inst.Name, inst.Port == 0 ? null : inst.Port, inst.Status,
+                inst.Error, inst.Origin));
         }
         return list;
     }

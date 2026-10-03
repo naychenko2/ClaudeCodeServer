@@ -262,6 +262,98 @@ public class DevServerServiceTests : IDisposable
         svc.ReserveAutoPort(sandboxed: true).Should().Be(firstFree, "резерв сбойного запуска снят");
     }
 
+    /// <summary>
+    /// «Стоп» хода во время подъёма стенда (start_stand): процесс гасится и уходит из реестра
+    /// сразу, а не по потолку ожидания порта.
+    /// </summary>
+    [Fact]
+    public async Task StartAsync_Cancelled_KillsStartingProcess()
+    {
+        // Процесс жив, но порта не объявляет — подъём висел бы до потолка
+        var (command, args) = ShellPrinting("ещё собираюсь");
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(700));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = await _svc.StartAsync("proj", "user1", "svc", "Stand", command, args,
+            readyTimeout: TimeSpan.FromSeconds(60), ct: cts.Token);
+
+        // Заглушка сама живёт ~10 с: без отмены подъём кончился бы её выходом, а не «Стопом»
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(6), "отмена прерывает ожидание порта");
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Стоп");
+        _svc.GetRunning("proj", "user1").Should().BeEmpty("стартующий процесс погашен и убран из реестра");
+    }
+
+    /// <summary>
+    /// Два одновременных подъёма одного сервиса (start_stand и кнопка панели): процесс запускается
+    /// один, проигравший получает «starting», а не «error» с погашенным чужим процессом.
+    /// </summary>
+    [Fact]
+    public async Task StartAsync_ConcurrentSameService_OneLaunchNoError()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        var (command, args) = ShellPrinting($"Local: http://localhost:{port}/");
+        using var go = new ManualResetEventSlim();
+
+        Task<DevServerStartResult> Raise() => Task.Run(() =>
+        {
+            go.Wait();
+            return _svc.StartAsync("proj", "user1", "svc", "Stand", command, args,
+                readyTimeout: TimeSpan.FromSeconds(20));
+        });
+        var tasks = Enumerable.Range(0, 4).Select(_ => Raise()).ToArray();
+        go.Set();
+        var results = await Task.WhenAll(tasks);
+
+        results.Should().OnlyContain(r => r.Success, "проигравший — «уже поднимается», а не ошибка");
+        results.Count(r => r.Status == "started").Should().BeGreaterThanOrEqualTo(1);
+        _svc.GetRunning("proj", "user1").Should().ContainSingle().Which.Status.Should().Be("started");
+        await _svc.StopAsync("proj", "user1", "svc");
+    }
+
+    /// <summary>
+    /// Стенд из чата: запуск идёт из корня рабочего дерева (worktree), а не проекта, и запись
+    /// реестра несёт подпись чата-инициатора — её показывает панель «Сервисы».
+    /// </summary>
+    [Fact]
+    public async Task StartAsync_RootAndOrigin_RunsInTreeAndCarriesOrigin()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        var tree = Directory.CreateDirectory(Path.Combine(_dir, "wt")).FullName;
+        File.WriteAllText(Path.Combine(tree, "marker.txt"), "дерево чата");
+        // Сервис печатает адрес, только если стартовал в дереве чата (там лежит marker.txt)
+        var (command, args) = OperatingSystem.IsWindows()
+            ? ("cmd", new[] { "/c", $"if exist marker.txt (echo Local: http://localhost:{port}/& ping -n 11 127.0.0.1 >nul)" })
+            : ("sh", new[] { "-c", $"test -f marker.txt && echo 'Local: http://localhost:{port}/' && sleep 10" });
+
+        var result = await _svc.StartAsync("proj", "user1", "svc", "Stand", command, args,
+            readyTimeout: TimeSpan.FromSeconds(20), root: tree, origin: new StandOrigin("sess-1", "чат «Е2Е»"));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Port.Should().Be(port);
+        _svc.GetRunning("proj", "user1").Should().ContainSingle()
+            .Which.Origin.Should().Be(new StandOrigin("sess-1", "чат «Е2Е»"));
+        await _svc.StopAsync("proj", "user1", "svc");
+    }
+
+    [Theory]
+    [InlineData(80, "запрещён")]
+    [InlineData(8080, "запрещён")]
+    [InlineData(5000, "вне диапазона")]
+    [InlineData(5700, "вне диапазона")]
+    public void StandPortRefusal_ForbiddenOrOutOfRange(int port, string expected) =>
+        DevServerService.StandPortRefusal(port).Should().Contain(expected);
+
+    [Theory]
+    [InlineData(5500)]
+    [InlineData(5699)]
+    public void StandPortRefusal_StandRange_Accepted(int port) =>
+        DevServerService.StandPortRefusal(port).Should().BeNull();
+
     [Fact]
     public void ShutdownAll_WithNoServers_DoesNotThrow()
     {

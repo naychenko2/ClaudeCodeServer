@@ -8,7 +8,9 @@ public record ServiceDto(
     int? SuggestedPort, bool AutoPort, bool Saved,
     string Status, int? RunningPort, string? Error,
     // Составной запуск: id входящих сервисов (у обычного сервиса — null)
-    string[]? Members = null);
+    string[]? Members = null,
+    // Стенд поднят агентом из чата (start_stand) — подпись «из чата …» в панели
+    StandOrigin? Origin = null);
 
 public record PreviewStartRequest(
     string Command, string[]? Args = null, int? Port = null,
@@ -72,14 +74,14 @@ public sealed class ProjectServicesApi(
                 s.SuggestedPort, s.AutoPort, s.Saved,
                 run?.Status ?? (isExternal ? "external" : "idle"),
                 run?.Port ?? (isExternal ? external[s.Id] : null),
-                run?.Error, s.Members));
+                run?.Error, s.Members, run?.Origin));
         }
         // Запущенные сервисы, которых нет в инференсе (напр. кастомная разовая команда).
         foreach (var run in running.Values)
         {
             if (covered.Contains(run.ServiceId)) continue;
             services.Add(new ServiceDto(run.ServiceId, run.Name, "custom", "", [], null,
-                null, false, false, run.Status, run.Port, run.Error));
+                null, false, false, run.Status, run.Port, run.Error, Origin: run.Origin));
         }
 
         return ProjectServicesResult.Ok(new { services, activeServiceId = activeId });

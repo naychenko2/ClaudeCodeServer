@@ -51,6 +51,28 @@ public sealed class ChatContextFocusMirror(
         }
     }
 
+    // Запуск дал нить новую версию (ADR-023, «результат запуска становится объектом»): если основной объект —
+    // эта нить, закреплённая на версии-основе запуска, он переезжает на новую версию. Метка того, кто его
+    // поставил (By), и id элемента сохраняются. Закреплённую на другой версии не трогаем: человек выбрал её
+    // сам, пока запуск шёл. Без закрепления (versionId нет) двигать нечего — читатели берут текущую версию нити.
+    // Сбой зеркала запись вертикали не откатывает
+    public void AdvanceVersion(string ownerId, string sessionId, string kind, string threadId, string? baseVersionId,
+        string newVersionId, string refKey = ThreadKey)
+    {
+        try
+        {
+            if (store.Get(ownerId, sessionId).Primary is not { } p || p.Kind != kind || ThreadOf(p, refKey) != threadId) return;
+            if (p.Ref["versionId"] is not JsonValue v || !v.TryGetValue<string>(out var pinned) || pinned != baseVersionId) return;
+            var next = (JsonObject)p.Ref.DeepClone();
+            next["versionId"] = newVersionId;
+            store.SetPrimary(ownerId, sessionId, p with { Ref = next }, null);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Основной объект {Kind} чата {SessionId} не перешёл на версию {VersionId}", kind, sessionId, newVersionId);
+        }
+    }
+
     // Нить удалена: убрать её из основного и референсов
     public void Forget(string ownerId, string sessionId, string kind, string threadId, string refKey = ThreadKey)
     {

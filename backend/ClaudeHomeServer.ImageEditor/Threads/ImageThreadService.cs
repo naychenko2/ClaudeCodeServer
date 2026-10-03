@@ -500,9 +500,15 @@ public sealed class ImageThreadService(
     // Версии уже записаны в нить и разосланы: теперь о них узнают подписчики (шов IMediaEvents). Событие
     // идёт ПОСЛЕ записи, из асинхронного пути исполнителя, а не из синхронного Report прогресса — иначе
     // подписчик прочитал бы нить без новой версии. Сбой подписчика хаб гасит сам
-    private async Task PublishVersionsAsync(string ownerId, string projectId, string sessionId, string threadId,
+    internal async Task PublishVersionsAsync(string ownerId, string projectId, string sessionId, string threadId,
         ImageThreadWrite written, string initiator)
     {
+        // Первая новая версия — та же, на которую переезжает текущая версия нити (ImageThreadStore, moveCurrent)
+        if (written.NewVersions.Count > 0)
+        {
+            var first = written.NewVersions[0];
+            mirror?.AdvanceVersion(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId, first.BaseVersionId, first.Id);
+        }
         if (mediaEvents is null) return;
         foreach (var version in written.NewVersions)
             await mediaEvents.PublishAsync(new ImageVersionAdded(ownerId, sessionId, projectId, threadId, version.Id, initiator));

@@ -45,6 +45,21 @@ public sealed class AudioContextKindTests : IDisposable
     private static JsonObject Ref(string threadId, string? versionId = null) =>
         versionId is null ? new JsonObject { ["threadId"] = threadId } : new JsonObject { ["threadId"] = threadId, ["versionId"] = versionId };
 
+    // Приёмка Д2: правка без ИИ (обрезка) или запуск дают версию — основной, закреплённый на основе, переезжает на неё
+    [Fact]
+    public void Правка_версии_переносит_закреплённый_основной_на_новую_версию()
+    {
+        var id = _threads.Open(Owner, Chat, "a.mp3", null, null).Thread!.Id;
+        var origin = AudioThreadVersion.OriginId;
+        _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem(AudioContextKind.Kind, id, ContextActor.Human, origin), null);
+
+        var written = _threads.AddEditVersion(Owner, Chat, id, [new AudioVersionFile(AudioFileRoles.Main, "x.wav")], null,
+            null, "job-1", origin);
+        _jobs.AdvanceContext(Owner, Chat, id, written);
+
+        _context.Get(Owner, Chat).Primary!.Ref["versionId"]!.GetValue<string>().Should().Be(written.NewVersions.Single().Id);
+    }
+
     [Fact]
     public void Validate_принимает_свою_нить_и_отказывает_чужой_и_неизвестной_версии()
     {

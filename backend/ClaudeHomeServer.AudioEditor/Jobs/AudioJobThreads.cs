@@ -217,9 +217,19 @@ public sealed class AudioJobThreads(
 
     // Версии уже записаны в нить и разосланы: теперь о них узнают подписчики (шов IMediaEvents). Событие идёт
     // ПОСЛЕ записи, иначе подписчик прочитал бы нить без новой версии. Сбой подписчика хаб гасит сам
+    // Основной объект контекста, закреплённый на версии-основе, переезжает на первую новую версию
+    // (зовёт и путь задач, и правка без ИИ — обрезка и т.п.)
+    public void AdvanceContext(string ownerId, string sessionId, string threadId, AudioThreadWrite written)
+    {
+        if (written.NewVersions.Count == 0) return;
+        var first = written.NewVersions[0];
+        mirror?.AdvanceVersion(ownerId, sessionId, ChatContext.AudioContextKind.Kind, threadId, first.BaseVersionId, first.Id);
+    }
+
     private async Task PublishVersionsAsync(string ownerId, string scopeKey, string sessionId, string threadId,
         string jobId, AudioThreadWrite written)
     {
+        AdvanceContext(ownerId, sessionId, threadId, written);
         if (mediaEvents is null) return;
         var initiator = written.Thread?.Launches.FirstOrDefault(l => l.JobId == jobId)?.Initiator ?? SpendInitiators.Human;
         foreach (var version in written.NewVersions)

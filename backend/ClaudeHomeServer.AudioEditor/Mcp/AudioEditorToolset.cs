@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -176,14 +177,15 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             if (scope.Project is not { } project) return Deny(NoProjectFiles);
             if (ProjectAudioPath(project, file) is not { } path)
                 return Deny($"Звуковой файл не найден в проекте: {file}");
-            written = Store.Open(ownerId, session.Id, path, null, null);
+            written = _threads.Tracked(ownerId, session.Id, () => Store.Open(ownerId, session.Id, path, null, null), ContextActor.Agent);
             if (written is { Status: AudioThreadWriteStatus.Ok, Existing: false, Thread: { } created })
                 await _threads.AnchorAsync(session.Id, created, ct);
         }
         else if (versionId is not null)
-            written = Store.SetCurrentVersion(ownerId, session.Id, threadId!, versionId, null, focus: true);
+            written = _threads.Tracked(ownerId, session.Id,
+                () => Store.SetCurrentVersion(ownerId, session.Id, threadId!, versionId, null, focus: true), ContextActor.Agent);
         else
-            written = Store.SetFocus(ownerId, session.Id, threadId, null);
+            written = _threads.Tracked(ownerId, session.Id, () => Store.SetFocus(ownerId, session.Id, threadId, null), ContextActor.Agent);
 
         return written.Status switch
         {
@@ -211,7 +213,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         }
 
         var settings = mode is null ? null : _prefs.ForNewThread(ownerId, scope, mode);
-        var written = Store.Open(ownerId, session.Id, null, folder, null, settings);
+        var written = _threads.Tracked(ownerId, session.Id, () => Store.Open(ownerId, session.Id, null, folder, null, settings), ContextActor.Agent);
         if (written is not { Status: AudioThreadWriteStatus.Ok, Thread: { } thread })
             return Deny("Звуки чата как раз меняются — повтори позже.");
         await _threads.AnchorAsync(session.Id, thread, ct);

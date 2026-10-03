@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -195,7 +196,7 @@ public abstract class AudioEditorEndpoints(
 
     // ── Нити ─────────────────────────────────────────────────────────────────────
 
-    protected IActionResult ThreadsIn(string sessionId) => Ok(threads.Store.Get(UserId, sessionId));
+    protected IActionResult ThreadsIn(string sessionId) => Ok(threads.View(UserId, sessionId));
 
     // Взять звук в работу: ровно одно из file и draftFolder. Нить по этому файлу уже есть — фокус на
     // неё, второй не будет. Файл и папка черновика — только у проекта
@@ -226,7 +227,8 @@ public abstract class AudioEditorEndpoints(
         else folder = "";
 
         var settings = req.Mode is null ? null : prefs.ForNewThread(UserId, scope, req.Mode);
-        var written = threads.Store.Open(UserId, sessionId, file, folder, req.Revision, settings);
+        var written = threads.Tracked(UserId, sessionId,
+            () => threads.Store.Open(UserId, sessionId, file, folder, req.Revision, settings), ContextActor.Human);
         if (written is { Status: AudioThreadWriteStatus.Ok, Existing: false, Thread: { } thread })
             await threads.AnchorAsync(sessionId, thread, ct);
         return await ResultAsync(scope, sessionId, written);
@@ -234,11 +236,16 @@ public abstract class AudioEditorEndpoints(
 
     protected async Task<IActionResult> FocusIn(AudioEditScope scope, string sessionId, AudioThreadFocusRequest req) =>
         await ResultAsync(scope, sessionId,
-            threads.Store.SetFocus(UserId, sessionId, string.IsNullOrWhiteSpace(req.ThreadId) ? null : req.ThreadId.Trim(), req.Revision));
+            threads.Tracked(UserId, sessionId, () => threads.Store.SetFocus(UserId, sessionId,
+                string.IsNullOrWhiteSpace(req.ThreadId) ? null : req.ThreadId.Trim(), req.Revision), ContextActor.Human));
 
     // Убрать нить, где нечего терять; у нити с версиями или идущим запуском — 400
-    protected async Task<IActionResult> RemoveIn(AudioEditScope scope, string sessionId, string threadId, long revision) =>
-        await ResultAsync(scope, sessionId, threads.Store.Remove(UserId, sessionId, threadId, revision));
+    protected async Task<IActionResult> RemoveIn(AudioEditScope scope, string sessionId, string threadId, long revision)
+    {
+        var written = threads.Store.Remove(UserId, sessionId, threadId, revision);
+        if (written.Status == AudioThreadWriteStatus.Ok) threads.Forget(UserId, sessionId, threadId);
+        return await ResultAsync(scope, sessionId, written);
+    }
 
     protected async Task<IActionResult> SettingsIn(AudioEditScope scope, string sessionId, string threadId,
         AudioThreadSettingsRequest req)
@@ -260,7 +267,9 @@ public abstract class AudioEditorEndpoints(
         if (string.IsNullOrWhiteSpace(req.VersionId))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Не указана версия");
         return await ResultAsync(scope, sessionId,
-            threads.Store.SetCurrentVersion(UserId, sessionId, threadId, req.VersionId.Trim(), req.Revision, focus: true));
+            threads.Tracked(UserId, sessionId,
+                () => threads.Store.SetCurrentVersion(UserId, sessionId, threadId, req.VersionId.Trim(), req.Revision, focus: true),
+                ContextActor.Human));
     }
 
     // Файл версии для плеера: Range — перемотка без скачивания целиком. Только файлы своих нитей;
@@ -304,7 +313,7 @@ public abstract class AudioEditorEndpoints(
             await threads.BroadcastAsync(UserId, scope.Key, sessionId, written.State);
         return written.Status switch
         {
-            AudioThreadWriteStatus.Ok => Ok(written.State),
+            AudioThreadWriteStatus.Ok => Ok(threads.Project(UserId, sessionId, written.State)),
             AudioThreadWriteStatus.Conflict => StatusCode(StatusCodes.Status409Conflict, new
             {
                 error = "Звуки чата уже поменялись — перечитайте их",

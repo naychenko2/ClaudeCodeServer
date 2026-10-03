@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Turn;
@@ -26,6 +27,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // по событиям шины session/deleted и session/branched
         services.AddSingleton(sp => Threads.AudioThreadStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
         services.AddHostedService<Threads.AudioThreadLifecycle>();
+        // Вид «audio» контекста чата (ADR-023): Validate/Describe и засев из фокуса звука
+        services.AddContextKindProvider<ChatContext.AudioContextKind>();
         // Запуск, оборванный перезапуском, не висит в «Генерируем…»: сверка при старте
         services.AddHostedService<Threads.AudioThreadRecovery>();
         // Префы режима области: data/audio-editor-prefs, их наследуют новые нити и цепочка запуска

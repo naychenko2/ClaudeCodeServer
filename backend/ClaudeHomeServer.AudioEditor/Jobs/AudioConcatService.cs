@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using System.Globalization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
@@ -94,8 +95,10 @@ public sealed class AudioConcatService(
         IReadOnlyList<AudioVersionFile> files, CancellationToken ct)
     {
         var store = threads.Store;
-        var opened = store.Open(ownerId, sessionId, null, folder, null,
-            new AudioThreadSettings(AudioModes.Process, AudioEditJobService.OpName(AudioOp.Concat), null, null, null), name);
+        var opened = threads.Tracked(ownerId, sessionId,
+            () => store.Open(ownerId, sessionId, null, folder, null,
+                new AudioThreadSettings(AudioModes.Process, AudioEditJobService.OpName(AudioOp.Concat), null, null, null), name),
+            input.Initiator == AudioEditInitiator.Agent ? ContextActor.Agent : ContextActor.Human);
         var thread = opened.Thread!;
         var who = input.Initiator == AudioEditInitiator.Agent ? SpendInitiators.Agent : SpendInitiators.Human;
         var license = License(pieces);

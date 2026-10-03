@@ -669,8 +669,10 @@ export function PanelZone({
     for (const k of c.keys) { const h = panelH[k]; if (h == null) return false; sum += h; }
     return sum >= zoneH - 4;
   };
+  // На узком планшете панель — дровер поверх контента у самой рельсы, и полный круг в
+  // углу ложился на его нижние строки: компактный режим (кнопка уходит под рельсу) и тут
   const rightPanelOpen = !isLeft && (compact
-    ? (tabletKeys.length > 0 && tabletInline)
+    ? tabletKeys.length > 0
     : (!floating && columns.some((c, vi) => columnFull(c, vi))));
   // FAB ужимаем и при распахнутой панели, и при открытом в центре файле — в обоих случаях
   // места мало и крупный круг мешает.

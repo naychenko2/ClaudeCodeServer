@@ -10,7 +10,7 @@ import { useContextPersona } from '../../lib/contextPersona';
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
 // Внизу — настройка будущего чата (модель, усилие, время жизни, теги), пока не отправлено первое сообщение.
-export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, project, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona, compact, greetingAbove }: {
+export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, project, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona, compact, greetingAbove, centered }: {
   hasProject: boolean;
   hasCLAUDEmd: boolean | null;
   onHint: (hint: string) => void;
@@ -28,6 +28,9 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
   // Выше в ленте уже стоит приветствие персоны (аватар + имя + реплика):
   // своё «лицо» не рисуем, чтобы не было двух аватаров подряд
   greetingAbove?: boolean;
+  // Композер поднят в центр области сразу под этим блоком: свой верхний воздух не нужен
+  // (группу центрирует ChatPanel), а снизу — зазор до поля ввода
+  centered?: boolean;
 }) {
   const asstName = useAssistantName();
   // Лицо пустого чата: аватар персоны чата (или дефолт-персоны контекста);
@@ -40,7 +43,8 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
           <div style={{
             flex: 1, display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center',
-            gap: SP.md, paddingTop: greetingAbove ? SP.lg : SP.xxl,
+            gap: SP.md, paddingTop: greetingAbove || centered ? SP.lg : SP.xxl,
+            paddingBottom: centered ? SP.xl : 0,
           }}>
             {/* Лицо чата: аватар релевантной персоны, fallback — нейтральный логотип.
                 С приветствием сверху аватар там уже есть — второй не нужен */}

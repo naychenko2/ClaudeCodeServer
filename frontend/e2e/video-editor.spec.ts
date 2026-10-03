@@ -111,9 +111,11 @@ for (const theme of ['light', 'dark'] as const) {
         expect(w().scenes[4].settings.text).toContain('Камера:');
         await expect(page.locator('[data-gen-draft]')).toHaveCount(0);
         await peek(page);
-        const c = page.locator('[data-video-card="launch"][data-scene="scene-5"]');
+        // Одна съёмка — одна полная карточка: плеер и варианты у сцены, запуск — компактная строка
+        const c = card(page, 5);
         await expect(c.locator('[data-video-player]')).toBeVisible({ timeout: 10_000 });
         await expect(c.getByText(/^\d из 2$/)).toBeVisible();
+        await expect(page.locator('[data-video-card="launch"][data-scene="scene-5"] [data-video-player]')).toHaveCount(0);
         await shot(page, SHOTS, shotName('s1-card'));
         await card(page, 5).getByRole('button', { name: 'Сохранить сцену' }).click();
         await expect(card(page, 5).getByText(/В проекте: scene-05\.mp4/)).toBeVisible();
@@ -138,7 +140,10 @@ for (const theme of ['light', 'dark'] as const) {
         await foot(page).getByRole('button', { name: 'Переснять', exact: true }).click();
         await expect.poll(() => w().scenes[2].versions.length).toBe(3);
         await peek(page);
-        await page.locator('[data-video-card="launch"][data-scene="scene-3"]').getByRole('button', { name: 'Сохранить сцену' }).click();
+        // Полная карточка одна — у сцены; запуск рисуется компактной строкой без кнопок
+        await card(page, 3).getByRole('button', { name: 'Сохранить сцену' }).click();
+        // Папка уходит из открытого фильма: у сцены из панели своей папки нет
+        await expect.poll(() => w().saves.at(-1)).toMatchObject({ folder: 'video/утро-в-горах' });
         await raise(page);
         await openFilm(page);
         const row3 = panel(page).locator('[data-video-film-row="2"]');
@@ -185,7 +190,7 @@ for (const theme of ['light', 'dark'] as const) {
         // Лента человека: строки правки и сборки есть, а ручки фильма звали с sessionId
         expect(w().filmNoSession).toEqual([]);
         await peek(page);
-        await expect(page.locator('[data-video-quiet="video_note"]').filter({ hasText: /^Вы поправили фильм утро-в-горах: / }).first()).toBeVisible();
+        await expect(page.locator('[data-video-quiet="video_note"]').filter({ hasText: /^Вы (поправили фильм: |переставили|подрезали|поменяли|добавили|убрали)/ }).first()).toBeVisible();
         await expect(page.locator('[data-video-quiet="video_film_built"]').last()).toHaveText('Вы собрали фильм утро-в-горах: video/утро-в-горах/film.mp4');
         await shot(page, SHOTS, shotName('s3-human-feed'));
         await raise(page);
@@ -278,8 +283,9 @@ for (const theme of ['light', 'dark'] as const) {
           await panel(page).locator(`[data-video-frame="${slot}"] button`).click();
           await panel(page).getByRole('button', { name: /^Из проекта/ }).click();
           const picker = panel(page).locator('[data-video-project-picker]');
-          // Без сцены выбор стартует в video/; у заведённой сцены — сразу в её кадрах
+          // Выбор стартует с корня проекта: папки video/ в проекте может не быть
           if (slot === 'A') {
+            await picker.getByRole('button', { name: 'video', exact: true }).click();
             await picker.getByRole('button', { name: 'утро-в-горах', exact: true }).click();
             await picker.getByRole('button', { name: 'кадры', exact: true }).click();
           }
@@ -294,12 +300,14 @@ for (const theme of ['light', 'dark'] as const) {
         await panel(page).getByRole('button', { name: 'Новый фильм' }).click();
         await panel(page).locator('[data-video-new-film] input').fill('вечер');
         await panel(page).getByRole('button', { name: 'Завести' }).click();
+        await expect.poll(() => w().filmCreates).toEqual(['video/вечер/вечер.film']);
         await expect(panel(page).locator('[data-video-empty="film"]')).toContainText('В фильме пока нет сцен');
         await expect(foot(page).getByText('Добавьте в фильм хотя бы одну сцену')).toBeVisible();
         await shot(page, SHOTS, shotName('s8-empty-film'));
         await panel(page).getByRole('button', { name: 'Сцена из проекта' }).click();
         const add = panel(page).locator('[data-video-add-scene]');
-        await add.getByRole('button', { name: 'Вверх' }).click();
+        // Папки нового фильма на диске ещё нет — выбор откроется с корня проекта, а не «Not Found»
+        await add.getByRole('button', { name: 'video', exact: true }).click();
         await add.getByRole('button', { name: 'утро-в-горах', exact: true }).click();
         await add.getByRole('button', { name: 'scene-06.mp4' }).click();
         await expect(panel(page).locator('[data-video-film-row]')).toHaveCount(1);
@@ -394,8 +402,11 @@ test('агент снимает: та же карточка запуска с ц
   await expect(c.locator('[data-video-card-progress]')).toContainText('снимаем 2 варианта');
   await expect(c.locator('[data-by-claude]')).toBeVisible();
   finishJob('job-agent');
-  await expect(c.locator('[data-video-player]')).toBeVisible();
-  await expect(c.getByRole('button', { name: 'Сохранить сцену' })).toBeVisible();
+  // Готовые варианты — в одной полной карточке сцены; у запуска остаётся компактная строка с итогом
+  await expect(card(page, 2).locator('[data-video-player]')).toBeVisible();
+  await expect(card(page, 2).getByRole('button', { name: 'Сохранить сцену' })).toBeVisible();
+  await expect(c.locator('[data-video-player]')).toHaveCount(0);
+  await expect(c.locator('[data-video-launch-outcome]')).toContainText('Готово: 2 варианта');
   await expect(tab(page, 'Фильм')).toHaveAttribute('aria-selected', 'true');
   await shot(page, SHOTS, 'agent-launch-card-1440-light');
 });
@@ -470,3 +481,20 @@ for (const width of [800, 1024]) {
   });
 }
 
+
+// Майя, major 3: в узкой колонке режется только имя; цена и длительность остаются целыми
+for (const width of [800, 1024, 1440]) {
+  test(`полоса ${width}: цена и «8 с · 2 вар.» не режутся`, async ({ page }) => {
+    await start(page, { vp: { width, height: 800 }, theme: 'light' });
+    // Цена приходит из котировки панели: открываем и закрываем «Сцену», чтобы она легла в стор
+    await openScene(page);
+    await expect(page.locator('[data-video-chip="scene"] [data-video-chip-price]')).toContainText('$3.20', { timeout: 10_000 });
+    const whole = async (sel: string) => {
+      const el = page.locator(sel).first();
+      if (!await el.count()) return;
+      expect(await el.evaluate(n => n.scrollWidth <= n.clientWidth + 1), sel).toBe(true);
+    };
+    await whole('[data-video-chip="scene"] [data-video-chip-price]');
+    await whole('[data-video-chip="scene"] [data-video-chip-meta]');
+  });
+}

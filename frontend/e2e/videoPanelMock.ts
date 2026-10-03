@@ -59,7 +59,8 @@ export const ver = (n: number, jobId: string, initiator = 'human') => ({
 
 export function scene(n: number, extra: Partial<Scene> = {}): Scene {
   return {
-    sceneId: `scene-${n}`, name: `Сцена ${n}`, folder: 'video/утро-в-горах',
+    // Сцена из панели папки не имеет — её даёт открытый фильм (сервер без папки отвечает 400)
+    sceneId: `scene-${n}`, name: `Сцена ${n}`, folder: '',
     settings: {
       frameA: file(`video/утро-в-горах/кадры/кадр-${n}.png`), frameB: file(`video/утро-в-горах/кадры/кадр-${n + 1}.png`),
       text: n === 5 ? 'Солнце поднимается над хребтом, камера медленно отъезжает' : `Сцена ${n}: камера плывёт над долиной`,
@@ -114,6 +115,10 @@ export interface World {
   patches: Record<string, unknown>[];
   // Вызовы ручек фильма без sessionId: бэкенд в таком случае не пишет строку ленты у человека
   filmNoSession: string[];
+  // Тела запросов «Сохранить сцену»
+  saves: Record<string, unknown>[];
+  // Запросы «Новый фильм» (POST films)
+  filmCreates: string[];
   // Отказ загрузки кадра в личном чате: 400 «не картинка», 413 «больше 20 МБ»
   uploadFail: 'notImage' | 'tooBig' | null;
   hubs: WebSocketRoute[];
@@ -133,7 +138,7 @@ export const w = () => world;
 export function newWorld(o: Partial<Pick<World, 'personal' | 'focus' | 'scenes' | 'autoFinish' | 'dsp' | 'feed'>> & { films?: Film[] } = {}): World {
   world = {
     personal: !!o.personal, focus: o.focus ?? {}, revision: 1, scenes: o.scenes ?? [], films: new Map((o.films ?? []).map(f => [f.path, f])),
-    feed: o.feed ?? [], quotes: [], jobs: [], patches: [], filmNoSession: [], uploadFail: null, hubs: [], imageThreads: [], imageRevision: 1, autoFinish: o.autoFinish ?? true,
+    feed: o.feed ?? [], quotes: [], jobs: [], patches: [], filmNoSession: [], saves: [], filmCreates: [], uploadFail: null, hubs: [], imageThreads: [], imageRevision: 1, autoFinish: o.autoFinish ?? true,
     dsp: o.dsp ?? true, audioThreads: [], musicFor: null,
   };
   return world;
@@ -152,7 +157,8 @@ export function pushThreads() {
   hubSend({ type: 'video_thread_changed', sessionId: S, scopeKey: scope(), revision: world.revision, state: threadsState() });
 }
 export function pushFilm(f: Film) {
-  hubSend({ type: 'video_film_changed', sessionId: S, scopeKey: P, path: f.path, state: f });
+  // Как у бэкенда: событие фильма не привязано к чату — sessionId в нём нет (VideoFilmChangedMessage)
+  hubSend({ type: 'video_film_changed', scopeKey: P, path: f.path, state: f });
 }
 export function pushRecord(rec: ReturnType<typeof record>) {
   world.feed.push(rec);
@@ -237,6 +243,23 @@ function applyOps(f: Film, ops: Record<string, unknown>[]) {
   if (d.builds.length) {
     f.marks = d.items.map((_, i) => ({ index: i, claude: false, updated: f.marks.find(m => m.index === i)?.updated ?? false, stale: false }));
   }
+}
+
+// Строка правки фильма пишется ПОСЛЕ серии (бэкенд: FilmPatchFeed, тишина 5 с) и одна: обороты копятся, текст человеческий
+const PATCH_PHRASE: Record<string, string> = {
+  add: 'добавили сцену', remove: 'убрали сцену', move: 'переставили сцены', cut: 'поменяли склейку', trim: 'подрезали сцену', music: 'поменяли музыку',
+};
+const _noteSeries = new Map<string, { phrases: string[]; timer: ReturnType<typeof setTimeout> }>();
+function noteFilmPatch(path: string, ops: { op: string }[]) {
+  const cur = _noteSeries.get(path) ?? { phrases: [], timer: 0 as never };
+  clearTimeout(cur.timer);
+  for (const o of ops) { const ph = PATCH_PHRASE[o.op]; if (ph && !cur.phrases.includes(ph)) cur.phrases.push(ph); }
+  cur.timer = setTimeout(() => {
+    _noteSeries.delete(path);
+    const text = cur.phrases.length === 1 ? `Вы ${cur.phrases[0]}` : `Вы поправили фильм: ${cur.phrases.join(', ')}`;
+    pushRecord(record('video_note', { filmPath: path, initiator: 'human' }, text, Date.now()));
+  }, 400);
+  _noteSeries.set(path, cur);
 }
 
 // Имя фильма в тексте строки ленты — как в бэкенде (VideoFeedTexts): без расширения .film
@@ -357,6 +380,8 @@ export async function mockApi(page: Page, trace = false) {
       if (sm[2] === 'current') { s.currentVersionId = body().versionId as string; world.revision++; setTimeout(pushThreads, 30); return json(threadsState()); }
       if (sm[2] === 'save') {
         const b = body();
+        world.saves.push(b);
+        if (!b.folder && !s.folder) return json({ error: 'Не указана папка фильма: video/<фильм>', code: 'invalid_request' }, 400);
         const vId = (b.versionId as string) ?? s.currentVersionId!;
         const n = Number(s.sceneId.replace(/\D/g, ''));
         const prev = s.savedFiles.length;
@@ -428,6 +453,15 @@ export async function mockApi(page: Page, trace = false) {
       return json({ kind: 'file', path: 'frames/0123456789abcdef0123456789abcdef.png' });
     }
     if (p === `${vb}/films`) {
+      if (method === 'POST') {
+        const b = body();
+        const fp = b.path as string;
+        world.filmCreates.push(fp);
+        if (filmOf(fp)) return json({ error: 'Фильм уже есть', code: 'name_taken' }, 409);
+        const nf = { ...standardFilm(), path: fp, revision: 'r0', document: { schema: 1, aspect: '16:9', items: [], cuts: [], builds: [] }, spent: { usd: 0, credits: 0, gpuSeconds: 0 }, marks: [], stale: false };
+        world.films.set(fp, nf);
+        return json(nf, 201);
+      }
       if (method === 'PATCH') {
         const fp = url.searchParams.get('path')!;
         let f = filmOf(fp);
@@ -436,7 +470,7 @@ export async function mockApi(page: Page, trace = false) {
         world.patches.push(b);
         if (b.expectedRevision !== f.revision && f.revision !== 'r0') return json({ error: 'Фильм поменяли', code: 'revision_conflict', state: f }, 409);
         applyOps(f, b.ops as Record<string, unknown>[]);
-        pushRecord(record('video_note', { filmPath: f.path, initiator: 'human' }, `Вы поправили фильм ${filmTitle(f.path)}: ${[...new Set((b.ops as { op: string }[]).map(o => o.op))].join(', ')}`, Date.now()));
+        noteFilmPatch(f.path, b.ops as { op: string }[]);
         return json(f);
       }
       return json([...world.films.values()].map(f => ({ path: f.path, name: f.path.split('/').pop()!.replace('.film', ''), itemCount: f.document.items.length, durationSec: 31, stale: !f.document.builds.length, valid: true })));
@@ -493,6 +527,8 @@ export async function mockApi(page: Page, trace = false) {
     if (p === `/projects/${P}/files/tree`) return json(TREE);
     if (p === `/projects/${P}/files` && method === 'GET') {
       const dir = url.searchParams.get('path') ?? '';
+      // Как у бэкенда: папки нет — 404, а не пустой список
+      if (dir && !TREE.some(e => e.path === dir && e.isDirectory)) return json({ error: 'Not Found' }, 404);
       return json(TREE.filter(e => ((e.path as string).includes('/') ? (e.path as string).slice(0, (e.path as string).lastIndexOf('/')) : '') === dir));
     }
     if (p === `/projects/${P}/files/upload`) return json({});

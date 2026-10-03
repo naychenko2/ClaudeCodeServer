@@ -43,7 +43,7 @@ export async function mockContext(page: Page) {
     if (p === '/auth/me') {
       return json({
         id: 'u1', userId: 'u1', username: 'admin', displayName: 'Андрей', role: 'admin', executionEnvironment: 'local',
-        featureFlags: { 'video-editor': true, 'composer-context-row': true, 'chat-context': true }, subsystems: [],
+        featureFlags: { 'video-editor': true, 'image-editor': true, 'audio-editor': true, 'composer-context-row': true, 'chat-context': true }, subsystems: [],
       });
     }
     if (p === '/subsystem-modules') return json({ items: [] });

@@ -69,9 +69,9 @@ function sceneMenu(ctx: ContextKindCtx, scene: VideoScene, refs: readonly ChatCo
       prev: { exists: !!prev, hasFrameB: !!prevB, usable: !!prevInput },
       editInImages: () => {
         const frame = ref ? frameOfRef(ref) : null;
-        if (frame) void editFrame(scope, ctx.sessionId, scene, slot, frame);
+        if (frame) void editFrame(scope, ctx.sessionId, scene, slot, frame, !ctx.isMobile);
       },
-      drawInImages: () => { void drawInImages(scope, ctx.sessionId, slot); },
+      drawInImages: () => { void drawInImages(scope, ctx.sessionId, slot, !ctx.isMobile, scene); },
       fromProject: () => openFramePicker({ sessionId: ctx.sessionId, scope, slot, folder: scene.folder ? `${scene.folder}/кадры` : '' }),
       fromPrevious: () => { if (prevInput) void setFrameRef(ctx.sessionId, slot, prevInput); },
       clear: () => { void setFrameRef(ctx.sessionId, slot, null); },

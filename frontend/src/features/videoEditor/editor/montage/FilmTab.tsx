@@ -440,7 +440,7 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
       {doc.items.length > 0 && (
         <div style={{ marginTop: SP.sm }}>
           <Button size="sm" variant="secondary" leftIcon={ic(Sparkles)} disabled={composing || !soundOn} title={soundOn ? undefined : 'Раздел «Звук» выключен'} style={isMobile ? { minHeight: TOUCH } : undefined}
-            onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f); }}>
+            onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f, !isMobile).then(ok => { if (ok && editor) ctx.onClose(); }); }}>
             {composing ? 'Сочиняем в «Звуке»…' : 'Сочинить под фильм…'}
           </Button>
           <Hint>

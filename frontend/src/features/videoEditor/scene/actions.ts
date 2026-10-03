@@ -8,6 +8,7 @@ import {
   ERR, errorCode, errorText, retryOf, videoApi,
   type FrameRef, type SaveSceneResult, type VideoPrefs, type VideoQuote, type VideoScene, type VideoSceneSettings,
 } from '../api';
+import { sceneToImages } from '../context/handoff';
 import { isPersonalScope } from '../scope';
 import { frameInputOf, setFrameRef } from '../store/frameRefs';
 import { bindFrame, createImageThread, onFrameReady, type FrameBinding } from '../store/imageFrames';
@@ -267,8 +268,14 @@ async function ensureScene(scope: string, sessionId: string): Promise<VideoScene
   return scene;
 }
 
-function toImages(sessionId: string, scene: VideoScene, threadId: string, slot: 'A' | 'B', needEdit = false) {
+// reveal = false на телефоне: шторка панели закрыла бы поле ввода, а чипы действий над ним появляются сами
+async function toImages(sessionId: string, scene: VideoScene, threadId: string, slot: 'A' | 'B', needEdit = false, draw = false, reveal = true) {
   bindFrame(sessionId, { sceneId: scene.sceneId, slot, threadId, ...(needEdit ? { needEdit } : {}) });
+  // Строка контекста: нить становится основным объектом, а возврат к сцене держит панель «Контекст»
+  if (getFlag(FLAGS.composerContextRow)) {
+    await sceneToImages({ sessionId, sceneId: scene.sceneId, sceneName: scene.name, threadId, draw, reveal });
+    return;
+  }
   revealWorkspacePanel('images', 'settings', {
     sessionId, preset: { thread: threadId },
     returnTo: { key: VIDEO_PANEL, strip: VIDEO_STRIP, tab: 'scene', target: scene.sceneId, label: `К сцене «${scene.name}» — панель «Видео»` },
@@ -277,13 +284,14 @@ function toImages(sessionId: string, scene: VideoScene, threadId: string, slot: 
 
 // «Нарисовать в «Картинках»»: черновик картинки заводится, панель «Картинки» открывается с возвратом;
 // первая готовая версия сама станет кадром
-export async function drawInImages(scope: string, sessionId: string, slot: 'A' | 'B'): Promise<void> {
-  const scene = await ensureScene(scope, sessionId);
+export async function drawInImages(scope: string, sessionId: string, slot: 'A' | 'B', reveal = true, known?: VideoScene): Promise<void> {
+  // Строка контекста знает сцену сама (основной объект): новую заводить нельзя
+  const scene = known ?? await ensureScene(scope, sessionId);
   if (!scene) return;
   try {
     const id = await createImageThread(scope, sessionId, { draftFolder: framesFolder(scene) });
     if (!id) { showToast('Не удалось завести картинку', '', 'error'); return; }
-    toImages(sessionId, scene, id, slot);
+    await toImages(sessionId, scene, id, slot, false, true, reveal);
   } catch (e) {
     showToast(errorText(e, 'Не удалось завести картинку'), '', 'error');
   }
@@ -291,13 +299,13 @@ export async function drawInImages(scope: string, sessionId: string, slot: 'A' |
 
 // «Править кадр»: нить кадра — в «Картинки»; кадр-файл берётся в работу и после правки сам встаёт кадром
 // frame — кадр из контекста чата (референс роли), когда он не совпадает с настройками сцены
-export async function editFrame(scope: string, sessionId: string, scene: VideoScene, slot: 'A' | 'B', frame?: FrameRef): Promise<void> {
+export async function editFrame(scope: string, sessionId: string, scene: VideoScene, slot: 'A' | 'B', frame?: FrameRef, reveal = true): Promise<void> {
   const f = frame ?? (slot === 'A' ? scene.settings.frameA : scene.settings.frameB);
   if (!f) return;
   try {
     const id = f.kind === 'image' ? f.threadId : await createImageThread(scope, sessionId, { file: f.path });
     if (!id) { showToast('Не удалось открыть кадр в «Картинках»', '', 'error'); return; }
-    toImages(sessionId, scene, id, slot, f.kind === 'file');
+    await toImages(sessionId, scene, id, slot, f.kind === 'file', false, reveal);
   } catch (e) {
     showToast(errorText(e, 'Не удалось открыть кадр в «Картинках»'), '', 'error');
   }

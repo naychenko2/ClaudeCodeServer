@@ -31,6 +31,18 @@ async function registerVideo(page: Page) {
   });
 }
 
+// Манифесты «Картинок» и «Звука»: без них чипы черновика, куда ведёт передача, не появятся
+async function registerNeighbours(page: Page) {
+  await page.evaluate(async () => {
+    const find = (part: string) => performance.getEntriesByType('resource').map(e => e.name).find(n => n.includes(part));
+    const core = await import(/* @vite-ignore */ find('/src/lib/subsystems/registryCore.ts') ?? '/src/lib/subsystems/registryCore.ts');
+    for (const [k, f] of [['e2e-image', 'imageEditor'], ['e2e-audio', 'audioEditor']] as const) {
+      const mod = await import(/* @vite-ignore */ `/src/features/${f}/manifest.tsx`);
+      core.registerSubsystem({ ...mod.manifest, key: k, core: true, tab: undefined });
+    }
+  });
+}
+
 async function open(page: Page, vp: { width: number; height: number }, primary: () => ReturnType<typeof primaryOf>) {
   newWorld({ scenes: standardScenes(), films: [standardFilm()], focus: {} });
   newCtxWorld(primary());
@@ -45,6 +57,7 @@ async function open(page: Page, vp: { width: number; height: number }, primary: 
   await page.goto(`/#/project/${P}/chat/${S}`);
   await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
   await registerVideo(page);
+  await registerNeighbours(page);
   await expect(page.locator('[data-composer-actions]')).toBeVisible({ timeout: 15_000 });
 }
 
@@ -123,5 +136,53 @@ for (const { name, vp } of [{ name: '1440', vp: D }, { name: '360', vp: M }] as 
     await page.getByRole('button', { name: 'Готово' }).click();
     await expect(ed).toHaveCount(0);
     expect(cw().mutations.filter(m => m.method === 'PUT')).toHaveLength(0);
+  });
+
+  // Сценарий 8 макета: «Нарисовать в «Картинках»» из меню кадра — черновик становится основным объектом,
+  // чип «Нарисовать» выбран, «↩ К сцене» возвращает сцену; панели «Картинки» нет
+  test(`кадр · ${name}: «Нарисовать в «Картинках»» → чип «Нарисовать» → «К сцене» возвращает сцену`, async ({ page }) => {
+    await open(page, vp, scenePrimary);
+    await actions(page).locator('[data-action-chip="frameA"]').click();
+    await page.getByText('Нарисовать в «Картинках»').click();
+    await expect.poll(() => primaryPuts().length).toBe(1);
+    expect(primaryPuts()[0]).toMatchObject({ kind: 'image', ref: { threadId: 'img-1' } });
+    await expect.poll(() => ids(page)).toEqual(['__chat', 'draw']);
+    await expect(actions(page).locator('[data-action-chip="draw"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('[data-composer-actions]')).toBeVisible();
+    await shot(page, `draw-frame-${name}.png`);
+    if (vp.width > 600) await expect(page.locator('[data-context-panel]')).toBeVisible({ timeout: 10_000 });
+    else await expect(page.locator('[data-context-panel]')).toHaveCount(0);
+
+    await page.locator('[data-context-row] [data-chip="primary"]').click();
+    const ret = page.locator('[data-ctx-return]');
+    await expect(ret).toContainText('К сцене «Сцена 5»');
+    await ret.click();
+    await expect.poll(() => primaryPuts().length).toBe(2);
+    expect(primaryPuts()[1]).toMatchObject({ kind: 'video-scene', ref: { sceneId: 'scene-5' } });
+    await expect.poll(() => ids(page)).toEqual(['__chat', 'shoot', 'frameA', 'frameB']);
+  });
+
+  // «Сочинить под фильм…» из монтажа: окно закрывается, черновик звука — основной объект, чип «Песня» выбран и
+  // заправлен описанием стиля, «↩ К фильму» возвращает фильм
+  test(`монтаж · ${name}: «Сочинить под фильм…» → чип «Песня» с предвыбором → «К фильму» возвращает фильм`, async ({ page }) => {
+    await open(page, vp, filmPrimary);
+    await actions(page).locator('[data-action-chip="montage"]').click();
+    await expect(montage(page)).toBeVisible({ timeout: 10_000 });
+    await montage(page).getByRole('button', { name: 'Сочинить под фильм…' }).click();
+    await expect(montage(page)).toHaveCount(0);
+    await expect.poll(() => primaryPuts().length).toBe(1);
+    expect(primaryPuts()[0]).toMatchObject({ kind: 'audio', ref: { threadId: 'audio-1' } });
+    expect(w().musicFor).toBe(FILM);
+    await expect.poll(() => ids(page)).toEqual(['__chat', 'speak', 'song', 'sfx']);
+    await expect(actions(page).locator('[data-action-chip="song"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('textarea').last()).toHaveValue(/Инструментальная музыка под фильм «утро-в-горах»/);
+    await shot(page, `compose-song-${name}.png`);
+
+    await page.locator('[data-context-row] [data-chip="primary"]').click();
+    const ret = page.locator('[data-ctx-return]');
+    await expect(ret).toContainText('К фильму «утро-в-горах»');
+    await ret.click();
+    await expect.poll(() => primaryPuts().length).toBe(2);
+    expect(primaryPuts()[1]).toMatchObject({ kind: 'video-film', ref: { filmPath: FILM } });
   });
 }

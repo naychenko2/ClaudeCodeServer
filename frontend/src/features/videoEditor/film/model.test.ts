@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { film, FILM_PATH, scene } from '../mocks';
-import { filmChip, staleFilm } from '../strip/summary';
 import {
-  buildView, clampTrim, cutLabel, filmDuration, filmStatusSuffix, newFilmPath, sceneOfItem, snapshotOf, soundPreset, spentText, staleReasons, trimLabel,
+  buildView, clampTrim, cutLabel, filmChip, filmDuration, filmStatusSuffix, newFilmPath, sceneOfItem, snapshotOf, soundPreset, spentText, staleFilm, staleReasons, trimLabel,
 } from './model';
 
 describe('фильм: подписи и длительность', () => {

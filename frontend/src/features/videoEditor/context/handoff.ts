@@ -36,7 +36,12 @@ async function handOff(h: Handoff): Promise<boolean> {
   const input = { kind: h.kind, ref: { threadId: h.threadId } };
   // Предвыбор раньше смены объекта: хост поля применит его при первом же разрешении действия
   if (h.actionId) presetAction(h.sessionId, objectKey(input), { actionId: h.actionId, ...(h.prefill ? { prefill: h.prefill } : {}) });
-  if (await setPrimary(h.sessionId, input) === 'failed') {
+  const res = await setPrimary(h.sessionId, input);
+  if (res === 'conflict') {
+    showToast('Контекст только что поменяли', 'Попробуйте ещё раз', 'info');
+    return false;
+  }
+  if (res === 'failed') {
     showToast(h.failText, '', 'error');
     return false;
   }

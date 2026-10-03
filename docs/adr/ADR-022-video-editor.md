@@ -192,8 +192,8 @@ Higgsfield, 0 local), с `Initiator`. Сбой после принятия — �
   в ленте и рассылка раньше жили в контроллере. Ручка человека и инструмент агента зовут один метод — иначе «те же
   карточки» держались бы на честном слове. Ревизию агент не передаёт (`null` — без сверки), `.film` правит только под
   ревизией из `video_state`.
-- **Тихие строки ленты в одном лице**: человек — «Вы сохранили / Вы запустили / Вы поправили …», агент — «Claude
-  сохранил …» (как у картинок).
+- **Тихие строки ленты в одном лице**: человек — «Вы сохранили / Вы запустили / Вы поправили …», агент — «Сохранил …»
+  без слова «Claude» (лицо даёт метка на строке, решение Андрея №6).
 - **Сервер в три точки, а не одну**: `StartNewSessionAsync` и обе ветки `EnsureProcessCoreAsync` (вне проекта и проект) —
   иначе после перезапуска процесса личный чат теряет сервер.
 - **Ожидание съёмки — `video_wait` (2026-10-03, приёмка 2, M1).** Съёмка идёт минутами и дольше хода, а «сними все» обязано
@@ -252,7 +252,7 @@ JSON ниже — единственное описание формы для ф
 
 Маршруты (`VideoEditorRoutes`; `Price.Unit` — `usd` | `credits` | `free`): проектные `api/projects/{projectId}/video-editor/sessions/{sessionId}/…` и общие
 `…/catalog`, `…/prefs`, `…/quote`, `…/jobs`; личные `api/video-editor/chats/{sessionId}/…`. Хвосты: `state`,
-`scenes`, `scenes/focus`, `scenes/{sceneId}/settings|current|save`, `scenes/{sceneId}/versions/{versionId}/file|poster`,
+`scenes`, `scenes/focus`, `scenes/{sceneId}/settings|current|save`, `scenes/{sceneId}/versions/{versionId}/file`,
 `films` (`GET` список, `POST` создать пустой фильм — `FilmCreateRequest` → 201 `FilmStateDto`, занятое имя — 409 `name_taken`), `films/state?path=`, `films/build?path=`; только личные — `frames/{name}` (`GET` байты кадра рабочей папки, `name` строго `<32 hex>.<png|jpg|webp>`, `Content-Type` по сигнатуре, чужой чат или файла нет — 404) и `frames/upload`
 (`POST` multipart, поле `file`: png/jpg/webp по сигнатуре, до 20 МБ → `FrameRef` вида `file` с путём `frames/<id>.<ext>` и `fileName` — человеческим именем исходного файла
 (лежит рядом с кадром, превью — `GET frames/<id>.<ext>`) в рабочей папке владельца; 404 — чужой чат, 400 — не картинка, 413 — больше лимита). В проектном чате кадр кладёт

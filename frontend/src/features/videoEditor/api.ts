@@ -388,8 +388,6 @@ export const videoApi = {
   // URL клипа для <video src>: токен через ?access_token=, тег заголовков не шлёт
   versionFileUrl: (scope: string, sessionId: string, sceneId: string, versionId: string, download = false) =>
     withToken(`/api${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/file`, download ? { download: 'true' } : {}),
-  versionPosterUrl: (scope: string, sessionId: string, sceneId: string, versionId: string) =>
-    withToken(`/api${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/poster`),
   // Сохранить в проект — только у проекта: у личного чата ручки нет, отказ до запроса (блок 2)
   save: (scope: string, sessionId: string, sceneId: string, req: Omit<SaveSceneRequest, 'sessionId' | 'sceneId'>) => {
     if (isPersonalScope(scope)) throw new Error('У личного чата нет проекта — клип можно только скачать');

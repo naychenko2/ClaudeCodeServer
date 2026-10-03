@@ -21,7 +21,6 @@ public static class VideoEditorRoutes
     public const string SceneSettings = "scenes/{sceneId}/settings";                      // PUT VideoSceneSettingsDto + revision
     public const string SceneCurrent = "scenes/{sceneId}/current";                        // PUT versionId + revision
     public const string SceneVersionFile = "scenes/{sceneId}/versions/{versionId}/file";  // GET mp4
-    public const string SceneVersionPoster = "scenes/{sceneId}/versions/{versionId}/poster"; // GET jpeg
     public const string SceneSave = "scenes/{sceneId}/save";                              // POST SaveSceneRequest → SaveSceneResult (блок 2)
     public const string Films = "films";                                                  // GET → FilmSummaryDto[] (блок 2)
     public const string FilmState = "films/state";                                        // GET ?path= → FilmStateDto

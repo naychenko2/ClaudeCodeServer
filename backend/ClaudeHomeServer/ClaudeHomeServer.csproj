@@ -198,7 +198,7 @@
           SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll')" />
   </Target>
 
-  <!-- Динамический модуль «Видео» (ADR-022 §1): тот же паттерн, что VideoEditor.
+  <!-- Динамический модуль «Видео» (ADR-022 §1): тот же паттерн, что AudioEditor.
        ReferenceOutputAssembly="false" — Main не видит типов модуля, швы живут в Core. -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.VideoEditor\ClaudeHomeServer.VideoEditor.csproj" ReferenceOutputAssembly="false" />

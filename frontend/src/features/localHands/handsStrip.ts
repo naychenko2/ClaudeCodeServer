@@ -9,6 +9,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { getPendingFocus, releaseStrip, requestStrip } from '../../lib/composerStrips';
+import { FLAGS, getFlag } from '../../lib/featureFlags';
 import {
   HANDS_BADGE_LOADING, HandsChatState, handsEventReceived, handsInitialFailed, handsInitialLoaded,
   type HandsBadgeState,
@@ -77,6 +78,8 @@ export function setHandsSessionProvider(sessionId: string, provider: string | nu
 // событие хода навязывало бы полосу заново вопреки ручному выбору (правило старшинства
 // из docs/design/composer-strips-and-modes.md). Новый ход после отпуска просит заново.
 export function applyHandsFocus(sessionId: string, state: string | null) {
+  // Строка контекста заменила хост полос: просить фокус полосы некому, руки живут пилюлей в губе поля
+  if (getFlag(FLAGS.composerContextRow)) return;
   if (state === HandsChatState.Active) {
     if (getPendingFocus(sessionId) !== HANDS_STRIP) requestStrip(sessionId, HANDS_STRIP);
   } else {

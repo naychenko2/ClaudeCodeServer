@@ -69,6 +69,7 @@ import type {
 import { ColorsSection } from './ColorsSection';
 import { AudioPlayerKitSection } from './AudioPlayerKitSection';
 import { GenSharedKitSection } from './GenSharedKitSection';
+import { ContextRowKitSection } from './ContextRowKitSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -118,6 +119,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-gen-panel',  label: 'Примитивы генерации' },
   { id: 'sec-gen-scaffold', label: 'Панель генерации' },
   { id: 'sec-gen-shared', label: 'Общий слой генерации' },
+  { id: 'sec-context-row', label: 'Строка контекста' },
   { id: 'sec-audio-player', label: 'Звук: плеер' },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
@@ -228,6 +230,11 @@ export function UiKitPage() {
             {/* Общий слой панелей генерации (Г1) — переключатель, меню выбора, исполнитель, «Вернуть» */}
             <div id="sec-gen-shared" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <GenSharedKitSection />
+            </div>
+
+            {/* Строка контекста хода над полем ввода (ADR-023) — все ступени лестницы */}
+            <div id="sec-context-row" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ContextRowKitSection />
             </div>
 
             {/* Звук: плеер — волна, выделение куска, A/B, микшер стемов (синусы из браузера) */}

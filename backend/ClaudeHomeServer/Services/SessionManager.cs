@@ -5632,7 +5632,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 HiggsfieldMcp: higgsfieldMcp,
                 ImageEditorMcp: imageEditorMcp,
                 AudioEditorMcp: audioEditorMcp,
-            TurnContextMcp: turnContextMcp,
+                TurnContextMcp: turnContextMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
                 MainRootPath: null,
                 LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId));
@@ -5706,7 +5706,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 HiggsfieldMcp: higgsfieldMcp,
                 ImageEditorMcp: imageEditorMcp,
                 AudioEditorMcp: audioEditorMcp,
-            TurnContextMcp: turnContextMcp,
+                TurnContextMcp: turnContextMcp,
                 LocalMediaMcp: localMediaMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).

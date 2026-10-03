@@ -37,7 +37,7 @@ public class ChatContextController(
     public IActionResult Get(string sessionId)
     {
         if (Scope(sessionId) is not { } scope) return NotFound();
-        if (IsLocal(scope)) return Ok(new ChatContextDto(0, null, []));
+        if (FilesUnavailable(scope)) return Ok(new ChatContextDto(0, null, []));
         return Ok(Dto(scope, store.Get(UserId, sessionId)));
     }
 
@@ -92,7 +92,7 @@ public class ChatContextController(
     public IActionResult SavedFiles(string sessionId)
     {
         if (Scope(sessionId) is not { } scope) return NotFound();
-        if (IsLocal(scope)) return Ok(Array.Empty<ChatSavedFile>());
+        if (FilesUnavailable(scope)) return Ok(Array.Empty<ChatSavedFile>());
         return Ok(savedFiles.SelectMany(s => s.List(scope)).OrderBy(f => f.SavedAt).ToList());
     }
 
@@ -103,11 +103,11 @@ public class ChatContextController(
         return new ContextScope(UserId, session, project);
     }
 
-    private static bool IsLocal(ContextScope scope) =>
+    private static bool FilesUnavailable(ContextScope scope) =>
         scope.Project is { } p && !ProjectCapabilityGuard.Allows(p, ProjectCapabilityArea.FileBound);
 
     private IActionResult? Refuse(ContextScope scope) =>
-        IsLocal(scope)
+        FilesUnavailable(scope)
             ? BadRequest(new { error = ChatContextErrors.ProjectLocalUnsupported, message = ProjectCapabilityGuard.FilesOnDeviceReason })
             : null;
 

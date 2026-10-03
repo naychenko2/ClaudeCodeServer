@@ -20,3 +20,8 @@ export function rolesFor(ctx: ContextKindCtx, state: ChatContextDto, candidateKi
   if (!primary) return [];
   return getKindApi(primary.kind)?.refRoles?.(ctx, primary, candidateKind) ?? [];
 }
+
+// Референс серый, когда выбранное действие его не берёт: usedBy — операции, которые принимают этот референс.
+// Действие без операции (нет op) — запасной признак: серый, только если не берёт никто
+export const unusedBy = (r: { usedBy: readonly string[] }, op?: string | null): boolean =>
+  op ? !r.usedBy.includes(op) : r.usedBy.length === 0;

@@ -8,6 +8,7 @@ import { ChevronDown, ChevronRight, Cpu, Eye, GitBranch, Plus, RotateCcw, Send, 
 import { C, FONT, FS, R, SP, SHADOW, Z } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import { contextRowLadder, NOM, type LadderFacts, type LadderPick } from '../../lib/chatContext/ladder';
+import { unusedBy } from '../../lib/chatContext/fill';
 import { roleLabel } from '../../lib/chatContext/roleLabels';
 import type { ChatContextPrimary, ChatContextRef } from '../../lib/chatContext/types';
 import { Badge, Menu, MenuItem, MenuSep, Modal } from '../ui';
@@ -52,6 +53,8 @@ export interface ContextRowViewProps {
   exec: RowExec | null;
   // Подпись выбранного действия: серыми становятся референсы, которых оно не берёт; null — «Чат»
   actionLabel: string | null;
+  // Операция выбранного действия: серый референс считается по ней; нет операции — по пустому usedBy
+  actionOp?: string | null;
   iconOf: (kind: string) => ReactNode;
   offer: RowOffer | null;
   onUndo: () => void;
@@ -382,7 +385,7 @@ export function ContextRowView(props: ContextRowViewProps) {
   const close = () => setMenu(null);
   const grayHint = actionLabel ? `Не используется в операции «${actionLabel}»` : '';
   // В «Чате» серых нет: Claude видит всё подключённое
-  const grayIds = new Set(actionLabel ? refs.filter(r => r.usedBy.length === 0).map(r => r.id) : []);
+  const grayIds = new Set(actionLabel ? refs.filter(r => unusedBy(r, props.actionOp)).map(r => r.id) : []);
   const shown = refs.slice(0, f.k);
   const hidden = refs.length - f.k;
 

@@ -13,6 +13,7 @@ import type {
 } from '../../lib/chatContext/types';
 import { Button, IconButton, InlineSegmented, Menu, MenuItem, ProgressBar, Stepper } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { unusedBy } from '../../lib/chatContext/fill';
 import { changesWord, GitMenuBody, MenuHead, type RowGit } from '../chat/ContextRowView';
 import { ExecutorList, ExecutorSummaryRow, rowPriceShort } from './ExecutorList';
 import { GenerationPanel } from './GenerationPanel';
@@ -219,7 +220,7 @@ function PlusSection({ p }: { p: ContextPanelProps }) {
   const [rect, setRect] = useState<DOMRect | null>(null);
   const actionLabel = p.action?.label ?? null;
   // В «Чате» серых нет: Claude видит всё подключённое
-  const gray = (r: ChatContextRef) => !!actionLabel && r.usedBy.length === 0;
+  const gray = (r: ChatContextRef) => !!actionLabel && unusedBy(r, p.action?.op);
   return (
     <Section name="plus" title={`Плюс${p.refs.length ? ` · ${p.refs.length}` : ''}`}
       aside={p.refs.length > 0 ? (

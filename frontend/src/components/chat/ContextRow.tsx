@@ -122,6 +122,7 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
         refs={refs}
         exec={exec}
         actionLabel={action?.label ?? null}
+        actionOp={action?.op ?? null}
         iconOf={iconOf}
         offer={offer}
         onUndo={() => { void undoReleasePrimary(sessionId); }}

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { refOf, rolesFor } from './fill';
+import { refOf, rolesFor, unusedBy } from './fill';
 import { registerSubsystem } from '../subsystems/registryCore';
 import type { ChatContextDto, ChatContextPrimary, ChatContextRef, ContextKindApi, ContextKindCtx } from './types';
 
@@ -40,5 +40,17 @@ describe('rolesFor', () => {
     expect(rolesFor(ctx, state(primary()), 'image-character')).toEqual([]);
     install({ kinds: ['image'] } as unknown as ContextKindApi);
     expect(rolesFor(ctx, state(primary()), 'project-file')).toEqual([]);
+  });
+});
+
+describe('unusedBy: серость референса по операции действия', () => {
+  const r = { usedBy: ['speak', 'convertVoice'] };
+  it('операция не в usedBy — серый, в usedBy — живой', () => {
+    expect(unusedBy(r, 'separate')).toBe(true);
+    expect(unusedBy(r, 'speak')).toBe(false);
+  });
+  it('без операции — серый только если не берёт никто', () => {
+    expect(unusedBy(r, null)).toBe(false);
+    expect(unusedBy({ usedBy: [] }, undefined)).toBe(true);
   });
 });

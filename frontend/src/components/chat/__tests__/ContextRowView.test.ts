@@ -75,6 +75,12 @@ describe('ContextRowView', () => {
     expect(withAction).toContain('Не используется в операции «Стемы»');
   });
 
+  it('серость считается по операции действия: голос при «Стемы» серый, а при «Озвучить» нет', () => {
+    const voice = ref('voice', { usedBy: ['speak', 'dialogue', 'convertVoice'] });
+    expect(html(props({ refs: [voice], actionLabel: 'Стемы', actionOp: 'separate' }))).toContain('line-through');
+    expect(html(props({ refs: [voice], actionLabel: 'Озвучить', actionOp: 'speak' }))).not.toContain('line-through');
+  });
+
   it('ступень лестницы: 360 px — прокрутка, 926 — всё на виду', () => {
     const many = props({ refs: [ref('a'), ref('b')], exec });
     expect(html({ ...many, width: 300 })).toContain('data-ladder-scroll="1"');

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -70,36 +69,36 @@ public sealed partial class TestRunService
 
     private readonly ILauncherFactory _launchers;
     private readonly TestRunsOptions _options;
-    private readonly BuildConcurrencyGate? _gate;
-    private readonly TimeSpan _exitGrace;
+    // Общий конвейер фаз: блокировка дерева, гейт, потолок, процесс фазы
+    private readonly PhasePipeline _pipeline;
     private readonly TimeSpan _progressInterval;
     private readonly Func<Uri, CancellationToken, Task<bool>> _standProbe;
 
-    // Деревья с идущим прогоном; ключ — нормализованный полный путь
-    private readonly ConcurrentDictionary<string, byte> _running =
-        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-
     public TestRunService(ILauncherFactory launchers, TestRunsOptions options)
-        : this(launchers, options, gate: null, exitGrace: TimeSpan.FromSeconds(10)) { }
+        : this(launchers, options, new PhasePipeline()) { }
+
+    // DI: конвейер — синглтон подсистемы, блокировка дерева общая с другими его движками
+    public TestRunService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline)
+        : this(launchers, options, pipeline, progressInterval: null, standProbe: null) { }
 
     // Для тестов: свой экземпляр гейта вместо процесс-глобального, короткая пауза на выход,
     // свой шаг прогресса (по умолчанию — не чаще раза в секунду) и своя проверка стенда
     internal TestRunService(ILauncherFactory launchers, TestRunsOptions options,
         BuildConcurrencyGate? gate, TimeSpan exitGrace, TimeSpan? progressInterval = null,
         Func<Uri, CancellationToken, Task<bool>>? standProbe = null)
+        : this(launchers, options, new PhasePipeline(gate, exitGrace), progressInterval, standProbe) { }
+
+    private TestRunService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline,
+        TimeSpan? progressInterval, Func<Uri, CancellationToken, Task<bool>>? standProbe)
     {
         _launchers = launchers;
         _options = options;
-        _gate = gate;
-        _exitGrace = exitGrace;
+        _pipeline = pipeline;
         _progressInterval = progressInterval ?? TimeSpan.FromSeconds(1);
         _standProbe = standProbe ?? ProbeStandAsync;
     }
 
     public TestRunsOptions Options => _options;
-
-    // Гейт читается на каждый прогон: Configure со старта хоста подменяет Instance
-    private BuildConcurrencyGate Gate => _gate ?? BuildConcurrencyGate.Instance;
 
     // Потолок длины фильтра: он едет одним аргументом ArgumentList, без shell, но бесконечная
     // строка — это мусор, а не выражение фильтра
@@ -256,39 +255,29 @@ public sealed partial class TestRunService
     {
         if (Validate(request) is { } refusal) return Refused(request, refusal);
 
-        var key = Path.GetFullPath(request.WorkingDirectory)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (!_running.TryAdd(key, 0))
+        using var treeLock = _pipeline.TryLockTree(request.WorkingDirectory);
+        if (treeLock is null)
             return Refused(request, "В этом дереве уже идёт прогон тестов — дождись его конца: "
                 + "два прогона подерутся за obj/bin.");
 
-        try
-        {
-            var launcher = _launchers.ForProject(request.Project);
-            // Стенд из webServer конфига Playwright поднимает сам — проверять заранее нечего
-            if (request.Kind == TestRunKind.Playwright && !launcher.IsSandboxed && !ConfigStartsWebServer(request)
-                && await StandRefusalAsync(request, ct) is { } down)
-                return Refused(request, down);
+        var launcher = _launchers.ForProject(request.Project);
+        // Стенд из webServer конфига Playwright поднимает сам — проверять заранее нечего
+        if (request.Kind == TestRunKind.Playwright && !launcher.IsSandboxed && !ConfigStartsWebServer(request)
+            && await StandRefusalAsync(request, ct) is { } down)
+            return Refused(request, down);
 
-            var runId = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}";
-            var artifacts = $"{TreeExcludes.AttachmentsDir}/{ArtifactsSubdir}/{runId}";
-            var artifactsFull = Path.Combine(request.WorkingDirectory, TreeExcludes.AttachmentsDir, ArtifactsSubdir, runId);
-            Directory.CreateDirectory(artifactsFull);
-            // Аргумент папки результатов — относительно каталога процесса (у node — каталог цели)
-            var results = Path.GetRelativePath(ProcessDirectory(request), artifactsFull).Replace('\\', '/');
-            using var run = new RunState(this, request.Kind, Path.Combine(artifactsFull, "console.log"), progress,
-                artifacts, results);
-            return request.Kind switch
-            {
-                TestRunKind.Vitest => await RunVitestPipelineAsync(launcher, request, run, artifactsFull, ct),
-                TestRunKind.Playwright => await RunPlaywrightPipelineAsync(launcher, request, run, artifactsFull, ct),
-                _ => await RunDotnetPipelineAsync(launcher, request, run, artifactsFull, ct),
-            };
-        }
-        finally
+        var artifacts = PhasePipeline.CreateArtifacts(request.WorkingDirectory, ArtifactsSubdir);
+        var artifactsFull = artifacts.Full;
+        // Аргумент папки результатов — относительно каталога процесса (у node — каталог цели)
+        var results = Path.GetRelativePath(ProcessDirectory(request), artifactsFull).Replace('\\', '/');
+        using var run = new RunState(this, request.Kind, Path.Combine(artifactsFull, "console.log"), progress,
+            artifacts.Relative, results);
+        return request.Kind switch
         {
-            _running.TryRemove(key, out _);
-        }
+            TestRunKind.Vitest => await RunVitestPipelineAsync(launcher, request, run, artifactsFull, ct),
+            TestRunKind.Playwright => await RunPlaywrightPipelineAsync(launcher, request, run, artifactsFull, ct),
+            _ => await RunDotnetPipelineAsync(launcher, request, run, artifactsFull, ct),
+        };
     }
 
     private static TestRunResult Refused(TestRunRequest request, string reason) =>
@@ -435,33 +424,19 @@ public sealed partial class TestRunService
     private async Task<(IDisposable? Slot, TestRunResult? Aborted)> AcquireAsync(ProcessSpec spec,
         TestRunPhase phase, RunState run, CancellationToken limit, CancellationToken callerCt)
     {
-        var gate = Gate;
-        if (gate.TryAcquire(spec) is { } slot) return (slot, null);
-        run.Report(new TestRunProgress("queued", $"ждёт очереди сборок (занято {gate.Limit})"));
-        try
+        var slot = await _pipeline.AcquireAsync(spec,
+            limit => run.Report(new TestRunProgress("queued", $"ждёт очереди сборок (занято {limit})")), limit);
+        if (slot is not null) return (slot, null);
+        // «Погашен» здесь было бы враньём: процесса не было
+        return (null, run.Result(null, phase) with
         {
-            return (await gate.AcquireAsync(spec, limit), null);
-        }
-        catch (OperationCanceledException)
-        {
-            // «Погашен» здесь было бы враньём: процесса не было
-            return (null, run.Result(null, phase) with
-            {
-                Cancelled = callerCt.IsCancellationRequested,
-                TimedOut = !callerCt.IsCancellationRequested,
-                NeverStarted = true,
-            });
-        }
+            Cancelled = callerCt.IsCancellationRequested,
+            TimedOut = !callerCt.IsCancellationRequested,
+            NeverStarted = true,
+        });
     }
 
-    // Серверный потолок включает ожидание очереди: иначе долгая очередь съела бы запас до
-    // обрыва вызова CLI
-    private CancellationTokenSource Ceiling(CancellationToken ct)
-    {
-        var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        limit.CancelAfter(TimeSpan.FromSeconds(_options.CeilingSeconds));
-        return limit;
-    }
+    private CancellationTokenSource Ceiling(CancellationToken ct) => PhasePipeline.Ceiling(_options.CeilingSeconds, ct);
 
     private async Task<TestRunResult> RunDotnetPipelineAsync(IProcessLauncher launcher, TestRunRequest request,
         RunState run, string artifactsFull, CancellationToken ct)
@@ -551,61 +526,16 @@ public sealed partial class TestRunService
         return run.Result(phase.ExitCode, where) with { Cancelled = cancelled, TimedOut = !cancelled };
     }
 
-    private readonly record struct PhaseOutcome(int? ExitCode, bool Aborted);
-
-    // Один процесс фазы: старт со своим TurnId, вычитка обоих потоков, гашение дерева по
-    // отмене/потолку. Сбой Start (нет dotnet/node, отказ среды) уходит наверх: слот освободит
-    // using, блокировку дерева — finally
-    private async Task<PhaseOutcome> RunPhaseAsync(IProcessLauncher launcher, TestRunPhase phase,
+    // Один процесс фазы со своим TurnId (из единственного генератора ProcessTurnIds); старт,
+    // вычитка и гашение — в конвейере. Сбой Start уходит наверх: слот освободит using,
+    // блокировку дерева — using в RunAsync
+    private Task<PhaseOutcome> RunPhaseAsync(IProcessLauncher launcher, TestRunPhase phase,
         TestRunRequest request, RunState run, CancellationToken limit, bool heavy = true)
     {
         var turnId = ProcessTurnIds.New();
         var spec = BuildSpec(phase, request, turnId, run.Results, heavy);
         run.BeginPhase(phase, spec, turnId);
-        using var process = launcher.Start(spec);
-        var readers = Task.WhenAll(
-            PumpAsync(process.StandardOutput, run),
-            PumpAsync(process.StandardError, run));
-
-        var aborted = false;
-        try
-        {
-            await process.WaitForExitAsync(limit);
-        }
-        catch (OperationCanceledException)
-        {
-            aborted = true;
-            // Гасим ДЕРЕВО: testhost, воркеры vitest, браузер — потомки; в песочнице — по TurnId
-            launcher.Kill(process, turnId);
-            try { await process.WaitForExitAsync().WaitAsync(_exitGrace); }
-            catch (TimeoutException) { /* процесс не умер за паузу — итог всё равно отдаём */ }
-        }
-
-        // Потоки закрываются с выходом процесса; внук, державший пайп, не должен задержать
-        // ответ навсегда
-        try { await readers.WaitAsync(_exitGrace); }
-        catch (TimeoutException) { }
-
-        int? exit = process.HasExited ? SafeExitCode(process) : null;
-        return new PhaseOutcome(exit, aborted);
-    }
-
-    private static int? SafeExitCode(Process process)
-    {
-        try { return process.ExitCode; }
-        catch (InvalidOperationException) { return null; }
-    }
-
-    private static async Task PumpAsync(StreamReader reader, RunState run)
-    {
-        try
-        {
-            while (await reader.ReadLineAsync() is { } line) run.OnLine(line);
-        }
-        catch (Exception e) when (e is IOException or ObjectDisposedException)
-        {
-            // Поток закрыт гашением процесса — вывод до этого места уже учтён
-        }
+        return _pipeline.RunProcessAsync(launcher, spec, run.OnLine, limit);
     }
 
     // Сводки всех TRX прогона; битый файл пропускается — остальные сборки важнее, огромный —

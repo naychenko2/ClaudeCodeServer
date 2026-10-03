@@ -21,6 +21,9 @@ public sealed class TestRunsSubsystem : IAppSubsystem
     public void Register(IServiceCollection services, IConfiguration config)
     {
         services.AddSingleton(TestRunsOptions.From(config));
+        // Конвейер фаз — один на процесс: блокировка «одно дерево — один прогон» общая для
+        // всех его движков (тесты, сборка)
+        services.AddSingleton<PhasePipeline>();
         services.AddSingleton<TestRunService>();
         // Подсказка «тесты — через run_tests»: выключенная подсистема не объявляет и секцию
         services.AddPromptSectionContributor<TestRunsHintContributor>();

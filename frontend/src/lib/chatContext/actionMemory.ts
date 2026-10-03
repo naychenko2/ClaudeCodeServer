@@ -55,7 +55,10 @@ export function pickDefaultAction(actions: readonly ContextAction[], by: Context
 
 // Человек выбрал чип (id действия или null — «Чат»)
 export function rememberAction(sessionId: string, key: string, actionId: string | null) {
-  of(sessionId).choice.set(key, actionId);
+  const m = of(sessionId);
+  m.choice.set(key, actionId);
+  // Ручной выбор старше висящего предвыбора: иначе тот перебил бы клик и затравил поле позже
+  m.presets.delete(key);
   emit();
 }
 
@@ -70,6 +73,10 @@ const _carry = new Map<string, { fromKey: string; actionId: string }>();
 export const noteRunStarted = (sessionId: string, fromKey: string, actionId: string) => {
   _carry.set(sessionId, { fromKey, actionId });
 };
+// Запуск закончился ошибкой — версии не будет, выбору переезжать некуда
+export const clearRunCarry = (sessionId: string) => { _carry.delete(sessionId); };
+// Вид объекта — до первого «:» ключа; переезжает выбор только к объекту того же вида
+const kindOfKey = (key: string) => key.slice(0, key.indexOf(':'));
 
 export interface ResolvedAction {
   // id выбранного run-действия; null — «Чат»
@@ -101,7 +108,9 @@ export function resolveAction(
   }
   // Объект сменился после запуска: «Чат» у агентского объекта, иначе то же действие, если оно есть
   const carry = _carry.get(sessionId);
-  if (carry && carry.fromKey !== key) {
+  if (carry && carry.fromKey !== key && kindOfKey(carry.fromKey) === kindOfKey(key)) {
+    // Действий ещё нет — carry ждёт: решение «Чат» при пустом списке запомнилось бы навсегда
+    if (actions.length === 0) return { actionId: null };
     _carry.delete(sessionId);
     const id = by !== 'agent' && usable(carry.actionId) ? carry.actionId : null;
     m.choice.set(key, id);

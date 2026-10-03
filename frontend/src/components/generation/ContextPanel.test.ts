@@ -98,6 +98,13 @@ describe('секции панели «Контекст»', () => {
     expect(html).not.toContain(EMPTY.execChat);
   });
 
+  it('кнопка низа панели: имя ужимается, «параметры · цена» в отдельном нешринкуемом куске', () => {
+    const run = { ...stubActionRun(edit), labelParts: { name: '✦ Изменить', tail: ' · ×3 · $0.12' } };
+    const html = panel({ primary, action: edit, run });
+    expect(html).toMatch(/data-run-label-name[^>]*text-overflow:ellipsis/);
+    expect(html).toMatch(/data-run-label-tail[^>]*white-space:nowrap;flex-shrink:0[^>]*> · ×3 · \$0\.12/);
+  });
+
   it('в «Чате» серых референсов нет', () => {
     const html = panel({ primary, refs: [ref('r1', 'Аня', [])] });
     expect(html).not.toContain('data-ctx-ref="gray"');

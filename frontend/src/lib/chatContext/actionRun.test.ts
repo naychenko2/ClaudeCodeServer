@@ -5,8 +5,8 @@ vi.mock('../offline', () => ({ request: vi.fn() }));
 vi.mock('../signalr', () => ({ onMessage: () => () => {}, onReconnected: () => () => {} }));
 vi.mock('../toast', () => ({ showToast: h.toast }));
 
-import { objectKey, resetActionMemory, resolveAction } from './actionMemory';
-import { buildActionRun, ensureQuote, resetAllRuns, runBlockReason, runLabel } from './actionRun';
+import { objectKey, rememberAction, resetActionMemory, resolveAction } from './actionMemory';
+import { buildActionRun, ensureQuote, resetAllRuns, runBlockReason, runLabel, runLabelParts } from './actionRun';
 import { __applyChatContext, __resetChatContextStore, getChatContextState } from './store';
 import type {
   ChatContextPrimary, ContextAction, ContextKindApi, LaunchHandle, LaunchParam, QuoteRequest,
@@ -61,6 +61,18 @@ describe('подпись кнопки (Р3): одна функция', () => {
   });
 });
 
+describe('части подписи (Р3): имя ужимается, хвост с ценой — никогда', () => {
+  const base = { action: edit, params: [{ kind: 'variants', min: 1, max: 4, value: 3 }] as LaunchParam[], price: '$0.12', mobile: true, state: 'idle' as const, progress: null };
+  it('имя и хвост разделены; склейка равна подписи', () => {
+    const p = runLabelParts(base);
+    expect(p).toEqual({ name: '✦ Изменить', tail: ' · ×3 · $0.12' });
+    expect(p.name + p.tail).toBe(runLabel(base));
+  });
+  it('во время хода хвост — процент', () => {
+    expect(runLabelParts({ ...base, state: 'running', progress: 0.4 })).toEqual({ name: '✦ Изменить…', tail: ' 40 %' });
+  });
+});
+
 describe('паритет поля ввода и низа панели (useActionRun)', () => {
   it('на одном состоянии обе точки получают одну подпись, одну цену и один запуск', async () => {
     const api = apiOf();
@@ -108,6 +120,30 @@ describe('паритет поля ввода и низа панели (useAction
   });
 });
 
+describe('подписка на ход запуска и carry', () => {
+  it('после result подписка снимается; по ошибке хода carry гаснет', async () => {
+    const off = vi.fn();
+    let emit!: (e: { progress?: number; result?: { summary: string }; error?: string }) => void;
+    const api = apiOf({ launch: vi.fn(async () => ({ id: 'j', watch: (on: typeof emit) => { emit = on; return off; } })) as never }, [stems, edit]);
+    const r = build(api);
+    await r.run('x');
+    emit({ result: { summary: 'готово' } });
+    expect(off).toHaveBeenCalledTimes(1);
+    // Новый запуск и ошибка хода: выбор за версией не едет — берётся умолчание
+    resetAllRuns(); resetActionMemory();
+    const r2 = build(apiOf({ launch: vi.fn(async () => ({ id: 'j', watch: (on: typeof emit) => { emit = on; return off; } })) as never }, [stems, edit]));
+    r2.setParam('stemSet', 'v');
+    expect(resolveAction('s1', objectKey(primary()), 'human', [stems, edit]).actionId).toBe('stems');
+    rememberChoiceEdit();
+    await r2.run('x');
+    emit({ error: 'сбой' });
+    const v2 = primary({ threadId: 't', versionId: 'v2' });
+    expect(resolveAction('s1', objectKey(v2), 'human', [stems, edit]).actionId).toBe('stems');
+  });
+});
+
+function rememberChoiceEdit() { rememberAction('s1', objectKey(primary()), 'edit'); }
+
 describe('409 context_changed и выбор после запуска', () => {
   const conflict = (revision: number) => Object.assign(new Error('Conflict'), {
     status: 409, body: { error: 'context_changed', context: { revision, primary: primary(), refs: [] } },
@@ -131,6 +167,21 @@ describe('409 context_changed и выбор после запуска', () => {
     await ensureQuote('s1', r.scope, api, ctx, r.req as QuoteRequest);
     expect(getChatContextState('s1').revision).toBe(10);
     expect(h.toast).not.toHaveBeenCalled();
+  });
+
+  it('ответы цены не по порядку: старый ответ не затирает цену текущего запроса', async () => {
+    let resolveA!: (v: { price: string }) => void;
+    const quote = vi.fn()
+      .mockImplementationOnce(() => new Promise(r => { resolveA = r; }))
+      .mockResolvedValueOnce({ price: '$0.20' });
+    const api = apiOf({ quote: quote as never });
+    const r = build(api);
+    const a = ensureQuote('s1', r.scope, api, ctx, { ...r.req!, text: 'a' });
+    await ensureQuote('s1', r.scope, api, ctx, { ...r.req!, text: 'ab' });
+    resolveA({ price: '$0.10' });
+    await a;
+    r.setText('ab');
+    expect(build(api).quote?.price).toBe('$0.20');
   });
 
   it('тот же запрос цены второй раз не уходит', async () => {

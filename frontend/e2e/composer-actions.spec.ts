@@ -23,14 +23,16 @@ async function shot(page: Page, name: string) {
 }
 
 // withActions=false — у вида `actions` пусты, живёт старый «Чат | Картинка» из слота composer-mode
-async function registerKit(page: Page, withActions: boolean) {
-  await page.evaluate(async withActions => {
+async function registerKit(page: Page, withActions: boolean, priced = false) {
+  await page.evaluate(async ({ withActions, priced }) => {
     // Тот же экземпляр модуля, что у приложения: dev-сервер мог дописать ?t= после HMR, свой URL дал бы второй реестр
     const url = performance.getEntriesByType('resource').map(e => e.name).find(n => n.includes('/src/lib/subsystems/registryCore.ts'))
       ?? '/src/lib/subsystems/registryCore.ts';
     const m = await import(/* @vite-ignore */ url);
     const act = (id: string, label: string, extra = {}) => ({ id, kind: 'run', label, hint: `Запуск: ${label}`, op: id, ...extra });
-    const actions = withActions
+    const actions = priced
+      ? [act('edit', 'Изменить отмеченное в выбранной области', { text: 'none' })]
+      : withActions
       ? [act('edit', 'Изменить', { text: 'required', placeholder: 'Что изменить на картинке…' }), act('removeBg', 'Убрать фон', { text: 'none' }),
           act('upscale', 'Увеличить', { text: 'none' }), act('outpaint', 'Дорисовать', { text: 'required' }),
           { id: 'mark', kind: 'editor', label: 'Отметить', hint: 'Открыть редактор на кисти', open: () => {} }]
@@ -38,7 +40,10 @@ async function registerKit(page: Page, withActions: boolean) {
     m.registerSubsystem({
       key: 'e2e-kit', title: 'e2e', order: 1, noPill: true, core: true,
       slots: {
-        'context-kind': [{ name: 'e2e-image', action: { kinds: ['image'], icon: () => null, preview: () => null, actions: () => actions } }],
+        'context-kind': [{ name: 'e2e-image', action: {
+          kinds: ['image'], icon: () => null, preview: () => null, actions: () => actions,
+          ...(priced ? { params: () => [{ kind: 'variants', min: 1, max: 4, value: 3 }], quote: async () => ({ price: '$0.12' }) } : null),
+        } }],
         'composer-mode': [{
           name: 'e2e-image-mode',
           action: {
@@ -48,7 +53,7 @@ async function registerKit(page: Page, withActions: boolean) {
         }],
       },
     });
-  }, withActions);
+  }, { withActions, priced });
 }
 
 const actions = (page: Page) => page.locator('[data-composer-actions]');
@@ -133,4 +138,26 @@ test('без флага: старый путь даже при видe с дей
   await registerKit(page, true);
   await expect(page.getByRole('button', { name: 'Режим «Картинка»' })).toBeVisible();
   await expect(actions(page)).toHaveCount(0);
+});
+
+test('360: подпись кнопки — имя ужимается многоточием, «· ×3 · $0.12» не режется (Р3), в поле и в панели', async ({ page }) => {
+  newWorld({ ctx: { primary: primary() } });
+  await openChat(page, { vp: M });
+  await expect(page.locator('[data-context-row]')).toBeVisible({ timeout: 30_000 });
+  await registerKit(page, true, true);
+  const tail = page.locator('[data-composer-mode-bar] [data-run-label-tail]');
+  await expect(tail).toHaveText(' · ×3 · $0.12', { timeout: 10_000 });
+  const name = page.locator('[data-composer-mode-bar] [data-run-label-name]');
+  const m = await page.evaluate(() => {
+    const n = document.querySelector('[data-composer-mode-bar] [data-run-label-name]') as HTMLElement;
+    const t = document.querySelector('[data-composer-mode-bar] [data-run-label-tail]') as HTMLElement;
+    const b = t.closest('button') as HTMLElement;
+    return { nameClipped: n.scrollWidth > n.clientWidth, tailClipped: t.scrollWidth > t.clientWidth, tailRight: t.getBoundingClientRect().right, btnRight: b.getBoundingClientRect().right, vw: window.innerWidth };
+  });
+  expect(m.nameClipped, 'имя действия ужато многоточием').toBe(true);
+  expect(m.tailClipped, 'хвост с ценой цел').toBe(false);
+  expect(m.tailRight).toBeLessThanOrEqual(m.btnRight + 0.5);
+  expect(m.btnRight).toBeLessThanOrEqual(m.vw);
+  await expect(name).toContainText('✦ Изменить');
+  await shot(page, 'run-label-360.png');
 });

@@ -6,6 +6,7 @@ export function stubActionRun(action: ContextAction | null): ActionRun {
   return {
     action,
     label: action ? `✦ ${action.label}` : '',
+    labelParts: { name: action ? `✦ ${action.label}` : '', tail: '' },
     quote: null,
     state: 'idle',
     progress: null,

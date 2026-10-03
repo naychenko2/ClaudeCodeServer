@@ -16,6 +16,7 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { changesWord, GitMenuBody, MenuHead, type RowGit } from '../chat/ContextRowView';
 import { ExecutorList, ExecutorSummaryRow, rowPriceShort } from './ExecutorList';
 import { GenerationPanel } from './GenerationPanel';
+import { RunLabel } from './RunLabel';
 
 // Тексты пустых состояний — из макета, раздел 4
 export const EMPTY = {
@@ -343,7 +344,7 @@ function Foot({ run, action }: { run: ActionRun; action: ContextAction | null })
           <div data-ctx-run="">
             <Button size="xs" fullWidth disabled={!!reason || busy} title={reason ?? undefined}
               onClick={() => { run.run(run.text).catch(() => { /* причину уже показал запуск */ }); }} style={{ whiteSpace: 'nowrap' }}>
-              {run.label}
+              <RunLabel parts={run.labelParts} />
             </Button>
           </div>
         </>

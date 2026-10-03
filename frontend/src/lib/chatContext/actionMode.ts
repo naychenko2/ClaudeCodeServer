@@ -3,6 +3,8 @@
 // но режим этот собирается из ContextAction и ActionRun, а не берётся из слота composer-mode. Так
 // машинерия поля (черновики, затравка, строка режима) работает без второй копии.
 
+import { createElement } from 'react';
+import { RunLabel } from '../../components/generation/RunLabel';
 import type { ComposerModeApi } from '../subsystems/registryCore';
 import type { ActionPreset, ActionRun, ContextAction } from './types';
 
@@ -25,10 +27,10 @@ export function actionComposerMode(o: {
     icon: null,
     isAvailable: () => true,
     placeholder: () => (action.text === 'none' ? NO_TEXT_PLACEHOLDER : action.placeholder ?? action.label),
-    submitLabel: () => run.label,
+    submitLabel: () => createElement(RunLabel, { parts: run.labelParts }),
     onSubmit: (_ctx, text) => run.run(text),
     // Текст не обязателен — запуск при пустом поле штатный; обязательный текст кнопка ждёт
-    emptySubmit: () => (action.text === 'required' || action.disabledReason ? null : { label: run.label, run: () => run.run('') }),
+    emptySubmit: () => (action.text === 'required' || action.disabledReason ? null : { label: createElement(RunLabel, { parts: run.labelParts }), run: () => run.run('') }),
     onTextChange: (_ctx, text) => run.setText(text),
     draftKey: () => actionDraftKey(o.objectKey, action.id),
     prefill: o.preset ? () => ({ key: o.preset!.key, text: o.preset!.value.prefill ?? null }) : undefined,

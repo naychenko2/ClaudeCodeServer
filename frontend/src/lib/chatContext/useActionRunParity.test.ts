@@ -18,7 +18,7 @@ describe('одна точка запуска', () => {
 
   it('низ панели рисует run.label и не строит подпись сам', () => {
     const s = read('components/generation/ContextPanel.tsx');
-    expect(s).toMatch(/\{run\.label\}/);
+    expect(s).toMatch(/<RunLabel parts=\{run\.labelParts\}/);
     expect(s).not.toMatch(/[`'"]✦/);
     expect(s).toMatch(/run\.run\(run\.text\)/);
   });

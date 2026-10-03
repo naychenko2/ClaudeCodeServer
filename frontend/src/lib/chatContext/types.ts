@@ -164,6 +164,8 @@ export interface ActionRun {
   action: ContextAction | null;
   // Подпись кнопки: «✦ Изменить · 3 вар. · $0.12»
   label: string;
+  // Та же подпись двумя кусками: имя ужимается, хвост с ценой — никогда
+  labelParts: { name: string; tail: string };
   quote: ActionQuote | null;
   state: RunState;
   progress: number | null;

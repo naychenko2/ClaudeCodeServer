@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   forgetActionMemory, getActionMemoryVersion, objectKey, pickDefaultAction, presetAction, rememberAction, resetActionMemory, resolveAction,
-  takePreset,
+  takePreset, noteRunStarted, clearRunCarry,
 } from './actionMemory';
 import type { ContextAction } from './types';
 
@@ -136,5 +136,31 @@ describe('чистка памяти', () => {
     expect(resolveAction('s1', 'v3', 'agent', [run('edit')]).actionId).toBeNull();
     noteRunStarted('s1', 'v3', 'edit');
     expect(resolveAction('s1', 'v4', 'human', [run('stems')]).actionId).toBeNull();
+  });
+
+  it('carry при пустых действиях не запоминает «Чат»: после загрузки вида выбор переезжает', () => {
+    noteRunStarted('s1', 'image:{"v":1}', 'edit');
+    expect(resolveAction('s1', 'image:{"v":2}', 'human', []).actionId).toBeNull();
+    expect(resolveAction('s1', 'image:{"v":2}', 'human', [run('stems'), run('edit')]).actionId).toBe('edit');
+  });
+
+  it('ручной выбор снимает висящий предвыбор: ни резолв, ни хост поля его уже не применят', () => {
+    const actions = [run('edit'), run('removeBg')];
+    presetAction('s1', 'k', { actionId: 'removeBg', prefill: 'без тени' });
+    rememberAction('s1', 'k', null);
+    expect(resolveAction('s1', 'k', 'human', actions, false).actionId).toBeNull();
+    expect(takePreset('s1', 'k', 'human', actions)).toBeNull();
+    presetAction('s1', 'k2', { actionId: 'removeBg' });
+    rememberAction('s1', 'k2', 'edit');
+    expect(resolveAction('s1', 'k2', 'human', actions, false).actionId).toBe('edit');
+  });
+
+  it('carry сверяется с видом объекта и гасится по ошибке запуска', () => {
+    const actions = [run('stems'), run('edit')];
+    noteRunStarted('s1', 'image:{"v":1}', 'edit');
+    // Другой вид объекта (человек сам выбрал звук) — выбор за ним не едет
+    expect(resolveAction('s1', 'audio:{"v":1}', 'human', actions).actionId).toBe('stems');
+    clearRunCarry('s1');
+    expect(resolveAction('s1', 'image:{"v":2}', 'human', actions).actionId).toBe('stems');
   });
 });

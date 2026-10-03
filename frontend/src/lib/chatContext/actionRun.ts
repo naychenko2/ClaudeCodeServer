@@ -3,7 +3,7 @@
 // невозможна по построению. Состояние хранится вне React (по чату): поле и панель живут в разных
 // ветках дерева и обязаны видеть один прогресс. Здесь — ядро без React, хук — в useActionRun.ts.
 
-import { noteRunStarted, objectKey, resolveAction } from './actionMemory';
+import { clearRunCarry, noteRunStarted, objectKey, resolveAction } from './actionMemory';
 import { acceptConflict } from './store';
 import { showToast } from '../toast';
 import type {
@@ -99,16 +99,15 @@ export function launchParams(action: ContextAction, params: readonly LaunchParam
 export const questionValue = (action: ContextAction, values: Readonly<Record<string, number | string>>): string | null =>
   action.question ? String(values[action.question.param] ?? action.question.options[0]?.value ?? '') : null;
 
-// Подпись кнопки (Р3), одна на поле и панель: `✦ Изменить · 3 вар. · $0.12`. Длительность пишется всегда,
-// вариантов — только больше одного; цена не режется никогда, на телефоне «×3» вместо «3 вар.»
-export function runLabel(o: {
+// Подпись кнопки (Р3) двумя кусками: имя действия (ужимается многоточием, на узком экране первым) и хвост
+// «параметры · цена» (не ужимается никогда). Хвост несёт свой разделитель
+export function runLabelParts(o: {
   action: ContextAction | null; params: readonly LaunchParam[]; price: string | null; mobile: boolean;
   state: RunState; progress: number | null;
-}): string {
-  if (!o.action) return '';
+}): { name: string; tail: string } {
+  if (!o.action) return { name: '', tail: '' };
   if (o.state === 'running') {
-    const pct = o.progress === null ? '' : ` ${Math.round(o.progress * 100)} %`;
-    return `✦ ${o.action.label}…${pct}`;
+    return { name: `✦ ${o.action.label}…`, tail: o.progress === null ? '' : ` ${Math.round(o.progress * 100)} %` };
   }
   const parts: string[] = [];
   for (const p of o.params) {
@@ -116,7 +115,13 @@ export function runLabel(o: {
     if (p.kind === 'variants' && p.value > 1) parts.push(o.mobile ? `×${p.value}` : `${p.value} вар.`);
   }
   if (o.price) parts.push(o.price);
-  return [`✦ ${o.action.label}`, ...parts].join(' · ');
+  return { name: `✦ ${o.action.label}`, tail: parts.map(x => ` · ${x}`).join('') };
+}
+
+// Подпись цельной строкой: `✦ Изменить · 3 вар. · $0.12`
+export function runLabel(o: Parameters<typeof runLabelParts>[0]): string {
+  const { name, tail } = runLabelParts(o);
+  return name + tail;
 }
 
 // Почему кнопка серая: серое действие или пустое поле у действия с обязательным текстом
@@ -141,11 +146,14 @@ export async function ensureQuote(
   const key = quoteKey(req);
   if (e.quote?.key === key || e.quoting === key) return;
   e.quoting = key;
+  // Ответ пишем, только если запрос всё ещё текущий: на быстрой печати ответы приходят не по порядку,
+  // и старый затёр бы цену нового
+  const current = () => _runs.get(sessionId) === e && e.quoting === key;
   try {
     const value = await api.quote(ctx, req);
-    if (_runs.get(sessionId) === e) patch(sessionId, { quote: { key, value }, quoting: null });
+    if (current()) patch(sessionId, { quote: { key, value }, quoting: null });
   } catch (err) {
-    if (_runs.get(sessionId) === e) {
+    if (current()) {
       // Ревизия устарела — свежий контекст уже в сторе, цена пересчитается сама новым ключом
       acceptConflict(sessionId, err, true);
       patch(sessionId, { quote: { key, value: null }, quoting: null });
@@ -182,15 +190,18 @@ export async function launchAction(d: RunDeps, text: string): Promise<void> {
     noteRunStarted(d.sessionId, objectKey(d.primary), d.action.id);
     let off: (() => void) | null = null;
     off = handle.watch(ev => {
-      if (ev.error) { patch(d.sessionId, { state: 'error', progress: null }); showToast(ev.error, '', 'error'); off?.(); return; }
-      if (ev.result) { patch(d.sessionId, { state: 'done', progress: 1, result: ev.result }); return; }
+      if (ev.error) {
+        patch(d.sessionId, { state: 'error', progress: null }); clearRunCarry(d.sessionId);
+        showToast(ev.error, '', 'error'); off?.(); return;
+      }
+      if (ev.result) { patch(d.sessionId, { state: 'done', progress: 1, result: ev.result }); off?.(); return; }
       if (ev.progress !== undefined) patch(d.sessionId, { progress: ev.progress });
     });
     _unwatch.set(d.sessionId, off);
   } catch (err) {
     // Контекст сменился: DTO уже в сторе, цену пересчитает новый ключ; запуск сам не повторяется
     if (acceptConflict(d.sessionId, err)) { patch(d.sessionId, { state: 'idle', progress: null, quote: null }); throw err; }
-    patch(d.sessionId, { state: 'error', progress: null });
+    patch(d.sessionId, { state: 'error', progress: null }); clearRunCarry(d.sessionId);
     showToast((err as Error).message || 'Не удалось запустить', '', 'error');
     throw err;
   }
@@ -221,7 +232,7 @@ export function buildActionRun(o: {
   refs: readonly ChatContextRef[];
   revision: number;
 }): ActionRun & { scope: string; req: QuoteRequest | null } {
-  const none = { action: null, label: '', quote: null, state: 'idle' as const, progress: null, result: null, text: '', answer: null, blocked: null, params: [] as readonly LaunchParam[], scope: '', req: null };
+  const none = { action: null, label: '', quote: null, state: 'idle' as const, progress: null, result: null, text: '', answer: null, blocked: null, labelParts: { name: '', tail: '' }, params: [] as readonly LaunchParam[], scope: '', req: null };
   const { sessionId, api, ctx, primary, refs, revision } = o;
   if (!api || !primary) return { ...none, setText: () => {}, setParam: () => {}, run: async () => {} };
   const actions = api.actions(ctx, { primary, refs });
@@ -234,11 +245,13 @@ export function buildActionRun(o: {
   const lp = launchParams(action, params, e.values);
   const req: QuoteRequest = { op: action.op ?? action.id, text: e.text, params: lp, contextRevision: revision };
   const price = e.quote?.key === quoteKey(req) ? e.quote.value : null;
+  const labelIn = { action, params, price: price?.price ?? null, mobile: ctx.isMobile, state: e.state, progress: e.progress };
   return {
     action,
     scope,
     req,
-    label: runLabel({ action, params, price: price?.price ?? null, mobile: ctx.isMobile, state: e.state, progress: e.progress }),
+    label: runLabel(labelIn),
+    labelParts: runLabelParts(labelIn),
     quote: price,
     state: e.state,
     progress: e.progress,

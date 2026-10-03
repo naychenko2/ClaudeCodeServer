@@ -2,9 +2,11 @@
 // сверяется с активными подсистемами из /api/auth/me. Фич-флаг владельца (video-editor) проверяют сами
 // входы — каждый вклад через isAvailable с getFlag(FLAGS.videoEditor).
 
-import type { ChatItemToolCtx, ComposerChipCtx, SlotContribution, SubsystemManifest } from '../../lib/subsystems/registryCore';
+import { FLAGS, getFlag } from '../../lib/featureFlags';
+import type { ChatItemToolCtx, ComposerChipCtx, ContextOpenerApi, SlotContribution, SubsystemManifest } from '../../lib/subsystems/registryCore';
 import { FramePickerHost } from './context/framePicker';
 import { videoKindApi } from './context/kind';
+import { filmRefOfPath, isFilmFile } from './context/opener';
 import { VideoChatWatcher } from './composer/VideoChatWatcher';
 import { VideoEditorHost } from './editor/VideoEditorHost';
 import { LaunchAnchor, QuietLine, SceneAnchor } from './feed/SceneCard';
@@ -28,6 +30,16 @@ export const manifest: SubsystemManifest = {
     'chat-item-tool': ANCHORS,
     // Вид «видео» контекста хода (ADR-023): чипы сцены и фильма, превью, «Чем» и параметры панели «Контекст»
     'context-kind': [{ name: 'video', action: videoKindApi as unknown as Record<string, unknown> }],
+    // Вход из «Файлов» (ADR-023): файл .film становится основным объектом «фильм»
+    'context-opener': [
+      {
+        name: 'video-film',
+        action: {
+          isOpenable: (path: string) => getFlag(FLAGS.videoEditor) && isFilmFile(path),
+          toRef: ({ projectId, sessionId, path }) => filmRefOfPath(projectId, sessionId, path),
+        } satisfies ContextOpenerApi as unknown as Record<string, unknown>,
+      },
+    ],
     // Загрузка сцен чата, окна редакторов и окно «Из проекта» меню кадра — невидимыми вкладами композера
     'composer-chip': [
       { name: 'video-watch', render: (ctx: ComposerChipCtx) => <VideoChatWatcher ctx={ctx} /> },

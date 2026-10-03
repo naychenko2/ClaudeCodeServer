@@ -23,6 +23,9 @@ const AUDIO_FILE = /\.(wav|mp3|flac|ogg|m4a)$/i;
 
 // Звуковой файл берёт только основной звук, остальные файлы — не звук: референс другого вида бэкенд принял бы
 // (kind у обоих «project-file»), но смысла в нём нет — «образец стиля» из .wav
+// Фильм — основной объект сам по себе, образцом он не бывает
+const FILM_FILE = /\.film$/i;
+
 const takesFile = (primaryKind: string, path: string) => AUDIO_FILE.test(path) === (primaryKind === 'audio');
 
 export function useFileContextMenu(projectId: string, path: string | null, online: boolean, close: () => void): { on: boolean; items: ReactNode[] } {
@@ -55,6 +58,8 @@ export function fileContextItems({ projectId, sessionId, path, state, opener, cl
         }} />,
     );
   }
+
+  if (FILM_FILE.test(path)) return items;
 
   const inCtx = refOf(state, candidate);
   if (inCtx) {

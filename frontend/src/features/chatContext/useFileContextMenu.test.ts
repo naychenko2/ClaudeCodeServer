@@ -40,6 +40,18 @@ describe('пункты «Файлов» для контекста хода', () 
     expect(h).toContain('В контекст · как объект');
   });
 
+  it('фильм: только «Работать с этой», ролей образца нет', () => {
+    const none = html('video/утро/утро.film', state(), false);
+    expect(none).not.toContain('В контекст');
+    const h = renderToStaticMarkup(createElement('div', null, ...fileContextItems({
+      projectId: 'p', sessionId: S, path: 'video/утро/утро.film', state: state(),
+      opener: { isOpenable: p => p.endsWith('.film'), toRef: async () => null }, close: () => {},
+    })));
+    expect(h).toContain('Работать с этой');
+    expect(h).not.toContain('В контекст');
+    expect(h).not.toContain('образец');
+  });
+
   it('не картинка: только «В контекст»; одна роль — без уточнения', () => {
     install([{ role: 'object', label: 'Как объект' }]);
     const h = html('notes.txt');

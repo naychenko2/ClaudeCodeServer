@@ -1,7 +1,7 @@
 // Связка панели «Контекст» с живыми данными (ADR-023 §Д1): стор контекста чата, вид из слота
 // context-kind, git-чип, ссылка «назад». Саму отрисовку держит ContextPanel (по готовой модели),
 // чтобы витрина кормила её фикстурами без стора и сети. Хост зовут обе страницы — проект и «Чаты».
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { File as FileIcon } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { useGitChip } from '../../hooks/useGitChip';
@@ -12,12 +12,14 @@ import { getGitActions } from '../../lib/chatContext/gitActions';
 import { getKindApi } from '../../lib/chatContext/registry';
 import { selectRowAction } from '../../lib/chatContext/rowExec';
 import {
-  clearContext, detachRef, ensureChatContext, releasePrimary, setPrimary, useChatContext,
+  attachRef, clearContext, detachRef, ensureChatContext, releasePrimary, setPrimary, useChatContext,
 } from '../../lib/chatContext/store';
 import type { ContextKindCtx } from '../../lib/chatContext/types';
 import { REVEAL_PANEL_EVENT, revealWorkspacePanel, type RevealPanelDetail } from '../../lib/subsystems/registryCore';
 import { wsPanels } from '../../pages/workspace/panelStackState';
+import { showToast } from '../../lib/toast';
 import { PublishDialog } from '../PublishDialog';
+import { Menu, MenuItem } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import type { RowGit } from '../chat/ContextRowView';
 import { ContextPanel, type AddFromItem } from './ContextPanel';
@@ -95,12 +97,47 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
   const iconOf = (kind: string): ReactNode =>
     getKindApi(kind)?.icon(kind) ?? <FileIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
+  // «С компьютера»: файл → вид кладёт его в свою рабочую папку → референс; роль спрашиваем, если их несколько
+  const upload = primary && api?.upload ? api.upload(kindCtx, primary) : null;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const menuAt = useRef<DOMRect | null>(null);
+  const [rolePick, setRolePick] = useState<{ files: File[]; at: DOMRect } | null>(null);
+  const addFiles = async (files: File[], role: string) => {
+    if (!upload) return;
+    for (const f of files) {
+      try {
+        await attachRef(sessionId, { kind: upload.kind, ref: await upload.send(f), role });
+      } catch (e) {
+        showToast((e as Error).message || 'Не удалось загрузить файл', '', 'error');
+      }
+    }
+  };
+
   const addFrom: AddFromItem[] = [
+    ...(upload ? [{ id: 'computer', label: 'С компьютера', hint: upload.hint, run: (at: DOMRect | null) => { menuAt.current = at; fileInput.current?.click(); } }] : []),
     ...(project ? [{ id: 'files', label: 'Из файлов проекта', hint: 'выберите файл в «Файлах» и нажмите «В контекст»', run: () => { revealWorkspacePanel('files'); } }] : []),
     ...(project ? [{ id: 'characters', label: 'Из «Персонажей»', hint: 'ролью «персонаж»', run: () => { revealWorkspacePanel('characters'); } }] : []),
   ];
 
   return (
+    <>
+    {upload && (
+      <input ref={fileInput} type="file" accept={upload.accept} multiple hidden data-ctx-upload=""
+        onChange={e => {
+          const files = [...(e.target.files ?? [])];
+          e.target.value = '';
+          if (!files.length) return;
+          if (upload.roles.length === 1) void addFiles(files, upload.roles[0].role);
+          else setRolePick({ files, at: menuAt.current ?? new DOMRect(window.innerWidth / 2, window.innerHeight / 2, 0, 0) });
+        }} />
+    )}
+    {rolePick && upload && (
+      <Menu anchor={rolePick.at} onClose={() => setRolePick(null)} minWidth={220}>
+        {upload.roles.map(r => (
+          <MenuItem key={r.role} label={r.label} onClick={() => { const { files } = rolePick; setRolePick(null); void addFiles(files, r.role); }} />
+        ))}
+      </Menu>
+    )}
     <ContextPanel
       isMobile={isMobile}
       git={git}
@@ -131,5 +168,6 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
       contained={contained}
       layout={layout}
     />
+    </>
   );
 }

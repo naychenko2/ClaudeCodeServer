@@ -110,6 +110,17 @@ export interface ExecutorListModel {
 // Роль, под которой объект входит референсом в основной (подпись — для меню «В контекст ▾»)
 export interface ContextRole { role: string; label: string }
 
+export interface ContextUpload {
+  // Вид референса, под которым файл встаёт в контекст
+  kind: string;
+  accept: string;
+  hint: string;
+  roles: readonly ContextRole[];
+  send: (file: File) => Promise<Record<string, unknown>>;
+}
+
+export interface ContextNote { label: string; hint: string; clear: () => void }
+
 export interface ContextKindApi {
   // Те же строки, что у бэкенд-провайдера
   kinds: readonly string[];
@@ -129,6 +140,11 @@ export interface ContextKindApi {
   // AcceptedRefs провайдера на бэкенде (он и принимает роль: чужая — 400 role_not_accepted). Пусто —
   // основной такой референс не берёт; одна роль — «В контекст» без вопроса
   refRoles?: (ctx: ContextKindCtx, primary: ChatContextPrimary, candidateKind: string) => readonly ContextRole[];
+  // «С компьютера» в «Добавить из…» панели: файл с диска ложится в рабочую папку вида и встаёт референсом
+  // (`send` возвращает ref). Роли — те же, что у refRoles; null — основной объект файлов не берёт
+  upload?: (ctx: ContextKindCtx, primary: ChatContextPrimary) => ContextUpload | null;
+  // Метка состояния основного объекта в панели кнопок поля (десктоп): «Отмечено: 2 ✕»
+  note?: (ctx: ContextKindCtx, primary: ChatContextPrimary) => ContextNote | null;
   // Вход «＋» композера и empty-state ленты
   create?: { title: string; hint?: string; icon: ReactNode; run: (ctx: ContextKindCtx) => void };
   // Запуск действия: op + params + contextRevision; входы бэкенд читает из стора по ревизии

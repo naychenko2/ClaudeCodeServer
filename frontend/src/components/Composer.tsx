@@ -33,7 +33,7 @@ import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
-import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
+import { Button, Chip, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
 import { plusButtonTitle, useStripShortcuts } from './chat/ComposerStripHost';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
@@ -629,6 +629,9 @@ export function Composer({
     api: turnContext.primary ? getKindApi(turnContext.primary.kind) : null, ctx: kindCtx,
   });
   const actionsOn = surface.surface === 'actions';
+  // Метка вида («Отмечено: 2 ✕») — в панели кнопок поля, только на компьютере: на телефоне место нужно кнопке запуска
+  const kindNote = actionsOn && !isMobile && turnContext.primary
+    ? getKindApi(turnContext.primary.kind)?.note?.(kindCtx, turnContext.primary) ?? null : null;
   // Одна точка запуска с панелью «Контекст»: подпись, цена и run читаются из useActionRun
   const actionRun = useActionRun(contextRowOn ? sessionId : null, kindCtx);
   // Предвыбор вертикали применяет один хост поля, и вне рендера: затравка текста уходит в поле режима
@@ -2714,6 +2717,11 @@ export function Composer({
       {activeMode && !talkActive && !isListening && (
         <div data-composer-mode-bar="" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: `0 ${SP.xxs}px ${SP.xxs}px` }}>
           {modesSeg}
+          {kindNote && (
+            <span data-composer-note="" style={{ display: 'inline-flex', minWidth: 0 }}>
+              <Chip title={kindNote.hint} onRemove={kindNote.clear} maxW={220}>{kindNote.label}</Chip>
+            </span>
+          )}
           <span style={{ flex: 1 }} />
           <span data-composer-send={modeSubmit!.kind === 'empty' ? 'empty' : ''} style={{ display: 'inline-flex', minWidth: 0, flexShrink: 1 }}>
             <Button size="sm" pill variant="primary" disabled={modeSubmit!.disabled}

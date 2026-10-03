@@ -30,7 +30,7 @@ export const EMPTY = {
   footChat: 'В «Чате» запуска нет — сообщение уходит Claude',
 } as const;
 
-export interface AddFromItem { id: string; label: string; hint: string; disabledReason?: string; run: () => void }
+export interface AddFromItem { id: string; label: string; hint: string; disabledReason?: string; run: (anchor: DOMRect | null) => void }
 
 export interface ContextPanelProps {
   isMobile: boolean;
@@ -265,7 +265,7 @@ function PlusSection({ p }: { p: ContextPanelProps }) {
           <MenuHead>Добавить к контексту</MenuHead>
           {p.addFrom.map(it => (
             <MenuItem key={it.id} label={it.label} hint={it.disabledReason ?? it.hint} disabled={!!it.disabledReason}
-              onClick={() => { setRect(null); it.run(); }} />
+              onClick={() => { const at = rect; setRect(null); it.run(at); }} />
           ))}
         </Menu>
       )}

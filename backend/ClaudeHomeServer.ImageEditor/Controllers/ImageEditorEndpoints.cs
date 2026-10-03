@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
@@ -51,7 +52,7 @@ public abstract class ImageEditorEndpoints(
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
         var heavy = config?.GetValue("ImageEditor:HeavyFileMb", DefaultHeavyFileMb) ?? DefaultHeavyFileMb;
         var limits = ImageEditCatalog.DefaultLimits with { HeavyFileMb = heavy > 0 ? heavy : DefaultHeavyFileMb };
-        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits);
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits, PreferLocal());
         // Без растра (подсистема картинок выключена) редактор не работает: ответ остаётся 200,
         // чтобы фронт показал причину, а не общий сбой
         if (jobs is null || raster is null) catalog = catalog with { Reason = ImageEditCatalogReasons.SubsystemDisabled };
@@ -103,8 +104,16 @@ public abstract class ImageEditorEndpoints(
         var place = ImagePlaceKeys.ImageEditor;
         var adminProvider = placeSettings?.ProviderFor(place);
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
-        return ImageExecutorRows.Build(ImageEditCatalog.Build(editors, adminProvider, adminModel), editors, op, hasImage, hasMask);
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, preferLocal: PreferLocal());
+        // Свою видеокарту «Авто» берёт только под операцию, которую она умеет; иначе — как без флага
+        if (PreferLocal() && !ImageExecutorRows.LocalCan(catalog, op, hasImage, hasMask))
+            catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel);
+        return ImageExecutorRows.Build(catalog, editors, op, hasImage, hasMask);
     }
+
+    // Флаг local-media-default владельца (ADR-021 §2): «Авто» сначала пробует локальную модель
+    private bool PreferLocal() =>
+        HttpContext?.RequestServices.GetService<IFeatureFlagGate>()?.IsEnabled(UserId, FeatureFlagKeys.LocalMediaDefault) == true;
 
     protected async Task<IActionResult> StartIn(ImageEditScope scope, StartJobForm form, CancellationToken ct)
     {

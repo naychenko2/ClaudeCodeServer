@@ -16,6 +16,8 @@ public static class ImageEditCatalog
     public static readonly IReadOnlySet<ImageEditOp> OwnModelOps = new HashSet<ImageEditOp> { ImageEditOp.EnhanceFaces };
 
     // Порядок поставщиков в списке и при умолчании «auto»; незнакомый ключ — в конец
+    private const string LocalProviderKey = "local";
+
     public static readonly string[] ProviderOrder = ["fal", "higgsfield", "local"];
 
     public static readonly ImageEditLimitsDto DefaultLimits = new(MaxFileMb: 20, MaxReferences: 6, MaxCount: 4);
@@ -117,7 +119,7 @@ public static class ImageEditCatalog
     // последний намеренно: доступность мигает, и «Авто» с local первым молча уходило бы в облако.
     public static ImageEditCatalogDto Build(
         IEnumerable<IImageEditor> editors, string? adminProvider, string? adminModel,
-        ImageEditLimitsDto? limits = null)
+        ImageEditLimitsDto? limits = null, bool preferLocal = false)
     {
         var providers = Registered(editors).Select(e => Describe(e, IsAvailable(e))).ToList();
 
@@ -134,7 +136,10 @@ public static class ImageEditCatalog
         }
         else
         {
-            def = new ImageEditDefaultDto(providers.FirstOrDefault(p => p.Available)?.Key, AutoModelId);
+            // «Авто» при local-media-default (флаг владельца) идёт на свою видеокарту первой, если она доступна:
+            // облако — только явным выбором. Явный выбор админа сюда не попадает (ветка выше)
+            var local = preferLocal ? providers.FirstOrDefault(p => p.Available && p.Key == LocalProviderKey) : null;
+            def = new ImageEditDefaultDto((local ?? providers.FirstOrDefault(p => p.Available))?.Key, AutoModelId);
         }
 
         var reason = providers.Count == 0 ? ImageEditCatalogReasons.NoProviderConfigured : null;

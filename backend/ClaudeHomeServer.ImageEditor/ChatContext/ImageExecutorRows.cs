@@ -50,6 +50,13 @@ public static class ImageExecutorRows
         return rows;
     }
 
+    // Умеет ли своя видеокарта эту операцию (хоть одна её модель без причины отказа): «Авто» при
+    // local-media-default уходит в облако только когда локальной не по силам
+    public static bool LocalCan(ImageEditCatalogDto catalog, ImageEditOp op, bool hasImage, bool hasMask) =>
+        catalog.Providers.Where(p => OnOwnGpu(p) && p.Available)
+            .SelectMany(p => p.Models)
+            .Any(m => m.Id != ImageEditCatalog.AutoModelId && BlockReason(m, op, hasImage, hasMask).Length == 0);
+
     private static bool OnOwnGpu(ImageEditProviderDto pv) => pv.PriceUnit == ImageEditPriceUnits.Free;
 
     private static string Name(ImageEditProviderDto pv, ImageEditModelDto m) =>

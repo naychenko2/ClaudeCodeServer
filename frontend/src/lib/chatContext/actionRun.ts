@@ -5,7 +5,7 @@
 
 import { withThumb } from './thumbs';
 import { isReported } from './errors';
-import { baseName } from './labels';
+import { runObjectSuffix } from './labels';
 import { clearRunCarry, noteRunStarted, objectKey, resolveAction } from './actionMemory';
 import { acceptConflict } from './store';
 import { showToast } from '../toast';
@@ -114,11 +114,11 @@ export const questionValue = (action: ContextAction, values: Readonly<Record<str
 // «параметры · цена» (не ужимается никогда). Хвост несёт свой разделитель
 export function runLabelParts(o: {
   action: ContextAction | null; params: readonly LaunchParam[]; price: string | null; mobile: boolean;
-  state: RunState; progress: number | null; objectName?: string | null;
+  state: RunState; progress: number | null; objectLabel?: string | null;
 }): { name: string; tail: string } {
   if (!o.action) return { name: '', tail: '' };
   if (o.state === 'running') {
-    const what = o.action.verb ? `${o.action.verb}${o.objectName ? ` ${o.objectName}` : ''}` : o.action.label;
+    const what = o.action.verb ? `${o.action.verb}${runObjectSuffix(o.action.verb, o.objectLabel)}` : o.action.label;
     return { name: `✦ ${what}…`, tail: o.progress === null ? '' : ` ${Math.round(o.progress * 100)} %` };
   }
   const parts: string[] = [];
@@ -263,7 +263,7 @@ export function buildActionRun(o: {
   const salt = api.priceSalt?.(ctx, action.id);
   const req: QuoteRequest = { op: action.op ?? action.id, text: e.text, params: lp, contextRevision: revision, ...(salt ? { salt } : null) };
   const price = e.quote?.key === quoteKey(req) ? e.quote.value : null;
-  const labelIn = { action, params, price: price?.price ?? null, mobile: ctx.isMobile, state: e.state, progress: e.progress, objectName: baseName(primary.label) };
+  const labelIn = { action, params, price: price?.price ?? null, mobile: ctx.isMobile, state: e.state, progress: e.progress, objectLabel: primary.label };
   return {
     action,
     scope,

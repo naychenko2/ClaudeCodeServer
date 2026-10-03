@@ -8,8 +8,15 @@ const edit: ContextAction = { id: 'edit', kind: 'run', label: 'Изменить'
 const base = { action: edit, params: [], price: null, mobile: false, state: 'running' as const, progress: 0.4 };
 
 describe('подпись хода и прогресс', () => {
-  it('во время хода: глагол, имя объекта без папки и процент', () => {
-    expect(runLabelParts({ ...base, objectName: baseName('img/hero.png') })).toEqual({ name: '✦ Изменяем hero.png…', tail: ' 40 %' });
+  it('во время хода: глагол, имя объекта без папки через двоеточие и процент', () => {
+    expect(runLabelParts({ ...base, objectLabel: 'img/hero.png' })).toEqual({ name: '✦ Изменяем: hero.png…', tail: ' 40 %' });
+  });
+
+  it('безымянный черновик — без имени, глагол с предлогом — имя через пробел', () => {
+    expect(runLabelParts({ ...base, objectLabel: 'Новая картинка · черновик' }).name).toBe('✦ Изменяем…');
+    expect(runLabelParts({ ...base, objectLabel: 'Новый звук · черновик', action: { ...edit, verb: 'Пишем песню' } }).name).toBe('✦ Пишем песню…');
+    expect(runLabelParts({ ...base, objectLabel: 'img/hero.png', action: { ...edit, verb: 'Убираем фон у' } }).name).toBe('✦ Убираем фон у hero.png…');
+    expect(runLabelParts({ ...base, objectLabel: 'Сцена 1 · черновик' }).name).toBe('✦ Изменяем: Сцена 1…');
   });
 
   it('без глагола — имя действия', () => {

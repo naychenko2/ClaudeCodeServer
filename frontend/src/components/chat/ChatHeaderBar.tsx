@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronRight } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronRight, Sparkles } from 'lucide-react';
+import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -1762,6 +1763,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           },
         };
       }),
+      // Запасной вход в AI-палитру на телефоне: ⌘K там нет, а круглешок прячется, когда
+      // композер растянут во весь экран и места ему не осталось (placeFab, hidden)
+      ...(isMobile ? [{
+        key: 'ai-hub', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'AI-действия',
+        onClick: () => window.dispatchEvent(new Event(OPEN_AI_EVENT)),
+      }] : []),
       ...badgeItems,
     ] as OverflowItem[]}
       // Триггер-обёртка фиксирует свой rect в ref: теги/срок из меню откроются

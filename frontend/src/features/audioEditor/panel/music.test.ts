@@ -11,7 +11,11 @@ const store = new Map<string, string>();
   length: 0,
 } as Storage;
 const dispatched: Event[] = [];
-(globalThis as unknown as { window: Pick<Window, 'dispatchEvent'> }).window = { dispatchEvent: (e: Event) => { dispatched.push(e); return true; } };
+// matchMedia — для useIsMobile в Opt (тач-высота карточек-опций)
+(globalThis as unknown as { window: Pick<Window, 'dispatchEvent' | 'matchMedia'> }).window = {
+  dispatchEvent: (e: Event) => { dispatched.push(e); return true; },
+  matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }) as unknown as MediaQueryList,
+};
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';

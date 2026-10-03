@@ -192,6 +192,44 @@ public sealed class AudioContextRefsTests : IDisposable
     }
 
     [Fact]
+    public void PriceText_запуск_fal_показывается_в_usd_а_не_сырым_run()
+    {
+        AudioContextKind.PriceText(new AudioPriceHint(0.1, AudioPriceUnits.Run, "run")).Should().Be("$0.1 / запуск");
+    }
+
+    [Fact]
+    public void PriceText_ни_одна_цена_каталога_fal_не_содержит_сырых_единиц()
+    {
+        var texts = AudioCatalog.Fal.Where(m => m.Info.PriceHint is not null)
+            .Select(m => (m.Info.Id, Text: AudioContextKind.PriceText(m.Info.PriceHint!))).ToList();
+
+        texts.Should().NotBeEmpty();
+        foreach (var (id, text) in texts)
+            text.Should().NotMatchRegex(@"\b(run|chars|sec|min)\b", $"модель {id}");
+    }
+
+    [Fact]
+    public void DescribeExecutor_настройки_нити_главнее_префов_режима()
+    {
+        var local = AudioCatalog.Local[0].Info;
+        var fal = new AudioModelInfo("tts-chars", "TTS", local.Caps, new AudioPriceHint(0.00009, AudioPriceUnits.Chars, "char"));
+        var localEngine = new Mock<IAudioEngine>();
+        localEngine.SetupGet(e => e.Key).Returns("local");
+        localEngine.SetupGet(e => e.Label).Returns("Локально");
+        localEngine.SetupGet(e => e.Models).Returns([local]);
+        var falEngine = new Mock<IAudioEngine>();
+        falEngine.SetupGet(e => e.Key).Returns("fal");
+        falEngine.SetupGet(e => e.Label).Returns("fal");
+        falEngine.SetupGet(e => e.Models).Returns([fal]);
+        var prefs = new AudioPrefsService(new AudioPrefsStore(Path.Combine(_root, "prefs")));
+        prefs.Save(Owner, AudioEditScope.Of(_session), AudioModes.Voice, new AudioModePrefs("speak", "local", local.Id, null, null));
+        var kind = new AudioContextKind(_threads, [localEngine.Object, falEngine.Object], prefs);
+        var id = NewThread(new AudioThreadSettings(AudioModes.Voice, "speak", "fal", "tts-chars", null));
+
+        kind.DescribeExecutor(Scope, Primary(id)).Should().Be("fal · TTS · $0.09 / 1000 симв.");
+    }
+
+    [Fact]
     public void Основным_бывает_только_звук()
     {
         var kind = Kind();

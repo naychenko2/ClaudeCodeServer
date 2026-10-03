@@ -121,12 +121,12 @@ public sealed class AudioContextKind(
         return string.Join(" · ", parts);
     }
 
-    // У fal Unit — единица тарификации (chars|sec|min), валюта подразумевается usd; у остальных поставщиков
-    // Unit — сама валюта. Символы пересчитываются на 1000: «$0.09 / 1000 симв.» вместо «$0.00009 / симв.»
+    // AudioPriceHint создают только fal и локальный каталог (free). У fal Unit — единица тарификации
+    // (chars|sec|min|run), валюта подразумевается usd; у free Unit — «free». Символы пересчитываются на 1000: «$0.09 / 1000 симв.» вместо «$0.00009 / симв.»
     internal static string PriceText(AudioPriceHint price) => price.Unit switch
     {
         AudioPriceUnits.Chars => ContextPriceText.Format(price.Amount * 1000, AudioPriceUnits.Usd, "1000 симв."),
-        AudioPriceUnits.Sec or AudioPriceUnits.Min => ContextPriceText.Format(price.Amount, AudioPriceUnits.Usd, price.Unit),
+        AudioPriceUnits.Sec or AudioPriceUnits.Min or AudioPriceUnits.Run => ContextPriceText.Format(price.Amount, AudioPriceUnits.Usd, price.Unit),
         _ => ContextPriceText.Format(price.Amount, price.Unit, price.Per),
     };
 

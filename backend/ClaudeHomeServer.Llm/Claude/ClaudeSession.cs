@@ -782,7 +782,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
     internal static bool IsVideoEditorAutoAllowed(VideoEditorMcpContext? context, string toolName) =>
         context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
-    // MCP-сервер «Контекст чата»: null — флаг composer-context-row выключен или тулсета нет в реестре (ADR-023 §3.2)
+    // MCP-сервер «Контекст чата»: null — тулсета нет в реестре (ADR-023 §3.2)
     private readonly TurnContextMcpContext? _turnContextMcp;
     private bool TurnContextHttpOn() => _turnContextMcp is { UseHttp: true } && HttpMcpOnNow();
 

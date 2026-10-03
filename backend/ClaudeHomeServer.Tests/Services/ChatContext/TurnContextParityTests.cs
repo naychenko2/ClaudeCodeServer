@@ -22,7 +22,6 @@ public sealed class TurnContextParityTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "turn-ctx-" + Guid.NewGuid().ToString("N"));
     private readonly ChatContextStore _store;
     private readonly ContextKindRegistry _registry;
-    private readonly Flag _flag = new();
     private readonly Session _session = new() { Id = Chat, OwnerId = Owner };
 
     public TurnContextParityTests()
@@ -34,12 +33,6 @@ public sealed class TurnContextParityTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
-    }
-
-    private sealed class Flag : IFeatureFlagGate
-    {
-        public bool On { get; set; } = true;
-        public bool IsEnabled(string userId, string key) => On && key == FeatureFlagKeys.ComposerContextRow;
     }
 
     // Подписи с «неудобными» символами: форматирование в хвосте сломало бы совпадение
@@ -74,7 +67,7 @@ public sealed class TurnContextParityTests : IDisposable
     {
         var projects = new Mock<IProjectManager>();
         var services = new ServiceCollection().AddSingleton<IChatContextStore>(_store).BuildServiceProvider();
-        return new TurnContextContributor(services, _registry, _flag, projects.Object);
+        return new TurnContextContributor(services, _registry, projects.Object);
     }
 
     private PromptSessionContext Ctx(string? rootPath = null) => new(_session, Owner, null, rootPath ?? _root);
@@ -160,7 +153,7 @@ public sealed class TurnContextParityTests : IDisposable
         store.AddRef(Owner, Chat, Item("audio", new JsonObject { ["threadId"] = "a1" }, null, ContextActor.Human), null);
         var projects = new Mock<IProjectManager>();
         var services = new ServiceCollection().AddSingleton<IChatContextStore>(store).BuildServiceProvider();
-        var contributor = new TurnContextContributor(services, _registry, _flag, projects.Object);
+        var contributor = new TurnContextContributor(services, _registry, projects.Object);
 
         var tail = (await contributor.BuildAsync(Ctx(), "привет"))!.Sections.Single().Text;
 
@@ -205,15 +198,6 @@ public sealed class TurnContextParityTests : IDisposable
         Contributor().IsEnabled(ctx).Should().BeFalse("контекст пуст и корень не git-репозиторий");
         Directory.CreateDirectory(Path.Combine(_root, ".git"));
         Contributor().IsEnabled(ctx).Should().BeTrue("проект с git получает хотя бы «Где»");
-    }
-
-    [Fact]
-    public void Без_флага_секции_нет()
-    {
-        Fill();
-        _flag.On = false;
-
-        Contributor().IsEnabled(Ctx()).Should().BeFalse();
     }
 
     [Fact]

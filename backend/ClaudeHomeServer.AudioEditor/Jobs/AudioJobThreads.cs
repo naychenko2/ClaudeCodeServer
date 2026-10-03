@@ -35,8 +35,8 @@ public sealed class AudioJobThreads(
 
     public AudioThreadStore Store => store;
 
-    // Состояние для DTO (ручка GET, ответы мутаций, событие): при флаге строки контекста фокус — проекция из
-    // контекста чата (основной объект своего вида), без флага — собственное поле. Читатели хода (хвост, MCP)
+    // Состояние для DTO (ручка GET, ответы мутаций, событие): фокус — проекция из
+    // контекста чата (основной объект своего вида). Читатели хода (хвост, MCP)
     // берут хранилище напрямую и проекции не видят
     public AudioThreadsState View(string ownerId, string sessionId) => Project(ownerId, sessionId, store.Get(ownerId, sessionId));
 
@@ -48,7 +48,7 @@ public sealed class AudioJobThreads(
         return focus == state.Focus ? state : state with { Focus = focus };
     }
 
-    // Запись, которая может сменить фокус: смена попадает в стор контекста (при флаге)
+    // Запись, которая может сменить фокус: смена попадает в стор контекста
     public AudioThreadWrite Tracked(string ownerId, string sessionId, Func<AudioThreadWrite> write, ContextActor by)
     {
         var before = store.Get(ownerId, sessionId).Focus;

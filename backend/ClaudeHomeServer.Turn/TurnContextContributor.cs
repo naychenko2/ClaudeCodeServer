@@ -13,8 +13,8 @@ namespace ClaudeHomeServer.Services.Turn;
 // видит в строке контекста. Единственная точка сборки: подписи «С чем» и «Плюс» берутся из того же
 // ChatContextDto, что отдают ручки (его строит ChatContextDtoBuilder поверх Describe провайдера
 // владельца), «Чем» — DescribeExecutor. Секция сама свои подписи не форматирует — она вставляет label
-// как есть; это держит TurnContextParityTests. Вертикальные блоки (image-editor-state и др.) при
-// флаге худеют и строк «В работе» / «Выбор человека» не повторяют.
+// как есть; это держит TurnContextParityTests. Вертикальные блоки (image-editor-state и др.)
+// худеют и строк «В работе» / «Выбор человека» не повторяют.
 //
 // Едет хвостом хода всегда (InTurnTail): в системный блок не попадает, неизменный контекст в ход не
 // повторяется хешем хвоста. «Где» — ветка без числа изменений: оно меняется каждый ход и раздувало бы хвост.
@@ -26,7 +26,6 @@ namespace ClaudeHomeServer.Services.Turn;
 public sealed class TurnContextContributor(
     IServiceProvider services,
     ContextKindRegistry registry,
-    IFeatureFlagGate flags,
     IProjectManager projects) : IPromptSectionContributor
 {
     public const string SectionKey = "turn-context";
@@ -55,7 +54,6 @@ public sealed class TurnContextContributor(
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.OwnerId is { Length: > 0 } ownerId
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow)
         && sessionContext.ServerContent
         && (HasContext(ownerId, sessionContext.Session) || HasGit(sessionContext.RootPath));
 

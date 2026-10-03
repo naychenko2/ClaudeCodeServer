@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Turn;
@@ -26,7 +25,6 @@ namespace ClaudeHomeServer.Services.VideoEditor.Chats;
 public sealed class VideoEditorStateContributor(
     IFeatureFlagGate flags,
     VideoThreadStore? threads = null,
-    VideoPrefsService? prefs = null,
     FilmSideStore? side = null,
     IConfiguration? config = null) : IPromptSectionContributor
 {
@@ -54,9 +52,8 @@ public sealed class VideoEditorStateContributor(
         var scope = VideoEditScope.Of(session);
         var (state, fresh) = threads?.TakeForTurn(ownerId, session.Id) ?? (VideoThreadsState.Empty, []);
         var spent = SpentOf(ownerId, scope, state);
-        // При строке контекста «В работе», «Открыт фильм» и «Выбор человека» отдаёт хвост «Контекст хода»
-        var row = flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
-        var block = Render(state, fresh, prefs?.Get(ownerId, scope), spent, _agentLaunch, scope.IsPersonal, row);
+        // «В работе», «Открыт фильм» и «Выбор человека» отдаёт хвост «Контекст хода»
+        var block = Render(state, fresh, spent, _agentLaunch, scope.IsPersonal);
         if (block is null) return Task.FromResult<PromptSectionContribution?>(null);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, block, Title, InTurnTail: true)]));
@@ -81,30 +78,10 @@ public sealed class VideoEditorStateContributor(
             spends.Values.Sum(s => s.LocalSeconds));
     }
 
-    // null — блок пуст: при строке контекста без video_shoot, журнала и трат не остаётся ни одной строки
-    public static string? Render(VideoThreadsState state, IReadOnlyList<VideoThreadEvent> fresh, VideoPrefsDto? prefs,
-        VideoSpentDto? spent, bool agentLaunch, bool personal, bool contextRow = false)
-    {
-        if (contextRow) return RenderRow(state, fresh, spent, agentLaunch, personal);
-        var sb = new StringBuilder();
-        sb.AppendLine("## Видео в этом чате");
-        sb.AppendLine(FocusText(state));
-        if (state.Focus.FilmPath is { } film)
-            sb.AppendLine($"Открыт фильм: {film}" + (spent is null ? "" : " · Потрачено на фильм: " + SpentText(spent)));
-        sb.AppendLine(ChoiceText(prefs));
-        if (agentLaunch) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
-        if (agentLaunch) sb.AppendLine(PaceRule);
-        if (fresh.Count > 0)
-        {
-            sb.AppendLine("С прошлого сообщения:");
-            foreach (var e in fresh) sb.AppendLine("- " + e.Text);
-        }
-        return sb.ToString().TrimEnd();
-    }
-
-    // Строка контекста: что в работе и какой выбор человека — в блоке «Контекст хода»; остаются траты открытого
-    // фильма (больше их нигде нет), правила приоритета и темпа и журнал «с прошлого сообщения»
-    private static string? RenderRow(VideoThreadsState state, IReadOnlyList<VideoThreadEvent> fresh, VideoSpentDto? spent,
+    // null — блок пуст: без video_shoot, журнала и трат не остаётся ни одной строки. Что в работе и какой выбор
+    // человека — в блоке «Контекст хода»; остаются траты открытого фильма (больше их нигде нет), правила
+    // приоритета и темпа и журнал «с прошлого сообщения»
+    public static string? Render(VideoThreadsState state, IReadOnlyList<VideoThreadEvent> fresh, VideoSpentDto? spent,
         bool agentLaunch, bool personal)
     {
         var lines = new List<string>();
@@ -123,17 +100,6 @@ public sealed class VideoEditorStateContributor(
         return lines.Count == 0 ? null : "## Видео в этом чате\n" + string.Join("\n", lines);
     }
 
-    // «В работе: сцена sc1 «Сцена 1» · версия 2 (остался с прошлых сообщений…)» — без списка сцен: его отдаёт video_state
-    private static string FocusText(VideoThreadsState state)
-    {
-        if (state.Scenes.FirstOrDefault(s => s.SceneId == state.Focus.SceneId) is not { } s)
-            return "В работе: ничего не выбрано";
-        var version = s.Versions.FirstOrDefault(v => v.VersionId == s.CurrentVersionId) is { } cv ? $" · версия {cv.Number}" : " · ещё не снята";
-        var running = s.Launches.Any(l => l.Status == VideoLaunchStatus.Running) ? " · идёт съёмка" : "";
-        return $"В работе: сцена {s.SceneId} «{s.Name}»{version}{running} (остался с прошлых сообщений и не обязывает его продолжать). "
-            + $"Сцен в чате: {state.Scenes.Count}";
-    }
-
     public static string SpentText(VideoSpentDto spent)
     {
         var parts = new List<string>();
@@ -141,17 +107,6 @@ public sealed class VideoEditorStateContributor(
         if (spent.Credits > 0) parts.Add(spent.Credits.ToString("0.##", CultureInfo.InvariantCulture) + " кредитов");
         if (spent.GpuSeconds > 0) parts.Add(spent.GpuSeconds.ToString("0", CultureInfo.InvariantCulture) + " GPU-с");
         return parts.Count == 0 ? "0" : string.Join(" + ", parts);
-    }
-
-    // «Выбор человека в «Видео»: поставщик fal, модель по умолчанию, 5 с»
-    public static string ChoiceText(VideoPrefsDto? prefs)
-    {
-        if (prefs is null or { Provider: null, Model: null, DurationSec: null, Count: null })
-            return "Выбор человека в «Видео»: по умолчанию";
-        var parts = new List<string> { $"поставщик {prefs.Provider ?? "по умолчанию"}", $"модель {prefs.Model ?? "по умолчанию"}" };
-        if (prefs.DurationSec is { } d) parts.Add($"{d} с");
-        if (prefs.Count is { } c) parts.Add($"вариантов {c}");
-        return "Выбор человека в «Видео»: " + string.Join(", ", parts);
     }
 
     // Общая часть правила приоритета для проекта и личного чата

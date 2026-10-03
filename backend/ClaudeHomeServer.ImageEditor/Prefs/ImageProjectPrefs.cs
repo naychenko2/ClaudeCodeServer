@@ -189,8 +189,8 @@ public sealed class ImageProjectPrefsService(
     public Task<ImageProjectPrefs> SetAsync(string ownerId, Project project, ImageProjectPrefs prefs) =>
         SetAsync(ownerId, ImageEditScope.Of(project), prefs);
 
-    // У личной области персонаж принудительно null: папки characters/ у неё нет.
-    // Запись сливается с сохранённым: нет Create/Edit в теле (старый фронт, другая вкладка) —
+    // Персонаж в префы больше не пишется (он ref контекста чата, ADR-023): в теле игнорируется, а то, что
+    // записано в старом файле, остаётся как есть. Запись сливается с сохранённым: нет Create/Edit в теле (старый фронт, другая вкладка) —
     // выбор режима остаётся прежним; присланный режим заменяется целиком
     public async Task<ImageProjectPrefs> SetAsync(string ownerId, ImageEditScope scope, ImageProjectPrefs prefs)
     {
@@ -198,7 +198,7 @@ public sealed class ImageProjectPrefsService(
         {
             Provider = Blank(prefs.Provider),
             Model = Blank(prefs.Model),
-            CharacterSlug = scope.Project is null ? null : Blank(prefs.CharacterSlug),
+            CharacterSlug = saved.CharacterSlug,
             Create = prefs.Create is { } create
                 ? create with { Provider = Blank(create.Provider), Model = Blank(create.Model) }
                 : saved.Create,

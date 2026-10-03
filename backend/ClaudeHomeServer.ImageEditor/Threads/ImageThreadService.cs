@@ -62,8 +62,8 @@ public sealed class ImageThreadService(
 
     public ImageThreadsState Get(string ownerId, string sessionId) => store.Get(ownerId, sessionId);
 
-    // Состояние для DTO (ручка GET и событие): при флаге строки контекста фокус — проекция из контекста
-    // чата (основной объект своего вида), без флага — собственное поле. Читатели хода (хвост, MCP) берут
+    // Состояние для DTO (ручка GET и событие): фокус — проекция из контекста чата
+    // (основной объект своего вида). Читатели хода (хвост, MCP) берут
     // хранилище напрямую и проекции не видят
     public ImageThreadsState View(string ownerId, string sessionId) => Project(ownerId, sessionId, store.Get(ownerId, sessionId));
 
@@ -75,7 +75,7 @@ public sealed class ImageThreadService(
         return focus == state.Focus ? state : state with { Focus = focus };
     }
 
-    // Запись, которая может сменить фокус: смена попадает в стор контекста (при флаге)
+    // Запись, которая может сменить фокус: смена попадает в стор контекста
     private ImageThreadWrite Tracked(string ownerId, string sessionId, Func<ImageThreadWrite> write, ContextActor by)
     {
         var before = store.Get(ownerId, sessionId).Focus;
@@ -85,7 +85,7 @@ public sealed class ImageThreadService(
         return written;
     }
 
-    // Усыновление открывает нить с фокусом и возвращает выбор человека; в контекст чата (при флаге) идёт только
+    // Усыновление открывает нить с фокусом и возвращает выбор человека; в контекст чата идёт только
     // итоговая разница: вернули прежний фокус — контекст не трогаем, остался на усыновлённой — отражаем
     private void SyncNetFocus(string ownerId, string sessionId, string? before, string? after) =>
         mirror?.Sync(ownerId, sessionId, ChatContext.ImageContextKind.Kind, before, after, ContextActor.Agent);

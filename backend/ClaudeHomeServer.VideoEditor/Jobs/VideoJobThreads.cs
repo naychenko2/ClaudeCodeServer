@@ -23,9 +23,8 @@ public sealed class VideoJobThreads(
 {
     public VideoThreadStore Store => store;
 
-    // Нити для DTO (ручки, ответы мутаций, событие): при флаге строки контекста составной фокус «Видео»
-    // распадается — сцена и фильм берутся из основного объекта контекста чата (по одному), без флага — собственное
-    // поле. Читатели хода (хвост, MCP) берут хранилище напрямую и проекции не видят
+    // Нити для DTO (ручки, ответы мутаций, событие): составной фокус «Видео» распадается —
+    // сцена и фильм берутся из основного объекта контекста чата (по одному). Читатели хода (хвост, MCP) берут хранилище напрямую и проекции не видят
     public VideoThreadsStateDto Dto(string ownerId, string sessionId, VideoThreadsState state)
     {
         if (mirror is null) return state.ToDto();
@@ -38,7 +37,7 @@ public sealed class VideoJobThreads(
 
     public VideoThreadsStateDto View(string ownerId, string sessionId) => Dto(ownerId, sessionId, store.Get(ownerId, sessionId));
 
-    // Запись, которая может сменить фокус: смена попадает в стор контекста (при флаге). Основным становится
+    // Запись, которая может сменить фокус: смена попадает в стор контекста. Основным становится
     // выбранное последним: фильм обрабатывается раньше сцены, поэтому при смене обоих разом выигрывает сцена
     public VideoThreadWrite Tracked(string ownerId, string sessionId, Func<VideoThreadWrite> write, ContextActor by)
     {

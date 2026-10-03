@@ -338,7 +338,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
                 .AddSingleton(store.Object).BuildServiceProvider(),
             new ClaudeHomeServer.Services.ChatContext.ContextKindRegistry(
                 [new ClaudeHomeServer.Services.ChatContext.ProjectFileContextKind()]),
-            new ContextRowFlag(), new Moq.Mock<ClaudeHomeServer.Services.IProjectManager>().Object);
+            new Moq.Mock<ClaudeHomeServer.Services.IProjectManager>().Object);
         return RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
             bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
             new Session { Model = "qwen-test-27b", OwnerId = "u1" });
@@ -371,7 +371,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         sections.Where(s => s.Kind == "turn").Select(s => s.Key).Should().ContainInOrder(
             "image-editor-state", "local-media-default");
         sections.Single(s => s.Key == "local-media-default").Text
-            .Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule);
+            .Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ForContextRow(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule));
     }
 
     // Проводка контекста секции (находки A и B финального ревью 33571541): поля HasLocalMediaMcp,
@@ -412,7 +412,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         var section = await LocalMediaDefaultSectionAsync(ProjectChat(), c => c with { LocalMediaMcp = LocalMediaMcp });
 
         section.Should().NotBeNull("local-media доехал до хода — проектный вариант правила обязан прийти хвостом");
-        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ProjectRule);
+        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ForContextRow(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ProjectRule));
     }
 
     [Fact]
@@ -446,7 +446,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         var section = await LocalMediaDefaultSectionAsync(PersonalChat(), c => c with { ImageEditorMcp = ImageEditorMcp });
 
         section.Should().NotBeNull("сервер редактора доехал до хода — личный вариант правила обязан прийти");
-        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule);
+        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ForContextRow(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule));
     }
 
     [Theory]
@@ -486,7 +486,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
 
         section.Should().NotBeNull("сервер audio-editor доехал до хода — блок «Звук» обязан прийти");
         section!.Kind.Should().Be("turn", "блок едет вклейкой в текст хода");
-        section.Text.Should().Contain(ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor.PriorityRule);
+        section.Text.Should().Contain(ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor.PriorityRuleFor(personal: false));
         systemPrompt.Should().NotContain("## Звук в этом чате",
             "блок меняется от хода к ходу и в системный блок не попадает ни при какой настройке провайдера");
     }
@@ -546,15 +546,9 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         section.Should().BeNull($"{why}: video_* у хода нет («No such tool available»)");
     }
 
-    // Все флаги, кроме строки контекста: тексты без неё должны быть прежними
     private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {
-        public bool IsEnabled(string userId, string key) => key != FeatureFlagKeys.ComposerContextRow;
-    }
-
-    private sealed class ContextRowFlag : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
-    {
-        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.ComposerContextRow;
+        public bool IsEnabled(string userId, string key) => true;
     }
 
     private async Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTailTurnAsync(

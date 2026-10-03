@@ -127,6 +127,21 @@ public class FeatureFlagServiceTests : IDisposable
         effective.Keys.Should().BeEquivalentTo(FeatureFlagCatalog.All.Select(f => f.Key));
     }
 
+    [Fact]
+    public void ОверрайдСнятогоФлага_ВUsersJson_ПереживаетПерезагрузкуИНеЛомаетЧтение()
+    {
+        // composer-context-row снят из каталога 2026-10-03, но ключ остался в data/users.json у людей
+        _users.SetFeatureFlag(_userId, "composer-context-row", true);
+        FeatureFlagCatalog.Exists("composer-context-row").Should().BeFalse();
+
+        var reloaded = new FeatureFlagService(CreateUserStore());
+        var effective = reloaded.GetEffective(_userId);
+
+        effective.Should().NotContainKey("composer-context-row");
+        effective.Keys.Should().BeEquivalentTo(FeatureFlagCatalog.All.Select(f => f.Key));
+        reloaded.IsEnabled(_userId, "composer-context-row").Should().BeFalse("снятый ключ никого не включает");
+    }
+
     // --- GetDefinitions ---
 
     [Fact]

@@ -130,7 +130,7 @@ public class LocalMediaDefaultContributorTests
 
         section.Key.Should().Be("local-media-default");
         section.InTurnTail.Should().BeTrue("правило едет хвостом хода и в системный блок не попадает");
-        section.Text.Should().Be(LocalMediaDefaultContributor.ProjectRule);
+        section.Text.Should().Be(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.ProjectRule));
         section.Text.Should().Contain("рисую локально (бесплатно), ≈N с; нужно облако — скажи")
             .And.Contain("local_text_to_video").And.Contain("local_generate_image")
             .And.Contain("если стоит «по умолчанию» — image_generate передавай с provider local")
@@ -143,7 +143,7 @@ public class LocalMediaDefaultContributorTests
         var section = (await Contributor().BuildAsync(Personal(), "нарисуй кота"))!.Sections.Should().ContainSingle().Subject;
 
         section.InTurnTail.Should().BeTrue();
-        section.Text.Should().Be(LocalMediaDefaultContributor.PersonalRule);
+        section.Text.Should().Be(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.PersonalRule));
         section.Text.Should().Contain(LocalMediaDefaultContributor.PersonalNoVideoRule)
             .And.Contain("рисую локально (бесплатно), ≈N с; нужно облако — скажи")
             .And.Contain("если стоит «по умолчанию» или блока нет — image_generate передавай с provider local")
@@ -171,24 +171,10 @@ public class LocalMediaDefaultContributorTests
     // Внутри варианта текст не зависит от хода: иначе хвост гонял бы разный текст
     // ── Строка контекста (ADR-023 §3.1, 2б-2): выбор человека виден в «Чем» контекста хода, полос больше нет ──
 
-    private static readonly string[] AllFlagsWithRow = [.. AllFlags, FeatureFlagKeys.ComposerContextRow];
-
     [Fact]
-    public async Task Без_флага_строки_контекста_тексты_всех_вариантов_прежние_байт_в_байт()
+    public async Task Ни_один_вариант_не_ссылается_на_полосы()
     {
-        (await Contributor().BuildAsync(Project(), "x"))!.Sections[0].Text.Should().Be(LocalMediaDefaultContributor.ProjectRule);
-        (await Contributor().BuildAsync(Personal(), "x"))!.Sections[0].Text.Should().Be(LocalMediaDefaultContributor.PersonalRule);
-        (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true), "x"))!.Sections[0].Text
-            .Should().Be(LocalMediaDefaultContributor.ProjectRuleWithAudioEditor);
-        (await Contributor().BuildAsync(Personal(hasAudioEditorMcp: true), "x"))!.Sections[0].Text
-            .Should().Be(LocalMediaDefaultContributor.PersonalRuleWithAudioEditor);
-        LocalMediaDefaultContributor.ProjectRule.Should().Contain("полосе «Картинки»");
-    }
-
-    [Fact]
-    public async Task При_строке_контекста_ни_один_вариант_не_ссылается_на_полосы()
-    {
-        var contributor = Contributor(flags: AllFlagsWithRow);
+        var contributor = Contributor();
         var texts = new[]
         {
             await contributor.BuildAsync(Project(), "x"),
@@ -245,11 +231,11 @@ public class LocalMediaDefaultContributorTests
     {
         var text = (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true), "озвучь"))!.Sections[0].Text;
 
-        text.Should().Be(LocalMediaDefaultContributor.ProjectRuleWithAudioEditor)
+        text.Should().Be(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.ProjectRuleWithAudioEditor))
             .And.Contain("audio_generate передавай с provider local")
             .And.Contain("Прямые local_* для звука — только если человек явно попросил сделать напрямую")
             .And.NotContain("озвучка — local_speech");
-        text.Should().StartWith(LocalMediaDefaultContributor.ProjectRule[..LocalMediaDefaultContributor.ProjectRule.IndexOf("Звук и музыка", StringComparison.Ordinal)],
+        text.Should().StartWith(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.ProjectRule)[..LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.ProjectRule).IndexOf("Звук и музыка", StringComparison.Ordinal)],
             "картинки и видео модуль звука не трогает");
     }
 
@@ -258,7 +244,7 @@ public class LocalMediaDefaultContributorTests
     {
         var text = (await Contributor().BuildAsync(Personal(hasAudioEditorMcp: true), "озвучь"))!.Sections[0].Text;
 
-        text.Should().Be(LocalMediaDefaultContributor.PersonalRuleWithAudioEditor)
+        text.Should().Be(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.PersonalRuleWithAudioEditor))
             .And.Contain("локальных моделей в этом чате нет").And.Contain("audio_generate")
             .And.NotContain("Прямые local_*", "в личной области локального звука нет вовсе");
     }
@@ -279,9 +265,9 @@ public class LocalMediaDefaultContributorTests
         var audio = why != "сервер не доставлен";
 
         (await contributor.BuildAsync(Project(hasAudioEditorMcp: audio), null))!.Sections[0].Text
-            .Should().Be(LocalMediaDefaultContributor.ProjectRule, why);
+            .Should().Be(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.ProjectRule), why);
         (await contributor.BuildAsync(Personal(hasAudioEditorMcp: audio), null))!.Sections[0].Text
-            .Should().Be(LocalMediaDefaultContributor.PersonalRule, why);
+            .Should().Be(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.PersonalRule), why);
     }
 
     // ── Модуль «Видео» (ADR-022 §5): видео — через video_*, прямые local_*_to_video только по прямой просьбе ──
@@ -313,7 +299,8 @@ public class LocalMediaDefaultContributorTests
     {
         var text = (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true, hasVideoEditorMcp: true), null))!.Sections[0].Text;
 
-        text.Should().Contain(LocalMediaDefaultContributor.ProjectVideoEditorRule).And.Contain(LocalMediaDefaultContributor.ProjectAudioEditorRule);
+        text.Should().Contain(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.ProjectVideoEditorRule))
+            .And.Contain(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.ProjectAudioEditorRule));
     }
 
     // Без доставленного сервера, без флага модуля или без video_shoot — прежние варианты
@@ -332,8 +319,8 @@ public class LocalMediaDefaultContributorTests
         var video = why != "сервер не доставлен";
 
         (await contributor.BuildAsync(Project(hasVideoEditorMcp: video), null))!.Sections[0].Text
-            .Should().Be(LocalMediaDefaultContributor.ProjectRule, why);
+            .Should().Be(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.ProjectRule), why);
         (await contributor.BuildAsync(Personal(hasVideoEditorMcp: video), null))!.Sections[0].Text
-            .Should().Be(LocalMediaDefaultContributor.PersonalRule, why);
+            .Should().Be(LocalMediaDefaultContributor.ForContextRow(LocalMediaDefaultContributor.PersonalRule), why);
     }
 }

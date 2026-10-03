@@ -12,7 +12,7 @@ using Xunit;
 
 namespace ClaudeHomeServer.Services.VideoEditor.Tests.ChatContext;
 
-// Двойная запись фокуса «Видео» (КТ-5, 3б-1): составной фокус {sceneId, filmPath} при флаге распадается —
+// Двойная запись фокуса «Видео» (КТ-5, 3б-1): составной фокус {sceneId, filmPath} распадается —
 // основным становится выбранное последним; агент выбор человека не перезаписывает; сохранённые файлы
 public sealed class VideoFocusMirrorTests : IDisposable
 {
@@ -23,7 +23,6 @@ public sealed class VideoFocusMirrorTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "vmirror-" + Guid.NewGuid().ToString("N"));
     private readonly VideoThreadStore _threads;
     private readonly ChatContextStore _context;
-    private readonly Flags _flags = new();
     private readonly VideoJobThreads _jobs;
     private readonly VideoSceneService _scenes;
     private readonly VideoEditScope _scope = new("proj1", new Project { Id = "proj1", RootPath = "/nope" });
@@ -33,7 +32,7 @@ public sealed class VideoFocusMirrorTests : IDisposable
         _threads = new VideoThreadStore(Path.Combine(_root, "threads"));
         var registry = new ContextKindRegistry([new VideoContextKind(_threads)]);
         _context = new ChatContextStore(Path.Combine(_root, "ctx"), registry);
-        var mirror = new ChatContextFocusMirror(_context, _flags, NullLogger<ChatContextFocusMirror>.Instance);
+        var mirror = new ChatContextFocusMirror(_context, NullLogger<ChatContextFocusMirror>.Instance);
         _jobs = new VideoJobThreads(_threads, NullLogger<VideoJobThreads>.Instance, mirror: mirror);
         _scenes = new VideoSceneService(_jobs, new Prefs.VideoPrefsService(new Prefs.VideoPrefsStore(Path.Combine(_root, "prefs"))));
     }
@@ -41,12 +40,6 @@ public sealed class VideoFocusMirrorTests : IDisposable
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
-    }
-
-    private sealed class Flags : IFeatureFlagGate
-    {
-        public bool On { get; set; } = true;
-        public bool IsEnabled(string userId, string key) => On && key == FeatureFlagKeys.ComposerContextRow;
     }
 
     private static VideoSceneSettingsDto Settings() => new(null, null, "т", null, null, null, null, null, null);
@@ -101,7 +94,7 @@ public sealed class VideoFocusMirrorTests : IDisposable
     }
 
     [Fact]
-    public async Task DTO_нитей_при_флаге_берёт_фокус_из_основного_объекта_а_без_флага_свой()
+    public async Task DTO_нитей_берёт_фокус_из_основного_объекта()
     {
         var scene = await Add();
         await _scenes.FocusAsync(Owner, _scope, Chat, new VideoFocusDto(scene, Film), null);
@@ -110,18 +103,6 @@ public sealed class VideoFocusMirrorTests : IDisposable
         _jobs.View(Owner, Chat).Focus.Should().Be(new VideoFocusDto(null, Film));
         _context.SetPrimary(Owner, Chat, null, null);
         _jobs.View(Owner, Chat).Focus.Should().Be(new VideoFocusDto(null, null), "основного нет — фокус распался");
-
-        _flags.On = false;
-        _jobs.View(Owner, Chat).Focus.Should().Be(new VideoFocusDto(null, Film), "без флага — собственное поле хранилища");
-    }
-
-    [Fact]
-    public async Task Без_флага_контекст_не_пишется()
-    {
-        _flags.On = false;
-        await Add();
-
-        _context.Get(Owner, Chat).Revision.Should().Be(0);
     }
 
     [Fact]

@@ -211,12 +211,11 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (_prefs is null) return null;
         var prefs = _prefs.Get(ownerId, scope);
         var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus)?.Settings;
-        // Строка контекста: выбор человека — «Чем» контекста хода, персонаж префов проекта не читается
-        var row = _flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
+        // Выбор человека — «Чем» контекста хода, персонаж префов проекта не читается
         return new
         {
-            text = Chats.ImageEditorStateContributor.ChoiceText(prefs, focused, row),
-            rule = row ? Chats.ImageEditorStateContributor.ChoiceRuleContextRow : Chats.ImageEditorStateContributor.ChoiceRule,
+            text = Chats.ImageEditorStateContributor.ChoiceText(prefs, focused),
+            rule = Chats.ImageEditorStateContributor.ChoiceRule,
         };
     }
 
@@ -335,30 +334,21 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var foreign = settings?.Provider is { } chosen && chosen != provider;
         var model = Str(args, "model") ?? (own || foreign ? null : settings?.Model) ?? ImageEditCatalog.AutoModelId;
         var count = Int(args, "count") ?? (!own && settings is { Count: > 0 } s ? s.Count : 1);
-        // При строке контекста персонаж префов проекта не читается: он ref контекста чата
-        var contextRow = _flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
-        string? character;
+        // Персонаж префов проекта не читается: он ref контекста чата
+        var character = Str(args, "character");
         IReadOnlyList<ReferenceImage> contextSamples = [];
-        if (contextRow)
+        if (_context is not null && (!referencesGiven || !characterGiven))
         {
-            character = Str(args, "character");
-            if (_context is not null && (!referencesGiven || !characterGiven))
+            var layout = _context.Layout(new ContextScope(ownerId, session, scope.Project),
+                _context.Current(ownerId, session.Id), op);
+            if (!referencesGiven)
             {
-                var layout = _context.Layout(new ContextScope(ownerId, session, scope.Project),
-                    _context.Current(ownerId, session.Id), op);
-                if (!referencesGiven)
-                {
-                    references = layout.ReferencePaths;
-                    var loaded = await _context.LoadSamplesAsync(ownerId, scope, session.Id, layout, ct);
-                    if (loaded.Value is not { } samples) return Deny(loaded.Error ?? "Образцы контекста не прочитаны.");
-                    contextSamples = samples;
-                }
-                if (!characterGiven) character = layout.CharacterSlug;
+                references = layout.ReferencePaths;
+                var loaded = await _context.LoadSamplesAsync(ownerId, scope, session.Id, layout, ct);
+                if (loaded.Value is not { } samples) return Deny(loaded.Error ?? "Образцы контекста не прочитаны.");
+                contextSamples = samples;
             }
-        }
-        else
-        {
-            character = Str(args, "character") ?? (own ? null : prefs?.CharacterSlug);
+            if (!characterGiven) character = layout.CharacterSlug;
         }
 
         var quoteRequest = new ImageEditQuoteRequest(provider, model, mode, op, count,

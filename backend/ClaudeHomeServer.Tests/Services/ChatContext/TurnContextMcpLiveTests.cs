@@ -66,7 +66,6 @@ public sealed class TurnContextMcpLiveTests : IDisposable
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ImageEditor, true);
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ComposerContextRow, true);
         _projectRoot = Path.Combine(_factory.TempDir, "live_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Path.Combine(_projectRoot, "art"));
         File.WriteAllBytes(Path.Combine(_projectRoot, "art", "palette.png"), [1, 2, 3]);
@@ -159,16 +158,5 @@ public sealed class TurnContextMcpLiveTests : IDisposable
         ToolText(attach).Should().Contain("делегированном");
         IsError(state).Should().BeFalse("context_state — чтение, разрешён");
         (await ContextAsync(chat)).GetProperty("refs").GetArrayLength().Should().Be(0);
-    }
-
-    [Fact]
-    public async Task Без_флага_сервер_пуст()
-    {
-        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(_ownerId, FeatureFlagKeys.ComposerContextRow, false);
-        var chat = await Chat();
-
-        var list = await RpcAsync(chat.Id, "tools/list");
-
-        list.GetProperty("result").GetProperty("tools").GetArrayLength().Should().Be(0);
     }
 }

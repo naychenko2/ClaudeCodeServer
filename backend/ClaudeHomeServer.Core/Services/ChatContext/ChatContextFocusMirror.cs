@@ -4,17 +4,14 @@ using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.ChatContext;
 
-// Двойная запись фокуса вертикали (ADR-023 §5, фаза 1). Вертикаль по-прежнему пишет свой Focus (старые
-// полосы, флаг выключен), а при флаге владельца зеркалит смену в стор контекста; чтение DTO вертикали при
-// флаге — проекция из контекста. Без флага (или без стора) всё как раньше. Вертикаль зовёт этот Core-класс,
-// а не другую вертикаль. Сбой зеркала фокус вертикали не откатывает: запись вертикали уже сделана.
+// Отражение фокуса вертикали в стор контекста (ADR-023 §5). Собственный Focus вертикали остаётся в её файле
+// только как «до/после» для различения смены и для засева контекста чата без файла; единственный источник
+// правды о выбранном объекте — основной объект контекста, DTO вертикали отдаёт его проекцию. Вертикаль зовёт
+// этот Core-класс, а не другую вертикаль. Сбой зеркала фокус вертикали не откатывает: запись вертикали уже сделана.
 public sealed class ChatContextFocusMirror(
     IChatContextStore store,
-    IFeatureFlagGate flags,
     ILogger<ChatContextFocusMirror> log)
 {
-    public bool Enabled(string ownerId) => flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
-
     // Фокус вертикали сменился с before на after: after != null — нить становится основным объектом;
     // after == null — снимаем основной, только если он был именно этой нитью (звук не должен снять картинку)
     // claim — явный выбор агента (image_focus и т.п.): фокус вертикали мог не измениться, потому что человек
@@ -25,7 +22,6 @@ public sealed class ChatContextFocusMirror(
     public void Sync(string ownerId, string sessionId, string kind, string? before, string? after, ContextActor by,
         bool claim = false, string refKey = ThreadKey)
     {
-        if (!Enabled(ownerId)) return;
         if (before == after && !(claim && after is not null)) return;
         try
         {
@@ -58,17 +54,15 @@ public sealed class ChatContextFocusMirror(
     // Нить удалена: убрать её из основного и референсов
     public void Forget(string ownerId, string sessionId, string kind, string threadId, string refKey = ThreadKey)
     {
-        if (!Enabled(ownerId)) return;
         try { store.Forget(ownerId, sessionId, i => i.Kind == kind && ThreadOf(i, refKey) == threadId); }
         catch (Exception ex) { log.LogWarning(ex, "Нить {ThreadId} не убрана из контекста чата {SessionId}", threadId, sessionId); }
     }
 
-    // Фокус вертикали для её DTO: при флаге — из основного объекта контекста своего вида (и только
-    // если такая нить ещё есть), иначе собственное поле как есть
+    // Фокус вертикали для её DTO: из основного объекта контекста своего вида (и только если такая нить ещё
+    // есть); own — собственное поле, на него падаем лишь при сбое чтения стора
     public string? ProjectFocus(string ownerId, string sessionId, string kind, string? own, Func<string, bool> threadExists,
         string refKey = ThreadKey)
     {
-        if (!Enabled(ownerId)) return own;
         try
         {
             return store.Get(ownerId, sessionId).Primary is { } p && p.Kind == kind

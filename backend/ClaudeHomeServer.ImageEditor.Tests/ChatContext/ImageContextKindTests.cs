@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ClaudeHomeServer.ImageEditor.Tests.ChatContext;
 
 // Вид «image» контекста чата и двойная запись фокуса (ADR-023, 1б-3): Validate/Describe/засев провайдера,
-// зеркалирование смены фокуса в стор при флаге владельца, проекция фокуса в DTO нитей, Forget при удалении
+// зеркалирование смены фокуса в стор, проекция фокуса в DTO нитей, Forget при удалении
 public sealed class ImageContextKindTests : IDisposable
 {
     private const string Owner = "owner-1";
@@ -22,7 +22,6 @@ public sealed class ImageContextKindTests : IDisposable
     private readonly ImageThreadStore _threads;
     private readonly ImageContextKind _kind;
     private readonly ChatContextStore _context;
-    private readonly Flags _flags = new();
     private readonly ImageThreadService _service;
     private readonly Session _session = new() { Id = Chat, OwnerId = Owner };
 
@@ -31,19 +30,13 @@ public sealed class ImageContextKindTests : IDisposable
         _threads = new ImageThreadStore(Path.Combine(_root, "image"));
         _kind = new ImageContextKind(_threads);
         _context = new ChatContextStore(Path.Combine(_root, "ctx"), new ContextKindRegistry([_kind]));
-        var mirror = new ChatContextFocusMirror(_context, _flags, NullLogger<ChatContextFocusMirror>.Instance);
+        var mirror = new ChatContextFocusMirror(_context, NullLogger<ChatContextFocusMirror>.Instance);
         _service = new ImageThreadService(_threads, NullLogger<ImageThreadService>.Instance, mirror: mirror);
     }
 
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
-    }
-
-    private sealed class Flags : IFeatureFlagGate
-    {
-        public bool On { get; set; }
-        public bool IsEnabled(string userId, string key) => On && key == FeatureFlagKeys.ComposerContextRow;
     }
 
     private ContextScope Scope => new(Owner, _session, null);
@@ -96,9 +89,30 @@ public sealed class ImageContextKindTests : IDisposable
     }
 
     [Fact]
-    public async Task При_флаге_человек_и_агент_зеркалят_смену_фокуса_в_стор()
+    public void Старый_файл_нитей_с_Focus_без_файла_контекста_засевает_основной_объект()
     {
-        _flags.On = true;
+        // Файл нитей, записанный до контекста: фокус только в собственном поле вертикали, файла контекста нет
+        var id = NewThread(focus: true);
+        var directory = new Moq.Mock<ISessionDirectory>();
+        directory.Setup(d => d.GetById(Chat)).Returns(_session);
+        var seeder = new ChatContextSeeder([_kind], directory.Object, new Moq.Mock<IProjectManager>().Object);
+        var context = new ChatContextStore(Path.Combine(_root, "ctx-seed"), new ContextKindRegistry([_kind]), seeder: seeder);
+
+        var state = context.Get(Owner, Chat);
+
+        state.Revision.Should().Be(0, "файла контекста нет — состояние производное");
+        state.Primary.Should().NotBeNull("старый Focus файла нитей читается и засевает основной объект");
+        ChatContextFocusMirror.ThreadOf(state.Primary!).Should().Be(id);
+        File.Exists(Path.Combine(_root, "ctx-seed", Owner, Chat + ".json")).Should().BeFalse("засев файл не создаёт");
+
+        // Первая запись применяется поверх засеянного состояния
+        context.SetPrimary(Owner, Chat, null, null);
+        context.Get(Owner, Chat).Primary.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Человек_и_агент_зеркалят_смену_фокуса_в_стор()
+    {
         var a = NewThread();
         var b = NewThread();
 
@@ -119,7 +133,6 @@ public sealed class ImageContextKindTests : IDisposable
     [Fact]
     public async Task Фокус_агента_возвращает_снятый_человеком_объект_основным()
     {
-        _flags.On = true;
         var a = NewThread();
         await _service.FocusAsync(Owner, Project, Chat, a, _threads.Get(Owner, Chat).Revision);
         // Человек снял объект в контексте (✕); фокус вертикали остался на нити
@@ -133,31 +146,28 @@ public sealed class ImageContextKindTests : IDisposable
         primary!.By.Should().Be(ContextActor.Agent);
     }
 
-    // Правило ADR-023, Дополнение 3: агент не перезаписывает выбор человека. Две ветки защиты: стор не даёт
-    // агенту затереть By=Human в записанном файле, а зеркало фокуса — в засеянном состоянии без файла
     [Fact]
     public async Task Фокус_агента_не_перезаписывает_выбор_человека()
     {
-        _flags.On = true;
         var a = NewThread();
         await _service.FocusAsync(Owner, Project, Chat, a, _threads.Get(Owner, Chat).Revision);
         var before = _context.Get(Owner, Chat);
         var chosen = before.Primary!;
         chosen.By.Should().Be(ContextActor.Human);
 
+        // Агент фокусирует ту же нить, что человек уже выбрал основной (ADR-023, Дополнение 3)
         await _service.AgentFocusAsync(Owner, Project, Chat, a, CancellationToken.None);
 
         var primary = _context.Get(Owner, Chat).Primary!;
         ChatContextFocusMirror.ThreadOf(primary).Should().Be(a);
         primary.By.Should().Be(ContextActor.Human, "выбор человека агент не затирает");
         primary.Id.Should().Be(chosen.Id, "основной объект не пересоздаётся");
-        _context.Get(Owner, Chat).Revision.Should().Be(before.Revision, "запись в стор не идёт вовсе");
+        _context.Get(Owner, Chat).Revision.Should().Be(before.Revision, "выбор человека агент не трогает — запись в стор не идёт вовсе");
     }
 
     [Fact]
     public async Task Фокус_агента_не_перезаписывает_засеянный_выбор_человека_из_старого_файла()
     {
-        _flags.On = true;
         // Файл контекста ещё не создан: основной объект — засев из старого Focus нитей (его выбрал человек)
         var a = NewThread(focus: true);
         var directory = new Moq.Mock<ISessionDirectory>();
@@ -165,7 +175,7 @@ public sealed class ImageContextKindTests : IDisposable
         var seeder = new ChatContextSeeder([_kind], directory.Object, new Moq.Mock<IProjectManager>().Object);
         var context = new ChatContextStore(Path.Combine(_root, "ctx-agent"), new ContextKindRegistry([_kind]), seeder: seeder);
         var service = new ImageThreadService(_threads, NullLogger<ImageThreadService>.Instance,
-            mirror: new ChatContextFocusMirror(context, _flags, NullLogger<ChatContextFocusMirror>.Instance));
+            mirror: new ChatContextFocusMirror(context, NullLogger<ChatContextFocusMirror>.Instance));
         context.Get(Owner, Chat).Primary!.By.Should().Be(ContextActor.Human);
 
         await service.AgentFocusAsync(Owner, Project, Chat, a, CancellationToken.None);
@@ -178,7 +188,6 @@ public sealed class ImageContextKindTests : IDisposable
     [Fact]
     public async Task Усыновление_файла_агентом_без_фокуса_попадает_в_контекст()
     {
-        _flags.On = true;
         // Файл контекста уже существует (ревизия > 0), основного объекта нет
         _context.SetPrimary(Owner, Chat, null, null);
 
@@ -194,7 +203,6 @@ public sealed class ImageContextKindTests : IDisposable
     [Fact]
     public async Task Усыновление_файла_не_уводит_контекст_от_выбора_человека()
     {
-        _flags.On = true;
         var mine = NewThread();
         await _service.FocusAsync(Owner, Project, Chat, mine, _threads.Get(Owner, Chat).Revision);
 
@@ -206,38 +214,20 @@ public sealed class ImageContextKindTests : IDisposable
     }
 
     [Fact]
-    public async Task Без_флага_стор_контекста_не_трогается()
-    {
-        _flags.On = false;
-        var a = NewThread();
-
-        await _service.FocusAsync(Owner, Project, Chat, a, _threads.Get(Owner, Chat).Revision);
-
-        File.Exists(Path.Combine(_root, "ctx", Owner, Chat + ".json")).Should().BeFalse();
-        _service.View(Owner, Chat).Focus.Should().Be(a);
-    }
-
-    [Fact]
-    public void При_флаге_фокус_в_DTO_нитей_берётся_из_контекста()
+    public void Фокус_в_DTO_нитей_берётся_из_контекста()
     {
         var id = NewThread(focus: true);
-        _flags.On = true;
 
         _service.View(Owner, Chat).Focus.Should().BeNull("в контексте основным объектом картинка не выбрана");
         _threads.Get(Owner, Chat).Focus.Should().Be(id, "собственное поле хранилища не меняется");
 
         _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem("image", id, ContextActor.Human), null);
         _service.View(Owner, Chat).Focus.Should().Be(id);
-
-        _flags.On = false;
-        _context.SetPrimary(Owner, Chat, null, null);
-        _service.View(Owner, Chat).Focus.Should().Be(id, "без флага DTO отдаёт собственное поле");
     }
 
     [Fact]
     public async Task Удаление_нити_убирает_её_отовсюду_в_контексте()
     {
-        _flags.On = true;
         var id = NewThread();
         await _service.FocusAsync(Owner, Project, Chat, id, _threads.Get(Owner, Chat).Revision);
         _context.AddRef(Owner, Chat, ChatContextFocusMirror.NewItem("image", id, ContextActor.Human) with { Role = "style" }, null);

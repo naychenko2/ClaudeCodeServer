@@ -112,26 +112,18 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     {
         var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir), config: Config(false));
 
-        var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
-
-        text.Should().NotContain("video_shoot").And.NotContain("Снимать следующую?");
+        (await contributor.BuildAsync(Ctx(), null)).Should().BeNull("правил про video_shoot нет, а остального в блоке не осталось");
     }
 
     [Fact]
-    public void Состояние_называет_сцену_в_работе_фильм_и_потрачено()
+    public void Траты_открытого_фильма_остаются_в_блоке()
     {
-        var scene = new VideoSceneDto("sc1", "Закат", "video/утро",
-            new VideoSceneSettingsDto(null, null, "т", null, null, null, null, null, null),
-            [], null, [], null, [], null, DateTime.UtcNow);
-        var state = new VideoThreadsState(new VideoFocusDto("sc1", "video/утро/утро.film"), 3, [scene]);
+        var state = new VideoThreadsState(new VideoFocusDto("sc1", "video/утро/утро.film"), 3, []);
 
-        var text = VideoEditorStateContributor.Render(state, [], new VideoPrefsDto("fal", null, 5, null, null, null),
-            new VideoSpentDto(1.5, 0, 30), agentLaunch: true, personal: false);
+        var text = VideoEditorStateContributor.Render(state, [], new VideoSpentDto(1.5, 0, 30), agentLaunch: false, personal: false);
 
-        text.Should().Contain("В работе: сцена sc1 «Закат»")
-            .And.Contain("Открыт фильм: video/утро/утро.film")
-            .And.Contain("Потрачено на фильм: $1.50 + 30 GPU-с")
-            .And.Contain("поставщик fal");
+        text.Should().Contain("Потрачено на открытый фильм video/утро/утро.film: $1.50 + 30 GPU-с")
+            .And.NotContain("В работе:");
     }
 
     [Fact]
@@ -153,20 +145,15 @@ public sealed class VideoEditorStateContributorTests : IDisposable
 
     // ── Строка контекста (ADR-023 §3.1, 3б-1): блок худеет ──
 
-    private sealed class RowFlags : IFeatureFlagGate
-    {
-        public bool IsEnabled(string userId, string key) => key is FeatureFlagKeys.VideoEditor or FeatureFlagKeys.ComposerContextRow;
-    }
-
     [Fact]
-    public async Task При_строке_контекста_нет_В_работе_Открыт_фильм_и_Выбор_человека_а_правила_и_журнал_остаются()
+    public async Task нет_В_работе_Открыт_фильм_и_Выбор_человека_а_правила_и_журнал_остаются()
     {
         var store = new VideoThreadStore(_dir);
         var scene = store.AddScene("u1", "s1", "", new VideoSceneSettingsDto(null, null, "т", null, null, null, null, null, null), null).Scene!;
         store.SetFocus("u1", "s1", new VideoFocusDto(scene.SceneId, "video/утро/утро.film"), null);
         store.SetSettings("u1", "s1", scene.SceneId, scene.Settings, null,
             new VideoThreadEvent(DateTime.UtcNow, VideoThreadEventKinds.Versions, "Готово: новых версий 1", scene.SceneId));
-        var contributor = new VideoEditorStateContributor(new RowFlags(), store);
+        var contributor = new VideoEditorStateContributor(new Flags(true), store);
 
         var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
 
@@ -177,20 +164,10 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     }
 
     [Fact]
-    public async Task При_строке_контекста_без_запуска_агентом_и_без_журнала_блока_нет()
+    public async Task без_запуска_агентом_и_без_журнала_блока_нет()
     {
-        var contributor = new VideoEditorStateContributor(new RowFlags(), new VideoThreadStore(_dir), config: Config(agentLaunch: false));
+        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir), config: Config(agentLaunch: false));
 
         (await contributor.BuildAsync(Ctx(), null)).Should().BeNull();
-    }
-
-    [Fact]
-    public async Task Без_флага_строки_контекста_текст_блока_прежний()
-    {
-        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir));
-
-        var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
-
-        text.Should().Contain("В работе: ничего не выбрано").And.Contain("Выбор человека в «Видео»");
     }
 }

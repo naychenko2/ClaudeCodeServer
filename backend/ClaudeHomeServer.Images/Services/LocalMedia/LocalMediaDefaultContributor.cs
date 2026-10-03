@@ -73,15 +73,13 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
         var text = sessionContext.Session.ProjectId is null
             ? Personal(audio, video)
             : Project(audio, video);
-        // Строка контекста: выбор человека виден в «Чем» хвоста «Контекст хода», а не в полосах и старых блоках
-        if (sessionContext.OwnerId is { Length: > 0 } ownerId && flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow))
-            text = ForContextRow(text);
+        // Выбор человека виден в «Чем» хвоста «Контекст хода», а не в полосах и старых блоках
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
-            [new PromptSection(Key, text, Title, InTurnTail: true)]));
+            [new PromptSection(Key, ForContextRow(text), Title, InTurnTail: true)]));
     }
 
     // Тексты под строку контекста: ссылки на полосы «Картинки»/«Звук» и на блок «Картинки в этом чате» как
-    // источник выбора переписаны на «Чем» контекста хода. Без строки — константы как были, байт-в-байт
+    // источник выбора переписаны на «Чем» контекста хода. 
     public static string ForContextRow(string rule) => rule
         .Replace("Выбор человека в полосе «Картинки», если там указан поставщик (виден в блоке «Картинки в этом чате»).",
             "Выбор человека в строке контекста, если в «Чем» контекста хода указан исполнитель.")

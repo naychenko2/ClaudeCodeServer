@@ -29,7 +29,6 @@ public sealed class TurnContextToolset(
     IProjectManager projects,
     ContextKindRegistry registry,
     IChatContextStore store,
-    IFeatureFlagGate flags,
     TurnContextContributor text,
     IDelegatedTurnGate? turnGate = null) : IMcpParameterizedToolset
 {
@@ -192,11 +191,6 @@ public sealed class TurnContextToolset(
             || !route.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))
         {
             error = "Некорректный маршрут сервера контекста — вызов отклонён.";
-            return false;
-        }
-        if (!flags.IsEnabled(context.OwnerId, FeatureFlagKeys.ComposerContextRow))
-        {
-            error = "Строка контекста выключена у владельца чата.";
             return false;
         }
         if (sessions.GetOwned(route, context.OwnerId) is not { } owned)

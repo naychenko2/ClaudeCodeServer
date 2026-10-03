@@ -549,7 +549,7 @@ public class McpToolsetStabilityTests
     /// тулсет в реестре), а не хода и не содержимого контекста.
     /// </summary>
     [SkippableFact]
-    public void СерверКонтекстаЧата_ГейтитсяПоФлагуИРеестру()
+    public void СерверКонтекстаЧата_ГейтитсяПоРеестру()
     {
         var path = FindSource("Services", "SessionManager.cs");
         Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
@@ -559,7 +559,7 @@ public class McpToolsetStabilityTests
 
         body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
         body.Should().NotContain("Context.Get", "содержимое контекста не влияет на состав серверов");
-        body.Should().Contain("FeatureFlagKeys.ComposerContextRow", "флаг владельца гейтит сервер");
+        body.Should().NotContain("ComposerContextRow", "флаг снят: сервер едет всегда");
         body.Should().Contain("McpEndpoints.TurnContextName", "тулсета нет в реестре — сервер в ход не едет");
         body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
         body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync тулсета");

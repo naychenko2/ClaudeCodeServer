@@ -86,10 +86,6 @@ public static class FeatureFlagKeys
     public const string ImagePanelV5 = "image-panel-v5";
     // Модуль «Видео» (ADR-022): сцены и фильм в боковой панели. Гейтит и серверные ручки модуля video-editor.
     public const string VideoEditor = "video-editor";
-
-    // Строка контекста над полем ввода (ADR-023): ветка, с чем работаем, что подключено. Стор контекста
-    // чата, хвост хода и входы операций читают одно и то же; переключателя полос больше нет
-    public const string ComposerContextRow = "composer-context-row";
 }
 
 /// <summary>
@@ -242,13 +238,6 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.VideoEditor,
             Title: "Видео: сцены и фильм",
             Description: "Панель «Видео» в чате: снимает сцены между двумя кадрами тремя поставщиками, собирает из них фильм со склейками и музыкой.",
-            Default: false,
-            Stage: "dev"),
-        // Строка контекста над полем ввода (ADR-023): пока флаг выключен, полосы и режимы поля как раньше
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.ComposerContextRow,
-            Title: "Строка контекста над полем ввода",
-            Description: "Над полем ввода теперь строка контекста: ветка, с чем работаем, чем и что подключено. Всё, что в ней, видят и Claude, и генераторы. Настройки — в боковой панели, переключателя полос больше нет.",
             Default: false,
             Stage: "dev"),
     ];

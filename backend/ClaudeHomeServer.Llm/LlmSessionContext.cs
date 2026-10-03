@@ -180,8 +180,7 @@ public sealed record AudioEditorMcpContext(string ApiUrl, Func<string> TokenFact
 public sealed record VideoEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
     IReadOnlyList<string>? AutoAllowTools = null);
 // Контекст MCP-сервера «Контекст чата» (ADR-023 §3.2): тулсет живёт в Main, сессия едет хвостом URL
-// (/mcp/turn-context/{sessionId}), в любом чате владельца. null — флаг composer-context-row выключен или
-// тулсета нет в реестре. Свойства сессии и владельца, не хода: от содержимого контекста состав не зависит.
+// (/mcp/turn-context/{sessionId}), в любом чате владельца. null — тулсета нет в реестре. Свойства сессии и владельца, не хода: от содержимого контекста состав не зависит.
 public sealed record TurnContextMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
     IReadOnlyList<string>? AutoAllowTools = null);
 // Контекст MCP-сервера локальной генерации (local-media: ComfyUI на своей GPU). null — чат без

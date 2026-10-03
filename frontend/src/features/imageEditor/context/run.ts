@@ -8,7 +8,7 @@ import { isRemovalPrompt, priceSum } from '../format';
 import { quickAvailability, type QuickAction } from '../editorInputs';
 import { hasMaskMark } from '../marks';
 import { buildQuoteBody } from '../thread/quoteBody';
-import { footPrice, isOneVariant, launchMarks, modeOp, quickOf } from '../panel/panelOp';
+import { footPrice, isOneVariant, launchMarks, modeOp, quickOf } from './ops';
 import { loadCatalog } from '../thread/catalog';
 import { enterScope } from '../scope';
 import { threadHasImage } from '../thread/model';

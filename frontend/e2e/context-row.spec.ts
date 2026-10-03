@@ -119,14 +119,6 @@ test('руки видны пилюлей в губе поля, полосы «Р
   await expect(page.locator('[data-git-strip]')).toHaveCount(0);
 });
 
-test('без флага: старые полосы на месте, строки и пилюли нет', async ({ page }) => {
-  newWorld({ flags: { 'composer-context-row': false }, ctx: { primary: primary() } });
-  await openChat(page, { vp: D });
-  await expect(page.locator('[data-git-strip], [data-composer-strip]').first()).toBeVisible({ timeout: 30_000 });
-  await expect(row(page)).toHaveCount(0);
-  await expect(page.locator('[data-hands-pill]')).toHaveCount(0);
-});
-
 test('личный чат без объекта: строки нет', async ({ page }) => {
   newWorld({ personal: true });
   await openChat(page, { vp: D });
@@ -192,11 +184,3 @@ test('панель на 360: шторка по просьбе, секции чи
   await shotPanel(page, 'panel-360.png');
 });
 
-test('без флага панели «Контекст» нет, строка и клик прежние', async ({ page }) => {
-  newWorld({ flags: { 'composer-context-row': false }, ctx: { primary: primary() } });
-  await openChat(page, { vp: D });
-  await expect(page.locator('[data-chat-panel], textarea').first()).toBeVisible({ timeout: 30_000 });
-  await expect(row(page)).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /«Контекст»/ })).toHaveCount(0);
-  await expect(panel(page)).toHaveCount(0);
-});

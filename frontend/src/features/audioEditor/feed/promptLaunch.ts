@@ -7,7 +7,7 @@
 
 import type { AudioCatalog, AudioMode, AudioModelInfo, AudioOp, AudioPrefs, AudioProvider, AudioThread } from '../api';
 import { MODE_LABEL, OPS, opInfo } from '../ops';
-import { priceLabel, resolveLaunch, type ResolvedLaunch } from '../strip/summary';
+import { priceLabel, resolveLaunch, type ResolvedLaunch } from '../panel/launch';
 
 export interface PromptLaunch {
   launch: ResolvedLaunch;

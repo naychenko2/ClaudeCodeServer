@@ -14,7 +14,7 @@
 // Стор параметризован неймспейсом (createPanelZones): воркспейс и раздел «Чаты»
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
 import { useCallback, useSyncExternalStore } from 'react';
-import { PANEL_HOME, RAIL_GROUPS, isPanelKey, migrateLegacyKey, panelRivals, type PanelKey, type Zone } from './panelCatalog';
+import { PANEL_HOME, RAIL_GROUPS, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
 
 // Реестр панелей (ключи, мета, домашние зоны) — соседний panelCatalog.ts.
 // Здесь только раскладка: что где лежит и какого размера.
@@ -69,7 +69,11 @@ export function sanitizeLayout(cols: unknown, exclude?: Set<PanelKey>): PanelKey
   for (const col of cols) {
     if (!Array.isArray(col)) continue;
     const clean: PanelKey[] = [];
-    for (const v of col) if (isPanelKey(v) && !seen.has(v)) { seen.add(v); clean.push(v); }
+    for (const raw of col) {
+      // Упразднённые ключи переводим до проверки: «Картинки» и «Звук» становятся «Контекстом», повтор снимает seen
+      const v = migrateLegacyKey(raw);
+      if (v && !seen.has(v)) { seen.add(v); clean.push(v); }
+    }
     if (clean.length) out.push(clean);
   }
   return out;
@@ -86,7 +90,10 @@ export function parseLayout(rawLayout: string | null, rawLegacyOpen: string | nu
       const arr = JSON.parse(rawLegacyOpen);
       if (Array.isArray(arr)) {
         const flat: PanelKey[] = [];
-        for (const v of arr) if (isPanelKey(v) && !flat.includes(v)) flat.push(v);
+        for (const raw of arr) {
+          const v = migrateLegacyKey(raw);
+          if (v && !flat.includes(v)) flat.push(v);
+        }
         const cols: PanelKey[][] = [];
         for (let i = 0; i < flat.length; i += COL_CAP) cols.push(flat.slice(i, i + COL_CAP));
         return cols;
@@ -407,15 +414,11 @@ export function enforceZoneInvariant(zones: PanelZones): PanelZones {
   const claim = (cols: PanelKey[][]): PanelKey[][] => {
     const out: PanelKey[][] = [];
     for (const col of cols) {
-      // Соперник занявшей место панели (EXCLUSIVE_PANEL_SETS) места уже не получит:
-      // так чинится и сохранённая раскладка, где обе панели генерации открыты разом.
-      // Помечаем по ходу, а не после фильтра: соперники бывают и в одной колонке
       const clean: PanelKey[] = [];
       for (const k of col) {
         if (seen.has(k)) continue;
         clean.push(k);
         seen.add(k);
-        panelRivals(k).forEach(r => seen.add(r));
       }
       if (clean.length) out.push(clean);
     }
@@ -518,17 +521,6 @@ function dropFromStash(zones: PanelZones, k: PanelKey): PanelZones {
     return { ...z, stash: z.stash.map(col => col.filter(x => x !== k)).filter(col => col.length > 0) };
   };
   return { ...zones, left: strip(zones.left), right: strip(zones.right) };
-}
-
-// Убрать соперников панели (EXCLUSIVE_PANEL_SETS) отовсюду — из раскладок и
-// спрятанных наборов обеих зон: свёрнутый соперник, вернувшись разворотом, снова
-// оказался бы рядом. Зовут все операции, которые ОТКРЫВАЮТ панель, — до вставки.
-export function closeRivals(zones: PanelZones, k: PanelKey): PanelZones {
-  const rivals = panelRivals(k);
-  if (rivals.length === 0) return zones;
-  const strip = (cols: PanelKey[][]) => cols.map(c => c.filter(x => !rivals.includes(x))).filter(c => c.length > 0);
-  const clean = (z: ZoneState): ZoneState => ({ ...z, layout: strip(z.layout), stash: strip(z.stash) });
-  return { ...zones, left: clean(zones.left), right: clean(zones.right) };
 }
 
 // Закрыть панель, бросив её на рельсу зоны: она не просто закрывается, а
@@ -645,7 +637,7 @@ export function reorderRail(
 // cap — вместимость колонки у рельсы (сколько панелей влезает по высоте), её
 // считает зона: см. COL_CAP.
 export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP, railSeq?: readonly PanelKey[]): PanelZones {
-  const base = closeRivals(closePanel(zones, k), k);
+  const base = closePanel(zones, k);
   return withZone(base, zone, z => ({
     ...z,
     layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone, cap, railSeq),
@@ -741,10 +733,7 @@ export function replacePanelWith(zones: PanelZones, guest: PanelKey, host: Panel
     ...z,
     layout: z.layout.map(col => col.map(k => (k === host ? guest : k))),
   }));
-  // Соперников убираем ПОСЛЕ замены: хозяин сам может оказаться соперником гостя
-  // (картинки бросили на звук), и снятый заранее он не оставил бы гостю слота
-  const done = closeRivals(filled, guest);
-  return { ...done, home: { ...done.home, [host]: zh } };
+  return { ...filled, home: { ...filled.home, [host]: zh } };
 }
 
 // Дроп в горизонтальный плейсхолдер зоны. Внутри своей зоны — обычная
@@ -757,9 +746,7 @@ export function moveAcrossAt(zones: PanelZones, k: PanelKey, zone: Zone, colIdx:
   const src = zoneOf(zones, k);
   if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelAt(z.layout, k, colIdx, rowIdx) }));
   const base = closePanel(zones, k);
-  // Соперников снимаем ПОСЛЕ вставки: снятый заранее, он мог унести целую колонку
-  // и сдвинуть colIdx — дроп встал бы мимо или потерялся
-  return closeRivals(withZone(base, zone, z => {
+  return withZone(base, zone, z => {
     // Зона в режиме одной панели принимает гостя вместо своей — как при клике по
     // иконке (openPanelIn), иначе перенос втихую сломал бы её режим
     if (z.mode === 'solo') return { ...z, layout: [[k]] };
@@ -768,7 +755,7 @@ export function moveAcrossAt(zones: PanelZones, k: PanelKey, zone: Zone, colIdx:
     if (colIdx < 0 || colIdx >= cols.length) return z;
     cols[colIdx].splice(Math.max(0, Math.min(cols[colIdx].length, rowIdx)), 0, k);
     return { ...z, layout: cols };
-  }), k);
+  });
 }
 
 // Дроп в разделитель колонок зоны: панель выносится в НОВУЮ колонку, в том
@@ -778,13 +765,12 @@ export function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone
   const src = zoneOf(zones, k);
   if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelToNewColumn(z.layout, k, insertIdx) }));
   const base = closePanel(zones, k);
-  // Как и в moveAcrossAt: соперников снимаем после вставки, чтобы не сдвинуть insertIdx
-  return closeRivals(withZone(base, zone, z => {
+  return withZone(base, zone, z => {
     if (z.mode === 'solo') return { ...z, layout: [[k]] };
     const cols = z.layout.map(c => [...c]);
     cols.splice(Math.max(0, Math.min(cols.length, insertIdx)), 0, [k]);
     return { ...z, layout: cols };
-  }), k);
+  });
 }
 
 // Выселить из зоны панели, которых на этом экране в ней быть не может, и вернуть
@@ -794,8 +780,6 @@ export function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone
 // пропадала с концами: в своей зоне её нет, в чужой она невидима.
 // null — выселять нечего (сигнал вызывающему не дёргать запись).
 export function evictForeign(zones: PanelZones, zone: Zone, allowed: readonly PanelKey[]): PanelZones | null {
-  const folded = foldGenPanels(zones, zone, allowed);
-  if (folded) return evictForeign(folded, zone, allowed) ?? folded;
   const z = zones[zone];
   const strays = [...z.layout.flat(), ...z.stash.flat()].filter(k => !allowed.includes(k));
   if (strays.length === 0) return null;
@@ -807,27 +791,6 @@ export function evictForeign(zones: PanelZones, zone: Zone, allowed: readonly Pa
     home,
     [zone]: { ...z, layout: drop(z.layout), stash: drop(z.stash) },
   };
-}
-
-// С флагом composer-context-row «Картинки» и «Звук» из набора экрана уходят, а место в раскладке
-// достаётся «Контексту» (ADR-023 §Д1): сохранённая раскладка не теряет панель генерации, вместо
-// двух ключей встаёт один на место первого. Дубль между зонами снимает инвариант «панель в одном
-// месте». null — сворачивать нечего (набор экрана прежний или старых ключей в зоне нет)
-function foldGenPanels(zones: PanelZones, zone: Zone, allowed: readonly PanelKey[]): PanelZones | null {
-  if (!allowed.includes('chatContext') || allowed.includes('images') || allowed.includes('sound')) return null;
-  const z = zones[zone];
-  const legacy = (k: PanelKey) => k === 'images' || k === 'sound';
-  if (![...z.layout.flat(), ...z.stash.flat()].some(legacy)) return null;
-  const fold = (cols: PanelKey[][]) => {
-    let placed = cols.flat().includes('chatContext');
-    return cols.map(c => c.flatMap(k => {
-      if (!legacy(k)) return [k];
-      if (placed) return [];
-      placed = true;
-      return ['chatContext' as PanelKey];
-    })).filter(c => c.length > 0);
-  };
-  return enforceZoneInvariant({ ...zones, [zone]: { ...z, layout: fold(z.layout), stash: fold(z.stash) } });
 }
 
 // Зона «свёрнута»: своих открытых панелей нет, но спрятанный набор есть

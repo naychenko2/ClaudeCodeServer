@@ -1,5 +1,4 @@
-// Панель «Голоса» отдельной панелью зоны (ADR-023 §Д1, 2з-3): при флаге composer-context-row вкладки
-// «Звук → Голоса» нет, библиотека живёт сама. Голос не основной объект, а референс с ролью «голос»:
+// Панель «Голоса» отдельной панелью зоны (ADR-023 §Д1, 2з-3): библиотека живёт сама, вкладки «Звук → Голоса» нет. Голос не основной объект, а референс с ролью «голос»:
 // «В контекст» / «В контексте ✓» по контексту этого чата. «Обучить голос» — кнопка под списком.
 
 import { Mic } from 'lucide-react';
@@ -24,7 +23,7 @@ export function VoicesContextPanel({ ctx, layout = 'column' }: { ctx: WorkspaceP
       layout={layout}
     >
       <div style={{ paddingTop: SP.sm }}>
-        <VoicesTab scope={scope} sessionId={sessionId} onPick={() => {}} contextSessionId={sessionId} />
+        <VoicesTab scope={scope} sessionId={sessionId} contextSessionId={sessionId} />
       </div>
     </GenerationPanel>
   );

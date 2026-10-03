@@ -1,55 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const ls = new Map<string, string>();
-(globalThis as unknown as { localStorage: Storage }).localStorage = {
-  getItem: (k: string) => ls.get(k) ?? null,
-  setItem: (k: string, v: string) => { ls.set(k, String(v)); },
-  removeItem: (k: string) => { ls.delete(k); },
-  clear: () => ls.clear(),
-  key: () => null,
-  length: 0,
-} as Storage;
-const dispatched: { type: string; detail: unknown }[] = [];
-(globalThis as unknown as { window: Pick<Window, 'dispatchEvent'> }).window = {
-  dispatchEvent: (e: Event) => { dispatched.push({ type: e.type, detail: (e as CustomEvent).detail }); return true; },
-};
+const filmToSound = vi.hoisted(() => vi.fn(async () => true));
+vi.mock('../context/handoff', () => ({ filmToSound }));
 
-import { __resetComposerStrips, __resetStripHolds, getActiveStrip, requestStrip } from '../../../lib/composerStrips';
-import { REVEAL_PANEL_EVENT } from '../../../lib/subsystems/registryCore';
+// Окружение node: showToast шлёт событие в window
+(globalThis as unknown as { window: Pick<Window, 'dispatchEvent'> }).window = { dispatchEvent: () => true };
+
 import { videoApi } from '../api';
 import { film } from '../mocks';
-import { VIDEO_STRIP } from '../store/videoStore';
-import { composeForFilm } from './compose';
-
-const AVAIL = ['git', VIDEO_STRIP, 'sound'];
+import { composeForFilm, isComposing } from './compose';
 
 beforeEach(() => {
-  ls.clear();
-  dispatched.length = 0;
-  __resetComposerStrips();
-  __resetStripHolds();
+  filmToSound.mockClear();
   vi.restoreAllMocks();
 });
 
-describe('«Сочинить под фильм…»: решение v7 №9', () => {
-  it('полоса остаётся на «Видео», «Звук» открывается рядом со ссылкой «К фильму»', async () => {
-    requestStrip('c1', VIDEO_STRIP);
+describe('«Сочинить под фильм…»', () => {
+  it('черновик звука передаётся в «Звук» через контекст с описанием стиля и возвратом «К фильму»', async () => {
+    const f = film();
     vi.spyOn(videoApi, 'composeMusic').mockResolvedValue({ threadId: 't1' });
-    expect(await composeForFilm('p1', 'c1', 'Мой', film())).toBe(true);
-    // стор «Звука» при смене фокуса нитей просит свою полосу — запрос не должен сработать
-    requestStrip('c1', 'sound');
-    expect(getActiveStrip('c1', AVAIL)).toBe(VIDEO_STRIP);
-    const reveal = dispatched.find(d => d.type === REVEAL_PANEL_EVENT)?.detail as { key: string; opts?: { returnTo?: { key: string; label: string } } } | undefined;
-    expect(reveal?.key).toBe('sound');
-    expect(JSON.stringify(reveal)).toContain('К фильму «Мой»');
-    expect(JSON.stringify(reveal)).toContain('"strip":"video"');
+    expect(await composeForFilm('p1', 'c1', 'Мой', f, false)).toBe(true);
+    expect(filmToSound).toHaveBeenCalledTimes(1);
+    const arg = (filmToSound.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+    expect(arg).toMatchObject({ sessionId: 'c1', path: f.path, filmName: 'Мой', threadId: 't1', reveal: false });
+    expect(String(arg.style)).toContain('Мой');
+    expect(isComposing(f.path, f.document.music?.file)).toBe(true);
   });
 
-  it('отказ сервера снимает удержание: «Звук» снова может просить полосу', async () => {
-    requestStrip('c1', VIDEO_STRIP);
+  it('отказ сервера: передачи нет, результат false', async () => {
     vi.spyOn(videoApi, 'composeMusic').mockRejectedValue(new Error('нет'));
     expect(await composeForFilm('p1', 'c1', 'Мой', film())).toBe(false);
-    requestStrip('c1', 'sound');
-    expect(getActiveStrip('c1', AVAIL)).toBe('sound');
+    expect(filmToSound).not.toHaveBeenCalled();
   });
 });

@@ -17,15 +17,14 @@ import { audioApi, type AudioThread, type AudioThreadVersion, type AudioThreadsS
 import { EMPTY_MIXER, mixPlan, toggleMute, setGain } from '../player/mix';
 import { lruGet, lruSet, normalizeJoint } from '../player/peaks';
 import { dropNode } from '../player/StemMixer';
-import { mixStems, saveVersion, takeVersion } from './actions';
+import { mixStems, saveVersion } from './actions';
 import {
   abSides, doneText, extraFiles, launchEndNote, licenseBadge, midiFileOf, orderedVersions, priceText, saveKind,
   splitSuggestion, stemsFolder, versionStems, versionTag,
 } from './model';
 import { __peaksCacheSize, __resetPeaksCache, CACHE_MAX, loadPeaks } from './serverPeaks';
 import {
-  __applyThreads, __resetAudioStore, getOperationRequest, getPieceFieldOpen, getSelection, getThreadsState, requestOperation,
-  setPieceFieldOpen, setSelection,
+  __applyThreads, __resetAudioStore, getSelection, getThreadsState, setSelection,
 } from './threadStore';
 
 const ver = (id: string, number: number, extra: Partial<AudioThreadVersion> = {}): AudioThreadVersion => ({
@@ -208,33 +207,15 @@ describe('карточка: сохранение', () => {
     expect(await saveVersion('personal', 's1', t, 'v2')).toMatchObject({ ok: false });
     expect(save).not.toHaveBeenCalled();
   });
-
-  it('«Взять» — текущая версия нити от свежей ревизии', async () => {
-    __applyThreads('s1', 'p1', st(9, [t]));
-    const cur = vi.spyOn(audioApi, 'current').mockResolvedValue(st(10, [{ ...t, currentVersionId: 'origin' }]));
-    expect(await takeVersion('p1', 's1', t, 'origin')).toBe(true);
-    expect(cur).toHaveBeenCalledWith('p1', 's1', 't1', 'origin', 9);
-  });
 });
 
-describe('стор нити: контракт выделения для поля «Кусок»', () => {
-  it('одно выделение на нить; панель отмечает открытое поле, карточка просит операцию', () => {
+describe('стор нити: выделение куска', () => {
+  it('одно выделение на нить', () => {
     setSelection('s1', 't1', { start: 1, end: 2.5, versionId: 'v2' });
     expect(getSelection('s1', 't1')).toEqual({ start: 1, end: 2.5, versionId: 'v2' });
     expect(getSelection('s1', 't2')).toBeNull();
     setSelection('s1', 't1', null);
     expect(getSelection('s1', 't1')).toBeNull();
-
-    setPieceFieldOpen('s1', 't1');
-    expect(getPieceFieldOpen('s1')).toBe('t1');
-    setPieceFieldOpen('s1', null);
-    expect(getPieceFieldOpen('s1')).toBeNull();
-
-    requestOperation('s1', 't1', 'trim');
-    requestOperation('s1', 't1', 'repaint');
-    expect(getOperationRequest('s1')).toEqual({ threadId: 't1', op: 'repaint', seq: 2 });
-    // Панель «Звук» открывается на «Настройках»
-    expect((dispatched[dispatched.length - 1] as CustomEvent).detail).toEqual({ key: 'sound', tab: 'settings' });
   });
 });
 

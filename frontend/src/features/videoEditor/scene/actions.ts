@@ -1,8 +1,8 @@
-// Действия полосы, панели и композера «Видео»: настройки сцены (одна цепочка для всех), новая
+// Действия контекста и редакторов «Видео»: настройки сцены (одна цепочка для всех), новая
 // сцена, съёмка по котировке (деньги — только quote → job), снятие выбора, кадры и «Картинки».
 
 import {
-  api, clearGenDraft, createReleaseUndo, FLAGS, followSelection, getFlag, requestStrip, revealWorkspacePanel, showToast,
+  api, clearGenDraft, createReleaseUndo, followSelection, revealContextPanel, showToast,
 } from 'aihome_shell/kit';
 import {
   ERR, errorCode, errorText, retryOf, videoApi,
@@ -14,7 +14,7 @@ import { frameInputOf, setFrameRef } from '../store/frameRefs';
 import { bindFrame, createImageThread, onFrameReady, type FrameBinding } from '../store/imageFrames';
 import {
   clearAgentFrame, ensureVideoThreads, filmTarget, focusFilm, focusScene, getCatalog, getFocusedScene, getPending, getPendingAny, getPrefs,
-  getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs, VIDEO_PANEL, VIDEO_STRIP,
+  getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs, VIDEO_PANEL,
   type PendingSettings,
 } from '../store/videoStore';
 import type { SaveTarget } from '../film/model';
@@ -153,25 +153,17 @@ export async function selectFilmByHuman(scope: string, sessionId: string, path: 
   return ok;
 }
 
-// «↩ К фильму» / «↩ К сцене» из «Звука» или «Картинок»: пока человек был там, соседняя полоса могла забрать
-// поле ввода (новая версия звука просит свою) — возвращаем «Видео»
-export function backToVideoStrip(sessionId: string | null) {
-  if (sessionId) requestStrip(sessionId, VIDEO_STRIP);
-}
-
-// Кнопки и ссылки («Переснять», «Открыть в панели») — явная просьба: открывают и закрытую панель
+// Кнопки и ссылки («Переснять», «Открыть в панели») — явная просьба: открывают и закрытую панель «Контекст»
 export function openScenePanel(sessionId: string | null) {
-  revealWorkspacePanel(VIDEO_PANEL, 'scene', sessionId ? { sessionId } : {});
+  if (sessionId) revealContextPanel(sessionId, {});
 }
 
+// Фильм становится выбранным (если ещё нет) и показывается в панели «Контекст»
 export function openFilmPanel(sessionId: string | null, path?: string) {
-  revealWorkspacePanel(VIDEO_PANEL, 'film', { ...(sessionId ? { sessionId } : {}), ...(path ? { target: path } : {}) });
-}
-
-// Ярлык «Видео» (меню полос, «＋» композера): полоса и панель на «Сцене»
-export function openVideoShortcut(sessionId: string | null) {
-  if (sessionId) requestStrip(sessionId, VIDEO_STRIP);
-  openScenePanel(sessionId);
+  if (!sessionId) return;
+  const scope = getScopeOf(sessionId);
+  if (path && scope && getThreadsState(sessionId).focus.filmPath !== path) void focusFilm(scope, sessionId, path);
+  revealContextPanel(sessionId, {});
 }
 
 // ── Съёмка ──
@@ -271,21 +263,14 @@ async function ensureScene(scope: string, sessionId: string): Promise<VideoScene
 // reveal = false на телефоне: шторка панели закрыла бы поле ввода, а чипы действий над ним появляются сами
 async function toImages(sessionId: string, scene: VideoScene, threadId: string, slot: 'A' | 'B', needEdit = false, draw = false, reveal = true) {
   bindFrame(sessionId, { sceneId: scene.sceneId, slot, threadId, ...(needEdit ? { needEdit } : {}) });
-  // Строка контекста: нить становится основным объектом, а возврат к сцене держит панель «Контекст»
-  if (getFlag(FLAGS.composerContextRow)) {
-    await sceneToImages({ sessionId, sceneId: scene.sceneId, sceneName: scene.name, threadId, draw, reveal });
-    return;
-  }
-  revealWorkspacePanel('images', 'settings', {
-    sessionId, preset: { thread: threadId },
-    returnTo: { key: VIDEO_PANEL, strip: VIDEO_STRIP, tab: 'scene', target: scene.sceneId, label: `К сцене «${scene.name}» — панель «Видео»` },
-  });
+  // Нить становится основным объектом, а возврат к сцене держит панель «Контекст»
+  await sceneToImages({ sessionId, sceneId: scene.sceneId, sceneName: scene.name, threadId, draw, reveal });
 }
 
-// «Нарисовать в «Картинках»»: черновик картинки заводится, панель «Картинки» открывается с возвратом;
+// «Нарисовать в «Картинках»»: черновик картинки заводится и становится основным объектом контекста;
 // первая готовая версия сама станет кадром
 export async function drawInImages(scope: string, sessionId: string, slot: 'A' | 'B', reveal = true, known?: VideoScene): Promise<void> {
-  // Строка контекста знает сцену сама (основной объект): новую заводить нельзя
+  // Контекст знает сцену сама (основной объект): новую заводить нельзя
   const scene = known ?? await ensureScene(scope, sessionId);
   if (!scene) return;
   try {
@@ -320,19 +305,12 @@ export function wireFrameBinding() {
     const scope = getScopeOf(sessionId);
     if (!scope) return;
     const frame: FrameRef = { kind: 'image', threadId: b.threadId, versionId, follow: true };
-    // Строка контекста: кадр — референс роли `frame-a`/`frame-b`, запуск по ревизии читает только его
-    if (getFlag(FLAGS.composerContextRow)) {
-      const input = frameInputOf(frame, isPersonalScope(scope));
-      if (!input) return;
-      void (async () => {
-        if (getFocusedScene(sessionId)?.sceneId !== b.sceneId && !await focusScene(scope, sessionId, b.sceneId)) return;
-        await setFrameRef(sessionId, b.slot, input);
-      })();
-      return;
-    }
+    // Кадр — референс роли `frame-a`/`frame-b`, запуск по ревизии читает только его
+    const input = frameInputOf(frame, isPersonalScope(scope));
+    if (!input) return;
     void (async () => {
-      if (getFocusedScene(sessionId)?.sceneId !== b.sceneId) await focusScene(scope, sessionId, b.sceneId);
-      changeSettings(scope, sessionId, b.slot === 'A' ? { frameA: frame } : { frameB: frame });
+      if (getFocusedScene(sessionId)?.sceneId !== b.sceneId && !await focusScene(scope, sessionId, b.sceneId)) return;
+      await setFrameRef(sessionId, b.slot, input);
     })();
   });
 }

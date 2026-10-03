@@ -214,8 +214,9 @@ test('карточка на версию: A/B, выделение, сведен�
   // Выделение куска протяжкой по волне — у своей карточки
   await dragOn(page, card.getByRole('slider', { name: /^Волна/ }).first(), 0.2, 0.6);
   await expect(card.getByText(/^Выделено /)).toBeVisible();
-  await expect(card.getByRole('button', { name: 'Перегенерировать кусок' })).toBeVisible();
-  await expect(page.locator('[data-audio-card="fxv3"]').getByRole('button', { name: 'Перегенерировать кусок' })).toHaveCount(0);
+  // Кусок правят в редакторе звука; «Перегенерировать кусок» — чип действий, а не кнопка карточки
+  await expect(card.getByRole('button', { name: 'Открыть в редакторе' })).toBeVisible();
+  await expect(page.locator('[data-audio-card="fxv3"]').getByRole('button', { name: 'Открыть в редакторе' })).toHaveCount(0);
 
   // Версия 1 (правка без ИИ) — своя карточка: A/B с исходником, переключение не сбивает позицию
   const edit = page.locator(`[data-audio-card="${ctx.v1}"]`);

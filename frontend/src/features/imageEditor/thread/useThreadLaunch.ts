@@ -10,7 +10,7 @@ import {
   AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditOp, type ImageEditQuoteRequest,
 } from '../api';
 import {
-  effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, providerTitle, variantsWord,
+  effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, variantsWord,
 } from '../format';
 import { currentModel } from '../ProviderModelPicker';
 import { contextInputCounts } from '../context/samples';
@@ -23,12 +23,12 @@ import { isPersonalScope } from '../scope';
 import {
   activeChoice, DEFAULT_CHOICE, effectiveMode, footPrice, getCreateRatio, isOneVariant, launchMarks, modeOp, opBlockReason, queueText, quickOf,
   resolveOp, runVerb, usePanelChoiceVersion, type PanelChoice,
-} from '../panel/panelOp';
+} from '../context/ops';
 import { useQuote } from '../useQuote';
 import { buildQuoteBody, marksSent } from './quoteBody';
-import { getCatalog, loadCatalog, useCatalog } from './catalog';
+import { loadCatalog, useCatalog } from './catalog';
 import { effectiveSettings, getPrefs, modeSettings, setModeSettings, setPrefs, usePrefs, type ProjectPrefs } from './prefs';
-import { effectiveImageMode, getStoredImageMode, modeAware, noteLastEdited, useImageModeVersion, type ImageMode } from './modeState';
+import { effectiveImageMode, getStoredImageMode, modeAware, useImageModeVersion, type ImageMode } from './modeState';
 import { activeStepOf } from './actions';
 import { currentVersion, isLegacyThread, originFile, threadHasImage, versionStep } from './model';
 import { getSamples, getThreadMarks, imageDraftKey, isWholeImage, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
@@ -72,15 +72,6 @@ export function launchMode(sessionId: string | null, thread: ImageThread | null)
 // Настройки запуска: с режимом — выбор режима, без него — как раньше
 export const launchSettings = (mode: ImageMode | null, prefs: ProjectPrefs, own: ImageThreadSettings | null | undefined) =>
   mode ? modeSettings(mode, prefs, own) : effectiveSettings(prefs, own);
-
-// Поставщик, модель и ориентир цены без подписки — для строк вне рендера полосы
-// (меню переключателя полос): каталог берётся из кэша, котировки нет
-export function launchSummaryParts(projectId: string, thread: ImageThread | null, sessionId: string | null = null) {
-  const settings = launchSettings(launchMode(sessionId, thread), getPrefs(projectId), thread?.settings);
-  const { pv, m } = resolveModel(getCatalog(projectId), settings);
-  const price = m?.priceHint ? priceSum(m.priceHint.amount * settings.count, m.priceHint.unit, true) : null;
-  return { provider: pv ? providerTitle(pv) : null, model: m?.label ?? null, count: settings.count, price };
-}
 
 export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -237,8 +228,6 @@ export async function launchThread(
     cx?.onJob?.(started.jobId);
     // Пометки ушли с запуском
     if (withMarks || withMask) setThreadMarks(thread.id, [], null);
-    // Правили эту картинку — отметка «правили последней» в меню «Что править?»
-    if (!fromScratch) noteLastEdited(sessionId, thread.id);
     // Запуск забрал черновик элемента — пометка «черновик» уходит
     clearGenDraft(imageDraftKey(thread.id));
     // Запуск здесь всегда от человека (агент запускает через MCP мимо фронта): строка

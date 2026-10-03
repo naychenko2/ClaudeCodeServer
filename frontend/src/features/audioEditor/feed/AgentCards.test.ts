@@ -20,9 +20,8 @@ import { getSlotItem, registerSubsystem, type ChatItemToolCtx } from '../../../l
 import { setAllSubsystems } from '../../../lib/subsystems';
 import { setAllFlags } from '../../../lib/featureFlags';
 import type { AudioCatalog, AudioThread } from '../api';
-import { soundMode } from '../composer/soundMode';
 import { manifest } from '../manifest';
-import { __applyThreads, __resetAudioStore, __setScopeData, suggestPrompt } from '../thread/threadStore';
+import { __applyThreads, __resetAudioStore, __setScopeData } from '../thread/threadStore';
 import { AudioConcatCard, AudioFocusLine, AudioLaunchCard, AudioPromptCard, AudioServiceLine } from './AgentCards';
 import { AUDIO_TOOL } from './parse';
 
@@ -194,28 +193,19 @@ describe('audio_concat', () => {
 });
 
 describe('audio_suggest_prompt', () => {
-  it('с выбранным звуком — «Вставить в промпт» и «Сгенерировать» с ценой', () => {
+  it('с выбранным звуком — «Сгенерировать» с ценой, без «Вставить в промпт»', () => {
     withThreads(thread(null));
     const out = html(AudioPromptCard, tool('audio_suggest_prompt', { prompt: 'Добрый вечер!', mode: 'voice' }, '{}'));
     expect(out).toContain('Добрый вечер!');
     expect(out).toContain('Голос');
-    expect(out).toContain('Вставить в промпт');
+    expect(out).not.toContain('Вставить в промпт');
     expect(out).toContain('Сгенерировать · бесплатно');
   });
 
   it('без выбранного звука — подсказка вместо кнопок', () => {
     const out = html(AudioPromptCard, tool('audio_suggest_prompt', { prompt: 'Добрый вечер!' }, '{}'));
-    expect(out).toContain('Выберите звук в полосе «Звук»');
+    expect(out).toContain('Сделайте звук основным объектом');
     expect(out).not.toContain('Сгенерировать');
-  });
-
-  it('«Вставить в промпт» включает режим «Звук» и кладёт текст в поле', () => {
-    withThreads(thread(null));
-    const mctx = { projectId: P, sessionId: S };
-    expect(soundMode.prefill!(mctx)).toBeNull();
-    suggestPrompt(S, 'Добрый вечер!');
-    expect(soundMode.prefill!(mctx)).toEqual({ key: 'suggest:1', text: 'Добрый вечер!' });
-    expect(soundMode.autoSelect!(mctx)).toBe('request:1');
   });
 });
 

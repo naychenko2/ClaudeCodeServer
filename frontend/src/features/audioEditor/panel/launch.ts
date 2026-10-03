@@ -1,13 +1,8 @@
-// Сводка полосы «Звук» (макет audio-editor-v2-proposal.md, раздел «Полоса «Звук» над
-// композером»): кнопка-сводка, свёрнутая строка и пункт меню переключателя говорят одно и
-// то же. Чистые функции — под юнит-тестом.
-//
-// Настройки — цепочкой «настройки нити → префы режима → умолчание каталога», как
+// Разрешение запуска звука: настройки — цепочкой «настройки нити → префы режима → умолчание каталога», как
 // AudioPrefsResolver на бэкенде. Режим задаёт нить; без её настроек — ярлык «Голос» / «Музыка».
 
 import type { AudioCatalog, AudioMode, AudioModelInfo, AudioOp, AudioPrefs, AudioProvider, AudioThread } from '../api';
-import { defaultOp, isNoAi, MODE_LABEL, opInfo } from '../ops';
-import type { JobProgress } from '../thread/threadStore';
+import { defaultOp } from '../ops';
 
 export interface ResolvedLaunch {
   mode: AudioMode;
@@ -81,47 +76,3 @@ function money(amount: number, unit: string): string {
   return `${n} ${unit}`;
 }
 
-// «podcast-intro.mp3 · версия 3» / «Новый звук»; short — без версии исходника
-export function focusLabel(thread: AudioThread): string {
-  const name = thread.file ? thread.file.split('/').pop()! : thread.name || 'Новый звук';
-  const v = thread.versions.find(x => x.id === thread.currentVersionId);
-  if (!v) return name;
-  return `${name} · ${v.id === 'origin' ? 'исходник' : `версия ${v.number}`}`;
-}
-
-export interface SoundSummaryParts {
-  focus: string | null;
-  launch: ResolvedLaunch;
-}
-
-// short — кнопка-сводка: «Голос · Озвучить · Локально · Qwen3-TTS 1.7B · Аня · 2 вар. · бесплатно»;
-// иначе — строка целиком: «Работаем с: intro.mp3 · версия 3 · …» / «Звук не выбран · …».
-// У правок без ИИ поставщика, модели и вариантов нет: «Обработка · Склеить · без ИИ»
-export function soundSummary({ focus, launch: L }: SoundSummaryParts, short = false): string {
-  const model = L.model?.label ?? (L.auto ? 'Авто' : null);
-  const body = isNoAi(L.op)
-    ? [MODE_LABEL[L.mode], opInfo(L.op)?.label, 'без ИИ']
-    : [MODE_LABEL[L.mode], opInfo(L.op)?.label, L.provider?.label, model, L.voice, `${L.count} вар.`, L.price];
-  if (short) return body.filter(Boolean).join(' · ');
-  return [focus ? `Работаем с: ${focus}` : 'Звук не выбран', ...body].filter(Boolean).join(' · ');
-}
-
-const eta = (sec: number) => (sec < 60 ? `${sec} с` : `${Math.round(sec / 60)} мин`);
-
-// Бейдж очереди GPU: ход идущей задачи нити; без задачи — только пометка тяжёлой локальной
-// операции. null — бейджа нет (облако без запуска)
-export function queueBadge(jobs: JobProgress[], runningWithoutProgress: boolean, L: ResolvedLaunch): string | null {
-  const j = jobs[0];
-  if (j) {
-    if (j.stage === 'queued') {
-      const pos = j.queuePosition && j.queuePosition > 0 ? `GPU: ${j.queuePosition}-я в очереди` : 'в очереди';
-      return j.etaSeconds != null ? `${pos} · старт ≈ через ${eta(j.etaSeconds)}` : pos;
-    }
-    if (j.stage === 'downloading') return 'забираем результат';
-    const of = j.count > 1 ? ` · вариант ${j.variant} из ${j.count}` : '';
-    return `идёт: ${opInfo(L.op)?.label ?? 'генерация'}${of}${j.etaSeconds != null ? ` · ещё ≈ ${eta(j.etaSeconds)}` : ''}`;
-  }
-  if (runningWithoutProgress) return 'идёт генерация';
-  if (L.heavy && L.provider?.key === 'local') return 'тяжёлая · одна за раз';
-  return null;
-}

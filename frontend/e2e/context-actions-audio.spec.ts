@@ -243,13 +243,3 @@ for (const { name, vp } of VIEWPORTS.filter(v => v.name !== '360')) {
     await expect(page.locator('[data-train-voice]')).toHaveCount(0);
   });
 }
-
-test('без флага composer-context-row карточка звука прежняя: «Обработать ▾», «Голоса» вкладкой «Звука»', async ({ page }) => {
-  newWorld({ feed: [anchor], audio: [songThread()], flags: { 'audio-editor': true, 'composer-context-row': false } });
-  await openChat(page, { vp: D });
-  await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
-  await registerAudio(page);
-  await expect(card(page).locator('[data-audio-process]')).toBeVisible({ timeout: 15_000 });
-  await expect(card(page).getByRole('button', { name: 'В контекст' })).toHaveCount(0);
-  void P;
-});

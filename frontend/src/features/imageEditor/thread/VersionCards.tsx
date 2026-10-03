@@ -8,7 +8,7 @@
 
 import { useState, type ReactNode } from 'react';
 import {
-  AlertTriangle, Download, Expand, RotateCcw, Save, Sparkles, Target, Undo2, X,
+  AlertTriangle, Download, Expand, RotateCcw, Save, Sparkles, Target, X,
 } from 'lucide-react';
 import {
   Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick,
@@ -16,7 +16,7 @@ import {
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { enterScope, isPersonalScope } from '../scope';
-import { continueFrom, pickByHuman, saveToProject, versionSaved } from './actions';
+import { saveToProject, versionSaved } from './actions';
 import { download, PERSONAL_DOWNLOAD_HINT } from './download';
 import {
   downloadName, findVersion, fromVersion, launchEndNote, launchOf, launchVersions, ORIGIN,
@@ -89,7 +89,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
 }) {
   const [busy, setBusy] = useState(false);
   const fill = useCardFill(sessionId, thread, version.id);
-  const current = fill.on ? fill.working : focused && thread.currentVersionId === version.id;
+  const current = fill.working;
   const src = versionSrc(projectId, thread, version);
   const saved = versionSaved(thread, version);
   const name = `${threadName(thread)} · ${versionName(version)}`;
@@ -103,7 +103,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
 
   return (
     <Shell current={current} testId={String(version.number)}
-      onPick={() => { void (fill.on ? fill.pick() : pickByHuman(projectId, sessionId, thread.id, focused)); }}>
+      onPick={() => { void fill.pick(); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
         <span title={name} style={{
           fontSize: FS.sm, fontWeight: 600, color: C.textHeading, minWidth: 0, flex: 1,
@@ -132,21 +132,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
             Скачать
           </Button>
         )}
-        {fill.on && <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={version.id} fill={fill} />}
-        {!fill.on && primary === 'continue' && (
-          <Button size="xs" variant="secondary" leftIcon={ic(Undo2)} disabled={busy}
-            title="Следующая правка пойдёт от этой версии, остальные останутся в ленте"
-            onClick={() => { void run(() => continueFrom(projectId, sessionId, thread, version.id)); }}>
-            Продолжить от неё
-          </Button>
-        )}
-        {!fill.on && primary === 'work' && (
-          <Button size="xs" variant="primary" leftIcon={ic(Target)} disabled={busy}
-            title="Полоса «Картинки» и режим «Картинка» будут работать с этой версией"
-            onClick={() => { void run(() => continueFrom(projectId, sessionId, thread, version.id)); }}>
-            Работать с этой
-          </Button>
-        )}
+        <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={version.id} fill={fill} />
         {src && primary !== 'download' && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex' }}>
             <IconButton size="xs" title="Скачать" ariaLabel="Скачать" onClick={save}>
@@ -210,7 +196,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   // Личный чат вне проекта: ctx.projectId = null, область — personal
   const projectId = enterScope(ctx.projectId, ctx.sessionId);
   const state = useThreads(projectId, ctx.sessionId);
-  const focusId = useFocusedThreadId(ctx.sessionId ?? '', state.focus);
+  const focusId = useFocusedThreadId(ctx.sessionId ?? '');
   const [busy, setBusy] = useState(false);
   const data = (rec?.data ?? {}) as LaunchData;
   const jobId = str(data.jobId);

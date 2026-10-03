@@ -15,7 +15,6 @@ const dispatched: { type: string; detail: unknown }[] = [];
   dispatchEvent: (e: Event) => { dispatched.push({ type: e.type, detail: (e as CustomEvent).detail }); return true; },
 };
 
-import { __resetComposerStrips, getActiveStrip, requestStrip } from '../../../lib/composerStrips';
 import { __resetAgentPicks, getAgentPick } from '../../../lib/genPanelFollow';
 import { __resetGenPanelOpen, holdGenPanelOpen } from '../../../lib/genPanelOpen';
 import { REVEAL_PANEL_EVENT } from '../../../lib/subsystems/registryCore';
@@ -23,13 +22,12 @@ import { videoApi } from '../api';
 import { CATALOG, film, FILM_PATH, PREFS, scene, threads } from '../mocks';
 import { saveTargetFor } from '../film/model';
 import { startSceneSave } from '../feed/SceneCard';
-import { backToVideoStrip, saveScene, selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
+import { saveScene, selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
 import {
   __applyThreads, __resetVideoStore, __setFilm, clearAgentFrame, ensureVideoThreads, getAgentFrames, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent, mutate,
-  patchFilm, sceneDraftKey, VIDEO_PANEL, VIDEO_STRIP,
+  patchFilm, sceneDraftKey, VIDEO_PANEL,
 } from './videoStore';
 
-const AVAIL = ['git', VIDEO_STRIP];
 const reveals = () => dispatched.filter(d => d.type === REVEAL_PANEL_EVENT).map(d => d.detail);
 const changed = (revision: number, st = threads(revision, [scene('s1'), scene('s2')])) =>
   ({ type: 'video_thread_changed' as const, sessionId: 'c1', scopeKey: 'p1', revision, state: st });
@@ -38,18 +36,16 @@ beforeEach(() => {
   ls.clear();
   dispatched.length = 0;
   __resetVideoStore();
-  __resetComposerStrips();
   __resetAgentPicks();
   __resetGenPanelOpen();
   vi.restoreAllMocks();
 });
 
 describe('стор «Видео»: события → состояние', () => {
-  it('загрузка берёт сцены, каталог и префы; фокус сцены просит полосу «Видео»', async () => {
+  it('загрузка берёт сцены, каталог и префы и выбирает сцену серверного фокуса', async () => {
     vi.spyOn(videoApi, 'state').mockResolvedValue({ threads: threads(3, [scene('s1')], { sceneId: 's1' }), catalog: CATALOG, prefs: PREFS });
     await ensureVideoThreads('p1', 'c1');
     expect(getFocusedScene('c1')?.sceneId).toBe('s1');
-    expect(getActiveStrip('c1', AVAIL)).toBe(VIDEO_STRIP);
   });
 
   it('старая ревизия события пропускается', () => {
@@ -74,13 +70,6 @@ describe('агент не двигает панель', () => {
     handleEvent(changed(2, threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' })));
     expect(reveals()).toEqual([]);
     expect(getAgentPick('c1')).toMatchObject({ panelKey: VIDEO_PANEL, target: sceneDraftKey('s2'), label: 'Сцена 2', tab: 'scene' });
-  });
-
-  it('выбор агента не переключает полосу: на телефоне это закрыло бы шторку соседнего раздела', () => {
-    __applyThreads('c1', 'p1', threads(1, [scene('s1')], {}));
-    handleEvent(changed(2, threads(2, [scene('s1')], { sceneId: 's1' })));
-    expect(getActiveStrip('c1', AVAIL)).not.toBe(VIDEO_STRIP);
-    expect(getAgentPick('c1')?.tab).toBe('scene');
   });
 
   it('правка настроек в полёте не глушит выбор агента — глушит только свой выбор', async () => {
@@ -117,7 +106,7 @@ describe('клик по карточке: панель следует за вы�
     vi.spyOn(videoApi, 'focus').mockResolvedValue(threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' }));
     holdGenPanelOpen(VIDEO_PANEL, 'column');
     await selectSceneByHuman('p1', 'c1', 's2');
-    expect(reveals()).toEqual([{ key: VIDEO_PANEL, tab: 'scene', sessionId: 'c1', target: sceneDraftKey('s2'), follow: true }]);
+    expect(reveals()).toEqual([{ key: 'chatContext', tab: 'scene', sessionId: 'c1', target: sceneDraftKey('s2'), follow: true }]);
   });
 
   it('закрытая панель не открывается — выбор просто запомнен', async () => {
@@ -133,7 +122,7 @@ describe('клик по карточке: панель следует за вы�
     vi.spyOn(videoApi, 'focus').mockResolvedValue(threads(2, [scene('s1')], { filmPath: FILM_PATH }));
     holdGenPanelOpen('images', 'column');
     await selectFilmByHuman('p1', 'c1', FILM_PATH);
-    expect(reveals()).toEqual([{ key: VIDEO_PANEL, tab: 'film', sessionId: 'c1', target: FILM_PATH, follow: true }]);
+    expect(reveals()).toEqual([{ key: 'chatContext', tab: 'film', sessionId: 'c1', target: FILM_PATH, follow: true }]);
   });
 });
 
@@ -214,17 +203,6 @@ describe('B2: место вызова — карточка сцены', () => {
     expect(spy.mock.calls[0][3]).toEqual({ versionId: 'ver-1', folder: 'video/утро' });
     expect(startSceneSave('p1', 'c1', scene('s1', { folder: '' }), 'ver-1', 'save')).toBe(false);
     expect(spy).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('B10: возврат из «Звука» возвращает полосу «Видео»', () => {
-  it('новая версия звука забрала поле ввода — «↩ К фильму» отдаёт его «Видео»', () => {
-    const all = ['git', VIDEO_STRIP, 'sound'];
-    requestStrip('c1', VIDEO_STRIP);
-    requestStrip('c1', 'sound');
-    expect(getActiveStrip('c1', all)).toBe('sound');
-    backToVideoStrip('c1');
-    expect(getActiveStrip('c1', all)).toBe(VIDEO_STRIP);
   });
 });
 

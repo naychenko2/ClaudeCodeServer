@@ -4,7 +4,7 @@
 
 import { AudioLines, Mic } from 'lucide-react';
 import {
-  C, FLAGS, getFlag, ICON_SIZE, ICON_STROKE, R, SP, notifyKindChanged,
+  C, ICON_SIZE, ICON_STROKE, R, SP, notifyKindChanged,
   type ChatContextItem, type ContextKindApi, type ContextKindCtx,
 } from 'aihome_shell/kit';
 import type { AudioOp } from '../api';
@@ -68,7 +68,7 @@ export const audioKindApi: ContextKindApi = {
   actions: (ctx, s) => {
     warm(ctx);
     const thread = threadOfPrimary(ctx.sessionId, s.primary);
-    if (thread && getFlag(FLAGS.composerContextRow)) migrateLegacyVoice(audioScope(ctx.projectId), ctx.sessionId, thread.id, s.refs);
+    if (thread) migrateLegacyVoice(audioScope(ctx.projectId), ctx.sessionId, thread.id, s.refs);
     return audioActions(ctx, s);
   },
   refRoles: (_ctx, primary, candidateKind) => (primary.kind === AUDIO_KIND ? audioRefRoles(candidateKind) : []),

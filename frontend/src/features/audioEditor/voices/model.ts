@@ -9,12 +9,6 @@ import {
 import type { AudioQuote } from '../api';
 import { money } from '../panel/model';
 
-// Значение поля «Голос» панели «Звук» для голоса из библиотеки
-export const VOICE_PICK_PREFIX = 'voice:';
-export const voicePickValue = (slug: string) => `${VOICE_PICK_PREFIX}${slug}`;
-export const pickedSlug = (value: string | null | undefined) =>
-  value?.startsWith(VOICE_PICK_PREFIX) ? value.slice(VOICE_PICK_PREFIX.length) : null;
-
 export const PERSONAL_TITLE = '«Голоса» живут в проекте';
 export const PERSONAL_TEXT =
   'Библиотека хранится в папке voices/ проекта. В личном чате можно озвучивать готовыми дикторами, по описанию и по образцу из файла.';
@@ -112,9 +106,6 @@ export function whereWorks(v: AudioVoice, now = new Date()): WhereRow[] {
     { key: 'yandex', label: 'Яндекс', status: 'no', note: 'Яндекс не клонирует голоса' },
   ];
 }
-
-// Пара .pth и .index на месте — голос годится смене голоса моделью RVC
-export const hasRvcModel = (v: AudioVoice) => v.providers.some(p => p.provider === 'rvc' && p.state === 'ok');
 
 export const isStale = (v: AudioVoice) => v.needsAttention || v.providers.some(p => p.state === 'stale');
 

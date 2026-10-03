@@ -3,7 +3,7 @@
 
 import type { ExecutorListModel, ExecutorRow } from 'aihome_shell/kit';
 import type { ImageEditCatalog, ImageEditOp } from '../api';
-import { quickOf } from '../panel/panelOp';
+import { quickOf } from './ops';
 import { AUTO_EXECUTOR, executorRows, executorSettings, executorValue } from '../panel/executorRows';
 import { modeSettings, getPrefs, setModeSettings } from '../thread/prefs';
 import { mutate } from '../thread/threadStore';

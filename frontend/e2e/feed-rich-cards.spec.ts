@@ -220,10 +220,11 @@ for (const vp of [{ name: 'w1440', width: 1440, height: 1000 }, { name: 'm360', 
     await expect(page.locator('[data-audio-card="draft"]')).toHaveCount(0);
     await expect(page.locator('[data-audio-card="v3"] [data-audio-nav]')).toHaveText('версия 3 · вариант 1 из 2');
     await expect(page.locator('[data-audio-card="running"]').getByRole('button', { name: 'Отменить' })).toHaveCount(1);
-    // У каждой карточки — полный набор: плеер, «Обработать», «Скачать» (личный чат)
+    // У каждой карточки — полный набор: «Работать с этой», «В контекст», «Скачать» (личный чат); меню «Обработать ▾» удалено
     for (const id of ['v1', 'v2', 'v3', 'v4']) {
       const c = page.locator(`[data-audio-card="${id}"]`);
-      await expect(c.locator('[data-audio-process]'), id).toHaveCount(1);
+      await expect(c.getByRole('button', { name: 'Работать с этой' }), id).toHaveCount(1);
+      await expect(c.locator('[data-audio-process]'), id).toHaveCount(0);
       await expect(c.getByRole('button', { name: 'Скачать' }), id).toHaveCount(1);
     }
     await page.locator('[data-audio-card="v1"]').scrollIntoViewIfNeeded();
@@ -242,12 +243,6 @@ for (const vp of [{ name: 'w1440', width: 1440, height: 1000 }, { name: 'm360', 
     const dl = page.waitForEvent('download');
     await page.locator('[data-audio-card="v3"]').getByRole('button', { name: 'Скачать' }).click();
     expect(new URL((await dl).url()).pathname).toBe(`/api/audio-editor/chats/${S}/threads/${T}/versions/v3/files/main`);
-    // «Обработать ▾» у не текущей версии сперва ставит её в работу
-    await page.locator('[data-audio-card="v1"] [data-audio-process] button').click();
-    await page.getByText('Сменить голос', { exact: true }).click();
-    await expect.poll(() => calls.filter(c => c.url.endsWith(`/threads/${T}/current`)).map(c => (c.body as { versionId: string }).versionId)).toEqual(['v2', 'v1']);
-    await closeSheet(page);
-
     // Картинки: два варианта — две карточки во всю ширину, идущий запуск — одна карточка хода
     await expect.poll(async () => imageCards(page).evaluateAll(els => els.map(e => e.getAttribute('data-image-version'))))
       .toEqual(['1', '2', 'running']);

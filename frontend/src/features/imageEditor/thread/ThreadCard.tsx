@@ -13,7 +13,7 @@ import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { imageEditorApi } from '../api';
 import { enterScope, isPersonalScope } from '../scope';
 import { isFreeUnit, money, variantsWord } from '../format';
-import { dismissJob, pickByHuman, saveToProject, savedStepOf, takeVariant, workWith } from './actions';
+import { dismissJob, saveToProject, savedStepOf, takeVariant } from './actions';
 import { download } from './download';
 import {
   chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isHiddenDraft, isLegacyThread, ORIGIN, saveFolder,
@@ -226,15 +226,14 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
   const saveState = stackSaveState(thread, isCurrent, unsaved, personal);
 
   const edit = async () => {
-    if (fill.on) await fill.pick();
-    else if (!focused && !(await workWith(projectId, sessionId, thread.id))) return;
+    await fill.pick();
     openEditor(sessionId, thread.id);
   };
   const save = async () => { setSaving(true); await saveToProject(projectId, sessionId, thread); setSaving(false); };
 
   return (
     <Frame focused={focused && isCurrent} stacked={chain.length > 1} dashed={draft} dim={!!stack?.old}
-      onPick={() => { void (fill.on ? fill.pick() : pickByHuman(projectId, sessionId, thread.id, focused)); }}>
+      onPick={() => { void fill.pick(); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm }}>
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ImageIcon, ICON_SIZE.sm)}</span>
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{threadName(thread)}</span>
@@ -270,9 +269,7 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
 
       {!draft && (
         <Acts>
-          {fill.on
-            ? isCurrent && <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={null} fill={fill} size="sm" />
-            : !focused && <Button size="sm" variant="secondary" onClick={() => { void workWith(projectId, sessionId, thread.id); }}>Работать с этой</Button>}
+          {isCurrent && <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={null} fill={fill} size="sm" />}
           <Button size="sm" variant={focused ? 'secondary' : 'ghost'} leftIcon={ic(Pencil)} onClick={() => { void edit(); }}>Редактировать</Button>
           {src && (
             <Button size="sm" variant="ghost" leftIcon={ic(Download)} title="Скачать" onClick={() => { void download(src, () => threadName(thread)); }}>
@@ -295,7 +292,7 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   // Личный чат вне проекта: ctx.projectId = null, область — personal
   const projectId = enterScope(ctx.projectId, ctx.sessionId);
   const state = useThreads(projectId, ctx.sessionId);
-  const focusId = useFocusedThreadId(ctx.sessionId ?? '', state.focus);
+  const focusId = useFocusedThreadId(ctx.sessionId ?? '');
   const data = (rec?.data ?? {}) as { threadId?: unknown; stackId?: unknown; versionId?: unknown };
   const thread = typeof data.threadId === 'string' ? state.threads.find(t => t.id === data.threadId) : undefined;
   if (!ctx.sessionId || !thread) {

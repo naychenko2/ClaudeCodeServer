@@ -12,7 +12,7 @@ import type { WorkspacePanelDefCtx } from '../../../../lib/subsystems/registryCo
 import { ERR, errorCode, errorText, videoApi, type FilmState, type VideoScene } from '../../api';
 import { ProjectPicker } from '../ProjectPicker';
 import { Hint, ic, Label } from '../primitives';
-import { createScene, openScenePanel, selectSceneByHuman } from '../../scene/actions';
+import { createScene } from '../../scene/actions';
 import { isPersonalScope, videoScope } from '../../scope';
 import {
   buildFilm, cancelBuild, filmName, focusFilm, loadFilmList, patchFilm, useFilm, useFilmList, useVideoStoreVersion,
@@ -224,11 +224,11 @@ type Picking = null | 'scene' | 'mp4' | 'music';
 
 export function FilmTab({ ctx, path: pathOverride, editor }: {
   ctx: WorkspacePanelDefCtx;
-  // Фильм, с которым работает редактор «Монтаж»; без него — фильм серверного фокуса (прежняя панель)
+  // Фильм, с которым работает редактор «Монтаж»; без него — фильм серверного фокуса
   path?: string | null;
-  // Редактор «Монтаж»: «Работать со сценой» делает сцену основным объектом контекста (прежняя панель
-  // открывает вкладку «Сцена»); новая сцена тоже уходит в контекст, а окно закрывается
-  editor?: { workWith: (scene: VideoScene) => void; afterNewScene: (created: boolean) => void };
+  // Редактор «Монтаж»: «Работать со сценой» делает сцену основным объектом контекста;
+  // новая сцена тоже уходит в контекст, а окно закрывается
+  editor: { workWith: (scene: VideoScene) => void; afterNewScene: (created: boolean) => void };
 }) {
   const { sessionId, isMobile } = ctx;
   const scope = videoScope(ctx.projectId);
@@ -319,12 +319,8 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
     // Сцены в этом чате нет: заводим новую по снимку из фильма
     const fa = it.scene?.frameA;
     const fresh = () => createScene(scope, sessionId, fa ? { frameA: { kind: 'file', path: fa } } : {});
-    if (editor) {
-      if (s) editor.workWith(s);
-      else void fresh().then(editor.afterNewScene);
-    // К удалению в 4б: ветка прежней панели «Видео» (VideoPanel), пока она ещё рендерит FilmTab без editor
-    } else if (s) void selectSceneByHuman(scope, sessionId, s.sceneId).then(() => openScenePanel(sessionId));
-    else void fresh().then(() => openScenePanel(sessionId));
+    if (s) editor.workWith(s);
+    else void fresh().then(editor.afterNewScene);
   };
   const actions: RowActions = {
     onMove: (from, to) => { void patch([{ op: 'move', from, to }]); setHighlight(to); },
@@ -332,7 +328,8 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
     onTrim: (i, trim) => { void patch([{ op: 'trim', index: i, trim }]); },
     onCut: (i, type, sec) => { void patch([{ op: 'cut', index: i, cutType: type, ...(type === 'butt' ? {} : { sec }) }]); },
     onReshoot: reshoot,
-    ...(editor ? { onWork: reshoot, hasScene: (i: number) => !!sceneOfItem(scenes, doc.items[i]) } : {}),
+    onWork: reshoot,
+    hasScene: (i: number) => !!sceneOfItem(scenes, doc.items[i]),
     onReveal: i => { void openProjectFile(doc.items[i].file, true); },
   };
   const addFile = (file: string, scene?: VideoScene | null) => {
@@ -344,7 +341,7 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
   const lastFrameB = doc.items[doc.items.length - 1]?.scene?.frameB;
   const newScene = () => {
     void createScene(scope, sessionId, lastFrameB ? { frameA: { kind: 'file', path: lastFrameB } } : {})
-      .then(ok => { if (editor) editor.afterNewScene(ok); else openScenePanel(sessionId); });
+      .then(editor.afterNewScene);
   };
 
   if (script) {
@@ -440,7 +437,7 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
       {doc.items.length > 0 && (
         <div style={{ marginTop: SP.sm }}>
           <Button size="sm" variant="secondary" leftIcon={ic(Sparkles)} disabled={composing || !soundOn} title={soundOn ? undefined : 'Раздел «Звук» выключен'} style={isMobile ? { minHeight: TOUCH } : undefined}
-            onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f, !isMobile).then(ok => { if (ok && editor) ctx.onClose(); }); }}>
+            onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f, !isMobile).then(ok => { if (ok) ctx.onClose(); }); }}>
             {composing ? 'Сочиняем в «Звуке»…' : 'Сочинить под фильм…'}
           </Button>
           <Hint>

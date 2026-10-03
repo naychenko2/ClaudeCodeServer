@@ -1,20 +1,18 @@
 // Стор «Видео» по чатам (ADR-022): нити сцен с сервера (GET state + video_thread_changed),
 // каталог и префы области, ход съёмки (video_edit_progress → completed / failed), фильмы
-// проекта (кеш FilmState + video_film_changed) и локальное состояние экрана. Выбор сцены
-// старше запомненной полосы: фокус просит полосу «Видео» у стора полос ядра, снятие — отпускает.
+// проекта (кеш FilmState + video_film_changed) и локальное состояние экрана.
 // Фокус, сменившийся событием, а не ответом на свой клик, выбрал агент: панель он не двигает,
 // каркас показывает подсказку «Claude взял в работу» (noteAgentPick, а не reveal).
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
+import { dropAgentPickOf, noteAgentPick, onReconnected, showToast } from 'aihome_shell/kit';
 import {
   conflictState, EMPTY_THREADS, errorText, filmConflict, videoApi,
-  type FilmBuildStatus, type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent, type VideoFocus,
+  type FilmBuildStatus, type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent,
   type VideoPrefs, type VideoScene, type VideoSceneSettings, type VideoThreadsState,
 } from '../api';
 import { isPersonalScope } from '../scope';
 
-export const VIDEO_STRIP = 'video';
 export const VIDEO_PANEL = 'videoEditor';
 // Ключ элемента для черновиков и выбора: панель + сцена («videoEditor:{sceneId}»)
 export const sceneDraftKey = (sceneId: string) => `${VIDEO_PANEL}:${sceneId}`;
@@ -68,25 +66,12 @@ const getVersion = () => _version;
 // Подписка вне React: вид контекста хода будит хост при смене сцен, каталога и фильмов
 export const subscribeVideoStore = subscribe;
 
-const hasFocus = (f: VideoFocus | undefined) => !!(f?.sceneId || f?.filmPath);
-
-// Фокус меняет полосу над композером: выбрали сцену или фильм — «Видео», сняли — прежняя
-function syncStrip(sessionId: string, prev: VideoFocus | undefined, next: VideoFocus) {
-  if (hasFocus(next) && (next.sceneId !== prev?.sceneId || next.filmPath !== prev?.filmPath)) requestStrip(sessionId, VIDEO_STRIP);
-  else if (!hasFocus(next) && hasFocus(prev)) releaseStrip(sessionId, VIDEO_STRIP);
-}
-
-// byAgent — фокус сменил агент: полосу не переключаем (на телефоне смена полосы закрыла бы шторку
-// соседнего раздела — агент панель не двигает)
-function apply(sessionId: string, scope: string, state: VideoThreadsState, byAgent = false) {
+function apply(sessionId: string, scope: string, state: VideoThreadsState) {
   const e = _entries.get(sessionId);
   // Событие старше того, что уже знаем, — пропускаем
   if (e?.loaded && e.state.revision > state.revision) return;
-  const prevFocus = e?.loaded ? e.state.focus : undefined;
   _entries.set(sessionId, { scope, state, loaded: true, loading: false });
-  if (!byAgent) syncStrip(sessionId, prevFocus, state.focus);
   emit();
-  notifyComposer();
 }
 
 // Фокус сменился событием с сервера, а не ответом на свой клик, — его выбрал агент: панель он не
@@ -185,8 +170,8 @@ export function handleEvent(ev: VideoEvent) {
       const e = _entries.get(ev.sessionId);
       if (!e) return;
       noteAgentFrames(ev.sessionId, e.loaded ? e.state : null, ev.state);
-      const byAgent = noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
-      apply(ev.sessionId, ev.scopeKey, ev.state, byAgent);
+      noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
+      apply(ev.sessionId, ev.scopeKey, ev.state);
       return;
     }
     case 'video_film_changed':
@@ -246,12 +231,6 @@ async function load(scope: string, sessionId: string, force = false) {
 export async function ensureVideoThreads(scope: string, sessionId: string): Promise<void> {
   if (_entries.get(sessionId)?.loaded) return;
   await load(scope, sessionId);
-}
-
-// Вход в чат: владелец полосы заново просит «Видео» по серверному фокусу
-export function enterChat(sessionId: string) {
-  const e = _entries.get(sessionId);
-  if (e?.loaded && hasFocus(e.state.focus)) requestStrip(sessionId, VIDEO_STRIP);
 }
 
 export function getThreadsState(sessionId: string | null): VideoThreadsState {

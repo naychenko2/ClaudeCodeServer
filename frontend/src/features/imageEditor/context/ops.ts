@@ -1,7 +1,6 @@
-// Операция и режим подбора панели «Картинки» (ADR-021 §3, записка image-editor-v4-panel-proposal.md,
-// «Вкладка «Настройки»»). «Авто» — ровно нынешнее поведение pickOp. Выбор живёт в памяти вкладки
-// на проект.
-// Тексты, причины и цена низа — чистые функции, их держит panelOp.test.ts.
+// Операции запуска картинок: операция по состоянию холста, причины отказа, цена низа, пометки запуска
+// и выбор операции в памяти вкладки на проект. «Авто» — ровно pickOp. Чистые функции держит ops.test.ts.
+// Прежняя панель «Картинки» удалена (ADR-023 §Д3): остался только общий код запуска.
 
 import { useSyncExternalStore } from 'react';
 import { AUTO_MODEL, type EditMode, type ImageEditEstimate, type ImageEditModel, type ImageEditOp } from '../api';
@@ -14,7 +13,6 @@ export type PanelOp = 'auto' | ImageEditOp;
 
 interface OpInfo {
   op: PanelOp;
-  label: string;
   run: string;              // глагол кнопки запуска
   needImage?: boolean;
   needMask?: boolean;
@@ -23,33 +21,17 @@ interface OpInfo {
 }
 
 export const PANEL_OPS: OpInfo[] = [
-  { op: 'auto', label: 'Авто', run: '' },
-  { op: 'generate', label: 'По тексту', run: 'Сгенерировать' },
-  { op: 'edit', label: 'Правка', run: 'Изменить', needImage: true },
-  { op: 'inpaint', label: 'По отмеченному', run: 'Изменить отмеченное', needImage: true, needMask: true },
-  { op: 'outpaint', label: 'Дорисовать за края', run: 'Дорисовать', needImage: true, noPrompt: true },
-  { op: 'removeBackground', label: 'Убрать фон', run: 'Убрать фон', needImage: true, noPrompt: true, one: true },
-  { op: 'upscale', label: 'Улучшить качество', run: 'Улучшить', needImage: true, noPrompt: true, one: true },
-  { op: 'enhanceFaces', label: 'Улучшить лица', run: 'Улучшить лица', needImage: true, noPrompt: true, one: true },
+  { op: 'auto', run: '' },
+  { op: 'generate', run: 'Сгенерировать' },
+  { op: 'edit', run: 'Изменить', needImage: true },
+  { op: 'inpaint', run: 'Изменить отмеченное', needImage: true, needMask: true },
+  { op: 'outpaint', run: 'Дорисовать', needImage: true, noPrompt: true },
+  { op: 'removeBackground', run: 'Убрать фон', needImage: true, noPrompt: true, one: true },
+  { op: 'upscale', run: 'Улучшить', needImage: true, noPrompt: true, one: true },
+  { op: 'enhanceFaces', run: 'Улучшить лица', needImage: true, noPrompt: true, one: true },
 ];
 
 const info = (op: PanelOp) => PANEL_OPS.find(o => o.op === op)!;
-export const opLabel = (op: PanelOp) => info(op).label;
-
-// Операция без промпта идёт своей моделью без канала образцов: секция персонажа и образцов
-// приглушена этой строкой (пусто — секция живая)
-export const noSamplesHint = (op: ImageEditOp, quick: boolean): string =>
-  quick ? `Для «${opLabel(op)}» образцы не нужны` : '';
-
-// [режим, название, подсказка]
-export const EDIT_MODES: [EditMode, string, string][] = [
-  ['auto', 'Авто', 'модель решает сама'],
-  ['fast', 'Быстро', 'дешевле и быстрее'],
-  ['precise', 'Точно', 'точнее следует правке'],
-  ['photoreal', 'Фотореализм', 'для фото людей и мест'],
-];
-
-export const ONE_VARIANT_HINT = 'Эта операция даёт один вариант';
 
 // Операция, которой пойдёт запуск: «Авто» — по состоянию холста, как полоса всегда
 export const resolveOp = (op: PanelOp, hasImage: boolean, hasMask: boolean): ImageEditOp =>
@@ -69,18 +51,6 @@ export function opBlockReason(op: PanelOp, hasImage: boolean, hasMask: boolean):
   if (o.needImage && !hasImage) return 'Сначала выберите картинку в ленте или загрузите её';
   if (o.needMask && !hasMask) return 'Отметьте место кистью в редакторе картинки';
   return '';
-}
-
-// Строка под пилюлями: [начало, выделенное слово, конец]
-export function opHint(op: PanelOp, hasImage: boolean, hasMask: boolean): [string, string, string] {
-  if (op === 'auto') {
-    const eff = info(pickOp(hasImage, hasMask)).label.toLowerCase();
-    const why = !hasImage ? 'картинки ещё нет' : hasMask ? 'в редакторе отмечено место' : 'картинка выбрана, отметок нет';
-    return ['Сейчас это ', eff, `: ${why}. Так ведёт себя полоса сейчас.`];
-  }
-  return info(op).noPrompt
-    ? ['Текст в поле ввода не нужен — достаточно нажать кнопку внизу.', '', '']
-    : ['Что сделать — напишите в поле ввода.', '', ''];
 }
 
 // Режим подбора есть только у модели «Авто»: явная модель сама и есть выбор
@@ -172,43 +142,6 @@ export function __resetPanelChoice() {
   _createRatio.clear();
   _version++;
 }
-
-// ── Панель v5 (флаг image-panel-v5): список «Операция» режима «Править» ──
-
-// Правки без ИИ открывают редактор на своём инструменте и операцией запуска не становятся
-export type NoAiTool = 'crop' | 'rotate' | 'resize';
-export type EditPick = Exclude<ImageEditOp, 'generate' | 'inpaint'> | NoAiTool;
-
-export const AI_GROUP = 'С ИИ';
-export const NO_AI_GROUP = 'Без ИИ · бесплатно';
-
-export const NO_AI_TOOLS: [NoAiTool, string][] = [
-  ['crop', 'Обрезать'],
-  ['rotate', 'Повернуть и отразить'],
-  ['resize', 'Размер и формат'],
-];
-
-export const isNoAiTool = (v: string): v is NoAiTool => NO_AI_TOOLS.some(([t]) => t === v);
-
-// «Правка» и «По отмеченному» — один пункт: отметки переключают его сами (modeOp).
-// «Улучшить лица» умеют только локальные модели — без них пункта нет
-export function editOpOptions(faces: boolean): { value: EditPick; label: string; group: string }[] {
-  const ai: Exclude<ImageEditOp, 'generate' | 'inpaint'>[] = ['edit', 'outpaint', 'removeBackground', 'upscale', ...(faces ? ['enhanceFaces' as const] : [])];
-  return [
-    ...ai.map(op => ({ value: op, label: op === 'edit' ? 'Изменить по тексту' : opLabel(op), group: AI_GROUP })),
-    ...NO_AI_TOOLS.map(([value, label]) => ({ value, label, group: NO_AI_GROUP })),
-  ];
-}
-
-// Пункт списка, который сейчас выбран: инпейнт и прежнее «Авто» — это «Изменить»
-export const editPickOf = (op: PanelOp): EditPick =>
-  op === 'auto' || op === 'inpaint' || op === 'generate' ? 'edit' : op;
-
-// «Где менять»: «Отмеченное», только если есть закрашенное кистью и его не отменили
-// выбором «Вся картинка»
-export type EditWhere = 'whole' | 'marked';
-export const editWhere = (maskMarks: number, whole: boolean): EditWhere =>
-  maskMarks > 0 && !whole ? 'marked' : 'whole';
 
 // Пометки, которые уйдут с запуском: при «Вся картинка» закрашенное кистью (маска) не уходит,
 // стрелки, рамки и подписи остаются подсказкой модели

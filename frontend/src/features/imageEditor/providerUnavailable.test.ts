@@ -1,11 +1,10 @@
 // Заведённый, но лежащий поставщик (available: false): пометка «не отвечает» цветом
-// предупреждения в обоих выборах, пункт остаётся выбираемым; старые ответы без поля — без пометки
+// предупреждения в выборе поставщика, пункт остаётся выбираемым; старые ответы без поля — без пометки
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ImageEditCatalog, ImageEditProvider } from './api';
 import { ProviderItems } from './ProviderModelPicker';
-import { ProviderOpts } from './strip/settings/ProviderSection';
 import { providerTitle, unavailableMark } from './format';
 
 const FAL: ImageEditProvider = { key: 'fal', label: 'fal', priceUnit: 'usd', models: [{ id: 'auto', label: 'Авто' }] };
@@ -18,10 +17,6 @@ const catalog = (lp: ImageEditProvider): ImageEditCatalog => ({
 
 const picker = (c: ImageEditCatalog) =>
   renderToStaticMarkup(createElement(ProviderItems, { catalog: c, value: 'settings', onPick: () => {} }));
-const strip = (c: ImageEditCatalog) =>
-  renderToStaticMarkup(createElement(ProviderOpts, { catalog: c, choice: 'settings', onPick: () => {} }));
-// Кнопки выбора поставщика в полосе «Картинки» — по одной на пункт
-const buttons = (html: string) => html.match(/<button[^>]*>.*?<\/button>/g) ?? [];
 // Пометка отдельным span цвета предупреждения (токен C.warningText)
 const warn = (text: string) => new RegExp(`<span style="[^"]*color:var\\(--c-warning-text\\)[^"]*">(<svg.*?</svg>)?${text}</span>`);
 
@@ -44,19 +39,9 @@ describe('поставщик с available: false', () => {
     expect(html).not.toMatch(/disabled|aria-disabled="true"/);
   });
 
-  it('полоса «Картинки»: пометка отдельным span, остальная подсказка прежняя, кнопка кликабельна', () => {
-    const html = strip(catalog(local(false)));
-    expect(html).toMatch(new RegExp(`сейчас Локальные модели · ${warn('не отвечает').source}`));
-    expect(html).toMatch(new RegExp(`${warn('не отвечает').source} · бесплатно, на своей видеокарте`));
-    const btns = buttons(html);
-    expect(btns).toHaveLength(3);
-    btns.forEach(b => expect(b).not.toMatch(/disabled/));
-  });
-
   it('поле не пришло или true — без пометки', () => {
     for (const c of [catalog(local()), catalog(local(true))]) {
       expect(picker(c)).not.toContain('не отвечает');
-      expect(strip(c)).not.toContain('не отвечает');
     }
   });
 });

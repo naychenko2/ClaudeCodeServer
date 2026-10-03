@@ -1,10 +1,9 @@
-// Наполнение контекста с карточек ленты (ADR-023, 2з-3). При флаге composer-context-row карточка версии звука
-// показывает «Работать с этой» и «В контекст ▾» вместо «Обработать ▾», а бейдж «В работе» берёт из контекста
-// чата, а не из фокуса нитей.
+// Наполнение контекста с карточек ленты (ADR-023, 2з-3). Карточка версии звука показывает «Работать с этой» и
+// «В контекст ▾», а бейдж «В работе» берёт из контекста чата, а не из фокуса нитей.
 
 import { Target } from 'lucide-react';
 import {
-  Button, ContextAddButton, FLAGS, ICON_SIZE, ICON_STROKE, useChatContext, useFeature, useIsMobile,
+  Button, ContextAddButton, ICON_SIZE, ICON_STROKE, useChatContext, useIsMobile,
   type ChatContextPrimary,
 } from 'aihome_shell/kit';
 import type { AudioThread } from '../api';
@@ -19,8 +18,6 @@ function primaryVersion(primary: ChatContextPrimary, thread: AudioThread): strin
 }
 
 export interface CardFill {
-  // Флаг включён: карточка живёт по контексту
-  on: boolean;
   // Эта карточка (нить и версия) — основной объект контекста
   working: boolean;
   // Основной объект выбрал агент: бейдж «в работе ✦»
@@ -32,16 +29,14 @@ export interface CardFill {
 }
 
 export function useCardFill(sessionId: string, thread: AudioThread, versionId: string): CardFill {
-  const on = useFeature(FLAGS.composerContextRow);
-  const { primary } = useChatContext(on ? sessionId : null);
+  const { primary } = useChatContext(sessionId);
   const mobile = useIsMobile();
-  const threadWorking = on && primary?.kind === AUDIO_KIND && primary.ref.threadId === thread.id;
+  const threadWorking = primary?.kind === AUDIO_KIND && primary.ref.threadId === thread.id;
   const working = threadWorking && primaryVersion(primary!, thread) === versionId;
   // Текущую версию основной объект не закрепляет: после запуска текущей станет новая версия, и чипы действий
   // (стемы, «Свести») пойдут за ней. Закрепляется только прежняя версия — её выбрали осознанно
   const pinned = versionId === thread.currentVersionId ? null : versionId;
   return {
-    on,
     working,
     byAgent: working && primary?.by === 'agent',
     threadWorking,
@@ -50,11 +45,9 @@ export function useCardFill(sessionId: string, thread: AudioThread, versionId: s
   };
 }
 
-// Нить в работе для пунктирной карточки черновика: при флаге — из контекста чата, иначе из фокуса нитей
-export function useFocusedThreadId(sessionId: string | null, focus: string | null): string | null {
-  const on = useFeature(FLAGS.composerContextRow);
-  const { primary } = useChatContext(on ? sessionId : null);
-  if (!on) return focus;
+// Нить в работе для пунктирной карточки черновика — из контекста чата
+export function useFocusedThreadId(sessionId: string | null): string | null {
+  const { primary } = useChatContext(sessionId);
   return primary?.kind === AUDIO_KIND && typeof primary.ref.threadId === 'string' ? primary.ref.threadId : null;
 }
 

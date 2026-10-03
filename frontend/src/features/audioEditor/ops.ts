@@ -52,17 +52,7 @@ export const OPS: readonly OpInfo[] = [
 
 export const MODE_LABEL: Record<AudioMode, string> = { voice: 'Голос', music: 'Музыка', process: 'Обработка' };
 
-// Режимы, создающие новый звук; «Обработка» работает с готовым
-export const isCreateMode = (mode: AudioMode | null | undefined): mode is 'voice' | 'music' => mode === 'voice' || mode === 'music';
-
 export const opInfo = (op: AudioOp | null | undefined): OpInfo | null => OPS.find(o => o.op === op) ?? null;
-
-// Плейсхолдер композера с учётом модели: у стемов с готовым набором (Вокал + минус, 4, 6,
-// Караоке) описание не нужно — оно бывает только у модели «выделить звук по описанию»
-export function opPlaceholder(op: AudioOp | null | undefined, model: { caps: { stemSet?: string | null } } | null): string | null {
-  if (op === 'separate' && model?.caps.stemSet) return `${NO_COMMENT} — выберите, что получить`;
-  return opInfo(op)?.placeholder ?? null;
-}
 
 export const defaultOp = (mode: AudioMode): AudioOp => OPS.find(o => o.mode === mode)!.op;
 

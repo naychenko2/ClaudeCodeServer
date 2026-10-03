@@ -1,18 +1,16 @@
 // Стор нитей картинок по чатам: состояние с сервера (GET + image_thread_changed),
 // мутации с ревизией и локальное состояние экрана — пометки выбранной картинки,
-// режим композера, открытый попап «Редактор». Выбор картинки старше запомненной
-// полосы: фокус просит полосу «Картинки» у стора полос ядра, снятие — отпускает.
+// открытый попап «Редактор».
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
+import { dropAgentPickOf, noteAgentPick, onReconnected, showToast } from 'aihome_shell/kit';
 import type { Sample } from '../editorInputs';
 import type { Mark, Tool } from '../marks';
 import { conflictState, EMPTY_THREADS, threadsApi, type ImageThread, type ImageThreadsState } from './threadsApi';
 import { threadName } from './model';
-import { modeAware, noteImageMode } from './modeState';
+import { noteImageMode } from './modeState';
 
-export const IMAGES_STRIP = 'images';
-// Ключ панели «Картинки» в рабочей области — тот же, что IMAGES_PANEL в characters/panel
+// Ключ элемента выбора агента и черновиков — тот же, что IMAGES_PANEL в characters/panel
 const PANEL = 'images';
 // Ключ элемента для черновиков и выбора: панель + нить
 export const imageDraftKey = (threadId: string) => `${PANEL}:${threadId}`;
@@ -32,9 +30,6 @@ let _editor: { sessionId: string; threadId: string; versionId: string | null; to
 // «Где менять: Вся картинка» при отметках (панель v5): маска нити не уходит. Новые отметки
 // снимают выбор — человек снова отметил место
 const _wholeImage = new Set<string>();
-// Просьбы включить режим «Картинка» по чатам («Редактировать» / «Нарисовать»): счётчик,
-// каждая новая — новый ключ самовключения режима в поле ввода
-const _modeRequests = new Map<string, number>();
 let _version = 0;
 const _listeners = new Set<() => void>();
 let _unsub: (() => void) | null = null;
@@ -53,26 +48,15 @@ const getVersion = () => _version;
 // Подписка вне React: мост вида контекста пересчитывает действия при смене нитей и отметок
 export const subscribeThreadStore = subscribe;
 
-// Фокус меняет полосу над композером: выбрали картинку — «Картинки», сняли — прежняя.
-// С флагом image-panel-v5 снятие полосу не уводит: дальше рисуем новую («Создать»), над
-// полосой — плашка «Вернуть»
-function syncStrip(sessionId: string, prev: string | null, next: string | null) {
-  if (next && next !== prev) requestStrip(sessionId, IMAGES_STRIP);
-  else if (!next && prev && !modeAware()) releaseStrip(sessionId, IMAGES_STRIP);
-}
-
 function apply(sessionId: string, projectId: string, state: ImageThreadsState) {
   const e = _entries.get(sessionId);
   // Событие старше того, что уже знаем, — пропускаем
   if (e?.loaded && e.state.revision > state.revision) return;
   const prevFocus = e?.loaded ? e.state.focus : null;
   _entries.set(sessionId, { projectId, state, loaded: true, loading: false });
-  syncStrip(sessionId, prevFocus, state.focus);
   // Выбор сняли — человек или агент: дальше рисуем новую (режим «Создать», флаг image-panel-v5)
   if (prevFocus && !state.focus) noteImageMode(sessionId, 'create');
   emit();
-  // Поле ввода пересчитывает режим «Картинка» по сигналу стора полос
-  notifyComposer();
 }
 
 // Фокус сменился событием с сервера, а не ответом на свой клик, — его выбрал агент
@@ -119,14 +103,6 @@ export async function ensureThreads(projectId: string, sessionId: string): Promi
   apply(sessionId, projectId, await threadsApi.get(projectId, sessionId));
 }
 
-// Вход в чат: владелец полосы заново просит «Картинки» по серверному фокусу — ручной уход
-// на другую полосу держится только до выхода из чата, как и после перезагрузки. Ещё не
-// загруженный чат попросит полосу сам, когда придёт его состояние
-export function enterChat(sessionId: string) {
-  const e = _entries.get(sessionId);
-  if (e?.loaded && e.state.focus) requestStrip(sessionId, IMAGES_STRIP);
-}
-
 export function getThreadsState(sessionId: string | null): ImageThreadsState {
   return (sessionId && _entries.get(sessionId)?.state) || EMPTY_THREADS;
 }
@@ -170,17 +146,6 @@ export async function mutate(
 
 export const focusThread = (projectId: string, sessionId: string, threadId: string | null) =>
   mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
-
-// ── Режим поля ввода ──
-
-export function requestImageMode(sessionId: string) {
-  _modeRequests.set(sessionId, (_modeRequests.get(sessionId) ?? 0) + 1);
-  notifyComposer();
-}
-
-export function getImageModeRequest(sessionId: string | null): number {
-  return (sessionId && _modeRequests.get(sessionId)) || 0;
-}
 
 // ── Пометки ──
 
@@ -244,7 +209,6 @@ export function __resetThreadStore() {
   _marks.clear();
   _samples.clear();
   _wholeImage.clear();
-  _modeRequests.clear();
   _editor = null;
   emit();
 }

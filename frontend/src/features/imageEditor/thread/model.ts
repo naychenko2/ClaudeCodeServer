@@ -144,8 +144,6 @@ export const launchOf = (t: ImageThread, jobId: string): ImageThreadLaunch | nul
 export const launchVersions = (t: ImageThread, jobId: string) =>
   versionsOf(t).filter(v => v.jobId === jobId).sort((a, b) => (a.variant ?? 0) - (b.variant ?? 0));
 
-export const hasRunningLaunch = (t: ImageThread) => (t.launches ?? []).some(l => l.status === 'running');
-
 // Надпись под запуском, кончившимся не целиком. Отмена и перезапуск сервера с частью готовых
 // вариантов называются прямо: без надписи лента выглядит так, будто остальное недорисовалось
 export function launchEndNote(status: ImageThreadLaunch['status'], ready: number, count: number): string | null {

@@ -8,8 +8,8 @@ vi.mock('aihome_shell/kit', () => ({
 
 const { voicesApi } = await import('./api');
 const {
-  EMPTY_TITLE, PERSONAL_TITLE, isStale, newVoiceProblem, pickedSlug, quotePrice, recreateAction,
-  sampleRemoval, samplesProblem, voicePickValue, voicesView, voiceSubtitle, whereWorks,
+  EMPTY_TITLE, PERSONAL_TITLE, isStale, newVoiceProblem, quotePrice, recreateAction,
+  sampleRemoval, samplesProblem, voicesView, voiceSubtitle, whereWorks,
 } = await import('./model');
 type AudioVoice = import('./api').AudioVoice;
 
@@ -60,12 +60,6 @@ describe('список голосов', () => {
     expect(by).toEqual({ 'local-tts': 'ok', 'local-vc': 'ok', higgsfield: 'none', minimax: 'none', falQwen: 'none', yandex: 'no' });
     const rvc = whereWorks(voice({ kind: 'rvc', providers: [{ provider: 'rvc', state: 'ok', createdAt: '2026-09-30T00:00:00Z', lastUsedAt: null }] }), NOW);
     expect(rvc.map(r => r.status)).toEqual(['ok', 'no']);
-  });
-
-  it('«Выбрать» отдаёт значение поля voice:<slug>', () => {
-    expect(voicePickValue('anya')).toBe('voice:anya');
-    expect(pickedSlug('voice:anya')).toBe('anya');
-    expect(pickedSlug('Eric')).toBeNull();
   });
 });
 

@@ -145,7 +145,7 @@ function doneHandle(id: string, summary: string, open: () => void): LaunchHandle
   return { id, watch: on => { on({ result: { summary, open } }); return () => {}; } };
 }
 
-const openSound = (sessionId: string) => () => { revealSoundPanel(sessionId, 'settings'); };
+const openSound = (sessionId: string) => () => { revealSoundPanel(sessionId); };
 
 export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Promise<LaunchHandle> {
   const op = req.op as AudioOp;

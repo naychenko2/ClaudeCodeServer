@@ -1,11 +1,9 @@
-// Вкладка «Голоса» панели «Звук» (ADR-021 §5, записка v2 «Вкладка «Голоса»»): библиотека
-// voices/ проекта — список, «Где работает», прослушивание образцов, новый голос из записей,
-// переименование, удаление, правка образцов и «Выбрать» для поля «Голос». Голоса живут только
-// в проектах: в личном чате — честный пустой экран. Вход один — панель подставляет компонент
-// вместо заглушки одной строкой; выбор приходит в onPick как slug, значение поля — voicePickValue.
+// Библиотека «Голоса» (ADR-021 §5, записка v2 «Вкладка «Голоса»»): voices/ проекта — список, «Где работает»,
+// прослушивание образцов, новый голос из записей, переименование, удаление, правка образцов и «В контекст».
+// Голоса живут только в проектах: в личном чате — честный пустой экран.
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Check, ChevronDown, ChevronUp, Lock, Mic, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Lock, Mic, Pencil, Plus, Trash2, X } from 'lucide-react';
 import {
   Badge, Button, ConfirmDialog, ContextAddButton, EmptyState, Field, IconButton, TextArea, TextField, refOf, showToast, useChatContext,
   useFeature, FLAGS, C, FS, R, SP, ICON_SIZE, ICON_STROKE,
@@ -26,11 +24,8 @@ export interface VoicesTabProps {
   // Ключ области звука: id проекта или personal
   scope: string;
   sessionId: string | null;
-  // Выбранный в панели голос (slug) — подсвечивается в списке
-  selected?: string | null;
-  onPick: (slug: string) => void;
-  // Панель «Голоса» при флаге composer-context-row (ADR-023, 2з-3): вместо «Выбрать» — «В контекст» / «В контексте ✓»
-  // по контексту этого чата и кнопка «Обучить голос» под списком. Без флага вкладка «Звука» работает как раньше
+  // Панель «Голоса» (ADR-023, 2з-3): «В контекст» / «В контексте ✓» по контексту этого чата и кнопка «Обучить голос»
+  // под списком; без чата кнопок контекста нет
   contextSessionId?: string | null;
 }
 
@@ -49,7 +44,7 @@ export function VoicesTab(props: VoicesTabProps) {
   return enabled ? <VoicesTabBody {...props} /> : null;
 }
 
-function VoicesTabBody({ scope, sessionId, selected = null, onPick, contextSessionId = null }: VoicesTabProps) {
+function VoicesTabBody({ scope, sessionId, contextSessionId = null }: VoicesTabProps) {
   const personal = isPersonalScope(scope);
   const [list, setList] = useState<VoicesList | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +53,7 @@ function VoicesTabBody({ scope, sessionId, selected = null, onPick, contextSessi
   const [training, setTraining] = useState(false);
   const chat = useChatContext(contextSessionId);
   const candidate = (slug: string) => ({ kind: 'audio-voice', ref: { slug } });
-  const isPicked = (slug: string) => (contextSessionId ? !!refOf(chat, candidate(slug)) : selected === slug);
+  const isPicked = (slug: string) => (contextSessionId ? !!refOf(chat, candidate(slug)) : false);
 
   const load = useCallback(() => {
     if (personal) return;
@@ -123,7 +118,7 @@ function VoicesTabBody({ scope, sessionId, selected = null, onPick, contextSessi
         <VoiceCard key={v.slug} scope={scope} voice={v} expanded={open === v.slug} picked={isPicked(v.slug)}
           contextSessionId={contextSessionId}
           onToggle={() => setOpen(o => (o === v.slug ? null : v.slug))}
-          onPick={() => onPick(v.slug)} onChanged={put}
+          onChanged={put}
           onDeleted={() => { drop(v.slug); if (open === v.slug) setOpen(null); }} />
       ))}
       {form || (
@@ -134,14 +129,13 @@ function VoicesTabBody({ scope, sessionId, selected = null, onPick, contextSessi
   );
 }
 
-function VoiceCard({ scope, voice: v, expanded, picked, contextSessionId, onToggle, onPick, onChanged, onDeleted }: {
+function VoiceCard({ scope, voice: v, expanded, picked, contextSessionId, onToggle, onChanged, onDeleted }: {
   scope: string;
   contextSessionId: string | null;
   voice: AudioVoice;
   expanded: boolean;
   picked: boolean;
   onToggle: () => void;
-  onPick: () => void;
   onChanged: (v: AudioVoice) => void;
   onDeleted: () => void;
 }) {
@@ -178,18 +172,15 @@ function VoiceCard({ scope, voice: v, expanded, picked, contextSessionId, onTogg
       )}
       </div>
       {expanded && (
-        <VoiceDetails scope={scope} voice={v} picked={picked} contextSessionId={contextSessionId} onPick={onPick} onChanged={onChanged} onDeleted={onDeleted} />
+        <VoiceDetails scope={scope} voice={v} onChanged={onChanged} onDeleted={onDeleted} />
       )}
     </div>
   );
 }
 
-function VoiceDetails({ scope, voice: v, picked, contextSessionId, onPick, onChanged, onDeleted }: {
+function VoiceDetails({ scope, voice: v, onChanged, onDeleted }: {
   scope: string;
-  contextSessionId: string | null;
   voice: AudioVoice;
-  picked: boolean;
-  onPick: () => void;
   onChanged: (v: AudioVoice) => void;
   onDeleted: () => void;
 }) {
@@ -336,14 +327,6 @@ function VoiceDetails({ scope, voice: v, picked, contextSessionId, onPick, onCha
       {error && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap', alignItems: 'center' }}>
-        {/* При контексте чата «В контекст» стоит в строке списка (макет): в раскрытой карточке второй копии нет */}
-        {contextSessionId
-          ? null
-          : (
-            <Button size="sm" variant={picked ? 'secondary' : 'primary'} leftIcon={picked ? ic(Check) : undefined} disabled={picked} onClick={onPick}>
-              {picked ? 'Выбран' : 'Выбрать'}
-            </Button>
-          )}
         <span style={{ flex: 1 }} />
         {!renaming && (
           <IconButton size="sm" title={v.kind === 'samples' ? 'Переименовать и расшифровка' : 'Переименовать'} ariaLabel={`Переименовать «${v.name}»`}

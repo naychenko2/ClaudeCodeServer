@@ -25,6 +25,7 @@ import type { ImageThread, ImageThreadEvent, ImageThreadStack } from './threadsA
 import { imageSrc, launchThread } from './useThreadLaunch';
 import { queueText, useJobStatus, useProgress } from './useJobStatus';
 import { OriginAnchor, VersionCard } from './VersionCards';
+import { CardContextActions, useCardFill, useFocusedThreadId } from '../context/CardFill';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -204,6 +205,7 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
   events?: readonly ImageThreadEvent[];
 }) {
   const mobile = useIsMobile();
+  const fill = useCardFill(sessionId, thread, null);
   const chain = chainOf(thread, stack);
   const isCurrent = !stack || stack.stackId === currentStack(thread)?.stackId;
   const at = currentIndex(thread, chain, stack);
@@ -224,14 +226,15 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
   const saveState = stackSaveState(thread, isCurrent, unsaved, personal);
 
   const edit = async () => {
-    if (!focused && !(await workWith(projectId, sessionId, thread.id))) return;
+    if (fill.on) await fill.pick();
+    else if (!focused && !(await workWith(projectId, sessionId, thread.id))) return;
     openEditor(sessionId, thread.id);
   };
   const save = async () => { setSaving(true); await saveToProject(projectId, sessionId, thread); setSaving(false); };
 
   return (
     <Frame focused={focused && isCurrent} stacked={chain.length > 1} dashed={draft} dim={!!stack?.old}
-      onPick={() => { void pickByHuman(projectId, sessionId, thread.id, focused); }}>
+      onPick={() => { void (fill.on ? fill.pick() : pickByHuman(projectId, sessionId, thread.id, focused)); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm }}>
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ImageIcon, ICON_SIZE.sm)}</span>
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{threadName(thread)}</span>
@@ -239,7 +242,7 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
           <span style={{ color: C.textSecondary }}>· {draft ? `сохранять в ${folder ? `${folder}/` : 'корень проекта'}` : versionLabel(thread, pos, saved)}</span>
         )}
         {stack?.old && <Badge size="xs" tone="neutral">старая стопка</Badge>}
-        {focused && isCurrent && <Badge size="xs" tone="accent">в работе</Badge>}
+        {focused && isCurrent && <Badge size="xs" tone="accent">{fill.byAgent ? 'в работе ✦' : 'в работе'}</Badge>}
         {chain.length > 1 && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: SP.xxs, color: C.textMuted }}>
             <IconButton size="xs" title="Предыдущий шаг" ariaLabel="Предыдущий шаг" disabled={idx <= 0} onClick={() => setView(idx - 1)}>
@@ -267,7 +270,9 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
 
       {!draft && (
         <Acts>
-          {!focused && <Button size="sm" variant="secondary" onClick={() => { void workWith(projectId, sessionId, thread.id); }}>Работать с этой</Button>}
+          {fill.on
+            ? isCurrent && <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={null} fill={fill} size="sm" />
+            : !focused && <Button size="sm" variant="secondary" onClick={() => { void workWith(projectId, sessionId, thread.id); }}>Работать с этой</Button>}
           <Button size="sm" variant={focused ? 'secondary' : 'ghost'} leftIcon={ic(Pencil)} onClick={() => { void edit(); }}>Редактировать</Button>
           {src && (
             <Button size="sm" variant="ghost" leftIcon={ic(Download)} title="Скачать" onClick={() => { void download(src, () => threadName(thread)); }}>
@@ -290,13 +295,14 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   // Личный чат вне проекта: ctx.projectId = null, область — personal
   const projectId = enterScope(ctx.projectId, ctx.sessionId);
   const state = useThreads(projectId, ctx.sessionId);
+  const focusId = useFocusedThreadId(ctx.sessionId ?? '', state.focus);
   const data = (rec?.data ?? {}) as { threadId?: unknown; stackId?: unknown; versionId?: unknown };
   const thread = typeof data.threadId === 'string' ? state.threads.find(t => t.id === data.threadId) : undefined;
   if (!ctx.sessionId || !thread) {
     // Нить удалили (пустой черновик сняли ✕) — якорь в истории остался; рисуем след
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
-  const focused = state.focus === thread.id;
+  const focused = focusId === thread.id;
   const byVersion = typeof data.versionId === 'string' || (typeof data.stackId !== 'string' && !isLegacyThread(thread) && !!thread.versions?.length);
   if (byVersion) {
     const v = typeof data.versionId === 'string' && data.versionId !== ORIGIN ? findVersion(thread, data.versionId) : null;

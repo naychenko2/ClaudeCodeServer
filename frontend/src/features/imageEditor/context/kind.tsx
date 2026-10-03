@@ -18,6 +18,7 @@ import { openEditor } from '../thread/threadStore';
 import type { ImageEditOp } from '../api';
 import { executorModel, settingsOf } from './executors';
 import { launchAction, paramsFor, quoteAction } from './run';
+import { imageRefRoles } from './roles';
 import { actionOf, IMAGE_KIND, imageActions, threadOfPrimary } from './state';
 
 const CHARACTER_KIND = 'image-character';
@@ -67,6 +68,7 @@ export const imageKindApi: ContextKindApi = {
     warm(enterScope(ctx.projectId, ctx.sessionId));
     return imageActions(ctx, s);
   },
+  refRoles: (_ctx, primary, candidateKind) => (primary.kind === IMAGE_KIND ? imageRefRoles(candidateKind) : []),
   preview: (ctx, item) => <ImagePreview ctx={ctx} item={item} />,
   editor: (ctx, item) => {
     const thread = threadOfPrimary(ctx.sessionId, item as never);

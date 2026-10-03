@@ -88,10 +88,10 @@ const FEATURES = join(fileURLToPath(new URL('../../', import.meta.url)), 'featur
 const CALL = /revealWorkspacePanel\(\s*(?:['"](?:images|sound|videoEditor|chatContext)['"]|[A-Z][A-Z_]*_PANEL\b)/g;
 
 // Старые вызовы под выключенным флагом: список сужается в 2к, 2з, 3ф и пустеет в 4б. Число вызовов в
-// файле зафиксировано — новый вызов в старом файле тоже краснит скан
+// файле зафиксировано — новый вызов в старом файле тоже краснит скан. У картинок (2к-2) вызов один, в
+// context/reveal.ts: при флаге он идёт в revealContextPanel / «Персонажи», без флага — в «Картинки»
 const LEGACY_REVEAL_CALLS: Readonly<Record<string, number>> = {
-  'imageEditor/strip/ImagesStrip.tsx': 3,
-  'imageEditor/thread/actions.ts': 1,
+  'imageEditor/context/reveal.ts': 1,
   'audioEditor/thread/actions.ts': 3,
   'audioEditor/thread/threadStore.ts': 1,
   'audioEditor/strip/SoundStrip.tsx': 1,

@@ -81,7 +81,7 @@ public sealed class ImageThreadService(
         var before = store.Get(ownerId, sessionId).Focus;
         var written = write();
         if (written.Status == ImageThreadWriteStatus.Ok)
-            mirror?.Sync(ownerId, sessionId, ChatContext.ImageContextKind.Kind, before, written.State.Focus, by);
+            mirror?.Sync(ownerId, sessionId, ChatContext.ImageContextKind.Kind, before, written.State.Focus, by, claim: by == ContextActor.Agent);
         return written;
     }
 

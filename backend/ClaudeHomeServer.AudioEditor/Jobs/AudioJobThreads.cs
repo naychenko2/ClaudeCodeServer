@@ -54,7 +54,7 @@ public sealed class AudioJobThreads(
         var before = store.Get(ownerId, sessionId).Focus;
         var written = write();
         if (written.Status == AudioThreadWriteStatus.Ok)
-            mirror?.Sync(ownerId, sessionId, ChatContext.AudioContextKind.Kind, before, written.State.Focus, by);
+            mirror?.Sync(ownerId, sessionId, ChatContext.AudioContextKind.Kind, before, written.State.Focus, by, claim: by == ContextActor.Agent);
         return written;
     }
 

@@ -17,11 +17,23 @@ public sealed class ChatContextFocusMirror(
 
     // Фокус вертикали сменился с before на after: after != null — нить становится основным объектом;
     // after == null — снимаем основной, только если он был именно этой нитью (звук не должен снять картинку)
-    public void Sync(string ownerId, string sessionId, string kind, string? before, string? after, ContextActor by)
+    // claim — явный выбор агента (image_focus и т.п.): фокус вертикали мог не измениться, потому что человек
+    // снял объект в контексте (✕), а нить и так в фокусе у вертикали; тогда, если основной — не эта нить,
+    // агент возвращает её основным (✦). Текущий выбор человека на эту нить не затирается: уже основная — не трогаем
+    public void Sync(string ownerId, string sessionId, string kind, string? before, string? after, ContextActor by,
+        bool claim = false)
     {
-        if (before == after || !Enabled(ownerId)) return;
+        if (!Enabled(ownerId)) return;
+        if (before == after && !(claim && after is not null)) return;
         try
         {
+            if (before == after)
+            {
+                var cur = store.Get(ownerId, sessionId);
+                if (cur.Primary is { } cp && cp.Kind == kind && ThreadOf(cp) == after) return;
+                store.SetPrimary(ownerId, sessionId, NewItem(kind, after!, by), null);
+                return;
+            }
             if (after is not null)
             {
                 store.SetPrimary(ownerId, sessionId, NewItem(kind, after, by), null);

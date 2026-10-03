@@ -94,6 +94,22 @@ public sealed class AudioContextKindTests : IDisposable
     }
 
     [Fact]
+    public void Фокус_агента_возвращает_снятый_человеком_объект_основным()
+    {
+        _flags.On = true;
+        var id = _jobs.Tracked(Owner, Chat, () => _threads.Open(Owner, Chat, "a.mp3", null, null), ContextActor.Human)
+            .Thread!.Id;
+        _context.SetPrimary(Owner, Chat, null, null);
+
+        _jobs.Tracked(Owner, Chat, () => _threads.SetFocus(Owner, Chat, id, null), ContextActor.Agent);
+
+        var primary = _context.Get(Owner, Chat).Primary;
+        primary.Should().NotBeNull();
+        ChatContextFocusMirror.ThreadOf(primary!).Should().Be(id);
+        primary!.By.Should().Be(ContextActor.Agent);
+    }
+
+    [Fact]
     public void При_флаге_смена_фокуса_попадает_в_стор_и_снимается_вместе_с_ним()
     {
         _flags.On = true;

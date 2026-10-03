@@ -116,6 +116,23 @@ public sealed class ImageContextKindTests : IDisposable
     }
 
     [Fact]
+    public async Task Фокус_агента_возвращает_снятый_человеком_объект_основным()
+    {
+        _flags.On = true;
+        var a = NewThread();
+        await _service.FocusAsync(Owner, Project, Chat, a, _threads.Get(Owner, Chat).Revision);
+        // Человек снял объект в контексте (✕); фокус вертикали остался на нити
+        _context.SetPrimary(Owner, Chat, null, null);
+
+        await _service.AgentFocusAsync(Owner, Project, Chat, a, CancellationToken.None);
+
+        var primary = _context.Get(Owner, Chat).Primary;
+        primary.Should().NotBeNull();
+        ChatContextFocusMirror.ThreadOf(primary!).Should().Be(a);
+        primary!.By.Should().Be(ContextActor.Agent);
+    }
+
+    [Fact]
     public async Task Усыновление_файла_агентом_без_фокуса_попадает_в_контекст()
     {
         _flags.On = true;

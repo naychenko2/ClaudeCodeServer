@@ -15,6 +15,7 @@ import {
   getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs, VIDEO_PANEL, VIDEO_STRIP,
   type PendingSettings,
 } from '../store/videoStore';
+import type { SaveTarget } from '../film/model';
 import { PERSONAL_LOCAL_REASON, resolveScene, settingsOf, type ResolvedScene } from './model';
 
 const SAVE_DELAY = 500;
@@ -206,9 +207,9 @@ export const takeVersion = (scope: string, sessionId: string, sceneId: string, v
   mutate(scope, sessionId, rev => videoApi.current(scope, sessionId, sceneId, versionId, rev), true);
 
 // «Сохранить сцену» в проект (блок 2 бэкенда)
-export async function saveScene(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, folder: string | null): Promise<SaveSceneResult | null> {
+export async function saveScene(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, target: SaveTarget | null): Promise<SaveSceneResult | null> {
   try {
-    const res = await videoApi.save(scope, sessionId, scene.sceneId, { ...(versionId ? { versionId } : {}), ...(folder ? { folder } : {}) });
+    const res = await videoApi.save(scope, sessionId, scene.sceneId, { ...(versionId ? { versionId } : {}), ...(target ?? {}) });
     showToast(`Сохранено: ${res.path}`, '', 'info');
     return res;
   } catch (e) {

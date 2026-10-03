@@ -21,7 +21,8 @@ import { __resetGenPanelOpen, holdGenPanelOpen } from '../../../lib/genPanelOpen
 import { REVEAL_PANEL_EVENT } from '../../../lib/subsystems/registryCore';
 import { videoApi } from '../api';
 import { CATALOG, film, FILM_PATH, PREFS, scene, threads } from '../mocks';
-import { saveFolderFor } from '../film/model';
+import { saveTargetFor } from '../film/model';
+import { startSceneSave } from '../feed/SceneCard';
 import { backToVideoStrip, saveScene, selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
 import {
   __applyThreads, __resetVideoStore, __setFilm, clearAgentFrame, ensureVideoThreads, getAgentFrames, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent, mutate,
@@ -174,22 +175,45 @@ describe('фильм: правка под ревизией', () => {
   });
 });
 
-describe('B2: «Сохранить сцену» и «В фильм →» — папка из открытого фильма', () => {
-  it('у сцены из панели папки нет, фильм открыт — папка фильма', () => {
-    const noFolder = scene('s1', { folder: '' });
-    expect(saveFolderFor(FILM_PATH, noFolder)).toBe('video/утро');
-    expect(saveFolderFor(FILM_PATH, scene('s1', { folder: 'video/старая' }))).toBe('video/утро');
+describe('B2: «Сохранить сцену» и «В фильм →» — открытый фильм старше папки сцены', () => {
+  it('фильм открыт — уходит его полный путь, папка сцены игнорируется', () => {
+    expect(saveTargetFor(FILM_PATH, scene('s1', { folder: '' }))).toEqual({ filmPath: FILM_PATH });
+    expect(saveTargetFor(FILM_PATH, scene('s1', { folder: 'video/старая' }))).toEqual({ filmPath: FILM_PATH });
   });
 
   it('нет фильма: папка сцены, иначе null — тогда человека спрашивают, в какой фильм', () => {
-    expect(saveFolderFor(null, scene('s1', { folder: 'video/утро' }))).toBe('video/утро');
-    expect(saveFolderFor(null, scene('s1', { folder: '' }))).toBeNull();
+    expect(saveTargetFor(null, scene('s1', { folder: 'video/утро' }))).toEqual({ folder: 'video/утро' });
+    expect(saveTargetFor(null, scene('s1', { folder: '' }))).toBeNull();
   });
 
-  it('saveScene отдаёт серверу ровно переданную папку', async () => {
+  it('saveScene отдаёт серверу путь открытого фильма (filmPath) без folder', async () => {
     const spy = vi.spyOn(videoApi, 'save').mockResolvedValue({ path: 'video/утро/scene-01.mp4', framePaths: [], addedToFilm: true });
-    await saveScene('p1', 'c1', scene('s1', { folder: '' }), 'ver-1', saveFolderFor(FILM_PATH, scene('s1', { folder: '' })));
+    await saveScene('p1', 'c1', scene('s1', { folder: '' }), 'ver-1', saveTargetFor(FILM_PATH, scene('s1', { folder: '' })));
+    expect(spy.mock.calls[0][3]).toEqual({ versionId: 'ver-1', filmPath: FILM_PATH });
+  });
+});
+
+describe('B2: место вызова — карточка сцены', () => {
+  const saved = { path: 'video/утро/scene-01.mp4', framePaths: [], addedToFilm: true };
+
+  it('открыт фильм — в запрос уходит filmPath, а не папка сцены', async () => {
+    __applyThreads('c1', 'p1', threads(1, [scene('s1', { folder: 'video/старая' })], { sceneId: 's1', filmPath: FILM_PATH }));
+    const spy = vi.spyOn(videoApi, 'save').mockResolvedValue(saved);
+    vi.spyOn(videoApi, 'films').mockResolvedValue([]);
+    expect(startSceneSave('p1', 'c1', scene('s1', { folder: 'video/старая' }), 'ver-1', 'save')).toBe(true);
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0][3]).toEqual({ versionId: 'ver-1', filmPath: FILM_PATH });
+  });
+
+  it('фильм не открыт — папка сцены; нет и её — запрос не уходит, человека спросят', async () => {
+    __applyThreads('c1', 'p1', threads(1, [scene('s1')], { sceneId: 's1' }));
+    const spy = vi.spyOn(videoApi, 'save').mockResolvedValue(saved);
+    vi.spyOn(videoApi, 'films').mockResolvedValue([]);
+    expect(startSceneSave('p1', 'c1', scene('s1', { folder: 'video/утро' }), 'ver-1', 'save')).toBe(true);
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
     expect(spy.mock.calls[0][3]).toEqual({ versionId: 'ver-1', folder: 'video/утро' });
+    expect(startSceneSave('p1', 'c1', scene('s1', { folder: '' }), 'ver-1', 'save')).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
 

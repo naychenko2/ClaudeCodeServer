@@ -260,7 +260,7 @@ export interface FilmMusicDraft {
   styleText?: string | null;
 }
 
-export interface SaveSceneRequest { sessionId: string; sceneId: string; versionId?: string; folder?: string; fileName?: string }
+export interface SaveSceneRequest { sessionId: string; sceneId: string; versionId?: string; folder?: string; filmPath?: string; fileName?: string }
 export interface SaveSceneResult { path: string; framePaths: string[]; addedToFilm: boolean }
 
 // ── События SignalR (Contracts/VideoEditorEvents.cs); базовый sessionId — чат события ──

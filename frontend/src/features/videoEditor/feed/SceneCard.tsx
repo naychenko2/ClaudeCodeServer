@@ -13,7 +13,7 @@ import {
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
-import { filmFolder, filmPathOf, newFilmPath, saveFolderFor, snapshotOf } from '../film/model';
+import { filmFolder, filmPathOf, newFilmPath, saveTargetFor, snapshotOf, type SaveTarget } from '../film/model';
 import { progressLabel } from '../panel/useScene';
 import { downloadClip, openFilmPanel, openScenePanel, saveScene, selectFilmByHuman, selectSceneByHuman, takeVersion } from '../scene/actions';
 import { currentVersion, modelLabel, plural, staleNotes } from '../scene/model';
@@ -249,13 +249,13 @@ export function LaunchRowView({ v, a }: { v: SceneCardView; a: Pick<SceneCardAct
   );
 }
 
-// «В фильм →»: папка фильма известна заранее (открытый фильм или выбор человека). Несохранённая сцена
-// сохраняется в неё — сервер сам ставит клип в фильм папки; уже сохранённая добавляется в фильм патчем
-export async function addToFilm(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, folder: string): Promise<void> {
-  const target = filmPathOf(folder);
+// «В фильм →»: фильм известен заранее (открытый фильм или выбор человека). Несохранённая сцена
+// сохраняется в него — сервер сам ставит клип в фильм; уже сохранённая добавляется в фильм патчем
+export async function addToFilm(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, to: SaveTarget): Promise<void> {
+  const target = 'filmPath' in to ? to.filmPath : filmPathOf(to.folder);
   let file = scene.savedFiles.find(x => x.versionId === versionId)?.path ?? null;
   if (!file) {
-    const res = await saveScene(scope, sessionId, scene, versionId, folder);
+    const res = await saveScene(scope, sessionId, scene, versionId, to);
     if (!res) return;
     if (res.addedToFilm) { void loadFilmList(scope, sessionId, true); openFilmPanel(sessionId, target); return; }
     file = res.path;
@@ -265,9 +265,17 @@ export async function addToFilm(scope: string, sessionId: string, scene: VideoSc
 }
 
 // «Сохранить сцену»: клип ложится в папку фильма и встаёт в него
-export async function saveToFolder(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, folder: string): Promise<void> {
-  const res = await saveScene(scope, sessionId, scene, versionId, folder);
+export async function saveToFolder(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, to: SaveTarget): Promise<void> {
+  const res = await saveScene(scope, sessionId, scene, versionId, to);
   if (res?.addedToFilm) void loadFilmList(scope, sessionId, true);
+}
+
+// Старт «Сохранить сцену» / «В фильм →»: открытый фильм старше папки сцены; нигде не лежит — false, спросить человека
+export function startSceneSave(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, kind: 'save' | 'film'): boolean {
+  const to = saveTargetFor(getFocusedFilmPath(sessionId), scene);
+  if (!to) return false;
+  void (kind === 'save' ? saveToFolder(scope, sessionId, scene, versionId, to) : addToFilm(scope, sessionId, scene, versionId, to));
+  return true;
 }
 
 // Фильма нет — спрашиваем, в какой: фильмы проекта списком и «Новый фильм» по имени
@@ -312,12 +320,9 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   }
   // Папка — из открытого фильма; нет фильма и у сцены нет папки — человека спрашивают
   const act = (kind: 'save' | 'film', folder: string) => run(() => (kind === 'save'
-    ? saveToFolder(scope, sessionId, scene, ver?.versionId, folder)
-    : addToFilm(scope, sessionId, scene, ver?.versionId, folder)));
-  const start = (kind: 'save' | 'film') => {
-    const folder = saveFolderFor(getFocusedFilmPath(sessionId), scene);
-    if (folder) void act(kind, folder); else setAsk(kind);
-  };
+    ? saveToFolder(scope, sessionId, scene, ver?.versionId, { folder })
+    : addToFilm(scope, sessionId, scene, ver?.versionId, { folder })));
+  const start = (kind: 'save' | 'film') => { if (!startSceneSave(scope, sessionId, scene, ver?.versionId, kind)) setAsk(kind); };
   return (
     <SceneCardView v={v} busy={busy}
       chooser={ask && <FilmChooser scope={scope} sessionId={sessionId} onCancel={() => setAsk(null)}
@@ -376,8 +381,8 @@ export function quietView(recordType: string, data: Record<string, unknown>, fal
 export function QuietLineView({ v, onClick }: { v: QuietView; onClick?: () => void }) {
   return (
     <Line onClick={onClick} by={v.byClaude}>
-      {ic(v.recordType === 'video_film_built' ? Film : Clapperboard)}
-      <span data-video-quiet={v.recordType}>{v.text}</span>
+      <span style={{ display: 'inline-flex', flexShrink: 0 }}>{ic(v.recordType === 'video_film_built' ? Film : Clapperboard)}</span>
+      <span data-video-quiet={v.recordType} style={{ flex: '1 1 8em', minWidth: 0 }}>{v.text}</span>
     </Line>
   );
 }

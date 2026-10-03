@@ -134,8 +134,7 @@ public sealed class AudioContextRefsTests : IDisposable
         Kind().DescribeExecutor(Scope, Primary(NewThread())).Should().Be("Авто · Авто");
     }
 
-    [Fact]
-    public void DescribeExecutor_нить_без_настроек_берёт_префы_режима()
+    private (AudioContextKind Kind, AudioPrefsService Prefs, AudioModelInfo Info) KindWithLocalEngine()
     {
         var info = AudioCatalog.Local[0].Info;
         var engine = new Mock<IAudioEngine>();
@@ -143,10 +142,53 @@ public sealed class AudioContextRefsTests : IDisposable
         engine.SetupGet(e => e.Label).Returns("Локально");
         engine.SetupGet(e => e.Models).Returns([info]);
         var prefs = new AudioPrefsService(new AudioPrefsStore(Path.Combine(_root, "prefs")));
-        prefs.Save(Owner, AudioEditScope.Of(_session), AudioModes.Voice, new AudioModePrefs("speak", "local", info.Id, null, null));
-        var kind = new AudioContextKind(_threads, [engine.Object], prefs);
+        return (new AudioContextKind(_threads, [engine.Object], prefs), prefs, info);
+    }
 
-        kind.DescribeExecutor(Scope, Primary(NewThread())).Should().Be($"Локально · {info.Label} · бесплатно");
+    [Fact]
+    public void DescribeExecutor_префы_голоса_пусты_а_у_музыки_заданы_берёт_голос_а_не_музыку()
+    {
+        var (kind, prefs, info) = KindWithLocalEngine();
+        prefs.Save(Owner, AudioEditScope.Of(_session), AudioModes.Music, new AudioModePrefs("song", "local", info.Id, null, null));
+
+        kind.DescribeExecutor(Scope, Primary(NewThread())).Should().Be("Авто · Авто");
+    }
+
+    [Fact]
+    public void DescribeExecutor_у_нити_режим_без_провайдера_берёт_провайдера_из_префов()
+    {
+        var (kind, prefs, info) = KindWithLocalEngine();
+        prefs.Save(Owner, AudioEditScope.Of(_session), AudioModes.Voice, new AudioModePrefs("speak", "local", info.Id, null, null));
+        var id = NewThread(new AudioThreadSettings(AudioModes.Voice, null, null, null, null, 2));
+
+        kind.DescribeExecutor(Scope, Primary(id)).Should().Be($"Локально · {info.Label} · бесплатно");
+    }
+
+    [Fact]
+    public void DescribeExecutor_режим_нити_определяет_какие_префы_брать()
+    {
+        var (kind, prefs, info) = KindWithLocalEngine();
+        prefs.Save(Owner, AudioEditScope.Of(_session), AudioModes.Music, new AudioModePrefs("song", "local", info.Id, null, null));
+        var id = NewThread(new AudioThreadSettings(AudioModes.Music, null, null, null, null));
+
+        kind.DescribeExecutor(Scope, Primary(id)).Should().Be($"Локально · {info.Label} · бесплатно");
+    }
+
+    [Fact]
+    public void DescribeExecutor_платная_модель_fal_показывает_usd_и_единицу()
+    {
+        var chars = new AudioModelInfo("tts-chars", "TTS", AudioCatalog.Local[0].Info.Caps, new AudioPriceHint(0.00009, AudioPriceUnits.Chars, "char"));
+        var secs = new AudioModelInfo("tts-sec", "Sec", AudioCatalog.Local[0].Info.Caps, new AudioPriceHint(0.018, AudioPriceUnits.Sec, "sec"));
+        var engine = new Mock<IAudioEngine>();
+        engine.SetupGet(e => e.Key).Returns("fal");
+        engine.SetupGet(e => e.Label).Returns("fal");
+        engine.SetupGet(e => e.Models).Returns([chars, secs]);
+        var kind = Kind(engine.Object);
+
+        kind.DescribeExecutor(Scope, Primary(NewThread(new AudioThreadSettings(AudioModes.Voice, "speak", "fal", "tts-chars", null))))
+            .Should().Be("fal · TTS · $0.09 / 1000 симв.");
+        kind.DescribeExecutor(Scope, Primary(NewThread(new AudioThreadSettings(AudioModes.Voice, "speak", "fal", "tts-sec", null))))
+            .Should().Be("fal · Sec · $0.018 / с");
     }
 
     [Fact]

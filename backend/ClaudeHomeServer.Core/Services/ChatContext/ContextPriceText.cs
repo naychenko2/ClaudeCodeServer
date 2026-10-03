@@ -9,7 +9,7 @@ public static class ContextPriceText
     public static string Format(double amount, string unit, string per)
     {
         if (amount == 0 || unit.Equals("free", StringComparison.OrdinalIgnoreCase)) return "бесплатно";
-        var number = amount.ToString("0.##", CultureInfo.InvariantCulture);
+        var number = Number(amount);
         var money = unit.ToLowerInvariant() switch
         {
             "usd" => $"${number}",
@@ -18,6 +18,13 @@ public static class ContextPriceText
             _ => $"{number} {unit}",
         };
         return $"{money} / {PerName(per)}";
+    }
+
+    // Три значащие цифры без показателя степени: 0.018 остаётся 0.018, 0.00009 не превращается в 0
+    private static string Number(double amount)
+    {
+        var digits = Math.Clamp(2 - (int)Math.Floor(Math.Log10(Math.Abs(amount))), 0, 12);
+        return Math.Round(amount, digits).ToString("0.############", CultureInfo.InvariantCulture);
     }
 
     private static string PerName(string per) => per.Trim().ToLowerInvariant() switch

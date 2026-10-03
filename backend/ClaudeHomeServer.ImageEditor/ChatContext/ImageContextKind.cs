@@ -34,9 +34,7 @@ public sealed class ImageContextKind(
     public const string CharacterKind = "image-character";
 
     // Операции, берущие образцы: у остальных (фон, апскейл, дорисовка, лица) образцов нет.
-    // Имена — из списка операций тулсета, своих строк здесь нет
-    private static readonly string[] RefOps =
-        [.. ImageEditorToolset.Ops.Where(o => o is "generate" or "edit" or "inpaint")];
+    private static readonly string[] RefOps = ImageEditorToolset.RefOps;
 
     public IReadOnlyList<string> Kinds { get; } = [Kind, CharacterKind];
 

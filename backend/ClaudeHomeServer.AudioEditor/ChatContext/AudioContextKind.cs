@@ -100,11 +100,15 @@ public sealed class AudioContextKind(
     public string? DescribeExecutor(ContextScope scope, ContextItem primary)
     {
         if (primary.Kind != Kind || Text(primary.Ref, "threadId") is not { } threadId) return null;
-        // Как цепочка запуска: нить → префы режима → каталог. Режим нити без настроек неизвестен,
-        // берётся первый режим, где человек что-то выбрал
-        var settings = Find(scope, threadId)?.Settings ?? PrefsSettings(scope);
-        var provider = string.IsNullOrWhiteSpace(settings?.Provider) ? null : settings.Provider;
-        var modelId = string.IsNullOrWhiteSpace(settings?.Model) || AudioCatalog.IsAuto(settings.Model) ? null : settings.Model;
+        // Как цепочка запуска audio_generate (AudioEditorToolset.HumanChoice): нить → префы режима → каталог
+        var thread = Find(scope, threadId);
+        var mode = thread?.Settings?.Mode ?? AudioModes.Voice;
+        var chain = prefs is null
+            ? AudioPrefsResolver.Resolve(mode, thread?.Settings, null, AudioEditJobService.CatalogDefault(mode))
+            : prefs.Resolve(scope.OwnerId, AudioEditScope.Of(scope.Session), mode, thread?.Settings,
+                AudioEditJobService.CatalogDefault(mode));
+        var provider = string.IsNullOrWhiteSpace(chain.Provider) || AudioCatalog.IsAuto(chain.Provider) ? null : chain.Provider;
+        var modelId = string.IsNullOrWhiteSpace(chain.Model) || AudioCatalog.IsAuto(chain.Model) ? null : chain.Model;
         var engine = provider is null ? null : engines?.FirstOrDefault(e => e.Key == provider);
         var model = modelId is null ? null : (engine?.Models ?? engines?.SelectMany(e => e.Models) ?? []).FirstOrDefault(m => m.Id == modelId);
         var parts = new List<string>
@@ -113,18 +117,18 @@ public sealed class AudioContextKind(
             modelId is null ? AudioCatalog.AutoModelLabel : model?.Label ?? modelId,
         };
         if (model?.PriceHint is { } price)
-            parts.Add(ContextPriceText.Format(price.Amount, price.Unit, price.Per));
+            parts.Add(PriceText(price));
         return string.Join(" · ", parts);
     }
 
-    private AudioThreadSettings? PrefsSettings(ContextScope scope)
+    // У fal Unit — единица тарификации (chars|sec|min), валюта подразумевается usd; у остальных поставщиков
+    // Unit — сама валюта. Символы пересчитываются на 1000: «$0.09 / 1000 симв.» вместо «$0.00009 / симв.»
+    internal static string PriceText(AudioPriceHint price) => price.Unit switch
     {
-        if (prefs is null) return null;
-        var area = AudioEditScope.Of(scope.Session);
-        return new[] { AudioModes.Voice, AudioModes.Music, AudioModes.Process }
-            .Select(mode => prefs.ForNewThread(scope.OwnerId, area, mode))
-            .FirstOrDefault(s => s is not null);
-    }
+        AudioPriceUnits.Chars => ContextPriceText.Format(price.Amount * 1000, AudioPriceUnits.Usd, "1000 симв."),
+        AudioPriceUnits.Sec or AudioPriceUnits.Min => ContextPriceText.Format(price.Amount, AudioPriceUnits.Usd, price.Unit),
+        _ => ContextPriceText.Format(price.Amount, price.Unit, price.Per),
+    };
 
     public ContextItem? SeedPrimary(ContextScope scope)
     {

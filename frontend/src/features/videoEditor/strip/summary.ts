@@ -14,7 +14,9 @@ export function filmDuration(doc: FilmDocument): number {
 export const staleFilm = (f: FilmState | null): boolean => {
   if (!f) return false;
   const built = f.document.builds.length > 0;
-  return (built && f.marks.some(m => m.updated || m.stale)) || f.build?.state === 'failed';
+  // Признак сервера покрывает и правки склеек, подрезки, музыки и порядка — метки строк их не видят
+  const changed = f.stale ?? f.marks.some(m => m.updated || m.stale);
+  return (built && changed) || f.build?.state === 'failed';
 };
 
 // Пока цены нет в сторе: честное «уточняется» (как у «Картинок»), а не пустое место

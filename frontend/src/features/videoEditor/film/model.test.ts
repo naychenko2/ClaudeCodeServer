@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { film, FILM_PATH, scene } from '../mocks';
 import { filmChip, filmDuration, staleFilm } from '../strip/summary';
 import {
-  buildView, clampTrim, cutLabel, newFilmPath, sceneOfItem, snapshotOf, soundPreset, spentText, staleReasons, trimLabel,
+  buildView, clampTrim, cutLabel, filmStatusSuffix, newFilmPath, sceneOfItem, snapshotOf, soundPreset, spentText, staleReasons, trimLabel,
 } from './model';
 
 describe('фильм: подписи и длительность', () => {
@@ -44,13 +44,33 @@ describe('сборка и «обновлена»', () => {
     expect(staleReasons(f)).toEqual(['сцена 3 обновлена']);
     expect(staleFilm(f)).toBe(true);
   });
+  it('признак сервера stale ловит правки склеек и порядка, которых нет в метках строк', () => {
+    const builds = [{ file: 'video/утро/film.mp4', sourceHash: 'ab', at: '2026-10-02T16:00:00Z' }];
+    const f = film({ document: { ...film().document, builds }, stale: true, marks: [] });
+    expect(staleFilm(f)).toBe(true);
+    expect(staleReasons(f)).toEqual(['фильм изменён после сборки']);
+    expect(buildView(f)).toEqual({ kind: 'done', file: 'video/утро/film.mp4', stale: ['фильм изменён после сборки'] });
+    // сервер сказал «не устарел» — метки строк его не перебивают
+    expect(staleFilm(film({ document: { ...film().document, builds }, stale: false, marks: [{ index: 0, claude: false, updated: true, stale: false }] }))).toBe(false);
+  });
   it('фильм ни разу не собирали — синей точки «изменён после сборки» нет', () => {
     expect(staleFilm(film({ marks: [{ index: 2, claude: false, updated: true, stale: false }] }))).toBe(false);
     expect(staleFilm(film())).toBe(false);
   });
 });
 
+describe('меню фильмов', () => {
+  it('«устарел» не сопровождается «собран»', () => {
+    expect(filmStatusSuffix({ stale: true, itemCount: 3 })).toBe(' · устарел');
+    expect(filmStatusSuffix({ stale: false, itemCount: 3 })).toBe(' · собран');
+    expect(filmStatusSuffix({ stale: false, itemCount: 0 })).toBe(' · пустой');
+  });
+});
+
 describe('стыки с соседями', () => {
+  it('заготовка «Звука» берёт длину и стиль у сервера, если они пришли', () => {
+    expect(soundPreset('утро', film(), { threadId: 't', actualDurationSec: 12, styleText: 'Рассвет' })).toMatchObject({ duration: 12, style: 'Рассвет' });
+  });
   it('заготовка «Звука»: длина фильма, песня, инструментал, привязка к .film', () => {
     expect(soundPreset('утро', film())).toMatchObject({ mode: 'music', op: 'song', duration: 22, instrumental: true, bindTo: FILM_PATH, from: 'под фильм «утро»' });
   });

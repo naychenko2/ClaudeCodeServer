@@ -21,9 +21,10 @@ export async function composeForFilm(scope: string, sessionId: string, name: str
     const draft = await videoApi.composeMusic(scope, sessionId, f.path);
     _pending.set(f.path, f.document.music?.file ?? null);
     revealWorkspacePanel('sound', 'settings', {
-      sessionId, preset: { ...soundPreset(name, f), thread: draft.threadId },
+      sessionId, preset: { ...soundPreset(name, f, draft), thread: draft.threadId },
       returnTo: { key: VIDEO_PANEL, tab: 'film', target: f.path, label: `К фильму «${name}» — панель «Видео»` },
     });
+    if (draft.durationNote) showToast(draft.durationNote, '', 'info');
     return true;
   } catch (e) {
     holdStripRequests(sessionId, SOUND_STRIP_KEY, 0);

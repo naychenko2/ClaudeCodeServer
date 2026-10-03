@@ -9,7 +9,7 @@ import {
   type GenerationFoot,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
-import { ERR, type FilmState, type VideoScene } from '../api';
+import { ERR, errorCode, errorText, videoApi, type FilmState, type VideoScene } from '../api';
 import { ProjectPicker } from '../panel/ProjectPicker';
 import { Hint, ic, Label } from '../panel/primitives';
 import { createScene, openScenePanel, selectSceneByHuman } from '../scene/actions';
@@ -23,7 +23,7 @@ import { TOUCH, useBoxWidth } from '../useBoxWidth';
 import { composeForFilm, isComposing, isFromSound } from './compose';
 import { FilmList, type RowActions } from './FilmList';
 import {
-  buildView, filmClock, filmFolder, fileName, newFilmPath, sceneOfItem, scenesWord, snapshotOf, spentText,
+  buildView, filmClock, filmFolder, filmStatusSuffix, fileName, MUSIC_MIN_SEC, newFilmPath, sceneOfItem, scenesWord, snapshotOf, spentText,
 } from './model';
 import { openProjectFile } from './nav';
 import { ScriptView } from './ScriptView';
@@ -172,7 +172,7 @@ function FilmContext({ scope, sessionId, path, f }: { scope: string; sessionId: 
       {menuAt && (
         <Menu onClose={() => setMenuAt(null)} anchor={menuAt} anchorAlign="start" minWidth={280}>
           {films.map(x => (
-            <MenuItem key={x.path} icon={ic(Film)} label={x.name} hint={`${x.path}${x.stale ? ' · устарел' : ' · собран'}`}
+            <MenuItem key={x.path} icon={ic(Film)} label={x.name} hint={`${x.path}${filmStatusSuffix(x)}`}
               onClick={() => { setMenuAt(null); void focusFilm(scope, sessionId, x.path); }} />
           ))}
           {films.length > 0 && <MenuSep />}
@@ -254,6 +254,13 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const create = async (name: string) => {
     const p = newFilmPath(name);
     if (!p) return;
+    // Пустой файл создаёт сервер (имя занято — 409, чужой фильм не затирается); потом он открывается
+    try {
+      await videoApi.createFilm(scope, sessionId, p);
+    } catch (e) {
+      showToast(errorCode(e) === ERR.nameTaken ? 'Фильм с таким именем уже есть — выберите его из списка или назовите иначе' : errorText(e, 'Не удалось завести фильм'), '', 'error');
+      return;
+    }
     closeNew();
     if (await focusFilm(scope, sessionId, p)) void loadFilmList(scope, sessionId, true);
   };
@@ -424,7 +431,8 @@ export function FilmTab({ ctx }: { ctx: WorkspacePanelDefCtx }) {
             {composing ? 'Сочиняем в «Звуке»…' : 'Сочинить под фильм…'}
           </Button>
           <Hint>
-            Откроет «Звук» с заготовкой: длина {filmClock(doc)}, настроение по текстам сцен. Готовый трек встанет сюда сам.
+            Откроет «Звук» с заготовкой: длина {filmClock(doc)}
+            {filmDuration(doc) < MUSIC_MIN_SEC && ` (музыка выйдет не короче ${MUSIC_MIN_SEC} с)`}, настроение по текстам сцен. Готовый трек встанет сюда сам.
           </Hint>
         </div>
       )}

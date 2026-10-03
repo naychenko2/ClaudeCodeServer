@@ -97,7 +97,7 @@ export const frameKey = (f: FrameRef | null | undefined): string =>
 
 export const frameName = (f: FrameRef | null | undefined): string => {
   if (!f) return '';
-  return f.kind === 'file' ? f.path.split('/').pop() ?? f.path : f.versionId === 'origin' ? 'исходник' : 'версия';
+  return f.kind === 'file' ? f.fileName ?? f.path.split('/').pop() ?? f.path : f.versionId === 'origin' ? 'исходник' : 'версия';
 };
 
 // Причина, по которой снять нельзя (макет v7, «Тексты»); null — можно

@@ -5,7 +5,8 @@
 import { useRef, useState } from 'react';
 import { ArrowLeft, Brush, FolderOpen, Image as ImageIcon, Pencil, Plus, Trash2, Upload } from 'lucide-react';
 import { api, Button, C, FS, ICON_SIZE, R, SP, ByClaude } from 'aihome_shell/kit';
-import type { FrameRef } from '../api';
+import { videoApi, type FrameRef } from '../api';
+import { isPersonalScope } from '../scope';
 import { frameName } from '../scene/model';
 import { frameVersionLabel, imageSrcOf, imageThreadName, useImageFramesVersion } from '../store/imageFrames';
 import { TOUCH } from '../useBoxWidth';
@@ -18,7 +19,11 @@ export const IMG_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
 export function useFrameSrc(scope: string, sessionId: string | null, f: FrameRef | null): { src: string | null; name: string } {
   useImageFramesVersion(scope, sessionId, f?.kind === 'image');
   if (!f) return { src: null, name: '' };
-  if (f.kind === 'file') return { src: api.files.fileUrl(scope, f.path) || null, name: frameName(f) };
+  if (f.kind === 'file') {
+    // Личный чат: файл лежит в рабочей папке чата, не в проекте — отдаёт ручка кадра
+    if (isPersonalScope(scope)) return { src: sessionId ? videoApi.frameFileUrl(sessionId, f.path) : null, name: frameName(f) };
+    return { src: api.files.fileUrl(scope, f.path) || null, name: frameName(f) };
+  }
   const named = sessionId ? imageThreadName(sessionId, f.threadId) : null;
   const src = sessionId ? imageSrcOf(scope, sessionId, f.threadId, f.versionId) : null;
   return { src, name: named ? `${named} · ${frameVersionLabel(sessionId, f.threadId, f.versionId)}` : frameName(f) };

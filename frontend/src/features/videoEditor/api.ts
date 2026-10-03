@@ -14,7 +14,8 @@ import { chatBase, isPersonalScope, PERSONAL_SCOPE, videoBase } from './scope';
 
 export type FrameRef =
   | { kind: 'image'; threadId: string; versionId: string; follow?: boolean }
-  | { kind: 'file'; path: string };
+  // fileName — человеческое имя загруженного «С компьютера» файла: подпись вместо пути рабочей папки
+  | { kind: 'file'; path: string; fileName?: string };
 
 export interface VideoSceneSettings {
   frameA?: FrameRef;
@@ -234,6 +235,8 @@ export interface FilmState {
   spent: FilmSpent;
   marks: FilmItemMark[];
   build?: FilmBuildStatus;
+  // Фильм изменён после последней сборки (или не собирался, а строки есть) — признак сервера, тот же, что у списка
+  stale?: boolean;
 }
 
 export type FilmPatchOp =
@@ -246,7 +249,16 @@ export type FilmPatchOp =
 
 export interface FilmPatch { expectedRevision: string; ops: FilmPatchOp[] }
 
-export interface FilmMusicDraft { threadId: string }
+// Длина заготовки музыки: durationSec — длина фильма, actualDurationSec — что придёт на самом деле (модели музыки
+// не короче minDurationSec); durationNote — причина расхождения; styleText — стиль по текстам сцен
+export interface FilmMusicDraft {
+  threadId: string;
+  durationSec?: number;
+  minDurationSec?: number;
+  actualDurationSec?: number;
+  durationNote?: string | null;
+  styleText?: string | null;
+}
 
 export interface SaveSceneRequest { sessionId: string; sceneId: string; versionId?: string; folder?: string; fileName?: string }
 export interface SaveSceneResult { path: string; framePaths: string[]; addedToFilm: boolean }
@@ -403,6 +415,12 @@ export const videoApi = {
     form.append('file', file);
     return request<FrameRef>(`${videoBase(PERSONAL_SCOPE, sessionId)}/frames/upload`, { method: 'POST', body: form, timeoutMs: 120_000 });
   },
+  // «Новый фильм»: пустой .film, занятое имя — 409 name_taken. Только проектные
+  createFilm: (scope: string, sessionId: string, path: string, aspect?: string) =>
+    json<FilmState>(`${videoBase(scope, sessionId)}/films`, { path, ...(aspect ? { aspect } : {}) }),
+  // Превью кадра личного чата: байты из рабочей папки (путь кадра — frames/<id>.<ext>)
+  frameFileUrl: (sessionId: string, path: string) =>
+    withToken(`/api${videoBase(PERSONAL_SCOPE, sessionId)}/frames/${encodeURIComponent(path.replace(/^frames\//, ''))}`),
   // «Сочинить под фильм…»: сервер заводит черновик звука в чате и ждёт его первую версию — она встанет
   // музыкой фильма сама (FilmMusicComposer), и при запуске человеком, и агентом
   composeMusic: (scope: string, sessionId: string, path: string) =>

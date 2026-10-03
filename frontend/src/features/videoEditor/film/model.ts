@@ -1,7 +1,7 @@
 // Чистая модель вкладки «Фильм» (макет v7): подписи склеек, длительности строк, причины пересборки,
 // снимок сцены для «В фильм →», заготовка «Сочинить под фильм…» и данные закреплённого низа.
 
-import type { FilmCut, FilmCutType, FilmDocument, FilmItem, FilmSceneSnapshot, FilmSpent, FilmState, VideoScene } from '../api';
+import type { FilmCut, FilmCutType, FilmDocument, FilmItem, FilmMusicDraft, FilmSceneSnapshot, FilmSummary, FilmSpent, FilmState, VideoScene } from '../api';
 import { clock, plural } from '../scene/model';
 import { filmDuration } from '../strip/summary';
 
@@ -62,6 +62,8 @@ export function staleReasons(f: FilmState): string[] {
     if (m.updated) out.push(`сцена ${m.index + 1} обновлена`);
     else if (m.stale) out.push(`сцена ${m.index + 1}: текст или кадр изменён`);
   }
+  // Устарел по признаку сервера, а причин по строкам нет (правили склейки, подрезку, музыку, порядок)
+  if (!out.length && f.stale) out.push('фильм изменён после сборки');
   return out;
 }
 
@@ -88,13 +90,17 @@ export function buildView(f: FilmState): BuildView {
 }
 
 // «Сочинить под фильм…»: заготовка панели «Звук» — длина фильма, стиль по текстам сцен, инструментал
-export function soundPreset(name: string, f: FilmState): Record<string, unknown> {
+// Модели музыки не снимают короче этого (сервер отдаёт то же в FilmMusicDraft.minDurationSec)
+export const MUSIC_MIN_SEC = 10;
+
+export function soundPreset(name: string, f: FilmState, draft?: FilmMusicDraft | null): Record<string, unknown> {
   const texts = f.document.items.map(i => i.scene?.text?.trim()).filter(Boolean) as string[];
   const style = texts.length
     ? `Инструментальная музыка под фильм «${name}»: ${texts.join('; ').slice(0, 400)}`
     : `Инструментальная музыка под фильм «${name}»`;
   return {
-    mode: 'music', op: 'song', duration: Math.max(10, Math.round(filmDuration(f.document))), style, instrumental: true,
+    mode: 'music', op: 'song', duration: draft?.actualDurationSec || Math.max(MUSIC_MIN_SEC, Math.round(filmDuration(f.document))),
+    style: draft?.styleText?.trim() || style, instrumental: true,
     from: `под фильм «${name}»`, bindTo: f.path,
   };
 }
@@ -131,3 +137,7 @@ export const saveFolderFor = (filmPath: string | null, scene: Pick<VideoScene, '
 
 // Путь фильма, который сервер ведёт в папке: video/утро → video/утро/утро.film
 export const filmPathOf = (folder: string) => `${folder}/${folder.slice(folder.lastIndexOf('/') + 1)}.film`;
+
+// Хвост подсказки строки меню фильмов: «устарел» старше «собран», пустой фильм не собран никогда
+export const filmStatusSuffix = (x: Pick<FilmSummary, 'stale' | 'itemCount'>) =>
+  x.stale ? ' · устарел' : x.itemCount === 0 ? ' · пустой' : ' · собран';

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Session, Persona, Project } from '../../types';
-import { C, R, SP, FONT } from '../../lib/design';
+import { C, R, SP, FS, FONT } from '../../lib/design';
+import { Button } from '../ui';
 import { NewChatSetup } from './NewChatSetup';
 import { useAssistantName } from './contexts';
 import { personaLabel, personaTitleLines } from '../../lib/personas';
@@ -39,7 +40,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
           <div style={{
             flex: 1, display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center',
-            gap: 12, paddingTop: greetingAbove ? SP.lg : 40,
+            gap: SP.md, paddingTop: greetingAbove ? SP.lg : SP.xxl,
           }}>
             {/* Лицо чата: аватар релевантной персоны, fallback — нейтральный логотип.
                 С приветствием сверху аватар там уже есть — второй не нужен */}
@@ -56,12 +57,12 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
                   <>
                     <div style={{
                       fontFamily: FONT.serif,
-                      fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                      fontWeight: 500, fontSize: FS.xl, color: C.textHeading, letterSpacing: '-0.01em',
                     }}>
                       Чем помочь?
                     </div>
 
-                    <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', maxWidth: 320 }}>
+                    <div style={{ fontSize: FS.base, color: C.textMuted, textAlign: 'center', maxWidth: 320 }}>
                       Спросите что угодно — тексты и идеи, поиск в интернете, генерация картинок
                     </div>
                   </>
@@ -74,49 +75,33 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
                 {!greetingAbove && (
                   <div style={{
                     fontFamily: FONT.serif,
-                    fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                    fontWeight: 500, fontSize: FS.xl, color: C.textHeading, letterSpacing: '-0.01em',
                   }}>
                     Новый проект
                   </div>
                 )}
 
                 {/* Подзаголовок */}
-                <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', maxWidth: 260 }}>
+                <div style={{ fontSize: FS.base, color: C.textMuted, textAlign: 'center', maxWidth: 260 }}>
                   Запустите /init — так {asstName} изучит проект и создаст CLAUDE.md
                 </div>
 
                 {/* Кнопка CTA */}
-                <button
-                  onClick={() => onHint('/init')}
-                  style={{
-                    marginTop: 4,
-                    background: C.accent, border: 'none',
-                    borderRadius: 10, padding: '10px 20px',
-                    fontSize: 13, color: C.onAccent, cursor: 'pointer',
-                    fontFamily: 'inherit', fontWeight: 500,
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
-                  onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-                >
+                <Button variant="primary" onClick={() => onHint('/init')} style={{ marginTop: SP.xs }}>
                   Инициализировать проект
-                </button>
+                </Button>
               </>
             ) : (
               <>
-                {/* С приветствием персоны сверху заголовок/подзаголовок не рисуем */}
+                {/* С приветствием персоны сверху заголовок не рисуем. Подзаголовка нет:
+                    «опишите задачу» ничего не добавляет к полю ввода прямо под ним */}
                 {!greetingAbove && (
-                  <>
-                    <div style={{
-                      fontFamily: FONT.serif,
-                      fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
-                    }}>
-                      Чем помочь?
-                    </div>
-
-                    <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center' }}>
-                      Опишите задачу или начните с подсказки
-                    </div>
-                  </>
+                  <div style={{
+                    fontFamily: FONT.serif,
+                    fontWeight: 500, fontSize: FS.xl, color: C.textHeading, letterSpacing: '-0.01em',
+                  }}>
+                    Чем помочь?
+                  </div>
                 )}
               </>
             )}
@@ -158,14 +143,14 @@ function PersonaPill({ p, active, onPick }: { p: Persona; active: boolean; onPic
         <PersonaAvatar persona={p} size={44} />
       </span>
       <span style={{
-        fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary,
+        fontFamily: FONT.sans, fontSize: FS.xs, color: C.textSecondary,
         maxWidth: 64, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>
         {personaTitleLines(p).primary}
       </span>
       {personaTitleLines(p).secondary && (
         <span style={{
-          fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted,
+          fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted,
           maxWidth: 64, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {personaTitleLines(p).secondary}
@@ -175,8 +160,13 @@ function PersonaPill({ p, active, onPick }: { p: Persona; active: boolean; onPic
   );
 }
 
+// Сколько аватаров ряд «Поговорить с…» показывает до раскрытия: ровно одна строка
+// в колонке чата (64px на пилюлю + зазор), остальное — за «+N»
+const PERSONAS_VISIBLE = 6;
+
 // Ряд «Поговорить с…»: в проекте команда видна сразу, глобальные — за кнопкой-раскрывашкой.
-// Без проектных персон (или вне проекта) глобальные показываются сразу.
+// Без проектных персон (или вне проекта) глобальные показываются сразу. Свёрнутый ряд —
+// не длиннее одной строки; выбранная персона в него попадает всегда.
 function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
   personas: Persona[];
   hasProject: boolean;
@@ -191,16 +181,20 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
   const pantheonPersonas = personas.filter(p => p.templateKey);
   // Обычные глобальные прячем только в проекте с собственной командой
   const collapseGlobals = hasProject && projectPersonas.length > 0;
-  const visible = expanded
-    ? [...projectPersonas, ...regularGlobals, ...pantheonPersonas]
-    : [...projectPersonas, ...(collapseGlobals ? [] : regularGlobals)];
-  // Скрытых по умолчанию: свёрнутые глобальные + всегда весь пантеон
-  const hiddenCount = expanded ? 0
-    : (collapseGlobals ? regularGlobals.length : 0) + pantheonPersonas.length;
+  const all = [...new Set([...projectPersonas, ...regularGlobals, ...pantheonPersonas])];
+  const candidates = [...projectPersonas, ...(collapseGlobals ? [] : regularGlobals)];
+  let visible = expanded ? all : candidates.slice(0, PERSONAS_VISIBLE);
+  // Выбранная персона за пределами строки — подставляем её последней видимой
+  const selected = all.find(p => p.id === selectedPersonaId);
+  if (!expanded && selected && !visible.includes(selected)) {
+    visible = [...visible.slice(0, PERSONAS_VISIBLE - 1), selected];
+  }
+  // Скрытых по умолчанию: всё, что не попало в строку (свёрнутые глобальные, пантеон, хвост)
+  const hiddenCount = all.length - visible.length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 6 }}>
-      <div style={{ fontSize: 11.5, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+      <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
         Поговорить с…
       </div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 480 }}>
@@ -220,11 +214,11 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
               width: 44, height: 44, borderRadius: R.full, margin: 2,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               background: C.bgWhite, border: `1px dashed ${C.border}`,
-              fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textMuted,
+              fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 600, color: C.textMuted,
             }}>
               +{hiddenCount}
             </span>
-            <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>ещё</span>
+            <span style={{ fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted }}>ещё</span>
           </button>
         )}
       </div>

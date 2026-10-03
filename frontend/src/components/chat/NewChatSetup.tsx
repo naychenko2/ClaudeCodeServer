@@ -1,29 +1,21 @@
 import { useEffect, useState } from 'react';
-import { Cpu, Zap, Hourglass, History, Lock, Tag as TagIcon, ChevronDown } from 'lucide-react';
+import { Hourglass, History, Lock, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import type { Session, Project, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
-import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel, USAGE } from '../../lib/models';
-import { effortsForProvider, effortLabel } from '../../lib/effort';
 import { expiryOptionLabel } from '../../lib/expiry';
 import { updateChatFields, type ChatFieldsPatch } from '../../lib/chatUpdate';
 import { ExpiryPicker } from './ExpiryPicker';
 import { DossierOptOutRow } from './DossierOptOutRow';
-import { ModelPicker } from '../ModelPicker';
-import { SegmentedControl } from '../ui';
 import { TagPickerBody } from '../TagChip';
-import { C, R, FONT, SHADOW, GROUP_COLORS } from '../../lib/design';
+import { C, R, SP, FS, FONT, SHADOW, GROUP_COLORS } from '../../lib/design';
 
-// Настройка будущего чата в пустом состоянии (до первого сообщения): выбор модели,
-// усилия рассуждения, времени жизни и тегов пилюлями с инлайн-раскрытием. Значения сразу
-// пишутся в сессию (провайдер ещё не «начат» — смена модели/провайдера разрешена). Инлайн-карточка
-// вместо плавающего поповера — надёжнее на мобильном, а в пустом чате места по вертикали хватает.
+// Настройка будущего чата в пустом состоянии (до первого сообщения): время жизни, история
+// решений и теги пилюлями с инлайн-раскрытием. Модели и усилия здесь нет — их выбирают в
+// композере, второй путь к той же настройке только дублировал его. Значения сразу пишутся
+// в сессию. Инлайн-карточка вместо плавающего поповера — надёжнее на мобильном.
 
-type Panel = 'model' | 'effort' | 'expiry' | 'dossiers' | 'tags' | null;
+type Panel = 'expiry' | 'dossiers' | 'tags' | null;
 
-// Иконка «чип» (модель)
-const IconModel = <Cpu size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
-// Иконка «молния» (усиление рассуждения)
-const IconEffort = <Zap size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 // Иконка «песочные часы» (время жизни временного чата)
 const IconExpiry = <Hourglass size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 // Иконка «история» (opt-out «не сохранять решения из этого чата»)
@@ -45,9 +37,6 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   onSessionUpdated?: (s: Session) => void;
   isMobile?: boolean;
 }) {
-  const models = useModels();
-  const caps = useModelCaps(session.model);
-  const modelName = useModelLabel(session.model);
   const [panel, setPanel] = useState<Panel>(null);
   const [saving, setSaving] = useState(false);
 
@@ -70,18 +59,6 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
     }
   };
 
-  const pickModel = (v: string) => {
-    if (v !== (session.model ?? '')) {
-      // Новый провайдер может не поддерживать усилие — тогда сбрасываем его вместе с моделью
-      const nextCaps = modelCaps(v);
-      persist({ model: v || null, ...(nextCaps.supportsEffort ? {} : { effort: null }) });
-    }
-    setPanel(null);
-  };
-  const pickEffort = (v: string) => {
-    if (v !== (session.effort ?? '')) persist({ effort: v || null });
-    setPanel(null);
-  };
   const pickExpiry = (minutes: number | null) => {
     if (minutes !== (session.expiresAfterMinutes ?? null)) persist({ expiresAfterMinutes: minutes });
     setPanel(null);
@@ -129,9 +106,9 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
       >
         <span style={{ color: C.accent, display: 'flex' }}>{icon}</span>
         <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.2, minWidth: 0 }}>
-          <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3, color: C.textMuted }}>{label}</span>
+          <span style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted }}>{label}</span>
           <span style={{
-            fontSize: 13, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap',
+            fontSize: FS.base, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap',
             maxWidth: isMobile ? 130 : 190, overflow: 'hidden', textOverflow: 'ellipsis',
           }}>
             {value}
@@ -143,10 +120,8 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginTop: 20, width: '100%' }}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-        {pill('model', IconModel, 'Модель', modelName)}
-        {caps.supportsEffort && pill('effort', IconEffort, 'Усилие', effortLabel(session.effort))}
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm, marginTop: SP.md, width: '100%' }}>
+      <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
         {pill('expiry', IconExpiry, 'Время жизни', expiryOptionLabel(session.expiresAfterMinutes))}
         {/* История решений — только у проектных чатов (личные в неё не пишутся) */}
         {project && pill('dossiers', IconDossiers, 'История решений', session.excludeFromDossiers ? 'Не сохраняются' : 'Сохраняются')}
@@ -157,7 +132,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
       {/* Заморозка модели: после первого хода правки цепочки и уровней чат не меняют */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6, maxWidth: '100%',
-        fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted,
+        fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>
         <Lock size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
@@ -171,22 +146,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
           boxShadow: SHADOW.card, padding: 12, textAlign: 'left',
           maxHeight: 320, overflowY: 'auto',
         }}>
-          {panel === 'model' ? (
-            <ModelPicker value={session.model ?? ''} options={models} onChange={pickModel} collapsible={false}
-              usage={session.personaId ? USAGE.chatPersona : USAGE.chatNew} />
-          ) : panel === 'effort' ? (
-            <>
-              <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-                Выше — глубже размышляет, но дольше и дороже.
-              </div>
-              <SegmentedControl
-                value={session.effort ?? ''}
-                options={effortsForProvider(modelProvider(session.model))}
-                onChange={pickEffort}
-                columns={3}
-              />
-            </>
-          ) : panel === 'tags' ? (
+          {panel === 'tags' ? (
             <TagPickerBody
               registry={registry}
               selected={session.tags ?? []}

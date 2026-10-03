@@ -193,7 +193,7 @@ public class ChatContextControllerTests : IDisposable
             return (await Json(r)).GetProperty("error").GetString()!;
         }
 
-        (await Error(await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "video-scene", @ref = new { sceneId = "s" } })))
+        (await Error(await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "hologram", @ref = new { id = "s" } })))
             .Should().Be("kind_unknown");
         (await Error(await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "image", @ref = new { threadId = "чужая" } })))
             .Should().Be("ref_invalid");

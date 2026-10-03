@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Turn;
@@ -30,6 +31,8 @@ public sealed class VideoEditorSubsystem : IAppSubsystem
         // Префы области: data/video-editor-prefs, их наследуют новые сцены и цепочка запуска
         services.AddSingleton(sp => Prefs.VideoPrefsStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<Prefs.VideoPrefsService>();
+        // Виды «video-scene» и «video-film» контекста чата (ADR-023, фаза 3): Validate/Describe, кадры сцены, засев
+        services.AddContextKindProvider<ChatContext.VideoContextKind>();
         // Рабочая папка задач (7 дней, вне бэкапа); клипы версий живых сцен чистка не трогает
         services.AddSingleton(sp =>
         {

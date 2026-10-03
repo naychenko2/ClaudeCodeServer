@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Controllers;
+using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services.ChatContext;
@@ -114,6 +115,28 @@ public class ChatContextContractsTests
     [Fact]
     public void ImageLaunchRequest_HasContextRevision() =>
         typeof(ImageEditLaunchRequest).GetProperty(nameof(ImageEditLaunchRequest.ContextRevision))!.PropertyType.Should().Be(typeof(long?));
+
+    // ── «Видео» (КТ-5) ──
+
+    [Fact]
+    public void VideoDto_RoundTrips_AndReadsFrameRoles()
+    {
+        AssertRoundTrip<ChatContextDto>("video-dto");
+        var dto = ExampleNode("video-dto").Deserialize<ChatContextDto>(Json)!;
+        dto.Primary!.Kind.Should().Be("video-scene");
+        dto.Refs.Select(r => r.Role).Should().BeEquivalentTo(["frame-a", "frame-b"]);
+        dto.Refs.Should().OnlyContain(r => r.UsedBy.Contains("shoot"));
+    }
+
+    [Fact]
+    public void VideoQuoteAndLaunch_RoundTrip_AndCarryContextRevision()
+    {
+        AssertRoundTrip<VideoQuoteRequest>("video-quote-request");
+        AssertRoundTrip<VideoLaunchRequest>("video-launch-request");
+        ExampleNode("video-quote-request").Deserialize<VideoQuoteRequest>(Json)!.ContextRevision.Should().Be(12);
+        ExampleNode("video-launch-request").Deserialize<VideoLaunchRequest>(Json)!.Params!["request"]!.ToString()
+            .Should().Be("добавь туман над долиной");
+    }
 
     private static void AssertFormFields(Type form, string label)
     {

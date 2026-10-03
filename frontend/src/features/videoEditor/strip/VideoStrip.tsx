@@ -7,7 +7,7 @@
 import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, ChevronUp, Clapperboard, Cpu, Film, Plus, TriangleAlert, X } from 'lucide-react';
 import {
-  Button, C, Dot, FS, GenerationPickMenu, IconButton, ICON_SIZE, R, ReleaseNotice, SP, gitRelTime, pickRows,
+  Button, C, Dot, FS, GenerationPickMenu, IconButton, ICON_SIZE, ICON_STROKE, R, ReleaseNotice, SP, gitRelTime, pickRows,
   type GenerationPickExtra, type GenerationPickRow,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
@@ -32,13 +32,18 @@ export function videoStripStatus(projectId: string | null, sessionId: string | n
 }
 
 // Полоса уже этой ширины (CSS px) рисуется как на телефоне: короткие чипы
-const NARROW_W = 480;
+const NARROW_W = 580;
+// Уже этой ширины модель съёмки прячем целиком вместе с «·»: от неё остаётся висячая точка, а номер сцены режется
+const MODEL_W = 800;
 const CHIP_H = 28;
 // Высота полосы и свёрнутой строки на десктопе (на телефоне — тач-цель плюс рамка)
 const FULL_H = 48;
 // Колонка уже этой ширины (открыты «Файлы»): у чипа фильма прячем время, чтобы цена сцены осталась целой
 const TINY_W = 340;
 const MINI_H = 30;
+
+// Значок чипа не сжимается до точки, когда имя не влезает
+const icFixed = (I: typeof Film, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />;
 
 function QueueBadge({ children }: { children: string }) {
   return (
@@ -85,6 +90,7 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
   // Узкая колонка: телефон или фактическая ширина меньше порога (до замера — по окну)
   const narrow = isMobile || (hostW > 0 && hostW < NARROW_W);
   const tiny = hostW > 0 && hostW < TINY_W;
+  const showModel = hostW === 0 || hostW >= MODEL_W;
   const h = isMobile ? TOUCH : CHIP_H;
   const offer = useSyncExternalStore(videoReleaseUndo.subscribe, videoReleaseUndo.current, videoReleaseUndo.current);
   const undo = offer && offer.snapshot.sessionId === sessionId ? offer : null;
@@ -149,14 +155,14 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const sceneLabel = narrow
     ? (
       <>
-        <span style={{ minWidth: 0, flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chip.shortName}</span>
+        <span style={{ minWidth: 0, flex: '0 0 auto', whiteSpace: 'nowrap' }}>{chip.shortName}</span>
         {chip.shortPrice && <span data-video-chip-price="" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.shortPrice}</span>}
       </>
     )
     : (
       <>
         <span style={{ whiteSpace: 'nowrap', flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{chip.name}</span>
-        <span style={{ flex: '0 1000 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {chip.model}</span>
+        {showModel && <span data-video-chip-model="" style={{ flex: '0 1000 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {chip.model}</span>}
         {chip.meta && <span data-video-chip-meta="" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.meta}</span>}
         {chip.price && <span data-video-chip-price="" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>· {chip.price}</span>}
       </>
@@ -191,10 +197,10 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
           <Button size="xs" variant="secondary" title="Открыть сцену в панели «Видео»" onClick={open}
             style={{ minWidth: 0, flex: '0 1 auto', height: h, border: `1px solid ${scene ? C.accent : C.border}`, background: C.bgWhite }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
-              {ic(Clapperboard)}
+              {icFixed(Clapperboard)}
               {sceneLabel}
               {chip.warn && scene && <span title="Снять пока нельзя: нет кадра или текста" style={{ color: C.warningText, display: 'inline-flex', flexShrink: 0 }}>{ic(TriangleAlert)}</span>}
-              {ic(narrow ? ChevronUp : ChevronRight)}
+              {icFixed(narrow ? ChevronUp : ChevronRight)}
             </span>
           </Button>
           {state.scenes.length > 0 && (
@@ -208,10 +214,10 @@ export function VideoStrip({ ctx }: { ctx: ComposerStripCtx }) {
               onClick={() => openFilmPanel(sessionId)}
               style={{ minWidth: 0, flex: '0 1 auto', height: h, border: `1px solid ${C.border}`, background: C.bgWhite }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
-                {ic(Film)}
+                {icFixed(Film)}
                 {filmLabel}
                 {filmStale && <span data-video-film-dot="" aria-label="Фильм изменён после сборки" style={{ display: 'inline-flex', flexShrink: 0 }}><Dot color={C.info} /></span>}
-                {ic(narrow ? ChevronUp : ChevronRight)}
+                {icFixed(narrow ? ChevronUp : ChevronRight)}
               </span>
             </Button>
           </span>

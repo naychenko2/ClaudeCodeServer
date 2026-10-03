@@ -155,6 +155,7 @@ export const SHADOW = {
   focus:    'var(--shadow-focus)',      // focus-ring контролов
   focusDanger: 'var(--shadow-focus-danger)', // focus-ring ошибочного поля (цвет danger)
   card:     'var(--shadow-card)',       // лёгкая тень карточек
+  selected: 'var(--shadow-selected)',   // кольцо выбранной карточки или строки (акцентная подсветка)
   island:   'var(--shadow-island)',     // панель-остров: заметнее card (контакт + разлёт)
   islandDrop: 'var(--drop-island)',     // та же тень для CSS filter: повторяет контур (SVG, PNG с прозрачностью)
   lift:     'var(--shadow-lift)',       // тот же подъём, но ВВЕРХ — для стоящих на кромке холста

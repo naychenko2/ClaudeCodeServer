@@ -92,6 +92,21 @@ export const audioEditorImportGuard = {
   },
 }
 
+// Тот же сторож для MF-модуля «Видео» (ADR-022): причины и исключения — как у imageEditorImportGuard
+export const videoEditorImportGuard = {
+  files: ['src/features/videoEditor/**/*.{ts,tsx}'],
+  ignores: ['**/*.test.{ts,tsx}'],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/components/**', '**/hooks/**', '**/lib/**', '**/pages/**', '**/features/**', '**/api/**', '**/App'],
+        allowTypeImports: true,
+        message: 'Модуль video-editor берёт ядро только из aihome_shell/kit (ADR-022): прямой импорт соберёт вторую копию в remote.',
+      }],
+    }],
+  },
+}
+
 // Сторож хостов контекста хода (ADR-023 §Д6, «единственный владелец действий вида»): строка контекста,
 // чипы действий и панель «Контекст» рисуют по контракту ContextKindApi и не знают вертикалей. Ни
 // ops.ts / panelOp.ts, ни форматтеров вида (всё это лежит в features/**) импортировать нельзя:
@@ -175,5 +190,6 @@ export default defineConfig([
   ...designSystem,
   imageEditorImportGuard,
   audioEditorImportGuard,
+  videoEditorImportGuard,
   contextHostImportGuard,
 ])

@@ -101,4 +101,21 @@ public class ModuleRecordFreshChatTests : IDisposable
         ThreadIds(await Sessions.GetHistoryAsync(chat.Id)).Should().Equal(["t1", "t2", "t3"],
             "после первого ответа и рестарта лента читается по ClaudeSessionId целиком");
     }
+
+    [Fact]
+    public async Task Запись_модуля_во_время_хода_стоит_в_загруженной_истории_после_сообщения_человека()
+    {
+        var chat = await Sessions.CreateAsync(_projectId, ClaudeMode.AcceptEdits, name: "Ход с записью");
+        await EnsureAccumulatorAsync(chat.Id);
+        var acc = Accumulator(chat.Id)!;
+        acc.OnUserMessage("Да, сохрани все три", []);
+
+        (await Feed.AppendRecordAsync(chat.Id, Record("t1"))).Should().BeTrue();
+        await OnMessageAsync(chat.Id, acc, new ResultMessage("success", 100, 1, null, null));
+
+        DropAccumulator(chat.Id);
+        var history = await Sessions.GetHistoryAsync(chat.Id);
+        history.First().Should().BeOfType<StoredUserMessage>("запись хода не обгоняет вызвавшее её сообщение");
+        history.OfType<StoredModuleRecord>().Should().ContainSingle();
+    }
 }

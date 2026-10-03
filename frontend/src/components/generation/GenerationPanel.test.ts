@@ -13,6 +13,7 @@ const fill = vi.hoisted(() => ({ calls: [] as boolean[] }));
 vi.mock('../../pages/workspace/panelFill', () => ({ useRequestPanelFill: (need: boolean) => { fill.calls.push(need); } }));
 
 const { GenerationPanel } = await import('./GenerationPanel');
+import type { GenerationFoot } from './GenerationPanel';
 const { PanelHeaderSlotContext } = await import('../ui/panelHeaderSlotContext');
 
 const foot = { count: 1, maxCount: 1 as const, price: ['≈ $0.04', '1 × $0.04 за картинку'] as [string, string], runLabel: 'Изменить', onRun: () => {} };
@@ -76,5 +77,52 @@ describe('шторка каркаса панели генерации', () => {
     const html = renderToStaticMarkup(panel({ layout: 'column', foot: { ...foot, noCount: true, runIcon: createElement('i', { 'data-run-icon': '' }) } }));
     expect(html).not.toContain('Сколько вариантов');
     expect(html).toContain('data-run-icon');
+  });
+});
+
+describe('низ панели: состояния progress / result / stale', () => {
+  const run = { runLabel: 'Собрать', onRun: () => {} };
+  const html = (f: GenerationFoot) => renderToStaticMarkup(panel({ layout: 'column', foot: f }));
+
+  it('count и price необязательны: «Фильм» без «− N +» и без цены рисуется', () => {
+    const h = html(run);
+    expect(h).not.toContain('Сколько вариантов');
+    expect(h).toContain('Собрать');
+  });
+
+  it('progress: вместо кнопки запуска — полоса и «Отменить»', () => {
+    const h = html({ ...run, progress: { label: 'Собираем', p: 40, onCancel: () => {} } });
+    expect(h).toContain('data-gen-foot-progress');
+    expect(h).toContain('aria-valuenow="40"');
+    expect(h).toContain('Отменить');
+    expect(h).not.toContain('>Собрать<');
+  });
+
+  it('result: файл и действия над кнопкой запуска', () => {
+    const h = html({ ...run, result: { file: 'film.mp4', actions: [{ label: 'Открыть', onClick: () => {} }] } });
+    expect(h).toContain('data-gen-foot-result');
+    expect(h).toContain('film.mp4');
+    expect(h).toContain('Открыть');
+    expect(h).toContain('Собрать');
+  });
+
+  it('stale: причины пересборки и пометка «устарел» у результата', () => {
+    const h = html({ ...run, stale: ['порядок сцен', 'склейка 2'], result: { file: 'film.mp4', actions: [] } });
+    expect(h).toContain('Изменено после сборки: порядок сцен · склейка 2');
+    expect(h).toContain('устарел');
+    expect(html({ ...run, stale: [] })).not.toContain('data-gen-foot-stale');
+  });
+
+  it('счётчик с count по-прежнему рисуется, как у «Картинок» и «Звука»', () => {
+    expect(html({ ...run, count: 2, maxCount: 4, onCountChange: () => {}, price: ['≈ $1', '2 × $0.5'] })).toContain('Сколько вариантов');
+  });
+});
+
+describe('ссылка «↩» к вызвавшей панели', () => {
+  it('рисуется строкой над контекстом, без returnLink — нет', () => {
+    const h = renderToStaticMarkup(panel({ layout: 'column', returnLink: { label: 'К фильму «утро»', onClick: () => {} } }));
+    expect(h).toContain('data-gen-return');
+    expect(h).toContain('К фильму «утро»');
+    expect(renderToStaticMarkup(panel({ layout: 'column' }))).not.toContain('data-gen-return');
   });
 });

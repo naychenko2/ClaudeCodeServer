@@ -12,7 +12,11 @@ export const LEGACY_GEN_PANEL_KEYS: readonly string[] = ['images', 'sound'];
 const isOn = () => getFlag(FLAGS.composerContextRow);
 
 // Ключи панелей генерации сейчас: при флаге — одна «Контекст»
-export const genPanelKeys = (): readonly string[] => (isOn() ? [CONTEXT_PANEL_KEY] : LEGACY_GEN_PANEL_KEYS);
+// «Видео» (ADR-022) в строку контекста не переехало и живёт отдельной панелью при любом флаге
+export const VIDEO_PANEL_KEY = 'videoEditor';
+const GEN_CONTEXT: readonly string[] = [CONTEXT_PANEL_KEY, VIDEO_PANEL_KEY];
+const GEN_LEGACY: readonly string[] = [...LEGACY_GEN_PANEL_KEYS, VIDEO_PANEL_KEY];
+export const genPanelKeys = (): readonly string[] => (isOn() ? GEN_CONTEXT : GEN_LEGACY);
 
 // Старый вызов вертикали с ключом «Картинки»/«Звук» при флаге попадает в «Контекст»: пока вертикали
 // не переехали на revealContextPanel (2к, 2з), без этого их показ панели молча терялся бы

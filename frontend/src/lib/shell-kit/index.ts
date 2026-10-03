@@ -36,7 +36,7 @@ export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
 export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel, revealContextPanel, SLOT_CONTEXT_KIND } from '../subsystems/registryCore';
-export type { SubsystemManifest, RevealPanelDetail } from '../subsystems/registryCore';
+export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions, PanelReturnTo } from '../subsystems/registryCore';
 
 // ─── chatContext (ADR-023): контракты вида контекста хода ────────────────────
 export type {
@@ -67,6 +67,7 @@ export { followSelection, isCardPick, noteAgentPick, dropAgentPick, dropAgentPic
 export type { GenerationAgentPick } from '../genPanelFollow';
 export { noteGenDraft, clearGenDraft, useGenDraft } from '../genDrafts';
 export { followPeeked } from '../genPanelOpen';
+export { usePanelReturnTo, usePendingPreset, consumePreset, returnToOrigin, returnLabel } from '../genPanelReturn';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
@@ -198,7 +199,7 @@ export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 // Владелец полосы над композером просит показать её в чате и снимает запрос
 // (правило старшинства — в самом сторе, ADR-019 решение 3); notifyComposer — сигнал
 // композеру от владельца режима поля ввода, submitComposerMode — отправка режима извне
-export { requestStrip, releaseStrip, notifyComposer, submitComposerMode } from '../composerStrips';
+export { requestStrip, releaseStrip, holdStripRequests, notifyComposer, submitComposerMode } from '../composerStrips';
 
 // ─── chatFollow ──────────────────────────────────────────────────────────────
 // Запуск по действию человека прокручивает ленту чата вниз, как своё сообщение
@@ -214,7 +215,10 @@ export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
 // ─── components/generation ───────────────────────────────────────────────────
 // Общий каркас панели генерации: «Картинки» и «Звук» видят хост только через кит (ADR-021 §3)
 export { GenerationPanel, GEN_PANEL_W, useGenerationSheet } from '../../components/generation/GenerationPanel';
-export type { GenerationFoot, GenerationPanelView } from '../../components/generation/GenerationPanel';
+export type {
+  GenerationFoot, GenerationFootProgress, GenerationFootResult, GenerationPanelView,
+} from '../../components/generation/GenerationPanel';
+export { ByClaude } from '../../components/generation/ByClaude';
 // «В контекст ▾» (ADR-023, 2к-2): кнопка наполнения контекста с выбором роли
 export { ContextAddButton } from '../../components/generation/ContextAddButton';
 // Общий слой панелей: переключатель режима, меню выбора источника, «Вернуть» после снятия выбора

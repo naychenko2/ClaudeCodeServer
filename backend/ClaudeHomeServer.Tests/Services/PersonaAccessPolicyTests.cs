@@ -135,6 +135,18 @@ public class PersonaAccessPolicyTests
             "mcp__architecture__arch_search"]);
     }
 
+    [Fact]
+    public void ReadOnly_ОтрезаетПишущиеИТратящиеИнструментыВидеоРедактора()
+    {
+        var result = PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.ReadOnly));
+
+        result.Should().Contain([
+            "mcp__video-editor__video_save_scene", "mcp__video-editor__video_film_edit",
+            "mcp__video-editor__video_film_build", "mcp__video-editor__video_shoot",
+            "mcp__video-editor__video_cancel"]);
+        result.Should().NotContain(["mcp__video-editor__video_state", "mcp__video-editor__video_wait"]);
+    }
+
     // Список запретов wsp живёт в PersonaAccessPolicy, каталог инструментов — в
     // WorkspaceToolset: опечатка в имени прошла бы молча (deny неизвестного имени wsp — не
     // падение CLI, а тихо неработающий запрет). Сверяем каждое имя с живым каталогом.

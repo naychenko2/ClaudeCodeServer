@@ -13,7 +13,8 @@ import { useEffect, useRef, useState } from 'react';
 import { AudioLines, Combine, Mic, Scissors, Send, SlidersHorizontal, X } from 'lucide-react';
 import {
   GenerationPanel, IconButton, SegmentedControl, Select, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE,
-  clearGenDraft, followPeeked, noteGenDraft, useAgentPick,
+  clearGenDraft, consumePreset, followPeeked, noteGenDraft, returnLabel, returnToOrigin, useAgentPick,
+  usePanelReturnTo, usePendingPreset,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
@@ -24,7 +25,7 @@ import { focusLabel, queueBadge } from '../strip/summary';
 import { SoundModeSwitch } from '../strip/SoundModeSwitch';
 import { changeSoundSettings, flushSoundSettings, releaseFocus, soundPanelState } from '../thread/actions';
 import {
-  focusThread, getCatalog, getComposerText, getJobsOf, getSelection, setPieceFieldOpen, setSelection,
+  focusThread, getCatalog, getComposerText, getJobsOf, getSelection, setComposerText, setPieceFieldOpen, setSelection,
   soundDraftKey, SOUND_PANEL, useAudioStoreVersion, useAudioThreads,
 } from '../thread/threadStore';
 import { hasRvcModel, voicePickValue, pickedSlug } from '../voices/model';
@@ -45,6 +46,7 @@ import { heavyWarning, licenseWarning, vocalLanguage } from './music';
 import { MusicFields } from './MusicFields';
 import { Language, ProcessFields, trimReady, VoiceFields } from './OpFields';
 import { pendingOperation, takeOperation } from './opRequest';
+import { parseSoundPreset, type SoundPreset } from './preset';
 import { withFirstPiece } from '../thread/procMenu';
 import { readPiece } from './piece';
 import type { PieceBinding } from './PieceField';
@@ -104,6 +106,54 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // Клик по другой карточке не сбрасывает правку: недосохранённое уходит в СВОЮ нить до смены
   // звука и при закрытии панели
   useEffect(() => () => flushSoundSettings(sessionId), [threadId, sessionId]);
+
+  // ── Заготовка из другой панели («Сочинить под фильм…» в «Видео») ──
+  // Заготовка — это НОВЫЙ звук: прежний в работе снимается, затем режим и операция, и только
+  // когда настройки перестроились под них — длительность, «Инструментал» и стиль (поле ввода)
+  const returnTo = usePanelReturnTo(SOUND_PANEL);
+  const pendingRaw = usePendingPreset(SOUND_PANEL);
+  const preset = useRef<SoundPreset | null>(null);
+  const presetStage = useRef(0);
+  const [presetFrom, setPresetFrom] = useState<string | null>(null);
+  // Черновик заготовки (preset.thread): пока он в работе, строка контекста помнит, откуда заготовка
+  const [presetThread, setPresetThread] = useState<string | null>(null);
+  if (pendingRaw && !preset.current) {
+    preset.current = parseSoundPreset(pendingRaw);
+    presetStage.current = 0;
+  }
+  useEffect(() => {
+    const pr = preset.current;
+    if (!pendingRaw) return;
+    if (!pr || !sessionId) { consumePreset(SOUND_PANEL); preset.current = null; return; }
+    setTab('settings');
+    if (pr.threadId) {
+      // Черновик вызвавшей панели: берём в работу его, прежний звук не снимаем отдельно
+      if (thread?.id !== pr.threadId) {
+        if (presetStage.current === 0) { presetStage.current = 1; void focusThread(scope, sessionId, pr.threadId); }
+        return;
+      }
+    } else if (thread) { if (presetStage.current === 0) { presetStage.current = 1; void releaseFocus(scope, sessionId, thread); } return; }
+    const wantOp = pr.op ?? state.op;
+    if ((state.mode !== 'music' || state.op !== wantOp) && presetStage.current < 2) {
+      presetStage.current = 2;
+      change({ mode: 'music', operation: wantOp });
+      return;
+    }
+    if (pr.durationSec !== undefined || pr.instrumental !== undefined) {
+      setInputs({
+        ...(pr.durationSec !== undefined ? { durationSec: pr.durationSec } : {}),
+        ...(pr.instrumental !== undefined ? { instrumental: pr.instrumental } : {}),
+      });
+    }
+    if (pr.style) setComposerText(sessionId, pr.style);
+    setPresetFrom(pr.from ?? '');
+    setPresetThread(pr.threadId ?? null);
+    noteGenDraft(draftKey);
+    preset.current = null;
+    consumePreset(SOUND_PANEL);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- по приходу заготовки и перестройке настроек под неё
+  }, [pendingRaw, threadId, state.mode, state.op, sessionId]);
+  useEffect(() => { if (threadId && threadId !== presetThread) { setPresetFrom(null); setPresetThread(null); } }, [threadId, presetThread]);
 
   // ── Просьба карточки («Обрезать», «Перегенерировать кусок»): сперва её нить в работу, потом операция ──
   const opReq = pendingOperation(sessionId);
@@ -316,6 +366,8 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       : <span>Папка <code>voices/</code> проекта · подключённый голос уходит в каждую озвучку</span>;
   } else if (state.op === 'concat') {
     context = <span>Куски — звук этого чата · результат — новый файл, исходники не меняются</span>;
+  } else if (thread && presetFrom !== null && thread.id === presetThread) {
+    context = <span>Новый звук · заготовка из «Видео»{presetFrom ? `: ${presetFrom}` : ''}</span>;
   } else if (thread) {
     context = (
       <>
@@ -325,7 +377,9 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       </>
     );
   } else {
-    context = <span>Новый звук · результат ляжет в ленту новой карточкой</span>;
+    context = presetFrom !== null
+      ? <span>Новый звук · заготовка из «Видео»{presetFrom ? `: ${presetFrom}` : ''}</span>
+      : <span>Новый звук · результат ляжет в ленту новой карточкой</span>;
   }
 
   let body;
@@ -415,6 +469,7 @@ export function SoundPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
         ? <IconButton size="xs" title="Снять выбор звука" ariaLabel="Снять выбор звука" onClick={release}>{ic(X)}</IconButton>
         : undefined}
       panelKey={SOUND_PANEL}
+      returnLink={returnTo ? { label: returnLabel(returnTo), onClick: () => returnToOrigin(SOUND_PANEL, returnTo, sessionId ?? undefined) } : undefined}
       agentPick={agentPick}
       draftKey={tab === 'settings' && state.op !== 'concat' ? draftKey : null}
       foot={tab === 'settings' || (peeked && ctx.isMobile) ? foot : undefined}

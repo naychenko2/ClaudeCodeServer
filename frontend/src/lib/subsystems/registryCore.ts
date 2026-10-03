@@ -345,11 +345,21 @@ export interface WorkspacePanelDefApi {
 // (автооткрытие по выбору картинки): телефонная шторка ждёт полосу именно этого чата.
 // follow — панель следует за выбором человека (клик по карточке): открытая панель
 // генерации уступает место запрошенной в том же виде, peek — шторка была опущена.
-// target — ключ выбранного элемента
+// target — ключ выбранного элемента.
+// preset — заготовка для чужой панели: хост её не разбирает, прозрачный объект, смысл
+// знает только панель-получатель (у «Звука» — режим, операция, длительность, стиль,
+// «Инструментал»). returnTo — откуда пришли: чужая панель рисует ссылку «↩ К сцене / К
+// фильму» и по клику возвращает вызвавшую панель (genPanelReturn)
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
-export interface RevealPanelDetail { key: string; tab?: string; sessionId?: string; target?: string; follow?: boolean; peek?: boolean }
+export interface PanelReturnTo { key: string; tab?: string; target?: string; label?: string; strip?: string }
+export interface RevealPanelDetail {
+  key: string; tab?: string; sessionId?: string; target?: string; follow?: boolean; peek?: boolean;
+  preset?: Record<string, unknown>; returnTo?: PanelReturnTo;
+}
 // ifOpen — показать, только если панель генерации уже открыта: закрытую выбор не открывает
-export interface RevealPanelOptions { sessionId?: string; target?: string; ifOpen?: boolean }
+export interface RevealPanelOptions {
+  sessionId?: string; target?: string; ifOpen?: boolean; preset?: Record<string, unknown>; returnTo?: PanelReturnTo;
+}
 
 // true — запрос ушёл; false — ifOpen, а открытой панели генерации нет
 export function revealWorkspacePanel(requested: string, tab?: string, opts: RevealPanelOptions = {}): boolean {
@@ -360,6 +370,8 @@ export function revealWorkspacePanel(requested: string, tab?: string, opts: Reve
   if (tab !== undefined) detail.tab = tab;
   if (opts.sessionId !== undefined) detail.sessionId = opts.sessionId;
   if (opts.target !== undefined) detail.target = opts.target;
+  if (opts.preset !== undefined) detail.preset = opts.preset;
+  if (opts.returnTo !== undefined) detail.returnTo = opts.returnTo;
   if (opts.ifOpen) {
     const open = openGenPanel();
     if (!open) return false;

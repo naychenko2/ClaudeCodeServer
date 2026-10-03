@@ -33,7 +33,7 @@ public sealed class AudioContextKindTests : IDisposable
         _kind = new AudioContextKind(_threads);
         _context = new ChatContextStore(Path.Combine(_root, "ctx"), new ContextKindRegistry([_kind]));
         var mirror = new ChatContextFocusMirror(_context, _flags, NullLogger<ChatContextFocusMirror>.Instance);
-        _jobs = new AudioJobThreads(_threads, NullLogger<AudioJobThreads>.Instance, null, null, null, mirror);
+        _jobs = new AudioJobThreads(_threads, NullLogger<AudioJobThreads>.Instance, null, null, null, mirror: mirror);
     }
 
     public void Dispose()
@@ -172,7 +172,7 @@ public sealed class AudioContextKindTests : IDisposable
         var both = new ContextKindRegistry([_kind, new StubImageKind()]);
         var context = new ChatContextStore(Path.Combine(_root, "ctx2"), both);
         var jobs = new AudioJobThreads(_threads, NullLogger<AudioJobThreads>.Instance, null, null, null,
-            new ChatContextFocusMirror(context, _flags, NullLogger<ChatContextFocusMirror>.Instance));
+            mirror: new ChatContextFocusMirror(context, _flags, NullLogger<ChatContextFocusMirror>.Instance));
         var id = _threads.Open(Owner, Chat, "a.mp3", null, null).Thread!.Id;
         context.SetPrimary(Owner, Chat, image, null);
 

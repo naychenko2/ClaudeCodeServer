@@ -24,23 +24,23 @@ function zones(left: string[][], right: string[][], stash: { left?: string[][]; 
 
 describe('набор панелей генерации по флагу', () => {
   it('без флага: «Картинки» и «Звук», как раньше; «Контекста» в рельсе нет', () => {
-    expect(genPanelKeys()).toEqual(['images', 'sound']);
+    expect(genPanelKeys()).toEqual(['images', 'sound', 'videoEditor']);
     expect(workspaceKeys(false)).toContain('images');
     expect(workspaceKeys(false)).not.toContain('chatContext');
     expect(chatRightKeys(false)).not.toContain('chatContext');
-    expect(panelRivals('images')).toEqual(['sound']);
+    expect(panelRivals('images')).toEqual(['sound', 'videoEditor']);
   });
 
-  it('с флагом: GEN_PANEL_KEYS = [chatContext] в обеих копиях, images и sound вне набора экрана', () => {
+  it('с флагом: GEN_PANEL_KEYS = [chatContext, videoEditor] в обеих копиях, images и sound вне набора экрана', () => {
     on();
-    expect(genPanelKeys()).toEqual(['chatContext']);
-    expect(dismissedKeys()).toEqual(['chatContext']);
+    expect(genPanelKeys()).toEqual(['chatContext', 'videoEditor']);
+    expect(dismissedKeys()).toEqual(['chatContext', 'videoEditor']);
     for (const keys of [workspaceKeys(true), chatRightKeys(true)]) {
       expect(keys).toContain('chatContext');
       expect(keys).not.toContain('images');
       expect(keys).not.toContain('sound');
     }
-    expect(panelRivals('chatContext')).toEqual([]);
+    expect(panelRivals('chatContext')).toEqual(['videoEditor']);
   });
 
   it('ссылки на наборы стабильны: зона держит их в зависимостях эффектов', () => {
@@ -93,6 +93,9 @@ const CALL = /revealWorkspacePanel\(\s*(?:['"](?:images|sound|videoEditor|chatCo
 const LEGACY_REVEAL_CALLS: Readonly<Record<string, number>> = {
   'imageEditor/context/reveal.ts': 1,
   'audioEditor/context/reveal.ts': 1,
+  // «Видео» (ADR-022) в строку контекста не переехало: свои вызовы панелей и открытие «Звука»/«Картинок» с заготовкой
+  'videoEditor/film/compose.ts': 1,
+  'videoEditor/scene/actions.ts': 3,
 };
 
 function sources(dir: string, out: string[] = []): string[] {

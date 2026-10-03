@@ -46,6 +46,7 @@
 
 **features/** — [audio-editor.md](features/audio-editor.md) (редактор звука: режимы
 Голос / Музыка / Обработка, поставщики, нити и версии, «Голоса», склейка и монтаж, агент),
+[video-editor.md](features/video-editor.md) (редактор видео: сцены, фильм, сборка, агент `video_*`),
 [decision-history-import-texts.md](features/decision-history-import-texts.md)
 (тексты README ветки `ccs/dossiers/v1` и подписей импорта в панели «История решений»),
 [desktop-agent.md](features/desktop-agent.md) и

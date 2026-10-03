@@ -85,6 +85,9 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             threads.Watch(sp.GetRequiredService<ImageEditJobService>());
             return threads;
         });
+        // Шов «Видео → Картинки» (ADR-022 §3): кадр версии нити и черновик «Новая картинка» для кадра сцены
+        services.AddSingleton<ClaudeHomeServer.Services.Media.IImageFrameSource>(sp =>
+            ActivatorUtilities.CreateInstance<Threads.ImageFrameSource>(sp));
         // Выбор человека в полосе «Картинки» проекта: data/image-editor-prefs, его наследуют новые
         // нити и запуск агентом без аргументов
         services.AddSingleton(sp => Prefs.ImageProjectPrefsStore.FromConfig(sp.GetRequiredService<IConfiguration>()));

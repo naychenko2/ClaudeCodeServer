@@ -69,15 +69,27 @@ export function dropAgentPickOf(sessionId: string, panelKey: string) {
 
 export const getAgentPick = (sessionId: string | null): AgentPick | null => (sessionId && _picks.get(sessionId)) || null;
 
-// Слот agentPick для панели panelKey: подсказка видна только в панели ДРУГОГО раздела.
-// Открылась панель самого выбора — подсказка своё отработала
-export function useAgentPick(sessionId: string | null, panelKey: string): GenerationAgentPick | undefined {
+// Слот agentPick для панели panelKey: подсказка видна в панели ДРУГОГО раздела. Открылась панель самого выбора —
+// подсказка своё отработала. Исключение — панель с вкладками (tab): агент выбрал элемент на вкладке, которой
+// сейчас не видно («Сцена», пока открыта «Фильм»), — подсказка остаётся, «Открыть» переключает вкладку
+export function useAgentPick(
+  sessionId: string | null, panelKey: string, tab?: { current: string; set: (t: string) => void },
+): GenerationAgentPick | undefined {
   useSyncExternalStore(
     fn => { _listeners.add(fn); return () => { _listeners.delete(fn); }; },
     () => _version, () => _version,
   );
-  const own = getAgentPick(sessionId)?.panelKey === panelKey;
-  useEffect(() => { if (own && sessionId) dropAgentPick(sessionId); }, [own, sessionId]);
+  const pick = getAgentPick(sessionId);
+  const own = pick?.panelKey === panelKey;
+  const hidden = own && !!tab && !!pick?.tab && pick.tab !== tab.current;
+  useEffect(() => { if (own && !hidden && sessionId) dropAgentPick(sessionId); }, [own, hidden, sessionId]);
+  if (hidden && pick && sessionId && tab) {
+    return {
+      label: pick.label,
+      onOpen: () => { dropAgentPick(sessionId); tab.set(pick.tab!); },
+      onDismiss: () => dropAgentPick(sessionId),
+    };
+  }
   return agentPickSlot(sessionId, panelKey);
 }
 

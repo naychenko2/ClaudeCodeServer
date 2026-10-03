@@ -5,6 +5,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Chats;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Threads;
 
@@ -30,6 +31,7 @@ public sealed class ImageThreadService(
     ISessionBroadcaster? broadcaster = null,
     ImageEditSteps? steps = null,
     Prefs.ImageProjectPrefsService? prefs = null,
+    IMediaEvents? mediaEvents = null,
     ChatContextFocusMirror? mirror = null)
 {
     public const string ModuleKey = "imageeditor";
@@ -427,17 +429,22 @@ public sealed class ImageThreadService(
         try
         {
             ImageThreadWrite written;
+            string initiator;
             await _versionsGate.WaitAsync();
             try
             {
                 if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
                 var taken = TakeVariants(ownerId, job, thread, launch);
                 if (taken.Count == 0) return;
+                initiator = launch.Initiator;
                 written = store.AddLaunchVersions(ownerId, sessionId, threadId, job.JobId, taken);
             }
             finally { _versionsGate.Release(); }
             if (written.Status == ImageThreadWriteStatus.Ok)
+            {
                 await AfterAsync(ownerId, job.ProjectId, sessionId, written);
+                await PublishVersionsAsync(ownerId, job.ProjectId, sessionId, threadId, written, initiator);
+            }
         }
         catch (Exception ex)
         {
@@ -457,11 +464,13 @@ public sealed class ImageThreadService(
         try
         {
             ImageThreadWrite written;
+            string initiator;
             await _versionsGate.WaitAsync();
             try
             {
                 if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
 
+                initiator = launch.Initiator;
                 var taken = steps is null ? [] : TakeVariants(ownerId, job, thread, launch);
                 var versions = thread.Versions.Count(v => v.JobId == job.JobId) + taken.Count;
                 var status = job.Status switch
@@ -477,12 +486,26 @@ public sealed class ImageThreadService(
             }
             finally { _versionsGate.Release(); }
             if (written.Status == ImageThreadWriteStatus.Ok)
+            {
                 await AfterAsync(ownerId, job.ProjectId, sessionId, written);
+                await PublishVersionsAsync(ownerId, job.ProjectId, sessionId, threadId, written, initiator);
+            }
         }
         catch (Exception ex)
         {
             log.LogWarning(ex, "Редактор картинок: варианты задачи {JobId} не стали версиями нити {ThreadId}", job.JobId, threadId);
         }
+    }
+
+    // Версии уже записаны в нить и разосланы: теперь о них узнают подписчики (шов IMediaEvents). Событие
+    // идёт ПОСЛЕ записи, из асинхронного пути исполнителя, а не из синхронного Report прогресса — иначе
+    // подписчик прочитал бы нить без новой версии. Сбой подписчика хаб гасит сам
+    private async Task PublishVersionsAsync(string ownerId, string projectId, string sessionId, string threadId,
+        ImageThreadWrite written, string initiator)
+    {
+        if (mediaEvents is null) return;
+        foreach (var version in written.NewVersions)
+            await mediaEvents.PublishAsync(new ImageVersionAdded(ownerId, sessionId, projectId, threadId, version.Id, initiator));
     }
 
     // Идущий запуск задачи в нити своего чата; иначе null

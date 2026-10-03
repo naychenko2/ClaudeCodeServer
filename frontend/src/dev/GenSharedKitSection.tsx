@@ -7,6 +7,8 @@ import { useIsMobile } from '../lib/breakpoints';
 import { GenerationModeSwitch, type GenerationModeOption } from '../components/generation/GenerationModeSwitch';
 import { GenerationPickMenu, type GenerationPickRow } from '../components/generation/GenerationPickMenu';
 import { ExecutorList, ExecutorSummaryRow, type ExecutorRow } from '../components/generation/ExecutorList';
+import { GenerationFootView, GenerationPanel, type GenerationFoot } from '../components/generation/GenerationPanel';
+import { ByClaude } from '../components/generation/ByClaude';
 import { ReleaseNotice } from '../components/generation/ReleaseNotice';
 import { useReleaseUndo } from '../components/generation/useReleaseUndo';
 import { pickRows } from '../components/generation/pickSort';
@@ -39,6 +41,15 @@ const IMG_ROWS = (create: boolean): ExecutorRow[] => [
   { id: 'nano', group: 'cloud', name: 'fal · Nano Banana 2', price: '$0.04 / шт.', badges: [{ label: 'новая', tone: 'accent' }] },
   { id: 'soul', group: 'cloud', name: 'Higgsfield · Soul', sub: 'фото людей, персонаж Soul', price: '2 кр. / шт.',
     disabled: !create, reason: 'не умеет «Изменить» — только новая картинка' },
+];
+
+const noop = () => {};
+// Низ панели в четырёх состояниях: покой, идёт работа, готово, «устарел»
+const FOOT_STATES: [string, GenerationFoot][] = [
+  ['покой — «Снять» с цифрой и ценой', { count: 2, maxCount: 4, onCountChange: noop, price: ['≈ $3.20', '2 × $1.60 · 8 с'], runLabel: 'Снять', onRun: noop }],
+  ['идёт работа — полоса и «Отменить»', { progress: { label: 'Собираем фильм: сцена 3 из 4', p: 62, onCancel: noop }, price: ['бесплатно', 'сборка без ИИ'], runLabel: 'Собрать', onRun: noop }],
+  ['готово — файл и действия', { result: { file: 'film.mp4', actions: [{ label: 'Открыть', onClick: noop }, { label: 'Показать в дереве', onClick: noop }] }, price: ['0:32 · бесплатно', '4 сцены · сборка без ИИ'], runLabel: 'Пересобрать', onRun: noop }],
+  ['устарел — причины над кнопкой', { stale: ['порядок сцен', 'склейка 2'], result: { file: 'film.mp4', actions: [{ label: 'Открыть', onClick: noop }] }, price: ['0:32 · бесплатно', '4 сцены · сборка без ИИ'], runLabel: 'Пересобрать', onRun: noop }],
 ];
 
 export function GenSharedKitSection() {
@@ -163,6 +174,41 @@ export function GenSharedKitSection() {
                 isMobile={narrow}
               />
               {execOpen && <ExecutorList rows={execRows} value={cur.id} onChange={id => { setExec(id); }} isMobile={narrow} />}
+            </div>
+          </Block>
+
+          <Block label="Низ панели (GenerationFoot) — покой · идёт работа · готово · устарел; без «− N +» у «Фильма»">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, width: 380, maxWidth: '100%' }}>
+              {FOOT_STATES.map(([label, foot]) => (
+                <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>{label}</span>
+                  <div style={{ padding: `${SP.sm}px ${SP.md}px`, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, background: C.bgCard }}>
+                    <GenerationFootView foot={foot} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Block>
+
+          <Block label="Панель «Звук» с заготовкой из «Видео»: строка «↩ К фильму», контекст нового звука, низ">
+            <div style={{ width: narrow ? '100%' : 380, maxWidth: '100%', height: 420, display: 'flex' }}>
+              <GenerationPanel<'settings'>
+                title="Звук" subtitle="Музыка · Песня" icon={<Music size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                tabs={[{ value: 'settings', label: 'Настройки' }]} tab="settings" onTabChange={noop}
+                layout="column" width={narrow ? 320 : 380} onWidthChange={noop}
+                returnLink={{ label: 'К фильму «утро-в-горах»', onClick: noop }}
+                context={<span>Новый звук · заготовка из «Видео»: под фильм «утро-в-горах»</span>}
+                foot={{ count: 1, maxCount: 3, onCountChange: noop, price: ['≈ $0.10', '1 × $0.10 · 32 с'], runLabel: 'Сочинить', onRun: noop }}
+              >
+                <div style={{ fontSize: FS.sm, color: C.textSecondary, paddingTop: SP.sm }}>Длительность 32 с · «Инструментал» · стиль по текстам сцен</div>
+              </GenerationPanel>
+            </div>
+          </Block>
+
+          <Block label="ByClaude — «✦ Claude» у подписи секции и на строке списка">
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: SP.sm, fontSize: FS.sm, color: C.textSecondary }}>
+              <b style={{ color: C.textHeading }}>Текст сцены</b><ByClaude />
+              <span>Сцена 3 · ✂ 8 с</span><ByClaude />
             </div>
           </Block>
 

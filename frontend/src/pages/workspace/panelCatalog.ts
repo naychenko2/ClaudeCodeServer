@@ -17,7 +17,7 @@
 import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb, DraftingCompass, Image as ImageIcon, AudioLines, SlidersHorizontal, Mic,
+  TableOfContents, Lightbulb, DraftingCompass, Image as ImageIcon, AudioLines, SlidersHorizontal, Mic, Clapperboard,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
@@ -46,6 +46,8 @@ export const PANEL_KEYS = [
   // Панели генерации (ADR-021 §3): «Картинки» и «Звук» — вклады вертикалей тем же
   // слотом; справа одновременно живёт только одна из них (см. EXCLUSIVE_PANEL_SETS)
   'images', 'sound',
+  // «Видео» (ADR-022) — вклад вертикали тем же слотом; строка контекста его пока не заменяет
+  'videoEditor',
   // Единая панель «Контекст» чата (ADR-023 §Д1): при флаге composer-context-row заменяет обе
   // панели генерации. Рисует её оболочка (ContextPanel), а не вертикаль. Ключ `context` занят
   // панелью «Персона» и сохранён в раскладках — отсюда отдельный ключ
@@ -131,7 +133,7 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   terminal: { title: 'Терминал',  Icon: SquareTerminal },
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
   preview:  { title: 'Сервисы',   Icon: AppWindow },
-  video:    { title: 'Видео',     Icon: MonitorPlay },
+  video:    { title: 'Эфир',      Icon: MonitorPlay },
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)
@@ -147,6 +149,7 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные
   images:   { title: 'Картинки',  Icon: ImageIcon },
   sound:    { title: 'Звук',      Icon: AudioLines },
+  videoEditor: { title: 'Видео',  Icon: Clapperboard },
   chatContext: { title: 'Контекст', Icon: SlidersHorizontal },
 
   // Разделы хаба. Ключи намеренно длиннее воркспейсных: рядом живут похожие по
@@ -189,6 +192,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   voices: 'right',
   images: 'right',
   sound: 'right',
+  videoEditor: 'right',
   chatContext: 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
@@ -201,8 +205,8 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 // Панели генерации в наборе зависят от флага composer-context-row (ctx): с флагом «Картинок» и «Звука»
 // в рельсе нет, вместо них одна «Контекст»; без флага набор прежний
-const GEN_LEGACY: readonly PanelKey[] = ['images', 'sound'];
-const GEN_CONTEXT: readonly PanelKey[] = ['chatContext'];
+const GEN_LEGACY: readonly PanelKey[] = ['images', 'sound', 'videoEditor'];
+const GEN_CONTEXT: readonly PanelKey[] = ['chatContext', 'videoEditor'];
 const genKeysFor = (ctx: boolean): readonly PanelKey[] => (ctx ? GEN_CONTEXT : GEN_LEGACY);
 
 const workspaceBase = (ctx: boolean): readonly PanelKey[] => [

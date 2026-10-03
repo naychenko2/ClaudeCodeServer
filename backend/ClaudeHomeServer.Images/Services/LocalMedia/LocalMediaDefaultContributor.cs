@@ -23,6 +23,9 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
     // То же у модуля «Звук»: без него у агента нет audio_generate (AudioEditorToolset.AgentLaunchKey)
     private const string AudioAgentLaunchKey = "AudioEditor:AgentLaunch";
 
+    // И у модуля «Видео»: без него у агента нет video_shoot (VideoEditorToolset.AgentLaunchKey)
+    private const string VideoAgentLaunchKey = "VideoEditor:AgentLaunch";
+
     public string Key => SectionKey;
     public string Title => "Локальная модель по умолчанию";
     // Сразу после блока «Картинки в этом чате» (700): правило на него ссылается
@@ -55,12 +58,21 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
         && flags.IsEnabled(ownerId, FeatureFlagKeys.AudioEditor)
         && config.GetValue(AudioAgentLaunchKey, true);
 
+    // Видео идёт через модуль «Видео» (ADR-022 §5), когда его сервер доехал до хода и у агента есть video_shoot;
+    // прямые local_*_to_video, generate_video Higgsfield и fal остаются, но только по явной просьбе
+    private bool VideoEditorReady(PromptSessionContext sessionContext) =>
+        sessionContext.HasVideoEditorMcp
+        && sessionContext.OwnerId is { Length: > 0 } ownerId
+        && flags.IsEnabled(ownerId, FeatureFlagKeys.VideoEditor)
+        && config.GetValue(VideoAgentLaunchKey, true);
+
     public Task<PromptSectionContribution?> BuildAsync(PromptSessionContext sessionContext, string? turnText)
     {
         var audio = AudioEditorReady(sessionContext);
+        var video = VideoEditorReady(sessionContext);
         var text = sessionContext.Session.ProjectId is null
-            ? audio ? PersonalRuleWithAudioEditor : PersonalRule
-            : audio ? ProjectRuleWithAudioEditor : ProjectRule;
+            ? Personal(audio, video)
+            : Project(audio, video);
         // Строка контекста: выбор человека виден в «Чем» хвоста «Контекст хода», а не в полосах и старых блоках
         if (sessionContext.OwnerId is { Length: > 0 } ownerId && flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow))
             text = ForContextRow(text);
@@ -119,11 +131,23 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
     public const string PersonalNoVideoRule =
         "Видео: локального видео здесь нет — скажи прямо и предложи облако.";
 
-    private const string ProjectImagesAndVideo = Head
+    private const string ProjectImages = Head
         + "Картинки: если в ходе есть блок «Картинки в этом чате» — image_new → image_generate; "
         + BandProviderRule + "; если стоит «по умолчанию» — " + ProviderLocalException + ". "
-        + "Если блока нет — local_generate_image, правка по образцам — local_edit_image.\n"
-        + "Видео: local_text_to_video, local_image_to_video, local_reference_to_video.\n";
+        + "Если блока нет — local_generate_image, правка по образцам — local_edit_image.\n";
+
+    // Модуля «Видео» у хода нет — прямые инструменты local-media
+    private const string ProjectVideoDirect = "Видео: local_text_to_video, local_image_to_video, local_reference_to_video.\n";
+
+    private const string ProjectImagesAndVideo = ProjectImages + ProjectVideoDirect;
+
+    // Модуль «Видео» доехал: видео — только через video_* (иначе ролик без карточки сцены в ленте), а прямые
+    // local_*_to_video, generate_video Higgsfield и fal — только по прямой просьбе (блок «Видео в этом чате»)
+    public const string ProjectVideoEditorRule =
+        "Видео: video_new → video_scene_set → video_shoot (см. блок «Видео в этом чате»); если в префах «Видео» указан "
+        + "поставщик — используй его (не подменяй), если стоит «по умолчанию» — video_shoot передавай с provider local "
+        + "(это исключение из правила «не передавай provider»). Прямые local_text_to_video, local_image_to_video, "
+        + "local_reference_to_video — только если человек явно попросил сделать напрямую, мимо редактора.\n";
 
     // Модуля «Звук» у хода нет — прямые инструменты local-media
     public const string ProjectRule = ProjectImagesAndVideo
@@ -141,12 +165,28 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
 
     public const string ProjectRuleWithAudioEditor = ProjectImagesAndVideo + ProjectAudioEditorRule + "\n" + NoticeRule;
 
+    private const string ProjectAudioDirect =
+        "Звук и музыка: озвучка — local_speech, песни — local_music_generate, правка трека — local_music_edit; "
+        + "обработка — local_audio_separate, local_audio_enhance, local_audio_to_midi, local_transcribe, "
+        + "local_voice_convert, local_voice_train.\n";
+
+    // Любое сочетание модулей «Звук» и «Видео»: без них тексты — прежние константы
+    private static string Project(bool audio, bool video) =>
+        ProjectImages + (video ? ProjectVideoEditorRule : ProjectVideoDirect)
+        + (audio ? ProjectAudioEditorRule + "\n" : ProjectAudioDirect) + NoticeRule;
+
     // Личный чат: local-media здесь нет, локальная картинка — только драйвер local редактора
-    private const string PersonalImagesAndVideo = Head
+    private const string PersonalImages = Head
         + "Картинки: image_new → image_generate; " + BandProviderRule
         + "; если стоит «по умолчанию» или блока нет — " + ProviderLocalException
-        + ". local-media в этом чате нет.\n"
-        + PersonalNoVideoRule + "\n";
+        + ". local-media в этом чате нет.\n";
+
+    private const string PersonalImagesAndVideo = PersonalImages + PersonalNoVideoRule + "\n";
+
+    // Локального видео в личной области нет и у модуля «Видео»: облако — его video_shoot
+    public const string PersonalVideoEditorRule =
+        "Видео: локального видео здесь нет — скажи прямо и предложи облако через "
+        + "video_new → video_shoot (см. блок «Видео в этом чате»).\n";
 
     public const string PersonalRule = PersonalImagesAndVideo
         + "Звук и музыка: локальных моделей в этом чате нет — скажи прямо и предложи облако.\n"
@@ -158,4 +198,11 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
         + "audio_new → audio_generate (см. блок «Звук в этом чате»).";
 
     public const string PersonalRuleWithAudioEditor = PersonalImagesAndVideo + PersonalAudioEditorRule + "\n" + NoticeRule;
+
+    private const string PersonalAudioDirect =
+        "Звук и музыка: локальных моделей в этом чате нет — скажи прямо и предложи облако.\n";
+
+    private static string Personal(bool audio, bool video) =>
+        PersonalImages + (video ? PersonalVideoEditorRule : PersonalNoVideoRule + "\n")
+        + (audio ? PersonalAudioEditorRule + "\n" : PersonalAudioDirect) + NoticeRule;
 }

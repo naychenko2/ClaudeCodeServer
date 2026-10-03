@@ -776,6 +776,12 @@ public class ClaudeSession : ILlmSessionAdapter
 
     internal static bool IsAudioEditorAutoAllowed(AudioEditorMcpContext? context, string toolName) =>
         context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
+    // MCP-сервер модуля «Видео»: null — флаг video-editor выключен или модуль не загружен (ADR-022 §5)
+    private readonly VideoEditorMcpContext? _videoEditorMcp;
+    private bool VideoEditorHttpOn() => _videoEditorMcp is { UseHttp: true } && HttpMcpOnNow();
+
+    internal static bool IsVideoEditorAutoAllowed(VideoEditorMcpContext? context, string toolName) =>
+        context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
     // MCP-сервер «Контекст чата»: null — флаг composer-context-row выключен или тулсета нет в реестре (ADR-023 §3.2)
     private readonly TurnContextMcpContext? _turnContextMcp;
     private bool TurnContextHttpOn() => _turnContextMcp is { UseHttp: true } && HttpMcpOnNow();
@@ -947,6 +953,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _higgsfieldMcp = context.HiggsfieldMcp;
         _imageEditorMcp = context.ImageEditorMcp;
         _audioEditorMcp = context.AudioEditorMcp;
+        _videoEditorMcp = context.VideoEditorMcp;
         _turnContextMcp = context.TurnContextMcp;
         _localMediaMcp = context.LocalMediaMcp;
         _httpMcpActive = context.HttpMcpActive;
@@ -1032,6 +1039,8 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasImageEditor = ImageEditorHttpOn();
         // Звук: как у редактора картинок — stdio-ветки нет
         var hasAudioEditor = AudioEditorHttpOn();
+        // Видео: как у звука — stdio-ветки нет
+        var hasVideoEditor = VideoEditorHttpOn();
         var hasTurnContext = TurnContextHttpOn();
         // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
         var hasLocalMedia = LocalMediaHttpOn();
@@ -1131,6 +1140,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasHiggsfield = hasHiggsfield && Keep("higgsfield");
             hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
             hasAudioEditor = hasAudioEditor && Keep(McpEndpoints.AudioEditorName);
+            hasVideoEditor = hasVideoEditor && Keep(McpEndpoints.VideoEditorName);
             hasTurnContext = hasTurnContext && Keep(McpEndpoints.TurnContextName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasConsultants = hasConsultants && Keep("consultants");
@@ -1142,7 +1152,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasTurnContext && !hasLocalMedia && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasTurnContext && !hasLocalMedia && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -1848,6 +1858,24 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав — свойство инстанса (AudioEditor:AgentLaunch), вариативен только транспорт
                 shapes[McpEndpoints.AudioEditorName] = "t:http";
+            }
+
+            if (hasVideoEditor)
+            {
+                // Модуль «Видео» (ADR-022 §5): тулсет модуля, http-ветка только; сессия — хвостом URL
+                servers[McpEndpoints.VideoEditorName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_videoEditorMcp!.ApiUrl, McpEndpoints.VideoEditorName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_videoEditorMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав — свойство инстанса (VideoEditor:AgentLaunch), вариативен только транспорт
+                shapes[McpEndpoints.VideoEditorName] = "t:http";
             }
 
             if (hasTurnContext)
@@ -2576,6 +2604,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (ruleDecision == null && IsImageEditorAutoAllowed(_imageEditorMcp, toolName)) return "allow";
         // Звук (ADR-021 §5) — так же: запуски видны нитью и карточкой с ценой
         if (ruleDecision == null && IsAudioEditorAutoAllowed(_audioEditorMcp, toolName)) return "allow";
+        if (ruleDecision == null && IsVideoEditorAutoAllowed(_videoEditorMcp, toolName)) return "allow";
         if (ruleDecision == null && IsTurnContextAutoAllowed(_turnContextMcp, toolName)) return "allow";
         // План текущего хода (BuiltInTaskPlanTools) — тоже без карточки: побочных эффектов
         // вне сессии у него нет, а спрашивать пришлось бы на КАЖДЫЙ шаг плана. В голосовом
@@ -3192,6 +3221,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasLocalMediaMcp: _localMediaMcp is not null && McpDelivered("local-media"),
                     HasImageEditorMcp: _imageEditorMcp is not null && McpDelivered(McpEndpoints.ImageEditorName),
                     HasAudioEditorMcp: _audioEditorMcp is not null && McpDelivered(McpEndpoints.AudioEditorName),
+                    HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth));
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);

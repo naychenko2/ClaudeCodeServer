@@ -503,6 +503,49 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         section.Should().BeNull($"{why}: audio_* у хода нет («No such tool available»)");
     }
 
+    // Блок «Видео в этом чате» (ADR-022 §5): признак HasVideoEditorMcp ClaudeSession собирает сам из доставки сервера
+    // video-editor в конфиг хода; секция едет хвостом, в системный блок не попадает
+    private static readonly VideoEditorMcpContext VideoEditorMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+
+    private async Task<(string SystemPrompt, PromptSectionDto? Section)> VideoEditorStateSectionAsync(
+        bool recallInTurnText, Func<LlmSessionContext, LlmSessionContext> tweak,
+        Dictionary<string, string?>? providerConfig = null)
+    {
+        var contributor = new ClaudeHomeServer.Services.VideoEditor.Chats.VideoEditorStateContributor(new AllFlags());
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            ProjectChat(), tweak, providerConfig);
+        return (systemPrompt, sections.SingleOrDefault(s => s.Key == "video-editor-state"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task VideoEditorState_СерверДоставлен_ХвостомХода(bool recallInTurnText)
+    {
+        var (systemPrompt, section) = await VideoEditorStateSectionAsync(recallInTurnText,
+            c => c with { VideoEditorMcp = VideoEditorMcp });
+
+        section.Should().NotBeNull("сервер video-editor доехал до хода — блок «Видео» обязан прийти");
+        section!.Kind.Should().Be("turn", "блок едет вклейкой в текст хода");
+        section.Text.Should().Contain(ClaudeHomeServer.Services.VideoEditor.Chats.VideoEditorStateContributor.PriorityRule)
+            .And.Contain(ClaudeHomeServer.Services.VideoEditor.Chats.VideoEditorStateContributor.PaceRule);
+        systemPrompt.Should().NotContain("## Видео в этом чате",
+            "блок меняется от хода к ходу и в системный блок не попадает ни при какой настройке провайдера");
+    }
+
+    [Theory]
+    [InlineData("модуль видео выключен")]
+    [InlineData("TrimMcpServers без video-editor")]
+    public async Task VideoEditorState_СервераНетУХода_БлокаНет(string why)
+    {
+        var (_, section) = why == "модуль видео выключен"
+            ? await VideoEditorStateSectionAsync(false, c => c)
+            : await VideoEditorStateSectionAsync(false, c => c with { VideoEditorMcp = VideoEditorMcp }, TrimToTasks);
+
+        section.Should().BeNull($"{why}: video_* у хода нет («No such tool available»)");
+    }
+
     // Все флаги, кроме строки контекста: тексты без неё должны быть прежними
     private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {

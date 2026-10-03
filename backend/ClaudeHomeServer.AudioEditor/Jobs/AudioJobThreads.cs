@@ -4,6 +4,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Jobs;
 
@@ -18,6 +19,7 @@ public sealed class AudioJobThreads(
     ISessionDirectory? directory = null,
     IChatFeed? feed = null,
     ISessionBroadcaster? broadcaster = null,
+    IMediaEvents? mediaEvents = null,
     ChatContextFocusMirror? mirror = null)
 {
     public const string ModuleKey = "audioeditor";
@@ -159,7 +161,10 @@ public sealed class AudioJobThreads(
                 [.. variants.Select(v => (v.Variant, v.Files))],
                 new AudioThreadEvent(store.Now(), AudioThreadEventKinds.Versions, text, threadId, jobId));
             if (written.Status == AudioThreadWriteStatus.Ok)
+            {
                 await BroadcastAsync(ownerId, scopeKey, sessionId, written.State);
+                await PublishVersionsAsync(ownerId, scopeKey, sessionId, threadId, jobId, written);
+            }
             else
                 log.LogWarning("Звук: итог задачи {JobId} не лёг в нить {ThreadId}: {Status}", jobId, threadId, written.Status);
         }
@@ -208,6 +213,17 @@ public sealed class AudioJobThreads(
         {
             log.LogWarning(ex, "Звук: сохранение {Path} не записано в нить {ThreadId}", path, threadId);
         }
+    }
+
+    // Версии уже записаны в нить и разосланы: теперь о них узнают подписчики (шов IMediaEvents). Событие идёт
+    // ПОСЛЕ записи, иначе подписчик прочитал бы нить без новой версии. Сбой подписчика хаб гасит сам
+    private async Task PublishVersionsAsync(string ownerId, string scopeKey, string sessionId, string threadId,
+        string jobId, AudioThreadWrite written)
+    {
+        if (mediaEvents is null) return;
+        var initiator = written.Thread?.Launches.FirstOrDefault(l => l.JobId == jobId)?.Initiator ?? SpendInitiators.Human;
+        foreach (var version in written.NewVersions)
+            await mediaEvents.PublishAsync(new AudioVersionAdded(ownerId, sessionId, scopeKey, threadId, version.Id, initiator));
     }
 
     public async Task BroadcastAsync(string ownerId, string scopeKey, string sessionId, AudioThreadsState state)

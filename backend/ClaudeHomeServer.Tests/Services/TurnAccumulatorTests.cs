@@ -691,6 +691,36 @@ public class TurnAccumulatorTests : IDisposable
         acc.GetAll().OfType<StoredResultMessage>().Single().TranscriptTailUuid.Should().BeNull();
     }
 
+    // Запись модуля посреди хода (карточка сцены, «Сохранил…») обязана стоять после сообщения человека, которое её
+    // вызвало, и в живой ленте, и в загруженной истории
+    [Fact]
+    public async Task AppendInTurn_ЗаписьМодуляПосредиХодаСтоитПослеСообщенияПользователя()
+    {
+        var acc = new TurnAccumulator([], Guid.NewGuid().ToString());
+        acc.OnUserMessage("сохрани все три", []);
+        acc.OnTextDelta("Сохраняю.");
+
+        acc.AppendInTurn(new StoredModuleRecord { Module = "video", RecordType = "video_saved", Fallback = "Сохранил" });
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        var all = acc.GetAll();
+        all.Select(m => m.GetType()).Take(3).Should().Equal(typeof(StoredUserMessage), typeof(StoredTextMessage), typeof(StoredModuleRecord));
+        var loaded = await _histSvc.LoadAsync(acc.SaveKey!);
+        loaded.First().Should().BeOfType<StoredUserMessage>();
+        loaded.OfType<StoredModuleRecord>().Should().ContainSingle();
+        loaded.IndexOf(loaded.OfType<StoredModuleRecord>().Single()).Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public void AppendInTurn_МеждуХодамиЗаписьИдётВИсторию()
+    {
+        var acc = new TurnAccumulator([]);
+
+        acc.AppendInTurn(new StoredModuleRecord { Module = "video", RecordType = "video_saved", Fallback = "Сохранил" });
+
+        acc.GetAll().Should().ContainSingle().Which.Should().BeOfType<StoredModuleRecord>();
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

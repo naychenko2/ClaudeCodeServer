@@ -70,6 +70,9 @@ public class SubsystemBoundaryCoverageTests
         // AudioEditor — динамический модуль «Звук» (ADR-021): Main на него не ссылается,
         // без форс-загрузки сторож прошёл бы по нему вакуумно.
         _ = typeof(ClaudeHomeServer.Services.AudioEditor.AudioEditorSubsystem).Assembly;
+        // VideoEditor — динамический модуль «Видео» (ADR-022): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.VideoEditor.VideoEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): без typeof набор
         // сборок её не содержит, и проверка полноты Boundaries по ней ничего не проверяет.
         _ = typeof(ClaudeHomeServer.Services.Prompts.OmoPrompts).Assembly;

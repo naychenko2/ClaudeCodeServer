@@ -487,6 +487,64 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Сервер модуля «Видео» (ADR-022 §5) — по тем же правилам, что audio-editor: свойства сессии, владельца и
+    /// процесса (флаг video-editor, тулсет в реестре), а не хода, фокуса, поставщика и сцен.
+    /// </summary>
+    [SkippableFact]
+    public void СерверВидео_ГейтитсяПоФлагуИРеестру()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "internal VideoEditorMcpContext? BuildVideoEditorContext");
+
+        body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
+        body.Should().NotContain("Scene", "фокус и сцены видео не влияют на состав серверов");
+        body.Should().Contain("FeatureFlagKeys.VideoEditor", "флаг владельца гейтит сервер");
+        body.Should().Contain("McpEndpoints.VideoEditorName",
+            "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
+        body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
+        body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync тулсета");
+        body.Should().NotContain("IsBusy", "идущий ход не должен влиять на состав серверов");
+    }
+
+    /// <summary>
+    /// Сервер video-editor едет и в личные чаты: контекст обязаны собирать ВСЕ три точки сборки LlmSessionContext —
+    /// иначе после перезапуска процесса личный чат теряет сервер («No such tool available»).
+    /// </summary>
+    [SkippableFact]
+    public void СерверВидео_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var source = File.ReadAllText(path!);
+
+        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
+        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
+        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
+        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
+        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
+
+        var points = new Dictionary<string, string>
+        {
+            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
+            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
+            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
+        };
+        foreach (var (name, body) in points)
+        {
+            body.Should().Contain("BuildVideoEditorContext(", $"{name} обязан собирать контекст video-editor");
+            body.Should().Contain("VideoEditorMcp: videoEditorMcp", $"{name} обязан передать его в LlmSessionContext");
+            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
+            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
+            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+            body[active..activeEnd].Should().Contain("videoEditorMcp",
+                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
+        }
+    }
+
+    /// <summary>
     /// Сервер «Контекст чата» (ADR-023 §3.2): свойства сессии, владельца и процесса (флаг composer-context-row,
     /// тулсет в реестре), а не хода и не содержимого контекста.
     /// </summary>
@@ -619,12 +677,16 @@ public class McpToolsetStabilityTests
         imageEditor.Should().NotBeNull("тулсет редактора картинок обязан попасть в проверку тел ToolsFor");
         var audioEditor = FindDirIn("ClaudeHomeServer.AudioEditor", "Mcp");
         audioEditor.Should().NotBeNull("тулсет модуля «Звук» обязан попасть в проверку тел ToolsFor");
+        var videoEditor = FindDirIn("ClaudeHomeServer.VideoEditor", "Mcp");
+        videoEditor.Should().NotBeNull("тулсет модуля «Видео» обязан попасть в проверку тел ToolsFor");
         var files = Directory.GetFiles(dir!.FullName, "*.cs")
             .Concat(Directory.GetFiles(imageEditor!.FullName, "*.cs"))
             .Concat(Directory.GetFiles(audioEditor!.FullName, "*.cs"))
+            .Concat(Directory.GetFiles(videoEditor!.FullName, "*.cs"))
             .ToList();
         files.Should().Contain(f => Path.GetFileName(f) == "ImageEditorToolset.cs");
         files.Should().Contain(f => Path.GetFileName(f) == "AudioEditorToolset.cs");
+        files.Should().Contain(f => Path.GetFileName(f) == "VideoEditorToolset.cs");
 
         var checkedAny = false;
         foreach (var file in files)
@@ -661,6 +723,33 @@ public class McpToolsetStabilityTests
                 $"{name}: состояние хода не должно влиять на состав инструментов");
         }
         checkedAny.Should().BeTrue("хотя бы один тулсет с ToolsFor обязан существовать");
+    }
+
+    /// <summary>
+    /// Состав tools/list тулсета «Видео» (ADR-022 §5) решается только сессией, флагом владельца и настройкой
+    /// инстанса VideoEditor:AgentLaunch. Общий сторож выше ловит чтение состояния хода; этот — ещё и чтение
+    /// фокуса, сцен, нитей, поставщиков и фильмов: от них состав зависеть не вправе, иначе процесс CLI
+    /// перезапустится со ВСЕМИ MCP-серверами («Stream closed», «No such tool available»).
+    /// </summary>
+    [SkippableFact]
+    public void СоставToolsFor_Видео_НеЧитаетФокусСценыНитиПоставщиковИФильмы()
+    {
+        var path = FindSourceIn("ClaudeHomeServer.VideoEditor", "Mcp", "VideoEditorToolset.cs");
+        Skip.If(path is null, "VideoEditorToolset.cs не найден (сборка вне дерева репозитория)");
+        var source = File.ReadAllText(path!);
+
+        string[] forbidden = ["Store", "Focus", "Scene", "_threads", "_scenes", "_jobs", "_prefs", "_films", "_engines", "_saver", "_assembler"];
+        foreach (var signature in new[]
+        {
+            "public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext",
+            "private IReadOnlyList<McpToolSchema> ToolsOfInstance",
+            "private bool TryResolve(McpToolCallContext",
+        })
+        {
+            var body = MethodBody(source, signature);
+            foreach (var word in forbidden)
+                body.Should().NotContain(word, $"{signature}: состав не вправе зависеть от «{word}»");
+        }
     }
 
     /// <summary>

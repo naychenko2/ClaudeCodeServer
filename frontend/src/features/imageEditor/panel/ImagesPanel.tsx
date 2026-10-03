@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
 import { Contact, Image as ImageIcon, Plus, RotateCw, SlidersHorizontal, Users, X } from 'lucide-react';
 import {
   Button, EmptyState, GenerationPanel, IconButton, C, FS, SP, REVEAL_PANEL_EVENT, ICON_SIZE, showToast, submitComposerMode, useAgentPick,
-  useIsMobile,
+  useIsMobile, consumePreset, returnLabel, returnToOrigin, usePanelReturnTo, usePendingPreset,
   type GenerationFoot, type RevealPanelDetail,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
@@ -28,7 +28,8 @@ import { useImageComposerText } from '../composer/composerText';
 import { ImageModeSwitch } from '../strip/ImageModeSwitch';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { focusLabel, isEmptyThread } from '../thread/model';
-import { imageDraftKey, useThreads } from '../thread/threadStore';
+import { focusThread, imageDraftKey, useThreads } from '../thread/threadStore';
+import { parseImagesPreset } from './preset';
 import type { ImageThread } from '../thread/threadsApi';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 import { ONE_VARIANT_HINT } from './panelOp';
@@ -72,6 +73,16 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
   const L = useThreadLaunch(projectId, sessionId, thread);
   const { list } = useCharacters(personal ? null : projectId);
   const [tab, setTab] = useState<Tab>(() => takeWanted() ?? 'settings');
+  // Заготовка из другой панели («Править кадр» из «Видео»): нить берётся в работу, ссылка «↩»
+  // ведёт обратно. Хост передаёт объекты прозрачно — разбор здесь
+  const returnTo = usePanelReturnTo(IMAGES_PANEL);
+  const pendingPreset = usePendingPreset(IMAGES_PANEL);
+  useEffect(() => {
+    if (!pendingPreset) return;
+    const p = parseImagesPreset(pendingPreset);
+    consumePreset(IMAGES_PANEL);
+    if (p && sessionId) { setTab('settings'); void focusThread(projectId, sessionId, p.threadId); }
+  }, [pendingPreset, projectId, sessionId]);
   const [editing, setEditing] = useState<CharacterEditing>(null);
   const { name: characterName } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
   useMarkImagesPanelShown(layout === 'column');
@@ -185,6 +196,7 @@ export function ImagesPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDef
         ? <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>
         : undefined}
       panelKey={IMAGES_PANEL}
+      returnLink={returnTo ? { label: returnLabel(returnTo), onClick: () => returnToOrigin(IMAGES_PANEL, returnTo, sessionId ?? undefined) } : undefined}
       agentPick={agentPick}
       draftKey={thread ? imageDraftKey(thread.id) : null}
       foot={foot}

@@ -82,9 +82,20 @@ export function selectStrip(sessionId: string, stripId: string) {
   emit();
 }
 
+// Запросы полосы на время игнорируются: раздел открывает чужую панель «рядом» (например, «Видео» —
+// панель «Звук» под фильм) и не хочет, чтобы полоса над полем ввода ушла за ней вслед
+const _held = new Map<string, number>();
+const heldKey = (sessionId: string, stripId: string) => `${sessionId}:${stripId}`;
+const isHeld = (sessionId: string, stripId: string) => (_held.get(heldKey(sessionId, stripId)) ?? 0) > Date.now();
+export function holdStripRequests(sessionId: string, stripId: string, ms: number) {
+  _held.set(heldKey(sessionId, stripId), Date.now() + ms);
+}
+export function __resetStripHolds() { _held.clear(); }
+
 // Владелец полосы просит показать её в этом чате. Повторный запрос (например,
 // включили режим «Картинка») возвращает полосу, даже если человек с неё уходил.
 export function requestStrip(sessionId: string, stripId: string) {
+  if (isHeld(sessionId, stripId)) return;
   const f = _focus.get(sessionId);
   if (f && f.stripId === stripId && !f.overridden) return;
   _focus.set(sessionId, { stripId, overridden: false });

@@ -154,7 +154,7 @@ export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Pro
     if (req.op === 'shoot') return await launchShoot(ctx, req);
   } catch (e) {
     if (isContextChanged(e)) throw e;
-    throw new Error(errorCode(e) === ERR.dspUnavailable ? DSP_TEXT : req.op === 'build' ? errorText(e, 'Сборка не запустилась') : runErrorText(e));
+    throw new Error(errorCode(e) === ERR.dspUnavailable ? DSP_TEXT : req.op === 'build' ? errorText(e, 'Сборка не запустилась') : runErrorText(e), { cause: e });
   }
   throw new Error(`Операция «${req.op}» недоступна`);
 }

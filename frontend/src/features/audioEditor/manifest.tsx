@@ -15,6 +15,7 @@ import { SoundChatWatcher } from './composer/SoundChatWatcher';
 import { SoundPanel } from './panel/SoundPanel';
 import { SoundSheet } from './panel/SoundSheet';
 import { soundMode } from './composer/soundMode';
+import { audioKindApi } from './context/kind';
 import { SoundStrip, soundStripStatus } from './strip/SoundStrip';
 import { openSoundShortcut } from './thread/actions';
 import { RECORD_LAUNCH, RECORD_THREAD, recordKey } from './thread/records';
@@ -81,6 +82,8 @@ export const manifest: SubsystemManifest = {
       { name: 'sound-watch', render: (ctx: ComposerChipCtx) => <SoundChatWatcher ctx={ctx} /> },
       { name: 'sound-sheet', render: (ctx: ComposerChipCtx) => <SoundSheet ctx={ctx} /> },
     ],
+    // Вид «звук» контекста хода (ADR-023): чипы действий, волна, «Чем» и параметры панели «Контекст»
+    'context-kind': [{ name: 'audio', action: audioKindApi as unknown as Record<string, unknown> }],
     // Панель «Звук»: настройки и голоса вкладками, в проекте и в правой колонке личного чата
     'workspace-panel-def': [
       {

@@ -71,6 +71,8 @@ function subscribe(fn: () => void) {
   return () => { _listeners.delete(fn); };
 }
 const getVersion = () => _version;
+// Подписка вне React (вид контекста хода узнаёт о смене нитей, каталога и выделения)
+export const subscribeAudioStore = subscribe;
 
 // Фокус меняет полосу над композером: выбрали звук — «Звук», сняли — прежняя
 function syncStrip(sessionId: string, prev: string | null, next: string | null) {

@@ -337,7 +337,7 @@ export function wireFrameBinding() {
         if (await setPrimary(sessionId, { kind: SCENE_KIND, ref: { sceneId: b.sceneId } }) !== 'ok') return;
         clearContextReturn(sessionId);
       }
-      if (await setFrameRef(sessionId, b.slot, input)) showToast(`Кадр ${b.slot} встал в сцену`, '', 'info');
+      if (await setFrameRef(sessionId, b.slot, input)) showToast(`Кадр ${b.slot} встал в сцену`, '', 'success');
     })();
   });
 }

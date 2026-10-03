@@ -1,13 +1,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { newWorld, openChat, primary, P, S } from './contextRowMock';
+import { newWorld, openChat, primary, P, S, w } from './contextRowMock';
 
-// Чипы действий РЕАЛЬНОГО вида «картинка» (ADR-023, шаг 2к-1). Бэкенд не нужен: контекст чата и хабы — моки
+// Чипы действий и наполнение контекста РЕАЛЬНОГО вида «картинка» (ADR-023, шаги 2к-1 и 2к-2). Бэкенд не нужен: контекст чата и хабы — моки
 // (contextRowMock), API картинок — встроенный мок модуля (ключ localStorage cc-image-editor-mock), вклад
 // `context-kind` регистрируется из страницы тем же модулем, что подключает манифест. Запуск:
 //   cd frontend; npx vite --port 5322 --strictPort --host 127.0.0.1 &
-//   PLAYWRIGHT_BASE_URL=http://127.0.0.1:5322 CA_SHOTS_DIR=../.cc-attachments/composer-actions npx playwright test e2e/image-context-actions.spec.ts
+//   PLAYWRIGHT_BASE_URL=http://127.0.0.1:5322 CA_SHOTS_DIR=../.cc-attachments/composer-actions npx playwright test e2e/context-actions-image.spec.ts
 
 const SHOTS = process.env.CA_SHOTS_DIR || '';
 test.use({ serviceWorkers: 'block' });
@@ -90,3 +90,159 @@ test('объект агента встаёт на «Чат»', async ({ page }) 
   await registerImage(page, 'file');
   await expect(actions(page).locator('[data-action-chip="__chat"]')).toHaveAttribute('aria-checked', 'true');
 });
+
+// ── 2к-2: наполнение контекста (макет composer-actions-v1, сценарии 1, 2, 3, 6, 7) ──
+// Лента: якорь нити hero.png → карточка версии. Весь манифест вертикали регистрируется из страницы
+// (карточки ленты, панель «Персонажи», вид контекста), мок API картинок — встроенный, нити — мок маршрута.
+
+const VIEWPORTS = [
+  { name: '1440', vp: D },
+  { name: '1024', vp: { width: 1024, height: 800 } },
+  { name: '360', vp: M },
+] as const;
+
+const HERO = 'thread-hero';
+const anchor = (id: string) => ({
+  kind: 'module_record', module: 'imageeditor', recordType: 'image_thread', data: { threadId: id, versionId: 'origin' }, fallback: '',
+  timestamp: Date.parse('2026-10-03T10:00:00Z') - 30_000,
+});
+const heroThread = () => ({
+  id: HERO, file: 'images/hero.png', lineage: [], draftFolder: null, stacks: [], currentStackId: null, currentStepId: null,
+  settings: null, pendingJobId: null, createdAt: '2026-10-03T09:00:00Z', currentVersionId: 'origin', launches: [],
+  versions: [{ id: 'origin', number: 0, jobId: null, variant: null, baseVersionId: null, baseStepId: null, steps: [], currentStepId: null, createdAt: '2026-10-03T09:00:00Z' }],
+});
+
+async function registerFull(page: Page, o: { characters?: boolean } = {}) {
+  await page.evaluate(async ({ P, o }) => {
+    const find = (part: string) => performance.getEntriesByType('resource').map(e => e.name).find(n => n.includes(part));
+    const core = await import(/* @vite-ignore */ find('/src/lib/subsystems/registryCore.ts') ?? '/src/lib/subsystems/registryCore.ts');
+    const mod = await import(/* @vite-ignore */ '/src/features/imageEditor/manifest.tsx');
+    if (o.characters) {
+      const api = await import(/* @vite-ignore */ '/src/features/imageEditor/api.ts');
+      await api.imageEditorApi().createCharacter(P, { name: 'Аня', photos: [new Blob(['x'], { type: 'image/jpeg' })] });
+    }
+    core.registerSubsystem({ ...mod.manifest, key: 'e2e-image', core: true, tab: undefined });
+  }, { P, o });
+}
+
+const card = (page: Page) => page.locator('[data-image-version]').first();
+const panelCtx = (page: Page) => page.locator('[data-context-panel]');
+const runBtn = (page: Page) => page.locator('[data-composer-mode-bar] button').last();
+
+async function openFeed(page: Page, vp: { width: number; height: number }, theme: 'light' | 'dark', o: { primary?: ReturnType<typeof primary> | null; characters?: boolean } = {}) {
+  newWorld({ feed: [anchor(HERO)], threads: [heroThread()], flags: { 'image-editor': true }, ctx: { primary: o.primary ?? null } });
+  await page.addInitScript(() => localStorage.setItem('cc-image-editor-mock', 'all'));
+  await openChat(page, { vp, theme });
+  await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
+  await registerFull(page, { characters: o.characters });
+}
+
+for (const { name, vp } of VIEWPORTS) {
+  for (const theme of ['light', 'dark'] as const) {
+    test.describe(`наполнение контекста · ${name} · ${theme}`, () => {
+      test(`1 · правка из ленты: «Работать с этой» → чипы, «Изменить» выбран → текст → запуск`, async ({ page }) => {
+        await openFeed(page, vp, theme);
+        await expect(card(page)).toBeVisible({ timeout: 15_000 });
+        // До выбора объекта в контексте пусто: чипов нет
+        await expect(actions(page)).toHaveCount(0);
+        await card(page).getByRole('button', { name: 'Работать с этой' }).click();
+        await expect(actions(page)).toBeVisible();
+        expect(await ids(page)).toEqual(['__chat', 'edit', 'removeBg', 'upscale', 'outpaint', 'mark']);
+        await expect(actions(page).locator('[data-action-chip="edit"]')).toHaveAttribute('aria-checked', 'true');
+        await expect(card(page)).toContainText('в работе');
+        // На телефоне «Работать с этой» панель не поднимает: шторка закрыла бы поле ввода
+        if (name === '360') await expect(panelCtx(page)).toHaveCount(0);
+        // Кнопка серая, пока нет текста
+        await expect(page.locator('[data-composer-mode-bar]')).toContainText('✦ Изменить');
+        await expect(runBtn(page)).toBeDisabled();
+        await page.locator('[data-composer-input] textarea').fill('сделай небо закатным');
+        await expect(runBtn(page)).toBeEnabled();
+        await expect(runBtn(page)).toContainText('✦ Изменить');
+        await runBtn(page).click();
+        // Запуск принят: кнопка показывает ход или итог
+        await expect(page.locator('[data-composer-mode-bar]')).toContainText(/Изменя|Готово|✦ Изменить/, { timeout: 10_000 });
+        expect(w().mutations.some(m => m.method === 'PUT' && m.path === '/primary')).toBe(true);
+        await shot(page, `s1-${name}-${theme}.png`);
+      });
+
+      test(`2 · убрать фон: чип → «Текст не нужен» → запуск`, async ({ page }) => {
+        await openFeed(page, vp, theme);
+        await expect(card(page)).toBeVisible({ timeout: 15_000 });
+        await card(page).getByRole('button', { name: 'Работать с этой' }).click();
+        await actions(page).locator('[data-action-chip="removeBg"]').click();
+        await expect(actions(page).locator('[data-action-chip="removeBg"]')).toHaveAttribute('aria-checked', 'true');
+        await expect(page.locator('[data-composer-input] textarea')).toHaveAttribute('placeholder', /Текст не нужен/);
+        await expect(runBtn(page)).toContainText('✦ Убрать фон');
+        await expect(runBtn(page)).toBeEnabled();
+        await runBtn(page).click();
+        await expect(page.locator('[data-composer-mode-bar]')).toContainText(/Убира|Готово|✦ Убрать фон/, { timeout: 10_000 });
+        await shot(page, `s2-${name}-${theme}.png`);
+      });
+
+      test(`3 · дорисовать: чип → «Пропорции» под чипами → 9:16 → запуск`, async ({ page }) => {
+        await openFeed(page, vp, theme);
+        await expect(card(page)).toBeVisible({ timeout: 15_000 });
+        await card(page).getByRole('button', { name: 'Работать с этой' }).click();
+        await actions(page).locator('[data-action-chip="outpaint"]').click();
+        await expect(actions(page).getByText('Пропорции')).toBeVisible();
+        await actions(page).getByRole('radio', { name: '9:16' }).or(actions(page).getByText('9:16', { exact: true })).first().click();
+        await expect(runBtn(page)).toContainText('✦ Дорисовать');
+        await expect(runBtn(page)).toBeEnabled();
+        await runBtn(page).click();
+        await expect(page.locator('[data-composer-mode-bar]')).toContainText(/Дорисов|Готово/, { timeout: 10_000 });
+        await shot(page, `s3-${name}-${theme}.png`);
+      });
+
+      test(`6 · объект агента: чипы есть, выбран «Чат», «Увеличить» → «Чем» в строке → запуск`, async ({ page }) => {
+        await openFeed(page, vp, theme, { primary: primary({ by: 'agent', ref: { threadId: HERO, versionId: 'origin' } }) });
+        await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+        await expect(actions(page).locator('[data-action-chip="__chat"]')).toHaveAttribute('aria-checked', 'true');
+        await expect(page.locator('[data-context-row] [data-chip="exec"]'), 'в «Чате» исполнителя нет').toHaveCount(0);
+        // Карточка объекта агента помечена ✦, панель от действий агента не двигается
+        await expect(card(page)).toContainText('в работе ✦');
+        await expect(panelCtx(page)).toHaveCount(0);
+        await actions(page).locator('[data-action-chip="upscale"]').click();
+        await expect(page.locator('[data-context-row] [data-chip="exec"]')).toBeVisible({ timeout: 10_000 });
+        await expect(runBtn(page)).toContainText('✦ Увеличить');
+        await runBtn(page).click();
+        await expect(page.locator('[data-composer-mode-bar]')).toContainText(/Увелич|Готово/, { timeout: 10_000 });
+        await shot(page, `s6-${name}-${theme}.png`);
+      });
+
+      test(`7 · панель: чип объекта → панель → «Чем» → «Добавить из…» → «Персонажей» → «В контекст» у Ани → 3 варианта на кнопке`, async ({ page }) => {
+        await openFeed(page, vp, theme, { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }), characters: true });
+        await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+        await expect(actions(page).locator('[data-action-chip="edit"]')).toHaveAttribute('aria-checked', 'true');
+        const open = async () => {
+          await page.locator('[data-context-row] [data-chip="primary"]').click();
+          await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
+        };
+        await open();
+        // «Чем»: FLUX Kontext
+        await panelCtx(page).getByRole('button', { name: /^Чем/ }).click();
+        await panelCtx(page).getByText('FLUX Kontext').first().click();
+        if (name !== '360') {
+          // Библиотека «Персонажи» открывается отдельной панелью, Аня встаёт референсом с ролью «персонаж».
+          // На телефоне панелей зоны нет, сценарий макета 9 до них не доходит
+          await panelCtx(page).getByRole('button', { name: /Добавить из/ }).click();
+          await page.getByText('Из «Персонажей»').click();
+          const chars = page.locator('[data-character="anya"]');
+          await expect(chars).toBeVisible({ timeout: 10_000 });
+          await chars.locator('[data-context-add="add"] button').click();
+          await expect(chars.locator('[data-context-add="in"]')).toBeVisible();
+          expect(w().mutations.some(m => m.method === 'POST' && m.path === '/refs'
+            && (m.body as { kind?: string; role?: string }).kind === 'image-character' && (m.body as { role?: string }).role === 'character')).toBe(true);
+          // Назад на «Контекст»: Аня в «Плюс»
+          await open();
+          await expect(panelCtx(page).locator('[data-ctx-ref="on"]')).toContainText('Аня');
+        }
+        // «Вариантов +»: 2 → 3, на кнопке поля и в низу панели «3 вар.» (на 360 — «×3»)
+        await panelCtx(page).getByRole('button', { name: 'Больше' }).click();
+        const three = /3 вар\.|×3/;
+        await expect(runBtn(page)).toContainText(three);
+        await expect(page.locator('[data-ctx-run]')).toContainText(three);
+        await shot(page, `s7-${name}-${theme}.png`);
+      });
+    });
+  }
+}

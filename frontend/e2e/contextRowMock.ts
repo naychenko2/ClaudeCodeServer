@@ -27,16 +27,22 @@ export interface World {
   invocations: { target: string; args: unknown[] }[];
   hubs: WebSocketRoute[];
   personal: boolean;
+  // Записи ленты кроме первого сообщения человека (module_record и прочее)
+  feed: Record<string, unknown>[];
+  // Нити картинок чата (мок …/image-editor/sessions/S/threads); null — маршрута нет, как раньше
+  threads: Record<string, unknown>[] | null;
+  threadsRevision: number;
 }
 
 let world: World;
 export const w = () => world;
 
-export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles' | 'personal'>> & { ctx?: Partial<Ctx> } = {}): World {
+export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles' | 'personal' | 'feed' | 'threads'>> & { ctx?: Partial<Ctx> } = {}): World {
   world = {
     ctx: { revision: 1, primary: null, refs: [], ...o.ctx },
     flags: { 'composer-context-row': true, 'chat-context': true, ...o.flags },
-    hands: o.hands ?? true, savedFiles: o.savedFiles ?? [], mutations: [], invocations: [], hubs: [], personal: o.personal ?? false,
+    hands: o.hands ?? true, savedFiles: o.savedFiles ?? [], mutations: [], invocations: [], hubs: [], personal: o.personal ?? false, feed: o.feed ?? [],
+    threads: o.threads ?? null, threadsRevision: 1,
   };
   return world;
 }
@@ -93,13 +99,24 @@ export async function mockApi(page: Page) {
     if (p === '/projects' && method === 'GET') return json(world.personal ? [] : [PROJECT()]);
     if (p === `/projects/${P}`) return json(PROJECT());
     if (p === `/chats/${S}/history` || p === `/projects/${P}/sessions/${S}/history`) {
-      return json([{ kind: 'user_message', text: 'Поправь hero', timestamp: Date.parse(now) - 60_000 }]);
+      return json([{ kind: 'user_message', text: 'Поправь hero', timestamp: Date.parse(now) - 60_000 }, ...world.feed]);
     }
     if (p === `/chats/${S}` || p === `/projects/${P}/sessions/${S}`) return json(SESSION());
     if (p === '/chats' && method === 'GET') return json([SESSION()]);
     if (p === `/projects/${P}/sessions` || p === `/projects/${P}/chats`) return json(world.personal ? [] : [SESSION()]);
     if (p === `/projects/${P}/git/status`) return json(GIT);
     if (p === `/sessions/${S}/hands-status`) return json({ state: 'active', reason: null, deviceName: 'Рабочий ПК' });
+    // ── нити картинок (мок для вида «картинка»): чтение и любая запись отдают снимок состояния ──
+    const tb = `/projects/${P}/image-editor/sessions/${S}/threads`;
+    if (world.threads && p.startsWith(tb)) {
+      if (method !== 'GET') {
+        world.threadsRevision++;
+        const sm = /\/threads\/([^/]+)\/settings$/.exec(p);
+        const t = sm ? world.threads.find(x => x.id === decodeURIComponent(sm[1])) : null;
+        if (t) t.settings = r.request().postDataJSON().settings;
+      }
+      return json({ focus: null, revision: world.threadsRevision, threads: world.threads });
+    }
     // ── контекст чата ──
     const base = `/chats/${S}/context`;
     if (p === base && method === 'GET') return json(world.ctx);
@@ -111,7 +128,8 @@ export async function mockApi(page: Page) {
       if (p === `${base}/primary` && method === 'PUT') {
         c.primary = body.kind === null ? null : primary({ kind: body.kind, ref: body.ref, label: 'hero.png', version: 'v2' });
       } else if (p === `${base}/refs` && method === 'POST') {
-        c.refs = [...c.refs, ref(`r${c.refs.length + 1}`, String((body.ref as { path?: string }).path ?? 'ref').split('/').pop()!, { role: body.role ?? null })];
+        const r = body.ref as { path?: string; slug?: string };
+        c.refs = [...c.refs, ref(`r${c.refs.length + 1}`, r.slug === 'anya' ? 'Аня' : String(r.path ?? r.slug ?? 'ref').split('/').pop()!, { kind: body.kind, ref: body.ref, role: body.role ?? null })];
       } else if (p.startsWith(`${base}/refs/`) && method === 'DELETE') {
         const id = decodeURIComponent(p.slice(`${base}/refs/`.length));
         c.refs = c.refs.filter(x => x.id !== id);

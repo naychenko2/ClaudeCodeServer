@@ -2,7 +2,7 @@
 // ImageEditorSubsystem.Key бэкенда: гейт слотов сверяется с активными подсистемами
 // из /api/auth/me. Фич-флаг владельца (image-editor) проверяют сами входы.
 
-import { Image as ImageIcon } from 'lucide-react';
+import { Contact, Image as ImageIcon } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
   ContextOpenerApi, SubsystemManifest, FileViewerToolbarCtx, ChatItemToolCtx, ComposerChipApi, ComposerChipCtx, ComposerStripCtx,
@@ -11,6 +11,7 @@ import type {
 import { isEditableImage } from './format';
 import { ImageFileMovedRow, ImageLaunchCard, ImageLaunchRow, ImagePromptCard } from './chat/cards';
 import { IMAGES_PANEL } from './characters/panel';
+import { CHARACTERS_PANEL, CharactersContextPanel } from './characters/CharactersContextPanel';
 import { EditImageButton } from './entry/EditImageButton';
 import { openFromTree } from './entry/openFromTree';
 import { ImageComposerChip } from './composer/ComposerChip';
@@ -98,6 +99,17 @@ export const manifest: SubsystemManifest = {
           title: 'Картинки',
           icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
           isAvailable: () => getFlag(FLAGS.imageEditor),
+        } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
+      },
+      // «Персонажи» отдельной панелью (ADR-023 §Д1, 2к-2): только при флаге composer-context-row — без него
+      // персонажи остаются вкладкой «Картинок»
+      {
+        name: CHARACTERS_PANEL,
+        render: (ctx: WorkspacePanelDefCtx) => <CharactersContextPanel ctx={ctx} />,
+        action: {
+          title: 'Персонажи',
+          icon: <Contact size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          isAvailable: () => getFlag(FLAGS.imageEditor) && getFlag(FLAGS.composerContextRow),
         } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],

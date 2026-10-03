@@ -11,13 +11,20 @@ import { useGenerationSheet } from '../generation/GenerationPanel';
 import { ContextPanelHost } from '../generation/ContextPanelHost';
 
 // Запрос ловим на уровне модуля: хост мог смонтироваться уже после события
-let wanted = false;
+// Запрос несёт чат: просьба другого чата шторку этого не поднимает. Без sessionId — любому
+let wanted: { sessionId: string | null } | null = null;
 const subs = new Set<() => void>();
-const take = () => { const w = wanted; wanted = false; return w; };
+export const takeSheetRequest = (sessionId: string): boolean => {
+  if (!wanted || (wanted.sessionId && wanted.sessionId !== sessionId)) return false;
+  wanted = null;
+  return true;
+};
+export const __resetSheetRequest = () => { wanted = null; };
 if (typeof window !== 'undefined') {
   window.addEventListener(REVEAL_PANEL_EVENT, e => {
-    if ((e as CustomEvent<Partial<RevealPanelDetail>>).detail?.key !== 'chatContext') return;
-    wanted = true;
+    const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
+    if (d?.key !== 'chatContext') return;
+    wanted = { sessionId: d.sessionId ?? null };
     subs.forEach(fn => fn());
   });
 }
@@ -29,11 +36,11 @@ export function ContextSheet({ session, project }: { session: Session; project: 
   useEffect(() => { setOpen(false); }, [session.id]);
   useEffect(() => {
     // В широком окне запрос забирает рабочая область — здесь его только гасим
-    const pull = () => { if (take() && narrow) setOpen(true); };
+    const pull = () => { if (takeSheetRequest(session.id) && narrow) setOpen(true); };
     pull();
     subs.add(pull);
     return () => { subs.delete(pull); };
-  }, [narrow]);
+  }, [narrow, session.id]);
 
   if (!narrow || !open) return null;
   return (

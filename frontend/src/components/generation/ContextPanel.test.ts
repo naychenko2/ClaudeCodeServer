@@ -82,6 +82,22 @@ describe('секции панели «Контекст»', () => {
     expect(html).toContain('✦ Изменить');
   });
 
+  it('«Чем»: цена и тон — из полей free/amount/unit, подпись price не разбирается', () => {
+    const cloud = { ...row, id: 'k', group: 'cloud' as const, name: 'FLUX', price: 'бесплатно · но это подпись', free: false, amount: 0.04, unit: 'usd' as const };
+    const html = panel({ primary, action: edit, run: stubActionRun(edit), exec: { rows: [cloud], value: 'k', onChange: () => {} } });
+    expect(html).toContain('$0.04');
+    expect(html).not.toContain('var(--c-success-bg)');
+    const free = panel({ primary, action: edit, run: stubActionRun(edit), exec: { rows: [{ ...row, free: true, amount: null, unit: 'free' as const }], value: 'auto', onChange: () => {} } });
+    expect(free).toContain('бесплатно');
+    expect(free).toContain('var(--c-success-bg)');
+  });
+
+  it('действие выбрано, а исполнителей ещё нет (executors = null): текст про расчёт цены, не про «Чат»', () => {
+    const html = panel({ primary, action: edit, run: stubActionRun(edit), exec: null });
+    expect(html).toContain(EMPTY.execPending);
+    expect(html).not.toContain(EMPTY.execChat);
+  });
+
   it('в «Чате» серых референсов нет', () => {
     const html = panel({ primary, refs: [ref('r1', 'Аня', [])] });
     expect(html).not.toContain('data-ctx-ref="gray"');

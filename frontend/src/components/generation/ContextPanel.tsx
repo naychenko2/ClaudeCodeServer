@@ -14,13 +14,14 @@ import type {
 import { Button, IconButton, InlineSegmented, Menu, MenuItem, ProgressBar, Stepper } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { changesWord, GitMenuBody, MenuHead, type RowGit } from '../chat/ContextRowView';
-import { ExecutorList, ExecutorSummaryRow } from './ExecutorList';
+import { ExecutorList, ExecutorSummaryRow, rowPriceShort } from './ExecutorList';
 import { GenerationPanel } from './GenerationPanel';
 
 // Тексты пустых состояний — из макета, раздел 4
 export const EMPTY = {
   primary: 'Ничего не выбрано — «Работать с этой» на карточке ленты или в «Файлах»',
   execChat: 'Исполнитель появится, когда в поле выбрано действие. В «Чате» сообщение уходит Claude — исполнитель не нужен',
+  execPending: 'Исполнители появятся после расчёта цены выбранного действия',
   execNoObject: 'Исполнитель появится, когда выберете, с чем работать',
   refs: 'Референсы: персонаж, образец стиля, голос, кадр, файл проекта. Их видят и Claude, и генератор',
   paramsChat: 'Параметры появятся, когда в поле ввода выбрано действие. В «Чате» запуска нет — сообщение уходит Claude',
@@ -192,14 +193,13 @@ function BySection({ p }: { p: ContextPanelProps }) {
   const [open, setOpen] = useState(false);
   const { exec, action, primary } = p;
   const row = exec?.rows.find(r => r.id === exec.value) ?? exec?.rows[0];
-  const free = !!row && (row.badges?.some(b => b.tone === 'success') ?? /^бесплатно/.test(row.price));
   return (
     <Section name="by" title={action ? `Чем · для «${action.label}»` : 'Чем'}>
       {!exec || !action || !row ? (
-        <Empty>{!primary ? EMPTY.execNoObject : EMPTY.execChat}</Empty>
+        <Empty>{!primary ? EMPTY.execNoObject : !action ? EMPTY.execChat : EMPTY.execPending}</Empty>
       ) : (
         <>
-          <ExecutorSummaryRow name={row.name} parts={row.sub ? [row.sub] : []} price={{ label: row.price.split(' · ')[0], tone: free ? 'success' : 'neutral' }}
+          <ExecutorSummaryRow name={row.name} parts={row.sub ? [row.sub] : []} price={{ label: rowPriceShort(row), tone: row.free ? 'success' : 'neutral' }}
             open={open} onToggle={() => setOpen(o => !o)} isMobile={p.isMobile} />
           {open && (
             <div style={{ marginTop: SP.xs }}>

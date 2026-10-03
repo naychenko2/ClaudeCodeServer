@@ -3,7 +3,6 @@
 
 import type { FilmCut, FilmCutType, FilmDocument, FilmItem, FilmMusicDraft, FilmSceneSnapshot, FilmSummary, FilmSpent, FilmState, VideoScene } from '../api';
 import { clock, plural } from '../scene/model';
-import { filmDuration } from '../strip/summary';
 
 export const CUT_LABEL: Record<FilmCutType, string> = { butt: 'встык', dissolve: 'наплыв', fade: 'затемнение' };
 export const CUT_MARK: Record<FilmCutType, string> = { butt: '|', dissolve: '≈', fade: '■' };
@@ -38,6 +37,13 @@ export function clampTrim(trim: [number, number], full: number): [number, number
   let b = Math.min(full, round(trim[1]));
   if (b - a < TRIM_STEP) { if (trim[0] !== a) a = Math.max(0, b - TRIM_STEP); else b = Math.min(full, a + TRIM_STEP); }
   return [a, b];
+}
+
+// Длительность фильма: клипы с подрезкой минус наплывы и затемнения (они накладывают клипы)
+export function filmDuration(doc: FilmDocument): number {
+  const clips = doc.items.reduce((s, it) => s + Math.max(0, (it.trim[1] ?? 0) - (it.trim[0] ?? 0)), 0);
+  const overlap = doc.cuts.reduce((s, c) => s + (c.type === 'dissolve' ? c.sec : 0), 0);
+  return Math.max(0, clips - overlap);
 }
 
 export const filmClock = (doc: FilmDocument) => clock(filmDuration(doc));

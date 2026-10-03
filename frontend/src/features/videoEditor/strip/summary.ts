@@ -1,14 +1,8 @@
 // Сводки полосы «Видео»: чип сцены и чип фильма (макет v7, «Полоса «Видео»»)
 
 import { clock, sceneNotReady, type ResolvedScene } from '../scene/model';
-import type { FilmDocument, FilmState, VideoScene } from '../api';
-
-// Длительность фильма: клипы с подрезкой минус наплывы и затемнения (они накладывают клипы)
-export function filmDuration(doc: FilmDocument): number {
-  const clips = doc.items.reduce((s, it) => s + Math.max(0, (it.trim[1] ?? 0) - (it.trim[0] ?? 0)), 0);
-  const overlap = doc.cuts.reduce((s, c) => s + (c.type === 'dissolve' ? c.sec : 0), 0);
-  return Math.max(0, clips - overlap);
-}
+import { filmDuration } from '../film/model';
+import type { FilmState, VideoScene } from '../api';
 
 // Точка «изменён после сборки» — только у фильма, который уже собирали: у несобранного нечего пересобирать
 export const staleFilm = (f: FilmState | null): boolean => {

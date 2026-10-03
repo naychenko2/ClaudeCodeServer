@@ -10,10 +10,9 @@ import { isPersonalScope } from '../scope';
 import { frameName } from '../scene/model';
 import { frameVersionLabel, imageSrcOf, imageThreadName, useImageFramesVersion } from '../store/imageFrames';
 import { TOUCH } from '../useBoxWidth';
-import { ic } from '../editor/primitives';
+import { ic, IMG_RE } from '../editor/primitives';
 import { ProjectPicker } from '../editor/ProjectPicker';
 
-export const IMG_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
 
 // Адрес миниатюры кадра; null — картинки пока нет (нить без версии, личный чат без файла)
 export function useFrameSrc(scope: string, sessionId: string | null, f: FrameRef | null): { src: string | null; name: string } {

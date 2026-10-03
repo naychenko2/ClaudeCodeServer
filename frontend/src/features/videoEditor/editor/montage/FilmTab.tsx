@@ -18,12 +18,11 @@ import {
   buildFilm, cancelBuild, filmName, focusFilm, loadFilmList, patchFilm, useFilm, useFilmList, useVideoStoreVersion,
   useVideoThreads,
 } from '../../store/videoStore';
-import { filmDuration } from '../../strip/summary';
 import { TOUCH, useBoxWidth } from '../../useBoxWidth';
 import { composeForFilm, isComposing, isFromSound } from '../../film/compose';
 import { FilmList, type RowActions } from './FilmList';
 import {
-  buildView, filmClock, filmFolder, filmStatusSuffix, fileName, MUSIC_MIN_SEC, newFilmPath, sceneOfItem, scenesWord, snapshotOf, spentText,
+  buildView, filmClock, filmDuration, filmFolder, filmStatusSuffix, fileName, MUSIC_MIN_SEC, newFilmPath, sceneOfItem, scenesWord, snapshotOf, spentText,
 } from '../../film/model';
 import { openProjectFile } from '../../film/nav';
 import { ScriptView } from './ScriptView';
@@ -323,6 +322,7 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
     if (editor) {
       if (s) editor.workWith(s);
       else void fresh().then(editor.afterNewScene);
+    // К удалению в 4б: ветка прежней панели «Видео» (VideoPanel), пока она ещё рендерит FilmTab без editor
     } else if (s) void selectSceneByHuman(scope, sessionId, s.sceneId).then(() => openScenePanel(sessionId));
     else void fresh().then(() => openScenePanel(sessionId));
   };

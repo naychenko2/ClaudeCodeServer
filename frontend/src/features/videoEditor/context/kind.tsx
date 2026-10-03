@@ -5,7 +5,7 @@
 
 import { Clapperboard, Film } from 'lucide-react';
 import {
-  C, ICON_SIZE, ICON_STROKE, R, SP,
+  C, ICON_SIZE, ICON_STROKE, R, SP, showToast,
   type ChatContextItem, type ContextKindApi, type ContextKindCtx,
 } from 'aihome_shell/kit';
 import { videoApi } from '../api';
@@ -78,7 +78,9 @@ export const videoKindApi: ContextKindApi = {
     hint: 'новая сцена между двумя кадрами',
     icon: <Clapperboard size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
     // Сцена становится основным объектом сама (фокус «Видео» → контекст), панель не прыгает
-    run: ctx => { void createScene(videoScope(ctx.projectId), ctx.sessionId); },
+    run: ctx => {
+      void createScene(videoScope(ctx.projectId), ctx.sessionId).then(ok => { if (!ok) showToast('Не удалось завести сцену', '', 'error'); });
+    },
   },
   quote: quoteAction,
   launch: launchAction,

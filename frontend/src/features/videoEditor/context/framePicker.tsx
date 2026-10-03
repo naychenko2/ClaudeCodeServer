@@ -4,7 +4,7 @@
 import { useSyncExternalStore } from 'react';
 import { MODAL_W, Modal } from 'aihome_shell/kit';
 import { FRAME_ROLE, setFrameRef, type FrameSlot } from '../store/frameRefs';
-import { IMG_RE } from '../panel/FrameSlot';
+import { IMG_RE } from '../editor/primitives';
 import { ProjectPicker } from '../editor/ProjectPicker';
 
 export interface FramePickRequest { sessionId: string; scope: string; slot: FrameSlot; folder: string }

@@ -27,6 +27,8 @@ public sealed class ContextKindRegistry
 
     public IContextKindProvider? Find(string kind) => _byKind.GetValueOrDefault(kind);
 
+    public bool CanBePrimary(string kind) => Find(kind)?.CanBePrimary(kind) ?? false;
+
     // null — Ref годится; иначе текст отказа. Незарегистрированный вид — отказ с этим же текстом
     public string? Validate(ContextScope scope, string kind, JsonObject reference) =>
         Find(kind) is { } provider

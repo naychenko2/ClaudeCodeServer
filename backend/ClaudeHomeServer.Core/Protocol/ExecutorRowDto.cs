@@ -4,7 +4,7 @@ namespace ClaudeHomeServer.Protocol;
 // отсюда, фронт строки сам не собирает и подпись Price не разбирает — цена лежит полями.
 // Group — auto | local | cloud; Sub у «Авто» несёт «сейчас: …»; Reason — почему серая (встаёт вместо Sub).
 // Free — бесплатно (локальная модель), тогда Amount = null; Amount и Unit — цена числом и единицей
-// (Unit — как в оценке: free, image, sec…); EtaSeconds — время запуска у локальных.
+// (Unit — единица цены: free | usd | credits | rub; «за что» стоит в подписи Price); EtaSeconds — время запуска у локальных.
 // Price — готовая подпись для показа; Badges — «RU», лицензия, «тяжёлая» и т. п.
 public sealed record ExecutorRowDto(
     string Id,

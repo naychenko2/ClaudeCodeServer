@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
-using System.Globalization;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 
@@ -33,12 +33,16 @@ public sealed class ImageContextKind(
     public const string Kind = "image";
     public const string CharacterKind = "image-character";
 
-    // Операции, берущие образцы: у остальных (фон, апскейл, дорисовка, лица) образцов нет
-    private static readonly string[] RefOps = ["generate", "edit", "inpaint"];
+    // Операции, берущие образцы: у остальных (фон, апскейл, дорисовка, лица) образцов нет.
+    // Имена — из списка операций тулсета, своих строк здесь нет
+    private static readonly string[] RefOps =
+        [.. ImageEditorToolset.Ops.Where(o => o is "generate" or "edit" or "inpaint")];
 
     public IReadOnlyList<string> Kinds { get; } = [Kind, CharacterKind];
 
     public int SeedPriority => 0;
+
+    public bool CanBePrimary(string kind) => kind == Kind;
 
     // Нить обязана быть в хранилище этого владельца и этого чата — чужая нить недостижима по построению;
     // персонаж — в папке проекта чата
@@ -112,8 +116,7 @@ public sealed class ImageContextKind(
             modelId is null ? ImageEditCatalog.AutoModelLabel : model?.Label ?? modelId,
         };
         if (model?.PriceHint is { } price)
-            parts.Add(price.Amount == 0 ? "бесплатно"
-                : string.Create(CultureInfo.InvariantCulture, $"{price.Amount:0.##} {price.Unit}/{price.Per}"));
+            parts.Add(ContextPriceText.Format(price.Amount, price.Unit, price.Per));
         return string.Join(" · ", parts);
     }
 

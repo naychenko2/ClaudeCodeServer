@@ -11,6 +11,8 @@ public static class ChatContextErrors
     public const string RefInvalid = "ref_invalid";
     // 400: основной объект не принимает референс с такой ролью
     public const string RoleNotAccepted = "role_not_accepted";
+    // 400: объект этого вида не может быть основным (персонаж, голос, файл проекта — только референсы)
+    public const string KindNotPrimary = "kind_not_primary";
     // 400: референсов больше MaxRefs
     public const string RefsLimit = "refs_limit";
     // 400: локальный проект (ADR-016) — проектные виды отказывают до диска

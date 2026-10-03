@@ -53,10 +53,16 @@ public sealed class ChatContextStore(
             if (item is null)
                 return current.Primary is null ? (fresh ? current with { } : current) : current with { Primary = null };
             RequireKnown(item.Kind);
+            if (!registry.CanBePrimary(item.Kind))
+                throw new ChatContextException(ChatContextErrors.KindNotPrimary,
+                    $"Объект вида «{item.Kind}» не может быть основным");
             if (current.Primary is { } p && SameObject(p, item))
+            {
                 // Тот же объект, но выбрал другой актор: человек подтвердил объект агента — By становится
-                // Human и ✦ гаснет (ADR-023 §2.4); так же обновляется Human → Agent
+                // Human и ✦ гаснет (ADR-023 §2.4). Обратно агент выбор человека не перезаписывает
+                if (!fresh && p.By == ContextActor.Human && item.By == ContextActor.Agent) return current;
                 return fresh || p.By != item.By ? current with { Primary = item with { Role = null } } : current;
+            }
             return current with
             {
                 Primary = item with { Role = null },

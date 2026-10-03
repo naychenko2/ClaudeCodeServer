@@ -107,6 +107,31 @@ public class ChatContextStoreTests : IDisposable
     }
 
     [Fact]
+    public void SetPrimary_AgentOnObjectAlreadyChosenByHuman_KeepsHuman()
+    {
+        var store = Store();
+        store.SetPrimary("u1", "s1", Item("image", "pic", by: ContextActor.Human), null);
+
+        var state = store.SetPrimary("u1", "s1", Item("image", "pic", by: ContextActor.Agent), null);
+
+        state.Primary!.By.Should().Be(ContextActor.Human, "агент не перезаписывает выбор человека");
+        state.Revision.Should().Be(1);
+        _notifier.Calls.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void SetPrimary_KindThatCannotBePrimary_ThrowsKindNotPrimary()
+    {
+        var store = new ChatContextStore(_root, new ContextKindRegistry([new ProjectFileContextKind()]), _notifier);
+
+        var act = () => store.SetPrimary("u1", "s1", new ContextItem("i", ProjectFileContextKind.Kind,
+            new System.Text.Json.Nodes.JsonObject { ["path"] = "a.md" }, null, ContextActor.Human, DateTime.UtcNow), null);
+
+        act.Should().Throw<ChatContextException>().Which.Code.Should().Be(ChatContextErrors.KindNotPrimary);
+        store.Get("u1", "s1").Revision.Should().Be(0);
+    }
+
+    [Fact]
     public void SetPrimary_SameObjectSameActor_IsNoop()
     {
         var store = Store();

@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
-using System.Globalization;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.Voices;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
+using ClaudeHomeServer.Services.AudioEditor.Prefs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 
 namespace ClaudeHomeServer.Services.AudioEditor.ChatContext;
@@ -24,7 +24,8 @@ public static class AudioContextRoles
 // в личном чате библиотеки нет.
 public sealed class AudioContextKind(
     AudioThreadStore store,
-    IEnumerable<IAudioEngine>? engines = null) : IContextKindProvider, IChatContextSeedSource
+    IEnumerable<IAudioEngine>? engines = null,
+    AudioPrefsService? prefs = null) : IContextKindProvider, IChatContextSeedSource
 {
     public const string Kind = "audio";
     public const string VoiceKind = "audio-voice";
@@ -32,6 +33,8 @@ public sealed class AudioContextKind(
     public IReadOnlyList<string> Kinds { get; } = [Kind, VoiceKind];
 
     public int SeedPriority => 1;
+
+    public bool CanBePrimary(string kind) => kind == Kind;
 
     // Нить обязана быть в хранилище этого владельца и этого чата — чужая нить недостижима по построению;
     // голос — в библиотеке проекта чата
@@ -97,7 +100,9 @@ public sealed class AudioContextKind(
     public string? DescribeExecutor(ContextScope scope, ContextItem primary)
     {
         if (primary.Kind != Kind || Text(primary.Ref, "threadId") is not { } threadId) return null;
-        var settings = Find(scope, threadId)?.Settings;
+        // Как цепочка запуска: нить → префы режима → каталог. Режим нити без настроек неизвестен,
+        // берётся первый режим, где человек что-то выбрал
+        var settings = Find(scope, threadId)?.Settings ?? PrefsSettings(scope);
         var provider = string.IsNullOrWhiteSpace(settings?.Provider) ? null : settings.Provider;
         var modelId = string.IsNullOrWhiteSpace(settings?.Model) || AudioCatalog.IsAuto(settings.Model) ? null : settings.Model;
         var engine = provider is null ? null : engines?.FirstOrDefault(e => e.Key == provider);
@@ -108,9 +113,17 @@ public sealed class AudioContextKind(
             modelId is null ? AudioCatalog.AutoModelLabel : model?.Label ?? modelId,
         };
         if (model?.PriceHint is { } price)
-            parts.Add(price.Amount == 0 || price.Unit == AudioPriceUnits.Free ? "бесплатно"
-                : string.Create(CultureInfo.InvariantCulture, $"{price.Amount:0.##} {price.Unit}/{price.Per}"));
+            parts.Add(ContextPriceText.Format(price.Amount, price.Unit, price.Per));
         return string.Join(" · ", parts);
+    }
+
+    private AudioThreadSettings? PrefsSettings(ContextScope scope)
+    {
+        if (prefs is null) return null;
+        var area = AudioEditScope.Of(scope.Session);
+        return new[] { AudioModes.Voice, AudioModes.Music, AudioModes.Process }
+            .Select(mode => prefs.ForNewThread(scope.OwnerId, area, mode))
+            .FirstOrDefault(s => s is not null);
     }
 
     public ContextItem? SeedPrimary(ContextScope scope)

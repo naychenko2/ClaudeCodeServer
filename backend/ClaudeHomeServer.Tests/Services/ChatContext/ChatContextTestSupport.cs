@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Services.ChatContext;
 internal sealed class FakeKindProvider(params string[] kinds) : IContextKindProvider
 {
     public IReadOnlyList<string> Kinds { get; } = kinds;
+    public bool CanBePrimary(string kind) => true;
     public IReadOnlyList<ContextRoleSpec> Accepted { get; set; } = [];
     public string? Validate(ContextScope scope, string kind, JsonObject reference) => null;
     public ContextItemSummary Describe(ContextScope scope, ContextItem item) =>

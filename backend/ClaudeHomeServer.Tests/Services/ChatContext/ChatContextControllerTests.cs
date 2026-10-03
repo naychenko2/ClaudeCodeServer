@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.AudioEditor.Threads;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Tests.Helpers;
+using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -204,6 +205,58 @@ public class ChatContextControllerTests : IDisposable
 
         // Validate стоит ДО записи: ни один из отказов не создал файл и не поднял ревизию
         (await Json(await _client.GetAsync(Ctx(chat)))).GetProperty("revision").GetInt64().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Персонаж_голос_и_файл_основными_не_бывают_400()
+    {
+        var chat = await Chat();
+        File.WriteAllText(Path.Combine(_projectRoot, "a.md"), "x");
+
+        var resp = await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "project-file", @ref = new { path = "a.md" } });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Json(resp)).GetProperty("error").GetString().Should().Be("kind_not_primary");
+        (await Json(await _client.GetAsync(Ctx(chat)))).GetProperty("revision").GetInt64().Should().Be(0);
+    }
+
+    // Роль спрашивается у владельца ОСНОВНОГО объекта: звук картинку с ролью style не принимает,
+    // а картинка персонажа с ролью character — принимает
+    [Fact]
+    public async Task Роль_референса_проверяется_по_основному_объекту()
+    {
+        var chat = await Chat();
+        var audioId = NewAudioThread(chat);
+        var imageId = NewImageThread(chat, focus: false);
+
+        (await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "audio", @ref = new { threadId = audioId } }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var refused = await _client.PostAsJsonAsync($"{Ctx(chat)}/refs",
+            new { kind = "image", @ref = new { threadId = imageId }, role = "style" });
+        refused.StatusCode.Should().Be(HttpStatusCode.BadRequest, await refused.Content.ReadAsStringAsync());
+        (await Json(refused)).GetProperty("error").GetString().Should().Be("role_not_accepted");
+
+        (await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "image", @ref = new { threadId = imageId } }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var form = new MultipartFormDataContent { { new StringContent("Аня"), "name" } };
+        for (var i = 1; i <= 3; i++)
+        {
+            var photo = new ByteArrayContent(TestImages.Jpeg((byte)i));
+            photo.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg");
+            form.Add(photo, "photos", $"IMG_{i}.jpg");
+        }
+        var created = await _client.PostAsync($"/api/projects/{_projectId}/image-editor/characters", form);
+        created.StatusCode.Should().Be(HttpStatusCode.Created, await created.Content.ReadAsStringAsync());
+        var slug = (await Json(created)).GetProperty("slug").GetString();
+        var accepted = await _client.PostAsJsonAsync($"{Ctx(chat)}/refs",
+            new { kind = "image-character", @ref = new { slug }, role = "character" });
+        accepted.StatusCode.Should().Be(HttpStatusCode.OK, await accepted.Content.ReadAsStringAsync());
+
+        // Файл проекта сам референсов не принимает, но роль «style» у основной картинки он получает
+        File.WriteAllText(Path.Combine(_projectRoot, "s.png"), "x");
+        var file = await _client.PostAsJsonAsync($"{Ctx(chat)}/refs",
+            new { kind = "project-file", @ref = new { path = "s.png" }, role = "style" });
+        file.StatusCode.Should().Be(HttpStatusCode.OK, await file.Content.ReadAsStringAsync());
     }
 
     [Fact]

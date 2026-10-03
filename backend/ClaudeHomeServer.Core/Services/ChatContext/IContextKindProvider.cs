@@ -9,6 +9,10 @@ public interface IContextKindProvider
 {
     IReadOnlyList<string> Kinds { get; }
 
+    // Может ли объект этого вида стать основным (ADR-023 §1, «Основным?»). По умолчанию нет: основными
+    // бывают только image и audio, остальные виды — лишь референсы
+    bool CanBePrimary(string kind) => false;
+
     // Проверка Ref до записи: объект существует, принадлежит владельцу, путь внутри проекта
     // (ProjectLinkGuard), в личном чате — без проектных путей. null — годится, иначе текст отказа 400
     string? Validate(ContextScope scope, string kind, JsonObject reference);

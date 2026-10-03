@@ -55,6 +55,14 @@ public sealed class ImageContextRefsTests : IDisposable
             .Value!.Manifest.Slug;
 
     [Fact]
+    public void Основным_бывает_только_картинка()
+    {
+        var kind = Kind();
+        kind.CanBePrimary("image").Should().BeTrue();
+        kind.CanBePrimary("image-character").Should().BeFalse();
+    }
+
+    [Fact]
     public void Validate_персонажа_принимает_свой_и_отказывает_пропавшему_битому_и_личному_чату()
     {
         var slug = NewCharacter();

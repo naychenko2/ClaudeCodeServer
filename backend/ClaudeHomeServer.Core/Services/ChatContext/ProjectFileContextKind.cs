@@ -5,7 +5,7 @@ using ClaudeHomeServer.Services.Media;
 namespace ClaudeHomeServer.Services.ChatContext;
 
 // Встроенный вид «файл проекта» (ADR-023): Ref = {path} — относительный путь от корня проекта.
-// Основным объектом не бывает: референсы не принимает, исполнителя не описывает.
+// Основным объектом не бывает (CanBePrimary по умолчанию false): референсы не принимает, исполнителя не описывает.
 public sealed class ProjectFileContextKind : IContextKindProvider
 {
     public const string Kind = "project-file";

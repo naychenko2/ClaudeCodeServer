@@ -24,7 +24,7 @@ public sealed partial class ImageEditorToolset
 
     // Значения в тех же строках, что уходят по REST (enum'ы camelCase)
     private static readonly string[] Modes = ["auto", "fast", "precise", "photoreal"];
-    private static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale", "enhanceFaces"];
+    internal static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale", "enhanceFaces"];
     private static readonly string[] Roles = ["character", "style", "object"];
 
     private static JsonArray StrEnum(params string[] values)

@@ -88,6 +88,19 @@
 }
 ```
 
+## Коды отказов 400
+
+Тело — `{ "error": <код>, "message": <текст> }`. Коды живут в `ChatContextErrors`.
+
+| Код | Когда |
+|---|---|
+| `kind_unknown` | вид не зарегистрирован (вертикаль выключена или опечатка) |
+| `ref_invalid` | `ref` не прошёл `Validate` провайдера |
+| `role_not_accepted` | основной объект не принимает референс с такой ролью |
+| `kind_not_primary` | объект этого вида не может быть основным (`image-character`, `audio-voice`, `project-file`) |
+| `refs_limit` | референсов больше 16 |
+| `project_local_unsupported` | локальный проект (ADR-016) |
+
 ## Событие `chat_context_changed`
 
 `sessionId` — базовое поле `ServerMessage` (чат-владелец); тело контекста — тот же DTO.
@@ -150,7 +163,7 @@
 
 `executors` — строки «Чем» для `op` запроса; их читает строка контекста и панель (решение Р2). `group` — `auto` | `local` |
 `cloud`; у строки «Авто» `sub` несёт «сейчас: …»; серая строка — `disabled: true` и `reason` вместо `sub`.
-Цена — полями: `free`, `amount` + `unit` (у бесплатных `amount: null`), `etaSeconds` (у локальных); `price` — готовая подпись для показа, фронт её не разбирает. `badges` — `[{label, tone}]` (`tone`: `neutral` | `good` | `warn` | `info`): RU / без RU, лицензия, «тяжёлая». Наполнение строк — этапы 2б-3 (картинки) и 2б-4 (звук); пока `executors` может быть `null`.
+Цена — полями: `free`, `amount` + `unit` (`free` | `usd` | `credits` | `rub`; у бесплатных `amount: null`); `amount` — цена за единицу из `PriceHint` модели (за штуку, секунду и т. п., подпись `price` называет единицу), а не за весь запуск с `count`, `etaSeconds` (у локальных); `price` — готовая подпись для показа, фронт её не разбирает. `badges` — `[{label, tone}]` (`tone`: `neutral` | `good` | `warn` | `info`): RU / без RU, лицензия, «тяжёлая». Наполнение строк — этапы 2б-3 (картинки) и 2б-4 (звук); пока `executors` может быть `null`.
 
 ```json image-quote
 {

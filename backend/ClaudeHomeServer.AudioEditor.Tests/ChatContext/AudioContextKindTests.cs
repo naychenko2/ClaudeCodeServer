@@ -216,6 +216,7 @@ public sealed class AudioContextKindTests : IDisposable
     private sealed class StubImageKind : IContextKindProvider
     {
         public IReadOnlyList<string> Kinds { get; } = ["image"];
+        public bool CanBePrimary(string kind) => true;
         public string? Validate(ContextScope scope, string kind, JsonObject reference) => null;
         public ContextItemSummary Describe(ContextScope scope, ContextItem item) => new("img", null, null, false);
         public IReadOnlyList<ContextRoleSpec> AcceptedRefs(ContextScope scope, ContextItem primary, string? op) => [];

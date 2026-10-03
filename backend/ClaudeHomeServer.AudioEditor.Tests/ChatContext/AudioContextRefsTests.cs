@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.ChatContext;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
+using ClaudeHomeServer.Services.AudioEditor.Prefs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 using ClaudeHomeServer.Services.AudioEditor.Voices;
 using ClaudeHomeServer.Services.ChatContext;
@@ -131,6 +132,29 @@ public sealed class AudioContextRefsTests : IDisposable
     public void DescribeExecutor_без_настроек_честно_скромен()
     {
         Kind().DescribeExecutor(Scope, Primary(NewThread())).Should().Be("Авто · Авто");
+    }
+
+    [Fact]
+    public void DescribeExecutor_нить_без_настроек_берёт_префы_режима()
+    {
+        var info = AudioCatalog.Local[0].Info;
+        var engine = new Mock<IAudioEngine>();
+        engine.SetupGet(e => e.Key).Returns("local");
+        engine.SetupGet(e => e.Label).Returns("Локально");
+        engine.SetupGet(e => e.Models).Returns([info]);
+        var prefs = new AudioPrefsService(new AudioPrefsStore(Path.Combine(_root, "prefs")));
+        prefs.Save(Owner, AudioEditScope.Of(_session), AudioModes.Voice, new AudioModePrefs("speak", "local", info.Id, null, null));
+        var kind = new AudioContextKind(_threads, [engine.Object], prefs);
+
+        kind.DescribeExecutor(Scope, Primary(NewThread())).Should().Be($"Локально · {info.Label} · бесплатно");
+    }
+
+    [Fact]
+    public void Основным_бывает_только_звук()
+    {
+        var kind = Kind();
+        kind.CanBePrimary("audio").Should().BeTrue();
+        kind.CanBePrimary("audio-voice").Should().BeFalse();
     }
 
     // Роль спрашивается у владельца ОСНОВНОГО объекта, а не у вида референса: картинка в контексте звука

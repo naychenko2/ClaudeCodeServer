@@ -148,7 +148,7 @@ function AgentMark({ title, onClick }: { title: string; onClick?: () => void }) 
 
 // ── Чипы ──
 
-const changesWord = (n: number) => `${n} ${plural(n, 'изменение', 'изменения', 'изменений')}`;
+export const changesWord = (n: number) => `${n} ${plural(n, 'изменение', 'изменения', 'изменений')}`;
 
 function gitTitle(g: RowGit) {
   return `Ветка ${g.label} · ${g.changes ? changesWord(g.changes) : 'чисто'}${g.publishN ? ` · ${g.publishN} к публикации` : ''}`;
@@ -246,11 +246,11 @@ function RefPill({ r, gray, icon, grayHint, onDetach }: {
 
 // ── Всплывашки ──
 
-function MenuHead({ children }: { children: ReactNode }) {
+export function MenuHead({ children }: { children: ReactNode }) {
   return <div style={{ padding: `${SP.xs + 2}px ${SP.md - 2}px`, fontSize: FS.sm, color: C.textMuted }}>{children}</div>;
 }
 
-function GitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
+export function GitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
   const files = `${g.changes} ${plural(g.changes, 'файл', 'файла', 'файлов')}`;
   const run = (fn: () => void) => () => { close(); fn(); };
   return (

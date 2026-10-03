@@ -116,6 +116,8 @@ export interface ContextKindApi {
   // Только картинка, волна, кадр
   preview: (ctx: ContextKindCtx, item: ChatContextItem) => ReactNode;
   editor?: (ctx: ContextKindCtx, item: ChatContextItem) => { label: string; hint: string; open: () => void } | null;
+  // Листание версий основного объекта (‹ ›) в секции «С чем» панели; null/нет — стрелок нет, версия одна
+  step?: (ctx: ContextKindCtx, item: ChatContextItem) => { prev: (() => void) | null; next: (() => void) | null } | null;
   // Строки «Чем» под выбранное run-действие
   executors?: (ctx: ContextKindCtx, actionId: string) => ExecutorListModel | null;
   params?: (ctx: ContextKindCtx, actionId: string) => readonly LaunchParam[];

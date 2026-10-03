@@ -133,3 +133,70 @@ test('личный чат без объекта: строки нет', async ({ 
   await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
   await expect(row(page)).toHaveCount(0);
 });
+
+// ── Панель «Контекст» (1ф-3) ──
+
+const panel = (page: Page) => page.locator('[data-context-panel]');
+const SHOTS_PANEL = process.env.CP_SHOTS_DIR || '';
+async function shotPanel(page: Page, name: string) {
+  if (!SHOTS_PANEL) return;
+  fs.mkdirSync(SHOTS_PANEL, { recursive: true });
+  await page.screenshot({ path: path.join(SHOTS_PANEL, name) });
+}
+
+test('чип объекта открывает панель «Контекст», повторный клик мигает «С чем»; кнопка панели одна', async ({ page }) => {
+  newWorld({ ctx: { primary: primary(), refs: [ref('r1', 'Аня', { role: 'char' }), ref('r2', 'palette.png')] } });
+  await openChat(page, { vp: D });
+  await expect(chip(page, 'primary')).toBeVisible({ timeout: 30_000 });
+  await expect(panel(page)).toHaveCount(0);
+  await chip(page, 'primary').click();
+  await expect(panel(page)).toBeVisible();
+  await expect(page.locator('[data-ctx-section="where"]')).toContainText('feat/video-editor');
+  await expect(page.locator('[data-ctx-section="with"]')).toContainText('hero.png');
+  await expect(page.locator('[data-ctx-section="with"]')).toContainText('v2');
+  // «Чат»: «Чем» и «Параметры» — пустые состояния
+  await expect(page.locator('[data-ctx-section="by"]')).toContainText('Исполнитель появится, когда в поле выбрано действие');
+  await expect(page.locator('[data-ctx-section="plus"] [data-ctx-ref]')).toHaveCount(2);
+  await expect(page.locator('[data-ctx-card]')).toHaveAttribute('data-ctx-flash', '0');
+  await shotPanel(page, 'panel-1440.png');
+  // повторный клик по чипу при открытой панели мигает карточкой
+  await chip(page, 'primary').click();
+  await expect(page.locator('[data-ctx-card]')).toHaveAttribute('data-ctx-flash', '1');
+  await expect(page.locator('[data-ctx-card]')).toHaveAttribute('data-ctx-flash', '0', { timeout: 5_000 });
+  // в рельсе одна кнопка панели генерации; отсутствие «Картинок» и «Звука» при включённых вертикалях
+  // держит юнит contextPanelHost.test.ts (в моке вертикали не загружаются)
+  await expect(page.getByRole('button', { name: /«Контекст»/ })).toHaveCount(1);
+});
+
+test('панель: ✕ у карточки снимает объект, ✕ у пилюли отключает референс, «Очистить контекст»', async ({ page }) => {
+  newWorld({ ctx: { primary: primary(), refs: [ref('r1', 'Аня', { role: 'char' }), ref('r2', 'palette.png')] } });
+  await openChat(page, { vp: D });
+  await chip(page, 'primary').click();
+  await expect(panel(page)).toBeVisible();
+  await page.locator('[data-ctx-section="plus"] [data-ctx-ref]').first().getByRole('button', { name: /Отключить/ }).click();
+  await expect(page.locator('[data-ctx-section="plus"] [data-ctx-ref]')).toHaveCount(1);
+  await page.locator('[data-ctx-clear]').click();
+  await expect(page.locator('[data-ctx-section="with"]')).toContainText('Ничего не выбрано');
+  expect(w().mutations.some(m => m.method === 'DELETE' && m.path === '/')).toBe(true);
+});
+
+test('панель на 360: шторка по просьбе, секции читаются, страница не уезжает вбок', async ({ page }) => {
+  newWorld({ ctx: { primary: primary(), refs: [ref('r1', 'Аня', { role: 'char' })] } });
+  await openChat(page, { vp: M });
+  await expect(chip(page, 'primary')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('[data-gen-sheet]')).toHaveCount(0);
+  await chip(page, 'primary').click();
+  await expect(page.locator('[data-gen-sheet]')).toBeVisible();
+  await expect(page.locator('[data-ctx-section="with"]')).toContainText('hero.png');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await shotPanel(page, 'panel-360.png');
+});
+
+test('без флага панели «Контекст» нет, строка и клик прежние', async ({ page }) => {
+  newWorld({ flags: { 'composer-context-row': false }, ctx: { primary: primary() } });
+  await openChat(page, { vp: D });
+  await expect(page.locator('[data-chat-panel], textarea').first()).toBeVisible({ timeout: 30_000 });
+  await expect(row(page)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /«Контекст»/ })).toHaveCount(0);
+  await expect(panel(page)).toHaveCount(0);
+});

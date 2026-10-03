@@ -6,6 +6,7 @@ import { File as FileIcon } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
 import { useGitChip } from '../../hooks/useGitChip';
+import { registerGitActions } from '../../lib/chatContext/gitActions';
 import { selectRowAction } from '../../lib/chatContext/rowExec';
 import { getKindApi } from '../../lib/chatContext/registry';
 import {
@@ -13,10 +14,12 @@ import {
 } from '../../lib/chatContext/store';
 import type { ContextAction } from '../../lib/chatContext/types';
 import type { TurnTree } from '../../lib/turnWorktree';
+import { revealContextPanel } from '../../lib/subsystems/registryCore';
 import { wsPanels } from '../../pages/workspace/panelStackState';
 import { PublishDialog } from '../PublishDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ContextRowView, type RowExec, type RowGit } from './ContextRowView';
+import { ContextSheet } from './ContextSheet';
 
 // Рамка и отступы строки: измеряем внешний блок, лестница считает от внутренней ширины
 const ROW_BORDER = 2;
@@ -28,7 +31,7 @@ interface Props {
   isMobile: boolean;
   onCommitOwn: () => void;
   onCommitAll: () => void;
-  // Открыть объект в правой панели «Контекст» (1ф-3); пока панели нет — не передаём
+  // Открыть объект в правой панели «Контекст»; по умолчанию — revealContextPanel
   onOpenPrimary?: () => void;
 }
 
@@ -36,6 +39,21 @@ const iconOf = (kind: string): ReactNode =>
   getKindApi(kind)?.icon(kind) ?? <FileIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
 export function ContextRow(props: Props) {
+  return (
+    <>
+      <ContextRowBody {...props} />
+      <ContextSheet session={props.session} project={props.project} />
+    </>
+  );
+}
+
+function ContextRowBody(props: Props) {
+  const { session, onCommitOwn, onCommitAll } = props;
+  // Панель «Контекст» живёт на странице выше и сама поручений чату отправить не может — берёт их здесь
+  useEffect(
+    () => registerGitActions(session.id, { commitOwn: onCommitOwn, commitAll: onCommitAll }),
+    [session.id, onCommitOwn, onCommitAll],
+  );
   return props.project
     ? <WithGit {...props} project={props.project} />
     : <RowCore {...props} git={null} />;
@@ -68,8 +86,10 @@ function WithGit(props: Props & { project: Project }) {
   );
 }
 
-function RowCore({ session, project, isMobile, onOpenPrimary, git }: Props & { git: RowGit | null }) {
+function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp, git }: Props & { git: RowGit | null }) {
   const sessionId = session.id;
+  // Клик по чипу объекта открывает панель «Контекст», а открытую мигает карточкой «С чем»
+  const onOpenPrimary = onOpenPrimaryProp ?? (() => { revealContextPanel(sessionId); });
   const ctx = useChatContext(sessionId);
   const offer = useReleaseOffer(sessionId);
   const [ref, width] = useContainerWidth<HTMLDivElement>();

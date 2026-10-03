@@ -92,6 +92,29 @@ export const audioEditorImportGuard = {
   },
 }
 
+// Сторож хостов контекста хода (ADR-023 §Д6, «единственный владелец действий вида»): строка контекста,
+// чипы действий и панель «Контекст» рисуют по контракту ContextKindApi и не знают вертикалей. Ни
+// ops.ts / panelOp.ts, ни форматтеров вида (всё это лежит в features/**) импортировать нельзя:
+// подпись или операция, посчитанная хостом, расходится с той, что посчитала вертикаль.
+export const contextHostImportGuard = {
+  files: [
+    'src/components/chat/ContextRow.tsx',
+    'src/components/chat/ContextRowView.tsx',
+    'src/components/chat/ContextSheet.tsx',
+    'src/components/chat/ComposerActionRow.tsx',
+    'src/components/generation/ContextPanel.tsx',
+    'src/components/generation/ContextPanelHost.tsx',
+  ],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/features/**', '**/ops', '**/ops.ts', '**/panelOp', '**/panelOp.ts'],
+        message: 'Хост контекста хода берёт операции и подписи только из ContextKindApi (ADR-023 §Д6): импорт вертикали создаёт вторую точку правды.',
+      }],
+    }],
+  },
+}
+
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA
   {
@@ -152,4 +175,5 @@ export default defineConfig([
   ...designSystem,
   imageEditorImportGuard,
   audioEditorImportGuard,
+  contextHostImportGuard,
 ])

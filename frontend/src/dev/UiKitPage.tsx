@@ -70,6 +70,7 @@ import { ColorsSection } from './ColorsSection';
 import { AudioPlayerKitSection } from './AudioPlayerKitSection';
 import { GenSharedKitSection } from './GenSharedKitSection';
 import { ContextRowKitSection } from './ContextRowKitSection';
+import { ContextPanelKitSection } from './ContextPanelKitSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -120,6 +121,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-gen-scaffold', label: 'Панель генерации' },
   { id: 'sec-gen-shared', label: 'Общий слой генерации' },
   { id: 'sec-context-row', label: 'Строка контекста' },
+  { id: 'sec-context-panel', label: 'Панель «Контекст»' },
   { id: 'sec-audio-player', label: 'Звук: плеер' },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
@@ -235,6 +237,11 @@ export function UiKitPage() {
             {/* Строка контекста хода над полем ввода (ADR-023) — все ступени лестницы */}
             <div id="sec-context-row" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <ContextRowKitSection />
+            </div>
+
+            {/* Панель «Контекст» чата (ADR-023 §Д1) — секции, пустые состояния, шторка */}
+            <div id="sec-context-panel" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ContextPanelKitSection />
             </div>
 
             {/* Звук: плеер — волна, выделение куска, A/B, микшер стемов (синусы из браузера) */}

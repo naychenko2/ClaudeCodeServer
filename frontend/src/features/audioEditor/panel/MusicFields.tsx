@@ -39,11 +39,12 @@ function Lyrics({ p }: { p: OpFieldsProps }) {
       {!instrumental && (
         <>
           <Label aside={max ? `${inputs.lyrics.length} / ${max}` : `${inputs.lyrics.length} симв.`}>{title}</Label>
-          <TextArea autoGrow minHeight={72} maxHeight={360} value={inputs.lyrics} onChange={v => setInputs({ lyrics: v })}
-            placeholder={'[Verse]\nПервый куплет…\n\n[Chorus]\nПрипев…'} />
-          <div style={{ display: 'flex', gap: SP.xxs, flexWrap: 'wrap', marginTop: SP.xxs }}>
+          <TextArea autoGrow minHeight={p.isMobile ? 40 : 72} maxHeight={360} value={inputs.lyrics} onChange={v => setInputs({ lyrics: v })}
+            placeholder={p.isMobile ? '[Verse]\nПервый куплет…' : '[Verse]\nПервый куплет…\n\n[Chorus]\nПрипев…'} />
+          {/* Телефон: цели по 40, а в два ряда они вытесняют «Чем» из первого экрана — один ряд со свайпом */}
+          <div data-lyrics-sections="" style={{ display: 'flex', gap: SP.xxs, marginTop: SP.xxs, ...(p.isMobile ? { overflowX: 'auto', flexWrap: 'nowrap' } : { flexWrap: 'wrap' }) }}>
             {SECTIONS.map(sec => (
-              <Button key={sec} size={p.isMobile ? 'md' : 'xs'} variant="ghost" onClick={() => setInputs({ lyrics: insertSection(inputs.lyrics, sec) })}>{sec}</Button>
+              <Button key={sec} size={p.isMobile ? 'md' : 'xs'} style={p.isMobile ? { flexShrink: 0 } : undefined} variant="ghost" onClick={() => setInputs({ lyrics: insertSection(inputs.lyrics, sec) })}>{sec}</Button>
             ))}
           </div>
           {op === 'song' && !required && <Hint>Пустые слова — инструментал</Hint>}

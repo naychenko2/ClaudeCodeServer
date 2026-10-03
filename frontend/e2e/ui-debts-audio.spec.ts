@@ -87,6 +87,11 @@ async function fixtures(page: Page) {
     const res = await r.fetch();
     await r.fulfill({ response: res, json: { ...(await res.json()), catalog: CATALOG } });
   });
+  // Схема параметров: одно необязательное поле — без него «Сбросить» в «Ещё настройки» не рисуется
+  await page.route('**/audio-editor/schema?*', r => r.fulfill({ json: {
+    provider: 'local', model: 'auto', source: 'local-catalog', reserved: ['text'],
+    fields: [{ key: 'vendor_extra', type: 'number', title: 'Особый параметр', min: 0.5, max: 2, default: 1 }],
+  } }));
   await page.route('**/audio-editor/**/quote', async r => {
     const body = r.request().postDataJSON() as Record<string, unknown>;
     await r.fulfill({ json: {
@@ -194,7 +199,11 @@ for (const theme of ['light', 'dark'] as const) {
     const voice = await heights(p, ['В текст →', /Выбрать в «Голосах»/]);
     expect(voice['В текст →'], 'В текст →').toBeGreaterThanOrEqual(MIN);
     expect(voice[String(/Выбрать в «Голосах»/)], 'Выбрать в «Голосах»').toBeGreaterThanOrEqual(MIN);
+    // Схема параметров грузится только под конкретного исполнителя — «Авто» её не даёт
+    await executorRow(p).click();
+    await p.getByRole('radio').filter({ hasText: 'MiniMax Speech 2.6' }).click();
     await p.getByRole('button', { name: /^Ещё настройки/ }).click();
+    await expect(p.getByRole('button', { name: 'Сбросить' }), 'схема пришла — «Сбросить» нарисована').toBeVisible();
     const reset = await heights(p, ['Сбросить']);
     expect(reset['Сбросить'], 'Сбросить').toBeGreaterThanOrEqual(MIN);
     await shot(page, `fields-voice-360-${theme}`);

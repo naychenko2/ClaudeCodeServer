@@ -172,7 +172,7 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(runBtn(page)).toContainText('✦ Стемы');
         await expect(runBtn(page)).toBeEnabled();
         // «Набор: 4» (4 дорожки) — «Чем» сам стал HTDemucs
-        await actions(page).getByRole('button', { name: '4', exact: true }).click();
+        await actions(page).getByRole('button', { name: 'Набор: 4 стема' }).click();
         // На телефоне чип без подписи — модель в его подсказке
         await expect(page.locator('[data-context-row] [data-chip="exec"]')).toHaveAttribute('title', /HTDemucs/, { timeout: 10_000 });
         await shot(page, `s5-stems-${name}-${theme}.png`);

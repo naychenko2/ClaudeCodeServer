@@ -336,8 +336,9 @@ function VoiceDetails({ scope, voice: v, picked, contextSessionId, onPick, onCha
       {error && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* При контексте чата «В контекст» стоит в строке списка (макет): в раскрытой карточке второй копии нет */}
         {contextSessionId
-          ? <ContextAddButton sessionId={contextSessionId} projectId={scope} candidate={{ kind: 'audio-voice', ref: { slug: v.slug } }} size="sm" toggle />
+          ? null
           : (
             <Button size="sm" variant={picked ? 'secondary' : 'primary'} leftIcon={picked ? ic(Check) : undefined} disabled={picked} onClick={onPick}>
               {picked ? 'Выбран' : 'Выбрать'}

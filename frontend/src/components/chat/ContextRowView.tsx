@@ -212,7 +212,8 @@ function PrimaryChip({ p, form, icon, onOpen, onRelease, onAgentTip }: {
 function ExecChip({ e, form, onOpen }: { e: RowExec; form: 1 | 2 | 3; onOpen: (r: DOMRect) => void }) {
   const row = e.rows.find(r => r.id === e.value) ?? e.rows[0];
   if (!row) return null;
-  const auto = row.group === 'auto';
+  // «Авто» с названием модели в now: «Авто · локально · Qwen»; строка группы auto с другим именем («Без ИИ») — как обычная
+  const auto = row.group === 'auto' && row.name === 'Авто';
   const price = rowPriceShort(row);
   const free = !!row.free;
   const full = auto ? `Авто${row.now ? ` · ${row.now}` : ''}` : `${row.sub ? `${row.sub} · ` : ''}${row.name}`;

@@ -125,6 +125,13 @@ describe('ContextRowView', () => {
     expect(free).toContain('var(--c-success-bg)');
   });
 
+  it('«Авто» с моделью в now: «Авто · локально · модель»; строка auto с другим именем («Без ИИ») называется по имени', () => {
+    const auto: RowExec = { ...exec, rows: [{ ...exec.rows[0], name: 'Авто', sub: 'сейчас: локально · Qwen', now: 'локально · Qwen' }] };
+    expect(html(props({ exec: auto }))).toContain('Чем: Авто · локально · Qwen');
+    const noAi: RowExec = { ...exec, rows: [{ ...exec.rows[0], name: 'Без ИИ', sub: 'на сервере', now: undefined }] };
+    expect(html(props({ exec: noAi }))).toContain('Без ИИ');
+  });
+
   it('факты лестницы собираются из модели', () => {
     expect(rowFacts(props({ refs: [ref('a')], exec }))).toEqual({ project: true, hasPrimary: true, hasExec: true, refs: 1, mobile: false });
   });

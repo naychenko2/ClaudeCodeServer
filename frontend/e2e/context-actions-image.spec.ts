@@ -218,8 +218,7 @@ for (const { name, vp } of VIEWPORTS) {
           await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
         };
         await open();
-        // «Чем»: FLUX Kontext
-        await panelCtx(page).getByRole('button', { name: /^Чем/ }).click();
+        // «Чем»: список раскрыт сразу (макет), сворачивать нечего — выбираем FLUX Kontext
         await panelCtx(page).getByText('FLUX Kontext').first().click();
         if (name !== '360') {
           // Библиотека «Персонажи» открывается отдельной панелью, Аня встаёт референсом с ролью «персонаж».
@@ -236,7 +235,8 @@ for (const { name, vp } of VIEWPORTS) {
           await open();
           await expect(panelCtx(page).locator('[data-ctx-ref="on"]')).toContainText('Аня');
         }
-        // «Вариантов +»: 2 → 3, на кнопке поля и в низу панели «3 вар.» (на 360 — «×3»)
+        // «Вариантов +»: умолчание 1 (макет) → 3, на кнопке поля и в низу панели «3 вар.» (на 360 — «×3»)
+        await panelCtx(page).getByRole('button', { name: 'Больше' }).click();
         await panelCtx(page).getByRole('button', { name: 'Больше' }).click();
         const three = /3 вар\.|×3/;
         await expect(runBtn(page)).toContainText(three);

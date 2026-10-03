@@ -252,11 +252,15 @@ public static class ImageEditErrorCodes
     public const string Unavailable = "image_editor_unavailable";
     // 503: растра нет — подсистема картинок выключена, transform и запуск задач недоступны
     public const string RasterUnavailable = "raster_unavailable";
+    // 409: ревизия контекста чата устарела (ADR-023 §Д2.1); в теле — свежий ChatContextDto
+    public const string ContextChanged = "context_changed";
 }
 
 // Результат вызова шва: Value при успехе, иначе код ImageEditErrorCodes.* и текст
-public record ImageEditCallResult<T>(T? Value, string? ErrorCode, string? Error)
+// Payload — тело отказа, если оно не {error, code}: у context_changed это свежий ChatContextDto
+public record ImageEditCallResult<T>(T? Value, string? ErrorCode, string? Error, object? Payload = null)
 {
     public static ImageEditCallResult<T> Ok(T value) => new(value, null, null);
     public static ImageEditCallResult<T> Fail(string code, string error) => new(default, code, error);
+    public static ImageEditCallResult<T> Fail(string code, string error, object payload) => new(default, code, error, payload);
 }

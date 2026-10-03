@@ -21,14 +21,16 @@ public static class ImageContextRoles
 
 // Виды «image» и «image-character» контекста чата (ADR-023).
 // image: Ref = {threadId, versionId?} — нить картинки этого чата; основной объект, принимает референсы
-// (AcceptedRefs) и описывает «Чем» (DescribeExecutor). Он же засевает контекст чата без файла из фокуса
+// (AcceptedRefs) и описывает «Чем» (DescribeExecutor). Референсом бывает и Ref = {upload} — образец,
+// загруженный с диска человека в рабочую папку модуля (ADR-023 §2.3). Он же засевает контекст чата без файла из фокуса
 // картинки — с приоритетом над звуком.
 // image-character: Ref = {slug} — персонаж проекта (characters/<slug>); только референс с ролью character,
 // в личном чате персонажей нет.
 public sealed class ImageContextKind(
     ImageThreadStore store,
     ImageProjectPrefsStore? prefs = null,
-    IEnumerable<IImageEditor>? editors = null) : IContextKindProvider, IChatContextSeedSource
+    IEnumerable<IImageEditor>? editors = null,
+    ImageEditWorkspace? workspace = null) : IContextKindProvider, IChatContextSeedSource
 {
     public const string Kind = "image";
     public const string CharacterKind = "image-character";
@@ -48,6 +50,8 @@ public sealed class ImageContextKind(
     {
         if (kind == CharacterKind) return ValidateCharacter(scope, reference);
         if (kind != Kind) return $"Вид «{kind}» не принадлежит редактору картинок";
+        if (Text(reference, "upload") is { } upload)
+            return workspace?.UploadExists(scope.OwnerId, upload) == true ? null : "Образец не найден или истёк";
         if (Text(reference, "threadId") is not { } threadId) return "Не указана нить картинки";
         if (Find(scope, threadId) is not { } thread) return "Нить картинки не найдена в этом чате";
         if (Text(reference, "versionId") is { } versionId && thread.Version(versionId) is null)
@@ -75,6 +79,10 @@ public sealed class ImageContextKind(
                 ? new ContextItemSummary("персонаж недоступен", null, null, true)
                 : new ContextItemSummary(character.Name, null, null, false);
         }
+        if (Text(item.Ref, "upload") is { } upload)
+            return workspace?.UploadExists(scope.OwnerId, upload) == true
+                ? new ContextItemSummary("образец", null, null, false)
+                : new ContextItemSummary("образец недоступен", null, null, true);
         if (Text(item.Ref, "threadId") is not { } threadId || Find(scope, threadId) is not { } thread)
             return new ContextItemSummary("картинка недоступна", null, null, true);
         var version = (Text(item.Ref, "versionId") is { } v ? thread.Version(v) : null) ?? thread.CurrentVersion;

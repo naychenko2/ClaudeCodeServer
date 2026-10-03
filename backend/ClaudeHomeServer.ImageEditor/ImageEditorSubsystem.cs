@@ -64,6 +64,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             ? new ImageEditSteps(raster, sp.GetRequiredService<ImageEditWorkspace>(), sp.GetRequiredService<IImageEditJobs>())
             : null!);
         // Общая сборка входа запуска и блок нитей хвостом хода: им же пользуется MCP-тулсет
+        services.AddSingleton<ChatContext.ImageContextLaunch>();
         services.AddSingleton<ImageEditLaunchAssembler>();
         // Гейт области ручек: проект или личный чат вне проекта (разрез image-editor-personal-chats)
         services.AddSingleton<Controllers.ImageEditScopeGate>();

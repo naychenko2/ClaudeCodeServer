@@ -163,7 +163,7 @@
 
 `executors` — строки «Чем» для `op` запроса; их читает строка контекста и панель (решение Р2). `group` — `auto` | `local` |
 `cloud`; у строки «Авто» `sub` несёт «сейчас: …»; серая строка — `disabled: true` и `reason` вместо `sub`.
-Цена — полями: `free`, `amount` + `unit` — валюта (`free` | `usd` | `credits` | `rub`; у бесплатных `amount: null`; единица тарификации поставщика `chars`/`sec`/`min` в `unit` не попадает — исполнитель переводит её в `usd`); `amount` — цена за единицу из `PriceHint` модели (за штуку, секунду и т. п., подпись `price` называет единицу), а не за весь запуск с `count`, `etaSeconds` (у локальных); `price` — готовая подпись для показа, фронт её не разбирает. `badges` — `[{label, tone}]` (`tone`: `neutral` | `good` | `warn` | `info`): RU / без RU, лицензия, «тяжёлая». Наполнение строк — этапы 2б-3 (картинки) и 2б-4 (звук); пока `executors` может быть `null`.
+Цена — полями: `free`, `amount` + `unit` — валюта (`free` | `usd` | `credits` | `rub`; у бесплатных `amount: null`; единица тарификации поставщика `chars`/`sec`/`min` в `unit` не попадает — исполнитель переводит её в `usd`); `amount` — цена за единицу из `PriceHint` модели (за штуку, секунду и т. п., подпись `price` называет единицу), а не за весь запуск с `count`, `etaSeconds` (у локальных); `price` — готовая подпись для показа, фронт её не разбирает. `badges` — `[{label, tone}]` (`tone`: `neutral` | `good` | `warn` | `info`): RU / без RU, лицензия, «тяжёлая». Id строки — `поставщик|модель` (в id моделей бывают слеши и двоеточия), «Авто» — `auto`. Строки картинки наполняются при `ContextRevision` в запросе (2б-3), звука — этап 2б-4; без ревизии `executors` — `null`. Образец с диска: `POST …/image-editor/uploads` (multipart, поле `file`) → `201 {uploadId}`, затем `attachRef({kind: 'image', ref: {upload}})`; образец живёт в рабочей папке модуля, как задачи (TTL 7 дней).
 
 ```json image-quote
 {
@@ -175,8 +175,8 @@
   "expectedSeconds": 40,
   "executors": [
     { "id": "auto", "group": "auto", "name": "Авто", "sub": "сейчас: локально · Qwen-Image Edit", "price": "бесплатно · ~40 с", "free": true, "amount": null, "unit": "free", "etaSeconds": 40, "badges": [{ "label": "без RU", "tone": "warn" }], "disabled": false, "locked": false, "reason": null },
-    { "id": "local:qwen-image-edit", "group": "local", "name": "Qwen-Image Edit", "sub": null, "price": "бесплатно · ~40 с", "free": true, "amount": null, "unit": "free", "etaSeconds": 40, "badges": [{ "label": "без RU", "tone": "warn" }, { "label": "apache-2.0", "tone": "neutral" }], "disabled": false, "locked": false, "reason": null },
-    { "id": "fal:flux-kontext", "group": "cloud", "name": "fal · FLUX Kontext", "sub": null, "price": "$0.04 / шт.", "free": false, "amount": 0.04, "unit": "usd", "etaSeconds": null, "badges": [{ "label": "RU", "tone": "good" }], "disabled": true, "locked": false, "reason": "не умеет «Изменить отмеченное» — только новая картинка" }
+    { "id": "local|qwen-image-edit", "group": "local", "name": "Qwen-Image Edit", "sub": null, "price": "бесплатно · ~40 с", "free": true, "amount": null, "unit": "free", "etaSeconds": 40, "badges": [{ "label": "без RU", "tone": "warn" }, { "label": "apache-2.0", "tone": "neutral" }], "disabled": false, "locked": false, "reason": null },
+    { "id": "fal|flux-kontext", "group": "cloud", "name": "fal · FLUX Kontext", "sub": null, "price": "$0.04 / шт.", "free": false, "amount": 0.04, "unit": "usd", "etaSeconds": null, "badges": [{ "label": "RU", "tone": "good" }], "disabled": true, "locked": false, "reason": "не умеет «Изменить отмеченное» — только новая картинка" }
   ]
 }
 ```

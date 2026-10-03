@@ -114,14 +114,17 @@ public sealed partial class ImageEditorToolset
                 ["references"] = new JsonObject
                 {
                     ["type"] = "array",
-                    ["description"] = "Образцы: пути файлов проекта с ролями; только в чате проекта",
+                    ["description"] = "Образцы: пути файлов проекта с ролями; только в чате проекта. "
+                        + "Не передан — берутся образцы контекста чата (если у человека включена строка контекста); "
+                        + "пустой массив — без образцов",
                     ["items"] = Obj(new JsonObject
                     {
                         ["path"] = Str("Путь от корня проекта"),
                         ["role"] = OneOf(Roles, "Роль образца"),
                     }, "path", "role"),
                 },
-                ["character"] = Str("Персонаж проекта (slug папки characters/; только в чате проекта). " + NotWithoutAsk),
+                ["character"] = Str("Персонаж проекта (slug папки characters/; только в чате проекта). "
+                    + "Не передан — персонаж из контекста чата, пустая строка — без персонажа. " + NotWithoutAsk),
                 ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края, улучшить лица (enhanceFaces, "
                     + "только local); по умолчанию — правка, а у новой картинки без файла — generate"),
                 ["matchSourceSize"] = new JsonObject

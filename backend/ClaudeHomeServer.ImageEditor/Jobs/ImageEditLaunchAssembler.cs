@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Media;
@@ -20,12 +21,17 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // старта внизу ленты ложится якорь запуска image_launch_versions, по завершении варианты
 // становятся версиями нити, а ход узнаёт о запуске из журнала нитей (блок
 // ImageEditorStateContributor). Запуск без нити — без чата: трата и события без SessionId.
+//
+// Запуск по ревизии контекста (ADR-023 §Д2.1): с ContextRevision входы берутся из стора контекста чата,
+// а Source, образцы, пути образцов, персонаж, нить и версия тела игнорируются; ревизия не совпала с
+// текущей или с ревизией котировки — context_changed со свежим состоянием. Без поля — всё как прежде.
 public sealed class ImageEditLaunchAssembler(
     IEnumerable<IImageEditor> editors,
     IImageEditJobs? jobs = null,
     IImageRaster? raster = null,
     ImageThreadService? threads = null,
-    ImageEditSteps? steps = null)
+    ImageEditSteps? steps = null,
+    ImageContextLaunch? context = null)
 {
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
 
@@ -34,7 +40,10 @@ public sealed class ImageEditLaunchAssembler(
     {
         var assembled = await AssembleAsync(ownerId, scope, req, ct);
         if (assembled.Value is not { } input)
-            return Fail<ImageEditJobCreatedDto>(assembled.ErrorCode, assembled.Error);
+            return assembled.Payload is { } payload
+                ? ImageEditCallResult<ImageEditJobCreatedDto>.Fail(
+                    assembled.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, assembled.Error ?? "Запрос не выполнен", payload)
+                : Fail<ImageEditJobCreatedDto>(assembled.ErrorCode, assembled.Error);
 
         var started = await jobs!.StartAsync(ownerId, scope.Key, input, ct);
         if (started.Value is { } created && input is { ChatSessionId: { } chatId, ThreadId: { } threadId } && threads is not null)
@@ -67,6 +76,14 @@ public sealed class ImageEditLaunchAssembler(
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена на этом сервере");
         if (string.IsNullOrWhiteSpace(req.QuoteId))
             return Invalid("Не указана котировка: сначала запросите цену");
+        if (req.ContextRevision is { } revision)
+        {
+            var applied = await ApplyContextAsync(ownerId, scope, req, revision, ct);
+            if (applied.Value is not { } byContext)
+                return ImageEditCallResult<ImageEditJobInput>.Fail(applied.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
+                    applied.Error ?? "Запрос не выполнен", applied.Payload!);
+            req = byContext;
+        }
         if (scope.Project is null
             && (req.ReferencePaths.Count > 0 || req.CharacterSlug is { Length: > 0 } || req.SourcePath is { Length: > 0 }))
             return Invalid("Вне проекта нельзя брать образцы, персонажей и исходник из файлов проекта");
@@ -144,6 +161,51 @@ public sealed class ImageEditLaunchAssembler(
             AspectRatio: aspectRatio,
             ThreadId: threadId,
             BaseVersionId: baseVersionId));
+    }
+
+    // Входы запуска — из стора контекста по ревизии клиента; поля входов тела заменяются раскладкой
+    private async Task<ImageEditCallResult<ImageEditLaunchRequest>> ApplyContextAsync(
+        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, long revision, CancellationToken ct)
+    {
+        static ImageEditCallResult<ImageEditLaunchRequest> Refuse(string? code, string? error, object? payload) =>
+            payload is null
+                ? ImageEditCallResult<ImageEditLaunchRequest>.Fail(code ?? ImageEditErrorCodes.InvalidRequest, error ?? "Запрос не выполнен")
+                : ImageEditCallResult<ImageEditLaunchRequest>.Fail(code ?? ImageEditErrorCodes.InvalidRequest, error ?? "Запрос не выполнен", payload);
+
+        if (context is null || jobs is null || threads is null)
+            return Refuse(ImageEditErrorCodes.Unavailable, "Контекст чата недоступен на этом сервере", null);
+        if (jobs.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim()) is not { } quote)
+            return Refuse(ImageEditErrorCodes.QuoteNotFound, "Котировка устарела — цена пересчитается автоматически", null);
+
+        var resolved = context.Resolve(ownerId, scope, req.ThreadSessionId, revision, quote.Op);
+        if (resolved.ErrorCode is not null) return Refuse(resolved.ErrorCode, resolved.Error, resolved.Payload);
+        var (inputs, ctx, sessionId) = resolved.Value;
+        // Цена посчитана на другой ревизии: образцы и персонаж уже другие, чем в котировке
+        if (quote.ContextRevision is { } quoted && quoted != revision)
+            return Refuse(ImageEditErrorCodes.ContextChanged, "Контекст чата изменился",
+                context.Stale<ImageEditLaunchRequest>(ctx, sessionId).Payload);
+
+        var thread = threads.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == inputs.ThreadId);
+        if (thread is null) return Refuse(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате", null);
+        var version = inputs.VersionId is { } v ? thread.Version(v) : thread.CurrentVersion;
+        if (version is null) return Refuse(ImageEditErrorCodes.VersionNotFound, "Версии нет в этой картинке", null);
+
+        var source = await context.ReadVersionAsync(ownerId, scope, thread, version, ct);
+        if (source.ErrorCode is not null) return Refuse(source.ErrorCode, source.Error, null);
+        var samples = await context.LoadSamplesAsync(ownerId, scope, sessionId, inputs, ct);
+        if (samples.Value is not { } loaded) return Refuse(samples.ErrorCode, samples.Error, null);
+
+        return ImageEditCallResult<ImageEditLaunchRequest>.Ok(req with
+        {
+            Source = source.Value,
+            SourcePath = req.SourcePath ?? thread.File,
+            Uploaded = loaded,
+            ReferencePaths = inputs.ReferencePaths,
+            CharacterSlug = inputs.CharacterSlug,
+            ThreadSessionId = sessionId,
+            ThreadId = inputs.ThreadId,
+            VersionId = inputs.VersionId,
+        });
     }
 
     private static long MaxFileBytes => ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;

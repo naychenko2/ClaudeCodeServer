@@ -79,7 +79,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     private sealed record Quote(
         string Id, string OwnerId, string ProjectId, string Provider, ImageEditModelInfo Model,
-        ImageEditOp Op, int Count, ImageEditEstimateDto Estimate, DateTime ExpiresAt, int? ExpectedSeconds);
+        ImageEditOp Op, int Count, ImageEditEstimateDto Estimate, DateTime ExpiresAt, int? ExpectedSeconds,
+        long? ContextRevision = null);
 
     private sealed class Job(string id, string ownerId, string projectId, Quote quote, CancellationTokenSource cts)
     {
@@ -165,11 +166,17 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         }
 
         var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, request.Count,
-            estimate, Now() + QuoteTtl, estimate.EtaSeconds ?? (editor as IImageEditQuoter)?.ExpectedSeconds(model));
+            estimate, Now() + QuoteTtl, estimate.EtaSeconds ?? (editor as IImageEditQuoter)?.ExpectedSeconds(model),
+            request.ContextRevision);
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return ImageEditCallResult<ImageEditQuoteDto>.Ok(ToDto(quote));
     }
+
+    public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId) =>
+        _quotes.TryGetValue(quoteId, out var q) && q.OwnerId == ownerId && q.ProjectId == projectId && q.ExpiresAt >= Now()
+            ? new ImageEditQuoteInfo(q.Op, q.ContextRevision)
+            : null;
 
     // ── Запуск ───────────────────────────────────────────────────────────────────
 

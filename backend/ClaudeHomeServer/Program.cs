@@ -681,6 +681,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Images.LocalMedia.ILocal
     ClaudeHomeServer.Services.Mcp.LocalMediaProjectAccess>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.LocalMediaToolset>();
+// Контекст чата для агента (ADR-023 §3.2): context_state / context_attach / context_detach; сессия — хвостом
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.TurnContextToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают

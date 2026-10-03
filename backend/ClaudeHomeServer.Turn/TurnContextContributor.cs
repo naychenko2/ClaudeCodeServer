@@ -57,7 +57,7 @@ public sealed class TurnContextContributor(
         sessionContext.OwnerId is { Length: > 0 } ownerId
         && flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow)
         && sessionContext.ServerContent
-        && (HasContext(ownerId, sessionContext.Session) || HasGit(sessionContext));
+        && (HasContext(ownerId, sessionContext.Session) || HasGit(sessionContext.RootPath));
 
     private bool HasContext(string ownerId, Session session)
     {
@@ -65,12 +65,12 @@ public sealed class TurnContextContributor(
         return (state.Primary is { } p && registry.IsRegistered(p.Kind)) || state.Refs.Any(r => registry.IsRegistered(r.Kind));
     }
 
-    private static bool HasGit(PromptSessionContext ctx) =>
-        ctx.RootPath is { Length: > 0 } root && GitRepo.IsRepo(root);
+    private static bool HasGit(string? rootPath) =>
+        rootPath is { Length: > 0 } root && GitRepo.IsRepo(root);
 
-    private static string? Branch(PromptSessionContext ctx) =>
-        ctx.Session.WorktreeBranch is { Length: > 0 } wb ? wb
-        : ctx.RootPath is { Length: > 0 } root ? GitRepo.CurrentBranch(root) : null;
+    private static string? Branch(Session session, string? rootPath) =>
+        session.WorktreeBranch is { Length: > 0 } wb ? wb
+        : rootPath is { Length: > 0 } root ? GitRepo.CurrentBranch(root) : null;
 
     public Task<PromptSectionContribution?> BuildAsync(PromptSessionContext sessionContext, string? turnText)
     {
@@ -78,6 +78,14 @@ public sealed class TurnContextContributor(
             return Task.FromResult<PromptSectionContribution?>(null);
         var session = sessionContext.Session;
         var project = session.ProjectId is { } pid ? projects.GetById(pid) : null;
+        var text = Compose(ownerId, session, project, sessionContext.RootPath);
+        return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
+            [new PromptSection(Key, text, Title, InTurnTail: true)]));
+    }
+
+    // Текст хвоста: единственная точка сборки, её же зовёт context_state агента — «тем же текстом, что хвост»
+    public string Compose(string ownerId, Session session, Project? project, string? rootPath)
+    {
         var scope = new ContextScope(ownerId, session, project);
         var state = store.Get(ownerId, session.Id);
         var dto = ChatContextDtoBuilder.Build(registry, scope, state);
@@ -87,7 +95,7 @@ public sealed class TurnContextContributor(
 
         var sb = new StringBuilder();
         sb.AppendLine("## Контекст хода");
-        if (WhereLine(sessionContext) is { } where) sb.AppendLine(where);
+        if (WhereLine(session, rootPath) is { } where) sb.AppendLine(where);
 
         var hasContext = primaryDto is not null || refDtos.Count > 0;
         if (hasContext)
@@ -105,16 +113,14 @@ public sealed class TurnContextContributor(
             sb.AppendLine(Footer);
         }
 
-        var text = sb.ToString().TrimEnd();
-        return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
-            [new PromptSection(Key, text, Title, InTurnTail: true)]));
+        return sb.ToString().TrimEnd();
     }
 
-    private static string? WhereLine(PromptSessionContext ctx)
+    private static string? WhereLine(Session session, string? rootPath)
     {
-        if (!HasGit(ctx) && ctx.Session.WorktreeBranch is null) return null;
-        var branch = Branch(ctx);
-        var worktree = ctx.Session.WorktreePath is not null ? " (worktree чата)" : "";
+        if (!HasGit(rootPath) && session.WorktreeBranch is null) return null;
+        var branch = Branch(session, rootPath);
+        var worktree = session.WorktreePath is not null ? " (worktree чата)" : "";
         return branch is null ? "Где: HEAD отсоединён" + worktree : $"Где: ветка {branch}{worktree}";
     }
 

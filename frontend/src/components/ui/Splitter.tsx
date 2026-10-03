@@ -15,11 +15,12 @@ export function Splitter({ orientation = 'v', active, onMouseDown }: {
     <div
       onPointerDown={onMouseDown}
       style={{
-        position: 'relative', flexShrink: 0, cursor: vertical ? 'col-resize' : 'row-resize',
+        position: 'relative', cursor: vertical ? 'col-resize' : 'row-resize',
         touchAction: 'none',
         background: active ? C.accent : C.border, transition: 'background 0.15s ease',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        ...(vertical ? { flex: '0 0 1px', width: 1, alignSelf: 'stretch' } : { height: 1, width: '100%' }),
+        // flex-шорткат и flexShrink в одном стиле React не любит: шорткат несёт все три свойства сам
+        ...(vertical ? { flex: '0 0 1px', width: 1, alignSelf: 'stretch' } : { flex: '0 0 auto', height: 1, width: '100%' }),
       }}
       onMouseEnter={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '1'; }}
       onMouseLeave={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '0'; }}

@@ -20,6 +20,10 @@ public interface IContextKindProvider
     // Для основного объекта своего вида: какие референсы принимает операция и как их зовут.
     // op — операция панели (null — режим по умолчанию). Пусто — референсы не принимаются
     IReadOnlyList<ContextRoleSpec> AcceptedRefs(ContextScope scope, ContextItem primary, string? op);
+
+    // «Чем»: исполнитель и модель для основного объекта своего вида
+    // («Авто · локально · Qwen-Image Edit · бесплатно»). null — не применимо
+    string? DescribeExecutor(ContextScope scope, ContextItem primary);
 }
 
 public sealed record ContextScope(string OwnerId, Session Session, Project? Project);

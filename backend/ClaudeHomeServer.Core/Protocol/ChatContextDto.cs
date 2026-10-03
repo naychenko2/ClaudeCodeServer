@@ -40,7 +40,7 @@ public static class ChatContextEventNames
     public const string Changed = "chat_context_changed";
 }
 
-// Контекст чата сменился (любая запись в IChatContextStore); SessionId — базовое поле, чат-владелец
+// Контекст чата сменился (любая запись в IChatContextStore); SessionId наследуется от ServerMessage, это чат-владелец
 public record ChatContextChangedMessage(ChatContextDto Context) : ServerMessage(ChatContextEventNames.Changed);
 
 // Тело 409 context_changed: свежий DTO, по нему фронт перерисует чипы и цену

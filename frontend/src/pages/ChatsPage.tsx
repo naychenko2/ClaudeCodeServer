@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
+import { forgetComposerOnChatDeleted } from '../lib/composerStrips';
 import { archiveApi } from '../api/chats';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { joinUser, onMessage } from '../lib/signalr';
@@ -111,6 +112,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       // Чат удалён на сервере (в т.ч. авто-удаление временного) — убираем из списка,
       // открытый чат закрываем. Side-эффекты в апдейтере идемпотентны.
       if (msg.type === 'chat_deleted') {
+        forgetComposerOnChatDeleted(msg);
         setChats(prev => prev.filter(c => c.id !== msg.sessionId));
         setActiveId(prev => {
           if (prev !== msg.sessionId) return prev;

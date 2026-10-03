@@ -63,11 +63,17 @@ describe('правило 1: клик по карточке', () => {
   });
 
   it('клик по кнопке карточки — не выбор, по самой карточке — выбор', () => {
-    const card = { contains: (x: unknown) => x === btn };
+    const card = { contains: (x: unknown) => x === btn || x === body };
     const btn = { closest: () => btn };
     const body = { closest: () => null };
     expect(isCardPick(btn as unknown as EventTarget, card as unknown as Element)).toBe(false);
     expect(isCardPick(body as unknown as EventTarget, card as unknown as Element)).toBe(true);
+  });
+
+  it('клик из портала (элемент вне DOM карточки) — не выбор карточки', () => {
+    const card = { contains: () => false };
+    const menuItem = { closest: () => menuItem };
+    expect(isCardPick(menuItem as unknown as EventTarget, card as unknown as Element)).toBe(false);
   });
 });
 

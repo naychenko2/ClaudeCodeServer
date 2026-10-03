@@ -31,7 +31,9 @@ export function followHost(openKeys: readonly string[], key: string): string | n
 const INTERACTIVE = 'button, a, input, textarea, select, [role="button"], [role="menuitem"], [role="slider"], [contenteditable="true"]';
 export function isCardPick(target: EventTarget | null, card: Element): boolean {
   const el = target as Element | null;
-  const hit = el?.closest?.(INTERACTIVE);
+  // Клик из портала (пункт меню «В контекст ▾») всплывает по дереву React, но лежит вне DOM карточки
+  if (!el || !card.contains(el)) return false;
+  const hit = el.closest?.(INTERACTIVE);
   return !hit || !card.contains(hit);
 }
 

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { __resetGenDrafts, clearGenDraft, getGenDraftText, hasGenDraft, noteGenDraft, setGenDraftText } from './genDrafts';
-import { modeDraftText, nextModeDraft, nextPrefill, type ModeDraftState, type PrefillState } from './composerModes';
+import { modeDraftText, nextModeDraft, nextPrefill, type ModeDraftState, type PrefillState } from './composerActionMemory';
 
 beforeEach(() => { __resetGenDrafts(); });
 

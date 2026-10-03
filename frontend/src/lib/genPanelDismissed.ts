@@ -14,8 +14,7 @@ import { revealWorkspacePanel } from './subsystems/registryCore';
 
 const STORAGE_KEY = 'cc_gen_panel_dismissed';
 export const MAX_KEYS = 500;
-// Ключи панелей генерации: без флага composer-context-row — «images», «sound», с флагом — одна
-// «chatContext». Функция, а не константа: набор зависит от флага пользователя
+// Ключи панелей генерации: одна «chatContext» (ADR-023 §Д1)
 export { genPanelKeys };
 
 export function isGenPanelKey(key: string): boolean {

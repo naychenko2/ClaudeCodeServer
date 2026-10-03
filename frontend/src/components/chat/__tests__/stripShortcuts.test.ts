@@ -8,39 +8,36 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
   matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
 }));
 
-const { registerSubsystem, SLOT_COMPOSER_STRIP } = await import('../../../lib/subsystems/registryCore');
+const { registerSubsystem, SLOT_CONTEXT_KIND } = await import('../../../lib/subsystems/registryCore');
 const { ChatEmptyState } = await import('../EmptyState');
-const { menuShortcuts, plusButtonTitle, useStripShortcuts } = await import('../ComposerStripHost');
+const { plusButtonTitle, useCreateShortcuts } = await import('../composerShortcuts');
 
-// Полоса-вклад с ярлыком «Звук» (ключ — id полосы); доступность — рычагом теста
-const lever = { available: true };
+// Вид контекста с `create` («Звук») — единственный источник ярлыков «＋» и пустой ленты
 registerSubsystem({
-  key: 'test-strip', title: 'Тест', core: true,
+  key: 'test-kind', title: 'Тест', core: true,
   slots: {
-    [SLOT_COMPOSER_STRIP]: [{
-      name: 'sound', order: 25, render: () => null,
+    [SLOT_CONTEXT_KIND]: [{
+      name: 'audio', order: 25,
       action: {
-        title: 'Звук', icon: null,
-        isAvailable: () => lever.available,
-        shortcuts: () => [
-          { key: 'sound', title: 'Звук', hint: 'голос, музыка, обработка', icon: null, onSelect: () => {} },
-        ],
+        kinds: ['audio'], icon: () => null, preview: () => null, actions: () => [],
+        create: { title: 'Звук', hint: 'голос, музыка, обработка', icon: null, run: () => {} },
       },
     }],
   },
 });
 
-const empty = () => renderToStaticMarkup(createElement(ChatEmptyState, { hasProject: true, hasCLAUDEmd: true, onHint: () => {} }));
-function titles(projectId: string | null): string[] {
+const empty = () => renderToStaticMarkup(createElement(ChatEmptyState, {
+  hasProject: true, hasCLAUDEmd: true, onHint: () => {}, session: { id: 's1' } as never,
+}));
+function titles(projectId: string | null, sessionId: string | null = 's1'): string[] {
   let out: string[] = [];
-  const Probe = () => { out = useStripShortcuts(projectId, 's1').map(s => s.title); return null; };
+  const Probe = () => { out = useCreateShortcuts(projectId, sessionId).map(s => s.title); return null; };
   renderToStaticMarkup(createElement(Probe));
   return out;
 }
 
-describe('ярлыки полос вне меню полосы (ADR-021 п.1)', () => {
+describe('ярлыки «＋» и пустой ленты от видов контекста', () => {
   it('пустая лента рисует одну кнопку «Звук», без «Голос» и «Музыка»', () => {
-    lever.available = true;
     const html = empty();
     expect(html).toContain('data-empty-shortcuts');
     expect(html).toContain('>Звук<');
@@ -48,39 +45,20 @@ describe('ярлыки полос вне меню полосы (ADR-021 п.1)', 
     expect(html).not.toContain('>Музыка<');
   });
 
-  it('недоступная полоса (флаг выключен) ярлыков не отдаёт ни ленте, ни «＋»', () => {
-    lever.available = false;
-    expect(empty()).not.toContain('data-empty-shortcuts');
-    expect(titles('p1')).toEqual([]);
-  });
-
-  it('хук отдаёт ярлыки доступной полосы по порядку и в личном чате', () => {
-    lever.available = true;
+  it('«Звук» в «＋» один — не два пункта (дефект 9de927dc)', () => {
     expect(titles('p1')).toEqual(['Звук']);
     expect(titles(null)).toEqual(['Звук']);
   });
-});
 
-describe('меню полос', () => {
-  const sound = { key: 'sound', title: 'Звук', icon: null, onSelect: () => {} };
-  const video = { key: 'video-clip', title: 'Клип', icon: null, onSelect: () => {} };
-
-  it('ярлык с ключом полосы — действие её пункта, а не второй пункт «Звук»', () => {
-    const m = menuShortcuts(['git', 'sound'], [sound, video]);
-    expect(m.shortcuts.map(s => s.title)).toEqual(['Клип']);
-    expect(m.own('sound')).toBe(sound);
-    expect(m.own('git')).toBeUndefined();
+  it('без чата ярлыков нет', () => {
+    expect(titles('p1', null)).toEqual([]);
   });
 });
 
 describe('подсказка кнопки «＋»', () => {
-  it('собирается из ярлыков полос, без ярлыков — только файл', () => {
-    lever.available = true;
-    let shortcuts: { title: string }[] = [];
-    const Probe = () => { shortcuts = useStripShortcuts('p1', 's1'); return null; };
-    renderToStaticMarkup(createElement(Probe));
-    expect(plusButtonTitle(shortcuts)).toBe('Прикрепить файл, звук…');
-    expect(plusButtonTitle([{ title: 'Видео' }])).toBe('Прикрепить файл, видео…');
+  it('собирается из ярлыков, без ярлыков — только файл', () => {
+    expect(plusButtonTitle([{ title: 'Звук' }])).toBe('Прикрепить файл, звук…');
+    expect(plusButtonTitle([{ title: 'Видео' }, { title: 'Картинка' }])).toBe('Прикрепить файл, видео, картинка…');
     expect(plusButtonTitle([])).toBe('Прикрепить файл');
   });
 });

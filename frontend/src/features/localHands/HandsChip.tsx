@@ -1,11 +1,8 @@
-// Пилюля «Руки» в губе поля ввода (слот composer-chip) при включённой строке контекста:
-// строка контекста заменяет хост полос, а вместе с ним и полосу «Руки», поэтому статус и
-// «Стоп» переезжают сюда. Без флага вклад молчит — рисуется старая полоса.
+// Пилюля «Руки» в губе поля ввода (слот composer-chip): статус рук чата и «Стоп».
 
 import { useState, type MouseEvent } from 'react';
 import { Eye, Square } from 'lucide-react';
 import { C, FS, R, SP } from '../../lib/design';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { interruptSession } from '../../lib/signalr';
 import {
   HANDS_ANY_WINDOW_TEXT, handsBadgeStatus, handsProviderLabel, handsProviderVision, handsStripView, type HandsBadgeTone,
@@ -19,13 +16,12 @@ import { getHandsProject, getHandsSession, handsStripAvailable, useHandsStripVer
 const TONE_DOT: Record<HandsBadgeTone, string> = { success: C.success, warning: C.warning, neutral: C.textMuted };
 
 export function HandsChip({ ctx }: { ctx: ComposerChipCtx }) {
-  const on = useFeature(FLAGS.composerContextRow);
   useHandsStripVersion();
   const providers = useProviders();
   const [busy, setBusy] = useState(false);
   const [card, setCard] = useState<DOMRect | null>(null);
   const { projectId, sessionId, isMobile } = ctx;
-  if (!on || !sessionId || !handsStripAvailable({ projectId, sessionId })) return null;
+  if (!sessionId || !handsStripAvailable({ projectId, sessionId })) return null;
 
   const session = getHandsSession(sessionId);
   const status = handsBadgeStatus(session.state);

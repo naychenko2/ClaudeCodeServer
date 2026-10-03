@@ -6,7 +6,7 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
   matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
 }));
 
-const { createShortcuts } = await import('./ComposerStripHost');
+const { createShortcuts } = await import('./composerShortcuts');
 type Kinds = Parameters<typeof createShortcuts>[0];
 
 const run = vi.fn();
@@ -16,7 +16,7 @@ const o = { projectId: 'p', sessionId: 's1', isMobile: false };
 
 describe('createShortcuts', () => {
   it('вид с create даёт ярлык, вид без create — нет; запуск получает контекст чата', () => {
-    const list = createShortcuts([audio, image], [], o);
+    const list = createShortcuts([audio, image], o);
     expect(list.map(s => s.key)).toEqual(['create:image']);
     expect(list[0]).toMatchObject({ title: 'Картинка', hint: 'черновик' });
     list[0].onSelect();
@@ -24,10 +24,6 @@ describe('createShortcuts', () => {
   });
 
   it('без чата ярлыков нет: черновику некуда лечь', () => {
-    expect(createShortcuts([image], [], { ...o, sessionId: null })).toEqual([]);
-  });
-
-  it('ярлык, уже заведённый под тем же ключом, не дублируется', () => {
-    expect(createShortcuts([image], [{ key: 'create:image' }], o)).toEqual([]);
+    expect(createShortcuts([image], { ...o, sessionId: null })).toEqual([]);
   });
 });

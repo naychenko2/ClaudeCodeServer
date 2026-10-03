@@ -36,7 +36,7 @@ export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
 export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel, revealContextPanel, SLOT_CONTEXT_KIND } from '../subsystems/registryCore';
-export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions, PanelReturnTo } from '../subsystems/registryCore';
+export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions } from '../subsystems/registryCore';
 
 // ─── chatContext (ADR-023): контракты вида контекста хода ────────────────────
 export type {
@@ -69,7 +69,6 @@ export { followSelection, isCardPick, noteAgentPick, dropAgentPick, dropAgentPic
 export type { GenerationAgentPick } from '../genPanelFollow';
 export { noteGenDraft, clearGenDraft, useGenDraft } from '../genDrafts';
 export { followPeeked } from '../genPanelOpen';
-export { usePanelReturnTo, usePendingPreset, consumePreset, returnToOrigin, returnLabel } from '../genPanelReturn';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
@@ -196,12 +195,6 @@ export { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
 
 // ─── pages/workspace/panelStackState ─────────────────────────────────────────
 export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
-
-// ─── composerStrips ──────────────────────────────────────────────────────────
-// Владелец полосы над композером просит показать её в чате и снимает запрос
-// (правило старшинства — в самом сторе, ADR-019 решение 3); notifyComposer — сигнал
-// композеру от владельца режима поля ввода, submitComposerMode — отправка режима извне
-export { requestStrip, releaseStrip, holdStripRequests, notifyComposer, submitComposerMode } from '../composerStrips';
 
 // ─── chatFollow ──────────────────────────────────────────────────────────────
 // Запуск по действию человека прокручивает ленту чата вниз, как своё сообщение

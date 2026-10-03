@@ -1,11 +1,10 @@
 // Пункты контекстного меню «Файлов» для контекста хода (ADR-023, 2к-2): «Работать с этой» (вертикаль
 // превращает путь в объект — слот context-opener) и «В контекст» с ролью от вида основного объекта.
-// Живёт при флаге composer-context-row и открытом чате; без них пунктов нет, меню прежнее.
+// Живёт при открытом чате и связи с сервером; без них пунктов нет, меню прежнее.
 import type { ReactNode } from 'react';
 import { Check, Target } from 'lucide-react';
 import { MenuItem } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useActiveChatForContext } from '../../lib/chatContext';
 import { refOf, rolesFor } from '../../lib/chatContext/fill';
 import { roleLabel } from '../../lib/chatContext/roleLabels';
@@ -27,13 +26,12 @@ const AUDIO_FILE = /\.(wav|mp3|flac|ogg|m4a)$/i;
 const takesFile = (primaryKind: string, path: string) => AUDIO_FILE.test(path) === (primaryKind === 'audio');
 
 export function useFileContextMenu(projectId: string, path: string | null, online: boolean, close: () => void): { on: boolean; items: ReactNode[] } {
-  const flag = useFeature(FLAGS.composerContextRow);
   const chat = useActiveChatForContext();
   // Вход в контекст у каждой вертикали свой (картинка, звук): берём того, кто принимает этот файл
   const openers = useSlot<never, ContextOpenerApi>('context-opener');
   const opener = path ? openers.map(o => o.action).find(a => a?.isOpenable(path)) : undefined;
-  const state = useChatContext(flag && chat ? chat.sessionId : null);
-  const on = flag && !!chat && online;
+  const state = useChatContext(chat ? chat.sessionId : null);
+  const on = !!chat && online;
   if (!on || !chat || !path) return { on, items: [] };
   return { on, items: fileContextItems({ projectId, sessionId: chat.sessionId, path, state, opener, close }) };
 }

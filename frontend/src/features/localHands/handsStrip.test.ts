@@ -11,14 +11,10 @@ const store = new Map<string, string>();
   length: 0,
 } as Storage;
 
-import { __resetComposerStrips, getActiveStrip, getPendingFocus, selectStrip } from '../../lib/composerStrips';
-import { setAllFlags } from '../../lib/featureFlags';
-import { getSlotContributions, SLOT_COMPOSER_STRIP, type ComposerStripApi } from '../../lib/subsystems/registryCore';
 import type { Project, ServerMessage } from '../../types';
 import {
-  __resetHandsStrip, HANDS_STRIP, handsProjectInfo, handsStripAvailable, handsStatusLoaded, handsStripOnMessage, setHandsProject,
+  __resetHandsStrip, getHandsSession, handsProjectInfo, handsStripAvailable, handsStatusLoaded, handsStripOnMessage, setHandsProject,
 } from './handsStrip';
-import './handsStripManifest';
 
 const P = 'p1';
 const S = 's1';
@@ -26,94 +22,60 @@ const S = 's1';
 const hands = (state: string, reason?: string) =>
   ({ sessionId: S, type: 'hands_status', state, reason }) as ServerMessage;
 
-// Состав полос так, как его собирает хост: Git (встроенная) плюс доступные вклады реестра
-function available(): string[] {
-  const strips = getSlotContributions<never, ComposerStripApi>(SLOT_COMPOSER_STRIP)
-    .filter(c => c.action?.isAvailable?.({ projectId: P, sessionId: S }) ?? true)
-    .map(c => c.name!);
-  return ['git', ...strips];
-}
-const active = () => getActiveStrip(S, available());
+const avail = () => handsStripAvailable({ projectId: P, sessionId: S });
+const state = () => {
+  const st = getHandsSession(S).state;
+  return st.kind === 'status' ? st.status.state : st.kind;
+};
 
 beforeEach(() => {
   store.clear();
-  __resetComposerStrips();
   __resetHandsStrip();
   setHandsProject(P, { available: true, deviceName: 'Ноутбук' });
 });
 
-describe('полоса «Руки» — фокус', () => {
-  it('active → полоса запрошена', () => {
+describe('руки чата — состояние из событий', () => {
+  it('hands_status меняет состояние чата, первая отрисовка тоже', () => {
     handsStripOnMessage(S, hands('active'));
-    expect(active()).toBe(HANDS_STRIP);
-  });
-
-  it('первая отрисовка с active тоже запрашивает полосу', () => {
-    handsStatusLoaded(S, { state: 'active', reason: null, deviceName: 'Ноутбук' });
-    expect(active()).toBe(HANDS_STRIP);
-  });
-
-  it('stopped → полоса отпущена, возврат к прежней', () => {
-    handsStripOnMessage(S, hands('active'));
+    expect(state()).toBe('active');
     handsStripOnMessage(S, hands('stopped', 'tray-stop'));
-    expect(active()).toBe('git');
+    expect(state()).toBe('stopped');
   });
 
-  it('allowed, unavailable и конец хода отпускают полосу', () => {
-    for (const end of [hands('allowed'), hands('unavailable', 'busy'),
-      { sessionId: S, type: 'result', subtype: 'success', durationMs: 1, numTurns: 1 } as ServerMessage]) {
-      handsStripOnMessage(S, hands('active'));
-      expect(active()).toBe(HANDS_STRIP);
-      handsStripOnMessage(S, end);
-      expect(active()).toBe('git');
-    }
+  it('первая отрисовка с active: состояние выставлено', () => {
+    handsStatusLoaded(S, { state: 'active', reason: null, deviceName: 'Ноутбук' });
+    expect(state()).toBe('active');
   });
 
-  it('после ручного ухода повторный active полосу не навязывает, на «▾» точка', () => {
-    handsStripOnMessage(S, hands('active'));
-    selectStrip(S, 'git');
-    handsStripOnMessage(S, hands('active'));
-    expect(active()).toBe('git');
-    // Условие точки на «▾» в ComposerStripHost: pendingFocus && pendingFocus !== active
-    expect(getPendingFocus(S)).toBe(HANDS_STRIP);
-  });
-
-  it('событие чужого чата фокус не трогает', () => {
+  it('событие чужого чата состояние не трогает', () => {
     handsStripOnMessage(S, { ...hands('active'), sessionId: 'other' } as ServerMessage);
-    expect(active()).toBe('git');
+    expect(state()).not.toBe('active');
   });
 });
 
-describe('полоса «Руки» — доступность', () => {
-  it('флага нет: полоса есть при любом наборе флагов', () => {
-    setAllFlags({});
-    handsStripOnMessage(S, hands('active'));
-    expect(available()).toContain(HANDS_STRIP);
-    expect(active()).toBe(HANDS_STRIP);
-  });
-
-  it('при handsRefusal проекта полосы нет', () => {
+describe('руки чата — доступность пилюли', () => {
+  it('при handsRefusal проекта рук нет', () => {
     setHandsProject(P, { available: false, deviceName: 'Ноутбук' });
-    expect(available()).not.toContain(HANDS_STRIP);
+    expect(avail()).toBe(false);
   });
 
-  it('сервер ответил «у чата рук нет» — полосы нет', () => {
+  it('сервер ответил «у чата рук нет» — пилюли нет', () => {
     handsStatusLoaded(S, { state: null });
-    expect(available()).not.toContain(HANDS_STRIP);
+    expect(avail()).toBe(false);
   });
 
-  it('с флагом и доступными руками полоса есть — вклад каркаса не зависит от тумблера подсистем', () => {
-    expect(available()).toContain(HANDS_STRIP);
+  it('руки проекта доступны и сервер не отказал — пилюля есть', () => {
+    expect(avail()).toBe(true);
   });
 
-  it('личный чат вне проекта (projectId = null) — полосы нет, даже когда руки чата активны', () => {
+  it('личный чат вне проекта (projectId = null) — рук нет, даже когда руки чата активны', () => {
     handsStripOnMessage(S, hands('active'));
     expect(handsStripAvailable({ projectId: P, sessionId: S })).toBe(true);
     expect(handsStripAvailable({ projectId: null, sessionId: S })).toBe(false);
   });
 });
 
-// Проект в том виде, в каком его сейчас отдаёт GET /api/projects (прод 053af8f8): руки решают
+// Проект в том виде, в каком его сейчас отдаёт GET /api/projects: руки решают
 // тумблер handsEnabled и отказ матрицы handsRefusal. Ни флага local-hands, ни списка
 // провайдеров рук в ответе больше нет
 const dto = (patch: Partial<Project> = {}): Project => ({
@@ -123,32 +85,25 @@ const dto = (patch: Partial<Project> = {}): Project => ({
   ...patch,
 }) as unknown as Project;
 
-describe('полоса «Руки» — из DTO проекта', () => {
-  it('hands_status=active: полоса запрошена и видна без флага и провайдеров, stopped — ушла', () => {
-    setAllFlags({});
+describe('руки чата — из DTO проекта', () => {
+  it('hands_status=active: пилюля доступна без флага и провайдеров', () => {
     setHandsProject(P, handsProjectInfo(dto()));
     handsStripOnMessage(S, hands('active'));
-    expect(available()).toContain(HANDS_STRIP);
-    expect(active()).toBe(HANDS_STRIP);
-    handsStripOnMessage(S, hands('stopped', 'tray-stop'));
-    expect(active()).toBe('git');
+    expect(avail()).toBe(true);
+    expect(state()).toBe('active');
   });
 
-  it('руки включили тумблером в открытом чате: свежий DTO проекта открывает полосу', () => {
-    setAllFlags({});
+  it('руки включили тумблером в открытом чате: свежий DTO проекта открывает пилюлю', () => {
     // Чат открыт до тумблера: чаты видят проект с выключенными руками
     setHandsProject(P, handsProjectInfo(dto({ handsEnabled: false })));
-    handsStripOnMessage(S, hands('active'));
-    expect(active()).toBe('git');
+    expect(avail()).toBe(false);
     // Сохранение секции «Руки на устройстве» доносит свежий DTO до чатов (App → WorkspacePage)
     setHandsProject(P, handsProjectInfo(dto()));
-    handsStripOnMessage(S, hands('active'));
-    expect(active()).toBe(HANDS_STRIP);
+    expect(avail()).toBe(true);
   });
 
-  it('отказ матрицы при включённом тумблере — полосы нет', () => {
+  it('отказ матрицы при включённом тумблере — пилюли нет', () => {
     setHandsProject(P, handsProjectInfo(dto({ handsRefusal: 'Агент устройства устарел' })));
-    handsStripOnMessage(S, hands('active'));
-    expect(available()).not.toContain(HANDS_STRIP);
+    expect(avail()).toBe(false);
   });
 });

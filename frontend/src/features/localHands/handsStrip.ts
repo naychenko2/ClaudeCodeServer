@@ -1,23 +1,16 @@
-// Полоса «Руки» над композером (реестр composer-strip, ADR-016 §7): стор состояния рук
-// чатов и правило фокуса. Компоненты только рисуют и подписываются — логика здесь, под
-// юнит-тестом handsStrip.test.ts.
+// Руки в чате (ADR-016 §7): стор состояния рук чатов для пилюли «Руки» в губе поля ввода. Компоненты
+// только рисуют и подписываются — логика здесь, под юнит-тестом handsStrip.test.ts.
 //
-// Источник состояния — тот же, что был у бейджа: первая отрисовка GET
-// /api/sessions/{id}/hands-status, дальше события hands_status. Питает стор
-// LocalHandsStripFeed, смонтированный в чате, пока тот открыт: сама полоса рисуется
-// только активной и не может сама себя запросить.
+// Источник состояния — первая отрисовка GET /api/sessions/{id}/hands-status, дальше события
+// hands_status. Питает стор LocalHandsStripFeed, смонтированный в чате, пока тот открыт.
 
 import { useSyncExternalStore } from 'react';
-import { getPendingFocus, releaseStrip, requestStrip } from '../../lib/composerStrips';
-import { FLAGS, getFlag } from '../../lib/featureFlags';
 import {
-  HANDS_BADGE_LOADING, HandsChatState, handsEventReceived, handsInitialFailed, handsInitialLoaded,
+  HANDS_BADGE_LOADING, handsEventReceived, handsInitialFailed, handsInitialLoaded,
   type HandsBadgeState,
 } from '../../lib/localHands';
 import { isFeatureAvailable } from '../../lib/projectCapabilities';
 import { ProjectFeature, type Project, type ServerMessage } from '../../types';
-
-export const HANDS_STRIP = 'hands';
 
 // Руки проекта глазами полосы: available — тумблер проекта включён и матрица их пускает
 // (handsRefusal == null)
@@ -71,52 +64,23 @@ export function setHandsSessionProvider(sessionId: string, provider: string | nu
   patchSession(sessionId, { provider });
 }
 
-// ---------- фокус ----------
-
-// Руки взяли ход → полоса просит фокус; любое другое состояние — отпускает. Человек
-// сам ушёл с полосы — запрос в силе, но повторный active его не освежает: иначе каждое
-// событие хода навязывало бы полосу заново вопреки ручному выбору (правило старшинства
-// из docs/design/composer-strips-and-modes.md). Новый ход после отпуска просит заново.
-export function applyHandsFocus(sessionId: string, state: string | null) {
-  // Строка контекста заменила хост полос: просить фокус полосы некому, руки живут пилюлей в губе поля
-  if (getFlag(FLAGS.composerContextRow)) return;
-  if (state === HandsChatState.Active) {
-    if (getPendingFocus(sessionId) !== HANDS_STRIP) requestStrip(sessionId, HANDS_STRIP);
-  } else {
-    releaseStrip(sessionId, HANDS_STRIP);
-  }
-}
-
 // ---------- события ----------
 
 export function handsStatusLoaded(
   sessionId: string,
   view: { state: string | null; reason?: string | null; deviceName?: string | null },
 ) {
-  const prev = getHandsSession(sessionId).state;
-  const next = handsInitialLoaded(prev, view);
-  patchSession(sessionId, { state: next });
-  // Событие успело раньше ответа — фокус уже выставило оно
-  if (prev.kind !== 'status') applyHandsFocus(sessionId, next.kind === 'status' ? next.status.state : null);
+  patchSession(sessionId, { state: handsInitialLoaded(getHandsSession(sessionId).state, view) });
 }
 
 export function handsStatusFailed(sessionId: string) {
   patchSession(sessionId, { state: handsInitialFailed(getHandsSession(sessionId).state) });
 }
 
-// Конец хода: руки ход больше не держат, даже если отчёт устройства потерялся
-const TURN_END_STATUSES = new Set(['finished', 'error', 'orphaned']);
-function isTurnEnd(msg: ServerMessage): boolean {
-  return msg.type === 'result' || (msg.type === 'status_changed' && TURN_END_STATUSES.has(msg.status));
-}
-
 export function handsStripOnMessage(sessionId: string, msg: ServerMessage) {
   if (msg.sessionId !== sessionId) return;
   if (msg.type === 'hands_status') {
     patchSession(sessionId, { state: handsEventReceived({ state: msg.state, deviceName: msg.deviceName, reason: msg.reason }) });
-    applyHandsFocus(sessionId, msg.state);
-  } else if (isTurnEnd(msg)) {
-    releaseStrip(sessionId, HANDS_STRIP);
   }
 }
 

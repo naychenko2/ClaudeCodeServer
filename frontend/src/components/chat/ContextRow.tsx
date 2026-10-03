@@ -1,6 +1,5 @@
 // Строка контекста хода: связка стора контекста (lib/chatContext) и git-чипа с отрисовкой
-// ContextRowView. Рисуется вместо хоста полос над композером, когда включён флаг
-// composer-context-row. Открытость правой панели сюда не приходит: строка от неё не зависит.
+// ContextRowView. Открытость правой панели сюда не приходит: строка от неё не зависит.
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { File as FileIcon } from 'lucide-react';
 import type { Project, Session } from '../../types';

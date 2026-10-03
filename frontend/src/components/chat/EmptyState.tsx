@@ -7,7 +7,7 @@ import { personaLabel, personaTitleLines } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { useContextPersona } from '../../lib/contextPersona';
 import { Button } from '../ui';
-import { useStripShortcuts } from './ComposerStripHost';
+import { useCreateShortcuts } from './composerShortcuts';
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
 // Внизу — настройка будущего чата (модель, усилие, время жизни, теги), пока не отправлено первое сообщение.
@@ -32,7 +32,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
 }) {
   const asstName = useAssistantName();
   // Ярлыки полос над композером («Голос», «Музыка» у «Звука») — кнопками под приветствием
-  const shortcuts = useStripShortcuts(project?.id ?? null, session?.id ?? null);
+  const shortcuts = useCreateShortcuts(project?.id ?? null, session?.id ?? null);
   // Лицо пустого чата: аватар персоны чата (или дефолт-персоны контекста);
   // нейтральный favicon — только когда персоны нет
   const facePersona = useContextPersona({

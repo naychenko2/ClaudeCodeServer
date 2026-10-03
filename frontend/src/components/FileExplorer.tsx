@@ -871,7 +871,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // в строке нет намеренно — кластер справа и так плотный, действие живёт в меню
   const ctxEntry = contextMenu && !contextMenu.entry.isDirectory ? contextMenu.entry : null;
   const chatContextBtn = useContextButton('file', ctxEntry?.path ?? null, ctxEntry?.name);
-  // Контекст хода (ADR-023, флаг composer-context-row): «Работать с этой» и «В контекст» занимают место
+  // Контекст хода (ADR-023): «Работать с этой» и «В контекст» занимают место
   // прежних «В контекст чата» и «Редактировать картинку»
   const fileCtx = useFileContextMenu(project.id, ctxEntry?.path ?? null, online, () => setContextMenu(null));
 

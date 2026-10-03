@@ -1,7 +1,7 @@
-import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react';
+import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
 import type { Project } from '../types';
 import { canRunTurn } from '../lib/projectCapabilities';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, MessageSquare, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -34,21 +34,19 @@ import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
 import { Button, Chip, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
-import { plusButtonTitle, useStripShortcuts } from './chat/ComposerStripHost';
-import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
-import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
-import { getComposerStripsVersion, getShownStrip, registerComposerSubmit, subscribeComposerStrips } from '../lib/composerStrips';
-import { composerModeMemory, modeDraftText, modesForStrip, modeSubmitButton, nextComposerMode, nextModeDraft, nextPrefill, type ModeDraftState, type PrefillState } from '../lib/composerModes';
+import { plusButtonTitle, useCreateShortcuts } from './chat/composerShortcuts';
+import { SLOT_COMPOSER_CHIP, useSlot } from '../lib/subsystems/registry';
+import type { ComposerChipCtx } from '../lib/subsystems/registry';
+import { modeDraftText, modeSubmitButton, nextModeDraft, nextPrefill, type ModeDraftState, type PrefillState } from '../lib/composerActionMemory';
 import { getGenDraftText, setGenDraftText } from '../lib/genDrafts';
 import { ComposerActionRow } from './chat/ComposerActionRow';
-import { ACTION_MODE_ID, actionComposerMode } from '../lib/chatContext/actionMode';
+import { ACTION_MODE_ID, actionComposerMode, type ActionModeCtx } from '../lib/chatContext/actionMode';
 import { rememberAction, takePreset, useActionMemoryVersion } from '../lib/chatContext/actionMemory';
 import { getKindApi } from '../lib/chatContext/registry';
 import { composerSurfaceFor } from '../lib/chatContext/surface';
 import { useChatContext } from '../lib/chatContext/store';
 import { useActionRun } from '../lib/chatContext/useActionRun';
 import type { ActionPreset, ContextKindCtx } from '../lib/chatContext/types';
-import { FLAGS, useFeature } from '../lib/featureFlags';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -612,20 +610,14 @@ export function Composer({
   useEffect(() => {
     setDraft(sessionId, text);
   }, [sessionId, text]);
-  // Режимы поля ввода от подсистем (слот composer-mode, например «Картинка»): текст режима
-  // уходит мимо агента через onSubmit вклада и хранится отдельно от черновика чата.
-  // Доступность режима зависит от состояния владельца; пересчитываемся по сигналу стора
-  // полос: владелец режима и полосы — одна подсистема, её выбор проходит через этот стор
-  useSyncExternalStore(subscribeComposerStrips, getComposerStripsVersion, getComposerStripsVersion);
-  const modeCtx: ComposerModeCtx = { projectId: project?.id ?? null, sessionId };
-  // Мост (ADR-023 §Д2): при флаге и виде с действиями поле рисует чипы действий, а слот composer-mode для
-  // этого объекта не читается; без действий или без флага — прежний сегмент «Чат | X»
-  const contextRowOn = useFeature(FLAGS.composerContextRow);
-  const turnContext = useChatContext(contextRowOn ? sessionId : null);
+  // Режим поля ввода — выбранное run-действие основного объекта контекста («Нарисовать», «Песня»):
+  // его текст уходит мимо агента через onSubmit и хранится отдельно от черновика чата
+  const modeCtx: ActionModeCtx = { projectId: project?.id ?? null, sessionId };
+  const turnContext = useChatContext(sessionId);
   useActionMemoryVersion();
   const kindCtx: ContextKindCtx = { projectId: project?.id ?? null, sessionId, isMobile: !!isMobile };
   const surface = composerSurfaceFor({
-    flag: contextRowOn, primary: turnContext.primary, refs: turnContext.refs,
+    primary: turnContext.primary, refs: turnContext.refs,
     api: turnContext.primary ? getKindApi(turnContext.primary.kind) : null, ctx: kindCtx,
   });
   const actionsOn = surface.surface === 'actions';
@@ -633,7 +625,7 @@ export function Composer({
   const kindNote = actionsOn && !isMobile && turnContext.primary
     ? getKindApi(turnContext.primary.kind)?.note?.(kindCtx, turnContext.primary) ?? null : null;
   // Одна точка запуска с панелью «Контекст»: подпись, цена и run читаются из useActionRun
-  const actionRun = useActionRun(contextRowOn ? sessionId : null, kindCtx);
+  const actionRun = useActionRun(sessionId, kindCtx);
   // Предвыбор вертикали применяет один хост поля, и вне рендера: затравка текста уходит в поле режима
   const [preset, setPreset] = useState<{ key: string; value: ActionPreset } | null>(null);
   const actionsKey = actionsOn ? surface.objectKey : null;
@@ -648,45 +640,20 @@ export function Composer({
   const actionMode = actionsOn && surface.action && actionRun.action
     ? actionComposerMode({ action: surface.action, run: actionRun, objectKey: surface.objectKey, preset })
     : null;
-  const availableModes = useSlot<ComposerModeCtx, ComposerModeApi>(SLOT_COMPOSER_MODE)
-    .filter(c => !actionsOn && c.name && c.action && c.action.isAvailable(modeCtx));
-  // Режим полосы виден только над ней: «Картинки» не предлагают «Звук» и наоборот
-  const slotModes = actionsOn
-    ? (actionMode ? [{ name: ACTION_MODE_ID, action: actionMode }] : [])
-    : modesForStrip(availableModes, getShownStrip(sessionId));
   const slotChips = useSlot<ComposerChipCtx>(SLOT_COMPOSER_CHIP);
-  // Ярлыки полос («Голос», «Музыка») превращают «＋» в меню; без них «＋» прикрепляет сразу
-  const stripShortcuts = useStripShortcuts(project?.id ?? null, sessionId);
+  // Ярлыки «Картинка», «Звук», «Видео» (create видов контекста) превращают «＋» в меню; без них «＋» прикрепляет сразу
+  const stripShortcuts = useCreateShortcuts(project?.id ?? null, sessionId);
   const [plusMenu, setPlusMenu] = useState<DOMRect | null>(null);
-  // Меню с якорем само Esc не ловит — как у переключателя полос
+  // Меню с якорем само Esc не ловит
   useEffect(() => {
     if (!plusMenu) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlusMenu(null); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [plusMenu]);
-  const modeMemory = composerModeMemory(sessionId);
-  const [modeIdState, setModeIdState] = useState<string | null>(() => modeMemory.modeId);
-  const setModeId = (id: string | null) => { modeMemory.modeId = id; setModeIdState(id); };
-  // Чипы действий владеют режимом поля: выбранное run-действие — режим, «Чат» — его отсутствие
-  const modeId = actionsOn ? (actionMode ? ACTION_MODE_ID : null) : modeIdState;
-  // Полоса сменилась на чужую — поле уходит в «Чат», а не ждёт возврата полосы в режиме
-  // Признак считаем в рендере (slotModes пересобирается каждый раз), а эффект зависит только от него
-  const modeHiddenByStrip = !!modeId && availableModes.some(c => c.name === modeId) && !slotModes.some(c => c.name === modeId);
-  useEffect(() => {
-    if (modeHiddenByStrip) setModeId(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- сбрасываем только на смену признака
-  }, [modeHiddenByStrip]);
-  // Самовключение режима по поводу от владельца (черновик, «Редактировать»): считаем по
-  // состоянию, а не по клику — фокус картинки приходит и от агента, и после перезагрузки
-  const autoMode = nextComposerMode(slotModes, modeCtx, modeMemory.seen, modeId);
-  useEffect(() => {
-    modeMemory.seen = autoMode.seen;
-    if (autoMode.modeId !== modeId) setModeId(autoMode.modeId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- переключаемся только на новый ключ
-  }, [autoMode.key]);
-  // Режим пропал (условие стало ложным) — поле само возвращается в «Чат»
-  const activeMode = slotModes.find(c => c.name === modeId)?.action ?? null;
+  // Выбранное run-действие — режим поля, «Чат» — его отсутствие
+  const modeId = actionMode ? ACTION_MODE_ID : null;
+  const activeMode = actionMode;
   const [modeText, setModeText] = useState('');
   useEffect(() => {
     activeMode?.onTextChange?.(modeCtx, modeText);
@@ -1222,19 +1189,6 @@ export function Composer({
     if (overrideText === undefined) resetInput();
     return true;
   };
-
-  // Внешний запуск режима поля ввода (низ панели «Картинки», submitComposerMode): тот же
-  // путь, что Enter. Пустое поле или другой режим — включаем режим и ставим фокус в поле
-  const submitModeRef = useRef<(mode: string) => void>(() => {});
-  useLayoutEffect(() => {
-    submitModeRef.current = mode => {
-      if (!slotModes.some(c => c.name === mode)) return;
-      if (modeId === mode && modeText.trim()) { void handleSend(); return; }
-      setModeId(mode);
-      textareaRef.current?.focus();
-    };
-  });
-  useEffect(() => registerComposerSubmit(sessionId, m => submitModeRef.current(m)), [sessionId]);
 
   // Хвост выхода из разговора. ДВЕ разновидности — прерывание хода в них НЕ одно и то же:
   // полный exitTalk — «человек явно сказал прекрати» (кнопка, голосовое «стоп»): прерываем
@@ -1838,28 +1792,6 @@ export function Composer({
     </div>
   );
 
-  // Сегмент режимов поля: в «Чате» — слева от поля, в режиме подсистемы («Картинка») —
-  // в нижней строке действий: поле тогда на всю ширину, три строки как в прототипе полос
-  const modesSeg = !actionsOn && slotModes.length > 0 && (
-        // Сегмент «Чат | …» слева поля. По макету (.mswitch) это радио-группа из
-        // двух кнопок — она появляется только при выбранной картинке, иначе первая
-        // кнопка «Чат» рисуется одна. Здесь slotModes.length > 0 уже отфильтровано
-        // isAvailable, поэтому «Картинка» в списке означает картинка выбрана — рисуем
-        // полный сегмент, иначе (например, другие подсистемы заведут свои режимы) —
-        // оставляем только кнопку «Чат», чтобы высота композера не менялась
-        <div data-composer-modes="" style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginRight: SP.xs }}>
-          <IconButton size="sm" active={!activeMode} title={`Чат — сообщение ${asstName}`} ariaLabel="Режим «Чат»"
-            onClick={() => setModeId(null)}>
-            <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-          </IconButton>
-          {slotModes.map(m => (
-            <IconButton key={m.name} size="sm" active={modeId === m.name} title={m.action!.title} ariaLabel={`Режим «${m.action!.title}»`}
-              onClick={() => { setModeId(m.name!); textareaRef.current?.focus(); }}>
-              {m.action!.icon}
-            </IconButton>
-          ))}
-        </div>
-      );
   const inputArea = talkActive ? loopArea : isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
@@ -1867,10 +1799,7 @@ export function Composer({
       <Waveform />
     </div>
   ) : (
-    // Сегмент режимов — снаружи позиционированной обёртки: ghost-слой подсказки
-    // (left: 0) иначе ложился поверх иконок «Чат | Картинка»
     <div style={{ flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
-    {!activeMode && modesSeg}
     {/* Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
         (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно) */}
     <div data-composer-input="" style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
@@ -2714,10 +2643,9 @@ export function Composer({
                 : <>{phrasesButton}{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
         </div>
       </div>
-      {/* Режим подсистемы: третья строка — сегмент режимов слева, запуск справа */}
+      {/* Режим действия: третья строка — метка вида слева, запуск справа */}
       {activeMode && !talkActive && !isListening && (
         <div data-composer-mode-bar="" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: `0 ${SP.xxs}px ${SP.xxs}px` }}>
-          {modesSeg}
           {kindNote && (
             <span data-composer-note="" style={{ display: 'inline-flex', minWidth: 0 }}>
               <Chip title={kindNote.hint} onRemove={kindNote.clear} maxW={220}>{kindNote.label}</Chip>

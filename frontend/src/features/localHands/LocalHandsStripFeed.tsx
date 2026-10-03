@@ -3,14 +3,14 @@ import { onMessage } from '../../lib/signalr';
 import { api } from '../../lib/api';
 import type { Project, Session } from '../../types';
 import {
-  applyHandsFocus, handsProjectInfo, handsStatusFailed, handsStatusLoaded, handsStripOnMessage, resetHandsSession,
+  handsProjectInfo, handsStatusFailed, handsStatusLoaded, handsStripOnMessage, resetHandsSession,
   setHandsProject, setHandsSessionProvider,
 } from './handsStrip';
-import { watchHandsAvailability } from './handsStripManifest';
+// Побочный эффект: модуль регистрирует вклад «Руки» (пилюля composer-chip) — питатель его и подключает
+import './handsStripManifest';
 
-// Питатель полосы «Руки» (ADR-016 §7): живёт в чате, пока тот открыт, и ничего не рисует.
-// Полоса рисуется только активной, поэтому запросить фокус сама не может — это делает он:
-// первая отрисовка — GET /api/sessions/{id}/hands-status, дальше события hands_status.
+// Питатель состояния рук (ADR-016 §7): живёт в чате, пока тот открыт, и ничего не рисует.
+// Первая отрисовка — GET /api/sessions/{id}/hands-status, дальше события hands_status.
 export function LocalHandsStripFeed({ session, project }: { session: Session; project: Project }) {
   const { available, deviceName } = handsProjectInfo(project);
 
@@ -20,11 +20,8 @@ export function LocalHandsStripFeed({ session, project }: { session: Session; pr
 
   useEffect(() => { setHandsSessionProvider(session.id, session.provider ?? null); }, [session.id, session.provider]);
 
-  useEffect(() => watchHandsAvailability(project.id, session.id), [project.id, session.id]);
-
   useEffect(() => {
-    // Руки выключили — полоса не держит фокус
-    if (!available) { applyHandsFocus(session.id, null); return; }
+    if (!available) return;
     resetHandsSession(session.id);
     let alive = true;
     // Подписка раньше запроса: событие между ответом и подпиской не теряется

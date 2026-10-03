@@ -129,12 +129,12 @@ describe('подписка на ход запуска и carry', () => {
     await r.run('x');
     emit({ result: { summary: 'готово' } });
     expect(off).toHaveBeenCalledTimes(1);
-    // Новый запуск и ошибка хода: выбор за версией не едет — берётся умолчание
+    // Новый запуск и ошибка хода: выбор за версией не едет — берётся умолчание.
+    // Выбор «Изменить» ставится ДО сборки запуска, иначе carry не получает действия edit
     resetAllRuns(); resetActionMemory();
-    const r2 = build(apiOf({ launch: vi.fn(async () => ({ id: 'j', watch: (on: typeof emit) => { emit = on; return off; } })) as never }, [stems, edit]));
-    r2.setParam('stemSet', 'v');
-    expect(resolveAction('s1', objectKey(primary()), 'human', [stems, edit]).actionId).toBe('stems');
     rememberChoiceEdit();
+    const r2 = build(apiOf({ launch: vi.fn(async () => ({ id: 'j', watch: (on: typeof emit) => { emit = on; return off; } })) as never }, [stems, edit]));
+    expect(r2.action?.id).toBe('edit');
     await r2.run('x');
     emit({ error: 'сбой' });
     const v2 = primary({ threadId: 't', versionId: 'v2' });

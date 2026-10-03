@@ -80,8 +80,9 @@ public sealed class VideoContextKind(
         if (Text(item.Ref, SceneKey) is not { } sceneId || Find(scope, sceneId) is not { } scene)
             return new ContextItemSummary("сцена недоступна", null, null, true);
         var current = scene.Versions.FirstOrDefault(v => v.VersionId == scene.CurrentVersionId);
-        // «сцена 3 · утро-в-горах»: номер строки в фильме и имя фильма; вне фильма — имя сцены
-        var label = scene.FilmRef is { } film ? $"сцена {film.Position + 1} · {FilmName(film.Path)}" : scene.Name;
+        // «сцена 3 · утро-в-горах»: номер строки в фильме и имя фильма; вне фильма — имя сцены, у неснятой — «Сцена 1 · черновик»
+        var label = scene.FilmRef is { } film ? $"сцена {film.Position + 1} · {FilmName(film.Path)}"
+            : scene.Versions.Count == 0 ? $"{scene.Name} · черновик" : scene.Name;
         return new ContextItemSummary(label, current is null ? null : $"v{current.Number}", null, false);
     }
 

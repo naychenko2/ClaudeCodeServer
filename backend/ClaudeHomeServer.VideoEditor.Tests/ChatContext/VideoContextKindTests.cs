@@ -87,7 +87,7 @@ public sealed class VideoContextKindTests : IDisposable
     {
         var id = AddScene();
         var item = Item("video-scene", SceneRef(id));
-        _kind.Describe(Scope, item).Label.Should().Be("Сцена 1");
+        _kind.Describe(Scope, item).Label.Should().Be("Сцена 1 · черновик");
 
         _store.SetFilmRef(Owner, Chat, id, new VideoFilmRefDto("video/утро-в-горах/утро-в-горах.film", 2));
 

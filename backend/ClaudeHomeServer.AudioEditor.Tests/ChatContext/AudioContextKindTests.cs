@@ -74,6 +74,14 @@ public sealed class AudioContextKindTests : IDisposable
     }
 
     [Fact]
+    public void Describe_черновик_без_файла_подписан_как_черновик()
+    {
+        var id = _threads.Open(Owner, Chat, null, "music", null).Thread!.Id;
+        _kind.Describe(Scope, new ContextItem("i", "audio", Ref(id), null, ContextActor.Human, DateTime.UtcNow))
+            .Label.Should().Be("Новый звук · черновик");
+    }
+
+    [Fact]
     public void Засев_отдаёт_фокус_нити_и_ничего_без_фокуса()
     {
         _kind.SeedPrimary(Scope).Should().BeNull();

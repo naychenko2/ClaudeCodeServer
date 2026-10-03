@@ -93,7 +93,7 @@ public class ChatContextControllerTests : IDisposable
         var primary = body.GetProperty("primary");
         primary.GetProperty("kind").GetString().Should().Be("image", "картинка важнее звука");
         primary.GetProperty("ref").GetProperty("threadId").GetString().Should().Be(imageId);
-        primary.GetProperty("label").GetString().Should().Be("новая картинка");
+        primary.GetProperty("label").GetString().Should().Be("Новая картинка · черновик");
         primary.GetProperty("missing").GetBoolean().Should().BeFalse();
         File.Exists(StateFile(chat)).Should().BeFalse("файл появляется на первой записи, а не на чтении");
     }

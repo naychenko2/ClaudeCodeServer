@@ -10,7 +10,7 @@
 //
 // Раскладки: десктоп — горизонтальная полоска; мобиль — компактная карточка.
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -20,6 +20,7 @@ import { usePersonas, personaLabel } from '../../lib/personas';
 import { makeLead } from '../personas/TeamCommandCenter';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
+import { setFabObstacle } from '../../lib/ai/fabObstacle';
 
 // Ключи отказа — РАЗДЕЛЬНЫЕ для двух вариантов карточки: «познакомиться» и
 // «разложить каркас» — отдельные намерения, повторно показывать должны независимо.
@@ -106,6 +107,14 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
     if (!p) return;
     void makeLead(p);
   }, [team]);
+  // Мобильная карточка прибита к низу списка, её кнопки во всю ширину и занимают угол
+  // круглешка AI — публикуем её препятствием, и кнопка поднимается над карточкой.
+  // Ref-колбэк: карточка монтируется и уходит вместе с вариантом, null приходит сам
+  const obstacleReleaseRef = useRef<(() => void) | null>(null);
+  const obstacleRef = useCallback((el: HTMLDivElement | null) => {
+    obstacleReleaseRef.current?.();
+    obstacleReleaseRef.current = el ? setFabObstacle(el, 'intro-card') : null;
+  }, []);
 
   if (!showIntro && !showScaffold) return null;
 
@@ -122,7 +131,7 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
   return (
     <>
       {isMobile ? (
-        <div style={mobileCard}>
+        <div ref={obstacleRef} style={mobileCard}>
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
             <Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />
             <div style={mobileTitle}>{title}</div>

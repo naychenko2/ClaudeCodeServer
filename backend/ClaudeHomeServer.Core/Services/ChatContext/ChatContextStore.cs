@@ -54,7 +54,9 @@ public sealed class ChatContextStore(
                 return current.Primary is null ? (fresh ? current with { } : current) : current with { Primary = null };
             RequireKnown(item.Kind);
             if (current.Primary is { } p && SameObject(p, item))
-                return fresh ? current with { Primary = item with { Role = null } } : current;
+                // Тот же объект, но выбрал другой актор: человек подтвердил объект агента — By становится
+                // Human и ✦ гаснет (ADR-023 §2.4); так же обновляется Human → Agent
+                return fresh || p.By != item.By ? current with { Primary = item with { Role = null } } : current;
             return current with
             {
                 Primary = item with { Role = null },

@@ -93,6 +93,30 @@ public class ChatContextStoreTests : IDisposable
     }
 
     [Fact]
+    public void SetPrimary_SameObjectChosenByHuman_TurnsAgentIntoHuman()
+    {
+        var store = Store();
+        store.SetPrimary("u1", "s1", Item("image", "pic", by: ContextActor.Agent), null);
+
+        var state = store.SetPrimary("u1", "s1", Item("image", "pic", by: ContextActor.Human), null);
+
+        state.Primary!.By.Should().Be(ContextActor.Human);
+        state.Revision.Should().Be(2);
+        _notifier.Calls.Select(c => c.Revision).Should().Equal(1, 2);
+        store.Get("u1", "s1").Primary!.By.Should().Be(ContextActor.Human);
+    }
+
+    [Fact]
+    public void SetPrimary_SameObjectSameActor_IsNoop()
+    {
+        var store = Store();
+        var before = store.SetPrimary("u1", "s1", Item("image", "pic"), null);
+        var after = store.SetPrimary("u1", "s1", Item("image", "pic"), null);
+        after.Revision.Should().Be(before.Revision);
+        _notifier.Calls.Should().HaveCount(1);
+    }
+
+    [Fact]
     public void AddRef_ObjectAlreadyPrimary_IsNoop()
     {
         var store = Store();

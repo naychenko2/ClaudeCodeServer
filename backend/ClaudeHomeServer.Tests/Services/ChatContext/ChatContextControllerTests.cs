@@ -199,6 +199,9 @@ public class ChatContextControllerTests : IDisposable
         (await Error(await _client.PostAsJsonAsync($"{Ctx(chat)}/refs",
                 new { kind = "image", @ref = new { threadId = imageId }, role = "style" })))
             .Should().Be("role_not_accepted");
+
+        // Validate стоит ДО записи: ни один из отказов не создал файл и не поднял ревизию
+        (await Json(await _client.GetAsync(Ctx(chat)))).GetProperty("revision").GetInt64().Should().Be(0);
     }
 
     [Fact]

@@ -3,6 +3,7 @@
 const ROLE_LABELS: Readonly<Record<string, string>> = {
   style: 'образец стиля',
   object: 'объект',
+  face: 'лицо',
   char: 'персонаж',
   character: 'персонаж',
   frameA: 'кадр A',

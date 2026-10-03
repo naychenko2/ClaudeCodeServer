@@ -107,6 +107,9 @@ export interface ExecutorListModel {
   onChange: (id: string) => void;
 }
 
+// Роль, под которой объект входит референсом в основной (подпись — для меню «В контекст ▾»)
+export interface ContextRole { role: string; label: string }
+
 export interface ContextKindApi {
   // Те же строки, что у бэкенд-провайдера
   kinds: readonly string[];
@@ -122,6 +125,10 @@ export interface ContextKindApi {
   // отдавать дешёвую чистую модель (строки каталога кэшируются у вертикали), а не строить её заново
   executors?: (ctx: ContextKindCtx, actionId: string) => ExecutorListModel | null;
   params?: (ctx: ContextKindCtx, actionId: string) => readonly LaunchParam[];
+  // Роли, под которыми объект вида candidateKind входит референсом в основной объект ЭТОГО вида. Зеркало
+  // AcceptedRefs провайдера на бэкенде (он и принимает роль: чужая — 400 role_not_accepted). Пусто —
+  // основной такой референс не берёт; одна роль — «В контекст» без вопроса
+  refRoles?: (ctx: ContextKindCtx, primary: ChatContextPrimary, candidateKind: string) => readonly ContextRole[];
   // Вход «＋» композера и empty-state ленты
   create?: { title: string; icon: ReactNode; run: (ctx: ContextKindCtx) => void };
   // Запуск действия: op + params + contextRevision; входы бэкенд читает из стора по ревизии

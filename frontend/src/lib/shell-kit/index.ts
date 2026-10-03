@@ -48,6 +48,9 @@ export {
   useChatContext, getChatContextState, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
 } from '../chatContext/store';
 export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
+export { refOf, rolesFor } from '../chatContext/fill';
+export type { ContextCandidate } from '../chatContext/fill';
+export type { ContextRole } from '../chatContext/types';
 export { notifyKindChanged } from '../chatContext/actionRun';
 export { setContextReturn, useContextReturn, clearContextReturn } from '../chatContext/contextReturn';
 
@@ -211,6 +214,8 @@ export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
 // Общий каркас панели генерации: «Картинки» и «Звук» видят хост только через кит (ADR-021 §3)
 export { GenerationPanel, GEN_PANEL_W, useGenerationSheet } from '../../components/generation/GenerationPanel';
 export type { GenerationFoot, GenerationPanelView } from '../../components/generation/GenerationPanel';
+// «В контекст ▾» (ADR-023, 2к-2): кнопка наполнения контекста с выбором роли
+export { ContextAddButton } from '../../components/generation/ContextAddButton';
 // Общий слой панелей: переключатель режима, меню выбора источника, «Вернуть» после снятия выбора
 export { GenerationModeSwitch } from '../../components/generation/GenerationModeSwitch';
 export type { GenerationModeOption } from '../../components/generation/GenerationModeSwitch';

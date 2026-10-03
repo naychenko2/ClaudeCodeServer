@@ -117,6 +117,7 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
     ...(upload ? [{ id: 'computer', label: 'С компьютера', hint: upload.hint, run: (at: DOMRect | null) => { menuAt.current = at; fileInput.current?.click(); } }] : []),
     ...(project ? [{ id: 'files', label: 'Из файлов проекта', hint: 'выберите файл в «Файлах» и нажмите «В контекст»', run: () => { revealWorkspacePanel('files'); } }] : []),
     ...(project ? [{ id: 'characters', label: 'Из «Персонажей»', hint: 'ролью «персонаж»', run: () => { revealWorkspacePanel('characters'); } }] : []),
+    ...(project ? [{ id: 'voices', label: 'Из «Голосов»', hint: 'ролью «голос»', run: () => { revealWorkspacePanel('voices'); } }] : []),
   ];
 
   return (

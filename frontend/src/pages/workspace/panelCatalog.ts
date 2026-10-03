@@ -17,7 +17,7 @@
 import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb, DraftingCompass, Image as ImageIcon, AudioLines, SlidersHorizontal,
+  TableOfContents, Lightbulb, DraftingCompass, Image as ImageIcon, AudioLines, SlidersHorizontal, Mic,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
@@ -41,6 +41,8 @@ export const PANEL_KEYS = [
   // Панели подсистем (слот workspace-panel-def): ключ зарезервирован здесь, тело и
   // доступность — у подсистемы; выключена подсистема — нет содержимого, нет и кнопки
   'characters',
+  // «Голоса» редактора звука: библиотека voices/ проекта отдельной панелью (при флаге composer-context-row)
+  'voices',
   // Панели генерации (ADR-021 §3): «Картинки» и «Звук» — вклады вертикалей тем же
   // слотом; справа одновременно живёт только одна из них (см. EXCLUSIVE_PANEL_SETS)
   'images', 'sound',
@@ -140,6 +142,8 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   toc:      { title: 'Оглавление', Icon: TableOfContents },
   // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
   characters: { title: 'Персонажи', Icon: Contact },
+  // Голоса редактора звука (модуль audio-editor): библиотека voices/ проекта
+  voices: { title: 'Голоса', Icon: Mic },
   // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные
   images:   { title: 'Картинки',  Icon: ImageIcon },
   sound:    { title: 'Звук',      Icon: AudioLines },
@@ -182,6 +186,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   context: 'right',
   toc: 'right',
   characters: 'right',
+  voices: 'right',
   images: 'right',
   sound: 'right',
   chatContext: 'right',
@@ -202,7 +207,7 @@ const genKeysFor = (ctx: boolean): readonly PanelKey[] => (ctx ? GEN_CONTEXT : G
 
 const workspaceBase = (ctx: boolean): readonly PanelKey[] => [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
-  'plan', 'agents', 'context', 'toc', 'video', 'characters',
+  'plan', 'agents', 'context', 'toc', 'video', 'characters', 'voices',
   ...genKeysFor(ctx),
 ];
 export const WORKSPACE_KEYS: readonly PanelKey[] = workspaceBase(false);

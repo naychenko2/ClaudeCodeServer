@@ -115,7 +115,7 @@ function LibraryVoice({ value, onClear, onOpen }: { value: string; onClear: () =
 }
 
 // Список путей проекта (записи для обучения RVC)
-function PathList({ paths, onChange }: { paths: string[]; onChange: (p: string[]) => void }) {
+export function PathList({ paths, onChange }: { paths: string[]; onChange: (p: string[]) => void }) {
   return (
     <div data-field="clips" style={{ marginBottom: SP.sm }}>
       {paths.map((p, i) => (

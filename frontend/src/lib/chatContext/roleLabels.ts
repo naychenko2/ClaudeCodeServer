@@ -9,6 +9,8 @@ const ROLE_LABELS: Readonly<Record<string, string>> = {
   frameA: 'кадр A',
   frameB: 'кадр B',
   voice: 'голос',
+  reference: 'образец',
+  piece: 'кусок',
 };
 
 export const roleLabel = (role: string | null): string | null =>

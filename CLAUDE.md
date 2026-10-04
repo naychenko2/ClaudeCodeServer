@@ -202,7 +202,17 @@ one-shot действия и разговор с исполнителем «Ло
 Эфиры телеканалов и лента подписок YouTube за общим `IVideoProvider`; живой кадр рисуется оверлеем над страницами (панель, центральный остров, плавающее окно).
 Инварианты и подробности — [backend/ClaudeHomeServer.Video/CLAUDE.md](backend/ClaudeHomeServer.Video/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
-**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; панель «Видео», ключ `videoEditor`, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` за флагом `video-editor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
+**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; выбор — вид `video-scene`/`video-film` строки контекста, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` за флагом `video-editor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
+
+## Контекст хода (Services/ChatContext)
+
+Строка над полем ввода и панель «Контекст» вместо полос «Картинки»/«Звук»/«Видео» и режимов поля; флаг `composer-context-row` снят ([ADR-023](docs/adr/ADR-023-turn-context.md), контракты — [ADR-023-contracts.md](docs/adr/ADR-023-contracts.md)).
+Стор — `Services.ChatContext` (Core, файл на чат и владельца, ревизия, `409 context_changed`), виды объявляют вертикали слотом `context-kind` (бэкенд — `IContextKindProvider`, фронт — `SLOT_CONTEXT_KIND`); хвост хода — `TurnContextContributor`, референсы агента — MCP `turn-context`; панель — `chatContext`, её открывает только человек (`revealContextPanel`). Инварианты:
+
+- **Основной объект один на чат.** Агент по своей инициативе его не меняет и не открывает панель: тот же объект, уже основной, он не трогает вовсе (закреплённая человеком версия и `By = Human` остаются), другой ставится только по явной просьбе человека — с меткой ✦. У видео `claim` нет.
+- **Выбор человека живёт в сторе, а не в `Focus` нити**: DTO вертикалей отдаёт проекцию, сырой `Focus` нужен лишь для `ChatContextFocusMirror.Sync` и засева (долг вычистки — ADR-023). Усыновители результатов `local_*` в контекст не пишут.
+- **Подписи строки считает бэкенд** (`Describe`/`DescribeExecutor`) — хвост хода и панель читают одно; запуск человека несёт `contextRevision`, поля тела игнорируются; состав `tools/list` от хода не зависит (`McpToolsetStabilityTests`).
+- Тексты, которые читает агент, говорят «строка контекста» и «Чем» контекста хода, а не «полоса»/«панель». Флаг `image-panel-v5` и `modeState` пока остаются — судьба отдельной задачей.
 
 ## Значок проекта (Services/ProjectIcons)
 

@@ -5093,6 +5093,22 @@ public class ClaudeSession : ILlmSessionAdapter
             + $"cont={run?.ContinuationActive} bg={run?.HasPendingBg} numTurns={nt}");
     }
 
+    // Диагностика промаха IsEmptyNoopResult (инцидент 03.10.2026): result с numTurns=0, который
+    // эвристика пустого результата не отсеяла и который засчитан ходу. Сырой result не
+    // логировался — без subtype/usage/denials не видно, какое именно поле его «наполнило».
+    private void LogZeroTurnResult(JsonElement root)
+    {
+        if (!root.TryGetProperty("num_turns", out var n) || n.ValueKind != JsonValueKind.Number || n.GetInt32() != 0)
+            return;
+        string Raw(string name) => root.TryGetProperty(name, out var v) ? v.GetRawText() : "-";
+        var denials = Raw("permission_denials");
+        Console.WriteLine(
+            $"[ClaudeSession][corr] zero-turn-result sid={Info.Id} subtype={Raw("subtype")} "
+            + $"is_error={Raw("is_error")} api_error_status={Raw("api_error_status")} "
+            + $"session_id={Raw("session_id")} usage={Raw("usage")} "
+            + $"permission_denials={(denials.Length > 400 ? denials[..400] : denials)}");
+    }
+
     // run — прогон-владелец read-loop'а, из которого пришла строка. Корреляцию ведём по нему,
     // а НЕ по полю _run: после механики доживания _run мог быть заменён новым прогоном, пока
     // старый reader дочитывает хвост — тогда поздние строки замещённого прогона (в т.ч. его
@@ -5324,6 +5340,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         break;
                     }
                     CorrTrace("result-emit", Info.Id, contRun, root);
+                    LogZeroTurnResult(root);
                 }
                 var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() ?? "success" : "success";
                 // Числа читаем через безопасные хелперы: openrouter-совместимый поток шлёт

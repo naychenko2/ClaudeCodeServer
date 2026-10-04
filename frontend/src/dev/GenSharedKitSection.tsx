@@ -1,34 +1,19 @@
-import { useRef, useState, type ReactNode } from 'react';
-import { Blend, Folder, ImageIcon, Layers, Mic, Music, Pencil, SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
-import { Island, IslandHeader, Toggle, InlineSegmented, IconButton } from '../components/ui';
+import { useState, type ReactNode } from 'react';
+import { Layers, Music } from 'lucide-react';
+import { Island, IslandHeader, Toggle, InlineSegmented } from '../components/ui';
 import { C, FS, ISLAND, R, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { useIsMobile } from '../lib/breakpoints';
-import { GenerationModeSwitch, type GenerationModeOption } from '../components/generation/GenerationModeSwitch';
-import { GenerationPickMenu, type GenerationPickRow } from '../components/generation/GenerationPickMenu';
 import { ExecutorList, ExecutorSummaryRow, type ExecutorRow } from '../components/generation/ExecutorList';
 import { GenerationFootView, GenerationPanel, type GenerationFoot } from '../components/generation/GenerationPanel';
 import { ByClaude } from '../components/generation/ByClaude';
 import { ReleaseNotice } from '../components/generation/ReleaseNotice';
-import { useReleaseUndo } from '../components/generation/useReleaseUndo';
-import { pickRows } from '../components/generation/pickSort';
-import heroPng from '../assets/hero.png';
-import aiHomePng from '../assets/ai-home.png';
 
 // Витрина общего слоя панелей генерации (шаг Г1): зеркальный переключатель, меню
 // «Что править?», «Исполнитель», плашка «Вернуть». Ширина 1440 / 360 переключается
 // рамкой, тема — общим переключателем страницы.
 
-type ImgMode = 'create' | 'edit';
-type SndMode = 'voice' | 'music' | 'process';
 type Width = 'wide' | 'narrow';
-
-const NOW = Date.now();
-const CHAT_IMAGES = [
-  { id: 'cat', name: 'cat.png', sub: 'версия 1 · агент · 20 мин назад', thumb: aiHomePng, at: NOW - 20 * 60_000 },
-  { id: 'hero', name: 'hero.png', sub: 'версия 3 · вы · 2 мин назад', thumb: heroPng, at: NOW - 2 * 60_000 },
-  { id: 'logo', name: 'logo.png', sub: 'версия 2 · вы · 8 мин назад', at: NOW - 8 * 60_000 },
-];
 
 const IMG_ROWS = (create: boolean): ExecutorRow[] => [
   { id: 'auto', group: 'auto', name: 'Авто', sub: 'сначала своя видеокарта, при отказе — облако с вашего согласия', price: 'бесплатно',
@@ -55,72 +40,15 @@ const FOOT_STATES: [string, GenerationFoot][] = [
 export function GenSharedKitSection() {
   const isMobile = useIsMobile();
   const [width, setWidth] = useState<Width>(isMobile ? 'narrow' : 'wide');
-  const [mode, setMode] = useState<ImgMode>('create');
-  const [focus, setFocus] = useState<string | null>(null);
-  const [lastEdited, setLastEdited] = useState<string | null>('hero');
   const [emptyChat, setEmptyChat] = useState(false);
-  const [menuAt, setMenuAt] = useState<DOMRect | 'inline' | null>(null);
-  const [snd, setSnd] = useState<SndMode>('voice');
   const [second, setSecond] = useState(false);
   const [exec, setExec] = useState('auto');
   const [execOpen, setExecOpen] = useState(true);
-  const undo = useReleaseUndo<{ focus: string; mode: ImgMode }>();
   const narrow = width === 'narrow';
-  const bar = useRef<HTMLDivElement>(null);
 
-  const imgModes: GenerationModeOption<ImgMode>[] = [
-    { value: 'create', label: 'Создать', icon: Sparkles },
-    { value: 'edit', label: 'Править', icon: Pencil, muted: !focus, title: focus ? undefined : 'Править — сначала выберите картинку' },
-  ];
-  const sndModes: GenerationModeOption<SndMode>[] = [
-    { value: 'voice', label: 'Голос', icon: Mic },
-    { value: 'music', label: 'Музыка', icon: Music },
-    { value: 'process', label: 'Обработка', icon: SlidersHorizontal, muted: true, title: 'Обработка — сначала выберите звук' },
-  ];
-
-  const rows: GenerationPickRow[] = emptyChat ? [] : pickRows(CHAT_IMAGES, { lastId: lastEdited, excludeId: focus })
-    .map(r => ({ id: r.id, name: r.name, sub: r.sub, thumb: r.thumb, icon: <ImageIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, mark: r.last ? 'правили последней' : undefined }));
-  const pick = (id: string) => { setFocus(id); setLastEdited(id); setMode('edit'); setMenuAt(null); undo.dismiss(); };
-  // Якорь меню — x сегмента и y полосы: меню встаёт над полосой от левого края сегмента
-  const openMenu = (seg: DOMRect, inBar = false) => {
-    const b = inBar ? bar.current?.getBoundingClientRect() : undefined;
-    setMenuAt(narrow ? 'inline' : b ? new DOMRect(seg.left, b.top, seg.width, b.height) : seg);
-  };
-  const release = (byHuman: boolean) => {
-    if (!focus) return;
-    undo.release({ snapshot: { focus, mode }, text: 'Картинка снята — дальше рисуем новую' }, byHuman);
-    setFocus(null);
-    setMode('create');
-  };
-  const restore = () => {
-    const s = undo.undo();
-    if (s) { setFocus(s.focus); setMode(s.mode); }
-  };
-  const create = mode === 'create';
+  const create = true;
   const execRows = IMG_ROWS(create);
   const cur = execRows.find(r => r.id === exec && !r.disabled) ?? execRows[0];
-
-  const menu = menuAt && (
-    <GenerationPickMenu
-      title="Что править?"
-      subtitle="Картинки этого чата, свежие сверху"
-      rows={rows}
-      onPick={pick}
-      emptyText="В этом чате пока нет картинок"
-      emptyHint="Нарисуйте новую в «Создать» или прикрепите через «＋»"
-      extras={[
-        { key: 'upload', label: 'С компьютера…', icon: <Upload size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, onClick: () => setMenuAt(null) },
-        { key: 'project', label: 'Из файлов проекта…', icon: <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, onClick: () => setMenuAt(null) },
-      ]}
-      footer="Или «Работать с этой» на карточке в ленте"
-      onClose={() => setMenuAt(null)}
-      anchor={menuAt === 'inline' ? undefined : menuAt}
-      // В рамке витрины — вниз под полосой: вверх меню ушло бы под шторку соседней секции
-      top={menuAt === 'inline' ? 0 : undefined}
-      fullWidth={narrow}
-      isMobile={narrow}
-    />
-  );
 
   return (
     <Island>
@@ -135,33 +63,6 @@ export function GenSharedKitSection() {
         </div>
 
         <div style={{ width: narrow ? 360 : '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: ISLAND.gap }}>
-          <Block label={`GenerationModeSwitch — режим: ${mode}${focus ? ` · картинка ${focus}` : ' · картинки нет, «Править» спрашивает'}`}>
-            {/* Полоса над полем ввода: плашка «Вернуть» встаёт над ней, меню — над полосой */}
-            <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-              {undo.offer && <ReleaseNotice text={undo.offer.text} onUndo={restore} isMobile={narrow} raiseFab />}
-              <div ref={bar} style={{
-                display: 'flex', alignItems: 'center', gap: SP.sm, padding: SP.sm, minWidth: 0,
-                border: `1px solid ${C.borderLight}`, borderRadius: R.lg, background: C.bgCard,
-              }}>
-                <GenerationModeSwitch value={mode} options={imgModes} onChange={setMode} onMutedClick={(_, a) => openMenu(a, true)}
-                  compact={narrow} quiet={narrow} isMobile={narrow} />
-                <span style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {focus ? <>Работаем с: <b style={{ color: C.textHeading }}>{focus}.png</b></> : 'Новая картинка'}
-                </span>
-                {focus && <Chipx title="Снять выбор (человек)" onClick={() => release(true)} />}
-                {focus && <Chipx title="Снять выбор (агент) — без плашки" agent onClick={() => release(false)} />}
-              </div>
-              {/* Нулевой якорь под полосой: меню absolute отсчитывается от него */}
-              {menuAt === 'inline' && <div style={{ position: 'relative' }}>{menu}</div>}
-            </div>
-            {menuAt && menuAt !== 'inline' && menu}
-          </Block>
-
-          <Block label="Тот же переключатель у звука: «Обработка» приглушена без выбранного звука">
-            <GenerationModeSwitch value={snd} options={sndModes} onChange={setSnd} onMutedClick={(_, a) => openMenu(a)}
-              compact={narrow} isMobile={narrow} />
-          </Block>
-
           <Block label={`ExecutorSummaryRow + ExecutorList — «${create ? 'Создать' : 'Править'}»: серые с причиной`}>
             {/* В продукте «Исполнитель» живёт в колонке 380 — витрина показывает ту же ширину */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, width: 380, maxWidth: '100%' }}>
@@ -240,10 +141,4 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{label}</span>
     </div>
   );
-}
-
-// ✕ на чипе «Работаем с»; вторая кнопка изображает снятие выбора агентом
-function Chipx({ title, onClick, agent }: { title: string; onClick: () => void; agent?: boolean }) {
-  const Icon = agent ? Blend : X;
-  return <IconButton size="xs" title={title} onClick={onClick}><Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></IconButton>;
 }

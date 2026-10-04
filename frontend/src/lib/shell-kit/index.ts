@@ -216,15 +216,9 @@ export { ByClaude } from '../../components/generation/ByClaude';
 // «В контекст ▾» (ADR-023, 2к-2): кнопка наполнения контекста с выбором роли
 export { ContextAddButton } from '../../components/generation/ContextAddButton';
 // Общий слой панелей: переключатель режима, меню выбора источника, «Вернуть» после снятия выбора
-export { GenerationModeSwitch } from '../../components/generation/GenerationModeSwitch';
-export type { GenerationModeOption } from '../../components/generation/GenerationModeSwitch';
-export { GenerationPickMenu } from '../../components/generation/GenerationPickMenu';
-export type { GenerationPickRow, GenerationPickExtra } from '../../components/generation/GenerationPickMenu';
 export { ReleaseNotice } from '../../components/generation/ReleaseNotice';
 export { createReleaseUndo, RELEASE_UNDO_MS } from '../../components/generation/useReleaseUndo';
 export type { ReleaseOffer, ReleaseUndoController } from '../../components/generation/useReleaseUndo';
-export { pickRows } from '../../components/generation/pickSort';
-export type { PickCandidate } from '../../components/generation/pickSort';
 // Список «Исполнитель» панели генерации (общий слой Г1): строки строит раздел сам
 export { ExecutorList, ExecutorSummaryRow } from '../../components/generation/ExecutorList';
 export type { ExecutorRow, ExecutorBadge } from '../../components/generation/ExecutorList';

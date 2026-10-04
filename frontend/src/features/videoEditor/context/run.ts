@@ -81,19 +81,30 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
 // рисует карточку ленты: первое событие приходит раньше подписки, а стор его уже учёл
 type Ev = { progress?: number; result?: { summary: string; open?: () => void }; error?: string; cancelled?: boolean };
 
+// Сколько живёт сторож задачи, на который так и не подписались
+const UNWATCHED_TTL_MS = 30_000;
+
 function jobWatcher(scope: string, sessionId: string, sceneId: string, jobId: string, open: () => void) {
   let listener: ((e: Ev) => void) | null = null;
   let cancelAsked = false;
   const buffered: Ev[] = [];
   const emit = (e: Ev) => { if (listener) listener(e); else buffered.push(e); };
-  // Процентов бэкенд не шлёт: доля растёт от времени прогона (jobFraction), события лишь двигают вариант и очередь
+  // Доля — Percent поставщика, а без него время прогона (jobFraction). Не откатывается: пока задачи нет в сторе
+  // (переподключение), держим последнюю показанную
+  let last = 0.02;
   const push = () => {
     const j = getJobsOf(sessionId, sceneId).find(x => x.jobId === jobId);
-    emit({ progress: j ? jobFraction(j) : 0.02 });
+    if (j) last = Math.max(last, jobFraction(j));
+    emit({ progress: last });
   };
   const offStore = subscribeVideoStore(push);
   const timer = setInterval(push, 500);
-  const stop = () => { offStore(); clearInterval(timer); offApi?.(); };
+  // Без watch сторож не живёт вечно: хост подписывается сразу, а не дождались — задача потеряна
+  let unwatchedTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => stop(), UNWATCHED_TTL_MS);
+  const stop = () => {
+    offStore(); clearInterval(timer); offApi?.();
+    if (unwatchedTimer) { clearTimeout(unwatchedTimer); unwatchedTimer = null; }
+  };
   const offApi = videoApi.subscribe(ev => {
     if (!('jobId' in ev) || ev.jobId !== jobId) return;
     if (ev.type === 'video_edit_completed') {
@@ -110,6 +121,7 @@ function jobWatcher(scope: string, sessionId: string, sceneId: string, jobId: st
   return {
     cancel: async () => { cancelAsked = true; await stopJob(scope, sessionId, jobId); },
     watch(on: (e: Ev) => void) {
+      if (unwatchedTimer) { clearTimeout(unwatchedTimer); unwatchedTimer = null; }
       listener = on;
       buffered.splice(0).forEach(on);
       return () => { listener = null; stop(); };

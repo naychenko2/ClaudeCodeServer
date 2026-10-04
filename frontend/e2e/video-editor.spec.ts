@@ -190,7 +190,7 @@ for (const theme of ['light', 'dark'] as const) {
         await shot(page, 's7-bar');
       });
 
-      test('10. съёмка: одна карточка сцены с ходом, строка запуска без полосы, процент растёт по времени прогона, цена из «Чем»', async ({ page }) => {
+      test('10. съёмка: одна карточка сцены с ходом, строка запуска без полосы, процент ровно от поставщика, цена из «Чем»', async ({ page }) => {
         await openVideoChat(page, scenePrimary(), { vp, theme, feed: feed(), films: [standardFilm(true)], frames: true, focus: { sceneId: 'scene-5', filmPath: FILM }, autoFinish: false });
         if (isPhone(page) && await page.locator('[data-gen-sheet="sheet"]').isVisible()) {
           await page.getByTitle('Закрыть панель — сводка останется в полосе').click();
@@ -199,11 +199,11 @@ for (const theme of ['light', 'dark'] as const) {
         await runBtn(page).click();
         await expect.poll(() => w().jobs.length).toBe(1);
         const jobId = String(w().jobs[0].jobId);
-        // Бэкенд процентов не шлёт: стадия, вариант и etaSeconds; на прогон ждём 4 с
-        const progress = (stage: 'queued' | 'running', eta?: number) => hubSend({
-          type: 'video_edit_progress', sessionId: S, scopeKey: P, jobId, sceneId: 'scene-5', stage, variant: 1, count: 1, initiator: 'human', ...(eta ? { etaSeconds: eta } : {}),
+        // Поставщик шлёт Percent варианта: 0,1 → 0,4 → 0,8, полоса показывает ровно его
+        const progress = (percent: number) => hubSend({
+          type: 'video_edit_progress', sessionId: S, scopeKey: P, jobId, sceneId: 'scene-5', stage: 'running', variant: 1, count: 1, initiator: 'human', percent,
         });
-        progress('running', 4);
+        progress(0.1);
         const bar = card(page, 5).locator('[data-video-card-progress]');
         const pct = async () => Number(/(\d+) %/.exec(await bar.innerText())?.[1] ?? NaN);
         // Ровно одна полная карточка сцены, полоса хода только в ней, строка запуска без полосы
@@ -211,11 +211,16 @@ for (const theme of ['light', 'dark'] as const) {
         await expect(page.locator('[data-video-card-progress]')).toHaveCount(1);
         await expect(page.locator('[data-video-card="launch"][data-scene="scene-5"]')).toHaveCount(1);
         await expect(bar).toContainText('снимаем');
-        const first = await pct();
-        expect(first).toBeLessThan(40);
-        // Процент не стоит на месте: сначала растёт, не достигая 100 до итога
-        await expect.poll(pct, { timeout: 8_000 }).toBeGreaterThan(first + 25);
-        expect(await pct()).toBeLessThanOrEqual(95);
+        // Процент и на карточке, и на кнопке ровно такой, какой прислал поставщик
+        for (const [p, text] of [[0.1, '10 %'], [0.4, '40 %'], [0.8, '80 %']] as const) {
+          progress(p);
+          await expect.poll(pct, { timeout: 8_000 }).toBe(p * 100);
+          await expect(runBtn(page)).toContainText(text);
+        }
+        // Отставшее событие не откатывает полосу назад
+        progress(0.3);
+        await page.waitForTimeout(1200);
+        expect(await pct()).toBe(80);
         await shot(page, 's10-progress');
         finishJob(jobId);
         await expect(bar).toHaveCount(0);

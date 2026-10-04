@@ -32,14 +32,21 @@ export interface JobProgress {
   count: number;
   // Начало текущего прогона (вариант или переход очереди → съёмка): от него идёт оценка доли по etaSeconds
   runStartedAt: number;
+  // Доля текущего варианта 0..1 от поставщика (Percent события); null — данных нет, считаем по времени
+  percent: number | null;
+  // Нижняя граница показанной доли: полоса не откатывается назад, когда приходит настоящий процент
+  floor: number;
 }
 
-// Доля хода съёмки 0..1 на момент now. Бэкенд процентов не шлёт (только стадия, вариант и etaSeconds), поэтому
-// доля считается от времени, как у картинок: внутри прогона не выше 95 %, в очереди полоса стоит
+// Доля хода съёмки 0..1 на момент now. Есть Percent поставщика — берём его (доля варианта среди всех); нет —
+// оценка от времени, как у картинок: внутри прогона не выше 95 %, в очереди полоса стоит. Не ниже floor
 export function jobFraction(j: JobProgress, now: number = Date.now()): number {
-  return Math.max(0.02, etaFraction(
-    { run: j.variant, runs: j.count, etaSeconds: j.etaSeconds ?? VIDEO_DEFAULT_ETA, queued: j.stage === 'queued' }, j.runStartedAt, now,
-  ));
+  const total = Math.max(1, j.count);
+  const run = Math.min(total, Math.max(1, j.variant));
+  const f = j.percent !== null && j.stage !== 'queued'
+    ? (run - 1 + Math.min(1, Math.max(0, j.percent))) / total
+    : etaFraction({ run: j.variant, runs: j.count, etaSeconds: j.etaSeconds ?? VIDEO_DEFAULT_ETA, queued: j.stage === 'queued' }, j.runStartedAt, now);
+  return Math.max(0.02, j.floor, f);
 }
 
 // permanent — отказ сервера 4xx: повторять бессмысленно, причина показана; retryAt/fails — повтор сбоя сети
@@ -53,6 +60,9 @@ const _entries = new Map<string, Entry>();
 const _catalogs = new Map<string, VideoCatalog>();
 const _prefs = new Map<string, VideoPrefs>();
 const _jobs = new Map<string, JobProgress>();
+// Задачи, потерянные при переподключении: следующее событие той же задачи берёт отсюда начало прогона и долю,
+// чтобы процент не уходил к нулю. Чистится на completed / failed и при сбросе стора
+const _resumable = new Map<string, JobProgress>();
 const _films = new Map<string, FilmEntry>();
 const _filmLists = new Map<string, FilmSummary[]>();
 // Кадры, которые поменял агент (video_scene_set): метка «✦ Claude» на кадре, пока человек его не тронул.
@@ -171,23 +181,32 @@ export function handleEvent(ev: VideoEvent) {
       applyFilmEvent(ev.scopeKey, ev.path, ev.state);
       return;
     case 'video_edit_progress': {
-      const prev = _jobs.get(ev.jobId);
+      const prev = _jobs.get(ev.jobId) ?? _resumable.get(ev.jobId);
+      _resumable.delete(ev.jobId);
       // Отсчёт прогона начинается заново на новом варианте и на выходе из очереди
-      const same = prev && prev.variant === ev.variant && (prev.stage === 'queued') === (ev.stage === 'queued');
-      _jobs.set(ev.jobId, {
+      const same = !!prev && prev.variant === ev.variant && (prev.stage === 'queued') === (ev.stage === 'queued');
+      const percent = typeof ev.percent === 'number' ? ev.percent : null;
+      const next: JobProgress = {
         jobId: ev.jobId, sessionId: ev.sessionId, sceneId: ev.sceneId, stage: ev.stage,
         queuePosition: ev.queuePosition ?? null, etaSeconds: ev.etaSeconds ?? null, variant: ev.variant, count: ev.count,
         runStartedAt: same ? prev.runStartedAt : Date.now(),
-      });
+        // Процент монотонен внутри прогона; новый вариант начинается с нуля варианта
+        percent: same && prev.percent !== null && percent !== null ? Math.max(prev.percent, percent) : percent,
+        // Полоса не откатывается внутри прогона: прошлая показанная доля — нижняя граница
+        floor: same ? jobFraction(prev) : 0,
+      };
+      _jobs.set(ev.jobId, next);
       emit();
       return;
     }
     case 'video_edit_failed':
       _jobs.delete(ev.jobId);
+      _resumable.delete(ev.jobId);
       _failures.set(ev.sessionId, { sceneId: ev.sceneId, text: ev.error || 'Съёмка не получилась', retry: ev.retryQuote ?? null });
       emit();
       return;
     case 'video_edit_completed':
+      _resumable.delete(ev.jobId);
       if (_jobs.delete(ev.jobId)) emit();
       return;
   }
@@ -198,6 +217,7 @@ function ensureLive() {
   const offEvents = videoApi.subscribe(handleEvent);
   // После обрыва события могли потеряться — перечитываем всё, что показано
   const offRe = onReconnected(() => {
+    _jobs.forEach((j, id) => _resumable.set(id, j));
     _jobs.clear();
     _entries.forEach((e, sid) => { if (e.loaded) void load(e.scope, sid, true); });
     _films.forEach((_, k) => {
@@ -520,6 +540,7 @@ export function setPriceHint(sessionId: string, sceneId: string, text: string | 
 
 // Сброс — только для тестов
 export function __resetVideoStore() {
+  _resumable.clear();
   _priceHints.clear();
   _failures.clear();
   _pending.clear();

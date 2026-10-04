@@ -282,6 +282,8 @@ export interface VideoProgressEvent extends VideoEventBase {
   stage: 'queued' | 'running' | 'downloading';
   queuePosition?: number;
   etaSeconds?: number;
+  // Доля готовности варианта 0..1 от поставщика; нет поля — клиент считает по времени
+  percent?: number;
   variant: number;
   count: number;
   initiator: VideoInitiator;

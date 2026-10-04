@@ -24,7 +24,7 @@ import { startSceneSave } from '../feed/SceneCard';
 import { saveScene, selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
 import {
   __applyThreads, __resetVideoStore, __setFilm, clearAgentFrame, ensureVideoThreads, getAgentFrames, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent, mutate,
-  patchFilm, sceneDraftKey, VIDEO_PANEL, loadFilm,
+  patchFilm, sceneDraftKey, VIDEO_PANEL, loadFilm, jobFraction,
 } from './videoStore';
 
 const reveals = () => dispatched.filter(d => d.type === REVEAL_PANEL_EVENT).map(d => d.detail);
@@ -58,6 +58,45 @@ describe('стор «Видео»: события → состояние', () =>
     handleEvent({ type: 'video_edit_failed', sessionId: 'c1', scopeKey: 'p1', jobId: 'j1', sceneId: 's1', error: 'fal недоступен', initiator: 'human' });
     expect(getJobsOf('c1', 's1')).toHaveLength(0);
     expect(getFailure('c1', 's1')?.text).toBe('fal недоступен');
+  });
+});
+
+describe('доля хода съёмки: Percent поставщика или оценка по времени', () => {
+  const prog = (extra: Record<string, unknown>) =>
+    handleEvent({ type: 'video_edit_progress', sessionId: 'c1', scopeKey: 'p1', jobId: 'j1', sceneId: 's1', stage: 'running', variant: 1, count: 1, initiator: 'human', ...extra } as never);
+  const frac = (now = Date.now()) => jobFraction(getJobsOf('c1', 's1')[0], now);
+
+  it('есть percent — показываем его, а не время; не откатывается назад в пределах варианта', () => {
+    prog({ percent: 0.1 });
+    expect(frac(Date.now() + 80_000)).toBeCloseTo(0.1);
+    prog({ percent: 0.4 });
+    expect(frac()).toBeCloseTo(0.4);
+    prog({ percent: 0.8 });
+    expect(frac()).toBeCloseTo(0.8);
+    prog({ percent: 0.3 });
+    expect(frac()).toBeCloseTo(0.8);
+  });
+
+  it('percent — доля варианта среди всех: второй вариант из двух с 0,5 даёт 0,75', () => {
+    prog({ percent: 0.9, variant: 1, count: 2 });
+    prog({ percent: 0.5, variant: 2, count: 2 });
+    expect(frac()).toBeCloseTo(0.75);
+  });
+
+  it('нет percent — прежняя оценка по времени (запасные 90 с), потолок 95 %', () => {
+    prog({});
+    const t0 = getJobsOf('c1', 's1')[0].runStartedAt;
+    expect(frac(t0 + 45_000)).toBeCloseTo(0.5);
+    expect(frac(t0 + 900_000)).toBeCloseTo(0.95);
+  });
+
+  it('оценка по времени не откатывается, когда приходит меньший настоящий percent', () => {
+    prog({});
+    const t0 = getJobsOf('c1', 's1')[0].runStartedAt;
+    const shown = jobFraction(getJobsOf('c1', 's1')[0], t0 + 45_000);
+    vi.useFakeTimers({ now: t0 + 45_000 });
+    try { prog({ percent: 0.1 }); } finally { vi.useRealTimers(); }
+    expect(frac(t0 + 45_000)).toBeGreaterThanOrEqual(shown - 1e-9);
   });
 });
 

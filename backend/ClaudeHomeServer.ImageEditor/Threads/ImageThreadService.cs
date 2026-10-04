@@ -85,11 +85,6 @@ public sealed class ImageThreadService(
         return written;
     }
 
-    // Усыновление открывает нить с фокусом и возвращает выбор человека; в контекст чата идёт только
-    // итоговая разница: вернули прежний фокус — контекст не трогаем, остался на усыновлённой — отражаем
-    private void SyncNetFocus(string ownerId, string sessionId, string? before, string? after) =>
-        mirror?.Sync(ownerId, sessionId, ChatContext.ImageContextKind.Kind, before, after, ContextActor.Agent);
-
     // Чат этой области (область уже своя — её проверил вызывающий): владение следует из области.
     // scopeKey — id проекта или ImageEditScope.Personal у личного чата вне проекта. Ключ Personal
     // общий у всех владельцев, и владения он не доказывает: его держат гейт личного маршрута и
@@ -209,8 +204,8 @@ public sealed class ImageThreadService(
     }
 
     // Агент позвал local_* напрямую, мимо image_*: картинка легла файлом в проект. Нить по файлу и якорь в
-    // ленте дают ту же карточку, что запуск через редактор. Выбор человека не трогаем (Open отдаёт фокус
-    // новой нити — возвращаем прежний), тихой строки «взял в работу» нет: Claude картинку не выбирал.
+    // ленте дают ту же карточку, что запуск через редактор. Выбор человека не трогаем (Open отдаёт сырой фокус
+    // новой нити — возвращаем прежний; в контекст чата усыновление не пишет вовсе), тихой строки «взял в работу» нет: Claude картинку не выбирал.
     // Нить по этому файлу уже есть — второго якоря нет
     public async Task AdoptFileAsync(string ownerId, string projectId, string sessionId, string file, CancellationToken ct)
     {
@@ -225,7 +220,6 @@ public sealed class ImageThreadService(
             if (before.Focus is not null && state.Focus != before.Focus
                 && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
                 state = back.State;
-            SyncNetFocus(ownerId, sessionId, before.Focus, state.Focus);
             await BroadcastAsync(ownerId, projectId, sessionId, state);
             return;
         }
@@ -296,7 +290,6 @@ public sealed class ImageThreadService(
         if (before.Focus is not null && state.Focus != before.Focus
             && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
             state = back.State;
-        SyncNetFocus(ownerId, sessionId, before.Focus, state.Focus);
         await BroadcastAsync(ownerId, projectId, sessionId, state);
     }
 

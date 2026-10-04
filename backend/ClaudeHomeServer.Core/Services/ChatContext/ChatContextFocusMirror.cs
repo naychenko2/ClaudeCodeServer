@@ -25,10 +25,14 @@ public sealed class ChatContextFocusMirror(
         if (before == after && !(claim && after is not null)) return;
         try
         {
+            // Агент не трогает основной объект, который уже тот же вида и нити: версию, закреплённую человеком,
+            // и метку By он не стирает. Сверка — с основным объектом стора, а не с сырым before вертикали:
+            // выбор человека пишется только в стор, сырой Focus при этом может быть пустым
+            if (after is not null && by == ContextActor.Agent
+                && store.Get(ownerId, sessionId).Primary is { } same && same.Kind == kind && ThreadOf(same, refKey) == after)
+                return;
             if (before == after)
             {
-                var cur = store.Get(ownerId, sessionId);
-                if (cur.Primary is { } cp && cp.Kind == kind && ThreadOf(cp, refKey) == after) return;
                 store.SetPrimary(ownerId, sessionId, NewItem(kind, after!, by, null, refKey), null);
                 return;
             }

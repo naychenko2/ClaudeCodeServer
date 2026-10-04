@@ -58,11 +58,6 @@ public sealed class AudioJobThreads(
         return written;
     }
 
-    // Итоговая смена фокуса после цепочки записей (усыновление: Open отдаёт фокус новой нити, выбор человека
-    // возвращается): в контекст чата идёт только разница «до → после»
-    public void SyncFocus(string ownerId, string sessionId, string? before, string? after, ContextActor by) =>
-        mirror?.Sync(ownerId, sessionId, ChatContext.AudioContextKind.Kind, before, after, by);
-
     // Нить исчезла — из контекста чата уходит и она сама, и её референсы
     public void Forget(string ownerId, string sessionId, string threadId) =>
         mirror?.Forget(ownerId, sessionId, ChatContext.AudioContextKind.Kind, threadId);

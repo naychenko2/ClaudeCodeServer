@@ -140,21 +140,19 @@ public sealed class AudioContextKindTests : IDisposable
     }
 
     [Fact]
-    public async Task Усыновление_звука_агентом_без_фокуса_попадает_в_контекст()
+    public async Task Усыновление_звука_не_делает_нить_основной_после_снятия_человеком()
     {
         _context.SetPrimary(Owner, Chat, null, null);
-        var adopter = Adopter();
 
-        await adopter.AdoptAsync(new LocalMediaAdoption(Owner, "p-1", Chat, "music_edit", "lm_a",
+        await Adopter().AdoptAsync(new LocalMediaAdoption(Owner, "p-1", Chat, "music_edit", "lm_a",
             [new LocalMediaAdoptedFile("gen/a.mp3", "audio/mpeg")]), CancellationToken.None);
 
-        var thread = _threads.Get(Owner, Chat).Threads.Single();
-        var primary = _context.Get(Owner, Chat).Primary;
-        primary.Should().NotBeNull("усыновлённая нить стала фокусом вертикали — контекст обязан её показать");
-        ChatContextFocusMirror.ThreadOf(primary!).Should().Be(thread.Id);
-        primary!.By.Should().Be(ContextActor.Agent);
+        _threads.Get(Owner, Chat).Threads.Should().ContainSingle("нить усыновлена");
+        _context.Get(Owner, Chat).Primary.Should().BeNull("усыновитель в контекст чата не пишет: объект человек снял сам");
     }
 
+    // Выбор человека пишется только в стор контекста (PUT primary), сырой Focus нити при этом пуст:
+    // фоновое усыновление не должно перебить такой выбор (ревью ADR-023, дефект 1)
     [Fact]
     public async Task Усыновление_звука_не_уводит_контекст_от_выбора_человека()
     {
@@ -167,6 +165,20 @@ public sealed class AudioContextKindTests : IDisposable
         var primary = _context.Get(Owner, Chat).Primary!;
         ChatContextFocusMirror.ThreadOf(primary).Should().Be(mine);
         primary.By.Should().Be(ContextActor.Human, "выбор человека усыновление не трогает");
+    }
+
+    [Fact]
+    public void Фокус_агента_на_ту_же_нить_не_стирает_закреплённую_человеком_версию()
+    {
+        var id = _threads.Open(Owner, Chat, "a.mp3", null, null).Thread!.Id;
+        _context.SetPrimary(Owner, Chat, new ContextItem("h", "audio",
+            new JsonObject { ["threadId"] = id, ["versionId"] = AudioThreadVersion.OriginId }, null, ContextActor.Human, DateTime.UtcNow), null);
+
+        _jobs.Tracked(Owner, Chat, () => _threads.SetFocus(Owner, Chat, id, null), ContextActor.Agent);
+
+        var primary = _context.Get(Owner, Chat).Primary!;
+        primary.By.Should().Be(ContextActor.Human);
+        primary.Ref["versionId"]!.GetValue<string>().Should().Be(AudioThreadVersion.OriginId);
     }
 
     private LocalAudioAdopter Adopter()

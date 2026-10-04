@@ -14,7 +14,7 @@ import { createDraft } from '../thread/actions';
 import { useServerPeaks } from '../thread/serverPeaks';
 import { ensureAudioThreads, openEditor, subscribeAudioStore, getCatalog, getThreadsState, useAudioStoreVersion } from '../thread/threadStore';
 import { hasMain, threadName } from '../thread/model';
-import { executorModel } from './executors';
+import { executorModel, getChoice } from './executors';
 import { launchAction, paramsFor, quoteAction } from './run';
 import { migrateLegacyVoice } from './legacyInputs';
 import { audioRefRoles } from './roles';
@@ -128,6 +128,12 @@ export const audioKindApi: ContextKindApi = {
       const scope = audioScope(ctx.projectId);
       void ensureAudioThreads(scope, ctx.sessionId).then(() => createDraft(scope, ctx.sessionId, 'voice'));
     },
+  },
+  // Исполнитель входит в ключ цены: смена «Чем» пересчитывает котировку, а не оставляет чужую цену
+  priceSalt: (ctx, actionId) => {
+    const op = actionOf(ctx, actionId)?.action.op as AudioOp | undefined;
+    const c = op ? getChoice(ctx.sessionId, op) : null;
+    return c ? `${c.provider}/${c.model}` : '';
   },
   quote: quoteAction,
   launch: launchAction,

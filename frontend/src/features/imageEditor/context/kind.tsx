@@ -13,7 +13,7 @@ import { createDraft } from '../thread/actions';
 import { ensurePrefs, subscribePrefs } from '../thread/prefs';
 import { findVersion, threadHasImage, threadName, versionName, versionsOf } from '../thread/model';
 import { getThreadMarks, getThreadsState, setThreadMarks, subscribeThreadStore, useThreadStoreVersion } from '../thread/threadStore';
-import { activeSrc, versionSrc } from '../thread/useThreadLaunch';
+import { activeSrc, resolveModel, versionSrc } from '../thread/useThreadLaunch';
 import { openEditor } from '../thread/threadStore';
 import type { ImageEditOp } from '../api';
 import type { ImageThread } from '../thread/threadsApi';
@@ -166,8 +166,11 @@ export const imageKindApi: ContextKindApi = {
     run: ctx => { void createDraft(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId, '', 'none'); },
   },
   priceSalt: (ctx, actionId) => {
-    const input = actionOf(ctx, actionId)?.input;
-    return input ? `${input.marks}:${input.hasMask}` : '';
+    const found = actionOf(ctx, actionId);
+    if (!found) return '';
+    // Исполнитель входит в ключ цены: смена «Чем» и приход настроек с сервера пересчитывают котировку
+    const { pv, m } = resolveModel(getCatalog(found.scope), settingsOf(found.scope, found.thread, (found.action.op ?? 'edit') as ImageEditOp));
+    return `${found.input.marks}:${found.input.hasMask}:${pv?.key ?? ''}/${m?.id ?? ''}`;
   },
   quote: quoteAction,
   launch: launchAction,

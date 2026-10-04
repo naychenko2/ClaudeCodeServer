@@ -82,6 +82,14 @@ export const videoKindApi: ContextKindApi = {
       void createScene(videoScope(ctx.projectId), ctx.sessionId).then(ok => { if (!ok) showToast('Не удалось завести сцену', '', 'error'); });
     },
   },
+  // Исполнитель входит в ключ цены: смена «Чем» пересчитывает котировку, а не оставляет чужую цену
+  priceSalt: (ctx, actionId) => {
+    const found = actionOf(ctx, actionId);
+    const scene = found ? sceneOfPrimary(ctx.sessionId, found.primary) : null;
+    if (!found || !scene) return '';
+    const r = currentResolved(ctx.sessionId, found.scope, scene);
+    return `${r.provider?.key ?? ''}/${r.model?.id ?? ''}`;
+  },
   quote: quoteAction,
   launch: launchAction,
 };

@@ -230,9 +230,17 @@ export async function mockApi(page: Page) {
       if (p === `${base}/primary` && method === 'PUT') {
         c.primary = body.kind === null ? null : primary({ kind: body.kind, ref: body.ref, label: body.kind === 'audio' ? 'intro.mp3' : 'hero.png', version: 'v2' });
       } else if (p === `${base}/refs` && method === 'POST') {
-        const r = body.ref as { path?: string; slug?: string; upload?: string };
+        // Как у бэкенда (AcceptedRefs ImageContextKind): образец-картинка и файл проекта — style|object|face,
+        // персонаж из «Персонажей» — character; чужая роль — 400 role_not_accepted
+        if (c.primary?.kind === 'image') {
+          const okRoles: Record<string, string[]> = { image: ['style', 'object', 'face'], 'project-file': ['style', 'object', 'face'], 'image-character': ['character'] };
+          if (okRoles[body.kind] && !okRoles[body.kind].includes(body.role)) {
+            return r.fulfill({ status: 400, json: { error: 'role_not_accepted', message: `Основной объект не принимает референс «${body.kind}» с ролью «${body.role}»` } });
+          }
+        }
+        const rf = body.ref as { path?: string; slug?: string; upload?: string };
         const names: Record<string, string> = { anya: 'Аня', marina: 'Марина' };
-        c.refs = [...c.refs, ref(`r${c.refs.length + 1}`, (r.slug && names[r.slug]) || (r.upload ? 'образец' : String(r.path ?? r.slug ?? 'ref').split('/').pop()!),
+        c.refs = [...c.refs, ref(`r${c.refs.length + 1}`, (rf.slug && names[rf.slug]) || (rf.upload ? 'образец' : String(rf.path ?? rf.slug ?? 'ref').split('/').pop()!),
           { kind: body.kind, ref: body.ref, role: body.role ?? null, usedBy: usedByOf(body.kind, body.role ?? null) })];
       } else if (p.startsWith(`${base}/refs/`) && method === 'DELETE') {
         const id = decodeURIComponent(p.slice(`${base}/refs/`.length));

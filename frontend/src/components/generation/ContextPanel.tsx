@@ -285,25 +285,55 @@ function PlusSection({ p }: { p: ContextPanelProps }) {
 
 // ── Параметры запуска ──
 
+// Перечислимые значения: до 4 — сегмент, больше — кнопка-чип с меню (ширина не растёт с числом значений)
+const SEGMENT_MAX = 4;
+
+function OptionsControl({ ariaLabel, value, options, isMobile, onChange }: {
+  ariaLabel: string; value: string; options: readonly { value: string; label: string }[]; isMobile: boolean; onChange: (v: string) => void;
+}) {
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const holder = useRef<HTMLSpanElement>(null);
+  if (options.length <= SEGMENT_MAX) return <InlineSegmented isMobile={isMobile} value={value} onChange={onChange} options={[...options]} />;
+  const cur = options.find(o => o.value === value);
+  return (
+    <>
+      <span ref={holder} data-ctx-options={ariaLabel} style={{ display: 'inline-flex' }}>
+        <Button size={isMobile ? 'sm' : 'xs'} variant="ghostFilled" title={ariaLabel}
+          onClick={() => setRect(holder.current?.getBoundingClientRect() ?? null)}>
+          {cur?.label ?? value}
+          <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ marginLeft: SP.xs }} aria-hidden />
+        </Button>
+      </span>
+      {rect && (
+        <Menu anchor={rect} onClose={() => setRect(null)} anchorAlign="start" minWidth={Math.max(120, rect.width)} maxWidth={220} maxHeight={320}>
+          {options.map(o => (
+            <MenuItem key={o.value} label={o.label} isMobile={isMobile} onClick={() => { setRect(null); onChange(o.value); }} />
+          ))}
+        </Menu>
+      )}
+    </>
+  );
+}
+
 // Закрытый набор: новый kind добавляется правкой типа LaunchParam и ветки здесь; неизвестный не рисуется
-function ParamControl({ param, onChange, isMobile }: { param: LaunchParam; onChange: (v: number | string) => void; isMobile: boolean }) {
+function ParamControl({ param, onChange, isMobile, inline }: { param: LaunchParam; onChange: (v: number | string) => void; isMobile: boolean; inline?: boolean }) {
   const row = (label: string, control: ReactNode) => (
     <div data-ctx-param={param.kind} style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minHeight: 30 }}>
-      <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: 92 }}>{label}</span>
+      <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: inline ? undefined : 92 }}>{label}</span>
       {control}
     </div>
   );
   switch (param.kind) {
     case 'variants':
-      return row('Вариантов', <Stepper ariaLabel="Сколько вариантов" value={param.value} min={param.min} max={param.max} onChange={onChange} />);
+      return row('Вариантов', <Stepper ariaLabel="Сколько вариантов" value={param.value} min={param.min} max={param.max} onChange={onChange} touch={isMobile} />);
     case 'duration':
       return row('Длительность', (
-        <InlineSegmented isMobile={isMobile} value={String(param.value)} onChange={v => onChange(Number(v))}
+        <OptionsControl ariaLabel="Длительность" isMobile={isMobile} value={String(param.value)} onChange={v => onChange(Number(v))}
           options={param.options.map(o => ({ value: String(o), label: `${o} с` }))} />
       ));
     case 'aspect':
       return row('Пропорции', (
-        <InlineSegmented isMobile={isMobile} value={param.value} onChange={onChange}
+        <OptionsControl ariaLabel="Пропорции" isMobile={isMobile} value={param.value} onChange={onChange}
           options={param.options.map(o => ({ value: o, label: o }))} />
       ));
     case 'fromQuestion':
@@ -318,13 +348,25 @@ export const isKnownParam = (p: { kind: string }): p is LaunchParam =>
 
 function ParamsSection({ p }: { p: ContextPanelProps }) {
   const known = p.params.filter(isKnownParam);
+  // «Вариантов» и «Длительность» делят строку (с переносом на узкой шторке)
+  const pair = known.some(x => x.kind === 'variants') && known.some(x => x.kind === 'duration');
+  const inPair = (x: LaunchParam) => pair && (x.kind === 'variants' || x.kind === 'duration');
+  const rest = known.filter(x => !inPair(x));
+  const ctl = (param: LaunchParam, inline?: boolean) => (
+    <ParamControl key={param.kind} param={param} isMobile={p.isMobile} inline={inline} onChange={v => p.onParam(param, v)} />
+  );
   return (
     <Section name="params" title="Параметры запуска">
       {!p.action ? <Empty>{EMPTY.paramsChat}</Empty>
         : known.length === 0 ? <Empty>{EMPTY.paramsNone(p.action.label)}</Empty>
         : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-            {known.map(param => <ParamControl key={param.kind} param={param} isMobile={p.isMobile} onChange={v => p.onParam(param, v)} />)}
+            {pair && (
+              <div data-ctx-param-pair="" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: SP.lg, rowGap: SP.xs }}>
+                {known.filter(inPair).map(x => ctl(x, true))}
+              </div>
+            )}
+            {rest.map(x => ctl(x))}
           </div>
         )}
     </Section>

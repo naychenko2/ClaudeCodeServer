@@ -371,7 +371,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         sections.Where(s => s.Kind == "turn").Select(s => s.Key).Should().ContainInOrder(
             "image-editor-state", "local-media-default");
         sections.Single(s => s.Key == "local-media-default").Text
-            .Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ForContextRow(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule));
+            .Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule);
     }
 
     // Проводка контекста секции (находки A и B финального ревью 33571541): поля HasLocalMediaMcp,
@@ -412,7 +412,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         var section = await LocalMediaDefaultSectionAsync(ProjectChat(), c => c with { LocalMediaMcp = LocalMediaMcp });
 
         section.Should().NotBeNull("local-media доехал до хода — проектный вариант правила обязан прийти хвостом");
-        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ForContextRow(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ProjectRule));
+        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ProjectRule);
     }
 
     [Fact]
@@ -446,7 +446,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         var section = await LocalMediaDefaultSectionAsync(PersonalChat(), c => c with { ImageEditorMcp = ImageEditorMcp });
 
         section.Should().NotBeNull("сервер редактора доехал до хода — личный вариант правила обязан прийти");
-        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.ForContextRow(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule));
+        section!.Text.Should().Be(ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor.PersonalRule);
     }
 
     [Theory]

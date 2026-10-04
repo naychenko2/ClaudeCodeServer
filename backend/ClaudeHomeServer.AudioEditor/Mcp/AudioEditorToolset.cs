@@ -235,7 +235,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             focus = state.Focus,
             thread = thread is null ? null : DescribeThread(ownerId, scope, thread),
             humanChoice = HumanChoice(ownerId, scope, thread),
-            note = "Человек видит в полосе «Звук», какой звук ты взял в работу, и может снять выбор.",
+            note = "Человек видит в строке контекста, какой звук ты взял в работу, и может снять выбор.",
         });
     }
 
@@ -283,7 +283,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         {
             providers,
             library = _library?.List(ownerId, scope),
-            note = "id диктора передай в voice у audio_generate. Голос, который человек выбрал в полосе «Звук», "
+            note = "id диктора передай в voice у audio_generate. Голос, который человек выбрал в строке контекста, "
                 + "без его просьбы не меняй.",
         });
     }
@@ -470,7 +470,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         AudioThread thread, AudioThreadVersion? version, AudioOp op, CancellationToken ct)
     {
         if (_edits is null)
-            return Deny("Монтаж без ИИ на этом сервере ещё не подключён — попроси человека сделать это в полосе «Звук».");
+            return Deny("Монтаж без ИИ на этом сервере ещё не подключён — попроси человека сделать это в панели «Контекст» (работать с этим звуком).");
         if (version is null) return Deny("У этого звука ещё нет версии со звуком — монтировать нечего.");
         var range = Range(args);
         var edited = await _edits.ApplyAsync(ownerId, scope, session.Id, thread.Id, version.Id, op, range.Start, range.End,
@@ -661,7 +661,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             provider = chain.Provider ?? AudioCatalog.AutoModelId,
             chain.Model,
             chain.Count,
-            rule = "Это выбор человека: настройки звука, затем полоса «Звук», затем умолчание. Не передавай "
+            rule = "Это выбор человека: настройки звука, затем строка контекста, затем умолчание. Не передавай "
                 + "provider, model, op и count без его просьбы — audio_generate возьмёт выбор сам.",
         };
     }

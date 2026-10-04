@@ -202,7 +202,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         return Json(Focused(state, scope, withChoice ? HumanChoice(ownerId, scope, state) : null));
     }
 
-    // humanChoice — настройки, которые картинка унаследовала из полосы «Картинки», и правило
+    // humanChoice — настройки, которые картинка унаследовала из выбора человека в строке контекста, и правило
     private static object Focused(ImageThreadsState state, ImageEditScope scope, object? humanChoice = null) => new
     {
         focus = state.Focus,

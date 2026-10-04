@@ -105,6 +105,10 @@ public abstract class AudioEditorEndpoints(
             form.Voice = fromContext.VoiceRef;
             form.ReferencePath = fromContext.Reference?.ProjectFile;
             form.ClipPaths = null;
+            form.Reference = null;
+            form.Clips = null;
+            form.VoiceModelPath = null;
+            form.VoiceIndexPath = null;
         }
 
         // Нить своя или её нет вовсе: чужая — 404 до запуска, а не тихий запуск без нити

@@ -52,15 +52,12 @@ public sealed class AudioEditorStateContributor(
     public static string? Render(bool agentLaunch, bool personal) =>
         agentLaunch ? "## Звук в этом чате\n" + PriorityRuleFor(personal) : null;
 
-    // Ссылка на полосу «Звук» переписана на контекст хода
-    public static string PriorityRuleFor(bool personal) =>
-        (personal ? PersonalPriorityRule : PriorityRule)
-            .Replace("уважают выбор человека в полосе «Звук»", "уважают выбор человека в строке контекста");
+    public static string PriorityRuleFor(bool personal) => personal ? PersonalPriorityRule : PriorityRule;
 
     // Общая часть правила для проекта и личного чата
     private const string EditorFirst =
         "Озвучку, музыку и обработку звука делай через audio_new → audio_generate (склейка — audio_concat): "
-        + "они ведут нить и версии, показывают цену и уважают выбор человека в полосе «Звук». "
+        + "они ведут нить и версии, показывают цену и уважают выбор человека в строке контекста. "
         + "Не передавай provider/model, если человек сам не просил сменить.";
 
     public const string PriorityRule = EditorFirst

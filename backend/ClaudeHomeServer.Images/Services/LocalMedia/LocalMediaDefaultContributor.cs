@@ -73,25 +73,17 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
         var text = sessionContext.Session.ProjectId is null
             ? Personal(audio, video)
             : Project(audio, video);
-        // Выбор человека виден в «Чем» хвоста «Контекст хода», а не в полосах и старых блоках
+        // Выбор человека виден в «Чем» хвоста «Контекст хода», а не в старых блоках
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
-            [new PromptSection(Key, ForContextRow(text), Title, InTurnTail: true)]));
+            [new PromptSection(Key, text, Title, InTurnTail: true)]));
     }
-
-    // Тексты под строку контекста: ссылки на полосы «Картинки»/«Звук» и на блок «Картинки в этом чате» как
-    // источник выбора переписаны на «Чем» контекста хода. 
-    public static string ForContextRow(string rule) => rule
-        .Replace("Выбор человека в полосе «Картинки», если там указан поставщик (виден в блоке «Картинки в этом чате»).",
-            "Выбор человека в строке контекста, если в «Чем» контекста хода указан исполнитель.")
-        .Replace(BandProviderRule, BandProviderRuleContextRow)
-        .Replace("если в полосе «Звук» указан поставщик", "если в «Чем» контекста хода указан поставщик");
 
     private const string Head =
         "## Картинки и видео: локальная модель по умолчанию\n"
         + "Это правило важнее общего правила о glif/fal-ai и оговорок «локально — только по явной просьбе».\n"
         + "Какой сервис брать, по порядку:\n"
         + "1. " + CurrentRequestRule + "\n"
-        + "2. Выбор человека в полосе «Картинки», если там указан поставщик (виден в блоке «Картинки в этом чате»).\n"
+        + "2. Выбор человека в строке контекста, если в «Чем» контекста хода указан исполнитель.\n"
         + "3. Иначе — локальная модель на своей видеокарте. glif, fal-ai и higgsfield — только если локальная "
         + "недоступна и человек согласился на облако.\n";
 
@@ -102,9 +94,6 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
 
     // Согласование с ChoiceRule блока «Картинки» («не передавай provider без просьбы»)
     public const string BandProviderRule =
-        "если в блоке «Картинки в этом чате» указан поставщик — используй его (не подменяй)";
-
-    public const string BandProviderRuleContextRow =
         "если в «Чем» контекста хода указан поставщик — используй его (не подменяй)";
 
     public const string ProviderLocalException =
@@ -142,7 +131,7 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
     // Модуль «Видео» доехал: видео — только через video_* (иначе ролик без карточки сцены в ленте), а прямые
     // local_*_to_video, generate_video Higgsfield и fal — только по прямой просьбе (блок «Видео в этом чате»)
     public const string ProjectVideoEditorRule =
-        "Видео: video_new → video_scene_set → video_shoot (см. блок «Видео в этом чате»); если в префах «Видео» указан "
+        "Видео: video_new → video_scene_set → video_shoot (см. блок «Видео в этом чате»); если в «Чем» контекста хода указан "
         + "поставщик — используй его (не подменяй), если стоит «по умолчанию» — video_shoot передавай с provider local "
         + "(это исключение из правила «не передавай provider»). Прямые local_text_to_video, local_image_to_video, "
         + "local_reference_to_video — только если человек явно попросил сделать напрямую, мимо редактора.\n";
@@ -156,7 +145,7 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
 
     // Модуль «Звук» доехал: звук — через audio_*, а local_* — только по прямой просьбе (блок «Звук в этом чате»)
     public const string ProjectAudioEditorRule =
-        "Звук и музыка: audio_new → audio_generate (см. блок «Звук в этом чате»); если в полосе «Звук» указан "
+        "Звук и музыка: audio_new → audio_generate (см. блок «Звук в этом чате»); если в «Чем» контекста хода указан "
         + "поставщик — используй его (не подменяй), если стоит «по умолчанию» — audio_generate передавай с provider "
         + "local (это исключение из правила «не передавай provider»). Прямые local_* для звука — только если "
         + "человек явно попросил сделать напрямую, мимо редактора.";

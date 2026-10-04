@@ -237,7 +237,7 @@ public static class FeatureFlagCatalog
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.VideoEditor,
             Title: "Видео: сцены и фильм",
-            Description: "Панель «Видео» в чате: снимает сцены между двумя кадрами тремя поставщиками, собирает из них фильм со склейками и музыкой.",
+            Description: "Видео в чате: снимает сцены между двумя кадрами тремя поставщиками, собирает из них фильм со склейками и музыкой.",
             Default: false,
             Stage: "dev"),
     ];

@@ -41,7 +41,10 @@ public sealed class VideoJobThreads(
     // выбранное последним: фильм обрабатывается раньше сцены, поэтому при смене обоих разом выигрывает сцена
     public VideoThreadWrite Tracked(string ownerId, string sessionId, Func<VideoThreadWrite> write, ContextActor by)
     {
-        var before = store.Get(ownerId, sessionId).Focus;
+        // «До» — то, что человек видит (проекция из контекста), а не сырой Focus нити: он мог устареть, пока
+        // выбор жил только в сторе, и тогда Sync принял бы чужую сцену за смену
+        var current = store.Get(ownerId, sessionId);
+        var before = Dto(ownerId, sessionId, current).Focus;
         var written = write();
         if (written.Status != VideoThreadWriteStatus.Ok || mirror is null) return written;
         var after = written.State.Focus;

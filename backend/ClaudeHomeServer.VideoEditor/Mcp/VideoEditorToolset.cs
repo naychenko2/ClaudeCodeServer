@@ -161,7 +161,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             call = await _scenes.FocusAsync(owner, scope, session.Id, focus, null, ContextActor.Agent);
         }
         return await ThreadsResultAsync(call, owner, session, scope,
-            "Человек видит в панели «Видео», что ты взял в работу; панель сама не двигается и выбор можно снять.");
+            "Человек видит в строке контекста, что ты взял в работу; панель «Контекст» сама не двигается, выбор можно снять.");
     }
 
     private async Task<McpToolCallResult> NewAsync(JsonObject args, string owner, Session session, VideoEditScope scope,

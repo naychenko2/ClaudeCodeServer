@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.VideoEditor.Films;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Jobs;
 using ClaudeHomeServer.Services.VideoEditor.Prefs;
@@ -46,6 +47,9 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
         if (focus.FilmPath is not null && (scope.IsPersonal || !InsideAllowed(focus.FilmPath)))
             return Call.Refuse(scope.IsPersonal ? VideoEditorErrors.PersonalScopeNoFilms : VideoEditorErrors.OutsideAllowedFolders,
                 scope.IsPersonal ? "Фильмы — только в чате проекта" : "Фильм должен лежать в video/");
+        // Фильм — только по правилу пути video/<имя фильма>/*.film (то же, что у Validate вида): иначе он встал бы основным мимо него
+        if (!string.IsNullOrWhiteSpace(focus.FilmPath) && !FilmPaths.IsFilmPath(FilmPaths.Normalize(focus.FilmPath) ?? ""))
+            return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders, "Фильм должен лежать в папке video/<имя фильма>/");
         var clean = new VideoFocusDto(string.IsNullOrWhiteSpace(focus.SceneId) ? null : focus.SceneId.Trim(),
             string.IsNullOrWhiteSpace(focus.FilmPath) ? null : focus.FilmPath.Trim());
         return await PublishedAsync(ownerId, scope, sessionId,

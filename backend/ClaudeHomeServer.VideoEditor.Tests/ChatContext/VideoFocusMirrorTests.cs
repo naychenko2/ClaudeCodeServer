@@ -50,6 +50,17 @@ public sealed class VideoFocusMirrorTests : IDisposable
         return call.Written!.Scene!.SceneId;
     }
 
+    [Theory]
+    [InlineData(ContextActor.Human)]
+    [InlineData(ContextActor.Agent)]
+    public async Task Фокус_не_принимает_фильм_не_по_правилу_пути(ContextActor by)
+    {
+        var call = await _scenes.FocusAsync(Owner, _scope, Chat, new VideoFocusDto(null, "video/корень.film"), null, by);
+
+        call.Written.Should().BeNull("отказ до записи");
+        _context.Get(Owner, Chat).Primary.Should().BeNull();
+    }
+
     [Fact]
     public async Task Новая_сцена_становится_основным_объектом_контекста_от_человека()
     {

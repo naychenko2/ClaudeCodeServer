@@ -98,7 +98,7 @@ public sealed class SandboxManager
                 ? img.Stdout.Trim()
                 : throw new InvalidOperationException(
                     $"Образ песочницы «{Options.Image}» не найден. Соберите его: " +
-                    "docker build --target sandbox -t claude-sandbox -f backend/ClaudeHomeServer/Dockerfile .");
+                    BuildRebuildHint(null));
 
             var confHash = ConfigHash(desiredImageId);
             var inspect = await DockerAsync(ct, "inspect", "--format",
@@ -137,6 +137,7 @@ public sealed class SandboxManager
             if (run.Code != 0)
                 throw new InvalidOperationException($"docker run песочницы не удался: {run.Stderr}");
             _log.LogInformation("Песочница {Name} создана из {Image}", Options.ContainerName, Options.Image);
+            await CheckWriteAccessAsync(ct);
             _lastOkCheck = DateTime.UtcNow;
         }
         finally { _lock.Release(); }
@@ -224,6 +225,61 @@ public sealed class SandboxManager
 
     private string ConfigHash(string imageId) =>
         ConfigHashForHost(DefaultSystemPromptsHost(), Options, ProfilesHostDir, TmpHostDir, imageId);
+
+    // Команда сборки образа песочницы. uid передаём явно: без --build-arg APP_UID
+    // пользователь app получает дефолт Dockerfile, а bind-mount на Linux сверяет права
+    // по uid (инцидент 02.10). hostUid == null — подставляем $(id -u) для копирования в шелл.
+    internal static string BuildRebuildHint(int? hostUid) =>
+        "docker build --target sandbox --build-arg APP_UID=" + (hostUid?.ToString() ?? "$(id -u)") +
+        " -t claude-sandbox -f backend/ClaudeHomeServer/Dockerfile .";
+
+    // Точки проверки записи: (контейнерный mount, хостовый каталог) — из тех же опций,
+    // по которым BuildRunArgsForHost строит -v
+    internal static (string Mount, string HostDir)[] WriteProbeTargets(
+        SandboxOptions opts, string profilesHostDir, string tmpHostDir) =>
+    [
+        (ProjectsMount, opts.ProjectsRoot),
+        (ProfilesMount, profilesHostDir),
+        (TmpMount, tmpHostDir),
+    ];
+
+    // Аргументы docker exec: создать и удалить служебный файл в каталоге mount'а
+    internal static string[] BuildWriteProbeArgs(string containerName, string mount) =>
+    [
+        "exec", containerName, "sh", "-c",
+        $"f='{mount}/.ccs-write-probe-'$$ && touch \"$f\" && rm -f \"$f\"",
+    ];
+
+    internal static string BuildWriteGuardMessage(
+        string containerName, string mount, string hostDir, string containerUid, string ownerUid, string probeError) =>
+        $"Песочница {containerName} не может писать в {mount} (хост: {hostDir}): uid в контейнере = {containerUid}, " +
+        $"владелец каталога = {ownerUid}. Ходы container-пользователей будут падать. " +
+        $"Пересоберите образ с uid владельца данных: {BuildRebuildHint(int.TryParse(ownerUid, out var o) ? o : null)} " +
+        $"— и пересоздайте контейнер. Ответ docker: {probeError.Trim()}";
+
+    // Диагностика, не гейт: ходы не блокируем, при отказе записи — громкий LogError
+    private async Task CheckWriteAccessAsync(CancellationToken ct)
+    {
+        try
+        {
+            string? containerUid = null;
+            foreach (var (mount, hostDir) in WriteProbeTargets(Options, ProfilesHostDir, TmpHostDir))
+            {
+                var probe = await DockerAsync(ct, BuildWriteProbeArgs(Options.ContainerName, mount));
+                if (probe.Code == 0) continue;
+                containerUid ??= (await DockerAsync(ct, "exec", Options.ContainerName, "id", "-u")).Stdout.Trim();
+                var owner = (await DockerAsync(ct, "exec", Options.ContainerName, "stat", "-c", "%u", mount)).Stdout.Trim();
+                _log.LogError("{Message}", BuildWriteGuardMessage(Options.ContainerName, mount, hostDir,
+                    containerUid is { Length: > 0 } ? containerUid : "?", owner is { Length: > 0 } ? owner : "?",
+                    probe.Stderr));
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Проверка записи песочницы не выполнена");
+        }
+    }
 
     private async Task<(int Code, string Stdout, string Stderr)> DockerAsync(CancellationToken ct, params string[] args)
     {

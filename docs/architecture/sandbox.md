@@ -208,6 +208,15 @@
   контейнер (docker CLI, `sleep infinity`, ленивый `EnsureRunningAsync`, пересоздание при
   смене образа/параметров по label-хешу). Конфиг — секция `Sandbox` (машинно-специфичный
   `ProjectsRoot` — в appsettings.Local.json). Образ песочницы:
-  `docker build --target sandbox -t claude-sandbox -f backend/ClaudeHomeServer/Dockerfile .`
+  `docker build --target sandbox --build-arg APP_UID=$(id -u) -t claude-sandbox -f backend/ClaudeHomeServer/Dockerfile .`
+- **uid образа = uid владельца данных.** Bind-mount на Linux сверяет права по uid, поэтому
+  пользователь `app` в образе обязан иметь uid владельца `Sandbox:ProjectsRoot` и каталогов
+  `data/sandbox-profiles`, `data/sandbox-tmp` (дефолт Dockerfile — 1000, освобождаем у `node`).
+  Инцидент 02.10: образ пересобрали без `--build-arg APP_UID`, получился uid 1001 — сутки
+  песочница не писала в `/projects`, ходы падали `No conversation found with session ID`.
+  Страховка — `SandboxManager.CheckWriteAccessAsync`: после создания контейнера `touch`+`rm`
+  в `/projects`, `/sandbox-profiles`, `/turn-tmp`; отказ — `LogError` с uid контейнера, uid
+  владельца и готовой командой пересборки. Это диагностика, ходы не блокирует; `chown`
+  хостовых данных из кода не делаем.
 - **Переход на per-user контейнеры** позже без переделки: имя контейнера параметризовано,
   меняется только `SandboxManager`/фабрика драйвера.

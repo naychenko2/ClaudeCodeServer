@@ -59,10 +59,11 @@ RUN npm install -g @anthropic-ai/claude-code skills
 RUN apt-get update && apt-get install -y --no-install-recommends mc \
  && rm -rf /var/lib/apt/lists/*
 
-# UID пользователя app. На Linux-хосте bind-mount проверяет права по UID —
-# задать UID владельца папок проектов: --build-arg APP_UID=$(id -u).
+# UID пользователя app. На Linux-хосте bind-mount проверяет права по UID — он обязан
+# совпасть с владельцем данных (дефолт 1000; иной — --build-arg APP_UID=$(id -u)).
+# Дефолт 1001 дал инцидент 02.10: песочница не писала в /projects.
 # UID 1000 в базовом образе занят пользователем node — освобождаем
-ARG APP_UID=1001
+ARG APP_UID=1000
 RUN if getent passwd ${APP_UID} >/dev/null; then userdel -r "$(getent passwd ${APP_UID} | cut -d: -f1)"; fi \
  && useradd -m -u ${APP_UID} app
 WORKDIR /app

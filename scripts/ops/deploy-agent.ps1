@@ -1086,6 +1086,8 @@ try {
         # Образ несёт в себе код MCP-серверов, run-turn.sh и claude CLI: без пересборки ходы
         # container-юзеров исполняются старым кодом. Контейнер пересоздаём в фазе 2 — сносить
         # его сейчас значило бы оборвать идущие ходы за минуты до окна переключения.
+        # APP_UID не передаём: Windows/Docker Desktop bind-mount не сверяет права по uid,
+        # дефолт Dockerfile (1000) годится. На Linux-хосте uid задают --build-arg APP_UID=$(id -u).
         $dockerfile = Join-Path $RepoDir 'backend\ClaudeHomeServer\Dockerfile'
         docker build --target sandbox -t claude-sandbox -f $dockerfile $RepoDir
         if ($LASTEXITCODE -ne 0) { Complete-DeployStep $h 'failed' "docker exit $LASTEXITCODE"; throw "сборка образа песочницы упала (exit $LASTEXITCODE)" }

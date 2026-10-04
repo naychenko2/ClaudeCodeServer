@@ -256,7 +256,6 @@ public class ImageProjectPrefsTests : IDisposable
         text.Should().Contain(ImageEditorStateContributor.PriorityRuleFor(personal: false));
         text.Should().Contain(ImageEditorStateContributor.FocusIsNotBindingText);
         text.Should().Contain($"- {id}: файл images/hero.png", "список нитей остаётся");
-        text.Should().NotContain(ImageEditorStateContributor.PriorityRule, "правило переписано под строку контекста");
     }
 
     [Fact]
@@ -401,7 +400,7 @@ public class ImageProjectPrefsTests : IDisposable
         foreach (var rule in new[] { ImageEditorStateContributor.PriorityRule, ImageEditorStateContributor.PersonalPriorityRule })
             rule.Should().Contain(ImageEditorStateContributor.NewOrContinueRule);
         ImageEditorStateContributor.NewOrContinueRule.Should().Contain("всегда image_new")
-            .And.Contain("даже если другая картинка в работе")
+            .And.Contain("даже если другая картинка стоит в «С чем»")
             .And.Contain("Сомневаешься — новая картинка")
             // Опорные примеры обеих сторон: без них модель хуже различает граничные просьбы
             .And.Contain("«нарисуй собаку»")

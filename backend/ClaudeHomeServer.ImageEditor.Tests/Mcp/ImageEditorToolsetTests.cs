@@ -1091,7 +1091,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         foreach (var name in new[] { "provider", "model", "character" })
             props[name]!["description"]!.GetValue<string>().Should()
-                .Contain("Не указывай без просьбы человека — по умолчанию берётся выбор из полосы «Картинки»");
+                .Contain("Не указывай без просьбы человека — по умолчанию берётся выбор человека из строки контекста");
     }
 
     // Имена в списке авторазрешения (Core) обязаны совпадать со схемами тулсета

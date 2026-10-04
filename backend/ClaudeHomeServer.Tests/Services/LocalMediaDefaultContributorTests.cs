@@ -159,7 +159,7 @@ public class LocalMediaDefaultContributorTests
     {
         var text = personal ? LocalMediaDefaultContributor.PersonalRule : LocalMediaDefaultContributor.ProjectRule;
 
-        text.Should().Contain("если в блоке «Картинки в этом чате» указан поставщик — используй его (не подменяй)", "(б)")
+        text.Should().Contain("если в «Чем» контекста хода указан поставщик — используй его (не подменяй)", "(б)")
             .And.Contain("(это исключение из правила «не передавай provider»)", "(б)")
             .And.Contain("если числа нет — не называй его, скажи просто «рисую локально (бесплатно)»", "(в)")
             .And.NotContain("с/мин", "(в)")

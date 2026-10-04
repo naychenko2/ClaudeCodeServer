@@ -140,7 +140,9 @@ Viaduct Community без форка; лицензионные рамки BUSL-1.
 голос, стемы и реставрация — venv-воркерами через узел `CcsAudioWorker` в общей очереди GPU1),
 [ADR-021](adr/ADR-021-audio-editor-and-generation-panel.md) (модуль «Звук» отдельной сборкой и
 MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.Media`, общий каркас панели
-генерации и перенос настроек картинок в неё, тулсет `audio_*`, этапы — черновик);
+генерации и перенос настроек картинок в неё, тулсет `audio_*`, этапы — черновик; полосы и панели заменены ADR-023),
+[ADR-022](adr/ADR-022-video-editor.md) (модуль «Видео»: сцены между двумя кадрами и фильм, `local` / fal / Higgsfield),
+[ADR-023](adr/ADR-023-turn-context.md) (контекст хода: строка над полем ввода и панель «Контекст» вместо полос и режимов поля, стор `Services.ChatContext`, правило ✦ и «основной объект один»; контракты — [ADR-023-contracts.md](adr/ADR-023-contracts.md));
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

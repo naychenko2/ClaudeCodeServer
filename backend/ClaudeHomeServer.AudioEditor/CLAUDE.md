@@ -13,7 +13,7 @@ local-media — [ADR-020](../../docs/adr/ADR-020-local-media-audio.md).
 dll копируется в `modules/audio-editor/` двумя целями (`Build` и `Publish`), `ModuleLoader` грузит её по
 записи `DynamicModules` с ключом `audioeditor`. Ссылка — **только на Core**, своих пакетов нет
 (`DynamicModulePackagesGuardTests`). Фронт — MF-remote `frontend/modules/audio-editor` (манифест
-подсистемы), код фичи — `frontend/src/features/audioEditor` (полоса, панель `sound`, «Голоса»); ручки —
+подсистемы), код фичи — `frontend/src/features/audioEditor` (вид `audio` строки контекста, панели вклада, «Голоса»); ручки —
 раздел звука в [api.md](../../docs/architecture/api.md).
 
 Состав: `Controllers/` (проектные `api/projects/{id}/audio-editor/*`, личные
@@ -22,7 +22,7 @@ dll копируется в `modules/audio-editor/` двумя целями (`Bu
 жизненный цикл по шине, `AudioThreadRecovery`), `Jobs/` (исполнитель `AudioEditJobService`, склейка
 `AudioConcatService`, рабочая папка), `Engines/` (драйверы `IAudioEngine` и `DspAudioEngine` «Без ИИ»),
 `Catalog/` (отобранные модели — данные), `Schema/` (схема параметров fal и проверка `params`), `Prefs/`
-(выбор в полосе по режимам, `AudioOpInputs`), `Voices/`, `Mcp/` (тулсет), `Chats/` (блок хвоста хода).
+(выбор по режимам для «Чем», `AudioOpInputs`), `Voices/`, `Mcp/` (тулсет), `Chats/` (блок хвоста хода).
 Тесты — `ClaudeHomeServer.AudioEditor.Tests`; ручки, отключаемость и `McpToolsetStabilityTests` — в
 `ClaudeHomeServer.Tests`.
 
@@ -110,9 +110,9 @@ dll копируется в `modules/audio-editor/` двумя целями (`Bu
 - **Нет ffmpeg или выключена Images — `503 dsp_unavailable`**, а не 500; выключенные Images / Tts /
   нет ключа fal / нет доступа Higgsfield — драйвер `Enabled=false`. Параметры конструкторов от
   отключаемых вертикалей — только nullable.
-- **Раскладка стемов — `AudioCaps.StemSet`, а не id модели**: панель «Что получить» подставляет модель
-  `separate` по набору (`vocals | 4 | 6 | karaoke`). Новая модель разделения без `StemSet` в сегменты не
-  встанет: панель её не подставит, выбрать её можно только в «Исполнителе».
+- **Раскладка стемов — `AudioCaps.StemSet`, а не id модели**: чип действия «Стемы» подставляет модель
+  `separate` по набору (`vocals | 4 | 6 | karaoke`). Новая модель разделения без `StemSet` не
+  встанет: действие её не подставит, выбрать её можно только в «Исполнителе».
 - **Отключаемость — 404, а не 500**: `DynamicModules[audioeditor].Enabled=false` или
   `Subsystems:AudioEditor:Enabled=false`.
 
@@ -134,3 +134,17 @@ dll копируется в `modules/audio-editor/` двумя целями (`Bu
 **Перед правками — прочитай [ADR-021](../../docs/adr/ADR-021-audio-editor-and-generation-panel.md)**
 (§2 модель модуля, §5 тулсет, §6 «Инварианты под угрозой и сторожа») и образец картинок —
 [ImageEditor/CLAUDE.md](../ClaudeHomeServer.ImageEditor/CLAUDE.md).
+
+## Контекст хода (ADR-023)
+
+Звук — вид `audio` строки контекста над полем ввода. Выбор человека живёт в сторе `Services.ChatContext`, а не в `Focus` нити:
+DTO нитей отдаёт проекцию (`AudioJobThreads.View/Project`), читатели хода берут основной из контекста; сырой `Focus` — только
+«до/после» для `ChatContextFocusMirror.Sync` и засев (долг вычистки — ADR-023, §5). Инварианты:
+
+- **Основной объект один на чат.** Агентский `audio_focus` на объект, уже основной, его не трогает (закреплённая человеком версия и
+  `By = Human` остаются); другой объект ставится только по явной просьбе человека, с ✦.
+- **Усыновитель `local_*` (`LocalAudioAdopter`) в контекст не пишет** и выбор человека не перебивает; нить усыновлённого файла
+  появляется в ленте, основной остаётся прежним.
+- **Запуск по `contextRevision`**: входы (голос, образец, куски, референс) берутся из стора, одноимённые поля тела — `Reference`,
+  `Clips`, `ReferencePath`, `ClipPaths`, `Voice`, `VoiceModelPath`/`VoiceIndexPath` — игнорируются; не совпавшая ревизия — `409 context_changed`.
+- Тексты, которые читает агент, говорят «строка контекста» / «Чем» контекста хода, а не «полоса «Звук»».

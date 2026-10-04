@@ -336,3 +336,31 @@ for (const { name, vp } of MARKS_VIEWPORTS) {
     await expect(panelCtx(page).locator('[data-ctx-ref="on"]')).toContainText('образец', { timeout: 10_000 });
   });
 }
+
+test('«Как лицо»: роль face уходит на сервер, бейдж «лицо», отказа role_not_accepted нет', async ({ page }) => {
+  await openFeed(page, D, 'light', { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }) });
+  await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+  await page.locator('[data-context-row] [data-chip="primary"]').click();
+  await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
+  await panelCtx(page).getByRole('button', { name: /Добавить из/ }).click();
+  await page.getByText('С компьютера').click();
+  await page.locator('input[data-ctx-upload]').setInputFiles({ name: 'cat.png', mimeType: 'image/png', buffer: Buffer.from('x') });
+  await expect(page.getByText('Как персонажа', { exact: true })).toHaveCount(0);
+  await page.getByRole('menuitem', { name: 'Как лицо' }).or(page.getByText('Как лицо', { exact: true })).first().click();
+  await expect(panelCtx(page).locator('[data-ctx-ref="on"]')).toContainText('лицо', { timeout: 10_000 });
+  const post = w().mutations.find(m => m.method === 'POST' && m.path === '/refs');
+  expect(post?.body).toMatchObject({ kind: 'image', role: 'face' });
+});
+
+test('цена на кнопке следует за «Чем»: смена исполнителя без текста меняет подпись', async ({ page }) => {
+  await openFeed(page, D, 'light', { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }) });
+  await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+  const bar = page.locator('[data-composer-mode-bar]');
+  await expect(bar).toContainText('✦ Изменить', { timeout: 10_000 });
+  await expect(bar).toContainText(/·/, { timeout: 10_000 });
+  const before = (await bar.innerText()).trim();
+  await page.locator('[data-context-row] [data-chip="primary"]').click();
+  await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
+  await panelCtx(page).getByText('FLUX Kontext').first().click();
+  await expect.poll(async () => (await bar.innerText()).trim(), { timeout: 10_000 }).not.toBe(before);
+});

@@ -305,7 +305,8 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const state = useVideoThreads(scope, sessionId);
   const { primary } = useChatContext(sessionId);
   useVideoStoreVersion();
-  useJobTick(!!sessionId && getJobsOf(sessionId, sceneId).length > 0);
+  // Полосу рисует карточка сцены; строки запусков (jobId) её не имеют и тикать не должны
+  useJobTick(!jobId && !!sessionId && getJobsOf(sessionId, sceneId).length > 0);
   const [pos, setPos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState<'save' | 'film' | null>(null);

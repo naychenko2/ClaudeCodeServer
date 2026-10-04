@@ -13,6 +13,18 @@ export const NOM = {
   plus: 14, ref: 104, more: 46,
 } as const;
 
+// Потолки ширины чипов на полной форме: номиналы нужны таблице макета, а реальный шрифт и имена файлов требуют
+// больше — строка сама проверяет вёрстку (ContextRowView) и при тесноте переходит на следующую ступень
+export const CAP = { g3: 300, o2: 190, ref: 150 } as const;
+
+// Ветка на полной форме растёт по содержимому: потолок чипа и имени условный, реальную тесноту ловит лестница
+// строки (после вёрстки не влезло — шаг назад на g2, где имя режется до 76). null у имени — без ограничения
+export const GIT_CHIP_MAX_FREE = 560;
+export function gitChipBox(form: 0 | 1 | 2 | 3): { chip: number; label: number | null } {
+  if (form === 3) return { chip: GIT_CHIP_MAX_FREE, label: null };
+  return { chip: form === 0 ? NOM.g0 : NOM[`g${form}` as 'g1'], label: form === 2 ? 76 : 0 };
+}
+
 export interface LadderFacts {
   // Проектный чат: слева чип ветки; в личном чате ветки нет
   project: boolean;

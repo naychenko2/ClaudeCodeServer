@@ -1,7 +1,8 @@
 # ADR-023 · Контракты (JSON)
 
 Приложение к [ADR-023](ADR-023-turn-context.md): примеры тел `ChatContextDto`, `409 context_changed`, события
-`chat_context_changed` и запусков по ревизии (КТ-3: котировка и запуск картинки и звука, `mix`, `concat`). Источник примеров для теста `ChatContextContractsTests`: он достаёт блоки ```` ```json ````
+`chat_context_changed` и запусков по ревизии (КТ-3: котировка и запуск картинки и звука, `mix`, `concat`; КТ-5: виды
+и запуск «Видео»). Источник примеров для теста `ChatContextContractsTests`: он достаёт блоки ```` ```json ````
 из этого файла по метке в первой строке и проверяет, что каждый десериализуется в контракт и сериализуется
 обратно без потерь. Менять контракт — только вместе с примером здесь.
 
@@ -286,3 +287,103 @@
   "contextRevision": 9
 }
 ```
+
+## «Видео» (КТ-5)
+
+Виды `video-scene` (`ref: {sceneId}`) и `video-film` (`ref: {filmPath}` — путь `video/**/*.film` от корня проекта) —
+оба основные; основной один на чат, поэтому составной фокус «Видео» `{sceneId, filmPath}` распадается: основным
+становится выбранное последним. Фильм, к которому относится сцена, в `ref` не хранится — `label` сцены его называет
+(«сцена 3 · утро-в-горах»). В личном чате фильмов нет: `video-film` там отказ 400. Сцена принимает кадры: роли
+`frame-a` и `frame-b`, виды `image` (`ref: {threadId, versionId}` — версия обязательна) и `project-file`, операция
+`shoot`; фильм референсов не принимает. Агент (`video_*`) ставит основным сцену с `by: agent` по явной просьбе человека; тот же объект, уже основной, он не трогает
+(версию и `by` человека не стирает). `claim` у видео нет.
+
+```json video-dto
+{
+  "revision": 12,
+  "primary": {
+    "id": "ci_10",
+    "kind": "video-scene",
+    "ref": { "sceneId": "sc3" },
+    "role": null,
+    "by": "human",
+    "addedAt": "2026-10-03T14:00:00Z",
+    "label": "сцена 3 · утро-в-горах",
+    "version": "v2",
+    "thumb": null,
+    "missing": false
+  },
+  "refs": [
+    {
+      "id": "ci_11",
+      "kind": "image",
+      "ref": { "threadId": "t3", "versionId": "v2" },
+      "role": "frame-a",
+      "by": "human",
+      "addedAt": "2026-10-03T14:01:00Z",
+      "label": "рассвет.png",
+      "version": "v2",
+      "thumb": "/api/projects/p1/image-editor/chats/c1/threads/t3/versions/v2/thumb",
+      "missing": false,
+      "usedBy": ["shoot"]
+    },
+    {
+      "id": "ci_12",
+      "kind": "project-file",
+      "ref": { "path": "video/утро/кадры/b.png" },
+      "role": "frame-b",
+      "by": "human",
+      "addedAt": "2026-10-03T14:02:00Z",
+      "label": "b.png",
+      "version": null,
+      "thumb": null,
+      "missing": false,
+      "usedBy": ["shoot"]
+    }
+  ]
+}
+```
+
+### Котировка сцены: тело
+
+С ревизией `sceneId` берётся из основного объекта `video-scene` (поле тела игнорируется и может быть пустым), а кадры
+сцены — из референсов `frame-a`/`frame-b`: они записываются в настройки сцены (`FrameA`/`FrameB`) и входят в подбор
+модели. Остаются `count`, `durationSec`, `aspect`, `sound`, `provider`/`model`.
+
+```json video-quote-request
+{
+  "sessionId": "c1",
+  "sceneId": "",
+  "provider": null,
+  "model": null,
+  "count": 1,
+  "durationSec": 5,
+  "aspect": null,
+  "sound": null,
+  "contextRevision": 12
+}
+```
+
+### Запуск сцены: тело
+
+Запуск идёт строго по `quoteId`; ревизия должна совпасть и со стором, и с ревизией котировки (иначе `409
+context_changed`). Текст поля ввода едет в `params.request` — просьба поверх текста сцены; в журнал запуска
+пишется «текст сцены + просьба», а снимок входов «переснять» остаётся по тексту сцены.
+
+```json video-launch-request
+{
+  "quoteId": "vq_01",
+  "sessionId": "c1",
+  "sceneId": "",
+  "initiator": null,
+  "params": { "request": "добавь туман над долиной" },
+  "seed": null,
+  "contextRevision": 12
+}
+```
+
+### Сборка фильма
+
+`POST …/video-editor/films/build?path=<filmPath>&sessionId=<chat>&contextRevision=<n>` — без тела. Основной объект
+контекста обязан быть `video-film` с тем же `filmPath` (сервер сверяет `path` со стором); ревизия не совпала —
+`409 context_changed`. Без `contextRevision` — прежнее поведение.

@@ -12,6 +12,9 @@ public sealed record VideoEditCallResult<T>(T? Value, string? ErrorCode, string?
     // Котировка соседа при отказе поставщика: запускает её только человек
     public RetryQuote? Retry { get; init; }
 
+    // Свежий контекст чата при отказе context_changed: ручка отдаёт его телом 409
+    public Protocol.ChatContextDto? Context { get; init; }
+
     public static VideoEditCallResult<T> Ok(T value) => new(value, null, null);
     public static VideoEditCallResult<T> Fail(string code, string error) => new(default, code, error);
 }

@@ -42,7 +42,8 @@ function Editor({ projectId, sessionId, threadId, versionId }: {
   const version: AudioThreadVersion | null = thread
     ? thread.versions.find(v => v.id === (shownId ?? thread.currentVersionId)) ?? null
     : null;
-  const peaks = useServerPeaks(thread && version
+  // Пики — только у версии с главным файлом: у стемов без общей дорожки и у версии, которой ещё нет, главного звука нет (404)
+  const peaks = useServerPeaks(thread && version && hasMain(version)
     ? [{ scope, sessionId, threadId: thread.id, versionId: version.id, role: null, points: PEAK_POINTS }]
     : []);
 
@@ -61,6 +62,8 @@ function Editor({ projectId, sessionId, threadId, versionId }: {
     [sessionId, thread, version]);
 
   if (!thread) return null;
+  const running = thread.launches.some(l => l.status === 'running');
+  const stemsOnly = !!version && !hasMain(version) && version.files.some(f => f.role.startsWith('stem:'));
 
   const apply = async () => {
     if (!version || busy) return;
@@ -88,11 +91,15 @@ function Editor({ projectId, sessionId, threadId, versionId }: {
         display: 'flex', flexDirection: 'column', justifyContent: 'center',
       }}>
         {source ? (
-          <AudioPlayer sources={[source]} selection={sel}
+          <AudioPlayer sources={[source]} selection={sel} large
             onSelectionChange={s => setSelection(sessionId, thread.id, s ? { ...s, versionId: version!.id } : null)} />
         ) : (
           <div style={{ color: C.textMuted, fontSize: FS.sm, textAlign: 'center' }}>
-            Звука ещё нет. Озвучьте или сочините его в композере — волна появится здесь.
+            {running
+              ? 'Звук готовится — волна появится, когда запуск закончится.'
+              : stemsOnly
+                ? 'У этой версии только стемы, общей дорожки нет. Сведите их чипом «Свести» — волна появится в новой версии.'
+                : 'Звука ещё нет. Озвучьте или сочините его в композере — волна появится здесь.'}
           </div>
         )}
       </div>
@@ -106,7 +113,7 @@ function Editor({ projectId, sessionId, threadId, versionId }: {
         </div>
         {source ? (
           <>
-            <TrimFields t={trim} piece={piece} set={patch => setTrim(prev => ({ ...prev, ...patch }))} />
+            <TrimFields t={trim} piece={piece} inEditor set={patch => setTrim(prev => ({ ...prev, ...patch }))} />
             <span data-editor-apply="" style={{ display: 'contents' }}>
               <Button size="sm" variant="primary" leftIcon={<Scissors size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
                 disabled={!ready} loading={busy}

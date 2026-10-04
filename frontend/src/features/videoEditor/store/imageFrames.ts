@@ -25,7 +25,7 @@ const _loading = new Set<string>();
 // Нить, нарисованная ради кадра: первая версия станет кадром. needEdit — нить открыта на готовом
 // кадре-файле: «исходник» кадром не становится (смена формы ссылки без правки метила сцену «изменён»
 // и теряла превью), ждём настоящую версию правки
-export interface FrameBinding { sceneId: string; slot: 'A' | 'B'; threadId: string; needEdit?: boolean }
+export interface FrameBinding { sceneId: string; sceneName?: string; slot: 'A' | 'B'; threadId: string; needEdit?: boolean }
 const _bindings = new Map<string, FrameBinding>();
 const _boundListeners = new Set<(sessionId: string, b: FrameBinding, versionId: string) => void>();
 let _version = 0;

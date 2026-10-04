@@ -74,8 +74,7 @@ public class ImageEditorToolsetTests : IDisposable
     private void AddChat(string id, string owner, string? projectId) =>
         _sessions[id] = new Session { Id = id, OwnerId = owner, ProjectId = projectId };
 
-    // Строка контекста владельца (ADR-023): выбор человека — «Чем» контекста хода, персонаж префов не читается
-    private bool _contextRow;
+    // Выбор человека — «Чем» контекста хода (ADR-023), персонаж префов не читается
     private ChatContextStore _ctxStore = null!;
 
     private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true,
@@ -94,11 +93,10 @@ public class ImageEditorToolsetTests : IDisposable
         var flags = new Mock<IFeatureFlagGate>();
         flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor))
             .Returns((string user, string _) => _flagOn.Contains(user));
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ComposerContextRow)).Returns(() => _contextRow);
         // Контекст чата (ADR-023): стор и раскладка входов, как в регистрации модуля
         var registry = new ContextKindRegistry([new ImageContextKind(_store, null, editors, workspace), new ProjectFileContextKind()]);
         _ctxStore = new ChatContextStore(Path.Combine(_dir, "chat-context"), registry);
-        var mirror = new ChatContextFocusMirror(_ctxStore, flags.Object, NullLogger<ChatContextFocusMirror>.Instance);
+        var mirror = new ChatContextFocusMirror(_ctxStore, NullLogger<ChatContextFocusMirror>.Instance);
         var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster,
             prefs: prefs, mirror: mirror);
         var context = new ImageContextLaunch(_ctxStore, registry, directory.Object, _store, workspace: workspace);
@@ -731,6 +729,8 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var thread = Thread();
         var toolset = Toolset();
+        // Фокус агент видит из контекста чата: человек выбрал эту картинку основной
+        _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("image", thread, ContextActor.Human), null);
 
         var result = await Call(toolset, ImageEditorToolset.ToolState);
 
@@ -817,30 +817,13 @@ public class ImageEditorToolsetTests : IDisposable
             .Be(new ImageThreadSettings(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, false));
         var choice = Parse(result)["humanChoice"]!;
         choice["text"]!.GetValue<string>().Should()
-            .Be("Выбор человека в полосе «Картинки»: поставщик local, модель qwen-image-2.1, вариантов 3, персонаж не подключён");
-        choice["rule"]!.GetValue<string>().Should().Contain("не передавай provider/model/character");
-    }
-
-    [Fact]
-    public async Task При_строке_контекста_image_new_говорит_о_строке_контекста_и_без_персонажа()
-    {
-        _contextRow = true;
-        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, false, "anya"));
-        var toolset = Toolset();
-
-        var result = await Call(toolset, ImageEditorToolset.ToolNew);
-
-        result.IsError.Should().BeFalse(result.Text);
-        var choice = Parse(result)["humanChoice"]!;
-        choice["text"]!.GetValue<string>().Should()
             .Be("Выбор человека в строке контекста: поставщик local, модель qwen-image-2.1, вариантов 3");
-        choice["rule"]!.GetValue<string>().Should().Be(ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor.ChoiceRuleContextRow);
+        choice["rule"]!.GetValue<string>().Should().Be(ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor.ChoiceRule);
     }
 
     [Fact]
-    public async Task При_строке_контекста_image_generate_не_читает_персонажа_из_префов_проекта()
+    public async Task image_generate_не_читает_персонажа_из_префов_проекта()
     {
-        _contextRow = true;
         var slug = Character();
         Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, true, slug));
         var (toolset, media) = WithLocal();
@@ -868,9 +851,8 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     [Fact]
-    public async Task При_строке_контекста_image_generate_без_references_берёт_образцы_контекста()
+    public async Task image_generate_без_references_берёт_образцы_контекста()
     {
-        _contextRow = true;
         var (toolset, media) = WithLocal();
         var draft = Draft();
         ContextWithStyleRef(draft);
@@ -883,9 +865,8 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     [Fact]
-    public async Task При_строке_контекста_image_focus_ставит_основной_объект_от_агента_а_выбор_человека_гасит_звёздочку()
+    public async Task image_focus_ставит_основной_объект_от_агента_а_выбор_человека_гасит_звёздочку()
     {
-        _contextRow = true;
         var toolset = Toolset();
 
         var focus = await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" });
@@ -903,20 +884,24 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     [Fact]
-    public async Task Без_строки_контекста_image_focus_стор_контекста_не_трогает()
+    public async Task image_state_показывает_основной_объект_контекста_а_не_запись_нити()
     {
         var toolset = Toolset();
+        var a = Draft();
+        var b = Draft();
+        _store.SetFocus(Owner, ChatId, a, _store.Get(Owner, ChatId).Revision);
+        // Человек ставит основным B ручкой контекста: запись нити по-прежнему говорит «A»
+        _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("image", b, ContextActor.Human), null);
+        _store.Get(Owner, ChatId).Focus.Should().Be(a);
 
-        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" })).IsError.Should().BeFalse();
+        var state = Parse(await Call(toolset, ImageEditorToolset.ToolState));
 
-        _ctxStore.Get(Owner, ChatId).Primary.Should().BeNull();
-        _ctxStore.Get(Owner, ChatId).Revision.Should().Be(0);
+        state["focus"]!.GetValue<string>().Should().Be(b, "агент видит выбор человека, а не сырой Focus нити");
     }
 
     [Fact]
-    public async Task При_строке_контекста_пустой_references_агента_заменяет_контекст()
+    public async Task пустой_references_агента_заменяет_контекст()
     {
-        _contextRow = true;
         var (toolset, media) = WithLocal();
         var draft = Draft();
         ContextWithStyleRef(draft);
@@ -931,20 +916,6 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     [Fact]
-    public async Task Без_строки_контекста_образцы_контекста_агенту_не_подмешиваются()
-    {
-        var (toolset, media) = WithLocal();
-        var draft = Draft();
-        ContextWithStyleRef(draft);
-
-        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, LocalGen(draft));
-
-        result.IsError.Should().BeFalse(result.Text);
-        await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
-        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 0);
-    }
-
-    [Fact]
     public async Task image_focus_по_файлу_новая_нить_наследует_выбор_проекта()
     {
         Prefs(new ImageProjectPrefs("higgsfield", null, 4, true, null));
@@ -953,25 +924,6 @@ public class ImageEditorToolsetTests : IDisposable
         (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" })).IsError.Should().BeFalse();
 
         _store.Get(Owner, ChatId).Threads.Single().Settings.Should().Be(new ImageThreadSettings("higgsfield", null, 4, true));
-    }
-
-    [Fact]
-    public async Task image_generate_без_аргументов_берёт_поставщика_модель_число_и_персонажа_из_полосы()
-    {
-        var slug = Character();
-        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, true, slug));
-        var (toolset, media) = WithLocal();
-        var draft = Draft(); // заведена мимо полосы: настроек у нити нет — берётся выбор проекта
-
-        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот в шляпе"));
-
-        result.IsError.Should().BeFalse(result.Text);
-        var job = await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
-        job.Provider.Should().Be(LocalImageEditor.ProviderKey, "по умолчанию админа был бы higgsfield");
-        job.Model.Should().Be(LocalImageEditor.QwenImage);
-        job.Count.Should().Be(3);
-        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 1,
-            "персонаж из полосы проекта уехал фото, хотя агент его не передавал");
     }
 
     [Fact]
@@ -1105,7 +1057,7 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     [Fact]
-    public async Task Правка_по_промпту_без_персонажа_берёт_его_из_полосы()
+    public async Task Правка_по_промпту_не_берёт_персонажа_из_префов_проекта()
     {
         var slug = Character();
         Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, null, 1, true, slug));
@@ -1115,8 +1067,8 @@ public class ImageEditorToolsetTests : IDisposable
 
         result.IsError.Should().BeFalse(result.Text);
         await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
-        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 2,
-            "холст и фото персонажа из полосы");
+        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 1,
+            "только холст: персонаж префов проекта не едет — он ref контекста чата");
     }
 
     [Fact]
@@ -1139,7 +1091,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         foreach (var name in new[] { "provider", "model", "character" })
             props[name]!["description"]!.GetValue<string>().Should()
-                .Contain("Не указывай без просьбы человека — по умолчанию берётся выбор из полосы «Картинки»");
+                .Contain("Не указывай без просьбы человека — по умолчанию берётся выбор человека из строки контекста");
     }
 
     // Имена в списке авторазрешения (Core) обязаны совпадать со схемами тулсета

@@ -24,10 +24,10 @@ const { loadCatalog } = await import('./catalog');
 const { __resetPrefs, ensurePrefs, getPrefs, prefsApi, setPrefs } = await import('./prefs');
 const { __applyThreads, __resetThreadStore, setThreadMarks } = await import('./threadStore');
 const { threadsApi } = await import('./threadsApi');
-const { createDraft, pickByHuman, releaseFocus } = await import('./actions');
+const { continueFrom, createDraft } = await import('./actions');
 const { __resetImageModes, effectiveImageMode, getStoredImageMode, setImageMode } = await import('./modeState');
 const { launchThread, useThreadLaunch } = await import('./useThreadLaunch');
-const { __resetPanelChoice, setPanelChoice } = await import('../panel/panelOp');
+const { __resetPanelChoice, setPanelChoice } = await import('../context/ops');
 import type { ImageEditQuoteRequest } from '../api';
 import type { Mark } from '../marks';
 import type { ImagePrefsChangedEvent, ProjectPrefs } from './prefs';
@@ -90,8 +90,8 @@ describe('режим «Создать / Править» на чат', () => {
   it('туда-обратно: выбор человеком → «Править», черновик → «Создать», снова выбор → «Править»', async () => {
     const t = thread();
     __applyThreads(S, P, state(null, 1, [t]));
-    vi.spyOn(threadsApi, 'focus').mockImplementation(async (_p, _s, id) => state(id ? t : null, 2, [t]));
-    expect(await pickByHuman(P, S, t.id, false)).toBe(true);
+    vi.spyOn(threadsApi, 'current').mockResolvedValue(state(t, 2, [t]));
+    expect(await continueFrom(P, S, t, 'v1')).toBe(true);
     expect(getStoredImageMode(S)).toBe('edit');
     expect(localStorage.getItem(`cc-image-mode:${S}`)).toBe('edit');
 
@@ -101,18 +101,8 @@ describe('режим «Создать / Править» на чат', () => {
     // Черновик без файла «Править» не включает
     expect(effectiveImageMode(getStoredImageMode(S), false)).toBe('create');
 
-    await pickByHuman(P, S, t.id, true);
+    await continueFrom(P, S, t, 'v1');
     expect(getStoredImageMode(S)).toBe('edit');
-  });
-
-  it('снятие выбора человеком → «Создать»', async () => {
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    setImageMode(S, 'edit');
-    // Файл без шагов — пустая нить: ✕ убирает её из ленты целиком
-    vi.spyOn(threadsApi, 'remove').mockResolvedValue(state(null, 2));
-    await releaseFocus(P, S, t);
-    expect(getStoredImageMode(S)).toBe('create');
   });
 
   it('агент: выбор режим не меняет, снятие выбора → «Создать»', () => {
@@ -137,7 +127,8 @@ describe('режим «Создать / Править» на чат', () => {
     setFlagLocal(FLAGS.imagePanelV5, false);
     const t = thread();
     __applyThreads(S, P, state(t));
-    await pickByHuman(P, S, t.id, true);
+    vi.spyOn(threadsApi, 'current').mockResolvedValue(state(t, 2));
+    await continueFrom(P, S, t, 'v1');
     expect(getStoredImageMode(S)).toBeNull();
     expect(localStorage.getItem(`cc-image-mode:${S}`)).toBeNull();
   });

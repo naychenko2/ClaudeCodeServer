@@ -470,7 +470,7 @@ MCP-сервера несёт два заголовка: `X-Caller-Session-Id` (
 
 Тулсет [TurnContextToolset](../../backend/ClaudeHomeServer/Services/Mcp/Http/TurnContextToolset.cs)
 ([ADR-023](../adr/ADR-023-contracts.md) §3.2), маршрут `POST /mcp/turn-context/{sessionId}` — любой чат владельца,
-**только по флагу `composer-context-row`** (свойство владельца, как `audio-editor`). Три инструмента с
+без флага (`composer-context-row` снят 2026-10-03). Три инструмента с
 фиксированной схемой: `context_state` (тот же текст, что хвост хода «Контекст хода», с идентификаторами
 референсов path/slug — собирает один метод `TurnContextContributor.Compose`), `context_attach {kind, ref, role?}`
 (референс с `By = Agent`, чип ✦; `Ref` проверяет `Validate` провайдера ДО записи, роль — основной объект) и

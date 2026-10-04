@@ -1,8 +1,9 @@
 using System.Globalization;
-using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Turn;
+using ClaudeHomeServer.Services.VideoEditor.ChatContext;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Films;
 using ClaudeHomeServer.Services.VideoEditor.Mcp;
@@ -26,9 +27,11 @@ namespace ClaudeHomeServer.Services.VideoEditor.Chats;
 public sealed class VideoEditorStateContributor(
     IFeatureFlagGate flags,
     VideoThreadStore? threads = null,
-    VideoPrefsService? prefs = null,
     FilmSideStore? side = null,
-    IConfiguration? config = null) : IPromptSectionContributor
+    IConfiguration? config = null,
+    // Ленивый: зеркало ведёт через стор контекста и засев к SessionManager, а он — к реестру секций, то есть
+    // к этому контрибьютору; прямая зависимость дала бы цикл при сборке контейнера
+    Lazy<ChatContextFocusMirror>? mirror = null) : IPromptSectionContributor
 {
     // Без video_shoot правила про него сослались бы на несуществующий инструмент
     private readonly bool _agentLaunch = config?.GetValue(VideoEditorToolset.AgentLaunchKey, true) ?? true;
@@ -53,8 +56,17 @@ public sealed class VideoEditorStateContributor(
         var session = sessionContext.Session;
         var scope = VideoEditScope.Of(session);
         var (state, fresh) = threads?.TakeForTurn(ownerId, session.Id) ?? (VideoThreadsState.Empty, []);
+        // Открытый фильм — основной объект контекста (его мог выбрать человек), а не запись нити
+        if (mirror is not null)
+        {
+            var film = mirror.Value.ProjectFocus(ownerId, session.Id, VideoContextKind.FilmKind, state.Focus.FilmPath,
+                _ => true, VideoContextKind.FilmKey);
+            state = state with { Focus = state.Focus with { FilmPath = film } };
+        }
         var spent = SpentOf(ownerId, scope, state);
-        var block = Render(state, fresh, prefs?.Get(ownerId, scope), spent, _agentLaunch, scope.IsPersonal);
+        // «В работе», «Открыт фильм» и «Выбор человека» отдаёт хвост «Контекст хода»
+        var block = Render(state, fresh, spent, _agentLaunch, scope.IsPersonal);
+        if (block is null) return Task.FromResult<PromptSectionContribution?>(null);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, block, Title, InTurnTail: true)]));
     }
@@ -65,7 +77,7 @@ public sealed class VideoEditorStateContributor(
     // к этому же контрибьютору (цикл при сборке контейнера, тихое зависание старта)
     private VideoSpentDto? SpentOf(string ownerId, VideoEditScope scope, VideoThreadsState state)
     {
-        if (side is null || scope.Project is null || state.Focus.FilmPath is not { } path) return null;
+        if (side is null || scope.IsPersonal || state.Focus.FilmPath is not { } path) return null;
         var spends = side.Get(ownerId, scope.Key, path).Spends.ToDictionary(s => s.VersionId);
         var folder = FilmPaths.FolderOf(path);
         foreach (var scene in state.Scenes.Where(s => s.FilmRef?.Path == path || FilmPaths.Normalize(s.Folder) == folder))
@@ -78,34 +90,26 @@ public sealed class VideoEditorStateContributor(
             spends.Values.Sum(s => s.LocalSeconds));
     }
 
-    public static string Render(VideoThreadsState state, IReadOnlyList<VideoThreadEvent> fresh, VideoPrefsDto? prefs,
-        VideoSpentDto? spent, bool agentLaunch, bool personal)
+    // null — блок пуст: без video_shoot, журнала и трат не остаётся ни одной строки. Что в работе и какой выбор
+    // человека — в блоке «Контекст хода»; остаются траты открытого фильма (больше их нигде нет), правила
+    // приоритета и темпа и журнал «с прошлого сообщения»
+    public static string? Render(VideoThreadsState state, IReadOnlyList<VideoThreadEvent> fresh, VideoSpentDto? spent,
+        bool agentLaunch, bool personal)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Видео в этом чате");
-        sb.AppendLine(FocusText(state));
-        if (state.Focus.FilmPath is { } film)
-            sb.AppendLine($"Открыт фильм: {film}" + (spent is null ? "" : " · Потрачено на фильм: " + SpentText(spent)));
-        sb.AppendLine(ChoiceText(prefs));
-        if (agentLaunch) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
-        if (agentLaunch) sb.AppendLine(PaceRule);
+        var lines = new List<string>();
+        if (state.Focus.FilmPath is { } film && spent is not null)
+            lines.Add($"Потрачено на открытый фильм {film}: {SpentText(spent)}");
+        if (agentLaunch)
+        {
+            lines.Add(personal ? PersonalPriorityRule : PriorityRule);
+            lines.Add(PaceRule);
+        }
         if (fresh.Count > 0)
         {
-            sb.AppendLine("С прошлого сообщения:");
-            foreach (var e in fresh) sb.AppendLine("- " + e.Text);
+            lines.Add("С прошлого сообщения:");
+            lines.AddRange(fresh.Select(e => "- " + e.Text));
         }
-        return sb.ToString().TrimEnd();
-    }
-
-    // «В работе: сцена sc1 «Сцена 1» · версия 2 (остался с прошлых сообщений…)» — без списка сцен: его отдаёт video_state
-    private static string FocusText(VideoThreadsState state)
-    {
-        if (state.Scenes.FirstOrDefault(s => s.SceneId == state.Focus.SceneId) is not { } s)
-            return "В работе: ничего не выбрано";
-        var version = s.Versions.FirstOrDefault(v => v.VersionId == s.CurrentVersionId) is { } cv ? $" · версия {cv.Number}" : " · ещё не снята";
-        var running = s.Launches.Any(l => l.Status == VideoLaunchStatus.Running) ? " · идёт съёмка" : "";
-        return $"В работе: сцена {s.SceneId} «{s.Name}»{version}{running} (остался с прошлых сообщений и не обязывает его продолжать). "
-            + $"Сцен в чате: {state.Scenes.Count}";
+        return lines.Count == 0 ? null : "## Видео в этом чате\n" + string.Join("\n", lines);
     }
 
     public static string SpentText(VideoSpentDto spent)
@@ -115,17 +119,6 @@ public sealed class VideoEditorStateContributor(
         if (spent.Credits > 0) parts.Add(spent.Credits.ToString("0.##", CultureInfo.InvariantCulture) + " кредитов");
         if (spent.GpuSeconds > 0) parts.Add(spent.GpuSeconds.ToString("0", CultureInfo.InvariantCulture) + " GPU-с");
         return parts.Count == 0 ? "0" : string.Join(" + ", parts);
-    }
-
-    // «Выбор человека в «Видео»: поставщик fal, модель по умолчанию, 5 с»
-    public static string ChoiceText(VideoPrefsDto? prefs)
-    {
-        if (prefs is null or { Provider: null, Model: null, DurationSec: null, Count: null })
-            return "Выбор человека в «Видео»: по умолчанию";
-        var parts = new List<string> { $"поставщик {prefs.Provider ?? "по умолчанию"}", $"модель {prefs.Model ?? "по умолчанию"}" };
-        if (prefs.DurationSec is { } d) parts.Add($"{d} с");
-        if (prefs.Count is { } c) parts.Add($"вариантов {c}");
-        return "Выбор человека в «Видео»: " + string.Join(", ", parts);
     }
 
     // Общая часть правила приоритета для проекта и личного чата

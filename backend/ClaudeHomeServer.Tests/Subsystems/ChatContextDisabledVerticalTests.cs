@@ -42,7 +42,6 @@ public class ChatContextDisabledVerticalTests : IDisposable
     {
         var users = _factory.Services.GetRequiredService<UserStore>();
         var ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        users.SetFeatureFlag(ownerId, FeatureFlagKeys.ComposerContextRow, true);
         var root = Path.Combine(_factory.TempDir, "off_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(root);
         var project = _factory.Services.GetRequiredService<ProjectManager>()

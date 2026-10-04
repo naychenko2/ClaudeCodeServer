@@ -9,7 +9,7 @@ import { quietView, QuietLineView, LaunchRowView, sceneCardView, SceneCardView, 
 // карточку строят запись ленты и стор, отличие только в «✦ Claude»
 
 const noop = () => {};
-const A: SceneCardActions = { onPick: noop, onPrev: noop, onNext: noop, onTake: noop, onSave: noop, onDownload: noop, onAddToFilm: noop, onReshoot: noop, onOpenFilm: noop };
+const A: SceneCardActions = { onPick: noop, onPrev: noop, onNext: noop, onTake: noop, onSave: noop, onDownload: noop, onAddToFilm: noop, onReshoot: noop, onWork: noop, onOpenFilm: noop };
 
 const BY = /<span data-by-claude=""[^>]*>.*?<\/span>/;
 const render = (s: VideoScene, who: 'human' | 'agent', o: { jobId?: string; record?: Record<string, unknown>; running?: boolean } = {}) => {
@@ -30,6 +30,25 @@ const shot = (who: 'human' | 'agent', running = false) => scene('s1', {
   launches: [{ jobId: 'job-7', at: '2026-10-02T15:00:00Z', status: running ? 'running' : 'done', interrupted: false, initiator: who, provider: 'fal', model: 'veo-3.1', count: 2 }],
 });
 const launchRecord = { sceneId: 's1', jobId: 'job-7', provider: 'fal', model: 'Veo 3.1', count: 2, durationSec: 8, price: { amount: 3.2, unit: 'usd', approx: true, source: 'pricing' } };
+
+describe('карточка сцены: «В работе» и «Работать с этой» вместо панели «Видео»', () => {
+  const card = (focused: boolean, s: VideoScene) => {
+    const v = sceneCardView({ scene: s, personal: false, focused, jobs: [], pos: null, catalog: CATALOG });
+    return renderToStaticMarkup(createElement(SceneCardView, { v, src: null, busy: false, a: A }));
+  };
+  it('сцена без клипа не говорит про панель', () => {
+    const html = card(false, (() => { const b = scene('s1', { versions: [], launches: [] }); return { ...b, settings: { ...b.settings, text: '' } }; })());
+    expect(html).toContain('в редакторе сцены');
+    expect(html).toContain('Работать с этой');
+    expect(html).not.toMatch(/в панели|Открыть в панели/);
+  });
+  it('основная сцена: бейдж «В работе», кнопки «Работать с этой» нет', () => {
+    const html = card(true, shot('human'));
+    expect(html).toContain('В работе');
+    expect(html).not.toContain('Работать с этой');
+    expect(html).toContain('Переснять');
+  });
+});
 
 describe('карточки «Видео»: агент — та же разметка плюс «✦ Claude»', () => {
   it('карточка сцены: плеер, версии, «Сохранить сцену», «В фильм →»', () => {

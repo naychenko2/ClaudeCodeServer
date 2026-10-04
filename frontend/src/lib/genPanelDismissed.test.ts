@@ -15,11 +15,11 @@ const dispatched: { type: string; detail: unknown }[] = [];
 import {
   MAX_KEYS, autoRevealGenerationPanel, isGenPanelDismissed, markGenPanelDismissed,
 } from './genPanelDismissed';
-import { FLAGS, setAllFlags } from './featureFlags';
 import { REVEAL_PANEL_EVENT, revealContextPanel } from './subsystems/registryCore';
 
+const P = 'chatContext';
+
 beforeEach(() => {
-  setAllFlags({});
   store.clear();
   dispatched.length = 0;
   vi.restoreAllMocks();
@@ -27,71 +27,64 @@ beforeEach(() => {
 
 describe('genPanelDismissed', () => {
   it('без признака панель открывается', () => {
-    expect(autoRevealGenerationPanel('images', 's1')).toBe(true);
-    expect(dispatched).toEqual([{ type: REVEAL_PANEL_EVENT, detail: { key: 'images', sessionId: 's1' } }]);
-  });
-
-  it('вкладка едет в detail события', () => {
-    autoRevealGenerationPanel('sound', 's1', 'music');
-    expect(dispatched[0].detail).toEqual({ key: 'sound', tab: 'music', sessionId: 's1' });
+    expect(autoRevealGenerationPanel(P, 's1')).toBe(true);
+    expect(dispatched).toEqual([{ type: REVEAL_PANEL_EVENT, detail: { key: P, sessionId: 's1' } }]);
   });
 
   it('при признаке «закрыта» в этом чате — отказ', () => {
-    markGenPanelDismissed('s1', 'images');
-    expect(autoRevealGenerationPanel('images', 's1')).toBe(false);
+    markGenPanelDismissed('s1', P);
+    expect(autoRevealGenerationPanel(P, 's1')).toBe(false);
     expect(dispatched).toHaveLength(0);
   });
 
-  it('признак — по паре чат + панель: другой чат и другая панель открываются', () => {
-    markGenPanelDismissed('s1', 'images');
-    expect(autoRevealGenerationPanel('images', 's2')).toBe(true);
-    expect(autoRevealGenerationPanel('sound', 's1')).toBe(true);
+  it('признак — по паре чат + панель: другой чат открывается', () => {
+    markGenPanelDismissed('s1', P);
+    expect(autoRevealGenerationPanel(P, 's2')).toBe(true);
   });
 
   it('без чата и для чужих панелей ничего не делается', () => {
-    expect(autoRevealGenerationPanel('images', null)).toBe(false);
+    expect(autoRevealGenerationPanel(P, null)).toBe(false);
     expect(autoRevealGenerationPanel('files', 's1')).toBe(false);
     markGenPanelDismissed('s1', 'files');
-    markGenPanelDismissed(null, 'images');
+    markGenPanelDismissed(null, P);
     expect(store.size).toBe(0);
   });
 
   it(`держит не больше ${MAX_KEYS} последних ключей: ${MAX_KEYS + 1}-й вытесняет самый старый`, () => {
-    for (let i = 0; i <= MAX_KEYS; i++) markGenPanelDismissed(`s${i}`, 'images');
-    expect(isGenPanelDismissed('s0', 'images')).toBe(false);
-    expect(isGenPanelDismissed('s1', 'images')).toBe(true);
-    expect(isGenPanelDismissed(`s${MAX_KEYS}`, 'images')).toBe(true);
+    for (let i = 0; i <= MAX_KEYS; i++) markGenPanelDismissed(`s${i}`, P);
+    expect(isGenPanelDismissed('s0', P)).toBe(false);
+    expect(isGenPanelDismissed('s1', P)).toBe(true);
+    expect(isGenPanelDismissed(`s${MAX_KEYS}`, P)).toBe(true);
     expect(JSON.parse(store.get('cc_gen_panel_dismissed')!)).toHaveLength(MAX_KEYS);
   });
 
   it('повторное закрытие освежает ключ — он не вытесняется первым', () => {
-    markGenPanelDismissed('s0', 'images');
-    for (let i = 1; i < MAX_KEYS; i++) markGenPanelDismissed(`s${i}`, 'images');
-    markGenPanelDismissed('s0', 'images');
-    markGenPanelDismissed('new', 'images');
-    expect(isGenPanelDismissed('s0', 'images')).toBe(true);
-    expect(isGenPanelDismissed('s1', 'images')).toBe(false);
+    markGenPanelDismissed('s0', P);
+    for (let i = 1; i < MAX_KEYS; i++) markGenPanelDismissed(`s${i}`, P);
+    markGenPanelDismissed('s0', P);
+    markGenPanelDismissed('new', P);
+    expect(isGenPanelDismissed('s0', P)).toBe(true);
+    expect(isGenPanelDismissed('s1', P)).toBe(false);
   });
 
   it('битое значение в localStorage не роняет стор', () => {
     store.set('cc_gen_panel_dismissed', '{не json');
-    expect(autoRevealGenerationPanel('images', 's1')).toBe(true);
+    expect(autoRevealGenerationPanel(P, 's1')).toBe(true);
   });
 });
 
-describe('при флаге composer-context-row вся генерация живёт в одной панели chatContext', () => {
-  beforeEach(() => setAllFlags({ [FLAGS.composerContextRow]: true }));
-
-  it('признак «закрыта» ключуется {сессия}:chatContext, старые ключи не мигрируют', () => {
+describe('вся генерация живёт в одной панели chatContext', () => {
+  it('признак «закрыта» ключуется {сессия}:chatContext', () => {
     markGenPanelDismissed('s1', 'chatContext');
     expect(JSON.parse(store.get('cc_gen_panel_dismissed')!)).toEqual(['s1:chatContext']);
     expect(isGenPanelDismissed('s1', 'chatContext')).toBe(true);
   });
 
-  it('старый вызов с images/sound попадает в chatContext: и признак, и показ', () => {
+  it('вызов с ключом упразднённой панели (images, sound, videoEditor) попадает в chatContext: и признак, и показ', () => {
     markGenPanelDismissed('s1', 'images');
     expect(JSON.parse(store.get('cc_gen_panel_dismissed')!)).toEqual(['s1:chatContext']);
     expect(autoRevealGenerationPanel('sound', 's1', 'music')).toBe(false);
+    expect(autoRevealGenerationPanel('videoEditor', 's1')).toBe(false);
     expect(autoRevealGenerationPanel('sound', 's2', 'music')).toBe(true);
     expect(dispatched).toEqual([{ type: REVEAL_PANEL_EVENT, detail: { key: 'chatContext', sessionId: 's2' } }]);
   });

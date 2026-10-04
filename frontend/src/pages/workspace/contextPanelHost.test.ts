@@ -1,19 +1,19 @@
-// Сторожа единственного хоста панели генерации (ADR-023 §Д6): при флаге composer-context-row справа
-// живёт одна панель «chatContext», «Картинок» и «Звука» в рельсе нет, а сохранённая раскладка не
-// теряет место. Скан features/** держит вертикали в стороне от ключей генерации.
-import { afterEach, describe, expect, it } from 'vitest';
+// Сторожа единственного хоста панели генерации (ADR-023 §Д6): справа живёт одна панель «chatContext»,
+// «Картинок», «Звука» и «Видео» в рельсе нет, а сохранённая раскладка со старыми ключами не теряет
+// место (LEGACY_KEY_ALIASES). Скан features/** держит вертикали в стороне от ключей генерации.
+import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FLAGS, setAllFlags } from '../../lib/featureFlags';
 import { genPanelKeys as dismissedKeys } from '../../lib/genPanelDismissed';
+import { toGenPanelKey } from '../../lib/genPanelKeys';
 import {
-  CHAT_RIGHT_KEYS, PANEL_HOME, PANEL_KEYS, PANEL_META, WORKSPACE_KEYS, chatRightKeys, genPanelKeys, panelRivals, workspaceKeys,
+  CHAT_RIGHT_KEYS, PANEL_HOME, PANEL_KEYS, PANEL_META, WORKSPACE_KEYS, genPanelKeys, migrateLegacyKey,
 } from './panelCatalog';
-import { evictForeign, sanitizeZones, zoneOf, type PanelZones } from './panelStackState';
+import { migrateZones, sanitizeLayout, sanitizeZones, zoneOf, type PanelZones } from './panelStackState';
 
-const on = () => setAllFlags({ [FLAGS.composerContextRow]: true });
-afterEach(() => setAllFlags({}));
+// Ключи упразднённых панелей генерации: в каталоге их быть не должно
+const REMOVED = ['images', 'sound', 'videoEditor'];
 
 function zones(left: string[][], right: string[][], stash: { left?: string[][]; right?: string[][] } = {}): PanelZones {
   return sanitizeZones({
@@ -22,81 +22,105 @@ function zones(left: string[][], right: string[][], stash: { left?: string[][]; 
   });
 }
 
-describe('набор панелей генерации по флагу', () => {
-  it('без флага: «Картинки» и «Звук», как раньше; «Контекста» в рельсе нет', () => {
-    expect(genPanelKeys()).toEqual(['images', 'sound', 'videoEditor']);
-    expect(workspaceKeys(false)).toContain('images');
-    expect(workspaceKeys(false)).not.toContain('chatContext');
-    expect(chatRightKeys(false)).not.toContain('chatContext');
-    expect(panelRivals('images')).toEqual(['sound', 'videoEditor']);
+describe('набор панелей генерации', () => {
+  it('GEN_PANEL_KEYS = [chatContext] в обеих копиях', () => {
+    expect(genPanelKeys()).toEqual(['chatContext']);
+    expect(dismissedKeys()).toEqual(['chatContext']);
   });
 
-  it('с флагом: GEN_PANEL_KEYS = [chatContext, videoEditor] в обеих копиях, images и sound вне набора экрана', () => {
-    on();
-    expect(genPanelKeys()).toEqual(['chatContext', 'videoEditor']);
-    expect(dismissedKeys()).toEqual(['chatContext', 'videoEditor']);
-    for (const keys of [workspaceKeys(true), chatRightKeys(true)]) {
-      expect(keys).toContain('chatContext');
-      expect(keys).not.toContain('images');
-      expect(keys).not.toContain('sound');
+  it('упразднённых ключей нет в каталоге, наборах экранов, мете и домашних зонах', () => {
+    for (const k of REMOVED) {
+      expect(PANEL_KEYS as readonly string[]).not.toContain(k);
+      expect(WORKSPACE_KEYS as readonly string[]).not.toContain(k);
+      expect(CHAT_RIGHT_KEYS as readonly string[]).not.toContain(k);
+      expect(Object.keys(PANEL_META)).not.toContain(k);
+      expect(Object.keys(PANEL_HOME)).not.toContain(k);
     }
-    expect(panelRivals('chatContext')).toEqual(['videoEditor']);
   });
 
-  it('ссылки на наборы стабильны: зона держит их в зависимостях эффектов', () => {
-    expect(workspaceKeys(true)).toBe(workspaceKeys(true));
-    expect(chatRightKeys(false)).toBe(CHAT_RIGHT_KEYS);
-    expect(workspaceKeys(false)).toBe(WORKSPACE_KEYS);
-  });
-
-  it('chatContext — правая панель с заголовком «Контекст»; ключ context («Персона») не тронут', () => {
+  it('chatContext — правая панель с заголовком «Контекст» в проекте и в правой зоне личного чата; ключ context («Персона») не тронут', () => {
     expect(PANEL_KEYS).toContain('chatContext');
+    expect(WORKSPACE_KEYS).toContain('chatContext');
+    expect(CHAT_RIGHT_KEYS).toContain('chatContext');
     expect(PANEL_HOME.chatContext).toBe('right');
     expect(PANEL_META.chatContext.title).toBe('Контекст');
     expect(PANEL_META.context.title).toBe('Персона');
   });
+
+  it('старый вызов с ключом упразднённой панели ведёт в chatContext', () => {
+    for (const k of REMOVED) expect(toGenPanelKey(k)).toBe('chatContext');
+    expect(toGenPanelKey('files')).toBe('files');
+  });
 });
 
-describe('сохранённая раскладка при флаге не теряет место', () => {
-  const allowed = workspaceKeys(true);
+describe('сохранённая раскладка со старыми ключами не теряет место (LEGACY_KEY_ALIASES)', () => {
+  it('ключи images, sound, videoEditor переводятся в chatContext, прочие остаются', () => {
+    for (const k of REMOVED) expect(migrateLegacyKey(k)).toBe('chatContext');
+    expect(migrateLegacyKey('files')).toBe('files');
+    expect(migrateLegacyKey('personas')).toBe('team');
+    expect(migrateLegacyKey('нет-такой')).toBeNull();
+  });
 
   it('«Картинки» на месте в колонке становятся «Контекстом» рядом с теми же соседями', () => {
-    const z = evictForeign(zones([], [['files', 'images'], ['tasks']]), 'right', allowed)!;
+    const z = zones([], [['files', 'images'], ['tasks']]);
     expect(z.right.layout).toEqual([['files', 'chatContext'], ['tasks']]);
-    expect(zoneOf(z, 'images')).toBeNull();
+    expect(zoneOf(z, 'chatContext')).toBe('right');
   });
 
-  it('обе старые панели в раскладке дают одну «Контекст»', () => {
-    const z = evictForeign(zones([], [['images', 'sound']]), 'right', allowed)!;
-    expect(z.right.layout).toEqual([['chatContext']]);
+  it('все три старые панели в одной раскладке дают одну «Контекст» на месте первой', () => {
+    expect(sanitizeLayout([['sound', 'files'], ['images', 'videoEditor']])).toEqual([['chatContext', 'files']]);
   });
 
-  it('спрятанный набор тоже сворачивается', () => {
-    const z = evictForeign(zones([], [['files']], { right: [['sound']] }), 'right', allowed)!;
+  it('спрятанный набор тоже переводится', () => {
+    const z = zones([], [['files']], { right: [['sound']] });
     expect(z.right.stash).toEqual([['chatContext']]);
   });
 
-  it('без флага (набор прежний) раскладка не трогается', () => {
-    expect(evictForeign(zones([], [['files', 'images']]), 'right', workspaceKeys(false))).toBeNull();
+  it('«Контекст» уже слева, а старая панель справа — панель остаётся в одном месте (правая зона главнее)', () => {
+    const z = zones([['chatContext']], [['files', 'images']]);
+    expect(zoneOf(z, 'chatContext')).toBe('right');
+    expect(z.right.layout).toEqual([['files', 'chatContext']]);
+    expect(z.left.layout).toEqual([]);
+  });
+
+  it('привязка к зоне, веса, ящик и порядок кнопок со старыми ключами тоже переводятся', () => {
+    const z = sanitizeZones({
+      left: { layout: [], stash: [] },
+      right: { layout: [], stash: [] },
+      home: { images: 'left', files: 'right' },
+      weights: { sound: 2 },
+      tucked: ['videoEditor', 'sound'],
+      railOrder: ['images', 'files'],
+    });
+    expect(z.home.chatContext).toBe('left');
+    expect(z.weights.chatContext).toBe(2);
+    expect(z.tucked).toEqual(['chatContext']);
+    expect(z.railOrder).toEqual(['chatContext', 'files']);
+  });
+
+  it('раскладка в формате до зон (cc_*_panels_layout) со старыми ключами читается', () => {
+    const store: Record<string, string> = {
+      cc_ws_panels_layout: JSON.stringify([['files', 'images'], ['sound']]),
+      cc_ws_left_panels_layout: JSON.stringify([['tasks', 'videoEditor']]),
+    };
+    const z = migrateZones(k => store[k] ?? null, 'ws')!;
+    expect(z.right.layout).toEqual([['files', 'chatContext']]);
+    expect(z.left.layout).toEqual([['tasks']]);
   });
 });
 
-// ── Скан features/**: вертикали не зовут revealWorkspacePanel с ключами генерации ──
+// ── Скан features/**: вертикали не зовут revealWorkspacePanel, autoRevealGenerationPanel и followSelection со старыми ключами генерации ──
 
 const FEATURES = join(fileURLToPath(new URL('../../', import.meta.url)), 'features');
 // Ключ генерации в первом аргументе: литерал или константа вида IMAGES_PANEL / SOUND_PANEL / VIDEO_EDITOR_PANEL
 const CALL = /revealWorkspacePanel\(\s*(?:['"](?:images|sound|videoEditor|chatContext)['"]|[A-Z][A-Z_]*_PANEL\b)/g;
+// autoRevealGenerationPanel и followSelection проводят ключ через toGenPanelKey: вертикаль называет панель
+// только ключом «chatContext»; упразднённый ключ или константа *_PANEL — хвост прошлой модели панелей
+const FOLLOW_CALL = /(?:autoRevealGenerationPanel|followSelection)\(\s*(?:['"](?:images|sound|videoEditor)['"]|[A-Z][A-Z_]*_PANEL\b)/g;
 
-// Старые вызовы под выключенным флагом: список сужается в 2к, 2з, 3ф и пустеет в 4б. Число вызовов в
-// файле зафиксировано — новый вызов в старом файле тоже краснит скан. У картинок (2к-2) вызов один, в
-// context/reveal.ts: при флаге он идёт в revealContextPanel / «Персонажи», без флага — в «Картинки». У звука (2з-3) так же: context/reveal.ts
-const LEGACY_REVEAL_CALLS: Readonly<Record<string, number>> = {
-  'imageEditor/context/reveal.ts': 1,
-  'audioEditor/context/reveal.ts': 1,
-  // «Видео» (ADR-022) в строку контекста не переехало: свои вызовы панелей и открытие «Звука»/«Картинок» с заготовкой
-  'videoEditor/film/compose.ts': 1,
-  'videoEditor/scene/actions.ts': 3,
-};
+// Вызовы revealWorkspacePanel с ключами генерации во вклады вертикалей не допускаются совсем: панель «Контекст» открывает
+// revealContextPanel (allow-list пуст, 4б-2). Число вызовов в файле фиксировать не нужно — список пуст.
+const LEGACY_REVEAL_CALLS: Readonly<Record<string, number>> = {};
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -110,7 +134,7 @@ function sources(dir: string, out: string[] = []): string[] {
 function scanRevealCalls(files: Record<string, string>): Record<string, number> {
   const found: Record<string, number> = {};
   for (const [file, text] of Object.entries(files)) {
-    const n = text.match(CALL)?.length ?? 0;
+    const n = (text.match(CALL)?.length ?? 0) + (text.match(FOLLOW_CALL)?.length ?? 0);
     if (n) found[file] = n;
   }
   return found;
@@ -119,12 +143,22 @@ function scanRevealCalls(files: Record<string, string>): Record<string, number> 
 describe('вертикали не знают ключей панелей генерации', () => {
   const files = Object.fromEntries(sources(FEATURES).map(f => [f.slice(FEATURES.length + 1).split('\\').join('/'), readFileSync(f, 'utf8')]));
 
-  it('вызовы revealWorkspacePanel с ключами генерации есть только в списке старых', () => {
+  it('вызовов панели с ключами генерации в features/** нет (allow-list пуст)', () => {
     expect(scanRevealCalls(files)).toEqual(LEGACY_REVEAL_CALLS);
   });
 
   it('сканер ловит и литерал, и константу ключа в новом файле', () => {
     const fake = { 'newKind/a.ts': "revealWorkspacePanel('images', 'settings')", 'newKind/b.ts': 'revealWorkspacePanel(IMAGES_PANEL)', 'ok.ts': "revealWorkspacePanel('files')" };
     expect(scanRevealCalls(fake)).toEqual({ 'newKind/a.ts': 1, 'newKind/b.ts': 1 });
+  });
+
+  it('сканер ловит autoRevealGenerationPanel и followSelection с упразднённым ключом или константой, но не «chatContext»', () => {
+    const fake = {
+      'k/a.ts': 'autoRevealGenerationPanel(SOUND_PANEL, sessionId)',
+      'k/b.ts': "followSelection('images', sessionId, key)",
+      'k/c.ts': 'followSelection(VIDEO_PANEL, sessionId, key, \'scene\')',
+      'ok.ts': "followSelection('chatContext', sessionId, key); autoRevealGenerationPanel('chatContext', sessionId)",
+    };
+    expect(scanRevealCalls(fake)).toEqual({ 'k/a.ts': 1, 'k/b.ts': 1, 'k/c.ts': 1 });
   });
 });

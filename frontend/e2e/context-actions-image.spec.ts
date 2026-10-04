@@ -149,7 +149,7 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(actions(page)).toBeVisible();
         expect(await ids(page)).toEqual(['__chat', 'edit', 'removeBg', 'upscale', 'outpaint', 'mark']);
         await expect(actions(page).locator('[data-action-chip="edit"]')).toHaveAttribute('aria-checked', 'true');
-        await expect(card(page)).toContainText('в работе');
+        await expect(card(page)).toContainText('В работе');
         // На телефоне «Работать с этой» панель не поднимает: шторка закрыла бы поле ввода
         if (name === '360') await expect(panelCtx(page)).toHaveCount(0);
         // Кнопка серая, пока нет текста
@@ -199,7 +199,7 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(actions(page).locator('[data-action-chip="__chat"]')).toHaveAttribute('aria-checked', 'true');
         await expect(page.locator('[data-context-row] [data-chip="exec"]'), 'в «Чате» исполнителя нет').toHaveCount(0);
         // Карточка объекта агента помечена ✦, панель от действий агента не двигается
-        await expect(card(page)).toContainText('в работе ✦');
+        await expect(card(page)).toContainText('В работе ✦');
         await expect(panelCtx(page)).toHaveCount(0);
         await actions(page).locator('[data-action-chip="upscale"]').click();
         await expect(page.locator('[data-context-row] [data-chip="exec"]')).toBeVisible({ timeout: 10_000 });
@@ -218,8 +218,7 @@ for (const { name, vp } of VIEWPORTS) {
           await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
         };
         await open();
-        // «Чем»: FLUX Kontext
-        await panelCtx(page).getByRole('button', { name: /^Чем/ }).click();
+        // «Чем»: список раскрыт сразу (макет), сворачивать нечего — выбираем FLUX Kontext
         await panelCtx(page).getByText('FLUX Kontext').first().click();
         if (name !== '360') {
           // Библиотека «Персонажи» открывается отдельной панелью, Аня встаёт референсом с ролью «персонаж».
@@ -236,7 +235,8 @@ for (const { name, vp } of VIEWPORTS) {
           await open();
           await expect(panelCtx(page).locator('[data-ctx-ref="on"]')).toContainText('Аня');
         }
-        // «Вариантов +»: 2 → 3, на кнопке поля и в низу панели «3 вар.» (на 360 — «×3»)
+        // «Вариантов +»: умолчание 1 (макет) → 3, на кнопке поля и в низу панели «3 вар.» (на 360 — «×3»)
+        await panelCtx(page).getByRole('button', { name: 'Больше' }).click();
         await panelCtx(page).getByRole('button', { name: 'Больше' }).click();
         const three = /3 вар\.|×3/;
         await expect(runBtn(page)).toContainText(three);
@@ -336,3 +336,31 @@ for (const { name, vp } of MARKS_VIEWPORTS) {
     await expect(panelCtx(page).locator('[data-ctx-ref="on"]')).toContainText('образец', { timeout: 10_000 });
   });
 }
+
+test('«Как лицо»: роль face уходит на сервер, бейдж «лицо», отказа role_not_accepted нет', async ({ page }) => {
+  await openFeed(page, D, 'light', { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }) });
+  await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+  await page.locator('[data-context-row] [data-chip="primary"]').click();
+  await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
+  await panelCtx(page).getByRole('button', { name: /Добавить из/ }).click();
+  await page.getByText('С компьютера').click();
+  await page.locator('input[data-ctx-upload]').setInputFiles({ name: 'cat.png', mimeType: 'image/png', buffer: Buffer.from('x') });
+  await expect(page.getByText('Как персонажа', { exact: true })).toHaveCount(0);
+  await page.getByRole('menuitem', { name: 'Как лицо' }).or(page.getByText('Как лицо', { exact: true })).first().click();
+  await expect(panelCtx(page).locator('[data-ctx-ref="on"]')).toContainText('лицо', { timeout: 10_000 });
+  const post = w().mutations.find(m => m.method === 'POST' && m.path === '/refs');
+  expect(post?.body).toMatchObject({ kind: 'image', role: 'face' });
+});
+
+test('цена на кнопке следует за «Чем»: смена исполнителя без текста меняет подпись', async ({ page }) => {
+  await openFeed(page, D, 'light', { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }) });
+  await expect(actions(page)).toBeVisible({ timeout: 15_000 });
+  const bar = page.locator('[data-composer-mode-bar]');
+  await expect(bar).toContainText('✦ Изменить', { timeout: 10_000 });
+  await expect(bar).toContainText(/·/, { timeout: 10_000 });
+  const before = (await bar.innerText()).trim();
+  await page.locator('[data-context-row] [data-chip="primary"]').click();
+  await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
+  await panelCtx(page).getByText('FLUX Kontext').first().click();
+  await expect.poll(async () => (await bar.innerText()).trim(), { timeout: 10_000 }).not.toBe(before);
+});

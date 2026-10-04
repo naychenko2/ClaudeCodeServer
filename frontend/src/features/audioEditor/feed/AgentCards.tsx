@@ -1,11 +1,11 @@
 // Карточки ленты для вызовов агентом инструментов audio_* (слот chat-item-tool, по образцу
 // карточек image_* редактора картинок): выбор звука — тихой строкой с переходом к нити,
-// запуск — карточкой со статусом задачи из стора нитей, предложенный текст — с кнопками
-// «Вставить в промпт» и «Сгенерировать», служебные вызовы — короткой строкой без JSON.
+// запуск — карточкой со статусом задачи из стора нитей, предложенный текст — с кнопкой
+// «Сгенерировать», служебные вызовы — короткой строкой без JSON.
 
 import { useState, type ReactNode } from 'react';
 import {
-  AlertTriangle, AudioLines, Check, Eye, ListMusic, Mic, PencilLine, Plus, Scissors, Sparkles, Square, X,
+  AlertTriangle, AudioLines, Check, Eye, ListMusic, Mic, Plus, Scissors, Sparkles, Square, X,
 } from 'lucide-react';
 import { Button, Dot, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, personaLabel, showToast } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
@@ -16,7 +16,7 @@ import { audioScope } from '../scope';
 import { launchFromComposer } from '../thread/actions';
 import { soundSource } from '../thread/modeState';
 import {
-  focusThread, getCatalog, getFocusedThread, getJobsOf, mutate, suggestPrompt, useAudioThreads,
+  focusThread, getCatalog, getFocusedThread, getJobsOf, mutate, useAudioThreads,
   type JobProgress,
 } from '../thread/threadStore';
 import { promptLaunch, promptRunLabel } from './promptLaunch';
@@ -300,16 +300,13 @@ export function AudioPromptCard({ ctx }: { ctx: ChatItemToolCtx }) {
       </div>
       {thread && ctx.sessionId ? (
         <Acts>
-          <Button size="sm" variant="ghost" leftIcon={ic(PencilLine)} onClick={() => suggestPrompt(ctx.sessionId!, prompt)}>
-            Вставить в промпт
-          </Button>
           <Button size="sm" variant="primary" loading={busy} disabled={busy || launched}
             leftIcon={launched ? ic(Check) : ic(Sparkles)} onClick={() => { void generate(); }}>
             {launched ? 'Запущено' : planned ? promptRunLabel(planned) : 'Сгенерировать'}
           </Button>
         </Acts>
       ) : (
-        <Note>Выберите звук в полосе «Звук», чтобы запустить этот текст.</Note>
+        <Note>Сделайте звук основным объектом («Работать с этой» на карточке), чтобы запустить этот текст.</Note>
       )}
     </Card>
   );

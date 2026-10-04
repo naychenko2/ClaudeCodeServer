@@ -242,6 +242,7 @@ public sealed class DspAudioEngine(
         }
 
         var version = written.NewVersions[0];
+        threads.AdvanceContext(ownerId, sessionId, thread.Id, written);
         // Своя карточка версии в ленте: каждая версия нити рисуется ровно одной карточкой
         await threads.AnchorAsync(sessionId, thread, ct, version.Id);
         await threads.BroadcastAsync(ownerId, scope.Key, sessionId, written.State);

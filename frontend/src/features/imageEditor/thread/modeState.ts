@@ -84,26 +84,5 @@ export function useImageModeVersion(): number {
 
 export function __resetImageModes() {
   _modes.clear();
-  _edited.clear();
   emit();
-}
-
-// Какую картинку чата правили последней — отметка в меню «Что править?». Пишет запуск правки
-// (не новой картинки); хранится там же, где режим: в памяти и в localStorage устройства
-const editedKey = (sessionId: string) => `cc-image-edited:${sessionId}`;
-const _edited = new Map<string, string | null>();
-
-export function getLastEdited(sessionId: string | null): string | null {
-  if (!sessionId) return null;
-  if (_edited.has(sessionId)) return _edited.get(sessionId) ?? null;
-  let v: string | null = null;
-  try { v = localStorage.getItem(editedKey(sessionId)); } catch { /* приватный режим */ }
-  _edited.set(sessionId, v);
-  return v;
-}
-
-export function noteLastEdited(sessionId: string, threadId: string) {
-  if (!modeAware() || getLastEdited(sessionId) === threadId) return;
-  _edited.set(sessionId, threadId);
-  try { localStorage.setItem(editedKey(sessionId), threadId); } catch { /* приватный режим */ }
 }

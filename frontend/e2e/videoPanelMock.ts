@@ -1,12 +1,12 @@
-import { expect, type Page, type Route, type WebSocketRoute } from '@playwright/test';
+import type { Page, Route, WebSocketRoute } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Мок стенда для спек «Видео» (video-*.spec.ts): собранный dist раздаётся статикой, /api/** и хаб —
+// Мок стенда для спек «Видео» (video-editor.spec.ts, context-actions-video.spec.ts): /api/** и хаб —
 // моки по контрактам ADR-022. Мир один на тест: сцены чата, фильмы проекта, лента (записи модуля),
 // котировки, запуски и сборки; запись нитей и фильма рассылается событием хаба, как на бою.
-// «Картинки» и «Звук» — минимальные заглушки ровно для стыков (preset и returnTo).
+// «Картинки» и «Звук» — минимальные заглушки ровно для стыков (передача хода в контекст).
 
 export const P = 'proj-vid';
 export const S = 'chat-vid';
@@ -132,6 +132,10 @@ export interface World {
   audioThreads: Record<string, unknown>[];
   // Фильм, ждущий музыку из «Звука» (films/music)
   musicFor: string | null;
+  // Основная сцена контекста хода: запуск съёмки по ревизии контекста идёт без sceneId — сцену знает сервер
+  runScene?: string;
+  // Новая сцена становится основной: бэкенд зеркалит фокус сцен в контекст хода, мок контекста подключается сюда
+  onSceneCreated?: (sceneId: string) => void;
 }
 
 let world: World;
@@ -284,7 +288,8 @@ function runBuild(f: Film) {
 }
 
 export async function mockApi(page: Page, trace = false) {
-  await page.route('**/hubs/**', async (r: Route) => {
+  // Только корневые /hubs/ и /api/: на dev-сервере Vite исходники лежат и под src/**/api/, glob их бы перехватил
+  await page.route(u => u.pathname.startsWith('/hubs/'), async (r: Route) => {
     if (r.request().url().includes('negotiate')) {
       return r.fulfill({ json: { negotiateVersion: 1, connectionId: 'c', connectionToken: 'c', availableTransports: [{ transport: 'WebSockets', transferFormats: ['Text'] }] } });
     }
@@ -304,7 +309,7 @@ export async function mockApi(page: Page, trace = false) {
       }
     });
   });
-  await page.route('**/api/**', async (r: Route) => {
+  await page.route(u => u.pathname.startsWith('/api/'), async (r: Route) => {
     const url = new URL(r.request().url());
     const p = decodeURIComponent(url.pathname.replace(/^\/api/, ''));
     const method = r.request().method();
@@ -346,6 +351,7 @@ export async function mockApi(page: Page, trace = false) {
       const s: Scene = { ...scene(n), settings: { text: '', ...(b.settings as object) } as Scene['settings'], name: (b.name as string) ?? `Сцена ${n}` };
       world.scenes.push(s);
       world.focus = { ...world.focus, sceneId: s.sceneId };
+      world.onSceneCreated?.(s.sceneId);
       world.revision++;
       pushRecord(record('video_scene', { sceneId: s.sceneId }, `Видео: ${s.name}`, Date.now()));
       setTimeout(pushThreads, 30);
@@ -436,7 +442,7 @@ export async function mockApi(page: Page, trace = false) {
       const jobId = `job${world.jobs.length + 1}`;
       world.jobs.push({ ...b, jobId });
       const q = world.quotes.at(-1) ?? {};
-      const s = world.scenes.find(x => x.sceneId === b.sceneId);
+      const s = world.scenes.find(x => x.sceneId === (b.sceneId || world.runScene));
       if (s) {
         s.launches.push({ jobId, at: now, status: 'running', interrupted: false, initiator: 'human', provider: q.provider ?? 'fal', model: q.model ?? 'veo-3.1', count: q.count ?? 1, prompt: s.settings.text });
         world.revision++;
@@ -505,6 +511,10 @@ export async function mockApi(page: Page, trace = false) {
     if (p === itb && method === 'GET') return json(imgState());
     if (p === itb && method === 'POST') {
       const b = body();
+      // Как у бэкенда: черновик в несуществующую папку проекта — 400
+      if (!world.personal && !b.file && b.draftFolder && !TREE.some(e => e.path === b.draftFolder && e.isDirectory)) {
+        return json({ error: 'Папка не найдена в проекте', code: 'invalid_request' }, 400);
+      }
       world.imageThreads.push({
         id: `img-${world.imageThreads.length + 1}`, file: b.file ?? null, lineage: [], draftFolder: b.file ? null : b.draftFolder, stacks: [], currentStackId: null,
         currentStepId: null, settings: null, pendingJobId: null, createdAt: now,
@@ -536,6 +546,15 @@ export async function mockApi(page: Page, trace = false) {
       return json(TREE.filter(e => ((e.path as string).includes('/') ? (e.path as string).slice(0, (e.path as string).lastIndexOf('/')) : '') === dir));
     }
     if (p === `/projects/${P}/files/upload`) return json({});
+    if (p === `/projects/${P}/files/mkdir` && method === 'POST') {
+      // Родительские папки создаются сами, повтор не ошибка
+      const parts = String(body().path).split('/');
+      parts.forEach((_, i) => {
+        const dir = parts.slice(0, i + 1).join('/');
+        if (!TREE.some(e => e.path === dir)) TREE.push({ name: parts[i], path: dir, isDirectory: true, modified: now, isModified: false });
+      });
+      return json({});
+    }
     if (p === `/projects/${P}/files/stream`) {
       const fp = url.searchParams.get('path') ?? '';
       if (/\.mp4$/.test(fp)) return r.fulfill({ contentType: 'video/mp4', body: MP4 });
@@ -559,28 +578,8 @@ export async function mockApi(page: Page, trace = false) {
   });
 }
 
-export async function openChat(page: Page, o: { vp: { width: number; height: number }; theme?: 'light' | 'dark'; trace?: boolean; route?: string }) {
-  await page.setViewportSize(o.vp);
-  await page.addInitScript(([th, s]) => {
-    localStorage.setItem('cc_token', 'e2e-token');
-    localStorage.setItem('cc_user_id', 'u1');
-    localStorage.setItem('theme-mode', th as string);
-    localStorage.setItem(`cc-composer-strip-collapsed:${s}:video`, '0');
-  }, [o.theme ?? 'light', S]);
-  await mockApi(page, o.trace);
-  if (o.trace) page.on('console', m => { if (m.type() === 'error') console.log('CONSOLE', m.text().slice(0, 2000)); });
-  await page.goto(o.route ?? (world.personal ? `/#/chats/${S}` : `/#/project/${P}/chat/${S}`));
-}
-
-export const strip = (page: Page) => page.locator('[data-video-strip]');
-export const panel = (page: Page) => page.getByRole('complementary', { name: 'Видео' }).or(page.getByRole('dialog', { name: 'Видео' })).first();
-
 export async function shot(page: Page, dir: string, name: string) {
   if (!dir) return;
   fs.mkdirSync(dir, { recursive: true });
   await page.screenshot({ path: path.join(dir, `${name}.png`) });
-}
-
-export async function stripReady(page: Page) {
-  await expect(page.locator('[data-composer-strip="video"]')).toBeVisible({ timeout: 30_000 });
 }

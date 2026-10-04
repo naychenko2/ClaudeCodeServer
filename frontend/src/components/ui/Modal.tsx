@@ -76,7 +76,7 @@ export function Modal({
   // крестик — справа; если заголовка нет, крестик всё равно показывается
   // (success/error-фазы диалогов скрывают заголовок, но крестик нужен).
   const titleBlock = (title || subtitle) && (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flexShrink: 1, flex: 1, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1, minWidth: 0 }}>
       {title && (
         <h2 style={{
           fontFamily: FONT.serif, fontWeight: 500, fontSize: isMobile ? 21 : 22, margin: 0,

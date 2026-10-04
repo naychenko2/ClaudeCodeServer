@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
-import { forgetComposerOnChatDeleted } from '../lib/composerStrips';
+import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
 import { archiveApi } from '../api/chats';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { joinUser, onMessage } from '../lib/signalr';
@@ -27,9 +27,7 @@ import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels, openKeysOf } from './workspace/panelStackState';
 import { followHost } from '../lib/genPanelFollow';
-import { CHAT_KEYS, chatRightKeys, isPanelKey, type PanelKey } from './workspace/panelCatalog';
-import { FLAGS, useFeature } from '../lib/featureFlags';
-import { LEGACY_GEN_PANEL_KEYS } from '../lib/genPanelKeys';
+import { CHAT_KEYS, CHAT_RIGHT_KEYS, isPanelKey, type PanelKey } from './workspace/panelCatalog';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
 import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
@@ -115,7 +113,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       // Чат удалён на сервере (в т.ч. авто-удаление временного) — убираем из списка,
       // открытый чат закрываем. Side-эффекты в апдейтере идемпотентны.
       if (msg.type === 'chat_deleted') {
-        forgetComposerOnChatDeleted(msg);
+        forgetChatContextOnDeleted(msg);
         setChats(prev => prev.filter(c => c.id !== msg.sessionId));
         setActiveId(prev => {
           if (prev !== msg.sessionId) return prev;
@@ -293,9 +291,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // здесь нет, поэтому projectId = null — проектные вклады («Персонажи») отказываются
   // сами. Без вкладов контента нет, и рельса кнопок не показывает
   const panelDefs = useSlot<WorkspacePanelDefCtx, WorkspacePanelDefApi>(SLOT_WORKSPACE_PANEL_DEF);
-  // Единая панель «Контекст» вместо «Картинок» и «Звука» (ADR-023 §Д1)
-  const ctxPanelOn = useFeature(FLAGS.composerContextRow);
-  const chatRight = chatRightKeys(ctxPanelOn);
+  const chatRight = CHAT_RIGHT_KEYS;
   // Канал выбрали в КАТАЛОГЕ — эфир идёт в боковой панели, а та могла быть закрыта
   // или лежать в ящике рельсы. Раскладка — епархия страницы, поэтому являет панель
   // она, а стор только просит об этом событием.
@@ -600,14 +596,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               onUserClose={k => markGenPanelDismissed(activeChat.id, k)}
               panels={{
                 ...Object.fromEntries(panelDefs.flatMap(d => (
-                  d.name && isPanelKey(d.name) && chatRight.includes(d.name) && d.render && !(ctxPanelOn && LEGACY_GEN_PANEL_KEYS.includes(d.name)) && (d.action?.isAvailable?.(null) ?? true)
+                  d.name && isPanelKey(d.name) && chatRight.includes(d.name) && d.render && d.name !== 'chatContext' && (d.action?.isAvailable?.(null) ?? true)
                     ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => { markGenPanelDismissed(activeChat.id, d.name!); closePanelKey(d.name as PanelKey); } })]]
                     : []
                 ))),
-                ...(ctxPanelOn ? {
-                  chatContext: <ContextPanelHost session={activeChat} project={null}
-                    onClose={() => { markGenPanelDismissed(activeChat.id, 'chatContext'); closePanelKey('chatContext'); }} />,
-                } : {}),
+                chatContext: <ContextPanelHost session={activeChat} project={null}
+                  onClose={() => { markGenPanelDismissed(activeChat.id, 'chatContext'); closePanelKey('chatContext'); }} />,
               }}
               sessionPanels={sessionPanels} compact={isTablet}
             />

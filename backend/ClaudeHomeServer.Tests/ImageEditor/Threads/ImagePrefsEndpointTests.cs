@@ -6,6 +6,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Tests.ImageEditor.Characters;
@@ -155,7 +156,11 @@ public class ImagePrefsEndpointTests : IDisposable
         var dir = Path.Combine(_root, "characters", "anya");
         Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "character.json"), """{"name":"Аня","slug":"anya","photos":[]}""");
+        // Запись слага прекращена (персонаж — ref контекста): тело игнорируется, старый файл читается
         (await _client.PutAsJsonAsync(Prefs(), Body(character: "anya"))).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(await _client.GetAsync(Prefs()))).GetProperty("characterSlug").ValueKind.Should().Be(JsonValueKind.Null);
+        _factory.Services.GetRequiredService<ImageProjectPrefsStore>()
+            .Save(_ownerId, _projectId, new ImageProjectPrefs("fal", "m1", 3, false, "anya"));
         (await Json(await _client.GetAsync(Prefs()))).GetProperty("characterSlug").GetString().Should().Be("anya");
 
         Directory.Delete(dir, recursive: true);

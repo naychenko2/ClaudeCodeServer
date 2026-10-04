@@ -1,7 +1,6 @@
 // Строка контекста хода: связка стора контекста (lib/chatContext) и git-чипа с отрисовкой
-// ContextRowView. Рисуется вместо хоста полос над композером, когда включён флаг
-// composer-context-row. Открытость правой панели сюда не приходит: строка от неё не зависит.
-import { useEffect, useState, type ReactNode } from 'react';
+// ContextRowView. Открытость правой панели сюда не приходит: строка от неё не зависит.
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { File as FileIcon } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
@@ -9,6 +8,8 @@ import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
 import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
 import { getKindApi } from '../../lib/chatContext/registry';
+import { getRunVersion, subscribeRun } from '../../lib/chatContext/actionRun';
+import { withThumb } from '../../lib/chatContext/thumbs';
 import {
   clearContext, detachRef, ensureChatContext, releasePrimary, undoReleasePrimary, useChatContext, useReleaseOffer,
 } from '../../lib/chatContext/store';
@@ -94,11 +95,15 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
   const ctx = useChatContext(sessionId);
   const offer = useReleaseOffer(sessionId);
   useActionMemoryVersion();
+  // Ответ вопроса («набор стемов») живёт в состоянии запуска и меняет строки «Чем»: строка обязана его слушать
+  useSyncExternalStore(subscribeRun, getRunVersion, getRunVersion);
   const [ref, width] = useContainerWidth<HTMLDivElement>();
   useEffect(() => { void ensureChatContext(sessionId); }, [sessionId]);
 
-  const { primary, refs } = ctx;
   const kindCtx = { projectId: project?.id ?? null, sessionId, isMobile };
+  // Миниатюры сервер не присылает: адрес собираем здесь (вид объекта или путь файла проекта)
+  const primary = ctx.primary ? withThumb(kindCtx, ctx.primary) : null;
+  const refs = ctx.refs.map(r => withThumb(kindCtx, r));
 
   // Выбранное действие объекта: предвыбор → память → умолчание (Р1). «Чем» есть только у run-действия
   // executors() вида зовётся на каждый рендер намеренно: выбранный исполнитель живёт в сторе вертикали,

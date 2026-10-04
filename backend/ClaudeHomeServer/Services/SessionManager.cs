@@ -1163,13 +1163,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             VideoEditor.VideoEditorAgentTools.AutoAllowTools);
     }
 
-    // MCP-сервер «Контекст чата» (ADR-023 §3.2) — по тем же правилам, что audio-editor: любой чат владельца,
-    // флаг composer-context-row (свойство владельца), тулсет в реестре, все три точки сборки контекста. От хода и
+    // MCP-сервер «Контекст чата» (ADR-023 §3.2) — любой чат владельца, тулсет в реестре, все три точки
+    // сборки контекста. От хода и
     // содержимого контекста состав не зависит (McpToolsetStabilityTests).
     internal TurnContextMcpContext? BuildTurnContextContext(string? ownerId, Session session)
     {
         if (ownerId is null) return null;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow)) return null;
         _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
         if (_mcpToolsets?.Find(McpEndpoints.TurnContextName) is null) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);

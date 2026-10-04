@@ -1,20 +1,16 @@
 // Стор «Видео» по чатам (ADR-022): нити сцен с сервера (GET state + video_thread_changed),
 // каталог и префы области, ход съёмки (video_edit_progress → completed / failed), фильмы
-// проекта (кеш FilmState + video_film_changed) и локальное состояние экрана. Выбор сцены
-// старше запомненной полосы: фокус просит полосу «Видео» у стора полос ядра, снятие — отпускает.
-// Фокус, сменившийся событием, а не ответом на свой клик, выбрал агент: панель он не двигает,
-// каркас показывает подсказку «Claude взял в работу» (noteAgentPick, а не reveal).
+// проекта (кеш FilmState + video_film_changed) и локальное состояние экрана.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { dropAgentPickOf, noteAgentPick, notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
+import { onReconnected, refreshChatContext, showToast } from 'aihome_shell/kit';
 import {
   conflictState, EMPTY_THREADS, errorText, filmConflict, videoApi,
-  type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent, type VideoFocus,
+  type FilmBuildStatus, type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent,
   type VideoPrefs, type VideoScene, type VideoSceneSettings, type VideoThreadsState,
 } from '../api';
 import { isPersonalScope } from '../scope';
 
-export const VIDEO_STRIP = 'video';
 export const VIDEO_PANEL = 'videoEditor';
 // Ключ элемента для черновиков и выбора: панель + сцена («videoEditor:{sceneId}»)
 export const sceneDraftKey = (sceneId: string) => `${VIDEO_PANEL}:${sceneId}`;
@@ -34,7 +30,12 @@ export interface JobProgress {
   count: number;
 }
 
-interface FilmEntry { state: FilmState | null; loading: boolean; error: string | null; code: string | null }
+// permanent — отказ сервера 4xx: повторять бессмысленно, причина показана; retryAt/fails — повтор сбоя сети
+// с нарастающей паузой
+interface FilmEntry {
+  state: FilmState | null; loading: boolean; error: string | null; code: string | null;
+  permanent?: boolean; retryAt?: number; fails?: number;
+}
 
 const _entries = new Map<string, Entry>();
 const _catalogs = new Map<string, VideoCatalog>();
@@ -65,47 +66,15 @@ function subscribe(fn: () => void) {
   return () => { _listeners.delete(fn); };
 }
 const getVersion = () => _version;
+// Подписка вне React: вид контекста хода будит хост при смене сцен, каталога и фильмов
+export const subscribeVideoStore = subscribe;
 
-const hasFocus = (f: VideoFocus | undefined) => !!(f?.sceneId || f?.filmPath);
-
-// Фокус меняет полосу над композером: выбрали сцену или фильм — «Видео», сняли — прежняя
-function syncStrip(sessionId: string, prev: VideoFocus | undefined, next: VideoFocus) {
-  if (hasFocus(next) && (next.sceneId !== prev?.sceneId || next.filmPath !== prev?.filmPath)) requestStrip(sessionId, VIDEO_STRIP);
-  else if (!hasFocus(next) && hasFocus(prev)) releaseStrip(sessionId, VIDEO_STRIP);
-}
-
-// byAgent — фокус сменил агент: полосу не переключаем (на телефоне смена полосы закрыла бы шторку
-// соседнего раздела — агент панель не двигает)
-function apply(sessionId: string, scope: string, state: VideoThreadsState, byAgent = false) {
+function apply(sessionId: string, scope: string, state: VideoThreadsState) {
   const e = _entries.get(sessionId);
   // Событие старше того, что уже знаем, — пропускаем
   if (e?.loaded && e.state.revision > state.revision) return;
-  const prevFocus = e?.loaded ? e.state.focus : undefined;
   _entries.set(sessionId, { scope, state, loaded: true, loading: false });
-  if (!byAgent) syncStrip(sessionId, prevFocus, state.focus);
   emit();
-  notifyComposer();
-}
-
-// Фокус сменился событием с сервера, а не ответом на свой клик, — его выбрал агент: панель он не
-// двигает (никакого reveal), а каркас покажет подсказку «Claude взял в работу». Вкладка — явная
-export function noteAgentFocus(sessionId: string, prev: VideoThreadsState | null, next: VideoThreadsState): boolean {
-  if (!prev || next.revision < prev.revision || (_own.get(sessionId) ?? 0) > 0) return false;
-  const was = prev.focus;
-  const now = next.focus;
-  if (was.sceneId !== now.sceneId) {
-    if (!now.sceneId) dropAgentPickOf(sessionId, VIDEO_PANEL);
-    else {
-      const scene = next.scenes.find(s => s.sceneId === now.sceneId);
-      noteAgentPick(sessionId, { panelKey: VIDEO_PANEL, target: sceneDraftKey(now.sceneId), label: scene?.name ?? 'сцена', tab: 'scene' });
-    }
-    return true;
-  }
-  if (was.filmPath !== now.filmPath && now.filmPath) {
-    noteAgentPick(sessionId, { panelKey: VIDEO_PANEL, target: filmTarget(now.filmPath), label: filmName(now.filmPath), tab: 'film' });
-    return true;
-  }
-  return false;
 }
 
 // «video/утро/утро.film» → «утро»
@@ -183,8 +152,7 @@ export function handleEvent(ev: VideoEvent) {
       const e = _entries.get(ev.sessionId);
       if (!e) return;
       noteAgentFrames(ev.sessionId, e.loaded ? e.state : null, ev.state);
-      const byAgent = noteAgentFocus(ev.sessionId, e.loaded ? e.state : null, ev.state);
-      apply(ev.sessionId, ev.scopeKey, ev.state, byAgent);
+      apply(ev.sessionId, ev.scopeKey, ev.state);
       return;
     }
     case 'video_film_changed':
@@ -246,12 +214,6 @@ export async function ensureVideoThreads(scope: string, sessionId: string): Prom
   await load(scope, sessionId);
 }
 
-// Вход в чат: владелец полосы заново просит «Видео» по серверному фокусу
-export function enterChat(sessionId: string) {
-  const e = _entries.get(sessionId);
-  if (e?.loaded && hasFocus(e.state.focus)) requestStrip(sessionId, VIDEO_STRIP);
-}
-
 export function getThreadsState(sessionId: string | null): VideoThreadsState {
   return (sessionId && _entries.get(sessionId)?.state) || EMPTY_THREADS;
 }
@@ -284,6 +246,22 @@ export function useVideoThreads(scope: string, sessionId: string | null): VideoT
   return getThreadsState(sessionId);
 }
 
+// ── Редакторы «Сцена» и «Монтаж» (ADR-023, шаг 3ф-2): окно открыто в одном чате за раз ──
+
+export type VideoEditorKind = 'scene' | 'film';
+export interface VideoEditorOpen { sessionId: string; kind: VideoEditorKind }
+let _editor: VideoEditorOpen | null = null;
+export const getVideoEditor = (): VideoEditorOpen | null => _editor;
+export function openVideoEditor(sessionId: string, kind: VideoEditorKind) {
+  _editor = { sessionId, kind };
+  emit();
+}
+export function closeVideoEditor() {
+  if (!_editor) return;
+  _editor = null;
+  emit();
+}
+
 export function useVideoStoreVersion(): number {
   return useSyncExternalStore(subscribe, getVersion, getVersion);
 }
@@ -301,6 +279,8 @@ export async function mutate(
   if (ownFocus) _own.set(sessionId, (_own.get(sessionId) ?? 0) + 1);
   try {
     apply(sessionId, scope, await run(getThreadsState(sessionId).revision));
+    // Смена фокуса «Видео» ставит сцену/фильм основным объектом на сервере: контекст чата не ждёт события рассылки
+if (ownFocus) void refreshChatContext(sessionId);
     return true;
   } catch (e) {
     const st = conflictState(e);
@@ -343,19 +323,41 @@ const EMPTY_FILM: FilmEntry = { state: null, loading: false, error: null, code: 
 export const getFilm = (sessionId: string | null, path: string | null): FilmEntry =>
   (sessionId && path && _films.get(filmKey(sessionId, path))) || EMPTY_FILM;
 
+const FILM_RETRY_BASE_MS = 2000;
+const FILM_RETRY_MAX_MS = 60_000;
+const _filmRetry = new Map<string, ReturnType<typeof setTimeout>>();
+
+// 4xx (кроме «таймаут» и «слишком часто») — приговор запросу, а не сбой канала
+const isPermanentFailure = (e: unknown) => {
+  const st = (e as { status?: unknown } | null)?.status;
+  return typeof st === 'number' && st >= 400 && st < 500 && st !== 408 && st !== 429;
+};
+
 export async function loadFilm(scope: string, sessionId: string, path: string, force = false) {
   if (isPersonalScope(scope)) return;
   const k = filmKey(sessionId, path);
   const cur = _films.get(k);
   if (cur && (cur.loading || (cur.state && !force))) return;
-  _films.set(k, { state: cur?.state ?? null, loading: true, error: null, code: null });
+  // Прошлая попытка кончилась отказом: хост зовёт загрузку на каждый рендер, поэтому без явной
+  // пересинхронизации (force) отказ 4xx не повторяем вовсе, а сбой сети — не раньше срока
+  if (cur?.error && !force && (cur.permanent || Date.now() < (cur.retryAt ?? 0))) return;
+  clearTimeout(_filmRetry.get(k));
+  _filmRetry.delete(k);
+  _films.set(k, { state: cur?.state ?? null, loading: true, error: null, code: null, fails: cur?.fails });
   emit();
   try {
     const st = await videoApi.filmState(scope, sessionId, path);
     _films.set(k, { state: st, loading: false, error: null, code: null });
   } catch (e) {
     const code = (e as { body?: { code?: unknown } } | null)?.body?.code;
-    _films.set(k, { state: cur?.state ?? null, loading: false, error: errorText(e, 'Фильм не прочитался'), code: typeof code === 'string' ? code : null });
+    const permanent = isPermanentFailure(e);
+    const fails = (cur?.fails ?? 0) + 1;
+    const wait = Math.min(FILM_RETRY_MAX_MS, FILM_RETRY_BASE_MS * 2 ** (fails - 1));
+    _films.set(k, {
+      state: cur?.state ?? null, loading: false, error: errorText(e, 'Фильм не прочитался'),
+      code: typeof code === 'string' ? code : null, permanent, fails, retryAt: permanent ? undefined : Date.now() + wait,
+    });
+    if (!permanent) _filmRetry.set(k, setTimeout(() => { void loadFilm(scope, sessionId, path); }, wait));
   }
   emit();
 }
@@ -409,15 +411,18 @@ export async function patchFilm(scope: string, sessionId: string, path: string, 
   }
 }
 
-// Сборка: статус едет в FilmState.build (video_film_changed); ответ POST кладём сразу, не дожидаясь
-// события. Отказ возвращается с кодом: 503 dsp_unavailable делает «Собрать» серым с причиной
+// Статус сборки едет в FilmState.build (video_film_changed); ответ POST кладём сразу, не дожидаясь события
+export function setFilmBuild(sessionId: string, path: string, build: FilmBuildStatus) {
+  const k = filmKey(sessionId, path);
+  const cur = _films.get(k);
+  if (cur?.state) _films.set(k, { ...cur, state: { ...cur.state, build } });
+  emit();
+}
+
+// Отказ возвращается с кодом: 503 dsp_unavailable делает «Собрать» серым с причиной
 export async function buildFilm(scope: string, sessionId: string, path: string): Promise<{ ok: boolean; code: string | null; text: string }> {
   try {
-    const b = await videoApi.buildFilm(scope, sessionId, path);
-    const k = filmKey(sessionId, path);
-    const cur = _films.get(k);
-    if (cur?.state) _films.set(k, { ...cur, state: { ...cur.state, build: b } });
-    emit();
+    setFilmBuild(sessionId, path, await videoApi.buildFilm(scope, sessionId, path));
     return { ok: true, code: null, text: '' };
   } catch (e) {
     const code = (e as { body?: { code?: unknown } } | null)?.body?.code;
@@ -495,6 +500,8 @@ export function __resetVideoStore() {
   _catalogs.clear();
   _prefs.clear();
   _jobs.clear();
+  _filmRetry.forEach(clearTimeout);
+  _filmRetry.clear();
   _films.clear();
   _filmLists.clear();
   _own.clear();

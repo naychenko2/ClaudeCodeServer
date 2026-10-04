@@ -182,8 +182,9 @@ jobs:
         continue-on-error: true
       # Сторож импортов MF-модулей «Редактор картинок» (ADR-018 §10.3) и «Звук» (ADR-021 §3) —
       # жёсткий гейт отдельным конфигом: в общем линте выше он тонул бы в легаси-долге
-      - name: Lint remote guard (image-editor, audio-editor)
-        run: npx eslint --config eslint.remote.config.js src/features/imageEditor src/features/audioEditor
+      # Видео — ADR-022, хосты контекста хода — ADR-023 §Д6
+      - name: Lint remote guard (image-editor, audio-editor, video-editor, хосты контекста)
+        run: npx eslint --config eslint.remote.config.js src/features/imageEditor src/features/audioEditor src/features/videoEditor src/components/chat src/components/generation
       - name: Build (tsc -b + vite)
         run: npm run build
       - name: Test

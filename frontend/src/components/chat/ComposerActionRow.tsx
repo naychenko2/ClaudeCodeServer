@@ -4,14 +4,22 @@
 // Здесь только отрисовка по готовой модели: операций и подписей вертикалей хост не знает, цену и подпись
 // кнопки считает useActionRun.
 import { useState, type KeyboardEvent } from 'react';
-import { ChevronDown, MessageSquare, Pencil } from 'lucide-react';
+import {
+  Activity, Brush, ChevronDown, Expand, Film, Image as ImageIcon, Layers, Link, Maximize2, MessageSquare, Mic, Music, Pencil, Scissors,
+  SlidersHorizontal, Sparkles, Users, type LucideIcon,
+} from 'lucide-react';
 import { actionChips, chipSelectable, CHAT_CHIP_ID, type ActionChip } from '../../lib/chatContext/actionChips';
-import type { ContextAction } from '../../lib/chatContext/types';
+import type { ContextAction, ContextActionIcon } from '../../lib/chatContext/types';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { InlineSegmented, Menu, MenuItem } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 
 export const ACTION_CHIP_H = 26;
+
+const CHIP_ICON: Readonly<Record<ContextActionIcon, LucideIcon>> = {
+  spark: Sparkles, scissors: Scissors, maximize: Maximize2, expand: Expand, brush: Brush, image: ImageIcon, mic: Mic, users: Users,
+  activity: Activity, layers: Layers, music: Music, link: Link, sliders: SlidersHorizontal, film: Film,
+};
 
 export interface ComposerActionRowProps {
   actions: readonly ContextAction[];
@@ -26,6 +34,15 @@ export interface ComposerActionRowProps {
 const act = (fn: () => void) => (e: KeyboardEvent) => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
 };
+
+const CHIP_THUMB = 16;
+
+function ChipThumb({ url }: { url: string | null }) {
+  const box = { width: CHIP_THUMB, height: CHIP_THUMB, borderRadius: R.sm, flexShrink: 0, boxSizing: 'border-box' } as const;
+  return url
+    ? <img data-chip-thumb="" src={url} alt="" draggable={false} style={{ ...box, objectFit: 'cover', border: `1px solid ${C.border}` }} />
+    : <span data-chip-thumb="empty" aria-hidden style={{ ...box, border: `1px dashed ${C.border}` }} />;
+}
 
 function Chip({ c, selected, onPick }: {
   c: ActionChip; selected: boolean; onPick: (rect: DOMRect | null) => void;
@@ -55,7 +72,11 @@ function Chip({ c, selected, onPick }: {
       }}
     >
       {c.kind === 'chat' && <MessageSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
-      {c.kind === 'editor' && <Pencil size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
+      {(() => {
+        const Icon = c.action?.icon ? CHIP_ICON[c.action.icon] : c.kind === 'editor' ? Pencil : null;
+        return Icon ? <Icon size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> : null;
+      })()}
+      {c.kind === 'menu' && c.action?.thumb !== undefined && <ChipThumb url={c.action.thumb} />}
       {c.label}
       {c.kind === 'menu' && <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
     </span>
@@ -88,7 +109,7 @@ export function ComposerActionRow({ actions, selectedId, onSelect, question, isM
         <div data-action-question="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
           <span style={{ fontSize: FS.sm, color: C.textMuted, flexShrink: 0 }}>{q.title}:</span>
           <InlineSegmented isMobile={isMobile} value={question.value} onChange={question.onChange}
-            options={q.options.map(o => ({ value: o.value, label: o.label }))} />
+            options={q.options.map(o => ({ value: o.value, label: o.label, title: `${q.title}: ${o.label}` }))} />
         </div>
       )}
       {menu && (

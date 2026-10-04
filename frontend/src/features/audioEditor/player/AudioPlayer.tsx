@@ -28,10 +28,12 @@ export interface AudioPlayerProps {
   /** Кнопки под выделением: «Обрезать», «Перегенерировать кусок» */
   selectionActions?: ReactNode;
   compact?: boolean;
+  /** Крупная волна: редактор на весь экран */
+  large?: boolean;
 }
 
 export function AudioPlayer({
-  sources, activeKey, onActiveChange, selection = null, onSelectionChange, selectionActions, compact,
+  sources, activeKey, onActiveChange, selection = null, onSelectionChange, selectionActions, compact, large,
 }: AudioPlayerProps) {
   const [ownKey, setOwnKey] = useState(sources[0]?.key ?? '');
   const key = activeKey ?? ownKey;
@@ -161,7 +163,7 @@ export function AudioPlayer({
           onSeek={seek}
           selection={selection}
           onSelectionChange={onSelectionChange}
-          size={compact ? 'sm' : 'md'}
+          size={compact ? 'sm' : large ? 'lg' : 'md'}
           ariaLabel={src?.title ? `Волна: ${src.title}` : 'Волна'}
         />
         <span data-player-time style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>

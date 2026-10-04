@@ -159,7 +159,7 @@ public class LocalMediaDefaultContributorTests
     {
         var text = personal ? LocalMediaDefaultContributor.PersonalRule : LocalMediaDefaultContributor.ProjectRule;
 
-        text.Should().Contain("если в блоке «Картинки в этом чате» указан поставщик — используй его (не подменяй)", "(б)")
+        text.Should().Contain("если в «Чем» контекста хода указан поставщик — используй его (не подменяй)", "(б)")
             .And.Contain("(это исключение из правила «не передавай provider»)", "(б)")
             .And.Contain("если числа нет — не называй его, скажи просто «рисую локально (бесплатно)»", "(в)")
             .And.NotContain("с/мин", "(в)")
@@ -171,24 +171,10 @@ public class LocalMediaDefaultContributorTests
     // Внутри варианта текст не зависит от хода: иначе хвост гонял бы разный текст
     // ── Строка контекста (ADR-023 §3.1, 2б-2): выбор человека виден в «Чем» контекста хода, полос больше нет ──
 
-    private static readonly string[] AllFlagsWithRow = [.. AllFlags, FeatureFlagKeys.ComposerContextRow];
-
     [Fact]
-    public async Task Без_флага_строки_контекста_тексты_всех_вариантов_прежние_байт_в_байт()
+    public async Task Ни_один_вариант_не_ссылается_на_полосы()
     {
-        (await Contributor().BuildAsync(Project(), "x"))!.Sections[0].Text.Should().Be(LocalMediaDefaultContributor.ProjectRule);
-        (await Contributor().BuildAsync(Personal(), "x"))!.Sections[0].Text.Should().Be(LocalMediaDefaultContributor.PersonalRule);
-        (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true), "x"))!.Sections[0].Text
-            .Should().Be(LocalMediaDefaultContributor.ProjectRuleWithAudioEditor);
-        (await Contributor().BuildAsync(Personal(hasAudioEditorMcp: true), "x"))!.Sections[0].Text
-            .Should().Be(LocalMediaDefaultContributor.PersonalRuleWithAudioEditor);
-        LocalMediaDefaultContributor.ProjectRule.Should().Contain("полосе «Картинки»");
-    }
-
-    [Fact]
-    public async Task При_строке_контекста_ни_один_вариант_не_ссылается_на_полосы()
-    {
-        var contributor = Contributor(flags: AllFlagsWithRow);
+        var contributor = Contributor();
         var texts = new[]
         {
             await contributor.BuildAsync(Project(), "x"),
@@ -205,7 +191,7 @@ public class LocalMediaDefaultContributorTests
             text.Should().Contain("«Чем» контекста хода");
         }
         texts[0].Should().Contain("Выбор человека в строке контекста, если в «Чем» контекста хода указан исполнитель")
-            .And.Contain(LocalMediaDefaultContributor.BandProviderRuleContextRow);
+            .And.Contain(LocalMediaDefaultContributor.BandProviderRule);
         texts[2].Should().Contain("если в «Чем» контекста хода указан поставщик — используй его (не подменяй)");
         texts[0].Should().Contain("Картинки: если в ходе есть блок «Картинки в этом чате»", "сам блок под флагом остаётся");
     }
@@ -313,7 +299,8 @@ public class LocalMediaDefaultContributorTests
     {
         var text = (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true, hasVideoEditorMcp: true), null))!.Sections[0].Text;
 
-        text.Should().Contain(LocalMediaDefaultContributor.ProjectVideoEditorRule).And.Contain(LocalMediaDefaultContributor.ProjectAudioEditorRule);
+        text.Should().Contain(LocalMediaDefaultContributor.ProjectVideoEditorRule)
+            .And.Contain(LocalMediaDefaultContributor.ProjectAudioEditorRule);
     }
 
     // Без доставленного сервера, без флага модуля или без video_shoot — прежние варианты

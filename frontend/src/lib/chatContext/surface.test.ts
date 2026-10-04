@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { objectKey, resetActionMemory } from './actionMemory';
 import { composerSurfaceFor } from './surface';
-import type { ChatContextPrimary, ContextAction, ContextKindApi } from './types';
+import type { ChatContextPrimary, ChatContextRef, ContextAction, ContextKindApi } from './types';
 
 const primary = (by: 'human' | 'agent' = 'human'): ChatContextPrimary => ({
   id: 'p1', kind: 'image', ref: { threadId: 't' }, by, addedAt: '', label: 'hero.png', version: 'v2', thumb: null, missing: false, role: null,
@@ -11,12 +11,12 @@ const apiWith = (actions: readonly ContextAction[]): ContextKindApi =>
   ({ kinds: ['image'], icon: () => null, preview: () => null, actions: () => actions });
 const ctx = { projectId: 'p', sessionId: 's1', isMobile: false };
 const input = (over: Partial<Parameters<typeof composerSurfaceFor>[0]> = {}) =>
-  ({ flag: true, primary: primary(), refs: [], api: apiWith([run('edit'), run('removeBg')]), ctx, ...over });
+  ({ primary: primary(), refs: [], api: apiWith([run('edit'), run('removeBg')]), ctx, ...over });
 
 beforeEach(() => resetActionMemory());
 
 describe('мост поля ввода composerSurfaceFor', () => {
-  it('вид с действиями при флаге — чипы; выбрано первое run-действие объекта человека', () => {
+  it('вид с действиями — чипы; выбрано первое run-действие объекта человека', () => {
     const s = composerSurfaceFor(input());
     expect(s.surface).toBe('actions');
     if (s.surface === 'actions') {
@@ -25,20 +25,27 @@ describe('мост поля ввода composerSurfaceFor', () => {
     }
   });
 
-  it('вид без действий — прежний путь «Чат | X»', () => {
-    expect(composerSurfaceFor(input({ api: apiWith([]) })).surface).toBe('modes');
+  it('вид без действий — обычный «Чат»', () => {
+    expect(composerSurfaceFor(input({ api: apiWith([]) })).surface).toBe('chat');
   });
 
-  it('вид без вклада в слоте context-kind — прежний путь', () => {
-    expect(composerSurfaceFor(input({ api: null })).surface).toBe('modes');
+  it('вид без вклада в слоте context-kind — обычный «Чат»', () => {
+    expect(composerSurfaceFor(input({ api: null })).surface).toBe('chat');
   });
 
-  it('без флага — только прежний путь, даже когда у вида есть действия', () => {
-    expect(composerSurfaceFor(input({ flag: false })).surface).toBe('modes');
+  it('вид получает референсы с миниатюрами: чипы кадров рисуют их из референса', () => {
+    const ref: ChatContextRef = {
+      id: 'r1', kind: 'project-file', ref: { path: 'a/кадр-5.png' }, by: 'human', addedAt: '', label: 'кадр-5.png', version: null,
+      thumb: null, missing: false, role: 'frame-a', usedBy: [],
+    };
+    let seen: readonly ChatContextRef[] = [];
+    const api: ContextKindApi = { ...apiWith([run('edit')]), actions: (_c, st) => { seen = st.refs; return [run('edit')]; } };
+    composerSurfaceFor(input({ api, refs: [ref] }));
+    expect(seen[0].thumb).toMatch(/кадр-5\.png|%D0%BA/);
   });
 
   it('без объекта строки действий нет', () => {
-    expect(composerSurfaceFor(input({ primary: null })).surface).toBe('modes');
+    expect(composerSurfaceFor(input({ primary: null })).surface).toBe('chat');
   });
 
   it('объект агента (By = Agent) встаёт на «Чат»', () => {

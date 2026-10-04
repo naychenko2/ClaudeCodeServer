@@ -1,10 +1,9 @@
-// Наполнение контекста с карточек ленты (ADR-023, 2к-2). При флаге composer-context-row карточки нити и
-// версии показывают «Работать с этой» и «В контекст ▾» вместо прежних «Продолжить от неё» / «Работать с
-// этой» и бейдж «В работе» берут из контекста чата, а не из фокуса нитей.
+// Наполнение контекста с карточек ленты (ADR-023, 2к-2). Карточки нити и версии показывают «Работать с этой»
+// и «В контекст ▾», а бейдж «В работе» берут из контекста чата, а не из фокуса нитей.
 
 import { Target } from 'lucide-react';
 import {
-  Button, ContextAddButton, FLAGS, ICON_SIZE, ICON_STROKE, useChatContext, useFeature, useIsMobile,
+  Button, ContextAddButton, ICON_SIZE, ICON_STROKE, useChatContext, useIsMobile,
   type ChatContextPrimary,
 } from 'aihome_shell/kit';
 import { isPersonalScope } from '../scope';
@@ -19,8 +18,6 @@ function primaryVersion(primary: ChatContextPrimary, thread: ImageThread): strin
 }
 
 export interface CardFill {
-  // Флаг включён: карточка живёт по контексту
-  on: boolean;
   // Эта карточка (нить и версия) — основной объект контекста
   working: boolean;
   // Основной объект выбрал агент: бейдж «В работе ✦»
@@ -33,13 +30,11 @@ export interface CardFill {
 
 // versionId = null — карточка всей нити (стопка), версия не важна
 export function useCardFill(sessionId: string, thread: ImageThread, versionId: string | null): CardFill {
-  const on = useFeature(FLAGS.composerContextRow);
-  const { primary } = useChatContext(on ? sessionId : null);
+  const { primary } = useChatContext(sessionId);
   const mobile = useIsMobile();
-  const threadWorking = on && primary?.kind === IMAGE_KIND && primary.ref.threadId === thread.id;
+  const threadWorking = primary?.kind === IMAGE_KIND && primary.ref.threadId === thread.id;
   const working = threadWorking && (versionId === null || primaryVersion(primary!, thread) === versionId);
   return {
-    on,
     working,
     byAgent: working && primary?.by === 'agent',
     threadWorking,
@@ -48,11 +43,9 @@ export function useCardFill(sessionId: string, thread: ImageThread, versionId: s
   };
 }
 
-// Нить в работе для лент-якорей: при флаге — из контекста чата, иначе из фокуса нитей
-export function useFocusedThreadId(sessionId: string, focus: string | null): string | null {
-  const on = useFeature(FLAGS.composerContextRow);
-  const { primary } = useChatContext(on ? sessionId : null);
-  if (!on) return focus;
+// Нить в работе для лент-якорей — из контекста чата
+export function useFocusedThreadId(sessionId: string): string | null {
+  const { primary } = useChatContext(sessionId);
   return primary?.kind === IMAGE_KIND && typeof primary.ref.threadId === 'string' ? primary.ref.threadId : null;
 }
 
@@ -65,7 +58,7 @@ export function CardContextActions({ sessionId, projectId, thread, versionId, fi
   const candidate = imageRefOf(thread.id, versionId);
   return (
     <>
-      <Button size={size} variant="primary" leftIcon={<Target size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      <Button size={size} variant="secondary" leftIcon={<Target size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
         title="Картинка станет основной в контексте хода: чипы действий и панель «Контекст»"
         onClick={() => { void fill.work(); }}>
         Работать с этой

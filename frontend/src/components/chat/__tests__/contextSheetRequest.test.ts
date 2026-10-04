@@ -7,7 +7,7 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
 vi.mock('../../../pages/workspace/panelFill', () => ({ useRequestPanelFill: () => {} }));
 
 const { REVEAL_PANEL_EVENT } = await import('../../../lib/subsystems/registryCore');
-const { takeSheetRequest, __resetSheetRequest } = await import('../ContextSheet');
+const { takeSheetRequest, takeLibraryRequest, __resetSheetRequest } = await import('../ContextSheet');
 
 const reveal = (detail: Record<string, unknown>) => window.dispatchEvent(new CustomEvent(REVEAL_PANEL_EVENT, { detail }));
 
@@ -26,5 +26,15 @@ describe('запрос шторки «Контекст» несёт чат', () 
     expect(takeSheetRequest('A')).toBe(false);
     reveal({ key: 'chatContext' });
     expect(takeSheetRequest('B')).toBe(true);
+  });
+
+  it('«Из «Голосов»» / «Из «Персонажей»» на узком окне: запрос библиотеки берётся один раз и не трогает шторку «Контекст»', () => {
+    reveal({ key: 'voices' });
+    expect(takeSheetRequest('A')).toBe(false);
+    expect(takeLibraryRequest('A')).toBe('voices');
+    expect(takeLibraryRequest('A')).toBeNull();
+    reveal({ key: 'characters', sessionId: 'A' });
+    expect(takeLibraryRequest('B')).toBeNull();
+    expect(takeLibraryRequest('A')).toBe('characters');
   });
 });

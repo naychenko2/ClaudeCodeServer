@@ -11,18 +11,24 @@ import { enterScope } from '../scope';
 import { getCatalog, loadCatalog } from '../thread/catalog';
 import { createDraft } from '../thread/actions';
 import { ensurePrefs, subscribePrefs } from '../thread/prefs';
-import { threadHasImage } from '../thread/model';
-import { getThreadMarks, setThreadMarks, subscribeThreadStore, useThreadStoreVersion } from '../thread/threadStore';
-import { activeSrc, versionSrc } from '../thread/useThreadLaunch';
+import { findVersion, threadHasImage, threadName, versionName, versionsOf } from '../thread/model';
+import { getThreadMarks, getThreadsState, setThreadMarks, subscribeThreadStore, useThreadStoreVersion } from '../thread/threadStore';
+import { activeSrc, resolveModel, versionSrc } from '../thread/useThreadLaunch';
 import { openEditor } from '../thread/threadStore';
 import type { ImageEditOp } from '../api';
+import type { ImageThread } from '../thread/threadsApi';
 import { executorModel, settingsOf } from './executors';
 import { launchAction, paramsFor, quoteAction } from './run';
 import { imageRefRoles, IMAGE_SAMPLE_ROLES } from './roles';
 import { SAMPLE_ACCEPT, uploadSampleRef } from './samples';
 import { actionOf, IMAGE_KIND, imageActions, threadOfPrimary } from './state';
+import { workWithInContext } from './work';
 
 const CHARACTER_KIND = 'image-character';
+
+// Версия основного объекта: явная в ref, иначе текущая версия нити
+const positionOf = (thread: ImageThread, item: ChatContextItem): string | null =>
+  typeof item.ref.versionId === 'string' ? item.ref.versionId : thread.currentVersionId ?? null;
 
 // Действия, «Чем» и цена зависят от внешнего состояния (нити, отметки, настройки, каталог): хост
 // узнаёт о его смене через notifyKindChanged. Подписка одна на вкладку, каталог и настройки
@@ -71,12 +77,49 @@ export const imageKindApi: ContextKindApi = {
   },
   refRoles: (_ctx, primary, candidateKind) => (primary.kind === IMAGE_KIND ? imageRefRoles(candidateKind) : []),
   preview: (ctx, item) => <ImagePreview ctx={ctx} item={item} />,
+  // Миниатюра: версия из ref, иначе текущая позиция нити
+  thumb: (ctx, item) => {
+    const thread = threadOfPrimary(ctx.sessionId, item as never);
+    if (!thread || item.kind !== IMAGE_KIND) return null;
+    const scope = enterScope(ctx.projectId, ctx.sessionId);
+    const version = typeof item.ref.versionId === 'string' ? thread.versions?.find(v => v.id === item.ref.versionId) ?? null : null;
+    return (version ? versionSrc(scope, thread, version) : activeSrc(scope, thread)) ?? null;
+  },
+  sub: (ctx, item) => {
+    const thread = threadOfPrimary(ctx.sessionId, item as never);
+    if (!thread || item.kind !== IMAGE_KIND) return null;
+    const versions = versionsOf(thread);
+    const cur = findVersion(thread, positionOf(thread, item));
+    if (!cur) return null;
+    const marks = getThreadMarks(thread.id).marks.length;
+    return [
+      versions.length > 1 ? `${versionName(cur)} из ${versions.length}` : versionName(cur),
+      marks > 0 ? `отмечено: ${marks}` : null,
+    ].filter(Boolean).join(' · ');
+  },
+  // Картинки ленты: текущая версия каждой нити, у которой есть что показать
+  feed: ctx => getThreadsState(ctx.sessionId).threads
+    .filter(t => threadHasImage(t))
+    .map(t => ({
+      id: t.id, label: threadName(t), hint: findVersion(t, t.currentVersionId) ? versionName(findVersion(t, t.currentVersionId)!) : undefined,
+      candidate: { kind: IMAGE_KIND, ref: { threadId: t.id, ...(t.currentVersionId ? { versionId: t.currentVersionId } : null) } },
+    })),
+  // ‹ › версий: основной объект переставляется на соседнюю версию той же нити
+  step: (ctx, item) => {
+    const thread = threadOfPrimary(ctx.sessionId, item as never);
+    if (!thread || item.kind !== IMAGE_KIND) return null;
+    const versions = versionsOf(thread);
+    if (versions.length < 2) return null;
+    const i = versions.findIndex(v => v.id === positionOf(thread, item));
+    const go = (j: number) => (j >= 0 && j < versions.length ? () => { void workWithInContext(ctx.sessionId, thread.id, versions[j].id, false); } : null);
+    return { prev: go(i - 1), next: go(i + 1) };
+  },
   editor: (ctx, item) => {
     const thread = threadOfPrimary(ctx.sessionId, item as never);
     if (!thread || !threadHasImage(thread)) return null;
     return {
-      label: 'Редактор',
-      hint: 'Маска и «Без ИИ»: обрезать, повернуть, размер и формат',
+      label: 'Открыть редактор',
+      hint: 'Маска и «Без ИИ»: обрезать, повернуть, формат',
       open: () => openEditor(ctx.sessionId, thread.id, null),
     };
   },
@@ -123,8 +166,11 @@ export const imageKindApi: ContextKindApi = {
     run: ctx => { void createDraft(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId, '', 'none'); },
   },
   priceSalt: (ctx, actionId) => {
-    const input = actionOf(ctx, actionId)?.input;
-    return input ? `${input.marks}:${input.hasMask}` : '';
+    const found = actionOf(ctx, actionId);
+    if (!found) return '';
+    // Исполнитель входит в ключ цены: смена «Чем» и приход настроек с сервера пересчитывают котировку
+    const { pv, m } = resolveModel(getCatalog(found.scope), settingsOf(found.scope, found.thread, (found.action.op ?? 'edit') as ImageEditOp));
+    return `${found.input.marks}:${found.input.hasMask}:${pv?.key ?? ''}/${m?.id ?? ''}`;
   },
   quote: quoteAction,
   launch: launchAction,

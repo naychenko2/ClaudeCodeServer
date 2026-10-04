@@ -227,13 +227,15 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         AudioThreadsState state)
     {
         await _threads.BroadcastAsync(ownerId, scope.Key, sessionId, state);
+        // Фокус в ответе — проекция из контекста: основной объект мог выбрать человек
+        state = _threads.Project(ownerId, sessionId, state);
         var thread = state.Threads.FirstOrDefault(t => t.Id == state.Focus);
         return Json(new
         {
             focus = state.Focus,
             thread = thread is null ? null : DescribeThread(ownerId, scope, thread),
             humanChoice = HumanChoice(ownerId, scope, thread),
-            note = "Человек видит в полосе «Звук», какой звук ты взял в работу, и может снять выбор.",
+            note = "Человек видит в строке контекста, какой звук ты взял в работу, и может снять выбор.",
         });
     }
 
@@ -281,7 +283,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         {
             providers,
             library = _library?.List(ownerId, scope),
-            note = "id диктора передай в voice у audio_generate. Голос, который человек выбрал в полосе «Звук», "
+            note = "id диктора передай в voice у audio_generate. Голос, который человек выбрал в строке контекста, "
                 + "без его просьбы не меняй.",
         });
     }
@@ -391,7 +393,6 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             libraryVoice = AudioVoiceRefs.Prefix + fromLibrary.Slug;
         }
         else if (!args.ContainsKey("voice") && _context is not null
-            && _flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow)
             && _context.AgentVoice(ownerId, session.Id, q.Op) is { } contextVoice)
         {
             // Агент без voice берёт голос контекста чата; явный аргумент, в том числе пустой, его заменяет
@@ -469,7 +470,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         AudioThread thread, AudioThreadVersion? version, AudioOp op, CancellationToken ct)
     {
         if (_edits is null)
-            return Deny("Монтаж без ИИ на этом сервере ещё не подключён — попроси человека сделать это в полосе «Звук».");
+            return Deny("Монтаж без ИИ на этом сервере ещё не подключён — попроси человека сделать это в панели «Контекст» (работать с этим звуком).");
         if (version is null) return Deny("У этого звука ещё нет версии со звуком — монтировать нечего.");
         var range = Range(args);
         var edited = await _edits.ApplyAsync(ownerId, scope, session.Id, thread.Id, version.Id, op, range.Start, range.End,
@@ -593,7 +594,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
 
     private object DescribeState(string ownerId, Session session, AudioEditScope scope)
     {
-        var state = Store.Get(ownerId, session.Id);
+        var state = _threads.View(ownerId, session.Id);
         return new
         {
             focus = state.Focus,
@@ -660,7 +661,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             provider = chain.Provider ?? AudioCatalog.AutoModelId,
             chain.Model,
             chain.Count,
-            rule = "Это выбор человека: настройки звука, затем полоса «Звук», затем умолчание. Не передавай "
+            rule = "Это выбор человека: настройки звука, затем строка контекста, затем умолчание. Не передавай "
                 + "provider, model, op и count без его просьбы — audio_generate возьмёт выбор сам.",
         };
     }

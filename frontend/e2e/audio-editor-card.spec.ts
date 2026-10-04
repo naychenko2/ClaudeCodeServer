@@ -205,7 +205,7 @@ test('карточка на версию: A/B, выделение, сведен�
   await peaks;
   await expect(card.locator('[data-audio-nav]')).toHaveText('версия 2 · вариант 1 из 2');
   await expect(card.locator('[data-audio-license="CC BY-NC"]')).toBeVisible();
-  await expect(card.getByText('в работе')).toBeVisible();
+  await expect(card.getByText('В работе')).toBeVisible();
   await expect(card.locator('[data-stem-row]')).toHaveCount(3);
   await expect(card.locator('[data-audio-file]')).toHaveCount(2);
   await expect(card.getByText('Сохранятся папкой')).toBeVisible();
@@ -214,8 +214,9 @@ test('карточка на версию: A/B, выделение, сведен�
   // Выделение куска протяжкой по волне — у своей карточки
   await dragOn(page, card.getByRole('slider', { name: /^Волна/ }).first(), 0.2, 0.6);
   await expect(card.getByText(/^Выделено /)).toBeVisible();
-  await expect(card.getByRole('button', { name: 'Перегенерировать кусок' })).toBeVisible();
-  await expect(page.locator('[data-audio-card="fxv3"]').getByRole('button', { name: 'Перегенерировать кусок' })).toHaveCount(0);
+  // Кусок правят в редакторе звука; «Перегенерировать кусок» — чип действий, а не кнопка карточки
+  await expect(card.getByRole('button', { name: 'Открыть в редакторе' })).toBeVisible();
+  await expect(page.locator('[data-audio-card="fxv3"]').getByRole('button', { name: 'Открыть в редакторе' })).toHaveCount(0);
 
   // Версия 1 (правка без ИИ) — своя карточка: A/B с исходником, переключение не сбивает позицию
   const edit = page.locator(`[data-audio-card="${ctx.v1}"]`);

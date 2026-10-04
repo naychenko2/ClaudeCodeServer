@@ -1,4 +1,7 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.VideoEditor.ChatContext;
+using ClaudeHomeServer.Services.VideoEditor.Films;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.VideoEditor.Chats;
@@ -42,6 +45,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
         {
             typeof(IFeatureFlagGate), typeof(VideoThreadStore), typeof(ClaudeHomeServer.Services.VideoEditor.Prefs.VideoPrefsService),
             typeof(ClaudeHomeServer.Services.VideoEditor.Films.FilmSideStore), typeof(IConfiguration),
+            typeof(Lazy<ChatContextFocusMirror>), // только ленивый: прямое зеркало замыкает цикл через SessionManager
         };
 
         var parameters = typeof(VideoEditorStateContributor).GetConstructors().Single().GetParameters().Select(p => p.ParameterType);
@@ -112,26 +116,18 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     {
         var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir), config: Config(false));
 
-        var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
-
-        text.Should().NotContain("video_shoot").And.NotContain("Снимать следующую?");
+        (await contributor.BuildAsync(Ctx(), null)).Should().BeNull("правил про video_shoot нет, а остального в блоке не осталось");
     }
 
     [Fact]
-    public void Состояние_называет_сцену_в_работе_фильм_и_потрачено()
+    public void Траты_открытого_фильма_остаются_в_блоке()
     {
-        var scene = new VideoSceneDto("sc1", "Закат", "video/утро",
-            new VideoSceneSettingsDto(null, null, "т", null, null, null, null, null, null),
-            [], null, [], null, [], null, DateTime.UtcNow);
-        var state = new VideoThreadsState(new VideoFocusDto("sc1", "video/утро/утро.film"), 3, [scene]);
+        var state = new VideoThreadsState(new VideoFocusDto("sc1", "video/утро/утро.film"), 3, []);
 
-        var text = VideoEditorStateContributor.Render(state, [], new VideoPrefsDto("fal", null, 5, null, null, null),
-            new VideoSpentDto(1.5, 0, 30), agentLaunch: true, personal: false);
+        var text = VideoEditorStateContributor.Render(state, [], new VideoSpentDto(1.5, 0, 30), agentLaunch: false, personal: false);
 
-        text.Should().Contain("В работе: сцена sc1 «Закат»")
-            .And.Contain("Открыт фильм: video/утро/утро.film")
-            .And.Contain("Потрачено на фильм: $1.50 + 30 GPU-с")
-            .And.Contain("поставщик fal");
+        text.Should().Contain("Потрачено на открытый фильм video/утро/утро.film: $1.50 + 30 GPU-с")
+            .And.NotContain("В работе:");
     }
 
     [Fact]
@@ -149,5 +145,54 @@ public sealed class VideoEditorStateContributorTests : IDisposable
 
         first.Should().Contain("С прошлого сообщения:").And.Contain("Claude запустил: съёмка");
         second.Should().NotContain("Claude запустил: съёмка");
+    }
+
+    // ── Строка контекста (ADR-023 §3.1, 3б-1): блок худеет ──
+
+    [Fact]
+    public async Task нет_В_работе_Открыт_фильм_и_Выбор_человека_а_правила_и_журнал_остаются()
+    {
+        var store = new VideoThreadStore(_dir);
+        var scene = store.AddScene("u1", "s1", "", new VideoSceneSettingsDto(null, null, "т", null, null, null, null, null, null), null).Scene!;
+        store.SetFocus("u1", "s1", new VideoFocusDto(scene.SceneId, "video/утро/утро.film"), null);
+        store.SetSettings("u1", "s1", scene.SceneId, scene.Settings, null,
+            new VideoThreadEvent(DateTime.UtcNow, VideoThreadEventKinds.Versions, "Готово: новых версий 1", scene.SceneId));
+        var contributor = new VideoEditorStateContributor(new Flags(true), store);
+
+        var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
+
+        text.Should().StartWith("## Видео в этом чате\n")
+            .And.NotContain("В работе:").And.NotContain("Открыт фильм:").And.NotContain("Выбор человека");
+        text.Should().Contain(VideoEditorStateContributor.PriorityRule).And.Contain(VideoEditorStateContributor.PaceRule)
+            .And.Contain("С прошлого сообщения:").And.Contain("Готово: новых версий 1");
+    }
+
+    [Fact]
+    public async Task Потрачено_на_фильм_считается_по_фильму_из_контекста_а_не_из_записи_нити()
+    {
+        using var w = new Films.FilmWorld(withContext: true);
+        w.WriteFile("video/утро/a.film");
+        w.WriteFile("video/утро/b.film");
+        w.Threads.SetFocus("u1", "s1", new VideoFocusDto(null, "video/утро/a.film"), null);
+        w.Side.Update("u1", "p1", "video/утро/a.film",
+            side => side with { Spends = [new FilmSpendEntry("v1", "usd", 1.00, 0, DateTime.UtcNow)] });
+        w.Side.Update("u1", "p1", "video/утро/b.film",
+            side => side with { Spends = [new FilmSpendEntry("v2", "usd", 3.25, 0, DateTime.UtcNow)] });
+        // Человек открывает B ручкой контекста: запись нити по-прежнему говорит «A»
+        w.Context!.SetPrimary("u1", "s1",
+            ChatContextFocusMirror.NewItem(VideoContextKind.FilmKind, "video/утро/b.film", ContextActor.Human, refKey: VideoContextKind.FilmKey), null);
+        var contributor = new VideoEditorStateContributor(new Flags(true), w.Threads, w.Side, mirror: new Lazy<ChatContextFocusMirror>(() => w.Mirror!));
+
+        var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
+
+        text.Should().Contain("Потрачено на открытый фильм video/утро/b.film: $3.25").And.NotContain("a.film");
+    }
+
+    [Fact]
+    public async Task без_запуска_агентом_и_без_журнала_блока_нет()
+    {
+        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir), config: Config(agentLaunch: false));
+
+        (await contributor.BuildAsync(Ctx(), null)).Should().BeNull();
     }
 }

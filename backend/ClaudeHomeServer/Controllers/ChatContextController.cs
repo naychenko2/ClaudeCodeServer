@@ -17,8 +17,6 @@ namespace ClaudeHomeServer.Controllers;
 // регистрирует — её элементы приходят с missing, а запись такого вида отказывает 400 kind_unknown.
 // Локальный проект (ADR-016): сервер его файлов не видит, поэтому чтение отдаёт пустой контекст, а
 // запись — 400 project_local_unsupported до любого обращения к диску.
-// Запись — только под флагом composer-context-row владельца (dark launch): при выключенном POST/PUT/DELETE
-// отвечают 404, будто ручки нет; чтение и saved-files открыты.
 [ApiController]
 [Authorize]
 public class ChatContextController(
@@ -26,12 +24,9 @@ public class ChatContextController(
     IProjectManager projects,
     ContextKindRegistry registry,
     IChatContextStore store,
-    IEnumerable<IChatSavedFiles> savedFiles,
-    IFeatureFlagGate flags) : ControllerBase
+    IEnumerable<IChatSavedFiles> savedFiles) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
-
-    private bool WriteEnabled => flags.IsEnabled(UserId, FeatureFlagKeys.ComposerContextRow);
 
     [HttpGet(ChatContextRoutes.Base)]
     public IActionResult Get(string sessionId)
@@ -44,7 +39,6 @@ public class ChatContextController(
     [HttpPut(ChatContextRoutes.Primary)]
     public IActionResult PutPrimary(string sessionId, [FromBody] ChatContextPrimaryRequest req)
     {
-        if (!WriteEnabled) return NotFound();
         if (Scope(sessionId) is not { } scope) return NotFound();
         if (Refuse(scope) is { } refused) return refused;
         return Write(scope, () =>
@@ -58,7 +52,6 @@ public class ChatContextController(
     [HttpPost(ChatContextRoutes.Refs)]
     public IActionResult PostRef(string sessionId, [FromBody] ChatContextRefRequest req)
     {
-        if (!WriteEnabled) return NotFound();
         if (Scope(sessionId) is not { } scope) return NotFound();
         if (Refuse(scope) is { } refused) return refused;
         return Write(scope, () =>
@@ -73,7 +66,6 @@ public class ChatContextController(
     [HttpDelete(ChatContextRoutes.Ref)]
     public IActionResult DeleteRef(string sessionId, string itemId, [FromQuery] long? revision)
     {
-        if (!WriteEnabled) return NotFound();
         if (Scope(sessionId) is not { } scope) return NotFound();
         if (Refuse(scope) is { } refused) return refused;
         return Write(scope, () => store.RemoveRef(UserId, sessionId, itemId, revision));
@@ -82,7 +74,6 @@ public class ChatContextController(
     [HttpDelete(ChatContextRoutes.Base)]
     public IActionResult Clear(string sessionId, [FromQuery] long? revision)
     {
-        if (!WriteEnabled) return NotFound();
         if (Scope(sessionId) is not { } scope) return NotFound();
         if (Refuse(scope) is { } refused) return refused;
         return Write(scope, () => store.Clear(UserId, sessionId, revision));

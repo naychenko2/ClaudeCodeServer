@@ -10,14 +10,12 @@ const store = new Map<string, string>();
   key: () => null,
   length: 0,
 } as Storage;
-import { __resetComposerStrips, getActiveStrip, selectStrip } from '../../../lib/composerStrips';
 import { audioApi, type AudioCatalog, type AudioPrefs, type AudioThread, type AudioThreadsState } from '../api';
 import {
-  __applyThreads, __resetAudioStore, enterChat, ensureAudioThreads, getCatalog, getFocusedThread, getJobsOf, getPrefs,
-  getThreadsState, handleEvent, SOUND_STRIP,
+  __applyThreads, __resetAudioStore, ensureAudioThreads, getCatalog, getFocusedThread, getJobsOf, getPrefs,
+  getThreadsState, handleEvent,
 } from './threadStore';
 
-const AVAIL = ['git', SOUND_STRIP];
 const thread = (id: string): AudioThread => ({
   id, file: `${id}.mp3`, lineage: [], draftFolder: null, createdAt: '', versions: [], currentVersionId: null, launches: [], settings: null,
 });
@@ -34,17 +32,15 @@ const progress = (jobId: string, extra: Partial<{ stage: 'queued' | 'running'; q
 beforeEach(() => {
   localStorage.clear();
   __resetAudioStore();
-  __resetComposerStrips();
   vi.restoreAllMocks();
 });
 
 describe('стор нитей звука: события → состояние', () => {
-  it('загрузка берёт нити, каталог и префы одним запросом; фокус открывает полосу «Звук»', async () => {
+  it('загрузка берёт нити, каталог и префы одним запросом', async () => {
     vi.spyOn(audioApi, 'state').mockResolvedValue({ threads: st(3, 't1', [thread('t1')]), catalog: CATALOG, prefs: PREFS });
     await ensureAudioThreads('p1', 's1');
     expect(getFocusedThread('s1')?.id).toBe('t1');
     expect(getCatalog('p1')).toEqual(CATALOG);
-    expect(getActiveStrip('s1', AVAIL)).toBe(SOUND_STRIP);
   });
 
   it('audio_thread_changed применяется к показанному чату, старая ревизия пропускается', () => {
@@ -61,19 +57,11 @@ describe('стор нитей звука: события → состояние'
     expect(getThreadsState('other').revision).toBe(0);
   });
 
-  it('снятие фокуса событием отпускает полосу «Звук»', () => {
+  it('снятие фокуса событием убирает нить в работе, сами нити остаются', () => {
     __applyThreads('s1', 'p1', st(1, 't1', [thread('t1')]));
-    expect(getActiveStrip('s1', AVAIL)).toBe(SOUND_STRIP);
     handleEvent({ ...base, type: 'audio_thread_changed', revision: 2, state: st(2, null, [thread('t1')]) });
-    expect(getActiveStrip('s1', AVAIL)).toBe('git');
-  });
-
-  it('ручной уход на Git держится до выхода из чата: при входе фокус снова даёт «Звук»', () => {
-    __applyThreads('s1', 'p1', st(1, 't1', [thread('t1')]));
-    selectStrip('s1', 'git');
-    expect(getActiveStrip('s1', AVAIL)).toBe('git');
-    enterChat('s1');
-    expect(getActiveStrip('s1', AVAIL)).toBe(SOUND_STRIP);
+    expect(getFocusedThread('s1')).toBeNull();
+    expect(getThreadsState('s1').threads).toHaveLength(1);
   });
 
   it('audio_prefs_changed меняет префы только своего режима области', () => {

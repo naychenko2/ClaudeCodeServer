@@ -20,7 +20,7 @@ export interface AudioWaveProps {
   /** Выделение куска — контролируемое. Без onSelectionChange выделять нельзя */
   selection?: AudioSelection | null;
   onSelectionChange?: (sel: AudioSelection | null) => void;
-  size?: 'md' | 'sm';
+  size?: 'md' | 'sm' | 'lg';
   bars?: number;
   dim?: boolean;
   ariaLabel?: string;
@@ -29,7 +29,8 @@ export interface AudioWaveProps {
 const FLAT = 0.08;
 
 // Высоты волны — из шкалы отступов: строка стема и крупный плеер
-export const WAVE_H = { sm: SP.xl, md: SP.xxl + SP.sm } as const;
+// lg — волна редактора на весь экран
+export const WAVE_H = { sm: SP.xl, md: SP.xxl + SP.sm, lg: SP.xxxl * 4 } as const;
 
 export function AudioWave({
   peaks, duration, position = 0, showCursor, onSeek, selection = null, onSelectionChange,
@@ -37,7 +38,7 @@ export function AudioWave({
 }: AudioWaveProps) {
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; t: number; moved: boolean } | null>(null);
-  const n = bars ?? (size === 'sm' ? 50 : 90);
+  const n = bars ?? (size === 'sm' ? 50 : size === 'lg' ? 160 : 90);
   const h = WAVE_H[size];
   const cols = useMemo(() => {
     const r = resamplePeaks(peaks, n);

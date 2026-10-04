@@ -72,7 +72,9 @@ public sealed class AudioContextKind(
         if (Text(item.Ref, "threadId") is not { } threadId || Find(scope, threadId) is not { } thread)
             return new ContextItemSummary("звук недоступен", null, null, true);
         var version = (Text(item.Ref, "versionId") is { } v ? thread.Version(v) : null) ?? thread.CurrentVersion;
-        return new ContextItemSummary(AudioJobThreads.Name(thread),
+        // Черновик без файла и без имени: «Новый звук · черновик» (подпись для человека, агентский текст берёт Name)
+        var label = thread.File is not { Length: > 0 } && thread.Name is not { Length: > 0 } ? "Новый звук · черновик" : AudioJobThreads.Name(thread);
+        return new ContextItemSummary(label,
             version is { IsOrigin: false } ? $"v{version.Number}" : null, null, false);
     }
 

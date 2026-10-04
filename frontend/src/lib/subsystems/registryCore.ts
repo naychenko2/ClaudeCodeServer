@@ -47,7 +47,7 @@ export interface SubsystemManifest {
   order: number;
   // Подсистема не получает пилюлю в таббаре хаба (вход — через меню/шорткаты).
   noPill?: boolean;
-  // Вклады самого каркаса (полоса «Руки»): бэковой подсистемы с тумблером у них нет,
+  // Вклады самого каркаса: бэковой подсистемы с тумблером у них нет,
   // гейт включённости не применяется — доступность решают сами вклады.
   core?: boolean;
   tab?: { component: LazyExoticComponent<ComponentType<SubsystemTabProps>> };
@@ -224,92 +224,22 @@ export interface ChatItemToolCtx {
 export interface ChatCardBadgeCtx { session: Session; isMobile: boolean }
 export interface ChatCardBadgeApi { open?: (session: Session) => boolean }
 
-// ---- Композер и рабочая область: слоты для полос, режимов, чипов и панелей ----
+// ---- Композер и рабочая область: слоты для чипов, видов контекста и панелей ----
 // Имена слотов — одной точкой: каркас и модули ссылаются на константы, а не на строки.
-export const SLOT_COMPOSER_STRIP = 'composer-strip';
-export const SLOT_COMPOSER_MODE = 'composer-mode';
 // Вид объекта контекста чата (ADR-023): вклад — ContextKindApi, имя вклада — не обязательно
 export const SLOT_CONTEXT_KIND = 'context-kind';
 export const SLOT_COMPOSER_CHIP = 'composer-chip';
 export const SLOT_WORKSPACE_PANEL_DEF = 'workspace-panel-def';
 
-// Слот `composer-strip`: полоса над композером (Git, Картинки, …). Имя вклада — id
-// полосы; render рисует саму полосу, action описывает её для переключателя «Git ▾».
-// Выбор активной полосы — стор lib/composerStrips.ts, не сама полоса.
-// projectId = null — личный чат вне проекта: полосы проекта (Git, «Руки») в нём не предлагаются
-export interface ComposerStripCtx {
-  projectId: string | null;
-  sessionId: string | null;
-  isMobile: boolean;
-  // Свёрнута ли полоса в строку 30 px — своё у каждой полосы каждого чата
-  collapsed: boolean;
-  // Свернуть в строку / развернуть (кнопка ⌃ в полосе, клик по свёрнутой строке)
-  setCollapsed: (collapsed: boolean) => void;
-  // Переключатель «Git ▾» от хоста: полоса ставит его на место своего заголовка
-  switcher: ReactNode;
-}
-export interface ComposerStripApi {
-  title: string;
-  icon: ReactNode;
-  // false — полоса не предлагается (нет git, модуль недоступен в проекте)
-  isAvailable?: (ctx: { projectId: string | null; sessionId: string | null }) => boolean;
-  // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
-  status?: (ctx: { projectId: string | null; sessionId: string | null }) => ReactNode;
-  // Ярлыки под списком полос в меню переключателя («Голос», «Музыка» у «Звука»): входы
-  // в полосу сразу в нужном режиме. Есть, только пока полоса доступна
-  shortcuts?: (ctx: { projectId: string | null; sessionId: string | null }) => ComposerStripShortcut[];
-}
-export interface ComposerStripShortcut {
+// Ярлык меню «＋» композера и пустой ленты: вход, который заводит объект контекста
+// («Картинка», «Звук», «Видео» — `create` вида контекста)
+export interface ComposerShortcut {
   key: string;
   title: string;
   // Подпись второй строкой: «озвучить текст, сменить голос, обучить»
   hint?: string;
   icon: ReactNode;
   onSelect: () => void;
-}
-
-// Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.
-export interface ComposerModeCtx { projectId: string | null; sessionId: string | null }
-export interface ComposerModeApi {
-  title: string;
-  icon: ReactNode;
-  // Режим предлагается, только пока условие истинно (например, выбрана картинка)
-  isAvailable: (ctx: ComposerModeCtx) => boolean;
-  // id полосы-владельца: режим виден в поле ввода, только пока над ним активна эта полоса
-  // («Картинки» — «Чат | Картинка», «Звук» — «Чат | Звук»). Нет поля — режим от полосы не зависит
-  strip?: string;
-  // Режим просит включить себя сам: ключ повода (черновик, «Редактировать»). Поле
-  // переключается один раз на каждый новый ключ, откуда бы ни пришло состояние —
-  // клик, агент, перезагрузка; ручной уход в «Чат» держится, пока ключ тот же.
-  // null — не просит. Сигнал о смене состояния — notifyComposer из kit
-  autoSelect?: (ctx: ComposerModeCtx) => string | null;
-  // Текст, который поле получает при входе в режим; key — повод (нить), на один key
-  // подставляется один раз и только в нетронутое поле. key отдавать и без текста
-  // (text: null): повод фиксируется с первого рендера, а не с появления текста
-  prefill?: (ctx: ComposerModeCtx) => { key: string; text: string | null } | null;
-  // Ключ элемента, черновиком которого считается текст режима (genDrafts): смена выбора
-  // уносит набранное в черновик прежнего элемента и возвращает в поле черновик нового.
-  // null — черновиков у режима сейчас нет
-  draftKey?: (ctx: ComposerModeCtx) => string | null;
-  placeholder: (ctx: ComposerModeCtx) => string;
-  // Подпись кнопки отправки: «✦ Изменить · ≈ $0.15»
-  submitLabel?: (ctx: ComposerModeCtx) => ReactNode;
-  // Подпись над полем: «Промпт модели · уходит прямо в FLUX Fill, без агента»
-  hint?: (ctx: ComposerModeCtx) => ReactNode;
-  // Отправка мимо агента; текст режима хранится отдельно от черновика чата
-  onSubmit: (ctx: ComposerModeCtx, text: string) => Promise<void> | void;
-  // Запуск при ПУСТОМ поле («↻ Ещё 2 · бесплатно» — повтор прошлого запуска): кнопка
-  // отправки берёт эту подпись и действие. null или нет вклада — при пустом поле кнопка
-  // гаснет, как раньше
-  emptySubmit?: (ctx: ComposerModeCtx) => ComposerEmptySubmit | null;
-  // Текст поля режима после каждой правки: панель режима считает по нему цену и
-  // запускает с ним же свою кнопку («Звук»)
-  onTextChange?: (ctx: ComposerModeCtx, text: string) => void;
-}
-
-export interface ComposerEmptySubmit {
-  label: ReactNode;
-  run: () => Promise<void> | void;
 }
 
 // Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).
@@ -346,32 +276,24 @@ export interface WorkspacePanelDefApi {
 // follow — панель следует за выбором человека (клик по карточке): открытая панель
 // генерации уступает место запрошенной в том же виде, peek — шторка была опущена.
 // target — ключ выбранного элемента.
-// preset — заготовка для чужой панели: хост её не разбирает, прозрачный объект, смысл
-// знает только панель-получатель (у «Звука» — режим, операция, длительность, стиль,
-// «Инструментал»). returnTo — откуда пришли: чужая панель рисует ссылку «↩ К сцене / К
-// фильму» и по клику возвращает вызвавшую панель (genPanelReturn)
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
-export interface PanelReturnTo { key: string; tab?: string; target?: string; label?: string; strip?: string }
 export interface RevealPanelDetail {
   key: string; tab?: string; sessionId?: string; target?: string; follow?: boolean; peek?: boolean;
-  preset?: Record<string, unknown>; returnTo?: PanelReturnTo;
 }
 // ifOpen — показать, только если панель генерации уже открыта: закрытую выбор не открывает
 export interface RevealPanelOptions {
-  sessionId?: string; target?: string; ifOpen?: boolean; preset?: Record<string, unknown>; returnTo?: PanelReturnTo;
+  sessionId?: string; target?: string; ifOpen?: boolean;
 }
 
 // true — запрос ушёл; false — ifOpen, а открытой панели генерации нет
 export function revealWorkspacePanel(requested: string, tab?: string, opts: RevealPanelOptions = {}): boolean {
-  // При флаге composer-context-row «Картинки»/«Звук» — это панель «Контекст» (вкладок у неё нет)
+  // Ключи упразднённых «Картинок», «Звука» и «Видео» ведут в панель «Контекст» (вкладок у неё нет)
   const key = toGenPanelKey(requested);
   if (key !== requested) tab = undefined;
   const detail: RevealPanelDetail = { key };
   if (tab !== undefined) detail.tab = tab;
   if (opts.sessionId !== undefined) detail.sessionId = opts.sessionId;
   if (opts.target !== undefined) detail.target = opts.target;
-  if (opts.preset !== undefined) detail.preset = opts.preset;
-  if (opts.returnTo !== undefined) detail.returnTo = opts.returnTo;
   if (opts.ifOpen) {
     const open = openGenPanel();
     if (!open) return false;

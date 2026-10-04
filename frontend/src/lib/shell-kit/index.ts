@@ -12,7 +12,7 @@
 import { lazy } from 'react';
 
 // ─── design ──────────────────────────────────────────────────────────────────
-export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W } from '../design';
+export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W, MODAL_W } from '../design';
 
 // ─── api ─────────────────────────────────────────────────────────────────────
 export { api } from '../api';
@@ -36,7 +36,7 @@ export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
 export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel, revealContextPanel, SLOT_CONTEXT_KIND } from '../subsystems/registryCore';
-export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions, PanelReturnTo } from '../subsystems/registryCore';
+export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions } from '../subsystems/registryCore';
 
 // ─── chatContext (ADR-023): контракты вида контекста хода ────────────────────
 export type {
@@ -45,14 +45,16 @@ export type {
 } from '../chatContext/types';
 
 export {
-  useChatContext, getChatContextState, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
+  useChatContext, getChatContextState, refreshChatContext, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
 } from '../chatContext/store';
 export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
 export { refOf, rolesFor } from '../chatContext/fill';
 export type { ContextCandidate } from '../chatContext/fill';
-export type { ContextRole, ContextUpload, ContextNote } from '../chatContext/types';
+export type { ContextRole, ContextUpload, ContextNote, ContextMenuItem } from '../chatContext/types';
 export { notifyKindChanged } from '../chatContext/actionRun';
 export { ReportedError } from '../chatContext/errors';
+export { etaTicker, etaFraction } from '../chatContext/etaProgress';
+export type { EtaState } from '../chatContext/etaProgress';
 export { setContextReturn, useContextReturn, clearContextReturn } from '../chatContext/contextReturn';
 
 // ─── genPanelDismissed ───────────────────────────────────────────────────────
@@ -63,11 +65,9 @@ export { autoRevealGenerationPanel, isGenPanelKey, markGenPanelDismissed } from 
 // ─── genPanelFollow / genDrafts / genPanelOpen ───────────────────────────────
 // Панель генерации следует за выбором: клик по карточке, подсказка выбора агентом,
 // черновики полей по ключу элемента
-export { followSelection, isCardPick, noteAgentPick, dropAgentPick, dropAgentPickOf, useAgentPick } from '../genPanelFollow';
-export type { GenerationAgentPick } from '../genPanelFollow';
+export { followSelection, isCardPick } from '../genPanelFollow';
 export { noteGenDraft, clearGenDraft, useGenDraft } from '../genDrafts';
 export { followPeeked } from '../genPanelOpen';
-export { usePanelReturnTo, usePendingPreset, consumePreset, returnToOrigin, returnLabel } from '../genPanelReturn';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
@@ -195,12 +195,6 @@ export { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
 // ─── pages/workspace/panelStackState ─────────────────────────────────────────
 export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 
-// ─── composerStrips ──────────────────────────────────────────────────────────
-// Владелец полосы над композером просит показать её в чате и снимает запрос
-// (правило старшинства — в самом сторе, ADR-019 решение 3); notifyComposer — сигнал
-// композеру от владельца режима поля ввода, submitComposerMode — отправка режима извне
-export { requestStrip, releaseStrip, holdStripRequests, notifyComposer, submitComposerMode } from '../composerStrips';
-
 // ─── chatFollow ──────────────────────────────────────────────────────────────
 // Запуск по действию человека прокручивает ленту чата вниз, как своё сообщение
 export { followChat } from '../chatFollow';
@@ -222,15 +216,9 @@ export { ByClaude } from '../../components/generation/ByClaude';
 // «В контекст ▾» (ADR-023, 2к-2): кнопка наполнения контекста с выбором роли
 export { ContextAddButton } from '../../components/generation/ContextAddButton';
 // Общий слой панелей: переключатель режима, меню выбора источника, «Вернуть» после снятия выбора
-export { GenerationModeSwitch } from '../../components/generation/GenerationModeSwitch';
-export type { GenerationModeOption } from '../../components/generation/GenerationModeSwitch';
-export { GenerationPickMenu } from '../../components/generation/GenerationPickMenu';
-export type { GenerationPickRow, GenerationPickExtra } from '../../components/generation/GenerationPickMenu';
 export { ReleaseNotice } from '../../components/generation/ReleaseNotice';
 export { createReleaseUndo, RELEASE_UNDO_MS } from '../../components/generation/useReleaseUndo';
 export type { ReleaseOffer, ReleaseUndoController } from '../../components/generation/useReleaseUndo';
-export { pickRows } from '../../components/generation/pickSort';
-export type { PickCandidate } from '../../components/generation/pickSort';
 // Список «Исполнитель» панели генерации (общий слой Г1): строки строит раздел сам
 export { ExecutorList, ExecutorSummaryRow } from '../../components/generation/ExecutorList';
 export type { ExecutorRow, ExecutorBadge } from '../../components/generation/ExecutorList';

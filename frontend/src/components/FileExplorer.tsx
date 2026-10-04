@@ -871,7 +871,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // в строке нет намеренно — кластер справа и так плотный, действие живёт в меню
   const ctxEntry = contextMenu && !contextMenu.entry.isDirectory ? contextMenu.entry : null;
   const chatContextBtn = useContextButton('file', ctxEntry?.path ?? null, ctxEntry?.name);
-  // Контекст хода (ADR-023, флаг composer-context-row): «Работать с этой» и «В контекст» занимают место
+  // Контекст хода (ADR-023): «Работать с этой» и «В контекст» занимают место
   // прежних «В контекст чата» и «Редактировать картинку»
   const fileCtx = useFileContextMenu(project.id, ctxEntry?.path ?? null, online, () => setContextMenu(null));
 
@@ -2210,7 +2210,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         // Десктоп — меню по якорю в точке курсора. Menu выравнивает карточку по
         // ПРАВОМУ краю якоря, поэтому ширина синтетического rect равна minWidth:
         // так левый край меню встаёт ровно под курсор
-        const W = 210;
+        const W = 280;
         const anchor = new DOMRect(contextMenu.x, contextMenu.y, W, 0);
         return <Menu anchor={anchor} minWidth={W} maxHeight={320} gap={2} onClose={close}>{items}</Menu>;
       })()}

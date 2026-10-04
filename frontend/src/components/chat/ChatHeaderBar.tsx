@@ -1303,7 +1303,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         </span>
       </span>
     );
-    // Руки локального проекта — полоса «Руки» над композером (features/localHands/HandsStrip)
     // Локальный проект (ADR-016): где живут файлы и в сети ли устройство — иначе
     // закрытый гейт хода и пропавшие панели выглядят поломкой
     if (deviceBadge) slots.push(

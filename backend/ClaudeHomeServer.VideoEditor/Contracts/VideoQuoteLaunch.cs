@@ -4,7 +4,10 @@ namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
 
 // Котировка → запуск строго по QuoteId (как у звука): цена видна до запуска. Содержимое сцены
 // (текст, кадры, настройки) сервер берёт из нити; запуск обязан прийти с теми же длительностью и
-// числом вариантов, от которых посчитана цена, иначе отказ
+// числом вариантов, от которых посчитана цена, иначе отказ.
+// ContextRevision (ADR-023 §Д2.1, КТ-5): при заданной ревизии сцена и кадры берутся из контекста чата на этой
+// ревизии (основной video-scene, референсы frame-a/frame-b), SceneId тела игнорируется; текст поля ввода едет
+// в Params.request. Ревизия не совпала со стором или с ревизией котировки — 409 context_changed
 
 public sealed record VideoQuoteRequest(
     string SessionId,
@@ -14,7 +17,8 @@ public sealed record VideoQuoteRequest(
     int? Count,
     int? DurationSec,
     string? Aspect,
-    bool? Sound);
+    bool? Sound,
+    long? ContextRevision = null);
 
 // Price.Unit — usd | credits | free (local бесплатен); Amount null — цена станет известна после запуска
 public sealed record VideoPriceDto(double? Amount, string Unit, bool Approx, string Source, int? Eta, int? QueueLength);
@@ -40,7 +44,8 @@ public sealed record VideoLaunchRequest(
     string SceneId,
     string? Initiator = null,
     JsonObject? Params = null,
-    long? Seed = null);
+    long? Seed = null,
+    long? ContextRevision = null);
 
 // Либо JobId, либо Error с кодом (VideoEditorErrors.*). Retry — котировка соседа у отказа поставщика
 public sealed record VideoLaunchResult(string? JobId, string? ErrorCode, string? Error, RetryQuote? Retry);

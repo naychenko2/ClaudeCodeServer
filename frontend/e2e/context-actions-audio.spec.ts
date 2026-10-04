@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { newWorld, openChat, primary, voiceRef, w, P } from './contextRowMock';
+import { newWorld, openChat, primary, voiceRef, w } from './contextRowMock';
 
 // 2з-3 (в конце файла): наполнение контекста из ленты и «Голосов» — сценарий 5 макета composer-actions-v1 и
 // сценарий 4 макета строки (серый голос при «Стемах») на 1440, 1024 и 360.
@@ -163,7 +163,7 @@ for (const { name, vp } of VIEWPORTS) {
         // «Стемы» выбраны, «Перегенерировать кусок» серый без выделения, «Склеить» серая без кусков
         await expect(actions(page).locator('[data-action-chip="stems"]')).toHaveAttribute('aria-checked', 'true');
         await expect(repaint(page)).toHaveAttribute('aria-disabled', 'true');
-        await expect(card(page)).toContainText('в работе');
+        await expect(card(page)).toContainText('В работе');
         // Телефон: «Работать с этой» панель не поднимает; десктоп — открывает «Контекст»
         if (name === '360') await expect(page.locator('[data-context-panel]')).toHaveCount(0);
         // Вопрос «Набор» под чипами, голос Марины серый («Стемы» голоса не берут)
@@ -172,7 +172,7 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(runBtn(page)).toContainText('✦ Стемы');
         await expect(runBtn(page)).toBeEnabled();
         // «Набор: 4» (4 дорожки) — «Чем» сам стал HTDemucs
-        await actions(page).getByRole('button', { name: '4', exact: true }).click();
+        await actions(page).getByRole('button', { name: 'Набор: 4 стема' }).click();
         // На телефоне чип без подписи — модель в его подсказке
         await expect(page.locator('[data-context-row] [data-chip="exec"]')).toHaveAttribute('title', /HTDemucs/, { timeout: 10_000 });
         await shot(page, `s5-stems-${name}-${theme}.png`);
@@ -243,13 +243,3 @@ for (const { name, vp } of VIEWPORTS.filter(v => v.name !== '360')) {
     await expect(page.locator('[data-train-voice]')).toHaveCount(0);
   });
 }
-
-test('без флага composer-context-row карточка звука прежняя: «Обработать ▾», «Голоса» вкладкой «Звука»', async ({ page }) => {
-  newWorld({ feed: [anchor], audio: [songThread()], flags: { 'audio-editor': true, 'composer-context-row': false } });
-  await openChat(page, { vp: D });
-  await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
-  await registerAudio(page);
-  await expect(card(page).locator('[data-audio-process]')).toBeVisible({ timeout: 15_000 });
-  await expect(card(page).getByRole('button', { name: 'В контекст' })).toHaveCount(0);
-  void P;
-});

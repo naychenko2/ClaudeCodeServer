@@ -123,8 +123,9 @@ describe('лента: карточка на каждый вариант', () => 
   it('готово — по полноценной карточке на вариант во всю ширину, каждая на своей версии', () => {
     __applyThreads(S, P, { focus: 't1', revision: 1, threads: [done()] });
     const html = renderFeed([launchRecord('t1', 'j1')]);
+    // «В работе» берётся из контекста чата, а не из фокуса нитей: без основного объекта текущей нет
     expect([...html.matchAll(/data-image-version="([^"]+)" data-current="(true|false)"/g)].map(m => m[1] + (m[2] === 'true' ? '*' : '')))
-      .toEqual(['3', '4*']);
+      .toEqual(['3', '4']);
     expect(html).not.toContain('calc(');
     const a = versionCard(html, '3');
     const b = versionCard(html, '4');
@@ -133,9 +134,11 @@ describe('лента: карточка на каждый вариант', () => 
     expect(b).toContain('вариант 2 из 2');
     // Подпись запуска переехала в карточку: промпт и кто запускал — у каждой
     for (const c of [a, b]) expect(c).toContain('«Андрей на пляже» · Claude');
-    // Действия — от своей версии: не текущая продолжает от себя, текущая — нет
-    expect(a).toContain('Продолжить от неё');
-    expect(b).not.toContain('Продолжить от неё');
+    // Действия — от своей версии: «Работать с этой» и «В контекст ▾», прежнего «Продолжить от неё» нет
+    for (const c of [a, b]) {
+      expect(c).toContain('Работать с этой');
+      expect(c).not.toContain('Продолжить от неё');
+    }
   });
 });
 

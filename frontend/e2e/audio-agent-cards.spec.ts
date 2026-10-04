@@ -155,7 +155,8 @@ for (const theme of ['light', 'dark'] as const) {
       await expect(page.getByText('Claude завёл новый звук (голос)')).toBeVisible();
       await expect(page.getByText('Звуки чата: 2 звука')).toBeVisible();
       await expect(page.getByText('Дикторы (ru): 12 дикторов, голосов проекта: 2')).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Вставить в промпт' })).toBeVisible();
+      // Режима «Звук» в поле ввода больше нет: «Вставить в промпт» ушла, остаётся «Сгенерировать»
+      await expect(page.getByRole('button', { name: 'Вставить в промпт' })).toHaveCount(0);
       await expect(page.getByRole('button', { name: /Сгенерировать · бесплатно/ })).toBeVisible();
       // Запуски, которые знает нить, рисует якорь audio_launch_versions (карточки вариантов) — не эта карточка
       // (вместе с якорями — e2e/audio-ui-merged.spec.ts)

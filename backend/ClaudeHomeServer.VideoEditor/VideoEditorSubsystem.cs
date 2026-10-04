@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Turn;
@@ -30,6 +32,12 @@ public sealed class VideoEditorSubsystem : IAppSubsystem
         // Префы области: data/video-editor-prefs, их наследуют новые сцены и цепочка запуска
         services.AddSingleton(sp => Prefs.VideoPrefsStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<Prefs.VideoPrefsService>();
+        // Виды «video-scene» и «video-film» контекста чата (ADR-023, фаза 3): Validate/Describe, кадры сцены, засев
+        services.AddContextKindProvider<ChatContext.VideoContextKind>();
+        // Съёмка и сборка по ревизии контекста (КТ-5): единственная точка, где вход берётся из стора
+        services.AddSingleton<ChatContext.VideoContextLaunch>();
+        // Сохранённые в чате файлы для «Зафиксировать только этот чат» (ADR-023 §3.3)
+        services.AddSingleton<IChatSavedFiles, ChatContext.VideoSavedFiles>();
         // Рабочая папка задач (7 дней, вне бэкапа); клипы версий живых сцен чистка не трогает
         services.AddSingleton(sp =>
         {
@@ -67,6 +75,9 @@ public sealed class VideoEditorSubsystem : IAppSubsystem
         services.AddFilms();
         // Агент: MCP-сервер video-editor (ADR-022 §5) и блок хвоста хода; сервисы — те же, что у ручек человека
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.VideoEditorToolset>();
+        // Зеркало фокуса контрибьютору хвоста — только лениво (цикл через SessionManager, см. конструктор)
+        services.TryAddSingleton(sp => new Lazy<ClaudeHomeServer.Services.ChatContext.ChatContextFocusMirror>(
+            () => sp.GetRequiredService<ClaudeHomeServer.Services.ChatContext.ChatContextFocusMirror>()));
         services.AddPromptSectionContributor<Chats.VideoEditorStateContributor>();
     }
 }

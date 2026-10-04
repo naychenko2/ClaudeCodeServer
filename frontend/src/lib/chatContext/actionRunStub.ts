@@ -12,6 +12,7 @@ export function stubActionRun(action: ContextAction | null): ActionRun {
     progress: null,
     result: null,
     run: async () => {},
+    stop: null,
     text: '',
     answer: null,
     setText: () => {},

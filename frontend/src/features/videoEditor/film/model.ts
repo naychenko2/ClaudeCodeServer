@@ -3,7 +3,6 @@
 
 import type { FilmCut, FilmCutType, FilmDocument, FilmItem, FilmMusicDraft, FilmSceneSnapshot, FilmSummary, FilmSpent, FilmState, VideoScene } from '../api';
 import { clock, plural } from '../scene/model';
-import { filmDuration } from '../strip/summary';
 
 export const CUT_LABEL: Record<FilmCutType, string> = { butt: 'встык', dissolve: 'наплыв', fade: 'затемнение' };
 export const CUT_MARK: Record<FilmCutType, string> = { butt: '|', dissolve: '≈', fade: '■' };
@@ -38,6 +37,13 @@ export function clampTrim(trim: [number, number], full: number): [number, number
   let b = Math.min(full, round(trim[1]));
   if (b - a < TRIM_STEP) { if (trim[0] !== a) a = Math.max(0, b - TRIM_STEP); else b = Math.min(full, a + TRIM_STEP); }
   return [a, b];
+}
+
+// Длительность фильма: клипы с подрезкой минус наплывы и затемнения (они накладывают клипы)
+export function filmDuration(doc: FilmDocument): number {
+  const clips = doc.items.reduce((s, it) => s + Math.max(0, (it.trim[1] ?? 0) - (it.trim[0] ?? 0)), 0);
+  const overlap = doc.cuts.reduce((s, c) => s + (c.type === 'dissolve' ? c.sec : 0), 0);
+  return Math.max(0, clips - overlap);
 }
 
 export const filmClock = (doc: FilmDocument) => clock(filmDuration(doc));
@@ -142,3 +148,21 @@ export const filmPathOf = (folder: string) => `${folder}/${folder.slice(folder.l
 // Хвост подсказки строки меню фильмов: «устарел» старше «собран», пустой фильм не собран никогда
 export const filmStatusSuffix = (x: Pick<FilmSummary, 'stale' | 'itemCount'>) =>
   x.stale ? ' · устарел' : x.itemCount === 0 ? ' · пустой' : ' · собран';
+
+// Точка «изменён после сборки» — только у фильма, который уже собирали: у несобранного нечего пересобирать
+export const staleFilm = (f: FilmState | null): boolean => {
+  if (!f) return false;
+  const built = f.document.builds.length > 0;
+  // Признак сервера покрывает и правки склеек, подрезки, музыки и порядка — метки строк их не видят
+  const changed = f.stale ?? f.marks.some(m => m.updated || m.stale);
+  return (built && changed) || f.build?.state === 'failed';
+};
+
+// «утро-в-горах · 4 сцены · 0:32»
+export function filmChip(name: string, f: FilmState | null): { text: string; short: string; meta: string } {
+  if (!f) return { text: name, short: name, meta: '' };
+  const n = f.document.items.length;
+  const word = n % 10 === 1 && n % 100 !== 11 ? 'сцена' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'сцены' : 'сцен';
+  const d = clock(filmDuration(f.document));
+  return { text: `${name} · ${n} ${word} · ${d}`, short: d, meta: `${n} ${word} · ${d}` };
+}

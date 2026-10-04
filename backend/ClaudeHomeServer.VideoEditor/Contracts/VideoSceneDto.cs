@@ -104,7 +104,8 @@ public static class VideoInitiators
 public sealed record VideoSceneStaleDto(bool Text, bool FrameA, bool FrameB, string? VersionId);
 
 // Какие версии в каком файле проекта лежат («Сохранить сцену»)
-public sealed record VideoSavedFileDto(string VersionId, string Path);
+// SavedAt — когда сохранили (для «Зафиксировать только этот чат», ADR-023 §3.3); у записей, сделанных до КТ-5, нет
+public sealed record VideoSavedFileDto(string VersionId, string Path, DateTime? SavedAt = null);
 
 // Место сцены в фильме проекта: Path — файл .film, Position — номер строки с нуля
 public sealed record VideoFilmRefDto(string Path, int Position);

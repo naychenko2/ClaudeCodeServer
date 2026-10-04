@@ -7,7 +7,7 @@ import { quickOffered } from '../editorInputs';
 import { hasMaskMark } from '../marks';
 import { enterScope } from '../scope';
 import { getCatalog } from '../thread/catalog';
-import { launchMarks } from '../panel/panelOp';
+import { launchMarks } from './ops';
 import { threadHasImage } from '../thread/model';
 import { getThreadMarks, getThreadsState, isWholeImage, openEditor } from '../thread/threadStore';
 import type { ImageThread } from '../thread/threadsApi';

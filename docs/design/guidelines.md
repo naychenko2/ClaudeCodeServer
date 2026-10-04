@@ -94,10 +94,11 @@
 | Полоса прогресса | `ProgressBar` (тоны accent / success / warning / danger, `estimate`) | `ui/ProgressBar` |
 | Рабочее окно во весь экран | `Modal size="fullscreen"` | `ui/Modal` |
 
-Полосы над композером, режим поля ввода «Картинка» и чипы подсистем над полем (слоты
-`composer-strip` / `composer-mode` / `composer-chip`, переключатель «Git ▾», правило
-старшинства полос) и правила трёх примитивов выше —
-[composer-strips-and-modes.md](composer-strips-and-modes.md).
+Над полем ввода — одна строка контекста («Где · С чем · Чем · Плюс»), под ним — чипы
+действий, подробности — в панели «Контекст» ([ADR-023](../adr/ADR-023-turn-context.md),
+макеты `docs/mockups/composer-context-row-v1*` и `composer-actions-v1*`). Своих полос и
+режимов поля подсистема не заводит. Устройство строки, вклад `composer-chip` и правила
+трёх примитивов выше — [composer-context-row.md](composer-context-row.md).
 
 ## Контролы в шапке панели
 

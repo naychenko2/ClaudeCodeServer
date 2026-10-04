@@ -202,7 +202,12 @@ one-shot действия и разговор с исполнителем «Ло
 Эфиры телеканалов и лента подписок YouTube за общим `IVideoProvider`; живой кадр рисуется оверлеем над страницами (панель, центральный остров, плавающее окно).
 Инварианты и подробности — [backend/ClaudeHomeServer.Video/CLAUDE.md](backend/ClaudeHomeServer.Video/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
-**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; панель «Видео», ключ `videoEditor`, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` за флагом `video-editor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
+**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; выбор — вид `video-scene`/`video-film` строки контекста, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` за флагом `video-editor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
+
+## Контекст хода (Services/ChatContext)
+
+Строка над полем ввода и панель «Контекст» вместо полос «Картинки»/«Звук»/«Видео»; флаг `composer-context-row` снят ([ADR-023](docs/adr/ADR-023-turn-context.md)). Стор — `Services.ChatContext` (Core, ревизия, `409 context_changed`), виды объявляют вертикали слотом `context-kind`, агент — MCP `turn-context`; панель `chatContext` открывает только человек (`revealContextPanel`).
+**Основной объект один на чат:** агент его по своей инициативе не меняет (тот же объект не трогает, другой — лишь по просьбе человека, с меткой ✦), усыновители `local_*` в контекст не пишут; выбор живёт в сторе, сырой `Focus` нити — только для `Sync` и засева. Тексты агенту — «строка контекста», без «полос».
 
 ## Значок проекта (Services/ProjectIcons)
 

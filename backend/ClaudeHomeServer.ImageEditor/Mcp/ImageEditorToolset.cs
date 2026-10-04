@@ -170,7 +170,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         return written.Status switch
         {
-            ImageThreadWriteStatus.Ok => Json(Focused(written.State, scope, file is null ? null : HumanChoice(ownerId, scope, written.State))),
+            ImageThreadWriteStatus.Ok => FocusedResult(ownerId, session.Id, scope, withChoice: file is not null),
             ImageThreadWriteStatus.ThreadNotFound => Deny($"Картинки {threadId} нет в этом чате. Список — image_state."),
             _ => Deny("Человек как раз меняет выбор картинки — повтори позже."),
         };
@@ -191,11 +191,18 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         var written = await _threads.AgentOpenAsync(ownerId, scope.Key, session.Id, null, folder, ct);
         return written.Status == ImageThreadWriteStatus.Ok
-            ? Json(Focused(written.State, scope, HumanChoice(ownerId, scope, written.State)))
+            ? FocusedResult(ownerId, session.Id, scope, withChoice: true)
             : Deny("Человек как раз меняет выбор картинки — повтори позже.");
     }
 
-    // humanChoice — настройки, которые картинка унаследовала из полосы «Картинки», и правило
+    // Ответ строится по проекции из контекста: основной объект мог выбрать человек, а не запись нити
+    private McpToolCallResult FocusedResult(string ownerId, string sessionId, ImageEditScope scope, bool withChoice)
+    {
+        var state = _threads.View(ownerId, sessionId);
+        return Json(Focused(state, scope, withChoice ? HumanChoice(ownerId, scope, state) : null));
+    }
+
+    // humanChoice — настройки, которые картинка унаследовала из выбора человека в строке контекста, и правило
     private static object Focused(ImageThreadsState state, ImageEditScope scope, object? humanChoice = null) => new
     {
         focus = state.Focus,
@@ -211,12 +218,11 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (_prefs is null) return null;
         var prefs = _prefs.Get(ownerId, scope);
         var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus)?.Settings;
-        // Строка контекста: выбор человека — «Чем» контекста хода, персонаж префов проекта не читается
-        var row = _flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
+        // Выбор человека — «Чем» контекста хода, персонаж префов проекта не читается
         return new
         {
-            text = Chats.ImageEditorStateContributor.ChoiceText(prefs, focused, row),
-            rule = row ? Chats.ImageEditorStateContributor.ChoiceRuleContextRow : Chats.ImageEditorStateContributor.ChoiceRule,
+            text = Chats.ImageEditorStateContributor.ChoiceText(prefs, focused),
+            rule = Chats.ImageEditorStateContributor.ChoiceRule,
         };
     }
 
@@ -335,30 +341,21 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var foreign = settings?.Provider is { } chosen && chosen != provider;
         var model = Str(args, "model") ?? (own || foreign ? null : settings?.Model) ?? ImageEditCatalog.AutoModelId;
         var count = Int(args, "count") ?? (!own && settings is { Count: > 0 } s ? s.Count : 1);
-        // При строке контекста персонаж префов проекта не читается: он ref контекста чата
-        var contextRow = _flags.IsEnabled(ownerId, FeatureFlagKeys.ComposerContextRow);
-        string? character;
+        // Персонаж префов проекта не читается: он ref контекста чата
+        var character = Str(args, "character");
         IReadOnlyList<ReferenceImage> contextSamples = [];
-        if (contextRow)
+        if (_context is not null && (!referencesGiven || !characterGiven))
         {
-            character = Str(args, "character");
-            if (_context is not null && (!referencesGiven || !characterGiven))
+            var layout = _context.Layout(new ContextScope(ownerId, session, scope.Project),
+                _context.Current(ownerId, session.Id), op);
+            if (!referencesGiven)
             {
-                var layout = _context.Layout(new ContextScope(ownerId, session, scope.Project),
-                    _context.Current(ownerId, session.Id), op);
-                if (!referencesGiven)
-                {
-                    references = layout.ReferencePaths;
-                    var loaded = await _context.LoadSamplesAsync(ownerId, scope, session.Id, layout, ct);
-                    if (loaded.Value is not { } samples) return Deny(loaded.Error ?? "Образцы контекста не прочитаны.");
-                    contextSamples = samples;
-                }
-                if (!characterGiven) character = layout.CharacterSlug;
+                references = layout.ReferencePaths;
+                var loaded = await _context.LoadSamplesAsync(ownerId, scope, session.Id, layout, ct);
+                if (loaded.Value is not { } samples) return Deny(loaded.Error ?? "Образцы контекста не прочитаны.");
+                contextSamples = samples;
             }
-        }
-        else
-        {
-            character = Str(args, "character") ?? (own ? null : prefs?.CharacterSlug);
+            if (!characterGiven) character = layout.CharacterSlug;
         }
 
         var quoteRequest = new ImageEditQuoteRequest(provider, model, mode, op, count,
@@ -464,7 +461,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
     private object DescribeState(string ownerId, Session session, ImageEditScope scope)
     {
-        var state = _threads.Get(ownerId, session.Id);
+        var state = _threads.View(ownerId, session.Id);
         var place = ImagePlaceKeys.ImageEditor;
         var admin = _placeSettings?.ProviderFor(place);
         var catalog = ImageEditCatalog.Build(_editors, admin, admin is null ? null : _placeSettings?.ModelFor(place, admin));

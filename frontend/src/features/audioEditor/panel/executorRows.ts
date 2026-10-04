@@ -5,8 +5,7 @@
 
 import type { ExecutorBadge, ExecutorRow } from 'aihome_shell/kit';
 import type { AudioCatalog, AudioModelInfo, AudioOp, AudioProvider, AudioStemSet } from '../api';
-import { opInfo } from '../ops';
-import { autoOrder } from '../strip/summary';
+import { autoOrder } from './launch';
 import { providerUnit, unitLabel, type PanelState, type SettingsPatch } from './model';
 
 export const AUTO_EXECUTOR = 'auto';
@@ -60,7 +59,8 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
   const auto = autoPick(catalog, op, stemSet);
   const rows: ExecutorRow[] = [{
     id: AUTO_EXECUTOR, group: 'auto', name: 'Авто',
-    sub: auto ? `сначала локальные модели · сейчас ${where(auto.provider, auto.model).join(' · ')}` : 'сейчас некому — нет поставщика с этой операцией',
+    sub: auto ? `сейчас: ${where(auto.provider, auto.model).join(' · ')}` : 'сейчас некому — нет поставщика с этой операцией',
+    ...(auto ? { now: where(auto.provider, auto.model).join(' · ') } : null),
     price: auto ? rowPrice(auto.provider, auto.model) : '—',
     free: !!auto && rowFree(auto.provider, auto.model),
     ...(auto ? null : { disabled: true, reason: 'Нет доступного поставщика для этой операции' }),
@@ -105,16 +105,3 @@ export function executorPatch(id: string): SettingsPatch {
   return { provider: id.slice(0, i), model: id.slice(i + 1) };
 }
 
-// Свёрнутая строка «Чем: **Авто** · локально · Qwen3-TTS»: у «Авто» — кого он взял сейчас
-export function executorSummary(
-  catalog: AudioCatalog, state: Pick<PanelState, 'providerKey' | 'modelId' | 'provider' | 'model' | 'op'>,
-): { name: string; parts: string[] } {
-  const p = state.provider;
-  if (!state.providerKey && isAutoModel(state.modelId, catalog)) {
-    return { name: 'Авто', parts: p ? where(p, state.model) : ['нет поставщика для «' + (opInfo(state.op)?.label ?? state.op) + '»'] };
-  }
-  if (!p) return { name: state.providerKey ?? 'Авто', parts: ['поставщика нет в каталоге'] };
-  if (isAutoModel(state.modelId, catalog)) return { name: `${p.label} · Авто`, parts: state.model ? [state.model.label] : [] };
-  const name = state.model?.label ?? state.modelId;
-  return onOwnGpu(p) ? { name, parts: ['локально'] } : { name: `${p.label} · ${name}`, parts: [] };
-}

@@ -50,6 +50,13 @@ public static class ImageExecutorRows
         return rows;
     }
 
+    // Умеет ли своя видеокарта эту операцию (хоть одна её модель без причины отказа): «Авто» при
+    // local-media-default уходит в облако только когда локальной не по силам
+    public static bool LocalCan(ImageEditCatalogDto catalog, ImageEditOp op, bool hasImage, bool hasMask) =>
+        catalog.Providers.Where(p => OnOwnGpu(p) && p.Available)
+            .SelectMany(p => p.Models)
+            .Any(m => m.Id != ImageEditCatalog.AutoModelId && BlockReason(m, op, hasImage, hasMask).Length == 0);
+
     private static bool OnOwnGpu(ImageEditProviderDto pv) => pv.PriceUnit == ImageEditPriceUnits.Free;
 
     private static string Name(ImageEditProviderDto pv, ImageEditModelDto m) =>
@@ -108,7 +115,7 @@ public static class ImageExecutorRows
         if (m.Id == ImageEditCatalog.AutoModelId || m.Caps is not { } caps) return "";
         var ops = caps.Ops;
         if (ops.Count > 0 && ops.All(o => o == ImageEditOp.EnhanceFaces) && op != ImageEditOp.EnhanceFaces)
-            return "Запускается кнопкой «Улучшить лица» в быстрых действиях";
+            return "Умеет только «Улучшить лица» — для этой задачи не годится";
         var fromScratch = op == ImageEditOp.Generate;
         var image = !fromScratch && hasImage;
         if (!image && !fromScratch && !ops.Contains(ImageEditOp.Generate))

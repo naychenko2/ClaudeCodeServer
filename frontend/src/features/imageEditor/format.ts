@@ -99,7 +99,7 @@ export const isRemovalPrompt = (prompt: string) => REMOVAL.test(prompt) && !OTHE
 export function modelBlockReason(m: ImageEditModel, hasImage: boolean, hasMask: boolean, op = pickOp(hasImage, hasMask)): string {
   if (m.id === AUTO_MODEL || !m.caps) return '';
   // Модель одного быстрого действия (FaceDetailer) промптом не запускается
-  if (m.caps.ops.length && m.caps.ops.every(op => op === 'enhanceFaces')) return 'Запускается кнопкой «Улучшить лица» в быстрых действиях';
+  if (m.caps.ops.length && m.caps.ops.every(op => op === 'enhanceFaces')) return 'Умеет только «Улучшить лица» — для этой задачи не годится';
   if (!hasImage && !m.caps.ops.includes('generate')) return 'Только правит готовую картинку — сначала загрузите её';
   if (hasImage && hasMask && m.caps.mask === 'none') return 'Не правит по маске — сотрите кисть или возьмите другую модель';
   // Операцию считаем как сервер котировки (правка с маской — инпейнт): модель без неё там

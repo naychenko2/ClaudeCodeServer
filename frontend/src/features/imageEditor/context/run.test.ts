@@ -146,6 +146,19 @@ describe('запуск чипа с отметками: маска и аннот�
   });
 });
 
+describe('цена следует за «Чем»', () => {
+  it('смена исполнителя меняет ключ цены (priceSalt) без единого символа текста', async () => {
+    await loadCatalog(P);
+    const salt = () => imageKindApi.priceSalt!(CTX, 'edit');
+    const before = salt();
+    const m = imageKindApi.executors!(CTX, 'edit')!;
+    const other = m.rows.find(r => r.id !== 'auto' && !r.disabled && r.group !== 'auto');
+    expect(other).toBeTruthy();
+    m.onChange(other!.id);
+    expect(salt()).not.toBe(before);
+  });
+});
+
 describe('цена, «Чем» и параметры', () => {
   it('цена по op действия: подпись из котировки, ревизия в запросе', async () => {
     const q = await imageKindApi.quote!(CTX, { op: 'edit', text: 'x', params: { variants: 2 }, contextRevision: 7 });
@@ -171,7 +184,7 @@ describe('цена, «Чем» и параметры', () => {
     __applyChatContext(S, { ...context(9), primary: { ...context(9).primary!, ref: { threadId: 'd1' } } });
     const draw = imageKindApi.params!(CTX, 'draw');
     expect(draw.map(p => p.kind)).toEqual(['variants', 'aspect']);
-    expect(draw[1]).toMatchObject({ options: ['авто', '1:1', '16:9', '9:16'], value: 'авто' });
+    expect(draw[1]).toMatchObject({ options: ['авто', '16:9', '9:16', '1:1'], value: 'авто' });
   });
 
   it('действия: у нити с файлом — пять чипов; нить не найдена — действий нет (остаётся «Чат | Картинка»)', () => {

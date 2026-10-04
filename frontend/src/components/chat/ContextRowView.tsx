@@ -3,13 +3,14 @@
 // Здесь только отрисовка по готовой модели: подписи объекта и референсов приходят из DTO
 // (`label`, `version`), своих форматтеров нет. Ширина — снаружи; форму каждого чипа выбирает
 // чистая лестница lib/chatContext/ladder.ts, открытость панели в неё не входит.
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Cpu, Eye, GitBranch, Plus, RotateCcw, Send, Trash2, X, Check, Info } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW, Z } from '../../lib/design';
 import { plural } from '../../lib/plural';
-import { contextRowLadder, NOM, type LadderFacts, type LadderPick } from '../../lib/chatContext/ladder';
+import { contextRowLadder, CAP, gitChipBox, ladderRungs, NOM, type LadderFacts, type LadderPick } from '../../lib/chatContext/ladder';
 import { unusedBy } from '../../lib/chatContext/fill';
 import { roleLabel } from '../../lib/chatContext/roleLabels';
+import { baseName } from '../../lib/chatContext/labels';
 import type { ChatContextPrimary, ChatContextRef } from '../../lib/chatContext/types';
 import { Badge, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -164,7 +165,8 @@ function GitChip({ g, form, onOpen }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: 
   const clean = !g.changes && !g.publishN;
   const up = g.publishN > 0 ? <span style={{ color: C.accent, fontWeight: 600, flexShrink: 0 }}>↑{g.publishN}</span> : null;
   const count = g.changes ? <span style={{ fontWeight: 600, flexShrink: 0 }}>{g.changes}</span> : null;
-  const max = form === 0 ? NOM.g0 : NOM[`g${form}` as 'g1'];
+  const box = gitChipBox(form);
+  const max = box.chip;
   const open = (e: { currentTarget: HTMLElement }) => onOpen(e.currentTarget.getBoundingClientRect());
   if (form === 0) {
     // Телефон: иконка с бейджем-счётчиком
@@ -179,7 +181,7 @@ function GitChip({ g, form, onOpen }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: 
   return (
     <RowChip kind="git" max={max} title={gitTitle(g)} onClick={open} mono>
       {icon}
-      {form >= 2 && <span style={{ ...ellipsis, maxWidth: form === 3 ? 136 : 76 }}>{g.label}</span>}
+      {form >= 2 && <span style={box.label === null ? ellipsis : { ...ellipsis, maxWidth: box.label }}>{g.label}</span>}
       <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>
       {form === 3
         ? (g.changes ? <span style={{ flexShrink: 0 }}>{changesWord(g.changes)}</span> : (g.publishN ? null : <span style={{ flexShrink: 0 }}>чисто</span>))
@@ -198,9 +200,9 @@ function PrimaryChip({ p, form, icon, onOpen, onRelease, onAgentTip }: {
   const ver = p.version ? ` · ${p.version}` : '';
   const title = `${p.label}${ver}${agent ? ' · взял в работу Claude' : ''}${onOpen ? ' — открыть в панели' : ''}`;
   return (
-    <RowChip kind="primary" max={form === 1 ? NOM.o1 : NOM.o2} title={title} onClick={onOpen} borderColor={C.accentMuted} dim={p.missing}>
+    <RowChip kind="primary" max={form === 1 ? NOM.o1 : CAP.o2} title={title} onClick={onOpen} borderColor={C.accentMuted} dim={p.missing}>
       <Thumb item={p} icon={icon} />
-      <span data-chip-label="" style={ellipsis}>{p.label}</span>
+      <span data-chip-label="" style={ellipsis}>{baseName(p.label, true)}</span>
       {p.version && <span style={{ color: C.textMuted, flexShrink: 0 }}>· {p.version}</span>}
       {agent && <AgentMark title="Взял в работу Claude" onClick={onAgentTip} />}
       <XBtn title={`Снять «${p.label}» с работы`} onClick={onRelease} />
@@ -211,10 +213,11 @@ function PrimaryChip({ p, form, icon, onOpen, onRelease, onAgentTip }: {
 function ExecChip({ e, form, onOpen }: { e: RowExec; form: 1 | 2 | 3; onOpen: (r: DOMRect) => void }) {
   const row = e.rows.find(r => r.id === e.value) ?? e.rows[0];
   if (!row) return null;
-  const auto = row.group === 'auto';
+  // «Авто» с названием модели в now: «Авто · локально · Qwen»; строка группы auto с другим именем («Без ИИ») — как обычная
+  const auto = row.group === 'auto' && row.name === 'Авто';
   const price = rowPriceShort(row);
   const free = !!row.free;
-  const full = `${auto ? 'Авто · ' : ''}${row.sub ? `${row.sub} · ` : ''}${row.name}`;
+  const full = auto ? `Авто${row.now ? ` · ${row.now}` : ''}` : `${row.sub ? `${row.sub} · ` : ''}${row.name}`;
   const title = `Чем: ${full} · ${price} — сменить исполнителя`;
   const open = (ev: { currentTarget: HTMLElement }) => onOpen(ev.currentTarget.getBoundingClientRect());
   const badge = <Badge size="xs" tone={free ? 'success' : 'neutral'}>{price}</Badge>;
@@ -226,7 +229,11 @@ function ExecChip({ e, form, onOpen }: { e: RowExec; form: 1 | 2 | 3; onOpen: (r
           ? <b style={{ ...ellipsis, color: C.textHeading, fontWeight: 600 }}>{row.name}</b>
           : <>
               <span style={{ color: C.textMuted, flexShrink: 0 }}>Чем:</span>
-              <span style={ellipsis}>{auto && <b style={{ color: C.textHeading, fontWeight: 600 }}>Авто · </b>}{row.sub ? `${row.sub} · ` : ''}<b style={{ color: C.textHeading, fontWeight: 600 }}>{row.name}</b></span>
+              <span style={ellipsis}>
+                {auto
+                  ? <><b style={{ color: C.textHeading, fontWeight: 600 }}>Авто</b>{row.now ? ` · ${row.now}` : ''}</>
+                  : <>{row.sub ? `${row.sub} · ` : ''}<b style={{ color: C.textHeading, fontWeight: 600 }}>{row.name}</b></>}
+              </span>
             </>}
       <span style={{ flexShrink: 0, display: 'inline-flex' }}>{badge}</span>
       <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
@@ -240,9 +247,9 @@ function RefPill({ r, gray, icon, grayHint, onDetach }: {
   const role = roleLabel(r.role);
   const title = gray ? grayHint : `${r.label}${role ? ` · ${role}` : ''}${r.by === 'agent' ? ' · подключил Claude' : ''}`;
   return (
-    <RowChip kind="ref" max={NOM.ref} title={title} dim={gray || r.missing} dashed={gray}>
+    <RowChip kind="ref" max={CAP.ref} title={title} dim={gray || r.missing} dashed={gray}>
       <Thumb item={r} icon={icon} round={r.role === 'char' || r.role === 'character'} />
-      <span style={{ ...ellipsis, textDecoration: gray ? 'line-through' : undefined }}>{r.label}</span>
+      <span style={{ ...ellipsis, textDecoration: gray ? 'line-through' : undefined }}>{baseName(r.label, true)}</span>
       {r.by === 'agent' && <AgentMark title="Подключил Claude" />}
       <XBtn title={`Отключить «${r.label}»`} onClick={onDetach} />
     </RowChip>
@@ -274,10 +281,11 @@ export function GitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
   );
 }
 
-function ExecMenuBody({ e, close }: { e: RowExec; close: () => void }) {
+// Заголовок меню — у шторки на телефоне он в шапке окна, второй раз не повторяем
+function ExecMenuBody({ e, close, head = true }: { e: RowExec; close: () => void; head?: boolean }) {
   return (
     <>
-      <MenuHead>{e.title}</MenuHead>
+      {head && <MenuHead>{e.title}</MenuHead>}
       {groupExecutorRows(e.rows).map(g => (
         <div key={g.group}>
           {g.group !== 'auto' && <MenuHead>{EXECUTOR_GROUP_LABEL[g.group]}</MenuHead>}
@@ -351,7 +359,7 @@ function AgentTip({ p, onOpen, onClose }: { p: ChatContextPrimary; onOpen?: () =
     }}>
       <b style={{ color: C.textHeading }}>✦ Взял в работу Claude</b> · {p.label}{p.version ? ` · ${p.version}` : ''}
       <div style={{ margin: `${SP.xs}px 0 ${SP.sm}px`, color: C.textMuted }}>
-        Панель от действий Claude не двигается. Поле осталось «Чат»: Claude продолжит разговор, а «Картинка» отправит промпт генератору.
+        Панель от действий Claude не двигается. Поле осталось «Чат»: Claude продолжит разговор, а чип действия отправит запуск генератору.
       </div>
       <div style={{ display: 'flex', gap: SP.sm }}>
         {onOpen && <button type="button" data-tip-open="" onClick={() => { onClose(); onOpen(); }} style={tipBtn(true)}>Открыть</button>}
@@ -370,17 +378,62 @@ const tipBtn = (primary: boolean) => ({
 
 type OpenMenu = { kind: 'git' | 'exec' | 'refs'; rect: DOMRect } | null;
 
+// Счётчик загрузок шрифтов страницы: растёт, когда шрифты готовы и после каждой догрузки (`loadingdone`)
+function useFontsEpoch(): number {
+  const [epoch, setEpoch] = useState(0);
+  useEffect(() => {
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    if (!fonts) return;
+    let alive = true;
+    const bump = () => { if (alive) setEpoch(n => n + 1); };
+    void fonts.ready.then(bump);
+    fonts.addEventListener?.('loadingdone', bump);
+    return () => { alive = false; fonts.removeEventListener?.('loadingdone', bump); };
+  }, []);
+  return epoch;
+}
+
 export function ContextRowView(props: ContextRowViewProps) {
   const { git, primary, refs, exec, isMobile, iconOf, actionLabel } = props;
   const [menu, setMenu] = useState<OpenMenu>(null);
   const [tip, setTip] = useState(false);
-  if (!showsRow(props)) return null;
-
   const facts = rowFacts(props);
   // Телефон: лестницы нет, строка прокручивается; ветка иконкой, «Чем» без подписи
-  const pick = props.pick ?? (isMobile
+  const base = props.pick ?? (isMobile
     ? { form: { g: 0 as const, o: 2 as const, e: 2 as const, k: refs.length }, index: -1, count: 0, need: 0, scroll: true }
     : contextRowLadder(props.width ?? 10_000, facts));
+  // Номиналы ступеней — верхняя оценка (чип не шире номинала), реальные чипы уже. Поэтому после вёрстки
+  // пробуем ступень богаче: влезла без прокрутки — оставляем, нет — возвращаемся на шаг назад и закрепляем
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [shift, setShift] = useState(0);
+  const trial = useRef({ sig: '', locked: false });
+  // Ширины чипов меряются по реальному шрифту: пока моноширинный не загрузился, запасной шире и «не влезло» ложное
+  const fontsEpoch = useFontsEpoch();
+  const sig = [fontsEpoch, props.width, base.index, git?.label, git?.changes, primary?.label, primary?.version, exec?.value, refs.map(r => r.label).join(',')].join('|');
+  const rungs = !props.pick && !isMobile ? ladderRungs(facts) : [];
+  const last = rungs.length - 1;
+  const at = Math.min(last, Math.max(0, base.index - shift));
+  useLayoutEffect(() => {
+    const el = rowRef.current;
+    if (!el || !rungs.length) return;
+    if (trial.current.sig !== sig) {
+      trial.current = { sig, locked: false };
+      if (shift !== 0) { setShift(0); return; }
+    }
+    if (el.scrollWidth > el.clientWidth + 1) {
+      // Не влезло: назад на шаг, и вверх больше не пробуем
+      if (at < last) { trial.current.locked = true; setShift(shift - 1); }
+    } else if (!trial.current.locked && at > 0) {
+      setShift(shift + 1);
+    }
+  });
+  const pick = shift !== 0 && rungs.length ? { ...base, form: rungs[at], index: at } : base;
+  if (!showsRow(props)) {
+    // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» после ✕ обязана остаться
+    return props.offer
+      ? <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${SP.sm - 2}px` }}><UndoNotice offer={props.offer} onUndo={props.onUndo} /></div>
+      : null;
+  }
   const f = pick.form;
   const close = () => setMenu(null);
   const grayHint = actionLabel ? `Не используется в операции «${actionLabel}»` : '';
@@ -393,7 +446,7 @@ export function ContextRowView(props: ContextRowViewProps) {
 
   const body = !menu ? null
     : menu.kind === 'git' && git ? <GitMenuBody g={git} close={close} />
-    : menu.kind === 'exec' && exec ? <ExecMenuBody e={exec} close={close} />
+    : menu.kind === 'exec' && exec ? <ExecMenuBody e={exec} close={close} head={!isMobile} />
     : menu.kind === 'refs' ? <RefsMenuBody refs={refs} grayIds={grayIds} grayHint={grayHint} iconOf={iconOf}
         onDetach={props.onDetach} onClear={props.onClear} close={close} />
     : null;
@@ -403,6 +456,7 @@ export function ContextRowView(props: ContextRowViewProps) {
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
       <div
+        ref={rowRef}
         data-context-row="" data-ladder-step={pick.index} data-ladder-scroll={pick.scroll ? '1' : '0'}
         role="toolbar" aria-label="Контекст хода"
         style={{
@@ -436,7 +490,7 @@ export function ContextRowView(props: ContextRowViewProps) {
         )}
       </div>
       {menu && body && (isMobile
-        ? <Modal title={menu.kind === 'git' ? 'Ветка' : menu.kind === 'exec' ? 'Чем выполнить' : 'Подключено к ходу'} onClose={close}>{body}</Modal>
+        ? <Modal title={menu.kind === 'git' ? 'Ветка' : menu.kind === 'exec' ? exec?.title ?? 'Чем выполнить' : 'Подключено к ходу'} onClose={close}>{body}</Modal>
         : <Menu anchor={menu.rect} onClose={close} minWidth={300} maxWidth={340} maxHeight={320} preferUp anchorAlign="start">{body}</Menu>)}
     </div>
   );

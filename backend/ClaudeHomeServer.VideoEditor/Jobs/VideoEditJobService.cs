@@ -6,6 +6,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.VideoEditor.Catalog;
+using ClaudeHomeServer.Services.VideoEditor.ChatContext;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Prefs;
 using ClaudeHomeServer.Services.VideoEditor.Scenes;
@@ -50,6 +51,7 @@ public sealed class VideoEditJobService : IDisposable
     private readonly VideoJobThreads _threads;
     private readonly VideoPrefsService? _prefs;
     private readonly VideoFrameReader _frames;
+    private readonly VideoContextLaunch? _context;
     private readonly ISpendCollector? _spend;
     private readonly ISessionBroadcaster? _broadcaster;
     private readonly IFeatureFlagGate? _flags;
@@ -71,8 +73,10 @@ public sealed class VideoEditJobService : IDisposable
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
         IFeatureFlagGate? flags = null,
-        VideoFrameReader? frames = null)
+        VideoFrameReader? frames = null,
+        VideoContextLaunch? context = null)
     {
+        _context = context;
         _engines = engines;
         _workspace = workspace;
         _threads = threads;
@@ -94,7 +98,8 @@ public sealed class VideoEditJobService : IDisposable
 
     private sealed record Quote(
         string Id, string OwnerId, string ScopeKey, string? SessionId, string? SceneId, string Provider, VideoModelInfo Model,
-        int Count, int DurationSec, string? Aspect, bool Sound, VideoPriceDto Price, DateTime ExpiresAt)
+        int Count, int DurationSec, string? Aspect, bool Sound, VideoPriceDto Price, DateTime ExpiresAt,
+        long? ContextRevision = null)
     {
         public bool Heavy => Model.Caps.Heavy;
         public string License => Model.Caps.License.Label;
@@ -137,9 +142,31 @@ public sealed class VideoEditJobService : IDisposable
     public async Task<VideoEditCallResult<VideoQuoteResponse>> QuoteAsync(
         string ownerId, VideoEditScope scope, VideoQuoteRequest request, CancellationToken ct)
     {
+        // Ревизия контекста: сцена и кадры берутся из стора, одноимённые поля запроса игнорируются
+        VideoContextInputs? fromContext = null;
+        if (request.ContextRevision is { } revision)
+        {
+            if (_context is null)
+                return Fail<VideoQuoteResponse>(VideoEditorErrors.ProviderUnavailable, VideoContextLaunch.UnavailableText);
+            var read = _context.Read(ownerId, scope, request.SessionId, revision);
+            if (!read.Ok) return read.Fail<VideoQuoteResponse>();
+            fromContext = VideoContextLaunch.Extract(read.State!);
+            if (fromContext.SceneId is null)
+                return Fail<VideoQuoteResponse>(VideoEditorErrors.InvalidRequest, VideoContextLaunch.NotSceneText);
+            if (fromContext.Problem is { } problem)
+                return Fail<VideoQuoteResponse>(VideoEditorErrors.InvalidRequest, problem);
+            request = request with { SceneId = fromContext.SceneId };
+        }
         if (!_threads.OwnScene(ownerId, scope.Key, request.SessionId, request.SceneId))
             return Fail<VideoQuoteResponse>(VideoEditorErrors.SceneNotFound, "Сцена не найдена");
         var settings = _threads.Store.Get(ownerId, request.SessionId).Scenes.First(s => s.SceneId == request.SceneId).Settings;
+        if (fromContext is not null)
+        {
+            // Кадры сцены при ревизии — только референсы контекста (frame-a/frame-b), не поля сцены
+            settings = settings with { FrameA = fromContext.FrameA, FrameB = fromContext.FrameB };
+            if (VideoSceneService.SettingsProblem(scope, settings) is { } bad)
+                return Fail<VideoQuoteResponse>(bad.ErrorCode!, bad.Error!);
+        }
 
         // Цепочка: явное в запросе → настройки сцены → префы области → умолчание каталога
         var prefs = _prefs?.Get(ownerId, scope) ?? VideoPrefsStore.Empty;
@@ -198,7 +225,7 @@ public sealed class VideoEditJobService : IDisposable
         }
 
         var quote = new Quote(NewId(), ownerId, scope.Key, request.SessionId, request.SceneId, engine.Key, model, count,
-            duration, aspect, sound, price, Now() + QuoteTtl);
+            duration, aspect, sound, price, Now() + QuoteTtl, request.ContextRevision);
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return VideoEditCallResult<VideoQuoteResponse>.Ok(ToDto(quote));
@@ -236,6 +263,26 @@ public sealed class VideoEditJobService : IDisposable
         if (!_quotes.TryGetValue(input.QuoteId, out var quote)
             || quote.OwnerId != ownerId || quote.ScopeKey != scope.Key || quote.ExpiresAt < Now())
             return Fail<VideoJobCreated>(VideoEditorErrors.QuoteNotFound, QuoteExpiredText);
+        // Ревизия контекста: совпасть и со стором, и с ревизией котировки (цена выписана на состав кадров);
+        // котировка по ревизии без ревизии в запуске — тоже несовпадение
+        VideoContextInputs? fromContext = null;
+        if (input.ContextRevision is { } revision)
+        {
+            if (_context is null)
+                return Fail<VideoJobCreated>(VideoEditorErrors.ProviderUnavailable, VideoContextLaunch.UnavailableText);
+            var read = _context.Read(ownerId, scope, input.SessionId, revision);
+            if (!read.Ok) return read.Fail<VideoJobCreated>();
+            if (quote.ContextRevision != revision)
+                return _context.Stale(ownerId, scope, input.SessionId).Fail<VideoJobCreated>();
+            fromContext = VideoContextLaunch.Extract(read.State!);
+            if (fromContext.SceneId is null)
+                return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, VideoContextLaunch.NotSceneText);
+            if (fromContext.Problem is { } problem)
+                return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, problem);
+            input = input with { SceneId = fromContext.SceneId };
+        }
+        else if (quote.ContextRevision is not null)
+            return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, QuoteMismatchText);
         if (quote.SessionId != input.SessionId || quote.SceneId != input.SceneId)
             return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, QuoteMismatchText);
         if (!_threads.OwnScene(ownerId, scope.Key, input.SessionId, input.SceneId))
@@ -250,11 +297,29 @@ public sealed class VideoEditJobService : IDisposable
             return Fail<VideoJobCreated>(ScopeRefusalCode(scope), refusal);
 
         var parameters = input.Params?.DeepClone().AsObject() ?? new JsonObject();
+        // При ревизии текст поля ввода едет в params.request — просьба поверх текста сцены, не частный параметр модели
+        string? ask = null;
+        if (fromContext is not null)
+        {
+            if (parameters["request"] is JsonValue asked && asked.TryGetValue<string>(out var askedText)
+                && !string.IsNullOrWhiteSpace(askedText))
+                ask = askedText.Trim();
+            parameters.Remove("request");
+        }
         if (CheckParams(engine, quote.Model, parameters) is { } badParams)
             return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, badParams);
 
         var scene = _threads.Store.Get(ownerId, input.SessionId).Scenes.First(s => s.SceneId == input.SceneId);
         var settings = scene.Settings;
+        if (fromContext is not null)
+        {
+            // Кадры при ревизии — референсы контекста; в сцену они ложатся запуском (OnLaunchedAsync пишет настройки)
+            settings = settings with { FrameA = fromContext.FrameA, FrameB = fromContext.FrameB };
+            if (VideoSceneService.SettingsProblem(scope, settings) is { } bad)
+                return Fail<VideoJobCreated>(bad.ErrorCode!, bad.Error!);
+        }
+        var prompt = string.IsNullOrWhiteSpace(ask) ? settings.Text
+            : string.IsNullOrWhiteSpace(settings.Text) ? ask : settings.Text.TrimEnd() + "\n\n" + ask;
         // Сцена могла поменять входы между котировкой и запуском: модель обязана по-прежнему подходить
         if (!VideoCatalog.Fits(quote.Model, new VideoCatalog.Need(settings.FrameA is not null, settings.FrameB is not null, quote.DurationSec)))
             return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, QuoteMismatchText);
@@ -299,9 +364,9 @@ public sealed class VideoEditJobService : IDisposable
             Sound = quote.Sound, Count = quote.Count,
         };
         await _threads.OnLaunchedAsync(ownerId, scope.Key, input.SessionId, input.SceneId, job.Id, ToDto(quote),
-            settings.Text, initiator, chosen, ct);
+            prompt, initiator, chosen, ct);
 
-        var request = new VideoRequest(quote.Model.Id, scope, settings.Text, frameA.Bytes, frameB.Bytes, quote.DurationSec,
+        var request = new VideoRequest(quote.Model.Id, scope, prompt, frameA.Bytes, frameB.Bytes, quote.DurationSec,
             quote.Aspect, quote.Sound, parameters, input.Seed);
         job.Completion = Task.Run(() => RunAsync(job, engine, request));
 

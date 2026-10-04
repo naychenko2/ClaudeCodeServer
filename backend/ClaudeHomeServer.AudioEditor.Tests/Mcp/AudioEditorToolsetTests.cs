@@ -69,12 +69,9 @@ public sealed class AudioEditorToolsetTests : IDisposable
         AudioContextLaunch? context = null, string[]? extraFlags = null)
     {
         engines ??= [new FakeEngine("fal")];
-        var contextFlags = new Mock<IFeatureFlagGate>();
-        contextFlags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ComposerContextRow))
-            .Returns(() => extraFlags?.Contains(FeatureFlagKeys.ComposerContextRow) == true);
         _ctxStore = new ChatContextStore(Path.Combine(_dir, "chat-context"),
             new ContextKindRegistry([new AudioContextKind(_store)]));
-        var mirror = new ChatContextFocusMirror(_ctxStore, contextFlags.Object, NullLogger<ChatContextFocusMirror>.Instance);
+        var mirror = new ChatContextFocusMirror(_ctxStore, NullLogger<ChatContextFocusMirror>.Instance);
         var threads = new AudioJobThreads(_store, NullLogger<AudioJobThreads>.Instance, mirror: mirror);
         _jobs = new AudioEditJobService(engines, _workspace, NullLogger<AudioEditJobService>.Instance, threads, _prefs,
             voices: library);
@@ -357,11 +354,9 @@ public sealed class AudioEditorToolsetTests : IDisposable
         engine.LastRequest.Params?.ContainsKey("voice").Should().NotBe(true);
     }
 
-    // Голос контекста агент берёт под флагом строки контекста composer-context-row, а не старым chat-context
-    [Theory]
-    [InlineData(FeatureFlagKeys.ComposerContextRow, true)]
-    [InlineData(FeatureFlagKeys.ChatContext, false)]
-    public async Task Голос_контекста_у_агента_зависит_от_флага_строки_контекста(string flag, bool taken)
+    // Голос контекста агент берёт без отдельного флага; старый chat-context на него не влияет
+    [Fact]
+    public async Task Голос_контекста_агент_берёт_без_флага()
     {
         var library = new VoiceLibrary();
         var scope = AudioEditScope.Of(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
@@ -375,14 +370,13 @@ public sealed class AudioEditorToolsetTests : IDisposable
         store.AddRef(Owner, ChatId, new ContextItem("ci_voice", AudioContextKind.VoiceKind, new JsonObject { ["slug"] = slug },
             "voice", ContextActor.Human, DateTime.UtcNow), null);
         var engine = new FakeEngine("fal") { TakesLibraryVoices = true };
-        var toolset = Toolset([engine], library: library, context: launch, extraFlags: [flag]);
+        var toolset = Toolset([engine], library: library, context: launch, extraFlags: [FeatureFlagKeys.ChatContext]);
 
         var result = await Call(toolset, AudioEditorToolset.ToolGenerate, Gen(Draft()));
         await WaitIdleAsync();
 
         result.IsError.Should().BeFalse(result.Text);
-        if (taken) engine.LastRequest!.Voice!.Slug.Should().Be(slug);
-        else engine.LastRequest!.Voice.Should().BeNull("флаг строки контекста выключен — голос контекста не берётся");
+        engine.LastRequest!.Voice!.Slug.Should().Be(slug);
     }
 
     // ── Сохранения у агента нет ────────────────────────────────────────────────
@@ -548,9 +542,25 @@ public sealed class AudioEditorToolsetTests : IDisposable
     }
 
     [Fact]
-    public async Task При_строке_контекста_audio_focus_ставит_основной_объект_от_агента_а_выбор_человека_гасит_звёздочку()
+    public async Task Audio_state_показывает_основной_объект_контекста_а_не_запись_нити()
     {
-        var toolset = Toolset(extraFlags: [FeatureFlagKeys.ComposerContextRow]);
+        var toolset = Toolset();
+        var a = Draft();
+        var b = Draft();
+        _store.SetFocus(Owner, ChatId, a, null);
+        // Человек ставит основным B ручкой контекста: запись нити по-прежнему говорит «A»
+        _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("audio", b, ContextActor.Human), null);
+        _store.Get(Owner, ChatId).Focus.Should().Be(a);
+
+        var state = Parse(await Call(toolset, AudioEditorToolset.ToolState));
+
+        state["focus"]!.GetValue<string>().Should().Be(b, "агент видит выбор человека, а не сырой Focus нити");
+    }
+
+    [Fact]
+    public async Task Audio_focus_ставит_основной_объект_от_агента_а_выбор_человека_гасит_звёздочку()
+    {
+        var toolset = Toolset();
 
         var focus = Parse(await Call(toolset, AudioEditorToolset.ToolFocus, new JsonObject { ["file"] = "audio/intro.wav" }));
 
@@ -563,17 +573,6 @@ public sealed class AudioEditorToolsetTests : IDisposable
         // Человек выбрал тот же объект — звёздочка гаснет (ADR-023 §2.4)
         _ctxStore.SetPrimary(Owner, ChatId, ChatContextFocusMirror.NewItem("audio", threadId, ContextActor.Human), null);
         _ctxStore.Get(Owner, ChatId).Primary!.By.Should().Be(ContextActor.Human);
-    }
-
-    [Fact]
-    public async Task Без_строки_контекста_audio_focus_стор_контекста_не_трогает()
-    {
-        var toolset = Toolset();
-
-        (await Call(toolset, AudioEditorToolset.ToolFocus, new JsonObject { ["file"] = "audio/intro.wav" })).IsError.Should().BeFalse();
-
-        _ctxStore.Get(Owner, ChatId).Primary.Should().BeNull();
-        _ctxStore.Get(Owner, ChatId).Revision.Should().Be(0);
     }
 
     [Fact]

@@ -21,7 +21,8 @@ public class FilmController(
     FilmService films,
     FilmSceneSaver saver,
     FilmAssembler assembler,
-    FilmMusicComposer music) : ControllerBase
+    FilmMusicComposer music,
+    ChatContext.VideoContextLaunch? context = null) : ControllerBase
 {
     private const string SubClaim = "sub";
 
@@ -54,11 +55,32 @@ public class FilmController(
             : denied;
 
     [HttpPost(VideoEditorRoutes.FilmBuild)]
-    public IActionResult Build(string projectId, [FromQuery] string? path, [FromQuery] string? sessionId = null) =>
-        Gate(projectId, out var scope, out var denied)
-            ? FilmHttp.Map(assembler.Start(UserId, scope, path, VideoInitiators.Human, sessionId),
-                status => StatusCode(StatusCodes.Status202Accepted, status))
-            : denied;
+    public IActionResult Build(string projectId, [FromQuery] string? path, [FromQuery] string? sessionId = null,
+        [FromQuery] long? contextRevision = null)
+    {
+        if (!Gate(projectId, out var scope, out var denied)) return denied;
+        // Ревизия контекста (ADR-023 §Д2.1): основной объект обязан быть этим фильмом, иначе 409/400 до сборки
+        if (contextRevision is { } revision && ContextRefusal(scope, path, sessionId, revision) is { } refusal)
+            return refusal;
+        return FilmHttp.Map(assembler.Start(UserId, scope, path, VideoInitiators.Human, sessionId),
+            status => StatusCode(StatusCodes.Status202Accepted, status));
+    }
+
+    private IActionResult? ContextRefusal(VideoEditScope scope, string? path, string? sessionId, long revision)
+    {
+        if (context is null)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = ChatContext.VideoContextLaunch.UnavailableText, code = VideoEditorErrors.ProviderUnavailable });
+        var read = context.Read(UserId, scope, sessionId, revision);
+        if (!read.Ok)
+            return read.Fresh is { } fresh
+                ? StatusCode(StatusCodes.Status409Conflict, new Protocol.ChatContextConflictDto(read.ErrorCode!, fresh))
+                : FilmHttp.Map(FilmCallResult<object>.Fail(read.ErrorCode!, read.Error ?? "Запрос не выполнен"), o => Ok(o));
+        var inputs = ChatContext.VideoContextLaunch.Extract(read.State!);
+        return inputs.FilmPath is { } film && FilmPaths.Normalize(film) == FilmPaths.Normalize(path)
+            ? null
+            : FilmHttp.Map(FilmCallResult<object>.Fail(VideoEditorErrors.InvalidRequest, ChatContext.VideoContextLaunch.NotFilmText), o => Ok(o));
+    }
 
     [HttpGet(VideoEditorRoutes.FilmBuild)]
     public IActionResult BuildStatus(string projectId, [FromQuery] string? path) =>

@@ -40,12 +40,40 @@ describe('пункты «Файлов» для контекста хода', () 
     expect(h).toContain('В контекст · как объект');
   });
 
+  it('фильм: только «Работать с этой», ролей образца нет', () => {
+    const none = html('video/утро/утро.film', state(), false);
+    expect(none).not.toContain('В контекст');
+    const h = renderToStaticMarkup(createElement('div', null, ...fileContextItems({
+      projectId: 'p', sessionId: S, path: 'video/утро/утро.film', state: state(),
+      opener: { isOpenable: p => p.endsWith('.film'), toRef: async () => null }, close: () => {},
+    })));
+    expect(h).toContain('Работать с этой');
+    expect(h).not.toContain('В контекст');
+    expect(h).not.toContain('образец');
+  });
+
   it('не картинка: только «В контекст»; одна роль — без уточнения', () => {
     install([{ role: 'object', label: 'Как объект' }]);
     const h = html('notes.txt');
     expect(h).not.toContain('Работать с этой');
     expect(h).toContain('>В контекст<');
     expect(h).not.toContain('как объект');
+  });
+
+  it('звуковой файл при картинке в работе: образцы стиля не предлагаются, кнопка серая с причиной', () => {
+    const h = html('speech.wav');
+    expect(h).toContain('такой референс не берёт');
+    expect(h).not.toContain('образец стиля');
+  });
+
+  it('картинка при звуке в работе — тоже серая; звуковой файл звук берёт ролями звука', () => {
+    const audioPrimary = { ...primary, kind: 'audio', label: 'song.mp3' };
+    registerSubsystem({
+      key: 'file-menu-test-audio', title: 'a', order: 2, noPill: true, core: true,
+      slots: { 'context-kind': [{ name: 'audio', action: { kinds: ['audio'], refRoles: () => [{ role: 'piece', label: 'Как кусок склейки' }] } as never }] },
+    });
+    expect(html('a.png', state([], audioPrimary))).toContain('такой референс не берёт');
+    expect(html('speech.wav', state([], audioPrimary))).toContain('>В контекст<');
   });
 
   it('нет вкладчика context-opener — «Работать с этой» нет даже у картинки', () => {

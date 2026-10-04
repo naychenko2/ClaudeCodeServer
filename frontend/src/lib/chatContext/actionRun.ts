@@ -3,7 +3,9 @@
 // невозможна по построению. Состояние хранится вне React (по чату): поле и панель живут в разных
 // ветках дерева и обязаны видеть один прогресс. Здесь — ядро без React, хук — в useActionRun.ts.
 
+import { withThumb } from './thumbs';
 import { isReported } from './errors';
+import { runObjectSuffix } from './labels';
 import { clearRunCarry, noteRunStarted, objectKey, resolveAction } from './actionMemory';
 import { acceptConflict } from './store';
 import { showToast } from '../toast';
@@ -33,6 +35,8 @@ export interface RunEntry {
 
 const _runs = new Map<string, RunEntry>();
 const _unwatch = new Map<string, () => void>();
+// Остановка идущего запуска: у дескриптора может не быть
+const _cancel = new Map<string, () => void | Promise<void>>();
 const _listeners = new Set<() => void>();
 let _version = 0;
 const emit = () => { _version++; _listeners.forEach(fn => fn()); };
@@ -70,7 +74,11 @@ export function setRunText(sessionId: string, scope: string, text: string) {
   emit();
 }
 
+// Число вариантов, выбранное человеком: переживает запуск и смену объекта в этом чате
+const _variants = new Map<string, number>();
+
 export function setRunParam(sessionId: string, scope: string, name: string, value: number | string) {
+  if (name === 'variants' && typeof value === 'number') _variants.set(sessionId, value);
   const e = runEntry(sessionId, scope);
   if (e.values[name] === value) return;
   e.values = { ...e.values, [name]: value };
@@ -106,11 +114,12 @@ export const questionValue = (action: ContextAction, values: Readonly<Record<str
 // «параметры · цена» (не ужимается никогда). Хвост несёт свой разделитель
 export function runLabelParts(o: {
   action: ContextAction | null; params: readonly LaunchParam[]; price: string | null; mobile: boolean;
-  state: RunState; progress: number | null;
+  state: RunState; progress: number | null; objectLabel?: string | null;
 }): { name: string; tail: string } {
   if (!o.action) return { name: '', tail: '' };
   if (o.state === 'running') {
-    return { name: `✦ ${o.action.label}…`, tail: o.progress === null ? '' : ` ${Math.round(o.progress * 100)} %` };
+    const what = o.action.verb ? `${o.action.verb}${runObjectSuffix(o.action.verb, o.objectLabel)}` : o.action.label;
+    return { name: `✦ ${what}…`, tail: o.progress === null ? '' : ` ${Math.round(o.progress * 100)} %` };
   }
   const parts: string[] = [];
   for (const p of o.params) {
@@ -191,8 +200,11 @@ export async function launchAction(d: RunDeps, text: string): Promise<void> {
   try {
     const handle = await d.api.launch(d.ctx, { op: d.action.op, text, params: d.params, contextRevision: d.revision });
     noteRunStarted(d.sessionId, objectKey(d.primary), d.action.id);
+    if (handle.cancel) _cancel.set(d.sessionId, handle.cancel); else _cancel.delete(d.sessionId);
     let off: (() => void) | null = null;
     off = handle.watch(ev => {
+      // Остановил сам человек: тихо возвращаем кнопку, ошибки нет
+      if (ev.cancelled) { patch(d.sessionId, { state: 'idle', progress: null }); clearRunCarry(d.sessionId); off?.(); return; }
       if (ev.error) {
         patch(d.sessionId, { state: 'error', progress: null }); clearRunCarry(d.sessionId);
         showToast(ev.error, '', 'error'); off?.(); return;
@@ -214,13 +226,14 @@ export async function launchAction(d: RunDeps, text: string): Promise<void> {
 export function resetRun(sessionId: string) {
   _unwatch.get(sessionId)?.();
   _unwatch.delete(sessionId);
+  _cancel.delete(sessionId);
   _runs.delete(sessionId);
   emit();
 }
 
 export function resetAllRuns() {
   _unwatch.forEach(off => off());
-  _unwatch.clear(); _runs.clear();
+  _unwatch.clear(); _cancel.clear(); _runs.clear(); _variants.clear();
   emit();
 }
 
@@ -235,21 +248,22 @@ export function buildActionRun(o: {
   refs: readonly ChatContextRef[];
   revision: number;
 }): ActionRun & { scope: string; req: QuoteRequest | null } {
-  const none = { action: null, label: '', quote: null, state: 'idle' as const, progress: null, result: null, text: '', answer: null, blocked: null, labelParts: { name: '', tail: '' }, params: [] as readonly LaunchParam[], scope: '', req: null };
+  const none = { action: null, stop: null, label: '', quote: null, state: 'idle' as const, progress: null, result: null, text: '', answer: null, blocked: null, labelParts: { name: '', tail: '' }, params: [] as readonly LaunchParam[], scope: '', req: null };
   const { sessionId, api, ctx, primary, refs, revision } = o;
   if (!api || !primary) return { ...none, setText: () => {}, setParam: () => {}, run: async () => {} };
-  const actions = api.actions(ctx, { primary, refs });
+  const actions = api.actions(ctx, { primary, refs: refs.map(r => withThumb(ctx, r)) });
   const { actionId } = resolveAction(sessionId, objectKey(primary), primary.by, actions, false);
   const action = actionId ? actions.find(a => a.id === actionId) ?? null : null;
   if (!action) return { ...none, setText: () => {}, setParam: () => {}, run: async () => {} };
   const scope = `${objectKey(primary)}:${action.id}`;
   const e = runEntry(sessionId, scope);
-  const params = mergeParams(api.params?.(ctx, action.id) ?? [], e.values);
-  const lp = launchParams(action, params, e.values);
+  const values = _variants.has(sessionId) && e.values.variants === undefined ? { ...e.values, variants: _variants.get(sessionId)! } : e.values;
+  const params = mergeParams(api.params?.(ctx, action.id) ?? [], values).map(p => (p.kind === 'variants' ? { ...p, value: Math.min(p.max, Math.max(p.min, p.value)) } : p));
+  const lp = launchParams(action, params, values);
   const salt = api.priceSalt?.(ctx, action.id);
   const req: QuoteRequest = { op: action.op ?? action.id, text: e.text, params: lp, contextRevision: revision, ...(salt ? { salt } : null) };
   const price = e.quote?.key === quoteKey(req) ? e.quote.value : null;
-  const labelIn = { action, params, price: price?.price ?? null, mobile: ctx.isMobile, state: e.state, progress: e.progress };
+  const labelIn = { action, params, price: price?.price ?? null, mobile: ctx.isMobile, state: e.state, progress: e.progress, objectLabel: primary.label };
   return {
     action,
     scope,
@@ -260,6 +274,7 @@ export function buildActionRun(o: {
     state: e.state,
     progress: e.progress,
     result: e.result,
+    stop: e.state === 'running' && _cancel.has(sessionId) ? () => { void Promise.resolve(_cancel.get(sessionId)?.()); } : null,
     text: e.text,
     answer: questionValue(action, e.values),
     blocked: runBlockReason(action, e.text),

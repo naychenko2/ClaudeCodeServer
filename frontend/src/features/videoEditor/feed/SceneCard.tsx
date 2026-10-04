@@ -7,21 +7,22 @@
 // Клик по карточке, а не по её кнопке, — выбор человеком: панель следует за ним, только если открыта.
 
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Save, Zap } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Save, Target, Zap } from 'lucide-react';
 import {
-  Badge, Button, ByClaude, C, FLAGS, FS, IconButton, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useFeature,
+  Badge, Button, ByClaude, C, FLAGS, FS, IconButton, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useChatContext, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
 import { filmFolder, filmPathOf, newFilmPath, saveTargetFor, snapshotOf, type SaveTarget } from '../film/model';
-import { progressLabel } from '../panel/useScene';
+import { progressLabel } from '../editor/useScene';
 import { downloadClip, openFilmPanel, openScenePanel, saveScene, selectFilmByHuman, selectSceneByHuman, takeVersion } from '../scene/actions';
 import { currentVersion, modelLabel, plural, staleNotes } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
 import {
   filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, loadFilmList, patchFilm, useFilmList, useVideoStoreVersion, useVideoThreads, type JobProgress,
 } from '../store/videoStore';
-import { ic } from '../panel/primitives';
+import { SCENE_KIND } from '../context/state';
+import { ic } from '../editor/primitives';
 import { recordOf, str } from './records';
 
 
@@ -131,7 +132,7 @@ export function sceneCardView(p: {
     canDownload: !!version && personal,
     canAddToFilm: !!version && !personal && !scene.filmRef,
     stale: staleNotes(scene),
-    emptyText: !version && !running ? (scene.settings.text ? `«${scene.settings.text.slice(0, 140)}»` : 'Сцена без клипа — кадры и текст в панели «Видео»') : null,
+    emptyText: !version && !running ? (scene.settings.text ? `«${scene.settings.text.slice(0, 140)}»` : 'Сцена без клипа — кадры и текст в редакторе сцены') : null,
     film: scene.filmRef && !personal ? { path: scene.filmRef.path, name: filmName(scene.filmRef.path), position: scene.filmRef.position } : null,
   };
 }
@@ -157,6 +158,7 @@ export interface SceneCardActions {
   onDownload: () => void;
   onAddToFilm: () => void;
   onReshoot: () => void;
+  onWork: () => void;
   onOpenFilm: () => void;
 }
 
@@ -175,7 +177,7 @@ export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; 
         {v.version && <span style={{ fontSize: FS.xs, color: C.textMuted }}>· версия {v.version.number} · {v.versionModel ?? v.version.model} · {v.version.durationSec} с</span>}
         <span style={{ flex: 1 }} />
         {v.byClaude && <ByClaude title={v.progress ? 'Claude снимает эту сцену' : 'Сделал Claude'} />}
-        {v.focused && <Badge size="xs" tone="neutral">в панели</Badge>}
+        {v.focused && <Badge size="xs" tone="accent" icon={ic(Target)}>{v.byClaude ? 'В работе ✦' : 'В работе'}</Badge>}
       </div>
       {v.launchLine && <div data-video-launch-line="" style={{ fontSize: FS.sm, color: C.textSecondary }}>{v.launchLine}</div>}
       {v.progress && (
@@ -207,7 +209,11 @@ export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; 
         {v.savedPath && <Badge tone="success">В проекте: {v.savedPath.split('/').pop()}</Badge>}
         {v.canSave && <Button size="sm" variant="secondary" leftIcon={ic(Save)} loading={busy} onClick={a.onSave}>Сохранить сцену</Button>}
         {v.canAddToFilm && <Button size="sm" variant="ghost" loading={busy} onClick={a.onAddToFilm}>В фильм →</Button>}
-        <Button size="sm" variant="ghost" onClick={a.onReshoot}>{v.version ? 'Переснять' : 'Открыть в панели'}</Button>
+        {!v.focused && (
+          <Button size="sm" variant="secondary" leftIcon={ic(Target)} onClick={a.onWork}
+            title="Сцена станет основной в контексте хода: чипы действий и панель «Контекст»">Работать с этой</Button>
+        )}
+        {v.version && <Button size="sm" variant="ghost" onClick={a.onReshoot}>Переснять</Button>}
       </div>
       {chooser}
       {v.film && (
@@ -304,6 +310,7 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const personal = isPersonalScope(scope);
   const sessionId = ctx.sessionId;
   const state = useVideoThreads(scope, sessionId);
+  const { primary } = useChatContext(sessionId);
   useVideoStoreVersion();
   const [pos, setPos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -311,7 +318,7 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const scene = state.scenes.find(s => s.sceneId === sceneId) ?? null;
   if (!scene || !sessionId) return null;
   const v = sceneCardView({
-    scene, jobId, record, personal, focused: state.focus.sceneId === scene.sceneId, jobs: getJobsOf(sessionId, scene.sceneId), pos, catalog: getCatalog(scope),
+    scene, jobId, record, personal, focused: primary?.kind === SCENE_KIND && primary.ref.sceneId === scene.sceneId, jobs: getJobsOf(sessionId, scene.sceneId), pos, catalog: getCatalog(scope),
   });
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
   const ver = v.version;
@@ -336,6 +343,7 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
         onSave: () => start('save'),
         onDownload: () => { if (ver) downloadClip(scope, sessionId, scene, ver.versionId); },
         onAddToFilm: () => start('film'),
+        onWork: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); },
         onReshoot: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId).then(() => openScenePanel(sessionId)); },
         onOpenFilm: () => { if (v.film) { const p = v.film.path; void selectFilmByHuman(scope, sessionId, p).then(() => openFilmPanel(sessionId, p)); } },
       }} />

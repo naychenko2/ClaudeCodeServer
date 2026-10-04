@@ -36,7 +36,7 @@ describe('поставщик «Локальные модели» в выборе
   });
 
   it('модель «Улучшить лица» промптом не выбирается', () => {
-    expect(modelBlockReason(local.models[2], true, false)).toBe('Запускается кнопкой «Улучшить лица» в быстрых действиях');
+    expect(modelBlockReason(local.models[2], true, false)).toBe('Умеет только «Улучшить лица» — для этой задачи не годится');
     expect(modelBlockReason(local.models[1], true, true)).toBe('');
     expect(providerHint(local)).toBe('бесплатно, на своей видеокарте');
   });

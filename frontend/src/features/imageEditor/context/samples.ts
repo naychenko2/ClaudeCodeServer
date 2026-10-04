@@ -1,4 +1,4 @@
-// Образцы и персонаж как референсы контекста чата (ADR-023, шаг 2к-3). При флаге composer-context-row
+// Образцы и персонаж как референсы контекста чата (ADR-023, шаг 2к-3).
 // `_samples` вкладки и `prefs.characterSlug` не пишутся: образец с диска — загрузка в рабочую папку модуля и
 // `attachRef({kind: 'image', ref: {upload}})`, файл проекта — `project-file`, персонаж — `image-character`.
 // Так выбор переживает перезагрузку страницы и виден агенту в `context_state`.
@@ -11,7 +11,7 @@ export const CHARACTER_KIND = 'image-character';
 export const FILE_KIND = 'project-file';
 export const SAMPLE_ACCEPT = 'image/png,image/jpeg,image/webp';
 
-// Образцы: картинки и файлы проекта с ролью образца (стиль, объект, лицо)
+// Образцы: картинки и файлы проекта с ролью образца (стиль, объект, персонаж)
 export const sampleRefs = (state: ChatContextDto): ChatContextRef[] =>
   state.refs.filter(r => (r.kind === IMAGE_KIND || r.kind === FILE_KIND) && r.role !== null);
 

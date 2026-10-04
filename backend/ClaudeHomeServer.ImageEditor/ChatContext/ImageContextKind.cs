@@ -86,7 +86,9 @@ public sealed class ImageContextKind(
         if (Text(item.Ref, "threadId") is not { } threadId || Find(scope, threadId) is not { } thread)
             return new ContextItemSummary("картинка недоступна", null, null, true);
         var version = (Text(item.Ref, "versionId") is { } v ? thread.Version(v) : null) ?? thread.CurrentVersion;
-        return new ContextItemSummary(ImageThreadService.Name(thread),
+        // Черновик без файла: «Новая картинка · черновик» (подпись для человека, агентский текст берёт Name)
+        var label = thread.File is { Length: > 0 } ? ImageThreadService.Name(thread) : "Новая картинка · черновик";
+        return new ContextItemSummary(label,
             version is { IsOrigin: false } ? $"v{version.Number}" : null, null, false);
     }
 

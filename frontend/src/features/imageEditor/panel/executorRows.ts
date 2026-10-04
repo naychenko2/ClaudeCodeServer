@@ -67,10 +67,13 @@ function blockReason(catalog: ImageEditCatalog, pv: ImageEditProvider, m: ImageE
 }
 
 // «сейчас fal», «сейчас локально · Qwen-Image 2.1»
-function autoNow(catalog: ImageEditCatalog): string {
+// Умолчание админа «Авто» — подбирает модель под задачу: берём первую, что возьмёт задачу
+function autoNow(catalog: ImageEditCatalog, task?: ExecutorTask): string {
   const pv = catalog.providers.find(p => p.key === catalog.default.provider);
   if (!pv) return '';
-  const m = catalog.default.model !== AUTO_MODEL ? pv.models.find(x => x.id === catalog.default.model) : null;
+  const m = catalog.default.model !== AUTO_MODEL
+    ? pv.models.find(x => x.id === catalog.default.model)
+    : task ? pv.models.find(x => x.id !== AUTO_MODEL && !blockReason(catalog, pv, x, task)) : null;
   return [onOwnGpu(pv) ? 'локально' : pv.label, m?.label].filter(Boolean).join(' · ');
 }
 
@@ -79,14 +82,17 @@ export function executorRows(catalog: ImageEditCatalog, task: ExecutorTask): Exe
   const adminModel = admin?.models.find(m => m.id === catalog.default.model) ?? null;
   const rows: ExecutorRow[] = [];
   if (admin) {
-    const now = autoNow(catalog);
-    rows.push({ id: AUTO_EXECUTOR, group: 'auto', name: 'Авто', sub: now ? `как в настройках · сейчас ${now}` : 'как в настройках', price: rowPrice(admin, adminModel), free: rowFree(admin, adminModel) });
+    const now = autoNow(catalog, task);
+    rows.push({ id: AUTO_EXECUTOR, group: 'auto', name: 'Авто', sub: now ? `сейчас: ${now}` : 'как в настройках', ...(now ? { now } : null), price: rowPrice(admin, adminModel), free: rowFree(admin, adminModel) });
   }
   // Сначала своя видеокарта, потом облако; внутри — порядок каталога
   const ordered = [...catalog.providers.filter(onOwnGpu), ...catalog.providers.filter(p => !onOwnGpu(p))];
   for (const pv of ordered) {
     const down = unavailableMark(pv);
     for (const m of pv.models) {
+      // Модель одного быстрого действия («Улучшить лица») в чужой список не лезет: серая строка с причиной только шумит
+      const ops = m.caps?.ops ?? [];
+      if (ops.length && ops.every(op => op === 'enhanceFaces') && task.op !== 'enhanceFaces') continue;
       const why = blockReason(catalog, pv, m, task);
       rows.push({
         id: rowId(pv.key, m.id),

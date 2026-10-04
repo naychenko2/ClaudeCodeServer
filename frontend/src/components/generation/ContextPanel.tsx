@@ -5,9 +5,10 @@
 // превью, редактор и строки «Чем» отдаёт вид через слот context-kind (ContextPanelHost).
 // Параметры — закрытый набор LaunchParam: неизвестный `kind` не рисуется.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, GitBranch, Pencil, Plus, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, GitBranch, Pencil, Plus, SlidersHorizontal, Square, Trash2, X } from 'lucide-react';
 import { C, FS, R, SP } from '../../lib/design';
 import { roleLabel } from '../../lib/chatContext/roleLabels';
+import { baseName } from '../../lib/chatContext/labels';
 import type {
   ActionRun, ChatContextPrimary, ChatContextRef, ContextAction, ContextReturn, ExecutorListModel, LaunchParam,
 } from '../../lib/chatContext/types';
@@ -15,7 +16,7 @@ import { Button, IconButton, InlineSegmented, Menu, MenuItem, ProgressBar, Stepp
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { unusedBy } from '../../lib/chatContext/fill';
 import { changesWord, GitMenuBody, MenuHead, type RowGit } from '../chat/ContextRowView';
-import { ExecutorList, ExecutorSummaryRow, rowPriceShort } from './ExecutorList';
+import { ExecutorList } from './ExecutorList';
 import { GenerationPanel } from './GenerationPanel';
 import { RunLabel } from './RunLabel';
 
@@ -40,8 +41,8 @@ export interface ContextPanelProps {
   primary: ChatContextPrimary | null;
   refs: readonly ChatContextRef[];
   iconOf: (kind: string) => ReactNode;
-  // От вида: миниатюра, волна, кадр; без вида — иконка
-  preview: ReactNode;
+  // Вторая строка карточки «С чем»: «версия 2 из 3 · отмечено: 2»; нет — version из DTO
+  sub?: string | null;
   editor: { label: string; hint: string; open: () => void } | null;
   step: { prev: (() => void) | null; next: (() => void) | null } | null;
   ret: ContextReturn | null;
@@ -137,45 +138,44 @@ function WithSection(p: ContextPanelProps) {
   return (
     <Section name="with" title="С чем">
       {!primary ? <Empty>{EMPTY.primary}</Empty> : (
-        <div data-ctx-card="" data-ctx-flash={blink ? '1' : '0'} style={{
-          border: `1px solid ${blink ? C.accent : C.accentMuted}`, borderRadius: R.lg, background: C.bgCard, overflow: 'hidden',
-          boxShadow: blink ? `0 0 0 3px ${C.accentLight}` : 'none', transition: 'box-shadow .25s, border-color .25s',
-          opacity: primary.missing ? 0.6 : 1,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'center', background: C.bgInset, minHeight: 96, maxHeight: 180, overflow: 'hidden' }}>
-            {p.preview ?? <Thumb item={primary} icon={p.iconOf(primary.kind)} size={96} />}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, padding: `${SP.sm - 2}px ${SP.sm}px` }}>
-            {p.step && (
-              <IconButton size="xs" title="Предыдущая версия" ariaLabel="Предыдущая версия" disabled={!p.step.prev} onClick={p.step.prev ?? undefined}>
-                <ChevronLeft size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-            )}
+        <>
+          <div data-ctx-card="" data-ctx-flash={blink ? '1' : '0'} style={{
+            display: 'flex', alignItems: 'center', gap: SP.sm, padding: SP.sm - 2,
+            border: `1px solid ${blink ? C.accent : C.accentMuted}`, borderRadius: R.lg, background: C.bgCard,
+            boxShadow: blink ? `0 0 0 3px ${C.accentLight}` : 'none', transition: 'box-shadow .25s, border-color .25s',
+            opacity: primary.missing ? 0.6 : 1,
+          }}>
+            <Thumb item={primary} icon={p.iconOf(primary.kind)} size={44} />
             <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
               <span data-ctx-label="" style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {primary.label}{primary.by === 'agent' && <span title="Взял в работу Claude" style={{ color: C.accent, marginLeft: SP.xs }}>✦</span>}
+                {baseName(primary.label, true)}{primary.by === 'agent' && <span title="Взял в работу Claude" style={{ color: C.accent, marginLeft: SP.xs }}>✦</span>}
               </span>
-              {primary.version && <span data-ctx-version="" style={{ fontSize: FS.xs, color: C.textMuted }}>{primary.version}</span>}
+              {(p.sub ?? primary.version) && <span data-ctx-version="" style={{ fontSize: FS.xs, color: C.textMuted }}>{p.sub ?? primary.version}</span>}
             </span>
             {p.step && (
-              <IconButton size="xs" title="Следующая версия" ariaLabel="Следующая версия" disabled={!p.step.next} onClick={p.step.next ?? undefined}>
-                <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
+              <>
+                <IconButton size="xs" title="Предыдущая версия" ariaLabel="Предыдущая версия" disabled={!p.step.prev} onClick={p.step.prev ?? undefined}>
+                  <ChevronLeft size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+                <IconButton size="xs" title="Следующая версия" ariaLabel="Следующая версия" disabled={!p.step.next} onClick={p.step.next ?? undefined}>
+                  <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              </>
             )}
             <IconButton size="xs" title={`Снять «${primary.label}» с работы`} ariaLabel={`Снять «${primary.label}» с работы`} onClick={p.onRelease}>
               <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </IconButton>
           </div>
           {p.editor && (
-            <div style={{ padding: `0 ${SP.sm}px ${SP.sm}px` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.xs + 2 }}>
               <Button size="xs" variant="secondary" leftIcon={<Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={p.editor.open}
-                title={p.editor.hint} style={{ width: '100%' }}>
+                title={p.editor.hint} style={{ flexShrink: 0 }}>
                 {p.editor.label}
               </Button>
-              <div style={{ marginTop: SP.xs, fontSize: FS.xs, color: C.textMuted }}>{p.editor.hint}</div>
+              <span style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0 }}>{p.editor.hint}</span>
             </div>
           )}
-        </div>
+        </>
       )}
       {p.ret && (
         <button type="button" data-ctx-return="" onClick={p.onReturn} style={{
@@ -192,23 +192,14 @@ function WithSection(p: ContextPanelProps) {
 // ── Чем ──
 
 function BySection({ p }: { p: ContextPanelProps }) {
-  const [open, setOpen] = useState(false);
   const { exec, action, primary } = p;
-  const row = exec?.rows.find(r => r.id === exec.value) ?? exec?.rows[0];
   return (
     <Section name="by" title={action ? `Чем · для «${action.label}»` : 'Чем'}>
-      {!exec || !action || !row ? (
+      {!exec || !action || exec.rows.length === 0 ? (
         <Empty>{!primary ? EMPTY.execNoObject : !action ? EMPTY.execChat : EMPTY.execPending}</Empty>
       ) : (
-        <>
-          <ExecutorSummaryRow name={row.name} parts={row.sub ? [row.sub] : []} price={{ label: rowPriceShort(row), tone: row.free ? 'success' : 'neutral' }}
-            open={open} onToggle={() => setOpen(o => !o)} isMobile={p.isMobile} />
-          {open && (
-            <div style={{ marginTop: SP.xs }}>
-              <ExecutorList rows={exec.rows} value={exec.value} isMobile={p.isMobile} onChange={id => { exec.onChange(id); setOpen(false); }} />
-            </div>
-          )}
-        </>
+        // Список раскрыт всегда (макет): выбор меняет кнопку в поле и цену
+        <ExecutorList rows={exec.rows} value={exec.value} isMobile={p.isMobile} onChange={exec.onChange} />
       )}
     </Section>
   );
@@ -243,7 +234,7 @@ function PlusSection({ p }: { p: ContextPanelProps }) {
                   border: `1px ${g ? 'dashed' : 'solid'} ${C.border}`, opacity: g || r.missing ? 0.55 : 1, fontSize: FS.sm, color: C.textSecondary,
                 }}>
                 <Thumb item={r} icon={p.iconOf(r.kind)} size={18} round={r.role === 'char' || r.role === 'character'} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, textDecoration: g ? 'line-through' : undefined }}>{r.label}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, textDecoration: g ? 'line-through' : undefined }}>{baseName(r.label, true)}</span>
                 {role && <span style={{ color: C.textMuted, flexShrink: 0 }}>· {role}</span>}
                 <IconButton size="xs" title={`Отключить «${r.label}»`} ariaLabel={`Отключить «${r.label}»`} onClick={() => p.onDetach(r.id)}>
                   <X size={ICON_SIZE.xs - 3} strokeWidth={ICON_STROKE} />
@@ -338,16 +329,35 @@ function Foot({ run, action }: { run: ActionRun; action: ContextAction | null })
               {run.quote.detail && <span>{run.quote.detail}</span>}
             </div>
           )}
-          {busy && run.progress !== null && <ProgressBar value={run.progress} />}
           {run.state === 'done' && run.result && (
-            <div data-ctx-result="" style={{ fontSize: FS.sm, color: C.successText }}>✓ {run.result.summary}</div>
+            <div data-ctx-result="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.sm, color: C.successText }}>
+              <span style={{ flex: 1, minWidth: 0 }}>✓ {run.result.summary}</span>
+              {run.result.open && <Button size="xs" variant="ghost" onClick={run.result.open}>Открыть</Button>}
+            </div>
           )}
-          <div data-ctx-run="">
-            <Button size="xs" fullWidth disabled={!!reason || busy} title={reason ?? undefined}
-              onClick={() => { run.run(run.text).catch(() => { /* причину уже показал запуск */ }); }} style={{ whiteSpace: 'nowrap' }}>
-              <RunLabel parts={run.labelParts} />
-            </Button>
-          </div>
+          {busy ? (
+            // Ход идёт: подпись с процентом, полоса и «Остановить» (макет, низ панели)
+            <div data-ctx-running="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+                <span style={{ fontSize: FS.sm, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <RunLabel parts={{ name: run.labelParts.name.replace(/^✦\s*/, ''), tail: run.labelParts.tail }} />
+                </span>
+                {run.progress !== null && <ProgressBar value={run.progress} />}
+              </div>
+              {run.stop && (
+                <Button size="xs" variant="secondary" leftIcon={<Square size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} />} onClick={run.stop}>
+                  Остановить
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div data-ctx-run="">
+              <Button size="xs" fullWidth disabled={!!reason} title={reason ?? undefined}
+                onClick={() => { run.run(run.text).catch(() => { /* причину уже показал запуск */ }); }} style={{ whiteSpace: 'nowrap' }}>
+                <RunLabel parts={run.labelParts} />
+              </Button>
+            </div>
+          )}
         </>
       )}
     </div>

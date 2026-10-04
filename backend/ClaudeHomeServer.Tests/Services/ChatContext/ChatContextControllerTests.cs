@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Tests.Services.ChatContext;
 
 // Ручки контекста чата (ADR-023 §2.1) на собранном приложении: пять ручек и saved-files, 409 со
 // свежим DTO, 404 на чужую сессию, засев из фокусов вертикалей без записи на диск, двойная запись
-// фокуса при флаге composer-context-row и проекция фокуса в DTO вертикали, событие в хаб.
+// фокуса и проекция фокуса в DTO вертикали, событие в хаб.
 public class ChatContextControllerTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();
@@ -32,8 +32,6 @@ public class ChatContextControllerTests : IDisposable
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ImageEditor, true);
         users.SetFeatureFlag(_ownerId, FeatureFlagKeys.AudioEditor, true);
-        // Запись в контекст — только под флагом; по умолчанию тесты работают с включённым, выключенный ставят сами
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ComposerContextRow, true);
         _projectRoot = Path.Combine(_factory.TempDir, "ctx_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_projectRoot);
         _projectId = _factory.Services.GetRequiredService<ProjectManager>()
@@ -46,9 +44,6 @@ public class ChatContextControllerTests : IDisposable
         _factory.Dispose();
         GC.SuppressFinalize(this);
     }
-
-    private void SetContextFlag(bool on) =>
-        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(_ownerId, FeatureFlagKeys.ComposerContextRow, on);
 
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();
     private ImageThreadStore Images => _factory.Services.GetRequiredService<ImageThreadStore>();
@@ -98,7 +93,7 @@ public class ChatContextControllerTests : IDisposable
         var primary = body.GetProperty("primary");
         primary.GetProperty("kind").GetString().Should().Be("image", "картинка важнее звука");
         primary.GetProperty("ref").GetProperty("threadId").GetString().Should().Be(imageId);
-        primary.GetProperty("label").GetString().Should().Be("новая картинка");
+        primary.GetProperty("label").GetString().Should().Be("Новая картинка · черновик");
         primary.GetProperty("missing").GetBoolean().Should().BeFalse();
         File.Exists(StateFile(chat)).Should().BeFalse("файл появляется на первой записи, а не на чтении");
     }
@@ -193,7 +188,7 @@ public class ChatContextControllerTests : IDisposable
             return (await Json(r)).GetProperty("error").GetString()!;
         }
 
-        (await Error(await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "video-scene", @ref = new { sceneId = "s" } })))
+        (await Error(await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "hologram", @ref = new { id = "s" } })))
             .Should().Be("kind_unknown");
         (await Error(await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "image", @ref = new { threadId = "чужая" } })))
             .Should().Be("ref_invalid");
@@ -340,42 +335,11 @@ public class ChatContextControllerTests : IDisposable
         (await Json(put)).GetProperty("error").GetString().Should().Be("project_local_unsupported");
     }
 
-    [Fact]
-    public async Task Без_флага_запись_отвечает_404_а_чтение_и_saved_files_открыты()
-    {
-        SetContextFlag(false);
-        var chat = await Chat();
-        var body = new { kind = "project-file", @ref = new { path = "a.md" } };
-
-        (await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "project-file", @ref = new { path = "a.md" } }))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await _client.PostAsJsonAsync($"{Ctx(chat)}/refs", body)).StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await _client.DeleteAsync($"{Ctx(chat)}/refs/ci_x")).StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await _client.DeleteAsync(Ctx(chat))).StatusCode.Should().Be(HttpStatusCode.NotFound);
-
-        (await _client.GetAsync(Ctx(chat))).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await _client.GetAsync($"{Ctx(chat)}/saved-files")).StatusCode.Should().Be(HttpStatusCode.OK);
-        File.Exists(StateFile(chat)).Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task С_флагом_запись_проходит()
-    {
-        SetContextFlag(true);
-        File.WriteAllText(Path.Combine(_projectRoot, "a.md"), "x");
-        var chat = await Chat();
-
-        var resp = await _client.PostAsJsonAsync($"{Ctx(chat)}/refs", new { kind = "project-file", @ref = new { path = "a.md" } });
-
-        resp.StatusCode.Should().NotBe(HttpStatusCode.NotFound, "с флагом ручка существует");
-    }
-
     // ── Двойная запись фокуса ─────────────────────────────────────────────────
 
     [Fact]
-    public async Task Выбор_картинки_в_старой_полосе_при_флаге_виден_в_контексте()
+    public async Task Выбор_картинки_в_старой_полосе_виден_в_контексте()
     {
-        SetContextFlag(true);
         var chat = await Chat();
         var imageId = NewImageThread(chat, focus: false);
         var state = Images.Get(_ownerId, chat.Id);
@@ -386,28 +350,12 @@ public class ChatContextControllerTests : IDisposable
         var primary = (await Json(await _client.GetAsync(Ctx(chat)))).GetProperty("primary");
         primary.GetProperty("kind").GetString().Should().Be("image");
         primary.GetProperty("ref").GetProperty("threadId").GetString().Should().Be(imageId);
-        File.Exists(StateFile(chat)).Should().BeTrue("при флаге смена фокуса записана в стор");
+        File.Exists(StateFile(chat)).Should().BeTrue("смена фокуса записана в стор");
     }
 
     [Fact]
-    public async Task Без_флага_фокус_картинки_в_контекст_не_пишется()
+    public async Task Фокус_в_DTO_нитей_берётся_из_контекста()
     {
-        SetContextFlag(false);
-        var chat = await Chat();
-        var imageId = NewImageThread(chat, focus: false);
-        var state = Images.Get(_ownerId, chat.Id);
-
-        (await _client.PutAsJsonAsync($"{ImageThreads(chat)}/focus", new { threadId = imageId, revision = state.Revision }))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
-
-        File.Exists(StateFile(chat)).Should().BeFalse("флаг выключен — вертикаль работает как раньше");
-        (await Json(await _client.GetAsync(ImageThreads(chat)))).GetProperty("focus").GetString().Should().Be(imageId);
-    }
-
-    [Fact]
-    public async Task При_флаге_фокус_в_DTO_нитей_берётся_из_контекста()
-    {
-        SetContextFlag(true);
         var chat = await Chat();
         var imageId = NewImageThread(chat);
         var audioId = NewAudioThread(chat);
@@ -418,7 +366,7 @@ public class ChatContextControllerTests : IDisposable
 
         Images.Get(_ownerId, chat.Id).Focus.Should().Be(imageId);
         (await Json(await _client.GetAsync(ImageThreads(chat)))).GetProperty("focus").ValueKind.Should().Be(JsonValueKind.Null,
-            "при флаге фокус картинки — проекция: основной объект не картинка");
+            "фокус картинки — проекция: основной объект не картинка");
 
         (await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "image", @ref = new { threadId = imageId } }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
@@ -426,15 +374,13 @@ public class ChatContextControllerTests : IDisposable
 
         (await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "audio", @ref = new { threadId = audioId } }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
-        SetContextFlag(false);
-        (await Json(await _client.GetAsync(ImageThreads(chat)))).GetProperty("focus").GetString().Should().Be(imageId,
-            "без флага DTO отдаёт собственное поле");
+        (await Json(await _client.GetAsync(ImageThreads(chat)))).GetProperty("focus").ValueKind.Should().Be(JsonValueKind.Null,
+            "основной объект снова звук — проекция фокуса картинки пуста");
     }
 
     [Fact]
     public async Task Удаление_нити_убирает_её_из_контекста()
     {
-        SetContextFlag(true);
         var chat = await Chat();
         var imageId = NewImageThread(chat, focus: false);
         var state = Images.Get(_ownerId, chat.Id);

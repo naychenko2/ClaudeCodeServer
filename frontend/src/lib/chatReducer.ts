@@ -1049,7 +1049,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return withItems([...prev.items, { kind: 'hands_notice', text: msg.text, tone: 'neutral' }]);
 
     case 'hands_status': {
-      // Состояние рук живёт в полосе «Руки» (LocalHandsStripFeed слушает то же событие); в ленту идёт
+      // Состояние рук показывает приложение агента устройства; в ленту идёт
       // только остановка на устройстве — она объясняет, почему ход оборвался
       const line = handsStatusFeedLine(msg);
       return line ? withItems([...prev.items, { kind: 'hands_notice', text: line, tone: 'warning' }]) : prev;

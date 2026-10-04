@@ -21,6 +21,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { setAllFlags } from '../../../lib/featureFlags';
+import { __applyChatContext, __resetChatContextStore } from '../../../lib/chatContext/store';
 import type { AudioThread, AudioThreadLaunch, AudioThreadVersion } from '../api';
 import { LaunchAnchor, ThreadAnchor } from './ThreadCard';
 import { __applyThreads, __resetAudioStore, setSelection } from './threadStore';
@@ -70,25 +71,36 @@ const cardHtml = (html: string, id: string) => {
 };
 const count = (html: string, needle: string) => html.split(needle).length - 1;
 
+// Основной объект контекста: «в работе» карточки берётся из него, а не из фокуса нитей
+const work = (versionId: string | null) => __applyChatContext(S, {
+  revision: 1, refs: [],
+  primary: {
+    id: 'p', kind: 'audio', ref: versionId ? { threadId: 't1', versionId } : { threadId: 't1' }, by: 'human', addedAt: '',
+    label: 'песенка', version: versionId, thumb: null, missing: false, role: null,
+  },
+} as never);
+
 beforeEach(() => {
   store.clear();
   __resetAudioStore();
+  __resetChatContextStore();
   setAllFlags({ 'audio-editor': true });
 });
 
 describe('лента звука: карточка на каждый вариант', () => {
   it('два запуска по два варианта — четыре полноценные карточки, каждая на своей версии, без повторов', () => {
     __applyThreads(S, P, { focus: 't1', revision: 1, threads: [song()] });
+    work('v4');
     const html = renderFeed([threadAnchor(null), launchAnchor('j1'), launchAnchor('j2')]);
 
     // Черновик после запуска молчит; версия — ровно одна карточка, в работе — только текущая
     expect(cards(html)).toEqual(['v1', 'v2', 'v3', 'v4*']);
     expect(html).not.toContain('Ещё не создан');
-    // Полноценная карточка у каждой: подпись своей версии, «Обработать», сохранение
+    // Полноценная карточка у каждой: подпись своей версии, «В контекст», сохранение
     for (const [id, tag] of [['v1', 'версия 1 · вариант 1 из 2'], ['v2', 'версия 2 · вариант 2 из 2'], ['v3', 'версия 3 · вариант 1 из 2'], ['v4', 'версия 4 · вариант 2 из 2']]) {
       const c = cardHtml(html, id);
       expect(c, id).toContain(tag);
-      expect(c, id).toContain('data-audio-process');
+      expect(c, id).not.toContain('data-audio-process');
       expect(c, id).toContain('Сохранить в проект');
     }
     // «Работать с этой» — у всех, кроме карточки текущей версии
@@ -106,8 +118,8 @@ describe('лента звука: карточка на каждый вариан
     __applyThreads(S, P, { focus: 't1', revision: 1, threads: [song()] });
     setSelection(S, 't1', { start: 1, end: 2, versionId: 'v2' });
     const html = renderFeed([launchAnchor('j1'), launchAnchor('j2')]);
-    expect(cardHtml(html, 'v2')).toContain('Перегенерировать кусок');
-    for (const id of ['v1', 'v3', 'v4']) expect(cardHtml(html, id), id).not.toContain('Перегенерировать кусок');
+    expect(cardHtml(html, 'v2')).toContain('Открыть в редакторе');
+    for (const id of ['v1', 'v3', 'v4']) expect(cardHtml(html, id), id).not.toContain('Открыть в редакторе');
   });
 
   it('запуск идёт — одна карточка хода с «Отменить», без карточек вариантов', () => {
@@ -126,6 +138,7 @@ describe('лента звука: карточка на каждый вариан
       currentVersionId: 'v5',
     });
     __applyThreads(S, P, { focus: 't1', revision: 1, threads: [t] });
+    work('v5');
     const html = renderFeed([threadAnchor('origin'), launchAnchor('j1'), launchAnchor('j2'), threadAnchor('v5')]);
     expect(cards(html)).toEqual(['origin', 'v1', 'v2', 'v3', 'v4', 'v5*']);
     expect(cardHtml(html, 'origin')).toContain('исходник');
@@ -134,6 +147,7 @@ describe('лента звука: карточка на каждый вариан
 
   it('черновик до первого запуска — пунктир', () => {
     __applyThreads(S, P, { focus: 't1', revision: 1, threads: [song({ versions: [], launches: [], currentVersionId: null })] });
+    work(null);
     expect(cards(renderFeed([threadAnchor(null)]))).toEqual(['draft*']);
   });
 });

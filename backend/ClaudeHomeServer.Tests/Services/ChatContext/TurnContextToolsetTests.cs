@@ -28,7 +28,6 @@ public sealed class TurnContextToolsetTests : IDisposable
     private readonly ChatContextStore _store;
     private readonly Mock<IDelegatedTurnGate> _gate = new();
     private readonly Dictionary<string, Session> _sessions = new();
-    private bool _flag = true;
 
     public TurnContextToolsetTests()
     {
@@ -59,25 +58,19 @@ public sealed class TurnContextToolsetTests : IDisposable
         public string? DescribeExecutor(ContextScope scope, ContextItem primary) => null;
     }
 
-    private sealed class Flag(Func<bool> on) : IFeatureFlagGate
-    {
-        public bool IsEnabled(string userId, string key) => on() && key == FeatureFlagKeys.ComposerContextRow;
-    }
-
     private (TurnContextToolset Toolset, TurnContextContributor Contributor) Build(IChatContextStore? store = null,
         bool withGate = true)
     {
-        var flags = new Flag(() => _flag);
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _project });
         projects.Setup(p => p.GetById(LocalProjectId)).Returns(new Project
             { Id = LocalProjectId, OwnerId = Owner, RootPath = "/home/dev/proj", DeviceId = "dev-1" });
         var services = new ServiceCollection().AddSingleton<IChatContextStore>(store ?? _store).BuildServiceProvider();
-        var contributor = new TurnContextContributor(services, _registry, flags, projects.Object);
+        var contributor = new TurnContextContributor(services, _registry, projects.Object);
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string id, string owner) => _sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
-        var toolset = new TurnContextToolset(accessor.Object, projects.Object, _registry, store ?? _store, flags, contributor,
+        var toolset = new TurnContextToolset(accessor.Object, projects.Object, _registry, store ?? _store, contributor,
             withGate ? _gate.Object : null);
         return (toolset, contributor);
     }
@@ -130,14 +123,12 @@ public sealed class TurnContextToolsetTests : IDisposable
     }
 
     [Fact]
-    public void Чужой_владелец_без_флага_и_битый_хвост_дают_пустой_состав()
+    public void Чужой_владелец_и_битый_хвост_дают_пустой_состав()
     {
         var (toolset, _) = Build();
 
         toolset.ToolsFor(Ctx(Stranger)).Should().BeEmpty("чужая сессия недоступна");
         toolset.ToolsFor(Ctx(tail: "../x")).Should().BeEmpty("хвост — только id сессии");
-        _flag = false;
-        toolset.ToolsFor(Ctx()).Should().BeEmpty("без флага владельца сервера нет");
     }
 
     // ── context_state ──

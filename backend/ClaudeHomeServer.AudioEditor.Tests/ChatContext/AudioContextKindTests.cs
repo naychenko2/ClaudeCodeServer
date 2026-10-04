@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ClaudeHomeServer.AudioEditor.Tests.ChatContext;
 
 // Вид «audio» контекста чата и двойная запись фокуса (ADR-023, 1б-3): Validate/Describe/засев провайдера,
-// зеркалирование смены фокуса в стор при флаге владельца, проекция фокуса в DTO нитей, Forget при удалении
+// зеркалирование смены фокуса в стор, проекция фокуса в DTO нитей, Forget при удалении
 public sealed class AudioContextKindTests : IDisposable
 {
     private const string Owner = "owner-1";
@@ -23,7 +23,6 @@ public sealed class AudioContextKindTests : IDisposable
     private readonly AudioThreadStore _threads;
     private readonly AudioContextKind _kind;
     private readonly ChatContextStore _context;
-    private readonly Flags _flags = new();
     private readonly AudioJobThreads _jobs;
     private readonly Session _session = new() { Id = Chat, OwnerId = Owner };
 
@@ -32,7 +31,7 @@ public sealed class AudioContextKindTests : IDisposable
         _threads = new AudioThreadStore(Path.Combine(_root, "audio"));
         _kind = new AudioContextKind(_threads);
         _context = new ChatContextStore(Path.Combine(_root, "ctx"), new ContextKindRegistry([_kind]));
-        var mirror = new ChatContextFocusMirror(_context, _flags, NullLogger<ChatContextFocusMirror>.Instance);
+        var mirror = new ChatContextFocusMirror(_context, NullLogger<ChatContextFocusMirror>.Instance);
         _jobs = new AudioJobThreads(_threads, NullLogger<AudioJobThreads>.Instance, null, null, null, mirror: mirror);
     }
 
@@ -41,16 +40,25 @@ public sealed class AudioContextKindTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
     }
 
-    private sealed class Flags : IFeatureFlagGate
-    {
-        public bool On { get; set; }
-        public bool IsEnabled(string userId, string key) => On && key == FeatureFlagKeys.ComposerContextRow;
-    }
-
     private ContextScope Scope => new(Owner, _session, null);
 
     private static JsonObject Ref(string threadId, string? versionId = null) =>
         versionId is null ? new JsonObject { ["threadId"] = threadId } : new JsonObject { ["threadId"] = threadId, ["versionId"] = versionId };
+
+    // Приёмка Д2: правка без ИИ (обрезка) или запуск дают версию — основной, закреплённый на основе, переезжает на неё
+    [Fact]
+    public void Правка_версии_переносит_закреплённый_основной_на_новую_версию()
+    {
+        var id = _threads.Open(Owner, Chat, "a.mp3", null, null).Thread!.Id;
+        var origin = AudioThreadVersion.OriginId;
+        _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem(AudioContextKind.Kind, id, ContextActor.Human, origin), null);
+
+        var written = _threads.AddEditVersion(Owner, Chat, id, [new AudioVersionFile(AudioFileRoles.Main, "x.wav")], null,
+            null, "job-1", origin);
+        _jobs.AdvanceContext(Owner, Chat, id, written);
+
+        _context.Get(Owner, Chat).Primary!.Ref["versionId"]!.GetValue<string>().Should().Be(written.NewVersions.Single().Id);
+    }
 
     [Fact]
     public void Validate_принимает_свою_нить_и_отказывает_чужой_и_неизвестной_версии()
@@ -81,6 +89,14 @@ public sealed class AudioContextKindTests : IDisposable
     }
 
     [Fact]
+    public void Describe_черновик_без_файла_подписан_как_черновик()
+    {
+        var id = _threads.Open(Owner, Chat, null, "music", null).Thread!.Id;
+        _kind.Describe(Scope, new ContextItem("i", "audio", Ref(id), null, ContextActor.Human, DateTime.UtcNow))
+            .Label.Should().Be("Новый звук · черновик");
+    }
+
+    [Fact]
     public void Засев_отдаёт_фокус_нити_и_ничего_без_фокуса()
     {
         _kind.SeedPrimary(Scope).Should().BeNull();
@@ -94,9 +110,23 @@ public sealed class AudioContextKindTests : IDisposable
     }
 
     [Fact]
-    public void При_флаге_смена_фокуса_попадает_в_стор_и_снимается_вместе_с_ним()
+    public void Фокус_агента_возвращает_снятый_человеком_объект_основным()
     {
-        _flags.On = true;
+        var id = _jobs.Tracked(Owner, Chat, () => _threads.Open(Owner, Chat, "a.mp3", null, null), ContextActor.Human)
+            .Thread!.Id;
+        _context.SetPrimary(Owner, Chat, null, null);
+
+        _jobs.Tracked(Owner, Chat, () => _threads.SetFocus(Owner, Chat, id, null), ContextActor.Agent);
+
+        var primary = _context.Get(Owner, Chat).Primary;
+        primary.Should().NotBeNull();
+        ChatContextFocusMirror.ThreadOf(primary!).Should().Be(id);
+        primary!.By.Should().Be(ContextActor.Agent);
+    }
+
+    [Fact]
+    public void Смена_фокуса_попадает_в_стор_и_снимается_вместе_с_ним()
+    {
         var id = _jobs.Tracked(Owner, Chat, () => _threads.Open(Owner, Chat, "a.mp3", null, null), ContextActor.Human)
             .Thread!.Id;
 
@@ -110,26 +140,22 @@ public sealed class AudioContextKindTests : IDisposable
     }
 
     [Fact]
-    public async Task Усыновление_звука_агентом_без_фокуса_попадает_в_контекст()
+    public async Task Усыновление_звука_не_делает_нить_основной_после_снятия_человеком()
     {
-        _flags.On = true;
         _context.SetPrimary(Owner, Chat, null, null);
-        var adopter = Adopter();
 
-        await adopter.AdoptAsync(new LocalMediaAdoption(Owner, "p-1", Chat, "music_edit", "lm_a",
+        await Adopter().AdoptAsync(new LocalMediaAdoption(Owner, "p-1", Chat, "music_edit", "lm_a",
             [new LocalMediaAdoptedFile("gen/a.mp3", "audio/mpeg")]), CancellationToken.None);
 
-        var thread = _threads.Get(Owner, Chat).Threads.Single();
-        var primary = _context.Get(Owner, Chat).Primary;
-        primary.Should().NotBeNull("усыновлённая нить стала фокусом вертикали — контекст обязан её показать");
-        ChatContextFocusMirror.ThreadOf(primary!).Should().Be(thread.Id);
-        primary!.By.Should().Be(ContextActor.Agent);
+        _threads.Get(Owner, Chat).Threads.Should().ContainSingle("нить усыновлена");
+        _context.Get(Owner, Chat).Primary.Should().BeNull("усыновитель в контекст чата не пишет: объект человек снял сам");
     }
 
+    // Выбор человека пишется только в стор контекста (PUT primary), сырой Focus нити при этом пуст:
+    // фоновое усыновление не должно перебить такой выбор (ревью ADR-023, дефект 1)
     [Fact]
     public async Task Усыновление_звука_не_уводит_контекст_от_выбора_человека()
     {
-        _flags.On = true;
         var mine = _threads.Open(Owner, Chat, "mine.mp3", null, null).Thread!.Id;
         _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem("audio", mine, ContextActor.Human), null);
 
@@ -139,6 +165,20 @@ public sealed class AudioContextKindTests : IDisposable
         var primary = _context.Get(Owner, Chat).Primary!;
         ChatContextFocusMirror.ThreadOf(primary).Should().Be(mine);
         primary.By.Should().Be(ContextActor.Human, "выбор человека усыновление не трогает");
+    }
+
+    [Fact]
+    public void Фокус_агента_на_ту_же_нить_не_стирает_закреплённую_человеком_версию()
+    {
+        var id = _threads.Open(Owner, Chat, "a.mp3", null, null).Thread!.Id;
+        _context.SetPrimary(Owner, Chat, new ContextItem("h", "audio",
+            new JsonObject { ["threadId"] = id, ["versionId"] = AudioThreadVersion.OriginId }, null, ContextActor.Human, DateTime.UtcNow), null);
+
+        _jobs.Tracked(Owner, Chat, () => _threads.SetFocus(Owner, Chat, id, null), ContextActor.Agent);
+
+        var primary = _context.Get(Owner, Chat).Primary!;
+        primary.By.Should().Be(ContextActor.Human);
+        primary.Ref["versionId"]!.GetValue<string>().Should().Be(AudioThreadVersion.OriginId);
     }
 
     private LocalAudioAdopter Adopter()
@@ -154,25 +194,13 @@ public sealed class AudioContextKindTests : IDisposable
     }
 
     [Fact]
-    public void Без_флага_стор_контекста_не_трогается()
-    {
-        _flags.On = false;
-
-        _jobs.Tracked(Owner, Chat, () => _threads.Open(Owner, Chat, "a.mp3", null, null), ContextActor.Human);
-
-        _context.Get(Owner, Chat).Revision.Should().Be(0);
-        File.Exists(Path.Combine(_root, "ctx", Owner, Chat + ".json")).Should().BeFalse();
-    }
-
-    [Fact]
     public void Фокус_звука_не_снимает_основную_картинку()
     {
-        _flags.On = true;
         var image = new ContextItem("i1", "image", Ref("img-1"), null, ContextActor.Human, DateTime.UtcNow);
         var both = new ContextKindRegistry([_kind, new StubImageKind()]);
         var context = new ChatContextStore(Path.Combine(_root, "ctx2"), both);
         var jobs = new AudioJobThreads(_threads, NullLogger<AudioJobThreads>.Instance, null, null, null,
-            mirror: new ChatContextFocusMirror(context, _flags, NullLogger<ChatContextFocusMirror>.Instance));
+            mirror: new ChatContextFocusMirror(context, NullLogger<ChatContextFocusMirror>.Instance));
         var id = _threads.Open(Owner, Chat, "a.mp3", null, null).Thread!.Id;
         context.SetPrimary(Owner, Chat, image, null);
 
@@ -183,25 +211,19 @@ public sealed class AudioContextKindTests : IDisposable
     }
 
     [Fact]
-    public void При_флаге_фокус_в_DTO_нитей_берётся_из_контекста()
+    public void Фокус_в_DTO_нитей_берётся_из_контекста()
     {
         var id = _threads.Open(Owner, Chat, "a.mp3", null, null).Thread!.Id;
-        _flags.On = true;
 
         _jobs.View(Owner, Chat).Focus.Should().BeNull("в контексте основным объектом звук не выбран");
 
         _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem("audio", id, ContextActor.Human), null);
         _jobs.View(Owner, Chat).Focus.Should().Be(id);
-
-        _flags.On = false;
-        _context.SetPrimary(Owner, Chat, null, null);
-        _jobs.View(Owner, Chat).Focus.Should().Be(id, "без флага DTO отдаёт собственное поле");
     }
 
     [Fact]
     public void Удаление_нити_убирает_её_отовсюду_в_контексте()
     {
-        _flags.On = true;
         var id = _threads.Open(Owner, Chat, "a.mp3", null, null).Thread!.Id;
         _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem("audio", id, ContextActor.Human), null);
         _context.AddRef(Owner, Chat, ChatContextFocusMirror.NewItem("audio", id, ContextActor.Human) with { Role = "reference" }, null);

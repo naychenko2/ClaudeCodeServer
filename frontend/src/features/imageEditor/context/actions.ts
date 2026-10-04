@@ -10,7 +10,7 @@ import { pickOp } from '../format';
 export type ImageState = 'draft' | 'file' | 'marks';
 
 // Пропорции, которые принимает сервер у дорисовки и новой картинки (ImageEditLaunchAssembler.AspectRatios)
-export const ASPECT_OPTIONS = ['1:1', '16:9', '9:16'] as const;
+export const ASPECT_OPTIONS = ['16:9', '9:16', '1:1'] as const;
 // Пропорции новой картинки «как решит модель»: значение params.aspect, на сервер уходит как null
 export const ASPECT_AUTO = 'авто';
 
@@ -34,7 +34,20 @@ export const EDIT_OP = (hasMask: boolean): ImageEditOp => pickOp(true, hasMask);
 
 const notOffered = (what: string) => `Ни один поставщик не умеет ${what}`;
 
-export function buildImageActions(i: ImageActionInput): readonly ContextAction[] {
+// Глагол хода и значок чипа по id действия (макет composer-actions-v1)
+const LOOK: Readonly<Record<string, Pick<ContextAction, 'verb' | 'icon'>>> = {
+  draw: { verb: 'Рисуем', icon: 'image' },
+  edit: { verb: 'Изменяем', icon: 'spark' },
+  removeBg: { verb: 'Убираем фон у', icon: 'scissors' },
+  upscale: { verb: 'Увеличиваем', icon: 'maximize' },
+  outpaint: { verb: 'Дорисовываем', icon: 'expand' },
+  mark: { icon: 'brush' },
+};
+
+export const buildImageActions = (i: ImageActionInput): readonly ContextAction[] =>
+  rawImageActions(i).map(a => ({ ...a, ...LOOK[a.id] }));
+
+function rawImageActions(i: ImageActionInput): readonly ContextAction[] {
   if (imageState(i) === 'draft') {
     return [{
       id: 'draw', kind: 'run', label: 'Нарисовать', op: 'generate', text: 'required',

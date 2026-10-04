@@ -1,7 +1,9 @@
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.VideoEditor.ChatContext;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Scenes;
 
@@ -16,9 +18,44 @@ public sealed class VideoJobThreads(
     ILogger<VideoJobThreads> log,
     ISessionDirectory? directory = null,
     IChatFeed? feed = null,
-    ISessionBroadcaster? broadcaster = null)
+    ISessionBroadcaster? broadcaster = null,
+    ChatContextFocusMirror? mirror = null)
 {
     public VideoThreadStore Store => store;
+
+    // Нити для DTO (ручки, ответы мутаций, событие): составной фокус «Видео» распадается —
+    // сцена и фильм берутся из основного объекта контекста чата (по одному). Читатели хода (`video_state`, умолчания путей, хвост) берут её же; сырой Focus нити — внутреннее «до/после» для Sync
+    public VideoThreadsStateDto Dto(string ownerId, string sessionId, VideoThreadsState state)
+    {
+        if (mirror is null) return state.ToDto();
+        var scene = mirror.ProjectFocus(ownerId, sessionId, VideoContextKind.SceneKind, state.Focus.SceneId,
+            id => state.Scenes.Any(s => s.SceneId == id), VideoContextKind.SceneKey);
+        var film = mirror.ProjectFocus(ownerId, sessionId, VideoContextKind.FilmKind, state.Focus.FilmPath,
+            _ => true, VideoContextKind.FilmKey);
+        return (state with { Focus = new VideoFocusDto(scene, film) }).ToDto();
+    }
+
+    public VideoThreadsStateDto View(string ownerId, string sessionId) => Dto(ownerId, sessionId, store.Get(ownerId, sessionId));
+
+    // Запись, которая может сменить фокус: смена попадает в стор контекста. Основным становится
+    // выбранное последним: фильм обрабатывается раньше сцены, поэтому при смене обоих разом выигрывает сцена
+    public VideoThreadWrite Tracked(string ownerId, string sessionId, Func<VideoThreadWrite> write, ContextActor by)
+    {
+        // «До» — то, что человек видит (проекция из контекста), а не сырой Focus нити: он мог устареть, пока
+        // выбор жил только в сторе, и тогда Sync принял бы чужую сцену за смену
+        var current = store.Get(ownerId, sessionId);
+        var before = Dto(ownerId, sessionId, current).Focus;
+        var written = write();
+        if (written.Status != VideoThreadWriteStatus.Ok || mirror is null) return written;
+        var after = written.State.Focus;
+        mirror.Sync(ownerId, sessionId, VideoContextKind.FilmKind, before.FilmPath, after.FilmPath, by, refKey: VideoContextKind.FilmKey);
+        mirror.Sync(ownerId, sessionId, VideoContextKind.SceneKind, before.SceneId, after.SceneId, by, refKey: VideoContextKind.SceneKey);
+        return written;
+    }
+
+    // Сцена исчезла — из контекста чата уходит и она
+    public void Forget(string ownerId, string sessionId, string sceneId) =>
+        mirror?.Forget(ownerId, sessionId, VideoContextKind.SceneKind, sceneId, VideoContextKind.SceneKey);
 
     // Своя сцена чата своей области; без справочника чатов (тесты без DI) — только по хранилищу владельца
     public bool OwnScene(string ownerId, string scopeKey, string? sessionId, string? sceneId)
@@ -154,7 +191,7 @@ public sealed class VideoJobThreads(
         try
         {
             await broadcaster.ToOwner(ownerId,
-                new VideoThreadChangedMessage(scopeKey, state.Revision, state.ToDto()) { SessionId = sessionId });
+                new VideoThreadChangedMessage(scopeKey, state.Revision, Dto(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)
         {

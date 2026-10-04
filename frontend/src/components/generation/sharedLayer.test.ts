@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Pencil, Sparkles } from 'lucide-react';
 
 // Окружение node: окно с matchMedia для useIsMobile (Badge), портал меню — на месте
 vi.stubGlobal('window', Object.assign(new EventTarget(), {
@@ -10,119 +9,12 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
 }));
 vi.mock('react-dom', async (orig) => ({ ...(await orig<typeof import('react-dom')>()), createPortal: (n: unknown) => n }));
 
-const { pickRows } = await import('./pickSort');
-const { GenerationPickMenu } = await import('./GenerationPickMenu');
 const { createReleaseUndo, RELEASE_UNDO_MS } = await import('./useReleaseUndo');
-const { handleModeClick, GenerationModeSwitch } = await import('./GenerationModeSwitch');
 const { groupExecutorRows, ExecutorList, ExecutorSummaryRow } = await import('./ExecutorList');
 const { ReleaseNotice, setFabRaise, FAB_RAISE_VAR } = await import('./ReleaseNotice');
 
 const html = (el: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(el);
 const noop = () => {};
-
-describe('pickRows — отбор и порядок строк меню', () => {
-  const items = [
-    { id: 'a', at: 100 },
-    { id: 'b', at: 300 },
-    { id: 'c', at: 200 },
-    { id: 'd', at: 300 },
-  ];
-
-  it('свежие сверху, при равном времени выше более поздний в списке', () => {
-    expect(pickRows(items).map(r => r.id)).toEqual(['d', 'b', 'c', 'a']);
-  });
-
-  it('скрытые и уже выбранная строка не попадают в меню', () => {
-    const rows = pickRows([...items, { id: 'e', at: 999, hidden: true }], { excludeId: 'b' });
-    expect(rows.map(r => r.id)).toEqual(['d', 'c', 'a']);
-  });
-
-  it('отметка «правили последней» — ровно у lastId', () => {
-    const rows = pickRows(items, { lastId: 'c' });
-    expect(rows.filter(r => r.last).map(r => r.id)).toEqual(['c']);
-    expect(pickRows(items).some(r => r.last)).toBe(false);
-  });
-
-  it('потолок отрезает самые старые', () => {
-    expect(pickRows(items, { limit: 2 }).map(r => r.id)).toEqual(['d', 'b']);
-    expect(pickRows(items, { limit: 0 })).toEqual([]);
-  });
-
-  it('повтор id схлопывается в самую свежую запись', () => {
-    const rows = pickRows([{ id: 'a', at: 100, n: 1 }, { id: 'a', at: 500, n: 2 }, { id: 'b', at: 300, n: 3 }]);
-    expect(rows.map(r => [r.id, r.n])).toEqual([['a', 2], ['b', 3]]);
-  });
-
-  it('исходный массив не меняется', () => {
-    const src = [{ id: 'x', at: 1 }, { id: 'y', at: 2 }];
-    pickRows(src, { lastId: 'x' });
-    expect(src).toEqual([{ id: 'x', at: 1 }, { id: 'y', at: 2 }]);
-  });
-});
-
-describe('GenerationPickMenu', () => {
-  const base = { title: 'Что править?', subtitle: 'Картинки этого чата, свежие сверху', onPick: noop, onClose: noop, emptyText: 'В этом чате пока нет картинок', emptyHint: 'Прикрепите через «＋»' };
-
-  it('пустое меню: строка «пока нет», доп. пункты и подвал остаются, разделитель только перед ними', () => {
-    const out = html(createElement(GenerationPickMenu, {
-      ...base, rows: [],
-      extras: [{ key: 'concat', label: 'Склеить несколько…', disabled: true, onClick: noop }],
-      footer: 'Или «Работать с этой» на карточке в ленте',
-    }));
-    expect(out).toContain('В этом чате пока нет картинок');
-    expect(out).toContain('Прикрепите через «＋»');
-    expect(out).toContain('Склеить несколько…');
-    expect(out).toContain('disabled=""');
-    expect(out).toContain('Или «Работать с этой» на карточке в ленте');
-    expect(out.match(/<button/g)).toHaveLength(1);
-  });
-
-  it('пустое меню без доп. пунктов — без разделителя и кнопок', () => {
-    const out = html(createElement(GenerationPickMenu, { ...base, rows: [] }));
-    expect(out).toContain('В этом чате пока нет картинок');
-    expect(out).not.toContain('<button');
-    expect(out).not.toContain('margin:4px 6px');
-  });
-
-  it('строки по порядку, миниатюра, отметка во второй строке и акцентная кромка', () => {
-    const out = html(createElement(GenerationPickMenu, {
-      ...base,
-      rows: [
-        { id: 'hero', name: 'hero.png', sub: 'версия 3', thumb: '/t/hero.png', mark: 'правили последней' },
-        { id: 'logo', name: 'logo.png', sub: 'версия 1', thumb: '/t/logo.png' },
-      ],
-    }));
-    expect(out).not.toContain('пока нет');
-    expect(out.indexOf('hero.png')).toBeLessThan(out.indexOf('logo.png'));
-    expect(out).toContain('версия 3 · правили последней');
-    expect(out.split('inset 3px 0 0').length - 1).toBe(1);
-    expect(out).toContain('src="/t/hero.png"');
-    expect(out).toContain('width:26px;height:26px');
-  });
-
-  it('плитка 26×26 на bg-inset у всех строк — с миниатюрой, без неё и у доп. пунктов; кромка прямая; мета переносится', () => {
-    const out = html(createElement(GenerationPickMenu, {
-      ...base,
-      rows: [
-        { id: 'hero', name: 'hero.png', thumb: '/t/hero.png' },
-        { id: 'logo', name: 'logo.png', sub: 'версия 2', icon: createElement('i'), mark: 'правили последней' },
-      ],
-      extras: [{ key: 'up', label: 'С компьютера…', icon: createElement('i'), onClick: noop }],
-    }));
-    expect(out.match(/width:26px;height:26px;flex-shrink:0;[^"]*background:var\(--c-bg-inset\)/g)).toHaveLength(3);
-    expect(out).toMatch(/box-shadow:inset 3px 0 0 var\(--c-accent\)"/);
-    expect(out).toContain('overflow-wrap:anywhere');
-  });
-
-  it('якорь — левый край сегмента, меню над ним', () => {
-    vi.stubGlobal('document', { body: null });
-    const out = html(createElement(GenerationPickMenu, { ...base, rows: [], anchor: { top: 700, bottom: 740, left: 90, right: 150 } as DOMRect }));
-    vi.stubGlobal('document', undefined);
-    const card = out.slice(out.indexOf('<div', out.indexOf('<div') + 1));
-    expect(card).toContain('left:90px');
-    expect(card).toContain('bottom:206px');
-  });
-});
 
 describe('createReleaseUndo — таймер плашки «Вернуть»', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -182,56 +74,6 @@ describe('createReleaseUndo — таймер плашки «Вернуть»', (
     ctl.dispose();
     vi.advanceTimersByTime(RELEASE_UNDO_MS * 2);
     expect(fn).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('GenerationModeSwitch — клик по сегменту', () => {
-  const options = [
-    { value: 'create' as const, label: 'Создать', icon: Sparkles },
-    { value: 'edit' as const, label: 'Править', icon: Pencil, muted: true, title: 'Править — сначала выберите картинку' },
-  ];
-  const rect = { x: 1 } as unknown as DOMRect;
-
-  it('приглушённый сегмент открывает меню с якорем вместо смены режима', () => {
-    const onChange = vi.fn();
-    const onMutedClick = vi.fn();
-    handleModeClick({ options, value: 'edit', onChange, onMutedClick, anchor: () => rect });
-    expect(onMutedClick).toHaveBeenCalledWith('edit', rect);
-    expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it('обычный сегмент меняет режим, якорь не считается', () => {
-    const onChange = vi.fn();
-    const onMutedClick = vi.fn();
-    const anchor = vi.fn(() => rect);
-    handleModeClick({ options, value: 'create', onChange, onMutedClick, anchor });
-    expect(onChange).toHaveBeenCalledWith('create');
-    expect(onMutedClick).not.toHaveBeenCalled();
-    expect(anchor).not.toHaveBeenCalled();
-  });
-
-  it('без onMutedClick приглушённый сегмент меняет режим как обычно', () => {
-    const onChange = vi.fn();
-    handleModeClick({ options, value: 'edit', onChange, anchor: () => rect });
-    expect(onChange).toHaveBeenCalledWith('edit');
-  });
-
-  it('широкий вид — подписи с иконками, узкий — только иконки с подсказками', () => {
-    const wide = html(createElement(GenerationModeSwitch<'create' | 'edit'>, { value: 'create', options, onChange: noop }));
-    expect(wide).toContain('>Создать<');
-    expect(wide).toContain('>Править<');
-    expect(wide).toContain('dashed');
-    const narrow = html(createElement(GenerationModeSwitch<'create' | 'edit'>, { value: 'create', options, onChange: noop, compact: true }));
-    expect(narrow).not.toContain('>Создать<');
-    expect(narrow).toContain('title="Создать"');
-    expect(narrow).toContain('title="Править — сначала выберите картинку"');
-  });
-
-  it('на телефоне сегменты 40×40, вне телефона — прежние 28×20', () => {
-    const phone = html(createElement(GenerationModeSwitch<'create' | 'edit'>, { value: 'create', options, onChange: noop, compact: true, isMobile: true }));
-    expect(phone.match(/<button[^>]*width:40px;height:40px/g)).toHaveLength(2);
-    const desk = html(createElement(GenerationModeSwitch<'create' | 'edit'>, { value: 'create', options, onChange: noop, compact: true }));
-    expect(desk.match(/<button[^>]*width:28px;height:20px/g)).toHaveLength(2);
   });
 });
 

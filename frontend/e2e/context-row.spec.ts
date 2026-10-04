@@ -43,6 +43,19 @@ test('1440: строка из ветки, объекта и референсов
   await shot(page, 'row-1440.png');
 });
 
+test('1440: ветка при свободном месте без многоточия, имя целиком', async ({ page }) => {
+  newWorld({ ctx: { primary: primary(), refs: [ref('r1', 'Аня')] } });
+  await openChat(page, { vp: D });
+  await expect(row(page)).toBeVisible({ timeout: 30_000 });
+  const cut = await chip(page, 'git').locator('span').first().evaluate(() => {
+    const el = document.querySelector('[data-chip="git"] span') as HTMLElement | null;
+    return el ? el.scrollWidth > el.clientWidth + 1 : false;
+  });
+  expect(cut, 'имя ветки не режется').toBe(false);
+  await expect(chip(page, 'git')).toContainText('feat/video-editor');
+  await shot(page, 'git-1440.png');
+});
+
 test('360: строка 32 px прокручивается, ветка иконкой с бейджем', async ({ page }) => {
   newWorld({ ctx: { primary: primary(), refs: [ref('r1', 'Аня'), ref('r2', 'palette.png')] } });
   await openChat(page, { vp: M });
@@ -111,20 +124,12 @@ test('меню ветки: «Зафиксировать только этот ч
   expect(sent).toContain('images/hero.v2.png');
 });
 
-test('руки видны пилюлей в губе поля, полосы «Руки» нет', async ({ page }) => {
+test('чипа «Руки» в поле ввода нет, полосы «Руки» тоже', async ({ page }) => {
   newWorld({ ctx: { primary: primary() } });
   await openChat(page, { vp: D });
-  await expect(page.locator('[data-hands-pill]')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('[data-composer-strip="hands"]')).toHaveCount(0);
   await expect(page.locator('[data-git-strip]')).toHaveCount(0);
-});
-
-test('без флага: старые полосы на месте, строки и пилюли нет', async ({ page }) => {
-  newWorld({ flags: { 'composer-context-row': false }, ctx: { primary: primary() } });
-  await openChat(page, { vp: D });
-  await expect(page.locator('[data-git-strip], [data-composer-strip]').first()).toBeVisible({ timeout: 30_000 });
-  await expect(row(page)).toHaveCount(0);
-  await expect(page.locator('[data-hands-pill]')).toHaveCount(0);
 });
 
 test('личный чат без объекта: строки нет', async ({ page }) => {
@@ -192,11 +197,3 @@ test('панель на 360: шторка по просьбе, секции чи
   await shotPanel(page, 'panel-360.png');
 });
 
-test('без флага панели «Контекст» нет, строка и клик прежние', async ({ page }) => {
-  newWorld({ flags: { 'composer-context-row': false }, ctx: { primary: primary() } });
-  await openChat(page, { vp: D });
-  await expect(page.locator('[data-chat-panel], textarea').first()).toBeVisible({ timeout: 30_000 });
-  await expect(row(page)).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /«Контекст»/ })).toHaveCount(0);
-  await expect(panel(page)).toHaveCount(0);
-});

@@ -1,7 +1,7 @@
 // Тело версии звука в карточке ленты: плеер с серверной волной и A/B, мини-микшер стемов со
 // сведением без ИИ и список остальных файлов версии (.abc, .txt/.srt/.lrc, .mid, .pth/.index)
 // со скачиванием. Выделение куска — у каждой карточки своё: волна показывает его, только если
-// выделяли на этой версии; операция над куском сперва ставит эту версию в работу.
+// выделяли на этой версии; кусок обрезается и правится в редакторе звука.
 // Версия «в MIDI» (без основного звука) под флагом midi-editor показывает ноты просмотрщиком кита.
 
 import { Suspense, useState } from 'react';
@@ -13,12 +13,10 @@ import { audioApi, type AudioThread, type AudioThreadVersion } from '../api';
 import { AudioPlayer, StemMixer, type AudioSource, type Stem } from '../player';
 import { normalizeJoint } from '../player/peaks';
 import { isPersonalScope } from '../scope';
-import { downloadFile, mixStems, takeVersion } from './actions';
+import { downloadFile, mixStems } from './actions';
 import { abSides, extraFiles, hasMain, type ExtraFile, midiFileOf, stemsFolder, versionLabel, versionStems } from './model';
 import { useServerPeaks } from './serverPeaks';
-import {
-  getPieceFieldOpen, getSelection, requestOperation, setSelection, useAudioStoreVersion,
-} from './threadStore';
+import { getSelection, openEditor, setSelection, useAudioStoreVersion } from './threadStore';
 
 // Точек волны: крупный плеер и строка стема (волна потом ресемплится под ширину)
 const PEAK_POINTS = 240;
@@ -114,13 +112,6 @@ function PlayerBlock({ scope, sessionId, thread, version }: Props) {
   // Выделение одно на нить; карточка показывает его, только если выделяли на её версии
   const stored = getSelection(sessionId, thread.id);
   const sel = stored?.versionId === version.id ? stored : null;
-  const current = thread.currentVersionId === version.id;
-  const linked = current && getPieceFieldOpen(sessionId) === thread.id;
-  // Операция над куском — от этой версии: не текущую сперва ставим в работу
-  const operate = async (op: 'trim' | 'repaint') => {
-    if (!current && !(await takeVersion(scope, sessionId, thread, version.id))) return;
-    requestOperation(sessionId, thread.id, op);
-  };
   return (
     <AudioPlayer
       sources={sources}
@@ -129,11 +120,7 @@ function PlayerBlock({ scope, sessionId, thread, version }: Props) {
       selection={sel}
       onSelectionChange={s => setSelection(sessionId, thread.id, s ? { ...s, versionId: version.id } : null)}
       selectionActions={
-        <>
-          {linked && <span data-piece-linked="" style={{ color: C.accent, fontWeight: 600 }}>= «Кусок» в панели</span>}
-          <Button size="xs" variant="ghost" onClick={() => { void operate('trim'); }}>Обрезать</Button>
-          <Button size="xs" variant="ghost" onClick={() => { void operate('repaint'); }}>Перегенерировать кусок</Button>
-        </>
+        <Button size="xs" variant="ghost" onClick={() => openEditor(sessionId, thread.id, version.id)}>Открыть в редакторе</Button>
       }
     />
   );

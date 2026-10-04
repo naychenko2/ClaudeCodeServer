@@ -1,6 +1,6 @@
 import { setAudioFocus } from '../lib/audioFocus';
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
-import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore, GitBranch } from 'lucide-react';
+import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { ProjectFeature } from '../types';
 import { featureReason, isLocalProject, useProjectFeature } from '../lib/projectCapabilities';
@@ -17,7 +17,7 @@ import { computeTodoBatches } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
 import { api, setGitSessionContext } from '../lib/api';
-import { ensureGit, getGitState, gitStripStatus, loadUnpushedLog, useGitStripAvailable } from '../lib/git';
+import { ensureGit, loadUnpushedLog } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
@@ -48,12 +48,8 @@ import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
 import { getDraft, setDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
-import { ProjectGitBar } from './ProjectGitBar';
-import { ComposerStripHost } from './chat/ComposerStripHost';
 import { ContextRow } from './chat/ContextRow';
-import { FLAGS, useFeature } from '../lib/featureFlags';
 import { chatContextApi } from '../lib/chatContext/api';
-import { LocalHandsStripFeed } from '../features/localHands/LocalHandsStripFeed';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, type NavSnapshot } from '../lib/nav';
@@ -230,10 +226,6 @@ function memoizedCacheEntry(
 
 export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
-  // Доступность встроенной полосы Git над композером (builtins ниже) — примитивный
-  // boolean, чтобы перерисовывать этот огромный компонент ровно при смене доступности,
-  // а не на каждый emit git-стора (busy, changedBy и т.п.)
-  const gitStripAvailable = useGitStripAvailable(project?.id ?? null);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
   // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
@@ -1127,8 +1119,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   }, [isJoined, send, pendingMessage]);
 
   const chipSlot = useSlot<ComposerChipCtx, ComposerChipApi>(SLOT_COMPOSER_CHIP);
-  // Строка контекста заменяет хост полос над композером (ADR-023); без флага — прежние полосы
-  const contextRowOn = useFeature(FLAGS.composerContextRow);
   const handleSend = async (text: string, _attachments?: string[], opts?: { auto?: boolean }) => {
     // Новый вопрос обрывает чтение предыдущего ответа. Прайминг здесь — второе место
     // (первое в тумблере): режим персистится на чате, и «включил вчера — надиктовал
@@ -1186,7 +1176,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const handleCommitOwn = useCallback(() => {
     const base = (style: string, saved: string) =>
       `Зафиксируй (git commit) изменения, сделанные в рамках этого чата — только то, что ты правил в этом диалоге, не затрагивая остальные изменения рабочего дерева. Сам придумай осмысленное сообщение коммита по сути изменений.${saved}${style}`;
-    if (!contextRowOn) { commitViaChat(style => base(style, '')); return; }
     // Строка контекста: файлы, которые редакторы сохранили в проект из этого чата, — надёжный
     // список «своего» (в отличие от ленты file_changed). Пустая ручка или сбой — как раньше
     void (async () => {
@@ -1197,7 +1186,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       } catch { /* ручки нет или сбой — коммитим по общим правилам */ }
       commitViaChat(style => base(style, saved));
     })();
-  }, [commitViaChat, contextRowOn, session.id]);
+  }, [commitViaChat, session.id]);
 
   // «Всё рабочее дерево»: коммитим все незафиксированные изменения без ограничения
   // диалогом (staged + unstaged, включая правки не из этого чата).
@@ -2885,46 +2874,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
-          {/* Git-бар над композером (только проектный чат на десктопе): ветка/worktree
-              чата, дерево текущего хода, суммарный diff и кнопки «Зафиксировать»/
-              «Опубликовать». Правой панели «Изменения» на мобиле нет — отсюда гейт
-              !isMobile; на мобиле о дереве хода сообщает только отметка в ленте. */}
-          {/* Полосы над композером (реестр composer-strip): одна за раз, Git — встроенный
-              вклад каркаса; какая видна — решает стор lib/composerStrips. */}
-          {/* Полоса «Руки»: состояние рук чата и её фокус питает отдельный компонент — сама
-              полоса рисуется только активной */}
-          {project && !embedded && <LocalHandsStripFeed session={session} project={project} />}
-          {/* В личном чате вне проекта Git нет — остаются полосы, доступные без проекта («Картинки») */}
-          {!embedded && contextRowOn && (
+          {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023) */}
+          {!embedded && (
             <ContextRow session={session} project={project ?? null} turnTree={turnTree} isMobile={isMobile === true}
               onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />
-          )}
-          {!embedded && !contextRowOn && (
-            <ComposerStripHost projectId={project?.id ?? null} sessionId={session.id} isMobile={isMobile === true}
-              builtins={project ? [{
-                name: 'git', order: 0,
-                render: ({ switcher, collapsed, setCollapsed }) => (
-                  // Заголовок-селектор полосы теперь живёт внутри самой полосы (ProjectGitBar),
-                  // а не отдельной плашкой над ней — одна плашка с веткой и «Опубликовать»
-                  <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting}
-                    onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} switcher={switcher}
-                    collapsed={collapsed} onCollapsedChange={setCollapsed} />
-                ),
-                action: {
-                  title: 'Git',
-                  icon: <GitBranch size={14} strokeWidth={ICON_STROKE} />,
-                  // Пока статус не получен — доступна (без дребезга «Картинки → Git» в
-                  // проекте с git); после ответа — только в настоящем репозитории
-                  isAvailable: () => gitStripAvailable,
-                  // На телефоне полоса тоже есть (прототип полос): по умолчанию свёрнута в строку
-                  status: () => {
-                    const g = getGitState(project.id);
-                    if (!g.status?.isRepo) return null;
-                    const branch = session.worktreeBranch ?? g.status.branch ?? '—';
-                    return `${branch} · ${gitStripStatus(g.status, g.unpushed.length).text}`;
-                  },
-                },
-              }] : []} />
           )}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала

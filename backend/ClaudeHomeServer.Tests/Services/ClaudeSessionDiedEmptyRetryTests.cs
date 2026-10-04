@@ -81,7 +81,12 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
         }
         else
         {
+            // Настоящий CLI эхом возвращает user-сообщение (--replay-user-messages) с тем же uuid:
+            // result до эха бэкенд считает чужим, так что фейк обязан его напечатать первым.
             var text = "#!/bin/sh\n"
+                + "read -r L\n"
+                + "U=$(printf '%s' \"$L\" | sed 's/.*\"uuid\":\"\\([^\"]*\\)\".*/\\1/')\n"
+                + "echo \"{\\\"type\\\":\\\"user\\\",\\\"message\\\":{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"x\\\"},\\\"uuid\\\":\\\"$U\\\",\\\"isReplay\\\":true}\"\n"
                 + string.Join("\n", lines.Select(l => $"echo '{l}'"))
                 + "\nsleep 120\n";
             script = Path.Combine(_root, "fake-cli.sh");

@@ -375,6 +375,15 @@ public class ClaudeSession : ILlmSessionAdapter
         // контент после TurnDone означает, что продолжение началось. Его result не должен
         // завершать пользовательский ход (см. SkipResults)
         public volatile bool ContinuationActive;
+        // uuid user-сообщения, записанного в stdin, эхо которого (--replay-user-messages) ещё не
+        // пришло. Пока оно не null, любой result — чужой: на resume CLI сначала доигрывает
+        // «осиротевший» task-notification прошлой сессии и выдаёт на него result (numTurns=0),
+        // раньше, чем возьмётся за наше сообщение. Засчитанный ходу, такой result закрывал stdin
+        // под настоящим ходом — «Stream closed» у всех инструментов (инцидент 03.10.2026).
+        // Пишет поток хода под _stdinLock, читает и снимает reader.
+        public volatile string? PendingEchoUuid;
+        // Второй контур (tool_use при закрытом stdin) сработал — процесс уже гасится
+        public int AnomalyAborted;
         // Сколько ближайших result'ов принадлежит продолжениям, начатым ДО отправки
         // текущего пользовательского хода (инкремент в TrySubmitTurn под _stdinLock,
         // декремент — поток reader'а)
@@ -2767,7 +2776,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Отдать ход живому процессу доживающего прогона (same-process ход). false — прогон
     // непригоден (умер/stdin закрыт/запись сорвалась): ход пойдёт новым процессом
-    private bool TrySubmitTurn(CliRun run, string userMessageJson, long turnSeq)
+    private bool TrySubmitTurn(CliRun run, string userMessageJson, long turnSeq, string turnUuid)
     {
         _stdinLock.Wait();
         try
@@ -2803,6 +2812,7 @@ public class ClaudeSession : ILlmSessionAdapter
             run.TurnDone = false;
             run.TurnGotEvent = false;       // новый ход — событий прогона ещё не было
             run.RetryOnEmptyExit = true;    // same-process: смерть до первого события = гонка TOCTOU
+            run.PendingEchoUuid = turnUuid; // result'ы до эха этого сообщения — чужие
             run.Process.StandardInput.WriteLine(userMessageJson);
             run.Process.StandardInput.Flush();
             return true;
@@ -2909,6 +2919,9 @@ public class ClaudeSession : ILlmSessionAdapter
             "--output-format", "stream-json",
             "--input-format", "stream-json",
             "--include-partial-messages",
+            // Эхо нашего user-сообщения (isReplay + тот же uuid) — подтверждение, что CLI взялся
+            // именно за него: result'ы до эха принадлежат чужим ходам (см. PendingEchoUuid)
+            "--replay-user-messages",
             "--permission-prompt-tool", "stdio"
         };
 
@@ -3970,9 +3983,11 @@ public class ClaudeSession : ILlmSessionAdapter
             blocks.AddRange(imageBlocks);
             content = blocks;
         }
+        var turnUuid = Guid.NewGuid().ToString();
         var userMessageJson = JsonSerializer.Serialize(new
         {
             type = "user",
+            uuid = turnUuid,
             message = new { role = "user", content }
         });
 
@@ -3989,7 +4004,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // переживают смену хода. Собранный temp MCP-конфиг не пригодился — убираем.
         var existing = _run;
         if (existing is not null && existing.TurnDone && existing.Signature == signature && GatewayTokenAlive(existing)
-            && TrySubmitTurn(existing, userMessageJson, turnSeq))
+            && TrySubmitTurn(existing, userMessageJson, turnSeq, turnUuid))
         {
             Console.WriteLine("[ClaudeSession] Ход отдан живому процессу прогона (фоновые агенты доживают)");
             // Same-process submit НЕ гарантирован durable (процесс доживает, запись в .jsonl
@@ -4165,6 +4180,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 else
                 {
+                    run.PendingEchoUuid = turnUuid;
                     await process.StandardInput.WriteLineAsync(userMessageJson);
                     await process.StandardInput.FlushAsync();
                 }
@@ -5093,6 +5109,39 @@ public class ClaudeSession : ILlmSessionAdapter
             + $"cont={run?.ContinuationActive} bg={run?.HasPendingBg} numTurns={nt}");
     }
 
+    // Второй контур: ход закончен и stdin закрыт, а основной агент всё равно зовёт инструмент.
+    // Ответить на can_use_tool уже некуда («Stream closed» на каждый вызов), процесс будет
+    // часами крутить инструменты вхолостую при «завершённом» ходе в UI (инцидент 03.10.2026).
+    // Гасим процесс и говорим об этом честной ошибкой.
+    private async Task<bool> AbortOnToolUseAfterStdinClosedAsync(CliRun run, JsonElement root)
+    {
+        if (!IsToolUseAfterStdinClosed(run.TurnDone, run.StdinClosed, root)) return false;
+        if (Interlocked.Exchange(ref run.AnomalyAborted, 1) == 1) return true;
+        CorrTrace("anomaly-tool-use-after-close", Info.Id, run, root);
+        Console.Error.WriteLine(
+            $"[ClaudeSession] Инструмент при закрытом stdin после завершённого хода — гасим процесс (session {Info.Id})");
+        _launcher.Kill(run.Process, run.LaunchTurnId);
+        await _onMessage(new ErrorMessage(
+            "Процесс агента продолжал вызывать инструменты после завершения хода, когда ответить на запрос прав уже было нельзя; он остановлен. Отправьте сообщение ещё раз.",
+            Details: "tool_use при TurnDone && StdinClosed"));
+        return true;
+    }
+
+    internal static bool IsToolUseAfterStdinClosed(bool turnDone, bool stdinClosed, JsonElement root)
+    {
+        if (!turnDone || !stdinClosed || HasParentToolUseId(root)) return false;
+        if (!root.TryGetProperty("message", out var msg) || !msg.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.Array) return false;
+        foreach (var b in content.EnumerateArray())
+            if (b.TryGetProperty("type", out var t) && t.GetString() == "tool_use") return true;
+        return false;
+    }
+
+    internal static bool IsOurEcho(JsonElement root, string uuid)
+        => root.TryGetProperty("isReplay", out var rp) && rp.ValueKind == JsonValueKind.True
+           && root.TryGetProperty("uuid", out var u) && u.ValueKind == JsonValueKind.String
+           && u.GetString() == uuid;
+
     // Диагностика промаха IsEmptyNoopResult (инцидент 03.10.2026): result с numTurns=0, который
     // эвристика пустого результата не отсеяла и который засчитан ходу. Сырой result не
     // логировался — без subtype/usage/denials не видно, какое именно поле его «наполнило».
@@ -5308,6 +5357,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     CorrTrace("continuation-start(assistant)", Info.Id, run, root);
                     run.ContinuationActive = true;
                 }
+                if (await AbortOnToolUseAfterStdinClosedAsync(run, root)) break;
                 TrackContextTokens(root);
                 await HandleAssistantToolsAsync(run, root);
                 break;
@@ -5330,6 +5380,18 @@ public class ClaudeSession : ILlmSessionAdapter
                         contRun.ContinuationActive = false;
                         Console.WriteLine("[ClaudeSession] Result хода-продолжения CLI между ходами — пропущен");
                         CloseStdinIfIdle(contRun);
+                        break;
+                    }
+                    if (contRun.PendingEchoUuid is not null)
+                    {
+                        // Наше сообщение ещё не принято CLI (эха нет) — это result «осиротевшего»
+                        // task-notification или продолжения. Он же гасит один пропуск SkipResults:
+                        // это то же самое событие, второй раз его не считаем.
+                        CorrTrace("result-skip(preEcho)", Info.Id, contRun, root);
+                        LogZeroTurnResult(root);
+                        if (Volatile.Read(ref contRun.SkipResults) > 0) Interlocked.Decrement(ref contRun.SkipResults);
+                        contRun.ContinuationActive = false;
+                        Console.WriteLine("[ClaudeSession] Result до эха нашего сообщения (чужой ход CLI) — пропущен");
                         break;
                     }
                     if (Volatile.Read(ref contRun.SkipResults) > 0)
@@ -5459,6 +5521,16 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "user":
+                // Эхо нашего сообщения: CLI взялся за него — всё, что было до, не наше.
+                // Остальные isReplay-строки идут штатным путём (учёт task-notification).
+                if (run.PendingEchoUuid is { } pendingUuid && IsOurEcho(root, pendingUuid))
+                {
+                    CorrTrace("echo", Info.Id, run, root);
+                    run.PendingEchoUuid = null;
+                    Volatile.Write(ref run.SkipResults, 0);
+                    run.ContinuationActive = false;
+                    break;
+                }
                 await HandleUserMessageAsync(run, root);
                 break;
 

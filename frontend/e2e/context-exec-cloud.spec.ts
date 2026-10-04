@@ -62,14 +62,27 @@ test('панель «Контекст»: выбрал fal без текста �
   await page.locator('[data-context-row] [data-chip="primary"]').click();
   const panel = page.locator('[data-context-panel]');
   await expect(panel).toBeVisible({ timeout: 10_000 });
-  await expect(panel.getByText('Облако', { exact: true })).toBeVisible();
+  // «Чем» в покое — одна строка; список с группами открывается меню поверх панели
+  const by = panel.locator('[data-ctx-exec]');
+  const pick = async (name: string | RegExp) => {
+    await by.getByRole('button').click();
+    await expect(page.getByText('Облако', { exact: true })).toBeVisible();
+    await page.getByRole('radio', { name }).first().click();
+    await expect(page.getByRole('radiogroup')).toHaveCount(0);
+  };
+  await expect(by).toContainText('Авто');
+  await expect(by).toContainText('бесплатно');
   await expect(runBtn(page)).toContainText('бесплатно', { timeout: 10_000 });
-  await panel.getByText('FLUX Kontext').first().click();
+  await pick(/FLUX Kontext/);
   await expect(runBtn(page)).toContainText('$', { timeout: 10_000 });
+  await expect(by).toContainText('FLUX Kontext');
+  await expect(by).toContainText('$');
+  await expect(panel.locator('[data-ctx-price]')).toContainText('$');
   await expect(execChip(page)).toContainText('FLUX Kontext');
-  await panel.getByText('Авто', { exact: true }).first().click();
+  await pick(/^Авто/);
   await expect(runBtn(page)).toContainText('бесплатно', { timeout: 10_000 });
-  await panel.getByText('FLUX Kontext').first().click();
+  await expect(by).toContainText('бесплатно');
+  await pick(/FLUX Kontext/);
   await expect(runBtn(page)).toContainText('$', { timeout: 10_000 });
   await page.reload();
   await expect(page.locator('[data-context-row]')).toBeVisible({ timeout: 30_000 });

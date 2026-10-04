@@ -104,15 +104,17 @@ export function ExecutorSummaryRow({ label = 'Чем', name, parts = [], price, 
   );
 }
 
-export function ExecutorList({ rows, value, onChange, ariaLabel = 'Исполнитель', isMobile }: {
+export function ExecutorList({ rows, value, onChange, ariaLabel = 'Исполнитель', isMobile, bare }: {
   rows: readonly ExecutorRow[];
   value: string;
   onChange: (id: string) => void;
   ariaLabel?: string;
   isMobile?: boolean;
+  // Без рамки и фона: список живёт внутри карточки меню, у которой они свои
+  bare?: boolean;
 }) {
   return (
-    <div role="radiogroup" aria-label={ariaLabel} style={{
+    <div role="radiogroup" aria-label={ariaLabel} style={bare ? { overflow: 'hidden' } : {
       border: `1px solid ${C.borderLight}`, borderRadius: R.md, background: C.bgCard, overflow: 'hidden',
     }}>
       {groupExecutorRows(rows).map(g => (

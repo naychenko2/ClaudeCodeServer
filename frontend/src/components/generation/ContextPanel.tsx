@@ -16,7 +16,7 @@ import { Button, IconButton, InlineSegmented, Menu, MenuItem, ProgressBar, Stepp
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { unusedBy } from '../../lib/chatContext/fill';
 import { changesWord, GitMenuBody, MenuHead, type RowGit } from '../chat/ContextRowView';
-import { ExecutorList } from './ExecutorList';
+import { ExecutorList, ExecutorSummaryRow, EXECUTOR_GROUP_LABEL, rowPriceShort, type ExecutorBadge } from './ExecutorList';
 import { GenerationPanel } from './GenerationPanel';
 import { RunLabel } from './RunLabel';
 
@@ -193,13 +193,31 @@ function WithSection(p: ContextPanelProps) {
 
 function BySection({ p }: { p: ContextPanelProps }) {
   const { exec, action, primary } = p;
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const holder = useRef<HTMLDivElement>(null);
+  const cur = exec ? exec.rows.find(r => r.id === exec.value) ?? exec.rows[0] : undefined;
+  // Бейдж, имя и «что сейчас» — от выбора exec.value, а не от открытого списка (цена за «Чем»)
+  const parts = !cur ? [] : cur.group === 'auto' ? (cur.now ? [cur.now] : []) : [EXECUTOR_GROUP_LABEL[cur.group]];
+  const price: ExecutorBadge | undefined = cur ? { label: rowPriceShort(cur), tone: cur.free ? 'good' : 'neutral' } : undefined;
   return (
     <Section name="by" title={action ? `Чем · для «${action.label}»` : 'Чем'}>
-      {!exec || !action || exec.rows.length === 0 ? (
+      {!exec || !action || !cur ? (
         <Empty>{!primary ? EMPTY.execNoObject : !action ? EMPTY.execChat : EMPTY.execPending}</Empty>
       ) : (
-        // Список раскрыт всегда (макет): выбор меняет кнопку в поле и цену
-        <ExecutorList rows={exec.rows} value={exec.value} isMobile={p.isMobile} onChange={exec.onChange} />
+        // В покое — одна строка; список с группами открывается меню поверх панели
+        <div ref={holder} data-ctx-exec="">
+          <ExecutorSummaryRow
+            name={cur.name} parts={parts} price={price} open={!!rect} isMobile={p.isMobile}
+            onToggle={() => setRect(r => (r ? null : holder.current?.getBoundingClientRect() ?? null))}
+          />
+          {rect && (
+            <Menu anchor={rect} onClose={() => setRect(null)} anchorAlign="start" maxHeight={420}
+              minWidth={rect.width} maxWidth={rect.width} fullWidth={p.isMobile}>
+              <ExecutorList bare rows={exec.rows} value={exec.value} isMobile={p.isMobile}
+                onChange={id => { setRect(null); exec.onChange(id); }} />
+            </Menu>
+          )}
+        </div>
       )}
     </Section>
   );

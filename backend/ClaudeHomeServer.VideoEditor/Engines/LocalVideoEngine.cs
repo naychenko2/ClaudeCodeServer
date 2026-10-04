@@ -132,20 +132,28 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     {
         var stage = VideoStage.Queued;
         int? position = null;
+        double? percent = null;
         while (true)
         {
             var poll = await media!.PollAsync(ticket, ct);
             if (poll.State is LocalVideoState.Completed or LocalVideoState.Failed) return poll;
             var next = poll.State == LocalVideoState.Running ? VideoStage.Running : VideoStage.Queued;
-            if (poll.Warning is null && (next != stage || poll.QueuePosition != position))
+            // Процент шлём, пока идёт прогон, и только при заметном сдвиге (1 %): опрос чаще, чем меняется шаг
+            var nextPercent = next == VideoStage.Running ? Percent(poll.Percent) : null;
+            if (poll.Warning is null && (next != stage || poll.QueuePosition != position || nextPercent != percent))
             {
                 stage = next;
                 position = poll.QueuePosition;
-                progress.Report(new VideoProgress(stage, stage == VideoStage.Queued ? position : null, eta, RemoteId: ticket));
+                percent = nextPercent;
+                progress.Report(new VideoProgress(stage, stage == VideoStage.Queued ? position : null, eta, RemoteId: ticket,
+                    Percent: percent));
             }
             await Task.Delay(PollInterval, ct);
         }
     }
+
+    private static double? Percent(double? raw) =>
+        raw is { } v && double.IsFinite(v) ? Math.Round(Math.Clamp(v, 0, 1), 2) : null;
 
     public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) =>
         media is null ? Task.FromResult(false) : media.CancelAsync(remoteId, ct);

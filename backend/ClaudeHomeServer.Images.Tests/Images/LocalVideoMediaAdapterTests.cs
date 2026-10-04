@@ -261,4 +261,20 @@ public class LocalVideoMediaAdapterTests
         poll.State.Should().Be(LocalVideoState.Running);
         poll.Warning.Should().NotBeNullOrEmpty();
     }
+
+    [Theory]
+    [InlineData("""{"type":"progress","data":{"value":3,"max":8,"prompt_id":"p1","node":"ms"}}""", 0.375, false)]
+    [InlineData("""{"type":"progress","data":{"value":3,"max":8,"prompt_id":"чужая"}}""", null, false)]
+    [InlineData("""{"type":"progress","data":{"value":3,"max":0,"prompt_id":"p1"}}""", null, false)]
+    [InlineData("""{"type":"executing","data":{"node":"ms","prompt_id":"p1"}}""", null, false)]
+    [InlineData("""{"type":"execution_success","data":{"prompt_id":"p1"}}""", null, true)]
+    [InlineData("""{"type":"execution_error","data":{"prompt_id":"p1"}}""", null, true)]
+    [InlineData("не json", null, false)]
+    public void Сообщение_сокета_ComfyUI_даёт_долю_шага_только_по_своей_задаче(string text, double? fraction, bool done)
+    {
+        var parsed = ComfyClient.ParseProgressMessage(text, "p1");
+
+        parsed.Fraction.Should().Be(fraction);
+        parsed.Done.Should().Be(done);
+    }
 }

@@ -290,6 +290,11 @@ POST                …/films/music?path=                { sessionId } — «С�
 События в группу владельца: `video_edit_progress`, `video_edit_completed`, `video_edit_failed` (у отказа —
 `retryQuote` соседа), `video_thread_changed`, `video_film_changed`.
 
+`video_edit_progress`: `{ jobId, scopeKey, sceneId, stage: queued|running|downloading, queuePosition?, etaSeconds?,
+variant, count, initiator, percent? }`. `percent` (0..1) необязателен и честен: local даёт долю шагов сэмплера ComfyUI
+(по WebSocket `/ws`, шкала монотонна и до конца задачи не доходит до 1), fal — только если статус очереди отдаёт
+`progress`/`percent`, Higgsfield — не даёт. Нет данных — поля нет, клиент считает долю по `etaSeconds`.
+
 **Агент** — MCP-сервер `video-editor` (`POST /mcp/video-editor/{sessionId}`, любой чат владельца при флаге).
 Всегда: `video_state`, `video_focus`, `video_new`, `video_scene_set`, `video_suggest_prompt`; при
 `VideoEditor:AgentLaunch` ещё `video_shoot`, `video_cancel`, `video_wait`, `video_save_scene`, `video_film_edit`,

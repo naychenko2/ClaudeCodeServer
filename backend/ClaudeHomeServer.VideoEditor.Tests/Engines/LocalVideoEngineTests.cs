@@ -208,6 +208,26 @@ public class LocalVideoEngineTests
     }
 
     [Fact]
+    public async Task Run_RunningPoll_PercentFromComfyProgress_NoDataStaysEmpty()
+    {
+        var media = new Mock<ILocalVideoMedia>();
+        media.Setup(m => m.SubmitAsync(It.IsAny<LocalVideoRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LocalVideoSubmitted("t-p", 0, 100, null));
+        media.SetupSequence(m => m.PollAsync("t-p", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LocalVideoPoll(LocalVideoState.Running, 0, null, null))
+            .ReturnsAsync(new LocalVideoPoll(LocalVideoState.Running, 0, null, null, Percent: 0.375))
+            .ReturnsAsync(new LocalVideoPoll(LocalVideoState.Running, 0, null, null, Percent: 0.75))
+            .ReturnsAsync(new LocalVideoPoll(LocalVideoState.Completed, null, Clip, null));
+        var recorder = new Recorder();
+
+        var result = await Fast(media.Object).RunAsync(Scene(VideoEditScope.Of(ServerProject)), recorder, CancellationToken.None);
+
+        result.Outcome.Should().Be(VideoOutcome.Ok);
+        recorder.Events.Where(e => e.Stage == VideoStage.Running).Select(e => e.Percent)
+            .Should().Equal(null, 0.38, 0.75);
+    }
+
+    [Fact]
     public async Task Run_PollFailed_FailedWithReason()
     {
         var media = new Mock<ILocalVideoMedia>();

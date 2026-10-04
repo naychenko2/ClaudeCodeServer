@@ -21,9 +21,10 @@ public record VideoThreadChangedMessage(string ScopeKey, long Revision, VideoThr
 public record VideoFilmChangedMessage(string ScopeKey, string Path, FilmStateDto State)
     : ServerMessage(VideoEditorEventNames.FilmChanged);
 
-// Stage — queued | running | downloading; Variant — номер варианта, который идёт
+// Stage — queued | running | downloading; Variant — номер варианта, который идёт; Percent — доля готовности
+// 0..1 от поставщика (необязательно: нет данных — поля нет, клиент считает по ETA)
 public record VideoEditProgressMessage(string JobId, string ScopeKey, string SceneId, string Stage, int? QueuePosition,
-    int? EtaSeconds, int Variant, int Count, string Initiator)
+    int? EtaSeconds, int Variant, int Count, string Initiator, double? Percent = null)
     : ServerMessage(VideoEditorEventNames.Progress);
 
 // Error — у частичного успеха: часть вариантов готова, следующий не получился

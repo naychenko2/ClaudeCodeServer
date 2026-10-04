@@ -2,8 +2,8 @@
 // каталог и префы области, ход съёмки (video_edit_progress → completed / failed), фильмы
 // проекта (кеш FilmState + video_film_changed) и локальное состояние экрана.
 
-import { useEffect, useSyncExternalStore } from 'react';
-import { onReconnected, refreshChatContext, showToast } from 'aihome_shell/kit';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { etaFraction, onReconnected, refreshChatContext, showToast } from 'aihome_shell/kit';
 import {
   conflictState, EMPTY_THREADS, errorText, filmConflict, videoApi,
   type FilmBuildStatus, type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent,
@@ -12,6 +12,8 @@ import {
 import { isPersonalScope } from '../scope';
 
 export const VIDEO_PANEL = 'videoEditor';
+// Ожидаемая длительность прогона, когда сервер её не прислал (облачные модели снимают 1–2,5 минуты)
+const VIDEO_DEFAULT_ETA = 90;
 // Ключ элемента для черновиков и выбора: панель + сцена («videoEditor:{sceneId}»)
 export const sceneDraftKey = (sceneId: string) => `${VIDEO_PANEL}:${sceneId}`;
 export const filmTarget = (path: string) => path;
@@ -28,6 +30,16 @@ export interface JobProgress {
   etaSeconds: number | null;
   variant: number;
   count: number;
+  // Начало текущего прогона (вариант или переход очереди → съёмка): от него идёт оценка доли по etaSeconds
+  runStartedAt: number;
+}
+
+// Доля хода съёмки 0..1 на момент now. Бэкенд процентов не шлёт (только стадия, вариант и etaSeconds), поэтому
+// доля считается от времени, как у картинок: внутри прогона не выше 95 %, в очереди полоса стоит
+export function jobFraction(j: JobProgress, now: number = Date.now()): number {
+  return Math.max(0.02, etaFraction(
+    { run: j.variant, runs: j.count, etaSeconds: j.etaSeconds ?? VIDEO_DEFAULT_ETA, queued: j.stage === 'queued' }, j.runStartedAt, now,
+  ));
 }
 
 // permanent — отказ сервера 4xx: повторять бессмысленно, причина показана; retryAt/fails — повтор сбоя сети
@@ -158,13 +170,18 @@ export function handleEvent(ev: VideoEvent) {
     case 'video_film_changed':
       applyFilmEvent(ev.scopeKey, ev.path, ev.state);
       return;
-    case 'video_edit_progress':
+    case 'video_edit_progress': {
+      const prev = _jobs.get(ev.jobId);
+      // Отсчёт прогона начинается заново на новом варианте и на выходе из очереди
+      const same = prev && prev.variant === ev.variant && (prev.stage === 'queued') === (ev.stage === 'queued');
       _jobs.set(ev.jobId, {
         jobId: ev.jobId, sessionId: ev.sessionId, sceneId: ev.sceneId, stage: ev.stage,
         queuePosition: ev.queuePosition ?? null, etaSeconds: ev.etaSeconds ?? null, variant: ev.variant, count: ev.count,
+        runStartedAt: same ? prev.runStartedAt : Date.now(),
       });
       emit();
       return;
+    }
     case 'video_edit_failed':
       _jobs.delete(ev.jobId);
       _failures.set(ev.sessionId, { sceneId: ev.sceneId, text: ev.error || 'Съёмка не получилась', retry: ev.retryQuote ?? null });
@@ -264,6 +281,16 @@ export function closeVideoEditor() {
 
 export function useVideoStoreVersion(): number {
   return useSyncExternalStore(subscribe, getVersion, getVersion);
+}
+
+// Пока идёт съёмка, перерисовывает потребителя раз в полсекунды: доля хода растёт от времени, а не от событий
+export function useJobTick(active: boolean): void {
+  const [, set] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => set(n => n + 1), 500);
+    return () => clearInterval(t);
+  }, [active]);
 }
 
 // Мутация от текущей ревизии. 409 — применяем состояние из ответа и говорим об этом;

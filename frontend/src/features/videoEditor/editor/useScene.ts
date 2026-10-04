@@ -9,7 +9,7 @@ import {
   hasClip, LOCAL_PROVIDER, plural, priceLines, runReason, type ResolvedScene,
 } from '../scene/model';
 import {
-  getCatalog, getFailure, setPriceHint, getFocusedScene, getJobsOf, sceneDraftKey, useVideoStoreVersion, useVideoThreads,
+  getCatalog, getFailure, setPriceHint, getFocusedScene, getJobsOf, jobFraction, sceneDraftKey, useJobTick, useVideoStoreVersion, useVideoThreads,
   type JobProgress, type LaunchFailure,
 } from '../store/videoStore';
 import { isPersonalScope, videoScope } from '../scope';
@@ -95,7 +95,8 @@ export const progressLabel = (scene: VideoScene | null, jobs: JobProgress[], cou
   }
   const total = j.count || count;
   const word = plural(total, 'вариант', 'варианта', 'вариантов');
-  return { label: `${name}: снимаем ${total} ${word} · ${Math.round(((j.variant - 1) / total) * 100 + 100 / total / 2)} %`, p: Math.round(((j.variant - 1) / total) * 100 + 100 / total / 2) };
+  const p = Math.round(jobFraction(j) * 100);
+  return { label: `${name}: снимаем ${total} ${word} · ${p} %`, p };
 };
 
 export function useScene(projectId: string | null, sessionId: string | null): SceneModel {
@@ -112,6 +113,7 @@ export function useScene(projectId: string | null, sessionId: string | null): Sc
   const jobs = getJobsOf(sessionId, scene?.sceneId ?? null);
   const launching = !!scene?.launches.some(l => l.status === 'running');
   const running = launching || jobs.length > 0;
+  useJobTick(jobs.length > 0);
   const failure = getFailure(sessionId, scene?.sceneId ?? null);
   const draftKey = scene ? sceneDraftKey(scene.sceneId) : null;
 

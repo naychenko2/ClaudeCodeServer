@@ -152,15 +152,24 @@ describe('«Остановить» и прогресс у съёмки и сбо
     expect(events.at(-1)).toEqual({ cancelled: true });
   });
 
-  it('прогресс берётся из стора: событие, пришедшее до подписки, не теряется', async () => {
-    applyScene();
-    const h = await run('shoot');
-    handleEvent(progress(2));
-    const events: { progress?: number }[] = [];
-    h.watch(e => events.push(e));
-    expect(events.at(-1)?.progress).toBeCloseTo(0.75);
-    handleEvent(progress(1));
-    expect(events.at(-1)?.progress).toBeCloseTo(0.25);
+  it('прогресс берётся из стора и растёт от времени прогона, а не стоит на середине варианта', async () => {
+    vi.useFakeTimers();
+    try {
+      applyScene();
+      const h = await run('shoot');
+      // Второй вариант из двух, ожидаемая длительность прогона 90 с (по умолчанию)
+      handleEvent(progress(2));
+      const events: { progress?: number }[] = [];
+      h.watch(e => events.push(e));
+      const start = events.at(-1)!.progress!;
+      expect(start).toBeGreaterThanOrEqual(0.5);
+      expect(start).toBeLessThan(0.55);
+      vi.advanceTimersByTime(45_000);
+      expect(events.at(-1)!.progress!).toBeCloseTo(0.75, 1);
+      // Новый вариант — отсчёт заново
+      handleEvent(progress(1));
+      expect(events.at(-1)!.progress!).toBeLessThan(0.1);
+    } finally { vi.useRealTimers(); }
   });
 
   it('сборка отдаёт cancel, отменённая сборка — cancelled, а не ошибка', async () => {

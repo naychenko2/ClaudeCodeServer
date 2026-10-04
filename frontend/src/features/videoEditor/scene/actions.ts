@@ -16,7 +16,7 @@ import { frameInputOf, setFrameRef } from '../store/frameRefs';
 import { bindFrame, createImageThread, imageThreadExists, onFrameReady, type FrameBinding } from '../store/imageFrames';
 import {
   clearAgentFrame, ensureVideoThreads, filmTarget, focusFilm, focusScene, getCatalog, getFocusedScene, getPending, getPendingAny, getPrefs,
-  getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs, VIDEO_PANEL,
+  getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs,
   type PendingSettings,
 } from '../store/videoStore';
 import type { SaveTarget } from '../film/model';
@@ -144,14 +144,14 @@ export async function undoRelease(): Promise<boolean> {
 export async function selectSceneByHuman(scope: string, sessionId: string, sceneId: string, focused = false): Promise<boolean> {
   if (!focused) await flushSettings(scope, sessionId);
   const ok = focused || await focusScene(scope, sessionId, sceneId);
-  if (ok) followSelection(VIDEO_PANEL, sessionId, sceneDraftKey(sceneId), 'scene');
+  if (ok) followSelection('chatContext', sessionId, sceneDraftKey(sceneId), 'scene');
   return ok;
 }
 
 // Строка «Фильм собран»: панель следует на вкладку «Фильм»
 export async function selectFilmByHuman(scope: string, sessionId: string, path: string, focused = false): Promise<boolean> {
   const ok = focused || await focusFilm(scope, sessionId, path);
-  if (ok) followSelection(VIDEO_PANEL, sessionId, filmTarget(path), 'film');
+  if (ok) followSelection('chatContext', sessionId, filmTarget(path), 'film');
   return ok;
 }
 

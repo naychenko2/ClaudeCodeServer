@@ -9,7 +9,7 @@ import { draftStem, mixRequest } from './model';
 import { opInfo } from '../ops';
 import { resolveLaunch } from '../panel/launch';
 import { soundSource } from './modeState';
-import { getCatalog, mutate, soundDraftKey, SOUND_PANEL } from './threadStore';
+import { getCatalog, mutate, soundDraftKey } from './threadStore';
 
 // «Новый звук»: черновик в корне, его настройки — копия префов режима; становится основным объектом
 export async function createDraft(scope: string, sessionId: string, mode: AudioMode): Promise<boolean> {
@@ -17,7 +17,7 @@ export async function createDraft(scope: string, sessionId: string, mode: AudioM
   if (ok) {
     // Черновик становится основным объектом на сервере; состояние контекста не ждёт события рассылки
     void refreshChatContext(sessionId);
-    autoRevealGenerationPanel(SOUND_PANEL, sessionId);
+    autoRevealGenerationPanel('chatContext', sessionId);
   }
   return ok;
 }

@@ -3,7 +3,6 @@
 // Запись идёт в стор контекста чата (PUT primary), а не в фокус нитей: сервер зеркалит её сам.
 
 import { followSelection, revealContextPanel, setPrimary } from 'aihome_shell/kit';
-import { IMAGES_PANEL } from '../characters/panel';
 import { imageDraftKey } from '../thread/threadStore';
 import { IMAGE_KIND } from './state';
 
@@ -24,5 +23,5 @@ export async function workWithInContext(sessionId: string, threadId: string, ver
 // закрытая не открывается. working — карточка уже основной объект: запись не нужна
 export async function pickInContext(sessionId: string, threadId: string, versionId: string | null, working: boolean): Promise<void> {
   if (!working && await setPrimary(sessionId, imageRefOf(threadId, versionId)) === 'failed') return;
-  followSelection(IMAGES_PANEL, sessionId, imageDraftKey(threadId));
+  followSelection('chatContext', sessionId, imageDraftKey(threadId));
 }

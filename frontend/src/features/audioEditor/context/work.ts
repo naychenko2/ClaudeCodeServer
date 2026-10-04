@@ -3,7 +3,6 @@
 // контекста чата (PUT primary), а не в фокус нитей: сервер зеркалит её сам.
 
 import { followSelection, revealContextPanel, setPrimary } from 'aihome_shell/kit';
-import { SOUND_PANEL } from '../thread/panelKey';
 import { soundDraftKey } from '../thread/threadStore';
 import { AUDIO_KIND } from './state';
 
@@ -24,5 +23,5 @@ export async function workWithInContext(sessionId: string, threadId: string, ver
 // не открывается. working — карточка уже основной объект: запись не нужна
 export async function pickInContext(sessionId: string, threadId: string, versionId: string | null, working: boolean): Promise<void> {
   if (!working && await setPrimary(sessionId, audioRefOf(threadId, versionId)) === 'failed') return;
-  followSelection(SOUND_PANEL, sessionId, soundDraftKey(threadId));
+  followSelection('chatContext', sessionId, soundDraftKey(threadId));
 }

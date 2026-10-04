@@ -5,7 +5,6 @@
 import {
   autoRevealGenerationPanel, refreshChatContext, revealContextPanel, showToast,
 } from 'aihome_shell/kit';
-import { IMAGES_PANEL } from '../characters/panel';
 import { imageEditorApi, nameTakenSuggestion, type ImageEncodeFormat } from '../api';
 import { nameStem } from '../saveAs';
 import { isPersonalScope } from '../scope';
@@ -50,7 +49,7 @@ export type RevealMode = 'auto' | 'none';
 // Выбор картинки человеком открывает панель «Контекст», пока её не закрыли в этом чате
 // (решения Андрея по v4, 2). Выбор агента (image_focus) приходит в стор с сервера и сюда не идёт
 function revealPanel(ok: boolean, sessionId: string, how: RevealMode = 'auto'): boolean {
-  if (ok && how === 'auto') autoRevealGenerationPanel(IMAGES_PANEL, sessionId);
+  if (ok && how === 'auto') autoRevealGenerationPanel('chatContext', sessionId);
   return ok;
 }
 

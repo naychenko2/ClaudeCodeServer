@@ -109,11 +109,14 @@ describe('сохранённая раскладка со старыми ключ
   });
 });
 
-// ── Скан features/**: вертикали не зовут revealWorkspacePanel с ключами генерации ──
+// ── Скан features/**: вертикали не зовут revealWorkspacePanel, autoRevealGenerationPanel и followSelection со старыми ключами генерации ──
 
 const FEATURES = join(fileURLToPath(new URL('../../', import.meta.url)), 'features');
 // Ключ генерации в первом аргументе: литерал или константа вида IMAGES_PANEL / SOUND_PANEL / VIDEO_EDITOR_PANEL
 const CALL = /revealWorkspacePanel\(\s*(?:['"](?:images|sound|videoEditor|chatContext)['"]|[A-Z][A-Z_]*_PANEL\b)/g;
+// autoRevealGenerationPanel и followSelection проводят ключ через toGenPanelKey: вертикаль называет панель
+// только ключом «chatContext»; упразднённый ключ или константа *_PANEL — хвост прошлой модели панелей
+const FOLLOW_CALL = /(?:autoRevealGenerationPanel|followSelection)\(\s*(?:['"](?:images|sound|videoEditor)['"]|[A-Z][A-Z_]*_PANEL\b)/g;
 
 // Вызовы revealWorkspacePanel с ключами генерации во вклады вертикалей не допускаются совсем: панель «Контекст» открывает
 // revealContextPanel (allow-list пуст, 4б-2). Число вызовов в файле фиксировать не нужно — список пуст.
@@ -131,7 +134,7 @@ function sources(dir: string, out: string[] = []): string[] {
 function scanRevealCalls(files: Record<string, string>): Record<string, number> {
   const found: Record<string, number> = {};
   for (const [file, text] of Object.entries(files)) {
-    const n = text.match(CALL)?.length ?? 0;
+    const n = (text.match(CALL)?.length ?? 0) + (text.match(FOLLOW_CALL)?.length ?? 0);
     if (n) found[file] = n;
   }
   return found;
@@ -140,12 +143,22 @@ function scanRevealCalls(files: Record<string, string>): Record<string, number> 
 describe('вертикали не знают ключей панелей генерации', () => {
   const files = Object.fromEntries(sources(FEATURES).map(f => [f.slice(FEATURES.length + 1).split('\\').join('/'), readFileSync(f, 'utf8')]));
 
-  it('вызовов revealWorkspacePanel с ключами генерации в features/** нет (allow-list пуст)', () => {
+  it('вызовов панели с ключами генерации в features/** нет (allow-list пуст)', () => {
     expect(scanRevealCalls(files)).toEqual(LEGACY_REVEAL_CALLS);
   });
 
   it('сканер ловит и литерал, и константу ключа в новом файле', () => {
     const fake = { 'newKind/a.ts': "revealWorkspacePanel('images', 'settings')", 'newKind/b.ts': 'revealWorkspacePanel(IMAGES_PANEL)', 'ok.ts': "revealWorkspacePanel('files')" };
     expect(scanRevealCalls(fake)).toEqual({ 'newKind/a.ts': 1, 'newKind/b.ts': 1 });
+  });
+
+  it('сканер ловит autoRevealGenerationPanel и followSelection с упразднённым ключом или константой, но не «chatContext»', () => {
+    const fake = {
+      'k/a.ts': 'autoRevealGenerationPanel(SOUND_PANEL, sessionId)',
+      'k/b.ts': "followSelection('images', sessionId, key)",
+      'k/c.ts': 'followSelection(VIDEO_PANEL, sessionId, key, \'scene\')',
+      'ok.ts': "followSelection('chatContext', sessionId, key); autoRevealGenerationPanel('chatContext', sessionId)",
+    };
+    expect(scanRevealCalls(fake)).toEqual({ 'k/a.ts': 1, 'k/b.ts': 1, 'k/c.ts': 1 });
   });
 });

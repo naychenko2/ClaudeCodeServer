@@ -98,6 +98,27 @@ public sealed class VideoContextKindTests : IDisposable
     }
 
     [Fact]
+    public void Validate_film_прямо_в_video_не_по_правилу_пути_отказ_а_в_папке_фильма_принят()
+    {
+        File.WriteAllText(Path.Combine(_project, "video", "корень.film"), "{}");
+        File.WriteAllText(Path.Combine(_project, "video", "утро", "утро.film"), "{}");
+
+        _kind.Validate(Scope, "video-film", FilmRef("video/корень.film")).Should().Contain("video/<имя фильма>/");
+        _kind.Validate(Scope, "video-film", FilmRef("video/утро/утро.film")).Should().BeNull();
+    }
+
+    [Fact]
+    public void Сохранённый_film_по_старому_пути_читается_без_исключения_как_недоступный_и_не_засевается()
+    {
+        File.WriteAllText(Path.Combine(_project, "video", "корень.film"), "{}");
+
+        var summary = _kind.Describe(Scope, Item("video-film", FilmRef("video/корень.film")));
+        summary.Missing.Should().BeTrue();
+        _store.SetFocus(Owner, Chat, new VideoFocusDto(null, "video/корень.film"), null);
+        _kind.SeedPrimary(Scope).Should().BeNull();
+    }
+
+    [Fact]
     public void Describe_фильм_по_имени_файла_и_серый_если_файла_нет()
     {
         File.WriteAllText(Path.Combine(_project, "video", "утро", "утро.film"), "{}");

@@ -3,6 +3,7 @@ using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.VideoEditor.Catalog;
+using ClaudeHomeServer.Services.VideoEditor.Films;
 using ClaudeHomeServer.Services.VideoEditor.Prefs;
 using ClaudeHomeServer.Services.VideoEditor.Scenes;
 
@@ -25,7 +26,7 @@ public static class VideoContextOps
 
 // Виды «video-scene» и «video-film» контекста чата (ADR-023, фаза 3).
 // video-scene: Ref = {sceneId} — сцена нитей этого чата; основной объект, принимает кадры (AcceptedRefs).
-// video-film: Ref = {filmPath} — файл video/**/*.film проекта; основной объект, референсов не принимает.
+// video-film: Ref = {filmPath} — файл video/<фильм>/*.film проекта (правило — FilmPaths.IsFilmPath); основной объект, референсов не принимает.
 // Основной один: составной фокус «Видео» {sceneId, filmPath} распадается, основным становится выбранное
 // последним. Сцена показывает фильм, к которому относится («сцена 3 · утро-в-горах»), но отдельным полем
 // стора он не хранится. Засевает контекст чата без файла из фокуса «Видео» — после картинки и звука.
@@ -59,8 +60,8 @@ public sealed class VideoContextKind(
         if (scope.Project is not { } project) return "В личном чате нет фильмов";
         if (ProjectCapabilityGuard.Refusal(project, ProjectCapabilityArea.FileBound) is { } refusal) return refusal;
         if (Text(reference, FilmKey) is not { } path) return "Не указан фильм";
-        if (!VideoSceneService.InsideAllowed(path) || !path.EndsWith(".film", StringComparison.OrdinalIgnoreCase))
-            return "Фильм должен лежать в video/ и называться *.film";
+        if (!FilmPaths.IsFilmPath(FilmPaths.Normalize(path) ?? ""))
+            return "Фильм должен лежать в папке video/<имя фильма>/ и называться *.film";
         return ProjectLinkGuard.ResolveInside(project.RootPath, path) is { } full && File.Exists(full)
             ? null
             : "Фильм не найден в проекте";
@@ -73,6 +74,7 @@ public sealed class VideoContextKind(
             var path = Text(item.Ref, FilmKey);
             if (path is null) return new ContextItemSummary("фильм недоступен", null, null, true);
             var exists = scope.Project is { } project
+                && FilmPaths.IsFilmPath(FilmPaths.Normalize(path) ?? "")
                 && ProjectCapabilityGuard.Allows(project, ProjectCapabilityArea.FileBound)
                 && ProjectLinkGuard.ResolveInside(project.RootPath, path) is { } full && File.Exists(full);
             return new ContextItemSummary(FilmName(path), null, null, !exists);
@@ -122,7 +124,7 @@ public sealed class VideoContextKind(
         if (focus.SceneId is { } sceneId && Find(scope, sceneId) is not null)
             return new ContextItem("seed_video_scene", SceneKind, new JsonObject { [SceneKey] = sceneId }, null,
                 ContextActor.Human, scope.Session.CreatedAt);
-        if (focus.FilmPath is { } path && scope.Project is not null)
+        if (focus.FilmPath is { } path && scope.Project is not null && FilmPaths.IsFilmPath(FilmPaths.Normalize(path) ?? ""))
             return new ContextItem("seed_video_film", FilmKind, new JsonObject { [FilmKey] = path }, null,
                 ContextActor.Human, scope.Session.CreatedAt);
         return null;

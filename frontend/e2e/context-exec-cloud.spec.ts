@@ -68,7 +68,7 @@ test('панель «Контекст»: выбрал fal без текста �
     await by.getByRole('button').click();
     await expect(page.getByText('Облако', { exact: true })).toBeVisible();
     await page.getByRole('radio', { name }).first().click();
-    await expect(page.getByRole('radiogroup')).toHaveCount(0);
+    await expect(page.getByRole('radiogroup', { name: 'Исполнитель' })).toHaveCount(0);
   };
   await expect(by).toContainText('Авто');
   await expect(by).toContainText('бесплатно');
@@ -77,7 +77,7 @@ test('панель «Контекст»: выбрал fal без текста �
   await expect(runBtn(page)).toContainText('$', { timeout: 10_000 });
   await expect(by).toContainText('FLUX Kontext');
   await expect(by).toContainText('$');
-  await expect(panel.locator('[data-ctx-price]')).toContainText('$');
+  await expect(page.locator('[data-ctx-price]')).toContainText('$');
   await expect(execChip(page)).toContainText('FLUX Kontext');
   await pick(/^Авто/);
   await expect(runBtn(page)).toContainText('бесплатно', { timeout: 10_000 });

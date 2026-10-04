@@ -218,8 +218,9 @@ for (const { name, vp } of VIEWPORTS) {
           await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
         };
         await open();
-        // «Чем»: список раскрыт сразу (макет), сворачивать нечего — выбираем FLUX Kontext
-        await panelCtx(page).getByText('FLUX Kontext').first().click();
+        // «Чем» в покое — одна строка: открываем меню и выбираем FLUX Kontext
+        await panelCtx(page).locator('[data-ctx-exec]').getByRole('button').click();
+        await page.getByRole('radio', { name: /FLUX Kontext/ }).first().click();
         if (name !== '360') {
           // Библиотека «Персонажи» открывается отдельной панелью, Аня встаёт референсом с ролью «персонаж».
           // На телефоне панелей зоны нет, сценарий макета 9 до них не доходит
@@ -361,6 +362,7 @@ test('цена на кнопке следует за «Чем»: смена ис
   const before = (await bar.innerText()).trim();
   await page.locator('[data-context-row] [data-chip="primary"]').click();
   await expect(panelCtx(page)).toBeVisible({ timeout: 10_000 });
-  await panelCtx(page).getByText('FLUX Kontext').first().click();
+  await panelCtx(page).locator('[data-ctx-exec]').getByRole('button').click();
+  await page.getByRole('radio', { name: /FLUX Kontext/ }).first().click();
   await expect.poll(async () => (await bar.innerText()).trim(), { timeout: 10_000 }).not.toBe(before);
 });

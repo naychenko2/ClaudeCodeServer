@@ -5,6 +5,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -184,5 +185,139 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
         await Drive(session, run, ToolUseAssistant);
 
         sent.OfType<ErrorMessage>().Should().BeEmpty();
+    }
+
+    // ── Фолбэк: CLI не присылает эхо совсем (обновление убрало флаг молча) ──
+
+    private sealed class ErrorCountLogger : ILogger
+    {
+        public int Errors;
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Error) Interlocked.Increment(ref Errors);
+        }
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
+    }
+
+    // Живой «CLI», который печатает строки и молчит; никакого эха. Платформонезависимо: echo из
+    // script-файла (cmd/sh), содержимое — ASCII.
+    private Process StartSilentEchoCli(string[] lines, int delayBeforeLastSec = 0)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs-noecho-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        ProcessStartInfo psi;
+        if (OperatingSystem.IsWindows())
+        {
+            var text = "@echo off\r\n"
+                + string.Join("\r\n", lines.Select((l, i) =>
+                    (i == lines.Length - 1 && delayBeforeLastSec > 0 ? $"ping -n {delayBeforeLastSec + 1} 127.0.0.1 >nul\r\n" : "")
+                    + $"echo {l}"))
+                + "\r\nping -n 60 127.0.0.1 >nul\r\n";
+            var script = Path.Combine(dir, "cli.cmd");
+            File.WriteAllText(script, text, System.Text.Encoding.ASCII);
+            psi = new ProcessStartInfo("cmd.exe", $"/c \"{script}\"");
+        }
+        else
+        {
+            var text = "#!/bin/sh\n"
+                + string.Join("\n", lines.Select((l, i) =>
+                    (i == lines.Length - 1 && delayBeforeLastSec > 0 ? $"sleep {delayBeforeLastSec}\n" : "")
+                    + $"echo '{l}'"))
+                + "\nsleep 60\n";
+            var script = Path.Combine(dir, "cli.sh");
+            File.WriteAllText(script, text, System.Text.Encoding.ASCII);
+            psi = new ProcessStartInfo("/bin/sh", script);
+        }
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardInput = true;
+        var process = Process.Start(psi)!;
+        _fakeProcesses.Add(process);
+        return process;
+    }
+
+    private async Task<(int Results, int Errors, bool TurnDone)> RunNoEchoScenarioAsync(string[] lines, int delayBeforeLastSec)
+    {
+        var sent = new List<ServerMessage>();
+        var logger = new ErrorCountLogger();
+        var context = new LlmSessionContext(
+            RootPath: Path.GetTempPath(),
+            OnMessage: msg => { lock (sent) sent.Add(msg); return Task.CompletedTask; },
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null);
+        var session = new ClaudeSession(new Session(), context, sessionLogger: new LoggerAdapter(logger))
+        {
+            EchoCutoff = TimeSpan.FromMilliseconds(400),
+        };
+        var process = StartSilentEchoCli(lines, delayBeforeLastSec);
+        var run = NewRun();
+        CliRunType.GetProperty("Process")!.SetValue(run, process);
+        CliRunType.GetField("EchoDeadlineTick")!.SetValue(run, Environment.TickCount64 + 400);
+
+        using var cts = new CancellationTokenSource();
+        var loop = (Task)ReadLoopMethod.Invoke(session, [run, cts.Token])!;
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (!Field<bool>(run, "TurnDone") && DateTime.UtcNow < deadline) await Task.Delay(50);
+        var turnDone = Field<bool>(run, "TurnDone");
+        int results;
+        lock (sent) results = sent.OfType<ResultMessage>().Count();
+        try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { }
+        cts.Cancel();
+        await loop.WaitAsync(TimeSpan.FromSeconds(30));
+        return (results, logger.Errors, turnDone);
+    }
+
+    private sealed class LoggerAdapter(ILogger inner) : ILogger<ClaudeSession>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => inner.BeginScope(state);
+        public bool IsEnabled(LogLevel logLevel) => inner.IsEnabled(logLevel);
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+            => inner.Log(logLevel, eventId, state, exception, formatter);
+    }
+
+    private static readonly MethodInfo ReadLoopMethod =
+        typeof(ClaudeSession).GetMethod("ReadLoopAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+    [Fact]
+    public async Task ЭхаНетСовсем_БыстрыйResult_ХодЗавершаетсяСвоимResult_LogErrorОдин()
+    {
+        // Result приходит до отсечки и глотается как «до эха»; по отсечке он доигрывается как наш
+        var (results, errors, turnDone) = await RunNoEchoScenarioAsync(
+            [MainStreamEvent, RealResult], delayBeforeLastSec: 0);
+
+        turnDone.Should().BeTrue("без эха ход не должен висеть до IdleTimeout");
+        results.Should().Be(1);
+        errors.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ЭхаНетСовсем_ResultПослеОтсечки_ЗасчитываетсяБезПропуска()
+    {
+        var (results, errors, turnDone) = await RunNoEchoScenarioAsync(
+            [MainStreamEvent, RealResult], delayBeforeLastSec: 2);
+
+        turnDone.Should().BeTrue();
+        results.Should().Be(1);
+        errors.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ЭхоПришлоДоОтсечки_ФолбэкНеВключается()
+    {
+        var (session, _) = NewClaudeSession();
+        var run = NewRun();
+        await Drive(session, run, Echo);
+        await Drive(session, run, RealResult);
+
+        Field<bool>(run, "TurnDone").Should().BeTrue();
+        Field<int>(run, "EchoUnsupported").Should().Be(0);
     }
 }

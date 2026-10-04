@@ -22,7 +22,7 @@ public static class ClaudeCliVersion
     public static Task<string?> RefreshAsync() => Cache.RefreshAsync();
 
     // Последняя известная версия без ожидания; null — опроса ещё не было или он не удался.
-    internal static bool TryGetKnown(out string? version) => Cache.TryGetKnown(out version);
+    public static bool TryGetKnown(out string? version) => Cache.TryGetKnown(out version);
 
     // «2.1.283 (Claude Code)» → «2.1.283»; без номера — null.
     public static string? Parse(string? output)

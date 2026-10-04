@@ -303,6 +303,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // сайд-эффект конструктора фабрики (глобальное общее состояние на весь процесс).
     private readonly TimeSpan _bgLingerTimeout;
 
+    // Отсечка ожидания эха --replay-user-messages. Эхо CLI отдаёт по приёму сообщения, до вызова
+    // модели, но приём происходит только после старта CLI (на resume — init MCP и загрузка истории:
+    // единицы секунд), а result осиротевшего notification может прийти раньше эха и длиться
+    // секунды. Надёжного признака «эха не будет» по событиям нет: stream_event даёт и сирота, и наш
+    // ход, поэтому выбрано время. Ложное срабатывание (сирота дольше отсечки) лишь возвращает
+    // прежнюю корреляцию SkipResults, молчаливое отсутствие эха без отсечки — ход до IdleTimeout.
+    internal static readonly TimeSpan DefaultEchoCutoff = TimeSpan.FromSeconds(20);
+    internal TimeSpan EchoCutoff { get; set; } = DefaultEchoCutoff;
+
     // Процессный прогон: один запуск claude CLI. Может пережить ход — пока в нём доживают
     // фоновые агенты, процесс не убиваем, а следующий совместимый ход отдаём ему же в stdin
     // (stream-json это штатно поддерживает). Поля мутирует поток чтения stdout (reader);
@@ -382,6 +391,15 @@ public class ClaudeSession : ILlmSessionAdapter
         // под настоящим ходом — «Stream closed» у всех инструментов (инцидент 03.10.2026).
         // Пишет поток хода под _stdinLock, читает и снимает reader.
         public volatile string? PendingEchoUuid;
+        // Tick-метка (Environment.TickCount64), после которой отсутствие эха считается признаком
+        // «CLI не эхает» (см. EchoCutoff). Пишет поток хода вместе с PendingEchoUuid.
+        public long EchoDeadlineTick;
+        // Строка result, пропущенная как «до эха»: если эха так и не будет, это мог быть result
+        // нашего хода. Сбрасывается любым событием модели после него (значит ход ещё идёт и
+        // его result придёт отдельно). Читает и пишет только reader.
+        public string? PreEchoResultLine;
+        // Для прогона включён фолбэк «эхо не поддерживается» (0/1): ожидание эха больше не взводится.
+        public int EchoUnsupported;
         // Второй контур (tool_use при закрытом stdin) сработал — процесс уже гасится
         public int AnomalyAborted;
         // Сколько ближайших result'ов принадлежит продолжениям, начатым ДО отправки
@@ -2812,7 +2830,7 @@ public class ClaudeSession : ILlmSessionAdapter
             run.TurnDone = false;
             run.TurnGotEvent = false;       // новый ход — событий прогона ещё не было
             run.RetryOnEmptyExit = true;    // same-process: смерть до первого события = гонка TOCTOU
-            run.PendingEchoUuid = turnUuid; // result'ы до эха этого сообщения — чужие
+            ArmEchoWait(run, turnUuid); // result'ы до эха этого сообщения — чужие
             run.Process.StandardInput.WriteLine(userMessageJson);
             run.Process.StandardInput.Flush();
             return true;
@@ -4180,7 +4198,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 else
                 {
-                    run.PendingEchoUuid = turnUuid;
+                    ArmEchoWait(run, turnUuid);
                     await process.StandardInput.WriteLineAsync(userMessageJson);
                     await process.StandardInput.FlushAsync();
                 }
@@ -4243,11 +4261,20 @@ public class ClaudeSession : ILlmSessionAdapter
                 using (var delayCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     var timeout = WatchdogFor(run);
+                    var echoLeft = EchoWaitLeft(run);
+                    var echoTimer = echoLeft is { } el && el < timeout;
+                    if (echoTimer) timeout = echoLeft!.Value;
                     var completed = await Task.WhenAny(pendingRead, Task.Delay(timeout, delayCts.Token));
                     // Delay связан с ct: отмена сессии (dispose/рестарт) завершает его мгновенно и
                     // выглядит как «тишина». Это не молчание модели — ошибку не шлём, уборку сделает finally
                     if (completed != pendingRead && ct.IsCancellationRequested)
                         break;
+                    if (completed != pendingRead && echoTimer)
+                    {
+                        // Не тишина, а отсечка ожидания эха — чтение держим
+                        await FallbackNoEchoAsync(run);
+                        continue;
+                    }
                     if (completed != pendingRead)
                     {
                         // Тишина дольше таймаута. Пока ждали, мог начаться same-process ход —
@@ -5137,6 +5164,45 @@ public class ClaudeSession : ILlmSessionAdapter
         return false;
     }
 
+    // Взвести ожидание эха нашего сообщения; на прогоне, где CLI уже уличён в отсутствии эха, не взводим
+    private void ArmEchoWait(CliRun run, string turnUuid)
+    {
+        if (Volatile.Read(ref run.EchoUnsupported) == 1) return;
+        run.PreEchoResultLine = null;
+        Volatile.Write(ref run.EchoDeadlineTick, Environment.TickCount64 + (long)EchoCutoff.TotalMilliseconds);
+        run.PendingEchoUuid = turnUuid;
+    }
+
+    // Сколько ещё ждать эха; null — эха не ждём
+    private static TimeSpan? EchoWaitLeft(CliRun run)
+    {
+        if (run.PendingEchoUuid is null) return null;
+        var left = Volatile.Read(ref run.EchoDeadlineTick) - Environment.TickCount64;
+        return TimeSpan.FromMilliseconds(Math.Max(0, left));
+    }
+
+    // Отсечка вышла, эха нет: CLI не эхает (обновление могло убрать флаг молча). Включаем прежнюю
+    // корреляцию (SkipResults/TurnDone) на этом прогоне; result, пропущенный как «до эха» и не
+    // сопровождённый событиями модели, был result нашего хода — доигрываем его. Зовёт только reader.
+    private async Task FallbackNoEchoAsync(CliRun run)
+    {
+        if (run.PendingEchoUuid is null) return;
+        run.PendingEchoUuid = null;
+        if (Interlocked.Exchange(ref run.EchoUnsupported, 1) == 0)
+        {
+            ClaudeCliVersion.TryGetKnown(out var version);
+            (_sessionLog ?? (ILogger?)_log)?.LogError(
+                "CLI не прислал эхо --replay-user-messages за {Cutoff} с (версия CLI {Version}, сессия {SessionId}): корреляция result через эхо отключена для этого прогона",
+                EchoCutoff.TotalSeconds, version ?? "неизвестна", Info.Id);
+        }
+        CorrTrace("echo-fallback", Info.Id, run);
+        if (run.PreEchoResultLine is { } stash)
+        {
+            run.PreEchoResultLine = null;
+            await ProcessLineAsync(run, stash);
+        }
+    }
+
     internal static bool IsOurEcho(JsonElement root, string uuid)
         => root.TryGetProperty("isReplay", out var rp) && rp.ValueKind == JsonValueKind.True
            && root.TryGetProperty("uuid", out var u) && u.ValueKind == JsonValueKind.String
@@ -5339,6 +5405,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "stream_event":
+                if (!HasParentToolUseId(root)) run.PreEchoResultLine = null;
                 // Контент ОСНОВНОГО агента после конца хода — CLI начал ход-продолжение
                 // (ответ на task-notification); его result не должен завершить будущий ход
                 // (см. case "result"). Сообщения сабагентов (parent_tool_use_id) — это стрим
@@ -5352,6 +5419,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "assistant":
+                if (!HasParentToolUseId(root)) run.PreEchoResultLine = null;
                 if (run is { TurnDone: true, ContinuationActive: false } && !HasParentToolUseId(root))
                 {
                     CorrTrace("continuation-start(assistant)", Info.Id, run, root);
@@ -5389,6 +5457,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         // это то же самое событие, второй раз его не считаем.
                         CorrTrace("result-skip(preEcho)", Info.Id, contRun, root);
                         LogZeroTurnResult(root);
+                        contRun.PreEchoResultLine = root.GetRawText();
                         if (Volatile.Read(ref contRun.SkipResults) > 0) Interlocked.Decrement(ref contRun.SkipResults);
                         contRun.ContinuationActive = false;
                         Console.WriteLine("[ClaudeSession] Result до эха нашего сообщения (чужой ход CLI) — пропущен");
@@ -5527,6 +5596,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     CorrTrace("echo", Info.Id, run, root);
                     run.PendingEchoUuid = null;
+                    run.PreEchoResultLine = null;
                     Volatile.Write(ref run.SkipResults, 0);
                     run.ContinuationActive = false;
                     break;

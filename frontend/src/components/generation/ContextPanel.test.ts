@@ -82,13 +82,22 @@ describe('секции панели «Контекст»', () => {
     expect(html).toContain('✦ Изменить');
   });
 
-  it('«Чем»: список раскрыт сразу — группы, выбранная строка и цена справа, без свёрнутой сводки', () => {
+  it('«Чем»: в покое одна строка — имя, группа и цена выбранного, списка нет (цена от exec.value)', () => {
     const cloud = { ...row, id: 'k', group: 'cloud' as const, name: 'FLUX', price: '$0.04 / шт.', free: false };
     const html = panel({ primary, action: edit, run: stubActionRun(edit), exec: { rows: [row, cloud], value: 'k', onChange: () => {} } });
-    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain('data-ctx-exec');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('FLUX');
     expect(html).toContain('Облако');
     expect(html).toContain('$0.04 / шт.');
-    expect(html).toContain('aria-checked="true"');
+    expect(html).not.toContain('role="radiogroup"');
+  });
+
+  it('секции идут в порядке «С чем → Чем → Параметры → Плюс → Где»', () => {
+    const html = panel({ primary, action: edit, run: stubActionRun(edit), git });
+    const at = (n: string) => html.indexOf(`data-ctx-section="${n}"`);
+    expect([at('with'), at('by'), at('params'), at('plus'), at('where')].every(i => i >= 0)).toBe(true);
+    expect([at('with'), at('by'), at('params'), at('plus'), at('where')]).toEqual([at('with'), at('by'), at('params'), at('plus'), at('where')].sort((x, y) => x - y));
   });
 
   it('действие выбрано, а исполнителей ещё нет (executors = null): текст про расчёт цены, не про «Чат»', () => {
@@ -123,6 +132,15 @@ describe('параметры запуска — закрытый набор', ()
     });
     for (const k of ['variants', 'duration', 'aspect', 'fromQuestion']) expect(html).toContain(`data-ctx-param="${k}"`);
     expect(html).toContain('9:16 · выбирается под чипами');
+  });
+
+  it('до 4 значений — сегмент, больше — кнопка с меню; «Вариантов» и «Длительность» в одной строке', () => {
+    const few = panel({ primary, action: edit, params: [{ kind: 'variants', min: 1, max: 4, value: 1 }, { kind: 'duration', options: [4, 6, 8, 10], value: 8 }] });
+    expect(few).not.toContain('data-ctx-options');
+    expect(few).toContain('data-ctx-param-pair');
+    const many = panel({ primary, action: edit, params: [{ kind: 'duration', options: [4, 5, 6, 8, 10], value: 8 }] });
+    expect(many).toContain('data-ctx-options="Длительность"');
+    expect(many).not.toContain('data-ctx-param-pair');
   });
 
   it('неизвестный kind не рисуется, а пустой набор даёт «параметров нет»', () => {

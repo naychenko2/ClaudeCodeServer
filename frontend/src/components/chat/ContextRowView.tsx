@@ -428,7 +428,12 @@ export function ContextRowView(props: ContextRowViewProps) {
     }
   });
   const pick = shift !== 0 && rungs.length ? { ...base, form: rungs[at], index: at } : base;
-  if (!showsRow(props)) return null;
+  if (!showsRow(props)) {
+    // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» после ✕ обязана остаться
+    return props.offer
+      ? <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${SP.sm - 2}px` }}><UndoNotice offer={props.offer} onUndo={props.onUndo} /></div>
+      : null;
+  }
   const f = pick.form;
   const close = () => setMenu(null);
   const grayHint = actionLabel ? `Не используется в операции «${actionLabel}»` : '';

@@ -30,6 +30,8 @@ export interface FilmActionInput {
   // Известно, что в фильме нет ни одной сцены; пока фильм не прочитан — false
   empty: boolean;
   openMontage: () => void;
+  // Почему фильм не прочитался (отказ сервера): «Собрать» серая с этой причиной
+  loadError?: string | null;
 }
 
 const frameReason = (a: boolean, b: boolean): string | undefined => {
@@ -64,7 +66,7 @@ export function buildFilmActions(i: FilmActionInput): readonly ContextAction[] {
     {
       id: 'build', kind: 'run', op: 'build', verb: 'Собираем', label: i.built ? 'Пересобрать' : 'Собрать', text: 'none',
       hint: 'Собрать фильм в один файл без ИИ: текст не нужен',
-      ...(i.empty ? { disabledReason: 'Добавьте в фильм хотя бы одну сцену' } : {}),
+      ...(i.loadError ? { disabledReason: i.loadError } : i.empty ? { disabledReason: 'Добавьте в фильм хотя бы одну сцену' } : {}),
     },
     {
       id: 'montage', kind: 'editor', label: 'Монтаж',

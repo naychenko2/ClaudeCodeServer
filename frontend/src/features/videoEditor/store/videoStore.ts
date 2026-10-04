@@ -30,7 +30,12 @@ export interface JobProgress {
   count: number;
 }
 
-interface FilmEntry { state: FilmState | null; loading: boolean; error: string | null; code: string | null }
+// permanent — отказ сервера 4xx: повторять бессмысленно, причина показана; retryAt/fails — повтор сбоя сети
+// с нарастающей паузой
+interface FilmEntry {
+  state: FilmState | null; loading: boolean; error: string | null; code: string | null;
+  permanent?: boolean; retryAt?: number; fails?: number;
+}
 
 const _entries = new Map<string, Entry>();
 const _catalogs = new Map<string, VideoCatalog>();
@@ -318,19 +323,41 @@ const EMPTY_FILM: FilmEntry = { state: null, loading: false, error: null, code: 
 export const getFilm = (sessionId: string | null, path: string | null): FilmEntry =>
   (sessionId && path && _films.get(filmKey(sessionId, path))) || EMPTY_FILM;
 
+const FILM_RETRY_BASE_MS = 2000;
+const FILM_RETRY_MAX_MS = 60_000;
+const _filmRetry = new Map<string, ReturnType<typeof setTimeout>>();
+
+// 4xx (кроме «таймаут» и «слишком часто») — приговор запросу, а не сбой канала
+const isPermanentFailure = (e: unknown) => {
+  const st = (e as { status?: unknown } | null)?.status;
+  return typeof st === 'number' && st >= 400 && st < 500 && st !== 408 && st !== 429;
+};
+
 export async function loadFilm(scope: string, sessionId: string, path: string, force = false) {
   if (isPersonalScope(scope)) return;
   const k = filmKey(sessionId, path);
   const cur = _films.get(k);
   if (cur && (cur.loading || (cur.state && !force))) return;
-  _films.set(k, { state: cur?.state ?? null, loading: true, error: null, code: null });
+  // Прошлая попытка кончилась отказом: хост зовёт загрузку на каждый рендер, поэтому без явной
+  // пересинхронизации (force) отказ 4xx не повторяем вовсе, а сбой сети — не раньше срока
+  if (cur?.error && !force && (cur.permanent || Date.now() < (cur.retryAt ?? 0))) return;
+  clearTimeout(_filmRetry.get(k));
+  _filmRetry.delete(k);
+  _films.set(k, { state: cur?.state ?? null, loading: true, error: null, code: null, fails: cur?.fails });
   emit();
   try {
     const st = await videoApi.filmState(scope, sessionId, path);
     _films.set(k, { state: st, loading: false, error: null, code: null });
   } catch (e) {
     const code = (e as { body?: { code?: unknown } } | null)?.body?.code;
-    _films.set(k, { state: cur?.state ?? null, loading: false, error: errorText(e, 'Фильм не прочитался'), code: typeof code === 'string' ? code : null });
+    const permanent = isPermanentFailure(e);
+    const fails = (cur?.fails ?? 0) + 1;
+    const wait = Math.min(FILM_RETRY_MAX_MS, FILM_RETRY_BASE_MS * 2 ** (fails - 1));
+    _films.set(k, {
+      state: cur?.state ?? null, loading: false, error: errorText(e, 'Фильм не прочитался'),
+      code: typeof code === 'string' ? code : null, permanent, fails, retryAt: permanent ? undefined : Date.now() + wait,
+    });
+    if (!permanent) _filmRetry.set(k, setTimeout(() => { void loadFilm(scope, sessionId, path); }, wait));
   }
   emit();
 }
@@ -473,6 +500,8 @@ export function __resetVideoStore() {
   _catalogs.clear();
   _prefs.clear();
   _jobs.clear();
+  _filmRetry.forEach(clearTimeout);
+  _filmRetry.clear();
   _films.clear();
   _filmLists.clear();
   _own.clear();

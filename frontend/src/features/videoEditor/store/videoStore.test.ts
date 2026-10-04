@@ -24,7 +24,7 @@ import { startSceneSave } from '../feed/SceneCard';
 import { saveScene, selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
 import {
   __applyThreads, __resetVideoStore, __setFilm, clearAgentFrame, ensureVideoThreads, getAgentFrames, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent, mutate,
-  patchFilm, sceneDraftKey, VIDEO_PANEL,
+  patchFilm, sceneDraftKey, VIDEO_PANEL, loadFilm,
 } from './videoStore';
 
 const reveals = () => dispatched.filter(d => d.type === REVEAL_PANEL_EVENT).map(d => d.detail);
@@ -196,5 +196,34 @@ describe('B21: кадр, поставленный агентом, — метка
     it('human — правка человека в «Картинках», метки нет', () => expect(run('human')).toBe(false));
     it('agent — метка есть', () => expect(run('agent')).toBe(true));
     it('undefined — прежняя эвристика, метка есть', () => expect(run(undefined)).toBe(true));
+  });
+});
+
+describe('загрузка фильма: отказ не крутится в цикле', () => {
+  it('4xx не повторяется, пока нет явной пересинхронизации; причина остаётся в записи', async () => {
+    const spy = vi.spyOn(videoApi, 'filmState').mockRejectedValue(Object.assign(new Error('Фильм — файл .film в папке video/<фильм>/'), { status: 400 }));
+    for (let i = 0; i < 20; i++) await loadFilm('p1', 'c1', 'video/Тест.film');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(getFilm('c1', 'video/Тест.film').error).toContain('.film');
+    await loadFilm('p1', 'c1', 'video/Тест.film', true);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('сбой сети повторяется с нарастающей паузой, а не на каждый вызов', async () => {
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(videoApi, 'filmState').mockRejectedValue(new TypeError('fetch failed'));
+      for (let i = 0; i < 20; i++) await loadFilm('p1', 'c1', 'video/Тест.film');
+      expect(spy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(spy).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(spy).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      __resetVideoStore();
+      vi.useRealTimers();
+    }
   });
 });

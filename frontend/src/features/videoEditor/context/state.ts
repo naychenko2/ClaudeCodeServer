@@ -98,8 +98,10 @@ export function videoActions(
   }
   const path = filmPathOf(s.primary);
   if (!path) return [];
-  const film: FilmState | null = getFilm(ctx.sessionId, path).state;
+  const entry = getFilm(ctx.sessionId, path);
+  const film: FilmState | null = entry.state;
   return buildFilmActions({
+    loadError: !film && entry.error ? entry.error : null,
     built: !!film && lastBuild(film.document) !== null,
     empty: !!film && film.document.items.length === 0,
     openMontage: () => openVideoEditor(ctx.sessionId, 'film'),

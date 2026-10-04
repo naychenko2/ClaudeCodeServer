@@ -105,6 +105,24 @@ describe('стор контекста чата', () => {
   });
 });
 
+describe('текст отказа мутации', () => {
+  it('тост показывает message ответа сервера, а не код', async () => {
+    __applyChatContext('s1', dto(5));
+    h.request.mockRejectedValueOnce(Object.assign(new Error('role_not_accepted'), {
+      status: 400, body: { error: 'role_not_accepted', message: 'Основной объект не принимает референс' },
+    }));
+    expect(await setPrimary('s1', { kind: 'image', ref: {} })).toBe('failed');
+    expect(h.toast).toHaveBeenCalledWith('Основной объект не принимает референс', '', 'error');
+  });
+
+  it('сообщения нет — код', async () => {
+    __applyChatContext('s1', dto(5));
+    h.request.mockRejectedValueOnce(Object.assign(new Error('role_not_accepted'), { status: 400, body: { error: 'role_not_accepted' } }));
+    await setPrimary('s1', { kind: 'image', ref: {} });
+    expect(h.toast).toHaveBeenCalledWith('role_not_accepted', '', 'error');
+  });
+});
+
 describe('«Вернуть» после снятия основного объекта', () => {
   it('✕ человека ставит плашку, «Вернуть» ставит тот же объект и гасит плашку', async () => {
     __applyChatContext('s1', dto(5));

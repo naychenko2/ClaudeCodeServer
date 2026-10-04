@@ -101,9 +101,16 @@ async function mutate(sessionId: string, run: (revision: number) => Promise<Chat
       showToast('Контекст только что поменяли в другом месте — показываем свежее состояние', '', 'info');
       return 'conflict';
     }
-    showToast((e as Error).message || 'Не удалось изменить контекст', '', 'error');
+    showToast(failureText(e), '', 'error');
     return 'failed';
   }
+}
+
+// Текст отказа: человеческое `message` ответа сервера, код (`error`) — только если сообщения нет
+export function failureText(e: unknown): string {
+  const msg = (e as { body?: { message?: unknown } } | null)?.body?.message;
+  if (typeof msg === 'string' && msg.trim()) return msg;
+  return (e as Error)?.message || 'Не удалось изменить контекст';
 }
 
 // 409 context_changed у запуска вида: подставляем свежий DTO из тела (перечитывать не нужно) и говорим об

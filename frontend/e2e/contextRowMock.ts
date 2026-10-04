@@ -62,6 +62,12 @@ export interface World {
   // Нити картинок чата (мок …/image-editor/sessions/S/threads); null — маршрута нет, как раньше
   threads: Record<string, unknown>[] | null;
   threadsRevision: number;
+  // Каталог картинок для живого API (без cc-image-editor-mock): как его отдаёт сервер; null — маршрута нет
+  imageCatalog: Record<string, unknown> | null;
+  // Настоящий remote картинок из собранного dist (вместо регистрации из исходников dev-сервера): тест идёт против `vite preview`
+  imageRemote: boolean;
+  // Проект без git-репозитория: в строке нет чипа ветки, и она держится только на объекте
+  noGit: boolean;
   // Нити звука чата (мок …/audio-editor/sessions/S/*); null — маршрута нет. edits — тела правок без ИИ
   audio: Record<string, unknown>[] | null;
   audioRevision: number;
@@ -74,12 +80,12 @@ export interface World {
 let world: World;
 export const w = () => world;
 
-export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles' | 'personal' | 'feed' | 'threads' | 'audio'>> & { ctx?: Partial<Ctx> } = {}): World {
+export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles' | 'personal' | 'feed' | 'threads' | 'audio' | 'imageCatalog' | 'imageRemote' | 'noGit'>> & { ctx?: Partial<Ctx> } = {}): World {
   world = {
     ctx: { revision: 1, primary: null, refs: [], ...o.ctx },
     flags: { 'chat-context': true, ...o.flags },
     hands: o.hands ?? true, savedFiles: o.savedFiles ?? [], mutations: [], invocations: [], hubs: [], personal: o.personal ?? false, feed: o.feed ?? [],
-    threads: o.threads ?? null, threadsRevision: 1, audio: o.audio ?? null, audioRevision: 1, audioEdits: [], audioQuotes: [], audioJobs: [],
+    threads: o.threads ?? null, threadsRevision: 1, imageCatalog: o.imageCatalog ?? null, imageRemote: o.imageRemote ?? false, noGit: o.noGit ?? false, audio: o.audio ?? null, audioRevision: 1, audioEdits: [], audioQuotes: [], audioJobs: [],
   };
   return world;
 }
@@ -151,7 +157,7 @@ export async function mockApi(page: Page) {
     const method = r.request().method();
     const json = (body: unknown) => r.fulfill({ json: body });
     if (p === '/auth/me') {
-      return json({ id: 'u1', userId: 'u1', username: 'admin', displayName: 'Андрей', role: 'admin', executionEnvironment: 'local', featureFlags: world.flags, subsystems: [] });
+      return json({ id: 'u1', userId: 'u1', username: 'admin', displayName: 'Андрей', role: 'admin', executionEnvironment: 'local', featureFlags: world.flags, subsystems: world.imageRemote ? ['imageeditor'] : [] });
     }
     if (p === '/projects' && method === 'GET') return json(world.personal ? [] : [PROJECT()]);
     if (p === `/projects/${P}`) return json(PROJECT());
@@ -161,9 +167,22 @@ export async function mockApi(page: Page) {
     if (p === `/chats/${S}` || p === `/projects/${P}/sessions/${S}`) return json(SESSION());
     if (p === '/chats' && method === 'GET') return json([SESSION()]);
     if (p === `/projects/${P}/sessions` || p === `/projects/${P}/chats`) return json(world.personal ? [] : [SESSION()]);
-    if (p === `/projects/${P}/git/status`) return json(GIT);
+    if (p === `/projects/${P}/git/status`) return json(world.noGit ? { isRepo: false, branch: null, upstream: null, ahead: 0, behind: 0, detached: false, isWorktree: false, staged: [], unstaged: [], untracked: [] } : GIT);
     if (p === `/sessions/${S}/hands-status`) return json({ state: 'active', reason: null, deviceName: 'Рабочий ПК' });
     // ── нити картинок (мок для вида «картинка»): чтение и любая запись отдают снимок состояния ──
+    if (world.imageCatalog && p === `/projects/${P}/image-editor/catalog`) return json(world.imageCatalog);
+    // Котировка как у сервера: цена из ориентира модели каталога, у локальной — бесплатно с ETA
+    if (world.imageCatalog && p === `/projects/${P}/image-editor/quote` && method === 'POST') {
+      const body = r.request().postDataJSON() as { provider: string; model: string; count: number };
+      const pv = (world.imageCatalog.providers as { key: string; priceUnit: string; models: { id: string; priceHint?: { amount: number } | null }[] }[]).find(x => x.key === body.provider);
+      const m = pv?.models.find(x => x.id === body.model);
+      const free = pv?.priceUnit === 'free';
+      return json({
+        quoteId: `q${Math.random()}`, provider: body.provider, model: body.model, expiresAt: '2099-01-01T00:00:00Z', expectedSeconds: free ? 15 : 8,
+        estimate: free ? { amount: 0, unit: 'free', approx: false, source: 'provider' }
+          : { amount: Math.round((m?.priceHint?.amount ?? 0) * body.count * 100) / 100, unit: pv?.priceUnit ?? 'usd', approx: true, source: 'catalog' },
+      });
+    }
     const tb = `/projects/${P}/image-editor/sessions/${S}/threads`;
     if (world.threads && p.startsWith(tb)) {
       if (method !== 'GET') {
@@ -255,7 +274,7 @@ export async function mockApi(page: Page) {
     const OBJ: Record<string, unknown> = {
       '/modules': { items: [] }, '/models': { models: [] }, '/settings': {}, '/usage': { snapshots: [] }, '/home/summary': { active: [], recent: [] },
       '/chats/agents-presence': { agents: [], commands: [] }, '/watchdogs': { sessions: [], projects: [] },
-      '/notifications/unread-count': { count: 0 }, '/subsystem-modules': { items: [] },
+      '/notifications/unread-count': { count: 0 }, '/subsystem-modules': { items: world.imageRemote ? [{ id: 'imageeditor', remoteUrl: '/image-editor-remote/remoteEntry.js', exposedModule: './subsystem' }] : [] },
     };
     if (p in OBJ) return json(OBJ[p]);
     return method === 'GET' ? json([]) : json({});

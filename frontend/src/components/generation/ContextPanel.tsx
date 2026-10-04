@@ -438,11 +438,11 @@ export function ContextPanel(p: ContextPanelProps) {
       peekSummary={p.primary ? `${p.primary.label}${p.primary.version ? ` · ${p.primary.version}` : ''}` : undefined}
     >
       <div data-context-panel="" style={{ display: 'flex', flexDirection: 'column' }}>
-        {p.git && <WhereSection git={p.git} />}
         <WithSection {...p} />
         <BySection p={p} />
-        <PlusSection p={p} />
         <ParamsSection p={p} />
+        <PlusSection p={p} />
+        {p.git && <WhereSection git={p.git} />}
       </div>
     </GenerationPanel>
   );

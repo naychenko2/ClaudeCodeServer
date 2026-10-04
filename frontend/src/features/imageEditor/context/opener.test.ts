@@ -27,6 +27,16 @@ describe('imageRefOfPath', () => {
     expect(create).toHaveBeenCalledWith('p1', 's1', { file: 'images/hero.png', revision: 4 });
   });
 
+  it('фокус сервер увёл (основной сейчас звук) — нить находится по пути файла', async () => {
+    vi.spyOn(threadsApi, 'create').mockResolvedValue({ focus: null, revision: 5, threads: [thread('t1'), thread('t2')] });
+    expect(await imageRefOfPath('p1', 's1', 'images/t2.png')).toEqual({ kind: 'image', ref: { threadId: 't2' } });
+  });
+
+  it('нити файла нет нигде — null (тост показан), а не молчаливый выход', async () => {
+    vi.spyOn(threadsApi, 'create').mockResolvedValue({ focus: null, revision: 5, threads: [thread('t1')] });
+    expect(await imageRefOfPath('p1', 's1', 'images/none.png')).toBeNull();
+  });
+
   it('мутация не прошла — null, ссылки нет', async () => {
     vi.spyOn(threadsApi, 'create').mockRejectedValue(new Error('сеть'));
     expect(await imageRefOfPath('p1', 's1', 'images/hero.png')).toBeNull();

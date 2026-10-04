@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Панель «Контекст» — компактный «Чем» и длительность · макет v1</title>
+<style>
+/* ===== Токены (значения из frontend/src/lib/theme.css; семантика — C.* из design.ts) ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-track:#D8CFBE;
+  --c-success-bg:#E7F1E4; --c-success-text:#4E7A3E;
+  --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-dropdown:0 8px 24px rgba(60,50,35,.14);
+  --shadow-sheet:0 -6px 24px rgba(60,50,35,.16);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-track:#453F37;
+  --c-success-bg:#1F2B1C; --c-success-text:#8FBF7A;
+  --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-dropdown:0 8px 28px rgba(0,0,0,.5);
+  --shadow-sheet:0 -6px 28px rgba(0,0,0,.5);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.5;
+}
+button { font-family:inherit; }
+
+/* ===== Служебная обвязка макета (не часть продукта) ===== */
+.bar { position:sticky; top:0; z-index:500; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.bar h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:220px; }
+.bar .toggle { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.bar .toggle button { font-size:12px; padding:6px 14px; cursor:pointer; background:transparent; border:none; color:var(--c-text-secondary); }
+.bar .toggle button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1320px; margin:0 auto; padding:24px 24px 96px; }
+h2.sec { margin:40px 0 4px; font-size:20px; font-weight:600; color:var(--c-text-heading); font-family:"PT Serif",Georgia,serif; }
+h2.sec:first-of-type { margin-top:8px; }
+p.note { margin:0 0 16px; color:var(--c-text-secondary); max-width:90ch; }
+p.note code, li code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; font-family:"JetBrains Mono",monospace; }
+.row { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 8px; }
+.cap b { color:var(--c-accent); font-weight:600; }
+.fold { position:relative; }
+/* Линия сгиба: нижняя кромка экрана 1440×900 / 360×780 */
+.fold-line { position:absolute; left:-10px; right:-10px; border-top:2px dashed var(--c-accent); pointer-events:none; z-index:40; }
+.fold-line span { position:absolute; right:0; top:-18px; font-size:10.5px; color:var(--c-accent); background:var(--c-bg-main); padding:0 4px; }
+
+/* ===== Колонка панели (десктоп): 380 × высота окна под шапкой приложения ===== */
+.col { width:380px; height:810px; display:flex; flex-direction:column; background:var(--c-bg-panel);
+  border:1px solid var(--c-border); border-radius:14px; overflow:hidden; position:relative; }
+.head { height:42px; flex:0 0 42px; display:flex; align-items:center; gap:6px; padding:0 6px 0 12px;
+  border-bottom:1px solid var(--c-border-light); background:var(--c-bg-inset); font-weight:600; color:var(--c-text-heading); }
+.head .x { margin-left:auto; color:var(--c-text-muted); width:24px; text-align:center; }
+.body { flex:1; min-height:0; overflow:auto; padding:2px 12px 12px; }
+.foot { flex:0 0 auto; border-top:1px solid var(--c-border-light); background:var(--c-bg-card); padding:8px 12px 12px;
+  display:flex; flex-direction:column; gap:6px; }
+.price b { display:block; color:var(--c-text-heading); }
+.price { font-size:12px; color:var(--c-text-secondary); line-height:1.35; }
+.run { height:30px; border:none; border-radius:10px; background:var(--c-accent); color:var(--c-on-accent); font-weight:600; font-size:12px; cursor:pointer; width:100%; }
+.mob .run { height:44px; font-size:14px; }
+
+/* ===== Шторка телефона 360 × 780 ===== */
+.phone { width:360px; height:780px; position:relative; overflow:hidden; border-radius:22px;
+  border:1px solid var(--c-border); background:var(--c-bg-main); }
+.phone .feed { padding:12px; color:var(--c-text-muted); font-size:12px; }
+.phone .feed div { height:46px; border-radius:12px; background:var(--c-bg-card); margin-bottom:8px; }
+.phone .dim { position:absolute; inset:0; background:var(--c-overlay); }
+.phone .sheet { position:absolute; left:0; right:0; bottom:0; height:88%; display:flex; flex-direction:column;
+  background:var(--c-bg-panel); border-radius:18px 18px 0 0; box-shadow:var(--shadow-sheet); overflow:hidden; }
+.grab { flex:0 0 auto; display:flex; justify-content:center; padding:8px 0 2px; }
+.grab span { width:36px; height:4px; border-radius:6px; background:var(--c-track); }
+.mob .head { background:transparent; }
+
+/* ===== Секции ===== */
+.sect { padding:8px 0; border-bottom:1px solid var(--c-border-light); }
+.sect:last-child { border-bottom:none; }
+.st { display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:11px; font-weight:600; color:var(--c-text-muted);
+  text-transform:uppercase; letter-spacing:.4px; }
+.st .aside { margin-left:auto; text-transform:none; letter-spacing:0; font-weight:400; }
+.git { display:flex; align-items:center; gap:6px; min-height:32px; padding:0 8px; border:1px solid var(--c-border); border-radius:8px;
+  background:var(--c-bg-card); font-size:12px; color:var(--c-text-secondary); }
+.git b { color:var(--c-text-heading); }
+.card { display:flex; align-items:center; gap:8px; padding:6px; border:1px solid var(--c-accent-muted); border-radius:10px; background:var(--c-bg-card); }
+.thumb { width:44px; height:44px; border-radius:6px; flex-shrink:0;
+  background:linear-gradient(135deg,#d9a27f,#8c6a9e 60%,#4a6d8c); }
+.thumb.v { background:linear-gradient(135deg,#3b5a74,#a5806a 55%,#e3c49a); }
+.card .t { flex:1; min-width:0; }
+.card .t b { display:block; font-size:13px; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.card .t span { font-size:11px; color:var(--c-text-muted); }
+.ib { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-muted); border-radius:8px; flex-shrink:0; }
+.mob .ib { width:40px; height:40px; }
+.edit { display:flex; align-items:center; gap:8px; margin-top:6px; font-size:11px; color:var(--c-text-muted); }
+.btn2 { height:24px; padding:0 8px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg-card); color:var(--c-text-primary); font-size:12px; flex-shrink:0; }
+.mob .btn2 { height:36px; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; }
+.chip { display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 6px 0 5px; border-radius:8px; background:var(--c-bg-card);
+  border:1px solid var(--c-border); font-size:12px; color:var(--c-text-secondary); }
+.chip i { width:18px; height:18px; border-radius:50%; background:linear-gradient(135deg,#c48a6a,#6f5a8e); display:inline-block; }
+.chip .r { color:var(--c-text-muted); }
+.ghost { margin-top:8px; font-size:12px; color:var(--c-text-secondary); }
+
+/* ===== «Чем»: было — раскрытый список (ExecutorList) ===== */
+.elist { border:1px solid var(--c-border-light); border-radius:8px; background:var(--c-bg-card); overflow:hidden; }
+.eg { padding:6px 10px 2px; font-size:11px; font-weight:600; color:var(--c-text-muted); background:var(--c-bg-inset); }
+.er { display:flex; align-items:center; gap:8px; width:100%; min-height:36px; padding:7px 10px; border:none; border-top:1px solid var(--c-border-light);
+  background:transparent; text-align:left; font-size:12px; color:var(--c-text-primary); cursor:pointer; }
+.mob .er { min-height:44px; }
+.er:hover { background:var(--c-bg-selected); }
+.er.on { background:var(--c-accent-light); }
+.er.off { opacity:.55; cursor:not-allowed; }
+.er .dot { width:14px; height:14px; border-radius:50%; border:1.5px solid var(--c-text-muted); flex-shrink:0; }
+.er.on .dot { border-color:var(--c-accent); background:var(--c-accent); box-shadow:inset 0 0 0 2.5px var(--c-bg-card); }
+.er .nm { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+.er .nm b { font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.er.on .nm b { font-weight:600; }
+.er .nm span { font-size:11px; color:var(--c-text-muted); }
+.er .pr { flex-shrink:0; font-size:11px; color:var(--c-text-secondary); white-space:nowrap; }
+.badge { display:inline-block; font-size:10px; padding:0 5px; border-radius:6px; background:var(--c-accent-light); color:var(--c-accent); margin-left:4px; font-weight:600; }
+.badge.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+
+/* ===== «Чем»: вариант А — одна строка (ExecutorSummaryRow) + меню поверх ===== */
+.sum { display:flex; align-items:center; gap:8px; width:100%; min-height:36px; padding:6px 10px; border:1px solid var(--c-border-light);
+  border-radius:8px; background:var(--c-bg-card); cursor:pointer; text-align:left; font-size:12px; color:var(--c-text-primary); }
+.mob .sum { min-height:44px; }
+.sum.open { border-color:var(--c-accent-muted); }
+.sum .lbl { color:var(--c-text-muted); flex-shrink:0; }
+.sum .val { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sum .val b { color:var(--c-text-heading); }
+.sum .pb { flex-shrink:0; font-size:11px; padding:1px 6px; border-radius:6px; background:var(--c-bg-selected); color:var(--c-text-secondary); font-weight:600; }
+.sum .pb.free { background:var(--c-success-bg); color:var(--c-success-text); }
+.sum .chev { color:var(--c-text-muted); flex-shrink:0; }
+/* Menu (anchor-режим): карточка bgWhite, R.xl, SHADOW.dropdown, padding 5 */
+.menu { position:absolute; z-index:72; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+  box-shadow:var(--shadow-dropdown); padding:5px; max-height:420px; overflow:auto; }
+.menu .mh { padding:4px 8px 6px; font-size:11px; color:var(--c-text-muted); }
+.menu .elist { border:none; background:transparent; }
+.menu .er { border-radius:8px; border-top:none; }
+.menu .eg { background:transparent; padding:8px 10px 2px; }
+/* Шторка второго уровня на 360: тот же список, на всю ширину, снизу */
+.sub-dim { position:absolute; inset:0; background:var(--c-overlay); z-index:70; }
+.subsheet { position:absolute; left:0; right:0; bottom:0; max-height:72%; z-index:71; display:flex; flex-direction:column;
+  background:var(--c-bg-white); border-radius:18px 18px 0 0; box-shadow:var(--shadow-sheet); }
+.subsheet .sh { display:flex; align-items:center; padding:2px 6px 6px 16px; font-weight:600; color:var(--c-text-heading); }
+.subsheet .sh .ib { margin-left:auto; }
+.subsheet .elist { border:none; border-radius:0; overflow:auto; flex:1; }
+
+/* ===== «Чем»: вариант Б — выбранный + 2 ближайших + «Ещё N ›» ===== */
+.more { display:flex; align-items:center; width:100%; min-height:32px; padding:0 10px; border:none; border-top:1px solid var(--c-border-light);
+  background:transparent; color:var(--c-accent); font-size:12px; cursor:pointer; text-align:left; }
+.mob .more { min-height:44px; }
+
+/* ===== Параметры ===== */
+.params { display:flex; flex-direction:column; gap:4px; }
+.prm { display:flex; align-items:center; gap:8px; min-height:30px; }
+.prm > span:first-child { font-size:12px; color:var(--c-text-secondary); min-width:92px; }
+.prm2 { display:grid; grid-template-columns:auto 1fr; column-gap:8px; row-gap:6px; align-items:center; }
+.prm2 > .l { font-size:12px; color:var(--c-text-secondary); }
+.inline-row { display:flex; align-items:center; gap:12px; flex-wrap:nowrap; }
+.inline-row .l { font-size:12px; color:var(--c-text-secondary); }
+.stepper { display:inline-flex; align-items:center; gap:2px; padding:1px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg-white); }
+.stepper button { width:24px; height:24px; border:none; background:transparent; color:var(--c-text-secondary); border-radius:6px; cursor:pointer; font-size:14px; }
+.mob .stepper button { width:40px; height:40px; }
+.stepper span { min-width:16px; text-align:center; font-weight:600; color:var(--c-text-heading); font-variant-numeric:tabular-nums; }
+.seg { display:flex; gap:2px; background:var(--c-bg-selected); border-radius:12px; padding:2px; flex-shrink:0; }
+.seg button { border:none; border-radius:10px; font-size:11px; font-weight:600; padding:4px 8px; min-height:28px; background:transparent; color:var(--c-text-muted); cursor:pointer; white-space:nowrap; }
+.mob .seg button { min-height:40px; min-width:40px; }
+.seg button.on { background:var(--c-accent-light); color:var(--c-accent); }
+/* Select size="sm": тот же нативный <select>, высота 28 (на таче 40) */
+.sel { position:relative; display:inline-flex; align-items:center; }
+.sel select { appearance:none; -webkit-appearance:none; height:28px; padding:0 26px 0 10px; border:1px solid var(--c-border); border-radius:10px;
+  background:var(--c-bg-white); color:var(--c-text-primary); font:inherit; font-size:12px; font-weight:600; cursor:pointer; }
+.mob .sel select { height:40px; font-size:14px; }
+.sel::after { content:"▾"; position:absolute; right:9px; pointer-events:none; color:var(--c-text-muted); font-size:11px; }
+.overflow-demo { width:380px; padding:10px 12px; border:1px solid var(--c-border); border-radius:12px; background:var(--c-bg-panel); overflow:hidden; }
+.bad { outline:2px dashed var(--c-accent); outline-offset:2px; }
+
+.list { margin:0 0 16px; padding-left:20px; color:var(--c-text-secondary); max-width:90ch; }
+.list li { margin:3px 0; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>Панель «Контекст»: компактный «Чем» и длительность · v1</h1>
+  <div class="toggle" id="theme"><button data-v="light" class="on">Светлая</button><button data-v="dark">Тёмная</button></div>
+</div>
+
+<div class="wrap">
+
+<h2 class="sec">0. Сейчас: «Чем» раскрыт всегда</h2>
+<p class="note">Картинка «Изменить», колонка 380 на 1440×900 (под шапкой приложения панели остаётся ~810 px) и шторка 88 % на 360×780.
+Рамка — ровно экран, всё ниже — за прокруткой. Подвал с ценой закреплён и виден всегда, но под списком исполнителей
+<b>«Плюс» и «Параметры» уходят за прокрутку</b>: их не видно, а цена в подвале зависит от них.</p>
+<div class="row">
+  <div><p class="cap">1440 · картинка «Изменить» · было</p><div id="was-d"></div></div>
+  <div><p class="cap">360 · картинка «Изменить» · было</p><div id="was-m"></div></div>
+  <div><p class="cap">360 · видео «Снять» · было: секунды уезжают вправо</p><div id="was-v"></div></div>
+</div>
+
+<h2 class="sec">1. Вариант А (рекомендую): одна строка «Чем» + список поверх</h2>
+<p class="note">В покое — <code>ExecutorSummaryRow</code> из кита: имя выбранного, уточнения через точку и цена бейджем справа
+(<code>rowPriceShort</code>). Нажатие открывает тот же список с группами поверх панели: на десктопе — <code>Menu</code> в anchor-режиме
+под строкой, на 360 — шторка второго уровня снизу. Выбор закрывает список, бейдж и цена в подвале меняются сразу (Б-1).
+Нажмите строку «Чем» и выберите другого исполнителя.</p>
+<div class="row">
+  <div><p class="cap">1440 · картинка «Изменить» · <b>А</b></p><div id="a-d"></div></div>
+  <div><p class="cap">360 · картинка «Изменить» · <b>А</b></p><div id="a-m"></div></div>
+  <div><p class="cap">1440 · видео «Снять» · <b>А</b></p><div id="a-dv"></div></div>
+  <div><p class="cap">360 · видео «Снять» · <b>А</b></p><div id="a-mv"></div></div>
+</div>
+
+<h2 class="sec">2. Вариант Б: выбранный + 2 ближайших + «Ещё N ›»</h2>
+<p class="note">Список остаётся в потоке, но свёрнут до трёх строк: выбранная и две соседние по порядку групп. «Ещё N ›» раскрывает
+остальное <b>на месте</b> — тогда панель снова растёт и «Параметры» уезжают вниз, как сейчас. Сворачивание экономит меньше
+(3 строки с подписями ≈ 150 px против 36 у А), а «ближайшие» — случайный набор: человек видит не то, что ему нужно, а что стоит рядом.</p>
+<div class="row">
+  <div><p class="cap">1440 · картинка «Изменить» · <b>Б</b></p><div id="b-d"></div></div>
+  <div><p class="cap">360 · картинка «Изменить» · <b>Б</b></p><div id="b-m"></div></div>
+</div>
+
+<h2 class="sec">3. Длительность, пропорции и «Вариантов»</h2>
+<p class="note">Правило одно для всех перечислимых параметров (<code>duration</code>, <code>aspect</code>): <b>до 4 значений —
+<code>InlineSegmented</code>, как сейчас; больше 4 — <code>Select</code></b> (нативный: на телефоне системный пикер).
+Ширина контрола после этого от числа значений не зависит. «Вариантов» остаётся <code>Stepper</code> — он и так постоянной ширины.
+Два коротких параметра встают <b>в одну строку</b>: «Вариантов − 2 + · Длительность 8 с ▾» — минус одна строка панели.</p>
+<div class="row">
+  <div>
+    <p class="cap">было: «Авто» у видео — объединение длительностей всех моделей</p>
+    <div class="overflow-demo"><div class="prm"><span>Длительность</span><div class="seg bad" id="seg-bad"></div></div></div>
+  </div>
+  <div>
+    <p class="cap">станет: ≤ 4 значений — сегмент, &gt; 4 — Select</p>
+    <div class="overflow-demo">
+      <div class="prm"><span>Длительность</span><div class="seg"><button class="on">5 с</button><button>10 с</button></div><span style="font-size:11px;color:var(--c-text-muted)">MiniMax H3</span></div>
+      <div class="prm"><span>Длительность</span><div class="sel"><select><option>3 с</option><option>4 с</option><option>5 с</option><option>6 с</option><option selected>8 с</option><option>10 с</option><option>12 с</option><option>15 с</option></select></div><span style="font-size:11px;color:var(--c-text-muted)">Авто, 8 значений</span></div>
+      <div class="prm"><span>Пропорции</span><div class="seg"><button class="on">16:9</button><button>9:16</button><button>1:1</button></div></div>
+    </div>
+  </div>
+  <div>
+    <p class="cap">станет: два параметра в одну строку</p>
+    <div class="overflow-demo">
+      <div class="inline-row"><span class="l">Вариантов</span><span class="stepper"><button>−</button><span>2</span><button>+</button></span>
+        <span class="l" style="margin-left:auto">Длительность</span><div class="sel"><select><option>5 с</option><option selected>8 с</option><option>10 с</option></select></div></div>
+    </div>
+  </div>
+</div>
+
+<h2 class="sec">4. Порядок секций</h2>
+<ul class="list">
+  <li><b>С чем → Чем → Параметры → Плюс → Где.</b> «Чем» и «Параметры» — то, от чего зависит цена в подвале, они должны стоять рядом
+  и над сгибом. «Плюс» — следом: серые референсы объясняют, что войдёт в запуск. «Где» (ветка git) для генерации вторично — вниз.</li>
+  <li>Подвал (цена + кнопка) остаётся закреплённым — он и сейчас вне прокрутки. Цель — чтобы <b>над ним</b> без прокрутки были видны
+  «Чем» и «Параметры»: на макетах А на 1440×900 панель помещается целиком, на 360×780 над подвалом видно всё до «Плюс»
+  включительно, «Где» — у самой кромки (прокрутка на 4 px).</li>
+</ul>
+
+</div>
+
+<script>
+// ===== Данные (по витрине GenSharedKitSection и mocks видеоредактора) =====
+const IMG = [
+  { id:'auto', g:'auto', name:'Авто', now:['локально','Qwen-Image Edit'], sub:'сначала своя видеокарта, при отказе — облако с вашего согласия', price:'бесплатно', short:'бесплатно', free:true, badge:'рекомендуем' },
+  { id:'qwen-edit', g:'local', name:'Qwen-Image Edit', sub:'правка по 1–16 образцам', price:'бесплатно · ~50 с', short:'бесплатно', free:true },
+  { id:'faces', g:'local', name:'FaceDetailer', sub:'только «Улучшить лица»', price:'бесплатно', short:'бесплатно', free:true },
+  { id:'kontext', g:'cloud', name:'fal · FLUX Kontext', sub:'правка, до 4 образцов', price:'$0.04 / шт.', short:'$0.04' },
+  { id:'nano', g:'cloud', name:'fal · Nano Banana 2', price:'$0.08 / шт.', short:'$0.08', badge:'новая' },
+  { id:'seedream', g:'cloud', name:'fal · Seedream 4', sub:'правка с сохранением лица', price:'$0.03 / шт.', short:'$0.03' },
+  { id:'gpt', g:'cloud', name:'fal · GPT Image', sub:'текст на картинке', price:'$0.17 / шт.', short:'$0.17' },
+  { id:'soul', g:'cloud', name:'Higgsfield · Soul', sub:'фото людей, персонаж Soul', price:'2 кр. / шт.', short:'2 кр.' },
+  { id:'off', g:'cloud', name:'Higgsfield · Seedance Img', reason:'не умеет «Изменить» — только новая картинка', price:'—', short:'—', off:true },
+];
+const VID = [
+  { id:'auto', g:'auto', name:'Авто', now:['локально','MiniMax H3'], sub:'сначала своя видеокарта, при отказе — облако с вашего согласия', price:'бесплатно', short:'бесплатно', free:true, durs:[3,4,5,6,8,10,12,15] },
+  { id:'h3', g:'local', name:'MiniMax H3', sub:'со звуком · 5 с ≈ 5 мин', price:'бесплатно', short:'бесплатно', free:true, durs:[5,10] },
+  { id:'veo', g:'cloud', name:'fal · Veo 3.1', sub:'со звуком, водяной знак', price:'$0.40 / с', short:'$0.40/с', durs:[4,6,8] },
+  { id:'seed', g:'cloud', name:'fal · Seedance 2.5', sub:'без звука', price:'$0.12 / с', short:'$0.12/с', durs:[5,10] },
+  { id:'kling', g:'cloud', name:'fal · Kling 3.0', sub:'3–15 с', price:'$0.10 / с', short:'$0.10/с', durs:[3,4,5,6,8,10,12,15] },
+  { id:'kling-hf', g:'cloud', name:'Higgsfield · Kling 3.0', sub:'коммерческая лицензия', price:'6 кр. / с', short:'6 кр./с', durs:[5,10] },
+];
+const GL = { local:'Бесплатно на своей видеокарте', cloud:'Облако' };
+
+// Состояние каждой панели — своё
+const S = {};
+function st(id, sc) { return S[id] ??= { sc, value:'auto', open:false, more:false, count: sc==='vid'?2:1, dur: 8 }; }
+const rowsOf = sc => sc === 'img' ? IMG : VID;
+const cur = s => rowsOf(s.sc).find(r => r.id === s.value);
+
+function priceFoot(s) {
+  const r = cur(s);
+  if (s.sc === 'img') {
+    if (r.free) return ['бесплатно', `${r.name === 'Авто' ? 'Авто → Qwen-Image Edit' : r.name} · ~50 с`];
+    return [`≈ ${r.short}`, `${s.count} × ${r.price}`];
+  }
+  const durs = r.durs; const d = durs.includes(s.dur) ? s.dur : durs[0];
+  if (r.free) return ['бесплатно', `${s.count} × ${d} с · своя видеокарта`];
+  const per = parseFloat(r.short.replace(/[^0-9.]/g,''));
+  if (r.short.includes('кр')) return [`≈ ${per*d*s.count} кр.`, `${s.count} × ${d} с × ${r.short}`];
+  return [`≈ $${(per*d*s.count).toFixed(2)}`, `${s.count} × ${d} с × ${r.short}`];
+}
+
+// ===== Кирпичи =====
+const where = () => `<div class="sect"><div class="st">Где</div><div class="git">⎇ <b>master</b><span>· 3 изменения</span><span style="margin-left:auto">▾</span></div></div>`;
+const withS = sc => `<div class="sect"><div class="st">С чем</div>
+  <div class="card"><span class="thumb ${sc==='vid'?'v':''}"></span><span class="t"><b>${sc==='img'?'портрет-аня.png':'Сцена 2 · утро'}</b><span>${sc==='img'?'версия 2 из 3 · отмечено: 2':'кадр A + кадр B · версия 1'}</span></span>
+  <span class="ib">‹</span><span class="ib">›</span><span class="ib">✕</span></div>
+  ${sc==='img'?'<div class="edit"><button class="btn2">✎ Отметить</button><span>область правки на холсте</span></div>':''}</div>`;
+const plus = sc => `<div class="sect"><div class="st">Плюс · 2<span class="aside">🗑 Очистить контекст</span></div>
+  <div class="chips"><span class="chip"><i></i>Аня<span class="r">· персонаж</span> ✕</span><span class="chip"><i style="border-radius:4px"></i>${sc==='img'?'стиль-акварель.jpg':'музыка-утро.mp3'}<span class="r">· ${sc==='img'?'стиль':'звук'}</span> ✕</span></div>
+  <div class="ghost">＋ Добавить из… ▾</div></div>`;
+
+function erow(r, s, pid) {
+  const on = r.id === s.value;
+  return `<button class="er ${on?'on':''} ${r.off?'off':''}" ${r.off?'disabled':''} data-pick="${pid}:${r.id}">
+    <span class="dot"></span><span class="nm"><b>${r.name}${r.badge?`<span class="badge ${r.badge==='рекомендуем'?'ok':''}">${r.badge}</span>`:''}</b>${(r.off?r.reason:r.sub)?`<span>${r.off?r.reason:r.sub}</span>`:''}</span>
+    <span class="pr">${r.price}</span></button>`;
+}
+function elist(rows, s, pid) {
+  let h = '', g = null;
+  for (const r of rows) {
+    if (r.g !== g) { g = r.g; if (g !== 'auto') h += `<div class="eg">${GL[g]}</div>`; }
+    h += erow(r, s, pid);
+  }
+  return `<div class="elist">${h}</div>`;
+}
+const byTitle = sc => `Чем · для «${sc==='img'?'Изменить':'Снять'}»`;
+
+function summary(s, pid) {
+  const r = cur(s);
+  const parts = r.id === 'auto' ? r.now : [];
+  return `<button class="sum ${s.open?'open':''}" data-open="${pid}"><span class="lbl">Чем</span>
+    <span class="val"><b>${r.name}</b>${parts.map(p=>' · '+p).join('')}</span>
+    <span class="pb ${r.free?'free':''}">${r.short}</span><span class="chev">${s.open?'▴':'▾'}</span></button>`;
+}
+
+function paramsBlock(s, mode, pid) {
+  const r = cur(s);
+  if (s.sc === 'img') {
+    return `<div class="sect"><div class="st">Параметры запуска</div><div class="params">
+      <div class="prm"><span>Вариантов</span><span class="stepper"><button data-cnt="${pid}:-1">−</button><span>${s.count}</span><button data-cnt="${pid}:1">+</button></span></div></div></div>`;
+  }
+  const durs = r.durs; const d = durs.includes(s.dur) ? s.dur : durs[0];
+  if (mode === 'was') {
+    return `<div class="sect"><div class="st">Параметры запуска</div><div class="params">
+      <div class="prm"><span>Вариантов</span><span class="stepper"><button>−</button><span>${s.count}</span><button>+</button></span></div>
+      <div class="prm"><span>Длительность</span><div class="seg bad" style="flex-shrink:0">${durs.map(x=>`<button class="${x===d?'on':''}">${x} с</button>`).join('')}</div></div></div></div>`;
+  }
+  const ctl = durs.length <= 4
+    ? `<div class="seg">${durs.map(x=>`<button class="${x===d?'on':''}" data-dur="${pid}:${x}">${x} с</button>`).join('')}</div>`
+    : `<div class="sel"><select data-dsel="${pid}">${durs.map(x=>`<option value="${x}" ${x===d?'selected':''}>${x} с</option>`).join('')}</select></div>`;
+  return `<div class="sect"><div class="st">Параметры запуска</div>
+    <div class="inline-row"><span class="l">Вариантов</span><span class="stepper"><button data-cnt="${pid}:-1">−</button><span>${s.count}</span><button data-cnt="${pid}:1">+</button></span>
+    <span class="l" style="margin-left:auto">Длительность</span>${ctl}</div></div>`;
+}
+
+function bySection(s, mode, pid) {
+  const rows = rowsOf(s.sc);
+  if (mode === 'was') return `<div class="sect"><div class="st">${byTitle(s.sc)}</div>${elist(rows, s, pid)}</div>`;
+  if (mode === 'a') return `<div class="sect" style="position:relative"><div class="st">${byTitle(s.sc)}</div>${summary(s, pid)}</div>`;
+  // Б: выбранный + 2 ближайших по порядку групп
+  if (s.more) return `<div class="sect"><div class="st">${byTitle(s.sc)}</div>${elist(rows, s, pid)}<div class="elist" style="border-top:none;border-radius:0 0 8px 8px"><button class="more" data-more="${pid}">Свернуть ‹</button></div></div>`;
+  const i = rows.findIndex(r => r.id === s.value);
+  let from = Math.max(0, Math.min(i - 1, rows.length - 3));
+  const pick = rows.slice(from, from + 3);
+  return `<div class="sect"><div class="st">${byTitle(s.sc)}</div>
+    <div class="elist">${pick.map(r => erow(r, s, pid)).join('')}<button class="more" data-more="${pid}">Ещё ${rows.length - 3} ›</button></div></div>`;
+}
+
+function foot(s, mob) {
+  const [a, b] = priceFoot(s);
+  return `<div class="foot"><div class="price"><b>${a}</b><span>${b}</span></div>
+    <button class="run">${s.sc==='img'?'Изменить':'Снять'}${s.count>1?' · '+s.count:''}</button></div>`;
+}
+
+function bodyHtml(s, mode, pid) {
+  if (mode === 'was') return where() + withS(s.sc) + bySection(s, mode, pid) + plus(s.sc) + paramsBlock(s, mode, pid);
+  return withS(s.sc) + bySection(s, mode, pid) + paramsBlock(s, mode, pid) + plus(s.sc) + where();
+}
+
+function overlay(s, mob, pid) {
+  if (!s.open) return '';
+  const rows = rowsOf(s.sc);
+  if (mob) return `<div class="sub-dim" data-close="${pid}"></div><div class="subsheet"><div class="grab"><span></span></div>
+    <div class="sh">${byTitle(s.sc)}<span class="ib" data-close="${pid}">✕</span></div>${elist(rows, s, pid)}</div>`;
+  return `<div class="sub-dim" style="background:transparent" data-close="${pid}"></div><div class="menu" data-menu="${pid}">${elist(rows, s, pid)}</div>`;
+}
+
+function render(pid) {
+  const el = document.getElementById(pid); const { sc, mode, mob } = el.dataset; const s = st(pid, sc);
+  const inner = `<div class="head">Контекст<span class="x">✕</span></div><div class="body">${bodyHtml(s, mode, pid)}</div>${foot(s, mob)}`;
+  el.innerHTML = mob
+    ? `<div class="fold"><div class="phone mob"><div class="feed">Лента чата<div></div><div></div></div><div class="dim"></div>
+        <div class="sheet"><div class="grab"><span></span></div>${inner}</div>${overlay(s, true, pid)}</div></div>`
+    : `<div class="fold"><div class="col">${inner}${overlay(s, false, pid)}</div></div>`;
+  // Меню под строкой «Чем» (anchor-режим Menu: top = низ якоря + 6)
+  if (!mob && s.open) {
+    const a = el.querySelector('[data-open]'), col = el.querySelector('.col'), m = el.querySelector('.menu');
+    const ar = a.getBoundingClientRect(), cr = col.getBoundingClientRect();
+    m.style.left = (ar.left - cr.left) + 'px'; m.style.width = ar.width + 'px'; m.style.top = (ar.bottom - cr.top + 6) + 'px';
+  }
+}
+
+// Где у каждой панели: [id, сценарий, режим, телефон?]
+const PANELS = [
+  ['was-d','img','was',0], ['was-m','img','was',1], ['was-v','vid','was',1],
+  ['a-d','img','a',0], ['a-m','img','a',1], ['a-dv','vid','a',0], ['a-mv','vid','a',1],
+  ['b-d','img','b',0], ['b-m','img','b',1],
+];
+for (const [id, sc, mode, mob] of PANELS) {
+  const el = document.getElementById(id); el.dataset.sc = sc; el.dataset.mode = mode; if (mob) el.dataset.mob = '1';
+  render(id);
+}
+document.getElementById('seg-bad').innerHTML = [3,4,5,6,8,10,12,15].map(x => `<button class="${x===8?'on':''}">${x} с</button>`).join('');
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-open],[data-pick],[data-close],[data-more],[data-cnt],[data-dur]'); if (!t) return;
+  const [pid, v] = (t.dataset.open ?? t.dataset.pick ?? t.dataset.close ?? t.dataset.more ?? t.dataset.cnt ?? t.dataset.dur).split(':');
+  const s = S[pid];
+  if (t.dataset.open) s.open = !s.open;
+  else if (t.dataset.pick) { s.value = v; s.open = false; }
+  else if (t.dataset.close) s.open = false;
+  else if (t.dataset.more) s.more = !s.more;
+  else if (t.dataset.cnt) s.count = Math.max(1, Math.min(4, s.count + Number(v)));
+  else if (t.dataset.dur) s.dur = Number(v);
+  render(pid);
+});
+document.addEventListener('change', e => {
+  const t = e.target.closest('[data-dsel]'); if (!t) return;
+  S[t.dataset.dsel].dur = Number(t.value); render(t.dataset.dsel);
+});
+document.getElementById('theme').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  document.documentElement.dataset.theme = b.dataset.v;
+  for (const x of e.currentTarget.children) x.classList.toggle('on', x === b);
+});
+</script>
+</body>
+</html>

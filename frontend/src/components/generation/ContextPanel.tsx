@@ -16,7 +16,7 @@ import { Button, IconButton, InlineSegmented, Menu, MenuItem, ProgressBar, Stepp
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { unusedBy } from '../../lib/chatContext/fill';
 import { changesWord, GitMenuBody, MenuHead, type RowGit } from '../chat/ContextRowView';
-import { ExecutorList } from './ExecutorList';
+import { ExecutorList, ExecutorSummaryRow, EXECUTOR_GROUP_LABEL, rowPriceShort, type ExecutorBadge } from './ExecutorList';
 import { GenerationPanel } from './GenerationPanel';
 import { RunLabel } from './RunLabel';
 
@@ -193,13 +193,31 @@ function WithSection(p: ContextPanelProps) {
 
 function BySection({ p }: { p: ContextPanelProps }) {
   const { exec, action, primary } = p;
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const holder = useRef<HTMLDivElement>(null);
+  const cur = exec ? exec.rows.find(r => r.id === exec.value) ?? exec.rows[0] : undefined;
+  // Бейдж, имя и «что сейчас» — от выбора exec.value, а не от открытого списка (цена за «Чем»)
+  const parts = !cur ? [] : cur.group === 'auto' ? (cur.now ? [cur.now] : []) : [EXECUTOR_GROUP_LABEL[cur.group]];
+  const price: ExecutorBadge | undefined = cur ? { label: rowPriceShort(cur), tone: cur.free ? 'good' : 'neutral' } : undefined;
   return (
     <Section name="by" title={action ? `Чем · для «${action.label}»` : 'Чем'}>
-      {!exec || !action || exec.rows.length === 0 ? (
+      {!exec || !action || !cur ? (
         <Empty>{!primary ? EMPTY.execNoObject : !action ? EMPTY.execChat : EMPTY.execPending}</Empty>
       ) : (
-        // Список раскрыт всегда (макет): выбор меняет кнопку в поле и цену
-        <ExecutorList rows={exec.rows} value={exec.value} isMobile={p.isMobile} onChange={exec.onChange} />
+        // В покое — одна строка; список с группами открывается меню поверх панели
+        <div ref={holder} data-ctx-exec="">
+          <ExecutorSummaryRow
+            name={cur.name} parts={parts} price={price} open={!!rect} isMobile={p.isMobile}
+            onToggle={() => setRect(r => (r ? null : holder.current?.getBoundingClientRect() ?? null))}
+          />
+          {rect && (
+            <Menu anchor={rect} onClose={() => setRect(null)} anchorAlign="start" maxHeight={420}
+              minWidth={rect.width} maxWidth={rect.width} fullWidth={p.isMobile}>
+              <ExecutorList bare rows={exec.rows} value={exec.value} isMobile={p.isMobile}
+                onChange={id => { setRect(null); exec.onChange(id); }} />
+            </Menu>
+          )}
+        </div>
       )}
     </Section>
   );
@@ -267,25 +285,55 @@ function PlusSection({ p }: { p: ContextPanelProps }) {
 
 // ── Параметры запуска ──
 
+// Перечислимые значения: до 4 — сегмент, больше — кнопка-чип с меню (ширина не растёт с числом значений)
+const SEGMENT_MAX = 4;
+
+function OptionsControl({ ariaLabel, value, options, isMobile, onChange }: {
+  ariaLabel: string; value: string; options: readonly { value: string; label: string }[]; isMobile: boolean; onChange: (v: string) => void;
+}) {
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const holder = useRef<HTMLSpanElement>(null);
+  if (options.length <= SEGMENT_MAX) return <InlineSegmented isMobile={isMobile} value={value} onChange={onChange} options={[...options]} />;
+  const cur = options.find(o => o.value === value);
+  return (
+    <>
+      <span ref={holder} data-ctx-options={ariaLabel} style={{ display: 'inline-flex' }}>
+        <Button size={isMobile ? 'sm' : 'xs'} variant="ghostFilled" title={ariaLabel}
+          onClick={() => setRect(holder.current?.getBoundingClientRect() ?? null)}>
+          {cur?.label ?? value}
+          <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ marginLeft: SP.xs }} aria-hidden />
+        </Button>
+      </span>
+      {rect && (
+        <Menu anchor={rect} onClose={() => setRect(null)} anchorAlign="start" minWidth={Math.max(120, rect.width)} maxWidth={220} maxHeight={320}>
+          {options.map(o => (
+            <MenuItem key={o.value} label={o.label} isMobile={isMobile} onClick={() => { setRect(null); onChange(o.value); }} />
+          ))}
+        </Menu>
+      )}
+    </>
+  );
+}
+
 // Закрытый набор: новый kind добавляется правкой типа LaunchParam и ветки здесь; неизвестный не рисуется
-function ParamControl({ param, onChange, isMobile }: { param: LaunchParam; onChange: (v: number | string) => void; isMobile: boolean }) {
+function ParamControl({ param, onChange, isMobile, inline }: { param: LaunchParam; onChange: (v: number | string) => void; isMobile: boolean; inline?: boolean }) {
   const row = (label: string, control: ReactNode) => (
     <div data-ctx-param={param.kind} style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minHeight: 30 }}>
-      <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: 92 }}>{label}</span>
+      <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: inline ? undefined : 92 }}>{label}</span>
       {control}
     </div>
   );
   switch (param.kind) {
     case 'variants':
-      return row('Вариантов', <Stepper ariaLabel="Сколько вариантов" value={param.value} min={param.min} max={param.max} onChange={onChange} />);
+      return row('Вариантов', <Stepper ariaLabel="Сколько вариантов" value={param.value} min={param.min} max={param.max} onChange={onChange} touch={isMobile} />);
     case 'duration':
       return row('Длительность', (
-        <InlineSegmented isMobile={isMobile} value={String(param.value)} onChange={v => onChange(Number(v))}
+        <OptionsControl ariaLabel="Длительность" isMobile={isMobile} value={String(param.value)} onChange={v => onChange(Number(v))}
           options={param.options.map(o => ({ value: String(o), label: `${o} с` }))} />
       ));
     case 'aspect':
       return row('Пропорции', (
-        <InlineSegmented isMobile={isMobile} value={param.value} onChange={onChange}
+        <OptionsControl ariaLabel="Пропорции" isMobile={isMobile} value={param.value} onChange={onChange}
           options={param.options.map(o => ({ value: o, label: o }))} />
       ));
     case 'fromQuestion':
@@ -300,13 +348,25 @@ export const isKnownParam = (p: { kind: string }): p is LaunchParam =>
 
 function ParamsSection({ p }: { p: ContextPanelProps }) {
   const known = p.params.filter(isKnownParam);
+  // «Вариантов» и «Длительность» делят строку (с переносом на узкой шторке)
+  const pair = known.some(x => x.kind === 'variants') && known.some(x => x.kind === 'duration');
+  const inPair = (x: LaunchParam) => pair && (x.kind === 'variants' || x.kind === 'duration');
+  const rest = known.filter(x => !inPair(x));
+  const ctl = (param: LaunchParam, inline?: boolean) => (
+    <ParamControl key={param.kind} param={param} isMobile={p.isMobile} inline={inline} onChange={v => p.onParam(param, v)} />
+  );
   return (
     <Section name="params" title="Параметры запуска">
       {!p.action ? <Empty>{EMPTY.paramsChat}</Empty>
         : known.length === 0 ? <Empty>{EMPTY.paramsNone(p.action.label)}</Empty>
         : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-            {known.map(param => <ParamControl key={param.kind} param={param} isMobile={p.isMobile} onChange={v => p.onParam(param, v)} />)}
+            {pair && (
+              <div data-ctx-param-pair="" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: SP.lg, rowGap: SP.xs }}>
+                {known.filter(inPair).map(x => ctl(x, true))}
+              </div>
+            )}
+            {rest.map(x => ctl(x))}
           </div>
         )}
     </Section>
@@ -378,11 +438,11 @@ export function ContextPanel(p: ContextPanelProps) {
       peekSummary={p.primary ? `${p.primary.label}${p.primary.version ? ` · ${p.primary.version}` : ''}` : undefined}
     >
       <div data-context-panel="" style={{ display: 'flex', flexDirection: 'column' }}>
-        {p.git && <WhereSection git={p.git} />}
         <WithSection {...p} />
         <BySection p={p} />
-        <PlusSection p={p} />
         <ParamsSection p={p} />
+        <PlusSection p={p} />
+        {p.git && <WhereSection git={p.git} />}
       </div>
     </GenerationPanel>
   );

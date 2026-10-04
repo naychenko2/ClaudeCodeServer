@@ -154,6 +154,38 @@ for (const { name, vp } of [{ name: '1440', vp: D }, { name: '360', vp: M }] as 
     await expect.poll(() => ids(page)).toEqual(['__chat', 'shoot', 'frameA', 'frameB']);
   });
 
+  // Д9 (блокер Глеба): генерация идёт минуты, человек ушёл на фильм — готовый кадр не перебивает выбор:
+  // основной остаётся фильмом, в тосте «Поставить в сцену», по нажатию сцена основная и кадр в слоте A
+  test(`кадр · ${name}: ушёл на фильм → готовый кадр не перебивает выбор, «Поставить в сцену» ставит кадр`, async ({ page }) => {
+    await open(page, vp, scenePrimary);
+    await actions(page).locator('[data-action-chip="frameA"]').click();
+    await page.getByText('Нарисовать в «Картинках»').click();
+    await expect.poll(() => primaryPuts().length).toBe(1);
+    // Человек ставит основным фильм
+    cw().ctx.primary = filmPrimary();
+    cw().ctx.revision++;
+    hubSend({ type: 'chat_context_changed', sessionId: S, context: cw().ctx });
+    await expect.poll(() => ids(page)).toEqual(['__chat', 'build', 'montage']);
+
+    w().imageThreads[0] = {
+      ...w().imageThreads[0], currentVersionId: 'v1',
+      versions: [{ id: 'v1', number: 1, jobId: 'j1', variant: 0, baseVersionId: null, baseStepId: null, steps: [], currentStepId: 'st1', createdAt: new Date().toISOString() }],
+    };
+    w().imageRevision++;
+    hubSend({ type: 'image_thread_changed', sessionId: S, projectId: P, revision: w().imageRevision, state: { focus: 'img-1', revision: w().imageRevision, threads: w().imageThreads } });
+    const toast = page.getByText('Кадр A для «Сцена 5» готов');
+    await expect(toast).toBeVisible({ timeout: 10_000 });
+    expect(primaryPuts()).toHaveLength(1);
+    expect(cw().mutations.some(m => m.path === '/refs')).toBe(false);
+    expect(cw().ctx.primary).toMatchObject({ kind: 'video-film' });
+
+    await page.getByRole('button', { name: 'Поставить в сцену' }).click();
+    await expect.poll(() => primaryPuts().length).toBe(2);
+    expect(primaryPuts()[1]).toMatchObject({ kind: 'video-scene', ref: { sceneId: 'scene-5' } });
+    await expect.poll(() => cw().mutations.find(m => m.path === '/refs')?.body).toMatchObject({ kind: 'image', role: 'frame-a', ref: { threadId: 'img-1', versionId: 'v1' } });
+    await expect.poll(() => ids(page)).toEqual(['__chat', 'shoot', 'frameA', 'frameB']);
+  });
+
   // «Править кадр»: пункт меню кадра с файлом ведёт в «Картинки» — нить заводится по файлу кадра и становится
   // основным объектом (правка, а не рисование: предвыбора «Нарисовать» нет), «↩ К сцене» возвращает сцену
   test(`кадр · ${name}: «Править в «Картинках»» → картинка кадра в контексте → «К сцене» возвращает сцену`, async ({ page }) => {

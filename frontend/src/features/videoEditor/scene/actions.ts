@@ -13,7 +13,7 @@ import { sceneReturnPoint, sceneToImages } from '../context/handoff';
 import { SCENE_KIND } from '../context/state';
 import { isPersonalScope } from '../scope';
 import { frameInputOf, setFrameRef } from '../store/frameRefs';
-import { bindFrame, createImageThread, onFrameReady, type FrameBinding } from '../store/imageFrames';
+import { bindFrame, createImageThread, imageThreadExists, onFrameReady, type FrameBinding } from '../store/imageFrames';
 import {
   clearAgentFrame, ensureVideoThreads, filmTarget, focusFilm, focusScene, getCatalog, getFocusedScene, getPending, getPendingAny, getPrefs,
   getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs, VIDEO_PANEL,
@@ -267,7 +267,7 @@ async function toImages(
   sessionId: string, scene: VideoScene, threadId: string, slot: 'A' | 'B', needEdit = false, draw = false, reveal = true,
   prev?: ChatContextItem | null,
 ) {
-  bindFrame(sessionId, { sceneId: scene.sceneId, slot, threadId, ...(needEdit ? { needEdit } : {}) });
+  bindFrame(sessionId, { sceneId: scene.sceneId, sceneName: scene.name, slot, threadId, ...(needEdit ? { needEdit } : {}) });
   // Нить становится основным объектом, а возврат к сцене держит панель «Контекст»
   await sceneToImages({ sessionId, sceneId: scene.sceneId, sceneName: scene.name, threadId, draw, reveal, prev });
 }
@@ -329,15 +329,25 @@ export function wireFrameBinding() {
     // Кадр — референс роли `frame-a`/`frame-b`, запуск по ревизии читает только его
     const input = frameInputOf(frame, isPersonalScope(scope));
     if (!input) return;
-    void (async () => {
-      if (getFocusedScene(sessionId)?.sceneId !== b.sceneId && !await focusScene(scope, sessionId, b.sceneId)) return;
+    // Генерация идёт минуты: человек мог уйти на другой объект. Сцену возвращаем основной сами, только если он
+    // всё ещё на нити этого кадра или уже на этой сцене; иначе выбор не трогаем и предлагаем кнопкой в тосте
+    const place = async (): Promise<boolean> => {
+      if (getFocusedScene(sessionId)?.sceneId !== b.sceneId && !await focusScene(scope, sessionId, b.sceneId)) return false;
       // Роли кадров принимает только основной объект «сцена»: пока основной — картинка, сервер ответит 400
       // role_not_accepted. Кадр привязывается к сцене, а не к тому, что открыто сейчас, — возвращаем сцену основной
       if (!isScenePrimary(sessionId, b.sceneId)) {
-        if (await setPrimary(sessionId, { kind: SCENE_KIND, ref: { sceneId: b.sceneId } }) !== 'ok') return;
+        if (await setPrimary(sessionId, { kind: SCENE_KIND, ref: { sceneId: b.sceneId } }) !== 'ok') return false;
         clearContextReturn(sessionId);
       }
-      if (await setFrameRef(sessionId, b.slot, input)) showToast(`Кадр ${b.slot} встал в сцену`, '', 'success');
-    })();
+      return setFrameRef(sessionId, b.slot, input);
+    };
+    const placed = () => place().then(ok => { if (ok) showToast(`Кадр ${b.slot} встал в сцену`, '', 'success'); });
+    const p = getChatContextState(sessionId).primary;
+    const onFrameThread = !!p && p.kind === 'image' && (p.ref as { threadId?: string }).threadId === b.threadId;
+    if (onFrameThread || isScenePrimary(sessionId, b.sceneId)) { void placed(); return; }
+    showToast(`Кадр ${b.slot} для «${b.sceneName ?? 'сцены'}» готов`, '', 'success', {
+      label: 'Поставить в сцену',
+      onClick: () => { if (imageThreadExists(sessionId, b.threadId)) void placed(); },
+    });
   });
 }

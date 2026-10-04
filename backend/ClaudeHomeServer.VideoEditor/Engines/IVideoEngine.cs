@@ -147,9 +147,10 @@ public sealed record VideoFile(byte[] Bytes, string ContentType, string Extensio
 public sealed record VideoCost(double Amount, string Unit);
 
 // Accepted — поставщик принял задачу: с этого момента пишется трата (исполнитель получает событие
-// через IProgress с Stage=Queued/Running и RemoteId). Charged: true — списано, false — точно не списано, null — неизвестно
+// через IProgress с Stage=Queued/Running и RemoteId). Percent — настоящая доля готовности 0..1 от поставщика;
+// null — данных нет (не выдумываем, фронт остаётся на оценке по времени). Charged: true — списано, false — точно не списано, null — неизвестно
 public sealed record VideoProgress(VideoStage Stage, int? QueuePosition = null, int? EtaSeconds = null,
-    string? RemoteId = null, bool Accepted = false);
+    string? RemoteId = null, bool Accepted = false, double? Percent = null);
 
 public sealed record VideoResult(
     VideoOutcome Outcome,

@@ -138,6 +138,8 @@ public sealed class FalVideoEngine : IVideoEngine, IVideoQuoter
             return VideoResult.Fail(VideoOutcome.Failed, ex.Message);
         }
 
+        // fal не отдаёт ETA в статусе: в каждое событие кладём ориентир модели из каталога (фронт иначе берёт запасные 90 с)
+        progress = new EtaProgress(progress, model.EtaSeconds);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(Ceiling);
         var run = await RunQueuedAsync(model.Info.Id, body, progress, ct, timeout.Token);
@@ -254,6 +256,25 @@ public sealed class FalVideoEngine : IVideoEngine, IVideoQuoter
         _ => error,
     };
 
+    // Публичный статус очереди fal доли готовности не гарантирует: берём числовое progress (0..1) или
+    // percent (0..100), если модель их отдаёт; иначе null — честно «нет данных»
+    internal static double? StatusPercent(JsonElement status)
+    {
+        if (status.ValueKind != JsonValueKind.Object) return null;
+        if (status.TryGetProperty("progress", out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetDouble(out var f)
+            && f is >= 0 and <= 1)
+            return Math.Round(f, 2);
+        if (status.TryGetProperty("percent", out var c) && c.ValueKind == JsonValueKind.Number && c.TryGetDouble(out var h)
+            && h is >= 0 and <= 100)
+            return Math.Round(h / 100, 2);
+        return null;
+    }
+
+    private sealed class EtaProgress(IProgress<VideoProgress> inner, int eta) : IProgress<VideoProgress>
+    {
+        public void Report(VideoProgress value) => inner.Report(value.EtaSeconds is null ? value with { EtaSeconds = eta } : value);
+    }
+
     private sealed record QueueRun(JsonElement? Output, string? RequestId, VideoResult? Failure);
 
     // Один прогон очереди: отправка, опрос до COMPLETED, чтение результата. Отмена снаружи отзывает задачу
@@ -289,6 +310,8 @@ public sealed class FalVideoEngine : IVideoEngine, IVideoQuoter
         _cancelUrls[ticket.RequestId] = ticket.CancelUrl;
         var id = ticket.RequestId;
         progress.Report(new VideoProgress(VideoStage.Queued, RemoteId: id, Accepted: true));
+        double? lastPercent = null;
+        var reportedRunning = false;
         try
         {
             while (true)
@@ -306,7 +329,14 @@ public sealed class FalVideoEngine : IVideoEngine, IVideoQuoter
                             s.TryGetProperty("queue_position", out var qp) && qp.TryGetInt32(out var pos) ? pos : null,
                             RemoteId: id, Accepted: true));
                     else if (state == "IN_PROGRESS")
-                        progress.Report(new VideoProgress(VideoStage.Running, RemoteId: id, Accepted: true));
+                    {
+                        var percent = StatusPercent(s);
+                        // Без изменения доли не частим: опрос идёт чаще, чем она двигается
+                        if (percent != lastPercent || !reportedRunning)
+                            progress.Report(new VideoProgress(VideoStage.Running, RemoteId: id, Accepted: true, Percent: percent));
+                        lastPercent = percent;
+                        reportedRunning = true;
+                    }
                 }
                 await Task.Delay(PollInterval, token);
             }

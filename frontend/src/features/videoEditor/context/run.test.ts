@@ -152,15 +152,55 @@ describe('«Остановить» и прогресс у съёмки и сбо
     expect(events.at(-1)).toEqual({ cancelled: true });
   });
 
-  it('прогресс берётся из стора: событие, пришедшее до подписки, не теряется', async () => {
+  it('прогресс берётся из стора и растёт от времени прогона, а не стоит на середине варианта', async () => {
+    vi.useFakeTimers();
+    try {
+      applyScene();
+      const h = await run('shoot');
+      // Второй вариант из двух, ожидаемая длительность прогона 90 с (по умолчанию)
+      handleEvent(progress(2));
+      const events: { progress?: number }[] = [];
+      h.watch(e => events.push(e));
+      const start = events.at(-1)!.progress!;
+      expect(start).toBeGreaterThanOrEqual(0.5);
+      expect(start).toBeLessThan(0.55);
+      vi.advanceTimersByTime(45_000);
+      expect(events.at(-1)!.progress!).toBeCloseTo(0.75, 1);
+      // Событие с меньшим вариантом (отставшее) полосу назад не двигает
+      handleEvent(progress(1));
+      expect(events.at(-1)!.progress!).toBeCloseTo(0.75, 1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('percent события идёт в прогресс как есть: 0,1 → 0,4 → 0,8, отставший 0,3 не откатывает', async () => {
     applyScene();
     const h = await run('shoot');
-    handleEvent(progress(2));
+    const withPercent = (percent: number) => ({ ...(progress(1) as object), count: 1, percent }) as never;
+    handleEvent(withPercent(0.1));
     const events: { progress?: number }[] = [];
     h.watch(e => events.push(e));
-    expect(events.at(-1)?.progress).toBeCloseTo(0.75);
-    handleEvent(progress(1));
-    expect(events.at(-1)?.progress).toBeCloseTo(0.25);
+    expect(events.at(-1)!.progress).toBeCloseTo(0.1);
+    handleEvent(withPercent(0.4));
+    expect(events.at(-1)!.progress).toBeCloseTo(0.4);
+    handleEvent(withPercent(0.8));
+    expect(events.at(-1)!.progress).toBeCloseTo(0.8);
+    handleEvent(withPercent(0.3));
+    expect(events.at(-1)!.progress).toBeCloseTo(0.8);
+  });
+
+  it('сторож, на который не подписались, сам снимает подписку на стор по таймауту', async () => {
+    vi.useFakeTimers();
+    try {
+      applyScene();
+      await run('shoot');
+      // Подписка сторожа на хаб снята вместе с остальным: unsubscribe мока вызван
+      const off = vi.fn();
+      vi.spyOn(videoApi, 'subscribe').mockImplementation(() => off);
+      const h2 = await run('shoot');
+      expect(h2.id).toBe('job1');
+      vi.advanceTimersByTime(31_000);
+      expect(off).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
   });
 
   it('сборка отдаёт cancel, отменённая сборка — cancelled, а не ошибка', async () => {

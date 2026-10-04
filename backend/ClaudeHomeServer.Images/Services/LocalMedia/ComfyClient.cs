@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -189,6 +190,71 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
             : v.TryGetValue<long>(out var l) ? l
             : v.TryGetValue<double>(out var d) ? (long)d
             : null;
+    }
+
+    // Прогресс шагов сэмплера: ComfyUI шлёт его только по WebSocket /ws (событие "progress"), в HTTP его нет.
+    // Слушаем до execution_success/error/interrupted по задаче или до отмены; onProgress получает долю шага
+    // 0..1 в пределах текущей ноды. Любой сбой сокета — тихий выход: прогресс необязателен, ход задачи не страдает
+    public async Task ListenProgressAsync(string promptId, Action<double> onProgress, CancellationToken ct)
+    {
+        try
+        {
+            var baseUri = new Uri(LocalMediaOptions.Read(config).ComfyUrl.TrimEnd('/') + "/");
+            var ws = new UriBuilder(new Uri(baseUri, "ws"))
+            {
+                Scheme = baseUri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
+                Query = "clientId=ccs-local-media",
+            }.Uri;
+            using var socket = new ClientWebSocket();
+            await socket.ConnectAsync(ws, ct);
+            var buffer = new byte[16 * 1024];
+            while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
+            {
+                using var message = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
+                {
+                    result = await socket.ReceiveAsync(buffer, ct);
+                    if (result.MessageType == WebSocketMessageType.Close) return;
+                    if (message.Length + result.Count <= 1024 * 1024) message.Write(buffer, 0, result.Count);
+                } while (!result.EndOfMessage);
+                // Бинарные кадры (превью) — не наши
+                if (result.MessageType != WebSocketMessageType.Text) continue;
+                var parsed = ParseProgressMessage(Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length), promptId);
+                if (parsed.Done) return;
+                if (parsed.Fraction is { } fraction) onProgress(fraction);
+            }
+        }
+        catch (Exception ex) when (ex is WebSocketException or IOException or InvalidOperationException
+            or UriFormatException or OperationCanceledException)
+        {
+        }
+    }
+
+    // Сообщение сокета: {"type":"progress","data":{"value":5,"max":8,"prompt_id":…}}; чужие задачи и прочие типы
+    // пропускаем. Done — задача закончилась (успех, ошибка, прерывание)
+    internal static (double? Fraction, bool Done) ParseProgressMessage(string text, string promptId)
+    {
+        try
+        {
+            if (JsonNode.Parse(text) is not JsonObject root || root["data"] is not JsonObject data) return (null, false);
+            if (data["prompt_id"]?.ToString() != promptId) return (null, false);
+            switch (root["type"]?.ToString())
+            {
+                case "execution_success" or "execution_error" or "execution_interrupted":
+                    return (null, true);
+                case "progress"
+                    when data["value"] is JsonValue v && v.TryGetValue<double>(out var value)
+                        && data["max"] is JsonValue m && m.TryGetValue<double>(out var max) && max > 0:
+                    return (Math.Clamp(value / max, 0, 1), false);
+                default:
+                    return (null, false);
+            }
+        }
+        catch (JsonException)
+        {
+            return (null, false);
+        }
     }
 
     public async Task<byte[]> DownloadAsync(ComfyOutputFile file, CancellationToken ct)

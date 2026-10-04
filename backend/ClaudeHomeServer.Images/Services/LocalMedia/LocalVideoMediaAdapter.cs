@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Media;
 
@@ -18,6 +19,45 @@ public sealed class LocalVideoMediaAdapter(
     private const string IdPrefix = "lv_";
     private const string FirstSlot = "первый кадр";
     private const string LastSlot = "последний кадр";
+
+    // Прогресс сэмплеров идущих задач: ticket → слушатель сокета ComfyUI. Живёт, пока опрашивают задачу
+    private readonly ConcurrentDictionary<string, ProgressWatch> _watches = new();
+
+    // Доля берётся как максимум от пройденного: у графа с несколькими сэмплерами шаги второго не должны
+    // откатывать шкалу назад; до конца задачи шкала не доходит до 1
+    private sealed class ProgressWatch : IDisposable
+    {
+        private readonly CancellationTokenSource _cts = new();
+        private double _fraction = -1;
+
+        public double? Fraction => _fraction < 0 ? null : _fraction;
+        public CancellationToken Token => _cts.Token;
+
+        public void Set(double value)
+        {
+            var capped = Math.Min(value, 0.99);
+            if (capped > _fraction) _fraction = capped;
+        }
+
+        public void Dispose() => _cts.Cancel();
+    }
+
+    private void StartWatch(string ticket)
+    {
+        var watch = new ProgressWatch();
+        if (!_watches.TryAdd(ticket, watch)) return;
+        _ = Task.Run(async () =>
+        {
+            await comfy.ListenProgressAsync(ticket, watch.Set, watch.Token);
+            // Слушатель закончил сам (задача завершилась или сокет не открылся): запись не держим
+            _watches.TryRemove(new KeyValuePair<string, ProgressWatch>(ticket, watch));
+        });
+    }
+
+    private void StopWatch(string ticket)
+    {
+        if (_watches.TryRemove(ticket, out var watch)) watch.Dispose();
+    }
 
     public bool Configured => LocalMediaOptions.IsEnabled(config);
 
@@ -74,6 +114,7 @@ public sealed class LocalVideoMediaAdapter(
                 ComfyWorkflows.FramesFor(plan.Seconds), seed, plan.Fast, $"{ComfyWorkflows.OutputFolder}/{id}",
                 $"{ComfyWorkflows.OutputFolder}/latents/{id}");
             var queued = await comfy.QueuePromptAsync(graph, ct);
+            StartWatch(queued.PromptId);
             return new LocalVideoSubmitted(queued.PromptId, queue,
                 LocalMediaService.ImageToVideoEta(plan.Size, plan.Seconds, plan.Fast), null);
         }
@@ -93,14 +134,16 @@ public sealed class LocalVideoMediaAdapter(
             {
                 var position = (await comfy.GetQueueAsync(ct)).PositionOf(ticket);
                 if (position is not null)
-                    return new LocalVideoPoll(position == 0 ? LocalVideoState.Running : LocalVideoState.Queued, position, null, null);
+                    return new LocalVideoPoll(position == 0 ? LocalVideoState.Running : LocalVideoState.Queued, position, null, null,
+                        Percent: position == 0 ? PercentOf(ticket) : null);
                 // Могла закончиться между двумя запросами — история решает
                 history = await comfy.GetHistoryAsync(ticket, ct);
                 if (history is null)
                     return Failed("Задача пропала из очереди ComfyUI (перезапуск или отмена на стенде).");
             }
             if (history.Failed) return Failed(history.Error ?? "ComfyUI завершил задачу ошибкой.");
-            if (!history.Completed) return new LocalVideoPoll(LocalVideoState.Running, 0, null, null);
+            if (!history.Completed) return new LocalVideoPoll(LocalVideoState.Running, 0, null, null, Percent: PercentOf(ticket));
+            StopWatch(ticket);
 
             foreach (var file in history.Files)
             {
@@ -123,11 +166,18 @@ public sealed class LocalVideoMediaAdapter(
             return new LocalVideoPoll(LocalVideoState.Running, null, null, null, "ComfyUI вернул неожиданный ответ.");
         }
 
-        static LocalVideoPoll Failed(string error) => new(LocalVideoState.Failed, null, null, error);
+        LocalVideoPoll Failed(string error)
+        {
+            StopWatch(ticket);
+            return new(LocalVideoState.Failed, null, null, error);
+        }
     }
+
+    private double? PercentOf(string ticket) => _watches.TryGetValue(ticket, out var watch) ? watch.Fraction : null;
 
     public async Task<bool> CancelAsync(string ticket, CancellationToken ct)
     {
+        StopWatch(ticket);
         try
         {
             var queue = await comfy.GetQueueAsync(ct);

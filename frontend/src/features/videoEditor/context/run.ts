@@ -11,7 +11,7 @@ import { openProjectFile } from '../film/nav';
 import { currentResolved, runErrorText, stopJob } from '../scene/actions';
 import { plural, priceLines, modelLabel, snapTo, type ResolvedScene } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
-import { cancelBuild, getCatalog, getFilm, getJobsOf, setFilmBuild, subscribeVideoStore } from '../store/videoStore';
+import { cancelBuild, getCatalog, getFilm, getJobsOf, jobFraction, setFilmBuild, subscribeVideoStore } from '../store/videoStore';
 import { filmPathOf, sceneOfPrimary } from './state';
 
 // Тело 409 context_changed: хост сам берёт из него свежий контекст, ошибку оставляем как есть
@@ -81,42 +81,50 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
 // рисует карточку ленты: первое событие приходит раньше подписки, а стор его уже учёл
 type Ev = { progress?: number; result?: { summary: string; open?: () => void }; error?: string; cancelled?: boolean };
 
-// Доля хода съёмки: та же формула, что у полосы карточки (варианты по очереди)
-export function jobFraction(j: { stage: string; variant: number; count: number }, fallbackCount: number): number {
-  if (j.stage === 'queued') return 0.05;
-  const total = j.count || fallbackCount || 1;
-  return Math.min(0.95, Math.max(0.05, ((j.variant - 1) / total) + 1 / total / 2));
-}
+// Сколько живёт сторож задачи, на который так и не подписались
+const UNWATCHED_TTL_MS = 30_000;
 
 function jobWatcher(scope: string, sessionId: string, sceneId: string, jobId: string, open: () => void) {
   let listener: ((e: Ev) => void) | null = null;
   let cancelAsked = false;
   const buffered: Ev[] = [];
   const emit = (e: Ev) => { if (listener) listener(e); else buffered.push(e); };
+  // Доля — Percent поставщика, а без него время прогона (jobFraction). Не откатывается: пока задачи нет в сторе
+  // (переподключение), держим последнюю показанную
+  let last = 0.02;
   const push = () => {
     const j = getJobsOf(sessionId, sceneId).find(x => x.jobId === jobId);
-    if (j) emit({ progress: jobFraction(j, 1) });
+    if (j) last = Math.max(last, jobFraction(j));
+    emit({ progress: last });
   };
   const offStore = subscribeVideoStore(push);
+  const timer = setInterval(push, 500);
+  // Без watch сторож не живёт вечно: хост подписывается сразу, а не дождались — задача потеряна
+  let unwatchedTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => stop(), UNWATCHED_TTL_MS);
+  const stop = () => {
+    offStore(); clearInterval(timer); offApi?.();
+    if (unwatchedTimer) { clearTimeout(unwatchedTimer); unwatchedTimer = null; }
+  };
   const offApi = videoApi.subscribe(ev => {
     if (!('jobId' in ev) || ev.jobId !== jobId) return;
     if (ev.type === 'video_edit_completed') {
       const n = ev.variants.length;
       if (ev.error) emit({ error: ev.error });
       else emit({ result: { summary: n > 1 ? `Готово: ${n} ${plural(n, 'вариант', 'варианта', 'вариантов')}` : 'Клип снят', open } });
-      offStore(); offApi?.();
+      stop();
     } else if (ev.type === 'video_edit_failed') {
       emit(cancelAsked ? { cancelled: true } : { error: ev.error ?? 'Съёмка не получилась' });
-      offStore(); offApi?.();
+      stop();
     }
   });
   push();
   return {
     cancel: async () => { cancelAsked = true; await stopJob(scope, sessionId, jobId); },
     watch(on: (e: Ev) => void) {
+      if (unwatchedTimer) { clearTimeout(unwatchedTimer); unwatchedTimer = null; }
       listener = on;
       buffered.splice(0).forEach(on);
-      return () => { listener = null; offStore(); offApi?.(); };
+      return () => { listener = null; stop(); };
     },
   };
 }

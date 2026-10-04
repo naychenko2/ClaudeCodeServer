@@ -46,13 +46,15 @@ public sealed record LocalVideoSubmitted(string? Ticket, int? QueuePosition, int
 
 public enum LocalVideoState { Queued, Running, Completed, Failed }
 
-// Warning — временный сбой опроса (ComfyUI не ответил), задача при этом жива
+// Warning — временный сбой опроса (ComfyUI не ответил), задача при этом жива; Percent — доля шагов сэмплера 0..1
+// по прогрессу ComfyUI (null — данных нет)
 public sealed record LocalVideoPoll(
     LocalVideoState State,
     int? QueuePosition,
     LocalVideoFile? File,
     string? Error,
-    string? Warning = null);
+    string? Warning = null,
+    double? Percent = null);
 
 // Extension — с точкой («.mp4»); HasSound — в ролике есть звуковая дорожка
 public sealed record LocalVideoFile(byte[] Bytes, string ContentType, string Extension, bool HasSound);

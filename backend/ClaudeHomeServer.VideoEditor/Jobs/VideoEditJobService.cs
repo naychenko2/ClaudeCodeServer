@@ -686,7 +686,7 @@ public sealed class VideoEditJobService : IDisposable
                 job.EtaSeconds = value.EtaSeconds;
             }
             _ = owner.Broadcast(job.OwnerId, new VideoEditProgressMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
-                StageName(value.Stage), value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.Initiator)
+                StageName(value.Stage), value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.Initiator, value.Percent)
             { SessionId = job.ChatSessionId ?? "" });
         }
     }

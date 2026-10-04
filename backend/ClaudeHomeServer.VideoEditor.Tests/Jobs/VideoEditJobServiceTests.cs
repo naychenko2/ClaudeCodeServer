@@ -158,6 +158,23 @@ public sealed class VideoEditJobServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Процент_съёмки_доходит_до_сообщения_прогресса_а_без_данных_пуст()
+    {
+        var svc = Service([new Fake("fal", "usd", (r, p, ct) =>
+        {
+            p.Report(new VideoProgress(VideoStage.Queued, RemoteId: "r1", Accepted: true));
+            p.Report(new VideoProgress(VideoStage.Running, RemoteId: "r1", Accepted: true, Percent: 0.42));
+            return Ok(r, p, ct);
+        })]);
+
+        await RunToEnd(svc, Scope, AddScene(), "fal");
+
+        var progress = _events.Sent.OfType<VideoEditProgressMessage>().ToList();
+        progress.Single(m => m.Stage == "running").Percent.Should().Be(0.42);
+        progress.Where(m => m.Stage == "queued").Should().OnlyContain(m => m.Percent == null);
+    }
+
+    [Fact]
     public async Task Кредиты_Higgsfield_идут_в_свою_валюту()
     {
         var svc = Service([new Fake("higgsfield", "credits", Ok, perSec: 2)]);

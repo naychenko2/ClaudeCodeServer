@@ -67,6 +67,8 @@ function prefsPatch(p: Partial<VideoSceneSettings>): VideoPrefs {
 }
 
 const _flushing = new Map<string, Promise<boolean>>();
+// Отправка стоящей правки завела сцену (правка без сцены с содержимым): createScene вторую не заводит
+const _flushCreated = new Set<string>();
 
 // Отправить стоящую правку сейчас (смена сцены, закрытие панели, запуск). Отправки одного чата идут
 // строго друг за другом: две записи с одной ревизией дали бы 409 на второй
@@ -95,7 +97,7 @@ async function flushNow(scope: string, sessionId: string): Promise<boolean> {
   if (Object.keys(pend.patch).some(k => CONTENT_KEYS.includes(k))) {
     const settings = settingsOf(resolveScene(null, pend.patch, getPrefs(scope), getCatalog(scope)));
     const ok = await mutate(scope, sessionId, rev => videoApi.addScene(scope, sessionId, { settings, revision: rev }), true);
-    if (ok) dropIf(sessionId, pend);
+    if (ok) { dropIf(sessionId, pend); _flushCreated.add(sessionId); }
     return ok;
   }
   // Выбор области: поставщик, модель, длительность, пропорции, звук, число вариантов
@@ -112,7 +114,9 @@ async function flushNow(scope: string, sessionId: string): Promise<boolean> {
 // ── Новая сцена, выбор, снятие ──
 
 export async function createScene(scope: string, sessionId: string, opts: { frameA?: FrameRef; name?: string } = {}): Promise<boolean> {
-  await flushSettings(scope, sessionId);
+  _flushCreated.delete(sessionId);
+  const flushed = await flushSettings(scope, sessionId);
+  if (_flushCreated.delete(sessionId)) return flushed;
   await ensureVideoThreads(scope, sessionId);
   const settings: VideoSceneSettings = {
     ...settingsOf(resolveScene(null, null, getPrefs(scope), getCatalog(scope))),

@@ -16,7 +16,7 @@ const { __resetChatContextStore, getChatContextState } = await import('../../../
 const { __resetVideoStore } = await import('../store/videoStore');
 const { videoApi } = await import('../api');
 const { CATALOG, PREFS, scene, threads } = await import('../mocks');
-const { createScene } = await import('./actions');
+const { changeSettings, createScene } = await import('./actions');
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -34,5 +34,17 @@ describe('createScene: контекст чата', () => {
     expect(await createScene('p1', 'c1')).toBe(true);
     await vi.waitFor(() => expect(getChatContextState('c1').primary?.ref.sceneId).toBe('s1'));
     expect(get).toHaveBeenCalledWith('c1');
+  });
+
+  it('стоящая правка без сцены сама заводит сцену — createScene второй не заводит', async () => {
+    vi.spyOn(videoApi, 'state').mockResolvedValue({ threads: threads(1, []), catalog: CATALOG, prefs: PREFS });
+    const add = vi.spyOn(videoApi, 'addScene').mockResolvedValue(threads(2, [scene('s1')], { sceneId: 's1' }));
+    vi.spyOn(chatContextApi, 'get').mockResolvedValue({ revision: 1, refs: [], primary: null } as never);
+    changeSettings('p1', 'c1', { text: 'закат над горами' }, true);
+    expect(await createScene('p1', 'c1')).toBe(true);
+    expect(add).toHaveBeenCalledTimes(1);
+    // Без стоящей правки createScene заводит сцену как обычно
+    expect(await createScene('p1', 'c1')).toBe(true);
+    expect(add).toHaveBeenCalledTimes(2);
   });
 });

@@ -251,6 +251,34 @@ public sealed class FalVideoEngineTests
     }
 
     [Fact]
+    public async Task Status_WithProgress_PercentReachesProgress()
+    {
+        var endpoint = FalVideoCatalog.KlingO1;
+        _fal.Job(endpoint, "rp1", ["IN_PROGRESS@0.4", "IN_PROGRESS@0.8", "COMPLETED"], """{"video":{"url":"https://cdn.test/v/p.mp4"}}""");
+        _fal.File("https://cdn.test/v/p.mp4", [1]);
+        var progress = new Recorder();
+
+        await Engine().RunAsync(Request(endpoint), progress, CancellationToken.None);
+
+        progress.Values.Where(p => p.Stage == VideoStage.Running).Select(p => p.Percent).Should().Equal(0.4, 0.8);
+        progress.Values.Where(p => p.Stage is VideoStage.Queued or VideoStage.Running).Should()
+            .OnlyContain(p => p.EtaSeconds == 150, "ETA модели из каталога едет в каждом событии хода");
+    }
+
+    [Fact]
+    public async Task Status_WithoutProgress_PercentEmpty()
+    {
+        var endpoint = FalVideoCatalog.KlingO1;
+        _fal.Job(endpoint, "rp2", ["IN_PROGRESS", "COMPLETED"], """{"video":{"url":"https://cdn.test/v/q.mp4"}}""");
+        _fal.File("https://cdn.test/v/q.mp4", [1]);
+        var progress = new Recorder();
+
+        await Engine().RunAsync(Request(endpoint), progress, CancellationToken.None);
+
+        progress.Values.Should().OnlyContain(p => p.Percent == null);
+    }
+
+    [Fact]
     public async Task StatusPoll_NetworkDrop_AfterAcceptance_ChargedUnknown()
     {
         var endpoint = FalVideoCatalog.KlingO1;
@@ -453,8 +481,11 @@ public sealed class FalVideoEngineTests
                 $$"""{"request_id":"{{id}}","status_url":"{{baseUrl}}/status","response_url":"{{baseUrl}}","cancel_url":"{{baseUrl}}/cancel"}""");
             for (var i = 0; i < statuses.Length; i++)
             {
+                // "IN_PROGRESS@0.4" — статус с долей готовности (progress), "IN_QUEUE:2" — с позицией в очереди
                 var parts = statuses[i].Split(':');
-                var json = parts.Length > 1
+                var json = statuses[i].Contains('@')
+                    ? $$"""{"status":"{{statuses[i].Split('@')[0]}}","progress":{{statuses[i].Split('@')[1]}}}"""
+                    : parts.Length > 1
                     ? $$"""{"status":"{{parts[0]}}","queue_position":{{parts[1]}}}"""
                     : $$"""{"status":"{{parts[0]}}"}""";
                 Respond(HttpMethod.Get, $"{baseUrl}/status", HttpStatusCode.OK, json, repeatLast && i == statuses.Length - 1);

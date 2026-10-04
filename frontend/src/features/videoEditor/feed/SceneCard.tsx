@@ -19,7 +19,7 @@ import { downloadClip, openFilmPanel, openScenePanel, saveScene, selectFilmByHum
 import { currentVersion, modelLabel, plural, staleNotes } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
 import {
-  filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, loadFilmList, patchFilm, useFilmList, useVideoStoreVersion, useVideoThreads, type JobProgress,
+  filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, loadFilmList, patchFilm, useFilmList, useJobTick, useVideoStoreVersion, useVideoThreads, type JobProgress,
 } from '../store/videoStore';
 import { SCENE_KIND } from '../context/state';
 import { ic } from '../editor/primitives';
@@ -118,7 +118,8 @@ export function sceneCardView(p: {
     name: scene.name,
     focused: p.focused,
     byClaude: initiator === 'agent',
-    progress: running ? progressLabel(scene, jobs, count ?? 1) : null,
+    // Ход съёмки показывает только полная карточка сцены: строка запуска не дублирует полосу
+    progress: running && !jobId ? progressLabel(scene, jobs, count ?? 1) : null,
     launchLine,
     failure,
     outcome,
@@ -229,26 +230,18 @@ export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; 
 // Запуск в ленте — компактная строка под карточкой сцены: модель, число вариантов, цена, ход и итог.
 // Плеер и варианты живут в ОДНОЙ полной карточке сцены (якорь video_scene), поэтому съёмка не рисует двойника
 export function LaunchRowView({ v, a }: { v: SceneCardView; a: Pick<SceneCardActions, 'onPick'> }) {
+  // Тихая строка без рамки: карточка в ленте одна — сцена, запуск лишь подписывает, что и почём снимали
   return (
     <div data-video-card="launch" data-scene={v.sceneId} data-current={v.focused ? 'true' : 'false'}
       onClick={e => { if (isCardPick(e.target, e.currentTarget)) a.onPick(); }}
-      style={{
-        display: 'flex', flexDirection: 'column', gap: SP.xs, padding: `${SP.xs}px ${SP.md}px`, width: '100%', maxWidth: CARD_MAX_W, boxSizing: 'border-box',
-        border: `1px solid ${v.focused ? C.accent : C.borderLight}`, borderRadius: R.lg, background: C.bgCard, minWidth: 0, cursor: 'pointer',
-      }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', minWidth: 0, fontSize: FS.sm, color: C.textSecondary }}>
+      style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, padding: `0 ${SP.md}px`, width: '100%', maxWidth: CARD_MAX_W, boxSizing: 'border-box', minWidth: 0, cursor: 'pointer' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', minWidth: 0, fontSize: FS.sm, color: C.textMuted }}>
         <span style={{ display: 'inline-flex', color: C.accent }}>{ic(Zap, ICON_SIZE.sm)}</span>
-        <span style={{ color: C.textHeading }}>{v.name}</span>
+        <span style={{ color: C.textSecondary }}>{v.name}</span>
         {v.launchLine && <span data-video-launch-line="">{v.launchLine}</span>}
         <span style={{ flex: 1 }} />
-        {v.byClaude && <ByClaude title={v.progress ? 'Claude снимает эту сцену' : 'Сделал Claude'} />}
+        {v.byClaude && <ByClaude title="Сделал Claude" />}
       </div>
-      {v.progress && (
-        <div data-video-card-progress="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-          <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{v.progress.label}</span>
-          {v.progress.p !== undefined && <ProgressBar value={v.progress.p} />}
-        </div>
-      )}
       {v.failure && <Line>{v.failure}</Line>}
       {v.outcome && <Line><span data-video-launch-outcome="">{v.outcome}</span></Line>}
     </div>
@@ -312,6 +305,8 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const state = useVideoThreads(scope, sessionId);
   const { primary } = useChatContext(sessionId);
   useVideoStoreVersion();
+  // Полосу рисует карточка сцены; строки запусков (jobId) её не имеют и тикать не должны
+  useJobTick(!jobId && !!sessionId && getJobsOf(sessionId, sceneId).length > 0);
   const [pos, setPos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState<'save' | 'film' | null>(null);

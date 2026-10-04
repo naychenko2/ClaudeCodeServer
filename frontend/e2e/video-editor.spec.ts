@@ -190,12 +190,48 @@ for (const theme of ['light', 'dark'] as const) {
         await shot(page, 's7-bar');
       });
 
+      test('10. съёмка: одна карточка сцены с ходом, строка запуска без полосы, процент растёт по времени прогона, цена из «Чем»', async ({ page }) => {
+        await openVideoChat(page, scenePrimary(), { vp, theme, feed: feed(), films: [standardFilm(true)], frames: true, focus: { sceneId: 'scene-5', filmPath: FILM }, autoFinish: false });
+        if (isPhone(page) && await page.locator('[data-gen-sheet="sheet"]').isVisible()) {
+          await page.getByTitle('Закрыть панель — сводка останется в полосе').click();
+        }
+        await expect(modeBar(page)).toContainText('≈ $3.20', { timeout: 10_000 });
+        await runBtn(page).click();
+        await expect.poll(() => w().jobs.length).toBe(1);
+        const jobId = String(w().jobs[0].jobId);
+        // Бэкенд процентов не шлёт: стадия, вариант и etaSeconds; на прогон ждём 4 с
+        const progress = (stage: 'queued' | 'running', eta?: number) => hubSend({
+          type: 'video_edit_progress', sessionId: S, scopeKey: P, jobId, sceneId: 'scene-5', stage, variant: 1, count: 1, initiator: 'human', ...(eta ? { etaSeconds: eta } : {}),
+        });
+        progress('running', 4);
+        const bar = card(page, 5).locator('[data-video-card-progress]');
+        const pct = async () => Number(/(\d+) %/.exec(await bar.innerText())?.[1] ?? NaN);
+        // Ровно одна полная карточка сцены, полоса хода только в ней, строка запуска без полосы
+        await expect(page.locator('[data-video-card="scene"][data-scene="scene-5"]')).toHaveCount(1);
+        await expect(page.locator('[data-video-card-progress]')).toHaveCount(1);
+        await expect(page.locator('[data-video-card="launch"][data-scene="scene-5"]')).toHaveCount(1);
+        await expect(bar).toContainText('снимаем');
+        const first = await pct();
+        expect(first).toBeLessThan(40);
+        // Процент не стоит на месте: сначала растёт, не достигая 100 до итога
+        await expect.poll(pct, { timeout: 8_000 }).toBeGreaterThan(first + 25);
+        expect(await pct()).toBeLessThanOrEqual(95);
+        await shot(page, 's10-progress');
+        finishJob(jobId);
+        await expect(bar).toHaveCount(0);
+        await expect(card(page, 5).locator('[data-video-player]')).toBeVisible({ timeout: 10_000 });
+        // После съёмки кнопка снова несёт цену выбранного в «Чем» исполнителя
+        await expect(modeBar(page)).toContainText('≈ $3.20', { timeout: 10_000 });
+      });
+
       test('8. пустой чат: «Видео» из «＋» заводит сцену, кадры A и B берутся «Из проекта» как референсы контекста', async ({ page }) => {
         // Лента пуста: якоря сцен 1–5 из feed() дали бы вторую карточку «Сцена 1» рядом с созданной сценой
         await openVideoChat(page, null, { vp, theme, scenes: [], feed: [] });
         await page.getByRole('button', { name: /^Прикрепить файл, / }).click();
         await page.getByRole('menuitem', { name: /^Видео/ }).or(page.getByRole('button', { name: /^Видео/ })).first().click();
         await expect.poll(() => w().scenes.length).toBe(1);
+        // Создание сцены — ровно одна карточка в ленте (ни второго якоря, ни строки запуска)
+        await expect(page.locator('[data-video-card]')).toHaveCount(1);
         // Бэкенд зеркалит фокус сцен в контекст: новая сцена — основной объект, чипы на месте, «Снять» серое без кадров
         await expect(actions(page)).toBeVisible({ timeout: 10_000 });
         await expect(chip(page, 'shoot')).toHaveAttribute('aria-disabled', 'true');
@@ -256,7 +292,9 @@ test('агент снимает: та же карточка запуска с ц
   hubSend({ type: 'video_edit_progress', sessionId: S, scopeKey: P, jobId: 'job-agent', sceneId: 'scene-2', stage: 'running', variant: 1, count: 2, initiator: 'agent' });
   const c = page.locator('[data-video-card="launch"][data-scene="scene-2"]');
   await expect(c.locator('[data-video-launch-line]')).toHaveText('Veo 3.1 · 2 вар. · ≈ $3.20');
-  await expect(c.locator('[data-video-card-progress]')).toContainText('снимаем 2 варианта');
+  // Полоса хода — в полной карточке сцены, строка запуска её не дублирует
+  await expect(card(page, 2).locator('[data-video-card-progress]')).toContainText('снимаем 2 варианта');
+  await expect(c.locator('[data-video-card-progress]')).toHaveCount(0);
   await expect(c.locator('[data-by-claude]')).toBeVisible();
   finishJob('job-agent');
   // Готовые варианты — в одной полной карточке сцены; у запуска остаётся компактная строка с итогом

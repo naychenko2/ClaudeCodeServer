@@ -69,8 +69,9 @@ describe('карточки «Видео»: агент — та же размет
     const h = render(shot('human', true), 'human', { jobId: 'job-7', record: launchRecord, running: true });
     const a = render(shot('agent', true), 'agent', { jobId: 'job-7', record: launchRecord, running: true });
     expect(h.html).toContain('Veo 3.1 · 2 вар. · ≈ $3.20');
-    expect(h.html).toContain('data-video-card-progress');
-    expect(h.html).toContain('снимаем 2 варианта');
+    // Полоса хода живёт в карточке сцены, строка запуска её не дублирует
+    expect(h.html).not.toContain('data-video-card-progress');
+    expect(render(shot('human', true), 'human', { running: true }).html).toContain('снимаем 2 варианта');
     expect(a.html).toMatch(BY);
     expect(a.html.replace(BY, '')).toBe(h.html);
   });

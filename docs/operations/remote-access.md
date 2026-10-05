@@ -209,6 +209,26 @@ Basic. Иначе Mini-Redirector цепляется за Negotiate и крут�
 (`WebDav/NegotiateFailure.cs`) превращает его в `401` с **одним** Basic. Без этого клиент получал
 500, а Explorer крутил сохранённую учётку по кругу.
 
+### Разбор InvalidToken и живая проверка с Windows
+
+Статус в `NTLM отклонён: …: <статус>` различает причины (разбор 2026-10-05):
+`GenericFailure` — не сошёлся NTLMv2-ответ (пароль, регистр или написание домена);
+`InvalidToken` — gss-ntlmssp вернул `GSS_S_DEFECTIVE_TOKEN` **после** успешной проверки хэша, то
+есть сломалась проверка MIC, channel bindings или разбор AV-пар. Неверный хэш InvalidToken не даёт.
+На стенде против настоящего gss-ntlmssp 1.2.0 и Kestrel по HTTPS (NTLMv2, MIC, SPNEGO mechListMIC,
+`MsvAvChannelBindings`, `MsvAvTargetName`) клиент pyspnego проходит; channel bindings Kestrel
+на Linux не навязывает (даже заведомо неверный CBT принят).
+
+Живая проверка (на Windows, не на проде без согласования):
+
+1. На сервере включить трассировку: в юните `Environment=GSSNTLMSSP_DEBUG=/tmp/gssntlm.log`,
+   перезапуск; после проверки убрать.
+2. С Windows: `curl.exe -v --ntlm -u "WORKGROUP\andrey:ПАРОЛЬ" https://хост/projects/` и то же с
+   `--negotiate -u "WORKGROUP\andrey:ПАРОЛЬ"`; для сравнения `-k` не нужен, если сертификат доверенный.
+3. В логе приложения найти `NTLM отклонён …; Type3: флаги 0x…, NTLMv2, MsvAvFlags 0x2 (MIC),
+   MsvAvTargetName …, CBT задан`. Прислать эту строку, статус и строки `ERROR:` из
+   `/tmp/gssntlm.log` — по ним видно, на какой проверке (`gss_sec_ctx.c`: MIC, CBT) падает токен.
+
 ### Безопасность
 
 В файле лежат NT-хэши **основного пароля**: по ним возможен pass-the-hash, а MD4 без соли

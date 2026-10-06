@@ -35,6 +35,11 @@ public class PersonalImageEditorController(
     public IActionResult Catalog(string sessionId) =>
         Gate(sessionId, out _, out var denied) ? CatalogOf() : denied;
 
+    [HttpGet("format")]
+    public async Task<IActionResult> Format(string sessionId, [FromQuery] string? provider, [FromQuery] string? model,
+        [FromQuery] string? op, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, ct) : denied;
+
     [HttpPost("quote")]
     public async Task<IActionResult> Quote(string sessionId, [FromBody] ImageEditQuoteRequest req, CancellationToken ct) =>
         Gate(sessionId, out var scope, out var denied) ? await QuoteIn(scope, req, ct) : denied;
@@ -127,6 +132,11 @@ public class PersonalThreadsController(
     [HttpPost("{threadId}/steps")]
     public async Task<IActionResult> AddStep(string sessionId, string threadId, [FromBody] ImageThreadStepRequest req) =>
         Gate(sessionId, out var scope, out var denied) ? await AddStepIn(scope, sessionId, threadId, req) : denied;
+
+    [HttpPost("{threadId}/crop")]
+    public async Task<IActionResult> Crop(string sessionId, string threadId, [FromBody] ImageThreadCropRequest req,
+        CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await CropIn(scope, sessionId, threadId, req, ct) : denied;
 
     [HttpPost("{threadId}/take")]
     public async Task<IActionResult> Take(string sessionId, string threadId, [FromBody] ImageThreadTakeRequest req,

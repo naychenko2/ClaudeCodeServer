@@ -171,7 +171,8 @@ public sealed class ImageEditorStateContributor(
     // чата (в префах проекта персонаж не читается)
     public const string ChoiceRule =
         "Исполнитель и модель в «Чем» контекста хода — выбор человека: не передавай provider/model в image_generate, "
-        + "если он сам не просил сменить. Персонаж и образцы бери из контекста хода, а не придумывай.";
+        + "если он сам не просил сменить. Персонаж и образцы бери из контекста хода, а не придумывай. "
+        + "Формат (aspect, quality, width, height) в «Формат:» контекста хода — тоже выбор человека: не передавай его без просьбы.";
 
     // Выбор остаётся с прошлых сообщений, человек его мог и не обновлять: без оговорки агент принимал любую
     // следующую просьбу за правку картинки из «С чем» (баг 30.09)
@@ -210,12 +211,15 @@ public sealed class ImageEditorStateContributor(
     // «Править» — правка (у картинки из «С чем» — её настройки). Персонаж — реф контекста, не префы проекта
     public static string ChoiceText(Prefs.ImageProjectPrefs prefs, ImageThreadSettings? focused)
     {
-        if (!prefs.HasModes) return "Выбор человека в строке контекста: " + SettingsText(focused ?? prefs.EditSettings());
+        var format = prefs.Format is { } f && f.Mode != Media.FormatModes.Model
+            ? $"; формат картинок проекта — {Media.MediaFormatText.Wish(f)}{(f.By == ClaudeHomeServer.Services.ChatContext.ContextActor.Agent ? " (✦ поставил Claude)" : "")}"
+            : "";
+        if (!prefs.HasModes) return "Выбор человека в строке контекста: " + SettingsText(focused ?? prefs.EditSettings()) + format;
         var edit = SettingsText(focused ?? prefs.EditSettings());
         var op = prefs.Edit?.Op is { } o ? $", операция {o}" : "";
         return "Выбор человека в строке контекста: "
             + $"новая картинка (генерация по тексту) — {SettingsText(prefs.CreateSettings())}; "
-            + $"правка{(focused is null ? "" : " картинки в работе")} — {edit}{op}";
+            + $"правка{(focused is null ? "" : " картинки в работе")} — {edit}{op}" + format;
     }
 
     private static string SettingsText(ImageThreadSettings settings) =>

@@ -2,7 +2,8 @@
 // (через /api/auth/me и /api/feature-flags) и раздаются компонентам хуком useFeature.
 // Паттерн — как у offline.ts: модульное состояние + подписки + useSyncExternalStore.
 
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
+import { api } from './api';
 
 // Тонкий реестр ключей для type-safe вызовов useFeature. Дублирует ключи из
 // бэкового FeatureFlagCatalog (одна строка на флаг). Описания/дефолты/стадии
@@ -68,6 +69,14 @@ export function setAllFlags(flags: Record<string, boolean>) {
   emit();
 }
 
+// Влить пришедшие значения поверх известных: пустой или частичный ответ не затирает
+// ключи, которых в нём нет (в отличие от setAllFlags, которая заменяет набор целиком)
+export function mergeFlags(flags: Record<string, boolean> | null | undefined) {
+  if (!flags) return;
+  _flags = { ..._flags, ...flags };
+  emit();
+}
+
 // Оптимистичное локальное обновление одного флага (для мгновенной реакции тумблера)
 export function setFlagLocal(key: string, value: boolean) {
   _flags = { ..._flags, [key]: value };
@@ -94,4 +103,45 @@ export function useFeature(key: FlagKey): boolean {
     () => getFlag(key),
     () => getFlag(key),
   );
+}
+
+// Освежение стора: флаги читаются при старте SPA, а тумблер мог сменить другой клиент
+// или прямой PUT. Дросселирование — чтобы alt-tab не дёргал сервер на каждый возврат.
+export const FLAGS_REFRESH_MIN_INTERVAL_MS = 45_000;
+
+export function createFlagsRefresher(
+  fetchFlags: () => Promise<Record<string, boolean> | null | undefined>,
+  now: () => number = Date.now,
+  minIntervalMs: number = FLAGS_REFRESH_MIN_INTERVAL_MS,
+) {
+  let last = Number.NEGATIVE_INFINITY;
+  return async function refresh(force = false): Promise<boolean> {
+    const t = now();
+    if (!force && t - last < minIntervalMs) return false;
+    last = t;
+    try {
+      mergeFlags(await fetchFlags());
+    } catch {
+      // сбой освежения не критичен: остаются прежние значения
+    }
+    return true;
+  };
+}
+
+// Один раз на всё приложение (после авторизации): при монтировании и при возврате
+// окну видимости/фокуса.
+export function useFeatureFlagsRefresh(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    const refresh = createFlagsRefresher(() => api.auth.me().then(me => me?.featureFlags));
+    void refresh(true);
+    const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
+    const onFocus = () => { void refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [enabled]);
 }

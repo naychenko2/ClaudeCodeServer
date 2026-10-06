@@ -118,6 +118,12 @@ public sealed class MemoryDifyDebouncer(TimeSpan debounce) : IDisposable
         if (_disposed && _timers.TryRemove(key, out var late)) late.Dispose();
     }
 
+    // Снять отложенный синк ключа (scope удалён — таймер не должен воскресить его датасет)
+    public void Cancel(string key)
+    {
+        if (_timers.TryRemove(key, out var timer)) timer.Dispose();
+    }
+
     public void Dispose()
     {
         _disposed = true;

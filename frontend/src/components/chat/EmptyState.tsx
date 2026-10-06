@@ -8,6 +8,7 @@ import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { useContextPersona } from '../../lib/contextPersona';
 import { Button } from '../ui';
 import { useCreateShortcuts } from './composerShortcuts';
+import { isZonedPersona } from '../../lib/personaZone';
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
 // Внизу — настройка будущего чата (модель, усилие, время жизни, теги), пока не отправлено первое сообщение.
@@ -199,7 +200,7 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
   onPick: (p: Persona) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const projectPersonas = personas.filter(p => p.scope === 'project');
+  const projectPersonas = personas.filter(isZonedPersona);
   // Пантеонные персоны (каталог OmO, с templateKey) — всегда под раскрывашкой,
   // как и обычные глобальные в проекте с командой; по умолчанию не предлагаются.
   const regularGlobals = personas.filter(p => p.scope === 'global' && !p.templateKey);

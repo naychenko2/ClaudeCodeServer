@@ -18,6 +18,8 @@ import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaWizard } from './PersonaWizard';
 import { DeletePersonaDialog } from './DeletePersonaDialog';
 import { useIsMobile } from '../../lib/breakpoints';
+import { visibleIn, isGlobalPersona } from '../../lib/personaZone';
+import { useSphereOf } from '../../lib/useSphereOf';
 
 // Проектная вкладка «Команда»: САЙДБАРНЫЙ СПИСОК персон этого проекта.
 // Форма редактирования/создания живёт отдельно — в центральной зоне (ProjectPersonaPane).
@@ -32,10 +34,11 @@ export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew, onS
   teamActive?: boolean;
 }) {
   const personas = usePersonas();
+  const sphereOf = useSphereOf();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
   // Только персоны этого проекта (глобальные живут в хабе «Персоны»)
-  const projectPersonas = personas.filter(p => p.scope === 'project' && p.projectId === project.id);
+  const projectPersonas = personas.filter(p => visibleIn(p, project.id, sphereOf) && !isGlobalPersona(p));
 
   return (
     // Фон прозрачный: подложку даёт контентная зона карточки панели (белая)

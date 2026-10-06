@@ -15,6 +15,7 @@ import {
 import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
+import { useSphereOf } from '../../lib/useSphereOf';
 import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
 import {
   SourceBadge,
@@ -191,7 +192,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   // Меню персон — общее с панелью комментариев: команда проекта + глобальные,
   // карточки с аватарами, портал с клэмпом по экрану.
   const personas = usePersonas();
-  const assignable = ann ? filterAssignablePersonas(personas, ann.docScope) : [];
+  const sphereOf = useSphereOf();
+  const assignable = ann ? filterAssignablePersonas(personas, ann.docScope, sphereOf) : [];
   const [assignAnchor, setAssignAnchor] = useState<HTMLElement | null>(null);
   useEffect(() => { if (ann && !ann.isReply) void ensurePersonasLoaded(); }, [ann]);
   const createTaskFromComment = async (persona?: Persona) => {

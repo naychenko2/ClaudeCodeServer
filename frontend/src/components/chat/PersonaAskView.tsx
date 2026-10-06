@@ -8,6 +8,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { markdownToPlain } from '../../lib/markdownPlain';
 import { findPersonaByAgentType } from './PersonaTaskView';
 import { ChatProjectContext } from './contexts';
+import { useSphereOf } from '../../lib/useSphereOf';
 
 // Вызов persona_ask (mcp__personas__persona_ask) — сравнение по суффиксу, без регистра
 export function isPersonaAsk(name: string): boolean {
@@ -46,6 +47,7 @@ export const PersonaAskView = memo(function PersonaAskView({ item }: { item: Ext
   // В чатах без персоны стор мог быть ещё не загружен — подтягиваем список
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
+  const sphereOf = useSphereOf();
   const project = useContext(ChatProjectContext);
 
   const inp = (item.input ?? {}) as { handle?: unknown; question?: unknown };
@@ -53,7 +55,7 @@ export const PersonaAskView = memo(function PersonaAskView({ item }: { item: Ext
   const question = typeof inp.question === 'string' ? inp.question : '';
 
   // Контекстный резолв: handle уникален лишь в границах проекта — тёзку из чужого не берём
-  const persona = findPersonaByAgentType(handle, personas, project?.id ?? null);
+  const persona = findPersonaByAgentType(handle, personas, project?.id ?? null, sphereOf);
   const accent = persona ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? NEUTRAL_ACCENT) : NEUTRAL_ACCENT;
   const title = persona ? personaLabel(persona) : handle || 'Персона';
 

@@ -2501,8 +2501,8 @@ export interface KnowledgeDocumentContent {
 
 // ===== Персоны (олицетворённые ИИ-собеседники) =====
 
-// Зона контекста персоны: глобально (личное пространство) или в рамках проекта
-export type PersonaScope = 'global' | 'project';
+// Зона контекста персоны: глобально (личное пространство), в рамках проекта или сферы (флаг spheres)
+export type PersonaScope = 'global' | 'project' | 'sphere';
 
 // Профиль доступа персоны (P6): full — без ограничений; readOnly — смотрит и
 // советует, но ничего не меняет; custom — свой список запрещённых инструментов
@@ -2782,7 +2782,8 @@ export interface Persona {
   tierWeak?: string | null;
   effort?: string;
   scope: PersonaScope;
-  projectId?: string;         // задан только для scope === 'project'
+  projectId?: string;         // задан только у проектной зоны
+  sphereId?: string;          // задан только у зоны сферы (флаг spheres)
   avatar: PersonaAvatar;
   voice?: PersonaVoice | null; // личный голос; null/отсутствие — голос инстанса
   greeting?: string;          // приветствие персоны в начале чата
@@ -2953,6 +2954,7 @@ export interface CreatePersonaDto {
   effort?: string;
   scope?: PersonaScope;
   projectId?: string;
+  sphereId?: string;
   color?: string;             // ключ палитры AGENT_COLORS для аватара-инициалов
   greeting?: string;
   memoryEnabled?: boolean;

@@ -15,6 +15,8 @@ import { markdownToPlain } from '../../lib/markdownPlain';
 import { itemKey, type ActivityEntry } from './timeline';
 import { ChatProjectContext, ChatSessionContext } from './contexts';
 import { useSubagentModelChip } from '../../lib/presets';
+import { useSphereOf } from '../../lib/useSphereOf';
+import { isZonedPersona, visibleIn, type SphereOf } from '../../lib/personaZone';
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -29,24 +31,24 @@ export function isAgentToolUse(name: string): boolean {
 // (subagent_type), и для агентов Workflow (agentType из meta.json)
 // projectId — контекст чата: handle уникален только в контексте (глобальные + персоны
 // одного проекта), тёзки из ЧУЖИХ проектов не матчатся (зеркало PersonaManager.GetByHandle).
-// Страховка на случай остаточных дублей: проектная приоритетнее глобальной.
-export function findPersonaByAgentType(agentType: string | undefined, personas: Persona[], projectId: string | null): Persona | null {
+// Страховка на случай остаточных дублей: проектная и сферная приоритетнее глобальной.
+export function findPersonaByAgentType(agentType: string | undefined, personas: Persona[], projectId: string | null, sphereOf?: SphereOf): Persona | null {
   const handle = agentType?.trim().toLowerCase();
   if (!handle) return null;
   const inContext = personas.filter(p => p.handle?.toLowerCase() === handle
-    && (p.scope === 'global' || (p.scope === 'project' && p.projectId === projectId)));
-  return inContext.find(p => p.scope === 'project') ?? inContext[0] ?? null;
+    && visibleIn(p, projectId ?? undefined, sphereOf));
+  return inContext.find(isZonedPersona) ?? inContext[0] ?? null;
 }
 
 // Персона, с которой консультируется этот Task-вызов (по input.subagent_type == handle);
 // null — обычный сабагент (Explore/general-purpose/кастомный). Используется и здесь
 // (фолбэк на ToolUseView), и в ChatPanel (передать вложенную активность внутрь карточки).
-export function findConsultedPersona(item: ToolUseItem, personas: Persona[], projectId: string | null): Persona | null {
+export function findConsultedPersona(item: ToolUseItem, personas: Persona[], projectId: string | null, sphereOf?: SphereOf): Persona | null {
   if (!isAgentToolUse(item.name)) return null;
   const inp = (item.input ?? {}) as { subagent_type?: unknown; agentType?: unknown };
   const handle = typeof inp.subagent_type === 'string' ? inp.subagent_type
     : typeof inp.agentType === 'string' ? inp.agentType : '';
-  return findPersonaByAgentType(handle, personas, projectId);
+  return findPersonaByAgentType(handle, personas, projectId, sphereOf);
 }
 
 // Презентационная карточка «консультация персоны»: идентичность (аватар + «Роль (Имя)» +
@@ -366,10 +368,11 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   // В чатах без персоны стор мог быть ещё не загружен — подтягиваем список
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
+  const sphereOf = useSphereOf();
   const project = useContext(ChatProjectContext);
 
   const inp = (item.input ?? {}) as { prompt?: unknown; description?: unknown };
-  const persona = findConsultedPersona(item, personas, project?.id ?? null) ?? undefined;
+  const persona = findConsultedPersona(item, personas, project?.id ?? null, sphereOf) ?? undefined;
 
   const question = typeof inp.prompt === 'string' ? inp.prompt : '';
   const summary = typeof inp.description === 'string' ? inp.description : '';

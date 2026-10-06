@@ -6,6 +6,7 @@ import { personaTitleLines } from '../../lib/personas';
 import { PillSwitch } from '../../components/Toolbar';
 import { Button, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { PersonaAvatar } from './PersonaAvatar';
+import { isProjectPersona, isProjectTeam } from '../../lib/personaZone';
 
 // Что показывать в разделе: только глобальных или вообще всех (с проектными)
 export type PersonaListMode = 'global' | 'all';
@@ -166,15 +167,15 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
           // Группируем только там, где список смешанный (глобальный раздел в режиме «Все»).
           // В панели команды проекта персоны и так все из одного проекта — секции ни к чему.
           const grouped = mode === 'all' && !!projects;
-          const ownGlobal = grouped ? own.filter(p => p.scope !== 'project') : own;
+          const ownGlobal = grouped ? own.filter(p => !isProjectPersona(p)) : own;
           const ownByProject = grouped
             ? (projects ?? [])
-              .map(pr => ({ title: pr.name, rows: own.filter(p => p.scope === 'project' && p.projectId === pr.id) }))
+              .map(pr => ({ title: pr.name, rows: own.filter(p => isProjectTeam(p, pr.id)) }))
               .filter(g => g.rows.length > 0)
             : [];
           const known = new Set((projects ?? []).map(pr => pr.id));
           const orphans = grouped
-            ? own.filter(p => p.scope === 'project' && (!p.projectId || !known.has(p.projectId)))
+            ? own.filter(p => isProjectPersona(p) && (!p.projectId || !known.has(p.projectId)))
             : [];
 
           return (

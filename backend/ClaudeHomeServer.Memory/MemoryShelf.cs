@@ -597,18 +597,26 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
     public async Task DeleteScopeAsync(string ownerId, string scopeId)
     {
         var key = Key(ownerId, scopeId);
+        // Отложенный синк снимаем до удаления, иначе он воссоздал бы датасет уже удалённого scope'а;
+        // идущий синк дожидаемся — он мог создать датасет, которого мы ещё не видим в _kStore
+        _debounce.Cancel(key);
+        await _syncLock.WaitAsync();
         string? datasetId;
-        lock (_kLock)
+        try
         {
-            datasetId = _kStore.GetValueOrDefault(key)?.DatasetId;
-            _kStore.Remove(key);
-            SaveKnowledge();
+            lock (_kLock)
+            {
+                datasetId = _kStore.GetValueOrDefault(key)?.DatasetId;
+                _kStore.Remove(key);
+                SaveKnowledge();
+            }
+            lock (_saveLock)
+            {
+                _store.TryRemove(key, out _);
+                Save();
+            }
         }
-        lock (_saveLock)
-        {
-            _store.TryRemove(key, out _);
-            Save();
-        }
+        finally { _syncLock.Release(); }
         if (!string.IsNullOrEmpty(datasetId) && _knowledge?.IsConfigured == true)
         {
             try { await _knowledge.DeleteDatasetAsync(datasetId); }
@@ -746,6 +754,12 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
             var state = GetKnowledgeState(ownerId, scopeId);
             if (string.IsNullOrEmpty(state.DatasetId))
             {
+                // Пустой scope без датасета (память удалена вместе с владельцем) — создавать нечего
+                if (Count(ownerId, scopeId) == 0)
+                {
+                    lock (_kLock) _kStore.Remove(Key(ownerId, scopeId));
+                    return 0;
+                }
                 var datasetId = await _knowledge!.CreateDatasetAsync(_opts.DatasetName(ownerId, scopeId));
                 lock (_kLock) { state.DatasetId = datasetId; SaveKnowledge(); }
             }

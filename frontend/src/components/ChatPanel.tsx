@@ -6,6 +6,7 @@ import { ProjectFeature } from '../types';
 import { featureReason, isLocalProject, useProjectFeature } from '../lib/projectCapabilities';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
+import { useSphereOf } from '../lib/useSphereOf';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { isArchivedChat } from '../lib/chatFilters';
@@ -544,6 +545,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // === Персона чата ===
   // Резолвим персону сессии из стора (реактивно — при обновлении списка перечитываем).
   const personasVersion = usePersonasVersion();
+  const sphereOf = useSphereOf();
   const persona = useMemo(
     () => session.personaId ? getPersonaById(session.personaId) ?? null : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — версия внешнего стора: бамп заставляет перечитать getPersonaById (стор нереактивен сам по себе)
@@ -2293,7 +2295,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           // Консультация персоны-сабагента: активность рендерится СЕКЦИЕЙ ВНУТРИ
           // карточки (PersonaTaskView), внешняя плашка «N действий» не нужна
           const isPersonaTask = it.kind === 'tool_use' && inlineChildren.length > 0
-            && !!findConsultedPersona(it, getPersonasSnapshot(), project?.id ?? null);
+            && !!findConsultedPersona(it, getPersonasSnapshot(), project?.id ?? null, sphereOf);
           return (
             <Fragment key={itemKey(it, idx)}>
               <div data-feed-index={idx} style={topBorder ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
@@ -2399,7 +2401,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
+  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sphereOf, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
 
   // Прыжок из баннера к карточке: лента режется окном (WINDOW_FIRST=50), и нужный
   // узел за пределами видимой области физически отсутствует в DOM — простой

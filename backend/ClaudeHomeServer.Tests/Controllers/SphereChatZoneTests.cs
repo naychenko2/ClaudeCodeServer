@@ -113,7 +113,8 @@ public class SphereChatZoneTests : IDisposable
         session.PersonaId.Should().Be(persona.Id, "собеседника молча не меняем");
         var history = await sessions.GetHistoryAsync(chatId);
         history.OfType<ClaudeHomeServer.Protocol.StoredErrorMessage>().Should()
-            .ContainSingle(e => e.Text.StartsWith("Проект больше не в сфере «чаты»") && e.Text.Contains("смените собеседника"));
+            .ContainSingle(e => e.Text == $"{persona.Name} работает только в проектах сферы «чаты». Смените собеседника."
+                && e.Action == "change-companion");
         _factory.LlmAdapters.Adapters[chatId].SentMessages.Should().BeEmpty("ход в процесс не уходил");
     }
 
@@ -132,7 +133,7 @@ public class SphereChatZoneTests : IDisposable
         var resp = await _client.PostAsync($"/api/tasks/{task.Id}/execute", null);
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await resp.Content.ReadAsStringAsync()).Should().Contain("смените собеседника");
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("Смените собеседника");
         tasks.GetById(task.Id)!.ClaudeResult.Should().Be("error");
         task.LinkedSessionId.Should().BeNull("сессия исполнителя не создавалась");
     }

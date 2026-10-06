@@ -24,7 +24,7 @@ public class PersonaZoneTests
     }
 
     private static Persona SpherePersona(string? sphereId = "s1") =>
-        new() { OwnerId = Owner, Scope = PersonaScope.Sphere, SphereId = sphereId };
+        new() { OwnerId = Owner, Name = "Лена", Scope = PersonaScope.Sphere, SphereId = sphereId };
 
     [Fact]
     public void Сфера_ФлагВыключен_ЗонаПуста()
@@ -92,7 +92,7 @@ public class PersonaZoneTests
 
         dir.Spheres["s1"].Remove("p1");
         PersonaZone.VisibleIn(persona, "p1", dir).Should().BeFalse();
-        PersonaZone.OutOfZoneRefusal(persona, "p1", dir).Should().Contain("«Работа»");
+        PersonaZone.OutOfZoneRefusal(persona, "p1", dir).Should().Contain("«Работа».").And.Contain(persona.Name).And.EndWith("Смените собеседника.");
     }
 
     [Fact]

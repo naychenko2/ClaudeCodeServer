@@ -508,12 +508,12 @@ internal class TurnAccumulator
 
     // text — человекочитаемая формулировка сбоя (Services/Llm/TurnFailureText), details —
     // сырой технический текст (ответ CLI, ex.Message): в карточке он под «Подробностями».
-    public async Task OnErrorAsync(string text, ChatHistoryService svc, string? details = null)
+    public async Task OnErrorAsync(string text, ChatHistoryService svc, string? details = null, string? action = null)
     {
         lock (_lock)
         {
             FlushBuffers(final: true);
-            _currentTurn.Add(new StoredErrorMessage(text) { Details = details, Timestamp = NowMs() });
+            _currentTurn.Add(new StoredErrorMessage(text) { Details = details, Action = action, Timestamp = NowMs() });
         }
         await FlushAsync(svc);
     }

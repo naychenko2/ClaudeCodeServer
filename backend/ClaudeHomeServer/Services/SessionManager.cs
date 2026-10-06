@@ -4370,7 +4370,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var runId = Interlocked.Increment(ref _runSeq);
         entry.RunId = runId;
         var acc = entry.Accumulator!;
-        await OnMessageAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true), runId);
+        await OnMessageAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true, Action: PersonaZone.ChangeCompanionAction), runId);
         await OnMessageAsync(sessionId, acc, new ResultMessage(
             Subtype: "error", DurationMs: 0, NumTurns: 0, Usage: null, TotalCostUsd: null), runId);
         await OnMessageAsync(sessionId, acc, new ExitedMessage(), runId);
@@ -9198,7 +9198,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // за которой пошла подмена, адаптер наружу не выпускает (её текст едет
                     // в ErrorDetails маркера) — значит и LoopTurnFailed на ней не взводится.
                     // Details — сырой техтекст под «Подробностями» карточки.
-                    await acc.OnErrorAsync(m.Text, _history, m.Details);
+                    await acc.OnErrorAsync(m.Text, _history, m.Details, m.Action);
                     // Ошибка хода (в т.ч. упавший старт процесса) — цикл «до готово»
                     // не продолжаем; иначе ретрай-шторм до лимита итераций
                     if (entry is not null) entry.LoopTurnFailed = true;

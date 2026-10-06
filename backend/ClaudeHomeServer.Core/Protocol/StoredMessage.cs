@@ -167,6 +167,8 @@ public class StoredErrorMessage(string text) : StoredMessage
     // Сырой технический текст сбоя (ErrorMessage.Details): в карточке живёт под
     // «Подробностями» и переживает F5. null — деталей нет (старые записи в том числе).
     public string? Details { get; init; }
+    // Признак действия под карточкой (ErrorMessage.Action), переживает F5. null — действия нет.
+    public string? Action { get; init; }
     // Когда случился сбой (Unix-мс UTC) — см. StoredTextMessage.Timestamp. По нему фронт
     // отделяет ошибки прошлых дней (склеиваются в кат «Завершённые с ошибкой») от
     // сегодняшних (полноразмерный баннер). null — история до этого поля: дату фронт

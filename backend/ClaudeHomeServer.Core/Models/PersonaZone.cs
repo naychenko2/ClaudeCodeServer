@@ -56,6 +56,9 @@ public static class PersonaZone
         || (persona.Scope == PersonaScope.Sphere && !string.IsNullOrEmpty(persona.SphereId)
             && string.Equals(persona.SphereId, sphereId, StringComparison.Ordinal));
 
+    /// <summary>Машинный признак отказа вне зоны (ErrorMessage.Action / StoredErrorMessage.Action): фронт рисует «смените собеседника».</summary>
+    public const string ChangeCompanionAction = "change-companion";
+
     /// <summary>
     /// Отказ, если проект чата вышел из сферы персоны; null — всё в порядке (в т.ч. для не-сферных
     /// персон и чата вне проекта: выходить не из чего).
@@ -65,6 +68,6 @@ public static class PersonaZone
         if (persona.Scope != PersonaScope.Sphere || sessionProjectId is null) return null;
         if (VisibleIn(persona, sessionProjectId, dir)) return null;
         var name = string.IsNullOrEmpty(persona.SphereId) ? null : dir.SphereName(persona.OwnerId, persona.SphereId);
-        return $"Проект больше не в сфере «{name ?? "—"}» — смените собеседника";
+        return $"{persona.Name} работает только в проектах сферы «{name ?? "—"}». Смените собеседника.";
     }
 }

@@ -7,7 +7,7 @@
 // Ручки фильма и «Сохранить сцену» (блок 2 бэкенда) описаны здесь же по контракту, но на момент
 // написания живого сервера у них нет: фронт ходит в них через videoApi, а тесты и e2e — на моках.
 
-import { onMessage, readStoredToken, request } from 'aihome_shell/kit';
+import { onMessage, readStoredToken, request, type MediaFormatCaps, type MediaFormatWish, type ResolvedFormat } from 'aihome_shell/kit';
 import { chatBase, isPersonalScope, PERSONAL_SCOPE, videoBase } from './scope';
 
 // ── Кадры и настройки сцены ──
@@ -18,6 +18,10 @@ export type FrameRef =
   // fileName — человеческое имя загруженного «С компьютера» файла: подпись вместо пути рабочей папки
   | { kind: 'file'; path: string; fileName?: string };
 
+// Рамка подрезки кадров A/B под формат сцены (ADR-025): по умолчанию по центру; top/bottom сервер понимает,
+// но интерфейс по записке даёт только «Слева · По центру · Справа»
+export type FrameAnchor = 'left' | 'center' | 'right' | 'top' | 'bottom';
+
 export interface VideoSceneSettings {
   frameA?: FrameRef;
   frameB?: FrameRef;
@@ -25,9 +29,13 @@ export interface VideoSceneSettings {
   provider?: string;
   model?: string;
   durationSec?: number;
+  // Зеркало format.aspect: его читает старый клиент и FilmSceneSaver, пишем оба
   aspect?: string;
   sound?: boolean;
   count?: number;
+  // Желание «Формата» (ADR-025): хранится желание, действующий формат считает сервер
+  format?: MediaFormatWish;
+  frameFit?: { anchor: FrameAnchor };
 }
 
 export interface VideoCost { currency: 'usd' | 'credits' | 'local'; amount: number }
@@ -51,6 +59,11 @@ export interface VideoClipVersion {
   initiator: VideoInitiator;
   inputs: VideoInputsSnapshot;
   createdAt: string;
+  // Размер ролика, если драйвер его знает (local — всегда)
+  width?: number;
+  height?: number;
+  // «Макс» local H3: увеличение не удалось или отменено, версия — съёмка 768p как есть
+  upscaleError?: string;
 }
 
 export type VideoLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
@@ -73,6 +86,11 @@ export interface VideoSceneStale { text: boolean; frameA: boolean; frameB: boole
 export interface VideoSavedFile { versionId: string; path: string }
 export interface VideoFilmRef { path: string; position: number }
 
+// Замок формата: сцена фильма на позиции > 0 следует пропорциям фильма (их задала сцена 1)
+export interface VideoFilmLock { filmPath: string; aspect: string }
+// Кадры последней съёмки подрезали под формат сцены; frameA/frameB — пропорции исходных кадров, null — не подрезался
+export interface VideoFramesCropped { aspect: string; frameA: string | null; frameB?: string | null; anchor: FrameAnchor }
+
 export interface VideoScene {
   sceneId: string;
   name: string;
@@ -85,6 +103,10 @@ export interface VideoScene {
   savedFiles: VideoSavedFile[];
   filmRef?: VideoFilmRef;
   createdAt: string;
+  lockedBy?: VideoFilmLock;
+  // Пропорции сцены не совпадают с фильмом: при склейке пойдут чёрные полосы
+  formatMismatch?: boolean;
+  framesCropped?: VideoFramesCropped;
 }
 
 export interface VideoFocus { sceneId?: string; filmPath?: string }
@@ -103,6 +125,8 @@ export interface VideoModelInfo {
   sound: boolean;
   lastFrame: boolean;
   license?: string;
+  // Ступени и пропорции «Формата»; нет — «Как у модели»
+  format?: MediaFormatCaps;
 }
 
 export interface VideoProvider {
@@ -124,6 +148,7 @@ export interface VideoPrefs {
   aspect?: string;
   sound?: boolean;
   count?: number;
+  format?: MediaFormatWish;
 }
 
 export interface VideoState { threads: VideoThreadsState; catalog: VideoCatalog; prefs: VideoPrefs }
@@ -139,6 +164,9 @@ export interface VideoQuoteRequest {
   durationSec?: number;
   aspect?: string;
   sound?: boolean;
+  // Желание «Формата»: сервер возвращает по нему действующий формат и цену со временем ступени
+  format?: MediaFormatWish;
+  frameFit?: { anchor: FrameAnchor };
   // Ревизия контекста чата (ADR-023 §Д2.1): сцену и кадры сервер берёт из стора, sceneId может быть пустым
   contextRevision?: number;
 }
@@ -150,6 +178,9 @@ export interface VideoPrice {
   source: string;
   eta?: number;
   queueLength?: number;
+  // «Макс» local H3: часть eta, которую занимает увеличение следом за съёмкой; postStep = 'upscale'
+  upscaleEta?: number;
+  postStep?: string;
 }
 
 export interface VideoQuote {
@@ -162,6 +193,8 @@ export interface VideoQuote {
   license: string;
   heavy: boolean;
   expiresAt: string;
+  // Действующий формат сцены по желанию: размер, подмена и пояснение
+  format?: ResolvedFormat;
 }
 
 export interface RetryQuote { provider: string; model: string; quote: VideoQuote; reason: string }
@@ -173,7 +206,7 @@ export interface VideoLaunchRequest {
 
 export interface VideoLaunchResult { jobId?: string; errorCode?: string; error?: string; retry?: RetryQuote }
 
-export type VideoJobStatus = 'queued' | 'running' | 'downloading' | 'completed' | 'failed' | 'cancelled';
+export type VideoJobStatus = 'queued' | 'running' | 'upscaling' | 'downloading' | 'completed' | 'failed' | 'cancelled';
 
 export interface VideoJob {
   jobId: string;
@@ -194,6 +227,8 @@ export interface VideoJob {
   sceneId?: string;
   initiator: VideoInitiator;
   license: string;
+  // Время увеличения «Макс» local H3, пока идёт съёмка («следом · ~15 мин»)
+  upscaleEtaSeconds?: number;
 }
 
 // ── Фильм (блок 2) ──
@@ -228,7 +263,7 @@ export interface FilmSummary { path: string; name: string; itemCount: number; du
 export interface FilmSpent { usd: number; credits: number; gpuSeconds: number }
 
 // «✦ Claude» (claude), «● обновлена» (updated), «переснять» (stale)
-export interface FilmItemMark { index: number; claude: boolean; updated: boolean; stale: boolean }
+export interface FilmItemMark { index: number; claude: boolean; updated: boolean; stale: boolean; formatMismatch?: boolean }
 
 export type FilmBuildState = 'waiting' | 'running' | 'done' | 'failed' | 'cancelled';
 
@@ -279,9 +314,12 @@ export interface VideoProgressEvent extends VideoEventBase {
   type: 'video_edit_progress';
   jobId: string;
   sceneId: string;
-  stage: 'queued' | 'running' | 'downloading';
+  // upscaling — вторая тяжёлая задача GPU: увеличение «Макс» local H3 после съёмки, свои etaSeconds и percent
+  stage: 'queued' | 'running' | 'upscaling' | 'downloading';
   queuePosition?: number;
   etaSeconds?: number;
+  // Во время съёмки того же запуска: сколько займёт увеличение следом
+  upscaleEtaSeconds?: number;
   // Доля готовности варианта 0..1 от поставщика; нет поля — клиент считает по времени
   percent?: number;
   variant: number;
@@ -331,6 +369,7 @@ export const ERR = {
   tooManyJobs: 'too_many_jobs',
   heavyBusy: 'heavy_busy',
   frameUnavailable: 'frame_unavailable',
+  filmFormatLocked: 'film_format_locked',
 } as const;
 
 // recordType карточек ленты (module_record, module «videoeditor»)
@@ -341,6 +380,18 @@ export const RECORD = {
   filmBuilt: 'video_film_built',
   note: 'video_note',
 } as const;
+
+// ── Подрезка кадров A/B (dryRun) ──
+
+export interface VideoFramesPreviewRequest { sessionId: string; sceneId: string; aspect?: string; anchor?: FrameAnchor }
+export interface VideoFramePreview {
+  sourceWidth: number; sourceHeight: number; sourceAspect: string; cropped: boolean;
+  resultWidth: number; resultHeight: number; x: number; y: number; w: number; h: number;
+}
+export interface VideoFramesPreview { aspect: string; anchor: FrameAnchor; frameA?: VideoFramePreview; frameB?: VideoFramePreview }
+
+// Тело 409 film_format_locked: замок держит сервер, «Всё равно» — повтор с force
+export interface VideoFormatLocked { error: string; code: 'film_format_locked'; lockedBy: VideoFilmLock }
 
 // ── Запросы ──
 
@@ -388,8 +439,15 @@ export const videoApi = {
     json<VideoThreadsState>(`${chatBase(scope, sessionId)}/scenes/focus`, { focus, revision }, 'PUT'),
   removeScene: (scope: string, sessionId: string, sceneId: string, revision: number) =>
     request<VideoThreadsState>(`${sceneUrl(scope, sessionId, sceneId)}?revision=${revision}`, { method: 'DELETE' }),
-  settings: (scope: string, sessionId: string, sceneId: string, settings: VideoSceneSettings, revision: number) =>
-    json<VideoThreadsState>(`${sceneUrl(scope, sessionId, sceneId)}/settings`, { settings, revision }, 'PUT'),
+  // force — «Всё равно 9:16»: замок формата фильма снимается для этого запроса
+  settings: (scope: string, sessionId: string, sceneId: string, settings: VideoSceneSettings, revision: number, force?: boolean) =>
+    json<VideoThreadsState>(`${sceneUrl(scope, sessionId, sceneId)}/settings`, { settings, revision, ...(force ? { force: true } : {}) }, 'PUT'),
+  // dryRun подрезки кадров A/B: тот же расчёт, что у съёмки, ничего не пишет и не тратит
+  framesPreview: (scope: string, sessionId: string, req: VideoFramesPreviewRequest) =>
+    json<VideoFramesPreview>(`${videoBase(scope, sessionId)}/frames/preview`, req),
+  // Отменить только увеличение «Макс» local H3: съёмка 768p остаётся версией с пометкой
+  cancelUpscale: (scope: string, sessionId: string | null, jobId: string) =>
+    request<VideoJob>(`${videoBase(scope, sessionId)}/jobs/${encodeURIComponent(jobId)}/upscale`, { method: 'DELETE' }),
   current: (scope: string, sessionId: string, sceneId: string, versionId: string, revision: number) =>
     json<VideoThreadsState>(`${sceneUrl(scope, sessionId, sceneId)}/current`, { versionId, revision }, 'PUT'),
   // URL клипа для <video src>: токен через ?access_token=, тег заголовков не шлёт
@@ -471,6 +529,14 @@ export function filmConflict(e: unknown): { state: FilmState | null } | null {
 export function retryOf(e: unknown): RetryQuote | null {
   const r = (e as ApiErr | null)?.body?.retry as RetryQuote | undefined;
   return r && r.quote && typeof r.quote.quoteId === 'string' ? r : null;
+}
+
+// Тело 409 film_format_locked: замок формата фильма
+export function filmLocked(e: unknown): VideoFormatLocked | null {
+  const err = e as ApiErr | null;
+  if (err?.status !== 409 || errorCode(e) !== ERR.filmFormatLocked) return null;
+  const b = err.body as Partial<VideoFormatLocked> | undefined;
+  return b?.lockedBy ? { error: typeof b.error === 'string' ? b.error : '', code: 'film_format_locked', lockedBy: b.lockedBy } : null;
 }
 
 export const errorText = (e: unknown, fallback = 'Не удалось'): string => {

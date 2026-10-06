@@ -6,7 +6,7 @@ import {
   type ChatContextItem,
 } from 'aihome_shell/kit';
 import {
-  ERR, errorCode, errorText, retryOf, videoApi,
+  ERR, errorCode, errorText, filmLocked, retryOf, videoApi,
   type FrameRef, type SaveSceneResult, type VideoPrefs, type VideoQuote, type VideoScene, type VideoSceneSettings,
 } from '../api';
 import { sceneReturnPoint, sceneToImages } from '../context/handoff';
@@ -16,7 +16,8 @@ import { frameInputOf, setFrameRef } from '../store/frameRefs';
 import { bindFrame, createImageThread, imageThreadExists, onFrameReady, type FrameBinding } from '../store/imageFrames';
 import {
   clearAgentFrame, ensureVideoThreads, filmTarget, focusFilm, focusScene, getCatalog, getFocusedScene, getPending, getPendingAny, getPrefs,
-  getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs,
+  getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setLockAsk, setPending, setScopePrefs,
+  type LockAsk,
   type PendingSettings,
 } from '../store/videoStore';
 import type { SaveTarget } from '../film/model';
@@ -63,6 +64,7 @@ function prefsPatch(p: Partial<VideoSceneSettings>): VideoPrefs {
   if ('aspect' in p) o.aspect = p.aspect;
   if ('sound' in p) o.sound = p.sound;
   if ('count' in p) o.count = p.count;
+  if ('format' in p) o.format = p.format;
   return o;
 }
 
@@ -90,8 +92,17 @@ async function flushNow(scope: string, sessionId: string): Promise<boolean> {
   if (scene) {
     // Правка видна человеком целиком: сохранённые настройки сцены плюс его поля
     const settings: VideoSceneSettings = { ...scene.settings, ...pend.patch };
-    const ok = await mutate(scope, sessionId, rev => videoApi.settings(scope, sessionId, scene.sceneId, settings, rev));
-    if (ok) dropIf(sessionId, pend);
+    let locked = false;
+    const ok = await mutate(scope, sessionId, rev => videoApi.settings(scope, sessionId, scene.sceneId, settings, rev), false, e => {
+      const l = filmLocked(e);
+      if (!l) return false;
+      // Замок держит сервер: правка не применена, человека спрашивают «Оставить / Всё равно»
+      locked = true;
+      setLockAsk(sessionId, { sceneId: scene.sceneId, patch: pend.patch, aspect: pend.patch.format?.aspect ?? pend.patch.aspect ?? '', lockedBy: l.lockedBy, text: l.error });
+      return true;
+    });
+    if (ok || locked) dropIf(sessionId, pend);
+    if (ok && pend.patch.format) void rememberFormat(scope, sessionId, pend.patch.format);
     return ok;
   }
   if (Object.keys(pend.patch).some(k => CONTENT_KEYS.includes(k))) {
@@ -109,6 +120,27 @@ async function flushNow(scope: string, sessionId: string): Promise<boolean> {
     showToast(errorText(e), '', 'error');
     return false;
   }
+}
+
+// Формат видео запоминается на проект: новая сцена наследует его, ручная запись снимает ✦ агента
+async function rememberFormat(scope: string, sessionId: string, format: NonNullable<VideoSceneSettings['format']>) {
+  try {
+    setScopePrefs(scope, await videoApi.putPrefs(scope, sessionId, { ...getPrefs(scope), format, ...(format.aspect ? { aspect: format.aspect } : {}) }));
+  } catch { /* память формата не обязательна: сцена уже сохранена */ }
+}
+
+// «Всё равно 9:16»: та же правка повторяется с force — замок снимается для этого запроса
+export async function forceLockedFormat(scope: string, sessionId: string, ask: LockAsk): Promise<boolean> {
+  await ensureVideoThreads(scope, sessionId);
+  const scene = getThreadsState(sessionId).scenes.find(s => s.sceneId === ask.sceneId);
+  if (!scene) { setLockAsk(sessionId, null); return false; }
+  const settings: VideoSceneSettings = { ...scene.settings, ...ask.patch };
+  const ok = await mutate(scope, sessionId, rev => videoApi.settings(scope, sessionId, scene.sceneId, settings, rev, true));
+  if (ok) {
+    setLockAsk(sessionId, null);
+    if (ask.patch.format) void rememberFormat(scope, sessionId, ask.patch.format);
+  }
+  return ok;
 }
 
 // ── Новая сцена, выбор, снятие ──

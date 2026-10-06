@@ -3,8 +3,9 @@
 // Без React и без стора — проверяется юнит-тестами.
 
 import type { ExecutorRow } from 'aihome_shell/kit';
+import type { MediaFormatWish } from 'aihome_shell/kit';
 import type {
-  FrameRef, VideoCatalog, VideoModelInfo, VideoPrefs, VideoPrice, VideoProvider, VideoQuote, VideoScene, VideoSceneSettings,
+  FrameAnchor, FrameRef, VideoCatalog, VideoModelInfo, VideoPrefs, VideoPrice, VideoProvider, VideoQuote, VideoScene, VideoSceneSettings,
 } from '../api';
 
 export const TEXT_MAX = 2000;
@@ -24,6 +25,9 @@ export interface ResolvedScene {
   text: string;
   frameA: FrameRef | null;
   frameB: FrameRef | null;
+  // Желание «Формата» (сцена → префы проекта); null — «Как у модели». Действующий формат считает сервер
+  format: MediaFormatWish | null;
+  frameAnchor: FrameAnchor;
 }
 
 const first = <T,>(...v: (T | undefined | null)[]): T | undefined => v.find(x => x !== undefined && x !== null);
@@ -65,7 +69,8 @@ export function resolveScene(
   const auto = !provider || !modelId || modelId === catalog?.autoModelId;
   const model = auto ? null : findModel(provider, modelId);
   const duration = snapTo(model?.durations ?? [], first(s.durationSec, prefs.durationSec)) ?? first(s.durationSec, prefs.durationSec) ?? 5;
-  const aspectWant = first(s.aspect, prefs.aspect);
+  const format = first(s.format, prefs.format) ?? null;
+  const aspectWant = first(patch?.aspect, patch?.format?.aspect, format?.aspect, s.aspect, prefs.aspect);
   const aspect = model && aspectWant && !model.aspects.includes(aspectWant) ? model.aspects[0] ?? aspectWant : aspectWant ?? model?.aspects[0] ?? '16:9';
   const soundWant = first(s.sound, prefs.sound) ?? false;
   return {
@@ -75,6 +80,8 @@ export function resolveScene(
     text: s.text ?? '',
     frameA: s.frameA ?? null,
     frameB: s.frameB ?? null,
+    format,
+    frameAnchor: s.frameFit?.anchor ?? 'center',
   };
 }
 
@@ -89,6 +96,8 @@ export function settingsOf(r: ResolvedScene): VideoSceneSettings {
     aspect: r.aspect,
     sound: r.sound,
     count: r.count,
+    ...(r.format ? { format: r.format } : {}),
+    ...(r.frameAnchor !== 'center' ? { frameFit: { anchor: r.frameAnchor } } : {}),
   };
 }
 
@@ -148,6 +157,7 @@ const unitMark = (u: string) => (u === 'usd' ? '$' : u === 'credits' ? 'кред
 
 // Строки «Исполнителя»: Авто, свои модели, облако. Модель, не снимающая в нужных пропорциях или не
 // знающая «кадр → кадр», серая с причиной; у личного чата local закрыт замком
+// aspect пуст — пропорции не отсеивают модели («Формат» сам переводит желание на ближайшую пропорцию модели)
 export function executorRows(catalog: VideoCatalog, personal: boolean, aspect: string, autoSub: string): ExecutorRow[] {
   const rows: ExecutorRow[] = [{ id: 'auto', group: 'auto', name: 'Авто', sub: autoSub, price: 'по цене модели' }];
   for (const p of catalog.providers) {
@@ -157,7 +167,7 @@ export function executorRows(catalog: VideoCatalog, personal: boolean, aspect: s
       if (local && personal) reason = PERSONAL_LOCAL_REASON;
       else if (!p.available) reason = p.reason ?? 'Поставщик недоступен';
       else if (!m.lastFrame) reason = 'Не умеет «кадр A → кадр B»';
-      else if (m.aspects.length && !m.aspects.includes(aspect)) reason = `Не снимает в пропорциях ${aspect}`;
+      else if (aspect && m.aspects.length && !m.aspects.includes(aspect)) reason = `Не снимает в пропорциях ${aspect}`;
       rows.push({
         id: `${p.key}|${m.id}`, group: local ? 'local' : 'cloud', name: m.label,
         sub: [p.label, m.durations.length ? `${m.durations.join(' / ')} с` : '', m.sound ? 'со звуком' : 'без звука'].filter(Boolean).join(' · '),

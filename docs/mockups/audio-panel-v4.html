@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Звук v4 — типовые сценарии и где переключать режим</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет был самодостаточным.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R из lib/design.ts. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    /* шкалы lib/design.ts */
+    --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px;
+    --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-sheet: 22px; --r-max: 999px;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #454037;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-success: #7CB86A; --c-success-bg: #1F2B1C; --c-success-text: #8FC47E;
+    --c-warning: #E0A955; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: #E9E4DA; color: #39332B;
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--fs-base); }
+  button, textarea, input, select { font: inherit; color: inherit; }
+  .doc-wrap { max-width: 1480px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; color: #2A251F; margin: 0 0 6px; }
+  p.lead { color: #756B5E; margin: 0 0 10px; max-width: 1000px; line-height: 1.55; }
+  code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; background: #E0D7C8; border-radius: 4px; padding: 0 4px; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 90; background: #E9E4DA; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 8px 0 12px; }
+  .demo .grp { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .demo .lbl { font-size: 11px; color: #9A8F7E; margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid #D0C6B4; background: #FBF8F2; border-radius: 10px; padding: 5px 10px; color: #39332B; }
+  .tbtn[aria-pressed="true"] { background: #D97757; color: #FBF8F2; border-color: transparent; }
+  .vnote { background: #FBF8F2; border: 1px solid #E0D7C8; border-radius: 12px; padding: 10px 14px; margin: 0 0 12px; line-height: 1.55; max-width: 1000px; }
+  .vnote b { color: #2A251F; }
+  .vnote ul { margin: 4px 0 0; padding-left: 18px; }
+
+  .frames { display: flex; flex-direction: column; gap: 16px; }
+  .frames.row { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+  .frame { background: var(--c-bg-main); color: var(--c-text-primary); border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; overflow-x: auto; }
+  .frame .cap { font-size: 11px; color: var(--c-text-muted); margin: 0 0 8px; }
+
+  /* ── Раскладка приложения ── */
+  .app { position: relative; height: 820px; display: flex; gap: 8px; width: 1420px; margin: 0 auto; }
+  .app.mobile { width: 360px; height: 740px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; flex-direction: column; gap: 0; background: var(--c-bg-main); }
+  .rail { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; }
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: var(--r-xxl); box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; position: relative; }
+  .island.main { flex: 1; }
+  .island.gen { width: 380px; flex: 0 0 380px; }
+
+  /* Лента и композер — фон, упрощённо */
+  .feed { flex: 1; overflow: hidden; padding: 14px 18px 8px; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+  .app.mobile .feed { padding: 10px; }
+  .msg { max-width: 560px; line-height: 1.5; font-size: var(--fs-base); }
+  .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 8px 12px; }
+  .acard { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: var(--r-xl); padding: 10px 12px; max-width: 560px; box-shadow: var(--shadow-card); }
+  .acard.focus { border-color: var(--c-accent); }
+  .acard .t { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  .acard .t b { color: var(--c-text-heading); font-size: var(--fs-base); }
+  .wave { display: flex; align-items: center; gap: 2px; height: 34px; margin-top: 8px; }
+  .wave i { flex: 1; background: var(--c-track); border-radius: 2px; }
+  .wave.on i:nth-child(-n+18) { background: var(--c-accent); }
+  .composer { margin: 0 12px 12px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xxl); padding: 8px 10px; }
+  .app.mobile .composer { margin: 0 8px 8px; }
+  .composer .ph { font-size: var(--fs-md); color: var(--c-text-primary); min-height: 38px; line-height: 1.4; }
+  .composer .ph.empty { color: var(--c-text-muted); }
+  .composer .bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .strip { display: flex; align-items: center; gap: 6px; margin: 0 12px 6px; }
+  .app.mobile .strip { margin: 0 8px 6px; }
+  .mtop { height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-panel); font-weight: 600; color: var(--c-text-heading); }
+
+  /* ── Кирпичи UI-кита (имена — как в components/ui) ── */
+  svg.i { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+  svg.i.s { width: 13px; height: 13px; } svg.i.l { width: 18px; height: 18px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-md);
+    border: 1px solid var(--c-border); background: var(--c-bg-card); cursor: pointer; font-size: var(--fs-sm); white-space: nowrap; color: var(--c-text-primary); }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn:focus-visible, .ib:focus-visible, .row-btn:focus-visible, .tile:focus-visible, .seg button:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); font-weight: 600; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.gacc { background: var(--c-accent-light); border-color: var(--c-accent); color: var(--c-accent); }
+  .btn.xs { height: 24px; padding: 0 8px; font-size: var(--fs-xs); border-radius: 7px; }
+  .btn.opt { height: auto; padding: 4px 12px; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; white-space: normal; }
+  .btn.opt.dash { border-style: dashed; opacity: .6; }
+  .btn.opt small { font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .ib { width: 26px; height: 26px; border-radius: var(--r-md); border: none; background: transparent; color: var(--c-text-muted); display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto; padding: 0; }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .seg { display: flex; background: var(--c-bg-inset); border-radius: var(--r-lg); padding: 2px; gap: 2px; }
+  .seg button { flex: 1; border: none; background: transparent; color: var(--c-text-secondary); height: 28px; padding: 0 8px; border-radius: var(--r-md); cursor: pointer; font-size: var(--fs-sm); display: inline-flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); font-weight: 600; }
+  .badge { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: var(--r-sm); font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+  .badge.ok { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.info { background: var(--c-info-bg); color: var(--c-info); }
+  .badge.mut { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .badge.acc { background: var(--c-accent-light); color: var(--c-accent); }
+  .select { display: flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0 10px; border: 1.5px solid var(--c-border); background: var(--c-bg-white); border-radius: var(--r-md); font-size: var(--fs-base); cursor: pointer; text-align: left; color: var(--c-text-primary); }
+  .select .v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .select .v small { color: var(--c-text-muted); font-size: var(--fs-sm); }
+  .textarea { width: 100%; border: 1.5px solid var(--c-border); background: var(--c-bg-white); border-radius: var(--r-md); padding: 6px 9px; font-size: var(--fs-base); line-height: 1.45; color: var(--c-text-primary); min-height: 84px; white-space: pre-wrap; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; }
+  .field { margin-bottom: var(--sp-md); }
+  .field > .fl { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-sm); color: var(--c-text-secondary); margin-bottom: var(--sp-xs); }
+  .field > .fl .aside { margin-left: auto; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .hint { font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.45; margin-top: var(--sp-xxs); }
+  .hint.warn { color: var(--c-warning-text); }
+  .label { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .4px; margin: var(--sp-md) 0 var(--sp-xs); display: flex; gap: 8px; }
+  .label .aside { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .rowx { display: flex; flex-wrap: wrap; gap: 6px; }
+  .range { display: flex; align-items: center; gap: 8px; }
+  .range .tr { flex: 1; height: 4px; background: var(--c-track); border-radius: 2px; position: relative; }
+  .range .tr i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--c-accent); border-radius: 2px; }
+  .range .tr b { position: absolute; top: -5px; width: 14px; height: 14px; border-radius: 50%; background: var(--c-bg-card); border: 2px solid var(--c-accent); }
+  .range .val { font-size: var(--fs-sm); color: var(--c-text-primary); min-width: 44px; text-align: right; }
+  .toggle { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--c-text-primary); cursor: pointer; }
+  .toggle i { width: 30px; height: 18px; border-radius: 999px; background: var(--c-track); position: relative; }
+  .toggle i::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--c-bg-card); }
+  .toggle.on i { background: var(--c-accent); } .toggle.on i::after { left: 14px; }
+  .stepper { display: inline-flex; align-items: center; border: 1px solid var(--c-border); border-radius: var(--r-md); height: 28px; background: var(--c-bg-card); }
+  .stepper button { width: 24px; height: 26px; border: none; background: transparent; cursor: pointer; color: var(--c-text-secondary); }
+  .stepper span { min-width: 18px; text-align: center; font-size: var(--fs-sm); font-weight: 600; }
+
+  /* ── Каркас GenerationPanel ── */
+  .gp-head { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); min-width: 0; }
+  .gp-head .ttl { font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); }
+  .gp-head .sub { font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .gp-head .ico { color: var(--c-accent); display: inline-flex; }
+  .sheet .gp-head { background: transparent; }
+  .gp-tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--c-border-light); flex: 0 0 auto; }
+  .gp-tabs button { border: none; background: transparent; height: 34px; padding: 0 10px; font-size: var(--fs-sm); color: var(--c-text-secondary); display: inline-flex; align-items: center; gap: 5px; border-bottom: 2px solid transparent; cursor: pointer; }
+  .gp-tabs button.on { color: var(--c-accent); border-bottom-color: var(--c-accent); font-weight: 600; }
+  .gp-ctx { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--c-border-light); font-size: var(--fs-sm); color: var(--c-text-secondary); min-width: 0; }
+  .gp-ctx > span.t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gp-ctx b { color: var(--c-text-heading); }
+  .gp-body { flex: 1; min-height: 0; overflow: auto; padding: 2px var(--sp-md) 14px; }
+  .gp-foot { flex: 0 0 auto; border-top: 1px solid var(--c-border-light); background: var(--c-bg-card); padding: var(--sp-sm) var(--sp-md) 10px; }
+  .gp-foot .row { display: flex; align-items: center; gap: var(--sp-sm); }
+  .gp-foot .price { flex: 1; min-width: 0; font-size: var(--fs-sm); line-height: 1.35; color: var(--c-text-secondary); white-space: nowrap; }
+  .gp-foot .price b { display: block; color: var(--c-text-heading); overflow: hidden; text-overflow: ellipsis; }
+  .gp-foot .price span { display: block; overflow: hidden; text-overflow: ellipsis; }
+  .gp-foot .q { margin-bottom: 6px; }
+  .gp-foot .sum { font-size: var(--fs-sm); color: var(--c-text-secondary); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sheet-ov { position: absolute; inset: 0; background: var(--c-overlay); z-index: 5; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; height: 88%; z-index: 6; background: var(--c-bg-card); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); display: flex; flex-direction: column; overflow: hidden; }
+  .sheet.peek { position: relative; height: auto; margin: 0 8px 4px; border: 1px solid var(--c-border); border-radius: var(--r-xxl); box-shadow: none; }
+  .grab { align-self: center; width: 64px; padding: 8px 0 2px; display: flex; justify-content: center; border: none; background: transparent; cursor: pointer; }
+  .grab span { width: 40px; height: 4px; border-radius: var(--r-sm); background: var(--c-track); }
+
+  /* ── Вариант А: строка-сводка «Чем», раскрывашка «Ещё» ── */
+  .row-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 10px; border: 1px solid var(--c-border-light); background: var(--c-bg-card); border-radius: var(--r-md); cursor: pointer; text-align: left; font-size: var(--fs-sm); color: var(--c-text-primary); }
+  .row-btn:hover { border-color: var(--c-accent-muted); }
+  .row-btn .k { color: var(--c-text-muted); flex: 0 0 auto; }
+  .row-btn .v { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-btn .v b { color: var(--c-text-heading); font-weight: 600; }
+  .row-btn.flat { border: none; background: transparent; padding-left: 0; color: var(--c-text-secondary); min-height: 30px; }
+  .pick-list { border: 1px solid var(--c-border-light); border-radius: var(--r-md); background: var(--c-bg-card); margin-top: 4px; overflow: hidden; }
+  .pick { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: var(--fs-sm); cursor: pointer; border-top: 1px solid var(--c-border-light); }
+  .pick:first-child { border-top: none; }
+  .pick:hover { background: var(--c-bg-selected); }
+  .pick.on { background: var(--c-accent-light); }
+  .pick .nm { flex: 1; min-width: 0; }
+  .pick .nm small { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .pick .pr { font-size: var(--fs-xs); color: var(--c-text-secondary); white-space: nowrap; }
+  .pick .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--c-border); flex: 0 0 auto; display: grid; place-items: center; }
+  .pick.on .dot { border-color: var(--c-accent); } .pick.on .dot::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+  .pick.off { opacity: .55; cursor: default; }
+  .grp-h { padding: 6px 10px 2px; font-size: var(--fs-xs); color: var(--c-text-muted); font-weight: 600; background: var(--c-bg-inset); }
+
+  /* ── Вариант Б: плитки задач ── */
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .tile { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--c-border-light); background: var(--c-bg-card); border-radius: var(--r-lg); cursor: pointer; text-align: left; font-size: var(--fs-sm); color: var(--c-text-primary); min-width: 0; }
+  .tile:hover { border-color: var(--c-accent-muted); }
+  .tile .ti { width: 28px; height: 28px; border-radius: var(--r-md); background: var(--c-bg-inset); display: grid; place-items: center; color: var(--c-text-secondary); flex: 0 0 auto; }
+  .tile .tn { min-width: 0; } .tile .tn small { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .tile.on .ti { background: var(--c-accent); color: var(--c-on-accent); }
+  .task-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--c-accent); background: var(--c-accent-light); border-radius: var(--r-lg); margin-top: var(--sp-sm); }
+  .task-head .ti { width: 28px; height: 28px; border-radius: var(--r-md); background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; }
+  .task-head .tn { flex: 1; min-width: 0; font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); }
+  .task-head .tn small { display: block; font-weight: 400; font-size: var(--fs-xs); color: var(--c-text-secondary); }
+  .search { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1.5px solid var(--c-border); border-radius: var(--r-md); background: var(--c-bg-white); color: var(--c-text-muted); font-size: var(--fs-sm); margin-bottom: 6px; }
+
+  /* ── Вариант В: шаги-аккордеон ── */
+  .step { border: 1px solid var(--c-border-light); border-radius: var(--r-lg); background: var(--c-bg-card); margin-top: var(--sp-sm); overflow: hidden; }
+  .step.open { border-color: var(--c-accent-muted); }
+  .step-h { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: none; background: transparent; cursor: pointer; text-align: left; color: var(--c-text-primary); }
+  .step-h .n { width: 20px; height: 20px; border-radius: 50%; background: var(--c-bg-inset); color: var(--c-text-secondary); font-size: var(--fs-xs); font-weight: 700; display: grid; place-items: center; flex: 0 0 auto; }
+  .step.open .step-h .n { background: var(--c-accent); color: var(--c-on-accent); }
+  .step-h .tt { flex: 1; min-width: 0; font-size: var(--fs-sm); }
+  .step-h .tt b { display: block; color: var(--c-text-heading); font-size: var(--fs-base); }
+  .step-h .tt span { display: block; color: var(--c-text-muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .step-b { padding: 0 10px 10px; border-top: 1px solid var(--c-border-light); }
+  .note-pin { position: absolute; background: #2A251F; color: #FBF8F2; font-size: 11px; border-radius: 8px; padding: 4px 8px; z-index: 20; max-width: 220px; line-height: 1.4; pointer-events: none; }
+
+  /* ── v4: полоса «Звук» над композером с переключателем режима ── */
+  .sstrip { position: relative; display: flex; align-items: center; gap: 8px; height: 48px; margin: 8px 12px 8px; padding: 0 8px;
+    background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: var(--r-xxl); min-width: 0; }
+  .app.mobile .sstrip { height: 42px; gap: 6px; margin: 6px 8px; padding: 0 6px; }
+  .sstrip .ttl { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-heading); flex: 0 0 auto; cursor: pointer; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px 0 8px; border-radius: var(--r-max); font-size: var(--fs-sm);
+    border: 1px solid var(--c-accent); background: var(--c-accent-light); color: var(--c-text-primary); min-width: 0; max-width: 100%; flex: 0 1 auto; cursor: pointer; }
+  .chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip b { color: var(--c-text-heading); }
+  .chip.dash { border-style: dashed; border-color: var(--c-dashed); background: transparent; color: var(--c-text-secondary); padding: 0 10px; }
+  .chip .x { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; color: var(--c-text-muted); border: none; background: transparent; padding: 0; cursor: pointer; }
+  .sumbtn { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: var(--r-md); border: 1px solid var(--c-border);
+    background: var(--c-bg-white); font-size: var(--fs-xs); color: var(--c-text-secondary); min-width: 0; flex: 0 1 auto; cursor: pointer; }
+  .sumbtn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qbadge { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: var(--r-max); background: var(--c-bg-inset); color: var(--c-text-secondary); font-size: var(--fs-xs); white-space: nowrap; }
+  /* InlineSegmented (1440): иконка + подпись, высота по TB */
+  .iseg { display: inline-flex; background: var(--c-bg-inset); border-radius: var(--r-lg); padding: 2px; gap: 2px; flex: 0 0 auto; }
+  .iseg button { border: none; background: transparent; color: var(--c-text-secondary); height: 28px; padding: 0 9px; border-radius: var(--r-md); cursor: pointer;
+    font-size: var(--fs-sm); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .iseg button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); font-weight: 600; }
+  .iseg button.off { color: var(--c-text-muted); opacity: .5; cursor: not-allowed; }
+  .iseg button.ask { color: var(--c-text-muted); }
+  .iseg button.ask::after { content: ''; width: 5px; height: 5px; border-radius: 50%; border: 1px solid var(--c-text-muted); margin-left: 1px; }
+  .iseg button.appear { animation: segIn .35s ease-out; }
+  @keyframes segIn { from { opacity: 0; max-width: 0; padding: 0; } to { opacity: 1; max-width: 140px; } }
+  /* IconSegmented (360): только иконки 28×20 по геометрии дорожки */
+  .app.mobile .iseg button { padding: 0; width: 30px; height: 26px; justify-content: center; }
+  .app.mobile .iseg button .lb { display: none; }
+  .app.mobile .iseg button.ask::after { display: none; }
+
+  .toast { display: flex; align-items: center; gap: 8px; margin: 0 12px -2px; padding: 6px 10px; border-radius: var(--r-md); background: var(--c-info-bg); color: var(--c-text-primary); font-size: var(--fs-sm); }
+  .app.mobile .toast { margin: 0 8px -2px; font-size: var(--fs-xs); }
+  .toast .t { flex: 1; min-width: 0; }
+
+  /* Поповер «Что обработать?» (Menu) */
+  .pop { position: absolute; bottom: calc(100% + 6px); left: 90px; width: 330px; z-index: 30; background: var(--c-bg-card); border: 1px solid var(--c-border);
+    border-radius: var(--r-xl); box-shadow: var(--shadow-dropdown); overflow: hidden; }
+  .app.mobile .pop { left: 0; right: 0; width: auto; }
+  .pop .ph { padding: 9px 12px 4px; font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); }
+  .pop .ph small { display: block; font-weight: 400; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .mi { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 12px; border: none; background: transparent; text-align: left; font-size: var(--fs-sm); color: var(--c-text-primary); cursor: pointer; min-height: 36px; }
+  .app.mobile .mi { min-height: 40px; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi .nm { flex: 1; min-width: 0; } .mi .nm small { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .mi .ic { width: 26px; height: 26px; border-radius: var(--r-md); background: var(--c-bg-inset); display: grid; place-items: center; color: var(--c-text-secondary); flex: 0 0 auto; }
+  .msep { height: 1px; background: var(--c-border-light); margin: 4px 0; }
+  .pop .foot { padding: 6px 12px 9px; font-size: var(--fs-xs); color: var(--c-text-muted); }
+
+  /* Карточка звука в ленте: действия своей версии */
+  .acard { position: relative; }
+  .acard .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .acard.focus { box-shadow: var(--shadow-focus); }
+  .wave { position: relative; }
+  .wave .rng { position: absolute; top: -2px; bottom: -2px; left: 34%; width: 14%; background: var(--c-accent-light); border: 1px solid var(--c-accent); border-radius: 4px; opacity: .85; }
+  .cmenu { position: absolute; z-index: 25; top: calc(100% - 6px); left: 120px; width: 230px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-dropdown); padding: 4px 0; }
+  .msg.agent { background: transparent; padding: 0; color: var(--c-text-primary); }
+  .msg.agent b { color: var(--c-text-heading); }
+
+  .composer .hintline { font-size: var(--fs-xs); color: var(--c-text-muted); margin-bottom: 4px; }
+  .composer .hintline b { color: var(--c-accent); font-weight: 600; }
+
+  /* Подсветка «куда нажать» на этом шаге */
+  .hl { outline: 2px solid var(--c-accent) !important; outline-offset: 2px; animation: hlp 1.4s ease-in-out infinite; position: relative; }
+  @keyframes hlp { 0%,100% { outline-color: var(--c-accent); } 50% { outline-color: var(--c-accent-muted); } }
+
+  /* Документ: шаги сценария и сравнение */
+  .scn-box { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; margin: 0 0 12px; max-width: 1420px; }
+  .scn-box .card { background: #FBF8F2; border: 1px solid #E0D7C8; border-radius: 12px; padding: 10px 14px; line-height: 1.5; }
+  .scn-box h3 { margin: 0 0 4px; font-size: 15px; color: #2A251F; }
+  .scn-box .why { color: #756B5E; font-size: 12.5px; margin: 0 0 6px; }
+  ol.steps { margin: 6px 0 0; padding-left: 0; list-style: none; counter-reset: s; }
+  ol.steps li { counter-increment: s; display: flex; gap: 8px; padding: 4px 6px; border-radius: 8px; cursor: pointer; font-size: 12.5px; color: #39332B; }
+  ol.steps li::before { content: counter(s); flex: 0 0 20px; height: 20px; border-radius: 50%; background: #E7E0D2; color: #756B5E; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+  ol.steps li.done-row::before { content: '✓'; }
+  ol.steps li.cur { background: #F4ECE1; }
+  ol.steps li.cur::before { background: #D97757; color: #FBF8F2; }
+  ol.steps li .z { margin-left: auto; font-size: 10.5px; color: #9A8F7E; white-space: nowrap; }
+  .short { margin-top: 6px; font-size: 12px; color: #756B5E; }
+  table.cmp { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  table.cmp th, table.cmp td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #E8E1D4; }
+  table.cmp th { color: #9A8F7E; font-weight: 600; font-size: 11px; }
+  table.cmp tr.me td { background: #F4ECE1; font-weight: 600; }
+  table.cmp td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .best { color: #3F7A4F; font-weight: 700; }
+  @media (max-width: 1100px) { .scn-box { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">Звук v4 — типовые сценарии и где переключать режим</h1>
+  <p class="lead">Основа — вариант А из v3: в панели видно только нужное для запуска, исполнитель выбирается одним списком, операции разбиты на группы.
+    Здесь решаем, где живёт переключатель <b>Голос / Музыка / Обработка</b> — в полосе над полем ввода, в панели или в обоих местах,
+    и как «Обработка» зависит от звука, выбранного в ленте. Выберите сценарий и вариант, затем шагайте по списку: на кадре обведено,
+    куда нажать на этом шаге. Клики и переходы между лентой, полосой и панелью считаются сами.
+    Подробности — <code>audio-panel-v4-proposal.md</code>.</p>
+
+  <div class="demo" id="demo"></div>
+  <div class="vnote" id="vnote"></div>
+  <div class="scn-box" id="scnbox"></div>
+  <div class="frames" id="frames"></div>
+</div>
+
+<script>
+// ── Иконки lucide ──
+const P = {
+  audio: '<path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/>',
+  sliders: '<path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  wand: '<path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M17.8 6.2 19 5M3 21l9-9M12.2 6.2 11 5"/>',
+  cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88"/><path d="M14.47 14.48 20 20"/><path d="M8.12 8.12 12 12"/>',
+  combine: '<rect x="2" y="6" width="8" height="12" rx="2"/><rect x="14" y="6" width="8" height="12" rx="2"/><path d="M10 12h4"/>',
+  down: '<path d="m6 9 6 6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>', up: '<path d="m18 15-6-6-6 6"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>',
+  play: '<path d="m6 3 14 9-14 9z"/>', send: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  dl: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  brush: '<path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
+  text: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8"/>',
+  gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+  repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 8V4"/><circle cx="8.5" cy="14" r="1"/><circle cx="15.5" cy="14" r="1"/>',
+};
+const I = (n, c = '') => `<svg class="i ${c}" viewBox="0 0 24 24">${P[n]}</svg>`;
+
+// ── Справочники ──
+const MODES = [['voice', 'Голос', 'mic'], ['music', 'Музыка', 'music'], ['process', 'Обработка', 'sliders']];
+const MODE_NAME = { voice: 'Голос', music: 'Музыка', process: 'Обработка' };
+// Операции в макете (подписи — из ops.ts); src — нужна ли на вход выбранная запись
+const OPS = {
+  speak: { mode: 'voice', label: 'Озвучить', run: 'Озвучить', ph: 'Текст для озвучки — паузы <#0.5#> и теги (laughs) понимают MiniMax и ElevenLabs', ai: true, model: 'Qwen3-TTS' },
+  song: { mode: 'music', label: 'Песня', run: 'Сочинить', ph: 'Стиль: жанр, настроение, инструменты, голос', ai: true, model: 'ACE-Step 1.5 XL' },
+  repaint: { mode: 'music', label: 'Перегенерировать кусок', run: 'Перегенерировать', ph: 'Что должно звучать в выделенном куске', ai: true, src: true, model: 'ACE-Step 1.5 XL' },
+  separate: { mode: 'process', label: 'Стемы', run: 'Разделить', ph: 'Комментарий не нужен — нажмите «Разделить»', ai: true, src: true, model: 'BS-RoFormer' },
+  normalize: { mode: 'process', label: 'Нормализация', run: 'Применить', ph: 'Комментарий не нужен — нажмите «Применить»', src: true },
+  concat: { mode: 'process', label: 'Склеить', run: 'Склеить', ph: 'Комментарий не нужен — соберите куски в панели' },
+};
+// Группы списка «Операция» (рекомендация v3: «Новый звук» / «С выбранным звуком» / «Без ИИ · бесплатно»)
+const OP_GROUPS = {
+  voice: [['Новый звук', ['Озвучить', 'Диалог', 'Голос по описанию', 'Клон по образцу']], ['С выбранным звуком', ['Сменить голос']], ['Библиотека', ['Обучить голос']]],
+  music: [['Новый звук', ['Песня', 'Звуковой эффект']], ['С выбранным звуком', ['Кавер', 'Перегенерировать кусок', 'Продолжить', 'Вытащить дорожку', 'Дописать дорожку', 'Доаранжировать']]],
+  process: [['С выбранным звуком · ИИ', ['Стемы', 'Очистить шум', 'Восстановить частоты', 'Мастеринг', 'В текст', 'Время к тексту', 'В MIDI']],
+    ['Без ИИ · бесплатно', ['Обрезка и громкость', 'Громкость и затухание', 'Нормализация', 'Свести стемы']], ['Из нескольких звуков', ['Склеить']]],
+};
+const OP_KEY = { 'Стемы': 'separate', 'Нормализация': 'normalize', 'Склеить': 'concat', 'Перегенерировать кусок': 'repaint', 'Песня': 'song', 'Озвучить': 'speak' };
+
+// Звуки ленты; у каждого варианта — своя полная карточка
+const SOUNDS = {
+  draft: { name: 'Новый звук', sub: 'черновик · ещё не записан', icon: 'spark', file: false },
+  v2: { name: 'ёжик.mp3', ver: 'версия 2', sub: '1:08 · ACE-Step', icon: 'music', file: true },
+  v3: { name: 'ёжик.mp3', ver: 'версия 3', sub: '1:12 · ACE-Step', icon: 'music', file: true },
+  agent: { name: 'привет.wav', ver: 'версия 1', sub: '0:09 · Qwen3-TTS · сделал Сева', icon: 'mic', file: true },
+  r1: { name: 'реплика-1.wav', ver: 'версия 1', sub: '0:04 · голос Ани', icon: 'mic', file: true },
+  r2: { name: 'реплика-2.wav', ver: 'версия 1', sub: '0:05 · голос Пети', icon: 'mic', file: true },
+  r3: { name: 'реплика-3.wav', ver: 'версия 1', sub: '0:03 · голос Ани', icon: 'mic', file: true },
+  greet: { name: 'приветствие.mp3', ver: 'версия 1', sub: '0:21 · Qwen3-TTS', icon: 'mic', file: true },
+  s1: { name: 'ёжик.mp3', ver: 'версия 1', sub: '1:10 · ACE-Step', icon: 'music', file: true },
+  s2: { name: 'ёжик.mp3', ver: 'версия 2', sub: '1:08 · ACE-Step', icon: 'music', file: true },
+  s3: { name: 'ёжик.mp3', ver: 'версия 3', sub: '1:05 · ACE-Step · ещё вариант', icon: 'music', file: true },
+  stems: { name: 'ёжик.mp3', ver: 'версия 4 · стемы', sub: 'вокал.mp3 + минус.mp3 · BS-RoFormer', icon: 'layers', file: true },
+  rep: { name: 'ёжик.mp3', ver: 'версия 4', sub: 'перегенерирован кусок 0:42–0:58', icon: 'music', file: true },
+  glue: { name: 'склейка.mp3', ver: 'версия 1', sub: '0:12 · три реплики · без ИИ', icon: 'combine', file: true },
+  norm: { name: 'привет.wav', ver: 'версия 2', sub: 'нормализация −14 LUFS · без ИИ', icon: 'gauge', file: true },
+};
+const label = id => { const s = SOUNDS[id]; return s.ver ? `${s.name} · ${s.ver}` : s.name; };
+
+// Лента каждого сценария: что лежит до начала
+const FEEDS = {
+  speak: { msg: 'Нужна озвучка приветствия для канала: «Привет! Это канал про сказки на ночь…»', cards: [] },
+  song: { msg: 'Сочини детскую песенку про ёжика, весёлую, на минуту', cards: [] },
+  hedgehog: { msg: 'Сочини детскую песенку про ёжика, весёлую, на минуту', cards: ['v2', 'v3'] },
+  lines: { msg: 'Озвучь три реплики для мультика: Аня, Петя, снова Аня', cards: ['r1', 'r2', 'r3'] },
+  agent: { msg: 'Сева, озвучь приветствие для канала', agent: 'Готово — озвучил приветствие и взял его в работу. Тихо вышло? Нажмите «Обработать ▾» → «Нормализация».', cards: ['agent'] },
+};
+const DONE_CARDS = { speak: ['greet'], song: ['s1', 's2'], song2: ['s1', 's2', 's3'], stems: ['stems'], repaint: ['rep'], concat: ['glue'], norm: ['norm'] };
+
+const TXT = { speak: 'Привет! Это канал про сказки на ночь. Каждый вечер — новая история…', song: 'children song, cheerful, ukulele, glockenspiel, female vocal, 110 bpm', repaint: 'бодрее, с колокольчиками' };
+
+// ── Варианты ──
+const VARIANTS = {
+  A: { name: 'Исходный А (v3)', short: 'Исх. А', note: '<b>Исходный А из v3 — точка отсчёта.</b> Режим переключается только в панели. В полосе — чип «Работаем с» или «✦ Новый звук» и кнопка-сводка, она открывает панель. «Обработка» от выбора звука не зависит: без звука её можно открыть, но запуск недоступен, а в панели стоит предупреждение.' },
+  V1: { name: '1 · Пульт в полосе', short: '1 · Пульт', note: '<b>1. Пульт в полосе.</b> Переключатель режима живёт <b>только в полосе</b> над полем ввода (<code>InlineSegmented</code> на 1440, иконки <code>IconSegmented</code> на 360). В панели остаётся одна подпись режима в шапке — это чистые настройки. «Обработка» без выбранного звука <b>серая</b>, подсказка «Выберите звук в ленте — «Работать с этой» на карточке». Выбор карточки делает её доступной, снятие выбора возвращает прошлый режим создания.' },
+  V2: { name: '2 · Зеркало, Обработка появляется', short: '2 · Зеркало', note: '<b>2. Зеркало.</b> Один и тот же переключатель стоит <b>в полосе и в панели</b>, выбор у них общий. «Обработка» без выбранного звука <b>скрыта</b>: сегментов два. Как только звук выбран (вами или агентом), третий сегмент выезжает и в полосе, и в панели. Снятие выбора убирает его и возвращает прошлый режим создания.' },
+  V3: { name: '3 · Зеркало, Обработка спрашивает', short: '3 · Спрашивает', note: '<b>3. Зеркало, «Обработка» спрашивает, что обработать.</b> Переключатель стоит в полосе и в панели, все три сегмента видны всегда. Обработка по-прежнему идёт <b>только над выбранным звуком</b>, но без выбора сегмент не мёртвый: клик открывает меню «Что обработать?» со звуками этого чата (свежие сверху) и пунктом «Склеить несколько…». Выбранный в меню звук встаёт в чип «Работаем с». Ленту листать не нужно.' },
+};
+
+// ── Сценарии: старт и шаги по вариантам ──
+// шаг: [зона, ключ подсветки, текст, патч после клика, патч до показа (ввод текста), кликов]
+// зоны: f — лента, b — низ (полоса + поле ввода), p — панель
+const SCN = {
+  speak: { title: '1. Озвучить абзац текста', why: 'Самый частый запуск. В прошлый раз в этом чате была «Музыка», поэтому режим надо сменить.',
+    start: { mode: 'music', focus: null, panel: 'closed', feed: 'speak' },
+    A: [['b', 'chip-new', '«✦ Новый звук» в полосе: в ленте появляется черновик, поле ввода переходит в режим «Звук». Режим запомнен прошлый — «Музыка»', { focus: 'draft' }],
+      ['b', 'summary', 'Кнопка-сводка в полосе открывает панель «Звук»', { panel: 'open' }],
+      ['p', 'pseg-voice', '«Голос» в панели', { mode: 'voice' }],
+      ['b', 'send', 'Вставить абзац в поле ввода и нажать «✦ Озвучить · бесплатно»', { done: 'speak', text: '' }, { text: TXT.speak }]],
+    X: [['b', 'chip-new', '«✦ Новый звук» в полосе: черновик в ленте, поле ввода в режиме «Звук»', { focus: 'draft' }],
+      ['b', 'seg-voice', '«Голос» в полосе: поле ввода сразу просит текст для озвучки, глагол кнопки — «Озвучить»', { mode: 'voice' }],
+      ['b', 'send', 'Вставить абзац и нажать «✦ Озвучить · бесплатно»', { done: 'speak', text: '' }, { text: TXT.speak }]],
+  },
+  song: { title: '2. Сочинить песню и сделать ещё вариант', why: 'Чат «Детская песенка»: слова пишутся в панели, стиль — в поле ввода, после прослушивания нужен ещё вариант.',
+    start: { mode: 'voice', focus: null, panel: 'closed', feed: 'song' },
+    A: [['b', 'chip-new', '«✦ Новый звук» в полосе', { focus: 'draft' }],
+      ['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'pseg-music', '«Музыка» в панели', { mode: 'music' }],
+      ['p', 'p-lyrics', 'Слова — в поле «Слова» панели', { lyrics: true }],
+      ['b', 'send', 'Стиль в поле ввода → «✦ Сочинить · бесплатно» (два варианта)', { done: 'song', text: '' }, { text: TXT.song }],
+      ['p', 'prun', 'Ещё вариант — «Сочинить» в низу панели: слова и стиль уже лежат у звука', { done: 'song2' }]],
+    X: [['b', 'chip-new', '«✦ Новый звук» в полосе', { focus: 'draft' }],
+      ['b', 'seg-music', '«Музыка» в полосе', { mode: 'music' }],
+      ['b', 'summary', 'Кнопка-сводка открывает панель: слова пишутся там', { panel: 'open' }],
+      ['p', 'p-lyrics', 'Слова — в поле «Слова» панели', { lyrics: true }],
+      ['b', 'send', 'Стиль в поле ввода → «✦ Сочинить · бесплатно»', { done: 'song', text: '' }, { text: TXT.song }],
+      ['p', 'prun', 'Ещё вариант — «Сочинить» в низу панели', { done: 'song2' }]],
+  },
+  separate: { title: '3. Взять песню из ленты и разложить на вокал и минус', why: 'Песня уже в ленте и ничего не выбрано. Это главный сценарий «Обработки».',
+    short: 'Через карточку во всех вариантах одинаково: «Обработать ▾» → «Стемы» → «Разделить» — 3 клика.',
+    start: { mode: 'music', focus: null, panel: 'closed', feed: 'hedgehog' },
+    A: [['f', 'card-work:v3', 'На карточке «ёжик.mp3 · версия 3» нажать «Работать с этой»: в полосе появляется чип «Работаем с»', { focus: 'v3' }],
+      ['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'pseg-process', '«Обработка» в панели: запомнена операция «Стемы», что получить — «Вокал + минус»', { mode: 'process' }],
+      ['p', 'prun', '«Разделить · бесплатно» в низу панели', { done: 'stems' }]],
+    V1: [['f', 'card-work:v3', '«Работать с этой» на версии 3: чип «Работаем с», серая «Обработка» в полосе становится доступной', { focus: 'v3' }],
+      ['b', 'seg-process', '«Обработка» в полосе: поле ввода — «Комментарий не нужен», кнопка — «Разделить»', { mode: 'process' }],
+      ['b', 'send', '«Разделить · бесплатно» прямо из поля ввода', { done: 'stems' }]],
+    V2: [['f', 'card-work:v3', '«Работать с этой» на версии 3: в полосе выезжает третий сегмент «Обработка»', { focus: 'v3' }],
+      ['b', 'seg-process', '«Обработка» в полосе', { mode: 'process' }],
+      ['b', 'send', '«Разделить · бесплатно» из поля ввода', { done: 'stems' }]],
+    V3: [['b', 'seg-process', 'Звук не выбран, поэтому «Обработка» открывает меню «Что обработать?» со звуками этого чата', { pop: true }],
+      ['b', 'pop:v3', 'Выбрать «ёжик.mp3 · версия 3»: звук встаёт в чип «Работаем с», режим — «Обработка»', { pop: false, focus: 'v3', mode: 'process' }],
+      ['b', 'send', '«Разделить · бесплатно» из поля ввода', { done: 'stems' }]],
+  },
+  repaint: { title: '4. Перегенерировать кусок песни', why: 'Песня в работе, не нравится припев. Кусок выделяется на волне карточки — это операция «Музыки» над выбранным звуком.',
+    start: { mode: 'music', focus: 'v3', panel: 'closed', feed: 'hedgehog' },
+    X: [['f', 'card-range', 'Протянуть по волне версии 3 кусок 0:42–0:58', { range: true }],
+      ['f', 'card-repaint', '«Перегенерировать кусок» на карточке: «Музыка» → «Перегенерировать кусок», открытая панель следует за выбором', { ops: { music: 'repaint' }, mode: 'music' }],
+      ['b', 'send', 'В поле ввода — «бодрее, с колокольчиками», затем «✦ Перегенерировать · бесплатно»', { done: 'repaint', text: '', range: false }, { text: TXT.repaint }]],
+  },
+  concat: { title: '5. Склеить три реплики', why: '«Склеить» лежит в «Обработке», но ему нужен не один выбранный звук, а несколько кусков. На этом сценарии видно, где правило «Обработка — только при выбранном звуке» даёт сбой.',
+    start: { mode: 'voice', focus: null, panel: 'closed', feed: 'lines' },
+    A: [['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'pseg-process', '«Обработка» в панели', { mode: 'process' }],
+      ['p', 'panel-op', 'Открыть список «Операция»', { opOpen: true }],
+      ['p', 'op:concat', '«Склеить» — в группе «Из нескольких звуков»', { opOpen: false, ops: { process: 'concat' } }],
+      ['p', 'piece-add', '«+ Кусок» → реплика-1, реплика-2, реплика-3 (по два клика)', { pieces: 3 }, null, 6],
+      ['p', 'prun', '«Склеить» в низу панели', { done: 'concat' }]],
+    V1: [['f', 'card-work:r1', '«Обработка» серая, поэтому сначала надо взять в работу любую реплику: «Работать с этой» на реплике 1', { focus: 'r1' }],
+      ['b', 'seg-process', '«Обработка» в полосе', { mode: 'process' }],
+      ['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'panel-op', 'Открыть список «Операция»', { opOpen: true }],
+      ['p', 'op:concat', '«Склеить»: выбранная реплика 1 становится первым куском', { opOpen: false, ops: { process: 'concat' }, pieces: 1 }],
+      ['p', 'piece-add', '«+ Кусок» → реплика-2, реплика-3', { pieces: 3 }, null, 4],
+      ['p', 'prun', '«Склеить»', { done: 'concat' }]],
+    V2: [['f', 'card-work:r1', 'Сегмента «Обработка» нет, пока звук не выбран. Найти «Склеить» можно только так: взять любую реплику в работу', { focus: 'r1' }],
+      ['b', 'seg-process', 'Выехала «Обработка» — нажать', { mode: 'process' }],
+      ['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'panel-op', 'Открыть список «Операция»', { opOpen: true }],
+      ['p', 'op:concat', '«Склеить»: реплика 1 становится первым куском', { opOpen: false, ops: { process: 'concat' }, pieces: 1 }],
+      ['p', 'piece-add', '«+ Кусок» → реплика-2, реплика-3', { pieces: 3 }, null, 4],
+      ['p', 'prun', '«Склеить»', { done: 'concat' }]],
+    V3: [['b', 'seg-process', '«Обработка» в полосе открывает «Что обработать?»', { pop: true }],
+      ['b', 'pop-concat', '«Склеить несколько…» внизу меню: панель открывается сразу на «Склеить»', { pop: false, mode: 'process', ops: { process: 'concat' }, panel: 'open' }],
+      ['p', 'piece-add', '«+ Кусок» → реплика-1, -2, -3', { pieces: 3 }, null, 6],
+      ['p', 'prun', '«Склеить»', { done: 'concat' }]],
+  },
+  agent: { title: '6. Агент сам сделал звук — я правлю', why: 'Сева озвучил приветствие и взял его в работу (audio_focus). Режим поля ввода агент не меняет, а чип «Работаем с» уже показывает его звук. Вышло тихо — нужна нормализация.',
+    short: 'Через карточку во всех вариантах одинаково: «Обработать ▾» → «Нормализация» → «Применить» — 3 клика. Агент сам подсказывает этот путь.',
+    start: { mode: 'music', focus: 'agent', panel: 'closed', feed: 'agent' },
+    A: [['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'pseg-process', '«Обработка» в панели', { mode: 'process' }],
+      ['p', 'panel-op', 'Открыть список «Операция»', { opOpen: true }],
+      ['p', 'op:normalize', '«Нормализация» — в группе «Без ИИ · бесплатно»', { opOpen: false, ops: { process: 'normalize' } }],
+      ['p', 'prun', '«Применить»', { done: 'norm' }]],
+    X: [['b', 'seg-process', 'Звук агента уже в чипе «Работаем с», поэтому «Обработка» в полосе доступна сразу', { mode: 'process' }],
+      ['b', 'summary', 'Кнопка-сводка открывает панель: операцию выбирают там', { panel: 'open' }],
+      ['p', 'panel-op', 'Открыть список «Операция»', { opOpen: true }],
+      ['p', 'op:normalize', '«Нормализация»', { opOpen: false, ops: { process: 'normalize' } }],
+      ['p', 'prun', '«Применить»', { done: 'norm' }]],
+  },
+  phone: { title: '7. Телефон 360: разложить песню при шторке', why: 'То же, что сценарий 3, но шторка закрывает ленту на 88 % высоты. Каждое открытие и закрытие шторки — смена контекста.',
+    short: 'Через карточку: «Обработать ▾» → «Стемы» поднимает шторку → «Разделить» — 3 клика.',
+    start: { mode: 'music', focus: null, panel: 'closed', feed: 'hedgehog', size: '360' },
+    A: [['f', 'card-work:v3', '«Работать с этой» на версии 3', { focus: 'v3' }],
+      ['b', 'summary', 'Сводка ▴ в полосе поднимает шторку', { panel: 'open' }],
+      ['p', 'pseg-process', '«Обработка» в шторке', { mode: 'process' }],
+      ['p', 'prun', '«Разделить»', { done: 'stems', panel: 'closed' }]],
+    V1: [['f', 'card-work:v3', '«Работать с этой» на версии 3: иконка «Обработки» в полосе становится доступной', { focus: 'v3' }],
+      ['b', 'seg-process', 'Иконка «Обработка» в полосе. Шторку поднимать не надо. Если она поднята, переключателя не видно: его нет в панели', { mode: 'process' }],
+      ['b', 'send', '«Разделить» из поля ввода', { done: 'stems' }]],
+    V2: [['f', 'card-work:v3', '«Работать с этой» на версии 3: третья иконка выезжает в полосе', { focus: 'v3' }],
+      ['b', 'seg-process', 'Иконка «Обработка» в полосе', { mode: 'process' }],
+      ['b', 'send', '«Разделить» из поля ввода', { done: 'stems' }]],
+    V3: [['b', 'seg-process', 'Иконка «Обработка» в полосе: меню «Что обработать?» во всю ширину над полем ввода', { pop: true }],
+      ['b', 'pop:v3', '«ёжик.mp3 · версия 3»', { pop: false, focus: 'v3', mode: 'process' }],
+      ['b', 'send', '«Разделить» из поля ввода', { done: 'stems' }]],
+  },
+  release: { title: 'Проверка: снять выбор звука в «Обработке»', why: 'Не сценарий, а граничный случай: что станет с режимом, если в «Обработке» нажать ✕ на чипе «Работаем с». Смотрите последний шаг («готово»).',
+    start: { mode: 'process', focus: 'v3', panel: 'open', feed: 'hedgehog', ops: { process: 'separate' } },
+    A: [['b', 'chip-x', '✕ на чипе «Работаем с»: режим остаётся «Обработкой», в панели — предупреждение, запуск недоступен', { focus: null }]],
+    V1: [['b', 'chip-x', '✕ на чипе: режим возвращается к прошлому режиму создания («Музыка»), «Обработка» сереет, в плашке над полосой можно «Вернуть»', { focus: null, mode: 'music', toast: true }]],
+    V2: [['b', 'chip-x', '✕ на чипе: сегмент «Обработка» уезжает, режим — «Музыка», в плашке можно «Вернуть»', { focus: null, mode: 'music', toast: true }]],
+    V3: [['b', 'chip-x', '✕ на чипе: режим — «Музыка», «Обработка» остаётся и снова будет спрашивать, в плашке можно «Вернуть»', { focus: null, mode: 'music', toast: true }]],
+  },
+};
+const stepsOf = (scn, v) => { const s = SCN[scn]; return s[v] || (v !== 'A' && s.X) || s.A || s.X; };
+const ZONE = { f: 'лента', b: 'полоса и поле', p: 'панель' };
+function metrics(scn, v) {
+  const st = stepsOf(scn, v);
+  let clicks = 0, sw = 0, prev = 'b';
+  for (const s of st) { clicks += s[5] ?? 1; if (s[0] !== prev) sw++; prev = s[0]; }
+  return { clicks, sw };
+}
+
+// ── Состояние макета ──
+const S = { v: 'V3', scn: 'separate', step: 0, theme: 'light', size: '1440' };
+
+function stateAt(scn, v, k) {
+  const sc = SCN[scn];
+  const st = { mode: 'voice', focus: null, panel: 'closed', feed: 'speak', ops: { voice: 'speak', music: 'song', process: 'separate' }, text: '', ...structuredClone(sc.start) };
+  st.ops = { voice: 'speak', music: 'song', process: 'separate', ...(sc.start.ops || {}) };
+  const steps = stepsOf(scn, v);
+  const apply = p => { if (!p) return; for (const [key, val] of Object.entries(p)) { if (key === 'ops') Object.assign(st.ops, val); else st[key] = val; } };
+  for (let i = 0; i < Math.min(k, steps.length); i++) { apply(steps[i][4]); apply(steps[i][3]); }
+  if (k < steps.length) { apply(steps[k][4]); st.hl = steps[k][1]; }
+  st.op = st.ops[st.mode];
+  return st;
+}
+
+// ── Кирпичи ──
+const hasFile = st => !!st.focus && SOUNDS[st.focus].file;
+const opInfo = st => OPS[st.op] || OPS.speak;
+function segState(v, st, k) {
+  if (k !== 'process' || hasFile(st)) return '';
+  if (v === 'V1') return 'off';
+  if (v === 'V2') return 'hide';
+  if (v === 'V3' && !(st.mode === 'process' && st.op === 'concat')) return 'ask';
+  return '';
+}
+function modeSeg(v, st, prefix) {
+  return `<div class="iseg" role="tablist">${MODES.map(([k, l, ic]) => {
+    const ss = segState(v, st, k);
+    if (ss === 'hide') return '';
+    const title = ss === 'off' ? 'Выберите звук в ленте — «Работать с этой» на карточке' : ss === 'ask' ? 'Выбрать звук этого чата для обработки' : l;
+    const appear = v === 'V2' && k === 'process' && hasFile(st) && st.mode !== 'process' ? 'appear' : '';
+    return `<button class="${st.mode === k ? 'on' : ''} ${ss} ${appear}" data-k="${prefix}-${k}" title="${title}" ${ss === 'off' ? 'aria-disabled="true"' : ''}>${I(ic, 's')}<span class="lb">${l}</span></button>`;
+  }).join('')}</div>`;
+}
+function badge(t, cls = 'mut') { return `<span class="badge ${cls}">${t}</span>`; }
+function fieldSelect(lbl, val, hint) {
+  return `<div class="field"><div class="fl">${lbl}</div><button class="select"><span class="v">${val}</span>${I('down', 's')}</button>${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
+}
+const bars = (n, seed = 1) => Array.from({ length: n }, (_, i) => `<i style="height:${18 + Math.round(72 * Math.abs(Math.sin((i + seed) * 1.7) * Math.cos((i + seed) * .45)))}%"></i>`).join('');
+
+// ── Лента ──
+function cardHtml(id, st, mob) {
+  const s = SOUNDS[id];
+  const focus = st.focus === id;
+  const isDraft = id === 'draft';
+  const range = st.range && id === 'v3';
+  const acts = isDraft ? `<span class="hint" style="margin:0">Сюда ляжет результат запуска</span>` :
+    `${focus ? badge('в работе', 'acc') : `<button class="btn xs" data-k="card-work:${id}">Работать с этой</button>`}
+     <button class="btn xs" data-k="card-proc:${id}">${I('sliders', 's')}Обработать ${I('down', 's')}</button>
+     ${range ? `<button class="btn xs gacc" data-k="card-repaint">${I('repeat', 's')}Перегенерировать кусок</button><button class="btn xs">${I('scissors', 's')}Обрезать</button>` : ''}
+     <span style="flex:1"></span>${mob ? '' : `<button class="ib" title="Скачать">${I('dl', 's')}</button>`}`;
+  return `<div class="acard ${focus ? 'focus' : ''}" data-card="${id}">
+    <div class="t">${I(s.icon, 's')}<b>${s.name}</b><span>${s.ver ? '· ' + s.ver : ''} · ${s.sub}</span></div>
+    ${isDraft ? '' : `<div class="wave ${focus ? 'on' : ''}" data-k="${id === 'v3' ? 'card-range' : ''}">${bars(mob ? 30 : 56, id.length * 3 + (s.ver || '').length)}${range ? '<span class="rng"></span>' : ''}</div>`}
+    <div class="acts">${acts}</div></div>`;
+}
+function feedHtml(st, mob) {
+  const f = FEEDS[st.feed];
+  let cards = [...f.cards];
+  if (st.focus === 'draft' && !st.done) cards.push('draft');
+  if (st.done) cards = cards.concat(DONE_CARDS[st.done] || []);
+  // на телефоне видны последние две карточки
+  if (mob && cards.length > 2) cards = cards.slice(-2);
+  return `<div class="feed">
+    <div class="msg user">${f.msg}</div>
+    ${f.agent ? `<div class="msg agent">${I('bot', 's')} <b>Сева:</b> ${f.agent}</div>` : ''}
+    ${cards.map(id => cardHtml(id, st, mob)).join('')}
+  </div>`;
+}
+
+// ── Полоса над композером ──
+function popHtml(st) {
+  const ids = (FEEDS[st.feed].cards || []).slice().reverse();
+  return `<div class="pop" role="menu"><div class="ph">Что обработать?<small>Звуки этого чата, свежие сверху</small></div>
+    ${ids.map(id => `<button class="mi" data-k="pop:${id}"><span class="ic">${I(SOUNDS[id].icon, 's')}</span><span class="nm">${label(id)}<small>${SOUNDS[id].sub}</small></span></button>`).join('')}
+    <div class="msep"></div>
+    <button class="mi" data-k="pop-concat"><span class="ic">${I('combine', 's')}</span><span class="nm">Склеить несколько…<small>без ИИ · бесплатно · куски выбираются в панели</small></span></button>
+    <div class="foot">Или «Обработать ▾» на карточке в ленте</div></div>`;
+}
+function stripHtml(v, st, mob) {
+  const L = opInfo(st);
+  const chip = st.focus
+    ? `<span class="chip" title="Режим «Звук» и Claude работают с этой версией"><span>${mob ? '' : 'Работаем с: '}<b>${label(st.focus)}</b></span><button class="x" data-k="chip-x" title="Снять выбор звука">${I('x', 's')}</button></span>`
+    : `<span class="chip dash" data-k="chip-new">${I('spark', 's')}<span>Новый звук</span></span>`;
+  const price = L.ai ? 'бесплатно' : 'без ИИ';
+  const sumFull = [MODE_NAME[st.mode], L.label, L.ai ? 'Авто · локально' : null, L.ai ? L.model : null, price].filter(Boolean).join(' · ');
+  const sumX = [L.label, L.ai ? L.model : null, price].filter(Boolean).join(' · ');
+  const seg = v === 'A' ? '' : modeSeg(v, st, 'seg');
+  const sum = mob
+    ? `<button class="sumbtn" data-k="summary" title="Настройки — в шторке">${v === 'A' ? `<span>${MODE_NAME[st.mode]} · ${price}</span>` : ''}${I('up', 's')}</button>`
+    : `<button class="sumbtn" data-k="summary" title="Настройки открываются в панели «Звук» справа"><span>${v === 'A' ? sumFull : sumX}</span>${I('right', 's')}</button>`;
+  const toast = st.toast ? `<div class="toast">${I('info', 's')}<span class="t">Звук снят — вернулись к «Музыке»</span><button class="btn xs ghost">Вернуть</button></div>` : '';
+  return `${toast}<div class="sstrip">
+    <span class="ttl" title="Переключить полосу">${I('audio', 's')}${mob ? '' : 'Звук'}${I('down', 's')}</span>
+    ${seg}${chip}
+    ${!mob && st.mode === 'process' && st.op === 'separate' && hasFile(st) ? `<span class="qbadge">${I('cpu', 's')}GPU: свободно</span>` : ''}
+    <span style="flex:1"></span>${sum}
+    ${mob ? '' : `<button class="ib" title="Свернуть полосу в строку">${I('up', 's')}</button>`}
+    ${st.pop ? popHtml(st) : ''}
+  </div>`;
+}
+function composerHtml(v, st, mob) {
+  const L = opInfo(st);
+  const sound = !!st.focus || (st.mode === 'process' && st.op === 'concat');
+  const blocked = sound && L.src && !hasFile(st);
+  return `<div class="composer">
+    ${sound ? `<div class="hintline"><b>Режим «Звук»</b> · ${MODE_NAME[st.mode]} → ${L.label} · текст уходит модели, не Claude</div>` : ''}
+    <div class="ph ${st.text ? '' : 'empty'}">${st.text || (sound ? L.ph : 'Напишите Claude…')}</div>
+    <div class="bar"><button class="ib">${I('plus', 's')}</button>${sound ? badge('Звук', 'acc') : ''}<span style="flex:1"></span><button class="ib">${I('mic', 's')}</button>
+      ${sound ? `<button class="btn pri xs" data-k="send" ${blocked ? 'disabled style="opacity:.5"' : ''}>${I(L.ai ? 'spark' : st.op === 'concat' ? 'combine' : 'scissors', 's')}${L.run}${L.ai ? ' · бесплатно' : ''}</button>` : `<button class="btn pri xs" data-k="send-chat">${I('send', 's')}</button>`}</div></div>`;
+}
+
+// ── Панель «Звук» (вариант А из v3 с группами операций) ──
+function opList(st) {
+  return `<div class="pick-list">${OP_GROUPS[st.mode].map(([g, items]) => {
+    const needs = /выбранным/.test(g);
+    const off = needs && !hasFile(st);
+    return `<div class="grp-h">${g}${off ? ' · выберите звук в ленте' : ''}</div>` + items.map(n => {
+      const k = OP_KEY[n];
+      return `<div class="pick ${k === st.op ? 'on' : ''} ${off ? 'off' : ''}" data-k="op:${k || n}"><span class="dot"></span><span class="nm">${n}</span></div>`;
+    }).join('');
+  }).join('')}</div>`;
+}
+function panelBody(v, st) {
+  const L = opInfo(st);
+  const seg = v === 'V1' ? '' : `<div style="margin-top:8px" class="pseg-wrap">${modeSeg(v, st, 'pseg').replace('class="iseg"', 'class="iseg" style="display:flex"')}</div>`;
+  const opSel = `<div class="field" style="margin-top:8px"><div class="fl">Операция</div>
+    <button class="select" data-k="panel-op"><span class="v">${L.label}${L.src && hasFile(st) ? ' <small>· над выбранным звуком</small>' : ''}</span>${I(st.opOpen ? 'up' : 'down', 's')}</button>
+    ${st.opOpen ? opList(st) : ''}</div>`;
+  let fields = '';
+  if (st.op === 'speak') fields = fieldSelect('Голос', 'Аня <small>· из библиотеки</small>', 'Голоса проекта — вкладка «Голоса»');
+  if (st.op === 'song') fields = `<div class="field"><div class="fl">Слова <span class="aside">${st.lyrics ? '164 симв.' : ''}</span></div>
+      <div class="textarea" data-k="p-lyrics" style="${st.lyrics ? '' : 'color:var(--c-text-muted)'}">${st.lyrics ? '[Verse]\nЁжик шёл по лесу утром,\nнёс в корзинке три гриба…\n[Chorus]\nФыр-фыр-фыр, топ-топ-топ…' : '[Verse] … [Chorus] … — пусто: инструментал'}</div></div>
+      <div class="field"><div class="fl">Длительность</div><div class="range"><div class="tr"><i style="width:22%"></i><b style="left:calc(22% - 7px)"></b></div><span class="val">1:00</span></div></div>`;
+  if (st.op === 'repaint') fields = `<div class="field"><div class="fl">Кусок</div><button class="select"><span class="v">0:42–0:58 <small>· выделен на волне карточки</small></span>${I('down', 's')}</button></div>`;
+  if (st.op === 'separate') fields = `<div class="field"><div class="fl">Что получить</div><div class="seg"><button class="on">Вокал + минус</button><button>4 дорожки</button><button>6</button><button>Караоке</button></div></div>`;
+  if (st.op === 'normalize') fields = fieldSelect('Целевая громкость', '−14 LUFS <small>· для соцсетей</small>');
+  if (st.op === 'concat') {
+    const n = st.pieces || 0;
+    fields = `<div class="field"><div class="fl">Куски по порядку <span class="aside">${n} из 3</span></div>
+      ${['r1', 'r2', 'r3'].slice(0, n).map((id, i) => `<div class="row-btn" style="margin-bottom:4px"><span class="k">${i + 1}</span><span class="v">${label(id)}</span>${I('x', 's')}</div>`).join('')}
+      <button class="btn xs" data-k="piece-add">${I('plus', 's')}Кусок</button></div>
+      ${fieldSelect('Стык', 'Пауза 0,3 с')}`;
+  }
+  const warn = L.src && !hasFile(st) ? `<div class="hint warn" style="margin-top:4px">${I('info', 's')} Выберите звук в ленте — операция возьмёт его на вход</div>` : '';
+  const who = L.ai ? `<div style="height:10px"></div><button class="row-btn"><span class="k">Чем</span><span class="v"><b>Авто</b> · локально · ${L.model}</span>${badge('бесплатно', 'ok')}${I('down', 's')}</button>` : `<div style="margin-top:10px">${badge('Правка без ИИ · бесплатно')}</div>`;
+  const more = `<button class="row-btn flat" style="margin-top:4px">${I('right', 's')}Ещё настройки<span style="flex:1"></span><span class="hint" style="margin:0">всё по умолчанию</span></button>`;
+  const hint = ['speak', 'song', 'repaint'].includes(st.op) ? `<div class="hint" style="margin-top:6px">${I('send', 's')} ${st.op === 'speak' ? 'Текст для озвучки' : 'Стиль'} — в поле ввода чата</div>` : '';
+  return seg + opSel + warn + fields + hint + who + more;
+}
+function panelHtml(v, st, sheet) {
+  const L = opInfo(st);
+  const blocked = L.src && !hasFile(st);
+  const ctx = st.op === 'concat' ? '<span class="t">Куски — звук этого чата · результат — новый файл</span>'
+    : st.focus ? `<span class="t">Работаем с: <b>${label(st.focus)}</b></span><button class="ib" data-k="chip-x" title="Снять выбор">${I('x', 's')}</button>`
+    : '<span class="t">Новый звук · ляжет в ленту новой карточкой</span>';
+  return `<div class="gp-head"><span class="ico">${I('audio')}</span><span class="ttl">Звук</span><span class="sub">${MODE_NAME[st.mode]} · ${L.label}</span><span style="flex:1"></span>
+      <button class="ib">${I(sheet ? 'down' : 'right', 's')}</button><button class="ib">${I('x', 's')}</button></div>
+    <div class="gp-tabs"><button class="on">${I('sliders', 's')}Настройки</button><button>${I('mic', 's')}Голоса</button></div>
+    <div class="gp-ctx">${ctx}</div>
+    <div class="gp-body">${panelBody(v, st)}</div>
+    <div class="gp-foot"><div class="row">${L.ai && st.op !== 'repaint' ? `<span class="stepper"><button>−</button><span>2</span><button>+</button></span>` : ''}
+      <span class="price"><b>${L.ai ? 'Бесплатно' : 'Без ИИ · бесплатно'}</b><span>${L.ai ? 'Локально · ' + L.model : 'один результат, сразу'}</span></span>
+      <button class="btn pri" data-k="prun" ${blocked ? 'disabled style="opacity:.5;box-shadow:none"' : ''}>${I(L.ai ? 'spark' : st.op === 'concat' ? 'combine' : 'scissors', 's')}${L.run}</button></div></div>`;
+}
+
+// ── Кадры ──
+function desktop(v, st) {
+  const open = st.panel === 'open';
+  return `<div class="app">
+    <div class="rail">${['menu', 'audio', 'brush', 'text'].map((n, i) => `<button class="ib" style="${i === 1 ? 'color:var(--c-accent);background:var(--c-accent-light)' : ''}">${I(n)}</button>`).join('')}</div>
+    <div class="island main"><div class="gp-head" style="background:var(--c-bg-inset)"><span class="ttl">${st.feed === 'speak' ? 'Озвучка канала' : st.feed === 'lines' ? 'Мультик' : st.feed === 'agent' ? 'Сева · приветствие' : 'Детская песенка'}</span></div>
+      ${feedHtml(st, false)}<div style="max-width:860px;width:100%;margin:0 auto">${stripHtml(v, st, false)}${composerHtml(v, st, false)}</div></div>
+    ${open ? `<div class="island gen">${panelHtml(v, st, false)}</div>` : ''}</div>`;
+}
+function mobile(v, st) {
+  const up = st.panel === 'open';
+  return `<div class="app mobile"><div class="mtop">${I('menu')}${st.feed === 'hedgehog' || st.feed === 'song' ? 'Детская песенка' : 'Чат'}</div>
+    ${feedHtml(st, true)}${stripHtml(v, st, true)}${composerHtml(v, st, true)}
+    ${up ? `<div class="sheet-ov"></div><div class="sheet"><button class="grab"><span></span></button>${panelHtml(v, st, true)}</div>` : ''}</div>`;
+}
+
+// ── Документ: шаги и сравнение ──
+function scnBox() {
+  const sc = SCN[S.scn];
+  const steps = stepsOf(S.scn, S.v);
+  const m = metrics(S.scn, S.v);
+  const li = steps.map((s, i) => `<li class="${i === S.step ? 'cur' : ''} ${i < S.step ? 'done-row' : ''}" data-step="${i}"><span>${s[2]}${(s[5] ?? 1) > 1 ? ` <i>(${s[5]} клика)</i>` : ''}</span><span class="z">${ZONE[s[0]]}</span></li>`).join('')
+    + `<li class="${S.step === steps.length ? 'cur' : ''}" data-step="${steps.length}"><span><b>Готово</b> — результат в ленте</span></li>`;
+  const rows = Object.keys(VARIANTS).map(v => { const x = metrics(S.scn, v); return { v, ...x }; });
+  const minC = Math.min(...rows.map(r => r.clicks)), minS = Math.min(...rows.map(r => r.sw));
+  const tbl = rows.map(r => `<tr class="${r.v === S.v ? 'me' : ''}" data-set="v" data-val="${r.v}" style="cursor:pointer"><td>${VARIANTS[r.v].short}</td><td class="n ${r.clicks === minC ? 'best' : ''}">${r.clicks}</td><td class="n ${r.sw === minS ? 'best' : ''}">${r.sw}</td></tr>`).join('');
+  // Итог по всем сценариям
+  const tot = Object.keys(VARIANTS).map(v => { let c = 0, w = 0; for (const k of Object.keys(SCN)) { if (k === 'release') continue; const x = metrics(k, v); c += x.clicks; w += x.sw; } return { v, c, w }; });
+  const tminC = Math.min(...tot.map(r => r.c)), tminW = Math.min(...tot.map(r => r.w));
+  return `<div class="card"><h3>${sc.title}</h3><p class="why">${sc.why}</p>
+      <div style="font-size:12.5px"><b>${VARIANTS[S.v].name}</b>: кликов — <b>${m.clicks}</b>, переходов между лентой, полосой и панелью — <b>${m.sw}</b></div>
+      <ol class="steps">${li}</ol>${sc.short ? `<div class="short">${I('info', 's')} ${sc.short}</div>` : ''}</div>
+    <div class="card"><h3>Этот сценарий</h3><table class="cmp"><tr><th>Вариант</th><th>Кликов</th><th>Переходов</th></tr>${tbl}</table>
+      <h3 style="margin-top:12px">Все 7 сценариев</h3><table class="cmp"><tr><th>Вариант</th><th>Кликов</th><th>Переходов</th></tr>
+      ${tot.map(r => `<tr class="${r.v === S.v ? 'me' : ''}"><td>${VARIANTS[r.v].short}</td><td class="n ${r.c === tminC ? 'best' : ''}">${r.c}</td><td class="n ${r.w === tminW ? 'best' : ''}">${r.w}</td></tr>`).join('')}</table>
+      <div class="short">Ввод текста кликом не считается. «Переход» — взгляд и рука уходят в другую зону: лента, полоса с полем ввода, панель. Старт — у поля ввода.</div></div>`;
+}
+function demo() {
+  const g = (lbl, key, opts) => `<span class="grp"><span class="lbl">${lbl}</span>${opts.map(([v, l]) => `<button class="tbtn" aria-pressed="${S[key] === v}" data-set="${key}" data-val="${v}">${l}</button>`).join('')}</span>`;
+  return g('Вариант', 'v', Object.entries(VARIANTS).map(([k, x]) => [k, x.short]))
+    + g('Сценарий', 'scn', [['speak', '1 Озвучка'], ['song', '2 Песня'], ['separate', '3 Стемы'], ['repaint', '4 Кусок'], ['concat', '5 Склейка'], ['agent', '6 Агент'], ['phone', '7 Телефон'], ['release', 'Снять выбор']])
+    + g('Тема', 'theme', [['light', 'Светлая'], ['dark', 'Тёмная'], ['both', 'Обе']])
+    + g('Ширина', 'size', [['1440', '1440'], ['360', '360'], ['cmp', '360 · все варианты рядом']]);
+}
+function render() {
+  document.getElementById('demo').innerHTML = demo();
+  document.getElementById('vnote').innerHTML = VARIANTS[S.v].note;
+  document.getElementById('scnbox').innerHTML = scnBox();
+  const themes = S.theme === 'both' ? ['light', 'dark'] : [S.theme];
+  const size = SCN[S.scn].start.size === '360' && S.size === '1440' ? '360' : S.size;
+  const out = [];
+  for (const t of themes) {
+    if (size === 'cmp') {
+      for (const v of Object.keys(VARIANTS)) {
+        const steps = stepsOf(S.scn, v);
+        const st = stateAt(S.scn, v, Math.min(S.step, steps.length));
+        out.push(`<div class="frame" data-theme="${t}"><div class="cap">${VARIANTS[v].name} · шаг ${Math.min(S.step, steps.length) + 1} · ${t === 'dark' ? 'тёмная' : 'светлая'}</div>${mobile(v, st)}</div>`);
+      }
+    } else {
+      const st = stateAt(S.scn, S.v, S.step);
+      out.push(`<div class="frame" data-theme="${t}"><div class="cap">${VARIANTS[S.v].name} · ${SCN[S.scn].title} · ${size === '1440' ? '1440 · панель колонкой 380 px' : '360 · шторка'} · ${t === 'dark' ? 'тёмная' : 'светлая'}</div>
+        ${size === '1440' ? desktop(S.v, st) : mobile(S.v, st)}</div>`);
+    }
+  }
+  const fr = document.getElementById('frames');
+  fr.className = 'frames' + (size === '1440' ? '' : ' row');
+  fr.innerHTML = out.join('');
+  // подсветка «куда нажать»
+  fr.querySelectorAll('.frame').forEach((f, i) => {
+    const v = size === 'cmp' ? Object.keys(VARIANTS)[i % 4] : S.v;
+    const steps = stepsOf(S.scn, v);
+    const k = Math.min(S.step, steps.length);
+    if (k < steps.length) f.querySelectorAll(`[data-k="${steps[k][1]}"]`).forEach(el => el.classList.add('hl'));
+  });
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-set],[data-step],[data-k]');
+  if (!b) return;
+  if (b.dataset.set) {
+    S[b.dataset.set] = b.dataset.val;
+    if (b.dataset.set === 'scn' || b.dataset.set === 'v') S.step = 0;
+    if (b.dataset.set === 'scn' && SCN[S.scn].start.size === '360' && S.size === '1440') S.size = '360';
+  } else if (b.dataset.step) S.step = +b.dataset.step;
+  else if (b.dataset.k) {
+    // клик по подсвеченному элементу кадра — следующий шаг
+    const steps = stepsOf(S.scn, S.v);
+    if (S.step < steps.length && b.dataset.k === steps[S.step][1]) S.step++;
+    else return;
+  }
+  render();
+});
+render();
+</script>
+</body>
+</html>

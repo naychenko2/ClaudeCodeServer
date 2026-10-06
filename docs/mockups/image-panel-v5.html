@@ -1,0 +1,986 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Картинки v5 — панель по образцу «Звука»</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет был самодостаточным.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R из lib/design.ts. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    /* шкалы lib/design.ts */
+    --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px;
+    --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-sheet: 22px; --r-max: 999px;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #454037;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-success: #7CB86A; --c-success-bg: #1F2B1C; --c-success-text: #8FC47E;
+    --c-warning: #E0A955; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: #E9E4DA; color: #39332B;
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--fs-base); }
+  button, textarea, input, select { font: inherit; color: inherit; }
+  .doc-wrap { max-width: 1480px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; color: #2A251F; margin: 0 0 6px; }
+  p.lead { color: #756B5E; margin: 0 0 10px; max-width: 1000px; line-height: 1.55; }
+  code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; background: #E0D7C8; border-radius: 4px; padding: 0 4px; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 90; background: #E9E4DA; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 8px 0 12px; }
+  .demo .grp { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .demo .lbl { font-size: 11px; color: #9A8F7E; margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid #D0C6B4; background: #FBF8F2; border-radius: 10px; padding: 5px 10px; color: #39332B; }
+  .tbtn[aria-pressed="true"] { background: #D97757; color: #FBF8F2; border-color: transparent; }
+  .vnote { background: #FBF8F2; border: 1px solid #E0D7C8; border-radius: 12px; padding: 10px 14px; margin: 0 0 12px; line-height: 1.55; max-width: 1000px; }
+  .vnote b { color: #2A251F; }
+  .vnote ul { margin: 4px 0 0; padding-left: 18px; }
+
+  .frames { display: flex; flex-direction: column; gap: 16px; }
+  .frames.row { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+  .frame { background: var(--c-bg-main); color: var(--c-text-primary); border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; overflow-x: auto; }
+  .frame .cap { font-size: 11px; color: var(--c-text-muted); margin: 0 0 8px; }
+
+  /* ── Раскладка приложения ── */
+  .app { position: relative; height: 820px; display: flex; gap: 8px; width: 1420px; margin: 0 auto; }
+  .app.mobile { width: 360px; height: 740px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; flex-direction: column; gap: 0; background: var(--c-bg-main); }
+  .rail { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; }
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: var(--r-xxl); box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; position: relative; }
+  .island.main { flex: 1; }
+  .island.gen { width: 380px; flex: 0 0 380px; }
+
+  /* Лента и композер — фон, упрощённо */
+  .feed { flex: 1; overflow: hidden; padding: 14px 18px 8px; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+  .app.mobile .feed { padding: 10px; }
+  .msg { max-width: 560px; line-height: 1.5; font-size: var(--fs-base); }
+  .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 8px 12px; }
+  .acard { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: var(--r-xl); padding: 10px 12px; max-width: 560px; box-shadow: var(--shadow-card); }
+  .acard.focus { border-color: var(--c-accent); }
+  .acard .t { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  .acard .t b { color: var(--c-text-heading); font-size: var(--fs-base); }
+  .wave { display: flex; align-items: center; gap: 2px; height: 34px; margin-top: 8px; }
+  .wave i { flex: 1; background: var(--c-track); border-radius: 2px; }
+  .wave.on i:nth-child(-n+18) { background: var(--c-accent); }
+  .composer { margin: 0 12px 12px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xxl); padding: 8px 10px; }
+  .app.mobile .composer { margin: 0 8px 8px; }
+  .composer .ph { font-size: var(--fs-md); color: var(--c-text-primary); min-height: 38px; line-height: 1.4; }
+  .composer .ph.empty { color: var(--c-text-muted); }
+  .composer .bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .strip { display: flex; align-items: center; gap: 6px; margin: 0 12px 6px; }
+  .app.mobile .strip { margin: 0 8px 6px; }
+  .mtop { height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-panel); font-weight: 600; color: var(--c-text-heading); }
+
+  /* ── Кирпичи UI-кита (имена — как в components/ui) ── */
+  svg.i { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+  svg.i.s { width: 13px; height: 13px; } svg.i.l { width: 18px; height: 18px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-md);
+    border: 1px solid var(--c-border); background: var(--c-bg-card); cursor: pointer; font-size: var(--fs-sm); white-space: nowrap; color: var(--c-text-primary); }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn:focus-visible, .ib:focus-visible, .row-btn:focus-visible, .tile:focus-visible, .seg button:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); font-weight: 600; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.gacc { background: var(--c-accent-light); border-color: var(--c-accent); color: var(--c-accent); }
+  .btn.xs { height: 24px; padding: 0 8px; font-size: var(--fs-xs); border-radius: 7px; }
+  .btn.opt { height: auto; padding: 4px 12px; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; white-space: normal; }
+  .btn.opt.dash { border-style: dashed; opacity: .6; }
+  .btn.opt small { font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .ib { width: 26px; height: 26px; border-radius: var(--r-md); border: none; background: transparent; color: var(--c-text-muted); display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto; padding: 0; }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .seg { display: flex; background: var(--c-bg-inset); border-radius: var(--r-lg); padding: 2px; gap: 2px; }
+  .seg button { flex: 1; border: none; background: transparent; color: var(--c-text-secondary); height: 28px; padding: 0 8px; border-radius: var(--r-md); cursor: pointer; font-size: var(--fs-sm); display: inline-flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); font-weight: 600; }
+  .badge { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: var(--r-sm); font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+  .badge.ok { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.info { background: var(--c-info-bg); color: var(--c-info); }
+  .badge.mut { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .badge.acc { background: var(--c-accent-light); color: var(--c-accent); }
+  .select { display: flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0 10px; border: 1.5px solid var(--c-border); background: var(--c-bg-white); border-radius: var(--r-md); font-size: var(--fs-base); cursor: pointer; text-align: left; color: var(--c-text-primary); }
+  .select .v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .select .v small { color: var(--c-text-muted); font-size: var(--fs-sm); }
+  .textarea { width: 100%; border: 1.5px solid var(--c-border); background: var(--c-bg-white); border-radius: var(--r-md); padding: 6px 9px; font-size: var(--fs-base); line-height: 1.45; color: var(--c-text-primary); min-height: 84px; white-space: pre-wrap; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; }
+  .field { margin-bottom: var(--sp-md); }
+  .field > .fl { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-sm); color: var(--c-text-secondary); margin-bottom: var(--sp-xs); }
+  .field > .fl .aside { margin-left: auto; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .hint { font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.45; margin-top: var(--sp-xxs); }
+  .hint.warn { color: var(--c-warning-text); }
+  .label { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .4px; margin: var(--sp-md) 0 var(--sp-xs); display: flex; gap: 8px; }
+  .label .aside { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .rowx { display: flex; flex-wrap: wrap; gap: 6px; }
+  .range { display: flex; align-items: center; gap: 8px; }
+  .range .tr { flex: 1; height: 4px; background: var(--c-track); border-radius: 2px; position: relative; }
+  .range .tr i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--c-accent); border-radius: 2px; }
+  .range .tr b { position: absolute; top: -5px; width: 14px; height: 14px; border-radius: 50%; background: var(--c-bg-card); border: 2px solid var(--c-accent); }
+  .range .val { font-size: var(--fs-sm); color: var(--c-text-primary); min-width: 44px; text-align: right; }
+  .toggle { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--c-text-primary); cursor: pointer; }
+  .toggle i { width: 30px; height: 18px; border-radius: 999px; background: var(--c-track); position: relative; }
+  .toggle i::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--c-bg-card); }
+  .toggle.on i { background: var(--c-accent); } .toggle.on i::after { left: 14px; }
+  .stepper { display: inline-flex; align-items: center; border: 1px solid var(--c-border); border-radius: var(--r-md); height: 28px; background: var(--c-bg-card); }
+  .stepper button { width: 24px; height: 26px; border: none; background: transparent; cursor: pointer; color: var(--c-text-secondary); }
+  .stepper span { min-width: 18px; text-align: center; font-size: var(--fs-sm); font-weight: 600; }
+
+  /* ── Каркас GenerationPanel ── */
+  .gp-head { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); min-width: 0; }
+  .gp-head .ttl { font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); }
+  .gp-head .sub { font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .gp-head .ico { color: var(--c-accent); display: inline-flex; }
+  .sheet .gp-head { background: transparent; }
+  .gp-tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--c-border-light); flex: 0 0 auto; }
+  .gp-tabs button { border: none; background: transparent; height: 34px; padding: 0 10px; font-size: var(--fs-sm); color: var(--c-text-secondary); display: inline-flex; align-items: center; gap: 5px; border-bottom: 2px solid transparent; cursor: pointer; }
+  .gp-tabs button.on { color: var(--c-accent); border-bottom-color: var(--c-accent); font-weight: 600; }
+  .gp-ctx { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--c-border-light); font-size: var(--fs-sm); color: var(--c-text-secondary); min-width: 0; }
+  .gp-ctx > span.t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gp-ctx b { color: var(--c-text-heading); }
+  .gp-body { flex: 1; min-height: 0; overflow: auto; padding: 2px var(--sp-md) 14px; }
+  .gp-foot { flex: 0 0 auto; border-top: 1px solid var(--c-border-light); background: var(--c-bg-card); padding: var(--sp-sm) var(--sp-md) 10px; }
+  .gp-foot .row { display: flex; align-items: center; gap: var(--sp-sm); }
+  .gp-foot .price { flex: 1; min-width: 0; font-size: var(--fs-sm); line-height: 1.35; color: var(--c-text-secondary); white-space: nowrap; }
+  .gp-foot .price b { display: block; color: var(--c-text-heading); overflow: hidden; text-overflow: ellipsis; }
+  .gp-foot .price span { display: block; overflow: hidden; text-overflow: ellipsis; }
+  .gp-foot .q { margin-bottom: 6px; }
+  .gp-foot .sum { font-size: var(--fs-sm); color: var(--c-text-secondary); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sheet-ov { position: absolute; inset: 0; background: var(--c-overlay); z-index: 5; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; height: 88%; z-index: 6; background: var(--c-bg-card); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); display: flex; flex-direction: column; overflow: hidden; }
+  .sheet.peek { position: relative; height: auto; margin: 0 8px 4px; border: 1px solid var(--c-border); border-radius: var(--r-xxl); box-shadow: none; }
+  .grab { align-self: center; width: 64px; padding: 8px 0 2px; display: flex; justify-content: center; border: none; background: transparent; cursor: pointer; }
+  .grab span { width: 40px; height: 4px; border-radius: var(--r-sm); background: var(--c-track); }
+
+  /* ── Вариант А: строка-сводка «Чем», раскрывашка «Ещё» ── */
+  .row-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 10px; border: 1px solid var(--c-border-light); background: var(--c-bg-card); border-radius: var(--r-md); cursor: pointer; text-align: left; font-size: var(--fs-sm); color: var(--c-text-primary); }
+  .row-btn:hover { border-color: var(--c-accent-muted); }
+  .row-btn .k { color: var(--c-text-muted); flex: 0 0 auto; }
+  .row-btn .v { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-btn .v b { color: var(--c-text-heading); font-weight: 600; }
+  .row-btn.flat { border: none; background: transparent; padding-left: 0; color: var(--c-text-secondary); min-height: 30px; }
+  .pick-list { border: 1px solid var(--c-border-light); border-radius: var(--r-md); background: var(--c-bg-card); margin-top: 4px; overflow: hidden; }
+  .pick { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: var(--fs-sm); cursor: pointer; border-top: 1px solid var(--c-border-light); }
+  .pick:first-child { border-top: none; }
+  .pick:hover { background: var(--c-bg-selected); }
+  .pick.on { background: var(--c-accent-light); }
+  .pick .nm { flex: 1; min-width: 0; }
+  .pick .nm small { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .pick .pr { font-size: var(--fs-xs); color: var(--c-text-secondary); white-space: nowrap; }
+  .pick .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--c-border); flex: 0 0 auto; display: grid; place-items: center; }
+  .pick.on .dot { border-color: var(--c-accent); } .pick.on .dot::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+  .pick.off { opacity: .55; cursor: default; }
+  .grp-h { padding: 6px 10px 2px; font-size: var(--fs-xs); color: var(--c-text-muted); font-weight: 600; background: var(--c-bg-inset); }
+
+  /* ── Вариант Б: плитки задач ── */
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .tile { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--c-border-light); background: var(--c-bg-card); border-radius: var(--r-lg); cursor: pointer; text-align: left; font-size: var(--fs-sm); color: var(--c-text-primary); min-width: 0; }
+  .tile:hover { border-color: var(--c-accent-muted); }
+  .tile .ti { width: 28px; height: 28px; border-radius: var(--r-md); background: var(--c-bg-inset); display: grid; place-items: center; color: var(--c-text-secondary); flex: 0 0 auto; }
+  .tile .tn { min-width: 0; } .tile .tn small { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .tile.on .ti { background: var(--c-accent); color: var(--c-on-accent); }
+  .task-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--c-accent); background: var(--c-accent-light); border-radius: var(--r-lg); margin-top: var(--sp-sm); }
+  .task-head .ti { width: 28px; height: 28px; border-radius: var(--r-md); background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; }
+  .task-head .tn { flex: 1; min-width: 0; font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); }
+  .task-head .tn small { display: block; font-weight: 400; font-size: var(--fs-xs); color: var(--c-text-secondary); }
+  .search { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1.5px solid var(--c-border); border-radius: var(--r-md); background: var(--c-bg-white); color: var(--c-text-muted); font-size: var(--fs-sm); margin-bottom: 6px; }
+
+  /* ── Вариант В: шаги-аккордеон ── */
+  .step { border: 1px solid var(--c-border-light); border-radius: var(--r-lg); background: var(--c-bg-card); margin-top: var(--sp-sm); overflow: hidden; }
+  .step.open { border-color: var(--c-accent-muted); }
+  .step-h { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: none; background: transparent; cursor: pointer; text-align: left; color: var(--c-text-primary); }
+  .step-h .n { width: 20px; height: 20px; border-radius: 50%; background: var(--c-bg-inset); color: var(--c-text-secondary); font-size: var(--fs-xs); font-weight: 700; display: grid; place-items: center; flex: 0 0 auto; }
+  .step.open .step-h .n { background: var(--c-accent); color: var(--c-on-accent); }
+  .step-h .tt { flex: 1; min-width: 0; font-size: var(--fs-sm); }
+  .step-h .tt b { display: block; color: var(--c-text-heading); font-size: var(--fs-base); }
+  .step-h .tt span { display: block; color: var(--c-text-muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .step-b { padding: 0 10px 10px; border-top: 1px solid var(--c-border-light); }
+  .note-pin { position: absolute; background: #2A251F; color: #FBF8F2; font-size: 11px; border-radius: 8px; padding: 4px 8px; z-index: 20; max-width: 220px; line-height: 1.4; pointer-events: none; }
+
+  /* ── v4: полоса «Звук» над композером с переключателем режима ── */
+  .sstrip { position: relative; display: flex; align-items: center; gap: 8px; height: 48px; margin: 8px 12px 8px; padding: 0 8px;
+    background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: var(--r-xxl); min-width: 0; }
+  .app.mobile .sstrip { height: 42px; gap: 6px; margin: 6px 8px; padding: 0 6px; }
+  .sstrip .ttl { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-heading); flex: 0 0 auto; cursor: pointer; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px 0 8px; border-radius: var(--r-max); font-size: var(--fs-sm);
+    border: 1px solid var(--c-accent); background: var(--c-accent-light); color: var(--c-text-primary); min-width: 0; max-width: 100%; flex: 0 1 auto; cursor: pointer; }
+  .chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip b { color: var(--c-text-heading); }
+  .chip.dash { border-style: dashed; border-color: var(--c-dashed); background: transparent; color: var(--c-text-secondary); padding: 0 10px; }
+  .chip .x { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; color: var(--c-text-muted); border: none; background: transparent; padding: 0; cursor: pointer; }
+  .sumbtn { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: var(--r-md); border: 1px solid var(--c-border);
+    background: var(--c-bg-white); font-size: var(--fs-xs); color: var(--c-text-secondary); min-width: 0; flex: 0 1 auto; cursor: pointer; }
+  .sumbtn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qbadge { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: var(--r-max); background: var(--c-bg-inset); color: var(--c-text-secondary); font-size: var(--fs-xs); white-space: nowrap; }
+  /* InlineSegmented (1440): иконка + подпись, высота по TB */
+  .iseg { display: inline-flex; background: var(--c-bg-inset); border-radius: var(--r-lg); padding: 2px; gap: 2px; flex: 0 0 auto; }
+  .iseg button { border: none; background: transparent; color: var(--c-text-secondary); height: 28px; padding: 0 9px; border-radius: var(--r-md); cursor: pointer;
+    font-size: var(--fs-sm); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .iseg button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); font-weight: 600; }
+  .iseg button.off { color: var(--c-text-muted); opacity: .5; cursor: not-allowed; }
+  .iseg button.ask { color: var(--c-text-muted); }
+  .iseg button.ask::after { content: ''; width: 5px; height: 5px; border-radius: 50%; border: 1px solid var(--c-text-muted); margin-left: 1px; }
+  .iseg button.appear { animation: segIn .35s ease-out; }
+  @keyframes segIn { from { opacity: 0; max-width: 0; padding: 0; } to { opacity: 1; max-width: 140px; } }
+  /* IconSegmented (360): только иконки 28×20 по геометрии дорожки */
+  .app.mobile .iseg button { padding: 0; width: 30px; height: 26px; justify-content: center; }
+  .app.mobile .iseg button .lb { display: none; }
+  .app.mobile .iseg button.ask::after { display: none; }
+
+  .toast { display: flex; align-items: center; gap: 8px; margin: 0 12px -2px; padding: 6px 10px; border-radius: var(--r-md); background: var(--c-info-bg); color: var(--c-text-primary); font-size: var(--fs-sm); }
+  .app.mobile .toast { margin: 0 8px -2px; font-size: var(--fs-xs); }
+  .toast .t { flex: 1; min-width: 0; }
+
+  /* Поповер «Что обработать?» (Menu) */
+  .pop { position: absolute; bottom: calc(100% + 6px); left: 90px; width: 330px; z-index: 30; background: var(--c-bg-card); border: 1px solid var(--c-border);
+    border-radius: var(--r-xl); box-shadow: var(--shadow-dropdown); overflow: hidden; }
+  .app.mobile .pop { left: 0; right: 0; width: auto; }
+  .pop .ph { padding: 9px 12px 4px; font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); }
+  .pop .ph small { display: block; font-weight: 400; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .mi { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 12px; border: none; background: transparent; text-align: left; font-size: var(--fs-sm); color: var(--c-text-primary); cursor: pointer; min-height: 36px; }
+  .app.mobile .mi { min-height: 40px; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi .nm { flex: 1; min-width: 0; } .mi .nm small { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .mi .ic { width: 26px; height: 26px; border-radius: var(--r-md); background: var(--c-bg-inset); display: grid; place-items: center; color: var(--c-text-secondary); flex: 0 0 auto; }
+  .msep { height: 1px; background: var(--c-border-light); margin: 4px 0; }
+  .pop .foot { padding: 6px 12px 9px; font-size: var(--fs-xs); color: var(--c-text-muted); }
+
+  /* Карточка звука в ленте: действия своей версии */
+  .acard { position: relative; }
+  .acard .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .acard.focus { box-shadow: var(--shadow-focus); }
+  .wave { position: relative; }
+  .wave .rng { position: absolute; top: -2px; bottom: -2px; left: 34%; width: 14%; background: var(--c-accent-light); border: 1px solid var(--c-accent); border-radius: 4px; opacity: .85; }
+  .cmenu { position: absolute; z-index: 25; top: calc(100% - 6px); left: 120px; width: 230px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-dropdown); padding: 4px 0; }
+  .msg.agent { background: transparent; padding: 0; color: var(--c-text-primary); }
+  .msg.agent b { color: var(--c-text-heading); }
+
+  .composer .hintline { font-size: var(--fs-xs); color: var(--c-text-muted); margin-bottom: 4px; }
+  .composer .hintline b { color: var(--c-accent); font-weight: 600; }
+
+  /* Подсветка «куда нажать» на этом шаге */
+  .hl { outline: 2px solid var(--c-accent) !important; outline-offset: 2px; animation: hlp 1.4s ease-in-out infinite; position: relative; }
+  @keyframes hlp { 0%,100% { outline-color: var(--c-accent); } 50% { outline-color: var(--c-accent-muted); } }
+
+  /* Документ: шаги сценария и сравнение */
+  .scn-box { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; margin: 0 0 12px; max-width: 1420px; }
+  .scn-box .card { background: #FBF8F2; border: 1px solid #E0D7C8; border-radius: 12px; padding: 10px 14px; line-height: 1.5; }
+  .scn-box h3 { margin: 0 0 4px; font-size: 15px; color: #2A251F; }
+  .scn-box .why { color: #756B5E; font-size: 12.5px; margin: 0 0 6px; }
+  ol.steps { margin: 6px 0 0; padding-left: 0; list-style: none; counter-reset: s; }
+  ol.steps li { counter-increment: s; display: flex; gap: 8px; padding: 4px 6px; border-radius: 8px; cursor: pointer; font-size: 12.5px; color: #39332B; }
+  ol.steps li::before { content: counter(s); flex: 0 0 20px; height: 20px; border-radius: 50%; background: #E7E0D2; color: #756B5E; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+  ol.steps li.done-row::before { content: '✓'; }
+  ol.steps li.cur { background: #F4ECE1; }
+  ol.steps li.cur::before { background: #D97757; color: #FBF8F2; }
+  ol.steps li .z { margin-left: auto; font-size: 10.5px; color: #9A8F7E; white-space: nowrap; }
+  .short { margin-top: 6px; font-size: 12px; color: #756B5E; }
+  table.cmp { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  table.cmp th, table.cmp td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #E8E1D4; }
+  table.cmp th { color: #9A8F7E; font-weight: 600; font-size: 11px; }
+  table.cmp tr.me td { background: #F4ECE1; font-weight: 600; }
+  table.cmp td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .best { color: #3F7A4F; font-weight: 700; }
+  @media (max-width: 1100px) { .scn-box { grid-template-columns: 1fr; } }
+
+  /* ── v5: картинки ── */
+  .feed { justify-content: flex-end; }
+  .icard { flex: 0 0 auto; position: relative; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: var(--r-xl); padding: 8px 10px; max-width: 420px; box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 6px; }
+  .icard.focus { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .icard .t { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--c-text-secondary); min-width: 0; }
+  .icard .t b { color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .icard .t .s { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c-text-muted); font-size: var(--fs-xs); }
+  .icard .acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .pic { height: 112px; border-radius: var(--r-md); background-size: cover; position: relative; overflow: hidden; }
+  .app.mobile .pic { height: 78px; }
+  .pic.draft { background: transparent; border: 1.5px dashed var(--c-dashed); display: grid; place-items: center; color: var(--c-text-muted); font-size: var(--fs-xs); }
+  .mark { position: absolute; right: 16%; top: 26%; width: 17%; height: 46%; border: 2px dashed var(--c-accent); border-radius: 40%; background: var(--c-accent-light); opacity: .75; }
+  .run-h { font-size: var(--fs-xs); color: var(--c-text-muted); display: flex; align-items: center; gap: 4px; }
+  .run-h b { color: var(--c-text-secondary); font-weight: 600; }
+  .feed .grid2 { display: flex; gap: 8px; flex-wrap: wrap; }
+  .thumb { width: 26px; height: 26px; border-radius: var(--r-sm); background-size: cover; flex: 0 0 auto; border: 1px solid var(--c-border-light); }
+  .thumb.s { width: 18px; height: 18px; border-radius: 4px; }
+  .thumb.round { border-radius: 50%; }
+
+  /* Операция в полосе (вариант 2): компактный Select */
+  .sop { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border-radius: var(--r-md); border: 1px solid var(--c-border);
+    background: var(--c-bg-white); font-size: var(--fs-sm); color: var(--c-text-primary); cursor: pointer; flex: 0 0 auto; white-space: nowrap; }
+  .sop b { font-weight: 600; color: var(--c-text-heading); }
+  .app.mobile .sop { padding: 0 6px; gap: 3px; }
+  .app.mobile .sop .lb { max-width: 64px; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Выпадашки в панели (Menu) */
+  .rel { position: relative; }
+  .dd { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; min-width: 240px; background: var(--c-bg-card); border: 1px solid var(--c-border);
+    border-radius: var(--r-lg); box-shadow: var(--shadow-dropdown); padding: 4px 0; }
+  .pop .grp-h, .dd .grp-h { background: transparent; padding: 7px 12px 2px; }
+  .mi.on { background: var(--c-accent-light); }
+  .mi.off { opacity: .55; cursor: default; }
+  .mi.last { box-shadow: inset 3px 0 0 var(--c-accent); }
+
+  /* Чипы образцов и персонажа */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .ichip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px 0 3px; border-radius: var(--r-max); border: 1px solid var(--c-border);
+    background: var(--c-bg-white); font-size: var(--fs-sm); color: var(--c-text-primary); cursor: pointer; white-space: nowrap; max-width: 190px; }
+  .ichip > span { overflow: hidden; text-overflow: ellipsis; }
+  .ichip.sel { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .ichip.dash { border-style: dashed; border-color: var(--c-dashed); background: transparent; color: var(--c-text-secondary); padding: 0 10px 0 8px; }
+  .ichip .x { color: var(--c-text-muted); display: inline-grid; }
+
+  /* Старые пилюли и опции (вид «Сейчас») */
+  .pill { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: var(--r-max); border: 1px solid var(--c-border); background: var(--c-bg-white);
+    font-size: var(--fs-xs); color: var(--c-text-primary); cursor: pointer; white-space: nowrap; }
+  .pill.on { border-color: var(--c-accent); background: var(--c-accent-light); color: var(--c-accent); font-weight: 600; }
+  .pill.off { border-style: dashed; background: transparent; opacity: .55; cursor: default; }
+  .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .btn.opt.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .chk { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-sm); }
+  .chk i { width: 15px; height: 15px; border: 1.5px solid var(--c-border); border-radius: 4px; background: var(--c-bg-white); }
+
+  /* Отметки в поле ввода */
+  .mchip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 4px 0 8px; border-radius: var(--r-max); background: var(--c-accent-light); color: var(--c-accent); font-size: var(--fs-xs); font-weight: 600; }
+
+  /* Редактор картинки (EditorModal), упрощённо */
+  .ed-ov { position: absolute; inset: 0; background: var(--c-overlay); z-index: 40; display: grid; place-items: center; }
+  .ed { width: 900px; height: 600px; background: var(--c-bg-card); border-radius: var(--r-xl); box-shadow: var(--shadow-dropdown); display: flex; flex-direction: column; overflow: hidden; }
+  .app.mobile .ed { width: 100%; height: 100%; border-radius: 0; }
+  .ed-h { height: 42px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--c-border-light); font-weight: 600; color: var(--c-text-heading); }
+  .ed-b { flex: 1; display: flex; min-height: 0; }
+  .ed-c { flex: 1; padding: 14px; display: grid; place-items: center; background: var(--c-bg-inset); }
+  .ed-c .pic { width: 100%; height: 100%; cursor: crosshair; }
+  .ed-s { width: 260px; padding: 10px 12px; border-left: 1px solid var(--c-border-light); overflow: auto; }
+  .ed-f { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--c-border-light); }
+  .tools { display: flex; gap: 4px; }
+  .ib.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .app.mobile .sheet .iseg button { width: auto; flex: 1; padding: 0 9px; }
+  .app.mobile .sheet .iseg button .lb { display: inline; }
+  .app.mobile .sheet .iseg button.ask::after { display: inline-block; }
+  button.pick { width: 100%; border: none; border-top: 1px solid var(--c-border-light); background: transparent; text-align: left; color: var(--c-text-primary); }
+  button.pick.on { background: var(--c-accent-light); }
+  .pop.sopm { left: 96px; width: 300px; }
+  .app.mobile .pop.sopm { left: 0; width: auto; }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">Картинки v5 — панель по образцу «Звука»</h1>
+  <p class="lead">Перенос решений звука на картинки: в панели видно только то, что меняется на каждом запуске; операции стоят одним списком с группами; поставщик и модель
+    собраны в строку «Чем»; режим переключается и в полосе, и в панели. «Править» без выбранной картинки спрашивает «Что править?».
+    Здесь сравниваются «Сейчас» (master) и два варианта переноса. Чем они отличаются: нужен ли картинкам переключатель <b>Создать / Править</b>
+    или хватит групп в списке операций. Выберите сценарий и шагайте по списку: на кадре обведено, куда нажать. Клики и переходы считаются сами.
+    Цены и модели в кадрах условные. Подробности — в <code>image-panel-v5-proposal.md</code>.</p>
+
+  <div class="demo" id="demo"></div>
+  <div class="vnote" id="vnote"></div>
+  <div class="scn-box" id="scnbox"></div>
+  <div class="frames" id="frames"></div>
+</div>
+
+<script>
+// ── Иконки lucide ──
+const P = {
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  sliders: '<path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/>',
+  contact: '<path d="M16 2v2"/><path d="M8 2v2"/><rect x="3" y="4" width="18" height="18" rx="2"/><circle cx="12" cy="11" r="3"/><path d="M7 20.2a5 5 0 0 1 10 0"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M6 21v-1a6 6 0 0 1 12 0v1"/>',
+  pencil: '<path d="M21.2 6.8a2.8 2.8 0 0 0-4-4L3.8 16.2 3 21l4.8-.8z"/><path d="m15 5 4 4"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>',
+  brush: '<path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
+  expand: '<path d="m21 21-6-6m6 6v-4.8m0 4.8h-4.8"/><path d="M3 16.2V21m0 0h4.8M3 21l6-6"/><path d="M21 7.8V3m0 0h-4.8M21 3l-6 6"/><path d="M3 7.8V3m0 0h4.8M3 3l6 6"/>',
+  eraser: '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>',
+  crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+  rotate: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+  square: '<rect x="3" y="3" width="18" height="18" rx="2"/>', type: '<path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  down: '<path d="m6 9 6 6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>', up: '<path d="m18 15-6-6-6 6"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  send: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>', plus: '<path d="M12 5v14M5 12h14"/>', menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  dl: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>', mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 8V4"/><circle cx="8.5" cy="14" r="1"/><circle cx="15.5" cy="14" r="1"/>',
+  text: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>', audio: '<path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/>',
+  face: '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>',
+  cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+};
+const I = (n, c = '') => `<svg class="i ${c}" viewBox="0 0 24 24">${P[n]}</svg>`;
+
+// ── Картинки ленты: вместо фото — градиенты (внешних ресурсов в макете нет) ──
+const G = {
+  hero: 'linear-gradient(135deg,#C98B5E 0%,#E7C79C 45%,#6B4A3A 100%)',
+  heroEve: 'linear-gradient(135deg,#7A4E3A 0%,#D9925A 45%,#2E2230 100%)',
+  heroBg: 'repeating-conic-gradient(#D8D2C6 0 25%,#F4F0E8 0 50%) 0 0/14px 14px',
+  cat: 'radial-gradient(circle at 42% 50%,#E9B872 0 17%,transparent 18%),linear-gradient(160deg,#7FA7C9,#2F4B66)',
+  catEve: 'radial-gradient(circle at 42% 50%,#E9B872 0 17%,transparent 18%),linear-gradient(160deg,#5B4A78,#1E1A2E)',
+  sea: 'linear-gradient(180deg,#9DB7C7 0%,#5E7F95 55%,#2E4A5C 100%)',
+  sea2: 'linear-gradient(200deg,#B9C9CF 0%,#6D8D9C 50%,#253E4E 100%)',
+  ana: 'radial-gradient(circle at 50% 38%,#E8C4A6 0 13%,transparent 14%),linear-gradient(150deg,#D7B98E,#8A6F9A)',
+  palette: 'linear-gradient(90deg,#D97757 0 25%,#E7C79C 0 50%,#8A6F9A 0 75%,#5E7F95 0)',
+  logo: 'radial-gradient(circle,#D97757 0 35%,#FBF8F2 36%)', mood: 'linear-gradient(135deg,#B7A58A,#5E5446)',
+};
+const IMGS = {
+  hero: { name: 'hero.png', ver: 'версия 2', sub: 'кафе у окна · в проекте', bg: G.hero },
+  cat: { name: 'кот.png', ver: 'версия 1', sub: 'нарисовал Claude · Qwen-Image 2.1', bg: G.cat },
+  draft: { name: 'Новая картинка', sub: 'черновик · сюда ляжет результат', draft: true },
+  n1: { name: 'маяк.png', ver: 'вариант 1', sub: 'по тексту · Qwen-Image 2.1', bg: G.sea, run: 'Сгенерировано · 2 варианта' },
+  n2: { name: 'маяк.png', ver: 'вариант 2', sub: 'по тексту · Qwen-Image 2.1', bg: G.sea2 },
+  n3: { name: 'маяк.png', ver: 'вариант 3', sub: 'ещё вариант · тот же промпт', bg: G.sea2, run: 'Ещё 2 варианта · тот же промпт' },
+  n4: { name: 'маяк.png', ver: 'вариант 4', sub: 'ещё вариант · тот же промпт', bg: G.sea },
+  e1: { name: 'hero.png', ver: 'версия 3', sub: 'вечер, тёплый свет', bg: G.heroEve, run: 'Изменено' },
+  m1: { name: 'hero.png', ver: 'версия 3', sub: 'по отмеченному: прохожий убран', bg: G.hero, run: 'Изменено отмеченное' },
+  o1: { name: 'hero.png', ver: 'версия 3', sub: 'дорисовано до 9:16', bg: G.hero, run: 'Дорисовано' },
+  b1: { name: 'hero.png', ver: 'версия 3', sub: 'фон убран', bg: G.heroBg, run: 'Фон убран' },
+  u1: { name: 'hero.png', ver: 'версия 4', sub: 'качество улучшено ×2', bg: G.heroBg, run: 'Качество улучшено' },
+  a1: { name: 'аня-у-окна.png', ver: 'вариант 1', sub: 'Аня + стиль palette.png', bg: G.ana, run: 'Сгенерировано · персонаж Аня · образец «Стиль»' },
+  a2: { name: 'аня-у-окна.png', ver: 'вариант 2', sub: 'Аня + стиль palette.png', bg: G.ana },
+  c2: { name: 'кот.png', ver: 'версия 2', sub: 'вечер', bg: G.catEve, run: 'Изменено' },
+};
+const label = id => { const s = IMGS[id]; return s.ver ? `${s.name} · ${s.ver}` : s.name; };
+
+// Операции (подписи — panelOp.ts; в вариантах переноса «Правка» и «По отмеченному» — один пункт «Изменить»)
+const OPS = {
+  generate: { label: 'По тексту', short: 'По тексту', run: 'Сгенерировать', icon: 'spark', model: 'Qwen-Image 2.1', ph: 'Опишите новую картинку — например, «маяк на скале в шторм, акварель»' },
+  edit: { label: 'Изменить по тексту', short: 'Изменить', run: 'Изменить', icon: 'pencil', src: true, model: 'Qwen-Image Edit', ph: 'Что изменить в %? Опишите словами или отметьте место кистью' },
+  inpaint: { label: 'По отмеченному', short: 'Отмеченное', run: 'Изменить отмеченное', icon: 'brush', src: true, model: 'Qwen-Image Edit', ph: 'Что сделать в отмеченном месте?' },
+  outpaint: { label: 'Дорисовать за края', short: 'За края', run: 'Дорисовать', icon: 'expand', src: true, noPrompt: true, model: 'Qwen-Image Edit', ph: 'Текст не нужен — нажмите «Дорисовать»' },
+  removeBackground: { label: 'Убрать фон', short: 'Убрать фон', run: 'Убрать фон', icon: 'eraser', src: true, noPrompt: true, one: true, model: 'BiRefNet', ph: 'Текст не нужен — нажмите «Убрать фон»' },
+  upscale: { label: 'Улучшить качество', short: 'Качество', run: 'Улучшить', icon: 'scan', src: true, noPrompt: true, one: true, model: 'апскейлер ×2', ph: 'Текст не нужен — нажмите «Улучшить»' },
+  enhanceFaces: { label: 'Улучшить лица', short: 'Лица', run: 'Улучшить лица', icon: 'face', src: true, noPrompt: true, one: true, model: 'FaceDetailer', ph: 'Текст не нужен — нажмите «Улучшить лица»' },
+};
+const AI_EDIT = ['edit', 'outpaint', 'removeBackground', 'upscale', 'enhanceFaces'];
+const NO_AI = [['crop', 'Обрезать', 'crop'], ['rotate', 'Повернуть и отразить', 'rotate'], ['resize', 'Размер и формат', 'scan']];
+
+const TXT = { newv: 'маяк на скале в шторм, акварель', edit: 'вечер, тёплый свет из окна', mask: 'убери человека справа', ana: 'Аня у окна с чашкой какао', agent: 'сделай вечер' };
+
+// Лента каждого сценария до начала
+const FEEDS = {
+  newv: { title: 'Обложка блога', msg: 'Нарисуй маяк на скале в шторм, акварелью', cards: ['hero'] },
+  two: { title: 'Обложка блога', msg: 'Вот кадр для обложки — давай поправим', cards: ['cat', 'hero'] },
+  ana: { title: 'Посты с Аней', msg: 'Нужна Аня в стиле нашей палитры для поста', cards: [] },
+  agent: { title: 'Обложка блога', msg: 'Нарисуй кота для обложки', agent: 'Нарисовал кота и взял картинку в работу. Поправить можно прямо в полосе над полем ввода.', cards: ['cat'] },
+};
+const DONE = { new: ['n1', 'n2'], new2: ['n1', 'n2', 'n3', 'n4'], edit: ['e1'], mask: ['m1'], out: ['o1'], rmbg: ['b1'], up: ['b1', 'u1'], ana: ['a1', 'a2'], agent: ['c2'] };
+
+// ── Варианты ──
+const VARIANTS = {
+  S: { name: 'Сейчас (master)', short: 'Сейчас', note: '<b>Сейчас — точка отсчёта.</b> Переключателя в полосе нет: чип «Работаем с» или «Нарисовать новую» и кнопка-сводка, она открывает панель. В панели все слои раскрыты сразу: 8 пилюль операции (с «Авто»), поставщик и модель двухстрочными карточками, режим подбора, персонаж и образцы, размер. «Авто» сам выбирает операцию по выбору картинки. Отметки рисуются только в редакторе картинки («Открыть» на карточке).' },
+  V1: { name: '1 · Создать / Править', short: '1 · Создать/Править', note: '<b>1. Создать / Править — прямой перенос звука.</b> Переключатель «Создать | Править» стоит зеркалом в полосе и в панели, как «Голос | Музыка | Обработка». У каждого режима свой запомненный выбор: операция и исполнитель (для новых картинок — Qwen-Image 2.1, для правки — Qwen-Image Edit). «Править» без выбранной картинки не тупик: открывает меню «Что править?» с картинками чата и загрузкой. В «Создать» операция одна, поэтому списка нет; у «Править» — список с группами «С ИИ» и «Без ИИ · бесплатно». Режим — выбор человека: после генерации он остаётся «Создать», и пустое поле ввода даёт «↻ Ещё 2».' },
+  V2: { name: '2 · Операция в полосе, без режимов', short: '2 · Операция', note: '<b>2. Без режимов: решают группы операций.</b> Отдельного переключателя нет. Вместо него в полосе (и зеркалом в панели) стоит список операции с группами «Новая картинка» / «С выбранной картинкой» / «Без ИИ · бесплатно». Операция над картинкой без выбора спрашивает «Что править?», «По тексту» при выбранной картинке заводит новую. Без выбора чип — «Картинка ▾» с меню «С чем работаем?». Исполнитель запоминается по группе. Плюс: быстрые операции меняются в полосе без панели. Минус: полоса на 360 тесная, а простое «поправь картинку агента» требует сменить операцию.' },
+};
+
+// ── Сценарии ──
+// шаг: [зона, ключ подсветки, текст, патч после клика, патч до показа (ввод текста), кликов]
+// зоны: f — лента, b — полоса и поле ввода, p — панель, e — редактор картинки
+const SCN = {
+  newv: { title: '1. Нарисовать новую и сделать ещё вариант', why: 'В чате только что правили hero.png, она в работе. Нужна новая картинка по тексту, а после просмотра — ещё пара вариантов того же промпта.',
+    short: 'Сейчас «ещё вариант» без повторного набора промпта не сделать: после отправки поле пустое, а выбранная готовая картинка переводит поле ввода в правку.',
+    start: { focus: 'hero', cm: true, mode: 'edit', op: 'edit', feed: 'newv' },
+    S: [['b', 'chip-x', '✕ на чипе «Работаем с: hero.png»: в полосе появляется «Нарисовать новую»', { focus: null, op: 'auto' }],
+      ['b', 'chip-new', '«Нарисовать новую»: черновик в ленте, поле ввода в режиме «Картинка»', { focus: 'draft' }],
+      ['b', 'send', 'Описание в поле ввода → «✦ Сгенерировать»', { done: 'new', focus: 'n2', text: '' }, { text: TXT.newv }],
+      ['b', 'summary', 'Ещё вариант. Выбрана готовая картинка, и «Авто» теперь — правка. Открыть панель', { panel: 'open' }],
+      ['p', 'pill:generate', 'Пилюля «По тексту»', { op: 'generate' }],
+      ['p', 'prun', 'Промпт набрать заново (после отправки поле пустое) → «Сгенерировать»', { done: 'new2', focus: 'n4', text: '' }, { text: TXT.newv }]],
+    V1: [['b', 'seg-create', '«Создать» в полосе: hero.png остаётся в ленте, в чипе — «Новая картинка». Исполнитель у «Создать» свой: Qwen-Image 2.1', { mode: 'create', op: 'generate', focus: 'draft' }],
+      ['b', 'send', 'Описание → «✦ Сгенерировать · бесплатно»', { done: 'new', focus: 'n2', text: '', again: true }, { text: TXT.newv }],
+      ['b', 'send', 'Ещё вариант: режим остался «Создать», поле пустое, поэтому кнопка — «↻ Ещё 2» (повтор прошлого запуска)', { done: 'new2', focus: 'n4' }]],
+    V2: [['b', 'sop', 'Операция в полосе (сейчас «Изменить»)', { pop: 'sop' }],
+      ['b', 'sop:generate', '«По тексту» в группе «Новая картинка»: в чипе — «Новая картинка», hero.png остаётся в ленте', { pop: null, op: 'generate', focus: 'draft' }],
+      ['b', 'send', 'Описание → «✦ Сгенерировать · бесплатно»', { done: 'new', focus: 'n2', text: '', again: true }, { text: TXT.newv }],
+      ['b', 'send', 'Ещё вариант: операция осталась «По тексту», кнопка — «↻ Ещё 2»', { done: 'new2', focus: 'n4' }]],
+  },
+  edit: { title: '2. Поправить картинку из ленты по промпту', why: 'В ленте hero.png и кот, ничего не выбрано, поле ввода в режиме «Чат». Нужно «вечер, тёплый свет из окна».',
+    short: 'Во всех вариантах работает и путь через карточку: «Работать с этой» → промпт → «Изменить» (2 клика, 2 перехода).',
+    start: { focus: null, cm: false, mode: 'create', op: 'generate', feed: 'two' },
+    S: [['f', 'card-work:hero', '«Работать с этой» на hero.png: чип «Работаем с», поле ввода в режиме «Картинка». На 1440 панель открывается сама, если её не закрывали', { focus: 'hero', cm: true, op: 'auto' }],
+      ['b', 'send', 'Промпт → «✦ Изменить»', { done: 'edit', focus: 'e1', text: '' }, { text: TXT.edit }]],
+    V1: [['b', 'seg-edit', 'Картинка не выбрана, поэтому «Править» открывает «Что править?» с картинками чата', { pop: 'pick' }],
+      ['b', 'pop:hero', 'hero.png: встаёт в чип, режим — «Править», операция запомнена — «Изменить»', { pop: null, focus: 'hero', cm: true, mode: 'edit', op: 'edit' }],
+      ['b', 'send', 'Промпт → «✦ Изменить · бесплатно»', { done: 'edit', focus: 'e1', text: '' }, { text: TXT.edit }]],
+    V2: [['b', 'chip-pick', 'Чип «Картинка ▾» открывает «С чем работаем?»', { pop: 'with' }],
+      ['b', 'pop:hero', 'hero.png: операция — запомненная для картинок «Изменить»', { pop: null, focus: 'hero', cm: true, op: 'edit' }],
+      ['b', 'send', 'Промпт → «✦ Изменить · бесплатно»', { done: 'edit', focus: 'e1', text: '' }, { text: TXT.edit }]],
+  },
+  mask: { title: '3. Убрать лишнее по отмеченному', why: 'hero.png в работе. Справа в кадре случайный прохожий: надо обвести его кистью и убрать. Маска рисуется в редакторе картинки, на телефоне отметок нет.',
+    start: { focus: 'hero', cm: true, mode: 'edit', op: 'edit', feed: 'two' },
+    S: [['f', 'card-open:hero', '«Открыть» на карточке hero.png: редактор картинки', { editor: true }],
+      ['e', 'tool-brush', 'Кисть в разделе «Пометки»', { tool: 'brush' }],
+      ['e', 'canvas', 'Обвести прохожего', { marks: 1 }],
+      ['e', 'ed-done', '«Готово»: отметка уйдёт со следующим запуском, «Авто» стал «По отмеченному»', { editor: false }],
+      ['b', 'send', '«убери человека справа» → «✦ Изменить отмеченное»', { done: 'mask', focus: 'm1', marks: 0, text: '' }, { text: TXT.mask }]],
+    X: [['b', 'brush', 'Кисть в поле ввода (есть у «Изменить» над картинкой): редактор открывается сразу с кистью', { editor: true, tool: 'brush' }],
+      ['e', 'canvas', 'Обвести прохожего', { marks: 1 }],
+      ['e', 'ed-done', '«Готово»: в поле ввода — «Отмечено: 1 ✕», кнопка — «Изменить отмеченное»', { editor: false }],
+      ['b', 'send', '«убери человека справа» → «✦ Изменить отмеченное»', { done: 'mask', focus: 'm1', marks: 0, text: '' }, { text: TXT.mask }]],
+  },
+  outp: { title: '4. Дорисовать за края до 9:16', why: 'hero.png в работе, нужна вертикальная версия для сторис. Операция без промпта со своим полем — пропорциями.',
+    short: 'Во всех вариантах так же работает редактор: «Открыть» → «Дорисовать за края» в «Быстрых действиях» → 9:16 (3 клика).',
+    start: { focus: 'hero', cm: true, mode: 'edit', op: 'edit', feed: 'two' },
+    S: [['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'pill:outpaint', 'Пилюля «Дорисовать за края»', { op: 'outpaint' }],
+      ['p', 'ratio:9:16', 'Пропорции 9:16', { ratio: '9:16' }],
+      ['p', 'prun', '«Дорисовать»', { done: 'out', focus: 'o1' }]],
+    V1: [['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'panel-op', 'Открыть список «Операция»', { opOpen: true }],
+      ['p', 'op:outpaint', '«Дорисовать за края» в группе «С ИИ»', { opOpen: false, op: 'outpaint' }],
+      ['p', 'ratio:9:16', 'Пропорции 9:16', { ratio: '9:16' }],
+      ['p', 'prun', '«Дорисовать · бесплатно»', { done: 'out', focus: 'o1' }]],
+    V2: [['b', 'sop', 'Операция в полосе', { pop: 'sop' }],
+      ['b', 'sop:outpaint', '«Дорисовать за края»', { pop: null, op: 'outpaint' }],
+      ['b', 'summary', 'Пропорции — поле операции, а поля живут в панели', { panel: 'open' }],
+      ['p', 'ratio:9:16', 'Пропорции 9:16', { ratio: '9:16' }],
+      ['p', 'prun', '«Дорисовать · бесплатно»', { done: 'out', focus: 'o1' }]],
+  },
+  quick: { title: '5. Убрать фон, потом увеличить', why: 'hero.png в работе. Две быстрые операции подряд, обе без промпта и с одним вариантом.',
+    short: 'Во всех вариантах так же работает редактор: «Открыть» → «Убрать фон» → «Улучшить качество» → «Готово» (4 клика).',
+    start: { focus: 'hero', cm: true, mode: 'edit', op: 'edit', feed: 'two' },
+    S: [['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'pill:removeBackground', 'Пилюля «Убрать фон»', { op: 'removeBackground' }],
+      ['p', 'prun', '«Убрать фон»', { done: 'rmbg', focus: 'b1' }],
+      ['p', 'pill:upscale', 'Пилюля «Улучшить качество»', { op: 'upscale' }],
+      ['p', 'prun', '«Улучшить»', { done: 'up', focus: 'u1' }]],
+    V1: [['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'panel-op', 'Список «Операция»', { opOpen: true }],
+      ['p', 'op:removeBackground', '«Убрать фон»', { opOpen: false, op: 'removeBackground' }],
+      ['p', 'prun', '«Убрать фон · бесплатно»', { done: 'rmbg', focus: 'b1' }],
+      ['p', 'panel-op', 'Снова список «Операция»', { opOpen: true }],
+      ['p', 'op:upscale', '«Улучшить качество»', { opOpen: false, op: 'upscale' }],
+      ['p', 'prun', '«Улучшить · бесплатно»', { done: 'up', focus: 'u1' }]],
+    V2: [['b', 'sop', 'Операция в полосе', { pop: 'sop' }],
+      ['b', 'sop:removeBackground', '«Убрать фон»: поле ввода — «Текст не нужен»', { pop: null, op: 'removeBackground' }],
+      ['b', 'send', '«Убрать фон · бесплатно» из поля ввода', { done: 'rmbg', focus: 'b1' }],
+      ['b', 'sop', 'Операция в полосе', { pop: 'sop' }],
+      ['b', 'sop:upscale', '«Улучшить качество»', { pop: null, op: 'upscale' }],
+      ['b', 'send', '«Улучшить · бесплатно»', { done: 'up', focus: 'u1' }]],
+  },
+  ana: { title: '6. Персонаж и стиль-образец', why: 'Ничего не выбрано, в прошлый раз правили. Нужна новая картинка: Аня (персонаж проекта) в стиле palette.png из файлов проекта.',
+    start: { focus: null, cm: false, mode: 'edit', op: 'edit', feed: 'ana' },
+    S: [['b', 'chip-new', '«Нарисовать новую»', { focus: 'draft', cm: true, op: 'auto' }],
+      ['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'char', 'Пунктирный чип «Персонаж» уводит на вкладку «Персонажи»', { tab: 'chars' }],
+      ['p', 'char:ana', '«Подключить» у Ани', { char: true }],
+      ['p', 'tab-settings', 'Обратно на «Настройки»', { tab: 'settings' }],
+      ['p', 'sample-add', '«＋ Образец»', { sampleMenu: true }],
+      ['p', 'sm-project', '«Из файлов проекта…»', { sampleMenu: false, picker: true }],
+      ['p', 'pk:palette', 'palette.png: роль по умолчанию «Стиль»', { picker: false, sample: true }],
+      ['b', 'send', '«Аня у окна с чашкой какао» → «✦ Сгенерировать»', { done: 'ana', focus: 'a2', text: '' }, { text: TXT.ana }]],
+    V1: [['b', 'seg-create', '«Создать» в полосе', { mode: 'create', op: 'generate', focus: 'draft', cm: true }],
+      ['b', 'summary', 'Кнопка-сводка открывает панель: персонаж и образцы — главные поля «Создать»', { panel: 'open' }],
+      ['p', 'char', '«Персонаж ▾» — меню персонажей проекта прямо в «Настройках», без перехода на вкладку', { charMenu: true }],
+      ['p', 'cm:ana', 'Аня', { charMenu: false, char: true }],
+      ['p', 'sample-add', '«＋ Образец»', { sampleMenu: true }],
+      ['p', 'sm-project', '«Из файлов проекта…»', { sampleMenu: false, picker: true }],
+      ['p', 'pk:palette', 'palette.png — «Стиль»', { picker: false, sample: true }],
+      ['b', 'send', 'Промпт → «✦ Сгенерировать · бесплатно»', { done: 'ana', focus: 'a2', text: '' }, { text: TXT.ana }]],
+    V2: [['b', 'sop', 'Операция в полосе', { pop: 'sop' }],
+      ['b', 'sop:generate', '«По тексту»: в чипе — «Новая картинка»', { pop: null, op: 'generate', focus: 'draft', cm: true }],
+      ['b', 'summary', 'Кнопка-сводка открывает панель', { panel: 'open' }],
+      ['p', 'char', '«Персонаж ▾»', { charMenu: true }],
+      ['p', 'cm:ana', 'Аня', { charMenu: false, char: true }],
+      ['p', 'sample-add', '«＋ Образец»', { sampleMenu: true }],
+      ['p', 'sm-project', '«Из файлов проекта…»', { sampleMenu: false, picker: true }],
+      ['p', 'pk:palette', 'palette.png — «Стиль»', { picker: false, sample: true }],
+      ['b', 'send', 'Промпт → «✦ Сгенерировать · бесплатно»', { done: 'ana', focus: 'a2', text: '' }, { text: TXT.ana }]],
+  },
+  agent: { title: '7. Агент сам нарисовал — я правлю', why: 'Claude нарисовал кота и взял картинку в работу (image_focus). Поле ввода агент не переключает, кот уже стоит в чипе «Работаем с». Нужно «сделай вечер».',
+    start: { focus: 'cat', cm: false, mode: 'create', op: 'generate', feed: 'agent' },
+    S: [['f', 'card-edit:cat', '«Редактировать» на карточке кота: поле ввода в режиме «Картинка»', { cm: true, op: 'auto' }],
+      ['b', 'send', '«сделай вечер» → «✦ Изменить»', { done: 'agent', focus: 'c2', text: '' }, { text: TXT.agent }]],
+    V1: [['b', 'seg-edit', '«Править» в полосе: кот уже в чипе, поэтому меню не нужно. Поле ввода — «Картинка»', { mode: 'edit', op: 'edit', cm: true }],
+      ['b', 'send', '«сделай вечер» → «✦ Изменить · бесплатно»', { done: 'agent', focus: 'c2', text: '' }, { text: TXT.agent }]],
+    V2: [['b', 'sop', 'Операция в полосе: запомнена «По тексту» — с ней получилась бы новая картинка', { pop: 'sop' }],
+      ['b', 'sop:edit', '«Изменить» в группе «С выбранной картинкой»: кот уже в чипе', { pop: null, op: 'edit', cm: true }],
+      ['b', 'send', '«сделай вечер» → «✦ Изменить · бесплатно»', { done: 'agent', focus: 'c2', text: '' }, { text: TXT.agent }]],
+  },
+  phone: { title: '8. Телефон 360: поправить картинку из ленты', why: 'То же, что сценарий 2, но на телефоне. Сейчас выбор картинки сам поднимает шторку (88 % высоты), и она закрывает поле ввода, а промпт пишется именно там.',
+    start: { focus: null, cm: false, mode: 'create', op: 'generate', feed: 'two', size: '360' },
+    S: [['f', 'card-work:hero', '«Работать с этой»: шторка поднимается сама и закрывает поле ввода', { focus: 'hero', cm: true, op: 'auto', panel: 'open' }],
+      ['p', 'grab', 'Опустить шторку, чтобы добраться до поля ввода', { panel: 'closed' }],
+      ['b', 'send', 'Промпт → «Изменить»', { done: 'edit', focus: 'e1', text: '' }, { text: TXT.edit }]],
+    V1: [['b', 'seg-edit', 'Иконка «Править» в полосе: «Что править?» во всю ширину над полем ввода', { pop: 'pick' }],
+      ['b', 'pop:hero', 'hero.png. Шторка не поднимается: выбор сделан в полосе, дальше человек пишет', { pop: null, focus: 'hero', cm: true, mode: 'edit', op: 'edit' }],
+      ['b', 'send', 'Промпт → «Изменить»', { done: 'edit', focus: 'e1', text: '' }, { text: TXT.edit }]],
+    V2: [['b', 'chip-pick', 'Чип-миниатюра «▢ ▾»: «С чем работаем?» во всю ширину', { pop: 'with' }],
+      ['b', 'pop:hero', 'hero.png, шторка не поднимается', { pop: null, focus: 'hero', cm: true, op: 'edit' }],
+      ['b', 'send', 'Промпт → «Изменить»', { done: 'edit', focus: 'e1', text: '' }, { text: TXT.edit }]],
+  },
+  release: { title: 'Проверка: снять выбор картинки', why: 'Граничный случай: ✕ на чипе «Работаем с», когда hero.png в работе и панель открыта. Результат — на последнем шаге («готово»).',
+    start: { focus: 'hero', cm: true, mode: 'edit', op: 'edit', panel: 'open', feed: 'two' },
+    S: [['b', 'chip-x', '✕ на чипе: поле ввода — «Чат», тост «Картинка больше не выбрана: режим «Чат»». Панель остаётся с «Авто», и её запуск заведёт новую картинку', { focus: null, cm: false, op: 'auto', toast: 'chat' }]],
+    V1: [['b', 'chip-x', '✕ на чипе: режим — «Создать», поле ввода остаётся «Картинкой», «Править» снова будет спрашивать. В плашке — «Вернуть»', { focus: null, mode: 'create', op: 'generate', toast: 'create' }]],
+    V2: [['b', 'chip-x', '✕ на чипе: операция — «По тексту», группа «С выбранной картинкой» серая. В плашке — «Вернуть»', { focus: null, op: 'generate', toast: 'create' }]],
+  },
+};
+const stepsOf = (scn, v) => { const s = SCN[scn]; return s[v] || (v !== 'S' && s.X) || s.S; };
+const ZONE = { f: 'лента', b: 'полоса и поле', p: 'панель', e: 'редактор' };
+function metrics(scn, v) {
+  let clicks = 0, sw = 0, prev = 'b';
+  for (const s of stepsOf(scn, v)) { clicks += s[5] ?? 1; if (s[0] !== prev) sw++; prev = s[0]; }
+  return { clicks, sw };
+}
+
+// ── Состояние макета ──
+const S = { v: 'V1', scn: 'newv', step: 0, theme: 'light', size: '1440', who: false };
+function stateAt(scn, v, k) {
+  const sc = SCN[scn];
+  const st = { focus: null, cm: false, mode: 'create', op: 'generate', panel: 'closed', tab: 'settings', feed: 'two', text: '', ratio: '16:9', marks: 0, ...structuredClone(sc.start) };
+  const steps = stepsOf(scn, v);
+  const apply = p => { if (p) Object.assign(st, p); };
+  for (let i = 0; i < Math.min(k, steps.length); i++) { apply(steps[i][4]); apply(steps[i][3]); }
+  if (k < steps.length) apply(steps[k][4]);
+  st.who = S.who;
+  return st;
+}
+
+// ── Кирпичи ──
+const hasFile = st => !!st.focus && !IMGS[st.focus].draft;
+// Операция, которой пойдёт запуск: «Авто» у «Сейчас» — pickOp; у вариантов «Изменить» с отметками — «По отмеченному»
+function effOp(st) {
+  if (st.op === 'auto') return !hasFile(st) ? 'generate' : st.marks ? 'inpaint' : 'edit';
+  if (st.op === 'edit' && st.marks) return 'inpaint';
+  if (OPS[st.op].src && !hasFile(st)) return st.op;
+  return st.op;
+}
+const badge = (t, cls = 'mut') => `<span class="badge ${cls}">${t}</span>`;
+const thumb = (bg, c = '') => `<span class="thumb ${c}" style="background:${bg}"></span>`;
+const priceOf = (v, op) => v === 'S' ? (OPS[op].one ? '≈ $0.04' : '≈ $0.08') : 'бесплатно';
+const execOf = (v, op) => v === 'S' ? 'fal · Авто' : `Авто · локально · ${OPS[op].model}`;
+
+// ── Лента ──
+function cardHtml(id, st, mob, prevRun) {
+  const s = IMGS[id];
+  const focus = st.focus === id;
+  const run = s.run && !prevRun ? `<div class="run-h">${I('spark', 's')}<b>${s.run}</b></div>` : '';
+  if (s.draft) return `<div class="icard focus"><div class="t">${I('spark', 's')}<b>Новая картинка</b><span class="s">черновик</span></div><div class="pic draft">Сюда ляжет результат запуска</div></div>`;
+  const acts = `<button class="btn xs" data-k="card-open:${id}">${I('expand', 's')}Открыть</button>
+    ${focus ? (st.cm ? badge(`${I('target', 's')}в работе`, 'acc') : `<button class="btn xs" data-k="card-edit:${id}">${I('pencil', 's')}Редактировать</button>`) : `<button class="btn xs pri" data-k="card-work:${id}">${I('target', 's')}Работать с этой</button>`}
+    <span style="flex:1"></span><button class="ib" title="Скачать">${I('dl', 's')}</button>`;
+  const mark = st.marks && focus ? '<span class="mark"></span>' : '';
+  return `${run}<div class="icard ${focus ? 'focus' : ''}"><div class="t">${I('image', 's')}<b>${s.name}</b><span class="s">${s.ver ? s.ver + ' · ' : ''}${s.sub}</span></div>
+    <div class="pic" style="background:${s.bg}">${mark}</div><div class="acts">${acts}</div></div>`;
+}
+function feedHtml(st, mob) {
+  const f = FEEDS[st.feed];
+  let cards = [...f.cards];
+  if (st.focus === 'draft') cards.push('draft');
+  if (st.done) cards = cards.filter(c => c !== 'draft').concat(DONE[st.done]);
+  const max = mob ? 2 : 3;
+  if (cards.length > max) cards = cards.slice(-max);
+  return `<div class="feed">
+    <div class="msg user">${f.msg}</div>
+    ${f.agent ? `<div class="msg agent">${I('bot', 's')} <b>Claude:</b> ${f.agent}</div>` : ''}
+    ${cards.map((id, i) => cardHtml(id, st, mob, i > 0 && IMGS[cards[i - 1]].name === IMGS[id].name && !IMGS[id].run)).join('')}
+  </div>`;
+}
+
+// ── Меню полосы ──
+function pickMenu(st, withNew) {
+  const ids = FEEDS[st.feed].cards.slice().reverse();
+  return `<div class="pop" role="menu"><div class="ph">${withNew ? 'С чем работаем?' : 'Что править?'}<small>Картинки этого чата, свежие сверху</small></div>
+    ${withNew ? `<button class="mi" data-k="pop-new"><span class="ic">${I('spark', 's')}</span><span class="nm">Новая картинка<small>по тексту, персонажу и образцам</small></span></button><div class="msep"></div>` : ''}
+    ${ids.map(id => `<button class="mi ${id === 'hero' ? 'last' : ''}" data-k="pop:${id}">${thumb(IMGS[id].bg)}<span class="nm">${label(id)}<small>${IMGS[id].sub}${id === 'hero' ? ' · правили последней' : ''}</small></span></button>`).join('')}
+    <div class="msep"></div>
+    <button class="mi"><span class="ic">${I('upload', 's')}</span><span class="nm">С компьютера…</span></button>
+    <button class="mi"><span class="ic">${I('folder', 's')}</span><span class="nm">Из файлов проекта…</span></button>
+    <div class="foot">Или «Работать с этой» на карточке в ленте</div></div>`;
+}
+function opGroups(v, st) {
+  const g = [];
+  if (v === 'V2') g.push(['Новая картинка', ['generate'], false]);
+  g.push([v === 'V2' ? 'С выбранной картинкой' : 'С ИИ', AI_EDIT, v === 'V2' && !hasFile(st)]);
+  return g;
+}
+function opMenuItems(v, st, prefix, cls) {
+  const cur = st.op === 'auto' ? 'edit' : st.op;
+  return opGroups(v, st).map(([name, ops, off]) => `<div class="grp-h">${name}${off ? ' · спросит, что править' : ''}</div>`
+    + ops.map(o => `<button class="${cls} ${o === cur ? 'on' : ''}" data-k="${prefix}:${o}">${cls === 'mi' ? `<span class="ic">${I(OPS[o].icon, 's')}</span>` : '<span class="dot"></span>'}<span class="nm">${OPS[o].label}${OPS[o].noPrompt ? '<small>без промпта · запуск кнопкой</small>' : ''}</span></button>`).join('')).join('')
+    + `<div class="grp-h">Без ИИ · бесплатно${!hasFile(st) ? ' · спросит, что править' : ''}</div>`
+    + NO_AI.map(([k, l, ic]) => `<button class="${cls}" data-k="${prefix}:${k}">${cls === 'mi' ? `<span class="ic">${I(ic, 's')}</span>` : '<span class="dot"></span>'}<span class="nm">${l}<small>в редакторе картинки, сразу</small></span></button>`).join('');
+}
+const sopMenu = (v, st) => `<div class="pop sopm" role="menu">${opMenuItems(v, st, 'sop', 'mi')}</div>`;
+
+// ── Полоса над композером ──
+function modeSeg(st, prefix, full) {
+  const askEdit = !hasFile(st) && st.mode !== 'edit';
+  const b = (k, l, ic, cls, title) => `<button class="${st.mode === k ? 'on' : ''} ${cls}" data-k="${prefix}-${k}" title="${title}">${I(ic, 's')}<span class="lb">${l}</span></button>`;
+  return `<div class="iseg" ${full ? 'style="display:flex"' : ''}>${b('create', 'Создать', 'spark', '', 'Новая картинка по тексту, персонажу и образцам')}${b('edit', 'Править', 'pencil', askEdit ? 'ask' : '', askEdit ? 'Выбрать картинку этого чата для правки' : 'Править выбранную картинку')}</div>`;
+}
+function stripHtml(v, st, mob) {
+  const op = effOp(st);
+  let chip;
+  if (hasFile(st)) chip = `<span class="chip" title="Режим «Картинка» и Claude работают с этой версией">${thumb(IMGS[st.focus].bg, 's')}<span>${mob ? '' : 'Работаем с: '}<b>${mob ? '' : label(st.focus)}</b></span><button class="x" data-k="chip-x" title="Снять выбор картинки">${I('x', 's')}</button></span>`;
+  else if (st.focus === 'draft' || (v === 'V1' && st.cm && st.mode === 'create')) chip = `<span class="chip dash">${I('spark', 's')}<span>${mob ? 'Новая' : 'Новая картинка'}</span></span>`;
+  else if (v === 'S') chip = `<span class="chip dash" data-k="chip-new">${I('spark', 's')}<span>${mob ? 'Новая' : 'Нарисовать новую'}</span></span>`;
+  else if (v === 'V2') chip = `<span class="chip dash" data-k="chip-pick" title="С чем работаем: новая картинка или картинка этого чата">${I('image', 's')}<span>${mob ? '' : 'Картинка'}</span>${I('down', 's')}</span>`;
+  else chip = '';
+  const seg = v === 'V1' ? modeSeg(st, 'seg') : '';
+  const sop = v === 'V2' ? `<button class="sop" data-k="sop" title="Операция">${I(OPS[op === 'inpaint' ? 'edit' : op].icon, 's')}<span class="lb">${mob ? OPS[op].short : OPS[op === 'inpaint' ? 'edit' : op].short}</span>${I('down', 's')}</button>` : '';
+  const sumTxt = v === 'S' ? 'fal · Авто · 2 вар. · ≈ $0.08' : `${OPS[op].model} · ${OPS[op].one ? '1 вар.' : '2 вар.'} · бесплатно`;
+  const sum = mob ? `<button class="sumbtn" data-k="summary" title="Настройки — в шторке">${v === 'S' ? '<span>2 вар. · ≈ $0.08</span>' : ''}${I('up', 's')}</button>`
+    : `<button class="sumbtn" data-k="summary" style="${st.panel === 'open' ? 'border-color:var(--c-accent)' : ''}" title="${st.panel === 'open' ? 'Настройки открыты в панели «Картинки» справа' : 'Открыть настройки в панели «Картинки»'}"><span>${sumTxt}</span>${I('right', 's')}</button>`;
+  const toast = st.toast ? `<div class="toast">${I('info', 's')}<span class="t">${st.toast === 'chat' ? 'Картинка больше не выбрана: режим «Чат»' : 'Картинка снята — дальше рисуем новую'}</span>${st.toast === 'chat' ? '' : '<button class="btn xs ghost">Вернуть</button>'}</div>` : '';
+  const pop = st.pop === 'pick' ? pickMenu(st, false) : st.pop === 'with' ? pickMenu(st, true) : st.pop === 'sop' ? sopMenu(v, st) : '';
+  return `${toast}<div class="sstrip">
+    <span class="ttl" title="Переключить полосу">${I('image', 's')}${mob ? '' : 'Картинки'}${I('down', 's')}</span>
+    ${seg}${sop}${chip}<span style="flex:1"></span>${sum}
+    ${mob ? '' : `<button class="ib" title="Свернуть полосу в строку">${I('up', 's')}</button>`}${pop}</div>`;
+}
+function composerHtml(v, st, mob) {
+  const op = effOp(st);
+  const L = OPS[op];
+  const on = st.cm;
+  const ph = !on ? 'Напишите Claude…' : L.ph.replace('%', hasFile(st) ? IMGS[st.focus].name : 'картинке');
+  const again = on && st.again && !st.text && v !== 'S' && op === 'generate';
+  const price = priceOf(v, op);
+  const sendLbl = again ? `${I('repeat', 's')}Ещё 2 · ${price}` : `${I(L.noPrompt ? L.icon : 'spark', 's')}${L.run} · ${price}`;
+  const brush = on && v !== 'S' && hasFile(st) && (op === 'edit' || op === 'inpaint') ? `<button class="ib" data-k="brush" title="Отметить место кистью — откроется редактор">${I('brush', 's')}</button>` : '';
+  const marks = on && st.marks ? `<span class="mchip">${I('brush', 's')}Отмечено: ${st.marks}<button class="x" style="border:none;background:transparent;color:inherit;display:inline-grid;padding:0">${I('x', 's')}</button></span>` : '';
+  const hl = on ? `<div class="hintline"><b>Режим «Картинка»</b> · ${v === 'V1' ? (st.mode === 'create' ? 'Создать' : 'Править') + ' → ' : ''}${L.label} · текст уходит модели, не Claude</div>` : '';
+  return `<div class="composer">${hl}
+    <div class="ph ${st.text ? '' : 'empty'}">${st.text || ph}</div>
+    <div class="bar"><button class="ib">${I('plus', 's')}</button>${brush}${marks}${on ? badge('Картинка', 'acc') : ''}<span style="flex:1"></span><button class="ib">${I('mic', 's')}</button>
+      ${on ? `<button class="btn pri xs" data-k="send">${sendLbl}</button>` : `<button class="btn pri xs" data-k="send-chat">${I('send', 's')}</button>`}</div></div>`;
+}
+
+// ── Панель «Картинки» ──
+function charsBlock(v, st) {
+  const charChip = st.char
+    ? `<span class="ichip sel">${thumb(G.ana, 's round')}<span>Аня · 6 фото</span><span class="x">${I('x', 's')}</span></span>`
+    : `<span class="rel"><span class="ichip dash" data-k="char">${I('user', 's')}<span>Персонаж</span>${v === 'S' ? '' : I('down', 's')}</span>
+        ${st.charMenu ? `<div class="dd"><div class="grp-h">Персонажи проекта</div>
+          <button class="mi" data-k="cm:ana">${thumb(G.ana, 'round')}<span class="nm">Аня<small>6 фото · лицо уходит в каждую генерацию</small></span></button>
+          <button class="mi">${thumb(G.mood, 'round')}<span class="nm">Петя<small>4 фото</small></span></button>
+          <div class="msep"></div><button class="mi"><span class="ic">${I('contact', 's')}</span><span class="nm">Все персонажи…<small>вкладка «Персонажи»</small></span></button></div>` : ''}</span>`;
+  const sample = st.sample ? `<span class="ichip sel">${thumb(G.palette, 's')}<span>Стиль · palette.png</span><span class="x">${I('x', 's')}</span></span>` : '';
+  const add = `<span class="rel"><span class="ichip dash" data-k="sample-add">${I('plus', 's')}<span>Образец</span></span>
+    ${st.sampleMenu ? `<div class="dd" style="min-width:200px"><button class="mi"><span class="ic">${I('upload', 's')}</span><span class="nm">С компьютера</span></button><button class="mi" data-k="sm-project"><span class="ic">${I('folder', 's')}</span><span class="nm">Из файлов проекта…</span></button></div>` : ''}
+    ${st.picker ? `<div class="dd" style="min-width:250px"><div class="ph" style="padding:8px 12px 2px;font-weight:600;color:var(--c-text-heading)">Картинка из проекта</div>
+      ${[['palette', 'assets/palette.png'], ['logo', 'assets/logo.png'], ['mood', 'refs/mood.jpg']].map(([k, p]) => `<button class="mi" data-k="pk:${k}">${thumb(G[k])}<span class="nm">${p}</span></button>`).join('')}</div>` : ''}</span>`;
+  return `<div class="field"><div class="fl">Персонаж и образцы <span class="aside">до 3 у Qwen-Image</span></div><div class="chips">${charChip}${sample}${add}</div></div>`;
+}
+function whoRow(v, st, op) {
+  const L = OPS[op];
+  const row = `<button class="row-btn" data-k="who"><span class="k">Чем</span><span class="v"><b>Авто</b> · локально · ${L.model}</span>${badge('бесплатно', 'ok')}${I(st.who ? 'up' : 'down', 's')}</button>`;
+  if (!st.who) return row;
+  const pk = (on, nm, sub, pr) => `<div class="pick ${on ? 'on' : ''}"><span class="dot"></span><span class="nm">${nm}${sub ? `<small>${sub}</small>` : ''}</span><span class="pr">${pr}</span></div>`;
+  const create = op === 'generate';
+  return row + `<div class="pick-list">
+    ${pk(true, 'Авто', 'сначала своя видеокарта, при отказе — облако с вашего согласия', 'бесплатно')}
+    <div class="grp-h">Бесплатно на своей видеокарте</div>
+    ${create ? pk(false, 'Qwen-Image 2.1', 'новая картинка · понимает русский, текст на картинке', 'бесплатно · ~40 с') : pk(false, 'Qwen-Image Edit', 'правка по 1–16 образцам', 'бесплатно · ~50 с')}
+    ${create ? '' : pk(false, 'FaceDetailer', 'только «Улучшить лица»', 'бесплатно')}
+    <div class="grp-h">Облако</div>
+    ${pk(false, 'fal · FLUX Kontext', create ? 'по тексту и образцам' : 'правка, до 4 образцов', '$0.04 / шт.')}
+    ${pk(false, 'fal · Nano Banana 2', '', '$0.04 / шт.')}
+    ${create ? pk(false, 'Higgsfield · Soul', 'фото людей, персонаж Soul', '2 кр. / шт.') : '<div class="pick off"><span class="dot"></span><span class="nm">Higgsfield · Soul<small>не умеет «Изменить» — только новая картинка</small></span><span class="pr">—</span></div>'}
+  </div>`;
+}
+function panelBodyNew(v, st) {
+  const op = effOp(st);
+  const L = OPS[op];
+  const isCreate = v === 'V1' ? st.mode === 'create' : op === 'generate';
+  let h = v === 'V1' ? `<div style="margin-top:8px">${modeSeg(st, 'pseg', true)}</div>` : '';
+  if (!(v === 'V1' && isCreate)) {
+    const curLbl = st.op === 'generate' ? OPS.generate.label : op === 'inpaint' ? 'Изменить по тексту <small>· по отмеченному</small>' : OPS[op].label;
+    h += `<div class="field rel" style="margin-top:8px"><div class="fl">Операция</div>
+      <button class="select" data-k="panel-op"><span class="v">${curLbl}${OPS[op].src && hasFile(st) ? ' <small>· над выбранной картинкой</small>' : ''}</span>${I(st.opOpen ? 'up' : 'down', 's')}</button>
+      ${st.opOpen ? `<div class="pick-list">${opMenuItems(v, st, 'op', 'pick')}</div>` : ''}</div>`;
+  } else h += `<div style="height:8px"></div>`;
+  if (op === 'generate') h += charsBlock(v, st) + `<div class="hint" style="margin-top:-4px">${I('send', 's')} Что нарисовать — в поле ввода чата</div>`;
+  if (op === 'edit' || op === 'inpaint') h += `<div class="field"><div class="fl">Где менять <span class="aside">отметки — в редакторе, на телефоне их нет</span></div>
+      <div class="seg"><button class="${st.marks ? '' : 'on'}">Вся картинка</button><button class="${st.marks ? 'on' : ''}">Отмеченное · ${st.marks}</button></div>
+      <button class="btn xs ghost" style="margin-top:4px" data-k="mark-open">${I('brush', 's')}Отметить в редакторе</button></div>`
+    + charsBlock(v, st) + `<div class="hint" style="margin-top:-4px">${I('send', 's')} Что изменить — в поле ввода чата</div>`;
+  if (op === 'outpaint') h += `<div class="field"><div class="fl">До пропорций</div><div class="seg">${['1:1', '16:9', '9:16', '4:3'].map(r => `<button class="${st.ratio === r ? 'on' : ''}" data-k="ratio:${r}">${r}</button>`).join('')}</div></div>`;
+  if (L.noPrompt) h += `<div class="hint">${I('info', 's')} Текст в поле ввода не нужен — достаточно нажать «${L.run}» внизу.${L.one ? ' Даёт один вариант.' : ''}</div>`;
+  h += `<div style="height:10px"></div>${whoRow(v, st, op)}`;
+  const n = op === 'generate' ? 2 : L.noPrompt ? 1 : 3;
+  const sumMore = op === 'generate' ? 'пропорции 1:1, режим подбора' : L.noPrompt ? 'размер оригинала' : 'размер оригинала, режим подбора';
+  h += `<button class="row-btn flat" style="margin-top:4px">${I('right', 's')}Ещё настройки · ${n}<span style="flex:1"></span><span class="hint" style="margin:0">${sumMore}</span></button>`;
+  return h;
+}
+function panelBodyNow(st) {
+  const op = effOp(st);
+  const hasF = hasFile(st);
+  const pills = [['auto', 'Авто'], ['generate', 'По тексту'], ['edit', 'Правка'], ['inpaint', 'По отмеченному'], ['outpaint', 'Дорисовать за края'], ['removeBackground', 'Убрать фон'], ['upscale', 'Улучшить качество'], ['enhanceFaces', 'Улучшить лица']]
+    .map(([k, l]) => { const off = (k !== 'auto' && k !== 'generate' && !hasF) || (k === 'inpaint' && !st.marks); return `<button class="pill ${st.op === k ? 'on' : ''} ${off ? 'off' : ''}" data-k="pill:${k}">${l}</button>`; }).join('');
+  const NOW = { generate: 'по тексту', edit: 'правка', inpaint: 'по отмеченному' };
+  const hint = st.op === 'auto' ? `Сейчас это <b>${NOW[op]}</b>: ${!hasF ? 'картинки ещё нет' : st.marks ? 'в редакторе отмечено место' : 'картинка выбрана, отметок нет'}.` : OPS[op].noPrompt ? 'Текст в поле ввода не нужен — достаточно нажать кнопку внизу.' : 'Что сделать — напишите в поле ввода.';
+  const ratio = st.op === 'outpaint' ? `<div class="opts" style="margin-top:6px;align-items:center;font-size:var(--fs-sm);color:var(--c-text-secondary)">Дорисовать до пропорций: ${['1:1', '16:9', '9:16'].map(r => `<button class="pill ${st.ratio === r ? 'on' : ''}" data-k="ratio:${r}">${r}</button>`).join('')}</div>` : '';
+  const opt = (on, n, s, off) => `<button class="btn opt ${on ? 'on' : ''} ${off ? 'dash' : ''}"><span>${n}</span><small>${s}</small></button>`;
+  return `<div class="label">Операция</div><div class="opts">${pills}</div><div class="hint" style="margin-top:4px">${hint}</div>${ratio}
+    <div class="label">Поставщик</div><div class="opts">${opt(true, 'Как в настройках', 'сейчас fal')}${opt(false, 'fal', '$ за картинку')}${opt(false, 'Higgsfield', 'кредиты')}${opt(false, 'Локальные модели', 'бесплатно · своя GPU')}</div>
+    <div class="label">Модель</div><div class="opts">${opt(true, 'Авто', 'подберём под задачу')}${opt(false, 'FLUX Kontext', '$0.04 за картинку')}${opt(false, 'Nano Banana 2', '$0.04 за картинку')}${opt(false, 'FLUX Fill', 'только по отмеченному', true)}</div>
+    ${OPS[op].noPrompt ? '' : `<div class="label">Режим подбора</div><div class="opts">${opt(true, 'Авто', 'модель решает сама')}${opt(false, 'Быстро', 'дешевле и быстрее')}${opt(false, 'Точно', 'точнее следует правке')}${opt(false, 'Фотореализм', 'для фото людей')}</div>`}
+    <div class="label">Персонаж и образцы</div>${OPS[op].noPrompt ? `<div class="hint">Для «${OPS[op].label}» образцы не нужны</div>` : charsBlock('S', st).replace(/<div class="fl">.*?<\/div>/, '')}
+    ${hasF ? '<div class="label">Размер</div><label class="chk"><i></i>Вернуть в размере оригинала</label>' : ''}`;
+}
+function charsTab() {
+  return `<div style="padding-top:8px;display:flex;flex-direction:column;gap:6px">
+    ${[['ana', 'Аня', '6 фото', G.ana], ['petya', 'Петя', '4 фото', G.mood]].map(([k, n, s, bg]) => `<div class="row-btn">${thumb(bg, 'round')}<span class="v"><b>${n}</b> · ${s}</span><button class="btn xs" data-k="char:${k}">Подключить</button></div>`).join('')}
+    <div class="hint">Папка <code>characters/</code> проекта · подключённый персонаж уходит в каждую генерацию</div></div>`;
+}
+function panelHtml(v, st, sheet) {
+  const op = effOp(st);
+  const L = OPS[op];
+  const isNew = v === 'S';
+  const ctx = hasFile(st) ? `<span class="t">Работаем с: <b>${label(st.focus)}</b></span><button class="ib" data-k="chip-x" title="Снять выбор картинки">${I('x', 's')}</button>`
+    : `<span class="t"><b>Новая картинка</b> · результат ляжет в ленту новой карточкой</span>`;
+  const sub = isNew ? 'fal · Авто' : v === 'V1' ? `${st.mode === 'create' ? 'Создать' : 'Править'} · ${L.short}` : L.label;
+  const again = st.again && v !== 'S' && op === 'generate';
+  const price = v === 'S' ? (L.one ? ['≈ $0.04', '1 × $0.04'] : ['≈ $0.08', '2 × $0.04']) : ['Бесплатно', `Локально · ${L.model} · очередь GPU: 0`];
+  const tabs = `<div class="gp-tabs"><button class="${st.tab !== 'chars' ? 'on' : ''}" data-k="tab-settings">${I('sliders', 's')}Настройки</button><button class="${st.tab === 'chars' ? 'on' : ''}">${I('contact', 's')}Персонажи · 2</button></div>`;
+  const body = st.tab === 'chars' ? charsTab() : isNew ? panelBodyNow(st) : panelBodyNew(v, st);
+  const foot = st.tab === 'chars' ? `<div class="gp-foot"><div class="row" style="font-size:var(--fs-sm);color:var(--c-text-secondary)"><span style="flex:1">Подключён: <b style="color:var(--c-text-heading)">${st.char ? 'Аня' : 'никто'}</b></span><button class="btn xs">${I('plus', 's')}Персонаж</button></div></div>`
+    : `<div class="gp-foot"><div class="row">${L.one ? '' : `<span class="stepper"><button>−</button><span>2</span><button>+</button></span>`}
+      <span class="price"><b>${price[0]}</b><span>${price[1]}</span></span>
+      <button class="btn pri" data-k="prun">${again ? `${I('repeat', 's')}Ещё 2` : `${I(L.noPrompt ? L.icon : 'spark', 's')}${L.run}`}</button></div></div>`;
+  return `<div class="gp-head"><span class="ico">${I('image')}</span><span class="ttl">Картинки</span><span class="sub">${sub}</span><span style="flex:1"></span>
+      ${sheet ? `<button class="ib">${I('down', 's')}</button>` : ''}<button class="ib">${I('x', 's')}</button></div>
+    ${tabs}${st.tab === 'chars' ? '' : `<div class="gp-ctx">${ctx}</div>`}
+    <div class="gp-body">${body}</div>${foot}`;
+}
+
+// ── Редактор картинки ──
+function editorHtml(st) {
+  const s = IMGS[st.focus] || IMGS.hero;
+  return `<div class="ed-ov"><div class="ed"><div class="ed-h">${I('image', 's')}${label(st.focus)}<span style="flex:1"></span><button class="ib">${I('x', 's')}</button></div>
+    <div class="ed-b"><div class="ed-c"><div class="pic" data-k="canvas" style="background:${s.bg}">${st.marks ? '<span class="mark"></span>' : ''}</div></div>
+      <div class="ed-s"><div class="label" style="margin-top:0">Пометки <span class="aside">уйдут со следующим запуском</span></div>
+        <div class="tools"><button class="ib ${st.tool === 'brush' ? 'on' : ''}" data-k="tool-brush" title="Кисть">${I('brush', 's')}</button><button class="ib" title="Рамка">${I('square', 's')}</button><button class="ib" title="Подпись">${I('type', 's')}</button></div>
+        <div class="hint">${st.marks ? 'Отмечено: 1 область' : st.tool === 'brush' ? 'Обведите место на картинке' : 'Выберите инструмент'}</div>
+        <div class="label">Быстрые действия <span class="aside">сразу, без промпта</span></div>
+        <div class="rowx"><button class="btn xs">Убрать фон</button><button class="btn xs">Улучшить качество</button><button class="btn xs">Дорисовать за края</button></div>
+        <div class="label">Без ИИ <span class="aside">бесплатно, мгновенно</span></div>
+        <div class="rowx"><button class="btn xs">${I('crop', 's')}Обрезать</button><button class="btn xs">${I('rotate', 's')}Повернуть</button></div></div></div>
+    <div class="ed-f"><button class="btn pri" data-k="ed-done">${I('check', 's')}Готово</button></div></div></div>`;
+}
+
+// ── Кадры ──
+function desktop(v, st) {
+  const open = st.panel === 'open';
+  return `<div class="app">
+    <div class="rail">${['menu', 'image', 'audio', 'text'].map((n, i) => `<button class="ib" style="${i === 1 ? 'color:var(--c-accent);background:var(--c-accent-light)' : ''}">${I(n)}</button>`).join('')}</div>
+    <div class="island main"><div class="gp-head"><span class="ttl">${FEEDS[st.feed].title}</span></div>
+      ${feedHtml(st, false)}<div style="max-width:860px;width:100%;margin:0 auto">${stripHtml(v, st, false)}${composerHtml(v, st, false)}</div></div>
+    ${open ? `<div class="island gen">${panelHtml(v, st, false)}</div>` : ''}
+    ${st.editor ? editorHtml(st) : ''}</div>`;
+}
+function mobile(v, st) {
+  const up = st.panel === 'open';
+  return `<div class="app mobile"><div class="mtop">${I('menu')}${FEEDS[st.feed].title}</div>
+    ${feedHtml(st, true)}${stripHtml(v, st, true)}${composerHtml(v, st, true)}
+    ${up ? `<div class="sheet-ov"></div><div class="sheet"><button class="grab" data-k="grab"><span></span></button>${panelHtml(v, st, true)}</div>` : ''}
+    ${st.editor ? editorHtml(st) : ''}</div>`;
+}
+
+// ── Документ: шаги и сравнение ──
+const SCN_KEYS = Object.keys(SCN).filter(k => k !== 'release');
+function scnBox() {
+  const sc = SCN[S.scn];
+  const steps = stepsOf(S.scn, S.v);
+  const m = metrics(S.scn, S.v);
+  const li = steps.map((s, i) => `<li class="${i === S.step ? 'cur' : ''} ${i < S.step ? 'done-row' : ''}" data-step="${i}"><span>${s[2]}</span><span class="z">${ZONE[s[0]]}</span></li>`).join('')
+    + `<li class="${S.step === steps.length ? 'cur' : ''}" data-step="${steps.length}"><span><b>Готово</b> — результат в ленте</span></li>`;
+  const rows = Object.keys(VARIANTS).map(v => ({ v, ...metrics(S.scn, v) }));
+  const minC = Math.min(...rows.map(r => r.clicks)), minS = Math.min(...rows.map(r => r.sw));
+  const tot = Object.keys(VARIANTS).map(v => { let c = 0, w = 0; for (const k of SCN_KEYS) { const x = metrics(k, v); c += x.clicks; w += x.sw; } return { v, c, w }; });
+  const tminC = Math.min(...tot.map(r => r.c)), tminW = Math.min(...tot.map(r => r.w));
+  return `<div class="card"><h3>${sc.title}</h3><p class="why">${sc.why}</p>
+      <div style="font-size:12.5px"><b>${VARIANTS[S.v].name}</b>: кликов — <b>${m.clicks}</b>, переходов между лентой, полосой, панелью и редактором — <b>${m.sw}</b></div>
+      <ol class="steps">${li}</ol>${sc.short ? `<div class="short">${I('info', 's')} ${sc.short}</div>` : ''}</div>
+    <div class="card"><h3>Этот сценарий</h3><table class="cmp"><tr><th>Вариант</th><th>Кликов</th><th>Переходов</th></tr>
+      ${rows.map(r => `<tr class="${r.v === S.v ? 'me' : ''}" data-set="v" data-val="${r.v}" style="cursor:pointer"><td>${VARIANTS[r.v].short}</td><td class="n ${r.clicks === minC ? 'best' : ''}">${r.clicks}</td><td class="n ${r.sw === minS ? 'best' : ''}">${r.sw}</td></tr>`).join('')}</table>
+      <h3 style="margin-top:12px">Все ${SCN_KEYS.length} сценариев</h3><table class="cmp"><tr><th>Вариант</th><th>Кликов</th><th>Переходов</th></tr>
+      ${tot.map(r => `<tr class="${r.v === S.v ? 'me' : ''}"><td>${VARIANTS[r.v].short}</td><td class="n ${r.c === tminC ? 'best' : ''}">${r.c}</td><td class="n ${r.w === tminW ? 'best' : ''}">${r.w}</td></tr>`).join('')}</table>
+      <div class="short">Ввод текста кликом не считается. «Переход» — взгляд и рука уходят в другую зону: лента, полоса с полем ввода, панель, редактор. Старт — у поля ввода.</div></div>`;
+}
+function demo() {
+  const g = (lbl, key, opts) => `<span class="grp"><span class="lbl">${lbl}</span>${opts.map(([v, l]) => `<button class="tbtn" aria-pressed="${String(S[key]) === String(v)}" data-set="${key}" data-val="${v}">${l}</button>`).join('')}</span>`;
+  return g('Вариант', 'v', Object.entries(VARIANTS).map(([k, x]) => [k, x.short]))
+    + g('Сценарий', 'scn', [['newv', '1 Новая + ещё'], ['edit', '2 Правка'], ['mask', '3 Маска'], ['outp', '4 За края'], ['quick', '5 Фон и качество'], ['ana', '6 Персонаж + стиль'], ['agent', '7 Агент'], ['phone', '8 Телефон'], ['release', 'Снять выбор']])
+    + g('Тема', 'theme', [['light', 'Светлая'], ['dark', 'Тёмная'], ['both', 'Обе']])
+    + g('Ширина', 'size', [['1440', '1440'], ['360', '360'], ['cmp', '360 · все варианты рядом']])
+    + g('Список «Чем»', 'who', [['false', 'свёрнут'], ['true', 'раскрыт']]);
+}
+function render() {
+  document.getElementById('demo').innerHTML = demo();
+  document.getElementById('vnote').innerHTML = VARIANTS[S.v].note;
+  document.getElementById('scnbox').innerHTML = scnBox();
+  const themes = S.theme === 'both' ? ['light', 'dark'] : [S.theme];
+  const size = SCN[S.scn].start.size === '360' && S.size === '1440' ? '360' : S.size;
+  const out = [];
+  for (const t of themes) {
+    if (size === 'cmp') {
+      for (const v of Object.keys(VARIANTS)) {
+        const steps = stepsOf(S.scn, v);
+        const st = stateAt(S.scn, v, Math.min(S.step, steps.length));
+        out.push(`<div class="frame" data-theme="${t}"><div class="cap">${VARIANTS[v].name} · шаг ${Math.min(S.step, steps.length) + 1} · ${t === 'dark' ? 'тёмная' : 'светлая'}</div>${mobile(v, st)}</div>`);
+      }
+    } else {
+      const st = stateAt(S.scn, S.v, S.step);
+      out.push(`<div class="frame" data-theme="${t}"><div class="cap">${VARIANTS[S.v].name} · ${SCN[S.scn].title} · ${size === '1440' ? '1440 · панель колонкой 380 px' : '360 · шторка'} · ${t === 'dark' ? 'тёмная' : 'светлая'}</div>
+        ${size === '1440' ? desktop(S.v, st) : mobile(S.v, st)}</div>`);
+    }
+  }
+  const fr = document.getElementById('frames');
+  fr.className = 'frames' + (size === '1440' ? '' : ' row');
+  fr.innerHTML = out.join('');
+  fr.querySelectorAll('.frame').forEach((f, i) => {
+    const v = size === 'cmp' ? Object.keys(VARIANTS)[i % Object.keys(VARIANTS).length] : S.v;
+    const steps = stepsOf(S.scn, v);
+    const k = Math.min(S.step, steps.length);
+    if (k < steps.length) f.querySelectorAll(`[data-k="${steps[k][1]}"]`).forEach(el => el.classList.add('hl'));
+  });
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-set],[data-step],[data-k]');
+  if (!b) return;
+  if (b.dataset.set) {
+    const val = b.dataset.val;
+    S[b.dataset.set] = val === 'true' ? true : val === 'false' ? false : val;
+    if (b.dataset.set === 'scn' || b.dataset.set === 'v') S.step = 0;
+    if (b.dataset.set === 'scn' && SCN[S.scn].start.size === '360' && S.size === '1440') S.size = '360';
+  } else if (b.dataset.step) S.step = +b.dataset.step;
+  else if (b.dataset.k) {
+    const steps = stepsOf(S.scn, S.v);
+    if (S.step < steps.length && b.dataset.k === steps[S.step][1]) S.step++;
+    else return;
+  }
+  render();
+});
+render();
+</script>
+</body>
+</html>

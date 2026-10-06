@@ -1,6 +1,6 @@
 # Дев-стенд NTLM (Kestrel + HTTPS + ASP.NET Negotiate)
 
-Реальные `NegotiateFailure`, `NtlmHandshakeRecorder`, `NtlmMicProbe`, `NtlmUserFile` из бэкенда — за Kestrel
+Реальные `NegotiateFailure`, `NtlmUserFile` из бэкенда — за Kestrel
 на `https://localhost:5443`. Нужен только для воспроизведения отказов NTLM; на боевой сервер не влияет.
 
 ```bash
@@ -21,7 +21,7 @@ python3 ../../client.py E2088237 secret --f3=E2888235 --win --cbt --target=HTTP/
 ## Живой Windows против стенда
 
 Нужен, когда спецификационный клиент `client.py` проходит, а настоящий Windows (Word, WebDAV-стек) — нет: гоним Windows на
-тестовую учётку, а стенд печатает полные Type1/Type2/Type3 (`STAND_DUMP=1`; пароль известен, секретов нет) и пробу MIC.
+тестовую учётку, а стенд печатает полные Type1/Type2/Type3 (`STAND_DUMP=1`; пароль известен, секретов нет).
 
 ```bash
 # на Linux-машине: сертификат с SAN под имя/адрес, по которому Windows достаёт машину (здесь IP — подставить свой)
@@ -44,6 +44,6 @@ $r = New-Object -ComObject WinHttp.WinHttpRequest.5.1
 $r.Open("OPTIONS", "https://<IP-машины>:5443/"); $r.SetCredentials("WORKGROUP\andrey", "secret", 0); $r.Send(); $r.Status
 ```
 
-Результат: ищи в `/tmp/stand.log` строки `NTLM отклонён … MIC …` (какая гипотеза совпала и какие пары AV не вернулись из Type2) и `DUMP …`
-(полные сообщения — по ним пробу можно гонять офлайн, не гоняя Windows снова). Порт 5443 должен быть открыт во входящих брандмауэра машины.
+Результат: ищи в `/tmp/stand.log` строки `NTLM отклонён …` (транспорт, флаги и AV-пары Type3) и `DUMP …`
+(полные сообщения — по ним MIC можно пересчитать офлайн, не гоняя Windows снова). Порт 5443 должен быть открыт во входящих брандмауэра машины.
 Остановка — `kill <PID>`, не по имени.

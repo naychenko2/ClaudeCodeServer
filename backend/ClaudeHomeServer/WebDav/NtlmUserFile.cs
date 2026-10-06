@@ -96,12 +96,6 @@ public sealed class NtlmUserFile
         lock (_lock) return _hashes.ContainsKey(username);
     }
 
-    /// <summary>NT-хэш пользователя для самодиагностики MIC; живёт только в памяти, в лог не уходит.</summary>
-    internal byte[]? TryGetHash(string username)
-    {
-        lock (_lock) return _hashes.TryGetValue(username, out var hex) ? Convert.FromHexString(hex) : null;
-    }
-
     /// <summary>Записать хэш открытого пароля. Файл переписывается, только если хэш изменился.</summary>
     public void Record(string username, string password)
     {

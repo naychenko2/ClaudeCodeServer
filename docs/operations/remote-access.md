@@ -209,181 +209,63 @@ Basic. Иначе Mini-Redirector цепляется за Negotiate и крут�
 (`WebDav/NegotiateFailure.cs`) превращает его в `401` с **одним** Basic. Без этого клиент получал
 500, а Explorer крутил сохранённую учётку по кругу.
 
-### Разбор InvalidToken и живая проверка с Windows
+### InvalidToken: причина, патчи, пакет (итог 2026-10-06)
 
-Статус в `NTLM отклонён: …: <статус>` различает причины (разбор 2026-10-05):
-`GenericFailure` — не сошёлся NTLMv2-ответ (пароль, регистр или написание домена);
-`InvalidToken` — gss-ntlmssp вернул `GSS_S_DEFECTIVE_TOKEN` **после** успешной проверки хэша, то
-есть сломалась проверка MIC, channel bindings или разбор AV-пар. Неверный хэш InvalidToken не даёт.
-На стенде против настоящего gss-ntlmssp 1.2.0 и Kestrel по HTTPS (NTLMv2, MIC, SPNEGO mechListMIC,
-`MsvAvChannelBindings`, `MsvAvTargetName`) клиент pyspnego проходит; channel bindings Kestrel
-на Linux не навязывает (даже заведомо неверный CBT принят).
+Статус в `NTLM отклонён: …: <статус>` различает причины: `GenericFailure` — не сошёлся NTLMv2-ответ
+(пароль, регистр или написание домена); `InvalidToken` — gss-ntlmssp вернул `GSS_S_DEFECTIVE_TOKEN`
+после успешной проверки хэша (MIC, channel bindings или разбор AV-пар). Строка отказа также несёт
+транспорт (сырой NTLMSSP или SPNEGO) и форму Type3: флаги, `MsvAvFlags`, `MsvAvChannelBindings`,
+`MsvAvTargetName`. Секретов там нет. ASP.NET Negotiate на Linux channel bindings в GSSAPI не передаёт,
+а по HTTP/2 хендлер Negotiate не аутентифицирует вовсе — до gss-ntlmssp Windows доходит по HTTP/1.1.
 
-Живая проверка (на Windows, не на проде без согласования):
+**Причина.** Два дефекта gss-ntlmssp 1.2.0 против Windows 11 24H2 (Mini-Redirector, Word):
 
-1. На сервере включить трассировку: в юните `Environment=GSSNTLMSSP_DEBUG=/tmp/gssntlm.log`,
-   перезапуск; после проверки убрать.
-2. С Windows: `curl.exe -v --ntlm -u "WORKGROUP\andrey:ПАРОЛЬ" https://хост/projects/` и то же с
-   `--negotiate -u "WORKGROUP\andrey:ПАРОЛЬ"`; для сравнения `-k` не нужен, если сертификат доверенный.
-3. В логе приложения найти `NTLM отклонён …; Type3: флаги 0x…, NTLMv2, MsvAvFlags 0x2 (MIC),
-   MsvAvTargetName …, CBT задан`. Прислать эту строку, статус и строки `ERROR:` из
-   `/tmp/gssntlm.log` — по ним видно, на какой проверке (`gss_sec_ctx.c`: MIC, CBT) падает токен.
+1. Ключ сессии расшифровывался по одному флагу `KEY_EXCH`, хотя по MS-NLMP 3.1.5.1.2 / 3.2.5.1.2 нужен
+   `KEY_EXCH` вместе с `SIGN` или `SEAL`. Клиент с Type1 `0xE2088207` слал KeyExchangeKey, сервер
+   получал чужой ключ — MIC не сходился.
+2. Type2 всегда нёс `MsvAvFlags=0`. Windows SSPI правит эту пару в своей копии CHALLENGE_MESSAGE на месте
+   (`|= MIC_PRESENT`) и считает MIC по изменённому Type2, поэтому подпись не сходилась. Без этой пары
+   Windows считает MIC по Type2 с провода, как и клиенты по спецификации.
 
-#### Причина InvalidToken найдена (2026-10-06): KEY_EXCH без SIGN/SEAL
+**Патчи** (проверка MIC не ослаблена, меняется только выбор ключа и состав Type2):
+[ntlm-key-exch-requires-sign-seal.diff](../../deploy/gss-ntlmssp/ntlm-key-exch-requires-sign-seal.diff) (`+ccs1`) и
+[ntlm-no-empty-msvavflags-in-type2.diff](../../deploy/gss-ntlmssp/ntlm-no-empty-msvavflags-in-type2.diff) (`+ccs2`).
+Пакет `1.2.0-1build5+ccs2` (Ubuntu 26.04) собирает [build-deb.sh](../../deploy/gss-ntlmssp/build-deb.sh) в контейнере;
+готовый .deb лежит в `deploy/gss-ntlmssp/out/` (в git не коммитится), тесты матрицы флагов — `build-deb.sh --test`.
+Пакет правит только акцептор (`gss_sec_ctx.c`). `+ccs1` Windows не пускает: нужен `+ccs2` или новее.
 
-`GSSNTLMSSP_DEBUG` на бою показал `gssntlm_accept_sec_context() @ gss_sec_ctx.c:976 [589824:13]`:
-хэш прошёл, не сошёлся MIC. Воспроизведено на стенде (gss-ntlmssp 1.2.0 + Kestrel, клиент pyspnego):
-ломает **не** сырой NTLM против SPNEGO (оба варианта проходят), а флаги Type1. Клиент, который просит
-`KEY_EXCH`, но не просит `SIGN`/`SEAL` (Windows SSPI в HTTP-стиле), по MS-NLMP шлёт в качестве
-ключа сессии сам KeyExchangeKey; gss-ntlmssp расшифровывает ключ по одному флагу `KEY_EXCH`
-(`gss_sec_ctx.c`, ветка перед проверкой MIC; в `main` и 1.3.x тот же код) и получает чужой ключ.
-
-| Type1 клиента | Результат |
-|---|---|
-| `0xE2088237` (SIGN+SEAL, pyspnego по умолчанию) | 200 |
-| `0xE2088217` (SIGN) / `0xE2088227` (SEAL) | 200 |
-| `0xE2088207` (без SIGN/SEAL) | 401, `InvalidToken`, `:976` |
-
-Исправить на нашей стороне без своего NTLM-акцептора нельзя: MIC считается по Type1/Type2, а оба
-хранит и сверяет сама gss-ntlmssp. Лог отказа теперь помечает такой Type3 фразой
-«KEY_EXCH без SIGN/SEAL» — это и есть подтверждение на боевом клиенте.
-
-Повтор на стенде (ключи — `NTLM_USER_FILE` со строкой `WORKGROUP\andrey` и NT-хэшем `secret`):
-`spnego.client('WORKGROUP\\andrey', 'secret', protocol='ntlm', context_req=spnego.ContextReq.none)`,
-шаги `step()` по HTTP-соединению keep-alive, токены в `Authorization: Negotiate`.
-
-#### Исправление: пропатченный gss-ntlmssp (решение 2026-10-06)
-
-Патч [ntlm-key-exch-requires-sign-seal.diff](../../deploy/gss-ntlmssp/ntlm-key-exch-requires-sign-seal.diff)
-приводит gss-ntlmssp к MS-NLMP 3.1.5.1.2 / 3.2.5.1.2: ключ сессии расшифровывается только при
-`KEY_EXCH` вместе с `SIGN` или `SEAL`, иначе ExportedSessionKey = KeyExchangeKey. **Проверка MIC не
-ослаблена**: меняется только выбор ключа. Пакет — `1.2.0-1build5+ccs1` (Ubuntu 26.04), собирается
-[build-deb.sh](../../deploy/gss-ntlmssp/build-deb.sh) в контейнере; готовый .deb после сборки лежит в
-`deploy/gss-ntlmssp/out/` (в git не коммитится). Тесты матрицы флагов — `build-deb.sh --test`.
-
-Результат на стенде (сырой NTLMv2-клиент против GSSAPI-акцептора, `test/run-test.sh`):
-
-| Сценарий | оригинал | `+ccs1` |
-|---|---|---|
-| Type1 `0xE2088207` (KEY_EXCH без SIGN/SEAL) | отказ `[589824:13]` | вход |
-| `0xE2088237` / `0xE2088217` / `0xE2088227` | вход | вход |
-| неверный пароль (любые флаги) | отказ | отказ |
-| подменённый MIC (`0xE2088207` и `0xE2088237`) | отказ | отказ |
-
-Что проверено и что нет: акцептор — на матрице выше. Пакет правит только акцептор
-(`gss_sec_ctx.c`); сторона инициатора (`gss_auth.c`) сознательно не тронута — непроверенный код в системной
-библиотеке нам не нужен. Через Kestrel и Windows
-.deb не гоняли — это живая проверка ниже.
-
-**Установка (делает человек, на хосте с боевым `ccs.service`).** Пакет: `/home/an/ccs-packages/gss-ntlmssp_1.2.0-1build5+ccs1_amd64.deb`, sha256 `6ab41eb5c118eb567cdd916e437fcfbff37f1e47a9267e58c1e506789f738cac`.
+**Установка (делает человек, на хосте с боевым `ccs.service`).** Пакет:
+`/home/an/ccs-packages/gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb`, sha256
+`ea89f8576e721462da21e49c8801fa56a9cec7b4a9bc28eb4ebb512b1ec426e6` (`gssntlmssp.so` внутри — sha256
+`3f2c5b9803469985a801663eca9f7819918122cc8501e331e4ef2ab73f38ed97`; повторная сборка даёт ту же `.so`, но другой
+sha256 самого `.deb`).
 
 ```bash
-sha256sum gss-ntlmssp_1.2.0-1build5+ccs1_amd64.deb   # сверить с суммой выше
-sudo dpkg -i gss-ntlmssp_1.2.0-1build5+ccs1_amd64.deb
+sha256sum gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb   # сверить с суммой выше
+sudo dpkg -i gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb
 sudo apt-mark hold gss-ntlmssp
 sudo systemctl restart ccs.service
 deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на месте
 ```
 
-**Живая проверка с Windows:** `curl.exe -v --ntlm -u "WORKGROUP\andrey:ПАРОЛЬ" https://хост/projects/` и то же с
-`--negotiate`; затем открыть документ по WebDAV-адресу из Word. Ожидается `200`/открытие файла и в логе
-`WebDAV: NTLM-вход WORKGROUP\andrey` без `NTLM отклонён … InvalidToken`.
+**Проверка.** Живой Windows (curl.exe `--negotiate`, Word по WebDAV) и бой 2026-10-06: `200`, в логе
+`WebDAV: NTLM-вход WORKGROUP\andrey`, неверный пароль — `401`. Воспроизведение без боевого сервера —
+дев-стенд [test/stand](../../deploy/gss-ntlmssp/test/stand) и клиент [client.py](../../deploy/gss-ntlmssp/test/client.py);
+если на Windows нужны полные токены тестовой учётки, стенд печатает их сам (`STAND_DUMP=1`).
+Трассировка gss-ntlmssp — `Environment=GSSNTLMSSP_DEBUG=/tmp/gssntlm.log` в юните (после проверки убрать).
 
 **Сторож отката.** `apt upgrade` без hold молча вернёт оригинал. Защиты две: hold и проверка
 [check-gss-ntlmssp.sh](../../deploy/gss-ntlmssp/check-gss-ntlmssp.sh) (exit 1 — версия без `+ccs2` или новее, exit 2 —
-нет hold; печатает `WARNING` в stderr; добавьте вызов в `/opt/ccs/check-release.sh` или cron). Плюс
-сервер при старте пишет warning `gss-ntlmssp … без патча '+ccs2' или новее` (`NtlmUserFile`), если читает
+нет hold; печатает `WARNING` в stderr; добавьте вызов в `/opt/ccs/check-release.sh` или cron). Плюс сервер при
+старте пишет warning `gss-ntlmssp … без патча '+ccs2' или новее` (`NtlmUserFile`), если читает
 `/var/lib/dpkg/status` и версия без суффикса.
 
 **Откат:** `sudo apt-mark unhold gss-ntlmssp && sudo apt install --reinstall gss-ntlmssp=1.2.0-1build5`
 (при отсутствии версии в индексе — `sudo apt install --reinstall gss-ntlmssp`), затем
-`sudo systemctl restart ccs.service`. Без патча NTLM у клиентов с `0xE2088207` снова даст InvalidToken, Basic
-продолжит работать.
+`sudo systemctl restart ccs.service`. Без патчей NTLM у Windows снова даст InvalidToken, Basic продолжит работать.
 
 **Upstream.** Текст issue и PR — [upstream-issue-and-pr.md](../../deploy/gss-ntlmssp/upstream-issue-and-pr.md),
 не опубликован: отправка только по явной просьбе.
-
-#### Разбор 2026-10-06 (ночь): причина найдена — Windows правит Type2 на месте
-
-Живой Windows 11 24H2 (`curl.exe --ntlm`, Type3 `0xE2888235`) против стенда с `STAND_DUMP=1`: полные Type1/Type2/Type3
-позволили пересчитать MIC офлайн (пароль тестовой учётки известен). MIC клиента сходится **только** по Type2 с
-`MsvAvFlags = 0x2` (однобитная правка байта 106), хотя сервер отправил `MsvAvFlags = 0`. Эталон — Chromium
-`ntlm_test_data.h` (MIC по Type1+Type2+Type3), проба на нём сходится.
-
-Механика: gss-ntlmssp всегда кладёт в TargetInfo Type2 пару `MsvAvFlags` (значение 0). Windows SSPI правит эту пару в
-своей копии CHALLENGE_MESSAGE на месте (`|= MIC_PRESENT`) и считает MIC уже по изменённому Type2; когда пары нет, он
-дописывает флаги в отдельный blob, и MIC идёт по Type2 с провода (так считают и клиенты по спецификации — потому
-`client.py`, pyspnego и прежний Windows-клиент проходили). Лишние 32 байта AV-пар в Type3 — просто
-`MsvAvSingleHost` размером 80 байт у Windows 24H2, к MIC отношения не имеют.
-
-Исправление — патч [ntlm-no-empty-msvavflags-in-type2.diff](../../deploy/gss-ntlmssp/ntlm-no-empty-msvavflags-in-type2.diff)
-(Type2 без пары `MsvAvFlags=0`), пакет `1.2.0-1build5+ccs2` собирается тем же `build-deb.sh` вместе с первым патчем.
-Проверка MIC не ослаблена. Установка `+ccs2` — тем же порядком, что у `+ccs1` (раздел выше); контрольную сумму
-считать после сборки.
-
-**Пакет `+ccs2` проверен живым Windows (2026-10-06):** `curl.exe --negotiate` против стенда с этой `.so` → 200,
-неверный пароль → 401, снова верный → 200. Файл: `/home/an/ccs-packages/gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb`,
-sha256 `ea89f8576e721462da21e49c8801fa56a9cec7b4a9bc28eb4ebb512b1ec426e6`
-(`gssntlmssp.so` внутри — sha256 `3f2c5b9803469985a801663eca9f7819918122cc8501e331e4ef2ab73f38ed97`; повторная сборка даёт
-ту же `.so`, но другой sha256 самого `.deb`). Сторож (`check-gss-ntlmssp.sh` и warning при старте сервера) требует `+ccs2`
-или новее: `+ccs1` Windows не пускает.
-
-#### Разбор 2026-10-06 (вечер): +ccs1 не помог, Type3 реального Windows — 0xE2888235
-
-После установки `+ccs1` Windows всё равно получает отказ, и на этот раз в Type3 **есть** SIGN и SEAL
-(`0xE2888235`: `SIGN|SEAL|KEY_EXCH|128|56`, NTLMv2, MIC, ненулевой CBT, `MsvAvTargetName HTTP/naychenko.me`).
-Вывод «причина — KEY_EXCH без SIGN/SEAL» к этому клиенту **не относится**: патч для него ничего не меняет
-(ключ расшифровывается и без патча). Причина **не найдена**: на стенде отказ не воспроизводится.
-
-Что проверено на стенде (gss-ntlmssp 1.2.0 и `+ccs1`, Kestrel по HTTPS, NTLMv2 + MIC; клиент
-[client.py](../../deploy/gss-ntlmssp/test/client.py) собирает Type1/Type3 по MS-NLMP, стенд —
-[test/stand](../../deploy/gss-ntlmssp/test/stand)) — все варианты проходят и без патча, и с ним:
-
-| Что варьировали | Результат |
-|---|---|
-| Type1 `0xE2088297/237/207/235`, Type3 `0xE2888235`, структура Version в Type1 и Type3 | OK |
-| ненулевой `MsvAvChannelBindings`, `MsvAvTargetName`, `MsvAvSingleHost`, нулевой LM-ответ | OK |
-| сырой NTLMSSP в `Negotiate` и SPNEGO (NegTokenInit/NegTokenResp, mechListMIC по MS-NLMP 3.4) | OK |
-| прямой GSSAPI-акцептор без .NET (`run-test.sh`) | OK |
-
-Опровергнутые гипотезы: **MIT SPNEGO подменяет Type1** — нет, MIC сходится и в сыром, и в обёрнутом виде;
-**.NET искажает Type2** — нет, записанный на сервере Type2 совпадает с тем, по которому клиент считал
-NTProofStr и MIC; **CBT ломает MIC** — нет, и более того, ASP.NET Negotiate на Linux **не передаёт channel
-bindings** в GSSAPI вообще (заведомо чужой CBT принимается), так что CBT сервером не проверяется;
-**RC4-расшифровка EncryptedRandomSessionKey** — корректна при `KEY_EXCH+SIGN|SEAL`. Попутно: по
-**HTTP/2** хендлер Negotiate не аутентифицирует вовсе (на любой Authorization отвечает «challenged»), так что
-до gss-ntlmssp Windows доходит только по HTTP/1.1.
-
-Остаётся то, чего стенд знать не может: **реальные байты Type1/Type2/Type3 от Windows**. Чтобы не гонять
-токены с паролем, сервер теперь диагностирует отказ сам: `NtlmHandshakeRecorder` держит в памяти Type1/Type2
-соединения, а при отказе `NtlmMicProbe` пересчитывает MIC по NT-хэшу из `NTLM_USER_FILE` при каждой
-гипотезе (ключ = KeyExchangeKey или RC4(KeyExchangeKey, EncryptedRandomSessionKey); каждый записанный
-Type1; смещение MIC 72/64) и пишет в лог **только признаки**: какая гипотеза сошлась, флаги Type1/2/3,
-размер EncryptedRandomSessionKey. Ключи, хэш и подписи в лог не попадают, токены не сохраняются.
-
-Строка отказа теперь: `NTLM отклонён: домен…, пользователь…: <статус>; транспорт: <…>; Type3: <…>; MIC: <…>`.
-
-- `транспорт`: `сырой NTLMSSP` (заголовок начинается с `TlRMTVNT`) или `SPNEGO NegTokenResp с/без mechListMIC`
-  (ASN.1: `0x60` — NegTokenInit, `0xA1` — NegTokenResp).
-- `MIC: MIC СХОДИТСЯ при: <ключ>; Type1 №N; смещение MIC …` — подпись клиента сходится при этой гипотезе, а
-  gss-ntlmssp выбирает другую: это и есть причина (например, `KeyExchangeKey` при `SIGN|SEAL` значит, что
-  клиент не шифровал ключ, а сервер расшифровывает; `RC4(…)` при отсутствии SIGN/SEAL — наоборот).
-- `MIC не сходится ни в одной из N комбинаций (NTProofStr верен)` — расходятся сами сообщения (Type1/Type2/Type3),
-  а не ключ: смотреть `Type1 записано N` и флаги Type1/Type2 в той же строке.
-- `NTProofStr не сходится` — это не MIC, а пароль/хэш/написание домена.
-
-**Живая проверка с Windows (одна попытка, без Wireshark и без записи токенов).**
-1. Тестовый пользователь с тестовым паролем, не основной: Type3 содержит NTLMv2-ответ, по нему пароль подбирается офлайн.
-2. Подключить `\\naychenko.me@SSL\DavWWWRoot\projects` (Проводник → «Подключить сетевой диск») или
-   `net use * https://naychenko.me/projects /user:andrey`. HTTP/1.1 — это обязательно (см. про HTTP/2 выше).
-3. В `/srv/ccs/data/logs/server-<дата>.log` найти `NTLM отклонён` и приложить строку целиком — в ней уже всё
-   нужное для вывода. В боевом логе приложения 6 октября строк `NTLM` не оказалось — проверить уровень логов
-   `ClaudeHomeServer.WebDav` (нужен Warning), иначе диагностика не видна.
-4. Без боевого сервера: дев-стенд [test/stand](../../deploy/gss-ntlmssp/test/stand) на другом порту и
-   Windows `curl.exe --negotiate -u andrey:secret -k https://<хост-стенда>:5443/` (предположительно curl на Windows
-   ходит через SSPI и даёт настоящие Type1/Type3; не проверено — доступа к Windows не было; стенд пишет ту же
-   диагностическую строку). Виртуалка `windows` из
-   `docs/operations/linux-dualboot-kvm-windows-passthrough.md` для этого подходит; её запускает человек.
 
 ### Безопасность
 
@@ -401,18 +283,3 @@ Type1; смещение MIC 72/64) и пишет в лог **только при
 | Нет белого IP (CGNAT) | туннель (Cloudflare) или Tailscale — см. раздел 2 |
 
 Во всех случаях нужен один и тот же API-ключ.
-
-#### Пары попыток 12:44 и состояние соединения (2026-10-06)
-
-Попытки WebClient идут парами: первая — `GenericFailure` («NTProofStr не сходится»), вторая через 6–8 с —
-`InvalidToken` (NTProofStr верен, MIC не сходится). Гипотеза «после отказа состояние Negotiate-хендлера
-остаётся на соединении и следующее рукопожатие идёт поверх старого» **на стенде не подтвердилась**: после
-отказа (`NegotiateFailure` + `HandleResponse`) и после брошенного Type1 без Type3 следующее рукопожатие на том
-же соединении проходит (`client.py … --prefail --abandon`). Строка «Type1 записано 1» ничего не доказывает:
-Type1 у Windows всегда побайтно одинаков, и рекордер его дедуплицирует, — поэтому в пробу добавлена хроника
-соединения (какой Type пришёл, когда отправлен Type2, статус).
-
-Проба расширена к следующему повтору на Windows: перебор всех записанных Type2 и Type3 в двух видах (MIC
-обнулён / как есть), а при несовпадении в лог попадают Type1 и Type2 целиком (открытые сообщения рукопожатия),
-длины и заголовок Type3 (первые 72 байта без ответов и ключа) и хроника соединения. Тело Type3 не выводится:
-по нему и Type2 офлайн подбирается пароль.

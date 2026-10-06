@@ -20,9 +20,9 @@ public static class NegotiateFailure
         // Статус .NET различает причины: InvalidToken — дефектный токен (MIC, channel binding),
         // GenericFailure — не сошёлся NTLMv2-ответ (пароль, регистр или написание домена)
         var authorization = http.Request.Headers.Authorization.ToString();
-        logger?.LogWarning("NTLM отклонён: домен '{Domain}', пользователь '{User}', {Path}: {Error}; транспорт: {Transport}; Type3: {Shape}; MIC: {Mic}",
+        logger?.LogWarning("NTLM отклонён: домен '{Domain}', пользователь '{User}', {Path}: {Error}; транспорт: {Transport}; Type3: {Shape}",
             domain ?? "?", user ?? "?", http.Request.Path.Value, ctx.Exception?.GetBaseException().Message,
-            DescribeTransport(authorization), DescribeType3(authorization), ProbeMic(http, authorization, user));
+            DescribeTransport(authorization), DescribeType3(authorization));
 
         http.Response.StatusCode = StatusCodes.Status401Unauthorized;
         http.Response.ContentLength = 0;
@@ -114,30 +114,6 @@ public static class NegotiateFailure
             for (var i = 0; i < n; i++) len = (len << 8) | s[2 + i];
             skip = 2 + n;
             return skip + len <= s.Length;
-        }
-    }
-
-    /// <summary>
-    /// Пересчёт MIC по записанным Type1/Type2 и NT-хэшу из нашего файла: говорит, при какой
-    /// гипотезе (ключ, Type1, смещение) подпись клиента сошлась. Любой сбой — просто текст.
-    /// </summary>
-    private static string ProbeMic(HttpContext http, string authorization, string? user)
-    {
-        try
-        {
-            if (user is null) return "нет пользователя";
-            var handshake = NtlmHandshakeRecorder.Get(http);
-            if (handshake is null) return "рукопожатие не записано";
-            var hash = http.RequestServices.GetService<NtlmUserFile>()?.TryGetHash(user);
-            if (hash is null) return "хэша пользователя в файле нет";
-            var type3 = NtlmHandshakeRecorder.ExtractNtlm(authorization["Negotiate ".Length..]);
-            if (type3 is null) return "Type3 не найден";
-            var (type1s, type2s) = handshake.Snapshot();
-            return NtlmMicProbe.Explain(type1s, type2s, type3, hash, handshake.Timeline());
-        }
-        catch (Exception ex)
-        {
-            return $"диагностика упала: {ex.GetType().Name}";
         }
     }
 

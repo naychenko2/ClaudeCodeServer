@@ -1746,8 +1746,6 @@ if (inspectionMode)
 
 // Хаб устройств и канал исполнения — только HTTPS или петля, как сопряжение (ADR-008)
 ClaudeHomeServer.Services.Devices.DeviceChannelGuard.UseDeviceChannelGuard(app);
-// Запись NTLM Type1/Type2 соединения — для самодиагностики MIC при отказе Negotiate
-app.UseMiddleware<ClaudeHomeServer.WebDav.NtlmHandshakeRecorder>();
 app.UseAuthentication();
 app.UseAuthorization();
 

@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.VideoEditor.Assembly;
 using ClaudeHomeServer.Services.VideoEditor.Catalog;
@@ -173,6 +174,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         if (ApplySettings(args, _prefs.ForNewScene(owner, scope), out var settings) is { } bad) return Deny(bad);
 
         var call = await _scenes.AddAsync(owner, scope, session.Id, folder, settings, Str(args, "name"), null, ct, ContextActor.Agent);
+        if (call.Written is { Status: VideoThreadWriteStatus.Ok } && ExplicitFormat(args, settings) is { } given)
+            await WriteAgentFormatAsync(owner, scope, session, given);
         return await ThreadsResultAsync(call, owner, session, scope,
             "Сцена заведена и в работе. Снять её — video_shoot; человек видит карточку сцены в ленте.");
     }
@@ -184,7 +187,14 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             return Deny($"Сцены {sceneId} нет в этом чате. Список — video_state.");
         if (ApplySettings(args, scene.Settings, out var settings) is { } bad) return Deny(bad);
 
-        var call = await _scenes.SettingsAsync(owner, scope, session.Id, sceneId, settings, null);
+        // Замок формата фильма держит сервис, а не инструмент: ручка человека и агент получают один и тот же отказ.
+        // force — только когда человек сам настоял
+        var call = await _scenes.SettingsAsync(owner, scope, session.Id, sceneId, settings, null,
+            force: Bool(args, "force") == true, by: ContextActor.Agent);
+        if (call.Locked is not null)
+            return Fail(call.ErrorCode, call.Error + " Если человек настаивает на другом формате — повтори с force=true.");
+        if (call.Written is { Status: VideoThreadWriteStatus.Ok } && ExplicitFormat(args, settings) is { } given)
+            await WriteAgentFormatAsync(owner, scope, session, given);
         return await ThreadsResultAsync(call, owner, session, scope, "Настройки сцены сохранены.");
     }
 
@@ -234,6 +244,14 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         if (!TryInt(args, "durationSec", out var duration) || !TryInt(args, "count", out var count))
             return "durationSec и count — целые числа.";
         if (args["sound"] is not null && Bool(args, "sound") is null) return "sound — true или false.";
+        if (FormatFromArgs(args, baseSettings.Format ?? FormatOfAspect(baseSettings.Aspect), out var format) is { } badFormat) return badFormat;
+        var fit = baseSettings.FrameFit;
+        if (args.ContainsKey("anchor"))
+        {
+            var anchor = Str(args, "anchor");
+            if (anchor is null || !CropAnchors.Contains(anchor)) return "anchor — left, center, right, top или bottom.";
+            fit = new VideoFrameFitDto(anchor);
+        }
         result = baseSettings with
         {
             FrameA = frameA,
@@ -242,11 +260,61 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             Provider = args.ContainsKey("provider") ? Str(args, "provider") : baseSettings.Provider,
             Model = args.ContainsKey("model") ? Str(args, "model") : baseSettings.Model,
             DurationSec = duration ?? baseSettings.DurationSec,
-            Aspect = args.ContainsKey("aspect") ? Str(args, "aspect") : baseSettings.Aspect,
+            Format = format ?? baseSettings.Format,
+            FrameFit = fit,
             Sound = Bool(args, "sound") ?? baseSettings.Sound,
             Count = count ?? baseSettings.Count,
         };
         return null;
+    }
+
+    // ── Формат от агента (ADR-025) ──────────────────────────────────────────────
+
+    private static MediaFormat? FormatOfAspect(string? aspect) =>
+        aspect is null ? null : new MediaFormat(FormatModes.Aspect, aspect, null, null, null, ContextActor.Human, DateTime.UtcNow);
+
+    // aspect и quality из аргументов поверх базового желания; без них — null (формат не меняется). Ошибка — текст отказа
+    private static string? FormatFromArgs(JsonObject args, MediaFormat? baseFormat, out MediaFormat? format)
+    {
+        format = null;
+        var hasAspect = args.ContainsKey("aspect") && Str(args, "aspect") is not null;
+        var hasQuality = args.ContainsKey("quality") && args["quality"] is not null;
+        if (!hasAspect && !hasQuality) return null;
+        FormatTier? tier = baseFormat?.Tier;
+        if (hasQuality)
+        {
+            tier = Str(args, "quality") switch
+            {
+                "standard" => FormatTier.Standard,
+                "high" => FormatTier.High,
+                "max" => FormatTier.Max,
+                _ => null,
+            };
+            if (tier is null) return "quality — standard, high или max.";
+        }
+        var aspect = hasAspect ? Str(args, "aspect") : baseFormat?.Aspect;
+        if (aspect is null) return "quality задаётся вместе с пропорциями: укажи aspect (или сначала выбери пропорции сцены).";
+        if (!AspectCrop.TryParse(aspect, out _)) return $"aspect — пропорции вида 16:9, а не «{aspect}».";
+        format = new MediaFormat(FormatModes.Aspect, aspect, tier, null, null, ContextActor.Agent, DateTime.UtcNow);
+        return null;
+    }
+
+    // Формат, который агент задал явно в этом вызове (aspect или quality), иначе null
+    private static MediaFormat? ExplicitFormat(JsonObject args, VideoSceneSettingsDto applied) =>
+        (args.ContainsKey("aspect") && Str(args, "aspect") is not null) || (args.ContainsKey("quality") && args["quality"] is not null)
+            ? applied.Format
+            : null;
+
+    // Явный формат агента меняет формат видео проекта (решение 2 Андрея): желание в префы с By = Agent и тихая строка
+    // «✦ Claude сменил формат видео проекта». Ту же правку человека (PUT prefs) снимает ✦
+    private async Task WriteAgentFormatAsync(string owner, VideoEditScope scope, Session session, MediaFormat wish)
+    {
+        var before = _prefs.Get(owner, scope);
+        if (before.Format is { } had && had.Mode == wish.Mode && had.Aspect == wish.Aspect && had.Tier == wish.Tier) return;
+        _prefs.Save(owner, scope, before with { Format = wish, Aspect = wish.Aspect }, ContextActor.Agent);
+        await _threads.NoteAsync(session.Id,
+            $"✦ Claude сменил формат видео проекта: {MediaFormatText.Wish(before.Format ?? FormatOfAspect(before.Aspect))} → {MediaFormatText.Wish(wish)}",
+            new { kind = "video_format", by = "agent", before = before.Format, after = wish });
     }
 
     private static FrameRef? ParseFrame(JsonObject obj)
@@ -281,15 +349,26 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         if (args["sound"] is not null && Bool(args, "sound") is null) return Deny("sound — true или false.");
         if (args["seed"] is not null && Long(args, "seed") is null) return Deny("seed — целое число.");
 
-        if (Store.Get(owner, session.Id).Scenes.All(s => s.SceneId != sceneId))
+        if (Store.Get(owner, session.Id).Scenes.FirstOrDefault(s => s.SceneId == sceneId) is not { } sceneNow)
             return Deny($"Сцены {sceneId} нет в этом чате. Список — video_state.");
+
+        // Формат запуска: aspect и quality поверх желания сцены; замок формата фильма — тот же отказ, что у ручки
+        if (FormatFromArgs(args, sceneNow.Settings.Format ?? FormatOfAspect(sceneNow.Settings.Aspect), out var shootFormat) is { } badFormat)
+            return Deny(badFormat);
+        if (shootFormat is not null
+            && VideoSceneFormat.LockedConflict(sceneNow, sceneNow.Settings with { Format = shootFormat, Aspect = shootFormat.Aspect }, false)
+                is { } locked)
+            return Fail(VideoEditorErrors.FilmFormatLocked,
+                VideoSceneFormat.LockedText(locked.FilmPath, locked.Aspect, shootFormat.Aspect ?? "")
+                + " Сменить формат сцены вопреки замку можно только через video_scene_set с force=true по просьбе человека.");
 
         // Тот же путь, что у человека: котировка, затем запуск строго по её quoteId; без provider/model цепочку
         // «настройки сцены → префы области → умолчание каталога» разворачивает исполнитель
         var quote = await _jobs.QuoteAsync(owner, scope,
             new VideoQuoteRequest(session.Id, sceneId, Str(args, "provider"), Str(args, "model"), count, duration,
-                Str(args, "aspect"), Bool(args, "sound")), ct);
+                null, Bool(args, "sound"), Format: shootFormat), ct);
         if (quote.Value is not { } q) return Fail(quote.ErrorCode, quote.Error, quote.Retry);
+        if (shootFormat is not null) await WriteAgentFormatAsync(owner, scope, session, shootFormat);
 
         var started = await _jobs.StartAsync(owner, scope,
             new VideoLaunchRequest(q.QuoteId, session.Id, sceneId, VideoInitiators.Agent, args["params"] as JsonObject, Long(args, "seed")), ct);
@@ -299,7 +378,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         {
             jobId = created.JobId,
             sceneId,
-            quote = new { q.Provider, q.Model, q.Count, q.DurationSec, q.Price, q.License },
+            quote = new { q.Provider, q.Model, q.Count, q.DurationSec, q.Price, q.License, q.Format },
             note = "Съёмка идёт отдельно от хода: остановка разговора её не отменяет, отмена — video_cancel. "
                 + "Результат — версии сцены в video_state (запуск running → done); ждать — video_wait (цикл до allDone); не выдумывай результат, пока он не готов. "
                 + "Каждый вариант станет версией сцены. После сцены спроси человека «Снимать следующую?»; "
@@ -527,7 +606,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             {
                 prefs = _prefs.Get(owner, scope),
                 rule = "Это выбор человека: настройки сцены, затем префы области, затем умолчание. Не передавай provider, "
-                    + "model, durationSec и count без его просьбы — video_shoot возьмёт выбор сам.",
+                    + "model, durationSec, count, aspect и quality без его просьбы — video_shoot возьмёт выбор сам.",
+                format = DescribeFormat(owner, scope),
             },
             agentLaunch = _agentLaunch,
             note = (state.Scenes.Count, scope.IsPersonal) switch
@@ -539,6 +619,21 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
                     + "video_film_edit и video_film_build.",
             },
         };
+    }
+
+    // Формат видео проекта и пояснение по ступеням: пропорции и ступени каждой модели — в catalog[].models[].format.
+    // У local MiniMax H3 «Макс» = съёмка 768p плюс увеличение до 1440p на своей видеокарте (ещё ≈ 15 мин)
+    private string DescribeFormat(string owner, VideoEditScope scope)
+    {
+        var prefs = _prefs.Get(owner, scope);
+        var wish = prefs.Format ?? FormatOfAspect(prefs.Aspect);
+        var line = wish is null
+            ? "как у модели — не задан; не передавай aspect/quality без просьбы человека"
+            : MediaFormatText.Wish(wish) + (wish.By == ContextActor.Agent ? " — ✦ поставил Claude" : " — выбор человека");
+        return $"Формат видео: {line}. Ступени quality: standard, high, max — по модели (размеры и пометки в catalog[].models[].format; "
+            + "ступень без размера у модели серая). У local MiniMax H3: standard 480p, high 768p, max 1440p — «max» это съёмка плюс "
+            + "увеличение (вторая тяжёлая задача видеокарты, ещё ≈ 15 мин). Размер задаётся только так: частные параметры "
+            + "resolution и size не принимаются. Сцены фильма после первой следуют пропорциям фильма (замок film_format_locked).";
     }
 
     private object DescribeScene(string owner, VideoEditScope scope, VideoSceneDto s) => new
@@ -560,6 +655,9 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             v.Cost,
             v.Initiator,
             prompt = v.Inputs.Text,
+            v.Width,
+            v.Height,
+            v.UpscaleError,
         }),
         running = s.Launches.Where(l => l.Status == VideoLaunchStatus.Running).Select(l =>
             _jobs.Get(owner, scope.Key, l.JobId) is { } j
@@ -568,6 +666,9 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         stale = s.Stale,
         savedFiles = s.SavedFiles,
         filmRef = s.FilmRef,
+        lockedBy = s.LockedBy,
+        formatMismatch = s.FormatMismatch,
+        framesCropped = s.FramesCropped,
     };
 
     // ── Гейты ──────────────────────────────────────────────────────────────────

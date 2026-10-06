@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Spheres;
 
 namespace ClaudeHomeServer.Services;
 
@@ -70,8 +71,10 @@ public sealed class PersonaAgentFileSync
         PersonaAgentFileGenerator generator, UserStore users, AppSettingsService appSettings,
         ILogger<PersonaAgentFileSync> log, Execution.SandboxManager? sandbox = null,
         UserHomeResolver? homes = null,
-        Llm.ModelAssignmentResolver? assignments = null)
+        Llm.ModelAssignmentResolver? assignments = null,
+        ISphereDirectory? spheres = null)
     {
+        _spheres = spheres;
         _assignments = assignments;
         _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _personas = personas;
@@ -92,8 +95,24 @@ public sealed class PersonaAgentFileSync
         personas.OnPersonaDeleted += p => Safe(() => RemovePersona(p), "delete", p);
         // Смена handle: удалить .md по СТАРОМУ handle (клон персоны с прежним handle даёт старые
         // пути в ResolvePaths); новые файлы запишет следующий за этим OnPersonaChanged.
+        // Проект вошёл в сферу или вышел из неё: персоны сферы получают/теряют его файл
+        projects.OnSphereMembershipChanged += e => SyncSpherePersonas(e);
         personas.OnPersonaHandleChanged += (p, oldHandle) =>
             Safe(() => RemovePersona(PersonaManager.WithHandle(p, oldHandle)), "rename", p);
+    }
+
+    private readonly ISphereDirectory? _spheres;
+
+    // Пересинк персон старой и новой сферы проекта: SyncPersona кладёт файл во все проекты зоны
+    // и убирает из остальных, поэтому один вызов покрывает и «вошёл», и «вышел»
+    private void SyncSpherePersonas(SphereMembershipChanged e)
+    {
+        foreach (var persona in _personas.GetByOwner(e.OwnerId))
+        {
+            if (!PersonaZone.IsSpherePersona(persona)) continue;
+            if (persona.SphereId != e.OldSphereId && persona.SphereId != e.NewSphereId) continue;
+            Safe(() => SyncPersona(persona), "sphere-membership", persona);
+        }
     }
 
     // Папки для --add-dir хода: только для чатов БЕЗ проекта (личные сессии).
@@ -246,6 +265,15 @@ public sealed class PersonaAgentFileSync
         {
             if (ServerRootOf(_projects.GetById(ownProjectId)) is { } projectRoot)
                 yield return Path.Combine(projectRoot, ".claude", "agents", persona.Handle + ".md");
+            yield break;
+        }
+
+        // Персона сферы → проекты сферы (пустая зона — ни одного файла; чат вне проекта ей не положен)
+        if (PersonaZone.IsSpherePersona(persona))
+        {
+            foreach (var projectId in PersonaZone.ProjectIds(persona, _spheres ?? NoSphereDirectory.Instance) ?? [])
+                if (ServerRootOf(_projects.GetById(projectId)) is { } sphereRoot)
+                    yield return Path.Combine(sphereRoot, ".claude", "agents", persona.Handle + ".md");
             yield break;
         }
 

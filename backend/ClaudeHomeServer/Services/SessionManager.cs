@@ -3129,16 +3129,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     private readonly ISphereDirectory? _spheres;
 
-    private sealed class NoSpheres : ISphereDirectory
-    {
-        public static readonly NoSpheres Instance = new();
-        public string? SphereOf(string ownerId, string projectId) => null;
-        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) => [];
-        public bool Enabled(string ownerId) => false;
-        public string? SphereName(string ownerId, string sphereId) => null;
-    }
-
-    private ISphereDirectory SphereDir => _spheres ?? NoSpheres.Instance;
+    private ISphereDirectory SphereDir => _spheres ?? NoSphereDirectory.Instance;
 
     /// <summary>Видна ли персоне работа в проекте (зона Global/Project/Sphere) — единая проверка чатов.</summary>
     public bool PersonaVisibleIn(Persona persona, string? projectId) =>

@@ -34,6 +34,23 @@ public class WebDavNtlmUserFileTests : IDisposable
         Directory.CreateDirectory(_dataDir);
     }
 
+    [Theory]
+    [InlineData("1.2.0-1build5", false)]
+    [InlineData("1.2.0-1build5+ccs1", true)]
+    public void IsPatchedVersion_ищет_суффикс_ccs(string version, bool expected) =>
+        NtlmUserFile.IsPatchedVersion(version).Should().Be(expected);
+
+    [Fact]
+    public void ReadPackageVersion_берёт_версию_именно_gss_ntlmssp()
+    {
+        var status = Path.Combine(_dataDir, "dpkg-status");
+        File.WriteAllText(status,
+            "Package: gss-ntlmssp-dev\nVersion: 9.9\n\nPackage: gss-ntlmssp\nStatus: install ok installed\nVersion: 1.2.0-1build5+ccs1\n\nPackage: other\nVersion: 1\n");
+
+        NtlmUserFile.ReadPackageVersion(status).Should().Be("1.2.0-1build5+ccs1");
+        NtlmUserFile.ReadPackageVersion(Path.Combine(_dataDir, "нет-файла")).Should().BeNull();
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(Path.GetDirectoryName(_dataDir)!, recursive: true); } catch { /* временная папка */ }

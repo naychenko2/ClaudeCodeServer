@@ -252,6 +252,55 @@ Basic. Иначе Mini-Redirector цепляется за Negotiate и крут�
 `spnego.client('WORKGROUP\\andrey', 'secret', protocol='ntlm', context_req=spnego.ContextReq.none)`,
 шаги `step()` по HTTP-соединению keep-alive, токены в `Authorization: Negotiate`.
 
+#### Исправление: пропатченный gss-ntlmssp (решение 2026-10-06)
+
+Патч [ntlm-key-exch-requires-sign-seal.diff](../../deploy/gss-ntlmssp/ntlm-key-exch-requires-sign-seal.diff)
+приводит gss-ntlmssp к MS-NLMP 3.1.5.1.2 / 3.2.5.1.2: ключ сессии расшифровывается только при
+`KEY_EXCH` вместе с `SIGN` или `SEAL`, иначе ExportedSessionKey = KeyExchangeKey. **Проверка MIC не
+ослаблена**: меняется только выбор ключа. Пакет — `1.2.0-1build5+ccs1` (Ubuntu 26.04), собирается
+[build-deb.sh](../../deploy/gss-ntlmssp/build-deb.sh) в контейнере; готовый .deb после сборки лежит в
+`deploy/gss-ntlmssp/out/` (в git не коммитится). Тесты матрицы флагов — `build-deb.sh --test`.
+
+Результат на стенде (сырой NTLMv2-клиент против GSSAPI-акцептора, `test/run-test.sh`):
+
+| Сценарий | оригинал | `+ccs1` |
+|---|---|---|
+| Type1 `0xE2088207` (KEY_EXCH без SIGN/SEAL) | отказ `[589824:13]` | вход |
+| `0xE2088237` / `0xE2088217` / `0xE2088227` | вход | вход |
+| неверный пароль (любые флаги) | отказ | отказ |
+| подменённый MIC (`0xE2088207` и `0xE2088237`) | отказ | отказ |
+
+Что проверено и что нет: акцептор — на матрице выше. Правка инициатора (`gss_auth.c`) по спецификации
+симметрична, но достижима только в датаграммном режиме и тестом не покрыта. Через Kestrel и Windows
+.deb не гоняли — это живая проверка ниже.
+
+**Установка (делает человек, на хосте с боевым `ccs.service`):**
+
+```bash
+sudo dpkg -i gss-ntlmssp_1.2.0-1build5+ccs1_amd64.deb
+sudo apt-mark hold gss-ntlmssp
+sudo systemctl restart ccs.service
+deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на месте
+```
+
+**Живая проверка с Windows:** `curl.exe -v --ntlm -u "WORKGROUP\andrey:ПАРОЛЬ" https://хост/projects/` и то же с
+`--negotiate`; затем открыть документ по WebDAV-адресу из Word. Ожидается `200`/открытие файла и в логе
+`WebDAV: NTLM-вход WORKGROUP\andrey` без `NTLM отклонён … InvalidToken`.
+
+**Сторож отката.** `apt upgrade` без hold молча вернёт оригинал. Защиты две: hold и проверка
+[check-gss-ntlmssp.sh](../../deploy/gss-ntlmssp/check-gss-ntlmssp.sh) (exit 1 — версия без `+ccs`, exit 2 —
+нет hold; печатает `WARNING` в stderr; добавьте вызов в `/opt/ccs/check-release.sh` или cron). Плюс
+сервер при старте пишет warning `gss-ntlmssp … без патча '+ccs'` (`NtlmUserFile`), если читает
+`/var/lib/dpkg/status` и версия без суффикса.
+
+**Откат:** `sudo apt-mark unhold gss-ntlmssp && sudo apt install --reinstall gss-ntlmssp=1.2.0-1build5`
+(при отсутствии версии в индексе — `sudo apt install --reinstall gss-ntlmssp`), затем
+`sudo systemctl restart ccs.service`. Без патча NTLM у клиентов с `0xE2088207` снова даст InvalidToken, Basic
+продолжит работать.
+
+**Upstream.** Текст issue и PR — [upstream-issue-and-pr.md](../../deploy/gss-ntlmssp/upstream-issue-and-pr.md),
+не опубликован: отправка только по явной просьбе.
+
 ### Безопасность
 
 В файле лежат NT-хэши **основного пароля**: по ним возможен pass-the-hash, а MD4 без соли

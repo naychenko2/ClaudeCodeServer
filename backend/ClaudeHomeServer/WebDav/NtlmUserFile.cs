@@ -68,6 +68,8 @@ public sealed class NtlmUserFile
                 EnvVar, Path);
         if (!mechanismPresent)
             _logger.LogInformation("Механизм gss-ntlmssp не найден в /etc/gss: NTLM для WebDAV выключен, только Basic");
+        else
+            WarnIfUnpatched(ReadPackageVersion("/var/lib/dpkg/status"));
 
         Load();
     }
@@ -227,6 +229,44 @@ public sealed class NtlmUserFile
 
     private static bool PathsEqual(string a, string b) =>
         string.Equals(a, b, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    /// <summary>
+    /// Без патча +ccs Windows SSPI (KEY_EXCH без SIGN/SEAL) получает InvalidToken при верном хэше:
+    /// при apt upgrade патч слетает молча, поэтому громко пишем об этом при старте.
+    /// Установка и откат — docs/operations/remote-access.md.
+    /// </summary>
+    private void WarnIfUnpatched(string? version)
+    {
+        if (version is null || IsPatchedVersion(version)) return;
+        _logger.LogWarning("gss-ntlmssp {Version} без патча '+ccs': Windows SSPI получит InvalidToken при верном хэше "
+            + "(KEY_EXCH без SIGN/SEAL). Поставьте пропатченный пакет, см. docs/operations/remote-access.md", version);
+    }
+
+    internal static bool IsPatchedVersion(string version) =>
+        version.Contains("+ccs", StringComparison.Ordinal);
+
+    /// <summary>Версия пакета gss-ntlmssp из файла статуса dpkg; null — файла или пакета нет.</summary>
+    internal static string? ReadPackageVersion(string dpkgStatusPath)
+    {
+        try
+        {
+            if (!File.Exists(dpkgStatusPath)) return null;
+            var inPackage = false;
+            foreach (var line in File.ReadLines(dpkgStatusPath))
+            {
+                if (line.Length == 0) { inPackage = false; continue; }
+                if (line.StartsWith("Package: ", StringComparison.Ordinal))
+                    inPackage = line.AsSpan(9).Trim().SequenceEqual("gss-ntlmssp");
+                else if (inPackage && line.StartsWith("Version: ", StringComparison.Ordinal))
+                    return line[9..].Trim();
+            }
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>Установлен ли механизм gss-ntlmssp: его регистрирует файл в /etc/gss/mech.d (или /etc/gss/mech).</summary>
     internal static bool DetectMechanism(string gssDir)

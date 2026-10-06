@@ -15,12 +15,15 @@ import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type CSSPrope
 import { C, R, COMPOSER_LIP, LIP_ANIM, composerLip } from '../../lib/design';
 
 // Единый transition для морфа оболочки: всё, что меняется на переходе
-// collapsed→expanded и обратно, проходит через одну и ту же кривую.
+// collapsed→expanded и обратно, проходит через одну и ту же кривую. margin-left
+// не морфится (ушко и развёрнутая полоса стоят у одного края), перечисляем
+// margin-top/margin-bottom точечно — на margin-left просто не заявляем переход.
 const SHELL_TRANSITION =
   `height ${LIP_ANIM.ms}ms ${LIP_ANIM.ease},` +
   `width ${LIP_ANIM.ms}ms ${LIP_ANIM.ease},` +
   `padding ${LIP_ANIM.ms}ms ${LIP_ANIM.ease},` +
-  `margin ${LIP_ANIM.ms}ms ${LIP_ANIM.ease}`;
+  `margin-top ${LIP_ANIM.ms}ms ${LIP_ANIM.ease},` +
+  `margin-bottom ${LIP_ANIM.ms}ms ${LIP_ANIM.ease}`;
 
 // Проявление содержимого: задержка 60 мс, чтобы оболочка уже почти набрала
 // размер — текст не перекомпонуется, пока строка дёргается.
@@ -129,7 +132,9 @@ export const ComposerLipShell = forwardRef<HTMLDivElement, Props>(function Compo
     return () => clearTimeout(t);
   }, [collapsed, reduced]);
 
-  // Геометрия оболочки
+  // Геометрия оболочки. Ушко и развёрнутая полоса стоят у одного левого края
+  // (margin-left: 0 в обоих состояниях — на десктопе и slim) — меняются только
+  // высота, ширина, отступ сверху, проявление содержимого.
   const fullBaseStyle: CSSProperties = isMobile
     ? {
         height: 44, padding: '0 6px',
@@ -141,7 +146,6 @@ export const ComposerLipShell = forwardRef<HTMLDivElement, Props>(function Compo
         // shellGeom не даёт width — замещаем тем, что нужно в обоих состояниях
         // (width задаётся в финальном объекте, см. ниже).
         marginTop: isSlim ? 6 : 10,
-        marginLeft: 0,
       };
   const miniBaseStyle: CSSProperties = isMobile
     ? {
@@ -152,19 +156,18 @@ export const ComposerLipShell = forwardRef<HTMLDivElement, Props>(function Compo
     : {
         ...shellGeom('top', true),
         marginTop: 4,
-        // shellGeom уже кладёт marginLeft: tabInset (через composerLip(tab:true)),
-        // повтор не нужен
       };
 
   // Какое состояние активно
   const activeBase = collapsed ? miniBaseStyle : fullBaseStyle;
   // Ширина оболочки: на десктопе в свёрнутом — измеренная, в развёрнутом — 100%.
-  // На телефоне — всегда 100%, ширина ушка не играет.
+  // На телефоне — всегда 100%, ширина ушка не играет. Ушко у левого края
+  // (`margin-left: 0` по умолчанию, отдельного maxWidth не задаём), как и развёрнутая
+  // полоса — между ними не морфится.
   const shellStyle: CSSProperties = {
     ...activeBase,
     position: 'relative',  // нужно для absolute-позиции неактивного ребёнка
     width: isMobile ? '100%' : (collapsed ? (miniWidth ?? 'auto') : '100%'),
-    ...(isMobile || !collapsed ? null : { maxWidth: `calc(100% - ${COMPOSER_LIP.tabInset * 2}px)` }),
     boxSizing: 'border-box',
     // overflow:hidden клипает содержимое во время морфа; снимаем после transitionend
     overflow: clipping ? 'hidden' : 'visible',

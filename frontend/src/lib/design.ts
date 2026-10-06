@@ -216,15 +216,14 @@ export const COMPOSER_LIP = {
   row:     32,  // высота ряда содержимого
   rowMini: 20,  // ряд свёрнутой строки полосы (ушка): переключатель «Git ▾» ужат до 20
   edgeTab: 2,   // поле ушка с открытой стороны — тоньше, чем у полной губы
-  tabInset: 14, // отступ ушка от левого края поля ввода
 } as const
 
 // Готовый стиль губы. Высота задана явно, чтобы губа не зависела от роста кнопок
 // внутри: развёрнутая полоса — одной высоты с нижней губой. Свёрнутая строка полосы
-// становится ушком (tab): низкий ряд rowMini и ширина по содержимому — закладка слева,
-// а не вторая строка поля во всю ширину.
+// становится ушком (tab): низкий ряд rowMini, ширину оболочка задаёт сама через
+// замер scrollWidth — закладка слева, не вторая строка поля во всю ширину.
 export function composerLip(side: 'top' | 'bottom', { row, tab = false }: { row?: number; tab?: boolean } = {}) {
-  const { overlap, gap, padX, tabInset } = COMPOSER_LIP;
+  const { overlap, gap, padX } = COMPOSER_LIP;
   const edge = tab ? COMPOSER_LIP.edgeTab : COMPOSER_LIP.edge;
   row ??= tab ? COMPOSER_LIP.rowMini : COMPOSER_LIP.row;
   const top = side === 'top';
@@ -238,7 +237,6 @@ export function composerLip(side: 'top' | 'bottom', { row, tab = false }: { row?
     // Тень обводит открытую сторону: вниз — как у островов, вверх — та же, но подъёмом
     boxShadow: top ? SHADOW.lift : SHADOW.island,
     ...(top ? { marginBottom: -overlap } : { marginTop: -overlap }),
-    ...(tab ? { width: 'fit-content', maxWidth: `calc(100% - ${tabInset * 2}px)`, marginLeft: tabInset } : null),
   };
 }
 

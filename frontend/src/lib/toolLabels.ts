@@ -125,6 +125,52 @@ export function testRunArg(input: unknown): string {
   return parts.join(' · ');
 }
 
+// Типовая операция инструмента — для иконки по смыслу, а не по виду инструмента: прогон тестов
+// и сборка через MCP иначе выглядели безликой «вилкой». null — операция не типовая (иконка по виду)
+export type Operation = 'tests' | 'build' | 'stand' | 'git' | 'media' | 'wait';
+
+// Генерирующие медиа-инструменты: служебные (whoami, проекты, загрузка файла) сюда не входят
+const MEDIA_TOOLS = new Set([
+  'mcp__glif__compose_project',
+  'mcp__fal__run_model', 'mcp__fal__submit_job', 'mcp__fal-ai__run_model', 'mcp__fal-ai__submit_job',
+  'mcp__local-media__local_generate_image', 'mcp__local-media__local_edit_image', 'mcp__local-media__local_face_detail',
+  'mcp__local-media__local_text_to_video', 'mcp__local-media__local_image_to_video', 'mcp__local-media__local_reference_to_video',
+  'mcp__local-media__local_video_upscale', 'mcp__local-media__local_video_inpaint',
+  'mcp__image-editor__image_generate',
+]);
+const WAIT_TOOLS = new Set([
+  LOCAL_JOBS_WAIT_TOOL, 'mcp__local-media__local_job_status', 'mcp__glif__get_job_status', 'mcp__watch__watch_start',
+]);
+
+// Звенья цепочки, которые только готовят почву: смена каталога операцией не считается
+const PREP_STEP = /^(cd|set-location|sl|pushd)\b/i;
+const COMMAND_OPS: [RegExp, Operation][] = [
+  [/^(dotnet\s+test|(npx\s+)?vitest|npx\s+playwright\s+test|npm\s+(run\s+)?test)\b/i, 'tests'],
+  [/^(dotnet\s+build|npm\s+run\s+build|npx\s+tsc)\b/i, 'build'],
+  [/^git\s/i, 'git'],
+];
+
+// Операция консольной команды — по первому значимому звену цепочки («cd backend; dotnet test»)
+function commandOperation(command: string): Operation | null {
+  const step = command.split(/;|&&|\|\||\|/).map(s => s.trim()).find(s => s && !PREP_STEP.test(s));
+  if (!step) return null;
+  return COMMAND_OPS.find(([re]) => re.test(step))?.[1] ?? null;
+}
+
+export function operationOf(name: string, input: unknown): Operation | null {
+  if (name === RUN_TESTS_TOOL) return 'tests';
+  if (name === BUILD_TOOL) return 'build';
+  if (name === START_STAND_TOOL || name === 'mcp__dev__stop_stand') return 'stand';
+  if (MEDIA_TOOLS.has(name) || name.startsWith('mcp__higgsfield__generate')) return 'media';
+  if (WAIT_TOOLS.has(name)) return 'wait';
+  // Консоль — только встроенная (у MCP с «shell» в имени поле command значит другое)
+  if (isConsoleTool(name) && !name.startsWith('mcp__')) {
+    const command = (input as { command?: unknown } | null)?.command;
+    return typeof command === 'string' ? commandOperation(command) : null;
+  }
+  return null;
+}
+
 // Склонение слова «файл»
 function filesWord(n: number): string {
   const m10 = n % 10, m100 = n % 100;

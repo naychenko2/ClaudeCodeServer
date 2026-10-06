@@ -8,7 +8,8 @@ import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContex
 import { LiveDot, ProgressBar } from '../ui';
 import { awaitsToolStart, formatClock, isQueued, meterText, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
 import { useRunningElapsed } from '../../hooks/useRunningElapsed';
-import { toolLabel, toolWord, toolCardLabel, testRunArg, buildArg, localJobsWaitArg, consoleCaption, isConsoleTool, RUN_TESTS_TOOL, BUILD_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
+import { toolLabel, toolWord, toolCardLabel, testRunArg, buildArg, localJobsWaitArg, consoleCaption, isConsoleTool, operationOf, RUN_TESTS_TOOL, BUILD_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
+import { OPERATION_ICON } from '../../lib/operationIcons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { CodeBlockFrame } from './CodeCopyButton';
 import { MediaBlock, extractMediaMeta, mediaLabel } from './MediaBlock';
@@ -115,8 +116,17 @@ function StageLine({ stages, caption }: { stages: StageView[]; caption: string |
   );
 }
 
-// Иконка и цвет по типу инструмента — чтобы read/edit/bash/web/mcp различались с первого взгляда
-function toolMeta(name: string): { color: string; icon: React.ReactNode } {
+// Иконка и цвет по типу инструмента — чтобы read/edit/bash/web/mcp различались с первого взгляда.
+// Типовая операция (тесты, сборка, git…) — иконкой по смыслу, цвет остаётся по виду инструмента
+function toolMeta(name: string, input: unknown): { color: string; icon: React.ReactNode } {
+  const base = toolKindMeta(name);
+  const op = operationOf(name, input);
+  if (!op) return base;
+  const Icon = OPERATION_ICON[op];
+  return { color: base.color, icon: <Icon size={13} strokeWidth={2} /> };
+}
+
+function toolKindMeta(name: string): { color: string; icon: React.ReactNode } {
   const n = name.toLowerCase();
   const common = { size: 13, strokeWidth: 2 } as const;
   if (n.startsWith('mcp__'))
@@ -190,7 +200,7 @@ export type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 // React.memo: элементы ленты иммутабельны по ссылке (кроме стримящегося последнего) —
 // при дописывании ленты завершённые строки не перерендериваются.
 export const ToolUseView = memo(function ToolUseView({ item, online = true, onOpenFile }: { item: Extract<ChatItem, { kind: 'tool_use' }>; online?: boolean; onOpenFile?: (path: string) => void }) {
-  const meta = toolMeta(item.name);
+  const meta = toolMeta(item.name, item.input);
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
   const n = item.name.toLowerCase();

@@ -494,6 +494,12 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     expect(html).toContain('cc-live-dot');
   });
 
+  it('иконка по смыслу операции: тесты — колба, сборка — молоток, прочий MCP — вилка', () => {
+    expect(render(run({ result: 'ok', finishedAt: 1_000 }), undefined, false)).toContain('lucide-flask-conical');
+    expect(render(run({ name: 'mcp__dev__build', input: { target: 'backend' }, result: 'ok', finishedAt: 1_000 }), undefined, false)).toContain('lucide-hammer');
+    expect(render(run({ name: 'mcp__notes__notes_list', input: {}, result: 'ok', finishedAt: 1_000 }), undefined, false)).toContain('lucide-plug');
+  });
+
   it('единственный этап — без своих часов: время уже в шапке', () => {
     const stages = [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 16_000 }];
     const html = render(run({ name: 'mcp__dev__build', input: { target: 'backend' }, result: 'ok', finishedAt: 16_000, stages }), undefined, false);

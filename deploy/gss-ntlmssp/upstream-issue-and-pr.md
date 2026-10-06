@@ -61,3 +61,26 @@ acceptor tests next to the existing SIGN+SEAL one.
 when `KEY_EXCH` is negotiated without SIGN/SEAL (MS-NLMP 3.1.5.1.2). Only reachable in datagram mode, and
 `EncryptedRandomSessionKey` is still sent there, so changing it alone may break interop with unpatched acceptors.
 We have not tested it, so it is left out of the PR and of our local package.
+
+## Второй дефект: пара MsvAvFlags=0 в Type2 (отдельный issue, патч [ntlm-no-empty-msvavflags-in-type2.diff](ntlm-no-empty-msvavflags-in-type2.diff))
+
+### Issue
+
+**Title:** Acceptor puts an empty MsvAvFlags pair into the Type2 TargetInfo; Windows SSPI edits it in place and the client MIC never verifies
+
+**Body:**
+
+`gssntlm_accept_sec_context()` encodes the CHALLENGE_MESSAGE TargetInfo with `MsvAvFlags = 0` (`av_flags` is passed to
+`ntlm_encode_target_info()` unconditionally). A Windows SSPI client (Word/WebDAV, `curl.exe --negotiate`) treats that pair
+as a place to set `MIC_PRESENT`: it edits the received pair in place (`|= 0x2`) and computes the MIC over its own,
+already modified copy of the Type2 message. The acceptor stores and signs the Type2 exactly as it sent it (without the
+edit), so the MIC check fails with `GSS_S_DEFECTIVE_TOKEN` for a correct password. Without the pair in Type2, Windows
+appends the flags in a separate AV blob and the MIC covers the Type2 as sent on the wire (what spec-compliant clients do).
+An offline recomputation of the MIC over Type2 with `MsvAvFlags = 0x2` reproduces the client value exactly.
+
+### Pull request
+
+**Title:** Do not send an empty MsvAvFlags pair in Type2
+
+Pass `NULL` instead of `&av_flags` to `ntlm_encode_target_info()` when `av_flags` is 0. The MIC verification is not
+weakened. Verification: see the live Windows check in the task result (patched `+ccs2` against a stand).

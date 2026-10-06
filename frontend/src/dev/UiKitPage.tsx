@@ -71,6 +71,7 @@ import { AudioPlayerKitSection } from './AudioPlayerKitSection';
 import { GenSharedKitSection } from './GenSharedKitSection';
 import { ContextRowKitSection } from './ContextRowKitSection';
 import { ContextPanelKitSection } from './ContextPanelKitSection';
+import { FormatKitSection } from './FormatKitSection';
 import { ComposerActionRowKitSection } from './ComposerActionRowKitSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
@@ -124,6 +125,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-context-row', label: 'Строка контекста' },
   { id: 'sec-composer-actions', label: 'Чипы действий' },
   { id: 'sec-context-panel', label: 'Панель «Контекст»' },
+  { id: 'sec-format', label: 'Формат' },
   { id: 'sec-audio-player', label: 'Звук: плеер' },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
@@ -249,6 +251,11 @@ export function UiKitPage() {
             {/* Панель «Контекст» чата (ADR-023 §Д1) — секции, пустые состояния, шторка */}
             <div id="sec-context-panel" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <ContextPanelKitSection />
+            </div>
+
+            {/* Чип «Формат» и его всплывашка (ADR-025) — все состояния из записки */}
+            <div id="sec-format" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <FormatKitSection />
             </div>
 
             {/* Звук: плеер — волна, выделение куска, A/B, микшер стемов (синусы из браузера) */}

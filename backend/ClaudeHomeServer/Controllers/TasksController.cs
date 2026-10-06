@@ -461,10 +461,11 @@ public static class TaskPersonaValidator
         // Персона сферы — исполнитель в любом проекте своей сферы: синтетические полные скоупы
         // зоны приходят в externalScopes (PersonaBindingsService.BuildExternalTaskScopes)
         // Зона — единая точка правды PersonaZone.VisibleIn (как у исполнителя): внешняя
-        // ProjectTasks-привязка не расширяет зону персоны сферы
+        // ProjectTasks-привязка не расширяет зону персоны сферы. Без справочника (null) —
+        // отказ: fail-closed, зону проверить нечем
         if (PersonaZone.IsSpherePersona(persona))
             return taskProjectId is not null
-                && (spheres is null || PersonaZone.VisibleIn(persona, taskProjectId, spheres))
+                && spheres is not null && PersonaZone.VisibleIn(persona, taskProjectId, spheres)
                 && externalScopes?.Any(s => s.ProjectId == taskProjectId && !s.ReadOnly) == true
                 ? null
                 : "Персона сферы может выполнять только задачи проектов своей сферы";

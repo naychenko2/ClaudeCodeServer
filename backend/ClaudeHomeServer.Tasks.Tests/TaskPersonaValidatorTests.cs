@@ -186,4 +186,14 @@ public class TaskPersonaValidatorTests : IDisposable
             .Should().Be("Персона сферы может выполнять только задачи проектов своей сферы");
         TaskPersonaValidator.Error(_personas, OwnerId, p.Id, ProjectA, scopes, dir).Should().BeNull();
     }
+
+    [Fact]
+    public void ПерсонаСферы_БезСправочникаСфер_Отказ()
+    {
+        var p = MakeSpherePersona("S1");
+        var scopes = new List<(string ProjectId, bool ReadOnly)> { (ProjectA, false) };
+
+        TaskPersonaValidator.Error(_personas, OwnerId, p.Id, ProjectA, scopes, spheres: null)
+            .Should().Be("Персона сферы может выполнять только задачи проектов своей сферы");
+    }
 }

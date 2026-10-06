@@ -99,6 +99,8 @@ public sealed class PersonaAgentFileSync
         projects.OnSphereMembershipChanged += e => SyncSpherePersonas(e);
         // Флаг «spheres» переключён: зона персон сферы пуста при выключенном флаге (fail-closed),
         // поэтому пересинк убирает их файлы из проектов, а при включении — возвращает
+        // Инвариант: PersonaAgentFileSync и UserStore — singleton'ы одного времени жизни,
+        // поэтому подписка живёт столько же, сколько процесс, и отписка не нужна
         users.OnFeatureFlagChanged += (ownerId, key, _) =>
         {
             if (key == FeatureFlagKeys.Spheres) ResyncSpherePersonas(ownerId);

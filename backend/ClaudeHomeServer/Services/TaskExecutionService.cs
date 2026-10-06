@@ -1501,6 +1501,31 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // оживлял бы рабочий чат пользователя скрытым платным расходом на каждое завершение задачи.
     internal static bool ShouldSendDelegatorReaction(Persona? delegator) => delegator is not null;
 
+    // Живая сессия владельца задачи по id; чужая/мёртвая — null
+    private Session? OwnedSession(string? sessionId, string? ownerId) =>
+        !string.IsNullOrEmpty(sessionId) && _sessions.GetById(sessionId) is { } s
+        && _sessions.ResolveOwnerId(s) == ownerId ? s : null;
+
+    // Подъём по цепочке: сессия, исполняющая задачу T, не адресат — адресат тот, кому докладывает T
+    // (ReportToSessionId ?? запустивший ?? создатель). Идём, пока не упрёмся в сессию, не являющуюся
+    // исполнителем; предохранители — глубина и защита от цикла. Звено мёртвое/чужое — остаёмся на
+    // последней живой сессии цепочки.
+    private Session? ResolveAddressee(string? startSessionId, string? ownerId)
+    {
+        var current = OwnedSession(startSessionId, ownerId);
+        var visited = new HashSet<string>();
+        for (var depth = 0; current is not null && depth < MaxReportChainDepth && visited.Add(current.Id); depth++)
+        {
+            if (_tasks.GetBySession(current.Id) is not { } t) break;
+            var nextId = t.ReportToSessionId ?? t.ExecutorLaunchedBySessionId ?? t.SourceSessionId;
+            if (OwnedSession(nextId, ownerId) is not { } next || visited.Contains(next.Id)) break;
+            current = next;
+        }
+        return current;
+    }
+
+    private const int MaxReportChainDepth = 5;
+
     // Модель Z: активный доклад о завершении делегированной задачи — в отличие от L0-тоста
     // (NotifyDelegatorAsync) кладёт репорт прямо в чат постановщика. ШАГ 1 — гостевая реплика
     // исполнителя B с готовым resultMarkdown (0 токенов, без агентского хода); ШАГ 2 — сразу
@@ -1516,13 +1541,14 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
         // Постановщик-персона нужен только чтобы реакция шла от её лица и чтобы был fallback
         // в новый чат. Его отсутствие (задачу поставил человек) доклад больше не отменяет.
-        // Запустивший исполнителя (tasks_run_executor из чата) — тот, кто ждёт результат: доклад и
-        // авто-ход идут ему, а не только создателю карточки. Чужая/мёртвая сессия запустившего —
-        // откат на прежнюю схему (создатель карточки).
-        var launcherSession = task.ExecutorLaunchedBySessionId is { } launcherId ? _sessions.GetById(launcherId) : null;
-        if (launcherSession is not null && _sessions.ResolveOwnerId(launcherSession) != task.OwnerId)
-            launcherSession = null;
-        var delegatorPersonaId = launcherSession is not null ? task.ExecutorLaunchedByPersonaId : task.CreatedByPersonaId;
+        // Адресат — тот, кто ждёт результат: запустивший исполнителя (tasks_run_executor из чата),
+        // затем унаследованный от родительской задачи (ReportToSessionId). Оба поднимаются по цепочке:
+        // если сессия сама исполняет другую задачу, доклад идёт её адресату (планировщик → оркестратор).
+        // Чужая/мёртвая сессия — откат на следующий пункт, в конце — создатель карточки.
+        var addressee = ResolveAddressee(task.ExecutorLaunchedBySessionId, task.OwnerId)
+            ?? ResolveAddressee(task.ReportToSessionId, task.OwnerId);
+        // Персона авто-хода — персона сессии-адресата, а не создателя карточки
+        var delegatorPersonaId = addressee is not null ? addressee.PersonaId : task.CreatedByPersonaId;
         var delegator = delegatorPersonaId is not null
             ? _personas.Get(delegatorPersonaId, task.OwnerId!)
             : null;
@@ -1533,7 +1559,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // нет (задача закрыта без запуска) — остаётся SourceSessionId, как было.
         var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
         var fromFallback = false;
-        var targetId = launcherSession?.Id
+        var targetId = addressee?.Id
             ?? ResolveReportTarget(executorSession, task.SourceSessionId, new TaskLookupAdapter(_tasks), out fromFallback);
         if (targetId is null)
         {
@@ -1611,7 +1637,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         await AppendReportCardAsync(targetSessionId);
         // Запустивший не создатель карточки: создателю — только карточка доклада (ШАГ 1), без
         // авто-хода: он не ждёт результата, но должен видеть итог своей задачи
-        if (launcherSession is not null && task.SourceSessionId is { } creatorId && creatorId != targetSessionId
+        if (addressee is not null && task.SourceSessionId is { } creatorId && creatorId != targetSessionId
             && _sessions.GetById(creatorId) is { } creatorSession
             && _sessions.ResolveOwnerId(creatorSession) == task.OwnerId)
             await AppendReportCardAsync(creatorId);

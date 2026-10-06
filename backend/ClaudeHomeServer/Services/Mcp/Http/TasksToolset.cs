@@ -245,7 +245,8 @@ public sealed class TasksToolset(
                     WorktreeBranch: OptionalArg(arguments, "worktreeBranch"),
                     // Вид карточки и шаги воспроизведения дефекта. null Kind — Task (дефолт)
                     Kind: KindArg(arguments),
-                    Repro: ReproArg(arguments));
+                    Repro: ReproArg(arguments),
+                    ReportToSessionId: InheritedReportTarget(session.Id));
                 TaskItem created;
                 try
                 {
@@ -786,6 +787,17 @@ public sealed class TasksToolset(
         new(JsonSerializer.Serialize(value, JsonOpts));
 
     private static McpToolCallResult Deny(string text) => new(text, IsError: true);
+
+    // Сессия-вызыватель — чат-исполнитель другой задачи T, ждущий результата (планировщик, QA):
+    // новая задача докладывает туда же, куда докладывает T, а не этой сессии, которая по правилу
+    // «решать нечего» промолчит. Не исполнитель (обычный чат, человек) — null, адресат прежний.
+    private string? InheritedReportTarget(string callerSessionId)
+    {
+        if (tasks.GetBySession(callerSessionId) is not { } parent || !TaskExecutionService.IsAwaitingResult(parent))
+            return null;
+        var target = parent.ReportToSessionId ?? parent.ExecutorLaunchedBySessionId ?? parent.SourceSessionId;
+        return string.IsNullOrEmpty(target) || target == callerSessionId ? null : target;
+    }
 
     private static string StringArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : "";

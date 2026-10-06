@@ -184,6 +184,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             SourceNoteLine = req.SourceNoteLine,
             CreatedByPersonaId = string.IsNullOrEmpty(req.CreatedByPersonaId) ? null : req.CreatedByPersonaId,
             SourceSessionId = string.IsNullOrEmpty(req.SourceSessionId) ? null : req.SourceSessionId,
+            ReportToSessionId = string.IsNullOrEmpty(req.ReportToSessionId) ? null : req.ReportToSessionId,
             DelegationDepth = ComputeDelegationDepth(req.SourceSessionId),
             Order = NextOrder(ownerId),
             // Создаём задачу сразу готовой (редко) — фиксируем момент завершения
@@ -832,7 +833,9 @@ public record CreateTaskRequest(
     TaskKind? Kind = null,
     // Шаги воспроизведения дефекта (DefectRules.EnsureReproOnReview требует Repro.Steps
     // при попадании в review-колонку); у обычной задачи игнорируется.
-    DefectRepro? Repro = null);
+    DefectRepro? Repro = null,
+    // Адресат доклада от родительской задачи (см. TaskItem.ReportToSessionId); UI/REST не шлют
+    string? ReportToSessionId = null);
 
 public record CreateSubtaskRequest(string Title);
 

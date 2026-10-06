@@ -110,6 +110,11 @@ public class TaskItem
     // прежний. Аддитивные nullable-поля: tasks.json читается штатно, BackupSchema.Version не растёт.
     public string? ExecutorLaunchedBySessionId { get; set; }
     public string? ExecutorLaunchedByPersonaId { get; set; }
+    // Адресат доклада, унаследованный от родительской задачи: если задачу создала сессия — чат-исполнитель
+    // другой задачи T (планировщик, QA), доклад идёт туда, куда он сам докладывает по T (оркестратору),
+    // а не этой молчаливой сессии. Ставит только tasks_create при создании; аддитивное nullable-поле,
+    // BackupSchema.Version не растёт.
+    public string? ReportToSessionId { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
     // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /

@@ -19,6 +19,8 @@ public sealed class NtlmHandshakeRecorder(RequestDelegate next)
         private readonly object _lock = new();
         private readonly List<byte[]> _type1s = [];
         private readonly List<byte[]> _type2s = [];
+        private readonly List<string> _events = [];
+        private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
         internal void Add(byte[] msg, bool type2)
         {
@@ -29,6 +31,25 @@ public sealed class NtlmHandshakeRecorder(RequestDelegate next)
                 if (list.Count == Keep) list.RemoveAt(0);
                 list.Add(msg);
             }
+        }
+
+        /// <summary>
+        /// Хроника запросов соединения: сколько раз пришёл Type1/Type3 и сколько Type2 ушло. Дедуп
+        /// в <see cref="Add"/> прячет повторы (Type1 у Windows всегда одинаков), поэтому «записано 1»
+        /// не говорит, что рукопожатие было одно.
+        /// </summary>
+        internal void Note(string what)
+        {
+            lock (_lock)
+            {
+                if (_events.Count == 16) _events.RemoveAt(0);
+                _events.Add($"{_clock.ElapsedMilliseconds}мс {what}");
+            }
+        }
+
+        internal string Timeline()
+        {
+            lock (_lock) return string.Join("; ", _events);
         }
 
         internal (IReadOnlyList<byte[]> Type1s, IReadOnlyList<byte[]> Type2s) Snapshot()
@@ -45,8 +66,10 @@ public sealed class NtlmHandshakeRecorder(RequestDelegate next)
             return next(ctx);
 
         var handshake = (Handshake)(items[ItemKey] ??= new Handshake());
-        if (ExtractNtlm(auth["Negotiate ".Length..]) is { } t1 && MessageType(t1) == 1)
-            handshake.Add(t1, type2: false);
+        var incoming = ExtractNtlm(auth["Negotiate ".Length..]);
+        if (incoming is not null && MessageType(incoming) == 1)
+            handshake.Add(incoming, type2: false);
+        handshake.Note($"{ctx.Request.Method} {ctx.Request.Protocol} получен Type{(incoming is null ? "?" : MessageType(incoming))}");
 
         ctx.Response.OnStarting(() =>
         {
@@ -55,8 +78,14 @@ public sealed class NtlmHandshakeRecorder(RequestDelegate next)
             if (at >= 0)
             {
                 var token = challenge[(at + "Negotiate ".Length)..].Split(',')[0];
-                if (ExtractNtlm(token) is { } t2 && MessageType(t2) == 2) handshake.Add(t2, type2: true);
+                if (ExtractNtlm(token) is { } t2 && MessageType(t2) == 2)
+                {
+                    handshake.Add(t2, type2: true);
+                    handshake.Note($"отправлен Type2 (статус {ctx.Response.StatusCode})");
+                    return Task.CompletedTask;
+                }
             }
+            handshake.Note($"ответ {ctx.Response.StatusCode} без Type2");
             return Task.CompletedTask;
         });
         return next(ctx);

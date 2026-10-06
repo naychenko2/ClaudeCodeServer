@@ -133,7 +133,7 @@ public static class NegotiateFailure
             var type3 = NtlmHandshakeRecorder.ExtractNtlm(authorization["Negotiate ".Length..]);
             if (type3 is null) return "Type3 не найден";
             var (type1s, type2s) = handshake.Snapshot();
-            return NtlmMicProbe.Explain(type1s, type2s, type3, hash);
+            return NtlmMicProbe.Explain(type1s, type2s, type3, hash, handshake.Timeline());
         }
         catch (Exception ex)
         {

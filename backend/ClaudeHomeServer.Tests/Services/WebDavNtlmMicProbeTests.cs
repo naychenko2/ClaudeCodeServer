@@ -74,6 +74,19 @@ public class WebDavNtlmMicProbeTests
     }
 
     [Fact]
+    public void NoMatch_ReportsWireMessagesAndTimelineButNotType3Body()
+    {
+        var h = Handshake(SignSealKeyExch, KeyMode.RandomKey, tamperMic: true);
+
+        var report = NtlmMicProbe.Explain([h.Type1], [h.Type2], h.Type3, NtHash, "0мс T1; 3мс T2");
+
+        report.Should().Contain(Convert.ToHexString(h.Type1)).And.Contain(Convert.ToHexString(h.Type2));
+        report.Should().Contain("хроника соединения: 0мс T1; 3мс T2");
+        report.Should().NotContain(Convert.ToHexString(h.Type3));
+        report.Should().NotContain(Convert.ToHexString(h.Type3.AsSpan(88)));
+    }
+
+    [Fact]
     public void WrongHash_ReportsProofMismatch()
     {
         var h = Handshake(SignSealKeyExch, KeyMode.RandomKey);

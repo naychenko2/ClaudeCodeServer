@@ -23,7 +23,7 @@ internal static class NtlmMicProbe
     /// <param name="type2s">Все Type2, отданные сервером на этом соединении.</param>
     /// <param name="type3">Присланный Type3 (чистый NTLMSSP, без SPNEGO-обёртки).</param>
     /// <param name="ntHash">NT-хэш пользователя из файла NTLM_USER_FILE.</param>
-    public static string Explain(IReadOnlyList<byte[]> type1s, IReadOnlyList<byte[]> type2s, byte[] type3, byte[] ntHash)
+    public static string Explain(IReadOnlyList<byte[]> type1s, IReadOnlyList<byte[]> type2s, byte[] type3, byte[] ntHash, string? timeline = null)
     {
         if (!TryParseType3(type3, out var t3, out var why)) return why;
         if (t3.NtResponse.Length < 44) return "NT-ответ короче NTLMv2, MIC не проверить";
@@ -55,6 +55,12 @@ internal static class NtlmMicProbe
         for (var i = 0; i < type1s.Count; i++) type1Options.Add(($"Type1 №{i + 1}", type1s[i]));
         type1Options.Add(("без Type1", null));
 
+        // Type2 перебираем все записанные (а не только по NTProofStr) и Type3 в двух видах:
+        // с обнулённым MIC (MS-NLMP) и как есть — на случай, если клиент считает иначе
+        var type2Options = new List<(string Name, byte[] Msg)> { ("Type2 по NTProofStr", type2) };
+        for (var i = 0; i < type2s.Count; i++)
+            if (!ReferenceEquals(type2s[i], type2)) type2Options.Add(($"Type2 №{i + 1}", type2s[i]));
+
         var matches = new List<string>();
         var combos = 0;
         foreach (var offset in offsets)
@@ -63,22 +69,30 @@ internal static class NtlmMicProbe
             var sent = type3.AsSpan(offset, 16).ToArray();
             var zeroed = (byte[])type3.Clone();
             Array.Clear(zeroed, offset, 16);
+            foreach (var (t3Name, t3Body) in new[] { ("Type3 с нулевым MIC", zeroed), ("Type3 как есть", type3) })
+            foreach (var (t2Name, t2) in type2Options)
             foreach (var (t1Name, t1) in type1Options)
             foreach (var (keyName, key) in keys)
             {
                 combos++;
-                byte[] data = t1 is null ? [.. type2, .. zeroed] : [.. t1, .. type2, .. zeroed];
+                byte[] data = t1 is null ? [.. t2, .. t3Body] : [.. t1, .. t2, .. t3Body];
                 if (HmacMd5(key, data).AsSpan().SequenceEqual(sent))
-                    matches.Add($"{keyName}; {t1Name}; смещение MIC {offset}");
+                    matches.Add($"{keyName}; {t1Name}; {t2Name}; {t3Name}; смещение MIC {offset}");
             }
         }
 
         var t1Flags = type1s.Count > 0 && type1s[^1].Length >= 16 ? $"0x{BitConverter.ToUInt32(type1s[^1], 12):X8}" : "?";
         var shape = $"флаги Type1 {t1Flags}, Type2 0x{BitConverter.ToUInt32(type2, 20):X8}, Type3 0x{t3.Flags:X8}, "
             + $"EncryptedRandomSessionKey {t3.EncryptedSessionKey.Length} байт, Type1 записано {type1s.Count}";
+        // Type1/Type2 — открытые сообщения рукопожатия (клиент видел их на проводе), секретов нет;
+        // Type3 не выводим: по нему и Type2 офлайн подбирается пароль
+        var wire = $"Type1 {type1s.Count}шт {string.Join("/", type1s.Select(m => m.Length))} байт: {string.Join(" | ", type1s.Select(Convert.ToHexString))}; "
+            + $"Type2 {type2s.Count}шт, ответ клиента на {type2Options[0].Msg.Length} байт: {Convert.ToHexString(type2)}; "
+            + $"Type3 {type3.Length} байт, заголовок: {Convert.ToHexString(type3.AsSpan(0, Math.Min(72, type3.Length)))}"
+            + (timeline is null ? "" : $"; хроника соединения: {timeline}");
         return matches.Count > 0
             ? $"MIC СХОДИТСЯ при: {string.Join(" | ", matches)}; {shape}"
-            : $"MIC не сходится ни в одной из {combos} комбинаций (NTProofStr верен); {shape}";
+            : $"MIC не сходится ни в одной из {combos} комбинаций (NTProofStr верен); {shape}; {wire}";
     }
 
     internal readonly record struct Type3(uint Flags, string Domain, string User, byte[] NtResponse, byte[] EncryptedSessionKey);

@@ -9,6 +9,8 @@
   --http=URL  вместо ./acceptor идти на HTTPS-стенд Kestrel+Negotiate (заголовок Authorization)
   --h2        в --http идти по HTTP/2 (httpx[http2])
   --spnego    в --http заворачивать токены в SPNEGO (NegTokenInit/NegTokenResp), иначе сырой NTLMSSP
+  --prefail  перед основным прогоном — рукопожатие с неверным паролем на том же соединении
+  --abandon  перед основным рукопожатием отправить лишний Type1 без Type3
   --no-mechmic  в SPNEGO не класть mechListMIC (по умолчанию кладётся, как Windows)
 Запускает ./acceptor, прогоняет Type1 → Type2 → Type3, печатает итог одной строкой (OK/FAIL)."""
 import hashlib, hmac, os, struct, subprocess, sys, time
@@ -72,6 +74,7 @@ def main():
     opt = {a.split('=')[0]: (a.split('=', 1)[1] if '=' in a else True) for a in sys.argv[3:]}
     win_version = b'\x0a\0\x63\x45\0\0\0\x0f' if '--win' in opt else b'\0' * 8
     user, domain = 'andrey', 'WORKGROUP'
+    sent = {'n': 0}
     wrap = None  # в SPNEGO заворачиваем только на --http --spnego
     if '--http' in opt:
         import base64, http.client, ssl
@@ -80,7 +83,7 @@ def main():
         conn = http.client.HTTPSConnection(u[0], int(u[1]), context=ctx); conn.connect()
         cert_der = conn.sock.getpeercert(binary_form=True)
         conn.request('GET', '/'); conn.getresponse().read()
-        wrap = '--spnego' in opt; sent = {'n': 0}
+        wrap = '--spnego' in opt
         h2 = None
         if '--h2' in opt:  # HTTP/2 (нужен httpx[http2]): те же запросы одним соединением
             import httpx
@@ -112,57 +115,61 @@ def main():
             acc.stdin.write(tok.hex() + '\n'); acc.stdin.flush()
             return acc.stdout.readline().strip()
 
-    t1 = b'NTLMSSP\0' + struct.pack('<II', 1, flags1) + field(0, 40) + field(0, 40) + b'\x0a\0\x63\x45\0\0\0\x0f'
-    r = talk(t1)
-    if not r.startswith('TOKEN '): print('FAIL на Type1:', r); return 1
-    t2 = bytes.fromhex(r[6:])
-    flags2 = struct.unpack_from('<I', t2, 20)[0]; schal = t2[24:32]
-    tl, _, to = struct.unpack_from('<HHI', t2, 40); tinfo = t2[to:to + tl]
-    flags3 = int(opt['--f3'], 16) if '--f3' in opt else flags1 & flags2
-    if '--verbose' in opt: print(f'flags1 {flags1:08X} flags2 {flags2:08X} flags3 {flags3:08X}', file=sys.stderr)
+    # --prefail: сначала рукопожатие с неверным паролем, затем верное на том же соединении (как пары WebClient)
+    tries = [('prefail', password + 'x'), ('main', password)] if '--prefail' in opt else [('main', password)]
+    for label, password in tries:
+        t1 = b'NTLMSSP\0' + struct.pack('<II', 1, flags1) + field(0, 40) + field(0, 40) + b'\x0a\0\x63\x45\0\0\0\x0f'
+        sent['n'] = 0
+        r = talk(t1)
+        if not r.startswith('TOKEN '): print('FAIL на Type1:', r); return 1
+        t2 = bytes.fromhex(r[6:])
+        flags2 = struct.unpack_from('<I', t2, 20)[0]; schal = t2[24:32]
+        tl, _, to = struct.unpack_from('<HHI', t2, 40); tinfo = t2[to:to + tl]
+        flags3 = int(opt['--f3'], 16) if '--f3' in opt else flags1 & flags2
+        if '--verbose' in opt: print(f'flags1 {flags1:08X} flags2 {flags2:08X} flags3 {flags3:08X}', file=sys.stderr)
 
-    ti = tinfo[:-4] + struct.pack('<HHI', 6, 4, 2)  # MsvAvFlags=0x2 (MIC)
-    if '--singlehost' in opt:  # MsvAvSingleHost: Size=48, Z4, CustomData(8), MachineID(32), как у Windows
-        ti += struct.pack('<HH', 8, 48) + struct.pack('<II', 48, 0) + b'\0' * 8 + os.urandom(32)
-    if '--cbt' in opt:
-        cb_app = b'tls-server-end-point:' + (hashlib.sha256(cert_der).digest() if '--http' in opt and opt['--cbt'] != 'bad' else b'test')
-        # MS-NLMP 2.2.2.1: MD5 от структуры gss_channel_bindings (4 нулевых поля + длина + данные)
-        ti += struct.pack('<HH', 10, 16) + hashlib.md5(struct.pack('<IIIII', 0, 0, 0, 0, len(cb_app)) + cb_app).digest()
-    if '--target' in opt:
-        tn = opt['--target'].encode('utf-16le'); ti += struct.pack('<HH', 9, len(tn)) + tn
-    ti += b'\0\0\0\0'  # EOL
-    nthash = md4(password.encode('utf-16le'))
-    rk = hmac_md5(nthash, (user.upper() + domain).encode('utf-16le'))
-    cchal = os.urandom(8)
-    blob = b'\x01\x01\0\0\0\0\0\0' + struct.pack('<Q', int((time.time() + 11644473600) * 1e7)) + cchal + b'\0' * 4 + ti + b'\0' * 4
-    proof = hmac_md5(rk, schal + blob); nt = proof + blob
-    lm = b'\0' * 24 if '--lmzero' in opt else hmac_md5(rk, schal + cchal) + cchal
-    kxk = hmac_md5(rk, proof)  # SessionBaseKey = KeyExchangeKey при NTLMv2
+        ti = tinfo[:-4] + struct.pack('<HHI', 6, 4, 2)  # MsvAvFlags=0x2 (MIC)
+        if '--singlehost' in opt:  # MsvAvSingleHost: Size=48, Z4, CustomData(8), MachineID(32), как у Windows
+            ti += struct.pack('<HH', 8, 48) + struct.pack('<II', 48, 0) + b'\0' * 8 + os.urandom(32)
+        if '--cbt' in opt:
+            cb_app = b'tls-server-end-point:' + (hashlib.sha256(cert_der).digest() if '--http' in opt and opt['--cbt'] != 'bad' else b'test')
+            # MS-NLMP 2.2.2.1: MD5 от структуры gss_channel_bindings (4 нулевых поля + длина + данные)
+            ti += struct.pack('<HH', 10, 16) + hashlib.md5(struct.pack('<IIIII', 0, 0, 0, 0, len(cb_app)) + cb_app).digest()
+        if '--target' in opt:
+            tn = opt['--target'].encode('utf-16le'); ti += struct.pack('<HH', 9, len(tn)) + tn
+        ti += b'\0\0\0\0'  # EOL
+        nthash = md4(password.encode('utf-16le'))
+        rk = hmac_md5(nthash, (user.upper() + domain).encode('utf-16le'))
+        cchal = os.urandom(8)
+        blob = b'\x01\x01\0\0\0\0\0\0' + struct.pack('<Q', int((time.time() + 11644473600) * 1e7)) + cchal + b'\0' * 4 + ti + b'\0' * 4
+        proof = hmac_md5(rk, schal + blob); nt = proof + blob
+        lm = b'\0' * 24 if '--lmzero' in opt else hmac_md5(rk, schal + cchal) + cchal
+        kxk = hmac_md5(rk, proof)  # SessionBaseKey = KeyExchangeKey при NTLMv2
 
-    enc = b''
-    mic_key = kxk
-    if flags3 & KEY_EXCH:
-        exported = os.urandom(16); enc = rc4(kxk, exported)
-        if flags3 & (SIGN | SEAL) or '--kx-always' in opt: mic_key = exported  # MS-NLMP 3.1.5.1.2; --kx-always — клиент без этого условия
+        enc = b''
+        mic_key = kxk
+        if flags3 & KEY_EXCH:
+            exported = os.urandom(16); enc = rc4(kxk, exported)
+            if flags3 & (SIGN | SEAL) or '--kx-always' in opt: mic_key = exported  # MS-NLMP 3.1.5.1.2; --kx-always — клиент без этого условия
 
-    dom, usr, wks = (s.encode('utf-16le') for s in (domain, user, 'CLIENT'))
-    off = 88
-    parts = []
-    def put(b):
-        nonlocal off
-        f = field(len(b), off); parts.append(b); off += len(b); return f
-    f_lm, f_nt, f_dom, f_usr, f_wks, f_enc = put(lm), put(nt), put(dom), put(usr), put(wks), put(enc)
-    hdr = b'NTLMSSP\0' + struct.pack('<I', 3) + f_lm + f_nt + f_dom + f_usr + f_wks + f_enc + struct.pack('<I', flags3) + win_version
-    t3 = hdr + b'\0' * 16 + b''.join(parts)
-    mic = hmac_md5(mic_key, t1 + t2 + t3)
-    if tamper: mic = bytes([mic[0] ^ 1]) + mic[1:]
-    t3 = t3[:72] + mic + t3[88:]
-    if wrap:
-        resp = der(0xa2, der(0x04, t3))
-        if '--no-mechmic' not in opt and flags3 & (SIGN | SEAL):
-            resp += der(0xa3, der(0x04, ntlm_mic_token(mic_key, MECH_TYPES, flags3)))
-        t3 = der(0xa1, der(0x30, resp))
-    print(talk(t3).replace('\n', ' '))
+        dom, usr, wks = (s.encode('utf-16le') for s in (domain, user, 'CLIENT'))
+        off = 88
+        parts = []
+        def put(b):
+            nonlocal off
+            f = field(len(b), off); parts.append(b); off += len(b); return f
+        f_lm, f_nt, f_dom, f_usr, f_wks, f_enc = put(lm), put(nt), put(dom), put(usr), put(wks), put(enc)
+        hdr = b'NTLMSSP\0' + struct.pack('<I', 3) + f_lm + f_nt + f_dom + f_usr + f_wks + f_enc + struct.pack('<I', flags3) + win_version
+        t3 = hdr + b'\0' * 16 + b''.join(parts)
+        mic = hmac_md5(mic_key, t1 + t2 + t3)
+        if tamper: mic = bytes([mic[0] ^ 1]) + mic[1:]
+        t3 = t3[:72] + mic + t3[88:]
+        if wrap:
+            resp = der(0xa2, der(0x04, t3))
+            if '--no-mechmic' not in opt and flags3 & (SIGN | SEAL):
+                resp += der(0xa3, der(0x04, ntlm_mic_token(mic_key, MECH_TYPES, flags3)))
+            t3 = der(0xa1, der(0x30, resp))
+        print(label, talk(t3).replace('\n', ' '))
     return 0
 
 sys.exit(main())

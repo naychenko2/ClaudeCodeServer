@@ -364,6 +364,23 @@ public class WebDavNtlmUserFileTests : IDisposable
         NegotiateFailure.DescribeType3(Basic("a", "b")).Should().Be("нет");
     }
 
+    [Theory]
+    [InlineData(0xE2088205u, true)]   // Windows в HTTP-стиле: KEY_EXCH без SIGN/SEAL
+    [InlineData(0xE2888235u, false)]  // SIGN и SEAL согласованы — ключ действительно шифруется
+    [InlineData(0xE2888215u, false)]  // хватает одного SIGN
+    [InlineData(0xA2088205u, false)]  // KEY_EXCH не просили вовсе
+    public void Type3_KeyExchБезSignSeal_ПомечаетсяВЛоге(uint flags, bool flagged)
+    {
+        var msg = new byte[64];
+        "NTLMSSP\0"u8.CopyTo(msg);
+        BitConverter.GetBytes(3u).CopyTo(msg, 8);
+        BitConverter.GetBytes(flags).CopyTo(msg, 60);
+
+        NegotiateFailure.HasKeyExchWithoutSignSeal(flags).Should().Be(flagged);
+        NegotiateFailure.DescribeType3("Negotiate " + Convert.ToBase64String(msg))
+            .Contains("KEY_EXCH без SIGN/SEAL").Should().Be(flagged);
+    }
+
     // Минимальный NTLM Type3: заголовок 64 байта, домен и имя в UTF-16LE, флаг UNICODE
     private static byte[] Type3(string domain, string user)
     {

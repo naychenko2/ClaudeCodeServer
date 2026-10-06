@@ -229,6 +229,29 @@ Basic. Иначе Mini-Redirector цепляется за Negotiate и крут�
    MsvAvTargetName …, CBT задан`. Прислать эту строку, статус и строки `ERROR:` из
    `/tmp/gssntlm.log` — по ним видно, на какой проверке (`gss_sec_ctx.c`: MIC, CBT) падает токен.
 
+#### Причина InvalidToken найдена (2026-10-06): KEY_EXCH без SIGN/SEAL
+
+`GSSNTLMSSP_DEBUG` на бою показал `gssntlm_accept_sec_context() @ gss_sec_ctx.c:976 [589824:13]`:
+хэш прошёл, не сошёлся MIC. Воспроизведено на стенде (gss-ntlmssp 1.2.0 + Kestrel, клиент pyspnego):
+ломает **не** сырой NTLM против SPNEGO (оба варианта проходят), а флаги Type1. Клиент, который просит
+`KEY_EXCH`, но не просит `SIGN`/`SEAL` (Windows SSPI в HTTP-стиле), по MS-NLMP шлёт в качестве
+ключа сессии сам KeyExchangeKey; gss-ntlmssp расшифровывает ключ по одному флагу `KEY_EXCH`
+(`gss_sec_ctx.c`, ветка перед проверкой MIC; в `main` и 1.3.x тот же код) и получает чужой ключ.
+
+| Type1 клиента | Результат |
+|---|---|
+| `0xE2088237` (SIGN+SEAL, pyspnego по умолчанию) | 200 |
+| `0xE2088217` (SIGN) / `0xE2088227` (SEAL) | 200 |
+| `0xE2088207` (без SIGN/SEAL) | 401, `InvalidToken`, `:976` |
+
+Исправить на нашей стороне без своего NTLM-акцептора нельзя: MIC считается по Type1/Type2, а оба
+хранит и сверяет сама gss-ntlmssp. Лог отказа теперь помечает такой Type3 фразой
+«KEY_EXCH без SIGN/SEAL» — это и есть подтверждение на боевом клиенте.
+
+Повтор на стенде (ключи — `NTLM_USER_FILE` со строкой `WORKGROUP\andrey` и NT-хэшем `secret`):
+`spnego.client('WORKGROUP\\andrey', 'secret', protocol='ntlm', context_req=spnego.ContextReq.none)`,
+шаги `step()` по HTTP-соединению keep-alive, токены в `Authorization: Negotiate`.
+
 ### Безопасность
 
 В файле лежат NT-хэши **основного пароля**: по ним возможен pass-the-hash, а MD4 без соли

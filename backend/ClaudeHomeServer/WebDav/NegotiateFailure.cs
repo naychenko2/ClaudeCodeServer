@@ -61,6 +61,15 @@ public static class NegotiateFailure
     }
 
     /// <summary>
+    /// KEY_EXCH (0x40000000) без SIGN (0x10) и SEAL (0x20). По MS-NLMP случайный ключ сессии
+    /// шифруется, только когда согласовано одно из двух; Windows в HTTP-стиле их не просит и
+    /// шлёт сам KeyExchangeKey. gss-ntlmssp (1.2.0 и main) расшифровывает по одному KEY_EXCH,
+    /// получает другой ключ, и проверка MIC падает с DEFECTIVE_TOKEN при верном хэше.
+    /// </summary>
+    internal static bool HasKeyExchWithoutSignSeal(uint flags) =>
+        (flags & 0x40000000) != 0 && (flags & 0x30) == 0;
+
+    /// <summary>
     /// Форма NTLM Type3 для лога: флаги, версия ответа и AV-пары NTLMv2 (MsvAvFlags/MIC,
     /// MsvAvChannelBindings, MsvAvTargetName). Нужна, чтобы по одной строке боевого лога
     /// отличить «клиент положил MIC/CBT» от «не сошёлся хэш» без Wireshark. Содержимое
@@ -83,6 +92,8 @@ public static class NegotiateFailure
         int ntLen = BitConverter.ToUInt16(msg[20..22]);
         var ntOff = (int)BitConverter.ToUInt32(msg[24..28]);
         var sb = new StringBuilder($"флаги 0x{flags:X8}");
+        if (HasKeyExchWithoutSignSeal(flags))
+            sb.Append(" (KEY_EXCH без SIGN/SEAL: gss-ntlmssp расшифрует session key, которого клиент не слал, и MIC не сойдётся)");
         if (ntOff < 0 || ntOff + ntLen > msg.Length) return sb.Append(", NT-ответ вне границ").ToString();
         if (ntLen == 24) return sb.Append(", NTLMv1").ToString();
         if (ntLen < 44) return sb.Append($", NT-ответ {ntLen} байт").ToString();

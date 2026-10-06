@@ -26,7 +26,7 @@ import { DeleteDialog } from '../features/projects/dialogs/DeleteDialog';
 import { MoveToGroupDialog } from '../features/projects/dialogs/MoveToGroupDialog';
 import { GroupManagerDialog } from '../features/projects/dialogs/GroupManagerDialog';
 import { onProjectIconBackfilled } from '../features/projects/useAllProjects';
-import { FLAGS, useFeature } from '../lib/featureFlags';
+import { FLAGS, setAllFlags, useFeature } from '../lib/featureFlags';
 import { SphereHeader } from '../features/spheres/SphereHeader';
 import { SphereDialog } from '../features/spheres/SphereDialog';
 import { SphereDeleteDialog } from '../features/spheres/SphereDeleteDialog';
@@ -89,6 +89,15 @@ function useMeasuredWidth<T extends HTMLElement>() {
 export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const online = useOnline();
   const spheresOn = useFeature(FLAGS.spheres);
+  // Флаги читаются при старте приложения; тумблер мог сменить другой клиент или прямой
+  // PUT, а переход по хешу страницу не перезагружает — освежаем стор при открытии вкладки
+  // и при возврате фокуса окну, иначе сферный UI живёт при уже выключенном флаге.
+  useEffect(() => {
+    const refresh = () => { void api.auth.me().then(me => { if (me?.featureFlags) setAllFlags(me.featureFlags); }).catch(() => {}); };
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
   const wide = useWide();
   const [listRef, listW] = useMeasuredWidth<HTMLDivElement>();
   const twoCol = listW >= 760;   // две колонки, когда панель достаточно широкая

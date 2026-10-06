@@ -35,12 +35,7 @@ cd frontend; npm run dev       # порт 5173
 cd frontend; npm run build     # production-сборка (tsc -b + vite)
 ```
 
-Хостовый дев-стенд поднимаем **только через `dotnet run`** (или с явным
-`ASPNETCORE_ENVIRONMENT=Development`): порождённые процессы наследуют `Production`, а там
-`Kestrel:Endpoints` уводит стенд на занятый боевым инстансом :80, и `ASPNETCORE_URLS` это не
-чинит. Стенд :5000 раздаёт `frontend/dist` ПОСЛЕДНЕЙ сборки (`wwwroot` в репозитории не
-живёт). Разбор и фоновый запуск —
-[docs/operations/dev-stand-host.md](docs/operations/dev-stand-host.md).
+Хостовый дев-стенд поднимаем **только через `dotnet run`** (или с явным `ASPNETCORE_ENVIRONMENT=Development`): порождённые процессы наследуют `Production`, а там `Kestrel:Endpoints` уводит стенд на занятый боевым инстансом :80, и `ASPNETCORE_URLS` это не чинит. Стенд :5000 раздаёт `frontend/dist` ПОСЛЕДНЕЙ сборки (`wwwroot` в репозитории не живёт). Разбор и фоновый запуск — [docs/operations/dev-stand-host.md](docs/operations/dev-stand-host.md).
 
 ## Среда исполнения пользователей (local / container)
 
@@ -211,8 +206,8 @@ one-shot действия и разговор с исполнителем «Ло
 
 ## Сферы (Services/Spheres, Core/Models/PersonaZone)
 
-Сфера = группа проектов с уставом, командой персон (зона `Sphere`) и полкой памяти; за флагом `spheres` ([ADR-024](docs/adr/ADR-024-spheres.md), [spheres.md](docs/features/spheres.md)).
-**Зона персоны — только через `PersonaZone` + `ISphereDirectory`** (без кэша, fail-closed: нет флага или сферы — зона пуста); членство проекта и зону персоны сферы меняет **только человек**, MCP отказывает.
+Сфера = группа проектов с уставом, командой персон и полкой памяти; за флагом `spheres` ([ADR-024](docs/adr/ADR-024-spheres.md), [spheres.md](docs/features/spheres.md)).
+**Зона персоны — только через `PersonaZone` + `ISphereDirectory`** (fail-closed); состав сферы и зону её персон меняет **только человек**, MCP отказывает.
 
 ## Значок проекта (Services/ProjectIcons)
 
@@ -347,9 +342,7 @@ Dify-датасетов, и Dify тут источник истины. Ключ 
 ## Интеграция с мессенджерами (Max / Telegram) — не реализовано
 
 Полноценный чат с Claude через мессенджер делать **не надо** — он не отрендерит
-diff/артефакты/виджеты; оправдывает интеграцию только уведомление о завершении задач и ответ
-на permission-запросы. **Max для ботов закрыт** (только верифицированные юрлица РФ).
-Исследование и архитектура — [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
+diff/артефакты/виджеты; оправдывает интеграцию только уведомление о завершении задач и ответ на permission-запросы. **Max для ботов закрыт** (только верифицированные юрлица РФ). Исследование и архитектура — [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
 
 ## Персоны
 

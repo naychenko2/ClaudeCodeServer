@@ -3,7 +3,7 @@
 // Здесь только отрисовка по готовой модели: подписи объекта и референсов приходят из DTO
 // (`label`, `version`), своих форматтеров нет. Ширина — снаружи; форму каждого чипа выбирает
 // чистая лестница lib/chatContext/ladder.ts, открытость панели в неё не входит.
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Cpu, Eye, GitBranch, Plus, RotateCcw, Send, Trash2, X, Check, Info } from 'lucide-react';
 import { C, COMPOSER_LIP, FONT, FS, R, SP, SHADOW, Z, composerLip } from '../../lib/design';
 import { plural } from '../../lib/plural';
@@ -85,6 +85,10 @@ const act = (fn: () => void) => (e: KeyboardEvent) => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
 };
 
+// Чипы внутри губы (десктоп, планшет) плоские: рамку держит сама губа, вторая рамка у каждого чипа —
+// «рамка в рамке». Остаются только рамки-сигналы: пунктир серого референса и цвет borderColor
+const FlatChips = createContext(false);
+
 function RowChip({ kind, max, title, onClick, borderColor, dim, dashed, mono, children }: {
   kind: string;
   max: number;
@@ -96,6 +100,8 @@ function RowChip({ kind, max, title, onClick, borderColor, dim, dashed, mono, ch
   mono?: boolean;
   children: ReactNode;
 }) {
+  const flat = useContext(FlatChips);
+  const framed = !flat || dashed || borderColor != null;
   return (
     <span
       data-chip={kind}
@@ -108,7 +114,8 @@ function RowChip({ kind, max, title, onClick, borderColor, dim, dashed, mono, ch
       style={{
         display: 'inline-flex', alignItems: 'center', gap: SP.xs + 1, flexShrink: 0, boxSizing: 'border-box',
         height: CHIP_H, maxWidth: max, padding: `0 ${SP.sm - 1}px`, borderRadius: R.md, minWidth: 0,
-        border: `1px ${dashed ? 'dashed' : 'solid'} ${borderColor ?? C.border}`, background: C.bgCard,
+        border: framed ? `1px ${dashed ? 'dashed' : 'solid'} ${borderColor ?? C.border}` : '1px solid transparent',
+        background: flat ? 'transparent' : C.bgCard,
         color: C.textSecondary, fontSize: FS.sm, fontFamily: mono ? FONT.mono : FONT.sans, whiteSpace: 'nowrap',
         cursor: onClick ? 'pointer' : 'default', opacity: dim ? 0.55 : 1,
       }}
@@ -199,10 +206,13 @@ function PrimaryChip({ p, form, icon, onOpen, onRelease, onAgentTip }: {
   const agent = p.by === 'agent';
   const ver = p.version ? ` · ${p.version}` : '';
   const title = `${p.label}${ver}${agent ? ' · взял в работу Claude' : ''}${onOpen ? ' — открыть в панели' : ''}`;
+  // В губе основной объект выделен не рамкой, а именем: заголовочный цвет и полужирный против
+  // приглушённых референсов — иначе он сливается с ними
+  const flat = useContext(FlatChips);
   return (
-    <RowChip kind="primary" max={form === 1 ? NOM.o1 : CAP.o2} title={title} onClick={onOpen} borderColor={C.accentMuted} dim={p.missing}>
+    <RowChip kind="primary" max={form === 1 ? NOM.o1 : CAP.o2} title={title} onClick={onOpen} borderColor={flat ? undefined : C.accentMuted} dim={p.missing}>
       <Thumb item={p} icon={icon} />
-      <span data-chip-label="" style={ellipsis}>{baseName(p.label, true)}</span>
+      <span data-chip-label="" style={flat ? { ...ellipsis, color: C.textHeading, fontWeight: 600 } : ellipsis}>{baseName(p.label, true)}</span>
       {p.version && <span style={{ color: C.textMuted, flexShrink: 0 }}>· {p.version}</span>}
       {agent && <AgentMark title="Взял в работу Claude" onClick={onAgentTip} />}
       <XBtn title={`Снять «${p.label}» с работы`} onClick={onRelease} />
@@ -221,18 +231,21 @@ function ExecChip({ e, form, onOpen }: { e: RowExec; form: 1 | 2 | 3; onOpen: (r
   const title = `Чем: ${full} · ${price} — сменить исполнителя`;
   const open = (ev: { currentTarget: HTMLElement }) => onOpen(ev.currentTarget.getBoundingClientRect());
   const badge = <Badge size="xs" tone={free ? 'success' : 'neutral'}>{price}</Badge>;
+  // В губе вес держит только основной объект: имя исполнителя обычным начертанием, «Чем» узнаётся по бейджу цены
+  const flat = useContext(FlatChips);
+  const name = flat ? { fontWeight: 400 } : { color: C.textHeading, fontWeight: 600 };
   return (
     <RowChip kind="exec" max={NOM[`e${form}` as 'e1']} title={title} onClick={open}>
       {form === 1
         ? <Cpu size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
         : form === 2
-          ? <b style={{ ...ellipsis, color: C.textHeading, fontWeight: 600 }}>{row.name}</b>
+          ? <b style={{ ...ellipsis, ...name }}>{row.name}</b>
           : <>
               <span style={{ color: C.textMuted, flexShrink: 0 }}>Чем:</span>
               <span style={ellipsis}>
                 {auto
-                  ? <><b style={{ color: C.textHeading, fontWeight: 600 }}>Авто</b>{row.now ? ` · ${row.now}` : ''}</>
-                  : <>{row.sub ? `${row.sub} · ` : ''}<b style={{ color: C.textHeading, fontWeight: 600 }}>{row.name}</b></>}
+                  ? <><b style={name}>Авто</b>{row.now ? ` · ${row.now}` : ''}</>
+                  : <>{row.sub ? `${row.sub} · ` : ''}<b style={name}>{row.name}</b></>}
               </span>
             </>}
       <span style={{ flexShrink: 0, display: 'inline-flex' }}>{badge}</span>
@@ -470,6 +483,7 @@ export function ContextRowView(props: ContextRowViewProps) {
     <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${isMobile ? SP.sm - 2 : 0}px` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
+      <FlatChips.Provider value={!isMobile}>
       <div
         ref={rowRef}
         data-context-row="" data-ladder-step={pick.index} data-ladder-scroll={pick.scroll ? '1' : '0'}
@@ -503,6 +517,7 @@ export function ContextRowView(props: ContextRowViewProps) {
           </>
         )}
       </div>
+      </FlatChips.Provider>
       {menu && body && (isMobile
         ? <Modal title={menu.kind === 'git' ? 'Ветка' : menu.kind === 'exec' ? exec?.title ?? 'Чем выполнить' : 'Подключено к ходу'} onClose={close}>{body}</Modal>
         : <Menu anchor={menu.rect} onClose={close} minWidth={300} maxWidth={340} maxHeight={320} preferUp anchorAlign="start">{body}</Menu>)}

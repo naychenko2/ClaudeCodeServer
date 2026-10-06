@@ -153,4 +153,37 @@ public class TaskPersonaValidatorTests : IDisposable
         var err = TaskPersonaValidator.Error(_personas, OwnerId, p.Id, ProjectA);
         err.Should().Be("Проектная персона может выполнять только задачи своего проекта");
     }
+
+    // --- Персона сферы: валидатор и исполнитель отвечают одинаково (PersonaZone.VisibleIn) ---
+
+    private sealed class FakeSpheres(string sphereId, params string[] projects) : ClaudeHomeServer.Services.Spheres.ISphereDirectory
+    {
+        public string? SphereOf(string ownerId, string projectId) => projects.Contains(projectId) ? sphereId : null;
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string id) => id == sphereId ? projects : [];
+        public bool Enabled(string ownerId) => true;
+        public string? SphereName(string ownerId, string id) => "Сфера";
+        public string? CharterOf(string ownerId, string id) => null;
+    }
+
+    private Persona MakeSpherePersona(string sphereId)
+    {
+        var p = _personas.Create(OwnerId, "Сферная" + Guid.NewGuid().ToString("N")[..4], null, null, null, null, null,
+            PersonaScope.Global, null, null, null, true);
+        p.Scope = PersonaScope.Sphere;
+        p.SphereId = sphereId;
+        return p;
+    }
+
+    [Fact]
+    public void ПерсонаСферы_ПроектВнеЗоны_ДажеСПолнымScopeПривязки_Отказ()
+    {
+        var p = MakeSpherePersona("S1");
+        var dir = new FakeSpheres("S1", ProjectA);
+        // Внешняя привязка ProjectTasks дала полный скоуп на проект вне сферы
+        var scopes = new List<(string ProjectId, bool ReadOnly)> { (ProjectA, false), (ProjectB, false) };
+
+        TaskPersonaValidator.Error(_personas, OwnerId, p.Id, ProjectB, scopes, dir)
+            .Should().Be("Персона сферы может выполнять только задачи проектов своей сферы");
+        TaskPersonaValidator.Error(_personas, OwnerId, p.Id, ProjectA, scopes, dir).Should().BeNull();
+    }
 }

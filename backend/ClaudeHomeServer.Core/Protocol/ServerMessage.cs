@@ -126,8 +126,14 @@ public record ToolProgressMessage(string ToolUseId, string? Stage = null, string
 // упала, прогон оборван на нём): карточка рисует его крестиком, а не галочкой
 public sealed record ToolStage(string Stage, string Label, long StartedAt, long? EndedAt = null, bool? Failed = null);
 
-// Итоговые счётчики прогона тестов для закрытой карточки: «174 из 177 · упало 3»
-public sealed record ToolRunTotals(int Passed, int Failed, int Total);
+// Итоговые счётчики прогона тестов для закрытой карточки: «174 из 177 · упало 3».
+// Failures — первые упавшие (имя и первая строка сообщения) для списка под строкой этапов,
+// чтобы не искать их в сыром выводе; null — упавших нет или имена неизвестны
+public sealed record ToolRunTotals(int Passed, int Failed, int Total, IReadOnlyList<ToolRunFailure>? Failures = null);
+
+// Упавший тест на карточке: полное имя и первая непустая строка сообщения (может не быть —
+// имя взято из консоли)
+public sealed record ToolRunFailure(string Name, string? Message = null);
 
 // Стриминг аргументов инструмента (input_json_delta) — накопленный частичный JSON
 public record ToolInputDeltaMessage(string ToolUseId, string PartialJson)

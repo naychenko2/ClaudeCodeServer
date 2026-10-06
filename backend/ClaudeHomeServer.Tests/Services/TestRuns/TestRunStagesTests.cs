@@ -105,6 +105,52 @@ public class TestRunStagesTests
     }
 
     [Fact]
+    public void Итог_ИзОтчётов_ПервыеУпавшие_ИмяИПерваяСтрокаСообщения()
+    {
+        var r = Result() with
+        {
+            Reports =
+            [
+                new TestReport("A", 10, 8, 2, 0, null,
+                [
+                    new TestFailure("A.Тест1", "\n  Expected 1\n  but was 2", "at A"),
+                    new TestFailure("A.Тест2", "", ""),
+                ]),
+                new TestReport("B", 10, 8, 2, 0, null,
+                [
+                    new TestFailure("B.Тест3", "boom", ""),
+                    new TestFailure("B.Тест4", "boom", ""),
+                ]),
+            ],
+        };
+
+        var totals = TestRunStages.Totals(r)!;
+
+        totals.Failed.Should().Be(4);
+        totals.Failures.Should().Equal(
+            new ToolRunFailure("A.Тест1", "Expected 1"),
+            new ToolRunFailure("A.Тест2", null),
+            new ToolRunFailure("B.Тест3", "boom"));
+    }
+
+    [Fact]
+    public void Итог_БезОтчёта_УпавшиеИзКонсоли_ТолькоИмена()
+    {
+        var r = Result() with { Cancelled = true, Total = 50, Counts = new TestCounts(10, 1, 0), FailedFromConsole = ["X.Упал"] };
+
+        TestRunStages.Totals(r)!.Failures.Should().Equal(new ToolRunFailure("X.Упал"));
+    }
+
+    [Fact]
+    public void Итог_ДлинноеИмя_ОбрезаетсяМноготочием()
+    {
+        var name = new string('a', 300);
+        var r = Result() with { Reports = [new TestReport("A", 1, 0, 1, 0, null, [new TestFailure(name, "m", "")])] };
+
+        TestRunStages.Totals(r)!.Failures![0].Name.Should().HaveLength(201).And.EndWith("…");
+    }
+
+    [Fact]
     public void Итог_ТестовНеБыло_Null()
     {
         TestRunStages.Totals(Result() with { Phase = TestRunPhase.Build }).Should().BeNull();
@@ -127,6 +173,7 @@ public class TestRunStagesTests
         public int? Total { get; init; }
         public TestCounts Counts { get; init; }
         public IReadOnlyList<TestReport> Reports { get; init; } = [];
+        public IReadOnlyList<string> FailedFromConsole { get; init; } = [];
 
         public static implicit operator TestRunResult(TestRunResultBuilder b) =>
             new(null, b.ExitCodeOverride, b.Cancelled, b.TimedOut, TimeSpan.Zero, [])
@@ -137,6 +184,7 @@ public class TestRunStagesTests
                 Total = b.Total,
                 Counts = b.Counts,
                 Reports = b.Reports,
+                FailedFromConsole = b.FailedFromConsole,
             };
     }
 }

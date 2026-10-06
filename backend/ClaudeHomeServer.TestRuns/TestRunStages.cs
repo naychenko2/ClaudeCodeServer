@@ -83,9 +83,28 @@ public sealed class TestRunStages(Func<long> clock)
         if (r.Refusal is not null || r.NeverStarted) return null;
         if (r.Reports.Count > 0)
             return new ToolRunTotals(r.Reports.Sum(x => x.Passed), r.Reports.Sum(x => x.Failed),
-                r.Reports.Sum(x => x.Total));
+                r.Reports.Sum(x => x.Total),
+                FailuresOf(r.Reports.SelectMany(x => x.Failures).Select(f => new ToolRunFailure(f.Name, FirstLine(f.Message)))));
         if (r.Phase != TestRunPhase.Test || r.Counts.Done == 0) return null;
         var total = r.Kind != TestRunKind.Vitest && r.Total is { } listed ? Math.Max(listed, r.Counts.Done) : r.Counts.Done;
-        return new ToolRunTotals(r.Counts.Passed, r.Counts.Failed, total);
+        return new ToolRunTotals(r.Counts.Passed, r.Counts.Failed, total,
+            FailuresOf(r.FailedFromConsole.Select(n => new ToolRunFailure(n))));
     }
+
+    // Сколько упавших едет в карточку: она показывает три и «ещё N», остальное — в выводе
+    // вызова. Запас сверх трёх не нужен — «ещё N» считается по счётчику Failed
+    public const int CardFailures = 3;
+    private const int MaxLine = 200;
+
+    private static IReadOnlyList<ToolRunFailure>? FailuresOf(IEnumerable<ToolRunFailure> all)
+    {
+        List<ToolRunFailure> list = [.. all.Take(CardFailures)
+            .Select(f => f with { Name = Clamp(f.Name)! })];
+        return list.Count > 0 ? list : null;
+    }
+
+    private static string? FirstLine(string message) =>
+        Clamp(message.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0));
+
+    private static string? Clamp(string? s) => s is { Length: > MaxLine } ? s[..MaxLine] + "…" : s;
 }

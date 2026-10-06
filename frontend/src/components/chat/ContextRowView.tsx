@@ -3,7 +3,7 @@
 // Здесь только отрисовка по готовой модели: подписи объекта и референсов приходят из DTO
 // (`label`, `version`), своих форматтеров нет. Ширина — снаружи; форму каждого чипа выбирает
 // чистая лестница lib/chatContext/ladder.ts, открытость панели в неё не входит.
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Cpu, Eye, GitBranch, Plus, RotateCcw, Send, Trash2, X, Check, Info } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW, Z } from '../../lib/design';
 import { plural } from '../../lib/plural';
@@ -12,13 +12,16 @@ import { unusedBy } from '../../lib/chatContext/fill';
 import { roleLabel } from '../../lib/chatContext/roleLabels';
 import { baseName } from '../../lib/chatContext/labels';
 import type { ChatContextPrimary, ChatContextRef } from '../../lib/chatContext/types';
+import type { FormatModel } from '../../lib/chatContext/formatTypes';
 import { Badge, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { RowChip, ellipsis } from './RowChip';
+import { FormatBody } from '../generation/format/FormatBody';
+import { FormatChip } from '../generation/format/FormatChip';
 import { groupExecutorRows, rowPriceShort, EXECUTOR_GROUP_LABEL, type ExecutorRow } from '../generation/ExecutorList';
 
 export const ROW_H = 30;
 export const ROW_H_MOBILE = 32;
-const CHIP_H = 22;
 
 // ── Модель строки ──
 
@@ -52,6 +55,10 @@ export interface ContextRowViewProps {
   primary: ChatContextPrimary | null;
   refs: readonly ChatContextRef[];
   exec: RowExec | null;
+  // Чип «Формат» (ADR-025, флаг media-format): модель от вида; null — чипа нет (нет вида, объекта или флага)
+  format?: FormatModel | null;
+  // Имя проекта для низа всплывашки «Запомнится для картинок проекта «X»»
+  projectName?: string | null;
   // Подпись выбранного действия: серыми становятся референсы, которых оно не берёт; null — «Чат»
   actionLabel: string | null;
   // Операция выбранного действия: серый референс считается по ней; нет операции — по пустому usedBy
@@ -68,10 +75,11 @@ export interface ContextRowViewProps {
   pick?: LadderPick;
 }
 
-export const rowFacts = (p: Pick<ContextRowViewProps, 'git' | 'primary' | 'refs' | 'exec' | 'isMobile'>): LadderFacts => ({
+export const rowFacts = (p: Pick<ContextRowViewProps, 'git' | 'primary' | 'refs' | 'exec' | 'isMobile' | 'format'>): LadderFacts => ({
   project: !!p.git,
   hasPrimary: !!p.primary,
   hasExec: !!p.exec,
+  hasFormat: !!p.format && !!p.primary,
   refs: p.refs.length,
   mobile: p.isMobile,
 });
@@ -80,45 +88,6 @@ export const rowFacts = (p: Pick<ContextRowViewProps, 'git' | 'primary' | 'refs'
 export const showsRow = (p: Pick<ContextRowViewProps, 'git' | 'primary'>) => !!p.git || !!p.primary;
 
 // ── Примитивы ──
-
-const act = (fn: () => void) => (e: KeyboardEvent) => {
-  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
-};
-
-function RowChip({ kind, max, title, onClick, borderColor, dim, dashed, mono, children }: {
-  kind: string;
-  max: number;
-  title?: string;
-  onClick?: (e: { currentTarget: HTMLElement }) => void;
-  borderColor?: string;
-  dim?: boolean;
-  dashed?: boolean;
-  mono?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <span
-      data-chip={kind}
-      {...(dashed ? { 'data-gray': '' } : null)}
-      title={title}
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onClick={onClick ? e => onClick(e) : undefined}
-      onKeyDown={onClick ? e => act(() => onClick({ currentTarget: e.currentTarget as HTMLElement }))(e) : undefined}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: SP.xs + 1, flexShrink: 0, boxSizing: 'border-box',
-        height: CHIP_H, maxWidth: max, padding: `0 ${SP.sm - 1}px`, borderRadius: R.md, minWidth: 0,
-        border: `1px ${dashed ? 'dashed' : 'solid'} ${borderColor ?? C.border}`, background: C.bgCard,
-        color: C.textSecondary, fontSize: FS.sm, fontFamily: mono ? FONT.mono : FONT.sans, whiteSpace: 'nowrap',
-        cursor: onClick ? 'pointer' : 'default', opacity: dim ? 0.55 : 1,
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
-const ellipsis = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 } as const;
 
 function XBtn({ title, onClick }: { title: string; onClick: () => void }) {
   return (
@@ -374,9 +343,24 @@ const tipBtn = (primary: boolean) => ({
   fontSize: FS.sm, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
 }) as const;
 
+function FormatNote({ text, onClose }: { text: string; onClose: () => void }) {
+  return (
+    <div data-format-note="" role="status" style={{
+      display: 'flex', alignItems: 'center', gap: SP.sm, margin: `0 0 ${SP.xs}px`, padding: `${SP.xs}px ${SP.sm}px`,
+      border: `1px solid ${C.info}`, borderRadius: R.lg, background: C.infoBg, fontSize: FS.sm, color: C.textPrimary,
+    }}>
+      <Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.info} style={{ flexShrink: 0 }} />
+      <span style={{ flex: 1, minWidth: 0 }}>{text}</span>
+      <button type="button" data-format-note-x="" aria-label="Закрыть" title="Закрыть" onClick={onClose} style={{
+        display: 'inline-flex', border: 'none', background: 'transparent', cursor: 'pointer', color: C.textMuted, padding: 0, flexShrink: 0,
+      }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
+    </div>
+  );
+}
+
 // ── Строка ──
 
-type OpenMenu = { kind: 'git' | 'exec' | 'refs'; rect: DOMRect } | null;
+type OpenMenu = { kind: 'git' | 'exec' | 'refs' | 'format'; rect: DOMRect } | null;
 
 // Счётчик загрузок шрифтов страницы: растёт, когда шрифты готовы и после каждой догрузки (`loadingdone`)
 function useFontsEpoch(): number {
@@ -395,12 +379,18 @@ function useFontsEpoch(): number {
 
 export function ContextRowView(props: ContextRowViewProps) {
   const { git, primary, refs, exec, isMobile, iconOf, actionLabel } = props;
+  const format = props.primary ? props.format ?? null : null;
+  // Пояснение подмены («16:9 нет у GPT Image — взяли 3:2») над строкой: закрывается, вернётся с новым текстом
+  const [dismissedNote, setDismissedNote] = useState<string | null>(null);
+  // «Дорисовать» без пропорций: всплывашка «Формата» открывается сама, когда запуск впервые упёрся в выбор
+  const needsChoice = !!format?.needsChoice;
+  const wasNeeding = useRef(false);
   const [menu, setMenu] = useState<OpenMenu>(null);
   const [tip, setTip] = useState(false);
   const facts = rowFacts(props);
   // Телефон: лестницы нет, строка прокручивается; ветка иконкой, «Чем» без подписи
   const base = props.pick ?? (isMobile
-    ? { form: { g: 0 as const, o: 2 as const, e: 2 as const, k: refs.length }, index: -1, count: 0, need: 0, scroll: true }
+    ? { form: { g: 0 as const, o: 2 as const, e: 2 as const, k: refs.length, ...(format ? { f: 1 as const } : null) }, index: -1, count: 0, need: 0, scroll: true }
     : contextRowLadder(props.width ?? 10_000, facts));
   // Номиналы ступеней — верхняя оценка (чип не шире номинала), реальные чипы уже. Поэтому после вёрстки
   // пробуем ступень богаче: влезла без прокрутки — оставляем, нет — возвращаемся на шаг назад и закрепляем
@@ -409,7 +399,7 @@ export function ContextRowView(props: ContextRowViewProps) {
   const trial = useRef({ sig: '', locked: false });
   // Ширины чипов меряются по реальному шрифту: пока моноширинный не загрузился, запасной шире и «не влезло» ложное
   const fontsEpoch = useFontsEpoch();
-  const sig = [fontsEpoch, props.width, base.index, git?.label, git?.changes, primary?.label, primary?.version, exec?.value, refs.map(r => r.label).join(',')].join('|');
+  const sig = [fontsEpoch, props.width, base.index, git?.label, git?.changes, primary?.label, primary?.version, exec?.value, format?.chip.main, format?.chip.sub, refs.map(r => r.label).join(',')].join('|');
   const rungs = !props.pick && !isMobile ? ladderRungs(facts) : [];
   const last = rungs.length - 1;
   const at = Math.min(last, Math.max(0, base.index - shift));
@@ -427,6 +417,13 @@ export function ContextRowView(props: ContextRowViewProps) {
       setShift(shift + 1);
     }
   });
+  useEffect(() => {
+    if (needsChoice && !wasNeeding.current) {
+      const el = rowRef.current?.querySelector('[data-chip="format"]');
+      if (el) setMenu({ kind: 'format', rect: el.getBoundingClientRect() });
+    }
+    wasNeeding.current = needsChoice;
+  }, [needsChoice]);
   const pick = shift !== 0 && rungs.length ? { ...base, form: rungs[at], index: at } : base;
   if (!showsRow(props)) {
     // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» после ✕ обязана остаться
@@ -442,11 +439,16 @@ export function ContextRowView(props: ContextRowViewProps) {
   const shown = refs.slice(0, f.k);
   const hidden = refs.length - f.k;
 
-  const open = (kind: 'git' | 'exec' | 'refs') => (rect: DOMRect) => setMenu({ kind, rect });
+  const open = (kind: 'git' | 'exec' | 'refs' | 'format') => (rect: DOMRect) => setMenu({ kind, rect });
+  const subNote = format?.state?.resolved.substituted ? format.state.resolved.note ?? null : null;
 
   const body = !menu ? null
     : menu.kind === 'git' && git ? <GitMenuBody g={git} close={close} />
     : menu.kind === 'exec' && exec ? <ExecMenuBody e={exec} close={close} head={!isMobile} />
+    : menu.kind === 'format' && format ? (
+        <FormatBody m={format} isMobile={isMobile} projectName={props.projectName ?? null}
+          onOpenExec={exec ? () => setMenu({ kind: 'exec', rect: menu.rect }) : undefined} />
+      )
     : menu.kind === 'refs' ? <RefsMenuBody refs={refs} grayIds={grayIds} grayHint={grayHint} iconOf={iconOf}
         onDetach={props.onDetach} onClear={props.onClear} close={close} />
     : null;
@@ -454,6 +456,7 @@ export function ContextRowView(props: ContextRowViewProps) {
   return (
     <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${SP.sm - 2}px` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
+      {subNote && subNote !== dismissedNote && !menu && <FormatNote text={subNote} onClose={() => setDismissedNote(subNote)} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
       <div
         ref={rowRef}
@@ -475,6 +478,7 @@ export function ContextRowView(props: ContextRowViewProps) {
             onRelease={props.onRelease} onAgentTip={() => setTip(t => !t)} />
         )}
         {primary && exec && <ExecChip e={exec} form={f.e} onOpen={open('exec')} />}
+        {format && <FormatChip m={format} short={isMobile || f.f === 1} open={menu?.kind === 'format'} onOpen={e => open('format')(e.currentTarget.getBoundingClientRect())} />}
         {refs.length > 0 && (
           <>
             <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} aria-label="Подключено к ходу" />
@@ -490,8 +494,12 @@ export function ContextRowView(props: ContextRowViewProps) {
         )}
       </div>
       {menu && body && (isMobile
-        ? <Modal title={menu.kind === 'git' ? 'Ветка' : menu.kind === 'exec' ? exec?.title ?? 'Чем выполнить' : 'Подключено к ходу'} onClose={close}>{body}</Modal>
-        : <Menu anchor={menu.rect} onClose={close} minWidth={300} maxWidth={340} maxHeight={320} preferUp anchorAlign="start">{body}</Menu>)}
+        ? <Modal title={menu.kind === 'git' ? 'Ветка' : menu.kind === 'exec' ? exec?.title ?? 'Чем выполнить' : menu.kind === 'format' ? format?.title ?? 'Формат' : 'Подключено к ходу'} onClose={close}>{body}</Modal>
+        : menu.kind === 'format'
+          ? <Menu anchor={menu.rect} onClose={close} minWidth={360} maxWidth={420} maxHeight={560} preferUp anchorAlign="start">
+              <MenuHead><b style={{ color: C.textHeading }}>{format?.title}</b></MenuHead>{body}
+            </Menu>
+          : <Menu anchor={menu.rect} onClose={close} minWidth={300} maxWidth={340} maxHeight={320} preferUp anchorAlign="start">{body}</Menu>)}
     </div>
   );
 }

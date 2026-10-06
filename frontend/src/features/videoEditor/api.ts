@@ -546,6 +546,16 @@ export function filmLocked(e: unknown): VideoFormatLocked | null {
   return b?.lockedBy ? { error: typeof b.error === 'string' ? b.error : '', code: 'film_format_locked', lockedBy: b.lockedBy } : null;
 }
 
+// Отказ «Повторить увеличение» понятным текстом по статусу и коду: 409 — тикет съёмки погас, 429 — GPU занята,
+// 400 — причина из тела; остальное — общий текст
+export function upscaleRetryError(e: unknown): string {
+  const err = e as ApiErr | null;
+  if (err?.status === 409 && errorCode(e) === ERR.upscaleRetryUnavailable) return 'Повторить увеличение уже нельзя — переснимите сцену';
+  if (err?.status === 429) return 'Видеокарта занята';
+  if (err?.status === 400 && typeof err.body?.error === 'string' && err.body.error) return err.body.error;
+  return 'Не удалось повторить увеличение';
+}
+
 export const errorText = (e: unknown, fallback = 'Не удалось'): string => {
   const err = e as ApiErr | null;
   if (typeof err?.body?.error === 'string') return err.body.error;

@@ -6,7 +6,7 @@ import {
   type ChatContextItem,
 } from 'aihome_shell/kit';
 import {
-  ERR, errorCode, errorText, filmLocked, retryOf, videoApi,
+  ERR, errorCode, errorText, filmLocked, retryOf, upscaleRetryError, videoApi,
   type FrameRef, type SaveSceneResult, type VideoPrefs, type VideoQuote, type VideoScene, type VideoSceneSettings,
 } from '../api';
 import { sceneReturnPoint, sceneToImages } from '../context/handoff';
@@ -260,7 +260,7 @@ export async function retryUpscale(scope: string, sessionId: string, sceneId: st
     await videoApi.retryUpscale(scope, sessionId, sceneId, versionId);
     return true;
   } catch (e) {
-    showToast(errorText(e, 'Не удалось повторить увеличение'), '', 'error');
+    showToast(upscaleRetryError(e), '', 'error');
     return false;
   }
 }

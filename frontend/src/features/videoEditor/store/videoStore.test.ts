@@ -124,6 +124,13 @@ describe('стадия upscaling: своя доля, свой отсчёт («М
   });
 });
 
+describe('стадия upscaling при нескольких вариантах', () => {
+  it('count=2, percent=0,5 на увеличении — доля 0,5, а не 0,25 «среди вариантов»', () => {
+    handleEvent({ type: 'video_edit_progress', sessionId: 'c1', scopeKey: 'p1', jobId: 'j1', sceneId: 's1', stage: 'upscaling', variant: 1, count: 2, percent: 0.5, initiator: 'human' } as never);
+    expect(jobFraction(getJobsOf('c1', 's1')[0])).toBeCloseTo(0.5);
+  });
+});
+
 describe('клик по карточке: панель следует за выбором с явной вкладкой', () => {
   it('открытая панель переключается на «Сцену» с ключом элемента', async () => {
     __applyThreads('c1', 'p1', threads(1, [scene('s1'), scene('s2')], { sceneId: 's1' }));

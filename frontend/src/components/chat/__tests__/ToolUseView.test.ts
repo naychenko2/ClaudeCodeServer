@@ -15,6 +15,13 @@ import { consoleCaption } from '../../../lib/toolLabels';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
+// Итог в десктопной шапке — две колонки «время | статус»: текст колонок через пробел
+// («0:15 готово»), без времени — одно слово. null — колонок нет (мобила, короткий вызов)
+const headStatus = (html: string): string | null => {
+  const m = /data-tool-status=""[^>]*>(.*?)<\/span><\/span>/.exec(html);
+  return m ? m[1].replace(/<!-- -->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : null;
+};
+
 // Мобила переключается флагом: статический рендер window не видит, а раскладка карточки
 // на мобиле своя (подпись прогресса — строкой под шапкой)
 const viewport = vi.hoisted(() => ({ mobile: false }));
@@ -220,7 +227,7 @@ describe('ToolUseView — таймер и статус после F5', () => {
 
   it('завершённый — «готово» с длительностью по отметкам сервера', () => {
     const html = renderIn([user('в'), bash('t1', { result: 'ok', finishedAt: 16_000 })], 't1', false);
-    expect(html).toContain('готово · 0:15');
+    expect(headStatus(html)).toBe('0:15 готово');
   });
 });
 
@@ -252,10 +259,20 @@ describe('ToolUseView — мобила: строка подписи пережи
     expect(done).not.toContain('progressbar');
   });
 
-  it('десктоп: итог остаётся в шапке, отдельной строки нет', () => {
+  it('десктоп: итог остаётся в шапке двумя колонками, отдельной строки нет', () => {
     const done = render(wait({ result: '{"all_done":true}', finishedAt: 16_000 }), false);
     expect(captionLines(done)).toBe(0);
-    expect(done).toContain('готово · 0:15');
+    expect(headStatus(done)).toBe('0:15 готово');
+  });
+
+  it('десктоп: время раньше слова статуса, слово — в слоте фиксированной ширины', () => {
+    const done = render(wait({ result: '{"all_done":true}', finishedAt: 16_000 }), false);
+    expect(done).toMatch(/data-tool-status=""[^>]*><span[^>]*>0:15<\/span><span style="min-width:8\.5ch[^"]*">готово</);
+  });
+
+  it('десктоп: место шеврона держится и у карточки без тела', () => {
+    const done = render(wait({ result: '', finishedAt: 16_000 }), false);
+    expect(done).toContain('aria-hidden="true" style="width:11px');
   });
 
   it('настоящие шаги ComfyUI — сплошная заливка полосы, оценка по ETA — пунктир и «≈»', () => {
@@ -306,11 +323,12 @@ describe('ToolUseView — прогон тестов (run_tests)', () => {
 
   // Регрессия с боя: длинный фильтр, «идёт 1:0» — последняя цифра под полосой прокрутки ленты
   // Живой «идёт M:SS» статикой не отрисовать (секунды тикают эффектом) — проверяем итог
-  // «готово · M:SS», он стоит на том же месте шапки по тем же правилам
+  // итог «время | статус», он стоит на том же месте шапки по тем же правилам
   it('длинный фильтр: время справа не ужимается и не переносится, у шапки запас справа под полосу', () => {
     const filter = 'FullyQualifiedName~DevServer|FullyQualifiedName~DevServerPortMemory|FullyQualifiedName~DevServerLaunchPolicy';
     const html = renderTool(run({ target: 'backend/ClaudeHomeServer.Tests', filter }, { result: 'dotnet test: все тесты прошли', finishedAt: 62_000 }));
-    expect(html).toMatch(/<span style="[^"]*flex-shrink:0;white-space:nowrap;font-variant-numeric:tabular-nums">готово(<!-- -->)? · 1:01/);
+    expect(html).toMatch(/data-tool-status="" style="[^"]*flex-shrink:0;[^"]*white-space:nowrap/);
+    expect(headStatus(html)).toBe('1:01 готово');
     expect(html).toContain('padding:3px 8px 3px 0;min-width:0;display:flex');
   });
 });
@@ -388,7 +406,9 @@ describe('ToolUseView — витрина Веры', () => {
   it('п. 9: «прервано» — с длительностью до обрыва', () => {
     const bash: ToolItem = { kind: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'sleep 99' }, startedAt: 1_000, started: true };
     const html = render(bash, [bash, { kind: 'interrupted', ts: 71_000 }], false);
-    expect(html).toContain('прервано · 1:10');
+    expect(headStatus(html)).toBe('1:10 прервано');
+    // Красное — только слово статуса, время серое
+    expect(html).toMatch(/>1:10<\/span><span style="min-width:8\.5ch;color:var\(--c-danger-text\)">прервано</);
   });
 
   // Карточка PowerShell, как и Bash, ждёт tool_started: до фактического старта команда не
@@ -396,10 +416,9 @@ describe('ToolUseView — витрина Веры', () => {
   it('PowerShell до tool_started — «прервано» без времени, после старта — с временем', () => {
     const ps: ToolItem = { kind: 'tool_use', id: 'p1', name: 'PowerShell', input: { command: 'Start-Sleep 99' }, startedAt: 1_000 };
     const before = render(ps, [ps, { kind: 'interrupted', ts: 71_000 }], false);
-    expect(before).toContain('прервано');
-    expect(before).not.toContain('прервано · ');
+    expect(headStatus(before)).toBe('прервано');
     const started = { ...ps, started: true };
-    expect(render(started, [started, { kind: 'interrupted', ts: 71_000 }], false)).toContain('прервано · 1:10');
+    expect(headStatus(render(started, [started, { kind: 'interrupted', ts: 71_000 }], false))).toBe('1:10 прервано');
   });
 });
 
@@ -420,8 +439,10 @@ describe('ToolUseView — этапы и итог run_tests', () => {
 
   it('готово с упавшими: счётчики в шапке, «упало» красным, этапы с галочками без раскрытия', () => {
     const html = render(run({ result: 'итог', finishedAt: 135_000, stages: done3, totals: { passed: 174, failed: 3, total: 177 } }), undefined, false);
-    expect(html).toContain('готово · 2:15');
+    expect(headStatus(html)).toBe('2:15 готово');
     expect(html).toContain('174 из 177 · <span style="color:var(--c-danger-text)">упало 3</span>');
+    // Счётчики — левее колонок «время | статус»
+    expect(html.indexOf('174 из 177')).toBeLessThan(html.indexOf('data-tool-status'));
     // Старая история с отдельным подсчётом: он схлопнут в «тесты», время прибавлено к ним
     expect(html).toContain('✓ сборка 1:02 · ✓ тесты 1:13');
     expect(html).not.toContain('подсчёт');
@@ -463,7 +484,7 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     ];
     const item = run({ stages });
     const html = render(item, [item, { kind: 'interrupted', ts: 70_500 }], false);
-    expect(html).toContain('прервано · 1:10');
+    expect(headStatus(html)).toBe('1:10 прервано');
     // Видимый этап один (очередь короче 2 с не показываем) — его время уже в шапке
     expect(html).toContain('✕ сборка');
     expect(html).not.toContain('✕ сборка 1:10');
@@ -477,10 +498,11 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     ['mcp__dev__build', { target: 'backend' }],
     ['mcp__dev__build', { kind: 'npm', target: 'frontend' }],
     ['mcp__tests__run_tests', { target: 'backend/App.Tests' }],
-  ])('упавшая сборка %s %j: шапка «ошибка · M:SS» красным, а не «готово»', (name, input) => {
+  ])('упавшая сборка %s %j: шапка «0:16 | ошибка», красное только слово, а не «готово»', (name, input) => {
     const stages = [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 16_000, failed: true }];
     const html = render(run({ name, input, result: 'сборка упала (код выхода 1)', finishedAt: 16_000, stages }), undefined, false);
-    expect(html).toContain('color:var(--c-danger-text);flex-shrink:0;white-space:nowrap;font-variant-numeric:tabular-nums">ошибка · 0:16');
+    expect(headStatus(html)).toBe('0:16 ошибка');
+    expect(html).toMatch(/>0:16<\/span><span style="min-width:8\.5ch;color:var\(--c-danger-text\)">ошибка</);
     expect(html).not.toContain('готово');
     expect(html).toContain('✕ сборка');
   });
@@ -513,7 +535,7 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     const html = render(run({ name: 'mcp__dev__build', input: { target: 'backend' }, result: 'ok', finishedAt: 16_000, stages }), undefined, false);
     expect(html).toContain('✓ сборка');
     expect(html).not.toContain('✓ сборка 0:16');
-    expect(html).toContain('готово · 0:16');
+    expect(headStatus(html)).toBe('0:16 готово');
   });
 
   it('готово с упавшими: первые упавшие списком без раскрытия, сверх — «ещё N»', () => {

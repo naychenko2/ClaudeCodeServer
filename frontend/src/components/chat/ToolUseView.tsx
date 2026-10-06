@@ -33,6 +33,11 @@ const MONO_PRE_STYLE: React.CSSProperties = {
 const LEAD_W = 18;
 const HEAD_GAP = 10;
 const BELOW_PAD = LEAD_W + HEAD_GAP;
+// Слот слова статуса в шапке (десктоп): по самому длинному частому слову «прервано» — слова
+// разной длины начинаются с одной линии, а время слева от слота выровнено по правому краю
+const STATUS_SLOT_W = '8.5ch';
+// Место шеврона раскрытия: держится и у карточки без тела
+const CHEVRON_W = 11;
 // Процент прогресса: факт (настоящие шаги) — сплошная заливка, оценка — пунктир
 type ProgressPct = { value: number; estimate: boolean; label?: string };
 
@@ -353,8 +358,10 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // неуспех несёт закрытый крестиком этап, и шапка обязана сказать «ошибка», а не «готово»
   const stageFailed = settled && item.stages?.some(s => s.failed) === true;
   const failed = item.isError || stageFailed;
-  const statusText = `${failed ? 'ошибка' : item.bgAborted || aborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово'}`
-    + (showClock ? ` · ${formatClock(elapsed)}` : '');
+  const statusWord = failed ? 'ошибка' : item.bgAborted || aborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово';
+  const statusClock = showClock ? formatClock(elapsed) : null;
+  // Мобила: итог строкой под шапкой слева — «статус · время», как был
+  const statusText = statusWord + (statusClock ? ` · ${statusClock}` : '');
   const statusColor = failed || item.bgAborted || aborted ? C.dangerText : C.textMuted;
   const totals = totalsText(item.totals);
   const status = (
@@ -424,19 +431,35 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
             <ProgressCaption text={headCaption} />
           </span>
         )}
-        {running && showClock && (
+        {/* Мобила: живое «идёт M:SS» в шапке — как было */}
+        {captionBelow && running && showClock && (
           <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
             идёт {formatClock(elapsed)}
           </span>
         )}
-        {(settled || aborted) && !captionBelow && (
-          <span style={{ fontSize: FS.xs, color: statusColor, flexShrink: 0, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-            {status}
+        {/* Десктоп: итог двумя колонками у правого края — [счётчики] [время] [слот статуса].
+            Слот фиксированной ширины, слово в нём слева: «готово», «ошибка», «прервано», «идёт»
+            начинаются с одной линии, а время, прижатое к слоту, — выровнено по правому краю. Так
+            колонка карточек в ленте ровная и при завершении ничего не прыгает. Красное — только
+            слово статуса */}
+        {!captionBelow && (settled || aborted) && totals && (
+          <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            <ProgressCaption text={totals} />
           </span>
         )}
-        {hasBody && (
-          <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
+        {!captionBelow && (settled || aborted || (running && showClock)) && (
+          <span data-tool-status="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexShrink: 0, fontSize: FS.xs, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            {statusClock && <span style={{ color: C.textMuted }}>{statusClock}</span>}
+            <span style={{ minWidth: STATUS_SLOT_W, color: running ? C.textMuted : statusColor }}>
+              {running ? 'идёт' : statusWord}
+            </span>
+          </span>
         )}
+        {/* Место шеврона держится всегда: у карточки без тела слот статуса иначе съезжал бы
+            вправо на ширину шеврона, и колонка рвалась */}
+        <span aria-hidden={!hasBody} style={{ width: CHEVRON_W, color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', textAlign: 'center', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+          {hasBody ? '▾' : null}
+        </span>
       </div>
       {/* Мобила: строка подписи держится с начала выполнения (пустая до первого прогресса), а
           итог «готово · M:SS» встаёт на её место той же высоты — завершение ленту не двигает.

@@ -19,12 +19,16 @@ public sealed record VideoJobDto(
     string? ChatSessionId,
     string? SceneId,
     string Initiator,
-    string License);
+    string License,
+    int? UpscaleEtaSeconds = null,
+    int? Variant = null);
 
 public static class VideoJobStatuses
 {
     public const string Queued = "queued";
     public const string Running = "running";
+    // Вторая тяжёлая задача GPU: латентный апскейл «Макс» local H3 после съёмки (ADR-025, решение 1)
+    public const string Upscaling = "upscaling";
     public const string Downloading = "downloading";
     public const string Completed = "completed";
     public const string Failed = "failed";

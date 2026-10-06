@@ -63,7 +63,9 @@ public sealed record FilmStateDto(
 public sealed record FilmCreateRequest(string Path, string? Aspect = null);
 
 // Метки строки: «✦ Claude» (Claude = правил агент), «● обновлена» (Updated), «переснять» (Stale)
-public sealed record FilmItemMarkDto(int Index, bool Claude, bool Updated, bool Stale);
+// FormatMismatch — сцена строки в пропорциях, не совпадающих с фильмом: при склейке пойдут чёрные полосы
+// («Привести к 16:9» — действие над настройками сцены, переснимать или нет, решает человек)
+public sealed record FilmItemMarkDto(int Index, bool Claude, bool Updated, bool Stale, bool? FormatMismatch = null);
 
 // Счётчик «Потрачено на фильм» — отображение, не потолок: сумма версий сцен фильма по валютам
 public sealed record VideoSpentDto(double Usd, double Credits, double GpuSeconds);

@@ -15,6 +15,8 @@ public static class VideoEditorRoutes
     public const string Quote = "quote";                                                  // POST VideoQuoteRequest → VideoQuoteResponse
     public const string Jobs = "jobs";                                                    // POST VideoLaunchRequest → VideoLaunchResult
     public const string Job = "jobs/{jobId}";                                             // GET статус / DELETE отмена
+    public const string JobUpscale = "jobs/{jobId}/upscale";                              // DELETE: отменить только увеличение «Макс» local H3 → VideoJobDto; съёмка 768p останется версией
+    public const string FramesPreview = "frames/preview";                                 // POST VideoFramesPreviewRequest → VideoFramesPreviewDto (dryRun подрезки кадров A/B)
     public const string Scenes = "scenes";                                                // GET → VideoThreadsStateDto / POST новая сцена
     public const string ScenesFocus = "scenes/focus";                                     // PUT VideoFocusDto + revision
     public const string Scene = "scenes/{sceneId}";                                       // DELETE

@@ -129,7 +129,7 @@ function FormatLine({ fix }: { fix?: { sceneAspect: string | null; filmAspect: s
   return (
     <div data-video-film-mismatch="" style={{ padding: `0 ${SP.sm}px ${SP.xs}px`, fontSize: FS.xs, color: C.warningText, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.xs }}>
       <span>{fix.sceneAspect ? `${fix.sceneAspect} в фильме ${fix.filmAspect}` : `Сцена не в формате фильма — ${fix.filmAspect}`} — при склейке будут чёрные полосы.</span>
-      {fix.fix && <Button size="xs" variant="ghost" data-video-film-fix="" onClick={fix.fix}>Привести к {fix.filmAspect}</Button>}
+      {fix.fix && <span data-video-film-fix="" style={{ display: 'inline-flex' }}><Button size="xs" variant="ghost" onClick={fix.fix}>Привести к {fix.filmAspect}</Button></span>}
     </div>
   );
 }

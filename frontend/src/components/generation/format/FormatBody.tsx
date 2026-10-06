@@ -61,7 +61,7 @@ function Tier({ o, on, onPick }: { o: FormatTierOption; on: boolean; onPick: () 
   const body = (
     <>
       <b style={{ fontSize: FS.sm, color: on ? C.accent : C.textHeading }}>{TIER_NAME[o.tier]}</b>
-      <span style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{cap.size}</span>
+      <span title={cap.size} style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{cap.size}</span>
       <em title={cap.price || undefined} style={{ fontStyle: 'normal', fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{cap.price || ' '}</em>
     </>
   );
@@ -354,8 +354,8 @@ export function FormatBody({ m, isMobile, projectName, onOpenExec }: {
         <Notice tone="warning" icon={TriangleAlert} data-fmt-note="lock-ask">
           {m.lockAsk.text}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: SP.xs }}>
-            <Button size="xs" variant="primary" data-fmt-lock="keep" onClick={m.lockAsk.onKeep}>{m.lockAsk.keepLabel}</Button>
-            <Button size="xs" variant="secondary" data-fmt-lock="force" onClick={m.lockAsk.onForce}>{m.lockAsk.forceLabel}</Button>
+            <span data-fmt-lock="keep" style={{ display: 'inline-flex' }}><Button size="xs" variant="primary" onClick={m.lockAsk.onKeep}>{m.lockAsk.keepLabel}</Button></span>
+            <span data-fmt-lock="force" style={{ display: 'inline-flex' }}><Button size="xs" variant="secondary" onClick={m.lockAsk.onForce}>{m.lockAsk.forceLabel}</Button></span>
           </div>
         </Notice>
       )}
@@ -363,7 +363,7 @@ export function FormatBody({ m, isMobile, projectName, onOpenExec }: {
       {m.mismatch && (
         <Notice tone="warning" icon={TriangleAlert} data-fmt-note="mismatch">
           {m.mismatch}
-          {m.mismatchAction && <div style={{ marginTop: SP.xs }}><Button size="xs" variant="primary" data-fmt-fix="" onClick={m.mismatchAction.onClick}>{m.mismatchAction.label}</Button></div>}
+          {m.mismatchAction && <div data-fmt-fix="" style={{ marginTop: SP.xs, display: 'flex' }}><Button size="xs" variant="primary" onClick={m.mismatchAction.onClick}>{m.mismatchAction.label}</Button></div>}
         </Notice>
       )}
       {m.frames && <Frames f={m.frames} isMobile={isMobile} />}

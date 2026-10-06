@@ -43,7 +43,7 @@ export const sizeLabel = (s: { w: number; h: number } | null | undefined) => (s 
 // Подпись под ступенью: размер и цена; серая — «нет у модели»
 export function tierCaption(o: FormatTierOption): { size: string; price: string } {
   if (o.disabledReason) return { size: 'нет у модели', price: '' };
-  return { size: o.size ? sizeLabel(o.size) : o.label, price: [priceLabel(o.price), o.extra].filter(Boolean).join(' · ') };
+  return { size: o.caption ?? (o.size ? sizeLabel(o.size) : o.label), price: [priceLabel(o.price), o.extra].filter(Boolean).join(' · ') };
 }
 
 // Свёрнутый чип новой картинки: «16:9 · 1792×1024», «1920×1088 · точно», «Формат Как у модели»

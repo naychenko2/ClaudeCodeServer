@@ -37,6 +37,12 @@ describe('цена и размер под ступенью', () => {
     expect(priceLabel(null)).toBe('');
   });
 
+  it('видео: подпись «720p · 1280×720» и время после цены — «бесплатно · ~21 мин»', () => {
+    const o = { tier: 'max' as const, label: '1440p', size: { w: 2528, h: 1440 }, caption: '1440p · 2528×1440', price: { amount: 0, unit: 'free' }, extra: '~21 мин' };
+    expect(tierCaption(o)).toEqual({ size: '1440p · 2528×1440', price: 'бесплатно · ~21 мин' });
+    expect(tierCaption({ ...o, caption: undefined, extra: undefined })).toEqual({ size: '2528×1440', price: 'бесплатно' });
+  });
+
   it('серая ступень — «нет у модели» без цены', () => {
     expect(tierCaption({ tier: 'max', label: 'нет у модели', disabledReason: 'причина' })).toEqual({ size: 'нет у модели', price: '' });
     expect(tierCaption({ tier: 'high', label: '2 Мп', size: { w: 1792, h: 1024 }, price: { amount: 0.08, unit: 'usd' } }))

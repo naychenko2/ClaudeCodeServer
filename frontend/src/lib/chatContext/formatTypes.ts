@@ -62,6 +62,8 @@ export interface FormatTierOption {
   postStep?: string | null;
   price?: FormatPrice | null;
   disabledReason?: string | null;
+  // Подпись размера целиком вместо одного размера: у видео «720p · 1280×720» (имя ступени модели и размер)
+  caption?: string | null;
   // Время ступени после цены («~21 мин»): видео знает его из котировки, у картинок не бывает
   extra?: string | null;
   // Пояснение под рядом ступеней, пока ступень выбрана («Макс» local H3: съёмка и увеличение — два прогона)

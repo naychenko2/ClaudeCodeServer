@@ -9,6 +9,7 @@ import { ERR, errorCode, errorText, videoApi, type FilmBuildStatus, type VideoCa
 import { DSP_TEXT } from '../editor/montage/FilmTab';
 import { openProjectFile } from '../film/nav';
 import { currentResolved, runErrorText, stopJob } from '../scene/actions';
+import { etaText } from './format';
 import { plural, priceLines, modelLabel, snapTo, type ResolvedScene } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
 import { cancelBuild, getCatalog, getFilm, getJobsOf, jobFraction, setFilmBuild, subscribeVideoStore } from '../store/videoStore';
@@ -75,7 +76,10 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
   const lines = priceLines(q, q.count, q.durationSec);
   const model = modelLabel(getCatalog(scope), q.provider, q.model);
   return {
-    price: q.price.unit === 'free' ? 'бесплатно' : lines?.[0] ?? 'цена станет известна после запуска',
+    // Под флагом media-format у бесплатной съёмки время в подписи кнопки: «✦ Снять · бесплатно · ~21 мин» (у «Макс» — оба прогона)
+    price: q.price.unit === 'free'
+      ? ['бесплатно', getFlag(FLAGS.mediaFormat) ? etaText(q.price.eta) : null].filter(Boolean).join(' · ')
+      : lines?.[0] ?? 'цена станет известна после запуска',
     detail: [model, lines?.[1]].filter(Boolean).join(' · '),
   };
 }

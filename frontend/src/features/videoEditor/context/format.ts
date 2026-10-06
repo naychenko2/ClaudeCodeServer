@@ -127,7 +127,7 @@ function tierOptions(
     // «Макс» с увеличением: время обоих прогонов в одной подписи; не замерено — так и пишем, число не выдумываем
     const extra = q ? (etaText(q.price.eta) ?? (upscale ? 'время не замерено' : null)) : null;
     return {
-      tier: t, label: spec.label, size, wireValue: spec.wireValue, postStep: spec.postStep, price: priceOf(q), extra,
+      tier: t, label: spec.label, size, caption: size ? `${spec.label} · ${size.w}×${size.h}` : spec.label, wireValue: spec.wireValue, postStep: spec.postStep, price: priceOf(q), extra,
       ...(upscale ? { note: upscaleNote(caps, spec.label, aspect, q) } : null),
     };
   });

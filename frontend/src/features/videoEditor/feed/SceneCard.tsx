@@ -196,8 +196,9 @@ function Stages({ rows, a }: { rows: CardStage[]; a: SceneCardActions }) {
           <span style={{ flex: '1 1 8em', minWidth: 0, color: r.state === 'now' ? C.textHeading : undefined }}>{r.text}</span>
           {r.badge && <Badge size="xs" tone={r.state === 'done' ? 'success' : r.state === 'now' ? 'accent' : 'neutral'}>{r.badge}</Badge>}
           {r.cancel && (
-            <Button size="xs" variant="secondary" data-video-stage-cancel={r.cancel}
-              onClick={r.cancel === 'upscale' ? a.onCancelUpscale : a.onCancelJob}>{r.cancel === 'upscale' ? 'Отменить увеличение' : 'Отменить'}</Button>
+            <span data-video-stage-cancel={r.cancel} style={{ display: 'inline-flex' }}>
+              <Button size="xs" variant="secondary" onClick={r.cancel === 'upscale' ? a.onCancelUpscale : a.onCancelJob}>{r.cancel === 'upscale' ? 'Отменить увеличение' : 'Отменить'}</Button>
+            </span>
           )}
         </div>
       ))}
@@ -238,7 +239,7 @@ export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; 
       {v.upscaledCaption && <div data-video-upscaled="" style={{ fontSize: FS.xs, color: C.textMuted }}>{v.upscaledCaption}</div>}
       {v.upscaleFail && (
         <Notice tone="warning" icon={TriangleAlert} data-video-upscale-fail=""
-          action={a.onRetryUpscale && <Button size="xs" variant="primary" data-video-upscale-retry="" onClick={a.onRetryUpscale}>Повторить</Button>}>
+          action={a.onRetryUpscale && <span data-video-upscale-retry="" style={{ display: 'inline-flex' }}><Button size="xs" variant="primary" onClick={a.onRetryUpscale}>Повторить</Button></span>}>
           {v.upscaleFail.text}
         </Notice>
       )}

@@ -31,6 +31,7 @@ internal static class NtlmMicProbe
 
         var proof = t3.NtResponse.AsSpan(0, 16);
         var blob = t3.NtResponse.AsSpan(16);
+        var blobBytes = t3.NtResponse[16..];
         var responseKey = HmacMd5(ntHash, Encoding.Unicode.GetBytes(t3.User.ToUpperInvariant() + t3.Domain));
 
         // NTProofStr привязан к серверному вызову: по нему находим именно тот Type2, на который ответил клиент
@@ -48,11 +49,22 @@ internal static class NtlmMicProbe
         var keys = new List<(string Name, byte[] Key)> { ("KeyExchangeKey (без расшифровки)", sessionBaseKey) };
         if (t3.EncryptedSessionKey.Length == 16)
             keys.Add(("RC4(KeyExchangeKey, EncryptedRandomSessionKey)", Rc4(sessionBaseKey, t3.EncryptedSessionKey)));
+        // KXKEY расширенной защиты в буквальном чтении MS-NLMP 3.4.5.1: HMAC(SessionBaseKey, ServerChallenge ‖ LmResponse[0..8]).
+        // gss-ntlmssp и Samba для NTLMv2 берут SessionBaseKey как есть; клиент, считающий иначе, дал бы именно этот ключ
+        if (t3.LmResponse.Length >= 8)
+        {
+            var kxEss = HmacMd5(sessionBaseKey, [.. type2.AsSpan(24, 8), .. t3.LmResponse.AsSpan(0, 8)]);
+            keys.Add(("KXKEY-ESS (HMAC(SessionBaseKey, ServerChallenge‖LM[0..8])) без расшифровки", kxEss));
+            if (t3.EncryptedSessionKey.Length == 16)
+                keys.Add(("RC4(KXKEY-ESS, EncryptedRandomSessionKey)", Rc4(kxEss, t3.EncryptedSessionKey)));
+        }
 
         // MIC лежит сразу за Version; старые клиенты Version не шлют, и смещение сдвигается на 8
         var offsets = (t3.Flags & FlagVersion) != 0 ? new[] { 72 } : new[] { 72, 64 };
         var type1Options = new List<(string Name, byte[]? Msg)>();
         for (var i = 0; i < type1s.Count; i++) type1Options.Add(($"Type1 №{i + 1}", type1s[i]));
+        for (var i = 0; i < type1s.Count; i++)
+            if (type1s[i].Length > 32) type1Options.Add(($"Type1 №{i + 1} без Version (32 байта)", type1s[i][..32]));
         type1Options.Add(("без Type1", null));
 
         // Type2 перебираем все записанные (а не только по NTProofStr) и Type3 в двух видах:
@@ -82,6 +94,7 @@ internal static class NtlmMicProbe
         }
 
         var t1Flags = type1s.Count > 0 && type1s[^1].Length >= 16 ? $"0x{BitConverter.ToUInt32(type1s[^1], 12):X8}" : "?";
+        var avs = $"AV Type3: {AvList(blobBytes[28..])}; AV Type2: {AvList(TargetInfo(type2))}; не вернулись из Type2 в Type3: {MissingFromType2(TargetInfo(type2), blobBytes[28..])}; LM-ответ {(t3.LmResponse.AsSpan().IndexOfAnyExcept((byte)0) < 0 ? "нулевой" : "ненулевой")}";
         var shape = $"флаги Type1 {t1Flags}, Type2 0x{BitConverter.ToUInt32(type2, 20):X8}, Type3 0x{t3.Flags:X8}, "
             + $"EncryptedRandomSessionKey {t3.EncryptedSessionKey.Length} байт, Type1 записано {type1s.Count}";
         // Type1/Type2 — открытые сообщения рукопожатия (клиент видел их на проводе), секретов нет;
@@ -92,10 +105,61 @@ internal static class NtlmMicProbe
             + (timeline is null ? "" : $"; хроника соединения: {timeline}");
         return matches.Count > 0
             ? $"MIC СХОДИТСЯ при: {string.Join(" | ", matches)}; {shape}"
-            : $"MIC не сходится ни в одной из {combos} комбинаций (NTProofStr верен); {shape}; {wire}";
+            : $"MIC не сходится ни в одной из {combos} комбинаций (NTProofStr верен); {shape}; {avs}; {wire}";
     }
 
-    internal readonly record struct Type3(uint Flags, string Domain, string User, byte[] NtResponse, byte[] EncryptedSessionKey);
+    private static byte[] TargetInfo(byte[] type2)
+    {
+        if (type2.Length < 48) return [];
+        int len = BitConverter.ToUInt16(type2, 40);
+        var off = (int)BitConverter.ToUInt32(type2, 44);
+        return off < 0 || off + len > type2.Length ? [] : type2.AsSpan(off, len).ToArray();
+    }
+
+    /// <summary>AV-пары списком «id:длина» — содержимое не выводим (там есть идентификатор машины и хэш привязки канала).</summary>
+    internal static string AvList(ReadOnlySpan<byte> av)
+    {
+        var parts = new List<string>();
+        for (var p = 0; p + 4 <= av.Length;)
+        {
+            int id = BitConverter.ToUInt16(av[p..]);
+            int len = BitConverter.ToUInt16(av[(p + 2)..]);
+            p += 4;
+            if (id == 0 || p + len > av.Length) break;
+            parts.Add($"{id}:{len}");
+            p += len;
+        }
+        return string.Join(",", parts);
+    }
+
+    /// <summary>Пары TargetInfo Type2, которых нет в Type3 с тем же содержимым (MsvAvFlags клиент правит сам). Пусто — Type2 вернулся целиком.</summary>
+    internal static string MissingFromType2(ReadOnlySpan<byte> type2Info, ReadOnlySpan<byte> type3Av)
+    {
+        var have = new List<(int Id, byte[] Value)>();
+        for (var p = 0; p + 4 <= type3Av.Length;)
+        {
+            int id = BitConverter.ToUInt16(type3Av[p..]);
+            int len = BitConverter.ToUInt16(type3Av[(p + 2)..]);
+            p += 4;
+            if (id == 0 || p + len > type3Av.Length) break;
+            have.Add((id, type3Av.Slice(p, len).ToArray()));
+            p += len;
+        }
+        var missing = new List<string>();
+        for (var p = 0; p + 4 <= type2Info.Length;)
+        {
+            int id = BitConverter.ToUInt16(type2Info[p..]);
+            int len = BitConverter.ToUInt16(type2Info[(p + 2)..]);
+            p += 4;
+            if (id == 0 || p + len > type2Info.Length) break;
+            var value = type2Info.Slice(p, len).ToArray();
+            p += len;
+            if (id != 6 && !have.Any(h => h.Id == id && h.Value.AsSpan().SequenceEqual(value))) missing.Add($"{id}:{len}");
+        }
+        return missing.Count == 0 ? "ничего" : string.Join(",", missing);
+    }
+
+    internal readonly record struct Type3(uint Flags, string Domain, string User, byte[] NtResponse, byte[] EncryptedSessionKey, byte[] LmResponse);
 
     internal static bool TryParseType3(byte[] msg, out Type3 result, out string why)
     {
@@ -108,17 +172,18 @@ internal static class NtlmMicProbe
         }
         var flags = BitConverter.ToUInt32(msg, 60);
         var unicode = (flags & FlagUnicode) != 0;
+        var lm = Field(msg, 12);
         var nt = Field(msg, 20);
         var domain = Field(msg, 28);
         var user = Field(msg, 36);
         var enc = Field(msg, 52);
-        if (nt is null || domain is null || user is null || enc is null)
+        if (lm is null || nt is null || domain is null || user is null || enc is null)
         {
             why = "поля Type3 вне границ";
             return false;
         }
         var enc2 = unicode ? Encoding.Unicode : Encoding.ASCII;
-        result = new Type3(flags, enc2.GetString(domain), enc2.GetString(user), nt, enc);
+        result = new Type3(flags, enc2.GetString(domain), enc2.GetString(user), nt, enc, lm);
         return true;
 
         static byte[]? Field(byte[] m, int at)

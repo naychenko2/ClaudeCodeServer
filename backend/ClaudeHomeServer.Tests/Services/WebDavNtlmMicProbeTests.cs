@@ -28,6 +28,26 @@ public class WebDavNtlmMicProbeTests
     }
 
     [Fact]
+    public void MicSignedWithKxkeyEssRandomKey_NamesKxkeyEssHypothesis()
+    {
+        var h = Handshake(SignSealKeyExch, KeyMode.KxkeyEssRandomKey);
+
+        var report = NtlmMicProbe.Explain([h.Type1], [h.Type2], h.Type3, NtHash);
+
+        report.Should().Contain("MIC СХОДИТСЯ").And.Contain("RC4(KXKEY-ESS, EncryptedRandomSessionKey)");
+    }
+
+    [Fact]
+    public void MicOverType1WithoutVersion_NamesTruncatedType1()
+    {
+        // Клиент подписал Type1 без Version, а на проводе (и в записи сервера) он полный
+        var h = Handshake(SignSealKeyExch, KeyMode.RandomKey, micType1Length: 32);
+
+        NtlmMicProbe.Explain([h.Type1], [h.Type2], h.Type3, NtHash)
+            .Should().Contain("MIC СХОДИТСЯ").And.Contain("без Version (32 байта)");
+    }
+
+    [Fact]
     public void MicSignedWithKeyExchangeKey_NamesNoDecryptHypothesis()
     {
         // Клиент без SIGN/SEAL: ExportedSessionKey = KeyExchangeKey (MS-NLMP 3.1.5.1.2)
@@ -129,6 +149,31 @@ public class WebDavNtlmMicProbeTests
     }
 
     [Fact]
+    public void ExternalVector_ChromiumMicOverSpecMessages_Matches()
+    {
+        // Независимый эталон: net/ntlm/ntlm_test_data.h Chromium (kExpectedNegotiateMsg, kChallengeMsgFromSpecV2,
+        // kExpectedAuthenticateMsgSpecResponseV2 с MIC kExpectedMicV2; пользователь User, домен Domain, пароль
+        // Password из MS-NLMP 4.2). Реализация Chromium работает против настоящих Windows-серверов, поэтому
+        // проба обязана подтвердить этот MIC — иначе она сама считает иначе, чем Windows.
+        var type1 = Convert.FromHexString("4e544c4d53535000010000000782080000000000200000000000000020000000");
+        var type2 = Convert.FromHexString(
+            "4e544c4d53535000020000000c000c003800000033828ae20123456789abcdef0000000000000000240024004400000006007017000000"
+            + "0f53006500720076006500720002000c0044006f006d00610069006e0001000c0053006500720076006500720000000000");
+        var type3 = Convert.FromHexString(
+            "4e544c4d535350000300000018001800580000008a008a00700000000c000c00fa0000000800080006010000100010000e010000000000"
+            + "0058000000038208000000000000000000f7361633f0ad9bdf4a7c421bc6b824a300000000000000000000000000000000000000000000"
+            + "00008c0260dbef690662af9c42d50782d2ed0101000000000000800bc8fd00d4d201aaaaaaaaaaaaaaaa0000000002000c0044006f006d"
+            + "00610069006e0001000c0053006500720076006500720006000400020000000a0010006586e99d81c2fc984e47172fd4dd031009001600"
+            + "48005400540050002f00530065007200760065007200000000000000000044006f006d00610069006e00550073006500720043004f004d"
+            + "0050005500540045005200");
+        var hash = Convert.FromHexString("a4f49c406510bdcab6824ee7c30fd852");
+
+        var report = NtlmMicProbe.Explain([type1], [type2], type3, hash);
+
+        report.Should().Contain("MIC СХОДИТСЯ").And.Contain("KeyExchangeKey (без расшифровки)");
+    }
+
+    [Fact]
     public void DescribeTransport_RawNtlm()
     {
         var h = Handshake(SignSealKeyExch, KeyMode.RandomKey);
@@ -170,12 +215,12 @@ public class WebDavNtlmMicProbeTests
         NtlmHandshakeRecorder.ExtractNtlm("не base64").Should().BeNull();
     }
 
-    private enum KeyMode { RandomKey, KeyExchangeKey }
+    private enum KeyMode { RandomKey, KeyExchangeKey, KxkeyEssRandomKey }
 
     private sealed record Messages(byte[] Type1, byte[] Type2, byte[] Type3, byte[] Mic);
 
     /// <summary>Клиент NTLMv2 с MIC (MS-NLMP 3.1.5.1.2): флаги Type3 и ключ MIC задаёт тест.</summary>
-    private static Messages Handshake(uint type3Flags, KeyMode keyMode, bool tamperMic = false)
+    private static Messages Handshake(uint type3Flags, KeyMode keyMode, bool tamperMic = false, int micType1Length = 40)
     {
         var type1 = new byte[40];
         "NTLMSSP\0"u8.CopyTo(type1);
@@ -203,8 +248,10 @@ public class WebDavNtlmMicProbeTests
         byte[] nt = [.. proof, .. blob];
         var keyExchangeKey = NtlmMicProbe.HmacMd5(responseKey, proof);
         var random = RandomNumberGenerator.GetBytes(16);
-        var encrypted = NtlmMicProbe.Rc4(keyExchangeKey, random);
-        var micKey = keyMode == KeyMode.RandomKey ? random : keyExchangeKey;
+        // клиент, считающий KeyExchangeKey по KXKEY расширенной защиты (LM-ответ в тесте нулевой)
+        var kxkeyEss = NtlmMicProbe.HmacMd5(keyExchangeKey, [.. challenge, .. new byte[8]]);
+        var encrypted = NtlmMicProbe.Rc4(keyMode == KeyMode.KxkeyEssRandomKey ? kxkeyEss : keyExchangeKey, random);
+        var micKey = keyMode == KeyMode.KeyExchangeKey ? keyExchangeKey : random;
 
         const int header = 88; // 64 + Version(8) + MIC(16)
         var lm = new byte[24];
@@ -226,7 +273,7 @@ public class WebDavNtlmMicProbeTests
         BitConverter.GetBytes(type3Flags).CopyTo(type3, 60);
         new byte[] { 10, 0, 0x63, 0x45, 0, 0, 0, 0x0F }.CopyTo(type3, 64);
 
-        var mic = NtlmMicProbe.HmacMd5(micKey, [.. type1, .. type2, .. type3]);
+        var mic = NtlmMicProbe.HmacMd5(micKey, [.. type1.AsSpan(0, micType1Length), .. type2, .. type3]);
         if (tamperMic) mic[0] ^= 1;
         mic.CopyTo(type3, 72);
         return new Messages(type1, type2, type3, mic);

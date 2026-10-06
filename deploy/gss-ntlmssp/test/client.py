@@ -11,6 +11,7 @@
   --spnego    в --http заворачивать токены в SPNEGO (NegTokenInit/NegTokenResp), иначе сырой NTLMSSP
   --prefail  перед основным прогоном — рукопожатие с неверным паролем на том же соединении
   --abandon  перед основным рукопожатием отправить лишний Type1 без Type3
+  --kxk-ess  KeyExchangeKey = HMAC(SessionBaseKey, ServerChallenge‖LM[0..8]) — клиент, читающий KXKEY буквально (на стенде обязан дать отказ)
   --no-mechmic  в SPNEGO не класть mechListMIC (по умолчанию кладётся, как Windows)
 Запускает ./acceptor, прогоняет Type1 → Type2 → Type3, печатает итог одной строкой (OK/FAIL)."""
 import hashlib, hmac, os, struct, subprocess, sys, time
@@ -128,7 +129,17 @@ def main():
         flags3 = int(opt['--f3'], 16) if '--f3' in opt else flags1 & flags2
         if '--verbose' in opt: print(f'flags1 {flags1:08X} flags2 {flags2:08X} flags3 {flags3:08X}', file=sys.stderr)
 
-        ti = tinfo[:-4] + struct.pack('<HHI', 6, 4, 2)  # MsvAvFlags=0x2 (MIC)
+        # MsvAvFlags=0x2 (MIC): как Windows, правим существующую пару Type2 на месте, а не дописываем вторую
+        ti, found, q = bytearray(), False, 0
+        while q + 4 <= len(tinfo):
+            aid, alen = struct.unpack_from('<HH', tinfo, q)
+            if aid == 0: break
+            val = tinfo[q + 4:q + 4 + alen]
+            if aid == 6 and alen == 4:
+                val = struct.pack('<I', struct.unpack('<I', val)[0] | 2); found = True
+            ti += struct.pack('<HH', aid, alen) + val; q += 4 + alen
+        if not found: ti += struct.pack('<HHI', 6, 4, 2)
+        ti = bytes(ti)
         if '--singlehost' in opt:  # MsvAvSingleHost: Size=48, Z4, CustomData(8), MachineID(32), как у Windows
             ti += struct.pack('<HH', 8, 48) + struct.pack('<II', 48, 0) + b'\0' * 8 + os.urandom(32)
         if '--cbt' in opt:
@@ -145,6 +156,7 @@ def main():
         proof = hmac_md5(rk, schal + blob); nt = proof + blob
         lm = b'\0' * 24 if '--lmzero' in opt else hmac_md5(rk, schal + cchal) + cchal
         kxk = hmac_md5(rk, proof)  # SessionBaseKey = KeyExchangeKey при NTLMv2
+        if '--kxk-ess' in opt: kxk = hmac_md5(kxk, schal + lm[:8])
 
         enc = b''
         mic_key = kxk

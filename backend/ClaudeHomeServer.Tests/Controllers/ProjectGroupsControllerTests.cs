@@ -112,7 +112,8 @@ public class ProjectGroupsControllerTests : IClassFixture<TestWebApplicationFact
         var id = (await CreateGroupAsync("на удаление")).GetProperty("id").GetString();
 
         var response = await _client.DeleteAsync($"/api/project-groups/{id}");
-        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("deletedMemory").GetInt32().Should().Be(0);
 
         var list = await _client.GetFromJsonAsync<JsonElement>("/api/project-groups");
         list.EnumerateArray().Select(g => g.GetProperty("id").GetString()).Should().NotContain(id);

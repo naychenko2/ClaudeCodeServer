@@ -53,26 +53,25 @@ public class ProjectGroupsController(SphereManager groups, ProjectManager projec
         => Ok(groups.Reorder(UserId, req.OrderedIds ?? []));
 
     [HttpDelete("{id}")]
-    public IActionResult Delete(string id)
+    public async Task<IActionResult> Delete(string id)
     {
         var g = groups.GetById(id);
         if (g is null || g.OwnerId != UserId) return NotFound();
-        // Сфера с командой или памятью не удаляется: сначала их переносят или удаляют
+        // С командой сфера не удаляется: персон сначала переносят или удаляют. Память живёт и
+        // умирает вместе со сферой — её забирает удаление, отказа из-за неё нет
         var team = personas.GetByOwner(UserId).Count(p => PersonaZone.IsSphereTeam(p, id));
-        var memory = sphereMemory.Count(UserId, id);
-        if (team > 0 || memory > 0)
-        {
-            var parts = new List<string>();
-            if (team > 0) parts.Add($"персон сферы: {team}");
-            if (memory > 0) parts.Add($"записей памяти: {memory}");
-            return Conflict(new { error = $"Сферу нельзя удалить — в ней {string.Join(", ", parts)}", personas = team, memory });
-        }
+        if (team > 0)
+            return Conflict(new { error = $"Сферу нельзя удалить — в ней персон сферы: {team}", personas = team });
         groups.Delete(id);
         // Проекты удалённой группы возвращаются в список «без группы»
         projects.ClearGroup(id);
-        return NoContent();
+        var deletedMemory = await sphereMemory.DeleteAllForSphereAsync(UserId, id);
+        return Ok(new DeleteGroupResponse(deletedMemory));
     }
 }
+
+/// <summary>Ответ удаления сферы: сколько записей её памяти удалено вместе с ней.</summary>
+public record DeleteGroupResponse(int DeletedMemory);
 
 public record CreateGroupRequest(string Name, string? Color);
 public record UpdateGroupRequest(string? Name, string? Color, string? Icon = null, string? Charter = null);

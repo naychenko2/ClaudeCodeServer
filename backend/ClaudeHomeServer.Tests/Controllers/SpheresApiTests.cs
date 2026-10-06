@@ -92,7 +92,67 @@ public class SpheresApiTests : IDisposable
         (await refused.Content.ReadAsStringAsync()).Should().Contain("персон сферы: 1");
 
         persona.SphereId = null;
-        (await _client.DeleteAsync($"/api/project-groups/{sphere}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        var deleted = await _client.DeleteAsync($"/api/project-groups/{sphere}");
+        deleted.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await deleted.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("deletedMemory").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Удаление_СФераСПамятьюБезПерсон_УдаляетсяВместеСПамятью()
+    {
+        var sphere = await CreateSphereAsync(_client, "с памятью");
+        var mem = _factory.Services.GetRequiredService<ClaudeHomeServer.Services.Memory.SphereMemoryService>();
+        mem.Add(OwnerId, sphere, "первая запись");
+        mem.Add(OwnerId, sphere, "вторая запись");
+
+        var resp = await _client.DeleteAsync($"/api/project-groups/{sphere}");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("deletedMemory").GetInt32().Should().Be(2);
+        mem.Count(OwnerId, sphere).Should().Be(0);
+        _factory.Services.GetRequiredService<SphereManager>().GetById(sphere).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ПамятьСферы_REST_ЧтениеЗаписьУдалениеПодъём_ЧужаяСфера404()
+    {
+        await EnableFlagAsync();
+        var sphere = await CreateSphereAsync(_client, "память");
+        var projectId = await CreateProjectAsync(_client, sphere);
+        var outside = await CreateProjectAsync(_client);
+        var team = _factory.Services.GetRequiredService<ClaudeHomeServer.Services.Memory.TeamMemoryService>();
+        var onShelf = team.Add(OwnerId, projectId, "запись проекта");
+
+        var added = await _client.PostAsJsonAsync($"/api/spheres/{sphere}/memory", new { text = "общее правило", type = "convention" });
+        added.StatusCode.Should().Be(HttpStatusCode.OK);
+        var addedId = (await added.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        (await _client.PostAsJsonAsync($"/api/spheres/{sphere}/memory", new { text = "  " })).StatusCode
+            .Should().Be(HttpStatusCode.BadRequest);
+
+        var list = await _client.GetFromJsonAsync<JsonElement>($"/api/spheres/{sphere}/memory");
+        list.GetProperty("sphere").EnumerateArray().Should().ContainSingle()
+            .Which.GetProperty("type").GetString().Should().Be("convention");
+        var shelf = list.GetProperty("projects").EnumerateArray().Should().ContainSingle().Subject;
+        shelf.GetProperty("projectId").GetString().Should().Be(projectId);
+        shelf.GetProperty("entries").EnumerateArray().Should().ContainSingle();
+
+        (await _client.PostAsJsonAsync($"/api/spheres/{sphere}/memory/adopt", new { projectId = outside, entryId = onShelf.Id }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var adopt = await _client.PostAsJsonAsync($"/api/spheres/{sphere}/memory/adopt", new { projectId, entryId = onShelf.Id });
+        adopt.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await adopt.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("promotedFrom").GetProperty("entryId")
+            .GetString().Should().Be(onShelf.Id);
+        team.List(OwnerId, projectId).Should().BeEmpty();
+
+        (await _client.DeleteAsync($"/api/spheres/{sphere}/memory/{addedId}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await _client.DeleteAsync($"/api/spheres/{sphere}/memory/{addedId}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        // Чужая сфера — 404 на всех четырёх ручках
+        (await _stranger.GetAsync($"/api/spheres/{sphere}/memory")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _stranger.PostAsJsonAsync($"/api/spheres/{sphere}/memory", new { text = "x" })).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _stranger.DeleteAsync($"/api/spheres/{sphere}/memory/{addedId}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _stranger.PostAsJsonAsync($"/api/spheres/{sphere}/memory/adopt", new { projectId, entryId = "e" })).StatusCode
+            .Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]

@@ -954,38 +954,3 @@ input[type="search"]::-webkit-search-results-button,
 input[type="search"]::-webkit-search-results-decoration {
   display: none;
 }
-
-/* Утка правой рельсы (features/duck/RailDuck.tsx). Подпрыгивает под курсором,
-   пузырь реплики выскакивает с наклоном, при побеге — гребёт и трясётся от злости.
-   Переезд самой копии — transition трансформа обёртки, поэтому покачивание живёт
-   на внутреннем элементе, чтобы не спорить с ним. */
-*:hover > .cc-duck-hop { animation: cc-duck-hop 0.5s cubic-bezier(0.3, 0.7, 0.4, 1) 2; }
-.cc-duck-swim { animation: cc-duck-swim 0.62s ease-in-out infinite; }
-.cc-duck-rage { animation: cc-duck-rage 0.12s linear infinite; }
-.cc-duck-bubble {
-  transform: rotate(var(--cc-duck-tilt, 0deg));
-  transform-origin: calc(100% + 6px) 50%;
-  animation: cc-duck-pop 0.28s cubic-bezier(0.2, 1.4, 0.5, 1);
-}
-@keyframes cc-duck-hop {
-  0%, 100% { transform: translateY(0) scale(1, 1); }
-  18% { transform: translateY(1px) scale(1.14, 0.86); }
-  45% { transform: translateY(-6px) scale(0.93, 1.09); }
-  72% { transform: translateY(1px) scale(1.12, 0.88); }
-}
-@keyframes cc-duck-swim {
-  0%, 100% { transform: translateY(0) rotate(-7deg); }
-  50% { transform: translateY(-2.5px) rotate(7deg); }
-}
-@keyframes cc-duck-rage {
-  0%, 100% { transform: rotate(-9deg); }
-  50% { transform: rotate(9deg); }
-}
-@keyframes cc-duck-pop {
-  0% { transform: rotate(var(--cc-duck-tilt, 0deg)) scale(0.4); opacity: 0; }
-  60% { transform: rotate(var(--cc-duck-tilt, 0deg)) scale(1.08); opacity: 1; }
-  100% { transform: rotate(var(--cc-duck-tilt, 0deg)) scale(1); }
-}
-@media (prefers-reduced-motion: reduce) {
-  *:hover > .cc-duck-hop, .cc-duck-swim, .cc-duck-rage, .cc-duck-bubble { animation: none; }
-}

@@ -22,7 +22,6 @@ import { GitCommitView } from '../../components/GitCommitView';
 import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
 import { ProjectRail } from '../../features/projects/ProjectRail';
-import { RailDuck } from '../../features/duck/RailDuck';
 import { PanelZone } from './PanelZone';
 import { TocPanel } from './TocPanel';
 import { useSessionPanels } from './useSessionPanels';
@@ -606,8 +605,6 @@ export function DesktopWorkspace(p: Props) {
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         centerFileOpen={!!p.openFile}
-        // Последняя кнопка рельсы — утка-пасхалка (ничего не делает, только крякает)
-        railTail={<RailDuck />}
       />
     </div>
   );

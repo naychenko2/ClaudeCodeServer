@@ -117,6 +117,11 @@
   .frow { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--c-border-light); font-size: var(--fs-sm); min-width: 0; }
   .frow .n { color: var(--c-text-muted); width: 16px; flex: 0 0 auto; }
   .frow .tx { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .frow.stg { flex-wrap: wrap; row-gap: 4px; }
+  .frow.stg .tx { flex: 1 1 140px; }
+  .frow.stg.now .tx { color: var(--c-text-heading); font-weight: 600; }
+  /* Пометка макета (не продукт): текст ждёт решения */
+  .pend { align-self: flex-start; font-size: 10.5px; color: var(--doc-muted); border: 1px dashed var(--c-dashed); border-radius: 4px; padding: 0 5px; }
   .frow.warn { background: var(--c-warning-bg); border-radius: var(--r-md); padding: 5px 6px; border-top-color: transparent; flex-wrap: wrap; }
 
   /* Кирпичи UI-кита (имена — как в components/ui) */
@@ -347,8 +352,10 @@ const VID = {
   seed: { label: 'Seedance Pro', where: 'fal', aspects: ['16:9', '9:16', '1:1'], id: 'fal-ai/seedance-pro',
     tiers: { std: { res: '480p', price: '$0.12 / 5 с' }, hi: { res: '720p', price: '$0.26 / 5 с' }, max: { res: '1080p', price: '$0.62 / 5 с' } } },
   h3: { label: 'MiniMax H3', where: 'локально', aspects: ['16:9', '9:16'], free: true, id: 'minimax-h3',
-    tiers: { std: { res: '480p', px: '864×480', price: 'бесплатно · ~1,5 мин', param: 'half' }, hi: { res: '768p', px: '1344×768', price: 'бесплатно · ~5,5 мин', param: 'full' },
-      max: { res: '1440p', px: '2528×1440', price: 'бесплатно · ~12 мин', note: 'съёмка + увеличение', param: 'full + upscale 1440p' } } },
+    tiers: { std: { res: '480p', px: { '16:9': '864×480', '9:16': '480×864' }, price: 'бесплатно · ~1,5 мин', param: 'half' },
+      hi: { res: '768p', px: { '16:9': '1344×768', '9:16': '768×1344' }, price: 'бесплатно · ~5,5 мин', param: 'full' },
+      // «Макс» = съёмка full (~5,5 мин) + латентное увеличение до 1440p (~15 мин по замеру, local-media.md)
+      max: { res: '1440p', px: { '16:9': '2528×1440', '9:16': '1440×2528' }, price: 'бесплатно · ~21 мин', post: 'upscale', param: 'full + upscale 1440p' } } },
 };
 const VPX = { '480p': { '16:9': '854×480', '9:16': '480×854', '1:1': '480×480' }, '720p': { '16:9': '1280×720', '9:16': '720×1280', '1:1': '720×720' }, '1080p': { '16:9': '1920×1080', '9:16': '1080×1920', '1:1': '1080×1080' } };
 
@@ -404,7 +411,7 @@ function eff() {
   const tier = nearestTier(want.tier, m);
   if (isImg() && want.exact && m.step) { const f = fitExact(want.exact[0], want.exact[1], m); return { exact: true, w: f.w, h: f.h, notes: f.notes, aspect, tier }; }
   if (isImg()) { const t = m.tiers[tier]; const [w, h] = t.size(aspect); return { aspect, tier, w, h, price: t.price, note: t.note }; }
-  const t = m.tiers[tier]; return { aspect, tier, res: t.res, px: t.px || (VPX[t.res] || {})[aspect] || t.res, price: t.price, note: t.note, param: t.param };
+  const t = m.tiers[tier]; return { aspect, tier, res: t.res, px: (t.px && t.px[aspect]) || (VPX[t.res] || {})[aspect] || t.res, price: t.price, note: t.note, param: t.param };
 }
 
 // ───────── Тексты чипа ─────────
@@ -480,7 +487,7 @@ function arGlyph(ar, size = 18) { const r = RATIO[ar]; const w = r >= 1 ? size :
 function rowHtml() {
   const o = OBJ[st.obj], m = curModel();
   const th = o.draft ? '<span class="th draft"></span>' : `<span class="th pic ${o.kind === 'image' ? 'cat' : 'mount'}"></span>`;
-  let h = `<button class="cx obj" data-k="obj">${th}<span class="nm">${o.label}</span>${o.ver ? `<span class="v">· ${o.ver}</span>` : ''}${st.objBy === 'agent' ? '<span class="ag">✦</span>' : ''}</button>`;
+  let h = `<button class="cx obj" data-k="obj">${th}<span class="nm">${o.label}</span>${(st.ver || o.ver) ? `<span class="v">· ${st.ver || o.ver}</span>` : ''}${st.objBy === 'agent' ? '<span class="ag">✦</span>' : ''}</button>`;
   if (st.action !== 'chat') {
     const price = m.free ? '<span class="badge ok">бесплатно</span>' : '';
     h += `<span class="vsep"></span><button class="cx" data-k="exec">${ui.mob ? '' : '<span class="k">Чем:</span>'}<b>${m.label}</b><span class="v">· ${m.where}</span>${price}${I('down', 'xs')}</button>`;
@@ -545,9 +552,11 @@ function fmtBody() {
   h += `<div class="flab">Качество</div><div class="tiers">${['std', 'hi', 'max'].map(t => {
     const tt = m.tiers[t];
     if (tt.off) return `<div class="tier off" title="${tt.off}"><b>${TIER_NAME[t]}</b><span>нет у модели</span><em>&nbsp;</em></div>`;
-    const sz = isImg() ? (() => { const [w, hh] = tt.size(e.aspect); return `${w}×${hh}`; })() : `${tt.res} · ${tt.px || (VPX[tt.res] || {})[e.aspect] || ''}`;
+    const sz = isImg() ? (() => { const [w, hh] = tt.size(e.aspect); return `${w}×${hh}`; })() : `${tt.res} · ${(tt.px && tt.px[e.aspect]) || (VPX[tt.res] || {})[e.aspect] || ''}`;
     return `<button class="tier ${!e.exact && e.tier === t ? 'on' : ''}" data-k="tier-${t}"><b>${TIER_NAME[t]}</b><span>${sz}</span><em>${tt.note ? tt.note + ' · ' : ''}${tt.price}</em></button>`; }).join('')}</div>`;
   if (m.tiers.hi.off) h += `<div class="hint">${m.tiers.hi.off} — «Высокое» и «Макс» у неё недоступны.</div>`;
+  if (!isImg() && m.tiers.max.post && e.tier === 'max') { const [a, b] = e.aspect === '9:16' ? ['768×1344', '1440×2528'] : ['1344×768', '2528×1440'];
+    h += `<div class="hint">«Макс» — два прогона на вашей видеокарте: съёмка ${a} (~5,5 мин), затем увеличение до ${b} (~15 мин). Увеличение можно отменить.</div>`; }
   if (!isImg() && o.film) h += `<div class="hint">Качество у сцен фильма может быть разным: склейка приводит их к размеру фильма без полос.</div>`;
   // ── Кадры A/B у видео ──
   if (!isImg() && o.frames && !o.film && e.aspect !== '16:9') h += framesWarn(e.aspect);
@@ -594,7 +603,7 @@ function askHtml(ar) {
   const s = srcNow(), [ow, oh] = outpaintSize(ar), [cw, ch] = cropSize(ar);
   return `<div class="ask"><div class="q">${s.ar} → ${ar}. Как получить ${ar}?</div>
     <button class="opt" data-k="ask-outpaint">${pvHtml(s.ar, ar, 'pad')}<span class="tx"><b>Дорисовать края</b><small>ИИ · FLUX.1 Fill · $0.04 · ${ow}×${oh}</small></span></button>
-    <button class="opt" data-k="ask-crop">${pvHtml(s.ar, ar, 'crop', st.edit.cropAnchor)}<span class="tx"><b>Обрезать</b><small>Без ИИ · бесплатно · ${cw}×${ch}</small></span></button>
+    <button class="opt" data-k="ask-crop">${pvHtml(s.ar, ar, 'crop', st.edit.cropAnchor)}<span class="tx"><b>Обрезать</b><small>Без ИИ · бесплатно · ${cw}×${ch} · новой версией</small></span></button>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="hint">Рамка обрезки:</span><span class="seg">${[['l', 'Слева'], ['c', 'По центру'], ['r', 'Справа']].map(([k, l]) => `<button class="${st.edit.cropAnchor === k ? 'on' : ''}" data-k="canc-${k}">${l}</button>`).join('')}</span></div>
     <div class="hint">Сама модель пропорции не тянет и не режет — только то, что выберете здесь. <button class="lnk" data-k="ask-cancel">Отмена</button></div></div>`;
 }
@@ -627,6 +636,7 @@ function feedHtml() {
   const sc = SCN[ui.scn];
   if (sc.feed) h += sc.feed(st);
   h += st.feed.map(f => f).join('');
+  if (st.shoot) h += shootCard(st);
   return h;
 }
 function composerHtml() {
@@ -656,6 +666,35 @@ function appHtml() {
 // ───────── Сценарии ─────────
 const cardImg = (t, sub, pics) => `<div class="icard"><div class="t">${I('spark', 's')}<b>${t}</b><span class="sub">${sub}</span></div><div class="pics">${pics}</div></div>`;
 const picBox = (ar, h, cls = '', lb = '') => `<div class="pic ${cls}" style="height:${h}px;width:${Math.round(h * RATIO[ar])}px">${lb ? `<span class="lb">${lb}</span>` : ''}</div>`;
+// Съёмка «Макс» у local H3: две стадии на своей видеокарте
+function shootCard(s) {
+  const port = s.mem.video.aspect === '9:16', base = port ? '768×1344' : '1344×768', big = port ? '1440×2528' : '2528×1440';
+  const k = s.shoot, ok = `<span class="badge ok">${I('check', 'xs')}готово</span>`;
+  const r1 = k === 'shoot'
+    ? `<div class="frow stg now"><span class="n">1</span><span class="tx">Снимаем · ${base}…</span><span class="badge acc">~5,5 мин</span><button class="btn xs" data-k="shoot-cancel">Отменить</button></div>`
+    : `<div class="frow stg"><span class="n">1</span><span class="tx">Съёмка · ${base}</span>${ok}</div>`;
+  const r2 = {
+    shoot: `<div class="frow stg"><span class="n">2</span><span class="tx">Увеличение до 1440p · ${big}</span><span class="badge mut">следом · ~15 мин</span></div>`,
+    up: `<div class="frow stg now"><span class="n">2</span><span class="tx">Увеличиваем до 1440p…</span><span class="badge acc">ещё ~15 мин</span><button class="btn xs" data-k="up-cancel">Отменить увеличение</button></div>`,
+    done: `<div class="frow stg"><span class="n">2</span><span class="tx">Увеличение до 1440p · ${big}</span>${ok}</div>`,
+    fail: `<div class="frow stg"><span class="n">2</span><span class="tx">Увеличение до 1440p</span><span class="badge warn">${I('warn', 'xs')}не удалось</span></div>`,
+    cancel: `<div class="frow stg"><span class="n">2</span><span class="tx">Увеличение до 1440p</span><span class="badge mut">отменено</span></div>`,
+  }[k];
+  let tail = '';
+  if (k === 'shoot') tail = `<button class="sim" data-k="shoot-next">Симуляция: съёмка готова</button>`;
+  if (k === 'up') tail = `<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="sim" data-k="up-done">Симуляция: готово</button><button class="sim" data-k="up-fail">Симуляция: сбой</button></div>`;
+  if (k === 'done') tail = `<div class="pics">${picBox(s.mem.video.aspect, port ? 110 : 62, 'mount', '1440p')}</div><div class="hint">Версия 1 · 1440p · ${big}</div>`;
+  if (k === 'fail') tail = `<div class="alert warn">${I('warn', 's')}<div class="tx">Увеличение до 1440p не удалось. Съёмка 768p сохранена версией 1 — в 1440p её нет.<div class="acts"><button class="btn xs pri" data-k="up-retry">Повторить</button></div></div></div><span class="pend">макет: текст ждёт решения Андрея — сохранять ли 768p</span>`;
+  if (k === 'cancel') tail = `<div class="alert mut">${I('info', 's')}<div class="tx">Увеличение отменено. Съёмка 768p сохранена версией 1 — в 1440p её нет.<div class="acts"><button class="btn xs" data-k="up-retry">Увеличить до 1440p</button></div></div></div><span class="pend">макет: текст ждёт решения Андрея — сохранять ли 768p</span>`;
+  return `<div class="icard"><div class="t">${I('film', 's')}<b>Рассвет · съёмка</b><span class="sub">MiniMax H3 · локально · ${s.mem.video.aspect} · 1440p · бесплатно</span></div>${r1}${r2}${tail}</div>`;
+}
+// Обрезка без ИИ — новая версия; строка и карточка одни для человека и для агента
+function cropFeed(s, by) {
+  const [w, h] = s.edit.srcNow ? [s.edit.srcNow.w, s.edit.srcNow.h] : [0, 0], ar = s.edit.srcNow.ar;
+  const who = by === 'agent' ? `<span class="ag">✦</span> Claude обрезал` : 'Вы обрезали';
+  return `<div class="quiet">${I('crop', 'xs')} ${who} без ИИ: <b>${w}×${h}</b> · ${ar} · бесплатно · версия 2</div>`
+    + cardImg('кот.png · v2', `${w}×${h} · ${ar} · обрезано без ИИ${by === 'agent' ? ' · ✦ Claude' : ''}`, picBox(ar, 84, 'cat'));
+}
 const filmCard = st2 => {
   const mism = st2.film.s2 && st2.film.s2 !== st2.film.aspect, a2 = st2.film.s2 || st2.film.aspect;
   return `<div class="icard"><div class="t">${I('film', 's')}<b>утро-в-горах.film</b><span class="sub">фильм · ${st2.film.aspect} · задала сцена 1</span></div>
@@ -702,8 +741,8 @@ const SCN = {
       ['Выбрать 1:1 — вопрос «Как получить 1:1?»', 'ear-1:1', s => { s.edit.ask = '1:1'; }],
       ['Путь А: «Дорисовать края» → действие «Дорисовать · $0.04», 1600×1600', 'ask-outpaint', s => { askOutpaint(s); }],
       ['Запустить дорисовку', 'run', s => { runNow(s); }],
-      ['Путь Б: снова 1:1, рамка «Слева»', 'fmt', s => { s.feed = []; s.action = 'edit'; s.edit = { mode: 'source', ask: '1:1', cropAnchor: 'l', srcNow: null }; s.pop = 'fmt'; }],
-      ['«Обрезать» — шаг без ИИ, исходник теперь 1:1, поле — «Изменить»', 'ask-crop', s => { askCrop(s); }],
+      ['Путь Б: снова 1:1, рамка «Слева»', 'fmt', s => { s.feed = []; s.ver = null; s.action = 'edit'; s.edit = { mode: 'source', ask: '1:1', cropAnchor: 'l', srcNow: null }; s.pop = 'fmt'; }],
+      ['«Обрезать» — без ИИ, новая версия v2 в 1:1, поле — «Изменить»', 'ask-crop', s => { askCrop(s); }],
     ] },
   s5: { t: '5 · Видео-сцена: 9:16 · 720p, кадры 16:9', why: 'У видео тот же чип: пропорции и качество по возможностям модели. Кадры A/B в других пропорциях — предупреждение «будут подрезаны» с превью и якорем рамки.',
     init: s => { s.obj = 'dawn'; s.action = 'shoot'; s.vmodel = 'seed'; },
@@ -750,6 +789,27 @@ const SCN = {
       ['Открыть «Формат»: только «Как у модели» с причиной', 'fmt', s => { s.pop = 'fmt'; }],
       ['«Сменить модель в «Чем»» → FLUX.2 Pro, формат вернулся 16:9', 'exec2', s => { pickModel(s, 'flux'); s.pop = 'fmt'; }],
     ] },
+  s10: { t: '10 · Локальное видео «Макс»: съёмка + увеличение до 1440p', why: 'У MiniMax H3 «Макс» — 1440p в два прогона на своей видеокарте: съёмка 1344×768, затем латентное увеличение. Время — в подписи ступени, увеличение — отдельная стадия карточки, его можно отменить. 768p вместо 1440p молча не подставляем.',
+    init: s => { s.obj = 'dawn'; s.action = 'shoot'; s.vmodel = 'h3'; },
+    feed: () => `<div class="icard"><div class="t">${I('film', 's')}<b>Рассвет</b><span class="sub">сцена · кадры 16:9</span></div><div class="pics">${picBox('16:9', 54, 'mount', 'A')}${picBox('16:9', 54, '', 'B')}</div></div>`,
+    steps: [
+      ['Открыть «Формат»: MiniMax H3, ступени 480p / 768p / 1440p', 'fmt', s => { s.pop = 'fmt'; }],
+      ['«Макс» — «1440p · 2528×1440 · бесплатно · ~21 мин» и подсказка о двух прогонах', 'tier-max', s => { s.mem.video.tier = 'max'; }],
+      ['Закрыть: чип «16:9 · 1440p», кнопка «Снять · бесплатно · ~21 мин»', 'fmt', s => { s.pop = null; }],
+      ['Снять — карточка: стадия 1 «Снимаем», стадия 2 следом', 'run', s => { runNow(s); }],
+      ['Съёмка готова — «Увеличиваем до 1440p… ещё ~15 мин»', 'shoot-next', s => { s.shoot = 'up'; }],
+      ['«Отменить увеличение» (текст ждёт решения)', 'up-cancel', s => { s.shoot = 'cancel'; }],
+      ['«Увеличить до 1440p» — стадия 2 снова идёт', 'up-retry', s => { s.shoot = 'up'; }],
+      ['Сбой увеличения — «Повторить» (текст ждёт решения)', 'up-fail', s => { s.shoot = 'fail'; }],
+      ['«Повторить» → готово: версия 1 · 1440p', 'up-retry', s => { s.shoot = 'done'; }],
+    ] },
+  s11: { t: '11 · Агент обрезает: «обрежь до 1:1»', why: 'Обрезка без ИИ — новая версия картинки, а не шаг. Строка ленты и карточка те же, что у ручной «Обрезать» (сценарий 4), только «Вы» → «✦ Claude». Формат проекта обрезка не меняет.',
+    init: s => { s.obj = 'cat'; s.action = 'chat'; },
+    feed: () => `<div class="icard"><div class="t">${I('spark', 's')}<b>кот.png</b><span class="sub">1600×1200 · 4:3 · исходник</span></div><div class="pics">${picBox('4:3', 84, 'cat')}</div></div><div class="msg user">Обрежь до 1:1, кот по центру</div>`,
+    steps: [
+      ['Ход Claude: image_generate(op "crop", aspect "1:1", anchor "center") → версия 2', 'obj', s => { agentCrop(s); }],
+      ['Открыть «Формат»: «Как у исходника · 1:1», формат проекта не тронут', 'fmt', s => { s.pop = 'fmt'; }],
+    ] },
 };
 
 // ───────── Операции ─────────
@@ -772,23 +832,29 @@ function pickModel(s, k) {
 function askOutpaint(s) { s.edit.mode = 'outpaint'; s.edit.aspect = s.edit.ask; s.edit.ask = null; s.action = 'outpaint'; }
 function askCrop(s) {
   const ar = s.edit.ask; const save = st; st = s; const [w, h] = cropSize(ar); st = save;
-  s.edit = { mode: 'source', ask: null, cropAnchor: s.edit.cropAnchor, srcNow: { w, h, ar } }; s.action = 'edit'; s.pop = null;
-  s.feed.push(`<div class="quiet">${I('crop', 'xs')} Обрезано без ИИ: <b>${w}×${h}</b> · ${ar} · шаг v1·2</div>` + cardImg('кот.png · v1·2', `${w}×${h} · без ИИ`, picBox(ar, 84, 'cat')));
+  s.edit = { mode: 'source', ask: null, cropAnchor: s.edit.cropAnchor, srcNow: { w, h, ar } }; s.action = 'edit'; s.pop = null; s.ver = 'v2';
+  s.feed.push(cropFeed(s, 'human'));
 }
 function runNow(s) {
   const save = st; st = s; const lbl = runLabel(); st = save;
   if (s.action === 'outpaint') { const save2 = st; st = s; const [w, h] = outpaintSize(s.edit.aspect); st = save2;
     s.feed.push(`<div class="quiet">Вы запустили: <b>Дорисовать</b> · FLUX.1 Fill · ${s.edit.aspect} · ${w}×${h}</div>` + cardImg('кот.png · v2', `${w}×${h} · дорисовано`, `<div class="pv" style="width:84px;height:84px"><div class="pad" style="inset:0"></div><div class="img pic cat" style="left:0;top:10.5px;width:84px;height:63px;border-radius:0"></div></div>`));
-    s.edit.mode = 'source'; s.edit.srcNow = { w, h, ar: s.edit.aspect }; s.action = 'edit';
+    s.edit.mode = 'source'; s.edit.srcNow = { w, h, ar: s.edit.aspect }; s.action = 'edit'; s.ver = 'v2';
   } else if (s.action === 'draw') {
     const save3 = st; st = s; const e = eff(); st = save3;
     if (!e.none) s.feed.push(`<div class="quiet">Вы запустили: <b>Нарисовать</b> · ${IMG[s.imodel].label} · ${e.exact ? 'точно' : e.aspect} · ${e.w}×${e.h}</div>` + cardImg('Новая картинка · v1', `${e.w}×${e.h}`, picBox(e.exact ? '16:9' : e.aspect, 84, 'mount')));
     else s.feed.push(`<div class="quiet">Вы запустили: <b>Нарисовать</b> · Soul · размер модели</div>`);
   } else if (s.action === 'shoot') {
     const save4 = st; st = s; const e = eff(); st = save4;
-    s.feed.push(`<div class="quiet">Вы запустили: <b>Снять</b> · ${VID[s.vmodel].label} · ${e.aspect} · ${e.res}</div>`);
+    const up = VID[s.vmodel].tiers[e.tier].post;
+    s.feed.push(`<div class="quiet">Вы запустили: <b>Снять</b> · ${VID[s.vmodel].label} · ${e.aspect} · ${e.res}${up ? ' · съёмка + увеличение' : ''}</div>`);
+    if (up) s.shoot = 'shoot';
   }
   s.typed = ''; s.pop = null;
+}
+function agentCrop(s) {
+  s.edit = { mode: 'source', ask: null, cropAnchor: 'c', srcNow: { w: 1200, h: 1200, ar: '1:1' } }; s.ver = 'v2'; s.pop = null;
+  s.feed.push(`<div class="tool">image_generate(threadId: "t_41", op: "crop", aspect: "1:1", anchor: "center")</div>` + cropFeed(s, 'agent'));
 }
 function agentSets(s) {
   s.mem.image = { aspect: '9:16', tier: 'hi', exact: null, by: 'agent' }; s.pop = null;
@@ -820,6 +886,11 @@ function onKey(k, el) {
   else if (k === 'ask-cancel') st.edit.ask = null;
   else if (k.startsWith('canc-')) st.edit.cropAnchor = k.slice(5);
   else if (k.startsWith('fanc-')) st.frameAnchor = k.slice(5);
+  else if (k === 'shoot-next' || k === 'up-retry') st.shoot = 'up';
+  else if (k === 'up-done') st.shoot = 'done';
+  else if (k === 'up-fail') st.shoot = 'fail';
+  else if (k === 'up-cancel') st.shoot = 'cancel';
+  else if (k === 'shoot-cancel') st.shoot = null;
   else if (k === 'film-keep') { st.film.warnAsk = null; st.film.s2 = null; }
   else if (k === 'film-force') { st.film.s2 = st.film.warnAsk; st.film.warnAsk = null; }
   else if (k === 'film-fix') { st.film.s2 = null; st.film.warnAsk = null; }

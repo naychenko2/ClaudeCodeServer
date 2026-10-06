@@ -151,7 +151,7 @@ public sealed class VideoThreadStore(string root, TimeProvider? time = null)
             List<VideoClipVersionDto> added = [.. results
                 .Where(r => !scene.Versions.Any(v => v.JobId == jobId && v.Variant == r.Variant))
                 .Select((r, i) => new VideoClipVersionDto(NewId(), number + i, jobId, r.Variant, launch.Provider, launch.Model,
-                    r.DurationSec, r.SizeBytes, r.HasSound, launch.License, r.Cost, launch.Initiator, inputs, now, r.Width, r.Height, r.UpscaleError))];
+                    r.DurationSec, r.SizeBytes, r.HasSound, launch.License, r.Cost, launch.Initiator, inputs, now, r.Width, r.Height, r.UpscaleError, r.UpscaleCancelled))];
             var after = scene with
             {
                 Versions = [.. scene.Versions, .. added],

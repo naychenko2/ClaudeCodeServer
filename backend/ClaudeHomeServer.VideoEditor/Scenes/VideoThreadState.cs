@@ -51,7 +51,7 @@ public sealed record VideoThreadWrite(VideoThreadWriteStatus Status, VideoThread
 
 // Итог одного варианта запуска: файл лежит в рабочей папке задачи (VideoEditWorkspace), здесь — метаданные
 public sealed record VideoVariantResult(int Variant, double DurationSec, long SizeBytes, bool HasSound, VideoCostDto? Cost,
-    int? Width = null, int? Height = null, string? UpscaleError = null);
+    int? Width = null, int? Height = null, string? UpscaleError = null, bool? UpscaleCancelled = null);
 
 public static class VideoSignatures
 {

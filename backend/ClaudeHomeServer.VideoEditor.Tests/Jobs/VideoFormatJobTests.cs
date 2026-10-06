@@ -1,4 +1,6 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.ChatContext;
@@ -123,7 +125,7 @@ public sealed class VideoFormatJobTests : IDisposable
             Probes.Add(request);
             var max = request.Format?.PostStep == FormatPostSteps.Upscale;
             return Task.FromResult(new VideoEstimate(0, VideoPriceUnits.Free, false, VideoEstimateSources.Provider,
-                max ? 333 + 915 : 333, 0, max ? 915 : null, max ? FormatPostSteps.Upscale : null));
+                max ? 333 + 915 : 333, 0, max ? 915 : null, max ? FormatPostSteps.Upscale : null, max ? 333 : null));
         }
 
         public Task<VideoResult> RunAsync(VideoRequest req, IProgress<VideoProgress> progress, CancellationToken ct)
@@ -221,8 +223,46 @@ public sealed class VideoFormatJobTests : IDisposable
         engine.Probes.Single().Aspect.Should().Be("9:16");
         quote.Price.Eta.Should().Be(333 + 915);
         quote.Price.UpscaleEta.Should().Be(915);
+        quote.Price.ShotEta.Should().Be(333, "время съёмки отдаёт сервер, разность eta − upscaleEta на клиенте не считается");
         quote.Price.PostStep.Should().Be("upscale");
         quote.Format!.Aspect.Should().Be("9:16");
+    }
+
+    [Fact]
+    public async Task Quote_of_a_plain_tier_has_no_shot_eta_and_count_multiplies_it()
+    {
+        var engine = new H3Fake();
+        var (svc, _) = Service(engine);
+        var scene = AddScene();
+
+        var plain = (await svc.QuoteAsync(Owner, Scope, Quote(scene, Wish("16:9", FormatTier.Standard)), default)).Value!;
+        var max = (await svc.QuoteAsync(Owner, Scope, Quote(scene, Wish("16:9", FormatTier.Max)) with { Count = 2 }, default)).Value!;
+
+        plain.Price.ShotEta.Should().BeNull("у ступени без увеличения нет разбиения на две части");
+        max.Price.ShotEta.Should().Be(333 * 2);
+        max.Price.UpscaleEta.Should().Be(915 * 2);
+    }
+
+    // Котировка конкретной ступени приходит без автора и времени и ничего не пишет: ни в префы, ни в сцену
+    [Fact]
+    public async Task Quote_with_format_without_author_and_time_writes_neither_prefs_nor_scene()
+    {
+        var engine = new H3Fake();
+        var (svc, prefs) = Service(engine);
+        var scene = AddScene(Wish("16:9", FormatTier.Standard));
+        var prefsBefore = JsonSerializer.Serialize(prefs.Get(Owner, Scope));
+        var threadBefore = JsonSerializer.Serialize(_store.Get(Owner, Session));
+        var web = new JsonSerializerOptions(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) } };
+        var body = JsonSerializer.Deserialize<VideoQuoteRequest>(
+            $$$"""{"sessionId":"{{{Session}}}","sceneId":"{{{scene}}}","provider":"local","count":1,"durationSec":5,"format":{"mode":"aspect","aspect":"9:16","tier":"max"}}""",
+            web)!;
+
+        var quote = (await svc.QuoteAsync(Owner, Scope, body, default)).Value!;
+
+        quote.Format!.Should().Match<ResolvedFormat>(f => f.Aspect == "9:16" && f.Tier == FormatTier.Max);
+        quote.Price.ShotEta.Should().Be(333);
+        JsonSerializer.Serialize(prefs.Get(Owner, Scope)).Should().Be(prefsBefore, "котировка не пишет в префы");
+        JsonSerializer.Serialize(_store.Get(Owner, Session)).Should().Be(threadBefore, "котировка не пишет в сцену");
     }
 
     [Fact]
@@ -437,6 +477,7 @@ public sealed class VideoFormatJobTests : IDisposable
         var version = _store.Get(Owner, Session).Scenes.Single().Versions.Single();
         (version.Width, version.Height).Should().Be((1344, 768));
         version.UpscaleError.Should().Contain("не удалось");
+        version.UpscaleCancelled.Should().BeNull("сбой — не отмена");
         _store.Get(Owner, Session).Scenes.Single().Launches.Single().Status.Should().Be(VideoLaunchStatus.Done);
     }
 
@@ -449,7 +490,7 @@ public sealed class VideoFormatJobTests : IDisposable
             p.Report(new VideoProgress(VideoStage.Queued, RemoteId: "t-shot", Accepted: true));
             p.Report(new VideoProgress(VideoStage.Upscaling, EtaSeconds: 915, RemoteId: "t-up"));
             await gate.Task;
-            return new VideoResult(VideoOutcome.Ok, new VideoFile([1], "video/mp4", ".mp4", 5, true, 1344, 768, "Увеличение отменено"), null, false, "t", null);
+            return new VideoResult(VideoOutcome.Ok, new VideoFile([1], "video/mp4", ".mp4", 5, true, 1344, 768, "Увеличение отменено", true), null, false, "t", null);
         });
         var (svc, _) = Service(engine);
         var scene = AddScene(Wish("16:9", FormatTier.Max));
@@ -464,7 +505,9 @@ public sealed class VideoFormatJobTests : IDisposable
         svc.Get(Owner, Scope.Key, jobId)!.Status.Should().Be("upscaling", "запуск не отменён — съёмка 768p дойдёт версией");
         gate.SetResult();
         await svc.WhenDone(jobId);
-        _store.Get(Owner, Session).Scenes.Single().Versions.Single().UpscaleError.Should().Be("Увеличение отменено");
+        var version = _store.Get(Owner, Session).Scenes.Single().Versions.Single();
+        version.UpscaleError.Should().Be("Увеличение отменено");
+        version.UpscaleCancelled.Should().BeTrue("отмена — явный признак, а не строка");
     }
 
     [Fact]
@@ -513,6 +556,23 @@ public sealed class VideoFormatJobTests : IDisposable
         p.Report(new VideoProgress(VideoStage.Upscaling, EtaSeconds: 915, RemoteId: "t-up2"));
         return Task.FromResult(new VideoResult(VideoOutcome.Ok, new VideoFile([9, 9], "video/mp4", ".mp4", 5, true, 2528, 1440), null,
             false, "t-up2", null));
+    }
+
+    [Fact]
+    public async Task Retry_upscale_accepts_a_cancelled_version_the_same_way_as_a_failed_one()
+    {
+        var engine = new H3Fake((r, p, ct) => Task.FromResult(new VideoResult(VideoOutcome.Ok,
+            new VideoFile([1], "video/mp4", ".mp4", 5, true, 1344, 768, "Увеличение отменено", true), null, false, "t-shot", null)))
+        { Retry = Big };
+        var (svc, _) = Service(engine);
+        var (scene, versionId) = await FailedUpscaleVersion(svc);
+        _store.Get(Owner, Session).Scenes.Single().Versions.Single().UpscaleCancelled.Should().BeTrue();
+
+        var started = await svc.RetryUpscaleAsync(Owner, Scope, Session, scene, versionId, VideoInitiators.Human, default);
+
+        started.ErrorCode.Should().BeNull("кнопка «Увеличить до 1440p» у отменённой зовёт ту же ручку");
+        await svc.WhenDone(started.Value!.JobId);
+        _store.Get(Owner, Session).Scenes.Single().Versions.Should().HaveCount(2);
     }
 
     [Fact]

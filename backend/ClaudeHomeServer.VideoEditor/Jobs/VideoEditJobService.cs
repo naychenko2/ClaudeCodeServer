@@ -291,7 +291,7 @@ public sealed class VideoEditJobService : IDisposable
             ? await quoter.EstimateAsync(model, probe, ct)
             : FromHint(engine, model, probe);
         return new VideoPriceDto(estimate.Amount * count, estimate.Unit, estimate.Approx, estimate.Source,
-            estimate.EtaSeconds * count, estimate.QueueLength, estimate.UpscaleEtaSeconds * count, estimate.PostStep);
+            estimate.EtaSeconds * count, estimate.QueueLength, estimate.UpscaleEtaSeconds * count, estimate.PostStep, estimate.ShotEtaSeconds * count);
     }
 
     // Ориентир каталога: цена за секунду × длительность или цена за запуск; нет ориентира — суммы нет
@@ -518,7 +518,7 @@ public sealed class VideoEditJobService : IDisposable
         if (result.File is not { Bytes.Length: > 0 } file) return null;
         _workspace.SaveClip(job.OwnerId, job.Id, variant, file.Bytes, file.Extension);
         return new VideoVariantResult(variant, file.DurationSec ?? job.Quote.DurationSec, file.Bytes.LongLength,
-            file.HasSound ?? job.Quote.Sound, null, file.Width, file.Height, file.UpscaleError);
+            file.HasSound ?? job.Quote.Sound, null, file.Width, file.Height, file.UpscaleError, file.UpscaleCancelled);
     }
 
     private async Task CompleteAsync(Job job, IReadOnlyList<VideoCost?> costs, string? partialError)
@@ -801,7 +801,7 @@ public sealed class VideoEditJobService : IDisposable
         // Котировки у повтора нет: «котировка» только несёт модель, формат и лицензию исходного запуска
         var quote = context.Quote with
         {
-            Id = NewId(), Count = 1, Price = context.Quote.Price with { Eta = null, UpscaleEta = null, PostStep = null },
+            Id = NewId(), Count = 1, Price = context.Quote.Price with { Eta = null, UpscaleEta = null, ShotEta = null, PostStep = null },
             ExpiresAt = Now(),
         };
         Job job;

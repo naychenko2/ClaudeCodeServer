@@ -86,6 +86,17 @@ public sealed class VideoContractExamplesTests
             $"пример «{name}» и сериализация типа разошлись.\nПример: {original}\nТип:    {back}");
     }
 
+    // Новые поля контракта «Формата» названы в ADR дословно: shotEta в примере котировки, upscaleCancelled в описании версии
+    [Fact]
+    public void Котировка_отдаёт_shotEta_рядом_с_upscaleEta_а_версия_описывает_upscaleCancelled()
+    {
+        var price = JsonNode.Parse(ReadExamples()[nameof(VideoQuoteResponse)])!["price"]!;
+        price["shotEta"]!.GetValue<int>().Should().Be(330);
+        price["upscaleEta"]!.GetValue<int>().Should().Be(915);
+        price["eta"]!.GetValue<int>().Should().Be(330 + 915, "eta остаётся суммой для совместимости");
+        File.ReadAllText(FindAdr()).Should().Contain("\"upscaleCancelled\": true");
+    }
+
     [Fact]
     public void В_ADR_нет_примеров_без_типа()
     {

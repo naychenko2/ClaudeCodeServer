@@ -10,6 +10,8 @@ namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
 // ревизии (основной video-scene, референсы frame-a/frame-b), SceneId тела игнорируется; текст поля ввода едет
 // в Params.request. Ревизия не совпала со стором или с ревизией котировки — 409 context_changed
 
+// Котировка ничего не пишет ни в префы, ни в сцену, поэтому у Format поля by и at необязательны и игнорируются: клиент
+// спрашивает цену конкретной ступени, не выдавая себя за автора желания (проверяет VideoQuoteWritesNothingTests)
 // Format — желание формата ЭТОГО запуска (необязательно: нет — берётся из настроек сцены, затем префов, ADR-025);
 // Aspect — прежнее поле, синоним Format.Aspect
 public sealed record VideoQuoteRequest(
@@ -27,9 +29,10 @@ public sealed record VideoQuoteRequest(
 // Price.Unit — usd | credits | free (local бесплатен); Amount null — цена станет известна после запуска.
 // Eta — полное время запуска, у «Макс» local H3 это съёмка + апскейл (ADR-025, решение 1); UpscaleEta — та его часть,
 // что занимает апскейл (для подписи «съёмка ~5,5 мин, затем увеличение ~15 мин»). PostStep == "upscale" при Eta == null —
-// апскейл ролика такой длины не замерен: «время не замерено», число не выдумываем
+// апскейл ролика такой длины не замерен: «время не замерено», число не выдумываем. ShotEta — часть Eta на саму съёмку
+// (только при PostStep; сервер отдаёт замер, клиент разность Eta − UpscaleEta не считает). Нет замера съёмки — поля нет
 public sealed record VideoPriceDto(double? Amount, string Unit, bool Approx, string Source, int? Eta, int? QueueLength,
-    int? UpscaleEta = null, string? PostStep = null);
+    int? UpscaleEta = null, string? PostStep = null, int? ShotEta = null);
 
 public sealed record VideoQuoteResponse(
     string QuoteId,

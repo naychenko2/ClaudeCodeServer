@@ -84,7 +84,8 @@ public sealed record VideoEstimate(
     int? EtaSeconds = null,
     int? QueueLength = null,
     int? UpscaleEtaSeconds = null,
-    string? PostStep = null);
+    string? PostStep = null,
+    int? ShotEtaSeconds = null);
 
 public static class VideoEstimateSources
 {
@@ -165,7 +166,7 @@ public sealed record VideoRequest(
 // Клип варианта: байты mp4 и признаки, которые драйвер знает от поставщика (null — неизвестно). Width и Height —
 // размер ролика. UpscaleError — «Макс» local H3: увеличение не удалось или отменено, в Bytes — съёмка 768p как есть
 public sealed record VideoFile(byte[] Bytes, string ContentType, string Extension, double? DurationSec = null,
-    bool? HasSound = null, int? Width = null, int? Height = null, string? UpscaleError = null);
+    bool? HasSound = null, int? Width = null, int? Height = null, string? UpscaleError = null, bool? UpscaleCancelled = null);
 
 public sealed record VideoCost(double Amount, string Unit);
 

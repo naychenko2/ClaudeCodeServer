@@ -71,7 +71,7 @@ public sealed record VideoInputsSnapshotDto(string Text, string? FrameA, string?
 // Версия клипа — один вариант запуска. Width и Height — размер ролика, если драйвер его знает (local — всегда).
 // UpscaleError — у «Макс» local H3 увеличение до 1440p не удалось (ошибка или отмена), а версия — съёмка 768p,
 // сохранённая как есть: текст причины. 768p вместо 1440p молча не подставляется никогда — поле и есть пометка
-// «увеличение не удалось» (решение Андрея по Б2 ждёт подтверждения: поведение переключается одной константой). File — путь в рабочей папке модуля от её корня; клиент читает
+// «увеличение не удалось»; UpscaleCancelled = true — его отменил человек (отличать от сбоя по тексту нельзя), иначе поля нет (решение Андрея по Б2 ждёт подтверждения: поведение переключается одной константой). File — путь в рабочей папке модуля от её корня; клиент читает
 // файл ручкой GET …/scenes/{sceneId}/versions/{versionId}/file. License — лицензия модели на момент запуска
 public sealed record VideoClipVersionDto(
     string VersionId,
@@ -90,7 +90,8 @@ public sealed record VideoClipVersionDto(
     DateTime CreatedAt,
     int? Width = null,
     int? Height = null,
-    string? UpscaleError = null);
+    string? UpscaleError = null,
+    bool? UpscaleCancelled = null);
 
 // Запуск в нить: якорь в ленте — по JobId. Status — VideoLaunchStatus.*. Interrupted дублирует
 // Status == "interrupted" ради простого условия на фронте: запуск оборвал перезапуск сервера,

@@ -680,6 +680,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             v.Width,
             v.Height,
             v.UpscaleError,
+            v.UpscaleCancelled,
         }),
         running = s.Launches.Where(l => l.Status == VideoLaunchStatus.Running).Select(l =>
             _jobs.Get(owner, scope.Key, l.JobId) is { } j

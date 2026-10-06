@@ -98,7 +98,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         // «Макс»: время = съёмка + апскейл; одной из частей нет в таблице замеров — числа не выдумываем
         var total = upscale ? (shot is { } a && up is { } b ? a + b : null) : shot;
         return new VideoEstimate(0, VideoPriceUnits.Free, false, VideoEstimateSources.Provider, total, queue,
-            UpscaleEtaSeconds: up, PostStep: upscale ? FormatPostSteps.Upscale : null);
+            UpscaleEtaSeconds: up, PostStep: upscale ? FormatPostSteps.Upscale : null, ShotEtaSeconds: upscale ? shot : null);
     }
 
     private static bool WantsUpscale(VideoRequest req) => req.Format?.PostStep == FormatPostSteps.Upscale;
@@ -248,7 +248,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         if (shot is null)
             return VideoResult.Fail(cancelled ? VideoOutcome.Cancelled : VideoOutcome.Failed, text);
         return KeepShotWhenUpscaleFails
-            ? new VideoResult(VideoOutcome.Ok, shot with { UpscaleError = text }, Free, false, shotTicket, null)
+            ? new VideoResult(VideoOutcome.Ok, shot with { UpscaleError = text, UpscaleCancelled = cancelled ? true : null }, Free, false, shotTicket, null)
             : new VideoResult(VideoOutcome.Failed, null, Free, false, shotTicket, text + ". Съёмка 768p не сохранена");
     }
 

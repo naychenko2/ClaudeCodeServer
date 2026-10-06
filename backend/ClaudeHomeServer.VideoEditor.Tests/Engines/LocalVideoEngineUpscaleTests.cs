@@ -144,6 +144,7 @@ public class LocalVideoEngineUpscaleTests
         result.Outcome.Should().Be(VideoOutcome.Ok);
         result.File!.Bytes.Should().Equal(new byte[] { 7, 7 }, "версия — съёмка 768p, а не подмена увеличенным");
         result.File.UpscaleError.Should().Contain("не удалось").And.Contain("CUDA out of memory");
+        result.File.UpscaleCancelled.Should().BeNull("сбой — не отмена");
         (result.File.Width, result.File.Height).Should().Be((1344, 768), "размер съёмки — «Высокое»");
     }
 
@@ -193,6 +194,7 @@ public class LocalVideoEngineUpscaleTests
 
         result.Outcome.Should().Be(VideoOutcome.Ok);
         result.File!.UpscaleError.Should().Be("Увеличение отменено");
+        result.File.UpscaleCancelled.Should().BeTrue();
         result.File.Bytes.Should().Equal(7, 7);
         media.Verify(m => m.CancelAsync("t-up", It.IsAny<CancellationToken>()), Times.Once);
         media.Verify(m => m.CancelAsync("t-shot", It.IsAny<CancellationToken>()), Times.Never);
@@ -232,9 +234,11 @@ public class LocalVideoEngineUpscaleTests
 
         max.EtaSeconds.Should().Be(333 + 915);
         max.UpscaleEtaSeconds.Should().Be(915);
+        max.ShotEtaSeconds.Should().Be(333, "замер съёмки отдельным полем, а не разностью на клиенте");
         max.PostStep.Should().Be(FormatPostSteps.Upscale);
         high.EtaSeconds.Should().Be(333);
         high.UpscaleEtaSeconds.Should().BeNull();
+        high.ShotEtaSeconds.Should().BeNull();
         high.PostStep.Should().BeNull();
     }
 
@@ -251,6 +255,7 @@ public class LocalVideoEngineUpscaleTests
         var max = await engine.EstimateAsync(engine.Models[0], Scene(Tier(FormatTier.Max)), CancellationToken.None);
 
         max.EtaSeconds.Should().BeNull("ролик длиннее замеренного: «время не замерено», число не выдумываем");
+        max.ShotEtaSeconds.Should().Be(943, "съёмка замерена — её время отдаём");
         max.PostStep.Should().Be(FormatPostSteps.Upscale);
     }
 

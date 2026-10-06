@@ -324,7 +324,8 @@ JSON ниже — единственное описание формы для ф
 ```
 
 `width` и `height` — размер ролика, если драйвер его знает (local — всегда). Увеличение «Макс» local H3 не удалось (ошибка или отмена), версия — съёмка 768p как есть:
-`"width": 1344, "height": 768, "upscaleError": "Увеличение до 1440p не удалось: ComfyUI завершил задачу ошибкой"` — поле `upscaleError` и есть пометка «увеличение не удалось».
+`"width": 1344, "height": 768, "upscaleError": "Увеличение до 1440p не удалось: ComfyUI завершил задачу ошибкой"` — поле `upscaleError` и есть пометка «увеличение не удалось». Если увеличение отменил человек, рядом `"upscaleCancelled": true` (текст `upscaleError` — «Увеличение отменено»);
+у сбоя поля нет. Клиент различает «отменено» и «не удалось» по `upscaleCancelled`, а не по тексту. «Повторить увеличение» принимает версию с любым `upscaleError`.
 
 #### VideoLaunchDto
 
@@ -545,15 +546,18 @@ JSON ниже — единственное описание формы для ф
 
 ```json
 {
-  "quoteId": "q-1", "provider": "fal", "model": "veo-3.1", "count": 2, "durationSec": 8,
-  "price": { "amount": 3.2, "unit": "usd", "approx": true, "source": "pricing", "eta": 240, "queueLength": 1 },
+  "quoteId": "q-1", "provider": "local", "model": "minimax-h3", "count": 1, "durationSec": 5,
+  "price": { "amount": 0, "unit": "free", "approx": false, "source": "provider", "eta": 1245, "queueLength": 0, "upscaleEta": 915, "postStep": "upscale", "shotEta": 330 },
   "license": "watermark", "heavy": false, "expiresAt": "2026-10-02T15:10:00Z",
   "format": { "mode": "aspect", "aspect": "9:16", "tier": "max", "width": 1440, "height": 2528, "wireValue": "full", "postStep": "upscale", "substituted": false, "rounded": false }
 }
 ```
 
-У «Макс» local H3 `price.eta` = съёмка + апскейл, `price.upscaleEta` — его часть, `price.postStep = "upscale"`; ролик, апскейл которого не замерен, — `eta` без поля и `postStep`
-(«время не замерено»).
+У «Макс» local H3 `price.eta` = съёмка + апскейл, `price.shotEta` и `price.upscaleEta` — его части (замеры отдельно, разность на клиенте не считается), `price.postStep = "upscale"`.
+Ролик, апскейл которого не замерен, — `eta` и `upscaleEta` без поля, `postStep` остаётся («время не замерено»); `shotEta` есть, если замерена съёмка.
+
+**Котировка ничего не пишет** ни в префы, ни в сцену. `format.by` и `format.at` в запросе котировки необязательны и игнорируются: чтобы узнать цену и время
+конкретной ступени, клиент шлёт `{ "format": { "mode": "aspect", "aspect": "16:9", "tier": "max" } }` — без автора и без времени.
 
 #### RetryQuote
 
@@ -605,7 +609,7 @@ JSON ниже — единственное описание формы для ф
 по живому тикету съёмки, без пересъёмки. Идёт стадия `upscaling` у **новой** задачи `jobId` (события `video_edit_*`, отмена — `DELETE jobs/{jobId}/upscale`),
 тяжёлая задача GPU через ту же очередь. Удачный итог — **новая версия 1440p** (без `upscaleError`), версия 768p остаётся как была; сбой или отмена версий не добавляют.
 Отказы — `{ "error", "code" }`: `409 upscale_retry_unavailable` «Повторить увеличение уже нельзя — переснимите сцену» (тикет съёмки недоступен: рестарт сервера или прошло
-больше 12 ч), `400 invalid_request` — у версии нет `upscaleError` или у модели нет увеличения, `404 scene_not_found` / `version_not_found`, `429 heavy_busy` — GPU занят другой тяжёлой задачей.
+больше 12 ч), `400 invalid_request` — у версии нет `upscaleError` (отменённая и упавшая версии принимаются одинаково) или у модели нет увеличения, `404 scene_not_found` / `version_not_found`, `429 heavy_busy` — GPU занят другой тяжёлой задачей.
 
 #### SaveSceneRequest
 

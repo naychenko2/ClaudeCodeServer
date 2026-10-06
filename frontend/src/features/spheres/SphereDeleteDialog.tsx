@@ -4,18 +4,15 @@ import { api } from '../../lib/api';
 import { C, FS, MODAL_W } from '../../lib/design';
 import { Button, ConfirmDialog, Modal } from '../../components/ui';
 import { invalidateProjectsCache } from '../projects/useAllProjects';
+import { plural } from '../../lib/plural';
+import { deleteDialogMode, deleteFailure } from './sphereLogic';
 
 interface Props {
   sphere: ProjectGroup;
   onDeleted: (id: string) => void;
-  // Переход на страницу сферы (когда удалению мешают персоны)
-  onOpenPage: (id: string) => void;
+  // Переход на страницу сферы (когда удалению мешают персоны); на самой странице сферы не нужен — кнопки нет
+  onOpenPage?: (id: string) => void;
   onClose: () => void;
-}
-
-function plural(n: number, one: string, few: string, many: string) {
-  const m10 = n % 10, m100 = n % 100;
-  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? few : many;
 }
 
 // Удаление сферы. Память удалению не мешает: пустая от персон сфера удаляется одним
@@ -40,14 +37,15 @@ export function SphereDeleteDialog({ sphere, onDeleted, onOpenPage, onClose }: P
       invalidateProjectsCache();
       onDeleted(sphere.id);
     } catch (e: unknown) {
-      const err = e as Error & { status?: number; body?: { personas?: number } };
       // Персон успели добавить между открытием диалога и подтверждением
-      if (err.status === 409) { setPersonas(err.body?.personas ?? 1); return; }
-      setError(err.message || 'Не удалось удалить сферу');
+      const f = deleteFailure(e);
+      if ('personas' in f) setPersonas(f.personas);
+      else setError(f.error);
     }
   };
 
-  if (error) {
+  const mode = deleteDialogMode({ memory, personas, error });
+  if (mode === 'error') {
     return (
       <Modal title={`Сферу «${sphere.name}» не удалось удалить`} width={MODAL_W.confirm} onClose={onClose}
         footer={<Button variant="secondary" size="md" fullWidth onClick={onClose}>Закрыть</Button>}>
@@ -55,9 +53,9 @@ export function SphereDeleteDialog({ sphere, onDeleted, onOpenPage, onClose }: P
       </Modal>
     );
   }
-  if (memory === null) return null;
+  if (mode === 'loading' || memory === null) return null;
 
-  if (personas > 0) {
+  if (mode === 'blocked') {
     return (
       <Modal
         title={`Сферу «${sphere.name}» нельзя удалить`}
@@ -66,9 +64,11 @@ export function SphereDeleteDialog({ sphere, onDeleted, onOpenPage, onClose }: P
         footer={
           <div style={{ display: 'flex', gap: 10, width: '100%' }}>
             <div style={{ flex: 1 }}><Button variant="secondary" size="md" fullWidth onClick={onClose}>Закрыть</Button></div>
-            <div style={{ flex: 1.5 }}>
-              <Button variant="primary" size="md" fullWidth onClick={() => onOpenPage(sphere.id)}>Открыть страницу сферы</Button>
-            </div>
+            {onOpenPage && (
+              <div style={{ flex: 1.5 }}>
+                <Button variant="primary" size="md" fullWidth onClick={() => onOpenPage(sphere.id)}>Открыть страницу сферы</Button>
+              </div>
+            )}
           </div>
         }
       >

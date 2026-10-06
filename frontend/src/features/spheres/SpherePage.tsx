@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { Brain, Laptop, MoreVertical, SquarePen, Trash2 } from 'lucide-react';
+import { Laptop, MoreVertical, SquarePen, Trash2 } from 'lucide-react';
 import type { DesktopDevice, ProjectGroup, SphereOverview } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, R, SHADOW } from '../../lib/design';
+import { plural } from '../../lib/plural';
 import { PRIORITY_COLOR, PRIORITY_LABEL } from '../../lib/tasks';
 import { useIsMobile } from '../../lib/breakpoints';
 import { BackButton, Badge, Button, IconButton, Menu, MenuItem } from '../../components/ui';
@@ -11,6 +12,8 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { SphereTile } from './SphereTile';
 import { SphereDialog } from './SphereDialog';
 import { SphereDeleteDialog } from './SphereDeleteDialog';
+import { SphereMemorySection } from './SphereMemory';
+import { describeLoadError } from './sphereLogic';
 
 interface Props {
   sphere: ProjectGroup;
@@ -23,11 +26,6 @@ interface Props {
 
 const TASKS_SHOWN = 5;
 const CHARTER_COLLAPSED = 160;
-
-function plural(n: number, one: string, few: string, many: string) {
-  const m10 = n % 10, m100 = n % 100;
-  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? few : many;
-}
 
 const card: CSSProperties = {
   background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, boxShadow: SHADOW.card,
@@ -49,11 +47,13 @@ function Card({ title, subtitle, children }: { title: string; subtitle?: string;
 const hint: CSSProperties = { fontSize: FS.base, color: C.textMuted, lineHeight: 1.5 };
 
 // Страница сферы: проекты (локальный — с бейджем устройства и причиной из capabilities),
-// команда, память (место под следующий шаг) и открытые задачи со всех проектов сферы.
+// команда, память (две полки) и открытые задачи со всех проектов сферы.
 export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onChanged, onDeleted }: Props) {
   const isMobile = useIsMobile();
   const [data, setData] = useState<SphereOverview | null>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<{ kind: 'notFound' | 'network'; text: string } | null>(null);
+  // Живой счётчик записей сферы: память на странице меняется без перезагрузки сводки
+  const [memoryCount, setMemoryCount] = useState<number | null>(null);
   const [devices, setDevices] = useState<DesktopDevice[]>([]);
   const [charterOpen, setCharterOpen] = useState(false);
   const [menu, setMenu] = useState<DOMRect | null>(null);
@@ -62,8 +62,8 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
 
   const load = useCallback(() => {
     api.spheres.overview(sphere.id)
-      .then(o => { setData(o); setError(''); })
-      .catch(e => setError(e instanceof Error ? e.message : 'Не удалось загрузить сферу'));
+      .then(o => { setData(o); setError(null); })
+      .catch(e => setError(describeLoadError(e)));
   }, [sphere.id]);
 
   useEffect(() => { load(); }, [load]);
@@ -80,7 +80,7 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
   const counts = data ? [
     `${data.projects.length} ${plural(data.projects.length, 'проект', 'проекта', 'проектов')}`,
     `${data.team.length} ${plural(data.team.length, 'персона', 'персоны', 'персон')}`,
-    `${data.memory.count} ${plural(data.memory.count, 'запись памяти', 'записи памяти', 'записей памяти')}`,
+    `${memoryCount ?? data.memory.count} ${plural(memoryCount ?? data.memory.count, 'запись памяти', 'записи памяти', 'записей памяти')}`,
     `${data.openTasks.length} ${plural(data.openTasks.length, 'открытая задача', 'открытые задачи', 'открытых задач')}`,
   ].join(' · ') : '';
 
@@ -163,16 +163,9 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
     </Card>
   );
 
-  // Место под следующий шаг (D3): полки памяти сферы и проектов сферы
   const memoryCard = (
     <Card title="Память" subtitle="В проекте сферы персоны помнят обе полки.">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.textSecondary, fontSize: FS.base }}>
-        <Brain size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-        {data ? `${data.memory.count} ${plural(data.memory.count, 'запись', 'записи', 'записей')} в памяти сферы` : '…'}
-      </div>
-      {data?.memory.count === 0 && (
-        <div style={hint}>Здесь соберутся решения и договорённости, которые переживут любой проект сферы.</div>
-      )}
+      <SphereMemorySection sphereId={sphere.id} onCountChange={setMemoryCount} />
     </Card>
   );
 
@@ -225,11 +218,18 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
 
       {error && (
         <div style={{ ...hint, color: C.danger }}>
-          {error}{' '}
-          <button type="button" onClick={load}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.accent, textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit' }}>
-            Повторить
-          </button>
+          {error.text}{' '}
+          {error.kind === 'notFound' ? (
+            <button type="button" onClick={onBack}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.accent, textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit' }}>
+              К списку проектов
+            </button>
+          ) : (
+            <button type="button" onClick={load}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.accent, textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit' }}>
+              Повторить
+            </button>
+          )}
         </div>
       )}
 
@@ -261,7 +261,6 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
         <SphereDeleteDialog
           sphere={sphere}
           onDeleted={id => { setDialog(null); onDeleted(id); }}
-          onOpenPage={() => setDialog(null)}
           onClose={() => setDialog(null)}
         />
       )}

@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ProjectGroup } from '../../types';
 import { api } from '../../lib/api';
 import { C, R, FONT, FS, GROUP_COLORS, MODAL_W } from '../../lib/design';
 import { Modal, ModalActions, Field, TextField, TextArea } from '../../components/ui';
-import { GlyphIcon, LUCIDE_ICON_NAMES } from '../../lib/projectGlyphs';
+import { Blank, GlyphIcon, LUCIDE_ICON_NAMES, preloadGlyph } from '../../lib/projectGlyphs';
 import { invalidateProjectsCache } from '../projects/useAllProjects';
 import { SphereTile } from './SphereTile';
 
@@ -38,9 +38,12 @@ export function SphereDialog({ sphere, existingCount, onSaved, onClose }: Props)
   const [error, setError] = useState('');
 
   const q = query.trim().toLowerCase();
-  const icons: readonly string[] = q
+  const icons = useMemo<readonly string[]>(() => q
     ? LUCIDE_ICON_NAMES.filter(n => n.includes(q)).slice(0, PICKER_LIMIT)
-    : SUGGESTED_ICONS;
+    : SUGGESTED_ICONS, [q]);
+
+  // Прогрев видимых значков, чтобы клетки пикера не мигали пустыми
+  useEffect(() => { icons.forEach(n => { void preloadGlyph(n); }); }, [icons]);
 
   const save = async () => {
     const trimmed = name.trim();
@@ -95,7 +98,7 @@ export function SphereDialog({ sphere, existingCount, onSaved, onClose }: Props)
           </button>
           {icons.map(n => (
             <button key={n} type="button" onClick={() => setIcon(n)} title={n} style={iconCell(icon === n)}>
-              <GlyphIcon name={n} fallback={() => null} size={18} strokeWidth={2} />
+              <GlyphIcon name={n} fallback={Blank} size={18} strokeWidth={2} />
             </button>
           ))}
         </div>

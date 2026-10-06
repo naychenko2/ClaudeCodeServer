@@ -501,6 +501,19 @@ export interface SphereOverview {
   }[];
 }
 
+// Память сферы: две полки — сама сфера и проекты сферы (GET /api/spheres/{id}/memory)
+export type SphereMemoryType = 'decision' | 'convention' | 'fact' | 'glossary';
+export interface SphereMemoryPromotion { projectId: string; entryId: string; at: string }
+export interface SphereMemoryEntry {
+  id: string; scopeId: string; text: string; type: SphereMemoryType; salience: number; source: string;
+  createdAt: string; promotedFrom: SphereMemoryPromotion | null;
+}
+export interface ProjectMemoryEntry {
+  id: string; projectId: string; text: string; type: string; salience: number; source: string; createdAt: string;
+}
+export interface SphereMemoryProjectShelf { projectId: string; projectName: string; entries: ProjectMemoryEntry[] }
+export interface SphereMemoryResponse { sphere: SphereMemoryEntry[]; projects: SphereMemoryProjectShelf[]; maxEntries: number }
+
 // Ответ DELETE /api/project-groups/{id}: сколько записей памяти ушло вместе со сферой
 export interface DeleteSphereResponse { deletedMemory: number }
 

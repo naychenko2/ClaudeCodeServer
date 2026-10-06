@@ -4,6 +4,7 @@ import { api } from '../../lib/api';
 import { C, FS, MODAL_W } from '../../lib/design';
 import { Button, ConfirmDialog, Modal } from '../../components/ui';
 import { invalidateProjectsCache } from '../projects/useAllProjects';
+import { startRemoveFlow } from './sphereLogic';
 
 interface Props {
   project: Project;
@@ -32,12 +33,15 @@ export function RemoveFromSphereDialog({ project, sphere, onDone, onClose }: Pro
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    api.spheres.overview(sphere.id)
-      .then(o => {
-        if (o.team.length === 0) void remove();
-        else setTeam(o.team.map(m => m.name));
-      })
-      .catch(e => setError(e instanceof Error ? e.message : 'Не удалось загрузить сферу'));
+    let updated: Project | null = null;
+    void startRemoveFlow({
+      loadTeam: () => api.spheres.overview(sphere.id).then(o => o.team),
+      remove: async () => { updated = await api.projects.update(project.id, { groupId: '' }); invalidateProjectsCache(); },
+    }).then(r => {
+      if (r.kind === 'done' && updated) onDone(updated);
+      else if (r.kind === 'confirm') setTeam(r.team);
+      else if (r.kind === 'error') setError(r.error);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- одноразовый запуск при открытии
   }, []);
 

@@ -1,12 +1,9 @@
 import { C, FONT, R } from '../../lib/design';
-import { GlyphIcon, isLucideIconName } from '../../lib/projectGlyphs';
+import { Blank, GlyphIcon, isLucideIconName } from '../../lib/projectGlyphs';
 
 interface SphereLike { name: string; color: string; icon?: string | null }
 
 const GLYPH_RATIO = 0.6;
-
-// Пока чанк глифа едет (или не доедет), плитка остаётся цветной без значка
-const Blank = () => null;
 
 // Плитка сферы: цвет сферы + белый глиф lucide, а без значка — первая буква имени
 // (как инициалы проекта, когда глифа нет). Имя вне набора lucide тихо уходит в букву.

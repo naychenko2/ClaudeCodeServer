@@ -366,7 +366,8 @@
   "durationSec": 5,
   "aspect": null,
   "sound": null,
-  "contextRevision": 12
+  "contextRevision": 12,
+  "format": null
 }
 ```
 

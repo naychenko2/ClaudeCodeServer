@@ -19,6 +19,7 @@ public class PersonaAgentFileSyncTests : IDisposable
     private readonly string _tempDir;
     private readonly PersonaManager _personas;
     private readonly ProjectManager _projects;
+    private readonly UserStore _users;
     private readonly PersonaAgentFileSync _sut;
     private readonly string _agentsBase;
     private readonly FakeSphereDirectory _spheres = new();
@@ -30,7 +31,8 @@ public class PersonaAgentFileSyncTests : IDisposable
         public string? SphereOf(string ownerId, string projectId) => ProjectSphere.GetValueOrDefault(projectId);
         public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) =>
             ProjectSphere.Where(kv => kv.Value == sphereId).Select(kv => kv.Key).ToList();
-        public bool Enabled(string ownerId) => true;
+        public bool Enabled(string ownerId) => On;
+        public bool On { get; set; } = true;
         public string? SphereName(string ownerId, string sphereId) => "сфера";
         public string? CharterOf(string ownerId, string sphereId) => null;
     }
@@ -46,6 +48,7 @@ public class PersonaAgentFileSyncTests : IDisposable
         });
 
         var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _users = users;
         var appSettings = new AppSettingsService(config);
         var projects = new ProjectManager(config, users, appSettings);
         _projects = projects;
@@ -134,6 +137,29 @@ public class PersonaAgentFileSyncTests : IDisposable
         File.Exists(SphereAgent(b, p)).Should().BeTrue();
         File.Exists(SphereAgent(outside, p)).Should().BeFalse();
         File.Exists(AgentPath("shared", p.Handle)).Should().BeFalse("чата вне проекта у персоны сферы нет");
+    }
+
+    [Fact]
+    public void ФлагСфер_ВыключенУбираетФайлыПерсонСферы_ВключённВозвращает()
+    {
+        var owner = _users.Add("flag_" + Guid.NewGuid().ToString("N")[..8], "pwd", "user");
+        var root = Path.Combine(_tempDir, "flagproj");
+        Directory.CreateDirectory(root);
+        var projectId = _projects.Create("flagproj", root, owner.Id, "owner").Id;
+        _spheres.ProjectSphere[projectId] = "sph";
+        var p = _personas.Create(owner.Id, "СферйФлаг", "Роль", null, null, null, null,
+            PersonaScope.Sphere, null, color: null, greeting: null, memoryEnabled: true);
+        p.SphereId = "sph";
+        _sut.SyncPersona(p);
+        File.Exists(SphereAgent(projectId, p)).Should().BeTrue();
+
+        _spheres.On = false;
+        _users.SetFeatureFlag(owner.Id, FeatureFlagKeys.Spheres, false);
+        File.Exists(SphereAgent(projectId, p)).Should().BeFalse("флаг выключен — зона пуста, файл убран");
+
+        _spheres.On = true;
+        _users.SetFeatureFlag(owner.Id, FeatureFlagKeys.Spheres, true);
+        File.Exists(SphereAgent(projectId, p)).Should().BeTrue("флаг включён — файл вернулся");
     }
 
     [Fact]

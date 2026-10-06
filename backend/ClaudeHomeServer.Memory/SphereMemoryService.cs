@@ -17,7 +17,7 @@ public class SphereMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposa
 
     public SphereMemoryService(IConfiguration config, ILogger<SphereMemoryService>? log = null,
         IKnowledgeIndex? knowledge = null, IDifyMetrics? metrics = null, IUserStore? users = null,
-        Llm.ICheapTextRunner? cheap = null)
+        Llm.ICheapTextRunner? cheap = null, TimeSpan? syncDebounce = null)
     {
         _shelf = new MemoryShelf(new MemoryShelfOptions(
             StoreFileName: "sphere-memory.json",
@@ -26,7 +26,8 @@ public class SphereMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposa
             TargetLabel: "sphere",
             RecallHeader: "## Память сферы",
             RecallIntro: "Общие факты и договорённости сферы (помнят все проекты и персоны сферы):",
-            RecallIntroTruncated: "Общие факты и договорённости сферы (помнят все проекты и персоны сферы; длинные записи обрезаны — полный текст записи в разделе памяти сферы):"),
+            RecallIntroTruncated: "Общие факты и договорённости сферы (помнят все проекты и персоны сферы; длинные записи обрезаны — полный текст записи в разделе памяти сферы):",
+            SyncDebounce: syncDebounce),
             config, log, knowledge, metrics, resolver: null, cheap);
     }
 

@@ -18,7 +18,9 @@ internal sealed record MemoryShelfOptions(
     string TargetLabel,
     string RecallHeader,
     string RecallIntro,
-    string RecallIntroTruncated);
+    string RecallIntroTruncated,
+    // Задержка отложенного Dify-синка; null — дефолт 15 с (тесты ускоряют, чтобы проверить отмену при удалении)
+    TimeSpan? SyncDebounce = null);
 
 // Полка памяти — общее ядро хранилищ «память команды проекта» и «память сферы»: JSON-стор
 // (ключ «owner:scope»), семантический слой в Dify-датасете (дифф по хешам, дебаунс), скоринг,
@@ -63,7 +65,7 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
     private readonly Dictionary<string, KnowledgeState> _kStore;
     private readonly Lock _kLock = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);
-    private readonly MemoryDifyDebouncer _debounce = new(SyncDebounce);
+    private readonly MemoryDifyDebouncer _debounce;
 
     // Параметры скоринга (взвешенная сумма) и потолок памяти
     private readonly MemoryScoringOptions _scoring;
@@ -82,6 +84,7 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
         Memory.MemoryWriteResolver? resolver = null, Llm.ICheapTextRunner? cheap = null)
     {
         _opts = opts;
+        _debounce = new MemoryDifyDebouncer(opts.SyncDebounce ?? SyncDebounce);
         _log = log;
         _knowledge = knowledge;
         // Метрика Dify-синка — обязательная зависимость: без неё прогресс синка

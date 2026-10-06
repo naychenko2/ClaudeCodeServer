@@ -21,6 +21,7 @@ public class UserStore : IForgejoAccountStore, IUserStore
 
     // Сведение родного Claude к семейству на записи; без реестра (юнит-тесты) — по форме id
     private readonly Llm.LlmProviderRegistry? _providers;
+    private readonly ILogger<UserStore> _logger;
 
     // Файл NT-хэшей для NTLM WebDAV (вне data/). Пишется ТОЛЬКО отсюда — в моменты, когда
     // открытый пароль виден; null — юнит-тесты и стенды без NTLM
@@ -30,6 +31,7 @@ public class UserStore : IForgejoAccountStore, IUserStore
         Llm.LlmProviderRegistry? providers = null, WebDav.NtlmUserFile? ntlm = null)
     {
         _providers = providers;
+        _logger = logger;
         _ntlm = ntlm;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
@@ -349,9 +351,16 @@ public class UserStore : IForgejoAccountStore, IUserStore
 
             (user.FeatureFlags ??= new())[key] = enabled;
             Save();
-            return true;
         }
+        // Вне лока: подписчики ходят в другие сторы и не должны держать замок пользователей
+        // Сбой подписчика не должен ронять переключение флага: оно уже сохранено
+        try { OnFeatureFlagChanged?.Invoke(id, key, enabled); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Подписчик OnFeatureFlagChanged упал (флаг {Key})", key); }
+        return true;
     }
+
+    /// <summary>Флаг пользователя переключён явно (userId, key, enabled).</summary>
+    public event Action<string, string, bool>? OnFeatureFlagChanged;
 
     /// <summary>
     /// Сохраняет IANA-таймзону пользователя (для планировщика напоминаний).

@@ -175,6 +175,25 @@ public class SphereMemoryServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Add_ПотомУдалениеСферы_ОтложенныйСинкОтменён_ДатасетНеВоскресает()
+    {
+        var dify = new FakeDify();
+        using var svc = new SphereMemoryService(_config, knowledge: dify, syncDebounce: TimeSpan.FromMilliseconds(50));
+        svc.Add("u1", "s1", "запись до удаления");   // синк взведён на 50 мс
+        await svc.DeleteAllForSphereAsync("u1", "s1");
+
+        // Пустая сфера датасета не воссоздаст и без Cancel, поэтому отмену видно по обращениям к Dify:
+        // сработавший таймер зовёт SyncAsync, а тот первым делом читает IsConfigured
+        var readsAfterDelete = Volatile.Read(ref dify.ConfiguredReads);
+        await Task.Delay(500);   // с запасом на срабатывание таймера, если бы Cancel не снял его
+
+        Volatile.Read(ref dify.ConfiguredReads).Should().Be(readsAfterDelete,
+            "отложенный синк должен быть снят при удалении сферы");
+        dify.Datasets.Should().BeEmpty();
+        dify.Indexed.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task AdoptAsync_ОтправляетЗаписьВDifyСразу_ИПеремещаетЕё()
     {
         var dify = new FakeDify();
@@ -192,7 +211,8 @@ public class SphereMemoryServiceTests : IDisposable
 
     private sealed class FakeDify : IKnowledgeIndex
     {
-        public bool IsConfigured => true;
+        public int ConfiguredReads;
+        public bool IsConfigured { get { Interlocked.Increment(ref ConfiguredReads); return true; } }
         public List<string> Datasets { get; } = [];
         public List<string> DeletedDatasets { get; } = [];
         public List<string> Indexed { get; } = [];

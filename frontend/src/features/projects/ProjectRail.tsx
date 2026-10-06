@@ -1,10 +1,10 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { AlarmClock, ArrowDownToLine, Pin, Plus } from 'lucide-react';
+import { AlarmClock, ArrowDownToLine, Pin, ZoomIn } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import { useWatchdogPresence } from '../../lib/watchdogPresence';
 import type { Project } from '../../types';
-import { RailHat, RailIconButton, RailSep, RAIL_HAT_H, RAIL_W } from '../../components/ui';
+import { RailCapsule, RailHat, RailIconButton, RailSep, RAIL_HAT_H } from '../../components/ui';
 import { PanelDropLine } from '../../components/ui/PanelDropGuide';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { ProjectIcon } from './ProjectIcon';
@@ -14,7 +14,7 @@ import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, toggle
 import { useProjectActivity, STATUS_COLOR, STATUS_PULSE, type ProjectActivity } from '../../lib/projectActivity';
 import { TOUCH_CALLOUT_GUARD } from '../../lib/pointer';
 
-// Вертикальный док проектов у левой кромки окна — НАД рельсой панелей. Раньше те же
+// Вертикальный док проектов — ВТОРАЯ левая рельса, под рельсой панелей. Раньше те же
 // иконки лежали горизонтальной строкой внутри панели «Проекты»: ряд в колонке шириной
 // с сайдбар вмещал мало и при этом занимал место в рельсе. В вертикали иконок помещается
 // столько, сколько даёт высота окна, а сама рельса ширины у контента не отнимает.
@@ -28,22 +28,15 @@ import { TOUCH_CALLOUT_GUARD } from '../../lib/pointer';
 // разделителя (выше/ниже) решает, попадёт проект в закреплённые или в недавние. Когда
 // закреплённых нет вовсе, зона пинов — «выше первой иконки», и линия несёт булавку:
 // отдельная мишень-квадрат раньше вставала В ПОТОК и сдвигала весь док вниз.
-// Что не влезло по высоте — «+N» на плюсе, оттуда палитра со всеми проектами.
-//
-// Оправы у дока нет: иконки стоят прямо на холсте, без капсулы. Обе рельсины в одной
-// оправе различались только 7px-ярлыком; теперь капсула — признак рельсы панелей, а
-// голый столбец — признак дока. Ярлык «Проекты» при этом остался: без него столбик
-// квадратиков на холсте не назван вовсе.
+// Что не влезло по высоте — «+N» на лупе, оттуда палитра со всеми проектами.
 
 const ICON_BOX = 32;          // бокс кнопки проекта — как у кнопок рельсы (IconButton md)
 const CAP_GAP = 6;            // зазор между элементами капсулы (как в PanelRail)
 const STEP = ICON_BOX + CAP_GAP;
-// Высота несменяемой части дока: верхнее поле (4), плюс-кнопка (32) и зазор до неё
-// (6), плюс шляпка. По ней из свободной высоты считается число слотов под иконки.
-const FIXED_H = 42 + RAIL_HAT_H;
-// Полоска у кромки окна: под курсором — средняя, у проекта с непрочитанным —
-// короткая. Выбранный её не носит: он помечен как и раньше, цветом и кольцом.
-const PILL_H = { hover: 10, unread: 6 } as const;
+// Высота несменяемой части капсулы: паддинги (8), сепаратор (5), лупа (32) и три
+// зазора капсулы (18), плюс шляпка. По ней из свободной высоты считается число
+// слотов под иконки.
+const FIXED_H = 63 + RAIL_HAT_H;
 // Потолок значков. Не про место (по высоте влезло бы вдвое больше), а про то, что
 // док ищут глазами: два десятка одинаковых квадратов читаются медленнее, чем поиск
 // по имени в палитре, и съедают экран. Что не влезло — «+N» на лупе.
@@ -89,10 +82,6 @@ function ProjectDockIcon({ p, activity, watchdog, active, muted, dragging, dragA
 }) {
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (pressTimer.current) clearTimeout(pressTimer.current); }, []);
-  const [hover, setHover] = useState(false);
-  const pill = active ? undefined
-    : hover && !dragActive ? 'hover'
-    : activity?.status === 'unread' ? 'unread' : undefined;
   // Подпись плашки обязана расшифровывать каждый значок на иконке (guidelines,
   // «Подсказки кнопок рельсы»): точка говорит статусом, будильник — сторожем
   const label = [p.name, activity && STATUS_TITLE[activity.status], watchdog && 'сторож ждёт']
@@ -111,8 +100,7 @@ function ProjectDockIcon({ p, activity, watchdog, active, muted, dragging, dragA
       onTouchEnd={() => { if (pressTimer.current) clearTimeout(pressTimer.current); }}
       onTouchMove={() => { if (pressTimer.current) clearTimeout(pressTimer.current); }}
       style={{
-        // Строка во всю ширину дока: от её левого края считается полоска у кромки
-        display: 'flex', justifyContent: 'center', alignSelf: 'stretch', flexShrink: 0, position: 'relative',
+        display: 'flex', flexShrink: 0, position: 'relative',
         opacity: dragging ? 0.35 : 1,
         // Щит обязателен каждому, кто ловит долгое нажатие (guidelines): обёртка
         // держит свой таймер жеста, и без щита удержание поднимало ещё и коллаут
@@ -122,17 +110,6 @@ function ProjectDockIcon({ p, activity, watchdog, active, muted, dragging, dragA
         transition: 'opacity 0.12s',
       }}
     >
-      {/* Полоска у кромки окна. Цвет нейтральный: оранжевый на доке занят точкой
-          «агент ждёт ответа», вторым акцентом полоска с ней спорила бы */}
-      <span aria-hidden style={{
-        position: 'absolute', left: 0, top: '50%', width: 3, transform: 'translateY(-50%)',
-        height: pill ? PILL_H[pill] : 0,
-        borderTopRightRadius: R.full, borderBottomRightRadius: R.full,
-        background: C.textPrimary, opacity: pill === 'unread' ? 0.55 : 1,
-        transition: 'height 0.15s ease-out', pointerEvents: 'none',
-      }} />
-      {/* Якорь значков статуса и сторожа — сама кнопка, а не строка во всю ширину */}
-      <span style={{ position: 'relative', display: 'flex' }}>
       {/* Кнопка-картинка: иконка проекта занимает бокс ЦЕЛИКОМ (штриховым иконкам
           панелей нужен воздух вокруг глифа, картинке — нет). Активный проект ВСЕГДА
           цветной — картинка в цвете или цветная плашка, — а в покое рельсы спят
@@ -145,7 +122,6 @@ function ProjectDockIcon({ p, activity, watchdog, active, muted, dragging, dragA
         variant="media"
         active={active && !muted}
         hoverSuppressed={dragActive}
-        onHoverChange={setHover}
         onClick={() => onClick(p)}
         // Действие живёт в подписи, а не отдельной кнопкой рельсы: убирают ОДИН
         // проект, и целятся при этом в его иконку. Знак — тот же, что у иконок рельсы
@@ -190,12 +166,11 @@ function ProjectDockIcon({ p, activity, watchdog, active, muted, dragging, dragA
           <AlarmClock size={10} strokeWidth={2.4} color={C.accent} />
         </span>
       )}
-      </span>
     </span>
   );
 }
 
-export function ProjectRail({ project, onOpenSettings, side = 'left', maxHeight }: {
+export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
   // Активный проект (свежая версия из WorkspacePage). undefined — активного нет:
   // так док выглядит на пустой «Стене», где фокусной колонки ещё не существует.
   // Ряд проектов при этом полноценный, просто ни одна иконка не подсвечена.
@@ -203,10 +178,6 @@ export function ProjectRail({ project, onOpenSettings, side = 'left', maxHeight 
   onOpenSettings: () => void;   // настройки текущего проекта — из его контекст-меню
   // Сторона окна: в какую сторону раскрываются подписи кнопок
   side?: 'left' | 'right';
-  // Сколько высоты доку можно занять. Задаёт хозяин, когда док стоит НАД чем-то
-  // (рельса панелей): там остаток зоны мерить у родителя нельзя — родитель сам
-  // стоит по доку. Не задан — меряем родителя, как на «Стене».
-  maxHeight?: number;
 }) {
   const projects = useAllProjects();
   const pinnedIds = usePinnedIds();
@@ -226,8 +197,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left', maxHeight 
   // стоит по контенту. Отсюда считается, сколько иконок показать.
   const boxRef = useRef<HTMLDivElement>(null);
   const colRef = useRef<HTMLDivElement>(null);
-  const [parentH, setParentH] = useState(0);
-  const boxH = maxHeight ?? parentH;
+  const [boxH, setBoxH] = useState(0);
   // Меряем РОДИТЕЛЯ (свободное место зоны), а не себя: сам док стоит по контенту,
   // иначе он растягивался бы на весь остаток и выталкивал соседние капсулы (док
   // «Стены») к нижней кромке окна. Родитель — тот, кто отдал доку место.
@@ -238,7 +208,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left', maxHeight 
     // иконки» считается по внешней коробке. Плюс перезамер следующим кадром —
     // на первом проходе колонка ещё не растянута флексом, и док решил бы, что
     // высоты нет (все проекты уезжали под лупу «ещё N»).
-    const measure = () => setParentH(el.getBoundingClientRect().height);
+    const measure = () => setBoxH(el.getBoundingClientRect().height);
     measure();
     const raf = requestAnimationFrame(measure);
     const ro = new ResizeObserver(measure);
@@ -427,26 +397,24 @@ export function ProjectRail({ project, onOpenSettings, side = 'left', maxHeight 
         @keyframes ccProjGhostPop { from { transform: scale(0.8) rotate(-3deg); opacity: 0 } to { transform: scale(1) rotate(-3deg); opacity: 0.95 } }
       `}</style>
 
-      {/* Голый столбец шириной рельсы: без оправы, но с тем же ритмом, что у капсул */}
-      <div
-        style={{
-          width: RAIL_W, boxSizing: 'border-box', paddingTop: 4,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: CAP_GAP,
-          ...(dragView ? { pointerEvents: 'none' } : null),
-        }}
+      {/* Капсула-остров — тот же примитив, что несёт рельсу панелей: геометрия
+          (ширина, скругление к центру, бордеры, тень) у всех рельс общая */}
+      <RailCapsule
+        side={side}
         onMouseEnter={() => setRailHover(true)}
         onMouseLeave={() => setRailHover(false)}
-        // Пока иконку тащат, док для мыши сквозной: место вставки считается по
+        // Пока иконку тащат, капсула для мыши сквозная: место вставки считается по
         // координатам курсора (события ловит window), а вот наведение на кнопки под
         // ним — чистый мусор. Иначе иконки подсвечивались бы и подпрыгивали ровно там,
         // куда человек целится.
+        style={dragView ? { pointerEvents: 'none' } : undefined}
       >
         <RailHat side={side} label="Проекты" title="Переключение проектов" />
 
         {/* Столбец иконок: закреплённые, разделитель, недавние */}
         <div ref={colRef} style={{
           position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center',
-          alignSelf: 'stretch', gap: CAP_GAP, flexShrink: 0,
+          gap: CAP_GAP, flexShrink: 0,
         }}>
           {shown.map((p, i) => {
             const sep = i === firstRecentIdx && firstRecentIdx > 0 ? <RailSep variant="inner" mark /> : null;
@@ -504,9 +472,10 @@ export function ProjectRail({ project, onOpenSettings, side = 'left', maxHeight 
           )}
         </div>
 
-        {/* Переход и создание: палитра умеет и поиск по всем проектам, и новый проект,
-            и «Все проекты». Знак — плюс: чаще за ним идут добавить проект в док или
-            завести новый. Кружок — сколько проектов не поместилось в док. */}
+        <RailSep />
+        {/* Поиск по всем проектам: палитра умеет и переход, и создание, и «Все проекты» —
+            плюс внутри лупы про это, отдельная кнопка «+» рядом не нужна.
+            Кружок — сколько проектов не поместилось в док. */}
         <RailIconButton
           side={side}
           label={hiddenCount > 0
@@ -515,7 +484,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left', maxHeight 
           onClick={() => setPaletteOpen(true)}
         >
           <div style={{ position: 'relative', display: 'flex' }}>
-            <Plus size={17} strokeWidth={ICON_STROKE} />
+            <ZoomIn size={17} strokeWidth={ICON_STROKE} />
             {/* Счётчик спрятанных проектов — нейтральный: это справка о размере списка,
                 а не событие. Цвет он берёт только когда среди скрытых кто-то ЖДЁТ
                 ответа — вот на это оторваться от дела стоит. Тон — тот же warning,
@@ -533,7 +502,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left', maxHeight 
             )}
           </div>
         </RailIconButton>
-      </div>
+      </RailCapsule>
 
       {/* Призрак перетаскиваемой иконки — порталом в body (капсула режет содержимое по
           своим скруглениям) и СБОКУ от курсора, в сторону центра окна. Под курсором он

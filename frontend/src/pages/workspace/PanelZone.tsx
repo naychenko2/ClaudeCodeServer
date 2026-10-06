@@ -98,9 +98,6 @@ interface Props {
   // панелей он отношения не имеет, но живёт в той же вертикали у края окна, поэтому
   // держит зону на экране даже когда открывать в ней нечего.
   railFooter?: ReactNode;
-  // Остров НАД рельсой зоны — док проектов. Получает высоту, которую можно занять, не
-  // выталкивая рельсу и нижний остров за кромку окна (см. PanelRail.header).
-  railHeader?: (maxHeight: number) => ReactNode;
   // Последняя кнопка столбца рельсы, перед ящиком «…» (см. PanelRail.tail): не
   // панель, раскладка её не знает. Сейчас это утка-пасхалка правой зоны.
   railTail?: ReactNode;
@@ -116,7 +113,7 @@ interface Props {
 export function PanelZone({
   side, panels, railBadges, panelStack,
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, compact, sessionPanels,
-  railFooter, railHeader, railTail, floating, centerFileOpen,
+  railFooter, railTail, floating, centerFileOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, openIn, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, markActive, releaseCompactSide, registerOpener, moveTo, registerZoneKeys, zoneKeys } = usePanels();
@@ -761,7 +758,7 @@ export function PanelZone({
   // иначе у контента торчала бы пустая полоса рельсы. Док под рельсой от раскладки
   // не зависит: пока он есть, зона остаётся на экране (капсула рельсы при этом
   // схлопнута — showRail её погасит).
-  if (availableAll.length === 0 && openKeys.length === 0 && !acceptsForeign && !railFooter && !railHeader) return null;
+  if (availableAll.length === 0 && openKeys.length === 0 && !acceptsForeign && !railFooter) return null;
 
   // Где лежит перетаскиваемая панель в ВИДИМОЙ раскладке этой зоны (null — тащат
   // из соседней). Нужно, чтобы не предлагать места, дающие ту же раскладку:
@@ -1063,7 +1060,6 @@ export function PanelZone({
         onMouseLeave: () => peeked.hide(),
       } : undefined}
       footer={railFooter}
-      header={railHeader}
       tail={railTail}
       // Состав групп — RAIL_GROUPS: тот же список задаёт и пределы перестановки
       // кнопок, поэтому он один на оба применения. Разделители PanelRail рисует сам и

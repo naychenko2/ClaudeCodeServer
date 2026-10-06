@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type HTMLAttributes, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type DragEvent, type HTMLAttributes, type ReactNode } from 'react';
 import { ArrowLeftToLine, ArrowRightToLine, ChevronsLeft, ChevronsRight, Columns2, Ellipsis, Eye, EyeOff, Pin, Square, X, type LucideIcon } from 'lucide-react';
 import { C, FONT, FS, ISLAND, R, Z } from '../../lib/design';
 import { ICON_STROKE } from './icons';
@@ -138,11 +138,6 @@ interface Props {
   // проектов левой зоны. Живёт своей жизнью (сам решает, что показывать) — рельса
   // лишь отдаёт ему остаток высоты и держит общий вертикальный ритм островов.
   footer?: ReactNode;
-  // Остров НАД капсулой — док проектов. Рельса меряет, сколько высоты ему можно
-  // занять (вся высота зоны минус капсула и нижний остров), и отдаёт это число:
-  // сам док мерить остаток не может — над рельсой он стоит по контенту, и родитель
-  // его ростом не прибавит.
-  header?: (maxHeight: number) => ReactNode;
   // Последняя кнопка столбца — после панелей, перед ящиком «…», без своей черты. Не
   // панель (нет ключа, раскладки, ящика и перестановки), а самостоятельный контрол —
   // сейчас утка-пасхалка. Рисует его вызывающий, обычно RailIconButton той же стороны.
@@ -496,30 +491,9 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
   );
 }
 
-export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer, header, tail }: Props) {
+export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer, tail }: Props) {
   const isLeft = side === 'left';
   const dropping = !!drop?.active;
-
-  // Место под остров сверху: высота зоны минус капсула и нижний остров. Отступы
-  // между островами — паддингами обёрток, чтобы offsetHeight их учитывал.
-  const outerRef = useRef<HTMLDivElement>(null);
-  const railWrapRef = useRef<HTMLDivElement>(null);
-  const footerRef = useRef<HTMLDivElement>(null);
-  const [headerMax, setHeaderMax] = useState(0);
-  const hasHeader = !!header;
-  useLayoutEffect(() => {
-    if (!hasHeader) return;
-    const measure = () => {
-      const outer = outerRef.current;
-      if (!outer) return;
-      const used = (railWrapRef.current?.offsetHeight ?? 0) + (footerRef.current?.offsetHeight ?? 0);
-      setHeaderMax(Math.max(0, outer.clientHeight - used));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    for (const el of [outerRef.current, railWrapRef.current, footerRef.current]) if (el) ro.observe(el);
-    return () => ro.disconnect();
-  }, [hasHeader]);
 
 
   // Пустые группы отбрасываем ДО отрисовки сепараторов — иначе между скрытой
@@ -732,46 +706,26 @@ export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCe
   // попапа-превью. Сквозная для мыши — иначе пустая полоса под рельсой перехватывала
   // бы клики по контенту; события ловят сами дети.
   return (
-    <div ref={outerRef} style={{
+    <div style={{
       alignSelf: 'stretch', flexShrink: 0, position: 'relative', pointerEvents: 'none',
       display: 'flex', flexDirection: 'column', alignItems: 'center',
     }}>
-      {/* Остров над рельсой (док проектов). Боковой отступ — как у нижнего острова */}
-      {header && (
-        <div style={{
-          flexShrink: 0, display: 'flex', flexDirection: 'column',
-          ...(isLeft ? { marginRight: gapToCenter } : { marginLeft: gapToCenter }),
-        }}>
-          {header(headerMax)}
-        </div>
-      )}
+      {rail}
 
-      {/* Зазор до острова сверху — паддингом: его учитывает замер места под остров */}
-      <div ref={railWrapRef} style={{
-        flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
-        paddingTop: header && visible ? ISLAND.gap : 0,
-      }}>
-        {rail}
-      </div>
-
-      {/* Нижний остров у края окна (док «Стены»; без острова сверху — док проектов,
-          тогда он забирает ОСТАТОК высоты зоны и по нему считает, сколько иконок
-          показать). Боковой отступ повторяет
+      {/* Второй остров у края окна (док проектов). Забирает ОСТАТОК высоты зоны: по
+          нему он сам считает, сколько иконок показать. Боковой отступ повторяет
           рельсу — иначе при закрытых панелях (где рельса отодвинута gapToCenter)
           капсулы разъехались бы по вертикали. Зазор между островами существует,
           только пока рельса на экране: без неё док встаёт на её место, у самого
           верха зоны, а не под пустотой. */}
       {footer && (
-        <div ref={footerRef} style={{
-          // При острове сверху нижний стоит по контенту: растянутый на остаток, он
-          // съел бы всё место, которое меряется под верхний
-          ...(header ? { flexShrink: 0 } : { flex: 1, minHeight: 0 }),
-          display: 'flex', flexDirection: 'column',
+        <div style={{
+          flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
           // Рельса схлопнулась (панелей на экране нет) — её место всё равно
-          // резервируем высотой капсулы с одной кнопкой: иначе нижний остров
-          // подпрыгивает вверх, стоит панелям исчезнуть, и вертикаль рельс «дышит»
-          // на каждом переключении экрана.
-          paddingTop: visible ? ISLAND.gap : RAIL_MIN_H + ISLAND.gap,
+          // резервируем высотой капсулы с одной кнопкой: иначе док проектов
+          // подпрыгивает к верхней кромке, стоит панелям исчезнуть, и вертикаль
+          // рельс «дышит» на каждом переключении экрана.
+          marginTop: visible ? ISLAND.gap : RAIL_MIN_H + ISLAND.gap,
           ...(isLeft ? { marginRight: gapToCenter } : { marginLeft: gapToCenter }),
         }}>
           {footer}

@@ -3,9 +3,9 @@
 // Здесь только отрисовка по готовой модели: подписи объекта и референсов приходят из DTO
 // (`label`, `version`), своих форматтеров нет. Ширина — снаружи; форму каждого чипа выбирает
 // чистая лестница lib/chatContext/ladder.ts, открытость панели в неё не входит.
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Cpu, Eye, GitBranch, Plus, RotateCcw, Send, Trash2, X, Check, Info } from 'lucide-react';
-import { C, FONT, FS, R, SP, SHADOW, Z } from '../../lib/design';
+import { C, COMPOSER_LIP, FONT, FS, R, SP, SHADOW, Z, composerLip } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import { contextRowLadder, CAP, gitChipBox, ladderRungs, NOM, type LadderFacts, type LadderPick } from '../../lib/chatContext/ladder';
 import { unusedBy } from '../../lib/chatContext/fill';
@@ -451,8 +451,23 @@ export function ContextRowView(props: ContextRowViewProps) {
         onDetach={props.onDetach} onClear={props.onClear} close={close} />
     : null;
 
+  // Десктоп и планшет: строка — верхняя губа композера в форме ушка (как свёрнутая полоса): закладка
+  // по ширине содержимого у левого края, заезжает под поле (оно лежит слоем выше). Ряд — по чипам
+  // (CHIP_H), горизонтальные поля — номинал лестницы, чтобы её расчёт ширины не разошёлся.
+  // На телефоне губ нет — строка отдельной плашкой
+  const shell: CSSProperties = isMobile
+    ? {
+        width: '100%', height: ROW_H_MOBILE, padding: `0 ${NOM.pad / 2}px`,
+        background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
+      }
+    : {
+        ...composerLip('top', { tab: true, row: CHIP_H }),
+        width: 'fit-content', maxWidth: '100%',
+        padding: `${COMPOSER_LIP.edgeTab}px ${NOM.pad / 2}px ${COMPOSER_LIP.overlap + COMPOSER_LIP.gap}px`,
+      };
+
   return (
-    <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${SP.sm - 2}px` }}>
+    <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${isMobile ? SP.sm - 2 : 0}px` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
       <div
@@ -460,9 +475,8 @@ export function ContextRowView(props: ContextRowViewProps) {
         data-context-row="" data-ladder-step={pick.index} data-ladder-scroll={pick.scroll ? '1' : '0'}
         role="toolbar" aria-label="Контекст хода"
         style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm - 2, boxSizing: 'border-box', width: '100%',
-          height: isMobile ? ROW_H_MOBILE : ROW_H, padding: `0 ${NOM.pad / 2}px`,
-          background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
+          display: 'flex', alignItems: 'center', gap: SP.sm - 2, boxSizing: 'border-box',
+          ...shell,
           overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
         }}
       >

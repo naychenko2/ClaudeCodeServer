@@ -18,10 +18,12 @@ public class LocalVideoEngineUpscaleTests
     private static readonly LocalVideoFile Shot = new([7, 7], "video/mp4", ".mp4", HasSound: true);
     private static readonly LocalVideoFile Big = new([1, 4, 4, 0], "video/mp4", ".mp4", HasSound: true);
 
+    // Отчёты пишутся под замком: порядок важен тестам, а читают их из другого потока после await
     private sealed class Recorder : IProgress<VideoProgress>
     {
-        public List<VideoProgress> Events { get; } = [];
-        public void Report(VideoProgress value) => Events.Add(value);
+        private readonly List<VideoProgress> _events = [];
+        public List<VideoProgress> Events { get { lock (_events) return [.. _events]; } }
+        public void Report(VideoProgress value) { lock (_events) _events.Add(value); }
     }
 
     private static ResolvedFormat Tier(FormatTier tier, string aspect = "16:9")
@@ -51,8 +53,17 @@ public class LocalVideoEngineUpscaleTests
             .ReturnsAsync(new LocalVideoSubmitted("t-up", 0, 915, null));
         if (upscalePolls.Length > 0)
         {
-            var seq = media.SetupSequence(m => m.PollAsync("t-up", It.IsAny<CancellationToken>()));
-            foreach (var poll in upscalePolls) seq = seq.ReturnsAsync(poll);
+            // Сценарий опросов — своя очередь, а не SetupSequence: порядок отдачи не зависит от внутреннего состояния Moq,
+            // а исчерпанный сценарий не молчит «null», а падает понятной ошибкой
+            var script = new Queue<LocalVideoPoll>(upscalePolls);
+            media.Setup(m => m.PollAsync("t-up", It.IsAny<CancellationToken>()))
+                .Returns(() =>
+                {
+                    lock (script)
+                        return Task.FromResult(script.Count > 0
+                            ? script.Dequeue()
+                            : throw new InvalidOperationException("Сценарий опросов t-up исчерпан"));
+                });
         }
         return media;
     }

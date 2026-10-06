@@ -104,6 +104,9 @@ public abstract class ImageEditorEndpoints(
     {
         // Resolved считает только сервер; генерация без формата в теле берёт формат проекта
         req = req with { Resolved = null };
+        // Желание в теле проходит те же белые списки, что и сохраняемое: «пропорции» без пропорций не маскируется под «как у модели»
+        if (req.Format is { } given && ImageProjectPrefsService.ValidateFormat(given) is { } badFormat)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, badFormat);
         if (req.Format is null && req.Op == ImageEditOp.Generate) req = req with { Format = StoredFormat(scope) };
         var editor = ImageEditCatalog.FindAvailable(editors, req.Provider);
         if (editor is null)

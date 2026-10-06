@@ -265,7 +265,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (version is null)
             return Deny($"У картинки {threadId} нет версии {versionId}. Список версий — image_state.");
 
-        // Обрезка под пропорции — без ИИ: ни котировки, ни поставщика, ни лимита запусков хода (ADR-025 §4)
+        // Обрезка под пропорции — без ИИ: ни котировки, ни поставщика, ни лимита запусков хода (ADR-025 §4).
+        // Сознательно ДО TryReserveLaunch: MaxLaunchesPerTurn считает траты на генерацию, а обрезка бесплатная операция
+        // над готовым файлом — её серия не должна выедать лимит запусков
         if (string.Equals(Str(args, "op"), "crop", StringComparison.OrdinalIgnoreCase))
             return await CropAsync(args, ownerId, session, scope, thread, version, ct);
 
@@ -318,6 +320,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var height = Int(args, "height");
         var given = aspect is not null || quality is not null || width is not null || height is not null;
         FormatTier? tier = quality switch { "standard" => FormatTier.Standard, "high" => FormatTier.High, "max" => FormatTier.Max, _ => null };
+        // Неизвестная ступень — явный отказ, а не молчаливое «как есть»
+        if (quality is not null && tier is null) return (null, "quality — standard, high или max.", false);
 
         switch (op)
         {

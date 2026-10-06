@@ -182,4 +182,29 @@ public sealed class MediaFormatResolverTests
         AspectCrop.Rect(100, 100, "1:1", "диагональ").Should().BeNull();
         AspectCrop.Rect(100, 100, "1:1", null).Should().Be(new ImageFractionRect(0, 0, 1, 1));
     }
+
+    // Правка Глеба по Б1: модель без «Точно…» и без списка пропорций (fal MiniMax H3 берёт пропорцию из кадра) не получает
+    // подменённой пропорции — причина есть, а подставлять нечего
+    [Fact]
+    public void Модель_без_Exact_и_без_Aspects_даёт_причину_и_не_подменяет_пропорцию()
+    {
+        var byFrame = new MediaFormatCaps("MiniMax H3", [],
+            [new FormatTierSpec(FormatTier.Standard, "768P", NoSizes, "768P")]);
+
+        var resolved = MediaFormatResolver.Resolve(byFrame, Exact(1920, 1080));
+
+        resolved.Aspect.Should().BeNull("пропорции у модели нет — подменять нечем, «ближайшей» не выдумываем");
+        resolved.Substituted.Should().BeTrue();
+        resolved.Note.Should().Contain("Точный размер 1920×1080 MiniMax H3 не умеет").And.Contain("размер модели");
+        resolved.Tier.Should().Be(FormatTier.Standard, "ступень при этом сохраняется");
+    }
+
+    // Правка Глеба по Б1: текст не маскирует «пропорции» без пропорций под «как у модели» (валидацию проверяет ImageEditor.Tests)
+    [Fact]
+    public void Желание_пропорции_без_пропорций_не_маскируется_под_как_у_модели()
+    {
+        var broken = new MediaFormat(FormatModes.Aspect, null, null, null, null, ContextActor.Human, DateTime.UtcNow);
+
+        MediaFormatText.Wish(broken).Should().NotBe("как у модели").And.Contain("не заданы");
+    }
 }

@@ -217,6 +217,45 @@ public class MediaFormatAgentTests : IDisposable
         Parse(result)["quote"]!["format"]!["wireValue"]!.GetValue<string>().Should().Be("2k", "формат ушёл в котировку");
     }
 
+    // Правка Глеба по Б1: quality вне standard/high/max — явный отказ, а не молчаливое «как есть»
+    [Theory]
+    [InlineData("ultra")]
+    [InlineData("HIGH")]
+    public async Task Неизвестная_ступень_quality_отказ_и_формат_проекта_не_меняется(string quality)
+    {
+        var id = Draft();
+
+        var result = await Gen(new JsonObject { ["threadId"] = id, ["prompt"] = "кот", ["aspect"] = "9:16", ["quality"] = quality });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("standard, high или max");
+        _prefs.Get(Owner, Scope).Format.Should().BeNull();
+        _records.Should().NotContain(r => r.Record.RecordType == ImageThreadService.RecordTypes.Format);
+    }
+
+    // Правка Глеба по Б1: «пропорции» без пропорций (и без ступени, и со ступенью) отклоняет валидация, а не маскирует
+    [Fact]
+    public void Желание_пропорции_без_пропорций_отклоняется_валидацией()
+    {
+        var broken = new MediaFormat(FormatModes.Aspect, null, null, null, null, ContextActor.Human, DateTime.UtcNow);
+
+        ImageProjectPrefsService.ValidateFormat(broken).Should().NotBeNull();
+        ImageProjectPrefsService.ValidateFormat(broken with { Tier = FormatTier.High }).Should().NotBeNull();
+        ImageProjectPrefsService.ValidateFormat(broken with { Aspect = "16:9" }).Should().BeNull();
+    }
+
+    // Правка Глеба по Б1: обрезка бесплатная и сознательно не считается в MaxLaunchesPerTurn
+    [Fact]
+    public async Task Обрезка_не_выедает_лимит_запусков_хода_генерации()
+    {
+        var thread = WideThread();
+        for (var i = 0; i < ImageEditorToolset.MaxLaunchesPerTurn + 2; i++)
+        {
+            var crop = await Gen(new JsonObject { ["threadId"] = thread, ["op"] = "crop", ["aspect"] = i % 2 == 0 ? "1:1" : "16:9" });
+            crop.IsError.Should().BeFalse($"обрезка №{i + 1}: {crop.Text}");
+        }
+    }
+
     [Fact]
     public async Task Ручная_запись_формата_снимает_пометку_агента()
     {

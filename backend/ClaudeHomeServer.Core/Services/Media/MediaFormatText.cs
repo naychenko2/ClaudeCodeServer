@@ -14,6 +14,8 @@ public static class MediaFormatText
         { Mode: FormatModes.Exact, Width: { } w, Height: { } h } => $"{w}×{h} точно",
         { Mode: FormatModes.Aspect, Aspect: { } a, Tier: { } t } => $"{a} · {MediaFormatResolver.TierLabel(t)}",
         { Mode: FormatModes.Aspect, Aspect: { } a } => a,
+        // Желание «пропорции» без пропорций валидация отклоняет на входе; здесь оно не маскируется под «как у модели»
+        { Mode: FormatModes.Aspect } => "пропорции не заданы",
         _ => "как у модели",
     };
 

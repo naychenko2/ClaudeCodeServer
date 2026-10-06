@@ -84,12 +84,17 @@ public sealed class LocalVideoMediaAdapter(
                 if (up.ShotTicket == ticket && _upscales.TryRemove(upTicket, out _)) PurgeUpscaleInputs(up, options);
         }
         foreach (var (upTicket, up) in _upscales)
-            if (now - up.At > ILocalVideoMedia.ShotTtl && !_watches.ContainsKey(upTicket) && _upscales.TryRemove(upTicket, out _))
+            if (now - up.At > UpscaleAbandonedAfter && _upscales.TryRemove(upTicket, out _))
                 PurgeUpscaleInputs(up, options);
     }
 
-    private bool HasUpscaleInFlight(string shotTicket) =>
-        _upscales.Any(u => u.Value.ShotTicket == shotTicket && _watches.ContainsKey(u.Key));
+    // Запись об увеличении, которое никто не дочитал до конца (процесс оборвался), держит съёмку не дольше этого срока:
+    // честное увеличение укладывается в потолок движка, а не в сутки
+    private static readonly TimeSpan UpscaleAbandonedAfter = ILocalVideoMedia.ShotTtl * 2;
+
+    // Запись в _upscales живёт до конца увеличения (ReleaseUpscale). Сокет прогресса для этого не годится: он необязателен
+    // и тихо закрывается при любом сбое подключения, а увеличение при этом идёт
+    private bool HasUpscaleInFlight(string shotTicket) => _upscales.Any(u => u.Value.ShotTicket == shotTicket);
 
     private void PurgeShot(Shot shot, LocalMediaOptions options)
     {

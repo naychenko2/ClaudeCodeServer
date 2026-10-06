@@ -154,6 +154,41 @@ public class LocalVideoShotCleanupTests : IDisposable
     }
 
     [Fact]
+    public async Task Sweep_keeps_mp4_of_the_shot_and_of_an_upscale_that_is_still_running()
+    {
+        var (adapter, ticket, id, _) = await ShotDone();
+        var shotMp4 = Touch(_output, $"ccs-local-media/{id}_00001_.mp4");
+        var (upTicket, upId, _) = await UpscaleStarted(adapter, ticket);
+        var upMp4 = Touch(_output, $"ccs-local-media/{upId}_00001_.mp4");
+        File.Exists(shotMp4).Should().BeTrue("до Sweep");
+
+        _clock.Advance(ILocalVideoMedia.ShotTtl + TimeSpan.FromMinutes(1));
+        adapter.Sweep();
+
+        File.Exists(shotMp4).Should().BeTrue("съёмка нужна идущему апскейлу");
+        File.Exists(upMp4).Should().BeTrue("апскейл в полёте");
+
+        _comfy.CompleteVideo(upTicket, upId, [9], withLatents: false);
+        await adapter.PollAsync(upTicket, default);
+        adapter.Sweep();
+        File.Exists(shotMp4).Should().BeFalse("после конца апскейла проход дочищает");
+        File.Exists(upMp4).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Sweep_purges_an_abandoned_upscale_that_nobody_finished_after_double_ttl()
+    {
+        var (adapter, ticket, _, shotFiles) = await ShotDone();
+        var (_, _, copies) = await UpscaleStarted(adapter, ticket);
+
+        _clock.Advance(ILocalVideoMedia.ShotTtl * 2 + TimeSpan.FromMinutes(1));
+        adapter.Sweep();
+        adapter.Sweep();
+
+        copies.Concat(shotFiles).Should().AllSatisfy(f => File.Exists(f).Should().BeFalse(f));
+    }
+
+    [Fact]
     public async Task Sweep_removes_mp4_results_of_the_shot_and_its_upscale_by_exact_names()
     {
         var (adapter, ticket, id, _) = await ShotDone();

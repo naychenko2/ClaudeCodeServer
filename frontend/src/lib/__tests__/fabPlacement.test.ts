@@ -3,8 +3,33 @@ import {
   placeFab, unionBox, PLACE_CORNER, FAB_FULL, FAB_SMALL, FAB_EDGE_INSET, setFabObstacle, getFabObstacles,
   subscribeFabObstacle, fabObstacleTestHooks, isFabNoRaise,
   stepFabSettle, initialFabSettle, fabSpotBlocker, PLACE_HIDDEN, FAB_SETTLE_MS, FAB_CONFIRM_MS, FAB_MOUNT_SETTLE_MS,
+  FAB_MOBILE_RIGHT,
   type FabPlacement, type FabSettle, type FabBlocker,
 } from '../ai/fabObstacle';
+import { CHAT_GUTTER_MOBILE, SCROLL_DOWN_SIZE } from '../design';
+
+// Телефон: круглешок на одной вертикальной оси с кнопкой «Вниз» чата, и подъём над ней
+// по-прежнему срабатывает (ось смещена внутрь — горизонтальное пересечение сохраняется)
+describe('FAB на телефоне — общая ось с кнопкой «Вниз»', () => {
+  const vw = 390, vh = 844;
+  const composer = box(0, vh - 150, vw, vh);
+  const scrollRight = vw - CHAT_GUTTER_MOBILE;
+  const scrollDown = box(scrollRight - SCROLL_DOWN_SIZE, composer.top - 14 - SCROLL_DOWN_SIZE, scrollRight, composer.top - 14);
+  const fabRight = vw - FAB_MOBILE_RIGHT;
+  const fabBottom = vh - 20;
+
+  it('центры совпадают по X', () => {
+    expect(fabRight - FAB_SMALL / 2).toBe(scrollRight - SCROLL_DOWN_SIZE / 2);
+  });
+
+  it('над композером и «Вниз» кнопка поднимается, не прячется и их не накрывает', () => {
+    const p = placeFab(unionBox([composer, scrollDown]), fabRight, fabBottom, vw);
+    expect(p.hidden).toBe(false);
+    expect(p.small).toBe(true);
+    // Нижний край поднятого круга — выше верха кнопки «Вниз»
+    expect(fabBottom - p.raise).toBeLessThanOrEqual(scrollDown.top);
+  });
+});
 
 // Место круглешка AI относительно композера. Главный критерий — кнопка не накрывает
 // препятствие ни в одной ветке: проверяем пересечение итогового круга с композером.

@@ -301,6 +301,10 @@ export const MODAL_W = {
 // колонка чтения для них тесна (по ~465px на колонку), а сетка раздела —
 // наоборот, растягивает карточки в полосы. 1028 даёт колонки примерно по 500px.
 export const CHAT_MAX_W = 950
+// Мобильный боковой отступ ленты чата и размер круглой кнопки «Вниз» над композером. Общие:
+// по ним на телефоне ставится ось круглешка AI (FAB_MOBILE_RIGHT) — центр на центре «Вниз»
+export const CHAT_GUTTER_MOBILE = 16
+export const SCROLL_DOWN_SIZE = 44
 export const HOME_MAX_W = 1028
 export const CONTENT_MAX_W = 1180
 

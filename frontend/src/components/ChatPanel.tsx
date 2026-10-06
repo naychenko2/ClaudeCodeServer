@@ -52,7 +52,7 @@ import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ContextRow } from './chat/ContextRow';
 import { chatContextApi } from '../lib/chatContext/api';
-import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
+import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L, CHAT_GUTTER_MOBILE, SCROLL_DOWN_SIZE } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, type NavSnapshot } from '../lib/nav';
 import { useIsTouch } from '../lib/breakpoints';
@@ -91,7 +91,7 @@ import { openChatById } from '../lib/openChat';
 // разъедутся. Десктоп пользуется полем CHAT_GUTTER_L, этот отступ — только мобила.
 // Значения сейчас совпадают, но роли разные: мобильное поле держит ширину экрана,
 // десктопное — размах колец индикатора. Сливать в одно не надо.
-const CHAT_GUTTER_MOBILE = 16;
+// Само значение (CHAT_GUTTER_MOBILE) живёт в lib/design: по нему же ставится ось круглешка AI
 
 interface Props {
   session: Session;
@@ -2924,7 +2924,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 // Служебная прокрутка — нейтральная (не accent), чтобы единственным
                 // акцентом в углу оставался круглешок AI.
                 pointerEvents: 'auto',
-                width: 44, height: 44, borderRadius: '50%',
+                width: SCROLL_DOWN_SIZE, height: SCROLL_DOWN_SIZE, borderRadius: '50%',
                 border: `1px solid ${C.border}`,
                 background: C.bgCard, color: C.textSecondary, cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',

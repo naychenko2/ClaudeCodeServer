@@ -26,6 +26,8 @@
 //
 // noRaise — над препятствием не лента, а форма (футер мастера персон): подниматься над
 // ним некуда, кнопка легла бы на поля шага. Не влезла в угол — прячется.
+import { CHAT_GUTTER_MOBILE, SCROLL_DOWN_SIZE } from '../design';
+
 type Listener = () => void;
 export type FabObstacleSlot = 'main' | 'scroll-down' | 'intro-card' | 'notice';
 export interface FabObstacleOptions { noRaise?: boolean }
@@ -86,6 +88,11 @@ export const FAB_SMALL = 36;
 export const FAB_CLEARANCE = 10;
 // Отступ от края окна у прижатой кнопки — тот же, что ставит PanelZone в компактном режиме
 export const FAB_EDGE_INSET = 6;
+// Правый отступ круглешка на телефоне — правило «общая ось»: центр FAB совпадает с центром
+// кнопки «Вниз» чата. Совпадение держится потому, что на телефоне колонка ленты (CHAT_MAX_W)
+// шире экрана и «Вниз» прижата к правому отступу ленты; оправа .cc-fab-ring растёт наружу
+// симметрично и центр не сдвигает. Правило глобальное — на всех мобильных экранах
+export const FAB_MOBILE_RIGHT = CHAT_GUTTER_MOBILE + (SCROLL_DOWN_SIZE - FAB_SMALL) / 2;
 // small — ужатый круг; edge — прижат к краю окна (FAB_EDGE_INSET); raise — подъём над
 // базовым углом, px; hidden — места нет нигде
 export interface FabPlacement { small: boolean; edge: boolean; raise: number; hidden: boolean }

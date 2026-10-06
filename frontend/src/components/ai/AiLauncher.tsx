@@ -14,7 +14,7 @@ import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionC
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
 import {
   getFabObstacles, subscribeFabObstacle, isFabNoRaise, placeFab, unionBox, fabSpotBlocker, stepFabSettle, initialFabSettle,
-  PLACE_HIDDEN, FAB_FULL, FAB_SMALL, FAB_EDGE_INSET, FAB_CLEARANCE,
+  PLACE_HIDDEN, FAB_FULL, FAB_SMALL, FAB_EDGE_INSET, FAB_CLEARANCE, FAB_MOBILE_RIGHT,
   type FabPlacement, type FabSettle,
 } from '../../lib/ai/fabObstacle';
 import { fabControlsAt } from '../../lib/ai/fabProbe';
@@ -694,7 +694,7 @@ export function AiLauncher() {
           т.к. box-shadow/transform анимаций inline-стилем не перебить. */}
       {/* Якорь замера: базовая точка кнопки (угол без подъёма), см. useFabPlacement */}
       <span ref={fabAnchorRef} aria-hidden style={{
-        ...fabAnchorStyle, ...(isMobile ? { right: 16 } : {}),
+        ...fabAnchorStyle, ...(isMobile ? { right: FAB_MOBILE_RIGHT } : {}),
       }} />
       {!open && !sheetRaised && (
         <button
@@ -718,7 +718,8 @@ export function AiLauncher() {
             // Наведение растит кнопку до полного размера — как в компактном режиме панелей.
             // Исключение — подпёртая композером: там расти некуда, круг накрыл бы поле ввода.
             ...(fabHover && !isMobile && !obstacleOverlap ? { width: FAB_FULL, height: FAB_FULL } : {}),
-            ...(isMobile ? { right: 16, width: FAB_SMALL, height: FAB_SMALL } : {}),
+            // Телефон: центр круга на оси кнопки «Вниз» (FAB_MOBILE_RIGHT), якорь замера — так же
+            ...(isMobile ? { right: FAB_MOBILE_RIGHT, width: FAB_SMALL, height: FAB_SMALL } : {}),
             ...(fabPlace.edge ? { right: FAB_EDGE_INSET } : {}),
             // Места нет нигде (композер растянут во весь экран) — прячемся, а не ложимся
             // поверх поля ввода. Палитра остаётся на ⌘K, а на телефоне, где хоткея нет, —

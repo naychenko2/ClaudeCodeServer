@@ -103,6 +103,20 @@ public sealed class FalAudioEngineTests
     }
 
     [Fact]
+    public async Task Result_Empty_WithModelText_ReasonInError()
+    {
+        var endpoint = AudioCatalog.FalMiniMaxHd;
+        _fal.Job(endpoint, "re1", ["COMPLETED"], """{"description":"Text violates content policy"}""");
+
+        var result = await Engine().RunAsync(new AudioRequest(AudioOp.Speak, endpoint, Personal, Text: "Привет"),
+            new Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Rejected);
+        result.RemoteId.Should().Be("re1");
+        result.Error.Should().Be("fal.ai не вернул файлов — модель ответила: «Text violates content policy»");
+    }
+
+    [Fact]
     public async Task Download_RedirectToOtherExtension_ExtensionFromFinalAddress()
     {
         var endpoint = AudioCatalog.FalMiniMaxHd;

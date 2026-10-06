@@ -59,8 +59,8 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   activeToolAppearedAt?: number | null;
   // Счётчик текущего этапа прогона («412 из 7951 · упало 1») — после времени, режется первым
   activeToolDetail?: string | null;
-  // Карточка инструмента видна в ленте: подпись, время и счётчик не повторяем — остаются
-  // лицо с кольцами
+  // Карточка инструмента видна в ленте: подпись, время и счётчик не повторяем — вместо них
+  // глаголы машинки, как без инструмента
   activeToolOnScreen?: boolean;
   // Типовая операция (тесты, сборка…) — иконка перед временем, та же, что в шапке карточки
   activeToolOperation?: Operation | null;
@@ -153,7 +153,8 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   const typedTool = reduced
     ? phrases.join(' · ')
     : tw.of === toolText ? typewriterText(tw.st, phrases) : '';
-  // Тихий режим: инструмент идёт, но его карточка на экране — текст не дублируем
+  // Тихий режим: инструмент идёт, но его карточка на экране — подпись и время не дублируем,
+  // вместо них крутятся глаголы с курсором (ход жив, а факты — на карточке)
   const quietTool = !!tool && activeToolOnScreen;
   const OpIcon = activeToolOperation ? OPERATION_ICON[activeToolOperation] : null;
 
@@ -216,11 +217,12 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
             («Думаю», «Работаю») места хватает на любой ширине. alignItems center, а не
             baseline: в пустой фазе (между глаголами) baseline задаёт один курсор, и
             строку чуть перекашивало по высоте каждый цикл. */}
-        {tool ? (
+        {tool && !quietTool ? (
           // Идёт инструмент: [иконка операции] [время] [печатаемый текст]. Иконка и время не
           // сжимаются и стоят на месте (время — фиксированной ширины): стирание текста их не
-          // двигает; режется многоточием текст. Тихий режим (карточка видна) — ничего не повторяем
-          !quietTool && (
+          // двигает; режется многоточием текст. Тихий режим (карточка видна) — факты не
+          // повторяем, а печатаем глаголы: иначе без курсора индикатор выглядел мёртвым
+          (
             <span data-waiting-tool="" style={{ display: 'inline-flex', alignItems: 'center', minHeight: 17, minWidth: 0, overflow: 'hidden' }}>
               {OpIcon && (
                 <OpIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0, marginRight: SP.xs + 2 }} />

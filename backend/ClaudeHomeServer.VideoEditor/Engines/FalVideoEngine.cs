@@ -6,6 +6,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.VideoEditor.Catalog;
 using static ClaudeHomeServer.Services.VideoEditor.Catalog.FalVideoCatalog;
@@ -76,17 +77,25 @@ public sealed class FalVideoEngine : IVideoEngine, IVideoQuoter
         if (Find(model.Id) is not { } fal) throw new VideoEngineUnavailableException("У fal.ai нет такой модели");
 
         var eta = fal.EtaSeconds;
+        // Ступень формата: прайс fal по ступеням не различается, цена = прайс × PriceFactor ступени, оценочная
+        var factor = TierFactor(fal, request);
+        var approx = fal.PriceVaries || factor != 1;
         if (await PriceAsync(fal.Info.Id, ct) is { } price)
         {
             var perRun = !IsPerSecond(price.Unit);
-            return new VideoEstimate(perRun ? price.Price : price.Price * request.DurationSec, VideoPriceUnits.Usd,
-                fal.PriceVaries, VideoEstimateSources.Provider, eta);
+            return new VideoEstimate((perRun ? price.Price : price.Price * request.DurationSec) * factor, VideoPriceUnits.Usd,
+                approx, VideoEstimateSources.Provider, eta);
         }
         if (fal.Info.PriceHint is { } hint)
-            return new VideoEstimate(hint.Per == "sec" ? hint.Amount * request.DurationSec : hint.Amount, hint.Unit, true,
+            return new VideoEstimate((hint.Per == "sec" ? hint.Amount * request.DurationSec : hint.Amount) * factor, hint.Unit, true,
                 VideoEstimateSources.Catalog, eta);
         return new VideoEstimate(null, PriceUnit, true, VideoEstimateSources.Unknown, eta);
     }
+
+    private static double TierFactor(FalVideoModel model, VideoRequest request) =>
+        request.Format?.Tier is { } tier
+            ? model.Info.Caps.Format?.Tiers.FirstOrDefault(t => t.Tier == tier)?.PriceFactor ?? 1
+            : 1;
 
     // seconds — за секунду ролика; videos, generations, units, requests — за запуск
     private static bool IsPerSecond(string unit) => unit.Trim().ToLowerInvariant() is "second" or "seconds" or "sec" or "s";
@@ -216,6 +225,11 @@ public sealed class FalVideoEngine : IVideoEngine, IVideoQuoter
             }
             // Модель без поля пропорции следует кадру — запрошенную пропорцию молча не навязываем
         }
+        // Ступень формата → частный параметр модели (resolution). Желания нет — «Стандарт» каталога: прежнее умолчание
+        // (у MiniMax H3 fal это родные 768P, а не 2K-апскейл по умолчанию самого fal)
+        if (model.Info.Caps.Format is { WireParam: { Length: > 0 } wire } caps
+            && (req.Format?.WireValue ?? caps.Tiers.FirstOrDefault(t => t.Tier == FormatTier.Standard)?.WireValue) is { } tierValue)
+            body[wire] = tierValue;
         if (model.Sound is not null) body[model.Sound] = req.Sound;
         if (model.Seed is not null && req.Seed is { } seed) body[model.Seed] = seed;
         return body;

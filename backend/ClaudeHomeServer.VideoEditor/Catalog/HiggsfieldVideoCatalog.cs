@@ -36,6 +36,10 @@ public static class HiggsfieldVideoCatalog
             "duration", "aspect_ratio", "width", "height", "generate_audio", "sound", "seed",
         };
 
+    // Параметры, которыми теперь управляет «Формат» (ступень): из Params не пропускаются, значение кладёт драйвер
+    public static readonly IReadOnlySet<string> FormatControlled =
+        new HashSet<string>(StringComparer.Ordinal) { "resolution" };
+
     public sealed record Param(
         string Name,
         bool Required,
@@ -92,9 +96,15 @@ public static class HiggsfieldVideoCatalog
 
         var first = roles.Contains(StartImage);
         var last = first && roles.Contains(EndImage);
-        var caps = new VideoCaps(durations, aspects, soundParam is not null, last, VideoLicense.Commercial,
-            VideoPriceUnits.Credits, FirstFrame: first);
         var label = item["name"]?.ToString() is { Length: > 0 } name ? name : id;
+        // Формат (ADR-025): пропорции — из aspect_ratios, ступени — из enum resolution схемы, если он есть, иначе их нет
+        var formatAspects = VideoFormatCatalog.RealAspects(aspects);
+        var tiers = parameters.TryGetValue("resolution", out var resolution)
+            ? VideoFormatCatalog.TiersFromOptions(formatAspects, resolution.Options)
+            : [];
+        var format = new Media.MediaFormatCaps(label, formatAspects, tiers, WireParam: tiers.Count > 0 ? "resolution" : null);
+        var caps = new VideoCaps(durations, aspects, soundParam is not null, last, VideoLicense.Commercial,
+            VideoPriceUnits.Credits, FirstFrame: first, Format: format);
         return new Model(new VideoModelInfo(id, label, caps), parameters, soundParam, soundAsSwitch);
     }
 

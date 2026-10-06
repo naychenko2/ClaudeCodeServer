@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.VideoEditor;
 using ClaudeHomeServer.Services.VideoEditor.Catalog;
 using ClaudeHomeServer.Services.VideoEditor.Engines;
+using ClaudeHomeServer.Services.Media;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -41,10 +42,66 @@ public sealed class FalVideoEngineTests
     };
 
     private static VideoRequest Request(string model, int duration = 5, VideoFrameBytes? last = null, string? aspect = null,
-        bool sound = false, JsonObject? @params = null, long? seed = null) =>
-        new(model, Personal, "Камера медленно приближается к окну", FrameA, last, duration, aspect, sound, @params, seed);
+        bool sound = false, JsonObject? @params = null, long? seed = null, ResolvedFormat? format = null) =>
+        new(model, Personal, "Камера медленно приближается к окну", FrameA, last, duration, aspect, sound, @params, seed, format);
+
+    // Действующий формат, посчитанный резолвером по каталогу модели: ступень уходит в resolution
+    private static ResolvedFormat Resolved(string model, string aspect, FormatTier tier) =>
+        MediaFormatResolver.Resolve(Model(model).Caps.Format,
+            new MediaFormat(FormatModes.Aspect, aspect, tier, null, null, ClaudeHomeServer.Services.ChatContext.ContextActor.Human, DateTime.UtcNow));
 
     private static VideoModelInfo Model(string id) => FalVideoCatalog.Find(id)!.Info;
+
+    [Theory]
+    [InlineData(FormatTier.Standard, "720p")]
+    [InlineData(FormatTier.High, "1080p")]
+    public void BuildBody_TierGoesToResolutionByCatalog_Veo(FormatTier tier, string wire)
+    {
+        var body = FalVideoEngine.BuildBody(FalVideoCatalog.Find(FalVideoCatalog.VeoLite)!,
+            Request(FalVideoCatalog.VeoLite, duration: 8, last: FrameB, aspect: "9:16", format: Resolved(FalVideoCatalog.VeoLite, "9:16", tier)));
+
+        body["resolution"]!.GetValue<string>().Should().Be(wire);
+        body["aspect_ratio"]!.GetValue<string>().Should().Be("9:16");
+    }
+
+    [Fact]
+    public void BuildBody_NoFormat_H3KeepsNative768P_AsStandardTier()
+    {
+        var body = FalVideoEngine.BuildBody(FalVideoCatalog.Find(FalVideoCatalog.MiniMaxH3)!, Request(FalVideoCatalog.MiniMaxH3, duration: 5));
+
+        body["resolution"]!.GetValue<string>().Should().Be("768P", "умолчание fal — 2K-апскейл, наше «Стандарт» — родные 768P");
+    }
+
+    [Theory]
+    [InlineData(FormatTier.High, "2K")]
+    [InlineData(FormatTier.Max, "4K")]
+    public void BuildBody_H3Tiers_By_LiveSchemaEnum(FormatTier tier, string wire)
+    {
+        var body = FalVideoEngine.BuildBody(FalVideoCatalog.Find(FalVideoCatalog.MiniMaxH3)!,
+            Request(FalVideoCatalog.MiniMaxH3, format: Resolved(FalVideoCatalog.MiniMaxH3, "16:9", tier)));
+
+        body["resolution"]!.GetValue<string>().Should().Be(wire);
+        body.ContainsKey("aspect_ratio").Should().BeFalse("пропорция H3 следует кадру, её режет подрезка кадров");
+    }
+
+    [Fact]
+    public void BuildBody_ResolutionInParams_IsRefused_SizeSetByFormat()
+    {
+        var act = () => FalVideoEngine.BuildBody(FalVideoCatalog.Find(FalVideoCatalog.VeoLite)!,
+            Request(FalVideoCatalog.VeoLite, duration: 8, last: FrameB, @params: new JsonObject { ["resolution"] = "1080p" }));
+
+        act.Should().Throw<ArgumentException>().WithMessage("*resolution*");
+    }
+
+    [Fact]
+    public void Catalog_FormatCaps_NoNativeMax_ForVeoAndNoTiersForFlux()
+    {
+        var veo = FalVideoCatalog.Find(FalVideoCatalog.VeoLite)!.Info.Caps.Format!;
+        veo.Tiers.Select(t => (t.Tier, t.WireValue)).Should().Equal((FormatTier.Standard, "720p"), (FormatTier.High, "1080p"));
+        veo.Tiers[1].Sizes["16:9"].Should().Be(new FormatSize(1920, 1080));
+        veo.Aspects.Should().Equal(["16:9", "9:16"], "«auto» — режим модели, а не пропорция формата");
+        FalVideoCatalog.Find(FalVideoCatalog.FluxDraft)!.Info.Caps.Format!.Tiers.Should().BeEmpty();
+    }
 
     // ── Нет ключа ────────────────────────────────────────────────────────────────
 
@@ -88,7 +145,7 @@ public sealed class FalVideoEngineTests
         var progress = new Recorder();
 
         var result = await Engine().RunAsync(Request(endpoint, duration: 6, last: FrameB, aspect: "16:9", sound: true,
-            @params: new JsonObject { ["resolution"] = "1080p" }, seed: 42), progress, CancellationToken.None);
+            seed: 42, format: Resolved(endpoint, "16:9", FormatTier.High)), progress, CancellationToken.None);
 
         result.Outcome.Should().Be(VideoOutcome.Ok);
         result.Charged.Should().BeTrue();

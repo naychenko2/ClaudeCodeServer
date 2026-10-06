@@ -95,11 +95,20 @@ describe('ContextRowView', () => {
     expect(h).toContain('data-chip="more"');
   });
 
-  it('телефон: ветка иконкой с бейджем, лестницы нет', () => {
-    const h = html(props({ isMobile: true, width: 342 }));
-    expect(h).toContain('data-ladder-scroll="1"');
-    expect(h).not.toContain('>feat/video-editor<');
-    expect(h).toContain('>3<');
+  it('телефон: смысловые строки «Где», «С чем», «Подключено», ветка целиком, прокрутки нет', () => {
+    const h = html(props({ isMobile: true, width: 342, refs: [ref('a')], exec }));
+    expect(h).toContain('data-ladder-scroll="0"');
+    expect(h).not.toContain('overflow-x:auto');
+    const lines = [...h.matchAll(/data-row-line="(\w+)"/g)].map(m => m[1]);
+    expect(lines).toEqual(['where', 'what', 'refs']);
+    expect(h).toContain('feat/video-editor');
+    // Тач-цель: чипы на телефоне 28px
+    expect(h).toContain('height:28px');
+  });
+
+  it('телефон: строки без содержимого нет — без объекта и референсов только «Где»', () => {
+    const h = html(props({ isMobile: true, width: 342, primary: null, exec: null, refs: [] }));
+    expect([...h.matchAll(/data-row-line="(\w+)"/g)].map(m => m[1])).toEqual(['where']);
   });
 
   it('плашка «Вернуть» после снятия объекта: текст по макету, отсчёт от срока из стора', () => {

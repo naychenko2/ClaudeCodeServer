@@ -85,9 +85,14 @@ const act = (fn: () => void) => (e: KeyboardEvent) => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
 };
 
-// Чипы внутри губы (десктоп, планшет) плоские: рамку держит сама губа, вторая рамка у каждого чипа —
-// «рамка в рамке». Остаются только рамки-сигналы: пунктир серого референса и цвет borderColor
+// Чипы внутри губы плоские: рамку держит сама губа, вторая рамка у каждого чипа — «рамка в рамке».
+// Остаются только рамки-сигналы: пунктир серого референса и цвет borderColor
 const FlatChips = createContext(false);
+// Высота чипа: на телефоне крупнее — это тач-цель под палец
+const ChipHeight = createContext(CHIP_H);
+const CHIP_H_MOBILE = 28;
+// Телефон, строки «Где» и «С чем»: чип ужимается по ширине строки (имя — многоточием), а не уезжает за край
+const ShrinkChips = createContext(false);
 
 function RowChip({ kind, max, title, onClick, borderColor, dim, dashed, mono, children }: {
   kind: string;
@@ -101,6 +106,8 @@ function RowChip({ kind, max, title, onClick, borderColor, dim, dashed, mono, ch
   children: ReactNode;
 }) {
   const flat = useContext(FlatChips);
+  const chipH = useContext(ChipHeight);
+  const shrink = useContext(ShrinkChips);
   const framed = !flat || dashed || borderColor != null;
   return (
     <span
@@ -112,8 +119,8 @@ function RowChip({ kind, max, title, onClick, borderColor, dim, dashed, mono, ch
       onClick={onClick ? e => onClick(e) : undefined}
       onKeyDown={onClick ? e => act(() => onClick({ currentTarget: e.currentTarget as HTMLElement }))(e) : undefined}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: SP.xs + 1, flexShrink: 0, boxSizing: 'border-box',
-        height: CHIP_H, maxWidth: max, padding: `0 ${SP.sm - 1}px`, borderRadius: R.md, minWidth: 0,
+        display: 'inline-flex', alignItems: 'center', gap: SP.xs + 1, flexShrink: shrink ? 1 : 0, boxSizing: 'border-box',
+        height: chipH, maxWidth: shrink ? `min(${max}px, 100%)` : max, padding: `0 ${SP.sm - 1}px`, borderRadius: R.md, minWidth: 0,
         border: framed ? `1px ${dashed ? 'dashed' : 'solid'} ${borderColor ?? C.border}` : '1px solid transparent',
         background: flat ? 'transparent' : C.bgCard,
         color: C.textSecondary, fontSize: FS.sm, fontFamily: mono ? FONT.mono : FONT.sans, whiteSpace: 'nowrap',
@@ -411,9 +418,13 @@ export function ContextRowView(props: ContextRowViewProps) {
   const [menu, setMenu] = useState<OpenMenu>(null);
   const [tip, setTip] = useState(false);
   const facts = rowFacts(props);
-  // Телефон: лестницы нет, строка прокручивается; ветка иконкой, «Чем» без подписи
+  // Телефон: лестницы нет, губа — смысловые строки «Где» (ветка целиком), «С чем» (объект и «Чем»),
+  // «Подключено» (референсы). Строка «Подключено» в одну линию: не влезшие референсы по одному
+  // уходят в «+N ›» (drop) после вёрстки
+  const [drop, setDrop] = useState(0);
+  const refsLineRef = useRef<HTMLDivElement>(null);
   const base = props.pick ?? (isMobile
-    ? { form: { g: 0 as const, o: 2 as const, e: 2 as const, k: refs.length }, index: -1, count: 0, need: 0, scroll: true }
+    ? { form: { g: 3 as const, o: 2 as const, e: 2 as const, k: Math.max(0, refs.length - drop) }, index: -1, count: 0, need: 0, scroll: false }
     : contextRowLadder(props.width ?? 10_000, facts));
   // Номиналы ступеней — верхняя оценка (чип не шире номинала), реальные чипы уже. Поэтому после вёрстки
   // пробуем ступень богаче: влезла без прокрутки — оставляем, нет — возвращаемся на шаг назад и закрепляем
@@ -440,6 +451,17 @@ export function ContextRowView(props: ContextRowViewProps) {
       setShift(shift + 1);
     }
   });
+  // Строка «Подключено» на телефоне переполнилась — ещё один референс в «+N ›»
+  const lineSig = useRef('');
+  useLayoutEffect(() => {
+    const el = refsLineRef.current;
+    if (!isMobile || props.pick) return;
+    if (lineSig.current !== sig) {
+      lineSig.current = sig;
+      if (drop !== 0) { setDrop(0); return; }
+    }
+    if (el && el.scrollWidth > el.clientWidth + 1 && drop < refs.length) setDrop(drop + 1);
+  });
   const pick = shift !== 0 && rungs.length ? { ...base, form: rungs[at], index: at } : base;
   if (!showsRow(props)) {
     // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» после ✕ обязана остаться
@@ -464,26 +486,51 @@ export function ContextRowView(props: ContextRowViewProps) {
         onDetach={props.onDetach} onClear={props.onClear} close={close} />
     : null;
 
-  // Десктоп и планшет: строка — верхняя губа композера в форме ушка (как свёрнутая полоса): закладка
-  // по ширине содержимого у левого края, заезжает под поле (оно лежит слоем выше). Ряд — по чипам
-  // (CHIP_H), горизонтальные поля — номинал лестницы, чтобы её расчёт ширины не разошёлся.
-  // На телефоне губ нет — строка отдельной плашкой
+  // Строка — верхняя губа композера: заезжает под поле (оно лежит слоем выше), горизонтальные поля —
+  // номинал лестницы, чтобы её расчёт ширины не разошёлся. Десктоп и планшет — ушко (как свёрнутая
+  // полоса): закладка по ширине содержимого у левого края, ряд по чипам (CHIP_H), лишнее сжимает
+  // лестница. Телефон — губа во всю ширину из смысловых строк и с крупными чипами
+  const inner = COMPOSER_LIP.overlap + COMPOSER_LIP.gap;
   const shell: CSSProperties = isMobile
     ? {
-        width: '100%', height: ROW_H_MOBILE, padding: `0 ${NOM.pad / 2}px`,
-        background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
+        ...composerLip('top', { row: CHIP_H_MOBILE }),
+        width: '100%', height: 'auto', flexDirection: 'column', alignItems: 'stretch', gap: SP.xs,
+        padding: `${COMPOSER_LIP.edge}px ${NOM.pad / 2}px ${inner}px`,
       }
     : {
         ...composerLip('top', { tab: true, row: CHIP_H }),
         width: 'fit-content', maxWidth: '100%',
-        padding: `${COMPOSER_LIP.edgeTab}px ${NOM.pad / 2}px ${COMPOSER_LIP.overlap + COMPOSER_LIP.gap}px`,
+        padding: `${COMPOSER_LIP.edgeTab}px ${NOM.pad / 2}px ${inner}px`,
+        overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
       };
 
+  const primaryNode = primary && (
+    <PrimaryChip p={primary} form={f.o} icon={iconOf(primary.kind)} onOpen={props.onOpenPrimary}
+      onRelease={props.onRelease} onAgentTip={() => setTip(t => !t)} />
+  );
+  const execNode = primary && exec && <ExecChip e={exec} form={f.e} onOpen={open('exec')} />;
+  const refsNodes = (
+    <>
+      <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} aria-label="Подключено к ходу" />
+      {shown.map(r => (
+        <RefPill key={r.id} r={r} gray={grayIds.has(r.id)} icon={iconOf(r.kind)} grayHint={grayHint} onDetach={() => props.onDetach(r.id)} />
+      ))}
+      <RowChip kind="more" max={NOM.more} onClick={e => setMenu({ kind: 'refs', rect: e.currentTarget.getBoundingClientRect() })}
+        title={hidden > 0 ? `Ещё ${hidden}: показать всё подключённое` : 'Показать всё подключённое'}>
+        {hidden > 0 && <span style={{ fontWeight: 600 }}>+{hidden}</span>}
+        <ChevronRight size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+      </RowChip>
+    </>
+  );
+  // Строка губы на телефоне: одна линия, ширина строки — потолок для чипов
+  const mobileLine: CSSProperties = { display: 'flex', alignItems: 'center', gap: SP.sm - 2, minWidth: 0 };
+
   return (
-    <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${isMobile ? SP.sm - 2 : 0}px` }}>
+    <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 0` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
-      <FlatChips.Provider value={!isMobile}>
+      <FlatChips.Provider value>
+      <ChipHeight.Provider value={isMobile ? CHIP_H_MOBILE : CHIP_H}>
       <div
         ref={rowRef}
         data-context-row="" data-ladder-step={pick.index} data-ladder-scroll={pick.scroll ? '1' : '0'}
@@ -491,32 +538,39 @@ export function ContextRowView(props: ContextRowViewProps) {
         style={{
           display: 'flex', alignItems: 'center', gap: SP.sm - 2, boxSizing: 'border-box',
           ...shell,
-          overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
         }}
       >
-        {git && <GitChip g={git} form={isMobile ? 0 : f.g} onOpen={open('git')} />}
-        {git && (primary || refs.length > 0) && (
-          <span data-row-sep="" style={{ width: NOM.vsep, height: 16, background: C.border, flexShrink: 0 }} />
-        )}
-        {primary && (
-          <PrimaryChip p={primary} form={f.o} icon={iconOf(primary.kind)} onOpen={props.onOpenPrimary}
-            onRelease={props.onRelease} onAgentTip={() => setTip(t => !t)} />
-        )}
-        {primary && exec && <ExecChip e={exec} form={f.e} onOpen={open('exec')} />}
-        {refs.length > 0 && (
+        {isMobile ? (
           <>
-            <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} aria-label="Подключено к ходу" />
-            {shown.map(r => (
-              <RefPill key={r.id} r={r} gray={grayIds.has(r.id)} icon={iconOf(r.kind)} grayHint={grayHint} onDetach={() => props.onDetach(r.id)} />
-            ))}
-            <RowChip kind="more" max={NOM.more} onClick={e => setMenu({ kind: 'refs', rect: e.currentTarget.getBoundingClientRect() })}
-              title={hidden > 0 ? `Ещё ${hidden}: показать всё подключённое` : 'Показать всё подключённое'}>
-              {hidden > 0 && <span style={{ fontWeight: 600 }}>+{hidden}</span>}
-              <ChevronRight size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            </RowChip>
+            {git && (
+              <div data-row-line="where" style={mobileLine}>
+                <ShrinkChips.Provider value><GitChip g={git} form={f.g} onOpen={open('git')} /></ShrinkChips.Provider>
+              </div>
+            )}
+            {primary && (
+              <div data-row-line="what" style={mobileLine}>
+                {/* Объект главнее «Чем»: держит до 60% строки и не ужимается, пока ужимается «Чем» */}
+                <ShrinkChips.Provider value>
+                  <span style={{ display: 'flex', minWidth: 0, flexShrink: 0, maxWidth: exec ? '60%' : '100%' }}>{primaryNode}</span>
+                  {exec && <span style={{ display: 'flex', minWidth: 0, flex: '0 1 auto', marginLeft: 'auto' }}>{execNode}</span>}
+                </ShrinkChips.Provider>
+              </div>
+            )}
+            {refs.length > 0 && <div ref={refsLineRef} data-row-line="refs" style={{ ...mobileLine, overflow: 'hidden' }}>{refsNodes}</div>}
+          </>
+        ) : (
+          <>
+            {git && <GitChip g={git} form={f.g} onOpen={open('git')} />}
+            {git && (primary || refs.length > 0) && (
+              <span data-row-sep="" style={{ width: NOM.vsep, height: 16, background: C.border, flexShrink: 0 }} />
+            )}
+            {primaryNode}
+            {exec && execNode}
+            {refs.length > 0 && refsNodes}
           </>
         )}
       </div>
+      </ChipHeight.Provider>
       </FlatChips.Provider>
       {menu && body && (isMobile
         ? <Modal title={menu.kind === 'git' ? 'Ветка' : menu.kind === 'exec' ? exec?.title ?? 'Чем выполнить' : 'Подключено к ходу'} onClose={close}>{body}</Modal>

@@ -49,11 +49,18 @@ export function SphereDeleteDialog({ sphere, onDeleted, onOpenPage, onClose }: P
     return (
       <Modal title={`Сферу «${sphere.name}» не удалось удалить`} width={MODAL_W.confirm} onClose={onClose}
         footer={<Button variant="secondary" size="md" fullWidth onClick={onClose}>Закрыть</Button>}>
-        <div style={{ color: C.danger, fontSize: FS.base }}>{error}</div>
+        <div role="alert" style={{ color: C.dangerText, fontSize: FS.base }}>{error}</div>
       </Modal>
     );
   }
-  if (mode === 'loading' || memory === null) return null;
+  if (mode === 'loading' || memory === null) {
+    return (
+      <Modal title={`Сфера «${sphere.name}»`} width={MODAL_W.confirm} onClose={onClose}
+        footer={<Button variant="secondary" size="md" fullWidth onClick={onClose}>Отмена</Button>}>
+        <div style={{ color: C.textMuted, fontSize: FS.base }}>Проверяем, что есть в сфере…</div>
+      </Modal>
+    );
+  }
 
   if (mode === 'blocked') {
     return (

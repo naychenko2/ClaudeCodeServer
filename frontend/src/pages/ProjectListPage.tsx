@@ -391,7 +391,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                 ? emptyBlock(`Ничего не найдено по запросу «${search}»`)
                 : projectsEmptyHero())}
 
-              {loadState === 'ok' && spheresOn && groups.length === 0 && view === 'all' && (
+              {loadState === 'ok' && spheresOn && !search && groups.length === 0 && view === 'all' && (
                 <EmptyState inline icon={<Orbit size={ICON_SIZE.lg} strokeWidth={2} />} title="Сфер пока нет"
                   subtitle="Сфера — область жизни или работы со своей командой персон и памятью, общей для её проектов."
                   action={online ? <Button variant="primary" size="md" onClick={() => setActiveDialog({ type: 'sphereNew' })}>Создать сферу</Button> : undefined} />
@@ -532,7 +532,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             {!spheresOn && ungrouped.map(renderCard)}
 
-            {spheresOn && loadState === 'ok' && groups.length === 0 && (
+            {spheresOn && loadState === 'ok' && !search && groups.length === 0 && (
               <EmptyState inline icon={<Orbit size={ICON_SIZE.lg} strokeWidth={2} />} title="Сфер пока нет"
                 subtitle="Сфера — область жизни или работы со своей командой персон и памятью, общей для её проектов."
                 action={online ? <Button variant="primary" size="md" onClick={() => setActiveDialog({ type: 'sphereNew' })}>Создать сферу</Button> : undefined} />

@@ -61,7 +61,7 @@ export function ExecutorPicker({ assignee, personaId, projectId, onChange, disab
 
   // Группы персон: команда проекта / глобальные
   const projectPersonas = personas.filter(p => !isGlobalPersona(p) && visibleIn(p, projectId ?? undefined, sphereOf));
-  const globalPersonas = personas.filter(p => p.scope === 'global');
+  const globalPersonas = personas.filter(isGlobalPersona);
 
   const pick = (v: ExecutorValue) => { onChange(v); setOpen(false); };
 

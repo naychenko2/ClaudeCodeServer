@@ -49,11 +49,18 @@ export function RemoveFromSphereDialog({ project, sphere, onDone, onClose }: Pro
     return (
       <Modal title="Не удалось убрать из сферы" width={MODAL_W.confirm} onClose={onClose}
         footer={<Button variant="secondary" size="md" fullWidth onClick={onClose}>Закрыть</Button>}>
-        <div style={{ color: C.danger, fontSize: FS.base }}>{error}</div>
+        <div role="alert" style={{ color: C.dangerText, fontSize: FS.base }}>{error}</div>
       </Modal>
     );
   }
-  if (!team) return null;
+  if (!team) {
+    return (
+      <Modal title="Убрать из сферы" width={MODAL_W.confirm} onClose={onClose}
+        footer={<Button variant="secondary" size="md" fullWidth onClick={onClose}>Отмена</Button>}>
+        <div style={{ color: C.textMuted, fontSize: FS.base }}>Проверяем, кто из персон сферы работает в проекте…</div>
+      </Modal>
+    );
+  }
 
   return (
     <ConfirmDialog

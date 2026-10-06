@@ -1,7 +1,8 @@
 import { ChevronRight } from 'lucide-react';
 import type { ProjectGroup } from '../../types';
 import { C, FONT, FS } from '../../lib/design';
-import { ICON_SIZE } from '../../components/ui/icons';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { IconButton } from '../../components/ui';
 import { NoSphereTile, SphereTile } from './SphereTile';
 
 interface Props {
@@ -27,7 +28,12 @@ export function SphereHeader({ sphere, count, onOpenPage, compact }: Props) {
       </span>
       <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>{count}</span>
       <div style={{ flex: 1, height: 1, background: C.divider }} />
-      {sphere && onOpenPage && (
+      {sphere && onOpenPage && compact && (
+        <IconButton size="lg" title="Страница сферы" ariaLabel={`Страница сферы «${sphere.name}»`} onClick={() => onOpenPage(sphere.id)}>
+          <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+        </IconButton>
+      )}
+      {sphere && onOpenPage && !compact && (
         <button
           type="button" onClick={() => onOpenPage(sphere.id)} title="Страница сферы"
           style={{
@@ -35,8 +41,8 @@ export function SphereHeader({ sphere, count, onOpenPage, compact }: Props) {
             cursor: 'pointer', color: C.accent, fontFamily: FONT.sans, fontSize: FS.sm,
           }}
         >
-          {!compact && 'Страница сферы'}
-          <ChevronRight size={ICON_SIZE.sm} strokeWidth={2} />
+          Страница сферы
+          <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         </button>
       )}
     </div>

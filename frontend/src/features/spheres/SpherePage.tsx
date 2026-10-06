@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { Laptop, MoreVertical, SquarePen, Trash2 } from 'lucide-react';
+import { Laptop, MoreVertical, SquarePen, Trash2, UserPlus } from 'lucide-react';
 import type { DesktopDevice, ProjectGroup, SphereOverview } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, R, SHADOW } from '../../lib/design';
@@ -13,6 +13,8 @@ import { SphereTile } from './SphereTile';
 import { SphereDialog } from './SphereDialog';
 import { SphereDeleteDialog } from './SphereDeleteDialog';
 import { SphereMemorySection } from './SphereMemory';
+import { showToast } from '../../lib/toast';
+import { PersonaWizard } from '../personas/PersonaWizard';
 import { describeLoadError } from './sphereLogic';
 
 interface Props {
@@ -59,6 +61,8 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [dialog, setDialog] = useState<'edit' | 'delete' | null>(null);
   const [showAllTasks, setShowAllTasks] = useState(false);
+  // Создание персоны сразу с зоной этой сферы (мастер вместо страницы)
+  const [creatingPersona, setCreatingPersona] = useState(false);
 
   const load = useCallback(() => {
     api.spheres.overview(sphere.id)
@@ -99,11 +103,11 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
             style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '8px 0', borderTop: `1px solid ${C.divider}` }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <button type="button" onClick={() => onOpenProject(p.id)}
-                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.md, fontWeight: 600, color: C.textHeading, textAlign: 'left' }}>
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.md, fontWeight: 600, color: C.textHeading, textAlign: 'left', minHeight: isMobile ? 40 : undefined }}>
                 {p.name}
               </button>
               {local && (
-                <Badge tone={reason ? 'warning' : 'neutral'} size="xs" icon={<Laptop size={11} />}>
+                <Badge tone={reason ? 'warning' : 'neutral'} size="xs" icon={<Laptop size={ICON_SIZE.xs} />}>
                   {deviceName ? `На устройстве «${deviceName}»` : 'На устройстве'}
                 </Badge>
               )}
@@ -122,6 +126,10 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
 
   const teamCard = (
     <Card title="Команда" subtitle="Работают во всех проектах сферы и пишут в её память.">
+      <Button variant="secondary" size="sm" leftIcon={<UserPlus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+        onClick={() => setCreatingPersona(true)}>
+        Добавить персону в команду
+      </Button>
       {data && data.team.length === 0 && (
         <div style={hint}>Персон пока нет. Персона сферы работает во всех её проектах и помнит решения соседних.</div>
       )}
@@ -155,10 +163,9 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
         );
       })}
       {tasks.length > TASKS_SHOWN && !showAllTasks && (
-        <button type="button" onClick={() => setShowAllTasks(true)}
-          style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.base, color: C.accent }}>
+        <Button variant="ghostAccent" size="sm" onClick={() => setShowAllTasks(true)} style={{ alignSelf: 'flex-start' }}>
           и ещё {tasks.length - TASKS_SHOWN}
-        </button>
+        </Button>
       )}
     </Card>
   );
@@ -168,6 +175,27 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
       <SphereMemorySection sphereId={sphere.id} onCountChange={setMemoryCount} />
     </Card>
   );
+
+  // Мастер создания: после «Готово» персона уже в команде сферы — закрываем и обновляем сводку
+  const finishCreate = (p: { name: string }) => {
+    setCreatingPersona(false);
+    load();
+    showToast('Персоны', `«${p.name}» добавлена в команду сферы «${sphere.name}».`);
+  };
+  if (creatingPersona) {
+    return (
+      <PersonaWizard
+        scope="sphere"
+        sphereId={sphere.id}
+        projects={[]}
+        onOpenStudio={finishCreate}
+        onStartChat={finishCreate}
+        onCancel={() => setCreatingPersona(false)}
+        onBack={() => setCreatingPersona(false)}
+        isMobile={isMobile}
+      />
+    );
+  }
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '12px 16px 18px' : '14px 26px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -184,7 +212,7 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
           {!isMobile && (
             <Button variant="secondary" size="md" onClick={() => setDialog('edit')}>Изменить</Button>
           )}
-          <IconButton title="Действия" size="sm" active={!!menu}
+          <IconButton title="Действия" ariaLabel="Действия со сферой" size={isMobile ? 'lg' : 'sm'} active={!!menu}
             onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setMenu(prev => (prev ? null : r)); }}>
             <MoreVertical size={ICON_SIZE.sm} fill="currentColor" />
           </IconButton>
@@ -203,10 +231,9 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
             {longCharter && (
               <>
                 {' '}
-                <button type="button" onClick={() => setCharterOpen(o => !o)}
-                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.base, color: C.accent }}>
+                <Button variant="ghostAccent" size="sm" onClick={() => setCharterOpen(o => !o)}>
                   {charterOpen ? 'Свернуть' : 'Показать полностью'}
-                </button>
+                </Button>
               </>
             )}
           </div>
@@ -217,18 +244,12 @@ export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onCha
       </div>
 
       {error && (
-        <div style={{ ...hint, color: C.danger }}>
+        <div role="alert" style={{ ...hint, color: C.dangerText }}>
           {error.text}{' '}
           {error.kind === 'notFound' ? (
-            <button type="button" onClick={onBack}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.accent, textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit' }}>
-              К списку проектов
-            </button>
+            <Button variant="ghostAccent" size="sm" onClick={onBack}>К списку проектов</Button>
           ) : (
-            <button type="button" onClick={load}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.accent, textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit' }}>
-              Повторить
-            </button>
+            <Button variant="ghostAccent" size="sm" onClick={load}>Повторить</Button>
           )}
         </div>
       )}

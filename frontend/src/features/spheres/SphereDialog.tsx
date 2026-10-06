@@ -80,7 +80,7 @@ export function SphereDialog({ sphere, existingCount, onSaved, onClose }: Props)
         />
       }
     >
-      {error && <div style={{ color: C.danger, fontSize: FS.base }}>{error}</div>}
+      {error && <div role="alert" style={{ color: C.dangerText, fontSize: FS.base }}>{error}</div>}
 
       <Field label="Название">
         <TextField value={name} onChange={setName} placeholder="Например, Банк" autoFocus onEnter={save} />

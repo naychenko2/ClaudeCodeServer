@@ -13,6 +13,7 @@ import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
 import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { useSpheres } from '../../lib/useSpheres';
 import { isZoneRefusal, OPEN_COMPANION_PICKER_EVENT } from '../../lib/personaZone';
 import { prunedHeadline, prunedDetails } from '../../lib/contextPruned';
 import { Button } from '../ui/Button';
@@ -2155,19 +2156,27 @@ function ErrorRetryButton({ onRetry }: { onRetry: () => void }) {
 // warning-карточка с единственным действием «Сменить собеседника» (откроет выбор в композере).
 // Повтор бессмыслен, «Вернуть проект в сферу» намеренно нет (решение владельца).
 function ZoneRefusalCard({ text }: { text: string }) {
+  // Имя персоны и сферы — из данных чата, а не из текста ошибки; нет данных — короткая подпись
+  const persona = useContext(PersonaContext);
+  const spheresOn = useFeature(FLAGS.spheres);
+  const spheres = useSpheres(spheresOn);
+  const sphereName = persona?.sphereId ? spheres.find(s => s.id === persona.sphereId)?.name : undefined;
+  const caption = persona && sphereName
+    ? `${persona.name} работает только в проектах сферы «${sphereName}». Сообщение сохранено в поле ввода — отправится новому собеседнику.`
+    : 'Сообщение сохранено в поле ввода — отправится новому собеседнику.';
   return (
-    <div style={{
-      background: C.warningBg, borderRadius: R.lg, padding: '10px 12px',
+    <div role="alert" style={{
+      background: C.warningBg, borderRadius: R.lg, padding: `${SP.md}px ${SP.lg}px`,
       border: `1px solid ${C.warning}`, color: C.warningText, fontFamily: FONT.sans,
-      display: 'flex', alignItems: 'flex-start', gap: 8,
+      display: 'flex', alignItems: 'flex-start', gap: SP.sm,
     }}>
-      <AlertTriangle size={ICON_SIZE.sm} strokeWidth={2} style={{ flexShrink: 0, marginTop: 2 }} />
+      <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 2 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: FS.base, fontWeight: 600, overflowWrap: 'break-word' }}>{text}</div>
         <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>
-          Сообщение сохранено в поле ввода — отправится новому собеседнику.
+          {caption}
         </div>
-        <div style={{ marginTop: 9 }}>
+        <div style={{ marginTop: SP.md }}>
           <Button
             size="xs"
             onClick={() => window.dispatchEvent(new Event(OPEN_COMPANION_PICKER_EVENT))}

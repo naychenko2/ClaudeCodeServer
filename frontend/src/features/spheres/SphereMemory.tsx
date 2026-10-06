@@ -13,6 +13,13 @@ import { MEMORY_TYPE_LABEL, memoryAdded, memoryAdopted, memoryRemoved } from './
 const hint: CSSProperties = { fontSize: FS.base, color: C.textMuted, lineHeight: 1.5 };
 const SHELF_SHOWN = 5;
 
+// Метка происхождения записи сферы: перенос из проекта, ручная (без метки) или автоматическая
+function originLabel(e: SphereMemoryEntry): string {
+  if (e.promotedFrom) return 'перенесено из проекта';
+  if (e.source === 'manual') return '';
+  return 'авто';
+}
+
 function shortDate(iso: string) {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
@@ -55,9 +62,9 @@ export function SphereMemoryShelves({ data, busyId, isMobile, onAdopt, onRemove 
           <div key={e.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 0', borderTop: `1px solid ${C.divider}` }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: FS.base, color: C.textPrimary, lineHeight: 1.45, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{e.text}</div>
-              {meta(e.type, e.promotedFrom ? 'перенесено из проекта' : e.source === 'manual' ? '' : 'авто', e.createdAt)}
+              {meta(e.type, originLabel(e), e.createdAt)}
             </div>
-            <IconButton title="Удалить запись" size="sm" disabled={busyId === e.id} onClick={() => onRemove(e.id)}>
+            <IconButton title="Удалить запись" ariaLabel="Удалить запись" size={isMobile ? 'lg' : 'sm'} disabled={busyId === e.id} onClick={() => onRemove(e.id)}>
               <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </IconButton>
           </div>
@@ -113,16 +120,16 @@ export function SphereMemorySection({ sphereId, onCountChange }: { sphereId: str
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (data) onCountChange?.(data.sphere.length); }, [data, onCountChange]);
 
-  const act = async (id: string, run: () => Promise<void>) => {
+  const act = async (id: string, failText: string, run: () => Promise<void>) => {
     setBusyId(id); setError('');
-    try { await run(); } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось выполнить действие'); }
+    try { await run(); } catch (e) { setError(e instanceof Error ? e.message : failText); }
     finally { setBusyId(null); }
   };
-  const adopt = (projectId: string, entryId: string) => act(entryId, async () => {
+  const adopt = (projectId: string, entryId: string) => act(entryId, 'Не удалось перенести запись', async () => {
     const adopted = await api.spheres.adoptMemory(sphereId, projectId, entryId);
     setData(d => d && memoryAdopted(d, projectId, entryId, adopted));
   });
-  const remove = (entryId: string) => act(entryId, async () => {
+  const remove = (entryId: string) => act(entryId, 'Не удалось удалить запись', async () => {
     await api.spheres.removeMemory(sphereId, entryId);
     setData(d => d && memoryRemoved(d, entryId));
   });
@@ -144,7 +151,7 @@ export function SphereMemorySection({ sphereId, onCountChange }: { sphereId: str
   return (
     <>
       {error && (
-        <div style={{ ...hint, color: C.danger }}>
+        <div role="alert" style={{ ...hint, color: C.dangerText }}>
           {error}{' '}
           {!data && (
             <button type="button" onClick={load}

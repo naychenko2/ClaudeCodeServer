@@ -260,9 +260,18 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
                 return Fail(ClassifyHttp(rresp.StatusCode, rtext), false, ticket.RequestId, ErrorText(rtext, rresp.StatusCode));
 
             progress.Report(new EditProgress(EditStage.Downloading));
-            var images = await DownloadAllAsync(Downloader, rtext, token);
+            var (images, downloadError) = await DownloadAllAsync(Downloader, rtext, token);
             if (images.Count == 0)
-                return Fail(EditOutcome.Failed, null, ticket.RequestId, "fal.ai не вернул картинок");
+            {
+                _log.LogWarning("fal.ai: задача {RequestId} ({Model}) без картинок, отказ скачивания: {Download}, ответ: {Body}",
+                    ticket.RequestId, req.Model, downloadError, FalEmptyResult.LogBody(rtext));
+                // Картинка была, но не скачалась: fal её нарисовал и, скорее всего, списал
+                if (downloadError is not null)
+                    return Fail(EditOutcome.Failed, true, ticket.RequestId,
+                        "fal.ai нарисовал картинку, но скачать её не удалось: " + ImageDownload.Explain(downloadError));
+                var (outcome, error) = EmptyResultReason(rtext);
+                return Fail(outcome, null, ticket.RequestId, error);
+            }
             return new ImageEditResult(EditOutcome.Ok, images, null, true, ticket.RequestId, null);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -376,7 +385,9 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
             Str(json, "cancel_url") ?? baseUrl + "/cancel");
     }
 
-    private static async Task<IReadOnlyList<EditedImage>> DownloadAllAsync(SafeMediaDownloader downloader, string text, CancellationToken ct)
+    // Варианты и код первого отказа загрузчика: при пустом итоге причина — он, а не ответ модели
+    private static async Task<(IReadOnlyList<EditedImage> Images, string? Error)> DownloadAllAsync(SafeMediaDownloader downloader,
+        string text, CancellationToken ct)
     {
         var json = JsonDocument.Parse(text).RootElement;
         var items = new List<JsonElement>();
@@ -386,13 +397,34 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
             items.Add(one);
 
         var result = new List<EditedImage>();
+        string? error = null;
         foreach (var item in items)
         {
             if (Str(item, "url") is not { Length: > 0 } url) continue;
-            if (await ImageDownload.FetchAsync(downloader, url, Str(item, "content_type"), ct) is { } img)
-                result.Add(img);
+            var (img, failed) = await ImageDownload.FetchWithErrorAsync(downloader, url, Str(item, "content_type"), ct);
+            if (img is not null) result.Add(img);
+            else error ??= failed;
         }
-        return result;
+        return (result, error);
+    }
+
+    // Причина пустого успешного ответа: ссылки были, но не скачались — иначе разбор FalEmptyResult
+    // (фильтр безопасности или текст модели вместо картинки)
+    internal static (EditOutcome Outcome, string Error) EmptyResultReason(string body)
+    {
+        JsonElement json;
+        try { json = JsonDocument.Parse(body).RootElement; }
+        catch (JsonException) { return (EditOutcome.Failed, "fal.ai не вернул картинок"); }
+
+        var links = json.TryGetProperty("images", out var arr) && arr.ValueKind == JsonValueKind.Array
+            ? arr.EnumerateArray().Count(i => Str(i, "url") is { Length: > 0 })
+            : Str(json.TryGetProperty("image", out var one) ? one : default, "url") is { Length: > 0 } ? 1 : 0;
+        if (links > 0)
+            return (EditOutcome.Failed, "fal.ai нарисовал картинку, но скачать её не удалось");
+
+        return FalEmptyResult.Explain(json) is { } why
+            ? (why.Rejected ? EditOutcome.Rejected : EditOutcome.Failed, "fal.ai не вернул картинок — " + why.Reason)
+            : (EditOutcome.Failed, "fal.ai не вернул картинок, причину не назвал");
     }
 
     private static EditOutcome ClassifyHttp(HttpStatusCode code, string body)

@@ -16,6 +16,8 @@ public sealed class TeamMemoryConsolidationService : BackgroundService
     private static readonly TimeSpan PendingTick = TimeSpan.FromMinutes(5);
 
     private readonly TeamMemoryService _memory;
+    // Полка памяти сферы (опциональна: без неё консолидируется только память проектов)
+    private readonly SphereMemoryService? _spheres;
     private readonly Llm.ICheapTextRunner _cheap;
     private readonly IConfiguration _config;
     private readonly ILogger<TeamMemoryConsolidationService> _log;
@@ -24,9 +26,11 @@ public sealed class TeamMemoryConsolidationService : BackgroundService
     private readonly ConcurrentDictionary<(string Owner, string Project), byte> _pending = new();
 
     public TeamMemoryConsolidationService(TeamMemoryService memory, Llm.ICheapTextRunner cheap,
-        IConfiguration config, ILogger<TeamMemoryConsolidationService> log)
+        IConfiguration config, ILogger<TeamMemoryConsolidationService> log,
+        SphereMemoryService? spheres = null)
     {
         _memory = memory;
+        _spheres = spheres;
         _cheap = cheap;
         _config = config;
         _log = log;
@@ -66,6 +70,10 @@ public sealed class TeamMemoryConsolidationService : BackgroundService
                     lastFullPass = DateTime.UtcNow;
                     foreach (var (owner, project) in _memory.AllScopes())
                         await ConsolidateSafeAsync(owner, project, ct);
+                    // Вторая полка — память сфер: тот же алгоритм и те же пороги
+                    if (_spheres is not null)
+                        foreach (var (owner, sphere) in _spheres.AllScopes())
+                            await ConsolidateSafeAsync(owner, sphere, ct, sphereShelf: true);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -75,28 +83,34 @@ public sealed class TeamMemoryConsolidationService : BackgroundService
         }
     }
 
-    private async Task ConsolidateSafeAsync(string ownerId, string projectId, CancellationToken ct)
+    private async Task ConsolidateSafeAsync(string ownerId, string projectId, CancellationToken ct,
+        bool sphereShelf = false)
     {
-        try { await ConsolidateAsync(ownerId, projectId, ct); }
+        try { await ConsolidateAsync(ownerId, projectId, ct, sphereShelf); }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Консолидация памяти команды проекта {Project}", projectId);
         }
     }
 
-    private async Task ConsolidateAsync(string ownerId, string projectId, CancellationToken ct)
+    private async Task ConsolidateAsync(string ownerId, string projectId, CancellationToken ct,
+        bool sphereShelf = false)
     {
-        var entries = _memory.List(ownerId, projectId);
+        // Полка выбирается флагом: обе отдают одинаковые List/ApplyConsolidation над общим MemoryShelf
+        Func<string, string, IReadOnlyList<TeamMemoryEntry>> list = sphereShelf ? _spheres!.List : _memory.List;
+        Func<string, string, IReadOnlyList<TeamMemoryConsolidationOp>, int> apply =
+            sphereShelf ? _spheres!.ApplyConsolidation : _memory.ApplyConsolidation;
+        var entries = list(ownerId, projectId);
         if (entries.Count <= SoftLimit) return;   // софт-порог: мало записей — не трогаем
 
         // Шаг 1: LLM-merge (невалидный/пустой ответ = no-op)
         var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.TeamMemoryConsolidate,
             BuildPrompt(entries), _config["Notes:AiModel"] ?? "haiku", ownerId, ct: ct);
         var ops = FilterOps(ParseOps(raw), entries);
-        var merged = ops.Count > 0 ? _memory.ApplyConsolidation(ownerId, projectId, ops) : 0;
+        var merged = ops.Count > 0 ? apply(ownerId, projectId, ops) : 0;
 
         // Шаг 2: вытеснение хвоста по retention-скорингу при переполнении сверх MaxEntries
-        var after = _memory.List(ownerId, projectId);
+        var after = list(ownerId, projectId);
         var evictIds = TeamMemoryScorer.SelectEvictionIds(after, MaxEntries, MemoryScoringOptions.Default, DateTime.UtcNow);
         var evicted = 0;
         if (evictIds.Count > 0)
@@ -104,7 +118,7 @@ public sealed class TeamMemoryConsolidationService : BackgroundService
             var dropOps = evictIds
                 .Select(id => new TeamMemoryConsolidationOp("drop", null, id, null, null, null))
                 .ToList();
-            evicted = _memory.ApplyConsolidation(ownerId, projectId, dropOps);
+            evicted = apply(ownerId, projectId, dropOps);
         }
 
         if (merged > 0 || evicted > 0)

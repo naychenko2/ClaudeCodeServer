@@ -134,6 +134,12 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
     // Настроенный потолок памяти полки (TeamMemory:MaxEntries)
     public int MaxEntries => _maxEntries;
 
+    // Число записей scope'а (без копирования списка)
+    public int Count(string ownerId, string scopeId)
+    {
+        lock (_saveLock) return Get(ownerId, scopeId).Count;
+    }
+
     public IReadOnlyList<TeamMemoryEntry> List(string ownerId, string scopeId) =>
         Snapshot(ownerId, scopeId);
 
@@ -157,7 +163,7 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
     public TeamMemoryEntry Add(string ownerId, string scopeId, string text,
         TeamMemoryType type = TeamMemoryType.Fact,
         TeamMemorySource source = TeamMemorySource.Manual,
-        string? sourceSessionId = null, double? salience = null)
+        string? sourceSessionId = null, double? salience = null, MemoryPromotion? promotedFrom = null)
     {
         var trimmed = text.Trim();
         TeamMemoryEntry result;
@@ -186,6 +192,7 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
                     Type = type,
                     Source = source,
                     SourceSessionId = sourceSessionId,
+                    PromotedFrom = promotedFrom,
                     Salience = salience is null ? 1.0 : Math.Clamp(salience.Value, 0.05, 1.0),
                 };
                 list.Add(entry);
@@ -203,7 +210,7 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
     public async Task<TeamMemoryEntry> AddAsync(string ownerId, string scopeId, string text,
         TeamMemoryType type = TeamMemoryType.Fact,
         TeamMemorySource source = TeamMemorySource.Manual,
-        string? sourceSessionId = null, double? salience = null)
+        string? sourceSessionId = null, double? salience = null, MemoryPromotion? promotedFrom = null)
     {
         var trimmed = await CompressIfLongAsync(source, text.Trim());
         var state = GetKnowledgeState(ownerId, scopeId);
@@ -221,7 +228,7 @@ internal sealed class MemoryShelf : Knowledge.IKnowledgeSyncParticipant, IDispos
             }
             catch (Exception ex) { _log?.LogDebug(ex, "memory-shelf: семантический дедуп {Scope}", scopeId); }
         }
-        return Add(ownerId, scopeId, trimmed, type, source, sourceSessionId, salience);
+        return Add(ownerId, scopeId, trimmed, type, source, sourceSessionId, salience, promotedFrom);
     }
 
     // Найти запись того же типа, семантически близкую к тексту (Dify retrieve, порог DedupThreshold)

@@ -16,7 +16,7 @@ public static class KnowledgeAccess
     }
 
     // Доступна ли база пользователю на чтение: своя или глобальная — да; чужая помеченная — нет.
-    // Своя память персоны/команды — внутренняя (управляется своим разделом), в «Знаниях» не видна.
+    // Своя память персоны/команды/сферы — внутренняя (управляется своим разделом), в «Знаниях» не видна.
     public static bool IsRelevant(string name, string username, IReadOnlySet<string> others)
     {
         var owner = OwnerOf(name, username, others);
@@ -24,7 +24,8 @@ public static class KnowledgeAccess
         if (!owner.Equals(username, StringComparison.OrdinalIgnoreCase)) return false;  // чужая
         var rest = name[(username.Length + 1)..];
         return !rest.StartsWith("persona:", StringComparison.Ordinal)
-            && !rest.StartsWith("team:", StringComparison.Ordinal);
+            && !rest.StartsWith("team:", StringComparison.Ordinal)
+            && !rest.StartsWith("sphere:", StringComparison.Ordinal);
     }
 
     // Можно ли удалить базу из раздела: самостоятельные ({user}:kb:…) и публичные (без префикса,

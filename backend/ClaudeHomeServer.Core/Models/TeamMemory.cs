@@ -28,4 +28,10 @@ public class TeamMemoryEntry : IMemoryEntry<TeamMemoryType>
     // Сессия-источник авто-записи (атрибуция); null для ручного ввода.
     public string? SourceSessionId { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    // Откуда запись поднята в память сферы (проект, исходная запись, момент); null — записана напрямую
+    // и во всех legacy-сторах (аддитивное поле, формат файла не ломает).
+    public MemoryPromotion? PromotedFrom { get; set; }
 }
+
+// Происхождение записи памяти сферы, поднятой из памяти проекта сферы.
+public sealed record MemoryPromotion(string ProjectId, string EntryId, DateTime At);

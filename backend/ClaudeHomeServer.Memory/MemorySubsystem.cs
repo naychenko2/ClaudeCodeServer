@@ -94,6 +94,10 @@ public sealed class MemorySubsystem : IAppSubsystem
         // для всех персон команды. Тип-эталон — PersonaMemoryService.
         services.AddSingleton<TeamMemoryService>();
 
+        // Память сферы — вторая полка над тем же MemoryShelf: стор data/sphere-memory.json и
+        // Dify-датасет `{username}:sphere:{sphereId}`; консолидирует её TeamMemoryConsolidationService.
+        services.AddSingleton<SphereMemoryService>();
+
         // Консолидация памяти команды — singleton + hosted через AddGatedHostedFrom.
         services.AddSingleton<TeamMemoryConsolidationService>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<TeamMemoryConsolidationService>());

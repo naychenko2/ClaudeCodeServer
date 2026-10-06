@@ -95,6 +95,7 @@ public sealed class KnowledgeBaseCatalogService(KnowledgeService knowledge, IUse
             if (rest == "notes") { type = "Заметки"; title = "Заметки"; deletable = false; }
             else if (rest.StartsWith("persona:", StringComparison.Ordinal)) return null; // память персоны — внутренняя, скрыта
             else if (rest.StartsWith("team:", StringComparison.Ordinal)) return null;     // память команды — внутренняя, скрыта
+            else if (rest.StartsWith("sphere:", StringComparison.Ordinal)) return null;   // память сферы — внутренняя, скрыта
             else if (rest.StartsWith("kb:", StringComparison.Ordinal)) { type = "Самостоятельная"; title = rest["kb:".Length..]; deletable = true; }
             else { type = "Проект"; title = rest; deletable = false; } // {username}:{projectName}
             visibility = "personal";

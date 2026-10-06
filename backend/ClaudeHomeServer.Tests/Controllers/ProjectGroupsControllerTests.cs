@@ -62,6 +62,23 @@ public class ProjectGroupsControllerTests : IClassFixture<TestWebApplicationFact
     }
 
     [Fact]
+    public async Task Update_ПринимаетЗначокИХартию_ОтвергаетНегодные()
+    {
+        var id = (await CreateGroupAsync("сфера")).GetProperty("id").GetString();
+
+        var ok = await _client.PutAsJsonAsync($"/api/project-groups/{id}", new { icon = "piggy-bank", charter = "# Хартия" });
+        ok.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await ok.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("icon").GetString().Should().Be("piggy-bank");
+        body.GetProperty("charter").GetString().Should().Be("# Хартия");
+
+        (await _client.PutAsJsonAsync($"/api/project-groups/{id}", new { icon = "нет-такой-иконки" }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _client.PutAsJsonAsync($"/api/project-groups/{id}", new { charter = new string('x', 4001) }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
     public async Task Update_ЧужаяГруппа_404()
     {
         var group = await CreateGroupAsync("моя");

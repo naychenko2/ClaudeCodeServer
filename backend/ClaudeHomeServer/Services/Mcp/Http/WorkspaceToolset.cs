@@ -55,7 +55,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// </summary>
 public sealed partial class WorkspaceToolset(
     ProjectManager projects,
-    ProjectGroupManager groups,
+    SphereManager groups,
     SessionManager sessions,
     PersonaManager personas,
     FileService files,

@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -9,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/project-groups")]
-public class ProjectGroupsController(ProjectGroupManager groups, ProjectManager projects) : ControllerBase
+public class ProjectGroupsController(SphereManager groups, ProjectManager projects) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -30,7 +31,18 @@ public class ProjectGroupsController(ProjectGroupManager groups, ProjectManager 
     {
         var g = groups.GetById(id);
         if (g is null || g.OwnerId != UserId) return NotFound();
-        var updated = groups.Update(id, req.Name?.Trim(), req.Color);
+        if (req.Charter is { Length: > Sphere.CharterMaxLength })
+            return BadRequest(new { error = $"Хартия не длиннее {Sphere.CharterMaxLength} символов" });
+        // Значок валидируется по белому списку lucide, как у проекта (ADR-009); "" — снять
+        var icon = req.Icon?.Trim();
+        if (!string.IsNullOrEmpty(icon))
+        {
+            var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(icon);
+            if (candidate is null)
+                return BadRequest(new { error = "Негодный значок: нужно имя иконки из набора lucide" });
+            icon = candidate.Name;
+        }
+        var updated = groups.Update(id, req.Name?.Trim(), req.Color, icon, req.Charter);
         return Ok(updated);
     }
 
@@ -51,5 +63,5 @@ public class ProjectGroupsController(ProjectGroupManager groups, ProjectManager 
 }
 
 public record CreateGroupRequest(string Name, string? Color);
-public record UpdateGroupRequest(string? Name, string? Color);
+public record UpdateGroupRequest(string? Name, string? Color, string? Icon = null, string? Charter = null);
 public record ReorderGroupsRequest(List<string>? OrderedIds);

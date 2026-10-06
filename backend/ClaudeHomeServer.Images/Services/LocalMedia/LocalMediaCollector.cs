@@ -7,6 +7,11 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 public sealed class LocalMediaCollector(LocalMediaService media, LocalMediaCleanup cleanup,
     ILogger<LocalMediaCollector> log, LocalVideoMediaAdapter? videos = null) : BackgroundService
 {
+    private readonly TaskCompletionSource _firstPass = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // Первый проход цикла выполнен (с любым исходом): хук для тестов, чтобы не угадывать паузу
+    internal Task FirstPass => _firstPass.Task;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -30,6 +35,8 @@ public sealed class LocalMediaCollector(LocalMediaService media, LocalMediaClean
             {
                 log.LogWarning(ex, "Сбор результатов локальной генерации не удался — повторю позже");
             }
+
+            _firstPass.TrySetResult();
 
             // Коллектор реже опроса агента: он страхует, а не ведёт
             var delay = TimeSpan.FromMilliseconds(Math.Clamp(options.PollIntervalMs * 3, 3000, 60000));

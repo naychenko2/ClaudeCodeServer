@@ -54,6 +54,10 @@ public sealed class LocalVideoMediaAdapter(
         public DateTime At { get; } = at;
         public volatile string? LatentVideo;
         public volatile string? LatentAudio;
+
+        // Точные пути mp4-результатов в output ComfyUI (съёмки и её апскейлов) вместе с id задачи, по которому
+        // они названы: 100–300 МБ на ролик, убираются тем же Sweep по TTL
+        public ConcurrentBag<(string OwnerId, string Path)> Outputs { get; } = [];
     }
 
     // Имя вида lv_ + 32 строчных hex — только такие id считаются нашими при удалении файлов
@@ -72,14 +76,20 @@ public sealed class LocalVideoMediaAdapter(
         var options = LocalMediaOptions.Read(config);
         foreach (var (ticket, shot) in _shots)
         {
-            if (now - shot.At <= ILocalVideoMedia.ShotTtl || !_shots.TryRemove(ticket, out _)) continue;
+            // Пока апскейл съёмки в полёте, ComfyUI ещё может читать латенты и копии в input: не трогаем ни шот,
+            // ни апскейл — дочистит следующий проход после завершения задачи
+            if (now - shot.At <= ILocalVideoMedia.ShotTtl || HasUpscaleInFlight(ticket) || !_shots.TryRemove(ticket, out _)) continue;
             PurgeShot(shot, options);
             foreach (var (upTicket, up) in _upscales)
                 if (up.ShotTicket == ticket && _upscales.TryRemove(upTicket, out _)) PurgeUpscaleInputs(up, options);
         }
         foreach (var (upTicket, up) in _upscales)
-            if (now - up.At > ILocalVideoMedia.ShotTtl && _upscales.TryRemove(upTicket, out _)) PurgeUpscaleInputs(up, options);
+            if (now - up.At > ILocalVideoMedia.ShotTtl && !_watches.ContainsKey(upTicket) && _upscales.TryRemove(upTicket, out _))
+                PurgeUpscaleInputs(up, options);
     }
+
+    private bool HasUpscaleInFlight(string shotTicket) =>
+        _upscales.Any(u => u.Value.ShotTicket == shotTicket && _watches.ContainsKey(u.Key));
 
     private void PurgeShot(Shot shot, LocalMediaOptions options)
     {
@@ -90,6 +100,8 @@ public sealed class LocalVideoMediaAdapter(
             if (latent is not null) cleanup.DeleteOwn(output, latent, shot.Id, LocalMediaCleanup.OutputPrefixes, '_');
         foreach (var frame in new[] { shot.FirstName, shot.LastName })
             if (frame is not null) cleanup.DeleteOwn(input, frame, shot.Id, LocalMediaCleanup.InputPrefixes, '-');
+        foreach (var (ownerId, path) in shot.Outputs)
+            cleanup.DeleteOwn(output, path, ownerId, LocalMediaCleanup.OutputPrefixes, '_');
     }
 
     private void PurgeUpscaleInputs(UpscaleInputs up, LocalMediaOptions options)
@@ -239,6 +251,7 @@ public sealed class LocalVideoMediaAdapter(
             if (history.Failed) return Failed(history.Error ?? "ComfyUI завершил задачу ошибкой.");
             if (!history.Completed) return new LocalVideoPoll(LocalVideoState.Running, 0, null, null, Percent: PercentOf(ticket));
             StopWatch(ticket);
+            var upscale = _upscales.TryGetValue(ticket, out var upInputs) ? upInputs : null;
             ReleaseUpscale(ticket);
             if (_shots.TryGetValue(ticket, out var shot))
             {
@@ -252,6 +265,7 @@ public sealed class LocalVideoMediaAdapter(
                 if (LocalMediaService.ContentTypeOf(ext) is not { } type || !type.StartsWith("video/", StringComparison.Ordinal))
                     continue;
                 // Звук H3 генерирует сам, CreateVideo склеивает его с кадрами: дорожка есть всегда
+                RememberOutput(upscale, ticket, file);
                 var bytes = await comfy.DownloadAsync(file, ct);
                 return new LocalVideoPoll(LocalVideoState.Completed, null, new LocalVideoFile(bytes, type, ext, HasSound: true), null);
             }
@@ -275,6 +289,15 @@ public sealed class LocalVideoMediaAdapter(
             if (_shots.TryRemove(ticket, out var failedShot)) PurgeShot(failedShot, LocalMediaOptions.Read(config));
             return new(LocalVideoState.Failed, null, null, error);
         }
+    }
+
+    // Имя mp4 запоминается точным путём в Shot: свой id у съёмки (её ticket) или у апскейла (по нему назван префикс)
+    private void RememberOutput(UpscaleInputs? upscale, string ticket, ComfyOutputFile file)
+    {
+        var owner = upscale is null ? _shots.GetValueOrDefault(ticket) : _shots.GetValueOrDefault(upscale.ShotTicket);
+        if (owner is null) return;
+        var path = file.Subfolder.Length == 0 ? file.FileName : $"{file.Subfolder}/{file.FileName}";
+        owner.Outputs.Add((upscale?.Id ?? owner.Id, path));
     }
 
     private double? PercentOf(string ticket) => _watches.TryGetValue(ticket, out var watch) ? watch.Fraction : null;

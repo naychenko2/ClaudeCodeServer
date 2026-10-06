@@ -107,11 +107,9 @@ public class LocalVideoShotCleanupTests : IDisposable
         (await adapter.SubmitUpscaleAsync(ticket, "1440p", default)).Error.Should().Contain("больше не доступна");
     }
 
-    [Fact]
-    public async Task Sweep_also_removes_leftover_upscale_input_copies_of_the_expired_shot()
+    private async Task<(string Ticket, string UpId, string[] Copies)> UpscaleStarted(LocalVideoMediaAdapter adapter, string shotTicket)
     {
-        var (adapter, ticket, _, _) = await ShotDone();
-        var up = await adapter.SubmitUpscaleAsync(ticket, "1440p", default);
+        var up = await adapter.SubmitUpscaleAsync(shotTicket, "1440p", default);
         up.Error.Should().BeNull();
         var upId = _comfy.UploadPaths.Single(p => p.EndsWith("-video.latent"))["ccs-local-media-".Length..^"-video.latent".Length];
         var copies = new[]
@@ -119,11 +117,62 @@ public class LocalVideoShotCleanupTests : IDisposable
             Touch(_input, $"ccs-local-media-{upId}-video.latent"),
             Touch(_input, $"ccs-local-media-{upId}-audio.latent"),
         };
+        return (up.Ticket!, upId, copies);
+    }
+
+    [Fact]
+    public async Task Sweep_after_finished_upscale_leaves_no_upscale_input_copies_of_the_expired_shot()
+    {
+        var (adapter, ticket, _, shotFiles) = await ShotDone();
+        var (upTicket, upId, copies) = await UpscaleStarted(adapter, ticket);
+        _comfy.CompleteVideo(upTicket, upId, [9], withLatents: false);
+        (await adapter.PollAsync(upTicket, default)).State.Should().Be(LocalVideoState.Completed);
 
         _clock.Advance(ILocalVideoMedia.ShotTtl + TimeSpan.FromMinutes(1));
         adapter.Sweep();
 
-        copies.Should().AllSatisfy(f => File.Exists(f).Should().BeFalse(f));
+        copies.Concat(shotFiles).Should().AllSatisfy(f => File.Exists(f).Should().BeFalse(f));
+    }
+
+    [Fact]
+    public async Task Sweep_keeps_copies_and_shot_latents_of_an_upscale_that_is_still_running()
+    {
+        var (adapter, ticket, _, shotFiles) = await ShotDone();
+        var (upTicket, upId, copies) = await UpscaleStarted(adapter, ticket);
+
+        _clock.Advance(ILocalVideoMedia.ShotTtl + TimeSpan.FromMinutes(1));
+        adapter.Sweep();
+
+        copies.Should().AllSatisfy(f => File.Exists(f).Should().BeTrue($"апскейл в полёте: {f}"));
+        shotFiles.Should().AllSatisfy(f => File.Exists(f).Should().BeTrue($"латент нужен идущему апскейлу: {f}"));
+
+        // После конца задачи следующий проход дочищает всё
+        _comfy.CompleteVideo(upTicket, upId, [9], withLatents: false);
+        (await adapter.PollAsync(upTicket, default)).State.Should().Be(LocalVideoState.Completed);
+        adapter.Sweep();
+        shotFiles.Should().AllSatisfy(f => File.Exists(f).Should().BeFalse(f));
+    }
+
+    [Fact]
+    public async Task Sweep_removes_mp4_results_of_the_shot_and_its_upscale_by_exact_names()
+    {
+        var (adapter, ticket, id, _) = await ShotDone();
+        var shotMp4 = Touch(_output, $"ccs-local-media/{id}_00001_.mp4");
+        var (upTicket, upId, _) = await UpscaleStarted(adapter, ticket);
+        _comfy.CompleteVideo(upTicket, upId, [9], withLatents: false);
+        await adapter.PollAsync(upTicket, default);
+        var upMp4 = Touch(_output, $"ccs-local-media/{upId}_00001_.mp4");
+        var foreign = Touch(_output, $"ccs-local-media/lv_{new string('d', 32)}_00001_.mp4");
+
+        adapter.Sweep();
+        File.Exists(shotMp4).Should().BeTrue("срок не вышел");
+
+        _clock.Advance(ILocalVideoMedia.ShotTtl + TimeSpan.FromMinutes(1));
+        adapter.Sweep();
+
+        File.Exists(shotMp4).Should().BeFalse();
+        File.Exists(upMp4).Should().BeFalse();
+        File.Exists(foreign).Should().BeTrue("чужой mp4 не трогаем");
     }
 
     [Fact]
@@ -234,8 +283,8 @@ public class LocalVideoShotCleanupTests : IDisposable
         await collector.StartAsync(default);
         try
         {
-            // Первый проход цикла идёт сразу при старте: ждём результат, а не угадываем паузу
-            for (var i = 0; i < 500 && files.Any(File.Exists); i++) await Task.Delay(10);
+            // Первый проход цикла идёт сразу при старте: ждём конец прохода, а не угадываем паузу
+            await collector.FirstPass.WaitAsync(TimeSpan.FromSeconds(30));
         }
         finally
         {

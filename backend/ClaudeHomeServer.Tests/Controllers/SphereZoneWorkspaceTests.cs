@@ -75,6 +75,16 @@ public class SphereZoneWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public async Task Задачи_ПерсонаСферы_НеИсполнительЛичнойЗадачи()
+    {
+        var (_, _, _, _, persona) = await ArrangeAsync();
+        var scopes = Svc<PersonaBindingsService>().BuildExternalTaskScopes(OwnerId, persona);
+
+        TaskPersonaValidator.Error(Svc<PersonaManager>(), OwnerId, persona.Id, null, scopes)
+            .Should().Be("Персона сферы может выполнять только задачи проектов своей сферы");
+    }
+
+    [Fact]
     public async Task Файлы_ЗонаРабочегоПространства_ПроектыСферы_ИНеNull()
     {
         var (_, in1, in2, outside, persona) = await ArrangeAsync();

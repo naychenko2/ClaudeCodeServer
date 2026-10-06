@@ -173,7 +173,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                 && (p.Scope == PersonaScope.Global
                     || PersonaZone.IsProjectTeam(p, projectId)
                     || (sphereId is not null && PersonaZone.IsSphereTeam(p, sphereId))))
-            .OrderBy(p => PersonaZone.IsProjectPersona(p) ? 0 : p.Scope == PersonaScope.Sphere ? 1 : 2)
+            .OrderBy(p => PersonaZone.IsProjectPersona(p) ? 0 : PersonaZone.IsSpherePersona(p) ? 1 : 2)
             .FirstOrDefault();
     }
 

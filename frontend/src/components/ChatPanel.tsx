@@ -36,7 +36,7 @@ import { estimateContext } from '../lib/context';
 import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart, stageCaptionOf } from '../lib/toolTiming';
-import { BUILD_TOOL, RUN_TESTS_TOOL } from '../lib/toolLabels';
+import { BUILD_TOOL, RUN_TESTS_TOOL, operationOf } from '../lib/toolLabels';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, sanitizeForSpeech, splitSentences, type StreamSpeech } from '../lib/tts';
@@ -1538,6 +1538,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // ленты к карточке; у инструментов без этапов — ничего
   const activeToolDetail = activeTool?.kind === 'tool_use' && activeTool.stages?.length
     ? stageCaptionOf(activeTool.progress, activeTool.name) : null;
+  // Типовая операция — та же иконка, что в шапке карточки (примитив: индикатор не перерисовываем)
+  const activeToolOperation = activeTool?.kind === 'tool_use' ? operationOf(activeTool.name, activeTool.input) : null;
   // Видна ли карточка активного инструмента в ленте: видна — индикатор ожидания не повторяет
   // её подпись и время (иначе один текст стоит дважды подряд), ушла за край — повторяет
   const activeToolId = activeTool?.kind === 'tool_use' ? activeTool.id : null;
@@ -2793,6 +2795,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 activeToolAppearedAt={activeToolAppeared}
                 activeToolDetail={activeToolDetail}
                 activeToolOnScreen={activeToolOnScreen}
+                activeToolOperation={activeToolOperation}
               />
             </div>
             {/* Пилюле — не больше половины строки: иначе на 320px её 300px съедали всё, и у

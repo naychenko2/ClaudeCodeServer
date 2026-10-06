@@ -6,7 +6,7 @@ import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
 import { LiveDot, ProgressBar } from '../ui';
-import { awaitsToolStart, formatClock, isQueued, meterText, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
+import { awaitsToolStart, FAILED_RE, formatClock, isQueued, meterText, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
 import { useRunningElapsed } from '../../hooks/useRunningElapsed';
 import { toolLabel, toolWord, toolCardLabel, testRunArg, buildArg, localJobsWaitArg, consoleCaption, isConsoleTool, operationOf, RUN_TESTS_TOOL, BUILD_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
 import { OPERATION_ICON } from '../../lib/operationIcons';
@@ -85,7 +85,7 @@ function LeadSlot({ live }: { live: boolean }) {
 }
 
 // «упало K» — единственный тревожный сигнал живой карточки: выделен цветом ошибки
-const FAILED_RE = /(упало [1-9]\d*)/;
+// (регулярка общая с индикатором ожидания — FAILED_RE в lib/toolTiming)
 function ProgressCaption({ text }: { text: string }) {
   return <>{text.split(FAILED_RE).map((part, i) =>
     i % 2 ? <span key={i} style={{ color: C.dangerText }}>{part}</span> : part)}</>;

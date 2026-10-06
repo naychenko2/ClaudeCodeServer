@@ -705,6 +705,8 @@ function OverlaysSection() {
         <SubBlock label="WaitingIndicator — идёт инструмент (с временем и до фактического старта)">
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
             <WaitingIndicator activeToolLabel="Синхронизирую транскрипты в sub-claude" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} />
+            {/* Прогон тестов: машинка по кругу «подпись → счётчик этапа», иконка операции, время слева */}
+            <WaitingIndicator activeToolLabel="Тесты · dotnet" activeToolDetail="412 из 7951 · упало 2" activeToolOperation="tests" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} />
             <WaitingIndicator activeToolLabel="Собираю бэкенд и прогоняю тесты" activeToolStartedAt={SHOWCASE_TOOL_STARTED_AT} activeToolTimer={false} />
             {/* Длинная подпись в узкой колонке: режется многоточием, время не сжимается */}
             <div style={{ width: 240, border: `1px dashed ${C.border}` }}>

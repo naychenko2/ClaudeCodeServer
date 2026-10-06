@@ -1,5 +1,56 @@
 import { describe, it, expect } from 'vitest';
-import { activeToolLabel, awaitsToolStart, captionLeadMs, formatClock, formatWaitClock, isQueued, isToolGroupDone, meterText, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption } from '../toolTiming';
+import { activeToolLabel, awaitsToolStart, captionLeadMs, formatClock, formatWaitClock, isQueued, isToolGroupDone, meterText, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption, nextTypewriterStep, typewriterDelay, typewriterText, TYPEWRITER_AT_REST, TYPEWRITER_MS, TYPEWRITER_START, type TypewriterState } from '../toolTiming';
+
+describe('nextTypewriterStep — машинка индикатора (вариант D)', () => {
+  const two = ['Тесты · dotnet', '412 из 7951'];
+  // Прогнать шаги до заданной фазы (с потолком, чтобы тест не завис)
+  const until = (s: TypewriterState, phrases: string[], phase: TypewriterState['phase']) => {
+    for (let i = 0; i < 1000 && s.phase !== phase; i++) s = nextTypewriterStep(s, phrases);
+    return s;
+  };
+
+  it('две фразы: печать подписи → показ → стирание → пауза → печать счётчика → по кругу', () => {
+    let s = until(TYPEWRITER_START, two, 'hold');
+    expect(typewriterText(s, two)).toBe('Тесты · dotnet');
+    s = until(s, two, 'pause');
+    expect(typewriterText(s, two)).toBe('');
+    s = nextTypewriterStep(s, two);
+    expect(s).toMatchObject({ phrase: 1, phase: 'typing' });
+    s = until(s, two, 'hold');
+    expect(typewriterText(s, two)).toBe('412 из 7951');
+    s = until(until(s, two, 'pause'), two, 'typing');
+    expect(s.phrase).toBe(0);
+  });
+
+  it('одна фраза: впечатывается и стоит — цикл останавливается', () => {
+    const one = ['Синхронизирую транскрипты'];
+    const s = until(TYPEWRITER_START, one, 'done');
+    expect(typewriterText(s, one)).toBe('Синхронизирую транскрипты');
+    expect(typewriterDelay(s)).toBeNull();
+  });
+
+  it('после F5 первая фраза стоит целиком и держится в показе', () => {
+    expect(typewriterText(TYPEWRITER_AT_REST, two)).toBe('Тесты · dotnet');
+    expect(typewriterDelay(TYPEWRITER_AT_REST)).toBe(TYPEWRITER_MS.hold);
+    expect(nextTypewriterStep(TYPEWRITER_AT_REST, two).phase).toBe('erasing');
+  });
+
+  it('счётчик сменил значение, пока стоит, — виден новый целиком, без перепечатки', () => {
+    const s = until(until(until(TYPEWRITER_START, two, 'pause'), two, 'typing'), two, 'hold');
+    expect(typewriterText(s, ['Тесты · dotnet', '500 из 7951 · упало 1'])).toBe('500 из 7951 · упало 1');
+  });
+
+  it('задержки по фазам', () => {
+    expect(typewriterDelay({ phrase: 0, shown: 1, phase: 'typing' })).toBe(TYPEWRITER_MS.type);
+    expect(typewriterDelay({ phrase: 0, shown: 3, phase: 'erasing' })).toBe(TYPEWRITER_MS.erase);
+    expect(typewriterDelay({ phrase: 0, shown: 0, phase: 'pause' })).toBe(TYPEWRITER_MS.pause);
+  });
+
+  it('счётчик пропал посреди цикла — к первой фразе', () => {
+    const s = nextTypewriterStep({ phrase: 1, shown: 0, phase: 'typing' }, ['Тесты']);
+    expect(s.phrase).toBe(0);
+  });
+});
 
 describe('meterText — подпись справа от полосы', () => {
   it('процента нет — молчим', () => {

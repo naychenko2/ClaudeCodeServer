@@ -347,6 +347,68 @@ export function activeToolLabel(item: { name: string; input?: unknown }): string
     : toolCardLabel(item.name, item.input);
 }
 
+// «упало K» (K > 0) — единственный тревожный сигнал живой подписи прогресса: карточка и индикатор
+// ожидания красят его цветом ошибки. Группа захвата — чтобы split отдавал совпадения нечётными
+export const FAILED_RE = /(упало [1-9]\d*)/;
+
+// Печатная машинка индикатора ожидания (вариант D): по кругу печатает фразы инструмента —
+// подпись, затем счётчик этапа; одна фраза — впечатывается один раз и стоит. Чистая функция
+// шага: компонент крутит её таймером, тест — без таймеров.
+// phrase — индекс фразы, shown — сколько символов напечатано; hold и done показывают фразу
+// ЦЕЛИКОМ (счётчик, сменивший значение, пока стоит, обновляется без перепечатки)
+export type TypewriterPhase = 'typing' | 'hold' | 'erasing' | 'pause' | 'done';
+export interface TypewriterState { phrase: number; shown: number; phase: TypewriterPhase }
+
+// Задержки фаз, мс: печать символа, показ целиком, стирание символа, пауза между фразами
+export const TYPEWRITER_MS = { type: 35, hold: 2600, erase: 18, pause: 200 } as const;
+
+// Новая подпись — печать с нуля; монтирование посреди инструмента (F5) — первая фраза уже
+// стоит целиком и держится, как после печати
+export const TYPEWRITER_START: TypewriterState = { phrase: 0, shown: 0, phase: 'typing' };
+export const TYPEWRITER_AT_REST: TypewriterState = { phrase: 0, shown: Number.MAX_SAFE_INTEGER, phase: 'hold' };
+
+export function nextTypewriterStep(s: TypewriterState, phrases: readonly string[]): TypewriterState {
+  const n = phrases.length;
+  if (n === 0) return { phrase: 0, shown: 0, phase: 'done' };
+  // Фраз стало меньше (счётчик пропал) — к первой
+  const phrase = s.phrase < n ? s.phrase : 0;
+  const len = phrases[phrase].length;
+  switch (s.phase) {
+    case 'typing': {
+      const shown = Math.min(s.shown + 1, len);
+      return shown < len ? { phrase, shown, phase: 'typing' } : { phrase, shown: len, phase: n > 1 ? 'hold' : 'done' };
+    }
+    case 'hold':
+      return n > 1 ? { phrase, shown: len, phase: 'erasing' } : { phrase, shown: len, phase: 'done' };
+    case 'erasing': {
+      const shown = Math.min(s.shown, len) - 1;
+      return shown > 0 ? { phrase, shown, phase: 'erasing' } : { phrase, shown: 0, phase: 'pause' };
+    }
+    case 'pause':
+      return { phrase: (phrase + 1) % n, shown: 0, phase: 'typing' };
+    default:
+      return { phrase, shown: len, phase: 'done' };
+  }
+}
+
+// Сколько ждать до следующего шага; null — цикл стоит (одна фраза впечатана)
+export function typewriterDelay(s: TypewriterState): number | null {
+  switch (s.phase) {
+    case 'typing': return TYPEWRITER_MS.type;
+    case 'hold': return TYPEWRITER_MS.hold;
+    case 'erasing': return TYPEWRITER_MS.erase;
+    case 'pause': return TYPEWRITER_MS.pause;
+    default: return null;
+  }
+}
+
+// Что видно сейчас: показ целиком (hold, done) — фраза как она есть СЕЙЧАС, иначе напечатанная часть
+export function typewriterText(s: TypewriterState, phrases: readonly string[]): string {
+  if (phrases.length === 0) return '';
+  const text = phrases[s.phrase < phrases.length ? s.phrase : 0];
+  return s.phase === 'hold' || s.phase === 'done' ? text : text.slice(0, Math.max(0, s.shown));
+}
+
 // Время рядом с подписью индикатора — словами, как в строке ожидания: «52 с», «1 мин 12 с»,
 // «1 ч 3 мин» (секунды в часовом масштабе — шум)
 export function formatWaitClock(ms: number): string {

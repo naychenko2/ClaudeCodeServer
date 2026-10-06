@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { C, FS, SP } from '../../lib/design';
-import { captionLeadMs, waitingToolCaption } from '../../lib/toolTiming';
+import {
+  captionLeadMs, waitingToolCaption, FAILED_RE, nextTypewriterStep, typewriterDelay, typewriterText,
+  TYPEWRITER_AT_REST, TYPEWRITER_START, type TypewriterState,
+} from '../../lib/toolTiming';
+import type { Operation } from '../../lib/toolLabels';
+import { OPERATION_ICON } from '../../lib/operationIcons';
+import { ICON_SIZE, ICON_STROKE } from './icons';
 import { useRunningElapsed } from '../../hooks/useRunningElapsed';
 import { pickVerb } from '../chat/thinkingVerbs';
 import aiHome from '../../assets/ai-home.png';
@@ -16,6 +22,10 @@ import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 const ECHO_FACE_W = 28;
 const ECHO_FACE_H = 56;
 
+// Ширина колонки времени инструмента: под самое длинное «59 мин 59 с» — время стоит неподвижно,
+// пока печатается и стирается текст справа от него
+const WAIT_CLOCK_MIN_W = '11ch';
+
 // Живой индикатор ожидания: значок-логотип «AI Home» с расходящимися кольцами «Эхо»
 // вокруг аватара персоны (или логотипа, если персоны нет) + «печатная машинка» по синонимам.
 // Текст печатается посимвольно с курсором, в конце дописывается «…», держит паузу,
@@ -28,8 +38,8 @@ const ECHO_FACE_H = 56;
 // Идёт долгий инструмент (activeToolLabel) — вместо глагола его русская подпись и время:
 // «Синхронизирую транскрипты · 52 с». Пропы примитивами: объект пересоздавался бы на каждом
 // рендере ленты. Подпись встаёт только с порога TOOL_TIMER_MIN_MS, чтобы быстрые Read/Grep
-// не мигали поверх глаголов; впечатывается один раз и не стирается, курсор в конце мигает.
-export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks, activeToolLabel, activeToolStartedAt, activeToolTimer = true, activeToolAppearedAt, activeToolDetail, activeToolOnScreen = false }: {
+// не мигали поверх глаголов; дальше машинка по кругу печатает подпись и счётчик этапа.
+export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks, activeToolLabel, activeToolStartedAt, activeToolTimer = true, activeToolAppearedAt, activeToolDetail, activeToolOnScreen = false, activeToolOperation = null }: {
   planning?: 'planning' | 'replanning';
   hint?: string;
   awaitingResponse?: boolean;
@@ -49,8 +59,10 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   // Счётчик текущего этапа прогона («412 из 7951 · упало 1») — после времени, режется первым
   activeToolDetail?: string | null;
   // Карточка инструмента видна в ленте: подпись, время и счётчик не повторяем — остаются
-  // лицо с кольцами и мигающий курсор
+  // лицо с кольцами
   activeToolOnScreen?: boolean;
+  // Типовая операция (тесты, сборка…) — иконка перед временем, та же, что в шапке карточки
+  activeToolOperation?: Operation | null;
 } = {}) {
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -101,33 +113,48 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   const tool = waitingToolCaption(activeToolLabel, toolElapsed, activeToolTimer, !!awaitingResponse,
     captionLeadMs(activeToolStartedAt, activeToolAppearedAt));
 
-  // Подпись инструмента впечатывается один раз — при появлении и при смене — и дальше стоит:
-  // это факт, его не стирают и не перебирают, как глаголы. Время и счётчик встают после печати,
-  // чтобы растущий текст не толкал цифры; живость дальше держит мигающий курсор в конце строки
-  // Подпись, что уже стояла при монтировании (F5 посреди инструмента), — сразу целиком
+  // Печатная машинка по делу (вариант D): по кругу «подпись → счётчик этапа», стирая и печатая
+  // заново; без счётчика подпись впечатывается один раз и стоит. Курсора у инструмента нет —
+  // живость несут сама печать, шиммер и кольца. Логика шагов — nextTypewriterStep (lib).
+  // Подпись, что уже стояла при монтировании (F5 посреди инструмента), — сразу целиком и держится
   const toolText = tool?.label ?? null;
-  // Напечатанное привязано к своей подписи: при смене подписи до первого тика печати не
-  // мелькает прежняя целиком — показывается пусто
-  const [typed, setTyped] = useState<{ of: string | null; text: string }>({ of: toolText, text: toolText ?? '' });
+  const phrases = toolText ? (activeToolDetail ? [toolText, activeToolDetail] : [toolText]) : [];
+  // Фразы читаются через ref: секундные тики счётчика не перезапускают цикл
+  const phrasesRef = useRef(phrases);
+  useEffect(() => { phrasesRef.current = phrases; });
+  // Состояние привязано к своей подписи: при её смене до первого шага не мелькает прежняя
+  const [tw, setTw] = useState<{ of: string | null; st: TypewriterState }>({ of: toolText, st: TYPEWRITER_AT_REST });
+  const twRef = useRef(tw);
+  useEffect(() => { twRef.current = tw; });
   const prevToolText = useRef(toolText);
+  const hasDetail = !!activeToolDetail;
   useEffect(() => {
     const changed = prevToolText.current !== toolText;
     prevToolText.current = toolText;
-    if (!toolText || reduced || !changed) { setTyped({ of: toolText, text: toolText ?? '' }); return; }
-    let n = 0;
+    if (!toolText || reduced) return;
+    let st = changed ? TYPEWRITER_START : (twRef.current.of === toolText ? twRef.current.st : TYPEWRITER_AT_REST);
+    // Подпись стояла одна, а счётчик появился — цикл продолжается с показа
+    if (st.phase === 'done' && phrasesRef.current.length > 1) st = { ...st, phase: 'hold' };
+    if (changed) setTw({ of: toolText, st });
     let timer = 0;
-    const tick = () => {
-      n++;
-      setTyped({ of: toolText, text: toolText.slice(0, n) });
-      if (n < toolText.length) timer = window.setTimeout(tick, 25 + Math.random() * 25);
+    const run = (s: TypewriterState) => {
+      const delay = typewriterDelay(s);
+      if (delay === null) return;
+      timer = window.setTimeout(() => {
+        const next = nextTypewriterStep(s, phrasesRef.current);
+        setTw({ of: toolText, st: next });
+        run(next);
+      }, delay);
     };
-    timer = window.setTimeout(tick, 60);
+    run(st);
     return () => clearTimeout(timer);
-  }, [toolText, reduced]);
-  const typedTool = typed.of === toolText ? typed.text : '';
-  const toolTyped = toolText != null && typedTool === toolText;
+  }, [toolText, hasDetail, reduced]);
+  const typedTool = reduced
+    ? phrases.join(' · ')
+    : tw.of === toolText ? typewriterText(tw.st, phrases) : '';
   // Тихий режим: инструмент идёт, но его карточка на экране — текст не дублируем
   const quietTool = !!tool && activeToolOnScreen;
+  const OpIcon = activeToolOperation ? OPERATION_ICON[activeToolOperation] : null;
 
   // Обёртка лица: внешний бокс с вертикальным резервом (ECHO_FACE_H), внутри — аватар
   // 28px по центру с двумя кольцами «Эхо» поверх. Резерв вмещает размах колец, чтобы они
@@ -188,38 +215,50 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
             («Думаю», «Работаю») места хватает на любой ширине. alignItems center, а не
             baseline: в пустой фазе (между глаголами) baseline задаёт один курсор, и
             строку чуть перекашивало по высоте каждый цикл. */}
-        <span style={{ display: 'inline-flex', alignItems: 'center', minHeight: 17, minWidth: 0, overflow: 'hidden' }}>
-          <span className="cc-shimmer-text" title={quietTool ? undefined : tool?.label} style={{
-            fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
-            whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden',
-          }}>
-            {tool ? (quietTool ? '' : typedTool) : text}
-          </span>
-          {/* Время инструмента не сжимается: обрезается подпись, а не цифры */}
-          {!quietTool && toolTyped && tool?.clock && (
+        {tool ? (
+          // Идёт инструмент: [иконка операции] [время] [печатаемый текст]. Иконка и время не
+          // сжимаются и стоят на месте (время — фиксированной ширины): стирание текста их не
+          // двигает; режется многоточием текст. Тихий режим (карточка видна) — ничего не повторяем
+          !quietTool && (
+            <span data-waiting-tool="" style={{ display: 'inline-flex', alignItems: 'center', minHeight: 17, minWidth: 0, overflow: 'hidden' }}>
+              {OpIcon && (
+                <OpIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0, marginRight: SP.xs + 2 }} />
+              )}
+              {tool.clock && (
+                <span data-waiting-clock="" style={{
+                  flexShrink: 0, minWidth: WAIT_CLOCK_MIN_W, marginRight: SP.sm, fontSize: FS.sm, color: C.textMuted,
+                  whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
+                }}>
+                  {tool.clock}
+                </span>
+              )}
+              <span className="cc-shimmer-text" title={phrases.join(' · ')} style={{
+                fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', minWidth: 0,
+              }}>
+                {/* «упало K» — цветом ошибки поверх шиммера (тот же признак, что у карточки) */}
+                {typedTool.split(FAILED_RE).map((part, i) => i % 2
+                  ? <span key={i} style={{ background: 'none', WebkitTextFillColor: C.dangerText, color: C.dangerText }}>{part}</span>
+                  : part)}
+              </span>
+            </span>
+          )
+        ) : (
+          <span style={{ display: 'inline-flex', alignItems: 'center', minHeight: 17, minWidth: 0, overflow: 'hidden' }}>
+            <span className="cc-shimmer-text" style={{
+              fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+              whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden',
+            }}>
+              {text}
+            </span>
+            {/* Курсор печатной машинки — только у глаголов */}
             <span style={{
-              marginLeft: SP.sm, flexShrink: 0, fontSize: FS.sm, color: C.textMuted,
-              whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
-            }}>
-              {tool.clock}
-            </span>
-          )}
-          {!quietTool && toolTyped && activeToolDetail && (
-            <span title={activeToolDetail} style={{
-              marginLeft: SP.xs, minWidth: 0, fontSize: FS.sm, color: C.textMuted,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontVariantNumeric: 'tabular-nums',
-            }}>
-              · {activeToolDetail}
-            </span>
-          )}
-          {/* Курсор печатной машинки — и у глаголов, и у подписи инструмента: у неё он стоит в
-              конце строки (после времени и счётчика) и мигает всё время, пока инструмент идёт */}
-          <span style={{
-            display: 'inline-block', width: 2, height: '0.95em', marginLeft: tool && toolTyped && !quietTool ? SP.xs : 2, flexShrink: 0,
-            background: pulseColor, borderRadius: 1, alignSelf: 'center',
-            animation: (reduced || awaitingResponse) ? 'none' : 'blink 1s step-start infinite',
-          }} />
-        </span>
+              display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2, flexShrink: 0,
+              background: pulseColor, borderRadius: 1, alignSelf: 'center',
+              animation: (reduced || awaitingResponse) ? 'none' : 'blink 1s step-start infinite',
+            }} />
+          </span>
+        )}
       </div>
       {hint && (
         <span style={{

@@ -3,6 +3,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Knowledge;
@@ -34,12 +35,12 @@ namespace ClaudeHomeServer.Tests.Services.Turn;
 public class PromptSectionContributorsDiTests
 {
     // Тест 1: быстрый сторож DI — после вызова AddPromptSectionContributors() в контейнере
-    // ровно 6 «чистых» регистраций IPromptSectionContributor (контрибьюторы, оставшиеся
+    // ровно 7 «чистых» регистраций IPromptSectionContributor (контрибьюторы, оставшиеся
     // в Turn после инверсии). CodeGraphContributor и NotesRecallContributor уехали в свои
     // вертикали — их регистрируют CodeGraphSubsystem/NotesSubsystem, а не Turn.
     // НЕ требует зависимостей контрибьюторов — резолва нет, только ServiceDescriptor'ы.
     [Fact]
-    public void AddPromptSectionContributors_RegistersSixCoreContributors()
+    public void AddPromptSectionContributors_RegistersSevenCoreContributors()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -55,8 +56,8 @@ public class PromptSectionContributorsDiTests
                         && d.ServiceType != typeof(IPromptSectionContributor)
                         && d.ImplementationType is not null)
             .ToList();
-        concreteDescriptors.Should().HaveCount(6,
-            "AddPromptSectionContributors должен зарегистрировать ровно 6 чистых контрибьюторов Turn");
+        concreteDescriptors.Should().HaveCount(7,
+            "AddPromptSectionContributors должен зарегистрировать ровно 7 чистых контрибьюторов Turn");
 
         // Канонический список «чистых» контрибьюторов Turn. Новый контрибьютор = новая
         // строка в AddPromptSectionContributors() И здесь, иначе сторож не отличит «забыли
@@ -66,6 +67,7 @@ public class PromptSectionContributorsDiTests
         implTypes.Should().BeEquivalentTo(new[]
         {
             typeof(DossierTrailerContributor),
+            typeof(SphereCharterContributor),
             typeof(PersonaRecallContributor),
             typeof(PromptSectionsContributor),
             typeof(PersonaBindingsContributor),
@@ -77,8 +79,8 @@ public class PromptSectionContributorsDiTests
         var interfaceDescriptors = services
             .Where(d => d.ServiceType == typeof(IPromptSectionContributor))
             .ToList();
-        interfaceDescriptors.Should().HaveCount(6,
-            "набор IPromptSectionContributor должен состоять из 6 элементов (по одному на чистого контрибьютора)");
+        interfaceDescriptors.Should().HaveCount(7,
+            "набор IPromptSectionContributor должен состоять из 7 элементов (по одному на чистого контрибьютора)");
 
         // Все регистрации — singleton (контрибьюторы без состояния, как и шина).
         concreteDescriptors.Should().OnlyContain(d => d.Lifetime == ServiceLifetime.Singleton);
@@ -99,8 +101,8 @@ public class PromptSectionContributorsDiTests
 
         var contributors = provider.GetServices<IPromptSectionContributor>().ToList();
 
-        contributors.Should().HaveCount(8,
-            "полный набор = 6 чистых Turn + CodeGraph + Notes");
+        contributors.Should().HaveCount(9,
+            "полный набор = 7 чистых Turn + CodeGraph + Notes");
 
         // Уникальность Key — две секции с одинаковым Key замазали бы друг друга в снапшоте.
         var keys = contributors.Select(c => c.Key).ToList();
@@ -114,13 +116,14 @@ public class PromptSectionContributorsDiTests
 
         // Сортируем по Order — ровно как шина (TurnEventBus.ApplyAsync: OrderBy(Order)).
         var ordered = contributors.OrderBy(c => c.Order).Select(c => c.Order).ToList();
-        ordered.Should().Equal(new[] { 100, 200, 300, 400, 500, 600, 690, 900 },
+        ordered.Should().Equal(new[] { 100, 150, 200, 300, 400, 500, 600, 690, 900 },
             "канонический порядок секций промпта (dossier-trailer → persona-layer)");
 
         // Парность: каждый Key обязан встретиться ровно один раз И с правильным Order.
         // Это ловит классическую регрессию «поправили Order у одного контрибьютора, забыли у соседа».
         var keyToOrder = contributors.ToDictionary(c => c.Key, c => c.Order);
         keyToOrder.Should().ContainKey("dossier-trailer").WhoseValue.Should().Be(100);
+        keyToOrder.Should().ContainKey("sphere-charter").WhoseValue.Should().Be(150);
         keyToOrder.Should().ContainKey("recall-notes").WhoseValue.Should().Be(200);
         keyToOrder.Should().ContainKey("recall-memory").WhoseValue.Should().Be(300);
         keyToOrder.Should().ContainKey("prompt-sections").WhoseValue.Should().Be(400);
@@ -343,6 +346,8 @@ public class PromptSectionContributorsDiTests
             // Хвост «Контекст хода»: реестр видов и стор контекста чата (в проде — AddChatContext)
             services.AddSingleton<ContextKindRegistry>(new ContextKindRegistry([]));
             services.AddSingleton<IChatContextStore>(new Mock<IChatContextStore>().Object);
+            // Устав сферы: справочник сфер в проде даёт Program.cs; здесь — заглушка
+            services.AddSingleton<ISphereDirectory>(new Mock<ISphereDirectory>().Object);
 
             // Логгеры для контрибьюторов с ILogger в конструкторе
             services.AddSingleton<ILogger<NotesRecallContributor>>(NullLogger<NotesRecallContributor>.Instance);

@@ -7,14 +7,14 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Сторож зоны персоны: единственная точка правды — <c>PersonaZone</c> (бэк) и
 /// <c>lib/personaZone.ts</c> (фронт). Ручные сравнения <c>Scope</c> с Project/Sphere
 /// вне неё не плодим: словарь — файл и ТОЧНОЕ число строк на сегодня, рост краснеет,
-/// падение подсказывает уменьшить лимит. Переводить места на PersonaZone — отдельной работой.
+/// падение подсказывает уменьшить лимит. Бэкенд-словарь пуст: всё вне exempt — дефект.
 /// </summary>
 public class PersonaZoneGuardTests
 {
     private const string Scope = @"(?:[A-Za-z_][A-Za-z0-9_]*\.)*PersonaScope\.(Project|Sphere)";
 
     private static readonly Regex BackendPattern = new(
-        $@"(==|!=)\s*{Scope}\b|\b{Scope}\s*(==|!=)|\bis\s+(not\s+)?{Scope}\b|\bcase\s+{Scope}\b",
+        $@"(==|!=)\s*{Scope}\b|\b{Scope}\s*(==|!=)|\bis\s+(not\s+)?{Scope}\b|\bcase\s+{Scope}\b|=>\s*{Scope}\b",
         RegexOptions.Compiled);
 
     private static readonly Regex FrontendPattern = new(
@@ -33,21 +33,6 @@ public class PersonaZoneGuardTests
 
     private static readonly Dictionary<string, int> BackendAllowed = new()
     {
-        ["backend/ClaudeHomeServer/Controllers/PersonasController.cs"] = 4,
-        ["backend/ClaudeHomeServer/Controllers/ProjectGroupsController.cs"] = 1,
-        ["backend/ClaudeHomeServer/Controllers/ProjectsController.cs"] = 1,
-        ["backend/ClaudeHomeServer/Controllers/SpheresController.cs"] = 1,
-        ["backend/ClaudeHomeServer/Controllers/TasksController.cs"] = 1,
-        ["backend/ClaudeHomeServer.Core/Services/PersonaConsultantToolset.cs"] = 1,
-        ["backend/ClaudeHomeServer.Memory/PersonaMemoryAutolearnService.cs"] = 1,
-        ["backend/ClaudeHomeServer.Memory/PersonaMemoryService.cs"] = 1,
-        ["backend/ClaudeHomeServer.Memory/TeamMemoryService.cs"] = 1,
-        ["backend/ClaudeHomeServer/Services/Mcp/Http/PersonasToolset.cs"] = 4,
-        ["backend/ClaudeHomeServer/Services/PersonaAgentFileSync.cs"] = 1,
-        ["backend/ClaudeHomeServer/Services/PersonaAutomationService.cs"] = 1,
-        ["backend/ClaudeHomeServer/Services/PersonaBindingsService.cs"] = 2,
-        ["backend/ClaudeHomeServer/Services/PersonaProjectBindingsMigration.cs"] = 1,
-        ["backend/ClaudeHomeServer/Services/SessionManager.cs"] = 4,
     };
 
     private static readonly Dictionary<string, int> FrontendAllowed = new()
@@ -149,6 +134,7 @@ public class PersonaZoneGuardTests
     [InlineData("if (p.Scope != PersonaScope.Sphere) { }")]
     [InlineData("if (p.Scope is PersonaScope.Project) { }")]
     [InlineData("case PersonaScope.Sphere:")]
+    [InlineData("var z = k switch { 1 => PersonaScope.Sphere, _ => x };")]
     [InlineData("=> p.Scope == ClaudeHomeServer.Models.PersonaScope.Project;")]
     public void Шаблон_ЛовитСравнениеНаБэке(string line) =>
         BackendPattern.IsMatch(line).Should().BeTrue();

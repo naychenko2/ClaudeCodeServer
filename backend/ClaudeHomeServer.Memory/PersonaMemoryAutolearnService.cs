@@ -138,8 +138,8 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
                 _log.LogInformation("autolearn: персона {Persona}, сессия {Session} — сохранено {Count} записей памяти",
                     persona.Id, sessionId, saved);
                 // Проектная персона, узнав факты, попадает в активность-ленту проекта
-                if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
-                    _events?.Append(persona.ProjectId, persona.OwnerId, ProjectEventTypes.MemoryLearned,
+                if (PersonaZone.OwnProjectId(persona) is { } ownProjectId)
+                    _events?.Append(ownProjectId, persona.OwnerId, ProjectEventTypes.MemoryLearned,
                         persona.Id, $"{PersonaLabel.Of(persona)}: узнал {saved} факт(ов)", sessionId);
             }
 

@@ -56,7 +56,7 @@ public class ProjectGroupsController(SphereManager groups, ProjectManager projec
         var g = groups.GetById(id);
         if (g is null || g.OwnerId != UserId) return NotFound();
         // Сфера с командой или памятью не удаляется: сначала их переносят или удаляют
-        var team = personas.GetByOwner(UserId).Count(p => p.Scope == PersonaScope.Sphere && p.SphereId == id);
+        var team = personas.GetByOwner(UserId).Count(p => PersonaZone.IsSphereTeam(p, id));
         var memory = SpheresController.MemoryCount(id);
         if (team > 0 || memory > 0)
         {

@@ -242,9 +242,9 @@ public sealed class PersonaAgentFileSync
         var ownerId = persona.OwnerId ?? "";
 
         // Проектная персона → только её проект
-        if (persona.Scope == PersonaScope.Project && persona.ProjectId is not null)
+        if (PersonaZone.OwnProjectId(persona) is { } ownProjectId)
         {
-            if (ServerRootOf(_projects.GetById(persona.ProjectId)) is { } projectRoot)
+            if (ServerRootOf(_projects.GetById(ownProjectId)) is { } projectRoot)
                 yield return Path.Combine(projectRoot, ".claude", "agents", persona.Handle + ".md");
             yield break;
         }

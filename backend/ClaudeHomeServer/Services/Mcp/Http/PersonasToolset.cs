@@ -128,7 +128,7 @@ public sealed partial class PersonasToolset(
                         + "(используй scope \"global\" или \"all\").");
                 if (scope == "project")
                     return Json(personas.GetByOwner(ownerId)
-                        .Where(p => p.Scope == PersonaScope.Project && p.ProjectId == projectId).ToList());
+                        .Where(p => PersonaZone.IsProjectTeam(p, projectId)).ToList());
                 if (scope == "global")
                     return Json(personas.GetByOwner(ownerId)
                         .Where(p => p.Scope == PersonaScope.Global).ToList());
@@ -142,8 +142,7 @@ public sealed partial class PersonasToolset(
                     {
                         if (seen.Contains(p.Id)) continue;
                         var included = extraSet.Contains(p.Id)
-                            || (p.Scope == PersonaScope.Project && p.ProjectId is not null
-                                && extraProjectIds.Contains(p.ProjectId));
+                            || (PersonaZone.OwnProjectId(p) is { } pid && extraProjectIds.Contains(pid));
                         if (!included) continue;
                         result.Add(p);
                         seen.Add(p.Id);
@@ -630,7 +629,7 @@ public sealed partial class PersonasToolset(
             Model: null,   // конкретная модель через MCP не задаётся — только уровнями
             Effort: OptionalArg(arguments, "effort"),
             Scope: scope,
-            ProjectId: scope == PersonaScope.Project
+            ProjectId: PersonaZone.IsProjectScope(scope)
                 ? OptionalArg(arguments, "projectId") ?? sessionProjectId : null,
             Color: OptionalArg(arguments, "color"),
             Greeting: OptionalArg(arguments, "greeting"),
@@ -672,7 +671,7 @@ public sealed partial class PersonasToolset(
             Model: null,
             Effort: arguments.ContainsKey("effort") ? StringArg(arguments, "effort") : null,
             Scope: scope,
-            ProjectId: scope == PersonaScope.Project
+            ProjectId: PersonaZone.IsProjectScope(scope)
                 ? OptionalArg(arguments, "projectId") ?? sessionProjectId
                 : OptionalArg(arguments, "projectId"),
             Color: arguments.ContainsKey("color") ? StringArg(arguments, "color") : null,

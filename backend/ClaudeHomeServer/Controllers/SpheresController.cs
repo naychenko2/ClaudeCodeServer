@@ -47,7 +47,7 @@ public class SpheresController(
         }).ToList();
 
         var team = personas.GetByOwner(UserId)
-            .Where(p => p.Scope == PersonaScope.Sphere && p.SphereId == id)
+            .Where(p => PersonaZone.IsSphereTeam(p, id))
             .Select(p => new { id = p.Id, name = p.Name, handle = p.Handle, role = p.Role })
             .ToList();
 

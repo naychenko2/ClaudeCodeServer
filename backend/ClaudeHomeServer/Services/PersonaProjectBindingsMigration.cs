@@ -35,7 +35,7 @@ public class PersonaProjectBindingsMigration : IHostedService
             if (File.Exists(_markerPath)) return Task.CompletedTask;
 
             var projectPersonas = _personas.GetAllInternal()
-                .Where(p => p.Scope == PersonaScope.Project && !string.IsNullOrEmpty(p.ProjectId))
+                .Where(p => PersonaZone.OwnProjectId(p) is not null)
                 .ToList();
 
             var updated = 0;

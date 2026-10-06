@@ -3135,7 +3135,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ?? throw new KeyNotFoundException($"Персона не найдена: {personaId}");
 
         // Проект сессии: у проектной персоны — её собственный; у глобальной — контекстный
-        var targetProjectId = persona.Scope == PersonaScope.Project
+        var targetProjectId = PersonaZone.IsProjectPersona(persona)
             ? persona.ProjectId
             : contextProjectId;
 
@@ -3202,8 +3202,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 Llm.LocalActionCatalog.DefaultTierOf(Llm.LocalActionCatalog.ChatPersona)),
             resumeSessionId: null, ownerId);
 
-        if (leader.Scope == PersonaScope.Project && !string.IsNullOrEmpty(leader.ProjectId)
-            && _projects.GetById(leader.ProjectId) is { } project && project.OwnerId == ownerId)
+        if (PersonaZone.OwnProjectId(leader) is { } leaderProjectId
+            && _projects.GetById(leaderProjectId) is { } project && project.OwnerId == ownerId)
         {
             var projectSession = new Session
             {
@@ -3386,7 +3386,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         ? new[] { single } : Array.Empty<Persona>();
                 else
                     toAdd = _personas.GetByOwner(ownerId).Where(p =>
-                        p.Scope == PersonaScope.Project && p.ProjectId == extProjectId);
+                        PersonaZone.IsProjectTeam(p, extProjectId));
                 foreach (var p in toAdd)
                 {
                     if (p.Id == session.PersonaId || !seen.Add(p.Id)) continue;
@@ -3555,7 +3555,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
             sb.Append($"- @{p.Handle} — {title}");
-            if (p.Scope == PersonaScope.Project && p.ProjectId != currentProjectId
+            if (PersonaZone.IsProjectPersona(p) && p.ProjectId != currentProjectId
                 && _projects.GetById(p.ProjectId!) is { } foreignProject)
                 sb.Append($" [проект «{foreignProject.Name}»]");
             if (!string.IsNullOrWhiteSpace(p.Description)) sb.Append($": {p.Description.Trim()}");

@@ -143,7 +143,7 @@ public static class PersonaConsultantToolset
         tools.AddRange(WspRead);
         if (persona.MemoryEnabled)
             tools.AddRange(MemoryTools(PmemServerKey(persona.Handle),
-                teamMemory: persona.Scope == PersonaScope.Project && persona.ProjectId is not null));
+                teamMemory: PersonaZone.OwnProjectId(persona) is not null));
 
         IEnumerable<string> result = tools.Distinct(StringComparer.Ordinal);
         if (persona.Access == PersonaAccess.Custom && persona.DisallowedTools is { Count: > 0 } denied)

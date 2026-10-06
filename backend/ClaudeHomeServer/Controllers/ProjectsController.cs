@@ -553,7 +553,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // Проектные персоны осиротели вместе с проектом — каскад: память (стор + Dify-датасет),
         // сама персона (файлы сабагента снимет OnPersonaDeleted), событие фронту
         foreach (var persona in personas.GetByOwner(UserId)
-                     .Where(x => x.Scope == PersonaScope.Project && x.ProjectId == id).ToList())
+                     .Where(x => PersonaZone.IsProjectTeam(x, id)).ToList())
         {
             try { await personaMemory.DeletePersonaAsync(persona.Id); }
             catch { /* память персоны — best-effort */ }

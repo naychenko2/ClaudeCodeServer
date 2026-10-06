@@ -102,8 +102,7 @@ public class PersonasController(
                 {
                     if (seen.Contains(p.Id)) continue;
                     var included = extraPersonas.Contains(p.Id)
-                        || (p.Scope == PersonaScope.Project && p.ProjectId is not null
-                            && extraProjects.Contains(p.ProjectId));
+                        || (PersonaZone.OwnProjectId(p) is { } pid && extraProjects.Contains(pid));
                     if (!included) continue;
                     result.Add(p);
                     seen.Add(p.Id);
@@ -113,7 +112,7 @@ public class PersonasController(
         }
         if (string.Equals(scope, "project", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetByOwner(UserId)
-                .Where(p => p.Scope == PersonaScope.Project && p.ProjectId == projectId).ToList());
+                .Where(p => PersonaZone.IsProjectTeam(p, projectId)).ToList());
         if (string.Equals(scope, "global", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetByOwner(UserId)
                 .Where(p => p.Scope == PersonaScope.Global).ToList());
@@ -517,7 +516,7 @@ public class PersonasController(
             return BadRequest(new { error = "Опишите, кто это и чем будет заниматься" });
 
         var scope = req.Scope ?? PersonaScope.Global;
-        if (scope == PersonaScope.Project && !_crud.ValidProject(UserId, req.ProjectId))
+        if (PersonaZone.IsProjectScope(scope) && !_crud.ValidProject(UserId, req.ProjectId))
             return BadRequest(new { error = "Для проектной персоны нужен корректный projectId" });
 
         // 1. Черновик всех полей одним one-shot вызовом (строгий JSON-объект).
@@ -1139,7 +1138,7 @@ public class PersonasController(
                 // Второй уровень пикера ProjectPersonas: команда конкретного (чужого) проекта —
                 // сужение привязки до одной персоны вместо всей команды.
                 return Ok(_personas.GetByOwner(UserId)
-                    .Where(p => p.Scope == PersonaScope.Project && p.ProjectId == source)
+                    .Where(p => PersonaZone.IsProjectTeam(p, source))
                     .Select(p => new { id = p.Id, label = PersonaManager.PersonaLabel(p), hint = p.Description, meta = source }));
 
             case "knowledge":

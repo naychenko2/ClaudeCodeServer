@@ -479,7 +479,7 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
             return "Персона, от имени которой идёт запись, не найдена (удалена или недоступна) — "
                 + "запись в память команды отклонена. Не меняй общую память, пока пользователь "
                 + "не уточнит актуальную персону.";
-        if (caller.Scope == PersonaScope.Project && caller.ProjectId == projectId) return null;
+        if (PersonaZone.IsProjectTeam(caller, projectId)) return null;
         return "Запись в память команды доступна только персоне ЭТОГО проекта. Ты — "
             + "глобальная персона или консультант другого проекта: можешь читать общую память "
             + "(team_memory_list/team_memory_search), но не менять её. Попроси персону проекта "

@@ -455,7 +455,7 @@ public static class TaskPersonaValidator
     {
         var persona = personas.Get(personaId, userId);
         if (persona is null) return "Персона не найдена или недоступна";
-        if (persona.Scope == PersonaScope.Project && persona.ProjectId != taskProjectId)
+        if (PersonaZone.IsProjectPersona(persona) && persona.ProjectId != taskProjectId)
         {
             // Кросс-проектная ProjectTasks-привязка с полным доступом разрешает
             if (externalScopes is not null)

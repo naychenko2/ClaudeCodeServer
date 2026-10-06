@@ -519,9 +519,9 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private (List<PersonaBinding> Bindings, bool Added) CollectProjectDefaults(
         Persona persona, string ownerId, List<PersonaBinding> bindings)
     {
-        if (persona.Scope != PersonaScope.Project || string.IsNullOrEmpty(persona.ProjectId))
+        if (PersonaZone.OwnProjectId(persona) is not { } ownProjectId)
             return (bindings, false);
-        var project = _projects.GetById(persona.ProjectId);
+        var project = _projects.GetById(ownProjectId);
         if (project is null || project.OwnerId != ownerId) return (bindings, false);
 
         bool Missing(PersonaBindingType type, string target) =>
@@ -530,19 +530,19 @@ public class PersonaBindingsService : IPersonaServerToolGate
 
         var added = false;
         // Файлы проекта
-        if (Missing(PersonaBindingType.Project, persona.ProjectId))
+        if (Missing(PersonaBindingType.Project, ownProjectId))
         {
-            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Project, Target = persona.ProjectId });
+            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Project, Target = ownProjectId });
             added = true;
         }
         // Заметки проекта (ключ источника заметок = projectId)
-        if (Missing(PersonaBindingType.Notes, persona.ProjectId))
+        if (Missing(PersonaBindingType.Notes, ownProjectId))
         {
-            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Notes, Target = persona.ProjectId });
+            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Notes, Target = ownProjectId });
             added = true;
         }
         // База знаний проекта — только если у проекта есть свой Dify-датасет
-        var dataset = KnownDatasets(ownerId).FirstOrDefault(d => d.ProjectId == persona.ProjectId);
+        var dataset = KnownDatasets(ownerId).FirstOrDefault(d => d.ProjectId == ownProjectId);
         if (dataset.Id is not null && Missing(PersonaBindingType.Knowledge, dataset.Id))
         {
             bindings.Add(new PersonaBinding { Type = PersonaBindingType.Knowledge, Target = dataset.Id });
@@ -1116,12 +1116,12 @@ public class PersonaBindingsService : IPersonaServerToolGate
                     var project = _projects.GetById(binding.Target);
                     if (project is null || project.OwnerId != ownerId)
                         return "Проект не найден или недоступен";
-                    if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
+                    if (owningPersona is not null && PersonaZone.IsProjectTeam(owningPersona, binding.Target))
                         return "Персона уже в команде этого проекта — привязка к своему же проекту не нужна";
                     if (!string.IsNullOrEmpty(binding.Path))
                     {
                         var target = _personas.Get(binding.Path, ownerId);
-                        if (target is null || target.Scope != PersonaScope.Project || target.ProjectId != binding.Target)
+                        if (target is null || !PersonaZone.IsProjectTeam(target, binding.Target))
                             return "Персона не найдена в этом проекте";
                     }
                     break;
@@ -1131,7 +1131,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
                     var project = _projects.GetById(binding.Target);
                     if (project is null || project.OwnerId != ownerId)
                         return "Проект не найден или недоступен";
-                    if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
+                    if (owningPersona is not null && PersonaZone.IsProjectTeam(owningPersona, binding.Target))
                         return "Персона уже в этом проекте — привязка к своему же проекту не нужна";
                     if (!string.IsNullOrEmpty(binding.Path)
                         && !string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase))

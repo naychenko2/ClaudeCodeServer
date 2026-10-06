@@ -507,7 +507,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         // Память команды проекта (③-3.4): проектная персона recall'ит общую память команды
         string? teamBlock = null;
         IReadOnlyList<TeamMemoryEntry> teamHits = [];
-        if (_teamMemory is not null && persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+        if (_teamMemory is not null && PersonaZone.OwnProjectId(persona) is not null)
         {
             try
             {

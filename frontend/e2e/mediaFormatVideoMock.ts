@@ -38,8 +38,9 @@ export interface FmtWorld {
   previews: Record<string, unknown>[];
   cancelUpscales: string[];
   retries: { sceneId: string; versionId: string }[];
-  // Исходные кадры сцены: пропорции для превью подрезки
+  // Исходные кадры сцены: пропорции для превью подрезки (кадр B — свои, если заданы)
   sourceAspect: string;
+  sourceAspectB?: string;
 }
 let fw: FmtWorld;
 export const fmt = () => fw;
@@ -78,7 +79,7 @@ function quote(b: Body) {
   return {
     quoteId: `q${w().quotes.length}`, provider: b.provider, model: b.model, count, durationSec: b.durationSec ?? 8, format,
     price: local
-      ? { unit: 'free', approx: false, source: 'local', eta: ETA[tier] ?? 330, queueLength: 0, ...(max ? { upscaleEta: UPSCALE_ETA, postStep: 'upscale' } : null) }
+      ? { unit: 'free', approx: false, source: 'local', eta: ETA[tier] ?? 330, queueLength: 0, ...(max ? { upscaleEta: UPSCALE_ETA, shotEta: ETA.high, postStep: 'upscale' } : null) }
       : b.provider === 'higgsfield' ? { amount: 16 * count, unit: 'credits', approx: false, source: 'get_cost' }
         : { amount: 1.6 * count, unit: 'usd', approx: true, source: 'pricing', eta: 240 },
     license: 'watermark', heavy: false, expiresAt: '2030-01-01T00:00:00Z',
@@ -95,7 +96,7 @@ export function shotWithoutUpscale(sceneId: string, jobId: string) {
   s.versions.push({
     versionId: `ver-${jobId}-${n}`, number: n, jobId, variant: 0, provider: 'local', model: 'minimax-h3', durationSec: 5, sizeBytes: 36026, hasSound: true,
     cost: { currency: 'local', amount: 0 }, initiator: 'human', inputs: { text: 'т' }, createdAt: '2026-10-07T10:00:00Z', width: 1344, height: 768,
-    upscaleError: 'Увеличение до 1440p не удалось: отменено',
+    upscaleError: 'Увеличение отменено', upscaleCancelled: true,
   });
   s.currentVersionId = s.versions[n - 1].versionId as string;
   w().revision++;
@@ -164,16 +165,19 @@ export async function mockFormat(page: Page) {
       const b = body() as { aspect?: string; anchor?: string };
       fw.previews.push(b);
       const target = b.aspect ?? '16:9';
-      const src = fw.sourceAspect;
-      const [sw, sh] = src === '16:9' ? [1920, 1080] : [1080, 1920];
-      const cropped = ratio(target) !== ratio(src);
-      const frame = () => ({
-        sourceWidth: sw, sourceHeight: sh, sourceAspect: src, cropped,
-        resultWidth: cropped ? (ratio(target) < ratio(src) ? Math.round(sh * ratio(target)) : sw) : sw,
-        resultHeight: cropped ? (ratio(target) < ratio(src) ? sh : Math.round(sw / ratio(target))) : sh,
-        x: 0, y: 0, w: 1, h: 1,
-      });
-      return json({ aspect: target, anchor: b.anchor ?? 'center', frameA: frame(), frameB: frame() });
+      const frame = (src: string) => {
+        const sh = 1000;
+        const sw = Math.round(sh * ratio(src));
+        const cropped = ratio(target) !== ratio(src);
+        const byWidth = ratio(target) < ratio(src);
+        return {
+          sourceWidth: sw, sourceHeight: sh, sourceAspect: src, cropped,
+          resultWidth: cropped && byWidth ? Math.round(sh * ratio(target)) : sw,
+          resultHeight: cropped && !byWidth ? Math.round(sw / ratio(target)) : sh,
+          x: 0, y: 0, w: 1, h: 1,
+        };
+      };
+      return json({ aspect: target, anchor: b.anchor ?? 'center', frameA: frame(fw.sourceAspect), frameB: frame(fw.sourceAspectB ?? fw.sourceAspect) });
     }
 
     const cu = /\/jobs\/([^/]+)\/upscale$/.exec(p);

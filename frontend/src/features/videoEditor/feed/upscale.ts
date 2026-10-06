@@ -52,9 +52,28 @@ const badge = (prefix: string, sec: number | null | undefined) => {
   return text ? { badge: text } : {};
 };
 
-// «Увеличение до 1440p не удалось. Съёмка 768p сохранена версией 1 — в 1440p её нет.»
-export function upscaleFailText(u: UpscaleInfo, version: Pick<VideoClipVersion, 'number'>): string {
-  return `Увеличение до ${u.targetLabel} не удалось. Съёмка ${u.shotLabel} сохранена версией ${version.number} — в ${u.targetLabel} её нет.`;
+type FailVersion = Pick<VideoClipVersion, 'number' | 'provider' | 'model' | 'width' | 'height' | 'upscaleError' | 'upscaleCancelled' | 'inputs'>;
+
+// Успешная 1440p той же съёмки: версия позже, без пометки сбоя, с нужным размером и теми же поставщиком, моделью и входами
+// (у повтора увеличения те же `inputs`, а общего ключа с исходной версией в контракте нет)
+export function upscaledSibling(u: UpscaleInfo, versions: readonly FailVersion[], failed: FailVersion): FailVersion | null {
+  const same = (a: { frameA?: string; frameB?: string; text: string }, b: typeof a) => a.text === b.text && a.frameA === b.frameA && a.frameB === b.frameB;
+  return versions.find(v => v.number > failed.number && !v.upscaleError && `${v.width}×${v.height}` === u.targetSize
+    && v.provider === failed.provider && v.model === failed.model && same(v.inputs, failed.inputs)) ?? null;
+}
+
+// Что говорит карточка о версии с неудавшимся увеличением и какое действие даёт (одна ручка на «Повторить» и «Увеличить»):
+// - в 1440p той же съёмки уже есть версия — нейтрально, без кнопки;
+// - увеличение отменил человек — нейтрально, «Увеличить до 1440p»;
+// - сбой — ⚠, «Повторить».
+export interface UpscaleFailView { text: string; tone: 'warning' | 'info'; action: { label: string } | null }
+
+export function upscaleFailView(u: UpscaleInfo, versions: readonly FailVersion[], version: FailVersion): UpscaleFailView {
+  const kept = `Съёмка ${u.shotLabel} сохранена версией ${version.number}`;
+  const sibling = upscaledSibling(u, versions, version);
+  if (sibling) return { text: `${kept}, а в ${u.targetLabel} — версией ${sibling.number}.`, tone: 'info', action: null };
+  if (version.upscaleCancelled) return { text: `Увеличение отменено. ${kept} — в ${u.targetLabel} её нет.`, tone: 'info', action: { label: `Увеличить до ${u.targetLabel}` } };
+  return { text: `Увеличение до ${u.targetLabel} не удалось. ${kept} — в ${u.targetLabel} её нет.`, tone: 'warning', action: { label: 'Повторить' } };
 }
 
 // «Версия 1 · 1440p · 2528×1440» под превью готового увеличенного клипа

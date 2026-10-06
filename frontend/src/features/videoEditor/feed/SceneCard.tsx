@@ -7,7 +7,7 @@
 // Клик по карточке, а не по её кнопке, — выбор человеком: панель следует за ним, только если открыта.
 
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Save, Target, TriangleAlert, Zap } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Info, Save, Target, TriangleAlert, Zap } from 'lucide-react';
 import {
   Badge, Button, ByClaude, C, FLAGS, FS, IconButton, Notice, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useChatContext, useFeature,
 } from 'aihome_shell/kit';
@@ -22,7 +22,7 @@ import {
   filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, loadFilmList, patchFilm, useFilmList, useJobTick, useVideoStoreVersion, useVideoThreads, type JobProgress,
 } from '../store/videoStore';
 import { SCENE_KIND } from '../context/state';
-import { stagesOf, upscaleFailText, upscaleInfo, upscaledCaption, type CardStage } from './upscale';
+import { stagesOf, upscaleFailView, upscaleInfo, upscaledCaption, type CardStage } from './upscale';
 import { ic } from '../editor/primitives';
 import { recordOf, str } from './records';
 
@@ -65,8 +65,8 @@ export interface SceneCardView {
   progress: { label: string; p?: number } | null;
   // «Макс» local H3: две стадии хода (съёмка и увеличение); null — запуск без увеличения
   stages: CardStage[] | null;
-  // Увеличение не удалось: версия 768p сохранена с пометкой, кнопка «Повторить»
-  upscaleFail: { text: string; jobId: string; versionId: string } | null;
+  // Увеличение не удалось или отменено: версия 768p сохранена с пометкой; кнопка «Повторить» / «Увеличить» — если 1440p ещё нет
+  upscaleFail: { text: string; tone: 'warning' | 'info'; actionLabel: string | null; jobId: string; versionId: string } | null;
   // «Версия 1 · 1440p · 2528×1440» под превью увеличенного клипа
   upscaledCaption: string | null;
   // «Veo 3.1 · 2 вар. · ≈ $3.20» — что запустили и почём
@@ -133,7 +133,9 @@ export function sceneCardView(p: {
     // Ход съёмки показывает только полная карточка сцены: строка запуска не дублирует полосу
     progress: running && !jobId ? progressLabel(scene, jobs, count ?? 1) : null,
     stages,
-    upscaleFail: !jobId && !running && version?.upscaleError && vInfo ? { text: upscaleFailText(vInfo, version), jobId: version.jobId, versionId: version.versionId } : null,
+    upscaleFail: !jobId && !running && version?.upscaleError && vInfo
+      ? (f => ({ text: f.text, tone: f.tone, actionLabel: f.action?.label ?? null, jobId: version.jobId, versionId: version.versionId }))(upscaleFailView(vInfo, versions, version))
+      : null,
     upscaledCaption: !jobId && version ? upscaledCaption(vInfo, version) : null,
     launchLine,
     failure,
@@ -238,8 +240,8 @@ export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; 
       )}
       {v.upscaledCaption && <div data-video-upscaled="" style={{ fontSize: FS.xs, color: C.textMuted }}>{v.upscaledCaption}</div>}
       {v.upscaleFail && (
-        <Notice tone="warning" icon={TriangleAlert} data-video-upscale-fail=""
-          action={a.onRetryUpscale && <span data-video-upscale-retry="" style={{ display: 'inline-flex' }}><Button size="xs" variant="primary" onClick={a.onRetryUpscale}>Повторить</Button></span>}>
+        <Notice tone={v.upscaleFail.tone} icon={v.upscaleFail.tone === 'warning' ? TriangleAlert : Info} data-video-upscale-fail=""
+          action={a.onRetryUpscale && v.upscaleFail.actionLabel && <span data-video-upscale-retry="" style={{ display: 'inline-flex' }}><Button size="xs" variant="primary" onClick={a.onRetryUpscale}>{v.upscaleFail.actionLabel}</Button></span>}>
           {v.upscaleFail.text}
         </Notice>
       )}

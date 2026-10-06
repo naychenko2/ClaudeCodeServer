@@ -35,6 +35,8 @@ interface Setup {
   focus?: { sceneId?: string; filmPath?: string };
   feed?: Record<string, unknown>[];
   flags?: Record<string, boolean>;
+  // Пропорции исходных кадров A и B для превью подрезки (по умолчанию обе 16:9)
+  sources?: [string, string];
 }
 
 const scene5 = () => primaryOf('video-scene', { sceneId: 'scene-5' });
@@ -44,6 +46,7 @@ const filmPrimary = () => primaryOf('video-film', { filmPath: FILM });
 async function open(page: Page, o: Setup) {
   applyFormatCatalog();
   newFmtWorld();
+  if (o.sources) { fmt().sourceAspect = o.sources[0]; fmt().sourceAspectB = o.sources[1]; }
   // Как у бэкенда: основной объект «Видео» зеркалится в серверный фокус сцен (выбор «Чем» пишется в сцену фокуса)
   await openVideoChat(page, o.primary ?? scene5, {
     focus: o.focus ?? { sceneId: 'scene-5' },
@@ -126,6 +129,47 @@ for (const { name, vp } of VIEWPORTS) {
         await shot(page, `s5-h3-${name}-${theme}.png`);
         await page.keyboard.press('Escape');
         await expect(runBtn(page)).toContainText('бесплатно · ~21 мин', { timeout: 10_000 });
+      });
+
+      test('5 · подрезка по высоте: «Сверху · По центру · Снизу», кадр A не тронут', async ({ page }) => {
+        await open(page, { vp, theme, sources: ['16:9', '9:16'] });
+        await actionChip(page, 'shoot').click();
+        await expect.poll(() => chipText(page), { timeout: 15_000 }).toContain('16:9 · 720p');
+        await chip(page).click();
+        await expect(note(page, 'frames')).toContainText('Кадр B — 9:16, сцена — 16:9: кадр будет подрезан сверху и снизу до модели.', { timeout: 10_000 });
+        await expect(page.locator('[data-fmt-frames] [data-fmt-preview="crop"]')).toHaveCount(1);
+        await expect(page.getByRole('button', { name: 'Сверху', exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Снизу', exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Слева', exact: true })).toHaveCount(0);
+        expect(await noOverflow(page)).toBe(true);
+        await shot(page, `s5-height-${name}-${theme}.png`);
+        await page.getByRole('button', { name: 'Сверху', exact: true }).click();
+        await expect.poll(() => lastPut().settings.frameFit).toEqual({ anchor: 'top' });
+        await expect.poll(() => fmt().previews.at(-1)?.anchor).toBe('top');
+      });
+
+      test('5 · кадры режутся в разные стороны: общий текст и «Рамка — по центру», выбора нет', async ({ page }) => {
+        await open(page, { vp, theme, sources: ['21:9', '9:16'] });
+        await actionChip(page, 'shoot').click();
+        await expect.poll(() => chipText(page), { timeout: 15_000 }).toContain('16:9 · 720p');
+        await chip(page).click();
+        await expect(note(page, 'frames')).toContainText('Сцена — 16:9: кадр A (21:9) будет подрезан по бокам, кадр B (9:16) — сверху и снизу до модели.', { timeout: 10_000 });
+        await expect(page.locator('[data-fmt-anchors="mixed"]')).toHaveText('Рамка — по центру: кадры режутся в разные стороны.');
+        await expect(page.getByRole('button', { name: 'Слева', exact: true })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Сверху', exact: true })).toHaveCount(0);
+        expect(await noOverflow(page)).toBe(true);
+        await shot(page, `s5-mixed-${name}-${theme}.png`);
+      });
+
+      test('5 · котировка ступеней не выдаёт себя за автора желания: у запросов по ступеням нет by и at', async ({ page }) => {
+        await open(page, { vp, theme, scenes: [...standardScenes().slice(0, 4), h3Scene('high')] });
+        await actionChip(page, 'shoot').click();
+        await expect.poll(() => chipText(page), { timeout: 15_000 }).toContain('16:9 · 768p');
+        await chip(page).click();
+        await expect(tier(page, 'max')).toContainText('~21 мин', { timeout: 10_000 });
+        const asks = (w().quotes as { format?: { tier?: string; by?: string; at?: string } }[]).map(q => q.format).filter(f => f && !f.by && !f.at);
+        // Ступень текущего желания делит ключ с его котировкой, поэтому «чужие» ступени обязаны быть среди запросов без автора
+        expect(asks.map(f => f!.tier)).toEqual(expect.arrayContaining(['standard', 'max']));
       });
 
       test('6 · сцена фильма: 16:9 · 720p 🔒 → 9:16 → «Оставить 16:9 / Всё равно 9:16» → предупреждение → «Привести к 16:9»', async ({ page }) => {
@@ -229,8 +273,10 @@ for (const { name, vp } of VIEWPORTS) {
         await shot(page, `s10-upscale-${name}-${theme}.png`);
         await card.locator('[data-video-stage-cancel="upscale"]').click();
         await expect.poll(() => fmt().cancelUpscales).toEqual([jobId]);
-        // Съёмка 768p сохранена версией, пометка «увеличение не удалось» и «Повторить»
-        await expect(card.locator('[data-video-upscale-fail]')).toContainText('Увеличение до 1440p не удалось. Съёмка 768p сохранена версией 1 — в 1440p её нет.', { timeout: 10_000 });
+        // Отмена — не сбой: съёмка 768p сохранена версией, нейтральный текст и «Увеличить до 1440p» (та же ручка)
+        await expect(card.locator('[data-video-upscale-fail]')).toContainText('Увеличение отменено. Съёмка 768p сохранена версией 1 — в 1440p её нет.', { timeout: 10_000 });
+        await expect(card.locator('[data-video-upscale-fail]')).not.toContainText('не удалось');
+        await expect(card.locator('[data-video-upscale-retry]')).toHaveText('Увеличить до 1440p');
         await shot(page, `s10-fail-${name}-${theme}.png`);
         await card.locator('[data-video-upscale-retry]').click();
         await expect.poll(() => fmt().retries).toEqual([{ sceneId: 'scene-5', versionId: `ver-${jobId}-1` }]);
@@ -240,6 +286,27 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(card.locator('[data-video-upscaled]')).toContainText('Версия 2 · 1440p · 2528×1440', { timeout: 10_000 });
         await expect(card.locator('[data-video-upscale-fail]')).toHaveCount(0);
         await shot(page, `s10-done-${name}-${theme}.png`);
+        // Вернулись к версии 768p: 1440p той же съёмки уже есть — без кнопки и без ⚠, а повторного запроса нет
+        await card.getByRole('button', { name: 'Прошлый вариант' }).click();
+        await expect(card.locator('[data-video-upscale-fail]')).toContainText('Съёмка 768p сохранена версией 1, а в 1440p — версией 2.');
+        await expect(card.locator('[data-video-upscale-retry]')).toHaveCount(0);
+        expect(fmt().retries).toHaveLength(1);
+      });
+
+      test('10 · сбой увеличения (не отмена): ⚠ «не удалось» и кнопка «Повторить»', async ({ page }) => {
+        const s = h3Scene('max');
+        s.versions = [{
+          versionId: 'ver-f1', number: 1, jobId: 'job-f', variant: 0, provider: 'local', model: 'minimax-h3', durationSec: 5, sizeBytes: 36026, hasSound: false,
+          cost: { currency: 'local', amount: 0 }, initiator: 'human', inputs: { text: 'т' }, createdAt: '2026-10-07T10:00:00Z', width: 1344, height: 768,
+          upscaleError: 'Увеличение до 1440p не удалось: ComfyUI завершил задачу ошибкой',
+        }] as never;
+        s.currentVersionId = 'ver-f1';
+        await open(page, { vp, theme, scenes: [...standardScenes().slice(0, 4), s], feed: [record('video_scene', { sceneId: 'scene-5' }, 'Видео: Сцена 5')] });
+        const card = page.locator('[data-video-card="scene"]');
+        await expect(card.locator('[data-video-upscale-fail]')).toContainText('Увеличение до 1440p не удалось. Съёмка 768p сохранена версией 1 — в 1440p её нет.', { timeout: 10_000 });
+        await expect(card.locator('[data-video-upscale-retry]')).toHaveText('Повторить');
+        await card.locator('[data-video-upscale-retry]').click();
+        await expect.poll(() => fmt().retries).toEqual([{ sceneId: 'scene-5', versionId: 'ver-f1' }]);
       });
     });
   }

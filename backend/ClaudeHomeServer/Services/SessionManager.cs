@@ -7,6 +7,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Turn;
@@ -765,8 +766,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         IServiceProvider? services = null,
         // Опционально (в тестах не передаётся): снимок загруженных подсистем — факт загрузки
         // динамических модулей (Architecture). Без него сервер arch_* ходу не объявляется.
-        Composition.SubsystemStateStore? subsystemStates = null)
+        Composition.SubsystemStateStore? subsystemStates = null,
+        // Опционально (в тестах без сфер не передаётся): справочник сфер для зоны персон; без него
+        // персона сферы нигде не видна (fail-closed)
+        ISphereDirectory? spheres = null)
     {
+        _spheres = spheres;
         _deviceGate = deviceGate;
         _services = services;
         _subsystemStates = subsystemStates;
@@ -3122,6 +3127,31 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return session;
     }
 
+    private readonly ISphereDirectory? _spheres;
+
+    private sealed class NoSpheres : ISphereDirectory
+    {
+        public static readonly NoSpheres Instance = new();
+        public string? SphereOf(string ownerId, string projectId) => null;
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) => [];
+        public bool Enabled(string ownerId) => false;
+        public string? SphereName(string ownerId, string sphereId) => null;
+    }
+
+    private ISphereDirectory SphereDir => _spheres ?? NoSpheres.Instance;
+
+    /// <summary>Видна ли персоне работа в проекте (зона Global/Project/Sphere) — единая проверка чатов.</summary>
+    public bool PersonaVisibleIn(Persona persona, string? projectId) =>
+        PersonaZone.VisibleIn(persona, projectId, SphereDir);
+
+    // Отказ 400 (InvalidOperationException), если персона не видна в проекте чата
+    private void EnsurePersonaVisible(Persona persona, string? projectId)
+    {
+        if (!PersonaVisibleIn(persona, projectId))
+            throw new InvalidOperationException(
+                $"Персона «{persona.Name}» не работает в этом проекте: он вне её сферы");
+    }
+
     // Создание чата от лица персоны. Маршрутизация по зоне:
     // проектная персона → сессия в её проекте (scope = проект); глобальная (или проект
     // недоступен) → чат вне проекта (scope = все данные владельца). Модель по умолчанию — из персоны.
@@ -3138,6 +3168,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var targetProjectId = PersonaZone.IsProjectPersona(persona)
             ? persona.ProjectId
             : contextProjectId;
+        // Персона сферы без проекта сферы чата не получает: её зона — только проекты сферы
+        if (PersonaZone.IsSpherePersona(persona)) EnsurePersonaVisible(persona, targetProjectId);
 
         // Персона без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной».
         // Дефолт места (Strong) передаётся в резолв, чтобы ячейка персоны без явного уровня сработала.
@@ -3192,7 +3224,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateGroupChatAsync(string ownerId, IReadOnlyList<string> personaIds,
         ClaudeMode mode, string? name = null)
     {
-        var participants = ValidateParticipants(ownerId, personaIds);
+        // Проект группового чата — проект ведущей проектной персоны; у остальных чат вне проекта,
+        // и персоне сферы в нём не место
+        var groupProjectId = _personas.Get(personaIds.FirstOrDefault() ?? "", ownerId) is { } l
+            ? PersonaZone.OwnProjectId(l) : null;
+        var participants = ValidateParticipants(ownerId, personaIds, groupProjectId);
         var leader = participants[0];
         var participantIds = participants.Select(p => p.Id).ToList();
         // Ведущая без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной»
@@ -3248,7 +3284,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (ResolveOwnerId(entry.Info) != ownerId) return null;
 
-        var participants = ValidateParticipants(ownerId, personaIds);
+        var participants = ValidateParticipants(ownerId, personaIds, entry.Info.ProjectId);
         entry.Info.Participants = participants.Select(p => p.Id).ToList();
         var speaker = participants.FirstOrDefault(p => p.Id == entry.Info.PersonaId) ?? participants[0];
         SwitchSpeaker(entry, speaker);
@@ -3256,14 +3292,18 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     // Участники группового чата: 2-4 уникальные персоны, все принадлежат владельцу
-    private List<Persona> ValidateParticipants(string ownerId, IReadOnlyList<string> personaIds)
+    private List<Persona> ValidateParticipants(string ownerId, IReadOnlyList<string> personaIds,
+        string? projectId = null)
     {
         var ids = (personaIds ?? Array.Empty<string>())
             .Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
         if (ids.Count is < 2 or > 8)
             throw new InvalidOperationException("В групповом чате участвуют от 2 до 8 персон");
-        return ids.Select(id => _personas.Get(id, ownerId)
+        var result = ids.Select(id => _personas.Get(id, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}")).ToList();
+        // Участник сферы обязан быть виден в проекте чата (у группового чата вне проекта — нигде)
+        foreach (var p in result.Where(PersonaZone.IsSpherePersona)) EnsurePersonaVisible(p, projectId);
+        return result;
     }
 
     // Чаты владельца, ведущиеся от лица конкретной персоны (для раздела «Персоны»)
@@ -3941,6 +3981,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             persona = _personas.Get(personaId, ownerId)
                 ?? throw new KeyNotFoundException("Персона не найдена");
+            EnsurePersonaVisible(persona, entry.Info.ProjectId);
         }
 
         SwitchSpeaker(entry, persona, agentName);

@@ -1602,7 +1602,8 @@ public sealed partial class WorkspaceToolset(
         CancellationToken ct)
     {
         if (projects.GetById(projectId)?.DefaultPersonaId is { } leadId
-            && personas.Get(leadId, ownerId) is { } lead)
+            && personas.Get(leadId, ownerId) is { } lead
+            && sessions.PersonaVisibleIn(lead, projectId))
             return lead.Id;
         return (await provisioner.EnsureAsync(ownerId, ct))?.Id;
     }

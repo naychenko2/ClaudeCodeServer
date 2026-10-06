@@ -50,7 +50,9 @@ public sealed record LocalImageRequest(
     int Count,
     long? Seed = null,
     byte[]? EraseMask = null,
-    LocalImagePad? Pad = null);
+    LocalImagePad? Pad = null,
+    int? Width = null,
+    int? Height = null);
 
 // Поля в пикселях холста по сторонам
 public sealed record LocalImagePad(int Left, int Top, int Right, int Bottom);

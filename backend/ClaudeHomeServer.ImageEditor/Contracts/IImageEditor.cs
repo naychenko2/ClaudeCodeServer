@@ -79,7 +79,10 @@ public record ImageEditCaps(
     double? MaxInputMb = null,
     // Сколько фото персонажа модель берёт как ОДНОГО человека; null — все. Qwen-Image рисует по
     // человеку на каждое фото, и текст запроса это не лечит (живой прогон 2026-09-26)
-    int? MaxCharacterPhotos = null);
+    int? MaxCharacterPhotos = null,
+    // Выходные пропорции, ступени и «Точно…» модели (ADR-025); null — модель размеров не сообщает:
+    // «Как у модели», текущее поведение
+    ClaudeHomeServer.Services.Media.MediaFormatCaps? Format = null);
 
 // Ориентир цены для каталога; точная сумма — только в котировке
 public record ImageEditPriceHint(double Amount, string Unit, string Per);
@@ -150,7 +153,10 @@ public record ImageEditRequest(
     string Model,
     CharacterRef? Character,
     ImageEditRequest? MaskPass = null,
-    string? Instruction = null);
+    string? Instruction = null,
+    // Действующий формат (ADR-025): ступень и размер, которые драйвер переводит в параметры модели;
+    // AspectRatio остаётся производным от него (откат и старые вызовы)
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null);
 
 public record EditedImage(byte[] Bytes, string ContentType);
 

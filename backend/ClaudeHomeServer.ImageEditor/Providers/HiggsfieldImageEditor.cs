@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
@@ -46,23 +47,45 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
 
     // Курируемый список волны 1 (сверено с models_explore 2026-09-25). Цены — замер get_cost
     // за один запуск: сумма от count не зависит, вариант = отдельный запуск.
+    // Формат (ADR-025), сверено с models_explore 2026-10-06: aspect_ratios (без «auto») и enum параметра
+    // resolution у каждой модели. Пикселей Higgsfield не называет — у ступеней подпись («1K») и значение
+    // параметра. Точного размера у них нет: Exact = null. Модели вне списка (Outpaint, фон, Topaz) — без формата.
+    private static readonly IReadOnlyDictionary<string, FormatSize> NoSizes = new Dictionary<string, FormatSize>();
+
+    private static readonly string[] NanoBananaAspects = ["1:1", "3:2", "2:3", "4:3", "3:4", "4:5", "5:4", "9:16", "16:9", "21:9"];
+
+    private static readonly (FormatTier Tier, string Wire) K1 = (FormatTier.Standard, "1k");
+    private static readonly (FormatTier Tier, string Wire) K2 = (FormatTier.High, "2k");
+    private static readonly (FormatTier Tier, string Wire) K4 = (FormatTier.Max, "4k");
+
+    private static MediaFormatCaps Format(string label, IReadOnlyList<string> aspects, params (FormatTier Tier, string Wire)[] tiers) =>
+        new(label, aspects, [.. tiers.Select(t => new FormatTierSpec(t.Tier, t.Wire.ToUpperInvariant(), NoSizes, t.Wire))],
+            null, "resolution");
+
+    private static ImageEditModelInfo Model(string id, string label, ImageEditOp[] ops, MaskSupport mask,
+        int maxRefs, int maxCount, bool face, double? credits, MediaFormatCaps? format = null) =>
+        new(id, label, new ImageEditCaps(ops, mask, maxRefs, maxCount, face, Format: format),
+            credits is { } c ? new ImageEditPriceHint(c, ImageEditPriceUnits.Credits, "image") : null);
+
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
-        Model(NanoBanana2, "Nano Banana 2", [ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.Native, 4, 4, true, 1.5),
-        Model(NanoBanana2Lite, "Nano Banana 2 Lite", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.Native, 4, 4, true, null),
-        Model(NanoBananaPro, "Nano Banana Pro", [ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 4, 4, true, null),
-        Model(GptImage, "GPT Image 2.5", [ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 4, 4, true, 0.25),
-        Model(FluxKontext, "FLUX Kontext", [ImageEditOp.Edit], MaskSupport.None, 2, 4, false, null),
-        Model(Seedream, "Seedream 5 Pro", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 4, 4, false, null),
+        Model(NanoBanana2, "Nano Banana 2", [ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.Native, 4, 4, true, 1.5,
+            Format("Nano Banana 2", NanoBananaAspects, K1, K2, K4)),
+        Model(NanoBanana2Lite, "Nano Banana 2 Lite", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.Native, 4, 4, true, null,
+            Format("Nano Banana 2 Lite", NanoBananaAspects, K1)),
+        Model(NanoBananaPro, "Nano Banana Pro", [ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 4, 4, true, null,
+            Format("Nano Banana Pro", ["1:1", "3:2", "2:3", "4:3", "3:4", "4:5", "5:4", "9:16", "16:9", "21:9"], K1, K2, K4)),
+        Model(GptImage, "GPT Image 2.5", [ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 4, 4, true, 0.25,
+            Format("GPT Image 2.5", ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "21:9", "27:16", "16:27", "9:8", "8:9", "4:5", "5:4"], K1, K2, K4)),
+        Model(FluxKontext, "FLUX Kontext", [ImageEditOp.Edit], MaskSupport.None, 2, 4, false, null,
+            new MediaFormatCaps("FLUX Kontext", ["1:1", "4:3", "3:4", "16:9", "9:16"],
+                [new FormatTierSpec(FormatTier.Standard, "по пропорции", NoSizes)], null, null, "размер по пропорции")),
+        Model(Seedream, "Seedream 5 Pro", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 4, 4, false, null,
+            Format("Seedream 5 Pro", ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9"], K1, K2)),
         Model(Outpaint, "FLUX.2 Pro Outpaint", [ImageEditOp.Outpaint], MaskSupport.None, 0, 1, false, null),
         Model(BackgroundRemover, "Убрать фон", [ImageEditOp.RemoveBackground], MaskSupport.None, 0, 1, false, null),
         Model(Topaz, "Topaz: улучшить качество", [ImageEditOp.Upscale], MaskSupport.None, 0, 1, false, null),
     ];
-
-    private static ImageEditModelInfo Model(string id, string label, ImageEditOp[] ops, MaskSupport mask,
-        int maxRefs, int maxCount, bool face, double? credits) =>
-        new(id, label, new ImageEditCaps(ops, mask, maxRefs, maxCount, face),
-            credits is { } c ? new ImageEditPriceHint(c, ImageEditPriceUnits.Credits, "image") : null);
 
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits)
     {
@@ -107,6 +130,15 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
             args["output_width"] = request.Width * 2;
             args["output_height"] = request.Height * 2;
         }
+        // Пропорции и ступень входят в цену (ADR-025 §3): проба идёт с теми же параметрами, что запуск
+        if (request.Resolved is { } format)
+            ApplyFormat(args, format);
+
+        // Проба стоит вызов MCP: ответ на ту же (модель, пропорция, ступень) держится 10 минут
+        var cacheKey = $"{model.Id}|{request.Resolved?.Aspect}|{request.Resolved?.WireValue}";
+        if (CostCacheable(request) && _costCache.TryGetValue(cacheKey, out var hit) && Now() - hit.At < CostCacheTtl)
+            return new ImageEditEstimateDto(Math.Round(hit.PerRun * Math.Max(1, request.Count), 4),
+                PriceUnit, false, ImageEditEstimateSources.Provider);
 
         var call = await client.CallToolAsync("generate_image", Params(args), ct);
         if (call.Unavailable) throw new ImageEditProviderUnavailableException(call.Text);
@@ -114,8 +146,27 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
             throw new ImageEditProviderUnavailableException(Explain(EditOutcome.InsufficientCredits, call.Text));
         // Цена неизвестна — не отказ: исполнитель запустит и допишет сумму по факту
         if (ParseCredits(call) is not { } perRun) return ImageEditEstimates.Unknown(PriceUnit);
+        if (CostCacheable(request)) _costCache[cacheKey] = (perRun, Now());
         return new ImageEditEstimateDto(Math.Round(perRun * Math.Max(1, request.Count), 4),
             PriceUnit, false, ImageEditEstimateSources.Provider);
+    }
+
+    private static readonly TimeSpan CostCacheTtl = TimeSpan.FromMinutes(10);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (double PerRun, DateTime At)> _costCache = new();
+
+    // Часы кеша; тесты подставляют свои
+    internal Func<DateTime> Clock { get; set; } = () => DateTime.UtcNow;
+    private DateTime Now() => Clock();
+
+    // Топазу цена зависит от размера входа, а правке — от входов запроса: кешируем только то, что от них не зависит
+    private static bool CostCacheable(ImageEditQuoteRequest request) =>
+        request.Op is ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint && request.References == 0;
+
+    // Параметры формата в аргументы generate_image: aspect_ratio и resolution (значение из каталога)
+    private static void ApplyFormat(JsonObject args, ResolvedFormat format)
+    {
+        if (format.Aspect is { Length: > 0 } aspect) args["aspect_ratio"] = aspect;
+        if (format.WireValue is { Length: > 0 } wire) args["resolution"] = wire;
     }
 
     // structuredContent бывает плоским и вложенным: { "cost": { "credits": 1.5 } }
@@ -167,6 +218,7 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
             };
             if (medias.Count > 0) args["medias"] = medias;
             if (req.AspectRatio is { Length: > 0 } ar) args["aspect_ratio"] = ar;
+            if (req.Format is { } format) ApplyFormat(args, format);
             if (req.Mask is not null) args["is_inpaint"] = true;
             if (req.Model == Outpaint && req.Outpaint is { } o)
             {

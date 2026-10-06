@@ -28,6 +28,10 @@ public interface IContextKindProvider
     // «Чем»: исполнитель и модель для основного объекта своего вида
     // («Авто · локально · Qwen-Image Edit · бесплатно»). null — не применимо
     string? DescribeExecutor(ContextScope scope, ContextItem primary);
+
+    // «Формат» основного объекта (ADR-025): строка хвоста хода «Формат: …» и context_state — и в режиме «Чат».
+    // Необязательный: вид без формата не переопределяет. null — не применимо
+    string? DescribeFormat(ContextScope scope, ContextItem primary) => null;
 }
 
 public sealed record ContextScope(string OwnerId, Session Session, Project? Project);

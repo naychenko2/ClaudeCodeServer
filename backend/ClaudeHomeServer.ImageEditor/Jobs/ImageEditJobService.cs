@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Media;
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -80,7 +81,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     private sealed record Quote(
         string Id, string OwnerId, string ProjectId, string Provider, ImageEditModelInfo Model,
         ImageEditOp Op, int Count, ImageEditEstimateDto Estimate, DateTime ExpiresAt, int? ExpectedSeconds,
-        long? ContextRevision = null);
+        long? ContextRevision = null, ResolvedFormat? Format = null);
 
     private sealed class Job(string id, string ownerId, string projectId, Quote quote, CancellationTokenSource cts)
     {
@@ -153,6 +154,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.InvalidRequest,
                 $"Модель {model.Label}: вариантов от 1 до {model.Caps.MaxCount}");
 
+        // Формат запуска: желание → действующий формат под модель; он же учитывается в цене и уходит в драйвер
+        var format = ImageFormatPlan.For(op, model.Caps.Format, request.Format);
+        request = request with { Resolved = format };
+        if (ImageFormatPlan.TargetSize(format) is { } target && request.Width is null)
+            request = request with { Width = target.Width, Height = target.Height };
+
         ImageEditEstimateDto estimate;
         try
         {
@@ -167,7 +174,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
         var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, request.Count,
             estimate, Now() + QuoteTtl, estimate.EtaSeconds ?? (editor as IImageEditQuoter)?.ExpectedSeconds(model),
-            request.ContextRevision);
+            request.ContextRevision, format);
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return ImageEditCallResult<ImageEditQuoteDto>.Ok(ToDto(quote));
@@ -209,7 +216,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 matchSize = (w, h);
         }
 
-        var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count, input.AspectRatio);
+        var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count,
+            quote.Format?.Aspect ?? input.AspectRatio, quote.Format);
         if (composed.Value is not { } request)
             return Fail<ImageEditJobCreatedDto>(composed.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
                 composed.Error ?? "Неверный запрос");
@@ -606,7 +614,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         q.Estimate.Amount is { } a ? new EditCost(a, q.Estimate.Unit) : null;
 
     private ImageEditQuoteDto ToDto(Quote q) =>
-        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds);
+        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds, Format: q.Format);
 
     private ImageEditJobDto ToDto(Job j)
     {

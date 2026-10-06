@@ -19,7 +19,8 @@ public static class EditRequestComposer
     public const string MaskLabel = "mask";
 
     public static ImageEditCallResult<ImageEditRequest> Compose(
-        ImageEditJobInput input, ImageEditOp op, ImageEditModelInfo model, int count, string? aspectRatio = null)
+        ImageEditJobInput input, ImageEditOp op, ImageEditModelInfo model, int count, string? aspectRatio = null,
+        ClaudeHomeServer.Services.Media.ResolvedFormat? format = null)
     {
         var source = input.Source is { Bytes.Length: > 0 } ? input.Source : null;
         var mask = input.Mask is { Bytes.Length: > 0 } ? input.Mask : null;
@@ -152,7 +153,7 @@ public static class EditRequestComposer
 
         return ImageEditCallResult<ImageEditRequest>.Ok(new ImageEditRequest(
             op, prompt, source, maskChannel, references, count, aspectRatio, outpaint, model.Id, input.Character, maskPass,
-            Instruction: input.Prompt?.Trim()));
+            Instruction: input.Prompt?.Trim(), Format: format));
     }
 
     private const string MaskRole = "маска: белое — область, которую менять, чёрное — не трогать";

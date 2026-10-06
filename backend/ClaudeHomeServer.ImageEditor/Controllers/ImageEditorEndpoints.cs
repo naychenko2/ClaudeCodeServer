@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
+using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Media;
@@ -59,8 +60,51 @@ public abstract class ImageEditorEndpoints(
         return Ok(catalog);
     }
 
+    private ImageProjectPrefsService? PrefsService => HttpContext?.RequestServices.GetService<ImageProjectPrefsService>();
+
+    // Формат проекта для генерации без явного формата в теле (ADR-025: умолчание — желание из префов)
+    private MediaFormat? StoredFormat(ImageEditScope scope) => PrefsService?.Get(UserId, scope).Format;
+
+    // GET …/format?provider&model&op — состояние чипа «Формат»: всё посчитано на сервере (ADR-025 §3), у
+    // каждой ступени своя цена из той же котировки, что на кнопке запуска
+    protected async Task<IActionResult> FormatIn(ImageEditScope scope, string? provider, string? model, string? op, CancellationToken ct)
+    {
+        var editor = ImageEditCatalog.FindAvailable(editors, provider);
+        if (editor is null)
+            return Error(StatusCodes.Status409Conflict, ImageEditErrorCodes.ProviderUnavailable,
+                ImageEditCatalog.UnavailableError(editors, provider));
+        var operation = Enum.TryParse<ImageEditOp>(op, ignoreCase: true, out var parsed) ? parsed : ImageEditOp.Generate;
+        var info = string.Equals(model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(model)
+            ? editor.PickModel(operation, EditMode.Auto, new EditTraits(false, 0, false))
+            : editor.Models.FirstOrDefault(m => string.Equals(m.Id, model.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (info is null)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                $"Модели «{model}» нет у поставщика {editor.Label}");
+
+        // Желание проекта относится к генерации; правка — «Как у исходника» на один запуск
+        var wish = operation == ImageEditOp.Generate ? StoredFormat(scope) : null;
+        var state = MediaFormatResolver.State(info.Caps.Format, wish);
+        if (jobs is null || info.Caps.Format is null || operation != ImageEditOp.Generate) return Ok(state);
+
+        var tiers = new List<FormatTierOption>();
+        foreach (var tier in state.Tiers)
+        {
+            if (tier.DisabledReason is not null) { tiers.Add(tier); continue; }
+            var probe = new ImageEditQuoteRequest(editor.Key, info.Id, EditMode.Auto, operation, 1, false,
+                Format: new MediaFormat(FormatModes.Aspect, state.Resolved.Aspect, tier.Tier, null, null,
+                    ClaudeHomeServer.Services.ChatContext.ContextActor.Human, DateTime.UtcNow));
+            var quoted = await jobs.QuoteAsync(UserId, scope.Key, probe, ct);
+            FormatPrice? price = quoted.Value?.Estimate is { Amount: { } amount } e ? new FormatPrice(amount, e.Unit, e.Approx) : null;
+            tiers.Add(tier with { Price = price });
+        }
+        return Ok(state with { Tiers = tiers });
+    }
+
     protected async Task<IActionResult> QuoteIn(ImageEditScope scope, ImageEditQuoteRequest req, CancellationToken ct)
     {
+        // Resolved считает только сервер; генерация без формата в теле берёт формат проекта
+        req = req with { Resolved = null };
+        if (req.Format is null && req.Op == ImageEditOp.Generate) req = req with { Format = StoredFormat(scope) };
         var editor = ImageEditCatalog.FindAvailable(editors, req.Provider);
         if (editor is null)
             return Error(StatusCodes.Status409Conflict, ImageEditErrorCodes.ProviderUnavailable,

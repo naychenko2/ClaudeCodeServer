@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
@@ -59,23 +60,45 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
     public const string BriaRemoveBackground = "fal-ai/bria/background/remove";
     public const string NanoBananaGenerate = "fal-ai/nano-banana-2";
 
+    // Формат (ADR-025), сверено с живыми схемами fal 2026-10-06 (get_model_schema). Nano Banana 2:
+    // aspect_ratio и resolution 0.5K/1K/2K/4K — у ступеней значения параметра, пикселей схема не
+    // называет. Прайс API от resolution не зависит (get_pricing: 0.08 за картинку), поэтому множитель
+    // ступени — ориентир, цена с «~». Kontext Pro: только aspect_ratio, размер задаёт модель.
+    // Остальные модели схемой не сверены — «Как у модели».
+    private static readonly IReadOnlyList<string> NanoBananaAspects =
+        ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "4:1", "1:4", "8:1", "1:8"];
+
+    private static readonly IReadOnlyDictionary<string, FormatSize> NoSizes = new Dictionary<string, FormatSize>();
+
+    private static readonly MediaFormatCaps NanoBananaFormat = new("Nano Banana 2", NanoBananaAspects,
+        [
+            new FormatTierSpec(FormatTier.Standard, "1K", NoSizes, "1K"),
+            new FormatTierSpec(FormatTier.High, "2K", NoSizes, "2K", PriceFactor: 1.5),
+            new FormatTierSpec(FormatTier.Max, "4K", NoSizes, "4K", PriceFactor: 2),
+        ], null, "resolution");
+
+    private static readonly MediaFormatCaps KontextFormat = new("FLUX Kontext Pro",
+        ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9", "9:21"],
+        [new FormatTierSpec(FormatTier.Standard, "по пропорции", NoSizes)],
+        null, null, "размер по пропорции");
+
     // Курируемый список: только модели, которые драйвер умеет вызвать с нашими образцами
     // и маской (сверено с живым каталогом fal 2026-09-25, цены — get_pricing)
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
-        Model(NanoBananaEdit, "Nano Banana 2", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true, 0.08, "image", maskPass: true),
+        Model(NanoBananaEdit, "Nano Banana 2", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true, 0.08, "image", maskPass: true, format: NanoBananaFormat),
         Model(NanoBananaProEdit, "Nano Banana Pro", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true, 0.15, "image", maskPass: true),
-        Model(KontextPro, "FLUX Kontext Pro", [ImageEditOp.Edit], MaskSupport.None, 0, 4, false, 0.04, "image"),
+        Model(KontextPro, "FLUX Kontext Pro", [ImageEditOp.Edit], MaskSupport.None, 0, 4, false, 0.04, "image", format: KontextFormat),
         Model(KontextMaxMulti, "FLUX Kontext Max Multi", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, false, 0.08, "image"),
         Model(FluxFill, "FLUX Pro Fill (инпейнт)", [ImageEditOp.Inpaint], MaskSupport.Native, 0, 4, false, 0.05, "megapixel"),
         Model(BriaExpand, "Bria Expand", [ImageEditOp.Outpaint], MaskSupport.None, 0, 1, false, 0.04, "generation"),
         Model(BriaRemoveBackground, "Bria: убрать фон", [ImageEditOp.RemoveBackground], MaskSupport.None, 0, 1, false, 0.018, "generation"),
-        Model(NanoBananaGenerate, "Nano Banana 2 (новая картинка)", [ImageEditOp.Generate], MaskSupport.None, 3, 4, false, 0.08, "image"),
+        Model(NanoBananaGenerate, "Nano Banana 2 (новая картинка)", [ImageEditOp.Generate], MaskSupport.None, 3, 4, false, 0.08, "image", format: NanoBananaFormat),
     ];
 
     private static ImageEditModelInfo Model(string id, string label, ImageEditOp[] ops, MaskSupport mask,
-        int maxRefs, int maxCount, bool face, double price, string per, bool maskPass = false) =>
-        new(id, label, new ImageEditCaps(ops, mask, maxRefs, maxCount, face, maskPass),
+        int maxRefs, int maxCount, bool face, double price, string per, bool maskPass = false, MediaFormatCaps? format = null) =>
+        new(id, label, new ImageEditCaps(ops, mask, maxRefs, maxCount, face, maskPass, Format: format),
             new ImageEditPriceHint(price, ImageEditPriceUnits.Usd, per));
 
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits)
@@ -123,14 +146,23 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
             request = request with { Count = request.Count + 1 };
 
         var price = await PriceAsync(model.Id, ct);
-        if (price is null) return ImageEditEstimates.FromHint(model, request, PriceUnit);
+        if (price is null) return ImageEditEstimates.FromHint(model, request, PriceUnit, TierFactor(model, request.Resolved));
 
         var amount = ImageEditEstimates.PerUnit(price.Value.Unit, price.Value.Price, request);
         if (amount is null) return ImageEditEstimates.Unknown(PriceUnit);
-        // За картинку и за запуск цена точная; мегапиксели — по размеру исходника, результат может отличаться
-        var approx = price.Value.Unit.StartsWith("megapixel", StringComparison.OrdinalIgnoreCase);
+        // Прайс API ступени не различает: цена ступени — множитель каталога, оценочная (ADR-025 §3)
+        var factor = TierFactor(model, request.Resolved);
+        amount = Math.Round(amount.Value * factor, 6);
+        // За картинку и за запуск цена точная; мегапиксели — по целевому размеру генерации или по
+        // размеру исходника у правки, результат может отличаться
+        var approx = price.Value.Unit.StartsWith("megapixel", StringComparison.OrdinalIgnoreCase) || factor != 1;
         return new ImageEditEstimateDto(amount, PriceUnit, approx, ImageEditEstimateSources.Catalog);
     }
+
+    internal static double TierFactor(ImageEditModelInfo model, ResolvedFormat? format) =>
+        format?.Tier is { } tier && model.Caps.Format?.Tiers.FirstOrDefault(t => t.Tier == tier) is { } spec
+            ? spec.PriceFactor
+            : 1;
 
     private async Task<(double Price, string Unit)?> PriceAsync(string endpoint, CancellationToken ct)
     {
@@ -359,8 +391,14 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
                 if (req.AspectRatio is { Length: > 0 } r) body["aspect_ratio"] = r;
                 break;
         }
+        // Ступень формата (ADR-025): значение параметра модели из каталога; fal без параметра отвергает 422
+        if (req.Format is { WireValue: { Length: > 0 } wire } && WireParamOf(id) is { } wireParam)
+            body[wireParam] = wire;
         return body;
     }
+
+    private static string? WireParamOf(string modelId) =>
+        Catalog.FirstOrDefault(m => string.Equals(m.Id, modelId, StringComparison.OrdinalIgnoreCase))?.Caps.Format?.WireParam;
 
     private sealed record QueueTicket(string RequestId, string StatusUrl, string ResponseUrl, string CancelUrl);
 

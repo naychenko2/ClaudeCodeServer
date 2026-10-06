@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Memory;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,7 +11,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/project-groups")]
-public class ProjectGroupsController(SphereManager groups, ProjectManager projects, PersonaManager personas) : ControllerBase
+public class ProjectGroupsController(SphereManager groups, ProjectManager projects, PersonaManager personas,
+    SphereMemoryService sphereMemory) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -57,7 +59,7 @@ public class ProjectGroupsController(SphereManager groups, ProjectManager projec
         if (g is null || g.OwnerId != UserId) return NotFound();
         // Сфера с командой или памятью не удаляется: сначала их переносят или удаляют
         var team = personas.GetByOwner(UserId).Count(p => PersonaZone.IsSphereTeam(p, id));
-        var memory = SpheresController.MemoryCount(id);
+        var memory = sphereMemory.Count(UserId, id);
         if (team > 0 || memory > 0)
         {
             var parts = new List<string>();

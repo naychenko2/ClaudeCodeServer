@@ -229,3 +229,106 @@ public class PersonaMemoryServiceTests : IDisposable
         entries[0].Salience.Should().Be(0.9);
     }
 }
+
+// Recall полки сферы: ключ — только проект ЧАТА (не persona.SphereId), глобальные персоны тоже
+// видят полку сферы проекта, вне проекта сферы полки нет.
+public class PersonaMemoryServiceSphereRecallTests : IDisposable
+{
+    private const string OwnerId = "owner-1";
+
+    private sealed class FakeDir : ClaudeHomeServer.Services.Spheres.ISphereDirectory
+    {
+        public Dictionary<string, List<string>> Spheres = new();
+        public bool Enabled(string ownerId) => true;
+        public string? SphereOf(string ownerId, string projectId) =>
+            Spheres.FirstOrDefault(s => s.Value.Contains(projectId)).Key;
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) =>
+            Spheres.TryGetValue(sphereId, out var l) ? l.ToList() : [];
+        public string? SphereName(string ownerId, string sphereId) => "Сфера " + sphereId;
+        public string? CharterOf(string ownerId, string sphereId) => null;
+    }
+
+    private readonly string _tempDir;
+    private readonly PersonaManager _personas;
+    private readonly PersonaMemoryService _sut;
+    private readonly SphereMemoryService _sphereMemory;
+    private readonly FakeDir _dir = new();
+
+    public PersonaMemoryServiceSphereRecallTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), "pmem_sphere_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempDir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            })
+            .Build();
+        var userStore = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), new WorkspaceKnowledgeStore(config));
+        _personas = new PersonaManager(config);
+        _sphereMemory = new SphereMemoryService(config);
+        _sut = new PersonaMemoryService(knowledge, _personas, _personas,
+            new PersonaDirectoryAdapter(_personas), new NoopPersonaEvents(),
+            new NoopDifyMetrics(), userStore, config, NullLogger<PersonaMemoryService>.Instance,
+            sphereMemory: _sphereMemory, spheres: _dir);
+
+        _dir.Spheres["S1"] = ["p1"];
+        _dir.Spheres["S2"] = ["p2"];
+        _sphereMemory.Add(OwnerId, "S1", "релизы сферы первой идут по четвергам");
+        _sphereMemory.Add(OwnerId, "S2", "релизы сферы второй идут по пятницам");
+    }
+
+    public void Dispose()
+    {
+        _sphereMemory.Dispose();
+        if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
+    }
+
+    private Persona Make(PersonaScope scope, string? sphereId = null)
+    {
+        var p = _personas.Create(OwnerId, "Ада" + Guid.NewGuid().ToString("N")[..4], "Аналитик", null, null,
+            null, null, PersonaScope.Global, null, null, null, memoryEnabled: true);
+        p.Scope = scope;
+        p.SphereId = sphereId;
+        return p;
+    }
+
+    [Fact]
+    public async Task Recall_ПерсонаСферыS1ВПроектеСферыS2_ВспоминаетТолькоS2()
+    {
+        var persona = Make(PersonaScope.Sphere, "S1");
+
+        var recall = await _sut.BuildRecallAsync(OwnerId, persona.Id, "релизы идут", 5, 0.1,
+            sessionProjectId: "p2");
+
+        recall!.Text.Should().Contain("«Сфера S2»").And.Contain("по пятницам");
+        recall.Text.Should().NotContain("по четвергам", "полка S1 не принадлежит проекту чата");
+        recall.SphereHits.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Recall_ГлобальнаяПерсонаВПроектеСферы_ВидитПолкуСферы()
+    {
+        var persona = Make(PersonaScope.Global);
+
+        var recall = await _sut.BuildRecallAsync(OwnerId, persona.Id, "релизы идут", 5, 0.1,
+            sessionProjectId: "p1");
+
+        recall!.Text.Should().Contain("## Память сферы «Сфера S1»").And.Contain("по четвергам");
+    }
+
+    [Fact]
+    public async Task Recall_ПроектВнеСферыИЧатВнеПроекта_ПолкиСферыНет()
+    {
+        var persona = Make(PersonaScope.Global);
+
+        var outside = await _sut.BuildRecallAsync(OwnerId, persona.Id, "релизы идут", 5, 0.1,
+            sessionProjectId: "p-вне-сфер");
+        var noProject = await _sut.BuildRecallAsync(OwnerId, persona.Id, "релизы идут", 5, 0.1);
+
+        outside!.Text.Should().BeNull();
+        noProject!.Text.Should().BeNull();
+    }
+}

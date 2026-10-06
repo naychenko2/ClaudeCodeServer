@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -17,13 +18,10 @@ public class SpheresController(
     ProjectManager projects,
     PersonaManager personas,
     TaskManager tasks,
+    SphereMemoryService sphereMemory,
     IDeviceExecChannel? deviceExec = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
-
-    // Записей памяти сферы; хранилище памяти сферы подключат позже, пока всегда 0
-    // TODO(Spheres C): подключить счётчик полки сферы; запись — только через PersonaZone.CanWriteSphereMemory
-    internal static int MemoryCount(string sphereId) => 0;
 
     /// <summary>Сводка сферы: проекты с матрицей возможностей, команда, память, открытые задачи.</summary>
     [HttpGet("{id}/overview")]
@@ -71,7 +69,7 @@ public class SpheresController(
             sphere = new { id = sphere.Id, name = sphere.Name, color = sphere.Color, icon = sphere.Icon, charter = sphere.Charter },
             projects = projectDtos,
             team,
-            memory = new { count = MemoryCount(id) },
+            memory = new { count = sphereMemory.Count(UserId, id) },
             openTasks,
         });
     }

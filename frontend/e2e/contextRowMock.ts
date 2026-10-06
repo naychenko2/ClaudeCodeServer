@@ -75,17 +75,22 @@ export interface World {
   // Котировки и запуски звука (тела как пришли): quote — JSON, jobs — поля формы
   audioQuotes: Record<string, unknown>[];
   audioJobs: Record<string, string>[];
+  // Префы картинок проекта (мок …/image-editor/prefs, PUT сливает и штампует format человеком, как сервер); null — маршрута нет
+  imagePrefs: Record<string, unknown> | null;
+  // Тела PUT префов как пришли
+  imagePrefsPuts: Record<string, unknown>[];
 }
 
 let world: World;
 export const w = () => world;
 
-export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles' | 'personal' | 'feed' | 'threads' | 'audio' | 'imageCatalog' | 'imageRemote' | 'noGit'>> & { ctx?: Partial<Ctx> } = {}): World {
+export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles' | 'personal' | 'feed' | 'threads' | 'audio' | 'imageCatalog' | 'imageRemote' | 'noGit' | 'imagePrefs'>> & { ctx?: Partial<Ctx> } = {}): World {
   world = {
     ctx: { revision: 1, primary: null, refs: [], ...o.ctx },
     flags: { 'chat-context': true, ...o.flags },
     hands: o.hands ?? true, savedFiles: o.savedFiles ?? [], mutations: [], invocations: [], hubs: [], personal: o.personal ?? false, feed: o.feed ?? [],
     threads: o.threads ?? null, threadsRevision: 1, imageCatalog: o.imageCatalog ?? null, imageRemote: o.imageRemote ?? false, noGit: o.noGit ?? false, audio: o.audio ?? null, audioRevision: 1, audioEdits: [], audioQuotes: [], audioJobs: [],
+    imagePrefs: o.imagePrefs ?? null, imagePrefsPuts: [],
   };
   return world;
 }
@@ -182,6 +187,15 @@ export async function mockApi(page: Page) {
         estimate: free ? { amount: 0, unit: 'free', approx: false, source: 'provider' }
           : { amount: Math.round((m?.priceHint?.amount ?? 0) * body.count * 100) / 100, unit: pv?.priceUnit ?? 'usd', approx: true, source: 'catalog' },
       });
+    }
+    if (world.imagePrefs && p === `/projects/${P}/image-editor/prefs`) {
+      if (method === 'PUT') {
+        const body = r.request().postDataJSON() as Record<string, unknown>;
+        world.imagePrefsPuts.push(body);
+        const { format, ...rest } = body;
+        world.imagePrefs = { ...world.imagePrefs, ...rest, ...(format ? { format: { ...(format as object), by: 'human', at: new Date().toISOString() } } : null) };
+      }
+      return json(world.imagePrefs);
     }
     const tb = `/projects/${P}/image-editor/sessions/${S}/threads`;
     if (world.threads && p.startsWith(tb)) {

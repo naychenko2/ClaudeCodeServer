@@ -5,28 +5,11 @@ Description: не расшифровывать EncryptedRandomSessionKey без 
  именно им считается MIC. Акцептор расшифровывал ключ по одному флагу
  KEY_EXCH и получал чужой ключ, из-за чего MIC клиента Windows SSPI
  (флаги Type1 0xE2088207) не сходился: GSS_S_DEFECTIVE_TOKEN, gss_sec_ctx.c.
- Проверка MIC не ослаблена. Симметричная правка в инициаторе: MIC считается
- ключом KeyExchangeKey, если нет SIGN/SEAL.
+ Проверка MIC не ослаблена. Сторона инициатора (gss_auth.c) не меняется.
 Author: Claude Code Server <noreply@anthropic.com>
 Forwarded: no
 Last-Update: 2026-10-06
 
---- a/src/gss_auth.c
-+++ b/src/gss_auth.c
-@@ -238,6 +238,13 @@
-             }
-         }
- 
-+        /* MS-NLMP 3.1.5.1.2: the MIC is keyed with the KeyExchangeKey unless
-+         * KEY_EXCH is negotiated together with SIGN or SEAL */
-+        if (key_exch && !(in_flags & (NTLMSSP_NEGOTIATE_SIGN |
-+                                      NTLMSSP_NEGOTIATE_SEAL))) {
-+            ctx->exported_session_key = key_exchange_key;
-+        }
-+
-         /* in_flags all verified, assign as current flags */
-         ctx->neg_flags |= in_flags;
- 
 --- a/src/gss_sec_ctx.c
 +++ b/src/gss_sec_ctx.c
 @@ -952,7 +952,13 @@

@@ -49,11 +49,15 @@ The MIC verification is not weakened: only the key selection follows the spec.
 
 - `gss_sec_ctx.c` (`gssntlm_accept_sec_context`): decrypt `EncryptedRandomSessionKey` only when
   `KEY_EXCH && (SIGN || SEAL)`; otherwise `ExportedSessionKey = KeyExchangeKey` (MS-NLMP 3.2.5.1.2).
-- `gss_auth.c` (`gssntlm_cli_auth`): symmetric rule for the initiator, the MIC is keyed with `KeyExchangeKey` when
-  `KEY_EXCH` is negotiated without SIGN/SEAL (MS-NLMP 3.1.5.1.2). Only reachable for initiators that negotiate `KEY_EXCH`
-  without `SIGN`/`SEAL` (datagram mode); not covered by a test in this PR, please review against the spec.
 
 Verification: raw NTLMv2 client against a GSSAPI acceptor, matrix above; the `0xE2088207` case fails before the patch and
 passes after, tampered-MIC and wrong-password cases fail in both.
 Suggested test for the upstream suite: add the `0xE2088207` negotiate-flag case to `tests/t_auth.c` / the NTLMv2
 acceptor tests next to the existing SIGN+SEAL one.
+
+## For discussion with the maintainer (not part of the PR)
+
+`gss_auth.c` (`gssntlm_cli_auth`): the initiator side may need the symmetric rule: the MIC keyed with `KeyExchangeKey`
+when `KEY_EXCH` is negotiated without SIGN/SEAL (MS-NLMP 3.1.5.1.2). Only reachable in datagram mode, and
+`EncryptedRandomSessionKey` is still sent there, so changing it alone may break interop with unpatched acceptors.
+We have not tested it, so it is left out of the PR and of our local package.

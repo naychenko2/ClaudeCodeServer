@@ -65,7 +65,6 @@ import type {
 
 import { ColorsSection } from './ColorsSection';
 import { ToolProgressSection } from './ToolProgressSection';
-import { DuckSection } from './DuckSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -128,7 +127,6 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-visual-plan',label: 'Визуальный план'    },
   { id: 'sec-headers',    label: 'Шапки'              },
   { id: 'sec-tool-progress', label: 'Прогресс инструмента' },
-  { id: 'sec-duck', label: 'Утка' },
 ];
 
 // Высота sticky-элементов над контентом: шапка темы + TOC-бар. Секция
@@ -282,11 +280,6 @@ export function UiKitPage() {
                 на настоящем ToolUseView (см. ToolProgressSection) */}
             <div id="sec-tool-progress" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <ToolProgressSection />
-            </div>
-
-            {/* Секция «Утка» — пасхалка правой рельсы и её финал с роликом */}
-            <div id="sec-duck" style={{ scrollMarginTop: STICKY_OFFSET }}>
-              <DuckSection />
             </div>
           </div>
 

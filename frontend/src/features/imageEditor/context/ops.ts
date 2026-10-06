@@ -151,7 +151,8 @@ export const launchMarks = <M extends { type: string }>(marks: M[], whole: boole
   whole ? marks.filter(m => m.type !== 'mask') : marks;
 
 // Пропорции новой картинки («Ещё настройки» режима «Создать»): в памяти вкладки на проект,
-// null — как решит модель
+// null — как решит модель. Удалить после снятия флага media-format: пропорции тогда задаёт только чип «Формат»,
+// а `_createRatio`, `getCreateRatio` и `setCreateRatio` остаются лишь для прежнего поведения без флага
 const _createRatio = new Map<string, OutpaintRatio>();
 
 // Под флагом media-format пропорции новой картинки задаёт чип «Формат», память вкладки их не подставляет

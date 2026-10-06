@@ -79,6 +79,10 @@ public sealed record PromptSessionContext(
     // MCP-сервер сборки (dev: build) доехал до хода: гейты те же, что у tests, а
     // TrimMcpServers гасит его отдельно (Keep("dev"))
     bool HasDevMcp = false,
+    // MCP-сервер модуля «Звук» (audio_*) доехал до хода — по той же причине, что у картинок
+    bool HasAudioEditorMcp = false,
+    // MCP-сервер модуля «Видео» (video_*) доехал до хода — по той же причине
+    bool HasVideoEditorMcp = false,
     // Живого человека у хода нет — см. TurnAudience.IsUnattended
     bool Unattended = false);
 

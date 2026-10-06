@@ -40,6 +40,15 @@ export const FLAGS = {
   localProjects: 'local-projects',
   // Локальная модель по умолчанию для картинок и видео (MCP local-media).
   localMediaDefault: 'local-media-default',
+  // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта.
+  audioEditor: 'audio-editor',
+  // Модуль «Видео»: сцены и фильм (ADR-022) — съёмка по кадрам A и B, сборка фильма без ИИ.
+  videoEditor: 'video-editor',
+// MIDI-просмотрщик: ноты из .mid в файлах и в редакторе звука.
+  midiEditor: 'midi-editor',
+  // Панель «Картинки» v5 «Создать / Править»: режим на чат и выбор по режиму. Выключен —
+  // картинки ведут себя побайтно как раньше.
+  imagePanelV5: 'image-panel-v5',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

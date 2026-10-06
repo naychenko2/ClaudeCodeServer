@@ -1141,6 +1141,47 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             ImageEditor.ImageEditorAgentTools.AutoAllowTools);
     }
 
+    // MCP-сервер модуля «Звук» (ADR-021 §5) — по тем же правилам, что image-editor: любой чат владельца,
+    // флаг audio-editor, тулсет в реестре (модуль загружен), все три точки сборки контекста. От хода,
+    // фокуса, режима и нитей звука состав не зависит (McpToolsetStabilityTests).
+    internal AudioEditorMcpContext? BuildAudioEditorContext(string? ownerId, Session session)
+    {
+        if (ownerId is null) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.AudioEditor)) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.AudioEditorName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new AudioEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
+            AudioEditor.AudioEditorAgentTools.AutoAllowTools);
+    }
+
+    // MCP-сервер модуля «Видео» (ADR-022 §5) — те же правила, что у «Звука»: любой чат владельца, флаг
+    // video-editor, тулсет в реестре (модуль загружен), все три точки сборки контекста. От хода, фокуса и
+    // поставщика состав не зависит (McpToolsetStabilityTests).
+    internal VideoEditorMcpContext? BuildVideoEditorContext(string? ownerId, Session session)
+    {
+        if (ownerId is null) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.VideoEditor)) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.VideoEditorName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new VideoEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
+            VideoEditor.VideoEditorAgentTools.AutoAllowTools);
+    }
+
+    // MCP-сервер «Контекст чата» (ADR-023 §3.2) — любой чат владельца, тулсет в реестре, все три точки
+    // сборки контекста. От хода и
+    // содержимого контекста состав не зависит (McpToolsetStabilityTests).
+    internal TurnContextMcpContext? BuildTurnContextContext(string? ownerId, Session session)
+    {
+        if (ownerId is null) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.TurnContextName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new TurnContextMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
+            Services.ChatContext.TurnContextAgentTools.AutoAllowTools);
+    }
+
     // MCP-сервер локальной генерации (ComfyUI на своей GPU). Узел есть в конфиге хода, только когда:
     //   1) включён машинный тумблер LocalMedia:Enabled и подсистема images (там живёт движок);
     //   2) чат проекта, чьи файлы на сервере: результат пишется в папку проекта
@@ -1218,7 +1259,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null,
         HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null,
         LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null,
-        TestsMcpContext? tests = null) =>
+        AudioEditorMcpContext? audioEditor = null, VideoEditorMcpContext? videoEditor = null,
+        TurnContextMcpContext? turnContext = null, TestsMcpContext? tests = null) =>
         architecture is { UseHttp: true } || tests is { UseHttp: true }
         || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
@@ -1226,7 +1268,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
         || watch is { UseHttp: true } || webSearch is { UseHttp: true }
         || higgsfield is { UseHttp: true } || imageEditor is { UseHttp: true }
-        || localMedia is { UseHttp: true };
+        || localMedia is { UseHttp: true } || audioEditor is { UseHttp: true }
+        || videoEditor is { UseHttp: true }
+        || turnContext is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -1939,7 +1983,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             Fallback = record.Fallback, Timestamp = ts,
         };
         await AppendStoredAsync(sessionId, stored,
-            new ModuleRecordMessage(stored.Module, stored.RecordType, stored.Data, stored.Fallback, ts));
+            new ModuleRecordMessage(stored.Module, stored.RecordType, stored.Data, stored.Fallback, ts), inTurn: true);
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return true;
@@ -4065,6 +4109,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var webSearchMcp = BuildWebSearchContext(ownerId, persona.Persona);
         var higgsfieldMcp = BuildHiggsfieldContext(ownerId, persona.Persona);
         var imageEditorMcp = BuildImageEditorContext(ownerId, session);
+        var audioEditorMcp = BuildAudioEditorContext(ownerId, session);
+        var videoEditorMcp = BuildVideoEditorContext(ownerId, session);
+        var turnContextMcp = BuildTurnContextContext(ownerId, session);
         var localMediaMcp = BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona);
         var testsMcp = BuildTestsContext(ownerId, session.ProjectId, persona.Persona);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
@@ -4108,7 +4155,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                 workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                imageEditorMcp, localMediaMcp, architectureMcp, testsMcp),
+                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
@@ -4119,6 +4166,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             WebSearchMcp: webSearchMcp,
             HiggsfieldMcp: higgsfieldMcp,
             ImageEditorMcp: imageEditorMcp,
+            AudioEditorMcp: audioEditorMcp,
+            VideoEditorMcp: videoEditorMcp,
+            TurnContextMcp: turnContextMcp,
             LocalMediaMcp: localMediaMcp,
             TestsMcp: testsMcp,
             // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
@@ -5578,6 +5628,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var webSearchMcp = BuildWebSearchContext(entry.Info.OwnerId, persona.Persona);
             var higgsfieldMcp = BuildHiggsfieldContext(entry.Info.OwnerId, persona.Persona);
             var imageEditorMcp = BuildImageEditorContext(entry.Info.OwnerId, entry.Info);
+            var audioEditorMcp = BuildAudioEditorContext(entry.Info.OwnerId, entry.Info);
+            var videoEditorMcp = BuildVideoEditorContext(entry.Info.OwnerId, entry.Info);
+            var turnContextMcp = BuildTurnContextContext(entry.Info.OwnerId, entry.Info);
             var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
             var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
@@ -5613,13 +5666,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, dify: difyMcp, watch: watchMcp, webSearch: webSearchMcp,
-                    higgsfield: higgsfieldMcp, imageEditor: imageEditorMcp),
+                    higgsfield: higgsfieldMcp, imageEditor: imageEditorMcp, audioEditor: audioEditorMcp, videoEditor: videoEditorMcp,
+                    turnContext: turnContextMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
                 WebSearchMcp: webSearchMcp,
                 HiggsfieldMcp: higgsfieldMcp,
                 ImageEditorMcp: imageEditorMcp,
+                AudioEditorMcp: audioEditorMcp,
+                VideoEditorMcp: videoEditorMcp,
+                TurnContextMcp: turnContextMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
                 MainRootPath: null,
                 LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId));
@@ -5641,6 +5698,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var webSearchMcp = BuildWebSearchContext(project.OwnerId, persona.Persona);
             var higgsfieldMcp = BuildHiggsfieldContext(project.OwnerId, persona.Persona);
             var imageEditorMcp = BuildImageEditorContext(project.OwnerId, entry.Info);
+            var audioEditorMcp = BuildAudioEditorContext(project.OwnerId, entry.Info);
+            var videoEditorMcp = BuildVideoEditorContext(project.OwnerId, entry.Info);
+            var turnContextMcp = BuildTurnContextContext(project.OwnerId, entry.Info);
             var localMediaMcp = BuildLocalMediaContext(project.OwnerId, project.Id, persona.Persona);
             var testsMcp = BuildTestsContext(project.OwnerId, project.Id, persona.Persona);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
@@ -5682,7 +5742,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                    imageEditorMcp, localMediaMcp, architectureMcp, testsMcp),
+                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ArchitectureMcp: architectureMcp,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
@@ -5691,6 +5751,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 WebSearchMcp: webSearchMcp,
                 HiggsfieldMcp: higgsfieldMcp,
                 ImageEditorMcp: imageEditorMcp,
+                AudioEditorMcp: audioEditorMcp,
+                VideoEditorMcp: videoEditorMcp,
+                TurnContextMcp: turnContextMcp,
                 LocalMediaMcp: localMediaMcp,
                 TestsMcp: testsMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
@@ -9594,7 +9657,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Запись StoredMessage в историю сессии ВНЕ хода + broadcast (обобщение паттерна
     // PublishFalCostAsync): активная сессия → через Accumulator + SaveSnapshot;
     // неактивная → LoadAsync + append + SaveAsync под локом. Используется совещаниями.
-    public async Task AppendStoredAsync(string sessionId, StoredMessage stored, ServerMessage broadcast)
+    public async Task AppendStoredAsync(string sessionId, StoredMessage stored, ServerMessage broadcast, bool inTurn = false)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
@@ -9605,7 +9668,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             if (entry.Accumulator is { } acc)
             {
-                acc.Append(stored);
+                if (inTurn) acc.AppendInTurn(stored);
+                else acc.Append(stored);
                 try { await acc.SaveSnapshotAsync(_history); }
                 catch (Exception ex)
                 {

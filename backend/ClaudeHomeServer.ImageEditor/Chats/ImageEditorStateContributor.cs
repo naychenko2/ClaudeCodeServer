@@ -62,6 +62,7 @@ public sealed class ImageEditorStateContributor(
             return Task.FromResult<PromptSectionContribution?>(null);
 
         var scope = ImageEditScope.Of(session);
+        // «В работе» и «Выбор человека» отдаёт хвост «Контекст хода»; блок худеет
         // У проекта — через проект: персонаж проверяется на его диске; у личной области персонажа нет
         var scopePrefs = session.ProjectId is { } projectId ? prefs?.Get(ownerId, projectId) : prefs?.Get(ownerId, scope);
         string block;
@@ -81,26 +82,17 @@ public sealed class ImageEditorStateContributor(
             [new PromptSection(Key, block, Title, InTurnTail: true)]));
     }
 
-    // Нити картинок чата: «в работе» первой, у каждой файл, шаг и ожидающие варианты
-    // prefs — выбор человека в полосе «Картинки» проекта: для картинки в работе показываются её
-    // настройки (а без них и без фокуса — проекта), персонаж всегда из проекта
+    // Нити картинок чата: у каждой файл, шаг и ожидающие варианты. Что в работе и какой выбор человека, говорит
+    // хвост «Контекст хода»; фокус вертикали — проекция контекста и здесь только путал бы
     public static string RenderThreads(ImageThreadsState state, IReadOnlyList<ImageThreadEvent> fresh,
         Func<string, ImageEditJobDto?> job, Prefs.ImageProjectPrefs? prefs = null, bool priorityRule = false,
         bool personal = false)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Картинки в этом чате");
-        sb.AppendLine(state.Focus is null
-            ? "В работе: ничего не выбрано"
-            : $"В работе: картинка {state.Focus} — {FocusIsNotBindingText}");
-        if (prefs is not null)
-        {
-            var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus);
-            sb.AppendLine(ChoiceText(focused?.Settings ?? prefs.ToThreadSettings(), prefs.CharacterSlug));
-            sb.AppendLine(ChoiceRule);
-        }
-        if (priorityRule) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
-        foreach (var t in state.Threads.OrderByDescending(t => t.Id == state.Focus))
+        if (prefs is not null) sb.AppendLine(ChoiceRule);
+        if (priorityRule) sb.AppendLine(PriorityRuleFor(personal));
+        foreach (var t in state.Threads)
         {
             var what = t.File is { Length: > 0 } file ? $"файл {file}"
                 : $"новая картинка, ещё не сохранена ({DraftSaveText(t.DraftFolder, personal)})";
@@ -112,7 +104,7 @@ public sealed class ImageEditorStateContributor(
                 : $"; старая стопка: шаг {at} из {steps.Count}";
             var pending = t.PendingJobId is { } p ? "; варианты старой стопки ждут выбора человека" + Outcome(job(p))
                 : t.InterruptedJobId is not null ? "; последняя задача потеряна при перезапуске сервера, варианты недоступны" : "";
-            sb.AppendLine($"- {t.Id}{(t.Id == state.Focus ? " (в работе)" : "")}: {what}{current}{stack}{pending}");
+            sb.AppendLine($"- {t.Id}: {what}{current}{stack}{pending}");
             RenderVersions(sb, t, job);
         }
         if (fresh.Count > 0)
@@ -129,17 +121,14 @@ public sealed class ImageEditorStateContributor(
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Картинки в этом чате");
-        sb.AppendLine("В работе: ничего не выбрано");
-        sb.AppendLine(ChoiceText(prefs.ToThreadSettings(), prefs.CharacterSlug));
         sb.AppendLine(ChoiceRule);
-        if (priorityRule) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
+        if (priorityRule) sb.AppendLine(PriorityRuleFor(personal));
         return sb.ToString().TrimEnd();
     }
 
-    // Личный чат без нитей и без сохранённого выбора: выбора человека нет, поэтому ни ChoiceText,
-    // ни ChoiceRule («это выбор человека») — только правило приоритета
-    public static string RenderEmpty() =>
-        "## Картинки в этом чате\nВ работе: ничего не выбрано\n" + PersonalPriorityRule;
+    // Личный чат без нитей и без сохранённого выбора: выбора человека нет, поэтому не ChoiceRule
+    // («это выбор человека») — только правило приоритета
+    public static string RenderEmpty() => "## Картинки в этом чате\n" + PriorityRuleFor(personal: true);
 
     // Сколько последних версий показывать у картинки: исходник и текущая видны всегда
     public const int MaxVersionsShown = 8;
@@ -178,25 +167,29 @@ public sealed class ImageEditorStateContributor(
         return $"{head} — вариант {v.Variant}{(prompt is null ? "" : $" запуска «{prompt}»")}, от: {from}{editsText}";
     }
 
+    // Исполнитель в «Чем» хвоста «Контекст хода» — выбор человека, а персонаж и образцы берутся из контекста
+    // чата (в префах проекта персонаж не читается)
     public const string ChoiceRule =
-        "Это выбор человека — не передавай provider/model/character в image_generate, если он сам не просил сменить.";
+        "Исполнитель и модель в «Чем» контекста хода — выбор человека: не передавай provider/model в image_generate, "
+        + "если он сам не просил сменить. Персонаж и образцы бери из контекста хода, а не придумывай.";
 
-    // Фокус остаётся с прошлых сообщений, человек его мог и не выбирать: без оговорки агент
-    // принимал любую следующую просьбу за правку картинки в работе (баг 30.09)
+    // Выбор остаётся с прошлых сообщений, человек его мог и не обновлять: без оговорки агент принимал любую
+    // следующую просьбу за правку картинки из «С чем» (баг 30.09)
     public const string FocusIsNotBindingText =
-        "осталась с прошлых сообщений и не обязывает её продолжать";
+        "выбрана в строке контекста и не обязывает её продолжать";
 
     // Критерий «новая картинка или продолжение той, что в работе» — общий для проекта и личного чата
     public const string NewOrContinueRule =
-        "Новая картинка или продолжение: просьба с новым сюжетом или предметом («нарисуй собаку», "
+        "Картинка в «С чем» " + FocusIsNotBindingText + ". "
+        + "Новая картинка или продолжение: просьба с новым сюжетом или предметом («нарисуй собаку», "
         + "«а теперь закат над морем», «сделай логотип») — всегда image_new и image_generate с threadId "
-        + "нового черновика, даже если другая картинка в работе. image_generate по картинке в работе — "
+        + "нового черновика, даже если другая картинка стоит в «С чем». image_generate по картинке из «С чем» — "
         + "только когда просьба явно про неё и нового сюжета не описывает: «поправь», «ещё вариант», "
         + "«сделай ярче», «убери фон», «как вторую, но…». Сомневаешься — новая картинка.";
 
-    // Выбор в полосе важнее правила проекта о сервисе для картинок (решение Андрея, план 21492bb8)
+    // Выбор человека важнее правила проекта о сервисе для картинок (решение Андрея, план 21492bb8)
     public const string PriorityRule =
-        "Картинки в этом проекте рисуй через image_new → image_generate: они уважают выбор человека в полосе "
+        "Картинки в этом проекте рисуй через image_new → image_generate: они уважают выбор человека в строке контекста "
         + "(включая local — свою видеокарту) и цену. Этот выбор важнее правил проекта о сервисе для картинок. "
         + "Есть в ходе правило хвостовой секции «Картинки и видео: локальная модель по умолчанию» — сервис и provider выбирай по нему; без него "
         + "fal-ai, glif, higgsfield и local-media для картинок — только если человек в своей просьбе прямо назвал этот сервис. "
@@ -205,19 +198,30 @@ public sealed class ImageEditorStateContributor(
     // То же для личного чата вне проекта: local-media там нет, локальная картинка — драйвер local
     // редактора, а черновик человек скачивает, а не сохраняет в проект
     public const string PersonalPriorityRule =
-        "Картинки в этом чате рисуй через image_new → image_generate: они уважают выбор человека в полосе "
-        + "«Картинки» и цену. Просьба нарисовать локально / на своей видеокарте / бесплатно — это "
+        "Картинки в этом чате рисуй через image_new → image_generate: они уважают выбор человека в "
+        + "строке контекста и цену. Просьба нарисовать локально / на своей видеокарте / бесплатно — это "
         + "image_generate с provider local. Есть в ходе правило хвостовой секции «Картинки и видео: локальная модель по умолчанию» — сервис и provider "
         + "выбирай по нему; без него fal-ai, glif и higgsfield для картинок — только если человек "
         + "в своей просьбе прямо назвал этот сервис. Видео, аудио и музыка — как раньше.\n" + NewOrContinueRule;
 
-    // «Выбор человека в полосе «Картинки»: поставщик fal, модель auto, вариантов 2, персонаж anya»
-    public static string ChoiceText(ImageThreadSettings settings, string? character) =>
-        "Выбор человека в полосе «Картинки»: "
-        + $"поставщик {settings.Provider ?? "по умолчанию"}, "
+    public static string PriorityRuleFor(bool personal) => personal ? PersonalPriorityRule : PriorityRule;
+
+    // Выбор человека в строке контекста. С выбором по режимам — оба: «Создать» берёт генерация по тексту,
+    // «Править» — правка (у картинки из «С чем» — её настройки). Персонаж — реф контекста, не префы проекта
+    public static string ChoiceText(Prefs.ImageProjectPrefs prefs, ImageThreadSettings? focused)
+    {
+        if (!prefs.HasModes) return "Выбор человека в строке контекста: " + SettingsText(focused ?? prefs.EditSettings());
+        var edit = SettingsText(focused ?? prefs.EditSettings());
+        var op = prefs.Edit?.Op is { } o ? $", операция {o}" : "";
+        return "Выбор человека в строке контекста: "
+            + $"новая картинка (генерация по тексту) — {SettingsText(prefs.CreateSettings())}; "
+            + $"правка{(focused is null ? "" : " картинки в работе")} — {edit}{op}";
+    }
+
+    private static string SettingsText(ImageThreadSettings settings) =>
+        $"поставщик {settings.Provider ?? "по умолчанию"}, "
         + $"модель {settings.Model ?? ImageEditCatalog.AutoModelId}, "
-        + $"вариантов {settings.Count}, "
-        + $"персонаж {character ?? "не подключён"}";
+        + $"вариантов {settings.Count}";
 
     public static string DraftFolderText(string? folder) =>
         string.IsNullOrEmpty(folder) ? "корень проекта" : $"папку {folder}";

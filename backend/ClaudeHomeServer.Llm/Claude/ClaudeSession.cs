@@ -45,6 +45,13 @@ public class ClaudeSession : ILlmSessionAdapter
             ? LlmProviderRegistry.StripClaudeWindowAlias(model)
             : _subscriptionPool.LaunchModel(model, Info.Provider);
 
+    // Профиль облегчённого контекста сессии (единая точка — LlmProviderRegistry.LightProfileFor):
+    // модель и персона — свойства СЕССИИ, не хода, поэтому состав MCP и сигнатура запуска
+    // стабильны. Тот же резолв в McpToolWhitelist (фильтр tools/list и tools/call). Признак
+    // подмены фолбэком адаптер ставит вместе с подменённой Info.Model (см. LightProfileFor).
+    private LightProfile? LightProfile =>
+        _providers?.LightProfileFor(EffectiveModel, _personaProvider?.Invoke(), Info.FallbackSubstitution);
+
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
     // цепочка нужна оркестратору, чтобы при сбое шагать по ней, а не автоподбирать. Без резолвера
@@ -296,6 +303,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // сайд-эффект конструктора фабрики (глобальное общее состояние на весь процесс).
     private readonly TimeSpan _bgLingerTimeout;
 
+    // Отсечка ожидания эха --replay-user-messages. Эхо CLI отдаёт по приёму сообщения, до вызова
+    // модели, но приём происходит только после старта CLI (на resume — init MCP и загрузка истории:
+    // единицы секунд), а result осиротевшего notification может прийти раньше эха и длиться
+    // секунды. Надёжного признака «эха не будет» по событиям нет: stream_event даёт и сирота, и наш
+    // ход, поэтому выбрано время. Ложное срабатывание (сирота дольше отсечки) лишь возвращает
+    // прежнюю корреляцию SkipResults, молчаливое отсутствие эха без отсечки — ход до IdleTimeout.
+    internal static readonly TimeSpan DefaultEchoCutoff = TimeSpan.FromSeconds(20);
+    internal TimeSpan EchoCutoff { get; set; } = DefaultEchoCutoff;
+
     // Процессный прогон: один запуск claude CLI. Может пережить ход — пока в нём доживают
     // фоновые агенты, процесс не убиваем, а следующий совместимый ход отдаём ему же в stdin
     // (stream-json это штатно поддерживает). Поля мутирует поток чтения stdout (reader);
@@ -368,6 +384,24 @@ public class ClaudeSession : ILlmSessionAdapter
         // контент после TurnDone означает, что продолжение началось. Его result не должен
         // завершать пользовательский ход (см. SkipResults)
         public volatile bool ContinuationActive;
+        // uuid user-сообщения, записанного в stdin, эхо которого (--replay-user-messages) ещё не
+        // пришло. Пока оно не null, любой result — чужой: на resume CLI сначала доигрывает
+        // «осиротевший» task-notification прошлой сессии и выдаёт на него result (numTurns=0),
+        // раньше, чем возьмётся за наше сообщение. Засчитанный ходу, такой result закрывал stdin
+        // под настоящим ходом — «Stream closed» у всех инструментов (инцидент 03.10.2026).
+        // Пишет поток хода под _stdinLock, читает и снимает reader.
+        public volatile string? PendingEchoUuid;
+        // Tick-метка (Environment.TickCount64), после которой отсутствие эха считается признаком
+        // «CLI не эхает» (см. EchoCutoff). Пишет поток хода вместе с PendingEchoUuid.
+        public long EchoDeadlineTick;
+        // Строка result, пропущенная как «до эха»: если эха так и не будет, это мог быть result
+        // нашего хода. Сбрасывается любым событием модели после него (значит ход ещё идёт и
+        // его result придёт отдельно). Читает и пишет только reader.
+        public string? PreEchoResultLine;
+        // Для прогона включён фолбэк «эхо не поддерживается» (0/1): ожидание эха больше не взводится.
+        public int EchoUnsupported;
+        // Второй контур (tool_use при закрытом stdin) сработал — процесс уже гасится
+        public int AnomalyAborted;
         // Сколько ближайших result'ов принадлежит продолжениям, начатым ДО отправки
         // текущего пользовательского хода (инкремент в TrySubmitTurn под _stdinLock,
         // декремент — поток reader'а)
@@ -773,6 +807,24 @@ public class ClaudeSession : ILlmSessionAdapter
     // Инструмент редактора картинок без карточки разрешения: только если сервер едет в этот ход
     internal static bool IsImageEditorAutoAllowed(ImageEditorMcpContext? context, string toolName) =>
         context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
+    // MCP-сервер модуля «Звук»: null — флаг audio-editor выключен или модуль не загружен (ADR-021 §5)
+    private readonly AudioEditorMcpContext? _audioEditorMcp;
+    private bool AudioEditorHttpOn() => _audioEditorMcp is { UseHttp: true } && HttpMcpOnNow();
+
+    internal static bool IsAudioEditorAutoAllowed(AudioEditorMcpContext? context, string toolName) =>
+        context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
+    // MCP-сервер модуля «Видео»: null — флаг video-editor выключен или модуль не загружен (ADR-022 §5)
+    private readonly VideoEditorMcpContext? _videoEditorMcp;
+    private bool VideoEditorHttpOn() => _videoEditorMcp is { UseHttp: true } && HttpMcpOnNow();
+
+    internal static bool IsVideoEditorAutoAllowed(VideoEditorMcpContext? context, string toolName) =>
+        context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
+    // MCP-сервер «Контекст чата»: null — тулсета нет в реестре (ADR-023 §3.2)
+    private readonly TurnContextMcpContext? _turnContextMcp;
+    private bool TurnContextHttpOn() => _turnContextMcp is { UseHttp: true } && HttpMcpOnNow();
+
+    internal static bool IsTurnContextAutoAllowed(TurnContextMcpContext? context, string toolName) =>
+        context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
     // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
     private readonly LocalMediaMcpContext? _localMediaMcp;
     // Локальная генерация: условие как у higgsfield — схема адреса допускает http И рубильник включён
@@ -944,6 +996,9 @@ public class ClaudeSession : ILlmSessionAdapter
         _architectureMcp = context.ArchitectureMcp;
         _higgsfieldMcp = context.HiggsfieldMcp;
         _imageEditorMcp = context.ImageEditorMcp;
+        _audioEditorMcp = context.AudioEditorMcp;
+        _videoEditorMcp = context.VideoEditorMcp;
+        _turnContextMcp = context.TurnContextMcp;
         _localMediaMcp = context.LocalMediaMcp;
         _testsMcp = context.TestsMcp;
         _httpMcpActive = context.HttpMcpActive;
@@ -1027,6 +1082,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasHiggsfield = HiggsfieldHttpOn();
         // Редактор картинок: stdio-ветки нет, контекста нет вне чата картинки
         var hasImageEditor = ImageEditorHttpOn();
+        // Звук: как у редактора картинок — stdio-ветки нет
+        var hasAudioEditor = AudioEditorHttpOn();
+        // Видео: как у звука — stdio-ветки нет
+        var hasVideoEditor = VideoEditorHttpOn();
+        var hasTurnContext = TurnContextHttpOn();
         // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
         var hasLocalMedia = LocalMediaHttpOn();
         // Прогон тестов: stdio-ветки нет, контекста нет у локального проекта и RO-персоны
@@ -1109,11 +1169,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // (на local-qwen по умолчанию ["tasks"]), остальные гасятся выборочно. Пустой список
         // = прежнее «всё или ничего» (гасится всё). Родной Claude и облачные
         // провайдеры не задеты (TrimMcpServers=false по умолчанию).
-        var provider = _providers?.ResolveByModel(EffectiveModel);
-        var trimMcp = provider is { TrimMcpServers: true };
+        var light = LightProfile;
+        var trimMcp = light is { TrimMcpServers: true };
         if (trimMcp)
         {
-            bool Keep(string key) => provider!.KeepMcpServers
+            bool Keep(string key) => light!.KeepMcpServers
                 .Contains(key, StringComparer.OrdinalIgnoreCase);
             hasTasks = hasTasks && Keep("tasks");
             hasNotes = hasNotes && Keep("notes");
@@ -1129,6 +1189,9 @@ public class ClaudeSession : ILlmSessionAdapter
             hasArchitecture = hasArchitecture && Keep("architecture");
             hasHiggsfield = hasHiggsfield && Keep("higgsfield");
             hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
+            hasAudioEditor = hasAudioEditor && Keep(McpEndpoints.AudioEditorName);
+            hasVideoEditor = hasVideoEditor && Keep(McpEndpoints.VideoEditorName);
+            hasTurnContext = hasTurnContext && Keep(McpEndpoints.TurnContextName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasTests = hasTests && Keep(McpEndpoints.TestsName);
             hasDev = hasDev && Keep(McpEndpoints.DevName);
@@ -1141,7 +1204,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasImageEditor && !hasLocalMedia && !hasTests && !hasDev && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -1831,6 +1894,60 @@ public class ClaudeSession : ILlmSessionAdapter
                 shapes[McpEndpoints.ImageEditorName] = "t:http";
             }
 
+            if (hasAudioEditor)
+            {
+                // Модуль «Звук» (ADR-021 §5): тулсет модуля, http-ветка только; сессия — хвостом URL
+                servers[McpEndpoints.AudioEditorName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_audioEditorMcp!.ApiUrl, McpEndpoints.AudioEditorName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_audioEditorMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав — свойство инстанса (AudioEditor:AgentLaunch), вариативен только транспорт
+                shapes[McpEndpoints.AudioEditorName] = "t:http";
+            }
+
+            if (hasVideoEditor)
+            {
+                // Модуль «Видео» (ADR-022 §5): тулсет модуля, http-ветка только; сессия — хвостом URL
+                servers[McpEndpoints.VideoEditorName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_videoEditorMcp!.ApiUrl, McpEndpoints.VideoEditorName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_videoEditorMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав — свойство инстанса (VideoEditor:AgentLaunch), вариативен только транспорт
+                shapes[McpEndpoints.VideoEditorName] = "t:http";
+            }
+
+            if (hasTurnContext)
+            {
+                // Контекст чата (ADR-023 §3.2): тулсет Main, http-ветка только; сессия — хвостом URL
+                servers[McpEndpoints.TurnContextName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_turnContextMcp!.ApiUrl, McpEndpoints.TurnContextName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_turnContextMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (3 инструмента), вариативен только транспорт
+                shapes[McpEndpoints.TurnContextName] = "t:http";
+            }
+
             if (hasLocalMedia)
             {
                 // Локальная генерация (ComfyUI на своей GPU): http-ветка только, stdio-отката нет.
@@ -2056,9 +2173,9 @@ public class ClaudeSession : ILlmSessionAdapter
             // новый блок, добавленный без индивидуальной проверки Keep. Без этого
             // однократная забывчивость навсегда оставляет лишний сервер в конфиге
             // хода и пожирает контекст локальной модели.
-            if (trimMcp && provider is not null)
+            if (trimMcp && light is not null)
             {
-                var allowed = new HashSet<string>(provider.KeepMcpServers, StringComparer.OrdinalIgnoreCase);
+                var allowed = new HashSet<string>(light.KeepMcpServers, StringComparer.OrdinalIgnoreCase);
                 var removed = new List<string>();
                 foreach (var key in servers.Select(kv => kv.Key).ToList())
                 {
@@ -2070,8 +2187,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 if (removed.Count > 0)
                 {
                     _log?.LogWarning(
-                        "TrimMcpServers: у провайдера {Provider} отрезаны серверы {Servers} (нет в KeepMcpServers)",
-                        provider.Key, string.Join(",", removed));
+                        "TrimMcpServers: у профиля {Provider} отрезаны серверы {Servers} (нет в KeepMcpServers)",
+                        light.Source, string.Join(",", removed));
                 }
             }
 
@@ -2584,6 +2701,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // Редактор картинок (ADR-019 §4): действия агента и так видны в ленте, список — из
         // контекста хода, а не из сессии: сервер едет в любой чат проекта
         if (ruleDecision == null && IsImageEditorAutoAllowed(_imageEditorMcp, toolName)) return "allow";
+        // Звук (ADR-021 §5) — так же: запуски видны нитью и карточкой с ценой
+        if (ruleDecision == null && IsAudioEditorAutoAllowed(_audioEditorMcp, toolName)) return "allow";
+        if (ruleDecision == null && IsVideoEditorAutoAllowed(_videoEditorMcp, toolName)) return "allow";
+        if (ruleDecision == null && IsTurnContextAutoAllowed(_turnContextMcp, toolName)) return "allow";
         // План текущего хода (BuiltInTaskPlanTools) — тоже без карточки: побочных эффектов
         // вне сессии у него нет, а спрашивать пришлось бы на КАЖДЫЙ шаг плана. В голосовом
         // режиме и hands-free отвечать на такую карточку вовсе некому — ход завис бы в
@@ -2745,7 +2866,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Отдать ход живому процессу доживающего прогона (same-process ход). false — прогон
     // непригоден (умер/stdin закрыт/запись сорвалась): ход пойдёт новым процессом
-    private bool TrySubmitTurn(CliRun run, string userMessageJson, long turnSeq)
+    private bool TrySubmitTurn(CliRun run, string userMessageJson, long turnSeq, string turnUuid)
     {
         _stdinLock.Wait();
         try
@@ -2781,6 +2902,7 @@ public class ClaudeSession : ILlmSessionAdapter
             run.TurnDone = false;
             run.TurnGotEvent = false;       // новый ход — событий прогона ещё не было
             run.RetryOnEmptyExit = true;    // same-process: смерть до первого события = гонка TOCTOU
+            ArmEchoWait(run, turnUuid); // result'ы до эха этого сообщения — чужие
             run.Process.StandardInput.WriteLine(userMessageJson);
             run.Process.StandardInput.Flush();
             return true;
@@ -2887,6 +3009,9 @@ public class ClaudeSession : ILlmSessionAdapter
             "--output-format", "stream-json",
             "--input-format", "stream-json",
             "--include-partial-messages",
+            // Эхо нашего user-сообщения (isReplay + тот же uuid) — подтверждение, что CLI взялся
+            // именно за него: result'ы до эха принадлежат чужим ходам (см. PendingEchoUuid)
+            "--replay-user-messages",
             "--permission-prompt-tool", "stdio"
         };
 
@@ -2956,22 +3081,26 @@ public class ClaudeSession : ILlmSessionAdapter
         // раньше --bare ломал OAuth-авторизацию, и BareMode был безопасен «структурно» —
         // включался только для не-родных провайдеров. Переменной окружения этот риск не
         // грозит, но проверку в коде пока НЕ снимаем (лишняя работа для этой задачи).
+        // Провайдер модели остаётся нужен тем осям, что привязаны к нему, а не к режиму
+        // (подсказки следующего сообщения ниже); карта и BareTools — от профиля облегчённого контекста.
         var bareProvider = _providers?.ResolveByModel(EffectiveModel);
-        if (bareProvider is { BareMode: true })
+        var bareLight = LightProfile;
+        if (bareLight is { BareMode: true })
         {
             try
             {
                 var bareArgs = BuildBareModeArgs(
                     _rootPath, _serverContentRoot,
-                    bareProvider.SystemPromptFile ?? "",
-                    bareProvider.BareTools,
+                    bareLight.SystemPromptFile ?? "",
+                    bareLight.BareTools,
                     _launcher.Paths,
                     // BareMode-диагностика — под категорией ClaudeSession, не фабрики
                     // (см. поле _sessionLog). Тесты без DI передают null — fallback на _log.
                     _sessionLog ?? (ILogger?)_log,
                     out var bareWarning,
                     out _lastBareModeApplied,
-                    out _lastBareModeMapBytes);
+                    out _lastBareModeMapBytes,
+                    bareLight.ServerMapFallback);
                 if (bareWarning is not null)
                     Console.Error.WriteLine($"[ClaudeSession] {bareWarning}");
                 args.AddRange(bareArgs);
@@ -3005,8 +3134,8 @@ public class ClaudeSession : ILlmSessionAdapter
             if (!_lastBareModeApplied)
             {
                 Console.Error.WriteLine(
-                    $"[ClaudeSession] BareMode НЕ применён (провайдер {bareProvider.Key}, " +
-                    $"SystemPromptFile={bareProvider.SystemPromptFile ?? "<empty>"}). " +
+                    $"[ClaudeSession] BareMode НЕ применён (профиль {bareLight.Source}, " +
+                    $"SystemPromptFile={bareLight.SystemPromptFile ?? "<empty>"}). " +
                     $"CLI получит полную CLAUDE.md проекта — локальный исполнитель может " +
                     $"не уложиться в окно. Проверьте наличие файла карты в поставке.");
             }
@@ -3121,7 +3250,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // побайтово неизменным, иначе prefix cache движка рвёт кэш всей истории), а
         // копятся здесь и уезжают хвостом — вклейкой в текст хода. Признак берём от
         // провайдера СЕССИИ, как BareMode: сигнатура запуска остаётся стабильной.
-        var recallInTurnText = _providers?.ResolveByModel(EffectiveModel) is { RecallInTurnText: true };
+        var recallInTurnText = LightProfile is { RecallInTurnText: true };
         List<PromptSectionDto> turnRecallSections = [];
         // Секции PromptSection.InTurnTail: хвостом при любом провайдере, ближе всего к тексту хода
         List<PromptSectionDto> alwaysTailSections = [];
@@ -3196,6 +3325,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasImageEditorMcp: _imageEditorMcp is not null && McpDelivered(McpEndpoints.ImageEditorName),
                     HasTestsMcp: _testsMcp is not null && McpDelivered(McpEndpoints.TestsName),
                     HasDevMcp: _testsMcp is not null && McpDelivered(McpEndpoints.DevName),
+                    HasAudioEditorMcp: _audioEditorMcp is not null && McpDelivered(McpEndpoints.AudioEditorName),
+                    HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth));
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
@@ -3966,9 +4097,11 @@ public class ClaudeSession : ILlmSessionAdapter
             blocks.AddRange(imageBlocks);
             content = blocks;
         }
+        var turnUuid = Guid.NewGuid().ToString();
         var userMessageJson = JsonSerializer.Serialize(new
         {
             type = "user",
+            uuid = turnUuid,
             message = new { role = "user", content }
         });
 
@@ -3985,7 +4118,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // переживают смену хода. Собранный temp MCP-конфиг не пригодился — убираем.
         var existing = _run;
         if (existing is not null && existing.TurnDone && existing.Signature == signature && GatewayTokenAlive(existing)
-            && TrySubmitTurn(existing, userMessageJson, turnSeq))
+            && TrySubmitTurn(existing, userMessageJson, turnSeq, turnUuid))
         {
             Console.WriteLine("[ClaudeSession] Ход отдан живому процессу прогона (фоновые агенты доживают)");
             // Same-process submit НЕ гарантирован durable (процесс доживает, запись в .jsonl
@@ -4161,6 +4294,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 else
                 {
+                    ArmEchoWait(run, turnUuid);
                     await process.StandardInput.WriteLineAsync(userMessageJson);
                     await process.StandardInput.FlushAsync();
                 }
@@ -4223,7 +4357,20 @@ public class ClaudeSession : ILlmSessionAdapter
                 using (var delayCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     var timeout = WatchdogFor(run);
+                    var echoLeft = EchoWaitLeft(run);
+                    var echoTimer = echoLeft is { } el && el < timeout;
+                    if (echoTimer) timeout = echoLeft!.Value;
                     var completed = await Task.WhenAny(pendingRead, Task.Delay(timeout, delayCts.Token));
+                    // Delay связан с ct: отмена сессии (dispose/рестарт) завершает его мгновенно и
+                    // выглядит как «тишина». Это не молчание модели — ошибку не шлём, уборку сделает finally
+                    if (completed != pendingRead && ct.IsCancellationRequested)
+                        break;
+                    if (completed != pendingRead && echoTimer)
+                    {
+                        // Не тишина, а отсечка ожидания эха — чтение держим
+                        await FallbackNoEchoAsync(run);
+                        continue;
+                    }
                     if (completed != pendingRead)
                     {
                         // Тишина дольше таймаута. Пока ждали, мог начаться same-process ход —
@@ -4928,11 +5075,27 @@ public class ClaudeSession : ILlmSessionAdapter
         ILogger? logger,
         out string? warning,
         out bool bareModeEffective,
-        out long mapBytes)
+        out long mapBytes,
+        bool serverMapFallback = true)
     {
         warning = null;
         bareModeEffective = false;
         mapBytes = 0;
+        // Профиль без серверной карты (общий LightProfile персоны): серверный SystemPromptFile —
+        // карта НАШЕГО репозитория, для персоны в чужом проекте это неверный контекст. Нет
+        // собственной docs/CLAUDE-local.md проекта — ход идёт БЕЗ карты, но автозагрузка
+        // CLAUDE.md всё равно отключена и инструменты урезаны: облегчение не зависит от карты.
+        if (!serverMapFallback)
+        {
+            var projectMap = Path.Combine(projectRoot, "docs", "CLAUDE-local.md");
+            if (File.Exists(projectMap) && new FileInfo(projectMap).Length <= ProjectMapSizeLimit)
+                return BuildBareModeArgs(projectRoot, serverContentRoot, projectMap, bareTools,
+                    paths, logger, out warning, out bareModeEffective, out mapBytes);
+            logger?.LogInformation(
+                "BareMode: у проекта нет docs/CLAUDE-local.md, серверная карта не подставляется — ход без карты");
+            bareModeEffective = true;
+            return bareTools is { Length: > 0 } ? BuildToolsArg(bareTools) : [];
+        }
         // BareMode без файла карты: --system-prompt-file без карты оставил бы модель
         // БЕЗ явной карты проекта. Асимметрия с веткой «файл не найден» ниже
         // (она снимает всё с warning) была неоправданна — модель идёт без
@@ -5067,6 +5230,94 @@ public class ClaudeSession : ILlmSessionAdapter
             $"[ClaudeSession][corr] {ev} sid={sid} turnDone={run?.TurnDone} "
             + $"skip={(run is null ? -1 : Volatile.Read(ref run.SkipResults))} "
             + $"cont={run?.ContinuationActive} bg={run?.HasPendingBg} numTurns={nt}");
+    }
+
+    // Второй контур: ход закончен и stdin закрыт, а основной агент всё равно зовёт инструмент.
+    // Ответить на can_use_tool уже некуда («Stream closed» на каждый вызов), процесс будет
+    // часами крутить инструменты вхолостую при «завершённом» ходе в UI (инцидент 03.10.2026).
+    // Гасим процесс и говорим об этом честной ошибкой.
+    private async Task<bool> AbortOnToolUseAfterStdinClosedAsync(CliRun run, JsonElement root)
+    {
+        if (!IsToolUseAfterStdinClosed(run.TurnDone, run.StdinClosed, root)) return false;
+        if (Interlocked.Exchange(ref run.AnomalyAborted, 1) == 1) return true;
+        CorrTrace("anomaly-tool-use-after-close", Info.Id, run, root);
+        Console.Error.WriteLine(
+            $"[ClaudeSession] Инструмент при закрытом stdin после завершённого хода — гасим процесс (session {Info.Id})");
+        _launcher.Kill(run.Process, run.LaunchTurnId);
+        await _onMessage(new ErrorMessage(
+            "Процесс агента продолжал вызывать инструменты после завершения хода, когда ответить на запрос прав уже было нельзя; он остановлен. Отправьте сообщение ещё раз.",
+            Details: "tool_use при TurnDone && StdinClosed"));
+        return true;
+    }
+
+    internal static bool IsToolUseAfterStdinClosed(bool turnDone, bool stdinClosed, JsonElement root)
+    {
+        if (!turnDone || !stdinClosed || HasParentToolUseId(root)) return false;
+        if (!root.TryGetProperty("message", out var msg) || !msg.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.Array) return false;
+        foreach (var b in content.EnumerateArray())
+            if (b.TryGetProperty("type", out var t) && t.GetString() == "tool_use") return true;
+        return false;
+    }
+
+    // Взвести ожидание эха нашего сообщения; на прогоне, где CLI уже уличён в отсутствии эха, не взводим
+    private void ArmEchoWait(CliRun run, string turnUuid)
+    {
+        if (Volatile.Read(ref run.EchoUnsupported) == 1) return;
+        run.PreEchoResultLine = null;
+        Volatile.Write(ref run.EchoDeadlineTick, Environment.TickCount64 + (long)EchoCutoff.TotalMilliseconds);
+        run.PendingEchoUuid = turnUuid;
+    }
+
+    // Сколько ещё ждать эха; null — эха не ждём
+    private static TimeSpan? EchoWaitLeft(CliRun run)
+    {
+        if (run.PendingEchoUuid is null) return null;
+        var left = Volatile.Read(ref run.EchoDeadlineTick) - Environment.TickCount64;
+        return TimeSpan.FromMilliseconds(Math.Max(0, left));
+    }
+
+    // Отсечка вышла, эха нет: CLI не эхает (обновление могло убрать флаг молча). Включаем прежнюю
+    // корреляцию (SkipResults/TurnDone) на этом прогоне; result, пропущенный как «до эха» и не
+    // сопровождённый событиями модели, был result нашего хода — доигрываем его. Зовёт только reader.
+    private async Task FallbackNoEchoAsync(CliRun run)
+    {
+        if (run.PendingEchoUuid is null) return;
+        run.PendingEchoUuid = null;
+        if (Interlocked.Exchange(ref run.EchoUnsupported, 1) == 0)
+        {
+            ClaudeCliVersion.TryGetKnown(out var version);
+            (_sessionLog ?? (ILogger?)_log)?.LogError(
+                "CLI не прислал эхо --replay-user-messages за {Cutoff} с (версия CLI {Version}, сессия {SessionId}): корреляция result через эхо отключена для этого прогона",
+                EchoCutoff.TotalSeconds, version ?? "неизвестна", Info.Id);
+        }
+        CorrTrace("echo-fallback", Info.Id, run);
+        if (run.PreEchoResultLine is { } stash)
+        {
+            run.PreEchoResultLine = null;
+            await ProcessLineAsync(run, stash);
+        }
+    }
+
+    internal static bool IsOurEcho(JsonElement root, string uuid)
+        => root.TryGetProperty("isReplay", out var rp) && rp.ValueKind == JsonValueKind.True
+           && root.TryGetProperty("uuid", out var u) && u.ValueKind == JsonValueKind.String
+           && u.GetString() == uuid;
+
+    // Диагностика промаха IsEmptyNoopResult (инцидент 03.10.2026): result с numTurns=0, который
+    // эвристика пустого результата не отсеяла и который засчитан ходу. Сырой result не
+    // логировался — без subtype/usage/denials не видно, какое именно поле его «наполнило».
+    private void LogZeroTurnResult(JsonElement root)
+    {
+        if (!root.TryGetProperty("num_turns", out var n) || n.ValueKind != JsonValueKind.Number || n.GetInt32() != 0)
+            return;
+        string Raw(string name) => root.TryGetProperty(name, out var v) ? v.GetRawText() : "-";
+        var denials = Raw("permission_denials");
+        Console.WriteLine(
+            $"[ClaudeSession][corr] zero-turn-result sid={Info.Id} subtype={Raw("subtype")} "
+            + $"is_error={Raw("is_error")} api_error_status={Raw("api_error_status")} "
+            + $"session_id={Raw("session_id")} usage={Raw("usage")} "
+            + $"permission_denials={(denials.Length > 400 ? denials[..400] : denials)}");
     }
 
     // run — прогон-владелец read-loop'а, из которого пришла строка. Корреляцию ведём по нему,
@@ -5260,6 +5511,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "stream_event":
+                if (!HasParentToolUseId(root)) run.PreEchoResultLine = null;
                 // Контент ОСНОВНОГО агента после конца хода — CLI начал ход-продолжение
                 // (ответ на task-notification); его result не должен завершить будущий ход
                 // (см. case "result"). Сообщения сабагентов (parent_tool_use_id) — это стрим
@@ -5273,11 +5525,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "assistant":
+                if (!HasParentToolUseId(root)) run.PreEchoResultLine = null;
                 if (run is { TurnDone: true, ContinuationActive: false } && !HasParentToolUseId(root))
                 {
                     CorrTrace("continuation-start(assistant)", Info.Id, run, root);
                     run.ContinuationActive = true;
                 }
+                if (await AbortOnToolUseAfterStdinClosedAsync(run, root)) break;
                 TrackContextTokens(root);
                 await HandleAssistantToolsAsync(run, root);
                 break;
@@ -5302,6 +5556,19 @@ public class ClaudeSession : ILlmSessionAdapter
                         CloseStdinIfIdle(contRun);
                         break;
                     }
+                    if (contRun.PendingEchoUuid is not null)
+                    {
+                        // Наше сообщение ещё не принято CLI (эха нет) — это result «осиротевшего»
+                        // task-notification или продолжения. Он же гасит один пропуск SkipResults:
+                        // это то же самое событие, второй раз его не считаем.
+                        CorrTrace("result-skip(preEcho)", Info.Id, contRun, root);
+                        LogZeroTurnResult(root);
+                        contRun.PreEchoResultLine = root.GetRawText();
+                        if (Volatile.Read(ref contRun.SkipResults) > 0) Interlocked.Decrement(ref contRun.SkipResults);
+                        contRun.ContinuationActive = false;
+                        Console.WriteLine("[ClaudeSession] Result до эха нашего сообщения (чужой ход CLI) — пропущен");
+                        break;
+                    }
                     if (Volatile.Read(ref contRun.SkipResults) > 0)
                     {
                         CorrTrace("result-skip(skipResults)", Info.Id, contRun, root);
@@ -5310,6 +5577,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         break;
                     }
                     CorrTrace("result-emit", Info.Id, contRun, root);
+                    LogZeroTurnResult(root);
                 }
                 var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() ?? "success" : "success";
                 // Числа читаем через безопасные хелперы: openrouter-совместимый поток шлёт
@@ -5428,6 +5696,17 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "user":
+                // Эхо нашего сообщения: CLI взялся за него — всё, что было до, не наше.
+                // Остальные isReplay-строки идут штатным путём (учёт task-notification).
+                if (run.PendingEchoUuid is { } pendingUuid && IsOurEcho(root, pendingUuid))
+                {
+                    CorrTrace("echo", Info.Id, run, root);
+                    run.PendingEchoUuid = null;
+                    run.PreEchoResultLine = null;
+                    Volatile.Write(ref run.SkipResults, 0);
+                    run.ContinuationActive = false;
+                    break;
+                }
                 await HandleUserMessageAsync(run, root);
                 break;
 

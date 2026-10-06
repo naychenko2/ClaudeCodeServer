@@ -1,6 +1,10 @@
 <Solution>
   <Project Path="ClaudeHomeServer/ClaudeHomeServer.csproj" />
   <Project Path="ClaudeHomeServer.Architecture/ClaudeHomeServer.Architecture.csproj" />
+  <Project Path="ClaudeHomeServer.AudioEditor/ClaudeHomeServer.AudioEditor.csproj" />
+  <Project Path="ClaudeHomeServer.AudioEditor.Tests/ClaudeHomeServer.AudioEditor.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.VideoEditor/ClaudeHomeServer.VideoEditor.csproj" />
+  <Project Path="ClaudeHomeServer.VideoEditor.Tests/ClaudeHomeServer.VideoEditor.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Backgrounds/ClaudeHomeServer.Backgrounds.csproj" />
   <Project Path="ClaudeHomeServer.Changelog/ClaudeHomeServer.Changelog.csproj" />
   <Project Path="ClaudeHomeServer.Changelog.Tests/ClaudeHomeServer.Changelog.Tests.csproj" />

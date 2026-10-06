@@ -24,7 +24,10 @@ public sealed partial class ImageEditorToolset
 
     // Значения в тех же строках, что уходят по REST (enum'ы camelCase)
     private static readonly string[] Modes = ["auto", "fast", "precise", "photoreal"];
-    private static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale", "enhanceFaces"];
+    // Операции, берущие образцы-референсы (контекст чата): у остальных образцов нет
+    internal static readonly string[] RefOps = ["generate", "edit", "inpaint"];
+
+    internal static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale", "enhanceFaces"];
     private static readonly string[] Roles = ["character", "style", "object"];
 
     private static JsonArray StrEnum(params string[] values)
@@ -49,7 +52,7 @@ public sealed partial class ImageEditorToolset
     }
 
     private const string NotWithoutAsk =
-        "Не указывай без просьбы человека — по умолчанию берётся выбор из полосы «Картинки»";
+        "Не указывай без просьбы человека — по умолчанию берётся выбор человека из строки контекста";
 
     private static JsonObject Count() => new()
     {
@@ -69,7 +72,7 @@ public sealed partial class ImageEditorToolset
 
         new(ToolFocus,
             "Берёт картинку в работу — человек увидит в ленте строку «Claude взял в работу: …» и "
-            + "полосу «Картинки» над полем ввода. threadId — картинка этого чата из image_state; file — "
+            + "в строке контекста над полем ввода. threadId — картинка этого чата из image_state; file — "
             + "путь картинки проекта (нить по нему заведётся или найдётся; только в чате проекта); без обоих — снять выбор. "
             + "versionId вместе с threadId — ещё и сделать эту версию текущей: от неё пойдёт следующая правка. "
             + "Денег не тратит.",
@@ -93,7 +96,7 @@ public sealed partial class ImageEditorToolset
             "Сразу запускает генерацию в картинку threadId — без вопроса человеку, это тратит деньги. "
             + "threadId обязателен: человек мог сменить картинку посреди хода. У черновика без файла "
             + "рисует новую по тексту. Поставщик, модель, число вариантов и персонаж по умолчанию — "
-            + "выбор человека в полосе «Картинки»: не передавай их без его просьбы. Не больше двух запусков "
+            + "выбор человека в строке контекста: не передавай их без его просьбы. Не больше двух запусков "
             + "за ход. Основа правки — текущая версия картинки или versionId («поправь вторую»). Возвращает "
             + "{ jobId, threadId, baseVersion, quote }. Каждый вариант станет новой версией внизу ленты; "
             + "сохранить в проект (или скачать) может только человек.",
@@ -111,14 +114,17 @@ public sealed partial class ImageEditorToolset
                 ["references"] = new JsonObject
                 {
                     ["type"] = "array",
-                    ["description"] = "Образцы: пути файлов проекта с ролями; только в чате проекта",
+                    ["description"] = "Образцы: пути файлов проекта с ролями; только в чате проекта. "
+                        + "Не передан — берутся образцы контекста чата (если у человека включена строка контекста); "
+                        + "пустой массив — без образцов",
                     ["items"] = Obj(new JsonObject
                     {
                         ["path"] = Str("Путь от корня проекта"),
                         ["role"] = OneOf(Roles, "Роль образца"),
                     }, "path", "role"),
                 },
-                ["character"] = Str("Персонаж проекта (slug папки characters/; только в чате проекта). " + NotWithoutAsk),
+                ["character"] = Str("Персонаж проекта (slug папки characters/; только в чате проекта). "
+                    + "Не передан — персонаж из контекста чата, пустая строка — без персонажа. " + NotWithoutAsk),
                 ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края, улучшить лица (enhanceFaces, "
                     + "только local); по умолчанию — правка, а у новой картинки без файла — generate"),
                 ["matchSourceSize"] = new JsonObject

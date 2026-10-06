@@ -23,6 +23,11 @@ public class ComfyWorkflowsTests
         "ModelPatchLoader", "LoadVideo", "GetVideoComponents", "LoadImageMask", "MiniMaxH3FunControlNetApply",
         "MiniMaxH3ReferenceToVideo", "LoadAudio", "GrowMask", "MaskToImage", "ImageBlur", "ImageToMask",
         "ImageFromBatch", "ImageCompositeMasked",
+        // Аудио (ADR-020): музыка нативными нодами, остальное — узел CcsAudioWorker
+        "ModelSamplingAuraFlow", "DualCLIPLoader", "TextEncodeAceStepAudio1.5", "ConditioningZeroOut",
+        "EmptyAceStep1.5LatentAudio", "SaveAudioMP3", "CheckpointLoaderSimple", "YuE2GenerateABC", "YuE2GenerateMusic",
+        "EmptyYuE2LatentAudio", "PreviewAny", "MiniMaxMusic3TextEncode", "EmptyMiniMaxMusic3LatentAudio",
+        "VAEDecodeAudioTiled", "CcsAudioWorker", "AudioEncoderLoader", "SheetSage2AudioToABC",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -131,6 +136,14 @@ public class ComfyWorkflowsTests
             ("r2v-images", ComfyWorkflows.ReferenceToVideo("a", ["x.png"], [], [], 1344, 768, 124, false, 1, "p")),
             ("r2v-all", ComfyWorkflows.ReferenceToVideo("a", Enumerable.Range(0, 9).Select(i => $"r{i}.png").ToList(),
                 ["v1.mp4", "v2.mp4", "v3.mp4"], ["a1.wav", "a2.wav", "a3.wav"], 768, 1344, 243, true, 1, "p")),
+            ("music-ace", ComfyWorkflows.AceMusic("rock", "[Verse]\nла", 180, "ru", 96, "A minor", 1, "p")),
+            ("music-ace-instrumental", ComfyWorkflows.AceMusic("ambient", "", 30, "unknown", 70, "C major", 1, "p")),
+            ("music-yue2", ComfyWorkflows.YuE2Music("pop", "[Verse]\nла", null, 120, 1, "p")),
+            ("music-yue2-abc", ComfyWorkflows.YuE2Music("pop", "[Verse]\nла", "X:1\nK:C\nCDEF|", 120, 1, "p")),
+            ("music-minimax", ComfyWorkflows.MiniMaxMusic("lofi", "[Verse]\nла", 120, 1, "p")),
+            ("music-yue2-cover", ComfyWorkflows.YuE2Cover("folk", "[Verse]\nла", "ccs-local-media/lm_1-src.mp3", 60, 1, "p")),
+            ("audio-worker", ComfyWorkflows.AudioWorker("separate", new JsonObject { ["mode"] = "vocals" },
+                ["ccs-local-media/lm_1-src.wav"], "lm_1", 30)),
         }.Select(g => new object[] { g.Name, g.Graph });
 
     [Theory]
@@ -147,6 +160,17 @@ public class ComfyWorkflowsTests
     public void ВсеШаблоны_ПроходятСхемуНодСтенда(string name, JsonObject wf)
     {
         ComfyGraphValidator.Validate(wf, ComfyReferenceFiles.ObjectInfo()).Should().BeEmpty(name);
+    }
+
+    // Белый список операций живёт в двух местах: WorkerOps бэкенда и OPS узла CcsAudioWorker
+    // (deploy/comfyui/audio). Разошлись — операция бэкенда упадёт в ComfyUI «Value not in list»
+    [Fact]
+    public void АудиоВоркер_ОперацииБэкендаСовпадаютСУзлом()
+    {
+        var node = ComfyReferenceFiles.ObjectInfo()["CcsAudioWorker"]!["input"]!["required"]!["op"]![0]!.AsArray()
+            .Select(v => v!.GetValue<string>());
+
+        node.Should().BeEquivalentTo(ComfyWorkflows.WorkerOps);
     }
 
     [Fact]

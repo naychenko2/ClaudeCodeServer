@@ -8,7 +8,7 @@ import { api, openChatById, showToast } from 'aihome_shell/kit';
 import type { ImageEditorOpenRequest } from '../../../lib/subsystems/registryCore';
 import type { Session } from '../../../types';
 import { createDraft, workWithFile } from '../thread/actions';
-import { ensureThreads, getThreadsState, openEditor, requestImageMode } from '../thread/threadStore';
+import { ensureThreads, getThreadsState, openEditor } from '../thread/threadStore';
 
 // Последний активный чат: самый свежий по updatedAt среди неархивных
 export function lastActiveChat(list: Session[]): Session | null {
@@ -35,8 +35,6 @@ export async function openFromTree(req: ImageEditorOpenRequest): Promise<void> {
       ? await workWithFile(projectId, chat.id, target.path)
       : await createDraft(projectId, chat.id, target.folder);
     if (!ok) return;
-    // Поле ввода открытого чата сразу в режиме «Картинка»: вход из дерева — это правка картинки
-    requestImageMode(chat.id);
     if (!await openChatById(chat.id)) return;
     const focus = getThreadsState(chat.id).focus;
     if (target.kind === 'edit' && focus) openEditor(chat.id, focus);

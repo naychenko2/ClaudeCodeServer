@@ -13,8 +13,22 @@ public static class LocalMediaOps
     public const string VideoInpaint = "video_inpaint";
     public const string ReferenceToVideo = "reference_to_video";
 
+    // Аудио: музыка — нативными нодами ComfyUI, остальное — venv-воркерами через узел CcsAudioWorker
+    public const string MusicGenerate = "music_generate";
+    public const string MusicEdit = "music_edit";
+    public const string Speech = "speech";
+    public const string VoiceConvert = "voice_convert";
+    public const string VoiceTrain = "voice_train";
+    public const string AudioSeparate = "audio_separate";
+    public const string AudioToMidi = "audio_to_midi";
+    public const string AudioEnhance = "audio_enhance";
+    public const string Transcribe = "transcribe";
+
+    public static bool IsAudio(string? op) => op is MusicGenerate or MusicEdit or Speech or VoiceConvert or VoiceTrain
+        or AudioSeparate or AudioToMidi or AudioEnhance or Transcribe;
+
     public static bool IsKnown(string? op) => op is GenerateImage or EditImage or FaceDetail or ImageToVideo
-        or TextToVideo or VideoUpscale or VideoInpaint or ReferenceToVideo;
+        or TextToVideo or VideoUpscale or VideoInpaint or ReferenceToVideo || IsAudio(op);
 
     // Видео, чей латент сохраняется и годится для апскейла
     public static bool KeepsLatent(string? op) => op is TextToVideo or ImageToVideo;
@@ -83,6 +97,9 @@ public sealed class LocalMediaJob
     public double? RunSeconds { get; set; }
     public int? Steps { get; set; }
     public List<string>? CachedNodes { get; set; }
+    // Аудио: движок (ace, yue2, qwen, rvc…) и длина входного звука, с — для статистики и ETA
+    public string? Engine { get; set; }
+    public double? InputSeconds { get; set; }
 }
 
 // Задачи локальной генерации: data/local-media-jobs.json. Переживает рестарт бэкенда, пока

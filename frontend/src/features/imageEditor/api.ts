@@ -84,6 +84,9 @@ export interface ImageEditQuoteRequest {
   hasAnnotations?: boolean;
   // Запрос просит стереть отмеченное кистью
   removal?: boolean;
+  // Чат и ревизия контекста (ADR-023 §Д2.1): с ревизией сервер берёт образцы, персонажа и размер из стора
+  sessionId?: string | null;
+  contextRevision?: number | null;
 }
 
 export interface ImageEditEstimate {
@@ -164,6 +167,8 @@ export interface ImageEditJobInput {
   baseStepId?: string;
   // Версия нити, от которой правка (не передана — текущая); без source сервер сам берёт её картинку
   versionId?: string;
+  // Ревизия контекста чата (ADR-023 §Д2.1): сервер берёт входы из стора, не совпала — 409 context_changed
+  contextRevision?: number;
 }
 
 export interface ImageEditUploadedReference { file: Blob; name: string; role: ReferenceRole }
@@ -196,6 +201,7 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.threadId) form.append('threadId', input.threadId);
   if (input.baseStepId) form.append('baseStepId', input.baseStepId);
   if (input.versionId) form.append('versionId', input.versionId);
+  if (input.contextRevision != null) form.append('contextRevision', String(input.contextRevision));
   return form;
 }
 
@@ -339,6 +345,8 @@ export interface ImageEditorApi {
   catalog(projectId: string): Promise<ImageEditCatalog>;
   quote(projectId: string, req: ImageEditQuoteRequest): Promise<ImageEditQuote>;
   startJob(projectId: string, input: ImageEditJobInput): Promise<{ jobId: string }>;
+  // Образец с диска человека в рабочую папку модуля; дальше он встаёт в контекст чата ref'ом {upload}
+  uploadSample(projectId: string, file: Blob, name: string): Promise<{ uploadId: string }>;
   getJob(projectId: string, jobId: string): Promise<ImageEditJob>;
   cancelJob(projectId: string, jobId: string): Promise<ImageEditJob>;
   // URL варианта для <img>: токен через ?access_token=, тег заголовков не шлёт
@@ -383,6 +391,11 @@ const liveApi: ImageEditorApi = {
     request<ImageEditQuote>(`${base(projectId)}/quote`, { method: 'POST', body: JSON.stringify(req), timeoutMs: 60_000 }),
   startJob: (projectId, input) =>
     request<{ jobId: string }>(`${base(projectId)}/jobs`, { method: 'POST', body: jobForm(input), timeoutMs: 120_000 }),
+  uploadSample: (projectId, file, name) => {
+    const form = new FormData();
+    form.append('file', file, name);
+    return request<{ uploadId: string }>(`${base(projectId)}/uploads`, { method: 'POST', body: form, timeoutMs: 120_000 });
+  },
   getJob: (projectId, jobId) =>
     request<ImageEditJob>(`${base(projectId)}/jobs/${encodeURIComponent(jobId)}`, { live: true }),
   cancelJob: (projectId, jobId) =>
@@ -536,6 +549,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       quotes.set(quote.quoteId, { ...quote, count: req.count });
       return delay(quote, p.key === 'fal' ? 120 : 300);
     },
+    uploadSample: async () => delay({ uploadId: `up${++seq}` }),
     startJob: async (projectId, input) => {
       const q = quotes.get(input.quoteId);
       if (!q) throw Object.assign(new Error('Котировка устарела'), { status: 404, body: { code: 'quote_not_found' } });

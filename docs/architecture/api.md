@@ -165,6 +165,163 @@ initiator, baseVersionId } }` — один на запуск; его верси�
 `save` — только человек: у агента такого MCP-инструмента нет (ADR-019, решение 1). Ручек чата
 картинки v2 (`image-editor/chats*`) больше нет.
 
+## Редактор звука (модуль `audioeditor`)
+
+Ручки модуля [ClaudeHomeServer.AudioEditor](../../backend/ClaudeHomeServer.AudioEditor/CLAUDE.md),
+решения — [ADR-021](../adr/ADR-021-audio-editor-and-generation-panel.md). Гейт один на все
+(`AudioEditScopeGate`): флаг `audio-editor` выключен, проект или чат чужой — `404`; модуль выключен
+конфигом — ручек нет (`404`). Ошибки — `{ error, code }`; коды: `invalid_request` — 400,
+`provider_unavailable`, `name_taken`, `revision_conflict`, `voice_clone_stale`, `voice_clone_missing` —
+409 (у протухшего клона ещё `recreate` — котировка пересоздания), `quote_not_found`, `thread_not_found`,
+`version_not_found`, `file_not_found`, `voice_not_found` — 404, `too_many_jobs`, `heavy_busy` — 429,
+`unavailable`, `dsp_unavailable` — 503.
+
+Области две, тела ручек общие (`AudioEditorEndpoints`): проект — база
+`/api/projects/{id}/audio-editor`, чат проекта — `…/sessions/{sid}`; личный чат вне проекта — база
+`/api/audio-editor/chats/{sid}` с теми же хвостами. У личной области нет сохранения в проект, «Голосов»,
+local и путей файлов проекта — отказ до диска.
+
+```
+GET                 …/catalog                          → поставщики, модели, caps, причины серых
+GET                 …/prefs                            → { voice, music, process } — выбор в полосе по режимам
+PUT                 …/prefs/{mode}                     { operation, provider, model, count, fields, inputs } → audio_prefs_changed
+POST                …/quote                            { mode, operation?, provider?, model?, count?, voiceKind?, sessionId?, threadId?,
+                                                       text?, prompt?, lyrics?, durationSec?, fields? } → котировка на 10 минут
+POST                …/jobs                             multipart: quoteId, sessionId? + threadId? [+ baseVersionId?], text, prompt,
+                                                       lyrics, language, durationSec, startSec, endSec, seed, params, reference |
+                                                       referencePath, clips | clipPaths, voiceModelPath, voiceIndexPath, voice
+                                                       (voice:<slug>) → 202 задача; тело до 500 МиБ
+GET/DELETE          …/jobs/{jobId}                     → задача / отмена
+GET                 /api/audio-editor/schema?provider=&model=&op=   → схема «Дополнительно» модели
+```
+
+Запуск — только по котировке и ровно на её паре «поставщик + модель». Текст, подводка, слова,
+длительность и итог `params` запуска обязаны совпасть с котированными: иначе `400 invalid_request`
+«Котировка не соответствует запросу — запросите цену заново», котировка при этом не сгорает.
+
+**Нити чата** (база чата: `…/sessions/{sid}` у проекта, `/api/audio-editor/chats/{sid}` у личного).
+Мутации несут `revision`: устарела — `409 revision_conflict`; ответ мутации — полное состояние.
+
+```
+GET                 …/state                            → { threads, catalog, prefs } одним запросом
+GET                 …/threads                          → { focus, revision, threads[] }
+POST                …/threads                          { file? | draftFolder?, mode?, revision } — взять звук в работу
+PUT                 …/threads/focus                    { threadId | null, revision }
+DELETE              …/threads/{threadId}?revision=     убрать нить без версий и идущих запусков
+PUT                 …/threads/{threadId}/settings      { settings, revision } — режим, операция, поставщик, модель, поля, входы
+PUT                 …/threads/{threadId}/current       { versionId, revision } — версия «в работе»
+GET                 …/threads/{threadId}/versions/{versionId}/files/{role}[?download=true]   файл версии по роли (Range)
+GET                 …/threads/{threadId}/versions/{versionId}/peaks                          пики волны
+POST                …/threads/{threadId}/edit          правка без ИИ (trim | gainFade | normalize | convert) → новая версия
+POST                …/threads/{threadId}/mix           { stems[], baseVersionId?, format?, revision? } — свести стемы → новая версия
+POST                …/concat                           { pieces[], joint?, joints?, normalizeLoudness?, name?, format? } → новая нить
+POST                …/threads/{threadId}/save          { versionId, mode?, folder?, fileName? } — только проект; занятое имя — 409 name_taken
+```
+
+**«Голоса»** — только серверный проект, база `/api/projects/{id}/audio-editor/voices`:
+
+```
+GET/POST            …/voices                           → список / создать из образцов (multipart, до 5 по 50 МБ)
+POST                …/voices/rvc                       создать из пары RVC проекта
+GET/PATCH/DELETE    …/voices/{slug}
+POST                …/voices/{slug}/samples            добавить образцы; DELETE …/samples/{file} — убрать
+POST                …/voices/{slug}/recreate?provider=minimax[&quoteId=]   две фазы: без quoteId — котировка, с ним — 202 задача
+GET                 …/voices/{slug}/files/{file}       образец или файл модели из манифеста
+```
+
+События в группу владельца: `audio_edit_progress`, `audio_edit_completed`, `audio_edit_failed` (у отказа —
+`retryQuote` соседа), `audio_thread_changed`, `audio_prefs_changed`. Агенту — MCP-сервер `audio-editor`:
+`audio_state`, `audio_focus`, `audio_new`, `audio_voices`, `audio_suggest_prompt`, а при
+`AudioEditor:AgentLaunch` ещё `audio_generate`, `audio_concat`, `audio_cancel`; сохранения у агента нет.
+
+## Редактор видео (модуль `videoeditor`)
+
+Ручки модуля [ClaudeHomeServer.VideoEditor](../../backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), решения —
+[ADR-022](../adr/ADR-022-video-editor.md), описание фичи — [video-editor.md](../features/video-editor.md). Гейт один на все
+(`VideoEditScopeGate`): флаг `video-editor` выключен, проект или чат чужой — `404`; модуль выключен конфигом — ручек
+нет (`404`). Ошибки — `{ error, code }` (константы `VideoEditorErrors`): `invalid_request`, `outside_allowed_folders`,
+`personal_scope_no_films`, `local_unavailable_personal`, `project_local_unsupported` — 400, `provider_unavailable`,
+`name_taken`, `revision_conflict` — 409, `quote_not_found`, `scene_not_found`, `version_not_found`, `job_not_found`,
+`file_not_found`, `chat_not_found` — 404, `film_invalid`, `film_schema_unsupported` — 422, `too_many_jobs`,
+`heavy_busy` — 429, `dsp_unavailable` — 503.
+
+Области две, тела ручек общие (`VideoEditorEndpoints`): проект — база `/api/projects/{id}/video-editor`, чат проекта —
+`…/sessions/{sid}`; личный чат вне проекта — база `/api/video-editor/chats/{sid}` с теми же хвостами. У личной области
+нет фильмов, сохранения в проект, local и путей проекта — отказ до диска; ручки фильмов у неё отвечают
+`personal_scope_no_films`.
+
+```
+GET                 …/catalog                          → поставщики, модели, caps, причины серых, порядок «Авто»
+GET/PUT             …/prefs                            ↔ { provider, model, durationSec, aspect, sound, count }
+POST                …/quote                            { sessionId, sceneId, provider?, model?, count?, durationSec?, aspect?, sound? } → котировка на 10 минут
+POST                …/jobs                             { quoteId, sessionId, sceneId, params?, seed? } → 202 { jobId }; initiator всегда human
+GET/DELETE          …/jobs/{jobId}                     → задача / отмена
+```
+
+**Сцены чата** (база чата: `…/sessions/{sid}` у проекта, `/api/video-editor/chats/{sid}` у личного). Мутации несут
+`revision`: устарела — `409 revision_conflict` со свежим состоянием; ответ мутации — полное состояние. Тело
+операций — `VideoSceneService`, общий с тулсетом агента.
+
+```
+GET                 …/state                            → { threads, catalog, prefs } одним запросом
+GET/POST            …/scenes                           → { focus, revision, scenes[] } / новая сцена { folder?, settings?, name?, revision }
+PUT                 …/scenes/focus                     { focus: { sceneId, filmPath }, revision }
+DELETE              …/scenes/{sceneId}?revision=       убрать сцену без версий и идущих запусков
+PUT                 …/scenes/{sceneId}/settings        { settings, revision }
+PUT                 …/scenes/{sceneId}/current         { versionId, revision } — «продолжить от версии»
+GET                 …/scenes/{sceneId}/versions/{versionId}/file[?download=true]   клип версии (Range)
+```
+
+**Фильмы и сохранение** — только проект (`[ProjectCapability(FileBound)]`: локальный проект отказывает до тела):
+
+```
+POST                …/sessions/{sid}/scenes/{sceneId}/save   { versionId?, folder?, fileName? } → { path, framePaths, addedToFilm }
+GET                 …/films                            → фильмы video/**/*.film кратко
+GET                 …/films/state?path=                → { path, revision, document, spent, marks, build }
+PATCH               …/films?path=[&sessionId=]         { expectedRevision, ops[] } — атомарно, всё или ничего
+POST/GET/DELETE     …/films/build?path=[&sessionId=]   сборка ffmpeg: 202 заявка / статус / отмена
+POST                …/films/music?path=                { sessionId } — «Сочинить под фильм…» → нить звука
+```
+
+Запись ленты — одна точка на действие для человека и агента: сохранение, правка и сборка пишут `module_record` в
+сервисе, а не в контроллере; `recordType` одинаков при `initiator = human` и `agent` (`video_scene`,
+`video_launch_versions`, `video_saved`, `video_film_built`, `video_note`).
+
+События в группу владельца: `video_edit_progress`, `video_edit_completed`, `video_edit_failed` (у отказа —
+`retryQuote` соседа), `video_thread_changed`, `video_film_changed`.
+
+`video_edit_progress`: `{ jobId, scopeKey, sceneId, stage: queued|running|downloading, queuePosition?, etaSeconds?,
+variant, count, initiator, percent? }`. `percent` (0..1) необязателен и честен: local даёт долю шагов сэмплера ComfyUI
+(по WebSocket `/ws`, шкала монотонна и до конца задачи не доходит до 1), fal — только если статус очереди отдаёт
+`progress`/`percent`, Higgsfield — не даёт. Нет данных — поля нет, клиент считает долю по `etaSeconds`.
+
+**Агент** — MCP-сервер `video-editor` (`POST /mcp/video-editor/{sessionId}`, любой чат владельца при флаге).
+Всегда: `video_state`, `video_focus`, `video_new`, `video_scene_set`, `video_suggest_prompt`; при
+`VideoEditor:AgentLaunch` ещё `video_shoot`, `video_cancel`, `video_wait`, `video_save_scene`, `video_film_edit`,
+`video_film_build`. Каждый инструмент зовёт тот же сервис, что ручка выше, и пишет ту же карточку в ленту с
+`initiator = agent` (пометка «✦ Claude»); пять пишущих и тратящих отказывают делегированному ходу (fail-closed),
+потолка трат и лимита запусков за ход нет.
+
+## Контекст чата (ADR-023)
+
+Основной объект и референсы чата; владелец — из `sub`, сессия — `GetOwned` (чужая — `404`), область
+(проект или личный чат) вертикаль выводит сама. Запись и чтение открыты без флага (`composer-context-row` снят 2026-10-03). Локальный проект (ADR-016): чтение пустое,
+запись — `400 project_local_unsupported`. Тела и примеры — [ADR-023-contracts.md](../adr/ADR-023-contracts.md).
+
+```
+GET     /api/chats/{sid}/context                       → ChatContextDto { revision, primary, refs[] }
+PUT     /api/chats/{sid}/context/primary               { kind|null, ref, revision? } → ChatContextDto  (null — снять основной)
+POST    /api/chats/{sid}/context/refs                  { kind, ref, role?, revision? } → ChatContextDto
+DELETE  /api/chats/{sid}/context/refs/{itemId}?revision=   → ChatContextDto
+DELETE  /api/chats/{sid}/context?revision=             → ChatContextDto  (очистить всё)
+GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, savedAt}]  (для «Зафиксировать только этот чат»)
+```
+
+`409 context_changed` — ревизия клиента устарела, тело — свежий DTO; `400` — `kind_unknown`, `ref_invalid`,
+`role_not_accepted`, `kind_not_primary`, `refs_limit`. `saved-files` склеивают `IChatSavedFiles` вертикалей
+(картинки и звуки): следы сохранений лежат в самих нитях. Событие в группу владельца — `chat_context_changed`
+(полный DTO). Агенту — MCP-сервер `turn-context`: [mcp-servers.md](mcp-servers.md).
+
 ## SignalR-хаб `/hubs/session`
 
 Вторая половина контракта с фронтом: REST отдаёт состояние, хаб — живой ход. Источник правды —

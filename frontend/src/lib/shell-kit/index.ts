@@ -9,8 +9,10 @@
 // В dev/prod MF-рантайм модуля резолвит это через remoteEntry.js хоста;
 // в хостовой сборке (tsc/vitest/vite) — через алиас на этот файл.
 
+import { lazy } from 'react';
+
 // ─── design ──────────────────────────────────────────────────────────────────
-export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W, COMPOSER_LIP, composerLip, FAB_CLEAR_PAD } from '../design';
+export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W, MODAL_W, FAB_CLEAR_PAD } from '../design';
 
 // ─── api ─────────────────────────────────────────────────────────────────────
 export { api } from '../api';
@@ -33,8 +35,39 @@ export {
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
-export { registerSubsystem, REVEAL_PANEL_EVENT } from '../subsystems/registryCore';
-export type { SubsystemManifest } from '../subsystems/registryCore';
+export { registerSubsystem, REVEAL_PANEL_EVENT, revealWorkspacePanel, revealContextPanel, SLOT_CONTEXT_KIND } from '../subsystems/registryCore';
+export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions } from '../subsystems/registryCore';
+
+// ─── chatContext (ADR-023): контракты вида контекста хода ────────────────────
+export type {
+  ChatContextDto, ChatContextItem, ChatContextPrimary, ChatContextRef, ContextKindApi, ContextKindCtx, KindState,
+  ContextAction, ActionKind, LaunchParam, ExecutorListModel, ActionResult, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
+} from '../chatContext/types';
+
+export {
+  useChatContext, getChatContextState, refreshChatContext, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
+} from '../chatContext/store';
+export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
+export { refOf, rolesFor } from '../chatContext/fill';
+export type { ContextCandidate } from '../chatContext/fill';
+export type { ContextRole, ContextUpload, ContextNote, ContextMenuItem } from '../chatContext/types';
+export { notifyKindChanged } from '../chatContext/actionRun';
+export { ReportedError } from '../chatContext/errors';
+export { etaTicker, etaFraction } from '../chatContext/etaProgress';
+export type { EtaState } from '../chatContext/etaProgress';
+export { setContextReturn, useContextReturn, clearContextReturn } from '../chatContext/contextReturn';
+
+// ─── genPanelDismissed ───────────────────────────────────────────────────────
+// Автооткрытие панели генерации по выбору картинки/звука, пока человек не закрыл
+// её в этом чате (ADR-021 §3)
+export { autoRevealGenerationPanel, isGenPanelKey, markGenPanelDismissed } from '../genPanelDismissed';
+
+// ─── genPanelFollow / genDrafts / genPanelOpen ───────────────────────────────
+// Панель генерации следует за выбором: клик по карточке, подсказка выбора агентом,
+// черновики полей по ключу элемента
+export { followSelection, isCardPick } from '../genPanelFollow';
+export { noteGenDraft, clearGenDraft, useGenDraft } from '../genDrafts';
+export { followPeeked } from '../genPanelOpen';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
@@ -111,11 +144,12 @@ export { useContainerWidth } from '../../hooks/useContainerWidth';
 // ─── components/ui ───────────────────────────────────────────────────────────
 export {
   Button, IconButton, Badge, Modal, ConfirmDialog, BackButton,
-  IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem,
+  IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem, MenuSep,
   SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
   Island, EmptyState, Field, TextField, TextArea, IconField, ModalActions, Menu, SegmentedControl, Checkbox,
-  Chip, ChipX, ProgressBar, MetaChip,
+  Chip, ChipX, ProgressBar, MetaChip, Select, InlineSegmented,
 } from '../../components/ui';
+export type { SelectOption } from '../../components/ui';
 
 // ─── components/ui/icons ─────────────────────────────────────────────────────
 export { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -123,6 +157,11 @@ export { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 // ─── components/MarkdownViewer ───────────────────────────────────────────────
 export { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 export type { ResolvedNote } from '../../components/MarkdownViewer';
+
+// ─── components/midi/MidiEditor ──────────────────────────────────────────────
+// Ленивый — чтобы @tonejs/midi и нотная лента не ехали в чанк кита.
+export const MidiEditor = lazy(() => import('../../components/midi/MidiEditor').then(m => ({ default: m.MidiEditor })));
+export type { MidiEditorProps } from '../../components/midi/MidiEditor';
 
 // ─── components/Toolbar ──────────────────────────────────────────────────────
 export { PillSwitch, tbBtnPrimary, tbBtnGhost, Toolbar, ToolbarIconButton } from '../../components/Toolbar';
@@ -156,12 +195,6 @@ export { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
 // ─── pages/workspace/panelStackState ─────────────────────────────────────────
 export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 
-// ─── composerStrips ──────────────────────────────────────────────────────────
-// Владелец полосы над композером просит показать её в чате и снимает запрос
-// (правило старшинства — в самом сторе, ADR-019 решение 3); notifyComposer — сигнал
-// композеру от владельца режима поля ввода
-export { requestStrip, releaseStrip, notifyComposer } from '../composerStrips';
-
 // ─── chatFollow ──────────────────────────────────────────────────────────────
 // Запуск по действию человека прокручивает ленту чата вниз, как своё сообщение
 export { followChat } from '../chatFollow';
@@ -172,3 +205,21 @@ export { onMessage, onReconnected } from '../signalr';
 // ─── features/modelsSpend ────────────────────────────────────────────────────
 // Модалка ядра (её же открывает шапка хаба), а не код MF-модуля spend
 export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
+
+// ─── components/generation ───────────────────────────────────────────────────
+// Общий каркас панели генерации: «Картинки» и «Звук» видят хост только через кит (ADR-021 §3)
+export { GenerationPanel, GEN_PANEL_W, useGenerationSheet } from '../../components/generation/GenerationPanel';
+export type {
+  GenerationFoot, GenerationFootProgress, GenerationFootResult, GenerationPanelView,
+} from '../../components/generation/GenerationPanel';
+export { ByClaude } from '../../components/generation/ByClaude';
+// «В контекст ▾» (ADR-023, 2к-2): кнопка наполнения контекста с выбором роли
+export { ContextAddButton } from '../../components/generation/ContextAddButton';
+// Общий слой панелей: переключатель режима, меню выбора источника, «Вернуть» после снятия выбора
+export { ReleaseNotice } from '../../components/generation/ReleaseNotice';
+export { createReleaseUndo, RELEASE_UNDO_MS } from '../../components/generation/useReleaseUndo';
+export type { ReleaseOffer, ReleaseUndoController } from '../../components/generation/useReleaseUndo';
+// Список «Исполнитель» панели генерации (общий слой Г1): строки строит раздел сам
+export { ExecutorList, ExecutorSummaryRow } from '../../components/generation/ExecutorList';
+export type { ExecutorRow, ExecutorBadge } from '../../components/generation/ExecutorList';
+export type { TabItem } from '../../components/ui';

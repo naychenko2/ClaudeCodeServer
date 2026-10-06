@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && npm run build:notes && npm run build:spend && npm run build:image-editor && npm run build:architecture",
-    "build:quiet": "tsc -b && vite build --logLevel warn && npm run build:notes && npm run build:spend && npm run build:image-editor && npm run build:architecture",
+    "build": "tsc -b && vite build && npm run build:notes && npm run build:spend && npm run build:image-editor && npm run build:audio-editor && npm run build:video-editor && npm run build:architecture",
+    "build:quiet": "tsc -b && vite build --logLevel warn && npm run build:notes && npm run build:spend && npm run build:image-editor && npm run build:audio-editor && npm run build:video-editor && npm run build:architecture",
     "lint": "eslint .",
     "lint:design": "eslint --config eslint.design.config.js .",
     "test": "vitest run",
@@ -18,6 +18,10 @@
     "dev:spend": "cd modules/spend && npx vite",
     "build:image-editor": "cd modules/image-editor && npx vite build && node -e \"const fs=require('fs');const dst='../../dist/image-editor-remote';fs.rmSync(dst,{recursive:true,force:true});fs.cpSync('dist',dst,{recursive:true});console.log('[image-editor] published to',dst)\"",
     "dev:image-editor": "cd modules/image-editor && npx vite",
+    "build:audio-editor": "cd modules/audio-editor && npx vite build && node -e \"const fs=require('fs');const dst='../../dist/audio-editor-remote';fs.rmSync(dst,{recursive:true,force:true});fs.cpSync('dist',dst,{recursive:true});console.log('[audio-editor] published to',dst)\"",
+    "dev:audio-editor": "cd modules/audio-editor && npx vite",
+    "build:video-editor": "cd modules/video-editor && npx vite build && node -e \"const fs=require('fs');const dst='../../dist/video-editor-remote';fs.rmSync(dst,{recursive:true,force:true});fs.cpSync('dist',dst,{recursive:true});console.log('[video-editor] published to',dst)\"",
+    "dev:video-editor": "cd modules/video-editor && npx vite",
     "build:architecture": "cd modules/architecture && npx vite build && node -e \"const fs=require('fs');const dst='../../dist/architecture-remote';fs.rmSync(dst,{recursive:true,force:true});fs.cpSync('dist',dst,{recursive:true});console.log('[architecture] published to',dst)\"",
     "dev:architecture": "cd modules/architecture && npx vite"
   },
@@ -43,6 +47,7 @@
     "@module-federation/runtime": "^2.8.0",
     "@module-federation/vite": "^1.19.1",
     "@ricky0123/vad-web": "^0.0.30",
+    "@tonejs/midi": "2.0.28",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
@@ -62,6 +67,7 @@
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
+    "tone": "15.1.22",
     "vite-plugin-static-copy": "^4.1.1",
     "xlsx": "^0.18.5",
     "zod": "^4.5.1"

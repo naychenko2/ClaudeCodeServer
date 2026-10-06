@@ -73,7 +73,15 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
         string script;
         if (OperatingSystem.IsWindows())
         {
-            var text = "@echo off\r\n"
+            // Эхо user-сообщения (как в sh-ветке): читаем строку stdin, достаём uuid и печатаем эхо
+            // с isReplay. Сообщение имеет вид {"type":"user","uuid":"<guid>",...}: кавычки меняем на
+            // #, по разделителю # восьмой токен — uuid. set /p читает до 1021 символа, uuid стоит
+            // в начале строки, так что усечение длинного сообщения безвредно.
+            var text = "@echo off\r\nsetlocal enabledelayedexpansion\r\n"
+                + "set /p L=\r\n"
+                + "set \"L=!L:\"=#!\"\r\n"
+                + "for /f \"tokens=8 delims=#\" %%U in (\"!L!\") do set \"U=%%U\"\r\n"
+                + "echo {\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"x\"},\"uuid\":\"!U!\",\"isReplay\":true}\r\n"
                 + string.Join("\r\n", lines.Select(l => $"echo {l}"))
                 + "\r\nping -n 120 127.0.0.1 >nul\r\n";
             script = Path.Combine(_root, "fake-cli.cmd");
@@ -81,7 +89,12 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
         }
         else
         {
+            // Настоящий CLI эхом возвращает user-сообщение (--replay-user-messages) с тем же uuid:
+            // result до эха бэкенд считает чужим, так что фейк обязан его напечатать первым.
             var text = "#!/bin/sh\n"
+                + "read -r L\n"
+                + "U=$(printf '%s' \"$L\" | sed 's/.*\"uuid\":\"\\([^\"]*\\)\".*/\\1/')\n"
+                + "echo \"{\\\"type\\\":\\\"user\\\",\\\"message\\\":{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"x\\\"},\\\"uuid\\\":\\\"$U\\\",\\\"isReplay\\\":true}\"\n"
                 + string.Join("\n", lines.Select(l => $"echo '{l}'"))
                 + "\nsleep 120\n";
             script = Path.Combine(_root, "fake-cli.sh");

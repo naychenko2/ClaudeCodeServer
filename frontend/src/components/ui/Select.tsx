@@ -1,12 +1,23 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { C, R, FIELD, SHADOW, FONT } from '../../lib/design';
 import { ICON_SIZE } from './icons';
+
+// Группа пунктов → <optgroup>. disabled гасит всю группу: так «С выбранным звуком»
+// остаётся видна, но недоступна, пока звук не выбран
+export interface SelectGroup {
+  label: string;
+  disabled?: boolean;
+}
 
 export interface SelectOption<T extends string = string> {
   value: T;
   label: string;
   disabled?: boolean;
+  // Пункты с одинаковым label группы собираются в один <optgroup> на месте первого
+  // из них; пункты без группы стоят на своих местах. disabled у группы — у любого
+  // её пункта
+  group?: string | SelectGroup;
 }
 
 interface Props<T extends string> {
@@ -46,13 +57,34 @@ export function Select<T extends string = string>({ value, onChange, options, pl
         }}
       >
         {placeholder !== undefined && <option value="">{placeholder}</option>}
-        {options.map(o => (
-          <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
-        ))}
+        {renderOptions(options)}
       </select>
       <span style={{ position: 'absolute', right: 12, pointerEvents: 'none', color: C.textMuted, display: 'flex' }}>
         <ChevronDown size={ICON_SIZE.xs} strokeWidth={2} />
       </span>
     </div>
   );
+}
+
+function renderOptions<T extends string>(options: SelectOption<T>[]): ReactNode[] {
+  const option = (o: SelectOption<T>) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>;
+  const groups = new Map<string, { disabled: boolean; items: SelectOption<T>[] }>();
+  const order: (SelectOption<T> | string)[] = [];
+  for (const o of options) {
+    if (o.group == null) { order.push(o); continue; }
+    const g = typeof o.group === 'string' ? { label: o.group } : o.group;
+    let entry = groups.get(g.label);
+    if (!entry) {
+      entry = { disabled: false, items: [] };
+      groups.set(g.label, entry);
+      order.push(g.label);
+    }
+    entry.disabled ||= !!g.disabled;
+    entry.items.push(o);
+  }
+  return order.map(e => {
+    if (typeof e !== 'string') return option(e);
+    const g = groups.get(e)!;
+    return <optgroup key={`group:${e}`} label={e} disabled={g.disabled || undefined}>{g.items.map(option)}</optgroup>;
+  });
 }

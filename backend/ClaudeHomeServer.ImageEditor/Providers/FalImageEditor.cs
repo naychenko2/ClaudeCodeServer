@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
@@ -30,6 +31,9 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
 
     // Пауза опроса статуса; тесты ставят ноль
     internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
+
+    // Скачивание результата по ссылке fal; тесты подставляют фейковый транспорт
+    internal SafeMediaDownloader Downloader { get; init; } = SafeMediaDownloader.Shared;
 
     public FalImageEditor(IHttpClientFactory http, IConfiguration config, ILogger<FalImageEditor> log)
     {
@@ -213,6 +217,10 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
             if (!resp.IsSuccessStatusCode)
                 return Fail(ClassifyHttp(resp.StatusCode, text), false, null, ErrorText(text, resp.StatusCode));
             ticket = ParseTicket(text) ?? throw new JsonException("нет request_id в ответе очереди");
+            // Ключ уходит и на эти адреса — чужой хост не опрашиваем
+            if (!new[] { ticket.StatusUrl, ticket.ResponseUrl, ticket.CancelUrl }.All(u => FalQueueUrls.IsTrusted(u, _queueBase)))
+                return Fail(EditOutcome.Failed, null, ticket.RequestId,
+                    "fal.ai вернул адрес опроса вне своих хостов — задачу не опрашиваем");
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException || ex is TaskCanceledException && !ct.IsCancellationRequested)
         {
@@ -252,7 +260,7 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
                 return Fail(ClassifyHttp(rresp.StatusCode, rtext), false, ticket.RequestId, ErrorText(rtext, rresp.StatusCode));
 
             progress.Report(new EditProgress(EditStage.Downloading));
-            var images = await DownloadAllAsync(client, rtext, token);
+            var images = await DownloadAllAsync(Downloader, rtext, token);
             if (images.Count == 0)
                 return Fail(EditOutcome.Failed, null, ticket.RequestId, "fal.ai не вернул картинок");
             return new ImageEditResult(EditOutcome.Ok, images, null, true, ticket.RequestId, null);
@@ -368,7 +376,7 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
             Str(json, "cancel_url") ?? baseUrl + "/cancel");
     }
 
-    private static async Task<IReadOnlyList<EditedImage>> DownloadAllAsync(HttpClient client, string text, CancellationToken ct)
+    private static async Task<IReadOnlyList<EditedImage>> DownloadAllAsync(SafeMediaDownloader downloader, string text, CancellationToken ct)
     {
         var json = JsonDocument.Parse(text).RootElement;
         var items = new List<JsonElement>();
@@ -381,7 +389,7 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
         foreach (var item in items)
         {
             if (Str(item, "url") is not { Length: > 0 } url) continue;
-            if (await ImageDownload.FetchAsync(client, url, Str(item, "content_type"), ct) is { } img)
+            if (await ImageDownload.FetchAsync(downloader, url, Str(item, "content_type"), ct) is { } img)
                 result.Add(img);
         }
         return result;

@@ -349,6 +349,13 @@ public class Session
     public ClaudeMode Mode { get; set; } = ClaudeMode.AcceptEdits;
     // Псевдоним или полный id модели для флага --model. null → дефолтная модель CLI
     public string? Model { get; set; }
+    // Модель хода сейчас подменена фолбэком (FallbackLlmSessionAdapter), а не выбрана человеком.
+    // Ставит адаптер вместе с подменённой Info.Model и снимает в finally хода; читают
+    // LlmProviderRegistry.LightProfileFor через ClaudeSession и McpToolWhitelist — на подмене
+    // на локальную модель её облегчённый профиль включается принудительно. Живёт только в
+    // памяти: подмена не переживает ход, а в sessions.json и ответы API ей нечего делать.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool FallbackSubstitution { get; set; }
     // Уровень reasoning effort для флага --effort (low/medium/high/xhigh/max). null → дефолт CLI
     public string? Effort { get; set; }
     public SessionStatus Status { get; set; } = SessionStatus.Starting;

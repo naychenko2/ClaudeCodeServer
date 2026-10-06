@@ -13,6 +13,8 @@ const store = new Map<string, string>();
   key: () => null,
   length: 0,
 } as Storage;
+// Ссылка на картинку версии берёт токен и из sessionStorage — в node его нет
+(globalThis as unknown as { sessionStorage: Storage }).sessionStorage = { ...globalThis.localStorage, getItem: () => null } as Storage;
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -91,6 +93,52 @@ describe('лента: запуск агентом в нить с версиям�
     const err = { ...toolUse('t1', 'j9'), result: JSON.stringify({ error: 'Нет такой модели' }) } as ChatItem;
     const html = renderFeed([err]);
     expect(html).toContain('Генерация не запущена');
+  });
+});
+
+// Готовый запуск на два варианта: v3 — от исходника, v4 — от v2; в работе v4
+const done = (): ImageThread => {
+  const t = v3() as unknown as { versions: unknown[]; launches: unknown[]; currentVersionId: string; file: string | null };
+  const v = (id: string, number: number, variant: number) =>
+    ({ id, number, jobId: 'j1', variant, baseVersionId: 'v2', baseStepId: null, steps: [`s${number}`], currentStepId: `s${number}`, createdAt: '2026-09-28T00:00:00Z' });
+  t.versions = [...t.versions, v('v3', 3, 1), v('v4', 4, 2)];
+  t.launches = [{ jobId: 'j1', status: 'done', prompt: 'Андрей на пляже', initiator: 'agent', baseVersionId: 'v2' }];
+  t.currentVersionId = 'v4';
+  return t as unknown as ImageThread;
+};
+const versionCard = (html: string, n: string) => {
+  const from = html.indexOf(`data-image-version="${n}"`);
+  const next = html.indexOf('data-image-version=', from + 1);
+  return html.slice(from, next < 0 ? undefined : next);
+};
+
+describe('лента: карточка на каждый вариант', () => {
+  it('идёт — одна карточка хода, вариантов ещё нет', () => {
+    __applyThreads(S, P, { focus: 't1', revision: 1, threads: [v3()] });
+    const html = renderFeed([launchRecord('t1', 'j1')]);
+    expect([...html.matchAll(/data-image-version="([^"]+)"/g)].map(m => m[1])).toEqual(['running']);
+    expect(count(html, 'Отменить')).toBe(1);
+  });
+
+  it('готово — по полноценной карточке на вариант во всю ширину, каждая на своей версии', () => {
+    __applyThreads(S, P, { focus: 't1', revision: 1, threads: [done()] });
+    const html = renderFeed([launchRecord('t1', 'j1')]);
+    // «В работе» берётся из контекста чата, а не из фокуса нитей: без основного объекта текущей нет
+    expect([...html.matchAll(/data-image-version="([^"]+)" data-current="(true|false)"/g)].map(m => m[1] + (m[2] === 'true' ? '*' : '')))
+      .toEqual(['3', '4']);
+    expect(html).not.toContain('calc(');
+    const a = versionCard(html, '3');
+    const b = versionCard(html, '4');
+    expect(a).toContain('версия 3');
+    expect(a).toContain('вариант 1 из 2');
+    expect(b).toContain('вариант 2 из 2');
+    // Подпись запуска переехала в карточку: промпт и кто запускал — у каждой
+    for (const c of [a, b]) expect(c).toContain('«Андрей на пляже» · Claude');
+    // Действия — от своей версии: «Работать с этой» и «В контекст ▾», прежнего «Продолжить от неё» нет
+    for (const c of [a, b]) {
+      expect(c).toContain('Работать с этой');
+      expect(c).not.toContain('Продолжить от неё');
+    }
   });
 });
 

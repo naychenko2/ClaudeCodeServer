@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
@@ -30,7 +31,9 @@ public sealed record LocalMediaRequest(
     string? Mask = null,
     IReadOnlyList<string>? RefVideos = null,
     IReadOnlyList<string>? RefAudios = null,
-    string? Identity = null);
+    string? Identity = null,
+    // Аудио-операции: аргументы инструмента как есть, разбор и белые списки — в LocalMediaService.Audio
+    JsonObject? Args = null);
 
 // Задача и её живое положение: Position — сколько задач ComfyUI впереди (0 — идёт),
 // Warning — временный сбой опроса (ComfyUI недоступен), задача при этом жива. EtaSeconds без
@@ -49,14 +52,16 @@ public sealed record LocalMediaCallResult(LocalMediaJobView? View, string? Error
 
 // Фасад локальной генерации: проверки, загрузка входов, постановка графа, опрос и
 // сбор результата в папку проекта. Граф — только из ComfyWorkflows
-public sealed class LocalMediaService(
+public sealed partial class LocalMediaService(
     ComfyClient comfy,
     LocalMediaJobStore store,
     ILocalMediaProjectAccess projects,
     IConfiguration config,
     ILogger<LocalMediaService> log,
     // Шаги семплера по WebSocket ComfyUI; нет — живой прогресс остаётся на оценке по ETA
-    ComfyProgressTracker? steps = null)
+    ComfyProgressTracker? steps = null,
+    // Усыновители результата (карточка в ленте у модулей «Звук» и «Картинки»); без них — как раньше
+    IEnumerable<ClaudeHomeServer.Services.Media.ILocalMediaAdopter>? adopters = null)
 {
     // Папка результатов в проекте: скрыта из дерева, из синка знаний и из git
     public const string ResultsFolder = ".cc-attachments/local-media";
@@ -88,8 +93,12 @@ public sealed class LocalMediaService(
         if (!options.Enabled) return LocalMediaCallResult.Fail("Локальная генерация выключена на этом сервере.");
         if (!LocalMediaOps.IsKnown(request.Op)) return LocalMediaCallResult.Fail("Неизвестная операция.");
 
+        if (LocalMediaOps.IsAudio(request.Op) && !options.AudioEnabled)
+            return LocalMediaCallResult.Fail("Локальные аудиомодели на этом сервере не установлены.");
         var prompt = (request.Prompt ?? "").Trim();
-        if (request.Op is not (LocalMediaOps.FaceDetail or LocalMediaOps.VideoUpscale) && prompt.Length == 0)
+        // У аудио prompt нужен не всем операциям — проверка в разборе аргументов операции
+        if (request.Op is not (LocalMediaOps.FaceDetail or LocalMediaOps.VideoUpscale) && !LocalMediaOps.IsAudio(request.Op)
+            && prompt.Length == 0)
             return LocalMediaCallResult.Fail("Нужен prompt — описание того, что сгенерировать.");
         if (prompt.Length > ComfyWorkflows.MaxPromptLength
             || (request.NegativePrompt?.Length ?? 0) > ComfyWorkflows.MaxPromptLength)
@@ -110,10 +119,11 @@ public sealed class LocalMediaService(
                     + "дождись их (local_jobs_wait) и повтори.");
 
             // Тяжёлые операции держат GPU десятки минут: у владельца одновременно одна
-            var heavy = IsHeavy(request);
+            var heavy = IsHeavy(request) || IsHeavyAudio(request);
             if (heavy && store.ActiveHeavyCount(request.OwnerId) > 0)
-                return LocalMediaCallResult.Fail("У тебя уже идёт тяжёлая локальная задача (апскейл, инпейнт или "
-                    + "референсы с identity=max) — дождись её (local_jobs_wait) и повтори.");
+                return LocalMediaCallResult.Fail("У тебя уже идёт тяжёлая локальная задача (апскейл, инпейнт, "
+                    + "референсы с identity=max, обучение голоса или правка трека моделью xl-base) — дождись её "
+                    + "(local_jobs_wait) и повтори.");
 
             ComfyQueueState queue;
             try
@@ -180,6 +190,8 @@ public sealed class LocalMediaService(
         LocalMediaJob job, string root, string prompt, long seed, string prefix, LocalMediaOptions options,
         CancellationToken ct)
     {
+        if (LocalMediaOps.IsAudio(request.Op))
+            return await BuildAudioAsync(request, job, root, prompt, seed, prefix, options, ct);
         var images = request.Images ?? [];
         switch (request.Op)
         {
@@ -473,9 +485,9 @@ public sealed class LocalMediaService(
         return await UploadAsync(job, input.Bytes, stem + input.Extension, ct);
     }
 
-    private enum MediaKind { Image, Video, Audio }
+    internal enum MediaKind { Image, Video, Audio, VoiceModel, VoiceIndex }
 
-    private sealed record InputFile(byte[] Bytes, string Extension, MediaProbe.VideoInfo? Video);
+    internal sealed record InputFile(byte[] Bytes, string Extension, MediaProbe.VideoInfo? Video);
 
     // Вход — путь файла проекта или job_id прошлой задачи этого же владельца и проекта.
     // Только из проекта чата: SafePath + запрет символических ссылок (ProjectLinkGuard)
@@ -486,6 +498,8 @@ public sealed class LocalMediaService(
         {
             MediaKind.Video => ("видео", "готового видео"),
             MediaKind.Audio => ("звук", "готового звука"),
+            MediaKind.VoiceModel => ("модель голоса", "модели голоса"),
+            MediaKind.VoiceIndex => ("индекс голоса", "индекса голоса"),
             _ => ("картинку", "готовой картинки"),
         };
         if (value.Length == 0) throw new LocalMediaInputException($"Пустая ссылка на {what}.");
@@ -496,9 +510,16 @@ public sealed class LocalMediaService(
             var source = store.Get(value, request.OwnerId);
             if (source is null || source.ProjectId != request.ProjectId)
                 throw new LocalMediaInputException($"Задача {value} не найдена.");
-            var type = kind == MediaKind.Video ? "video/" : "image/";
-            var output = kind == MediaKind.Audio ? null
-                : source.Outputs.FirstOrDefault(o => o.ContentType.StartsWith(type, StringComparison.Ordinal));
+            // У задачи со стемами звуковых файлов несколько — по job_id берётся первый, конкретный — путём
+            Func<LocalMediaOutput, bool> fits = kind switch
+            {
+                MediaKind.Video => o => o.ContentType.StartsWith("video/", StringComparison.Ordinal),
+                MediaKind.Audio => o => o.ContentType.StartsWith("audio/", StringComparison.Ordinal),
+                MediaKind.VoiceModel => o => o.Path.EndsWith(".pth", StringComparison.Ordinal),
+                MediaKind.VoiceIndex => o => o.Path.EndsWith(".index", StringComparison.Ordinal),
+                _ => o => o.ContentType.StartsWith("image/", StringComparison.Ordinal),
+            };
+            var output = source.Outputs.FirstOrDefault(fits);
             if (source.Status != LocalMediaStatuses.Completed || output is null)
                 throw new LocalMediaInputException($"У задачи {value} нет {result}.");
             relative = output.Path;
@@ -513,9 +534,19 @@ public sealed class LocalMediaService(
             ?? throw new LocalMediaInputException($"Путь «{value}» вне папки проекта.");
         var info = new FileInfo(full);
         if (!info.Exists) throw new LocalMediaInputException($"Файл «{value}» не найден в проекте.");
-        var limit = kind == MediaKind.Image ? MaxInputBytes : MaxMediaInputBytes;
-        if (info.Length > limit) throw new LocalMediaInputException($"Файл «{value}» больше {limit / 1024 / 1024} МБ.");
-        var bytes = File.ReadAllBytes(full);
+        if (info.Length > InputLimit(kind))
+            throw new LocalMediaInputException($"Файл «{value}» больше {InputLimit(kind) / 1024 / 1024} МБ.");
+        return CheckInput(File.ReadAllBytes(full), relative, value, kind);
+    }
+
+    private static int InputLimit(MediaKind kind) => kind == MediaKind.Image ? MaxInputBytes : MaxMediaInputBytes;
+
+    // Проверка содержимого входа: размер и формат по сигнатуре. name — имя файла (у .pth и .index
+    // решает и расширение), value — как вход назван в отказе
+    internal static InputFile CheckInput(byte[] bytes, string name, string value, MediaKind kind)
+    {
+        if (bytes.Length > InputLimit(kind))
+            throw new LocalMediaInputException($"Файл «{value}» больше {InputLimit(kind) / 1024 / 1024} МБ.");
 
         switch (kind)
         {
@@ -527,6 +558,17 @@ public sealed class LocalMediaService(
                 var audio = MediaProbe.DetectAudioExtension(bytes)
                     ?? throw new LocalMediaInputException($"Файл «{value}» — не звук (нужен WAV, MP3, FLAC или OGG).");
                 return new InputFile(bytes, audio, null);
+            case MediaKind.VoiceModel:
+                // .pth торча — zip-архив
+                if (!name.EndsWith(".pth", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'P' || bytes[1] != 'K')
+                    throw new LocalMediaInputException($"Файл «{value}» — не модель голоса RVC (.pth из local_voice_train).");
+                return new InputFile(bytes, ".pth", null);
+            case MediaKind.VoiceIndex:
+                // Индекс faiss начинается с четырёхбуквенного кода типа: I + три знака (IwFl у IVFFlat, IxF2, IxHN…)
+                if (!name.EndsWith(".index", StringComparison.OrdinalIgnoreCase) || bytes.Length < 4 || bytes[0] != 'I'
+                    || !bytes.AsSpan(1, 3).ToArray().All(b => char.IsAsciiLetterOrDigit((char)b)))
+                    throw new LocalMediaInputException($"Файл «{value}» — не индекс голоса RVC (.index из local_voice_train).");
+                return new InputFile(bytes, ".index", null);
             default:
                 var image = ImageFormatSniffer.DetectExtension(bytes)
                     ?? throw new LocalMediaInputException($"Файл «{value}» — не картинка (нужен PNG, JPEG или WebP).");
@@ -633,7 +675,19 @@ public sealed class LocalMediaService(
         }
     }
 
+    // Сборку делает один вызов под общим замком; усыновление — уже ПОСЛЕ замка и без токена запроса:
+    // усыновитель не держит сборку остальных владельцев, а обрыв опроса («Стоп», конец хода) после
+    // записи Completed не оставляет задачу без карточки (повторно её уже никто не соберёт)
     private async Task<LocalMediaJob> CollectAsync(LocalMediaJob job, ComfyHistoryEntry history, CancellationToken ct)
+    {
+        var (result, collected) = await CollectUnderGateAsync(job, history, ct);
+        if (collected) await AdoptAsync(result, CancellationToken.None);
+        return result;
+    }
+
+    // Collected = true, только если файлы собрал именно этот вызов (а не соседний опрос)
+    private async Task<(LocalMediaJob Job, bool Collected)> CollectUnderGateAsync(LocalMediaJob job, ComfyHistoryEntry history,
+        CancellationToken ct)
     {
         var files = history.Files;
         await _collectGate.WaitAsync(ct);
@@ -641,13 +695,13 @@ public sealed class LocalMediaService(
         {
             // Пока ждали ворот, результат мог собрать соседний опрос
             var current = store.Get(job.Id, job.OwnerId) ?? job;
-            if (LocalMediaStatuses.IsTerminal(current.Status)) return current;
+            if (LocalMediaStatuses.IsTerminal(current.Status)) return (current, false);
 
             var root = projects.ResolveRoot(current.OwnerId, current.ProjectId);
-            if (root is null) return Fail(current, "Проект задачи недоступен — результат некуда сохранить.", history);
+            if (root is null) return (Fail(current, "Проект задачи недоступен — результат некуда сохранить.", history), false);
 
             var wanted = files.Where(f => ContentTypeOf(Path.GetExtension(f.FileName)) is not null).ToList();
-            if (wanted.Count == 0) return Fail(current, "ComfyUI не вернул файлов результата.", history);
+            if (wanted.Count == 0) return (Fail(current, "ComfyUI не вернул файлов результата.", history), false);
 
             var folder = $"{ResultsFolder}/{current.CreatedAt:yyyy-MM-dd}";
             var outputs = new List<LocalMediaOutput>();
@@ -656,7 +710,7 @@ public sealed class LocalMediaService(
                 var file = wanted[n];
                 var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
                 var bytes = await comfy.DownloadAsync(file, ct);
-                var relative = $"{folder}/{current.Id}-{n + 1}{ext}";
+                var relative = $"{folder}/{current.Id}-{OutputSuffix(file.FileName, current.Id, n)}{ext}";
                 var full = SafePath.Join(root, relative);
                 ProjectLinkGuard.EnsureNoLink(root, full);
                 Directory.CreateDirectory(Path.GetDirectoryName(full)!);
@@ -677,12 +731,23 @@ public sealed class LocalMediaService(
                 });
             }
 
+            // Партитура YuE2 — текстом из истории: её можно поправить и передать обратно в abc
+            if (current.Op is LocalMediaOps.MusicGenerate or LocalMediaOps.MusicEdit && history.Texts.Count > 0)
+            {
+                var relative = $"{folder}/{current.Id}-score.abc";
+                var full = SafePath.Join(root, relative);
+                ProjectLinkGuard.EnsureNoLink(root, full);
+                await File.WriteAllTextAsync(full, history.Texts[0], ct);
+                projects.NotifyWritten(root, relative);
+                outputs.Add(new LocalMediaOutput { Path = relative, ContentType = "text/plain" });
+            }
+
             // Латент видео — вход будущего апскейла: остаётся в output ComfyUI, в сторе только путь
             var (latentVideo, latentAudio) = LocalMediaOps.KeepsLatent(current.Op)
                 ? (LatentPath(history.Latents, "_video_"), LatentPath(history.Latents, "_audio_"))
                 : (null, null);
 
-            return store.Update(current.Id, current.OwnerId, j =>
+            var completed = store.Update(current.Id, current.OwnerId, j =>
             {
                 j.Status = LocalMediaStatuses.Completed;
                 j.Outputs = outputs;
@@ -692,20 +757,56 @@ public sealed class LocalMediaService(
                 j.FinishedAt = DateTime.UtcNow;
                 ApplyRunStats(j, history);
             }) ?? current;
+            return (completed, true);
         }
         catch (UnauthorizedAccessException)
         {
-            return Fail(job, "Папка результатов идёт через символическую ссылку или вне проекта — результат не сохранён.", history);
+            return (Fail(job, "Папка результатов идёт через символическую ссылку или вне проекта — результат не сохранён.", history), false);
         }
         catch (IOException ex)
         {
             log.LogWarning(ex, "Не удалось записать результат задачи {JobId}", job.Id);
-            return Fail(job, "Не удалось записать результат в папку проекта.", history);
+            return (Fail(job, "Не удалось записать результат в папку проекта.", history), false);
         }
         finally
         {
             _collectGate.Release();
         }
+    }
+
+    // Результат собран — отдать файлы усыновителям. Задача без чата-вызывателя (прямой вызов вне чата)
+    // и сбой усыновителя результат не портят: файлы в проекте уже лежат
+    private async Task AdoptAsync(LocalMediaJob job, CancellationToken ct)
+    {
+        if (adopters is null || string.IsNullOrWhiteSpace(job.SessionId) || job.Status != LocalMediaStatuses.Completed)
+            return;
+        var adoption = new ClaudeHomeServer.Services.Media.LocalMediaAdoption(job.OwnerId, job.ProjectId, job.SessionId,
+            job.Op, job.Id, [.. job.Outputs.Select(o => new ClaudeHomeServer.Services.Media.LocalMediaAdoptedFile(o.Path, o.ContentType))]);
+        foreach (var adopter in adopters)
+        {
+            try { await adopter.AdoptAsync(adoption, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.LogWarning(ex, "Результат задачи {JobId} не усыновлён ({Adopter})", job.Id, adopter.GetType().Name);
+            }
+        }
+    }
+
+    // Имя файла в проекте. У воркера аудио хвост значимый (lm_…_vocals.wav → lm_…-vocals.wav): по нему
+    // агент отличает вокал от минуса и .pth от .index. Нативные выходы ComfyUI (lm_…_00001_.png) и
+    // подозрительные хвосты — по номеру, как раньше
+    public static string OutputSuffix(string fileName, string jobId, int index)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var head = jobId + "_";
+        if (stem.StartsWith(head, StringComparison.Ordinal))
+        {
+            var tail = stem[head.Length..];
+            if (tail.Length is > 0 and <= 40 && tail.All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '_')
+                && tail.Any(char.IsAsciiLetterLower))
+                return tail;
+        }
+        return (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static string? LatentPath(IReadOnlyList<ComfyOutputFile> latents, string marker) =>
@@ -720,6 +821,14 @@ public sealed class LocalMediaService(
         ".webp" => "image/webp",
         ".mp4" => "video/mp4",
         ".webm" => "video/webm",
+        ".mp3" => "audio/mpeg",
+        ".wav" => "audio/wav",
+        ".flac" => "audio/flac",
+        ".ogg" => "audio/ogg",
+        ".mid" => "audio/midi",
+        // Модель голоса RVC и её индекс — вход следующих local_voice_convert
+        ".pth" or ".index" => "application/octet-stream",
+        ".txt" or ".srt" or ".lrc" or ".abc" => "text/plain",
         _ => null,
     };
 

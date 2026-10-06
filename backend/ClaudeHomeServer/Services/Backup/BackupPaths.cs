@@ -107,6 +107,16 @@ public static class BackupPaths
         if (segments.Length > 1
             && root.Equals(ImageEditor.ImageEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
             return false;
+        // Рабочая папка задач модуля «Звук» (ADR-021 §2): файлы вариантов — кеш на 7 дней.
+        // Нити (audio-threads) и префы (audio-editor-prefs) — другие корни, они в архив едут
+        if (segments.Length > 1
+            && root.Equals(AudioEditor.AudioEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
+            return false;
+        // Рабочая папка модуля «Видео» (ADR-022 §2): клипы вариантов — кеш на 7 дней весом до сотен МБ.
+        // Нити (video-threads) и префы (video-editor-prefs) — другие корни, они в архив едут
+        if (segments.Length > 1
+            && root.Equals(VideoEditor.VideoEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
+            return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 
         // Встроенный Forgejo (forgejo/**): репозитории и gitea.db едут, но три подпапки нет.

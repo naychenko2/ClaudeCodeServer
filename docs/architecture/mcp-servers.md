@@ -504,6 +504,21 @@ MCP-сервера несёт два заголовка: `X-Caller-Session-Id` (
   оказывался `undefined`, ответа не было вовсе, и клиент ждал до собственного таймаута;
 - нечитаемая строка stdin логируется, а не проглатывается молча.
 
+## Контекст чата (turn-context, тулсет Main)
+
+Тулсет [TurnContextToolset](../../backend/ClaudeHomeServer/Services/Mcp/Http/TurnContextToolset.cs)
+([ADR-023](../adr/ADR-023-contracts.md) §3.2), маршрут `POST /mcp/turn-context/{sessionId}` — любой чат владельца,
+без флага (`composer-context-row` снят 2026-10-03). Три инструмента с
+фиксированной схемой: `context_state` (тот же текст, что хвост хода «Контекст хода», с идентификаторами
+референсов path/slug — собирает один метод `TurnContextContributor.Compose`), `context_attach {kind, ref, role?}`
+(референс с `By = Agent`, чип ✦; `Ref` проверяет `Validate` провайдера ДО записи, роль — основной объект) и
+`context_detach {itemId}` (только референсы: основной объект меняют `image_focus` / `audio_focus`).
+`attach`/`detach` — fail-closed через `IDelegatedTurnGate` (делегированный и реакционный ход — отказ, нет гейта —
+тоже отказ), `context_state` разрешён всегда; локальный проект (ADR-016) отказывает до диска. Инструменты едут в
+`AutoAllowTools` (`TurnContextAgentTools`) — карточки разрешения нет. Сервер собирается во ВСЕХ трёх точках
+`SessionManager` рядом с `BuildAudioEditorContext` (`BuildTurnContextContext`, `TurnContextMcp: …`), состав
+`tools/list` от контекста чата не зависит — `ToolsFor` стор не читает (`McpToolsetStabilityTests`).
+
 ## Принцип именования MCP-инструментов
 
 Имена инструментов в одном MCP-сервере не должны быть однокоренными или отличаться

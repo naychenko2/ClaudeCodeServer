@@ -7,7 +7,8 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// Отвечает на один вопрос: какие инструменты сервера <c>name</c> видит и может звать чат,
 /// от имени которого пришёл запрос.
 ///
-/// Профиль резолвится по цепочке «сессия-вызыватель → её эффективная модель → провайдер»:
+/// Профиль резолвится по цепочке «сессия-вызыватель → её эффективная модель и персона → профиль
+/// облегчённого контекста (LlmProviderRegistry.LightProfileFor)»:
 /// заголовок <c>X-Caller-Session-Id</c> кладёт в конфиг хода наш же код (ClaudeSession), сессия
 /// проверяется на принадлежность владельцу токена. Все звенья — свойства СЕССИИ, не хода,
 /// поэтому инвариант стабильности состава <c>tools/list</c> не нарушается (McpToolsetStabilityTests):
@@ -31,7 +32,8 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 public sealed class McpToolWhitelist(
     SessionManager sessions,
     ModelAssignmentResolver assignments,
-    LlmProviderRegistry providers)
+    LlmProviderRegistry providers,
+    PersonaManager personas)
 {
     /// <summary>
     /// Разрешённые имена инструментов сервера или null — фильтра нет (сервер целиком).
@@ -49,7 +51,13 @@ public sealed class McpToolWhitelist(
         // резолва провайдер локальной модели не нашёлся бы вовсе.
         var model = assignments.Resolve(UsageKeyFor(session), session.Model, context.OwnerId)
             ?? session.Model;
-        var provider = providers.ResolveByModel(model);
+        // Профиль — через ту же единую точку, что и ClaudeSession (LightProfileFor): модель +
+        // персона сессии. Своя логика здесь дала бы рассинхрон состава MCP и фильтра
+        // («No such tool available»). Персона — так же, как у BuildPersonaProvider в SessionManager.
+        var persona = session.PersonaId is { } pid ? personas.Get(pid, context.OwnerId) : null;
+        // Признак подмены фолбэком — с живой сессии, тот же, что читает ClaudeSession: на подмене
+        // на локальную модель серверы урезаны её профилем, и фильтр обязан сработать вместе с ними
+        var provider = providers.LightProfileFor(model, persona, session.FallbackSubstitution);
         if (provider is null || provider.KeepMcpTools.Count == 0) return null;
 
         // Ключи словаря приходят из конфига и регистр не гарантируют — ищем как KeepMcpServers,

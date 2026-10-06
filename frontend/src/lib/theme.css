@@ -118,6 +118,7 @@
      а не «активный ввод» (макет docs/mockups/model-route-error-state.html) */
   --shadow-focus-danger: 0 0 0 3px rgba(180, 69, 47, 0.14);
   --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+  --shadow-selected: 0 0 0 3px var(--c-accent-light);
   /* Панели-острова (Islands): заметнее карточной — контактная тень + мягкий разлёт,
      чтобы остров читался «приподнятым» над холстом */
   --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
@@ -298,6 +299,7 @@
   --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
   --shadow-focus-danger: 0 0 0 3px rgba(232, 120, 94, 0.26);
   --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-selected: 0 0 0 3px var(--c-accent-light);
   --shadow-island:   0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
   --drop-island:     drop-shadow(0 1px 2px rgba(0, 0, 0, 0.30)) drop-shadow(0 8px 24px rgba(0, 0, 0, 0.45));
   --shadow-lift:     0 -1px 2px rgba(0, 0, 0, 0.30), 0 -8px 24px rgba(0, 0, 0, 0.45);

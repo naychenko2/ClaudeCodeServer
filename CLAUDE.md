@@ -185,36 +185,40 @@ one-shot действия и разговор с исполнителем «Ло
 «Автоматически»; не нарисовалось — инициалы, догоняет `ImageBackfillService` ([image-generation.md](docs/features/image-generation.md)).
 Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU, только по явной просьбе (с флагом `local-media-default` — по умолчанию, облако при отказе лишь с согласия);
 **граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста ([local-media.md](docs/features/local-media.md)).
+Аудио (музыка, голос, стемы) — там же, модели вне venv ComfyUI идут узлом `CcsAudioWorker` в общей очереди GPU1, веса — только при установке ([ADR-020](docs/adr/ADR-020-local-media-audio.md)).
 
 ## Редактор картинок (ClaudeHomeServer.ImageEditor)
 
 Динамический модуль правки картинок проекта: fal, Higgsfield, локальные модели, правки без ИИ, чат картинки с агентом; за флагом `image-editor`.
 Инварианты и подробности — [backend/ClaudeHomeServer.ImageEditor/CLAUDE.md](backend/ClaudeHomeServer.ImageEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой.
 
+## Редактор звука (ClaudeHomeServer.AudioEditor)
+
+Динамический модуль озвучки, музыки и обработки звука в чате: fal, Higgsfield, Яндекс, локальные модели, монтаж и склейка без ИИ, «Голоса», агент; за флагом `audio-editor` ([ADR-021](docs/adr/ADR-021-audio-editor-and-generation-panel.md), [audio-editor.md](docs/features/audio-editor.md)).
+Инварианты и подробности — [backend/ClaudeHomeServer.AudioEditor/CLAUDE.md](backend/ClaudeHomeServer.AudioEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+
 ## Раздел «Видео» (Services/Video)
 
 Эфиры телеканалов и лента подписок YouTube за общим `IVideoProvider`; живой кадр рисуется оверлеем над страницами (панель, центральный остров, плавающее окно).
-
 Инварианты и подробности — [backend/ClaudeHomeServer.Video/CLAUDE.md](backend/ClaudeHomeServer.Video/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+
+**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; выбор — вид `video-scene`/`video-film` строки контекста, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` за флагом `video-editor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
+
+## Контекст хода (Services/ChatContext)
+
+Строка над полем ввода и панель «Контекст» вместо полос «Картинки»/«Звук»/«Видео»; флаг `composer-context-row` снят ([ADR-023](docs/adr/ADR-023-turn-context.md)). Стор — `Services.ChatContext` (Core, ревизия, `409 context_changed`), виды объявляют вертикали слотом `context-kind`, агент — MCP `turn-context`; панель `chatContext` открывает только человек (`revealContextPanel`).
+**Основной объект один на чат:** агент его по своей инициативе не меняет (тот же объект не трогает, другой — лишь по просьбе человека, с меткой ✦), усыновители `local_*` в контекст не пишут; выбор живёт в сторе, сырой `Focus` нити — только для `Sync` и засева. Тексты агенту — «строка контекста», без «полос».
 
 ## Значок проекта (Services/ProjectIcons)
 
-Значок от модели — **не картинка**: модель отдаёт имя иконки из белого списка lucide
-(`LucideGlyphs`), разметки от модели не приходит никогда; любой сбой молча оставляет инициалы.
-Своя картинка владельца (`Kind = Image`, загрузка с компа) живёт в `data/project-icon-images/`,
-**не в `project-icons/`** — тот каталог сносит стартовая миграция; показ только через `<img>`.
-Контракт ответа, двухходовая схема подбора, белый список и форма хранения —
-[ADR-009](docs/adr/ADR-009-project-icon-glyph.md); тексты интерфейса —
-[docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
+Значок от модели — **не картинка**: модель отдаёт имя иконки из белого списка lucide (`LucideGlyphs`), разметки от модели не приходит никогда; любой сбой молча оставляет инициалы. Своя картинка владельца (`Kind = Image`, загрузка с компа) живёт в `data/project-icon-images/`, **не в `project-icons/`** — тот каталог сносит стартовая миграция; показ только через `<img>`.
+Контракт ответа, двухходовая схема подбора, белый список и форма хранения — [ADR-009](docs/adr/ADR-009-project-icon-glyph.md); тексты интерфейса — [docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
 
 ## Уборка карты проекта (Services/Docs)
 
-Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые
-ссылки, вложенные карты) и предлагает, что прибрать; за флагом `project-map-hygiene`. Запись —
-только по явной отметке человека, а **вынос секции кнопкой не делается никогда** (цена ошибки —
-потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет. Устройство двух фаз —
-[docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план —
-[project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
+Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые ссылки, вложенные карты) и предлагает, что прибрать; за флагом `project-map-hygiene`.
+Запись — только по явной отметке человека, а **вынос секции кнопкой не делается никогда** (цена ошибки — потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет.
+Устройство двух фаз — [docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план — [project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
 
 ## Раздел «Архитектура» (Viaduct)
 

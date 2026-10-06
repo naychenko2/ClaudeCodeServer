@@ -7,16 +7,16 @@
 import { useState, type ReactNode } from 'react';
 import { AlertTriangle, ChevronLeft, ChevronRight, Download, Image as ImageIcon, Pencil, RotateCcw, X } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, useIsMobile,
+  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, isCardPick, useIsMobile,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { imageEditorApi } from '../api';
 import { enterScope, isPersonalScope } from '../scope';
 import { isFreeUnit, money, variantsWord } from '../format';
-import { dismissJob, saveToProject, savedStepOf, takeVariant, workWith } from './actions';
+import { dismissJob, saveToProject, savedStepOf, takeVariant } from './actions';
 import { download } from './download';
 import {
-  chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isLegacyThread, ORIGIN, saveFolder,
+  chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isHiddenDraft, isLegacyThread, ORIGIN, saveFolder,
   stackSaveState, stepOf, threadName, versionLabel,
 } from './model';
 import { recordOf } from './records';
@@ -25,16 +25,20 @@ import type { ImageThread, ImageThreadEvent, ImageThreadStack } from './threadsA
 import { imageSrc, launchThread } from './useThreadLaunch';
 import { queueText, useJobStatus, useProgress } from './useJobStatus';
 import { OriginAnchor, VersionCard } from './VersionCards';
+import { CardContextActions, useCardFill, useFocusedThreadId } from '../context/CardFill';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
-function Frame({ focused, stacked, dashed, dim, children }: {
-  focused: boolean; stacked: boolean; dashed?: boolean; dim?: boolean; children: ReactNode;
+function Frame({ focused, stacked, dashed, dim, onPick, children }: {
+  focused: boolean; stacked: boolean; dashed?: boolean; dim?: boolean; onPick?: () => void; children: ReactNode;
 }) {
   // Края стопки позади карточки — два сдвинутых контура той же карточки
   const edges = stacked ? `, 5px 5px 0 -1px ${C.bgCard}, 5px 5px 0 0 ${C.border}, 10px 10px 0 -1px ${C.bgCard}, 10px 10px 0 0 ${C.borderLight}` : '';
   return (
-    <div data-image-thread-card={focused ? 'focused' : 'idle'} style={{
+    <div data-image-thread-card={focused ? 'focused' : 'idle'}
+      // Клик по карточке, а не по её кнопке, — выбор человеком: панель следует за ним
+      onClick={onPick ? e => { if (isCardPick(e.target, e.currentTarget)) onPick(); } : undefined}
+      style={{
       display: 'flex', flexDirection: 'column', gap: SP.sm, padding: SP.md, maxWidth: 520,
       marginRight: stacked ? 10 : 0, marginBottom: stacked ? 10 : 0,
       border: `1px ${dashed ? 'dashed' : 'solid'} ${focused ? C.accent : C.border}`, borderRadius: R.xl,
@@ -201,6 +205,7 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
   events?: readonly ImageThreadEvent[];
 }) {
   const mobile = useIsMobile();
+  const fill = useCardFill(sessionId, thread, null);
   const chain = chainOf(thread, stack);
   const isCurrent = !stack || stack.stackId === currentStack(thread)?.stackId;
   const at = currentIndex(thread, chain, stack);
@@ -221,13 +226,14 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
   const saveState = stackSaveState(thread, isCurrent, unsaved, personal);
 
   const edit = async () => {
-    if (!focused && !(await workWith(projectId, sessionId, thread.id))) return;
+    await fill.pick();
     openEditor(sessionId, thread.id);
   };
   const save = async () => { setSaving(true); await saveToProject(projectId, sessionId, thread); setSaving(false); };
 
   return (
-    <Frame focused={focused && isCurrent} stacked={chain.length > 1} dashed={draft} dim={!!stack?.old}>
+    <Frame focused={focused && isCurrent} stacked={chain.length > 1} dashed={draft} dim={!!stack?.old}
+      onPick={() => { void fill.pick(); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm }}>
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ImageIcon, ICON_SIZE.sm)}</span>
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{threadName(thread)}</span>
@@ -235,7 +241,7 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
           <span style={{ color: C.textSecondary }}>· {draft ? `сохранять в ${folder ? `${folder}/` : 'корень проекта'}` : versionLabel(thread, pos, saved)}</span>
         )}
         {stack?.old && <Badge size="xs" tone="neutral">старая стопка</Badge>}
-        {focused && isCurrent && <Badge size="xs" tone="accent">в работе</Badge>}
+        {focused && isCurrent && <Badge size="xs" tone="accent">{fill.byAgent ? 'В работе ✦' : 'В работе'}</Badge>}
         {chain.length > 1 && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: SP.xxs, color: C.textMuted }}>
             <IconButton size="xs" title="Предыдущий шаг" ariaLabel="Предыдущий шаг" disabled={idx <= 0} onClick={() => setView(idx - 1)}>
@@ -263,7 +269,7 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
 
       {!draft && (
         <Acts>
-          {!focused && <Button size="sm" variant="secondary" onClick={() => { void workWith(projectId, sessionId, thread.id); }}>Работать с этой</Button>}
+          {isCurrent && <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={null} fill={fill} size="sm" />}
           <Button size="sm" variant={focused ? 'secondary' : 'ghost'} leftIcon={ic(Pencil)} onClick={() => { void edit(); }}>Редактировать</Button>
           {src && (
             <Button size="sm" variant="ghost" leftIcon={ic(Download)} title="Скачать" onClick={() => { void download(src, () => threadName(thread)); }}>
@@ -286,13 +292,14 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   // Личный чат вне проекта: ctx.projectId = null, область — personal
   const projectId = enterScope(ctx.projectId, ctx.sessionId);
   const state = useThreads(projectId, ctx.sessionId);
+  const focusId = useFocusedThreadId(ctx.sessionId ?? '');
   const data = (rec?.data ?? {}) as { threadId?: unknown; stackId?: unknown; versionId?: unknown };
   const thread = typeof data.threadId === 'string' ? state.threads.find(t => t.id === data.threadId) : undefined;
   if (!ctx.sessionId || !thread) {
     // Нить удалили (пустой черновик сняли ✕) — якорь в истории остался; рисуем след
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
-  const focused = state.focus === thread.id;
+  const focused = focusId === thread.id;
   const byVersion = typeof data.versionId === 'string' || (typeof data.stackId !== 'string' && !isLegacyThread(thread) && !!thread.versions?.length);
   if (byVersion) {
     const v = typeof data.versionId === 'string' && data.versionId !== ORIGIN ? findVersion(thread, data.versionId) : null;
@@ -301,6 +308,8 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
       : <OriginAnchor projectId={projectId} sessionId={ctx.sessionId} thread={thread} focused={focused} />;
   }
   const stack = typeof data.stackId === 'string' ? findStack(thread, data.stackId) : currentStack(thread);
+  // Пустой черновик в ленте не рисуем; пока идёт первый запуск — карточка с «Отменить», как раньше
+  if (isHiddenDraft(thread)) return null;
   return (
     <StackCard projectId={projectId} sessionId={ctx.sessionId} thread={thread} stack={stack}
       focused={focused} events={state.events} />

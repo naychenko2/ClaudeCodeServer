@@ -2,16 +2,20 @@
 // сохранить в проект может только человек). Каждое — мутация с ревизией через стор;
 // тексты тостов — из записки v3, раздел «Тексты».
 
-import { showToast } from 'aihome_shell/kit';
+import {
+  autoRevealGenerationPanel, refreshChatContext, revealContextPanel, showToast,
+} from 'aihome_shell/kit';
 import { imageEditorApi, nameTakenSuggestion, type ImageEncodeFormat } from '../api';
 import { nameStem } from '../saveAs';
 import { isPersonalScope } from '../scope';
 import {
-  chainOf, currentStack, currentVersion, hasRunningLaunch, isEmptyThread, isLegacyThread, ORIGIN, originFile, saveFolder,
-  versionStep,
+  chainOf, currentStack, currentVersion, isLegacyThread, ORIGIN, originFile, saveFolder, versionStep,
 } from './model';
-import { closeEditor, getEditor, getThreadsState, mutate, requestImageMode, setThreadMarks } from './threadStore';
+import {
+  getThreadsState, imageDraftKey, mutate,
+} from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadTake, type ImageThreadVersion } from './threadsApi';
+import { noteImageMode } from './modeState';
 
 // Шаг, который уже лежит в проекте файлом нити: версия «в проекте», а не «черновик»
 const _saved = new Map<string, string>();
@@ -37,9 +41,35 @@ export function activeStepOf(t: ImageThread): string | null {
   return v ? versionStep(t, v) : t.currentStepId;
 }
 
-// «Продолжить от неё» и «Работать с этой»: версия становится текущей, нить — в работе
-export const continueFrom = (projectId: string, sessionId: string, t: ImageThread, versionId: string) =>
-  mutate(projectId, sessionId, rev => threadsApi.current(projectId, sessionId, t.id, versionId, rev));
+// Как открывать панель после действия человека: auto — как решено в v4; none — не открывать.
+// none зовут смена режима сегментом и выбор в меню полосы на телефоне: шторка не поднимается,
+// человек выбрал картинку там, где пишет промпт (макет v5). Шторка ли сейчас — знает разметка
+export type RevealMode = 'auto' | 'none';
+
+// Выбор картинки человеком открывает панель «Контекст», пока её не закрыли в этом чате
+// (решения Андрея по v4, 2). Выбор агента (image_focus) приходит в стор с сервера и сюда не идёт
+function revealPanel(ok: boolean, sessionId: string, how: RevealMode = 'auto'): boolean {
+  if (ok && how === 'auto') autoRevealGenerationPanel('chatContext', sessionId);
+  return ok;
+}
+
+// Кнопка («Работать с этой», «Продолжить от неё») — просьба открыть: панель «Контекст»
+// открывается и закрытая («Панель следует за выбором», правило 4)
+function openPanel(ok: boolean, sessionId: string, threadId: string): boolean {
+  if (!ok) return false;
+  revealContextPanel(sessionId, { target: imageDraftKey(threadId) });
+  return true;
+}
+
+// Картинку выбрал человек — режим «Править» (флаг image-panel-v5); выбор агента сюда не идёт
+function humanPick(ok: boolean, sessionId: string): boolean {
+  if (ok) noteImageMode(sessionId, 'edit');
+  return ok;
+}
+
+// «Продолжить от неё»: версия становится текущей, нить — в работе
+export const continueFrom = async (projectId: string, sessionId: string, t: ImageThread, versionId: string) =>
+  openPanel(humanPick(await mutate(projectId, sessionId, rev => threadsApi.current(projectId, sessionId, t.id, versionId, rev)), sessionId), sessionId, t.id);
 
 // Правка без ИИ: у нити с версиями — шаг текущей версии, у старой — «Взять» шага в стопку
 export const applyStep = (projectId: string, sessionId: string, t: ImageThread, stepId: string) =>
@@ -66,32 +96,20 @@ export async function rollbackTo(projectId: string, sessionId: string, t: ImageT
   return ok;
 }
 
-// «Работать с этой»: фокус на существующую нить
-export const workWith = (projectId: string, sessionId: string, threadId: string | null) =>
-  mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
-
 // Файл проекта в работу: сервер найдёт его нить или заведёт новую с якорем в ленте
-export const workWithFile = (projectId: string, sessionId: string, file: string) =>
-  mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { file, revision: rev }));
+export const workWithFile = async (projectId: string, sessionId: string, file: string, how: RevealMode = 'auto') =>
+  revealPanel(humanPick(await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { file, revision: rev })), sessionId), sessionId, how);
 
-// «✦ Нарисовать новую»: карточка-черновик «Новая картинка» и фокус на неё. Черновик завёл
+// «✦ Нарисовать новую»: черновик «Новая картинка» (чип в полосе, в ленту не рисуется) и фокус на него. Черновик завёл
 // человек — это и есть просьба о режиме «Картинка»; черновик агента режим не меняет
-export async function createDraft(projectId: string, sessionId: string, folder: string) {
+export async function createDraft(projectId: string, sessionId: string, folder: string, how: RevealMode = 'auto') {
   const ok = await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { draftFolder: folder, revision: rev }));
-  if (ok) requestImageMode(sessionId);
-  return ok;
-}
-
-// ✕ на чипе: снять выбор; пустая нить (черновик или файл без шагов) уходит из ленты целиком
-export async function releaseFocus(projectId: string, sessionId: string, t: ImageThread | null) {
-  const empty = !!t && isEmptyThread(t) && !t.pendingJobId && !hasRunningLaunch(t);
-  const ok = empty && t
-    ? await mutate(projectId, sessionId, rev => threadsApi.remove(projectId, sessionId, t.id, rev))
-    : await mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, null, rev));
-  if (!ok) return;
-  if (t) setThreadMarks(t.id, [], null);
-  if (t && getEditor()?.threadId === t.id) closeEditor();
-  showToast('Картинка больше не выбрана: режим «Чат»', '', 'info');
+  if (ok) {
+    noteImageMode(sessionId, 'create');
+    // Черновик становится основным объектом на сервере; состояние контекста не ждёт события рассылки
+    void refreshChatContext(sessionId);
+  }
+  return revealPanel(ok, sessionId, how);
 }
 
 // «Сохранить в проект»: файл — следующей версией рядом, черновик — под свободным именем

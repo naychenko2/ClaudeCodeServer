@@ -104,6 +104,38 @@ public class ImageEditCatalogTests
         catalog.Providers.Select(p => p.Key).Should().Equal("fal", LocalImageEditor.ProviderKey);
     }
 
+    // Приёмка Д7: при local-media-default «Авто» берёт свою видеокарту первой, облако — только явным выбором
+    [Fact]
+    public void Авто_при_флаге_local_media_default_берёт_local_даже_при_настроенном_облаке()
+    {
+        var local = new LocalImageEditor(new LocalImageEditorTests.FakeMedia());
+
+        ImageEditCatalog.Build([Fal, local], "auto", null, preferLocal: true).Default.Provider
+            .Should().Be(LocalImageEditor.ProviderKey);
+        ImageEditCatalog.Build([Fal, local], "auto", null).Default.Provider.Should().Be("fal", "без флага — как раньше");
+        ImageEditCatalog.Build([Fal, local], "fal", null, preferLocal: true).Default.Provider
+            .Should().Be("fal", "явный выбор админа флаг не трогает");
+        ImageEditCatalog.Build([Fal, LocalDown()], "auto", null, preferLocal: true).Default.Provider
+            .Should().Be("fal", "лежащая видеокарта — не повод молча ждать её");
+    }
+
+    [Fact]
+    public void Строка_Авто_при_флаге_бесплатная_локальная_а_операция_без_local_уходит_в_облако()
+    {
+        var local = new LocalImageEditor(new LocalImageEditorTests.FakeMedia());
+        IImageEditor[] editors = [Fal, local];
+        var catalog = ImageEditCatalog.Build(editors, "auto", null, preferLocal: true);
+
+        var auto = ClaudeHomeServer.Services.ImageEditor.ChatContext.ImageExecutorRows
+            .Build(catalog, editors, ImageEditOp.Edit, hasImage: true, hasMask: false).First(r => r.Id == "auto");
+        auto.Free.Should().BeTrue();
+        auto.Sub.Should().StartWith("сейчас: локально");
+
+        ClaudeHomeServer.Services.ImageEditor.ChatContext.ImageExecutorRows.LocalCan(catalog, ImageEditOp.Edit, true, false).Should().BeTrue();
+        ClaudeHomeServer.Services.ImageEditor.ChatContext.ImageExecutorRows.LocalCan(catalog, ImageEditOp.RemoveBackground, true, false)
+            .Should().BeFalse("в каталоге local такой операции нет — контроллер вернёт «Авто» прежний");
+    }
+
     [Fact]
     public void Незаведённый_local_отсутствует_в_каталоге()
     {

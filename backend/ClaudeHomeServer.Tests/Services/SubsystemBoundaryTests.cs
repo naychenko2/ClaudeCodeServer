@@ -38,14 +38,12 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <c>PromptToolsSinkFor</c> → <c>SafePromptSnapshotAttach</c>, и пришлось чинить
 /// отдельной задачей. Источник правды тут — сборка, а не текст.
 ///
-/// Сторож читает: поля, параметры конструкторов, публичные свойства, сигнатуры
-/// публичных методов И тела методов (IL-скан через <see cref="BoundaryIlScanner"/>).
-/// Поэтому видны: статические вызовы, резолвы <c>sp.GetRequiredService&lt;T&gt;()</c>,
-/// вызовы из async-state-машинок и замыканий. Обход вложенных типов обязателен:
-/// без него 3 из 7 известных швов остаются невидимыми.
-///
-/// Что НЕ проверяется осознанно: интерфейсы и базовые классы (за пределами четырёх мест
-/// ниже). Если потребуется — расширим в следующем шаге.
+/// Сторож читает (всё через <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/>):
+/// метаданные типа — поля всех видимостей, сигнатуры методов и конструкторов, свойства,
+/// события, базовый тип, интерфейсы, атрибуты — И тела методов (IL-скан).
+/// Поэтому видны: поле чужого типа, не тронутое в коде, статические вызовы, резолвы
+/// <c>sp.GetRequiredService&lt;T&gt;()</c>, вызовы из async-state-машинок и замыканий.
+/// Обход вложенных типов обязателен: без него 3 из 7 известных швов остаются невидимыми.
 /// </summary>
 public class SubsystemBoundaryTests
 {
@@ -115,6 +113,12 @@ public class SubsystemBoundaryTests
         // ImageEditor — динамический модуль (ADR-018 §10.1): Main на него не ссылается,
         // без форс-загрузки сторож прошёл бы по нему вакуумно.
         _ = typeof(ClaudeHomeServer.Services.ImageEditor.ImageEditorSubsystem).Assembly;
+        // AudioEditor — динамический модуль «Звук» (ADR-021): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.AudioEditor.AudioEditorSubsystem).Assembly;
+        // VideoEditor — динамический модуль «Видео» (ADR-022): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.VideoEditor.VideoEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): форс-загрузка нужна,
         // чтобы сторож видел типы Prompts (OmoPrompts, SubagentPrompts, OmcPersonaRouting)
         // и проверял границы по Prompts.dll.
@@ -292,6 +296,32 @@ public class SubsystemBoundaryTests
                 "ClaudeHomeServer.Services.TestRuns",
                 SharedAllowedPrefixes
                     .Concat(new[] { "ClaudeHomeServer.Services.TestRuns" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // AudioEditor — динамический модуль «Звук» (ADR-021 §1). Только общая спинка: Higgsfield,
+        // локальные модели и DSP — швы Core в нейтральных namespace. Ссылка на сборку ImageEditor
+        // (а не на Core) — нарушение, так и проверяется мутацией.
+        new object[]
+        {
+            new VerticalBoundary(
+                "AudioEditor",
+                "ClaudeHomeServer.Services.AudioEditor",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.AudioEditor" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // VideoEditor — динамический модуль «Видео» (ADR-022 §1). Только общая спинка: Higgsfield,
+        // локальные модели и ffmpeg — швы Core в нейтральных namespace. Ссылка на сборку ImageEditor
+        // или AudioEditor — нарушение, так и проверяется мутацией.
+        new object[]
+        {
+            new VerticalBoundary(
+                "VideoEditor",
+                "ClaudeHomeServer.Services.VideoEditor",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.VideoEditor" })
                     .ToArray(),
                 Array.Empty<string>()),
         },
@@ -1735,6 +1765,10 @@ public class SubsystemBoundaryTests
         // вертикалях (CodeGraph, Notes). Прецедент IKnowledgeSyncParticipant: тот же
         // приём — контракт в Core, реализации по вертикалям, реестр через IEnumerable<>.
         "ClaudeHomeServer.Services.Turn",
+        // ADR-023 (контекст хода): стор контекста чата, контракты видов объектов
+        // (IContextKindProvider) и DTO — спина: вертикали объявляют виды, а спина
+        // знает только строки Kind и не ссылается на вертикали.
+        "ClaudeHomeServer.Services.ChatContext",
         // Этап 5, волна D (Notes): INoteTaskBridge + узкие Core-типы (NoteTaskRef/
         // NoteTaskCreateRequest/NoteTaskUpdateRequest/NoteTaskStatus/NoteTaskKind/
         // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes
@@ -1772,17 +1806,28 @@ public class SubsystemBoundaryTests
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).
         "ClaudeHomeServer.Core.Telemetry",
-        // ADR-018 §10.1: швы модуля редактора картинок в спине — IHiggsfieldAccess,
-        // список авторазрешения тулсета агента (ImageEditorAgentTools), имя рабочей папки для
-        // бэкапа и записи операций растра.
+        // ADR-018 §10.1: швы модуля редактора картинок в спине — список авторазрешения
+        // тулсета агента (ImageEditorAgentTools), имя рабочей папки для бэкапа и записи
+        // операций растра.
         // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
         "ClaudeHomeServer.Services.ImageEditor",
+        // ADR-021 §2: имя рабочей папки модуля «Звук» для бэкапа (AudioEditorPaths) — Main
+        // типов динамического модуля не видит. Сам модуль — в ClaudeHomeServer.AudioEditor.
+        "ClaudeHomeServer.Services.AudioEditor",
+        // ADR-022 §2: имя рабочей папки модуля «Видео» для бэкапа (VideoEditorPaths) и общие
+        // константы агента — Main типов динамического модуля не видит.
+        "ClaudeHomeServer.Services.VideoEditor",
         // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая
         // функция по сигнатуре байтов, нужна и модулю редактора, и LocalMedia в Images.
         "ClaudeHomeServer.Services.ImageEditor.Versioning",
         // ADR-018 §10.1: шов растра. Реализация (SkiaImageRaster) в Images, потребитель —
         // модуль редактора; namespace сохранён при переносе интерфейса из Images.
         "ClaudeHomeServer.Services.Images.Editing.Raster",
+        // ADR-021 §2: общие швы медиа-модулей (картинки и звук) под нейтральными именами —
+        // IHiggsfieldAccess (доступ к инстансной интеграции Higgsfield) и ProjectLinkGuard
+        // (запрет символических ссылок в путях проекта). Перенесены из Services.ImageEditor.
+        "ClaudeHomeServer.Services.Higgsfield",
+        "ClaudeHomeServer.Services.Media",
     ];
 
     /// <summary>
@@ -1799,6 +1844,10 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.OutputRingBuffer",
         "ClaudeHomeServer.Services.JsonFileStore",
         "ClaudeHomeServer.Services.SsrfGuard",
+        // Скачивание результата генерации по ссылке поставщика поверх SsrfGuard: им пользуются
+        // и Images, и ImageEditor — вторая копия в вертикали снова открыла бы SSRF
+        "ClaudeHomeServer.Services.SafeMediaDownloader",
+        "ClaudeHomeServer.Services.MediaDownloadResult",
         "ClaudeHomeServer.Services.RuleRuntimeState",
         "ClaudeHomeServer.Services.ModelTiers",
         "ClaudeHomeServer.Services.SpecialtyDefaultBinding",

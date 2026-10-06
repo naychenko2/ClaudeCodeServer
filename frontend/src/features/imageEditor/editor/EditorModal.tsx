@@ -5,7 +5,7 @@
 // становится текущей при первой правке: следующая правка всегда идёт от версии в работе. Закрытие (✕, «Готово», Esc) выбор картинки не снимает; пометки
 // остаются в сторе нити и уходят чипом со следующим сообщением.
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, Download, Eye, Save } from 'lucide-react';
 import {
   Button, Chip, Field, Modal, ModalActions, TextField, C, FS, R, SP, ICON_SIZE, ICON_STROKE, showToast, useIsMobile,
@@ -33,10 +33,11 @@ import {
   chainOf, currentIndex, currentStack, currentVersion, downloadName, findVersion, isLegacyThread, ORIGIN, originFile, saveFolder, stepOf,
   threadName, versionHasImage, versionLabel, versionName, versionShort, versionsOf, versionStep,
 } from '../thread/model';
-import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads } from '../thread/threadStore';
+import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads, type EditorTool } from '../thread/threadStore';
 import { imageSrc, launchThread, quickAvailabilityFor, threadHasImage, versionSrc } from '../thread/useThreadLaunch';
 import { useCatalog } from '../thread/catalog';
-import { effectiveSettings, usePrefs } from '../thread/prefs';
+import { effectiveSettings, modeSettings, usePrefs } from '../thread/prefs';
+import { modeAware } from '../thread/modeState';
 import { useJobStatus } from '../thread/useJobStatus';
 
 const ic = (I: typeof Check, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -67,8 +68,13 @@ function useSourceInfo(src: string | null) {
   return info && info.src === src ? info : undefined;
 }
 
-export function EditorModal({ projectId, sessionId, threadId, versionId = null }: {
+// Инструменты холста; остальные инструменты старта — правки без ИИ в колонке справа
+const CANVAS_TOOLS: readonly EditorTool[] = ['hand', 'mask', 'arrow', 'rect', 'text', 'eraser'];
+
+export function EditorModal({ projectId, sessionId, threadId, versionId = null, startTool }: {
   projectId: string; sessionId: string; threadId: string; versionId?: string | null;
+  // С чем открыть: инструмент холста, «Обрезать» (сразу рамка) или раздел «Без ИИ»
+  startTool?: EditorTool;
 }) {
   const mobile = useIsMobile();
   const api = useMemo(() => imageEditorApi(), []);
@@ -76,7 +82,10 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
   const personal = isPersonalScope(projectId);
   const state = useThreads(projectId, sessionId);
   const thread = state.threads.find(t => t.id === threadId) ?? null;
-  const [tool, setTool] = useState<Tool>('mask');
+  const [tool, setTool] = useState<Tool>(() => (startTool && CANVAS_TOOLS.includes(startTool) ? startTool as Tool : 'mask'));
+  // «Обрезать» из панели ставит рамку один раз, как только известен размер картинки
+  const [cropPending, setCropPending] = useState(startTool === 'crop');
+  const noAiRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ src: string; w: number; h: number } | null>(null);
   const [crop, setCrop] = useState<{ rect: ImageFractionRect; ratio: CropRatio } | null>(null);
   const [labelAt, setLabelAt] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -95,6 +104,13 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
     return v ? versionSrc(projectId, thread, v) : imageSrc(projectId, thread, thread.currentStepId);
   }, [projectId, thread, versionId]);
   const sourceInfo = useSourceInfo(viewedSrc);
+  // «Повернуть и отразить», «Размер и формат» из панели: раздел «Без ИИ» сразу на виду
+  useEffect(() => {
+    if (startTool !== 'rotate' && startTool !== 'resize') return;
+    const box = noAiRef.current;
+    const el = startTool === 'resize' ? box?.querySelector('[data-size-compress]') ?? box : box;
+    el?.scrollIntoView?.({ block: 'start' });
+  }, [startTool, sourceInfo]);
 
   if (!thread) return null;
   const stack = currentStack(thread);
@@ -126,7 +142,12 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
   };
   const onImageLoad = (img: HTMLImageElement) => {
     if (img.getAttribute('src') !== src) return;
-    setSize({ src: src!, w: img.naturalWidth, h: img.naturalHeight });
+    const d = { w: img.naturalWidth, h: img.naturalHeight };
+    setSize({ src: src!, ...d });
+    if (cropPending) {
+      setCropPending(false);
+      setCrop({ rect: initialCrop('free', d), ratio: 'free' });
+    }
   };
 
   // Правка без ИИ: сервер пишет шаг, шаг ложится в текущую версию (у старой нити — take)
@@ -150,7 +171,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
   };
 
   // Умеет ли поставщик полосы действие — по каталогу, до котировки и запуска
-  const settings = effectiveSettings(prefs, thread.settings);
+  // Быстрые действия редактора — правка: с режимами (image-panel-v5) идут выбором «Править»
+  const settings = modeAware() ? modeSettings('edit', prefs, thread.settings) : effectiveSettings(prefs, thread.settings);
   const quickActions = QUICK_ACTIONS.filter(a => quickOffered(a, catalog));
   const availability = (a: QuickAction) => (catalog ? quickAvailabilityFor(catalog, settings, a) : null);
   const quickBlock = (a: QuickAction) => {
@@ -232,6 +254,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
           onRun={(a, provider) => { void runQuick(a, provider); }} />
       </Section>
       {hasImage && (
+        <div ref={noAiRef} data-editor-no-ai="">
         <Section title="Без ИИ" meta={legacy ? 'бесплатно, мгновенно' : 'бесплатно, мгновенно, шагом этой версии'}>
           <AdjustPanel api={api} projectId={projectId} stepId={viewedStep ?? baseFile ?? ''} size={dims}
             base={transformBase ? Promise.resolve(transformBase) : null}
@@ -242,6 +265,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
             onCrop={() => { if (dims) setCrop(c => (c ? null : { rect: initialCrop('free', dims), ratio: 'free' })); }}
             onApply={(ops, encode) => { void runTransform(ops, encode); }} />
         </Section>
+        </div>
       )}
       {viewed && (
         <Section title="Версии" meta="в ленте — карточка на каждую">

@@ -12,6 +12,9 @@ export const threadName = (t: ImageThread) => (t.file ? splitPath(t.file).name :
 export const isEmptyThread = (t: ImageThread) =>
   t.stacks.every(s => !s.steps.length) && versionsOf(t).every(v => v.id === ORIGIN && !v.steps.length);
 
+// Пустой черновик без идущего запуска: в ленте карточкой не рисуется (живёт чипом в полосе)
+export const isHiddenDraft = (t: ImageThread) => !t.file && isEmptyThread(t) && !t.pendingJobId;
+
 export const findStack = (t: ImageThread, stackId: string | null | undefined) =>
   t.stacks.find(s => s.stackId === stackId) ?? null;
 
@@ -109,6 +112,13 @@ export const versionStep = (t: ImageThread, v: ImageThreadVersion) =>
 // Файл исходника: после «Сохранить в проект» нить идёт за новым файлом, а исходник — первый
 export const originFile = (t: ImageThread) => t.lineage[0] ?? t.file;
 
+// Картинка в работе — есть что править: версия с картинкой, шаг или файл
+export function threadHasImage(t: ImageThread | null): boolean {
+  if (!t) return false;
+  const v = isLegacyThread(t) ? null : currentVersion(t);
+  return v ? versionHasImage(t, v) : !!t.currentStepId || !!t.file;
+}
+
 export const versionHasImage = (t: ImageThread, v: ImageThreadVersion) =>
   !!versionStep(t, v) || (v.id === ORIGIN && !!originFile(t));
 
@@ -133,8 +143,6 @@ export const launchOf = (t: ImageThread, jobId: string): ImageThreadLaunch | nul
 // Версии одного запуска по порядку вариантов
 export const launchVersions = (t: ImageThread, jobId: string) =>
   versionsOf(t).filter(v => v.jobId === jobId).sort((a, b) => (a.variant ?? 0) - (b.variant ?? 0));
-
-export const hasRunningLaunch = (t: ImageThread) => (t.launches ?? []).some(l => l.status === 'running');
 
 // Надпись под запуском, кончившимся не целиком. Отмена и перезапуск сервера с частью готовых
 // вариантов называются прямо: без надписи лента выглядит так, будто остальное недорисовалось
@@ -163,6 +171,13 @@ export function versionMeta(t: ImageThread, v: ImageThreadVersion, model?: strin
     v.steps.length > 1 ? 'с правками без ИИ' : '',
     model ?? '',
   ].filter(Boolean).join(' · ');
+}
+
+// Что за запуск дал версию: «промпт» и кто запускал — в карточке версии, строки запуска над ней нет
+export function versionDone(t: ImageThread, v: ImageThreadVersion): string | null {
+  const launch = v.jobId ? launchOf(t, v.jobId) : null;
+  if (!launch) return null;
+  return [launch.prompt ? `«${launch.prompt}»` : null, launch.initiator === 'agent' ? 'Claude' : null].filter(Boolean).join(' · ') || null;
 }
 
 // Главная кнопка карточки версии (прототип полос): у версии в работе — «Сохранить в проект»,

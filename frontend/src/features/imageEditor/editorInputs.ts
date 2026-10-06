@@ -23,11 +23,6 @@ export const SAMPLE_ROLES: [ReferenceRole, string, string][] = [
   ['object', 'Предмет', 'Предмет'],
 ];
 
-export const roleShort = (r: ReferenceRole) => SAMPLE_ROLES.find(x => x[0] === r)?.[2] ?? r;
-
-const IMAGE_EXT = /\.(png|jpe?g|webp)$/i;
-export const isImagePath = (path: string) => IMAGE_EXT.test(path);
-
 // Потолок образцов: лимит сервера и, у явно выбранной модели, её собственный
 export function maxSamples(serverLimit: number, modelLimit: number | null | undefined): number {
   return modelLimit != null ? Math.min(serverLimit, modelLimit) : serverLimit;

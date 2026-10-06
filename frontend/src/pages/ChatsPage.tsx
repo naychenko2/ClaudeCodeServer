@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
+import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
 import { archiveApi } from '../api/chats';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { joinUser, onMessage } from '../lib/signalr';
@@ -24,8 +25,13 @@ import { useVideoCenter, useVideoCenterSplit, useVideoPlaying, VIDEO_PANEL_EVENT
 import { useCenterSplit } from '../hooks/useCenterSplit';
 import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
-import { chatPanels } from './workspace/panelStackState';
-import { CHAT_KEYS, SESSION_KEYS } from './workspace/panelCatalog';
+import { chatPanels, openKeysOf } from './workspace/panelStackState';
+import { followHost } from '../lib/genPanelFollow';
+import { CHAT_KEYS, CHAT_RIGHT_KEYS, isPanelKey, type PanelKey } from './workspace/panelCatalog';
+import { ContextPanelHost } from '../components/generation/ContextPanelHost';
+import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
+import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
+import { isGenPanelKey, markGenPanelDismissed } from '../lib/genPanelDismissed';
 import { plural } from '../lib/plural';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
@@ -107,6 +113,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       // Чат удалён на сервере (в т.ч. авто-удаление временного) — убираем из списка,
       // открытый чат закрываем. Side-эффекты в апдейтере идемпотентны.
       if (msg.type === 'chat_deleted') {
+        forgetChatContextOnDeleted(msg);
         setChats(prev => prev.filter(c => c.id !== msg.sessionId));
         setActiveId(prev => {
           if (prev !== msg.sessionId) return prev;
@@ -277,7 +284,14 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // При выходе/unmount флаг снимается — на мобильной ветке compact передаётся
   // безусловно, и isTablet там всегда false, так что эксклюзив десктопной веткой
   // не поднимается впустую.
-  const { setExclusive, markActive, closeCompactStack, reveal } = chatPanels.use();
+  const { setExclusive, markActive, closeCompactStack, reveal, close: closePanelKey, replaceWith, zones: chatZones } = chatPanels.use();
+  const chatOpenKeys = useRef<string[]>([]);
+  chatOpenKeys.current = openKeysOf(chatZones);
+  // Панели подсистем в правой зоне личного чата (слот workspace-panel-def): проекта
+  // здесь нет, поэтому projectId = null — проектные вклады («Персонажи») отказываются
+  // сами. Без вкладов контента нет, и рельса кнопок не показывает
+  const panelDefs = useSlot<WorkspacePanelDefCtx, WorkspacePanelDefApi>(SLOT_WORKSPACE_PANEL_DEF);
+  const chatRight = CHAT_RIGHT_KEYS;
   // Канал выбрали в КАТАЛОГЕ — эфир идёт в боковой панели, а та могла быть закрыта
   // или лежать в ящике рельсы. Раскладка — епархия страницы, поэтому являет панель
   // она, а стор только просит об этом событием.
@@ -286,6 +300,27 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     window.addEventListener(VIDEO_PANEL_EVENT, show);
     return () => window.removeEventListener(VIDEO_PANEL_EVENT, show);
   }, [reveal]);
+  // Показ панели правой зоны по просьбе подсистемы (revealWorkspacePanel): чужие
+  // ключи — проектные панели вроде «Персонажей» — здесь пропускаются. Вкладку
+  // detail.tab панель разбирает сама.
+  // Правая зона пустого чата скрыта (см. right ниже), но запрошенная панель генерации
+  // обязана появиться и в нём («＋» → Звук/Картинка в новом чате): запрос держит
+  // зону на экране до смены чата
+  const [genZoneFor, setGenZoneFor] = useState<string | null>(null);
+  useEffect(() => {
+    const onReveal = (e: Event) => {
+      const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
+      const key = d?.key;
+      if (!isPanelKey(key) || !chatRight.includes(key)) return;
+      if (isGenPanelKey(key)) setGenZoneFor(activeId);
+      // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
+      const host = d?.follow ? followHost(chatOpenKeys.current, key) : null;
+      if (host && isPanelKey(host)) replaceWith(key, host);
+      else reveal(key);
+    };
+    window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
+    return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
+  }, [reveal, replaceWith, activeId, chatRight]);
 
   useEffect(() => {
     setExclusive(isTablet);
@@ -551,12 +586,25 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // сообщения (есть что показать в артефактах). Для нового пустого чата
           // рельса не нужна — это держит центральную область симметричной:
           // IslandScaffold видит right=undefined и применяет авто-компенсацию.
-          // Правой зоне доступны ТОЛЬКО панели сессии: список чатов рисует левая
+          // Правой зоне доступны ТОЛЬКО панели сессии и генерации: список чатов рисует левая
           // (контент есть лишь у неё), и уехавшая сюда панель «Чаты» пропадала бы
           // с экрана целиком. Набор ключей это запрещает — и заодно чинит
           // раскладку, сохранённую до появления правила.
-          right={activeChat && activeChat.messageCount > 0 ? (
-            <PanelZone side="right" allowedKeys={SESSION_KEYS} hideWhenEmpty panelStack={chatPanels} panels={{}} sessionPanels={sessionPanels} compact={isTablet} />
+          right={activeChat && (activeChat.messageCount > 0 || genZoneFor === activeChat.id) ? (
+            <PanelZone
+              side="right" allowedKeys={chatRight} hideWhenEmpty panelStack={chatPanels}
+              onUserClose={k => markGenPanelDismissed(activeChat.id, k)}
+              panels={{
+                ...Object.fromEntries(panelDefs.flatMap(d => (
+                  d.name && isPanelKey(d.name) && chatRight.includes(d.name) && d.render && d.name !== 'chatContext' && (d.action?.isAvailable?.(null) ?? true)
+                    ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => { markGenPanelDismissed(activeChat.id, d.name!); closePanelKey(d.name as PanelKey); } })]]
+                    : []
+                ))),
+                chatContext: <ContextPanelHost session={activeChat} project={null}
+                  onClose={() => { markGenPanelDismissed(activeChat.id, 'chatContext'); closePanelKey('chatContext'); }} />,
+              }}
+              sessionPanels={sessionPanels} compact={isTablet}
+            />
           ) : undefined}
         />
       </div>

@@ -4,6 +4,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
+using ClaudeHomeServer.Services.Media;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -28,7 +29,7 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
 {
     protected string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    protected IActionResult GetIn(string sessionId) => Ok(threads.Get(UserId, sessionId));
+    protected IActionResult GetIn(string sessionId) => Ok(threads.View(UserId, sessionId));
 
     // Взять картинку в работу: ровно одно из file (путь в проекте) и draftFolder (черновик «Новая
     // картинка», "" — корень). Нить по этому файлу уже есть — фокус на неё, второй не будет

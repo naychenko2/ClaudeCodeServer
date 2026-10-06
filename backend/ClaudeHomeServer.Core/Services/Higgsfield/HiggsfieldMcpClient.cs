@@ -1,0 +1,178 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace ClaudeHomeServer.Services.Higgsfield;
+
+// Тонкий JSON-RPC-клиент бэкенда к mcp.higgsfield.ai/mcp (ADR-017, раздел 2а). REST API под
+// наш OAuth-токен у Higgsfield нет, MCP-эндпоинт и есть их API. Прокси хода
+// HiggsfieldToolset не переиспользуем: он привязан к сессии чата. initialize не нужен —
+// сервер отвечает без Mcp-Session-Id.
+//
+// Токен берётся через шов IHiggsfieldAccess на КАЖДЫЙ вызов: задача живёт минуты, а
+// обновление токена идёт само. null — интеграция отключена админом.
+//
+// Живёт в Core, а не в модуле картинок (ADR-021, §2): тот же транспорт нужен модулю «Звук», а
+// вертикаль на вертикаль не ссылается. Здесь только то, что не знает о картинках, — картиночное
+// скачивание лежит расширением в ImageEditor.
+public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration config, IHiggsfieldAccess? access = null)
+{
+    public const string HttpClientName = "higgsfield-editor";
+    private const string DefaultUrl = "https://mcp.higgsfield.ai/mcp";
+
+    private readonly string _url = config["Higgsfield:McpUrl"] ?? DefaultUrl;
+    private int _rpcId;
+
+    // Скачивание результата и загрузка образца по ссылкам Higgsfield; тесты модулей подставляют фейковый транспорт при
+    // создании клиента (клиент в Core, тесты в сборках вертикалей), а после создания загрузчик не
+    // подменить: иначе любой код с доступом к singleton обошёл бы SsrfGuard
+    public SafeMediaDownloader Downloader { get; init; } = SafeMediaDownloader.Shared;
+
+    public bool Available => Token() is not null;
+
+    public async Task<HiggsfieldCall> CallToolAsync(string tool, JsonObject arguments, CancellationToken ct)
+    {
+        var token = Token();
+        if (token is null) return HiggsfieldCall.NoAccess("Higgsfield отключён администратором");
+
+        var rpc = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = Interlocked.Increment(ref _rpcId),
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject { ["name"] = tool, ["arguments"] = arguments },
+        };
+        using var req = new HttpRequestMessage(HttpMethod.Post, _url)
+        {
+            Content = new StringContent(rpc.ToJsonString(), Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        // Streamable HTTP: без text/event-stream апстрим вправе ответить 406
+        req.Headers.Accept.ParseAdd("application/json");
+        req.Headers.Accept.ParseAdd("text/event-stream");
+
+        string text;
+        try
+        {
+            using var resp = await Client().SendAsync(req, ct);
+            text = await resp.Content.ReadAsStringAsync(ct);
+            if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                return HiggsfieldCall.NoAccess("Higgsfield не принял токен доступа");
+            if (!resp.IsSuccessStatusCode)
+                return HiggsfieldCall.NoAccess($"Higgsfield ответил {(int)resp.StatusCode}");
+        }
+        catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            return HiggsfieldCall.NoAccess("Higgsfield не ответил: " + ex.Message);
+        }
+
+        var envelope = ParseEnvelope(text);
+        if (envelope is null) return HiggsfieldCall.Error("Непонятный ответ Higgsfield");
+        if (envelope["error"] is JsonObject err)
+            return HiggsfieldCall.Error(err["message"]?.ToString() ?? "Ошибка Higgsfield");
+        if (envelope["result"] is not JsonObject result) return HiggsfieldCall.Error("Пустой ответ Higgsfield");
+
+        var body = new StringBuilder();
+        if (result["content"] is JsonArray content)
+            foreach (var item in content.OfType<JsonObject>())
+                if (item["text"]?.ToString() is { Length: > 0 } t)
+                    body.Append(body.Length > 0 ? "\n" : "").Append(t);
+        var isError = result["isError"] is JsonValue ev && ev.TryGetValue<bool>(out var e) && e;
+        return new HiggsfieldCall(!isError, false, body.ToString(), result["structuredContent"]);
+    }
+
+    // Адрес загрузки приходит в ответе media_upload, то есть извне: PUT идёт тем же транспортом,
+    // что и скачивание (SsrfGuard до запроса и при соединении, без прокси), а не клиентом MCP
+    public async Task<bool> PutAsync(string url, byte[] bytes, string contentType, CancellationToken ct) =>
+        await Downloader.UploadAsync(url, bytes, contentType, ct) is null;
+
+    // Результат поставщика: data:-ссылка разбирается на месте, внешняя — только через
+    // SafeMediaDownloader (SSRF, потолок maxBytes задаёт вызывающий по виду медиа).
+    // null — ссылка не годится или скачать не вышло
+    public async Task<HiggsfieldDownload?> DownloadBytesAsync(string url, long maxBytes, CancellationToken ct)
+    {
+        if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            var comma = url.IndexOf(',');
+            if (comma < 0) return null;
+            var type = url[5..comma].Split(';')[0];
+            try
+            {
+                return new HiggsfieldDownload(Convert.FromBase64String(url[(comma + 1)..]),
+                    string.IsNullOrEmpty(type) ? null : type);
+            }
+            catch (FormatException)
+            {
+                return null;
+            }
+        }
+
+        var download = await Downloader.DownloadAsync(url, maxBytes, ct);
+        return download.Bytes is { } bytes ? new HiggsfieldDownload(bytes, download.ContentType) : null;
+    }
+
+    // Ответ бывает и JSON, и SSE (строки data:)
+    internal static JsonObject? ParseEnvelope(string text)
+    {
+        var trimmed = text.TrimStart();
+        if (trimmed.StartsWith('{'))
+        {
+            try { return JsonNode.Parse(trimmed) as JsonObject; }
+            catch (JsonException) { return null; }
+        }
+        foreach (var line in text.Split('\n'))
+        {
+            var l = line.TrimStart();
+            if (!l.StartsWith("data:", StringComparison.Ordinal)) continue;
+            try
+            {
+                if (JsonNode.Parse(l["data:".Length..].Trim()) is JsonObject obj) return obj;
+            }
+            catch (JsonException) { }
+        }
+        return null;
+    }
+
+    private string? Token()
+    {
+        try
+        {
+            return access?.AccessToken();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private HttpClient Client()
+    {
+        var client = http.CreateClient(HttpClientName);
+        client.Timeout = TimeSpan.FromSeconds(60);
+        return client;
+    }
+}
+
+// ContentType — null, если поставщик тип не назвал
+public sealed record HiggsfieldDownload(byte[] Bytes, string? ContentType);
+
+// Ok — tools/call прошёл и isError=false; NoAccess — поставщик недоступен (нет токена,
+// 401, сеть); иначе — содержательная ошибка инструмента в Text
+public sealed record HiggsfieldCall(bool Ok, bool Unavailable, string Text, JsonNode? Structured)
+{
+    public static HiggsfieldCall NoAccess(string reason) => new(false, true, reason, null);
+    public static HiggsfieldCall Error(string text) => new(false, false, text, null);
+
+    // Тело ответа как JSON: structuredContent, если есть, иначе JSON в тексте
+    public JsonNode? Json()
+    {
+        if (Structured is not null) return Structured;
+        var start = Text.IndexOf('{');
+        var end = Text.LastIndexOf('}');
+        if (start < 0 || end <= start) return null;
+        try { return JsonNode.Parse(Text[start..(end + 1)]); }
+        catch (JsonException) { return null; }
+    }
+}

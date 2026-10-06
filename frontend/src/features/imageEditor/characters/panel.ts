@@ -1,9 +1,4 @@
-// Ключ панели «Персонажи» в рабочей области и её показ извне (из полосы «Картинки»)
+// Ключ бывшей панели «Картинки»: остался идентификатором выбора и черновиков (followSelection,
+// автооткрытие, ключ imageDraftKey); сама панель удалена (ADR-023 §Д3)
 
-import { REVEAL_PANEL_EVENT } from 'aihome_shell/kit';
-
-export const CHARACTERS_PANEL = 'characters';
-
-export function revealWorkspacePanel(key: string) {
-  window.dispatchEvent(new CustomEvent(REVEAL_PANEL_EVENT, { detail: { key } }));
-}
+export const IMAGES_PANEL = 'images';

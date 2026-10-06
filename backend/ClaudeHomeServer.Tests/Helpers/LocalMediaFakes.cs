@@ -19,6 +19,9 @@ public sealed class FakeComfy : HttpMessageHandler
     public List<string> UploadPaths { get; } = [];
     public Dictionary<string, byte[]> UploadedBytes { get; } = [];
     public List<string> Requests { get; } = [];
+    public List<string> Interrupted { get; } = [];
+    // Срабатывает после отдачи снимка очереди — гонка «прочитали очередь, а прогон уже сменился»
+    public Action? AfterQueueRead { get; set; }
     public bool Down { get; set; }
     public string? RejectPrompt { get; set; }
 
@@ -31,11 +34,36 @@ public sealed class FakeComfy : HttpMessageHandler
         if (Down) throw new HttpRequestException("connection refused");
 
         if (request.Method == HttpMethod.Get && path == "/queue")
-            return Json(new JsonObject
+        {
+            var snapshot = Json(new JsonObject
             {
                 ["queue_running"] = new JsonArray([.. Running.Select((id, i) => (JsonNode)new JsonArray(i, id, new JsonObject()))]),
                 ["queue_pending"] = new JsonArray([.. Pending.Select((id, i) => (JsonNode)new JsonArray(100 + i, id, new JsonObject()))]),
             });
+            AfterQueueRead?.Invoke();
+            return snapshot;
+        }
+
+        // Снятие ждущих: {"delete":[id…]}
+        if (request.Method == HttpMethod.Post && path == "/queue")
+        {
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject();
+            foreach (var id in body["delete"]?.AsArray() ?? []) Pending.Remove(id!.GetValue<string>());
+            return Json(new JsonObject());
+        }
+
+        // Прерывание как в ComfyUI 0.37: с prompt_id — только если она идёт; без него — любой текущий прогон
+        if (request.Method == HttpMethod.Post && path == "/interrupt")
+        {
+            var text = request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct);
+            var target = text.Length == 0 ? null : JsonNode.Parse(text)?["prompt_id"]?.GetValue<string>();
+            foreach (var id in Running.Where(id => target is null || id == target).ToList())
+            {
+                Running.Remove(id);
+                Interrupted.Add(id);
+            }
+            return Json(new JsonObject());
+        }
 
         if (request.Method == HttpMethod.Post && path == "/prompt")
         {
@@ -104,6 +132,24 @@ public sealed class FakeComfy : HttpMessageHandler
                 },
             },
         };
+    }
+
+    // Аудио-задача закончилась: файлы в outputs.{node}.audio (SaveAudio*, CcsAudioWorker) и
+    // необязательный текст PreviewAny (партитура YuE2)
+    public void CompleteAudio(string promptId, string[] texts, params (string Name, byte[] Bytes)[] outputs)
+    {
+        Complete(promptId);
+        foreach (var (name, bytes) in outputs) Files[$"ccs-local-media/{name}"] = bytes;
+        var nodes = History[promptId]["outputs"]!.AsObject();
+        nodes["save"] = new JsonObject
+        {
+            ["audio"] = new JsonArray([.. outputs.Select(o => (JsonNode)new JsonObject
+            {
+                ["filename"] = o.Name, ["subfolder"] = "ccs-local-media", ["type"] = "output",
+            })]),
+        };
+        if (texts.Length > 0)
+            nodes["score"] = new JsonObject { ["text"] = new JsonArray([.. texts.Select(t => (JsonNode)t)]) };
     }
 
     // Видеозадача закончилась: mp4 в images у SaveVideo и два латента у SaveLatent (как у t2v/i2v)
@@ -190,7 +236,14 @@ public sealed class FakeProjectAccess : ILocalMediaProjectAccess
     public string? ResolveRoot(string ownerId, string projectId) =>
         Roots.TryGetValue((ownerId, projectId), out var root) ? root : null;
 
-    public void NotifyWritten(string root, string relativePath) => Notified.Add(relativePath);
+    // Хук тестов: сработал на записи файла результата (например, оборвать токен запроса посреди сборки)
+    public Action<string>? OnNotified { get; set; }
+
+    public void NotifyWritten(string root, string relativePath)
+    {
+        Notified.Add(relativePath);
+        OnNotified?.Invoke(relativePath);
+    }
 }
 
 public static class LocalMediaTestImages

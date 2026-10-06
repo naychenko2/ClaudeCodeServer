@@ -41,6 +41,7 @@ import { copyMarkdown } from '../lib/selectionScope';
 import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { useContextButton } from '../features/chatContext/useContextButton';
+import { useFileContextMenu } from '../features/chatContext/useFileContextMenu';
 import { EmptyState } from './EmptyState';
 import { DeviceAgentGate } from './DeviceAgentGate';
 import { CapabilityUnavailable } from './CapabilityGate';
@@ -870,6 +871,9 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // в строке нет намеренно — кластер справа и так плотный, действие живёт в меню
   const ctxEntry = contextMenu && !contextMenu.entry.isDirectory ? contextMenu.entry : null;
   const chatContextBtn = useContextButton('file', ctxEntry?.path ?? null, ctxEntry?.name);
+  // Контекст хода (ADR-023): «Работать с этой» и «В контекст» занимают место
+  // прежних «В контекст чата» и «Редактировать картинку»
+  const fileCtx = useFileContextMenu(project.id, ctxEntry?.path ?? null, online, () => setContextMenu(null));
 
   // === Delete confirm state ===
   const [deleteConfirm, setDeleteConfirm] = useState<FileEntry | null>(null);
@@ -2143,10 +2147,11 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         // Контекст чата — первым: он про «материал живёт у чата», вложение ниже —
         // про «уедет с ближайшим сообщением». В контексте пункт превращается
         // в «Убрать» с галочкой (приём соседних «Убрать из офлайна»/«Удалить из знаний»)
-        add(chatContextBtn.available,
+        fileCtx.items.forEach(node => items.push(node));
+        add(chatContextBtn.available && !fileCtx.on,
           <MenuItem key="chat-context" icon={chatContextBtn.inContext ? <MI_Check /> : <MI_Context />}
             label={chatContextBtn.title} onClick={() => { close(); chatContextBtn.toggle(); }} />);
-        add(imageEditorOn && online && !entry.isDirectory && imageEditor?.isEditable(entry.path),
+        add(imageEditorOn && online && !entry.isDirectory && !fileCtx.on && imageEditor?.isEditable(entry.path),
           <MenuItem key="image-edit" icon={<Pencil size={15} strokeWidth={ICON_STROKE} />} label="Редактировать картинку"
             onClick={() => { close(); openEditor({ kind: 'edit', path: entry.path }); }} />);
         add(imageEditorOn && online && entry.isDirectory && !inNotesVault(entry.path),
@@ -2205,7 +2210,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         // Десктоп — меню по якорю в точке курсора. Menu выравнивает карточку по
         // ПРАВОМУ краю якоря, поэтому ширина синтетического rect равна minWidth:
         // так левый край меню встаёт ровно под курсор
-        const W = 210;
+        const W = 280;
         const anchor = new DOMRect(contextMenu.x, contextMenu.y, W, 0);
         return <Menu anchor={anchor} minWidth={W} maxHeight={320} gap={2} onClose={close}>{items}</Menu>;
       })()}

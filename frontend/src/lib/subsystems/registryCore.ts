@@ -16,6 +16,9 @@ import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
 import type { AuthState, ChatItem, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
+import { subscribeFlags } from '../featureFlags';
+import { noteReveal, openGenPanel } from '../genPanelOpen';
+import { CONTEXT_PANEL_KEY, toGenPanelKey } from '../genPanelKeys';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
 // Вклад в слот. Ровно два вида:
@@ -44,7 +47,7 @@ export interface SubsystemManifest {
   order: number;
   // Подсистема не получает пилюлю в таббаре хаба (вход — через меню/шорткаты).
   noPill?: boolean;
-  // Вклады самого каркаса (полоса «Руки»): бэковой подсистемы с тумблером у них нет,
+  // Вклады самого каркаса: бэковой подсистемы с тумблером у них нет,
   // гейт включённости не применяется — доступность решают сами вклады.
   core?: boolean;
   tab?: { component: LazyExoticComponent<ComponentType<SubsystemTabProps>> };
@@ -188,6 +191,15 @@ export interface ImageEditorOpenerApi {
   isEditable: (path: string) => boolean;
   open: (req: ImageEditorOpenRequest) => void;
 }
+// Action-слот `context-opener` (ADR-023, 2к-2): вход из дерева файлов в контекст хода. Вертикаль
+// превращает путь в объект контекста (ссылку на свой вид): картинка — в нить `image` с файлом. Слот
+// обобщает `image-editor`/`opener`: тот открывает попап редактора, этот наполняет контекст
+export const SLOT_CONTEXT_OPENER = 'context-opener';
+export interface ContextOpenerApi {
+  isOpenable: (path: string) => boolean;
+  // null — не вышло (ошибка уже показана тостом вертикалью)
+  toRef: (req: { projectId: string; sessionId: string; path: string }) => Promise<{ kind: string; ref: Record<string, unknown> } | null>;
+}
 // Render-слот `file-viewer-toolbar`: кнопки под просмотром файла
 export interface FileViewerToolbarCtx {
   projectId: string;
@@ -212,82 +224,93 @@ export interface ChatItemToolCtx {
 export interface ChatCardBadgeCtx { session: Session; isMobile: boolean }
 export interface ChatCardBadgeApi { open?: (session: Session) => boolean }
 
-// ---- Композер и рабочая область: слоты для полос, режимов, чипов и панелей ----
+// ---- Композер и рабочая область: слоты для чипов, видов контекста и панелей ----
 // Имена слотов — одной точкой: каркас и модули ссылаются на константы, а не на строки.
-export const SLOT_COMPOSER_STRIP = 'composer-strip';
-export const SLOT_COMPOSER_MODE = 'composer-mode';
+// Вид объекта контекста чата (ADR-023): вклад — ContextKindApi, имя вклада — не обязательно
+export const SLOT_CONTEXT_KIND = 'context-kind';
 export const SLOT_COMPOSER_CHIP = 'composer-chip';
 export const SLOT_WORKSPACE_PANEL_DEF = 'workspace-panel-def';
 
-// Слот `composer-strip`: полоса над композером (Git, Картинки, …). Имя вклада — id
-// полосы; render рисует саму полосу, action описывает её для переключателя «Git ▾».
-// Выбор активной полосы — стор lib/composerStrips.ts, не сама полоса.
-// projectId = null — личный чат вне проекта: полосы проекта (Git, «Руки») в нём не предлагаются
-export interface ComposerStripCtx {
-  projectId: string | null;
-  sessionId: string | null;
-  isMobile: boolean;
-  // Свёрнута ли полоса в строку 30 px — своё у каждой полосы каждого чата
-  collapsed: boolean;
-  // Свернуть в строку / развернуть (кнопка ⌃ в полосе, клик по свёрнутой строке)
-  setCollapsed: (collapsed: boolean) => void;
-  // Переключатель «Git ▾» от хоста: полоса ставит его на место своего заголовка
-  switcher: ReactNode;
-}
-export interface ComposerStripApi {
+// Ярлык меню «＋» композера и пустой ленты: вход, который заводит объект контекста
+// («Картинка», «Звук», «Видео» — `create` вида контекста)
+export interface ComposerShortcut {
+  key: string;
   title: string;
+  // Подпись второй строкой: «озвучить текст, сменить голос, обучить»
+  hint?: string;
   icon: ReactNode;
-  // false — полоса не предлагается (нет git, модуль недоступен в проекте)
-  isAvailable?: (ctx: { projectId: string | null; sessionId: string | null }) => boolean;
-  // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
-  status?: (ctx: { projectId: string | null; sessionId: string | null }) => ReactNode;
-}
-
-// Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.
-export interface ComposerModeCtx { projectId: string | null; sessionId: string | null }
-export interface ComposerModeApi {
-  title: string;
-  icon: ReactNode;
-  // Режим предлагается, только пока условие истинно (например, выбрана картинка)
-  isAvailable: (ctx: ComposerModeCtx) => boolean;
-  // Режим просит включить себя сам: ключ повода (черновик, «Редактировать»). Поле
-  // переключается один раз на каждый новый ключ, откуда бы ни пришло состояние —
-  // клик, агент, перезагрузка; ручной уход в «Чат» держится, пока ключ тот же.
-  // null — не просит. Сигнал о смене состояния — notifyComposer из kit
-  autoSelect?: (ctx: ComposerModeCtx) => string | null;
-  // Текст, который поле получает при входе в режим; key — повод (нить), на один key
-  // подставляется один раз и только в нетронутое поле. key отдавать и без текста
-  // (text: null): повод фиксируется с первого рендера, а не с появления текста
-  prefill?: (ctx: ComposerModeCtx) => { key: string; text: string | null } | null;
-  placeholder: (ctx: ComposerModeCtx) => string;
-  // Подпись кнопки отправки: «✦ Изменить · ≈ $0.15»
-  submitLabel?: (ctx: ComposerModeCtx) => ReactNode;
-  // Подпись над полем: «Промпт модели · уходит прямо в FLUX Fill, без агента»
-  hint?: (ctx: ComposerModeCtx) => ReactNode;
-  // Отправка мимо агента; текст режима хранится отдельно от черновика чата
-  onSubmit: (ctx: ComposerModeCtx, text: string) => Promise<void> | void;
+  onSelect: () => void;
 }
 
 // Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).
 // Вклад сам решает, рисоваться ли (null — чипа нет).
-export interface ComposerChipCtx { projectId: string | null; sessionId: string | null; isMobile: boolean }
+// modeId — активный режим поля ввода (null — «Чат»); у вызова beforeSend не задан
+export interface ComposerChipCtx { projectId: string | null; sessionId: string | null; isMobile: boolean; modeId?: string | null }
 // Действие вклада composer-chip: перед отправкой сообщения агенту (режим «Чат») вклад
 // отдаёт файлы, которые уйдут вложениями (снимок картинки с пометками), и сам гасит
 // свой чип. Пустой список — прикладывать нечего
 export interface ComposerChipApi { beforeSend?: (ctx: ComposerChipCtx) => Promise<File[]> }
 
-// Слот `workspace-panel-def`: панель рабочей области от подсистемы (например,
-// «Персонажи»). Имя вклада — ключ панели; render рисует тело, action описывает её
-// для рельсы и каталога панелей.
-export interface WorkspacePanelDefCtx { projectId: string; isMobile: boolean; onClose: () => void }
+// Слот `workspace-panel-def`: панель рабочей области от подсистемы («Персонажи»,
+// панели генерации «Картинки» и «Звук»). Имя вклада — ключ панели; render рисует
+// тело, action описывает её для рельсы и каталога панелей. Слот читают и проект, и
+// раздел «Чаты»: projectId = null — личный чат вне проекта, sessionId = null — чат
+// не выбран.
+export interface WorkspacePanelDefCtx {
+  projectId: string | null;
+  sessionId: string | null;
+  isMobile: boolean;
+  onClose: () => void;
+}
 export interface WorkspacePanelDefApi {
   title: string;
   icon: ReactNode;
-  isAvailable?: (projectId: string) => boolean;
+  // false — панели здесь нет (например, проектная панель в личном чате)
+  isAvailable?: (projectId: string | null) => boolean;
 }
 // Показать панель рабочей области извне (например, пунктирный чип «Персонаж» в полосе):
-// событие окна с detail = { key }; слушает страница проекта, неизвестный ключ пропускается
+// событие окна с detail = { key, tab? }; слушают страница проекта и раздел «Чаты»,
+// неизвестный ключ пропускается. tab — вкладка, которую панель покажет сама: хост её
+// не разбирает, панель слушает то же событие. sessionId — чат, ради которого просят показ
+// (автооткрытие по выбору картинки): телефонная шторка ждёт полосу именно этого чата.
+// follow — панель следует за выбором человека (клик по карточке): открытая панель
+// генерации уступает место запрошенной в том же виде, peek — шторка была опущена.
+// target — ключ выбранного элемента.
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
+export interface RevealPanelDetail {
+  key: string; tab?: string; sessionId?: string; target?: string; follow?: boolean; peek?: boolean;
+}
+// ifOpen — показать, только если панель генерации уже открыта: закрытую выбор не открывает
+export interface RevealPanelOptions {
+  sessionId?: string; target?: string; ifOpen?: boolean;
+}
+
+// true — запрос ушёл; false — ifOpen, а открытой панели генерации нет
+export function revealWorkspacePanel(requested: string, tab?: string, opts: RevealPanelOptions = {}): boolean {
+  // Ключи упразднённых «Картинок», «Звука» и «Видео» ведут в панель «Контекст» (вкладок у неё нет)
+  const key = toGenPanelKey(requested);
+  if (key !== requested) tab = undefined;
+  const detail: RevealPanelDetail = { key };
+  if (tab !== undefined) detail.tab = tab;
+  if (opts.sessionId !== undefined) detail.sessionId = opts.sessionId;
+  if (opts.target !== undefined) detail.target = opts.target;
+  if (opts.ifOpen) {
+    const open = openGenPanel();
+    if (!open) return false;
+    detail.follow = true;
+    if (open.view === 'peek') detail.peek = true;
+  }
+  noteReveal(key, !!detail.peek);
+  window.dispatchEvent(new CustomEvent<RevealPanelDetail>(REVEAL_PANEL_EVENT, { detail }));
+  return true;
+}
+
+// Показать панель «Контекст» чата (ADR-023 §Д1): тонкая обёртка над revealWorkspacePanel. Открытая
+// панель на повторный показ мигает карточкой «С чем» — запрос ловит она сама. Вертикали зовут
+// её, а не revealWorkspacePanel с ключами генерации: их запрещает сторож features/**
+export function revealContextPanel(sessionId: string, opts: { target?: string; ifOpen?: boolean } = {}): boolean {
+  return revealWorkspacePanel(CONTEXT_PANEL_KEY, undefined, { sessionId, ...opts });
+}
 
 // ---- Хранилище ----
 const _manifests: SubsystemManifest[] = [];
@@ -345,6 +368,9 @@ export function getSlotAction<A = Record<string, unknown>>(slot: string, name: s
 // изменение стора подсистем поднимаем версию и оповещаем подписчиков — иначе
 // useSyncExternalStore вернул бы прежний снапшот и слот не перерисовался бы.
 subscribeSubsystems(emit);
+// Фич-флаги владельца — тоже: вклады, гейтящие себя флагом прямо в слоте (геттер в манифесте),
+// без этого не перерисовались бы на тумблер до перезагрузки
+subscribeFlags(emit);
 
 // Примитивы подписки — база хуков ниже. Экспортируются, чтобы тест мог проверить
 // пересчёт вкладов на смену тумблера без рендера React.

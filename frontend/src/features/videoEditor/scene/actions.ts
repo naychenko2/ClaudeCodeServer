@@ -1,0 +1,357 @@
+// Действия контекста и редакторов «Видео»: настройки сцены (одна цепочка для всех), новая
+// сцена, съёмка по котировке (деньги — только quote → job), снятие выбора, кадры и «Картинки».
+
+import {
+  api, clearContextReturn, clearGenDraft, createReleaseUndo, followSelection, getChatContextState, revealContextPanel, setPrimary, showToast,
+  type ChatContextItem,
+} from 'aihome_shell/kit';
+import {
+  ERR, errorCode, errorText, retryOf, videoApi,
+  type FrameRef, type SaveSceneResult, type VideoPrefs, type VideoQuote, type VideoScene, type VideoSceneSettings,
+} from '../api';
+import { sceneReturnPoint, sceneToImages } from '../context/handoff';
+import { SCENE_KIND } from '../context/state';
+import { isPersonalScope } from '../scope';
+import { frameInputOf, setFrameRef } from '../store/frameRefs';
+import { bindFrame, createImageThread, imageThreadExists, onFrameReady, type FrameBinding } from '../store/imageFrames';
+import {
+  clearAgentFrame, ensureVideoThreads, filmTarget, focusFilm, focusScene, getCatalog, getFocusedScene, getPending, getPendingAny, getPrefs,
+  getScopeOf, getThreadsState, mutate, sceneDraftKey, setFailure, setPending, setScopePrefs,
+  type PendingSettings,
+} from '../store/videoStore';
+import type { SaveTarget } from '../film/model';
+import { PERSONAL_LOCAL_REASON, resolveScene, settingsOf, type ResolvedScene } from './model';
+
+const SAVE_DELAY = 500;
+const CONTENT_KEYS = ['frameA', 'frameB', 'text'];
+const _timers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// Настройки, которые видит человек: сцена → несохранённая правка → префы → умолчание
+export function currentResolved(sessionId: string | null, scope: string, scene: VideoScene | null = getFocusedScene(sessionId)): ResolvedScene {
+  const pend = getPending(sessionId, scene?.sceneId ?? null);
+  return resolveScene(scene, pend?.patch ?? null, getPrefs(scope), getCatalog(scope));
+}
+
+// Правка поля копится в стоящей правке и уходит на сервер по таймеру (или сразу). Без сцены поля
+// содержимого (кадры, текст) заводят новую сцену, остальное — выбор области (префы)
+// forScene — редактор «Сцена» правит основную сцену контекста, а не сцену серверного фокуса
+export function changeSettings(
+  scope: string, sessionId: string, patch: Partial<VideoSceneSettings>, debounced = false, forScene?: string,
+): void {
+  const sceneId = forScene ?? getFocusedScene(sessionId)?.sceneId ?? null;
+  if ('frameA' in patch) clearAgentFrame(sessionId, sceneId, 'A');
+  if ('frameB' in patch) clearAgentFrame(sessionId, sceneId, 'B');
+  const prev = getPending(sessionId, sceneId);
+  setPending(sessionId, { sceneId, patch: { ...(prev?.patch ?? {}), ...patch } });
+  const t = _timers.get(sessionId);
+  if (t) clearTimeout(t);
+  if (debounced) _timers.set(sessionId, setTimeout(() => { void flushSettings(scope, sessionId); }, SAVE_DELAY));
+  else { _timers.delete(sessionId); void flushSettings(scope, sessionId); }
+}
+
+function dropIf(sessionId: string, sent: PendingSettings) {
+  const now = getPendingAny(sessionId);
+  // Снимаем только то, что отправили: более свежая правка остаётся поверх
+  if (now && now.sceneId === sent.sceneId && JSON.stringify(now.patch) === JSON.stringify(sent.patch)) setPending(sessionId, null);
+}
+
+function prefsPatch(p: Partial<VideoSceneSettings>): VideoPrefs {
+  const o: VideoPrefs = {};
+  if ('provider' in p) o.provider = p.provider;
+  if ('model' in p) o.model = p.model;
+  if ('durationSec' in p) o.durationSec = p.durationSec;
+  if ('aspect' in p) o.aspect = p.aspect;
+  if ('sound' in p) o.sound = p.sound;
+  if ('count' in p) o.count = p.count;
+  return o;
+}
+
+const _flushing = new Map<string, Promise<boolean>>();
+// Отправка стоящей правки завела сцену (правка без сцены с содержимым): createScene вторую не заводит
+const _flushCreated = new Set<string>();
+
+// Отправить стоящую правку сейчас (смена сцены, закрытие панели, запуск). Отправки одного чата идут
+// строго друг за другом: две записи с одной ревизией дали бы 409 на второй
+export function flushSettings(scope: string, sessionId: string): Promise<boolean> {
+  const t = _timers.get(sessionId);
+  if (t) { clearTimeout(t); _timers.delete(sessionId); }
+  const prev = _flushing.get(sessionId) ?? Promise.resolve(true);
+  const next = prev.then(() => flushNow(scope, sessionId));
+  _flushing.set(sessionId, next);
+  void next.finally(() => { if (_flushing.get(sessionId) === next) _flushing.delete(sessionId); });
+  return next;
+}
+
+async function flushNow(scope: string, sessionId: string): Promise<boolean> {
+  const pend = getPendingAny(sessionId);
+  if (!pend) return true;
+  await ensureVideoThreads(scope, sessionId);
+  const scene = pend.sceneId ? getThreadsState(sessionId).scenes.find(s => s.sceneId === pend.sceneId) ?? null : null;
+  if (scene) {
+    // Правка видна человеком целиком: сохранённые настройки сцены плюс его поля
+    const settings: VideoSceneSettings = { ...scene.settings, ...pend.patch };
+    const ok = await mutate(scope, sessionId, rev => videoApi.settings(scope, sessionId, scene.sceneId, settings, rev));
+    if (ok) dropIf(sessionId, pend);
+    return ok;
+  }
+  if (Object.keys(pend.patch).some(k => CONTENT_KEYS.includes(k))) {
+    const settings = settingsOf(resolveScene(null, pend.patch, getPrefs(scope), getCatalog(scope)));
+    const ok = await mutate(scope, sessionId, rev => videoApi.addScene(scope, sessionId, { settings, revision: rev }), true);
+    if (ok) { dropIf(sessionId, pend); _flushCreated.add(sessionId); }
+    return ok;
+  }
+  // Выбор области: поставщик, модель, длительность, пропорции, звук, число вариантов
+  try {
+    setScopePrefs(scope, await videoApi.putPrefs(scope, sessionId, { ...getPrefs(scope), ...prefsPatch(pend.patch) }));
+    dropIf(sessionId, pend);
+    return true;
+  } catch (e) {
+    showToast(errorText(e), '', 'error');
+    return false;
+  }
+}
+
+// ── Новая сцена, выбор, снятие ──
+
+export async function createScene(scope: string, sessionId: string, opts: { frameA?: FrameRef; name?: string } = {}): Promise<boolean> {
+  _flushCreated.delete(sessionId);
+  const flushed = await flushSettings(scope, sessionId);
+  if (_flushCreated.delete(sessionId)) return flushed;
+  await ensureVideoThreads(scope, sessionId);
+  const settings: VideoSceneSettings = {
+    ...settingsOf(resolveScene(null, null, getPrefs(scope), getCatalog(scope))),
+    ...(opts.frameA ? { frameA: opts.frameA } : {}),
+  };
+  return mutate(scope, sessionId, rev => videoApi.addScene(scope, sessionId, { settings, ...(opts.name ? { name: opts.name } : {}), revision: rev }), true);
+}
+
+// Кадр B прошлой сцены → кадр A новой (стык без скачка)
+export const frameBOf = (s: VideoScene | undefined | null): FrameRef | null => s?.settings.frameB ?? null;
+
+export interface ReleaseSnapshot { scope: string; sessionId: string; sceneId: string }
+export const videoReleaseUndo = createReleaseUndo<ReleaseSnapshot>();
+
+// ✕ «Снять выбор — новая сцена»: сцена остаётся в ленте, плашка «Вернуть» на 4 секунды
+export async function releaseFocus(scope: string, sessionId: string, scene: VideoScene | null) {
+  if (!scene) return;
+  await flushSettings(scope, sessionId);
+  if (!await focusScene(scope, sessionId, null)) return;
+  videoReleaseUndo.release({ snapshot: { scope, sessionId, sceneId: scene.sceneId }, text: `${scene.name} снята — дальше снимаем новую сцену` }, true);
+}
+
+export async function undoRelease(): Promise<boolean> {
+  const s = videoReleaseUndo.undo();
+  return s ? selectSceneByHuman(s.scope, s.sessionId, s.sceneId) : false;
+}
+
+// Клик по карточке сцены в ленте: панель следует за выбором, только если открыта; вкладка — явная
+export async function selectSceneByHuman(scope: string, sessionId: string, sceneId: string, focused = false): Promise<boolean> {
+  if (!focused) await flushSettings(scope, sessionId);
+  const ok = focused || await focusScene(scope, sessionId, sceneId);
+  if (ok) followSelection('chatContext', sessionId, sceneDraftKey(sceneId), 'scene');
+  return ok;
+}
+
+// Строка «Фильм собран»: панель следует на вкладку «Фильм»
+export async function selectFilmByHuman(scope: string, sessionId: string, path: string, focused = false): Promise<boolean> {
+  const ok = focused || await focusFilm(scope, sessionId, path);
+  if (ok) followSelection('chatContext', sessionId, filmTarget(path), 'film');
+  return ok;
+}
+
+// Кнопки и ссылки («Переснять», «Открыть в панели») — явная просьба: открывают и закрытую панель «Контекст»
+export function openScenePanel(sessionId: string | null) {
+  if (sessionId) revealContextPanel(sessionId, {});
+}
+
+// Фильм становится выбранным (если ещё нет) и показывается в панели «Контекст»
+export function openFilmPanel(sessionId: string | null, path?: string) {
+  if (!sessionId) return;
+  const scope = getScopeOf(sessionId);
+  if (path && scope && getThreadsState(sessionId).focus.filmPath !== path) void focusFilm(scope, sessionId, path);
+  revealContextPanel(sessionId, {});
+}
+
+// ── Съёмка ──
+
+export interface RunInput { scope: string; sessionId: string; scene: VideoScene; r: ResolvedScene; quote: VideoQuote }
+
+// Запуск строго по котировке: настройки уходят в сцену ДО запуска (сервер берёт текст и кадры из нити).
+// Просьба из поля ввода добавляется к тексту сцены строкой (в запуске для неё поля нет)
+// Съёмка: код local_unavailable_personal — человеку понятная причина, а не общий текст бэкенда
+export const runErrorText = (e: unknown) =>
+  errorCode(e) === ERR.localPersonal ? PERSONAL_LOCAL_REASON : errorText(e, 'Съёмка не запустилась');
+
+export async function runScene(i: RunInput, extraText = ''): Promise<boolean> {
+  const { scope, sessionId, scene, quote } = i;
+  if (extraText.trim()) {
+    const base = i.r.text.trim();
+    changeSettings(scope, sessionId, { text: base ? `${base}\n${extraText.trim()}` : extraText.trim() });
+  }
+  if (!await flushSettings(scope, sessionId)) return false;
+  setFailure(sessionId, null);
+  try {
+    await videoApi.startJob(scope, sessionId, { quoteId: quote.quoteId, sessionId, sceneId: scene.sceneId });
+    clearGenDraft(sceneDraftKey(scene.sceneId));
+    return true;
+  } catch (e) {
+    setFailure(sessionId, { sceneId: scene.sceneId, text: runErrorText(e), retry: retryOf(e) });
+    if (errorCode(e) === ERR.quoteNotFound) showToast('Цена устарела — она пересчитана, нажмите ещё раз', '', 'info');
+    return false;
+  }
+}
+
+export async function stopJob(scope: string, sessionId: string, jobId: string) {
+  try { await videoApi.cancelJob(scope, sessionId, jobId); } catch (e) { showToast(errorText(e), '', 'error'); }
+}
+
+// «Продолжить от версии»
+export const takeVersion = (scope: string, sessionId: string, sceneId: string, versionId: string) =>
+  mutate(scope, sessionId, rev => videoApi.current(scope, sessionId, sceneId, versionId, rev), true);
+
+// «Сохранить сцену» в проект (блок 2 бэкенда)
+export async function saveScene(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, target: SaveTarget | null): Promise<SaveSceneResult | null> {
+  try {
+    const res = await videoApi.save(scope, sessionId, scene.sceneId, { ...(versionId ? { versionId } : {}), ...(target ?? {}) });
+    showToast(`Сохранено: ${res.path}`, '', 'info');
+    return res;
+  } catch (e) {
+    showToast(errorText(e, 'Не удалось сохранить сцену'), '', 'error');
+    return null;
+  }
+}
+
+export function downloadClip(scope: string, sessionId: string, scene: VideoScene, versionId: string) {
+  const a = document.createElement('a');
+  a.href = videoApi.versionFileUrl(scope, sessionId, scene.sceneId, versionId, true);
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+// ── Кадры и «Картинки» ──
+
+export const framesFolder = (scene: VideoScene | null) => `${scene?.folder || 'video'}/кадры`;
+
+// Причина отказа загрузки кадра: 413 — слишком большой, 400 invalid_request — не картинка
+export function uploadErrorText(e: unknown): string {
+  const err = e as { status?: unknown } | null;
+  if (err?.status === 413) return 'Файл больше 20 МБ';
+  if (err?.status === 400 && errorCode(e) === 'invalid_request') return 'Это не картинка';
+  return errorText(e, 'Не удалось загрузить кадр');
+}
+
+// Файл с компьютера. Проектный чат: картинка проекта в video/…/кадры/, кадром становится файл проекта.
+// Личный чат: файла проекта нет — сервер кладёт файл в рабочую папку чата и отдаёт готовый FrameRef
+export async function uploadFrame(scope: string, sessionId: string | null, scene: VideoScene | null, file: File): Promise<FrameRef | null> {
+  try {
+    if (isPersonalScope(scope)) {
+      if (!sessionId) return null;
+      return await videoApi.uploadFrame(sessionId, file);
+    }
+    const dir = framesFolder(scene);
+    await api.files.upload(scope, file, dir);
+    return { kind: 'file', path: `${dir}/${file.name}` };
+  } catch (e) {
+    showToast(uploadErrorText(e), '', 'error');
+    return null;
+  }
+}
+
+async function ensureScene(scope: string, sessionId: string): Promise<VideoScene | null> {
+  await flushSettings(scope, sessionId);
+  let scene = getFocusedScene(sessionId);
+  if (!scene && await createScene(scope, sessionId)) scene = getFocusedScene(sessionId);
+  return scene;
+}
+
+// reveal = false на телефоне: шторка панели закрыла бы поле ввода, а чипы действий над ним появляются сами
+async function toImages(
+  sessionId: string, scene: VideoScene, threadId: string, slot: 'A' | 'B', needEdit = false, draw = false, reveal = true,
+  prev?: ChatContextItem | null,
+) {
+  bindFrame(sessionId, { sceneId: scene.sceneId, sceneName: scene.name, slot, threadId, ...(needEdit ? { needEdit } : {}) });
+  // Нить становится основным объектом, а возврат к сцене держит панель «Контекст»
+  await sceneToImages({ sessionId, sceneId: scene.sceneId, sceneName: scene.name, threadId, draw, reveal, prev });
+}
+
+// Папка кадров в новом проекте не существует, а сервер отказывает черновику в несуществующей папке (400).
+// Создаём её сами; «уже есть» не ошибка. В личном чате папки проекта нет — черновик идёт в рабочую папку чата
+async function ensureFramesFolder(scope: string, scene: VideoScene): Promise<string> {
+  if (isPersonalScope(scope)) return '';
+  const dir = framesFolder(scene);
+  try { await api.files.mkdir(scope, dir); } catch { /* уже есть или создание отклонено — решит сервер при заведении черновика */ }
+  return dir;
+}
+
+// «Нарисовать в «Картинках»»: черновик картинки заводится и становится основным объектом контекста;
+// первая готовая версия сама станет кадром
+export async function drawInImages(scope: string, sessionId: string, slot: 'A' | 'B', reveal = true, known?: VideoScene): Promise<void> {
+  // Контекст знает сцену сама (основной объект): новую заводить нельзя
+  const scene = known ?? await ensureScene(scope, sessionId);
+  if (!scene) return;
+  const prev = sceneReturnPoint(sessionId, scene.sceneId);
+  try {
+    const id = await createImageThread(scope, sessionId, { draftFolder: await ensureFramesFolder(scope, scene) });
+    if (!id) { showToast('Не удалось завести картинку', '', 'error'); return; }
+    await toImages(sessionId, scene, id, slot, false, true, reveal, prev);
+  } catch (e) {
+    showToast(errorText(e, 'Не удалось завести картинку'), '', 'error');
+  }
+}
+
+// «Править кадр»: нить кадра — в «Картинки»; кадр-файл берётся в работу и после правки сам встаёт кадром
+// frame — кадр из контекста чата (референс роли), когда он не совпадает с настройками сцены
+export async function editFrame(scope: string, sessionId: string, scene: VideoScene, slot: 'A' | 'B', frame?: FrameRef, reveal = true): Promise<void> {
+  const f = frame ?? (slot === 'A' ? scene.settings.frameA : scene.settings.frameB);
+  if (!f) return;
+  const prev = sceneReturnPoint(sessionId, scene.sceneId);
+  try {
+    const id = f.kind === 'image' ? f.threadId : await createImageThread(scope, sessionId, { file: f.path });
+    if (!id) { showToast('Не удалось открыть кадр в «Картинках»', '', 'error'); return; }
+    await toImages(sessionId, scene, id, slot, f.kind === 'file', false, reveal, prev);
+  } catch (e) {
+    showToast(errorText(e, 'Не удалось открыть кадр в «Картинках»'), '', 'error');
+  }
+}
+
+const isScenePrimary = (sessionId: string, sceneId: string) => {
+  const p = getChatContextState(sessionId).primary;
+  return !!p && p.kind === SCENE_KIND && p.ref.sceneId === sceneId;
+};
+
+let _wired = false;
+// Нить, нарисованная для кадра, получила картинку — она становится кадром (и следует за новыми версиями)
+export function wireFrameBinding() {
+  if (_wired) return;
+  _wired = true;
+  onFrameReady((sessionId, b: FrameBinding, versionId) => {
+    const scope = getScopeOf(sessionId);
+    if (!scope) return;
+    const frame: FrameRef = { kind: 'image', threadId: b.threadId, versionId, follow: true };
+    // Кадр — референс роли `frame-a`/`frame-b`, запуск по ревизии читает только его
+    const input = frameInputOf(frame, isPersonalScope(scope));
+    if (!input) return;
+    // Генерация идёт минуты: человек мог уйти на другой объект. Сцену возвращаем основной сами, только если он
+    // всё ещё на нити этого кадра или уже на этой сцене; иначе выбор не трогаем и предлагаем кнопкой в тосте
+    const place = async (): Promise<boolean> => {
+      if (getFocusedScene(sessionId)?.sceneId !== b.sceneId && !await focusScene(scope, sessionId, b.sceneId)) return false;
+      // Роли кадров принимает только основной объект «сцена»: пока основной — картинка, сервер ответит 400
+      // role_not_accepted. Кадр привязывается к сцене, а не к тому, что открыто сейчас, — возвращаем сцену основной
+      if (!isScenePrimary(sessionId, b.sceneId)) {
+        if (await setPrimary(sessionId, { kind: SCENE_KIND, ref: { sceneId: b.sceneId } }) !== 'ok') return false;
+        clearContextReturn(sessionId);
+      }
+      return setFrameRef(sessionId, b.slot, input);
+    };
+    const placed = () => place().then(ok => { if (ok) showToast(`Кадр ${b.slot} встал в сцену`, '', 'success'); });
+    const p = getChatContextState(sessionId).primary;
+    const onFrameThread = !!p && p.kind === 'image' && (p.ref as { threadId?: string }).threadId === b.threadId;
+    if (onFrameThread || isScenePrimary(sessionId, b.sceneId)) { void placed(); return; }
+    showToast(`Кадр ${b.slot} для «${b.sceneName ?? 'сцены'}» готов`, '', 'success', {
+      label: 'Поставить в сцену',
+      onClick: () => { if (imageThreadExists(sessionId, b.threadId)) void placed(); },
+    });
+  });
+}

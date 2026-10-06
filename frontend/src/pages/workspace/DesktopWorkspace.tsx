@@ -38,6 +38,11 @@ import { ChatContextBar, type ContextTarget } from '../../features/chatContext/C
 import { useHasChatContext } from '../../lib/chatContext';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { getTaskById } from '../../lib/tasks';
+import { canSplitCenter, CHAT_SPLIT_MIN_PX, SPLIT_SIDE_MIN_PX } from './splitLayout';
+
+// Минимумы колонок разделённого центра — в splitLayout.ts; на узком центре соседка (минимум 200) всё равно
+// остаётся, поэтому минимум ленты — это то, что остаётся от неё
+const CHAT_SPLIT_MIN = `min(${CHAT_SPLIT_MIN_PX}px, calc(100% - ${SPLIT_SIDE_MIN_PX}px))`;
 
 export type SidebarMode = 'pinned' | 'collapsed';
 
@@ -139,6 +144,8 @@ interface Props {
   // Нужно ChatPanel для плашки «Ветка от …» — определять, жив ли оригинал ветки.
   // Не задано — fallback к ссылке (старое поведение)
   availableChatIds?: Set<string>;
+  // Человек закрыл панель (крестик или рельса) — для признака автооткрытия генерации
+  onPanelUserClose?: (k: PanelKey) => void;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -160,6 +167,19 @@ export function DesktopWorkspace(p: Props) {
   // Пропорция чат/файл в split-режиме (как chatFlex в старой ветке; не персистится)
   const [chatFlex, setChatFlex] = useState(1);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  // Ширина центра под файл: замеряется на обёртке, которая живёт при любой раскладке файла, — иначе переключение
+  // «рядом ↔ во весь центр» теряло бы замер и раскладка мигала
+  const fileHostRef = useRef<HTMLDivElement>(null);
+  const [fileHostW, setFileHostW] = useState(0);
+  const fileOpen = !!p.openFile;
+  useEffect(() => {
+    const el = fileHostRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setFileHostW(Math.round(el.getBoundingClientRect().width)));
+    ro.observe(el);
+    setFileHostW(Math.round(el.getBoundingClientRect().width));
+    return () => ro.disconnect();
+  }, [fileOpen]);
 
   // Эксклюзив боковых сторон на планшете: гейтит режим флагом exclusive в сторе
   // (его читают обе PanelZone + reveal из FileViewer/GitBar). При входе в планшет
@@ -208,7 +228,7 @@ export function DesktopWorkspace(p: Props) {
     setDragging('split');
     startPointerDrag(
       ev => {
-        const chatW = Math.max(200, Math.min(rect.width - 200, ev.clientX - rect.left));
+        const chatW = Math.max(Math.min(CHAT_SPLIT_MIN_PX, rect.width - SPLIT_SIDE_MIN_PX), Math.min(rect.width - SPLIT_SIDE_MIN_PX, ev.clientX - rect.left));
         setChatFlex(chatW / (rect.width - chatW));
       },
       { onEnd: () => setDragging(null) },
@@ -228,6 +248,9 @@ export function DesktopWorkspace(p: Props) {
     // а насильный возврат прервал бы просмотр на полуслове.
     p.onSelectSession(s, firstMessage, autoSelect);
   };
+
+  // Файл рядом с чатом — только если колонке чата остаётся не меньше порога; иначе файл идёт во весь центр
+  const fileSplit = !p.fileFullscreen && !p.isTablet && canSplitCenter(fileHostW - 2 * ISLAND.centerGap);
 
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
@@ -433,6 +456,7 @@ export function DesktopWorkspace(p: Props) {
         panels={zonePanels}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
+        onUserClose={p.onPanelUserClose}
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
           // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
@@ -462,7 +486,7 @@ export function DesktopWorkspace(p: Props) {
           слева, детали встают справа (тот же приём и тот же сплиттер, что у файла и ридера) */}
       {taskSplit && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
-          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: CHAT_SPLIT_MIN }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {chatPanel(false)}
             </div>
@@ -522,7 +546,7 @@ export function DesktopWorkspace(p: Props) {
           смотреть, не бросая разговор, — то, ради чего кадр в центр и уводят */}
       {videoSplitCenter && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
-          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: CHAT_SPLIT_MIN }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {chatPanel(false)}
             </div>
@@ -545,9 +569,11 @@ export function DesktopWorkspace(p: Props) {
       )}
 
       {/* Split чат|файл — ДВА острова, ресайз живёт в зазоре между ними */}
-      {p.openFile && !p.fileFullscreen && !p.isTablet && (
+      {p.openFile && (
+      <div ref={fileHostRef} style={{ flex: 1, display: 'flex', minWidth: 0 }}>
+      {fileSplit && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
-          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: CHAT_SPLIT_MIN }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {chatPanel(false)}
             </div>
@@ -562,18 +588,20 @@ export function DesktopWorkspace(p: Props) {
         </div>
       )}
 
-      {p.openFile && (p.fileFullscreen || p.isTablet) && centerIsland(
+      {!fileSplit && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          {/* На планшете сплита нет — тумблер режима не показываем */}
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} />
+          {/* На планшете и на узком центре сплита нет — тумблер режима не показываем */}
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet || !p.fileFullscreen ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} />
         </div>
+      )}
+      </div>
       )}
 
       {/* Split чат|ридер — тот же приём, что у файла: два острова, общий сплиттер
           (файл и ридер взаимно вытесняют друг друга — одновременно не бывают) */}
       {!p.openFile && p.readerState.open && !p.readerState.expanded && !p.isTablet && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
-          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: CHAT_SPLIT_MIN }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {chatPanel(false)}
             </div>
@@ -591,7 +619,7 @@ export function DesktopWorkspace(p: Props) {
 
       {!p.openFile && p.readerState.open && (p.readerState.expanded || p.isTablet) && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {/* На планшете сплита нет — тумблер режима не показываем */}
+          {/* На планшете и на узком центре сплита нет — тумблер режима не показываем */}
           <ReaderHeaderBar state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} isTablet={p.isTablet} />
           <ReaderBody state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
         </div>
@@ -604,6 +632,7 @@ export function DesktopWorkspace(p: Props) {
         panels={zonePanels}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
+        onUserClose={p.onPanelUserClose}
         centerFileOpen={!!p.openFile}
       />
     </div>

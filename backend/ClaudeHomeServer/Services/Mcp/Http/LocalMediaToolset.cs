@@ -22,7 +22,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// ИНВАРИАНТ состава: tools/list зависит только от сессии-вызывателя, не от хода.
 /// stdio-ветки отката нет (node-сервера не существовало), как у websearch/higgsfield.
 /// </summary>
-public sealed class LocalMediaToolset(
+public sealed partial class LocalMediaToolset(
     SessionManager sessions,
     ProjectManager projects,
     // Из отключаемой вертикали Images: выключена — инструменты честно отказывают
@@ -121,6 +121,12 @@ public sealed class LocalMediaToolset(
                     Video: StringArg(arguments, "video"),
                     Mask: StringArg(arguments, "mask")), ct);
 
+            case var audio when AudioOps.TryGetValue(audio, out var op):
+                return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id, op,
+                    Prompt: StringArg(arguments, "prompt"),
+                    Seed: LongArg(arguments, "seed"),
+                    Args: (JsonObject)arguments.DeepClone()), ct);
+
             case "local_job_status":
             {
                 var jobId = StringArg(arguments, "job_id") ?? "";
@@ -195,6 +201,8 @@ public sealed class LocalMediaToolset(
         {
             var images = new JsonArray();
             var videos = new JsonArray();
+            var audio = new JsonArray();
+            var files = new JsonArray();
             foreach (var output in job.Outputs)
             {
                 var item = new JsonObject
@@ -205,10 +213,27 @@ public sealed class LocalMediaToolset(
                     ["height"] = output.Height,
                     ["path"] = output.Path,
                 };
-                (output.ContentType.StartsWith("video/", StringComparison.Ordinal) ? videos : images).Add(item);
+                // Звук — audio, модель голоса, MIDI, тексты и партитура — files: их путь идёт во вход
+                // следующих local_* или открывается человеком из проекта
+                var bucket = output.ContentType switch
+                {
+                    var t when t.StartsWith("video/", StringComparison.Ordinal) => videos,
+                    var t when t.StartsWith("image/", StringComparison.Ordinal) => images,
+                    "audio/midi" => files,
+                    var t when t.StartsWith("audio/", StringComparison.Ordinal) => audio,
+                    _ => files,
+                };
+                if (bucket != images && bucket != videos)
+                {
+                    item.Remove("width");
+                    item.Remove("height");
+                }
+                bucket.Add(item);
             }
             if (images.Count > 0) json["images"] = images;
             if (videos.Count > 0) json["videos"] = videos;
+            if (audio.Count > 0) json["audio"] = audio;
+            if (files.Count > 0) json["files"] = files;
         }
         return json;
     }
@@ -228,6 +253,8 @@ public sealed class LocalMediaToolset(
         if ((job.Height ?? first?.Height) is { } height) stats["height"] = height;
         if (job.DurationSeconds is { } duration) stats["duration_seconds"] = duration;
         if (job.CachedNodes is { } cached) stats["cached_nodes"] = cached.Count;
+        if (job.Engine is { } engine) stats["engine"] = engine;
+        if (job.InputSeconds is { } input) stats["input_seconds"] = input;
         return stats;
     }
 
@@ -317,8 +344,8 @@ public sealed class LocalMediaToolset(
             ["video_fast_default"] = options.VideoFastDefault,
             ["upscale_1440_mode"] = options.Upscale1440Tiled ? "tiled" : "single",
             ["eta_note"] = EtaNote,
-            ["operations"] = new JsonArray
-            {
+            ["operations"] = new JsonArray(
+            [
                 Operation("local_generate_image", "Qwen-Image 2.1", "картинка по тексту, 1–4 варианта", "≈45 с на картинку при 25 шагах"),
                 Operation("local_edit_image", "Qwen-Image 2.1 (правка)", "правка по 1–16 референсам", "≈60 с"),
                 Operation("local_face_detail", "FaceDetailer (YOLOv8 + Qwen-Image)", "доводка лиц на готовой картинке", "≈25 с"),
@@ -345,7 +372,9 @@ public sealed class LocalMediaToolset(
                     + $"{options.MaxVideoSeconds} с; тяжёлая",
                     "864×480, 5 с ≈ 1,5 мин; 1344×768 — не замерено",
                     new JsonObject { ["half_5s"] = 98, ["full_5s"] = null }),
-            },
+                .. AudioOperationsJson(),
+            ]),
+            ["audio_enabled"] = options.AudioEnabled,
             ["aspects"] = new JsonArray([.. ComfyWorkflows.ImageSizes.Select(s =>
                 (JsonNode)$"{s.Key} ({s.Value.Width}×{s.Value.Height})")]),
             ["video_sizes"] = new JsonArray([.. ComfyWorkflows.VideoSizes.Select(s =>
@@ -676,6 +705,8 @@ public sealed class LocalMediaToolset(
                     ["seed"] = Seed(),
                 },
             });
+
+        foreach (var tool in AudioSchemas()) yield return tool;
 
         yield return Tool("local_job_status",
             "Статус задачи локальной генерации по job_id. Готово — поле images или videos с url и path файла в проекте.",

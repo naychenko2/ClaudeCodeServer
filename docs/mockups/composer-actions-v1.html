@@ -1,0 +1,1184 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Чипы действий в поле ввода и панель «Контекст» — v1</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет был самодостоятельным.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R из lib/design.ts. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px;
+    --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-sheet: 22px; --r-max: 999px;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #454037;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-success: #7CB86A; --c-success-bg: #1F2B1C; --c-success-text: #8FC47E;
+    --c-warning: #E0A955; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: #E9E4DA; color: #39332B;
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--fs-base); }
+  button { font: inherit; color: inherit; }
+  .doc-wrap { max-width: 1480px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; color: #2A251F; margin: 0 0 6px; }
+  p.lead { color: #756B5E; margin: 0 0 10px; max-width: 1000px; line-height: 1.55; }
+  code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; background: #E0D7C8; border-radius: 4px; padding: 0 4px; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 90; background: #E9E4DA; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 8px 0 12px; }
+  .demo .grp { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .demo .lbl { font-size: 11px; color: #9A8F7E; margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid #D0C6B4; background: #FBF8F2; border-radius: 10px; padding: 5px 10px; color: #39332B; }
+  .tbtn[aria-pressed="true"] { background: #D97757; color: #FBF8F2; border-color: transparent; }
+  .scn-box { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; margin: 0 0 12px; max-width: 1440px; }
+  .scn-box .card { background: #FBF8F2; border: 1px solid #E0D7C8; border-radius: 12px; padding: 10px 14px; line-height: 1.5; min-width: 0; }
+  .scn-box h3 { margin: 0 0 4px; font-size: 15px; color: #2A251F; }
+  .scn-box .why { color: #756B5E; font-size: 12.5px; margin: 0 0 6px; }
+  ol.steps { margin: 6px 0 0; padding-left: 0; list-style: none; counter-reset: s; }
+  ol.steps li { counter-increment: s; display: flex; gap: 8px; padding: 4px 6px; border-radius: 8px; cursor: pointer; font-size: 12.5px; color: #39332B; }
+  ol.steps li::before { content: counter(s); flex: 0 0 20px; height: 20px; border-radius: 50%; background: #E7E0D2; color: #756B5E; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+  ol.steps li.done-row::before { content: '✓'; }
+  ol.steps li.cur { background: #F4ECE1; }
+  ol.steps li.cur::before { background: #D97757; color: #FBF8F2; }
+  ol.steps li .z { margin-left: auto; font-size: 10.5px; color: #9A8F7E; white-space: nowrap; }
+  .short { margin-top: 6px; font-size: 12px; color: #756B5E; }
+  table.lad { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.lad td, table.lad th { padding: 3px 5px; border-bottom: 1px solid #E8E1D4; text-align: left; vertical-align: top; }
+  table.lad th { color: #9A8F7E; font-size: 11px; font-weight: 600; }
+  table.lad tr.me td { background: #F4ECE1; font-weight: 600; }
+  table.lad td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @media (max-width: 1100px) { .scn-box { grid-template-columns: 1fr; } }
+
+  .frames { display: flex; flex-direction: column; gap: 16px; }
+  .frames.row { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+  .frame { background: var(--c-bg-main); color: var(--c-text-primary); border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; overflow-x: auto; max-width: 100%; }
+  .frame .cap { font-size: 11px; color: var(--c-text-muted); margin: 0 0 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .frame .cap .rung { color: var(--c-accent); }
+
+  /* ── Раскладка приложения ── */
+  .app { position: relative; height: 780px; display: flex; gap: 8px; margin: 0 auto; }
+  .app.mobile { width: 360px; height: 740px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; flex-direction: column; gap: 0; background: var(--c-bg-main); }
+  .rail { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; }
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: var(--r-xxl); box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; position: relative; }
+  .island.main { flex: 1; overflow: visible; }
+  .island.chats { width: 240px; flex: 0 0 240px; }
+  .island.dock { flex: 0 0 auto; }
+  .ihead { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset);
+    font-weight: 600; color: var(--c-text-heading); min-width: 0; border-radius: var(--r-xxl) var(--r-xxl) 0 0; }
+  .ihead .sub { font-size: var(--fs-xs); color: var(--c-text-muted); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .mtop { height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-panel); font-weight: 600; color: var(--c-text-heading); }
+  .mtop .sp { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Список чатов */
+  .clist { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+  .citem { padding: 7px 9px; border-radius: var(--r-md); font-size: var(--fs-sm); color: var(--c-text-primary); min-width: 0; }
+  .citem.on { background: var(--c-bg-selected); }
+  .citem b { display: block; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .citem span { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Лента */
+  .feed { flex: 1; overflow: hidden; padding: 14px 18px 8px; min-height: 0; display: flex; flex-direction: column; gap: 10px; justify-content: flex-end; }
+  .app.mobile .feed { padding: 10px; gap: 8px; }
+  .msg { max-width: 560px; line-height: 1.5; font-size: var(--fs-base); flex: 0 0 auto; }
+  .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 8px 12px; }
+  .msg.agent b { color: var(--c-text-heading); }
+  .tool { flex: 0 0 auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--c-text-secondary); background: var(--c-bg-inset); border-radius: var(--r-md); padding: 3px 8px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .tool .pb { width: 60px; height: 4px; border-radius: 2px; background: var(--c-track); overflow: hidden; }
+  .tool .pb i { display: block; height: 100%; background: var(--c-accent); }
+  .sim { flex: 0 0 auto; align-self: flex-start; border: 1.5px dashed var(--c-dashed); background: transparent; border-radius: var(--r-md); padding: 5px 10px; font-size: var(--fs-sm); color: var(--c-text-secondary); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+  .icard { flex: 0 0 auto; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: var(--r-xl); padding: 8px 10px; width: 400px; max-width: 100%; box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 6px; }
+  .icard.focus { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .icard .t { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--c-text-secondary); min-width: 0; }
+  .icard .t b { color: var(--c-text-heading); white-space: nowrap; }
+  .icard .t .sub { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c-text-muted); font-size: var(--fs-xs); }
+  .icard .acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; position: relative; }
+  .pic { height: 96px; border-radius: var(--r-md); background-size: cover; position: relative; }
+  .app.mobile .pic { height: 58px; }
+  .pic .mk { position: absolute; border: 2px dashed var(--c-accent); border-radius: 50%; background: rgba(217,119,87,.25); }
+  .wave { display: flex; align-items: center; gap: 2px; height: 30px; }
+  .wave i { flex: 1; background: var(--c-track); border-radius: 2px; }
+  .wave.stems i:nth-child(4n+1) { background: var(--c-accent); } .wave.stems i:nth-child(4n+2) { background: var(--c-info); } .wave.stems i:nth-child(4n+3) { background: var(--c-success); }
+  .frames2 { display: flex; gap: 6px; align-items: center; }
+  .frames2 .fr { flex: 1; height: 54px; border-radius: var(--r-sm); background-size: cover; position: relative; font-size: 10px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); padding: 3px 5px; }
+  .frames2 .fr.empty { border: 1.5px dashed var(--c-dashed); background: transparent; color: var(--c-text-muted); text-shadow: none; display: grid; place-items: center; }
+  .frames2 .arr { color: var(--c-text-muted); }
+  .clip { height: 96px; border-radius: var(--r-md); background: linear-gradient(135deg,#C98B5E,#2F4B66); display: grid; place-items: center; color: #fff; position: relative; }
+  .app.mobile .clip { height: 58px; }
+  .clip .dur { position: absolute; right: 6px; bottom: 4px; font-size: 10px; background: rgba(0,0,0,.5); padding: 1px 5px; border-radius: 4px; }
+
+  /* Кирпичи UI-кита (имена — как в components/ui) */
+  svg.i { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+  svg.i.s { width: 13px; height: 13px; } svg.i.xs { width: 11px; height: 11px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-md);
+    border: 1px solid var(--c-border); background: var(--c-bg-card); cursor: pointer; font-size: var(--fs-sm); white-space: nowrap; color: var(--c-text-primary); }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); font-weight: 600; }
+  .btn.pri.off { opacity: .55; box-shadow: none; cursor: default; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.xs { height: 24px; padding: 0 8px; font-size: var(--fs-xs); border-radius: 7px; }
+  .ib { width: 28px; height: 28px; border-radius: var(--r-md); border: none; background: transparent; color: var(--c-text-muted); display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto; padding: 0; }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .badge { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: var(--r-sm); font-size: 10.5px; font-weight: 600; white-space: nowrap; flex: 0 0 auto; }
+  .badge.ok { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.mut { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .badge.acc { background: var(--c-accent-light); color: var(--c-accent); }
+  .seg { display: inline-flex; background: var(--c-bg-inset); border-radius: var(--r-lg); padding: 2px; gap: 2px; }
+  .seg span { border: none; background: transparent; color: var(--c-text-secondary); height: 24px; padding: 0 9px; border-radius: var(--r-md); font-size: var(--fs-sm); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; cursor: pointer; }
+  .seg span.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); font-weight: 600; }
+  .seg.sm span { height: 22px; padding: 0 8px; font-size: var(--fs-xs); }
+  .label { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .4px; margin: var(--sp-md) 0 var(--sp-xs); display: flex; gap: 8px; align-items: center; }
+  .label .r { margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .hint { font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.45; margin-top: var(--sp-xxs); }
+  .th { width: 18px; height: 18px; border-radius: 4px; background-size: cover; flex: 0 0 auto; border: 1px solid var(--c-border-light); }
+  .th.round { border-radius: 50%; }
+  .th.draft { background: transparent; border: 1.5px dashed var(--c-dashed); }
+  .th.l { width: 30px; height: 30px; border-radius: var(--r-sm); }
+
+  /* Подсветка «куда нажать» на этом шаге */
+  .hl { outline: 2px solid var(--c-accent) !important; outline-offset: 1px; animation: hlp 1.4s ease-in-out infinite; }
+  @keyframes hlp { 0%,100% { outline-color: var(--c-accent); } 50% { outline-color: var(--c-accent-muted); } }
+
+  /* ── Строка контекста: 30 px, R.lg — как в composer-context-row-v1 ── */
+  .bottom { max-width: 950px; width: 100%; margin: 0 auto; position: relative; }
+  .rw { position: relative; margin: 0 12px 6px; }
+  .app.mobile .rw { margin: 0 8px 6px; }
+  .crow { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px; background: var(--c-bg-panel); border: 1px solid var(--c-border);
+    border-radius: var(--r-lg); overflow: hidden; min-width: 0; }
+  .app.mobile .crow { height: 32px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .app.mobile .crow::-webkit-scrollbar { display: none; }
+  .vsep { width: 1px; height: 16px; background: var(--c-divider); flex: 0 0 1px; }
+  .cx { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 7px; border-radius: 7px; border: 1px solid transparent; background: transparent;
+    font-size: var(--fs-sm); color: var(--c-text-secondary); white-space: nowrap; cursor: pointer; flex: 0 0 auto; min-width: 0; }
+  .app.mobile .cx { height: 26px; }
+  .cx:hover { background: var(--c-bg-selected); }
+  .cx .t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .cx .nm { color: var(--c-text-heading); font-weight: 600; }
+  .cx .v { color: var(--c-text-muted); flex: 0 0 auto; }
+  .cx .k { color: var(--c-text-muted); flex: 0 0 auto; }
+  .cx .cv { color: var(--c-text-muted); display: inline-grid; flex: 0 0 auto; }
+  .cx.git { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; }
+  .cx.git .nm { font-weight: 700; }
+  .cx.git .n { flex: 0 0 auto; color: var(--c-text-heading); }
+  .cx.git .n.clean { color: var(--c-success-text); font-family: 'Hanken Grotesk', -apple-system, sans-serif; font-size: var(--fs-sm); }
+  .cx.git .up { flex: 0 0 auto; color: var(--c-accent); font-weight: 700; }
+  .cx.git .dot { position: relative; }
+  .cx.git .cnt { position: absolute; top: -6px; right: -7px; min-width: 13px; height: 13px; border-radius: 7px; background: var(--c-accent); color: var(--c-on-accent); font-size: 9px; font-weight: 700; display: grid; place-items: center; padding: 0 3px; font-family: 'Hanken Grotesk', sans-serif; }
+  .cx.obj { background: var(--c-bg-card); border-color: var(--c-accent-muted); padding-left: 3px; padding-right: 2px; }
+  .cx.ex b { color: var(--c-text-heading); font-weight: 600; }
+  .cx.ref { background: var(--c-bg-card); border-color: var(--c-border-light); border-radius: var(--r-max); padding-left: 2px; padding-right: 2px; }
+  .cx.ref.unused { opacity: .55; border-style: dashed; background: transparent; }
+  .cx.ref.unused .nm { color: var(--c-text-secondary); font-weight: 500; text-decoration: line-through; text-decoration-color: var(--c-text-muted); }
+  .cx.more { color: var(--c-text-heading); font-weight: 600; padding: 0 6px; border-color: var(--c-border); background: var(--c-bg-card); }
+  .cx .x { width: 18px; height: 18px; border: none; background: transparent; border-radius: 5px; color: var(--c-text-muted); display: inline-grid; place-items: center; cursor: pointer; padding: 0; flex: 0 0 auto; }
+  .cx .x:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .app.mobile .cx .x { width: 22px; height: 22px; }
+  .ag { border: none; background: var(--c-accent-light); color: var(--c-accent); font-size: 10px; font-weight: 700; height: 16px; min-width: 16px; border-radius: 4px; padding: 0 3px; cursor: pointer; flex: 0 0 auto; display: inline-grid; place-items: center; }
+  .plusl { color: var(--c-text-muted); display: inline-grid; flex: 0 0 14px; width: 14px; }
+
+  /* Всплывашки (Menu / Notice / подсказка) */
+  .pop { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; min-width: 240px; max-width: 340px; background: var(--c-bg-card); border: 1px solid var(--c-border);
+    border-radius: var(--r-lg); box-shadow: var(--shadow-dropdown); padding: 4px 0; }
+  .app.mobile .pop { left: 0 !important; right: 0; max-width: none; }
+  .pop .ph { padding: 7px 12px 5px; font-size: var(--fs-sm); color: var(--c-text-secondary); border-bottom: 1px solid var(--c-border-light); margin-bottom: 4px; }
+  .pop .ph b { color: var(--c-text-heading); }
+  .pop .gh { padding: 7px 12px 2px; font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .4px; }
+  .mi { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 12px; border: none; background: transparent; text-align: left; cursor: pointer; font-size: var(--fs-sm); color: var(--c-text-primary); min-width: 0; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi .tx { flex: 1; min-width: 0; }
+  .mi .tx small { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .mi.on { background: var(--c-accent-light); }
+  .mi.off { opacity: .5; cursor: default; }
+  .mi.danger { color: var(--c-danger-text); }
+  .mdiv { height: 1px; background: var(--c-border-light); margin: 4px 0; }
+  .radio { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--c-border); flex: 0 0 auto; }
+  .mi.on .radio { border: 4px solid var(--c-accent); }
+  .tip { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 31; width: 280px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-lg);
+    box-shadow: var(--shadow-dropdown); padding: 9px 12px; font-size: var(--fs-sm); line-height: 1.45; color: var(--c-text-primary); }
+  .app.mobile .tip { left: 0 !important; right: 0; width: auto; }
+  .tip b { color: var(--c-text-heading); }
+  .tip .row { display: flex; gap: 8px; align-items: center; margin-top: 7px; }
+  .notice { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 29; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px;
+    border-radius: var(--r-lg); background: var(--c-bg-card); border: 1px solid var(--c-border); box-shadow: var(--shadow-dropdown); font-size: var(--fs-sm); }
+  .notice .tx { flex: 1; min-width: 0; }
+  .notice.ok { background: var(--c-success-bg); border-color: transparent; color: var(--c-success-text); }
+  .notice .cd { font-size: var(--fs-xs); color: var(--c-text-muted); }
+
+  /* ── Поле ввода: чипы действий, вопрос параметра, текст, панель кнопок ── */
+  .composer { margin: 0 12px 12px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xxl); padding: 8px 10px; position: relative; }
+  .app.mobile .composer { margin: 0 8px 8px; }
+  .composer .ph { font-size: var(--fs-md); color: var(--c-text-muted); min-height: 36px; line-height: 1.4; cursor: text; }
+  .composer .ph.typed { color: var(--c-text-primary); }
+  .composer .ph.notext { display: flex; align-items: center; gap: 6px; background: var(--c-accent-light); color: var(--c-accent); border-radius: var(--r-md); padding: 0 10px; font-size: var(--fs-base); }
+  .composer .bar { display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 0; }
+  .composer .sp { flex: 1; }
+  .composer .mdl { font-size: var(--fs-sm); color: var(--c-text-secondary); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .composer .pop { bottom: calc(100% + 6px); left: 0; }
+  /* Чипы не режутся никогда: не влезли — строка прокручивается (на десктопе это один случай — «Изменить отмеченное» на 1024 с панелью) */
+  .chiprow { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; min-width: 0; position: relative; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .chiprow::-webkit-scrollbar { display: none; }
+  .app.mobile .chiprow { margin-right: -10px; padding-right: 10px; }
+  .ach { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: var(--r-max); border: 1px solid var(--c-border); background: var(--c-bg-panel);
+    font-size: var(--fs-sm); color: var(--c-text-secondary); cursor: pointer; white-space: nowrap; flex: 0 0 auto; }
+  .ach:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ach.on { background: var(--c-accent-light); border-color: var(--c-accent-muted); color: var(--c-accent); font-weight: 600; }
+  .ach.act { border-style: dashed; background: transparent; }
+  .ach.dis { opacity: .5; cursor: default; }
+  .ach.dis:hover { background: var(--c-bg-panel); color: var(--c-text-secondary); }
+  /* Кнопка запуска: ужимается только имя действия; «параметры · цена» не режутся никогда */
+  .btn.run { min-width: 0; max-width: 100%; gap: 5px; }
+  .btn.run .rl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .btn.run .rp { flex: 0 0 auto; }
+  .ach .th { width: 14px; height: 14px; border-radius: 3px; }
+  .ach .th.draft { border-width: 1px; }
+  .qrow { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: var(--fs-sm); color: var(--c-text-secondary); min-width: 0; flex-wrap: wrap; }
+  .qrow .q { white-space: nowrap; }
+  .marks { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--c-accent); background: var(--c-accent-light); border-radius: var(--r-sm); padding: 2px 6px; white-space: nowrap; }
+
+  /* ── Редактор (заглушка: кисть / монтаж) ── */
+  .editor { position: absolute; inset: 0; z-index: 35; background: var(--c-bg-main); border-radius: var(--r-xxl); display: flex; flex-direction: column; }
+  .app.mobile .editor { border-radius: 0; }
+  .editor .eh { height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--c-border-light); font-weight: 600; color: var(--c-text-heading); }
+  .editor .eh .sub { font-weight: 400; color: var(--c-text-muted); font-size: var(--fs-xs); }
+  .editor .tools { display: flex; gap: 6px; padding: 8px 10px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; align-items: center; }
+  .editor .tools .hint { white-space: nowrap; }
+  .editor .canvas { flex: 1; margin: 0 10px; border-radius: var(--r-lg); background-size: cover; position: relative; cursor: crosshair; min-height: 0; }
+  .editor .canvas .mk { position: absolute; border: 2px dashed var(--c-accent); border-radius: 50%; background: rgba(217,119,87,.25); }
+  .editor .ef { display: flex; gap: 8px; align-items: center; padding: 10px; }
+  .editor .ef .sp { flex: 1; }
+  .editor .ef .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mlist { display: flex; flex-direction: column; gap: 4px; padding: 0 10px; }
+  .mlist .ms { display: flex; align-items: center; gap: 8px; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: var(--r-md); padding: 6px 8px; font-size: var(--fs-sm); }
+  .mlist .ms .th { width: 42px; height: 26px; }
+  .mlist .jn { font-size: var(--fs-xs); color: var(--c-text-muted); padding-left: 24px; }
+
+  /* Правый док: вкладки библиотек и панель «Контекст» */
+  .dtabs { display: flex; gap: 0; padding: 0 4px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); flex: 0 0 auto; border-radius: var(--r-xxl) var(--r-xxl) 0 0; }
+  .dtabs button { border: none; background: transparent; height: 38px; padding: 0 6px; flex: 0 0 auto; font-size: var(--fs-xs); color: var(--c-text-secondary); display: inline-flex; align-items: center; gap: 4px; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+  .dtabs button.on { color: var(--c-accent); border-bottom-color: var(--c-accent); font-weight: 600; }
+  .dtabs .sp { flex: 1; }
+  .dbody { flex: 1; min-height: 0; overflow: auto; padding: 4px var(--sp-md) 12px; }
+  .lrow { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--c-border-light); min-width: 0; position: relative; }
+  .lrow .tx { flex: 1; min-width: 0; font-size: var(--fs-sm); }
+  .lrow .tx b { display: block; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lrow .tx small { display: block; color: var(--c-text-muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lrow .pop { top: calc(100% - 2px); bottom: auto; left: auto; right: 0; }
+  .rowbtn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 10px; border: 1px solid var(--c-border-light); background: var(--c-bg-card); border-radius: var(--r-md);
+    cursor: pointer; text-align: left; font-size: var(--fs-sm); color: var(--c-text-primary); position: relative; }
+  .rowbtn .k { color: var(--c-text-muted); flex: 0 0 auto; }
+  .rowbtn .v { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rowbtn .v b { color: var(--c-text-heading); }
+  .rowbtn .pop { top: calc(100% + 4px); bottom: auto; left: 0; right: 0; }
+  .rowbtn.dashed { border-style: dashed; background: transparent; color: var(--c-text-secondary); }
+  .exl { display: flex; flex-direction: column; border: 1px solid var(--c-border-light); border-radius: var(--r-md); background: var(--c-bg-card); overflow: hidden; }
+  .exl .gh { padding: 6px 10px 2px; font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .4px; }
+  .exl .mi { padding: 6px 10px; }
+  .exl .mi .pr { font-size: var(--fs-xs); color: var(--c-text-secondary); white-space: nowrap; flex: 0 0 auto; }
+  .objcard { display: flex; gap: 10px; align-items: center; background: var(--c-bg-card); border: 1px solid var(--c-accent-muted); border-radius: var(--r-md); padding: 8px; min-width: 0; }
+  .objcard.flash { box-shadow: 0 0 0 4px var(--c-accent-light); }
+  .objcard .big { width: 64px; height: 48px; border-radius: var(--r-sm); background-size: cover; flex: 0 0 auto; display: grid; place-items: center; color: var(--c-accent); border: 1px solid var(--c-border-light); }
+  .objcard .big.draft { border: 1.5px dashed var(--c-dashed); color: var(--c-text-muted); }
+  .objcard .tx { flex: 1; min-width: 0; font-size: var(--fs-sm); }
+  .objcard .tx b { display: block; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .objcard .tx small { display: block; color: var(--c-text-muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .objcard .vn { display: flex; gap: 0; flex: 0 0 auto; }
+  .objcard .vn .ib { width: 24px; height: 24px; }
+  .prm { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--c-border-light); font-size: var(--fs-sm); color: var(--c-text-secondary); min-width: 0; }
+  .prm .k { flex: 1; min-width: 0; }
+  .stp { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--c-border); border-radius: var(--r-md); overflow: hidden; }
+  .stp button { width: 26px; height: 24px; border: none; background: var(--c-bg-card); cursor: pointer; color: var(--c-text-secondary); font-size: 14px; }
+  .stp b { min-width: 22px; text-align: center; color: var(--c-text-heading); font-size: var(--fs-sm); }
+  .dfoot { flex: 0 0 auto; border-top: 1px solid var(--c-border-light); background: var(--c-bg-card); padding: 8px 12px 10px; display: flex; align-items: center; gap: 8px; border-radius: 0 0 var(--r-xxl) var(--r-xxl); }
+  .dfoot .pr { flex: 1; min-width: 0; font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.3; }
+  .dfoot .pr b { color: var(--c-text-heading); display: block; }
+  .dfoot .pr small { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dfoot .prog { flex: 1; min-width: 0; font-size: var(--fs-sm); }
+  .dfoot .prog .pb { height: 4px; border-radius: 2px; background: var(--c-track); margin-top: 5px; overflow: hidden; }
+  .dfoot .prog .pb i { display: block; height: 100%; background: var(--c-accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  /* Шторка на телефоне */
+  .sheet-ov { position: absolute; inset: 0; background: var(--c-overlay); z-index: 40; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 82%; z-index: 41; background: var(--c-bg-card); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); display: flex; flex-direction: column; overflow: hidden; }
+  .sheet .grab { align-self: center; width: 40px; height: 4px; border-radius: var(--r-sm); background: var(--c-track); margin: 8px 0 4px; flex: 0 0 auto; }
+  .sheet .sh { padding: 4px 16px 8px; font-weight: 600; color: var(--c-text-heading); font-size: var(--fs-md); }
+  .sheet .mi { min-height: 44px; padding: 8px 16px; font-size: var(--fs-md); }
+  .sheet .gh { padding: 8px 16px 2px; font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .4px; }
+  .sheet .dtabs { border-radius: 0; }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">Чипы действий в поле ввода и панель «Контекст» — v1</h1>
+  <p class="lead">Связка целиком: строка контекста (из <code>composer-context-row-v1</code>, без изменений), над текстом поля — <b>чипы действий</b> вместо
+    переключателя «Чат | Картинка», справа — <b>одна панель «Контекст»</b> вместо «Картинки» / «Звук» / «Видео». Чип — режим, а не кнопка:
+    он решает, что сделает запуск. Выберите сценарий и шагайте по списку: на кадре обведено, куда нажать. Подробности —
+    в <code>composer-actions-v1-proposal.md</code>.</p>
+  <div class="demo" id="demo"></div>
+  <div class="scn-box" id="scnbox"></div>
+  <div class="frames" id="frames"></div>
+</div>
+
+<script>
+// ── Иконки lucide ──
+const P = {
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  branch: '<path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  down: '<path d="m6 9 6 6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>', up: '<path d="m18 15-6-6-6 6"/>', left: '<path d="m15 18-6-6 6-6"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  send: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>', plus: '<path d="M12 5v14M5 12h14"/>', menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>',
+  cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  commit: '<circle cx="12" cy="12" r="3"/><path d="M3 12h6M15 12h6"/>',
+  eye: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>', chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>', file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  film: '<rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 17h5M17 7h5"/>',
+  brush: '<path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>', stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12"/>',
+  layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+  maximize: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  expand: '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  activity: '<path d="M2 12h3l3-8 4 16 3-8h7"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+};
+const I = (n, c = '') => `<svg class="i ${c}" viewBox="0 0 24 24">${P[n]}</svg>`;
+
+// ── Данные: вместо фото — градиенты (внешних ресурсов в макете нет) ──
+const G = {
+  hero: 'linear-gradient(135deg,#C98B5E 0%,#E7C79C 45%,#6B4A3A 100%)',
+  cat: 'radial-gradient(circle at 42% 50%,#E9B872 0 17%,transparent 18%),linear-gradient(160deg,#7FA7C9,#2F4B66)',
+  ana: 'radial-gradient(circle at 50% 38%,#E8C4A6 0 13%,transparent 14%),linear-gradient(150deg,#D7B98E,#8A6F9A)',
+  misha: 'radial-gradient(circle at 50% 38%,#D9B08C 0 13%,transparent 14%),linear-gradient(150deg,#7FA7C9,#4E6B52)',
+  palette: 'linear-gradient(90deg,#D97757 0 25%,#E7C79C 0 50%,#8A6F9A 0 75%,#5E7F95 0)',
+  mood: 'linear-gradient(135deg,#B7A58A,#5E5446)', logo: 'radial-gradient(circle,#D97757 0 35%,#FBF8F2 36%)',
+  marina: 'linear-gradient(135deg,#C9A0B8,#6E4E6A)', dima: 'linear-gradient(135deg,#9FB4C9,#3E5468)',
+  k5: 'linear-gradient(135deg,#E7C79C,#C98B5E 60%,#3E5468)', k6: 'linear-gradient(135deg,#7FA7C9,#2F4B66 70%,#E9B872)',
+};
+// Объекты «с чем»: одна функция сводки на строку и на «С чем» панели
+const OBJ = {
+  hero: { kind: 'image', name: 'hero.png', bg: G.hero, sub: 'кафе у окна · 1024×768' },
+  cat: { kind: 'image', name: 'кот.png', bg: G.cat, sub: 'нарисовал Claude · Qwen-Image 2.1' },
+  draft: { kind: 'draft', name: 'Новая картинка' },
+  adraft: { kind: 'adraft', name: 'Новый звук' },
+  morning: { kind: 'audio', akind: 'song', name: 'утро.mp3', sub: 'песня · 2:48' },
+  line3: { kind: 'audio', akind: 'speech', name: 'реплика-3.wav', sub: 'речь · 0:12 · Марина' },
+  scene5: { kind: 'scene', name: 'Сцена 5', sub: 'не в фильме', A: { name: 'кадр-5.png', bg: G.k5 }, B: { name: 'кадр-6.png', bg: G.k6 }, text: 'Камера медленно отъезжает от окна кафе, утренний свет становится золотым.' },
+  film: { kind: 'film', name: 'утро-в-горах', sub: '4 сцены · 0:32' },
+};
+// Что можно подключить «плюсом»
+const REF = {
+  ana: { name: 'Аня', bg: G.ana, round: true, sub: 'персонаж · 6 фото' },
+  misha: { name: 'Миша', bg: G.misha, round: true, sub: 'персонаж · 4 фото' },
+  palette: { name: 'palette.png', bg: G.palette, sub: 'assets/ · 1024×1024' },
+  mood: { name: 'mood.jpg', bg: G.mood, sub: 'assets/ · 1600×900' },
+  logo: { name: 'logo.png', bg: G.logo, sub: 'brand/ · 512×512' },
+  marina: { name: 'Марина', bg: G.marina, round: true, sub: 'голос · клон 12 с' },
+  dima: { name: 'Дмитрий', bg: G.dima, round: true, sub: 'голос · пресет' },
+};
+const ROLE = { style: 'образец стиля', object: 'объект', char: 'персонаж', frameA: 'кадр A', frameB: 'кадр B', voice: 'голос', piece: 'кусок' };
+const ROLE_MENU = [['style', 'Как образец стиля'], ['object', 'Как объект'], ['char', 'Как персонажа'], ['frameA', 'Как кадр A'], ['frameB', 'Как кадр B']];
+
+// Исполнители: строки как у ExecutorList. usd — за штуку, perSec — за секунду клипа
+const EXEC = {
+  qwenEdit: { where: 'локально', model: 'Qwen-Image Edit', free: true, eta: '~40 с' },
+  flux: { where: 'fal', model: 'FLUX Kontext', usd: 0.04, eta: '~15 с' },
+  seedream: { where: 'Higgsfield', model: 'Seedream 4', usd: 0.03, eta: '~20 с' },
+  rembg: { where: 'локально', model: 'BiRefNet', free: true, eta: '~5 с' },
+  rembgCloud: { where: 'fal', model: 'BiRefNet', usd: 0.01, eta: '~4 с' },
+  esrgan: { where: 'локально', model: 'Real-ESRGAN ×2', free: true, eta: '~10 с' },
+  clarity: { where: 'fal', model: 'Clarity Upscaler', usd: 0.02, eta: '~25 с' },
+  qwenGen: { where: 'локально', model: 'Qwen-Image 2.1', free: true, eta: '~30 с' },
+  qwenTts: { where: 'локально', model: 'Qwen3-TTS', free: true, eta: '~10 с' },
+  eleven: { where: 'fal', model: 'ElevenLabs v3', usd: 0.02, eta: '~5 с' },
+  seedvc: { where: 'локально', model: 'Seed-VC', free: true, eta: '~20 с' },
+  dfn: { where: 'локально', model: 'DeepFilterNet', free: true, eta: '~5 с' },
+  roformer: { where: 'локально', model: 'BS-RoFormer', free: true, eta: '~30 с' },
+  demucs: { where: 'локально', model: 'HTDemucs', free: true, eta: '~45 с' },
+  ace: { where: 'локально', model: 'ACE-Step 1.5', free: true, eta: '~1,5 мин' },
+  mmMusic: { where: 'fal', model: 'MiniMax Music 3', usd: 0.10, eta: '~2 мин' },
+  sfxCloud: { where: 'fal', model: 'ElevenLabs SFX', usd: 0.02, eta: '~10 с' },
+  noai: { where: 'на сервере', model: 'Без ИИ', free: true, eta: 'сразу', noai: true },
+  h3: { where: 'локально', model: 'MiniMax H3', free: true, eta: '~5,5 мин' },
+  veo: { where: 'fal', model: 'Veo 3.1', perSec: 0.20, eta: '~2 мин' },
+  kling: { where: 'Higgsfield', model: 'Kling 3.0', perSec: 0.14, eta: '~3 мин' },
+};
+// Списки по операции: [группа, ключ, причина-серости?]. Первая строка — «Авто» (его выбор)
+const EXEC_MENU = {
+  edit: [['auto', 'qwenEdit'], ['local', 'qwenEdit'], ['cloud', 'flux'], ['cloud', 'seedream']],
+  bg: [['auto', 'rembg'], ['local', 'rembg'], ['cloud', 'rembgCloud']],
+  upscale: [['auto', 'esrgan'], ['local', 'esrgan'], ['cloud', 'clarity']],
+  outpaint: [['auto', 'qwenEdit'], ['local', 'qwenEdit'], ['cloud', 'flux'], ['cloud', 'seedream', 'не дорисовывает за края']],
+  draw: [['auto', 'qwenGen'], ['local', 'qwenGen'], ['cloud', 'seedream'], ['cloud', 'flux', 'только правка готовой картинки']],
+  speak: [['auto', 'qwenTts'], ['local', 'qwenTts'], ['cloud', 'eleven']],
+  voice: [['auto', 'seedvc'], ['local', 'seedvc']],
+  denoise: [['auto', 'dfn'], ['local', 'dfn']],
+  stems: [['auto', 'roformer'], ['local', 'roformer'], ['local', 'demucs']],
+  repaint: [['auto', 'ace'], ['local', 'ace'], ['cloud', 'mmMusic']],
+  music: [['auto', 'ace'], ['local', 'ace'], ['cloud', 'mmMusic']],
+  sfx: [['auto', 'sfxCloud'], ['cloud', 'sfxCloud']],
+  noai: [['noai', 'noai']],
+  shoot: [['auto', 'h3'], ['local', 'h3'], ['cloud', 'veo'], ['cloud', 'kling', 'не снимает по двум кадрам']],
+};
+
+// ── Чипы действий: состояние объекта → строка чипов (потолок 6 вместе с «Чат») ──
+// text — нужен текст; textOpt — текст необязателен; param — вопрос под чипами; takes — какие роли референсов берёт;
+// action — чип не режим: открывает редактор или меню; count/duration/aspect — параметры панели
+const OP = {
+  chat: { l: 'Чат', ic: 'chat' },
+  edit: { l: 'Изменить', ic: 'spark', text: true, ph: 'Что изменить на картинке…', ex: 'edit', takes: ['char', 'style', 'object'], count: true, verb: 'Изменяем' },
+  bg: { l: 'Убрать фон', ic: 'scissors', ex: 'bg', takes: [], verb: 'Убираем фон у' },
+  upscale: { l: 'Увеличить', ic: 'maximize', ex: 'upscale', takes: [], verb: 'Увеличиваем' },
+  outpaint: { l: 'Дорисовать', ic: 'expand', ex: 'outpaint', takes: ['style'], count: true, verb: 'Дорисовываем',
+    param: { k: 'aspect', q: 'Пропорции', opts: ['16:9', '9:16', '1:1', '4:3'] } },
+  mark: { l: 'Отметить', ic: 'brush', action: 'editor' },
+  draw: { l: 'Нарисовать', ic: 'image', text: true, ph: 'Опишите картинку…', ex: 'draw', takes: ['char', 'style', 'object'], count: true, aspect: true, verb: 'Рисуем' },
+  speak: { l: 'Озвучить ещё', ic: 'mic', text: true, ph: 'Что озвучить…', ex: 'speak', takes: ['voice'], count: true, verb: 'Озвучиваем' },
+  voice: { l: 'Сменить голос', ic: 'users', ex: 'voice', takes: ['voice'], verb: 'Меняем голос в' },
+  denoise: { l: 'Убрать шум', ic: 'activity', ex: 'denoise', takes: [], verb: 'Чистим' },
+  stems: { l: 'Стемы', ic: 'layers', ex: 'stems', takes: [], verb: 'Делим на стемы',
+    param: { k: 'stems', q: 'Набор', opts: ['Вокал + минус', '4 стема', '6 стемов', 'Караоке'] } },
+  repaint: { l: 'Перегенерировать кусок', ic: 'spark', text: true, ph: 'Что должно звучать в куске 0:48–1:02…', ex: 'repaint', takes: ['piece'], count: true, verb: 'Перегенерируем кусок',
+    off: 'Выделите кусок на волне в редакторе' },
+  tts: { l: 'Озвучить', ic: 'mic', text: true, ph: 'Что озвучить…', ex: 'speak', takes: ['voice'], count: true, verb: 'Озвучиваем' },
+  song: { l: 'Песня', ic: 'music', text: true, ph: 'Стиль и слова песни…', ex: 'music', takes: ['voice'], count: true, verb: 'Пишем песню' },
+  sfx: { l: 'Эффект', ic: 'activity', text: true, ph: 'Какой звук: шаги по снегу, скрип двери…', ex: 'sfx', takes: [], count: true, verb: 'Делаем звук' },
+  concat: { l: 'Склеить', ic: 'link', ex: 'noai', takes: ['piece'], verb: 'Склеиваем' },
+  mix: { l: 'Свести', ic: 'sliders', ex: 'noai', takes: [], verb: 'Сводим' },
+  shoot: { l: 'Снять', ic: 'film', textOpt: true, ph: 'Добавить к тексту сцены… (не обязательно)', ex: 'shoot', takes: ['frameA', 'frameB'], count: true, duration: true, verb: 'Снимаем' },
+  reshoot: { l: 'Переснять', ic: 'film', textOpt: true, ph: 'Что изменить в сцене… (не обязательно)', ex: 'shoot', takes: ['frameA', 'frameB'], count: true, duration: true, verb: 'Переснимаем' },
+  frameA: { l: 'Кадр A', ic: 'image', action: 'frame', slot: 'A' },
+  frameB: { l: 'Кадр B', ic: 'image', action: 'frame', slot: 'B' },
+  build: { l: 'Собрать', ic: 'film', ex: 'noai', takes: [], verb: 'Собираем' },
+  rebuild: { l: 'Пересобрать', ic: 'film', ex: 'noai', takes: [], verb: 'Пересобираем' },
+  montage: { l: 'Монтаж', ic: 'scissors', action: 'editor' },
+};
+const CHIPS = {
+  image: ['edit', 'bg', 'upscale', 'outpaint', 'mark'],
+  draft: ['draw'],
+  adraft: ['tts', 'song', 'sfx'],
+  speech: ['speak', 'voice', 'denoise', 'stems'],
+  song: ['repaint', 'stems', 'denoise', 'concat'],
+  stems: ['mix', 'concat'],
+  scene: ['shoot', 'frameA', 'frameB'],
+  sceneShot: ['reshoot', 'frameA', 'frameB'],
+  film: ['build', 'montage'],
+  filmBuilt: ['rebuild', 'montage'],
+};
+const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
+const clone = o => JSON.parse(JSON.stringify(o));
+
+// ── Производные от контекста ──
+function objState(st) {
+  if (!st.obj) return null;
+  const o = OBJ[st.obj.id], os = st.os[st.obj.id] || {};
+  if (o.kind === 'image') return 'image';
+  if (o.kind === 'draft') return 'draft';
+  if (o.kind === 'adraft') return 'adraft';
+  if (o.kind === 'audio') return os.stems ? 'stems' : o.akind;
+  if (o.kind === 'scene') return os.shot ? 'sceneShot' : 'scene';
+  return os.built ? 'filmBuilt' : 'film';
+}
+const chipsOf = st => { const s = objState(st); return s ? ['chat'].concat(CHIPS[s]) : []; };
+const chipLabel = (st, k) => k === 'edit' && marksOf(st) ? 'Изменить отмеченное' : OP[k].l;
+const marksOf = st => st.obj ? (st.os[st.obj.id] || {}).marks || 0 : 0;
+// Причина серости действия: чип виден, но выбрать и запустить его нельзя
+const offOf = (st, k) => OP[k].off || null;
+// Умолчание (Р1): объект человека — первое действие-запуск без серости, иначе «Чат»; объект агента — «Чат»
+const pickDefaultAction = (st, agent) => agent ? 'chat' : chipsOf(st).find(k => OP[k].ex && !offOf(st, k)) || 'chat';
+// Операция, от которой считаем «Чем»: только выбранный чип-режим. У «Чата» исполнителя нет (Р2)
+function opOf(st) {
+  if (!st.obj || st.chip === 'chat' || !OP[st.chip] || !OP[st.chip].ex) return null;
+  return st.chip;
+}
+const hasExec = st => !!opOf(st);
+function execMenuKey(st) { const op = opOf(st); return op ? OP[op].ex : null; }
+function execKeyOf(st) {
+  const mk = execMenuKey(st); if (!mk) return null;
+  const rows = EXEC_MENU[mk];
+  if (st.execKey && rows.some(r => r[1] === st.execKey && r[0] !== 'auto' && !r[2])) return st.execKey;
+  // «Авто» у стемов: вокал + минус — RoFormer, остальные наборы — HTDemucs
+  if (mk === 'stems' && st.param.stems && st.param.stems !== 'Вокал + минус') return 'demucs';
+  return rows[0][1];
+}
+const isAuto = st => { const mk = execMenuKey(st); return !mk || !st.execKey || !EXEC_MENU[mk].some(r => r[1] === st.execKey && r[0] !== 'auto'); };
+const verOf = (st, id) => st.ver[id] || 1;
+const isDraft = id => OBJ[id].kind === 'draft' || OBJ[id].kind === 'adraft';
+const verLong = (st, id) => isDraft(id) ? 'черновик' : `версия ${verOf(st, id)}`;
+const verShort = (st, id) => isDraft(id) ? 'черновик' : `v${verOf(st, id)}`;
+const durOf = st => st.param.duration || 8;
+function priceOf(st) {
+  const e = EXEC[execKeyOf(st)]; if (!e) return null;
+  const op = OP[opOf(st)], n = op.count ? st.count : 1;
+  if (e.free) return { text: 'бесплатно', free: true, detail: e.noai ? 'без ИИ · сразу' : `${e.eta}${n > 1 ? ` × ${n}` : ''} · очередь GPU: 0` };
+  if (e.perSec) { const d = durOf(st), s = e.perSec * d * n; return { text: `$${s.toFixed(2)}`, detail: `${n > 1 ? `${n} × ` : ''}$${(e.perSec * d).toFixed(2)} за ${d} с · ${e.eta}` }; }
+  const s = e.usd * n; return { text: `$${s.toFixed(2)}`, detail: `${n > 1 ? `${n} × $${e.usd.toFixed(2)} = ` : ''}$${s.toFixed(2)} · ${e.eta}` };
+}
+// Референс не нужен выбранному действию: в «Чате» Claude видит всё, серого нет
+function isUnused(st, r) {
+  if (!st.obj || st.chip === 'chat') return false;
+  const op = OP[st.chip]; if (!op || !op.ex) return false;
+  return !op.takes.includes(r.role);
+}
+const opTitle = st => st.chip === 'chat' ? 'Чат' : chipLabel(st, st.chip);
+// Нужен ли текст и есть ли он: кнопка запуска «серая с причиной», пока текста нет
+// Подпись кнопки запуска (Р3) — одна точка, как useActionRun.label: действие · параметры панели · цена.
+// Параметры: длительность — всегда, у кого она есть; вариантов — только если больше одного.
+// Десктоп: «Изменить · 3 вар. · $0.12», «Снять · 8 с · $1.60». 360: «Изменить · ×3 · $0.12».
+// Ужимается только имя действия (многоточием); параметры и цена не режутся никогда.
+function runLabel(st, compact) {
+  const op = OP[st.chip], pr = priceOf(st), ps = [];
+  if (op.duration) ps.push(`${durOf(st)} с`);
+  if (op.count && st.count > 1) ps.push(compact ? `×${st.count}` : `${st.count} вар.`);
+  const tail = ps.concat([pr.text]).join(' · ');
+  return { name: chipLabel(st, st.chip), tail, text: `${chipLabel(st, st.chip)} · ${tail}` };
+}
+function runState(st, compact = false) {
+  if (!st.obj || st.chip === 'chat') return { kind: 'chat' };
+  const op = OP[st.chip]; if (!op || !op.ex) return { kind: 'chat' };
+  if (st.run) return { kind: 'running', label: `${op.verb} ${OBJ[st.obj.id].name}… ${st.run.p} %` };
+  const lb = runLabel(st, compact);
+  if (op.text && !st.text) return { kind: 'needText', label: lb.text, lb, reason: op.ph };
+  return { kind: 'ready', label: lb.text, lb };
+}
+
+// ── Лестница схлопывания строки — как в composer-context-row-v1 ──
+const NOM = { pad: 10, gap: 6, vsep: 1, g3: 262, g2: 150, g1: 76, g0: 34, o2: 150, o1: 112, e3: 320, e2: 196, e1: 112, plus: 14, ref: 104, more: 46 };
+// Вход лестницы — только ширина строки и дискретные факты; открытость панели в неё не входит (Р4).
+// В «Чате» чипа «Чем» нет (Р2): его ступени не бывают, номинал 0
+function rungs(st) {
+  const n = st.refs.length, hasObj = !!st.obj, ex = hasExec(st), proj = st.chat === 'proj';
+  let f = { g: 3, o: 2, e: 3, k: n };
+  const out = [{ ...f, why: 'всё полностью' }];
+  const step = (ch, why) => { f = { ...f, ...ch }; out.push({ ...f, why }); };
+  if (ex) step({ e: 2 }, '«Чем» без «Чем: Авто · где»');
+  if (proj) step({ g: 2 }, 'ветка: «⎇ имя · 3»');
+  for (let k = n - 1; k >= 0; k--) step({ k }, `референсов в строке: ${k}, остальные в «+${n - k}»`);
+  if (proj) step({ g: 1 }, 'ветка: «⎇ · 3»');
+  if (hasObj) step({ o: 1 }, 'имя объекта короче');
+  if (ex) step({ e: 1 }, '«Чем»: только цена');
+  return out;
+}
+function nominal(st, f, mobile) {
+  const w = [];
+  if (st.chat === 'proj') w.push(mobile ? NOM.g0 : NOM['g' + f.g]);
+  const rest = [];
+  if (st.obj) rest.push(NOM['o' + f.o]);
+  if (hasExec(st)) rest.push(NOM['e' + f.e]);
+  if (st.refs.length) { rest.push(NOM.plus); for (let i = 0; i < f.k; i++) rest.push(NOM.ref); rest.push(NOM.more); }
+  if (w.length && rest.length) w.push(NOM.vsep);
+  const all = w.concat(rest);
+  return NOM.pad + all.reduce((a, b) => a + b, 0) + NOM.gap * Math.max(0, all.length - 1);
+}
+function pickRung(st, width) {
+  const rs = rungs(st);
+  for (let i = 0; i < rs.length; i++) { const need = nominal(st, rs[i]); if (need <= width) return { f: rs[i], i, n: rs.length, need }; }
+  const i = rs.length - 1; return { f: rs[i], i, n: rs.length, need: nominal(st, rs[i]), scroll: true };
+}
+
+// ── Чипы строки ──
+function gitChip(st, form) {
+  const g = st.git, ch = g.changes, up = g.ahead ? `<span class="up">↑${g.ahead}</span>` : '';
+  const cnt = ch ? `<span class="n">${ch}</span>` : '';
+  const clean = `<span class="n clean">чисто</span>`;
+  const title = `Ветка ${g.branch} · ${ch ? `${ch} ${plural(ch, 'изменение', 'изменения', 'изменений')}` : 'чисто'}${g.ahead ? ` · ${g.ahead} к публикации` : ''}`;
+  let inner;
+  if (form === 0) inner = `<span class="dot">${I('branch', 's')}${ch || g.ahead ? `<span class="cnt">${ch || '↑' + g.ahead}</span>` : ''}</span>`;
+  else if (form === 1) inner = `${I('branch', 's')}<span class="v">·</span>${ch ? cnt : g.ahead ? '' : clean}${up}`;
+  else if (form === 2) inner = `${I('branch', 's')}<span class="t nm" style="max-width:76px">${g.branch}</span><span class="v">·</span>${ch ? cnt : g.ahead ? '' : clean}${up}`;
+  else inner = `${I('branch', 's')}<span class="t nm" style="max-width:136px">${g.branch}</span><span class="v">·</span>${ch ? `<span class="n">${ch} ${plural(ch, 'изменение', 'изменения', 'изменений')}</span>` : clean}${g.ahead ? `<span class="v">·</span>${up}` : ''}`;
+  const max = form === 0 ? NOM.g0 : NOM['g' + form];
+  return `<span class="cx git" data-k="git" data-anchor="git" data-chip="git" title="${title}" style="max-width:${max}px">${inner}${form ? `<span class="cv">${I('down', 'xs')}</span>` : ''}</span>`;
+}
+function objThumb(o, cls = 'th') {
+  if (o.kind === 'audio') return `<span class="${cls}" style="display:grid;place-items:center;color:var(--c-accent);border:none">${I('music', 's')}</span>`;
+  if (o.kind === 'scene' || o.kind === 'film') return `<span class="${cls}" style="display:grid;place-items:center;color:var(--c-accent);border:none">${I('film', 's')}</span>`;
+  if (o.kind === 'draft') return `<span class="${cls} draft"></span>`;
+  if (o.kind === 'adraft') return `<span class="${cls} draft" style="display:grid;place-items:center;color:var(--c-text-muted)">${I('music', 'xs')}</span>`;
+  return `<span class="${cls}" style="background:${o.bg};background-size:cover"></span>`;
+}
+function objChip(st, form) {
+  const o = OBJ[st.obj.id], ag = st.obj.agent;
+  const max = form === 1 ? NOM.o1 : NOM.o2;
+  const title = `${o.name} · ${verLong(st, st.obj.id)}${ag ? ' · взял в работу Claude' : ''} — открыть панель «Контекст»`;
+  return `<span class="cx obj" data-k="obj" data-anchor="obj" data-chip="obj" title="${title}" style="max-width:${max}px">${objThumb(o)}<span class="t nm">${o.name}</span><span class="v">· ${verShort(st, st.obj.id)}</span>`
+    + (ag ? `<button class="ag" data-k="agent-mark" title="Взял в работу Claude">✦</button>` : '')
+    + `<button class="x" data-k="obj-x" title="Снять «${o.name}» с работы">${I('x', 'xs')}</button></span>`;
+}
+function execText(st, e, form) {
+  const auto = isAuto(st);
+  if (form === 3) return `${auto ? '<b>Авто</b> · ' : ''}${e.where} · ${auto ? e.model : `<b>${e.model}</b>`}`;
+  return `<b>${e.model}</b>`;
+}
+function execChip(st, form) {
+  const e = EXEC[execKeyOf(st)], pr = priceOf(st);
+  const price = `<span class="badge ${pr.free ? 'ok' : 'mut'}">${pr.text}</span>`;
+  const title = `Чем: ${isAuto(st) ? 'Авто · ' : ''}${e.where} · ${e.model} · ${pr.text} — сменить исполнителя`;
+  let inner;
+  if (form === 1) inner = `${I('cpu', 's')}${price}`;
+  else if (form === 2) inner = `<span class="t">${execText(st, e, 2)}</span>${price}`;
+  else inner = `<span class="k">Чем:</span><span class="t">${execText(st, e, 3)}</span>${price}`;
+  return `<span class="cx ex" data-k="exec" data-anchor="exec" data-chip="exec" title="${title}" style="max-width:${NOM['e' + form]}px">${inner}<span class="cv">${I('down', 'xs')}</span></span>`;
+}
+function refChip(st, r) {
+  const d = REF[r.id], un = isUnused(st, r);
+  const title = un ? `Не используется в «${opTitle(st)}»` : `${d.name} · ${ROLE[r.role]}${r.agent ? ' · подключил Claude' : ''}`;
+  return `<span class="cx ref ${un ? 'unused' : ''}" data-k="ref-${r.id}" data-anchor="ref-${r.id}" data-chip="ref" title="${title}" style="max-width:${NOM.ref}px">`
+    + `<span class="th ${d.round ? 'round' : ''}" style="background:${d.bg};background-size:cover"></span><span class="t nm">${d.name}</span>`
+    + (r.agent ? `<span class="ag" title="Подключил Claude">✦</span>` : '')
+    + `<button class="x" data-k="rx-${r.id}" title="Отключить «${d.name}»">${I('x', 'xs')}</button></span>`;
+}
+function rowInner(st, f, mobile) {
+  const parts = [];
+  if (st.chat === 'proj') parts.push(gitChip(st, mobile ? 0 : f.g));
+  const rest = [];
+  if (st.obj) rest.push(objChip(st, f.o));
+  if (hasExec(st)) rest.push(execChip(st, f.e));
+  if (st.refs.length) {
+    rest.push(`<span class="plusl" title="Подключено к ходу">${I('plus', 's')}</span>`);
+    st.refs.slice(0, f.k).forEach(r => rest.push(refChip(st, r)));
+    const hid = st.refs.length - f.k;
+    const alias = st.refs.slice(f.k).map(r => 'ref-' + r.id).join(' ');
+    if (hid > 0) rest.push(`<span class="cx more" data-k="refs-more" data-alias="${alias}" data-anchor="refs" data-chip="more" title="Ещё ${hid}: показать всё подключённое" style="max-width:${NOM.more}px">+${hid}${I('right', 'xs')}</span>`);
+    else rest.push(`<span class="cx more" data-k="refs-more" data-anchor="refs" data-chip="more" title="Показать всё подключённое" style="max-width:${NOM.more}px;padding:0 4px">${I('right', 'xs')}</span>`);
+  }
+  if (parts.length && rest.length) parts.push('<span class="vsep"></span>');
+  return parts.concat(rest).join('');
+}
+const showRow = st => st.chat === 'proj' || !!st.obj;
+
+// ── Всплывашки строки ──
+function gitMenu(st) {
+  const g = st.git, ch = g.changes;
+  const files = `${ch} ${plural(ch, 'файл', 'файла', 'файлов')}`;
+  return `<div class="pop" data-for="git" style="width:300px">
+    <div class="ph"><b>${g.branch}</b> · ${ch ? `${ch} ${plural(ch, 'изменение', 'изменения', 'изменений')}` : 'чисто'}${g.ahead ? ` · ↑${g.ahead}` : ''}</div>
+    <button class="mi ${ch ? '' : 'off'}" data-k="git-chat">${I('commit', 's')}<span class="tx">Зафиксировать только этот чат<small>${ch ? `${files}, которые правил этот чат` : 'изменений этого чата нет'}</small></span></button>
+    <button class="mi ${ch ? '' : 'off'}" data-k="git-all">${I('commit', 's')}<span class="tx">Зафиксировать всё дерево<small>${ch ? `${files} · всё, что изменено в дереве` : 'дерево чистое'}</small></span></button>
+    <button class="mi ${g.ahead ? '' : 'off'}" data-k="git-push">${I('send', 's')}<span class="tx">${g.ahead ? `Опубликовать ${g.ahead}` : 'Опубликовать'}<small>${g.ahead ? `${g.ahead} ${plural(g.ahead, 'коммит', 'коммита', 'коммитов')} в origin/${g.branch}` : 'нечего публиковать'}</small></span></button>
+    <div class="mdiv"></div>
+    <button class="mi" data-k="git-diff">${I('eye', 's')}<span class="tx">Показать изменения</span></button></div>`;
+}
+// Строки ExecutorList: одни и те же в меню «Чем» строки и в секции «Чем» панели
+function execRows(st) {
+  const mk = execMenuKey(st); if (!mk) return '';
+  const cur = execKeyOf(st), auto = isAuto(st), rows = EXEC_MENU[mk], op = OP[opOf(st)];
+  const n = op.count ? st.count : 1;
+  const priceRow = e => e.free ? 'бесплатно' : e.perSec ? `$${(e.perSec * durOf(st)).toFixed(2)} за ${durOf(st)} с` : `$${e.usd.toFixed(2)} / шт.`;
+  let html = '', lastG = '';
+  for (const [grp, key, why] of rows) {
+    const e = EXEC[key];
+    if (grp === 'noai') { html += `<div class="mi on"><span class="radio"></span><span class="tx">Без ИИ · на сервере<small>монтаж без модели: сразу и бесплатно</small></span><span class="badge ok">бесплатно</span></div>`; continue; }
+    if (grp !== lastG && grp !== 'auto') html += `<div class="gh">${grp === 'local' ? 'Бесплатно на своей видеокарте' : 'Облако'}</div>`;
+    lastG = grp;
+    if (grp === 'auto') html += `<button class="mi ${auto ? 'on' : ''}" data-k="ex-auto"><span class="radio"></span><span class="tx"><b>Авто</b><small>сейчас: ${EXEC[cur].where} · ${EXEC[cur].model}</small></span><span class="badge ${EXEC[cur].free ? 'ok' : 'mut'}">${priceRow(EXEC[cur])}</span></button>`;
+    else if (why) html += `<div class="mi off"><span class="radio"></span><span class="tx">${e.where === 'локально' ? e.model : `${e.where} · ${e.model}`}<small>${why}</small></span><span class="pr">${priceRow(e)}</span></div>`;
+    else html += `<button class="mi ${!auto && cur === key ? 'on' : ''}" data-k="ex-${key}"><span class="radio"></span><span class="tx">${e.where === 'локально' ? e.model : `${e.where} · ${e.model}`}<small>${e.eta}${n > 1 && !e.free ? ` · ${n} шт. = $${((e.usd || e.perSec * durOf(st)) * n).toFixed(2)}` : ''}</small></span><span class="pr">${priceRow(e)}</span></button>`;
+  }
+  return html;
+}
+function execMenu(st) { return `<div class="pop" data-for="exec" style="width:300px"><div class="ph">Чем выполнить «${chipLabel(st, opOf(st))}»</div>${execRows(st)}</div>`; }
+function refsMenu(st) {
+  const rows = st.refs.map(r => { const d = REF[r.id], un = isUnused(st, r); return `<div class="mi" style="cursor:default">
+      <span class="th l ${d.round ? 'round' : ''}" style="background:${d.bg};background-size:cover;${un ? 'opacity:.55' : ''}"></span>
+      <span class="tx"><b style="font-weight:600;color:var(--c-text-heading)">${d.name}</b>${r.agent ? ' <span class="ag" style="display:inline-grid">✦</span>' : ''}<small>${un ? `не используется в «${opTitle(st)}»` : ROLE[r.role]}</small></span>
+      <button class="ib" data-k="rx-${r.id}" title="Отключить «${d.name}»">${I('x', 's')}</button></div>`; }).join('');
+  return `<div class="pop" data-for="refs" style="width:300px"><div class="ph"><b>Подключено к ходу</b> · ${st.refs.length}</div>${rows}
+    <div class="mdiv"></div><button class="mi danger" data-k="ctx-clear">${I('trash', 's')}<span class="tx">Очистить контекст<small>снимет объект и всё подключённое; ветку и «Чем» не трогает</small></span></button></div>`;
+}
+function tipHtml(st) {
+  if (st.tip === 'agent') { const o = OBJ[st.obj.id];
+    return `<div class="tip" data-for="obj"><b>✦ Взял в работу Claude</b> · ${o.name} · ${verLong(st, st.obj.id)}<div class="hint">Панель от действий Claude не двигается. В поле выбран «Чат»: Claude продолжит разговор, а чип действия отправит запуск генератору.</div>
+      <div class="row"><button class="btn xs pri" data-k="tip-open">${I('panel', 's')}Открыть</button><button class="btn xs ghost" data-k="tip-close">Понятно</button></div></div>`; }
+  return '';
+}
+function noticeHtml(st) {
+  if (!st.toast) return '';
+  if (st.toast.kind === 'undo') return `<div class="notice">${I('info', 's')}<span class="tx">Выбор снят — поле снова «Чат»</span><span class="cd">4 с</span><button class="btn xs" data-k="undo">${I('undo', 's')}Вернуть</button></div>`;
+  return `<div class="notice ok">${I('check', 's')}<span class="tx">${st.toast.text}</span></div>`;
+}
+function rowBlock(st, mobile) {
+  if (!showRow(st)) return '';
+  const pop = mobile ? '' : st.menu === 'git' ? gitMenu(st) : st.menu === 'exec' ? execMenu(st) : st.menu === 'refs' ? refsMenu(st) : '';
+  return `<div class="rw" data-row>${noticeHtml(st)}${pop}${tipHtml(st)}<div class="crow" data-k="row-scroll" role="toolbar" aria-label="Контекст хода"></div></div>`;
+}
+
+// ── Поле ввода: чипы действий ──
+function frameMenu(st, slot) {
+  const o = OBJ[st.obj.id], f = o[slot];
+  return `<div class="pop" data-for="frame${slot}" style="width:280px"><div class="ph">Кадр ${slot}${f ? ` · <b>${f.name}</b>` : ' · не выбран'}</div>
+    <button class="mi" data-k="fr-edit">${I('brush', 's')}<span class="tx">Править в «Картинках»<small>${f ? `${f.name} станет объектом, результат вернётся кадром ${slot}` : `новая картинка станет кадром ${slot}`}</small></span></button>
+    <button class="mi" data-k="fr-proj">${I('folder', 's')}<span class="tx">Из проекта<small>картинки проекта миниатюрами</small></span></button>
+    <button class="mi" data-k="fr-prev">${I('film', 's')}<span class="tx">Кадр B прошлой сцены<small>сцена 4 · стык без скачка</small></span></button>
+    ${f ? `<div class="mdiv"></div><button class="mi danger" data-k="fr-clear">${I('x', 's')}<span class="tx">Убрать кадр</span></button>` : ''}</div>`;
+}
+function chipsHtml(st, mobile) {
+  const ch = chipsOf(st); if (!ch.length) return '';
+  const o = OBJ[st.obj.id];
+  const items = ch.map(k => {
+    const op = OP[k], on = st.chip === k, act = !!op.action, off = offOf(st, k);
+    let inner = `${I(op.ic, 's')}${chipLabel(st, k)}`;
+    if (op.action === 'frame') { const f = o[op.slot]; inner = `${f ? `<span class="th" style="background:${f.bg};background-size:cover"></span>` : `<span class="th draft"></span>`}${op.l}${I('down', 'xs')}`; }
+    const title = off ? `${chipLabel(st, k)}: ${off}` : k === 'chat' ? 'Сообщение Claude — запуск генератора не нужен' : act ? (op.action === 'frame' ? `Кадр ${op.slot}: откуда взять` : k === 'mark' ? 'Открыть редактор на кисти — отмеченное пойдёт в «Изменить»' : 'Открыть монтаж фильма') : `Запуск сделает «${chipLabel(st, k)}»`;
+    return `<button class="ach ${on ? 'on' : ''} ${act ? 'act' : ''} ${off ? 'dis' : ''}" data-k="chip-${k}" title="${title}" role="radio" aria-checked="${on}" ${off ? 'aria-disabled="true"' : ''}>${inner}</button>`;
+  }).join('');
+  // Меню кадра живёт в поле, а не в строке чипов: строка прокручивается и обрезала бы всплывашку
+  const frame = !mobile && st.menu && st.menu.startsWith('frame') ? frameMenu(st, st.menu.slice(5)) : '';
+  return `<div class="chiprow" role="radiogroup" aria-label="Что сделает запуск">${items}</div>${frame}`;
+}
+function questionHtml(st) {
+  if (!st.obj || st.chip === 'chat') return '';
+  const op = OP[st.chip]; if (!op || !op.param) return '';
+  const p = op.param, cur = st.param[p.k] || p.opts[0];
+  return `<div class="qrow"><span class="q">${p.q}:</span><span class="seg sm" role="radiogroup">${p.opts.map(v => `<span class="${cur === v ? 'on' : ''}" data-k="q-${v}" role="radio" aria-checked="${cur === v}">${v}</span>`).join('')}</span>
+    ${marksOf(st) && st.chip === 'edit' ? '' : ''}</div>`;
+}
+function runBtn(st, mobile, where = 'field') {
+  const rs = runState(st, mobile), k = where === 'field' ? 'run' : 'prun';
+  if (rs.kind === 'chat') return `<button class="btn pri" data-k="${k}" title="Отправить сообщение Claude" style="width:32px;padding:0">${I('send')}</button>`;
+  if (rs.kind === 'running') return `<button class="btn pri off" title="${rs.label}">${I('spark', 's')}${mobile ? '' : rs.label}${mobile ? '…' : ''}</button>`;
+  // имя действия — отдельный кусок с многоточием, «параметры · цена» — кусок, который не ужимается
+  const inner = `${I('spark', 's')}<span class="rl">${rs.lb.name}</span><span class="rp">· ${rs.lb.tail}</span>`;
+  if (rs.kind === 'needText') return `<button class="btn pri run off" data-k="${k}-off" title="Напишите текст: ${rs.reason}">${inner}</button>`;
+  return `<button class="btn pri run" data-k="${k}" title="Запустить «${rs.label}»">${inner}</button>`;
+}
+function composerHtml(st, mobile) {
+  const o = st.obj && OBJ[st.obj.id];
+  const op = o && st.chip !== 'chat' ? OP[st.chip] : null;
+  let ph;
+  if (!op || !op.ex) ph = st.text ? `<div class="ph typed" data-k="type">${st.text}</div>` : `<div class="ph" data-k="type">Сообщение Claude…</div>`;
+  else if (op.text || op.textOpt) ph = st.text ? `<div class="ph typed" data-k="type">${st.text}</div>` : `<div class="ph" data-k="type">${op.ph}</div>`;
+  else ph = `<div class="ph notext" data-k="type">${I('info', 's')}Текст не нужен — нажмите запуск</div>`;
+  const plus = st.plusMenu ? `<div class="pop" style="width:230px"><button class="mi">${I('file', 's')}<span class="tx">Прикрепить файл<small>уйдёт с этим сообщением</small></span></button><div class="mdiv"></div>
+    <button class="mi" data-k="plus-image">${I('image', 's')}<span class="tx">Картинка<small>черновик «Новая картинка»</small></span></button>
+    <button class="mi" data-k="plus-audio">${I('music', 's')}<span class="tx">Звук<small>черновик «Новый звук»</small></span></button><button class="mi">${I('film', 's')}<span class="tx">Видео</span></button></div>` : '';
+  // На телефоне метку «Отмечено» в панели кнопок не показываем: её уже несёт чип «Изменить отмеченное», а места нет
+  const marks = marksOf(st) && st.chip === 'edit' && !mobile ? `<span class="marks" title="Отмечено в редакторе: пойдёт в «Изменить отмеченное»">${I('brush', 'xs')}Отмечено: ${marksOf(st)}<button class="x" data-k="marks-x" style="border:none;background:transparent;padding:0;color:inherit;cursor:pointer;display:inline-grid">${I('x', 'xs')}</button></span>` : '';
+  return `<div class="composer" data-composer>${plus}${chipsHtml(st, mobile)}${questionHtml(st)}${ph}
+    <div class="bar"><button class="ib" data-k="plus" title="Прикрепить или начать картинку, звук, видео">${I('plus')}</button>${marks}<span class="sp"></span>
+    ${(!op || !op.ex) && !mobile ? `<span class="mdl">Opus 5.5 ${I('down', 'xs')}</span>` : ''}${runBtn(st, mobile)}</div></div>`;
+}
+
+// ── Лента ──
+function inCtx(st, id) { return st.refs.find(r => r.id === id); }
+function cardHead(st, it, o, foc) {
+  return `<div class="t">${I(o.kind === 'audio' ? 'music' : o.kind === 'scene' ? 'film' : 'image', 's')}<b>${o.name}</b><span class="sub">${it.ver ? `версия ${it.ver} · ` : o.kind === 'image' ? `версия 1 · ` : ''}${it.by || o.sub}</span>
+    ${foc ? `<span class="badge acc">В работе${st.obj.agent ? ' ✦' : ''}</span>` : ''}</div>`;
+}
+function cardActs(st, it, foc) {
+  const id = it.id, ref = inCtx(st, id), roleOpen = st.roleFor === id + (it.ver || '');
+  return `<div class="acts">${foc && (it.ver || 1) === verOf(st, id) ? '' : `<button class="btn xs" data-k="work-${id}${it.ver ? '-' + it.ver : ''}">${I('spark', 's')}Работать с этой</button>`}
+    ${ref || OBJ[id].kind === 'scene' ? (ref ? `<span class="badge ok">${I('check', 'xs')}В контексте · ${ROLE[ref.role]}</span>` : '') : `<button class="btn xs ghost" data-k="ctx-${id}">В контекст ${I('down', 'xs')}</button>`}
+    ${roleOpen ? rolePop(id, 'top:calc(100% + 4px);bottom:auto;left:120px') : ''}</div>`;
+}
+function feedHtml(st, mobile) {
+  return `<div class="feed">${st.feed.map(it => {
+    if (it.t === 'user') return `<div class="msg user">${it.text}</div>`;
+    if (it.t === 'agent') return `<div class="msg agent">${it.text}</div>`;
+    if (it.t === 'tool') return `<div class="tool">${I('spark', 'xs')}${it.text}</div>`;
+    if (it.t === 'prog') return `<div class="tool">${I('spark', 'xs')}${it.text}<span class="pb"><i style="width:${it.p}%"></i></span>${it.p} %</div>`;
+    if (it.t === 'sim') return `<button class="sim" data-k="${it.k}">${I('right', 's')}${it.text}</button>`;
+    const o = OBJ[it.id] || REF[it.id];
+    // карточка без номера — версия 1; «В работе» только у текущей версии объекта
+    const foc = st.obj && st.obj.id === it.id && (it.ver || 1) === verOf(st, it.id);
+    if (it.t === 'audio') {
+      return `<div class="icard ${foc ? 'focus' : ''}">${cardHead(st, it, o, foc)}
+        <div class="wave ${it.stems ? 'stems' : ''}">${Array.from({ length: 48 }, (_, i) => `<i style="height:${20 + Math.round(70 * Math.abs(Math.sin(i * 0.7) * Math.cos(i * 0.23)))}%"></i>`).join('')}</div>
+        ${it.stems ? `<div class="hint" style="margin:0">Стемы: вокал · барабаны · бас · прочее — каждый отдельным файлом</div>` : ''}${cardActs(st, it, foc)}</div>`;
+    }
+    if (it.t === 'scene') {
+      const os = st.os[it.id] || {};
+      return `<div class="icard ${foc ? 'focus' : ''}">${cardHead(st, it, o, foc)}
+        ${it.shot ? `<div class="clip">${I('play')}<span class="dur">0:0${durOf(st)} · ${st.count} ${plural(st.count, 'вариант', 'варианта', 'вариантов')}</span></div>` : `<div class="frames2"><span class="fr" style="background:${o.A.bg}">A · ${o.A.name}</span><span class="arr">${I('right', 's')}</span><span class="fr" style="background:${o.B.bg}">B · ${o.B.name}</span></div>
+        <div class="hint" style="margin:0">${o.text}</div>`}${cardActs(st, it, foc)}</div>`;
+    }
+    // картинка: своя (объект) или из библиотеки (референс)
+    const mk = it.ver && it.ver === verOf(st, it.id) ? 0 : (it.marks || 0);
+    return `<div class="icard ${foc ? 'focus' : ''}">${cardHead(st, it, o, foc)}${inCtx(st, it.id) ? '' : ''}
+      <div class="pic" style="background:${it.bg || o.bg};background-size:cover">${mk ? `<span class="mk" style="left:30%;top:20%;width:18%;height:40%"></span><span class="mk" style="left:62%;top:45%;width:14%;height:30%"></span>` : ''}</div>
+      ${cardActs(st, it, foc)}</div>`;
+  }).join('')}</div>`;
+}
+function rolePop(id, style = '') {
+  return `<div class="pop" style="width:220px;${style}"><div class="ph">«${(REF[id] || OBJ[id]).name}» в контекст</div>${ROLE_MENU.map(([r, l]) => `<button class="mi" data-k="role-${r}">${l}</button>`).join('')}</div>`;
+}
+
+// ── Редактор: заглушка кисти и монтажа ──
+function editorHtml(st) {
+  if (!st.editor) return '';
+  const o = OBJ[st.obj.id], os = st.os[st.obj.id] || {};
+  if (st.editor === 'montage') return `<div class="editor"><div class="eh">${I('scissors')}Монтаж · ${o.name}<span class="sub">· 4 сцены · 0:32</span></div>
+    <div class="mlist">${[['scene-01.mp4', 'Сцена 1 · 8 с'], ['scene-02.mp4', 'Сцена 2 · ✂ 7 с из 8'], ['scene-03.v2.mp4', 'Сцена 3 · 8 с · ● обновлена'], ['scene-05.mp4', 'Сцена 5 · 8 с']].map(([f, s], i) => `${i ? `<div class="jn">${i === 2 ? '■ затемнение 1 с' : '| встык'}</div>` : ''}<div class="ms">⋮⋮<span class="th" style="background:${i % 2 ? G.k6 : G.k5}"></span><span style="flex:1"><b>${f}</b><br><small style="color:var(--c-text-muted)">${s}</small></span>${I('menu', 's')}</div>`).join('')}</div>
+    <div class="ef"><span class="hint" style="margin:0">Музыка: утро.mp3 · затухание 2 с</span><span class="sp"></span><button class="btn" data-k="editor-back">${I('left', 's')}Назад в чат</button></div></div>`;
+  return `<div class="editor"><div class="eh">${I('brush')}Редактор · ${o.name}<span class="sub">· ${verLong(st, st.obj.id)} · 1024×768</span></div>
+    <div class="tools"><span class="seg"><span class="on">${I('brush', 's')}Кисть</span><span>Ластик</span><span>Обрезать</span><span>Повернуть</span><span>Без ИИ ▾</span></span><span class="hint" style="margin:0 0 0 auto;align-self:center">Кликните по картинке — отметка</span></div>
+    <div class="canvas" data-k="paint" style="background:${o.bg}">${os.marks ? `<span class="mk" style="left:30%;top:20%;width:18%;height:40%"></span><span class="mk" style="left:62%;top:45%;width:14%;height:30%"></span>` : ''}</div>
+    <div class="ef"><span class="hint" style="margin:0">${os.marks ? `Отмечено: ${os.marks} области — в поле чип станет «Изменить отмеченное»` : 'Отметок пока нет'}</span><span class="sp"></span><button class="btn ghost" data-k="editor-clear">Очистить</button><button class="btn pri" data-k="editor-back">${I('check', 's')}Готово${os.marks ? ` · ${os.marks}` : ''}</button></div></div>`;
+}
+
+// ── Правый док: библиотеки и панель «Контекст» ──
+const TABS = [['files', 'folder', 'Файлы'], ['chars', 'users', 'Персонажи'], ['voices', 'mic', 'Голоса'], ['context', 'sliders', 'Контекст']];
+function dockTabs(st) { return `<div class="dtabs">${TABS.map(([k, ic, l]) => `<button class="${st.dock === k ? 'on' : ''}" data-k="tab-${k}" title="${l}">${I(ic, 's')}${st.dock === k || k === 'context' ? `<span class="lb">${l}</span>` : ''}</button>`).join('')}<span class="sp"></span><button class="ib" title="Закрыть панель" data-k="dock-x">${I('x', 's')}</button></div>`; }
+function libRow(st, id, opts = {}) {
+  const d = REF[id] || OBJ[id]; const ref = inCtx(st, id); const foc = st.obj && st.obj.id === id;
+  const act = foc ? `<span class="badge acc">В работе</span>` : ref ? `<span class="badge ok">${I('check', 'xs')}В контексте</span>`
+    : `${opts.work ? `<button class="btn xs ghost" data-k="pwork-${id}">Работать</button>` : ''}<button class="btn xs" data-k="add-${id}">В контекст${opts.roles ? ' ' + I('down', 'xs') : ''}</button>`;
+  return `<div class="lrow"><span class="th l ${d.round ? 'round' : ''}" style="background:${d.bg || 'var(--c-bg-inset)'};background-size:cover;${d.bg ? '' : 'display:grid;place-items:center;color:var(--c-accent)'}">${d.bg ? '' : I('music', 's')}</span>
+    <span class="tx"><b>${d.name}</b><small>${ref ? ROLE[ref.role] + ' · ' : ''}${d.sub}</small></span>${act}${st.roleFor === id && opts.roles ? rolePop(id) : ''}</div>`;
+}
+function gitRow(st) {
+  const g = st.git, ch = g.changes;
+  return `<div class="rowbtn" data-k="p-git"><span class="k">${I('branch', 's')}</span><span class="v"><b>${g.branch}</b> · ${ch ? `${ch} ${plural(ch, 'изменение', 'изменения', 'изменений')}` : 'чисто'}${g.ahead ? ` · ↑${g.ahead}` : ''}</span>${I('down', 'xs')}
+    ${st.menu === 'pgit' ? gitMenu(st).replace('class="pop"', 'class="pop" style="top:calc(100% + 4px);bottom:auto;left:0;right:0;width:auto"') : ''}</div>`;
+}
+function objCard(st) {
+  if (!st.obj) return `<div class="rowbtn dashed" style="cursor:default"><span class="v" style="white-space:normal">Ничего не выбрано — «Работать с этой» на карточке ленты или в «Файлах»</span></div>`;
+  const o = OBJ[st.obj.id], id = st.obj.id, v = verOf(st, id), os = st.os[id] || {};
+  let big, sub, editor;
+  if (o.kind === 'image') { big = `<span class="big" style="background:${o.bg}"></span>`; sub = `${verLong(st, id)} из ${v} · 1024×768${os.marks ? ` · отмечено: ${os.marks}` : ''}`; editor = ['Открыть редактор', 'маска и «Без ИИ»: обрезать, повернуть, формат', 'brush']; }
+  else if (o.kind === 'draft') { big = `<span class="big draft">${I('image')}</span>`; sub = 'черновик · файла ещё нет'; editor = null; }
+  else if (o.kind === 'adraft') { big = `<span class="big draft">${I('music')}</span>`; sub = 'черновик · файла ещё нет'; editor = null; }
+  else if (o.kind === 'audio') { big = `<span class="big">${I('music')}</span>`; sub = `${verLong(st, id)}${os.stems ? ' · стемы: 4' : ''} · ${o.sub}`; editor = ['Открыть редактор', 'волна и кусок, монтаж без ИИ', 'activity']; }
+  else if (o.kind === 'scene') { big = `<span class="big" style="background:${o.A.bg}">${I('play')}</span>`; sub = `${os.shot ? `снята · ${verLong(st, id)} · 0:0${durOf(st)}` : 'не снята'} · ${o.sub}`; editor = null; }
+  else { big = `<span class="big">${I('film')}</span>`; sub = o.sub; editor = ['Открыть монтаж', 'порядок, склейки, музыка', 'scissors']; }
+  return `<div class="objcard ${st.flash ? 'flash' : ''}">${big}<span class="tx"><b>${o.name}${st.obj.agent ? ' <span class="ag" style="display:inline-grid">✦</span>' : ''}</b><small>${sub}</small></span>
+      <span class="vn">${isDraft(id) ? '' : `<button class="ib ${v > 1 ? '' : 'off'}" data-k="ver-prev" title="Предыдущая версия" ${v > 1 ? '' : 'style="opacity:.35"'}>${I('left', 's')}</button><button class="ib" data-k="ver-next" title="Следующая версия" style="opacity:.35">${I('right', 's')}</button>`}<button class="ib" data-k="p-obj-x" title="Снять «${o.name}» с работы">${I('x', 's')}</button></span></div>
+    ${editor ? `<div style="display:flex;gap:8px;align-items:center;margin-top:6px"><button class="btn xs" data-k="open-editor">${I(editor[2], 's')}${editor[0]}</button><span class="hint" style="margin:0">${editor[1]}</span></div>` : ''}`;
+}
+function plusBlock(st) {
+  const un = st.refs.filter(r => isUnused(st, r));
+  const chips = st.refs.length ? `<div class="chips">${st.refs.map(r => refChip(st, r).replace(/data-anchor="[^"]*"/, '').replace(/data-k="ref-/, 'data-k="pref-')).join('')}</div>` : '';
+  const hint = un.length ? `<div class="hint">Серый — не используется в «${opTitle(st)}»: останется в контексте для Claude и других действий.</div>` : !st.refs.length ? `<div class="hint">Референсы: персонаж, образец стиля, голос, кадр, файл проекта. Их видят и Claude, и генератор.</div>` : '';
+  const menu = st.menu === 'addfrom' ? `<div class="pop" style="top:calc(100% + 4px);bottom:auto;left:0;right:0;width:auto">
+    <button class="mi" data-k="af-feed">${I('chat', 's')}<span class="tx">Из ленты чата<small>картинки и звуки этого чата</small></span></button>
+    <button class="mi" data-k="af-files">${I('folder', 's')}<span class="tx">Из файлов проекта</span></button>
+    <button class="mi" data-k="af-chars">${I('users', 's')}<span class="tx">Из «Персонажей»<small>ролью «персонаж»</small></span></button>
+    <button class="mi" data-k="af-voices">${I('mic', 's')}<span class="tx">Из «Голосов»<small>ролью «голос»</small></span></button>
+    <div class="mdiv"></div><button class="mi" data-k="af-upload">${I('upload', 's')}<span class="tx">С компьютера<small>ляжет в рабочую папку чата</small></span></button></div>` : '';
+  return `${chips}${hint}<div class="rowbtn dashed" data-k="addfrom" style="margin-top:6px"><span class="k">${I('plus', 's')}</span><span class="v">Добавить из…</span>${I('down', 'xs')}${menu}</div>`;
+}
+function paramsBlock(st) {
+  if (!st.obj || st.chip === 'chat' || !OP[st.chip] || !OP[st.chip].ex) return `<div class="hint">Параметры появятся, когда в поле ввода выбрано действие. В «Чате» запуска нет — сообщение уходит Claude.</div>`;
+  const op = OP[st.chip], rows = [];
+  if (op.count) rows.push(`<div class="prm"><span class="k">Вариантов</span><span class="stp"><button data-k="cnt-minus" title="Меньше">−</button><b>${st.count}</b><button data-k="cnt-plus" title="Больше">+</button></span></div>`);
+  if (op.duration) rows.push(`<div class="prm"><span class="k">Длительность</span><span class="seg sm">${[4, 6, 8].map(v => `<span class="${durOf(st) === v ? 'on' : ''}" data-k="dur-${v}">${v} с</span>`).join('')}</span></div>`);
+  if (op.aspect) rows.push(`<div class="prm"><span class="k">Пропорции</span><span class="seg sm">${['1:1', '16:9', '9:16', '4:3'].map(v => `<span class="${(st.param.aspect || '1:1') === v ? 'on' : ''}" data-k="q-${v}">${v}</span>`).join('')}</span></div>`);
+  if (op.param) rows.push(`<div class="prm"><span class="k">${op.param.q}</span><span class="hint" style="margin:0">${st.param[op.param.k] || op.param.opts[0]} · выбирается под чипами</span></div>`);
+  if (!rows.length) return `<div class="hint">У «${chipLabel(st, st.chip)}» параметров нет: один результат, как есть.</div>`;
+  if (op.count || op.duration) rows.push(`<div class="hint">${op.duration ? 'Длительность и число вариантов видны' : 'Число вариантов видно'} на кнопке запуска: «✦ ${runLabel(st, false).text}».</div>`);
+  return rows.join('');
+}
+function footHtml(st, mobile) {
+  const rs = runState(st);
+  if (rs.kind === 'chat') return '';
+  if (rs.kind === 'running') return `<div class="dfoot"><div class="prog">${rs.label}<div class="pb"><i style="width:${st.run.p}%"></i></div></div><button class="btn xs" data-k="stop">${I('stop', 'xs')}Остановить</button></div>`;
+  const pr = priceOf(st);
+  const res = st.result ? `<div class="dfoot" style="border-radius:0;padding-bottom:4px"><span class="pr" style="color:var(--c-success-text)">${I('check', 'xs')} ${st.result}</span><button class="btn xs ghost">Открыть</button><button class="btn xs ghost">В проект</button></div>` : '';
+  return `${res}<div class="dfoot"><span class="pr"><b>${pr.text}</b><small>${pr.detail}${rs.kind === 'needText' ? ' · нужен текст в поле' : ''}</small></span>${runBtn(st, mobile, 'panel')}</div>`;
+}
+function dockHtml(st, mobile) {
+  let body = '', foot = '';
+  if (st.dock === 'files') body = `<div class="label">assets/</div>${libRow(st, 'hero', { work: true, roles: true })}${libRow(st, 'palette', { roles: true })}${libRow(st, 'mood', { roles: true })}<div class="label">brand/</div>${libRow(st, 'logo', { roles: true })}<div class="label">audio/</div>${libRow(st, 'morning', { work: true })}`;
+  else if (st.dock === 'chars') body = `<div class="label">Персонажи проекта</div>${libRow(st, 'ana')}${libRow(st, 'misha')}<div class="hint">Персонаж уходит в контекст ролью «персонаж»: его видят генератор картинок и Claude.</div>`;
+  else if (st.dock === 'voices') body = `<div class="label">Голоса проекта</div>${libRow(st, 'marina')}${libRow(st, 'dima')}
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn xs" data-k="voice-train">${I('mic', 's')}Обучить голос</button><span class="hint" style="margin:0">по записям одного человека: 2–30 минут чистой речи · бесплатно на своей видеокарте</span></div>`;
+  else if (st.dock === 'context') {
+    body = `${st.chat === 'proj' ? `<div class="label">Где</div>${gitRow(st)}` : ''}
+      <div class="label">С чем</div>${objCard(st)}
+      <div class="label">Чем${hasExec(st) ? `<span class="r">для «${chipLabel(st, opOf(st))}»</span>` : ''}</div>${hasExec(st) ? `<div class="exl">${execRows(st)}</div>` : `<div class="hint">${st.obj ? 'Исполнитель появится, когда в поле выбрано действие. В «Чате» сообщение уходит Claude — исполнитель не нужен.' : 'Исполнитель появится, когда выберете, с чем работать.'}</div>`}
+      <div class="label">Плюс${st.refs.length ? `<span class="r">${st.refs.length}</span>` : ''}</div>${plusBlock(st)}
+      <div class="label">Параметры запуска</div>${paramsBlock(st)}`;
+    foot = footHtml(st, mobile);
+  }
+  return `${dockTabs(st)}<div class="dbody">${body}</div>${foot}`;
+}
+
+// ── Кадры ──
+function chatsHtml(st) {
+  const cur = st.obj ? `${OBJ[st.obj.id].name} · ${verShort(st, st.obj.id)}${st.refs.length ? ` · ＋${st.refs.length}` : ''}` : `⎇ ${st.git.branch}`;
+  return `<div class="ihead">Чаты</div><div class="clist"><div class="citem on"><b>${st.title}</b><span>${cur}</span></div>
+    <div class="citem"><b>Склейка видео-редактора</b><span>🎬 Сцена 5 · не в фильме</span></div><div class="citem"><b>Ревью ленты</b><span>⎇ master</span></div></div>`;
+}
+function desktop(st, size) {
+  const w = +size, dockW = w >= 1440 ? 340 : 320, chats = w >= 1440 && st.chat === 'proj';
+  return `<div class="app" style="width:${w}px">
+    <div class="rail">${['menu', 'chat', 'folder', 'sliders'].map((n, i) => `<button class="ib ${i === 1 ? 'on' : ''}" ${i === 3 ? 'data-k="rail-context" title="Контекст"' : ''}>${I(n)}</button>`).join('')}</div>
+    ${chats ? `<div class="island chats">${chatsHtml(st)}</div>` : ''}
+    <div class="island main"><div class="ihead">${st.title}<span class="sub">${st.chat === 'proj' ? '· проект «Лендинг кафе»' : '· личный чат'}</span></div>
+      ${feedHtml(st, false)}<div class="bottom">${rowBlock(st, false)}${composerHtml(st, false)}</div>${editorHtml(st)}</div>
+    ${st.dock ? `<div class="island dock" style="width:${dockW}px">${dockHtml(st, false)}</div>` : ''}</div>`;
+}
+function mobile(st, curZone) {
+  // Шторка панели опущена; поднимается, только если шаг сценария идёт в панели
+  const sheetDock = st.dock && (curZone === 'panel' || curZone === 'sheet') && !st.menu;
+  const strip = html => html.replace(/^<div class="pop[^"]*"[^>]*>/, '').replace(/<\/div>$/, '');
+  const menuSheet = st.menu === 'git' || st.menu === 'pgit' ? `<div class="sh">${st.git.branch}</div>${strip(gitMenu(st))}`
+    : st.menu === 'exec' ? `<div class="sh">Чем выполнить «${chipLabel(st, opOf(st))}»</div>${execRows(st)}`
+    : st.menu === 'refs' ? strip(refsMenu(st))
+    : st.menu && st.menu.startsWith('frame') ? strip(frameMenu(st, st.menu.slice(5)))
+    : st.menu === 'addfrom' ? `<div class="sh">Добавить в контекст из…</div>${strip(plusBlock({ ...st, refs: [] }).match(/<div class="pop"[\s\S]*<\/div><\/div>$/)[0]).replace(/<\/div>$/, '')}`
+    : st.roleFor ? `<div class="sh">«${(REF[st.roleFor] || OBJ[st.roleFor]).name}» в контекст</div>${ROLE_MENU.map(([r, l]) => `<button class="mi" data-k="role-${r}">${l}</button>`).join('')}` : '';
+  return `<div class="app mobile"><div class="mtop">${I('menu')}<span class="sp">${st.title}</span><button class="ib" title="Панель «Контекст»" data-k="rail-context">${I('sliders')}</button></div>
+    ${feedHtml(st, true)}<div class="bottom">${rowBlock(st, true)}${composerHtml(st, true)}</div>${editorHtml(st)}
+    ${menuSheet ? `<div class="sheet-ov"></div><div class="sheet"><span class="grab"></span>${menuSheet}<div style="height:10px"></div></div>` : ''}
+    ${!menuSheet && sheetDock ? `<div class="sheet-ov"></div><div class="sheet" style="height:78%"><span class="grab"></span>${dockHtml(st, true)}</div>` : ''}</div>`;
+}
+
+// ── Сценарии ──
+const PROJ = { chat: 'proj', title: 'Лендинг: герой и палитра', git: { branch: 'feat/video-editor', changes: 3, ahead: 0 }, obj: null, chip: 'chat', execKey: null, refs: [],
+  param: {}, count: 1, text: '', ver: {}, os: {}, run: null, result: null, editor: null,
+  dock: null, menu: null, tip: null, toast: null, roleFor: null, plusMenu: false, flash: false, size: null, undo: null };
+const FEED_IMG = [{ t: 'user', text: 'Вот кадр для лендинга, сделаем вечер и тёплый свет.' }, { t: 'img', id: 'hero' }, { t: 'agent', text: 'Принял. Могу править сам или дать вам промпт — выберите, с чем работать.' }];
+const addRef = (st, id, role, agent = false) => { if (!st.refs.find(r => r.id === id)) st.refs.push({ id, role, agent }); };
+// Объект человека встаёт на первое действие вида без серости, объект агента — на «Чат» (Р1, решение Андрея 2026-10-03)
+const setObj = (st, id, agent = false) => { st.obj = { id, agent }; st.execKey = null; st.text = ''; st.result = null; st.chip = 'chat'; st.chip = pickDefaultAction(st, agent); };
+const pickChip = (st, k) => { st.chip = k; st.result = null; st.menu = null; };
+// Запуск → ход генерации; результат — новая версия того же объекта
+const startRun = st => { st.run = { p: 40 }; st.menu = null; const o = OBJ[st.obj.id]; st.feed = st.feed.filter(x => x.t !== 'sim').concat([{ t: 'prog', text: `${OP[st.chip].verb} ${o.name} · ${EXEC[execKeyOf(st)].model}`, p: 40 }, { t: 'sim', k: 'sim-done', text: 'Результат готов' }]); };
+const finishRun = st => {
+  const id = st.obj.id, o = OBJ[id], op = st.chip, e = EXEC[execKeyOf(st)]; st.run = null; st.text = '';
+  st.feed = st.feed.filter(x => x.t !== 'sim' && x.t !== 'prog');
+  st.os[id] = st.os[id] || {};
+  if (o.kind === 'image') { st.ver[id] = verOf(st, id) + 1; st.os[id].marks = 0; st.feed.push({ t: 'img', id, ver: st.ver[id], by: `✦ ${chipLabel(st, op)} · ${e.model}` }); st.result = `${o.name} · версия ${st.ver[id]}`; }
+  else if (o.kind === 'audio' && op === 'stems') { st.ver[id] = verOf(st, id) + 1; st.os[id].stems = true; st.feed.push({ t: 'audio', id, ver: st.ver[id], stems: true, by: `✦ Стемы · ${st.param.stems || 'Вокал + минус'} · ${e.model}` }); st.result = `${o.name} · версия ${st.ver[id]} · стемы`; }
+  else if (o.kind === 'audio') { st.ver[id] = verOf(st, id) + 1; st.feed.push({ t: 'audio', id, ver: st.ver[id], by: `✦ ${OP[op].l} · ${e.model}` }); st.result = `${o.name} · версия ${st.ver[id]}`; }
+  else if (o.kind === 'scene') { st.ver[id] = (st.os[id].shot ? verOf(st, id) + 1 : 1); st.os[id].shot = true; st.feed.push({ t: 'scene', id, ver: st.ver[id], shot: true, by: `✦ ${OP[op].l} · ${e.model} · ${st.count} ${plural(st.count, 'вариант', 'варианта', 'вариантов')}` }); st.result = `${o.name} · версия ${st.ver[id]} · 0:0${durOf(st)}`; }
+  // Чип остаётся, если он есть у новой версии; иначе — «Чат»
+  if (!chipsOf(st).includes(st.chip)) st.chip = 'chat';
+};
+const SCN = {
+  s1: { title: '1 · Правка картинки из ленты', why: '«Работать с этой» ставит объект в строку, над полем появляются чипы, и сразу выбрано первое действие вида — «Изменить». Человек пишет текст — и запуск кнопкой «✦ Изменить · бесплатно». Результат — карточка новой версии.',
+    start: { ...PROJ, dock: 'context', feed: FEED_IMG },
+    steps: [
+      ['feed', 'work-hero', 'Лента: «Работать с этой» на hero.png — чипы появились, выбран «Изменить» (первое действие вида); кнопка «✦ Изменить · бесплатно» серая: нужен текст', st => setObj(st, 'hero')],
+      ['composer', 'type', 'Поле: написать, что изменить (клик по полю печатает текст) — кнопка «✦ Изменить · бесплатно» ожила', st => { st.text = 'Сделай вечер: тёплый свет из окон, фонари на улице.'; }],
+      ['composer', 'run', 'Кнопка «✦ Изменить · бесплатно» — ход генерации в ленте и в низу панели', st => startRun(st)],
+      ['feed', 'sim-done', 'Результат готов — карточка «hero.png · версия 2 · ✦ Изменить», она же в работе; чип «Изменить» остался', st => finishRun(st)],
+    ] },
+  s2: { title: '2 · Убрать фон без текста', why: 'Чип без текста: поле подсвечивает «Текст не нужен — нажмите запуск», кнопка сразу «✦ Убрать фон · бесплатно».',
+    start: { ...PROJ, dock: 'context', obj: { id: 'hero', agent: false }, chip: 'edit', feed: FEED_IMG },
+    steps: [
+      ['composer', 'chip-bg', 'Чип «Убрать фон» — поле: «Текст не нужен — нажмите запуск»; в панели у «Чем» список для «Убрать фон», параметров нет', st => pickChip(st, 'bg')],
+      ['composer', 'run', 'Кнопка «✦ Убрать фон · бесплатно»', st => startRun(st)],
+      ['feed', 'sim-done', 'Результат — hero.png · версия 2', st => finishRun(st)],
+    ] },
+  s3: { title: '3 · Дорисовать за края', why: 'Чип с параметром: один вопрос «Пропорции» прямо под чипами, панель не нужна. В панели параметр только повторён подписью.',
+    start: { ...PROJ, dock: 'context', obj: { id: 'hero', agent: false }, chip: 'edit', feed: FEED_IMG },
+    steps: [
+      ['composer', 'chip-outpaint', 'Чип «Дорисовать» — под чипами вопрос «Пропорции: 16:9 · 9:16 · 1:1 · 4:3»', st => pickChip(st, 'outpaint')],
+      ['composer', 'q-9:16', 'Ответ: «9:16»', st => { st.param.aspect = '9:16'; }],
+      ['composer', 'run', 'Кнопка «✦ Дорисовать · бесплатно»', st => startRun(st)],
+      ['feed', 'sim-done', 'Результат — hero.png · версия 2 в 9:16', st => finishRun(st)],
+    ] },
+  s4: { title: '4 · Отметить кистью', why: '«✎ Отметить» — не режим, а вход в редактор на кисти. Назад — чип «Изменить» подписан «Изменить отмеченное», в поле метка «Отмечено: 2».',
+    start: { ...PROJ, dock: 'context', obj: { id: 'hero', agent: false }, chip: 'edit', feed: FEED_IMG },
+    steps: [
+      ['composer', 'chip-mark', 'Чип «✎ Отметить» — редактор картинки на кисти', st => { st.editor = 'brush'; }],
+      ['editor', 'paint', 'Редактор: отметить две области на картинке', st => { st.os.hero = { marks: 2 }; }],
+      ['editor', 'editor-back', '«Готово · 2» — назад в чат: чип «Изменить отмеченное» выбран, в поле «Отмечено: 2 ✕»', st => { st.editor = null; st.chip = 'edit'; }],
+      ['composer', 'type', 'Текст: что сделать с отмеченным', st => { st.text = 'Убери стакан и салфетку.'; }],
+      ['composer', 'run', 'Кнопка «✦ Изменить отмеченное · бесплатно»', st => startRun(st)],
+    ] },
+  s5: { title: '5 · Песня: сразу «Стемы», потом «Свести · Склеить»', why: 'У песни первое действие «Перегенерировать кусок» серое, пока нет выделения, поэтому «Работать с этой» ставит первое живое — «Стемы»: кнопка «✦ Стемы · бесплатно» запустит разделение без текста. У версии со стемами — «Свести · Склеить», а выбранный чип после запуска уходит в «Чат», потому что «Стемов» у новой версии нет.',
+    start: { ...PROJ, dock: 'context', refs: [{ id: 'marina', role: 'voice', agent: false }], feed: [{ t: 'user', text: 'Разложи песню на дорожки — хочу отдельно вокал.' }, { t: 'audio', id: 'morning' }] },
+    steps: [
+      ['feed', 'work-morning', 'Лента: «Работать с этой» на утро.mp3 — выбран «Стемы»: «Перегенерировать кусок» серый (нет выделения). Вопрос «Набор» под чипами, голос Марины серый, кнопка «✦ Стемы · бесплатно» живая', st => setObj(st, 'morning')],
+      ['composer', 'q-4 стема', 'Ответ: «4 стема» — «Чем» сам сменился на HTDemucs', st => { st.param.stems = '4 стема'; st.execKey = null; }],
+      ['composer', 'run', 'Кнопка «✦ Стемы · бесплатно»', st => startRun(st)],
+      ['feed', 'sim-done', 'Результат — утро.mp3 · версия 2 · стемы; чипы сменились на «Чат · Свести · Склеить»', st => finishRun(st)],
+      ['composer', 'chip-mix', 'Чип «Свести» — «Чем: Без ИИ · на сервере», кнопка «✦ Свести · бесплатно»', st => pickChip(st, 'mix')],
+    ] },
+  s6: { title: '6 · Агент взял картинку в работу', why: 'Claude вызывает image_focus — чип с ✦ в строке, чипы действий над полем есть, но выбран «Чат». Человек сам выбирает «Увеличить» — и следующий запуск уходит генератору.',
+    start: { ...PROJ, dock: 'files', feed: [{ t: 'img', id: 'cat' }, { t: 'user', text: 'Сделай кота вечерним, только без фиолетового.' }, { t: 'sim', k: 'sim-agent', text: 'Ход Claude: image_focus(кот.png)' }] },
+    steps: [
+      ['feed', 'sim-agent', 'Лента: ход Claude — image_focus(кот.png). В строке «кот.png · v1 ✦» без «Чем», над полем чипы, выбран «Чат»; панель «Файлы» стоит на месте', st => {
+        setObj(st, 'cat', true); st.feed = st.feed.filter(x => x.t !== 'sim').concat([{ t: 'tool', text: 'image_focus · кот.png' }, { t: 'agent', text: 'Взял <b>кот.png</b> в работу. Сделаю вечер в тёплых тонах — запускать?' }]); }],
+      ['composer', 'chip-upscale', 'Чип «Увеличить» — в строке появился «Чем», кнопка «✦ Увеличить · бесплатно», ✦ на объекте остался', st => pickChip(st, 'upscale')],
+      ['composer', 'run', 'Кнопка «✦ Увеличить · бесплатно»', st => startRun(st)],
+    ] },
+  s7: { title: '7 · Панель «Контекст»', why: 'Чип объекта в строке открывает одну панель: Где · С чем · Чем · Плюс · Параметры · низ с той же кнопкой. Исполнитель, персонаж из «Персонажей» и число вариантов меняют кнопку в поле: число вариантов видно на ней.',
+    start: { ...PROJ, dock: null, obj: { id: 'hero', agent: false }, chip: 'edit', text: 'Сделай вечер и тёплый свет.', feed: FEED_IMG },
+    steps: [
+      ['row', 'obj', 'Строка: чип hero.png — панель «Контекст» открывается, «С чем» мигает', st => { st.dock = 'context'; st.flash = true; }],
+      ['panel', 'ex-flux', '«Чем»: fal · FLUX Kontext — цена «$0.04» в строке, в низу панели и на кнопке поля', st => { st.execKey = 'flux'; }],
+      ['panel', 'addfrom', '«Плюс»: «Добавить из…»', st => { st.menu = 'addfrom'; }],
+      ['panel', 'af-chars', '«Из «Персонажей»» — вкладка «Персонажи»', st => { st.menu = null; st.dock = 'chars'; }],
+      ['panel', 'add-ana', '«В контекст» у Ани — «В контексте ✓», в строке «＋ Аня»', st => addRef(st, 'ana', 'char')],
+      ['panel', 'tab-context', 'Назад на «Контекст»: Аня в «Плюс» ролью «персонаж»', st => { st.dock = 'context'; }],
+      ['panel', 'cnt-plus', 'Параметры: «Вариантов +» → 2 — кнопка «✦ Изменить · 2 вар. · $0.08»', st => { st.count = 2; }],
+      ['panel', 'cnt-plus', '«+» → 3: кнопка в поле и в низу «✦ Изменить · 3 вар. · $0.12», расшифровка «3 × $0.04»', st => { st.count = 3; }],
+    ] },
+  s8: { title: '8 · Сцена: снять, переснять, кадр B', why: 'У сцены чипы «Снять · Кадр A · Кадр B»; после съёмки — «Переснять». «Кадр B» — меню источника кадра, не режим.',
+    start: { ...PROJ, dock: 'context', title: 'Утро в горах', obj: { id: 'scene5', agent: false }, chip: 'chat', feed: [{ t: 'user', text: 'Сцена 5: отъезд камеры от окна кафе, золотой свет.' }, { t: 'scene', id: 'scene5' }] },
+    steps: [
+      ['composer', 'chip-shoot', 'Чип «Снять» — кнопка «✦ Снять · 8 с · бесплатно»: длительность из панели видна на кнопке', st => pickChip(st, 'shoot')],
+      ['panel', 'ex-veo', '«Чем»: fal · Veo 3.1 — «$1.60» за 8 с', st => { st.execKey = 'veo'; }],
+      ['composer', 'run', 'Кнопка «✦ Снять · 8 с · $1.60» — текст в поле не обязателен: текст сцены в панели', st => startRun(st)],
+      ['feed', 'sim-done', 'Клип готов — карточка сцены с плеером; чипы: «Чат · Переснять · Кадр A · Кадр B»', st => finishRun(st)],
+      ['composer', 'chip-frameB', 'Чип «Кадр B ▾» — меню: Править в «Картинках» / Из проекта / Кадр B прошлой сцены', st => { st.menu = 'frameB'; }],
+      ['composer', 'fr-edit', '«Править в «Картинках»» — кадр-6.png становится объектом, чипы картинки, выбран «Изменить» (выбор человека); результат вернётся кадром B', st => { st.menu = null; OBJ.k6 = { kind: 'image', name: 'кадр-6.png', bg: G.k6, sub: 'кадр B сцены 5' }; setObj(st, 'k6'); }],
+    ] },
+  s9: { title: '9 · Телефон 360: правка, фон, панель', why: 'Чипы прокручиваются вбок, страница стоит; вопрос параметра встаёт под чипами и не перекрывает поле; панель «Контекст» — шторкой по чипу строки.',
+    start: { ...PROJ, size: '360', title: 'Лендинг', dock: 'context', feed: [{ t: 'img', id: 'hero' }] },
+    steps: [
+      ['feed', 'work-hero', 'Лента: «Работать с этой» — чипы в одну прокручиваемую строку, выбран «Изменить»', st => setObj(st, 'hero')],
+      ['composer', 'type', 'Текст', st => { st.text = 'Вечер, тёплый свет.'; }],
+      ['composer', 'run', '«✦ Изменить · бесплатно»', st => startRun(st)],
+      ['feed', 'sim-done', 'Результат — версия 2', st => finishRun(st)],
+      ['composer', 'chip-bg', 'Чип «Убрать фон» — «Текст не нужен — нажмите запуск»', st => pickChip(st, 'bg')],
+      ['composer', 'run', '«✦ Убрать фон · бесплатно»', st => startRun(st)],
+      ['feed', 'sim-done', 'Результат — версия 3', st => finishRun(st)],
+      ['composer', 'chip-outpaint', 'Чип «Дорисовать» — вопрос пропорций под чипами, поле видно целиком', st => pickChip(st, 'outpaint')],
+      ['composer', 'chip-edit', 'Чип «Изменить» снова', st => pickChip(st, 'edit')],
+      ['row', 'obj', 'Строка: чип hero.png — панель «Контекст» шторкой', st => { st.flash = true; }],
+      ['sheet', 'ex-flux', 'Шторка, «Чем»: fal · FLUX Kontext', st => { st.execKey = 'flux'; }],
+      ['sheet', 'cnt-plus', '«Вариантов +» → 2', st => { st.count = 2; }],
+      ['sheet', 'cnt-plus', '«+» → 3 — шторка опускается, на кнопке поля «✦ Изменить · ×3 · $0.12» (формат 360)', st => { st.count = 3; st.text = 'Вечер.'; }],
+    ] },
+  s10: { title: '10 · Новый звук: черновик', why: '«＋ → Звук» заводит черновик «Новый звук»: чипы «Чат · Озвучить · Песня · Эффект», выбран первый — «Озвучить». Обучение голоса — кнопка «Обучить голос» во вкладке «Голоса», а не чип.',
+    start: { ...PROJ, dock: 'context', feed: [{ t: 'user', text: 'Нужна заставка для подкаста: короткий джингл.' }, { t: 'agent', text: 'Заведите звук через «＋» в поле — или попросите меня.' }] },
+    steps: [
+      ['composer', 'plus', 'Поле: «＋» — вложение и входы «Картинка / Звук / Видео»', st => { st.plusMenu = true; }],
+      ['composer', 'plus-audio', '«Звук» — черновик «Новый звук» в строке; чипы «Чат · Озвучить · Песня · Эффект», выбран «Озвучить», кнопка серая: нужен текст', st => { st.plusMenu = false; setObj(st, 'adraft'); }],
+      ['composer', 'chip-song', 'Чип «Песня» — плейсхолдер «Стиль и слова песни…», «Чем: Авто · ACE-Step 1.5»', st => pickChip(st, 'song')],
+      ['composer', 'type', 'Текст: стиль джингла', st => { st.text = 'Бодрый джингл 10 секунд: укулеле, хлопки, без слов.'; }],
+      ['panel', 'tab-voices', 'Вкладка «Голоса»: под списком кнопка «Обучить голос»', st => { st.dock = 'voices'; }],
+    ] },
+};
+const ZONE = { feed: 'лента', row: 'строка', panel: 'панель', composer: 'поле', sheet: 'шторка', editor: 'редактор' };
+function stateAt(scn, k) {
+  const sc = SCN[scn]; const st = clone({ ...sc.start, feed: sc.start.feed });
+  for (let i = 0; i < k && i < sc.steps.length; i++) { st.flash = false; sc.steps[i][3](st); }
+  return st;
+}
+
+// ── Документ ──
+const qs = new URLSearchParams(location.search);
+const S = { scn: qs.get('scn') || 's1', step: +(qs.get('step') || 0), theme: qs.get('theme') || 'light', size: qs.get('w') || '1440' };
+function effSize(st) { return st.size === '360' ? '360' : st.size || S.size; }
+function chipTable(st) {
+  if (!st.obj) return '<div class="short">Объекта нет — строки чипов нет, поле обычное: «Сообщение Claude…» и «Отправить».</div>';
+  const ch = chipsOf(st), rs = runState(st);
+  return `<table class="lad"><tr><th>Чип</th><th>Что делает</th><th class="n">Текст</th></tr>${ch.map(k => { const op = OP[k];
+    return `<tr class="${st.chip === k ? 'me' : ''}"><td>${chipLabel(st, k)}</td><td>${k === 'chat' ? 'сообщение Claude' : op.action === 'editor' ? 'открывает редактор' : op.action === 'frame' ? 'меню источника кадра' : `запуск «${chipLabel(st, k)}»${op.param ? ` · вопрос «${op.param.q}»` : ''}`}</td><td class="n">${k === 'chat' ? '—' : op.text ? 'нужен' : op.textOpt ? 'по желанию' : op.action ? '—' : 'не нужен'}</td></tr>`; }).join('')}</table>
+    <div class="short">Состояние объекта: <b>${objState(st)}</b> · чипов ${ch.length} из 6 · кнопка: <b>${rs.kind === 'chat' ? 'Отправить' : rs.kind === 'running' ? rs.label : `✦ ${rs.label}${rs.kind === 'needText' ? ' (серая, нужен текст)' : ''}`}</b></div>`;
+}
+function scnBox() {
+  const sc = SCN[S.scn];
+  const li = sc.steps.map((s, i) => `<li class="${i === S.step ? 'cur' : ''} ${i < S.step ? 'done-row' : ''}" data-step="${i}"><span>${s[2]}</span><span class="z">${ZONE[s[0]]}</span></li>`).join('')
+    + `<li class="${S.step === sc.steps.length ? 'cur' : ''}" data-step="${sc.steps.length}"><span><b>Готово</b></span></li>`;
+  const st = stateAt(S.scn, S.step);
+  return `<div class="card"><h3>${sc.title}</h3><p class="why">${sc.why}</p><ol class="steps">${li}</ol>
+      <div class="short">Кликов в сценарии: <b>${sc.steps.length}</b>. Начать заново — клик по первому шагу.</div></div>
+    <div class="card"><h3>Чипы на этом шаге</h3>${chipTable(st)}</div>`;
+}
+function demo() {
+  const g = (lbl, key, opts) => `<span class="grp"><span class="lbl">${lbl}</span>${opts.map(([v, l, k]) => `<button class="tbtn" aria-pressed="${String(S[key]) === String(v)}" data-set="${key}" data-val="${v}"${k ? ` data-k="${k}"` : ''}>${l}</button>`).join('')}</span>`;
+  return g('Сценарий', 'scn', Object.entries(SCN).map(([k, s]) => [k, s.title.split(' · ')[0] + ' ' + s.title.split(' · ')[1].split(':')[0]]))
+    + g('Тема', 'theme', [['light', 'Светлая'], ['dark', 'Тёмная'], ['both', 'Обе']])
+    + g('Ширина', 'size', [['1440', '1440 · «Чаты» и панель'], ['1024', '1024', 'w1024'], ['360', '360']]);
+}
+function render() {
+  const st = stateAt(S.scn, S.step);
+  const size = effSize(st);
+  const curZone = (SCN[S.scn].steps[S.step] || [])[0];
+  const themes = S.theme === 'both' ? ['light', 'dark'] : [S.theme];
+  document.getElementById('demo').innerHTML = demo();
+  const fr = document.getElementById('frames');
+  fr.className = 'frames' + (size === '360' ? ' row' : '');
+  fr.innerHTML = themes.map(t => `<div class="frame" data-theme="${t}"><div class="cap"><span>${SCN[S.scn].title} · ${size === '360' ? '360 · шторка опущена' : size === '1440' ? `1440 · «Чаты»${st.dock ? ' и правая панель' : ''} открыты` : `1024 · «Чаты» свёрнуты${st.dock ? ', правая панель открыта' : ''}`} · ${t === 'dark' ? 'тёмная' : 'светлая'}</span><span class="rung"></span></div>
+    ${size === '360' ? mobile(st, curZone) : desktop(st, size)}</div>`).join('');
+  // Строка: выбор ступени по фактической ширине строки, затем чипы; всплывашки — над своим чипом
+  fr.querySelectorAll('[data-row]').forEach(rw => {
+    const row = rw.querySelector('.crow'); const mob = !!rw.closest('.app.mobile');
+    let pick;
+    if (mob) { const f = { g: 0, o: 2, e: 2, k: st.refs.length }; pick = { f, i: -1, need: nominal(st, f, true) }; }
+    else pick = pickRung(st, row.offsetWidth);
+    row.innerHTML = rowInner(st, pick.f, mob);
+    if (pick.scroll) { row.style.overflowX = 'auto'; row.style.scrollbarWidth = 'none'; }
+    row.dataset.rung = pick.i; row.dataset.need = pick.need;
+    const comp = rw.parentElement.querySelector('[data-composer]');
+    const cap = rw.closest('.frame').querySelector('.cap .rung');
+    cap.textContent = `строка ${row.offsetWidth} px · ${mob ? 'прокрутка' : `ступень ${pick.i}`} · поле ${comp ? comp.offsetHeight : 0} px`;
+    rw.querySelectorAll('.pop[data-for], .tip[data-for]').forEach(p => {
+      const a = row.querySelector(`[data-anchor="${p.dataset.for}"]`) || row.querySelector('[data-anchor="refs"]');
+      if (!a || mob) return;
+      const left = a.getBoundingClientRect().left - rw.getBoundingClientRect().left;
+      p.style.left = Math.max(0, Math.min(left, rw.offsetWidth - p.offsetWidth)) + 'px';
+    });
+  });
+  // Меню кадра — под своим чипом
+  fr.querySelectorAll('[data-composer] > .pop[data-for]').forEach(p => {
+    const comp = p.parentElement, a = comp.querySelector(`[data-k="chip-${p.dataset.for}"]`); if (!a) return;
+    const left = a.getBoundingClientRect().left - comp.getBoundingClientRect().left;
+    p.style.left = Math.max(0, Math.min(left, comp.offsetWidth - p.offsetWidth)) + 'px';
+  });
+  document.getElementById('scnbox').innerHTML = scnBox();
+  const steps = SCN[S.scn].steps;
+  if (S.step < steps.length) document.querySelectorAll(`[data-k="${steps[S.step][1]}"], [data-alias~="${steps[S.step][1]}"]`).forEach(el => el.classList.add('hl'));
+}
+document.addEventListener('click', e => {
+  const steps = SCN[S.scn].steps;
+  const key = S.step < steps.length && steps[S.step][1];
+  if (key && e.target.closest(`[data-k="${key}"], [data-alias~="${key}"]`)) { e.stopPropagation(); S.step++; render(); return; }
+  const b = e.target.closest('[data-set],[data-step]');
+  if (!b) return;
+  if (b.dataset.set) {
+    S[b.dataset.set] = b.dataset.val;
+    if (b.dataset.set === 'scn') { S.step = 0; }
+  } else if (b.dataset.step) S.step = +b.dataset.step;
+  else return;
+  render();
+});
+window.addEventListener('resize', render);
+render();
+</script>
+</body>
+</html>

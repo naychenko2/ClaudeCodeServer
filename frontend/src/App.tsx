@@ -36,6 +36,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/
 import { requestOpenModelsSpend } from './lib/modelProvidersNav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
+import { resetChatContextMemory } from './lib/chatContext/forget'
 import { setAllFlags } from './lib/featureFlags'
 import { SUBSYSTEMS, isSubsystemEnabled, setAllSubsystems, useSubsystem } from './lib/subsystems'
 import { getSubsystem, getSubsystemTab } from './lib/subsystems/registry'
@@ -449,7 +450,7 @@ export default function App() {
 
   // Секция настроек открытого проекта сохранила своё поле (тумблер рук, MCP, устройство):
   // realtime у проектов нет, поэтому свежий DTO несём сюда сами. Иначе чаты держат прежний
-  // объект до перезагрузки — так включённые в открытом чате руки не доходили до полосы «Руки»
+  // объект до перезагрузки — так включённые в открытом чате руки не доходили до чата
   const handleOpenProjectUpdated = useCallback((fresh: Project) => {
     if (fresh.id !== projectIdRef.current) return
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
@@ -545,6 +546,7 @@ export default function App() {
       sessionStorage.removeItem('cc_user_id')
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       clearMe()
+      resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
       // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
       // пользователя — при смене аккаунта человек видел бы чужой раздел
@@ -1220,6 +1222,7 @@ export default function App() {
     sessionStorage.removeItem('cc_user_id')
     idbClear() // чистим кэш при смене аккаунта/сервера
     clearMe()
+    resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
     // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике
     // cc-unauthorized: иначе следующий вход поднимет раздел прошлого пользователя

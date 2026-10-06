@@ -21,10 +21,13 @@
 // чатов и «Команды», её кнопки во всю ширину. Отдельный слот, а не `main`: композер
 // чата смонтирован рядом (скрыт) и, опубликовавшись позже, перебил бы карточку в стеке.
 //
+// Слот `notice` — плашка «Вернуть» (ReleaseNotice raiseFab) над полем ввода: она висит вне
+// высоты композера, и без своего слота круг ложился бы на её кнопку.
+//
 // noRaise — над препятствием не лента, а форма (футер мастера персон): подниматься над
 // ним некуда, кнопка легла бы на поля шага. Не влезла в угол — прячется.
 type Listener = () => void;
-export type FabObstacleSlot = 'main' | 'scroll-down' | 'intro-card';
+export type FabObstacleSlot = 'main' | 'scroll-down' | 'intro-card' | 'notice';
 export interface FabObstacleOptions { noRaise?: boolean }
 
 const nodes = new Map<FabObstacleSlot, HTMLElement[]>();

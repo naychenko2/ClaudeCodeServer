@@ -68,7 +68,7 @@ publish_server() {
   # RID обязателен: без него нативка SkiaSharp едет под все платформы (~0,4 ГБ)
   dotnet publish "$REPO/backend/ClaudeHomeServer/ClaudeHomeServer.csproj" -c Release -r linux-x64 --self-contained false -o "$STAGING" --nologo -v quiet
   # Динамические модули ModuleLoader резолвит по пути — без них старт падает (см. deploy-agent.ps1).
-  for mod in notes/ClaudeHomeServer.Notes.dll spend/ClaudeHomeServer.Spend.dll image-editor/ClaudeHomeServer.ImageEditor.dll; do
+  for mod in notes/ClaudeHomeServer.Notes.dll spend/ClaudeHomeServer.Spend.dll image-editor/ClaudeHomeServer.ImageEditor.dll audio-editor/ClaudeHomeServer.AudioEditor.dll; do
     [[ -f "$STAGING/modules/$mod" ]] || fail "нет modules/$mod после publish"
   done
 

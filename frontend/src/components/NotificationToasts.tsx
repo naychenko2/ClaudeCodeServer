@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW, Z } from '../lib/design';
 import { ICON_STROKE } from './ui/icons';
+import { useGenSheetRaised } from '../lib/genSheet';
 import { joinUser, onMessage, onReconnected } from '../lib/signalr';
 import { loadUnreadCount, loadUnreadSticky, markRead } from '../lib/notifications';
 import type { LocalToast, ToastAction } from '../lib/toast';
@@ -119,11 +120,14 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
     return () => { off(); offReconnect(); window.removeEventListener('cc-local-toast', onLocal); };
   }, []);
 
+  // Поднятая шторка панели генерации держит шапку в зоне тостов: тосты уходят под её слой
+  const sheetRaised = useGenSheetRaised();
+
   if (toasts.length === 0) return null;
 
   return (
     <div style={{
-      position: 'fixed', top: 14, right: 14, zIndex: Z.modal + 10,
+      position: 'fixed', top: 14, right: 14, zIndex: sheetRaised ? Z.modal - 1 : Z.modal + 10,
       display: 'flex', flexDirection: 'column', gap: 10,
       maxWidth: 'min(360px, calc(100vw - 28px))',
     }}>

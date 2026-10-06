@@ -25,6 +25,13 @@ public static class McpEndpoints
     public const string HiggsfieldName = "higgsfield";
     // Редактор картинок (ADR-018 §2, §10.2): сервер есть только в чате картинки
     public const string ImageEditorName = "image-editor";
+    // Модуль «Звук» (ADR-021 §5): сервер есть в любом чате владельца при флаге audio-editor
+    public const string AudioEditorName = "audio-editor";
+    // Модуль «Видео» (ADR-022 §5): сервер есть в любом чате владельца при флаге video-editor
+    public const string VideoEditorName = "video-editor";
+
+    // Контекст чата (ADR-023 §3.2): context_state / context_attach / context_detach, в любом чате владельца при флаге
+    public const string TurnContextName = "turn-context";
     public const string LocalMediaName = "local-media";
     // Прогон тестов с прогрессом (run_tests): только серверные проекты, на устройство не едет
     public const string TestsName = "tests";

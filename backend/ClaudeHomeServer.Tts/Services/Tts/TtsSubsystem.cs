@@ -36,6 +36,10 @@ public sealed class TtsSubsystem : IAppSubsystem
     {
         services.AddSingleton<YandexTtsService>();
 
+        // Шов для модуля «Звук» (ADR-021, §2): без ключа он зарегистрирован, но Configured=false;
+        // выключенная подсистема его не регистрирует вовсе — модуль берёт его nullable
+        services.AddSingleton<ClaudeHomeServer.Services.Media.ITtsEngine, YandexTtsEngine>();
+
         // Единственная точка склейки голоса (персона → конфиг). Singleton: дефолты
         // инстанса читаются один раз, поэтому предупреждение об опечатке в голосе
         // не сыплется на каждую фразу.

@@ -75,6 +75,17 @@ public static class FeatureFlagKeys
     // Локальная модель по умолчанию для картинок и видео: при включённом local-media агент
     // рисует им без явной просьбы «локально». Гейтит хвостовую секцию промпта хода.
     public const string LocalMediaDefault = "local-media-default";
+    // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта, общая панель генерации.
+    // Гейтит и серверные ручки модуля audio-editor.
+    public const string AudioEditor = "audio-editor";
+// MIDI-просмотрщик: ноты из .mid открываются в файлах и в редакторе звука, их видно на
+    // нотной ленте и можно послушать. Выкатка выключенной (dark launch) за этим флагом.
+    public const string MidiEditor = "midi-editor";
+    // Панель «Картинки» v5 «Создать / Править» (переходный флаг до снятия старой панели):
+    // режим на чат и свой выбор у каждого режима. Сервер префов по режиму под флагом не прячется
+    public const string ImagePanelV5 = "image-panel-v5";
+    // Модуль «Видео» (ADR-022): сцены и фильм в боковой панели. Гейтит и серверные ручки модуля video-editor.
+    public const string VideoEditor = "video-editor";
 }
 
 /// <summary>
@@ -195,7 +206,38 @@ public static class FeatureFlagCatalog
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.LocalMediaDefault,
             Title: "Локальная модель по умолчанию",
-            Description: "Если у вас включены локальные модели, картинки и видео агент рисует ими сам, без отдельной просьбы. Если локальная сейчас недоступна, агент скажет об этом и предложит облако.",
+            Description: "Если у вас включены локальные модели, картинки, видео и звук агент делает ими сам, без отдельной просьбы. Если локальная сейчас недоступна, агент скажет об этом и предложит облако.",
+            Default: false,
+            Stage: "dev"),
+
+        // Модуль «Звук» (ADR-021): динамический модуль ClaudeHomeServer.AudioEditor.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.AudioEditor,
+            Title: "Звук",
+            Description: "Озвучка текста, музыка и правка звука прямо в проекте: результат ложится версиями рядом с исходником, оригинал не трогается.",
+            Default: false,
+            Stage: "dev"),
+
+// MIDI-просмотрщик: ноты из .mid открываются в файлах и в редакторе звука.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.MidiEditor,
+            Title: "MIDI-просмотрщик",
+            Description: "Ноты из .mid открываются в файлах и в редакторе звука: их видно на нотной ленте и можно послушать.",
+            Default: false,
+            Stage: "dev"),
+        // Режимы «Создать» / «Править» (docs/mockups/image-panel-v5*): пока флаг выключен,
+        // режим и настройки не делятся по режимам
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ImagePanelV5,
+            Title: "Картинки: режимы «Создать» и «Править»",
+            Description: "Режимы «Создать» и «Править» выводятся из выбора: есть выбранная картинка — правка, нет — рисуем новую. У каждого режима свои запомненные настройки: модель и операция.",
+            Default: false,
+            Stage: "dev"),
+        // Модуль «Видео» (ADR-022): сцены (клип между двумя кадрами) и фильм из них
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.VideoEditor,
+            Title: "Видео: сцены и фильм",
+            Description: "Видео в чате: снимает сцены между двумя кадрами тремя поставщиками, собирает из них фильм со склейками и музыкой.",
             Default: false,
             Stage: "dev"),
     ];

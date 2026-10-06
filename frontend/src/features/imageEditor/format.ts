@@ -95,14 +95,30 @@ export const isRemovalPrompt = (prompt: string) => REMOVAL.test(prompt) && !OTHE
 
 // Почему модель недоступна для текущей задачи (пусто — доступна). «Авто» подбирается
 // сервером и недоступной не бывает.
-export function modelBlockReason(m: ImageEditModel, hasImage: boolean, hasMask: boolean): string {
+// op — операция запуска; не задана — как у «Авто» (pickOp)
+export function modelBlockReason(m: ImageEditModel, hasImage: boolean, hasMask: boolean, op = pickOp(hasImage, hasMask)): string {
   if (m.id === AUTO_MODEL || !m.caps) return '';
   // Модель одного быстрого действия (FaceDetailer) промптом не запускается
-  if (m.caps.ops.length && m.caps.ops.every(op => op === 'enhanceFaces')) return 'Запускается кнопкой «Улучшить лица» в быстрых действиях';
+  if (m.caps.ops.length && m.caps.ops.every(op => op === 'enhanceFaces')) return 'Умеет только «Улучшить лица» — для этой задачи не годится';
   if (!hasImage && !m.caps.ops.includes('generate')) return 'Только правит готовую картинку — сначала загрузите её';
   if (hasImage && hasMask && m.caps.mask === 'none') return 'Не правит по маске — сотрите кисть или возьмите другую модель';
+  // Операцию считаем как сервер котировки (правка с маской — инпейнт): модель без неё там
+  // получает 400 «так не умеет»
+  const want = op === 'edit' && hasMask ? 'inpaint' : op;
+  if (m.caps.ops.length && !m.caps.ops.includes(want)) {
+    return (m.caps.ops.length === 1 && ONLY_OP[m.caps.ops[0]]) || 'Не умеет эту операцию — возьмите другую модель';
+  }
   return '';
 }
+
+// Почему модель одной операции не подходит под текущую задачу
+const ONLY_OP: Partial<Record<ImageEditOp, string>> = {
+  generate: 'Только рисует новую картинку — снимите выбор картинки или выберите «По тексту»',
+  inpaint: 'Правит только по маске — отметьте место кистью',
+  outpaint: 'Только дорисовывает за края — операция «Дорисовать за края»',
+  removeBackground: 'Только убирает фон — операция «Убрать фон»',
+  upscale: 'Только улучшает качество — операция «Улучшить качество»',
+};
 
 export type ProviderChoice = 'settings' | string;
 

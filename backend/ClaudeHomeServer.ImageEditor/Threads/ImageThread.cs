@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Services.ChatContext;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Threads;
 
@@ -45,6 +46,8 @@ public sealed record ImageThread(
     public IReadOnlyList<ImageThreadVersion> Versions { get; init; } = [];
     public string? CurrentVersionId { get; init; }
     public IReadOnlyList<ImageThreadLaunch> Launches { get; init; } = [];
+    // Файлы, которые человек сохранил из нити (для «Зафиксировать только этот чат», ADR-023 §3.3)
+    public IReadOnlyList<ThreadSavedFile> SavedFiles { get; init; } = [];
 
     [JsonIgnore]
     public ImageThreadStack? CurrentStack => Stacks.FirstOrDefault(s => s.StackId == CurrentStackId);

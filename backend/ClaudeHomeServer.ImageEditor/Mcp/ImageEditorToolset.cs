@@ -2,10 +2,12 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Mcp.Http;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
@@ -61,6 +63,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private readonly IImagePlaceSettings? _placeSettings;
     private readonly ImageEditSteps? _steps;
     private readonly ImageProjectPrefsService? _prefs;
+    private readonly ChatContext.ImageContextLaunch? _context;
     private readonly bool _agentLaunch;
 
     // Запуски агентом в текущем ходу: sessionId → число. Сброс — TurnCompleted этой сессии
@@ -80,7 +83,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         ImageEditSteps? steps = null,
         ITurnEventBus? events = null,
         IConfiguration? config = null,
-        ImageProjectPrefsService? prefs = null)
+        ImageProjectPrefsService? prefs = null,
+        ChatContext.ImageContextLaunch? context = null)
     {
         _sessions = sessions;
         _flags = flags;
@@ -93,6 +97,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         _placeSettings = placeSettings;
         _steps = steps;
         _prefs = prefs;
+        _context = context;
         _agentLaunch = config?.GetValue(AgentLaunchKey, true) ?? true;
         events?.OnNotification<TurnCompleted>(OnTurnCompleted, "ImageEditorToolset.ResetLaunches");
     }
@@ -165,7 +170,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         return written.Status switch
         {
-            ImageThreadWriteStatus.Ok => Json(Focused(written.State, scope, file is null ? null : HumanChoice(ownerId, scope, written.State))),
+            ImageThreadWriteStatus.Ok => FocusedResult(ownerId, session.Id, scope, withChoice: file is not null),
             ImageThreadWriteStatus.ThreadNotFound => Deny($"Картинки {threadId} нет в этом чате. Список — image_state."),
             _ => Deny("Человек как раз меняет выбор картинки — повтори позже."),
         };
@@ -186,11 +191,18 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         var written = await _threads.AgentOpenAsync(ownerId, scope.Key, session.Id, null, folder, ct);
         return written.Status == ImageThreadWriteStatus.Ok
-            ? Json(Focused(written.State, scope, HumanChoice(ownerId, scope, written.State)))
+            ? FocusedResult(ownerId, session.Id, scope, withChoice: true)
             : Deny("Человек как раз меняет выбор картинки — повтори позже.");
     }
 
-    // humanChoice — настройки, которые картинка унаследовала из полосы «Картинки», и правило
+    // Ответ строится по проекции из контекста: основной объект мог выбрать человек, а не запись нити
+    private McpToolCallResult FocusedResult(string ownerId, string sessionId, ImageEditScope scope, bool withChoice)
+    {
+        var state = _threads.View(ownerId, sessionId);
+        return Json(Focused(state, scope, withChoice ? HumanChoice(ownerId, scope, state) : null));
+    }
+
+    // humanChoice — настройки, которые картинка унаследовала из выбора человека в строке контекста, и правило
     private static object Focused(ImageThreadsState state, ImageEditScope scope, object? humanChoice = null) => new
     {
         focus = state.Focus,
@@ -205,10 +217,11 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     {
         if (_prefs is null) return null;
         var prefs = _prefs.Get(ownerId, scope);
-        var settings = state.Threads.FirstOrDefault(t => t.Id == state.Focus)?.Settings ?? prefs.ToThreadSettings();
+        var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus)?.Settings;
+        // Выбор человека — «Чем» контекста хода, персонаж префов проекта не читается
         return new
         {
-            text = Chats.ImageEditorStateContributor.ChoiceText(settings, prefs.CharacterSlug),
+            text = Chats.ImageEditorStateContributor.ChoiceText(prefs, focused),
             rule = Chats.ImageEditorStateContributor.ChoiceRule,
         };
     }
@@ -271,17 +284,13 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private async Task<McpToolCallResult> LaunchAsync(JsonObject args, string ownerId, Session session,
         ImageEditScope scope, ImageThread thread, ImageThreadVersion version, CancellationToken ct)
     {
-        // Что не передано — выбор человека: настройки нити, иначе полосы «Картинки» области, а
-        // поставщик по умолчанию — как у каталога. Персонаж — подключённый в полосе проекта (у
-        // личной области его нет)
         var prefs = _prefs?.Get(ownerId, scope);
-        var settings = thread.Settings ?? prefs?.ToThreadSettings();
-        var provider = Str(args, "provider") ?? settings?.Provider ?? DefaultProvider();
-        if (provider is null)
-            return Deny("Поставщик рисования не настроен. Обратитесь к администратору.");
         var mode = Enum<EditMode>(args, "mode") ?? EditMode.Auto;
         var prompt = Str(args, "prompt") ?? "";
-        var matchSourceSize = Bool(args, "matchSourceSize") ?? settings?.MatchSourceSize ?? true;
+        // Образцы и персонаж: явный аргумент (в том числе пустой) заменяет контекст чата, не переданный —
+        // берётся из контекста (ADR-023 §Д2.1); описание инструмента от этого не меняется
+        var referencesGiven = args["references"] is JsonArray;
+        var characterGiven = args.ContainsKey("character");
         var references = ReferencesArg(args);
         // Проектные аргументы в личном чате — отказ до котировки (сборщик отказал бы тоже, но позже)
         if (scope.Project is null && (references.Count > 0 || Str(args, "character") is not null))
@@ -310,18 +319,48 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             return Deny("Картинки ещё нет: это новая картинка. Сначала нарисуй её — op generate или без op.");
         if (prompt.Length == 0 && op is ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint)
             return Deny("Пустой промпт: опиши, что нарисовать или поправить.");
+
+        // Что не передано — выбор человека по операции: генерация по тексту — режим «Создать»,
+        // правка — настройки нити, иначе «Править»; поставщик по умолчанию — как у каталога.
+        // Пока «Создать» не сохраняли (старый фронт), генерация берёт настройки нити, как раньше.
+        // Явный provider агента не подменяется. Персонаж — подключённый в полосе проекта (у
+        // личной области его нет)
+        var settings = op == ImageEditOp.Generate && prefs is { Create: not null }
+            ? prefs.CreateSettings()
+            : thread.Settings ?? prefs?.EditSettings();
+        var provider = Str(args, "provider") ?? settings?.Provider ?? DefaultProvider();
+        if (provider is null)
+            return Deny("Поставщик рисования не настроен. Обратитесь к администратору.");
+        var matchSourceSize = Bool(args, "matchSourceSize") ?? settings?.MatchSourceSize ?? true;
         var size = source is null ? null : ImageDimensions.Read(source.Bytes);
 
         // Операции со своей моделью — как у человека: из выбора в полосе не наследуются ни
         // модель, ни число вариантов, ни персонаж. Явные аргументы агента остаются как есть
         var own = ImageEditCatalog.OwnModelOps.Contains(op);
-        var model = Str(args, "model") ?? (own ? null : settings?.Model) ?? ImageEditCatalog.AutoModelId;
+        // Модель выбора человека — только вместе с его поставщиком: у явного чужого provider она не годится
+        var foreign = settings?.Provider is { } chosen && chosen != provider;
+        var model = Str(args, "model") ?? (own || foreign ? null : settings?.Model) ?? ImageEditCatalog.AutoModelId;
         var count = Int(args, "count") ?? (!own && settings is { Count: > 0 } s ? s.Count : 1);
-        var character = Str(args, "character") ?? (own ? null : prefs?.CharacterSlug);
+        // Персонаж префов проекта не читается: он ref контекста чата
+        var character = Str(args, "character");
+        IReadOnlyList<ReferenceImage> contextSamples = [];
+        if (_context is not null && (!referencesGiven || !characterGiven))
+        {
+            var layout = _context.Layout(new ContextScope(ownerId, session, scope.Project),
+                _context.Current(ownerId, session.Id), op);
+            if (!referencesGiven)
+            {
+                references = layout.ReferencePaths;
+                var loaded = await _context.LoadSamplesAsync(ownerId, scope, session.Id, layout, ct);
+                if (loaded.Value is not { } samples) return Deny(loaded.Error ?? "Образцы контекста не прочитаны.");
+                contextSamples = samples;
+            }
+            if (!characterGiven) character = layout.CharacterSlug;
+        }
 
         var quoteRequest = new ImageEditQuoteRequest(provider, model, mode, op, count,
             HasMask: false,
-            References: references.Count,
+            References: references.Count + contextSamples.Count,
             HasCharacter: character is not null,
             Width: size?.Width,
             Height: size?.Height,
@@ -332,7 +371,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         var request = new ImageEditLaunchRequest(
             q.QuoteId, prompt, MarksJson: null, thread.File, source, Mask: null, Annotated: null,
-            Uploaded: [],
+            Uploaded: contextSamples,
             ReferencePaths: references,
             character,
             MatchSourceSize: matchSourceSize,
@@ -422,7 +461,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
     private object DescribeState(string ownerId, Session session, ImageEditScope scope)
     {
-        var state = _threads.Get(ownerId, session.Id);
+        var state = _threads.View(ownerId, session.Id);
         var place = ImagePlaceKeys.ImageEditor;
         var admin = _placeSettings?.ProviderFor(place);
         var catalog = ImageEditCatalog.Build(_editors, admin, admin is null ? null : _placeSettings?.ModelFor(place, admin));

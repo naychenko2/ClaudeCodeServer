@@ -10,6 +10,7 @@ using ClaudeHomeServer.Services.ImageEditor.Chats;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Turn;
@@ -322,7 +323,7 @@ public class ImageThreadVersionsTests : IDisposable
     }
 
     private (ImageEditorToolset Toolset, ImageThreadService Threads, ImageEditJobService Jobs, ImageEditSteps Steps) Agent(
-        IImageEditor? editor = null, bool finishBeforeLaunch = false)
+        IImageEditor? editor = null, bool finishBeforeLaunch = false, IMediaEvents? events = null)
     {
         editor ??= new VariantsEditor();
         var jobs = NewJobs(editor);
@@ -333,7 +334,8 @@ public class ImageThreadVersionsTests : IDisposable
         directory.Setup(d => d.GetById(Chat)).Returns(session);
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
-        var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster, steps);
+        var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster, steps,
+            mediaEvents: events);
         threads.Watch(jobs);
         // Слушатели Finished зовутся по очереди: этот — после нитей, их запись и рассылка уже прошли
         jobs.Finished += (_, job) =>
@@ -416,6 +418,31 @@ public class ImageThreadVersionsTests : IDisposable
             && e.Text.StartsWith("Готово «синий фон» в картинку images/hero.png: версии 1–3"));
         _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>()
             .Should().Contain(m => m.State.Threads.Single().Versions.Count == 4);
+    }
+
+    // Шов «Видео → Картинки» (ADR-022 §3): каждая новая версия объявляется событием ImageVersionAdded, и
+    // объявляется ПОСЛЕ записи в нить — подписчик, прочитавший нить в момент события, версию уже видит
+    [Fact]
+    public async Task Версии_запуска_объявляются_событием_после_записи_в_нить()
+    {
+        var hub = new MediaEventHub();
+        var seen = new List<(ImageVersionAdded Evt, bool InThread)>();
+        hub.Subscribe<ImageVersionAdded>(e =>
+        {
+            seen.Add((e, Thread(e.ThreadId).Version(e.VersionId) is not null));
+            return Task.CompletedTask;
+        });
+        var (toolset, _, _, _) = Agent(events: hub);
+        var id = Opened();
+
+        var jobId = await Generate(toolset, id, 2);
+        var thread = await Finished(id, jobId);
+
+        seen.Should().HaveCount(2, "по событию на версию");
+        seen.Should().OnlyContain(x => x.InThread, "событие идёт после записи версии, а не до неё");
+        seen.Select(x => x.Evt.VersionId).Should().BeEquivalentTo(thread.Versions.Where(v => !v.IsOrigin).Select(v => v.Id));
+        seen.Should().OnlyContain(x => x.Evt.OwnerId == Owner && x.Evt.SessionId == Chat && x.Evt.ProjectId == ProjectId
+            && x.Evt.ThreadId == id && x.Evt.Initiator == SpendInitiators.Agent);
     }
 
     // Быстрый поставщик кончил задачу раньше, чем запуск лёг в нить: Finished не нашёл запуска, финал

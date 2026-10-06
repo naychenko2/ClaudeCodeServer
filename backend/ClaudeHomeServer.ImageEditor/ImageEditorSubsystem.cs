@@ -1,4 +1,6 @@
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
@@ -62,6 +64,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             ? new ImageEditSteps(raster, sp.GetRequiredService<ImageEditWorkspace>(), sp.GetRequiredService<IImageEditJobs>())
             : null!);
         // Общая сборка входа запуска и блок нитей хвостом хода: им же пользуется MCP-тулсет
+        services.AddSingleton<ChatContext.ImageContextLaunch>();
         services.AddSingleton<ImageEditLaunchAssembler>();
         // Гейт области ручек: проект или личный чат вне проекта (разрез image-editor-personal-chats)
         services.AddSingleton<Controllers.ImageEditScopeGate>();
@@ -70,6 +73,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         // вместе с чатом по событиям шины session/deleted и session/branched
         services.AddSingleton(sp => Threads.ImageThreadStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
         services.AddHostedService<Threads.ImageThreadLifecycle>();
+        // Вид «image» контекста чата (ADR-023): Validate/Describe и засев из фокуса картинки
+        services.AddContextKindProvider<ChatContext.ImageContextKind>();
+        // Сохранённые человеком файлы чата для «Зафиксировать только этот чат» (ADR-023 §3.3)
+        services.AddSingleton<ClaudeHomeServer.Services.ChatContext.IChatSavedFiles, ChatContext.ImageSavedFiles>();
         // Следы нити в ленте и событие image_thread_changed; нить идёт за переименованным файлом.
         // Варианты готовой задачи становятся версиями нити по событию исполнителя
         services.AddSingleton(sp =>
@@ -78,6 +85,9 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             threads.Watch(sp.GetRequiredService<ImageEditJobService>());
             return threads;
         });
+        // Шов «Видео → Картинки» (ADR-022 §3): кадр версии нити и черновик «Новая картинка» для кадра сцены
+        services.AddSingleton<ClaudeHomeServer.Services.Media.IImageFrameSource>(sp =>
+            ActivatorUtilities.CreateInstance<Threads.ImageFrameSource>(sp));
         // Выбор человека в полосе «Картинки» проекта: data/image-editor-prefs, его наследуют новые
         // нити и запуск агентом без аргументов
         services.AddSingleton(sp => Prefs.ImageProjectPrefsStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
@@ -88,5 +98,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         // MCP-сервер редактора для агента любого чата проекта (ADR-019 §4): маршрут общий,
         // POST /mcp/image-editor/{sessionId}, реестр Main находит тулсет среди IMcpToolset
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.ImageEditorToolset>();
+        // Агент позвал local_* напрямую: картинка результата получает ту же карточку, что запуск через image_*
+        services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalMediaAdopter, Threads.LocalImageAdopter>();
     }
 }

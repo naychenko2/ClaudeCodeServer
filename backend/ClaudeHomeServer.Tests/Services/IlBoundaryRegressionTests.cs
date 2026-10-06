@@ -1,4 +1,6 @@
-﻿using Xunit.Abstractions;
+﻿using ClaudeHomeServer.Services.Composition;
+using FluentAssertions;
+using Xunit.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -30,6 +32,12 @@ public class IlBoundaryRegressionTests
         _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
         // TestRuns — отдельная сборка (движок run_tests): IL-скан обязан видеть её типы.
         _ = typeof(ClaudeHomeServer.Services.TestRuns.TestRunsSubsystem).Assembly;
+        // AudioEditor — динамический модуль «Звук» (ADR-021): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.AudioEditor.AudioEditorSubsystem).Assembly;
+        // VideoEditor — динамический модуль «Видео» (ADR-022): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.VideoEditor.VideoEditorSubsystem).Assembly;
     }
 
     public IlBoundaryRegressionTests(ITestOutputHelper output) => _out = output;
@@ -95,5 +103,37 @@ public class IlBoundaryRegressionTests
             "IL-скан должен видеть все 7 известных швов. Без этого теста сторож " +
             "может стать декоративным при изменении логики обхода тел/вложенных типов. " +
             "Не найдено: " + string.Join("; ", missed));
+    }
+
+    // Пробы ссылок, которых нет в IL тел методов: поле, ни разу не тронутое в коде,
+    // и параметр конструктора, который тело не использует. До скана сигнатур сторож
+    // пропускал такую ссылку на чужую вертикаль молча (дефект 86a0d03e).
+#pragma warning disable CS0169 // поле намеренно не используется — в этом и суть пробы
+    private sealed class FieldOnlyProbe
+    {
+        private IGitRepoChecker? _checker;
+    }
+
+    private sealed class GenericFieldOnlyProbe
+    {
+        private List<Dictionary<string, IGitRepoChecker>>? _checkers;
+    }
+#pragma warning restore CS0169
+
+    private sealed class CtorParameterOnlyProbe
+    {
+        public CtorParameterOnlyProbe(IGitRepoChecker checker) { }
+    }
+
+    [Theory]
+    [InlineData(typeof(FieldOnlyProbe))]
+    [InlineData(typeof(GenericFieldOnlyProbe))]
+    [InlineData(typeof(CtorParameterOnlyProbe))]
+    public void Scan_ВидитСсылкуВнеТелМетодов(Type probe)
+    {
+        BoundaryIlScanner.CollectAllReferencedTypes(probe)
+            .Should().Contain(typeof(IGitRepoChecker),
+                $"ссылка из {probe.Name} живёт только в метаданных (поле/параметр конструктора), " +
+                "и сторож границ обязан её видеть");
     }
 }

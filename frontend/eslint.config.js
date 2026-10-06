@@ -77,6 +77,59 @@ export const imageEditorImportGuard = {
   },
 }
 
+// Тот же сторож для MF-модуля «Звук» (ADR-021 §3): причины и исключения — как у imageEditorImportGuard
+export const audioEditorImportGuard = {
+  files: ['src/features/audioEditor/**/*.{ts,tsx}'],
+  ignores: ['**/*.test.{ts,tsx}'],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/components/**', '**/hooks/**', '**/lib/**', '**/pages/**', '**/features/**', '**/api/**', '**/App'],
+        allowTypeImports: true,
+        message: 'Модуль audio-editor берёт ядро только из aihome_shell/kit (ADR-021 §3): прямой импорт соберёт вторую копию в remote.',
+      }],
+    }],
+  },
+}
+
+// Тот же сторож для MF-модуля «Видео» (ADR-022): причины и исключения — как у imageEditorImportGuard
+export const videoEditorImportGuard = {
+  files: ['src/features/videoEditor/**/*.{ts,tsx}'],
+  ignores: ['**/*.test.{ts,tsx}'],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/components/**', '**/hooks/**', '**/lib/**', '**/pages/**', '**/features/**', '**/api/**', '**/App'],
+        allowTypeImports: true,
+        message: 'Модуль video-editor берёт ядро только из aihome_shell/kit (ADR-022): прямой импорт соберёт вторую копию в remote.',
+      }],
+    }],
+  },
+}
+
+// Сторож хостов контекста хода (ADR-023 §Д6, «единственный владелец действий вида»): строка контекста,
+// чипы действий и панель «Контекст» рисуют по контракту ContextKindApi и не знают вертикалей. Ни
+// ops.ts / panelOp.ts, ни форматтеров вида (всё это лежит в features/**) импортировать нельзя:
+// подпись или операция, посчитанная хостом, расходится с той, что посчитала вертикаль.
+export const contextHostImportGuard = {
+  files: [
+    'src/components/chat/ContextRow.tsx',
+    'src/components/chat/ContextRowView.tsx',
+    'src/components/chat/ContextSheet.tsx',
+    'src/components/chat/ComposerActionRow.tsx',
+    'src/components/generation/ContextPanel.tsx',
+    'src/components/generation/ContextPanelHost.tsx',
+  ],
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/features/**', '**/ops', '**/ops.ts', '**/panelOp', '**/panelOp.ts'],
+        message: 'Хост контекста хода берёт операции и подписи только из ContextKindApi (ADR-023 §Д6): импорт вертикали создаёт вторую точку правды.',
+      }],
+    }],
+  },
+}
+
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA
   {
@@ -136,4 +189,7 @@ export default defineConfig([
   },
   ...designSystem,
   imageEditorImportGuard,
+  audioEditorImportGuard,
+  videoEditorImportGuard,
+  contextHostImportGuard,
 ])

@@ -1,15 +1,18 @@
 // Стор нитей картинок по чатам: состояние с сервера (GET + image_thread_changed),
 // мутации с ревизией и локальное состояние экрана — пометки выбранной картинки,
-// режим композера, открытый попап «Редактор». Выбор картинки старше запомненной
-// полосы: фокус просит полосу «Картинки» у стора полос ядра, снятие — отпускает.
+// открытый попап «Редактор».
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
+import { onReconnected, showToast } from 'aihome_shell/kit';
 import type { Sample } from '../editorInputs';
-import type { Mark } from '../marks';
+import type { Mark, Tool } from '../marks';
 import { conflictState, EMPTY_THREADS, threadsApi, type ImageThread, type ImageThreadsState } from './threadsApi';
+import { noteImageMode } from './modeState';
 
-export const IMAGES_STRIP = 'images';
+// Ключ элемента выбора агента и черновиков — тот же, что IMAGES_PANEL в characters/panel
+const PANEL = 'images';
+// Ключ элемента для черновиков и выбора: панель + нить
+export const imageDraftKey = (threadId: string) => `${PANEL}:${threadId}`;
 
 interface Entry { projectId: string; state: ImageThreadsState; loaded: boolean; loading: boolean }
 
@@ -18,11 +21,14 @@ const _entries = new Map<string, Entry>();
 const _marks = new Map<string, { marks: Mark[]; size: { w: number; h: number } | null }>();
 // Образцы на проект: уходят в каждую генерацию, пока их не убрали (карточка настроек полосы)
 const _samples = new Map<string, Sample[]>();
+// Инструмент, с которым открывается редактор: кисть и пометки — или правка без ИИ
+// («Обрезать», «Повернуть и отразить», «Размер и формат» из списка операций панели)
+export type EditorTool = Tool | 'crop' | 'rotate' | 'resize';
 // Попап «Редактор»: какой чат, какая нить и какая версия открыты (null — текущая)
-let _editor: { sessionId: string; threadId: string; versionId: string | null } | null = null;
-// Просьбы включить режим «Картинка» по чатам («Редактировать» / «Нарисовать»): счётчик,
-// каждая новая — новый ключ самовключения режима в поле ввода
-const _modeRequests = new Map<string, number>();
+let _editor: { sessionId: string; threadId: string; versionId: string | null; tool?: EditorTool } | null = null;
+// «Где менять: Вся картинка» при отметках (панель v5): маска нити не уходит. Новые отметки
+// снимают выбор — человек снова отметил место
+const _wholeImage = new Set<string>();
 let _version = 0;
 const _listeners = new Set<() => void>();
 let _unsub: (() => void) | null = null;
@@ -38,12 +44,8 @@ function subscribe(fn: () => void) {
   return () => { _listeners.delete(fn); };
 }
 const getVersion = () => _version;
-
-// Фокус меняет полосу над композером: выбрали картинку — «Картинки», сняли — прежняя
-function syncStrip(sessionId: string, prev: string | null, next: string | null) {
-  if (next && next !== prev) requestStrip(sessionId, IMAGES_STRIP);
-  else if (!next && prev) releaseStrip(sessionId, IMAGES_STRIP);
-}
+// Подписка вне React: мост вида контекста пересчитывает действия при смене нитей и отметок
+export const subscribeThreadStore = subscribe;
 
 function apply(sessionId: string, projectId: string, state: ImageThreadsState) {
   const e = _entries.get(sessionId);
@@ -51,16 +53,16 @@ function apply(sessionId: string, projectId: string, state: ImageThreadsState) {
   if (e?.loaded && e.state.revision > state.revision) return;
   const prevFocus = e?.loaded ? e.state.focus : null;
   _entries.set(sessionId, { projectId, state, loaded: true, loading: false });
-  syncStrip(sessionId, prevFocus, state.focus);
+  // Выбор сняли — человек или агент: дальше рисуем новую (режим «Создать», флаг image-panel-v5)
+  if (prevFocus && !state.focus) noteImageMode(sessionId, 'create');
   emit();
-  // Поле ввода пересчитывает режим «Картинка» по сигналу стора полос
-  notifyComposer();
 }
 
 function ensureLive() {
   if (_unsub) return;
   const offEvents = threadsApi.subscribe(ev => {
-    if (!_entries.has(ev.sessionId)) return;
+    const e = _entries.get(ev.sessionId);
+    if (!e) return;
     apply(ev.sessionId, ev.projectId, ev.state);
   });
   // После обрыва события могли потеряться — перечитываем всё, что показано
@@ -88,14 +90,6 @@ async function load(projectId: string, sessionId: string, force = false) {
 export async function ensureThreads(projectId: string, sessionId: string): Promise<void> {
   if (_entries.get(sessionId)?.loaded) return;
   apply(sessionId, projectId, await threadsApi.get(projectId, sessionId));
-}
-
-// Вход в чат: владелец полосы заново просит «Картинки» по серверному фокусу — ручной уход
-// на другую полосу держится только до выхода из чата, как и после перезагрузки. Ещё не
-// загруженный чат попросит полосу сам, когда придёт его состояние
-export function enterChat(sessionId: string) {
-  const e = _entries.get(sessionId);
-  if (e?.loaded && e.state.focus) requestStrip(sessionId, IMAGES_STRIP);
 }
 
 export function getThreadsState(sessionId: string | null): ImageThreadsState {
@@ -142,17 +136,6 @@ export async function mutate(
 export const focusThread = (projectId: string, sessionId: string, threadId: string | null) =>
   mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
 
-// ── Режим поля ввода ──
-
-export function requestImageMode(sessionId: string) {
-  _modeRequests.set(sessionId, (_modeRequests.get(sessionId) ?? 0) + 1);
-  notifyComposer();
-}
-
-export function getImageModeRequest(sessionId: string | null): number {
-  return (sessionId && _modeRequests.get(sessionId)) || 0;
-}
-
 // ── Пометки ──
 
 export function getThreadMarks(threadId: string | null) {
@@ -162,6 +145,15 @@ export function getThreadMarks(threadId: string | null) {
 export function setThreadMarks(threadId: string, marks: Mark[], size: { w: number; h: number } | null) {
   if (marks.length) _marks.set(threadId, { marks, size });
   else _marks.delete(threadId);
+  _wholeImage.delete(threadId);
+  emit();
+}
+
+export const isWholeImage = (threadId: string | null) => !!threadId && _wholeImage.has(threadId);
+
+export function setWholeImage(threadId: string, whole: boolean) {
+  if (whole) _wholeImage.add(threadId);
+  else _wholeImage.delete(threadId);
   emit();
 }
 
@@ -169,8 +161,8 @@ export function setThreadMarks(threadId: string, marks: Mark[], size: { w: numbe
 
 export function getEditor() { return _editor; }
 
-export function openEditor(sessionId: string, threadId: string, versionId: string | null = null) {
-  _editor = { sessionId, threadId, versionId };
+export function openEditor(sessionId: string, threadId: string, versionId: string | null = null, opts?: { tool?: EditorTool }) {
+  _editor = { sessionId, threadId, versionId, ...(opts?.tool ? { tool: opts.tool } : null) };
   emit();
 }
 
@@ -205,7 +197,7 @@ export function __resetThreadStore() {
   _entries.clear();
   _marks.clear();
   _samples.clear();
-  _modeRequests.clear();
+  _wholeImage.clear();
   _editor = null;
   emit();
 }

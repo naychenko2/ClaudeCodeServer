@@ -17,10 +17,11 @@
 import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb, DraftingCompass,
+  TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
+import { GEN_PANEL_KEYS } from '../../lib/genPanelKeys';
 
 // Сторона экрана. Зон ровно две, и обе равноправны: любая панель может лежать
 // в любой из них.
@@ -40,6 +41,12 @@ export const PANEL_KEYS = [
   // Панели подсистем (слот workspace-panel-def): ключ зарезервирован здесь, тело и
   // доступность — у подсистемы; выключена подсистема — нет содержимого, нет и кнопки
   'characters',
+  // «Голоса» редактора звука: библиотека voices/ проекта отдельной панелью
+  'voices',
+  // Единая панель «Контекст» чата (ADR-023 §Д1): вместо прежних панелей генерации «Картинки», «Звук» и
+  // «Видео». Рисует её оболочка (ContextPanel), а не вертикаль. Ключ `context` занят панелью «Персона» и
+  // сохранён в раскладках — отсюда отдельный ключ
+  'chatContext',
   // Фоновый эфир рядом с работой: живёт и в проекте, и в разделе «Чаты».
   // Каталог каналов панелью НЕ является: он открывается в центральном острове
   // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
@@ -121,7 +128,7 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   terminal: { title: 'Терминал',  Icon: SquareTerminal },
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
   preview:  { title: 'Сервисы',   Icon: AppWindow },
-  video:    { title: 'Видео',     Icon: MonitorPlay },
+  video:    { title: 'Эфир',      Icon: MonitorPlay },
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)
@@ -132,6 +139,10 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   toc:      { title: 'Оглавление', Icon: TableOfContents },
   // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
   characters: { title: 'Персонажи', Icon: Contact },
+  // Голоса редактора звука (модуль audio-editor): библиотека voices/ проекта
+  voices: { title: 'Голоса', Icon: Mic },
+  // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные
+  chatContext: { title: 'Контекст', Icon: SlidersHorizontal },
 
   // Разделы хаба. Ключи намеренно длиннее воркспейсных: рядом живут похожие по
   // смыслу панели проекта, и путать их нельзя. personasList — все персоны
@@ -170,6 +181,8 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   context: 'right',
   toc: 'right',
   characters: 'right',
+  voices: 'right',
+  chatContext: 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
@@ -181,7 +194,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
-  'plan', 'agents', 'context', 'toc', 'video', 'characters',
+  'plan', 'agents', 'context', 'toc', 'video', 'characters', 'voices', 'chatContext',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];
@@ -195,6 +208,13 @@ export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
 // Персона — если собеседник персона). В рельсе они отделены сепаратором от
 // инструментов проекта.
 export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
+
+// Правая зона раздела «Чаты»: панели сессии плюс «Контекст» личного чата
+export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'chatContext'];
+
+// Панели генерации: в планшетной зоне они держат поток до GEN_PANEL_INLINE_MIN (genPanelPlacement).
+// Источник один — lib/genPanelKeys.ts, вторая копия в lib/genPanelDismissed.ts отдаёт тот же список
+export const genPanelKeys = (): readonly PanelKey[] => GEN_PANEL_KEYS as readonly PanelKey[];
 
 // Панели ЦЕНТРАЛЬНОЙ ОБЛАСТИ: показывают не проект и не сессию, а то, что открыто
 // в центре прямо сейчас. Живут ровно столько, сколько живёт их источник: закрыли
@@ -260,8 +280,13 @@ export function isPanelKey(v: unknown): v is PanelKey {
 // его роль закрывают `terminal` и `preview`, которые пользователь откроет сам.
 // Так же отбрасывается `projects`: панель-переключатель проектов упразднена, её
 // заменил док проектов второй левой рельсой (features/projects/ProjectRail).
+// Панели генерации «Картинки», «Звук» и «Видео» упразднены (ADR-023): в сохранённых раскладках их место
+// занимает «Контекст»; повтор в одной раскладке снимает санитайз (дубли), поэтому три ключа дают одну панель.
 const LEGACY_KEY_ALIASES: Record<string, PanelKey> = {
   personas: 'team',
+  images: 'chatContext',
+  sound: 'chatContext',
+  videoEditor: 'chatContext',
 };
 
 // Ключ старой раскладки → ключ реестра (null — панель упразднена).

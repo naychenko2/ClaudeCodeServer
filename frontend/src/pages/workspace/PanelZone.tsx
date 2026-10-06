@@ -37,6 +37,7 @@ import {
   isPanelKey, type PanelKey, type RailBadgeInfo, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
+import { compactStack, genPanelInZone } from './genPanelPlacement';
 import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, railSequence, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, PANEL_SPLIT_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
@@ -105,13 +106,17 @@ interface Props {
   // Открыт ли файл в центральной области — тоже ужимает FAB AI-хаба (как распахнутая
   // панель): места в центре мало, крупный круг мешает. Знает только правая зона.
   centerFileOpen?: boolean;
+  // Человек закрыл панель — крестиком в шапке или повторным кликом по рельсе. Хост
+  // ставит по нему признак «закрыта в этом чате» панели генерации (ADR-021 §3)
+  onUserClose?: (k: PanelKey) => void;
 }
 
 export function PanelZone({
   side, panels, railBadges, panelStack,
-  allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, compact, sessionPanels,
-  railFooter, floating, centerFileOpen,
+  allowedKeys: allowedKeysProp, hideWhenEmpty, compact, sessionPanels,
+  railFooter, floating, centerFileOpen, onUserClose,
 }: Props) {
+  const allowedKeys = allowedKeysProp ?? WORKSPACE_KEYS;
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, openIn, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, markActive, releaseCompactSide, registerOpener, moveTo, registerZoneKeys, zoneKeys } = usePanels();
   const zoneState = zones[side];
@@ -196,6 +201,8 @@ export function PanelZone({
   // есть контент (у сессионных он всегда есть).
   const keyAvailable = (k: PanelKey): boolean => {
     if (!allowedKeys.includes(k)) return false;
+    // Панель генерации на узком планшете рисует шторкой полоса над полем ввода
+    if (!genPanelInZone(k, !!compact, windowWidth)) return false;
     return content(k) != null;
   };
 
@@ -239,6 +246,11 @@ export function PanelZone({
       : layout.flat().filter(keyAvailable))
     : [];
   const openKeys = compact ? tabletKeys : columns.flatMap(c => c.keys);
+  // Стек в потоке или ящиком: открытость считается по tabletInline (выше), а рисуется по
+  // stackInline — панели генерации держат поток и там, где обычной панели места уже нет
+  const genStack = compactStack(windowWidth, width, tabletKeys);
+  const stackInline = tabletInline || genStack.inline;
+  const stackW = tabletInline ? width : genStack.width;
 
   // Колонка, ближайшая к ЦЕНТРУ экрана: у левой зоны это последняя (панели растут
   // от рельсы вправо), у правой — первая (порядок зеркальный).
@@ -921,8 +933,9 @@ export function PanelZone({
       setPinned(peek === k ? k : null);
       // Показанную панель клик закрывает, закрытую — открывает по общему правилу
       // (placeHere): своей копии правила у клика больше нет.
-      if (!openKeys.includes(k)) placeHere(k);
-      else if (compactOverlay) closeCompact(k);
+      if (!openKeys.includes(k)) { placeHere(k); return; }
+      onUserClose?.(k);
+      if (compactOverlay) closeCompact(k);
       // Закрытие: вместимость и порядок кнопок ни при чём — togglePanelIn видит
       // панель в этой зоне и просто закрывает её. На широком планшете inline
       // открытость уже в сторе, и toggle идёт общим путём десктопа.
@@ -940,7 +953,11 @@ export function PanelZone({
     const stretched = vi === undefined
       ? multiInCol || !!fillWanted[k]
       : panelStretched(k, vi, multiInCol ? 2 : 1);
-    const onCloseThis = compactOverlay ? () => closeCompact(k) : () => closeTo(side, k);
+    const onCloseThis = () => {
+      onUserClose?.(k);
+      if (compactOverlay) closeCompact(k);
+      else closeTo(side, k);
+    };
     const shell = (
       <PanelShell
         icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
@@ -1346,11 +1363,11 @@ export function PanelZone({
         ))}
       </div>
     );
-    if (tabletInline) {
+    if (stackInline) {
       return (
         <>
           {splitter}
-          <div style={{ width: width + GAP * 2, flexShrink: 0, display: 'flex', padding: `0 ${GAP}px`, boxSizing: 'border-box' }}>
+          <div style={{ width: stackW + GAP * 2, flexShrink: 0, display: 'flex', padding: `0 ${GAP}px`, boxSizing: 'border-box' }}>
             {stack}
           </div>
         </>

@@ -2,6 +2,7 @@
 using System.Net;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
@@ -494,6 +495,8 @@ builder.Services.AddSingleton<PersonaAgentFileSync>();
 // реконсайлера error-документов Dify, не собственность Memory.
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.Configuration);
+// Разовое решение «Облегчённого контекста» для персон из стора (по прежней логике провайдера)
+builder.Services.AddGatedHostedService<PersonaLightContextMigration>(builder.Configuration);
 // Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai) —
 // gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
 // Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).
@@ -600,7 +603,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
 // Инстансное подключение Higgsfield (фаза 1.1): единый OAuth-вход админа, шарится всеми
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>();
 // Шов для драйвера Higgsfield редактора картинок (ADR-017): токен без AdminOwnerId
-builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IHiggsfieldAccess,
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Higgsfield.IHiggsfieldAccess,
     ClaudeHomeServer.Services.Mcp.HiggsfieldAccessAdapter>();
 // Запись модулей в ленту чата (ADR-019 §2): общий шов для подсистем, адаптер над SessionManager
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IChatFeed, ChatFeed>();
@@ -692,6 +695,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // Сборка с прогрессом (dev: build) — движки той же вертикали TestRuns, гейты как у tests
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.DevToolset>();
+// Контекст чата для агента (ADR-023 §3.2): context_state / context_attach / context_detach; сессия — хвостом
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.TurnContextToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают
@@ -702,6 +708,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolWhitelis
 // (6 провайдеров + DossierTrailerHint) подключается к шине через SessionManager.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
     ClaudeHomeServer.Services.Turn.TurnEventBus>();
+// Хаб событий между редакторами (ADR-022 §3): «в Картинках/Звуке появилась версия» → «Видео». In-memory,
+// один на инстанс; сами редакторы друг о друге не знают
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, ClaudeHomeServer.Services.Media.MediaEventHub>();
 // Этап 2: контрибьюторы секций системного промпта (этап 2 плана «Шина событий хода»).
 // Каждый контрибьютор несёт Order/Key/Group и два метода: IsEnabled (гейт по
 // per-session условиям — без него регрессия golden-фикстуры 4) и BuildAsync (исключения
@@ -883,6 +892,7 @@ builder.Services.AddHttpClient("safe-download")
 // Сам `VideoSubsystem.Register` подключает и платформенный `IMemoryCache` для своих
 // провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
 // больше не держим.
+builder.Services.AddChatContext();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),

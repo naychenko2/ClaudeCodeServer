@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -22,6 +23,8 @@ public sealed record ComfyHistoryEntry(bool Completed, bool Failed, string? Erro
     public long? StartedAtMs { get; init; }
     public long? FinishedAtMs { get; init; }
     public IReadOnlyList<string> CachedNodes { get; init; } = [];
+    // Текстовые выходы нод (PreviewAny: outputs.{node}.text) — партитура ABC у YuE2
+    public IReadOnlyList<string> Texts { get; init; } = [];
 
     // Длительность прогона по меткам ComfyUI; null — меток нет или они несостоятельны
     public double? RunSeconds => StartedAtMs is { } start && FinishedAtMs is { } end && end >= start
@@ -156,7 +159,8 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         var latents = new List<ComfyOutputFile>();
         if (entry["outputs"] is JsonObject outputs)
             foreach (var (_, output) in outputs)
-                foreach (var key in new[] { "images", "gifs", "videos", "latents" })
+                // audio — SaveAudio* и узел CcsAudioWorker (у него там и MIDI, и модели голоса)
+                foreach (var key in new[] { "images", "gifs", "videos", "latents", "audio" })
                     if (output?[key] is JsonArray list)
                         foreach (var item in list)
                         {
@@ -169,12 +173,20 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                             (key == "latents" ? latents : files).Add(file);
                         }
 
+        var texts = new List<string>();
+        if (entry["outputs"] is JsonObject textOutputs)
+            foreach (var (_, output) in textOutputs)
+                if (output?["text"] is JsonArray list)
+                    texts.AddRange(list.OfType<JsonValue>().Select(v => v.TryGetValue<string>(out var t) ? t : null)
+                        .Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!));
+
         return new ComfyHistoryEntry(completed && !failed, failed, error ?? (failed ? "ComfyUI завершил задачу ошибкой" : null),
             files, latents)
         {
             StartedAtMs = startedAt,
             FinishedAtMs = finishedAt,
             CachedNodes = cached,
+            Texts = texts,
         };
 
         // Метка сообщения — миллисекунды эпохи; число бывает и целым, и дробным
@@ -183,6 +195,71 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
             : v.TryGetValue<long>(out var l) ? l
             : v.TryGetValue<double>(out var d) ? (long)d
             : null;
+    }
+
+    // Прогресс шагов сэмплера: ComfyUI шлёт его только по WebSocket /ws (событие "progress"), в HTTP его нет.
+    // Слушаем до execution_success/error/interrupted по задаче или до отмены; onProgress получает долю шага
+    // 0..1 в пределах текущей ноды. Любой сбой сокета — тихий выход: прогресс необязателен, ход задачи не страдает
+    public async Task ListenProgressAsync(string promptId, Action<double> onProgress, CancellationToken ct)
+    {
+        try
+        {
+            var baseUri = new Uri(LocalMediaOptions.Read(config).ComfyUrl.TrimEnd('/') + "/");
+            var ws = new UriBuilder(new Uri(baseUri, "ws"))
+            {
+                Scheme = baseUri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
+                Query = "clientId=ccs-local-media",
+            }.Uri;
+            using var socket = new ClientWebSocket();
+            await socket.ConnectAsync(ws, ct);
+            var buffer = new byte[16 * 1024];
+            while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
+            {
+                using var message = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
+                {
+                    result = await socket.ReceiveAsync(buffer, ct);
+                    if (result.MessageType == WebSocketMessageType.Close) return;
+                    if (message.Length + result.Count <= 1024 * 1024) message.Write(buffer, 0, result.Count);
+                } while (!result.EndOfMessage);
+                // Бинарные кадры (превью) — не наши
+                if (result.MessageType != WebSocketMessageType.Text) continue;
+                var parsed = ParseProgressMessage(Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length), promptId);
+                if (parsed.Done) return;
+                if (parsed.Fraction is { } fraction) onProgress(fraction);
+            }
+        }
+        catch (Exception ex) when (ex is WebSocketException or IOException or InvalidOperationException
+            or UriFormatException or OperationCanceledException)
+        {
+        }
+    }
+
+    // Сообщение сокета: {"type":"progress","data":{"value":5,"max":8,"prompt_id":…}}; чужие задачи и прочие типы
+    // пропускаем. Done — задача закончилась (успех, ошибка, прерывание)
+    internal static (double? Fraction, bool Done) ParseProgressMessage(string text, string promptId)
+    {
+        try
+        {
+            if (JsonNode.Parse(text) is not JsonObject root || root["data"] is not JsonObject data) return (null, false);
+            if (data["prompt_id"]?.ToString() != promptId) return (null, false);
+            switch (root["type"]?.ToString())
+            {
+                case "execution_success" or "execution_error" or "execution_interrupted":
+                    return (null, true);
+                case "progress"
+                    when data["value"] is JsonValue v && v.TryGetValue<double>(out var value)
+                        && data["max"] is JsonValue m && m.TryGetValue<double>(out var max) && max > 0:
+                    return (Math.Clamp(value / max, 0, 1), false);
+                default:
+                    return (null, false);
+            }
+        }
+        catch (JsonException)
+        {
+            return (null, false);
+        }
     }
 
     public async Task<byte[]> DownloadAsync(ComfyOutputFile file, CancellationToken ct)
@@ -220,20 +297,28 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
     }
 
     // Снять задачу из ожидающих: POST /queue {"delete":[id]}. Идущую задачу ComfyUI так не
-    // снимает — для неё нужен interrupt, а он бьёт по любому текущему прогону
-    public async Task DeletePendingAsync(string promptId, CancellationToken ct)
+    // снимает — для неё InterruptAsync
+    public Task DeletePendingAsync(string promptId, CancellationToken ct) =>
+        PostAsync("queue", new JsonObject { ["delete"] = new JsonArray(promptId) }, "снятие задачи", ct);
+
+    // Прервать идущую задачу: POST /interrupt {"prompt_id":id}. С prompt_id ComfyUI (проверено на
+    // 0.37) прерывает прогон, только если идёт именно он, — чужой не заденет. Без prompt_id не
+    // звать: так прерывается любой текущий прогон
+    public Task InterruptAsync(string promptId, CancellationToken ct) =>
+        PostAsync("interrupt", new JsonObject { ["prompt_id"] = promptId }, "прерывание задачи", ct);
+
+    private async Task PostAsync(string path, JsonObject body, string what, CancellationToken ct)
     {
-        var body = new JsonObject { ["delete"] = new JsonArray(promptId) };
         using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         try
         {
-            using var response = await Client().PostAsync("queue", content, ct);
+            using var response = await Client().PostAsync(path, content, ct);
             if (!response.IsSuccessStatusCode)
-                throw new ComfyException($"ComfyUI отклонил снятие задачи ({(int)response.StatusCode})");
+                throw new ComfyException($"ComfyUI отклонил {what} ({(int)response.StatusCode})");
         }
         catch (HttpRequestException ex)
         {
-            throw new ComfyException("ComfyUI недоступен (снятие задачи)", ex);
+            throw new ComfyException($"ComfyUI недоступен ({what})", ex);
         }
     }
 

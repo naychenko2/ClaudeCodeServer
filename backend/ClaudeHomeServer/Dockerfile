@@ -31,7 +31,8 @@ COPY deploy/agent-install/ ./deploy/agent-install/
 RUN dotnet publish backend/ClaudeHomeServer/ClaudeHomeServer.csproj \
     -c Release -r linux-x64 --self-contained false -o /app/publish /p:UseAppHost=false
 # Динамические модули ModuleLoader резолвит по пути — без них старт падает (как в publish-linux.sh)
-RUN for mod in notes/ClaudeHomeServer.Notes.dll spend/ClaudeHomeServer.Spend.dll image-editor/ClaudeHomeServer.ImageEditor.dll; do \
+RUN for mod in notes/ClaudeHomeServer.Notes.dll spend/ClaudeHomeServer.Spend.dll image-editor/ClaudeHomeServer.ImageEditor.dll \
+        audio-editor/ClaudeHomeServer.AudioEditor.dll; do \
       test -f "/app/publish/modules/$mod" || { echo "нет modules/$mod после publish" >&2; exit 1; }; \
     done
 # Свежесобранный фронт кладём в wwwroot (исходный wwwroot исключён в .dockerignore)
@@ -58,10 +59,11 @@ RUN npm install -g @anthropic-ai/claude-code skills
 RUN apt-get update && apt-get install -y --no-install-recommends mc \
  && rm -rf /var/lib/apt/lists/*
 
-# UID пользователя app. На Linux-хосте bind-mount проверяет права по UID —
-# задать UID владельца папок проектов: --build-arg APP_UID=$(id -u).
+# UID пользователя app. На Linux-хосте bind-mount проверяет права по UID — он обязан
+# совпасть с владельцем данных (дефолт 1000; иной — --build-arg APP_UID=$(id -u)).
+# Дефолт 1001 дал инцидент 02.10: песочница не писала в /projects.
 # UID 1000 в базовом образе занят пользователем node — освобождаем
-ARG APP_UID=1001
+ARG APP_UID=1000
 RUN if getent passwd ${APP_UID} >/dev/null; then userdel -r "$(getent passwd ${APP_UID} | cut -d: -f1)"; fi \
  && useradd -m -u ${APP_UID} app
 WORKDIR /app
@@ -113,8 +115,12 @@ RUN npm install -g @anthropic-ai/claude-code
 # вызов скачивает пакет, и «шум» загрузки может исказить первый разбор вывода.
 RUN npm install -g skills
 
-# Консольные утилиты для веб-терминала (Midnight Commander и т.п.)
-RUN apt-get update && apt-get install -y --no-install-recommends mc \
+# Консольные утилиты для веб-терминала (Midnight Commander и т.п.) и ffmpeg
+# для монтажа без ИИ в модуле «Звук» (ADR-021, этап 5): пики волны, обрезка,
+# фейды, громкость, нормализация LUFS, сведение стемов. Без него операции
+# корректно сереют (`503 dsp_unavailable`), но в контейнере тесты на монтаж
+# должны работать.
+RUN apt-get update && apt-get install -y --no-install-recommends mc ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
 # Непривилегированный пользователь; HOME под volume ~/.claude

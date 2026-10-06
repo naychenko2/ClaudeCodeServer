@@ -14,7 +14,7 @@
 // Стор параметризован неймспейсом (createPanelZones): воркспейс и раздел «Чаты»
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
 import { useCallback, useSyncExternalStore } from 'react';
-import { PANEL_HOME, RAIL_GROUPS, isPanelKey, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
+import { PANEL_HOME, RAIL_GROUPS, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
 
 // Реестр панелей (ключи, мета, домашние зоны) — соседний panelCatalog.ts.
 // Здесь только раскладка: что где лежит и какого размера.
@@ -69,7 +69,11 @@ export function sanitizeLayout(cols: unknown, exclude?: Set<PanelKey>): PanelKey
   for (const col of cols) {
     if (!Array.isArray(col)) continue;
     const clean: PanelKey[] = [];
-    for (const v of col) if (isPanelKey(v) && !seen.has(v)) { seen.add(v); clean.push(v); }
+    for (const raw of col) {
+      // Упразднённые ключи переводим до проверки: «Картинки» и «Звук» становятся «Контекстом», повтор снимает seen
+      const v = migrateLegacyKey(raw);
+      if (v && !seen.has(v)) { seen.add(v); clean.push(v); }
+    }
     if (clean.length) out.push(clean);
   }
   return out;
@@ -86,7 +90,10 @@ export function parseLayout(rawLayout: string | null, rawLegacyOpen: string | nu
       const arr = JSON.parse(rawLegacyOpen);
       if (Array.isArray(arr)) {
         const flat: PanelKey[] = [];
-        for (const v of arr) if (isPanelKey(v) && !flat.includes(v)) flat.push(v);
+        for (const raw of arr) {
+          const v = migrateLegacyKey(raw);
+          if (v && !flat.includes(v)) flat.push(v);
+        }
         const cols: PanelKey[][] = [];
         for (let i = 0; i < flat.length; i += COL_CAP) cols.push(flat.slice(i, i + COL_CAP));
         return cols;
@@ -407,8 +414,12 @@ export function enforceZoneInvariant(zones: PanelZones): PanelZones {
   const claim = (cols: PanelKey[][]): PanelKey[][] => {
     const out: PanelKey[][] = [];
     for (const col of cols) {
-      const clean = col.filter(k => !seen.has(k));
-      clean.forEach(k => seen.add(k));
+      const clean: PanelKey[] = [];
+      for (const k of col) {
+        if (seen.has(k)) continue;
+        clean.push(k);
+        seen.add(k);
+      }
       if (clean.length) out.push(clean);
     }
     return out;

@@ -4,8 +4,9 @@ using System.Text;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Higgsfield;
 using ClaudeHomeServer.Services.Spend;
 using Microsoft.Extensions.Configuration;
 
@@ -22,6 +23,10 @@ internal sealed class FakeHttp : HttpMessageHandler, IHttpClientFactory
     public FakeHttp(Func<Call, HttpResponseMessage> route) => _route = route;
 
     public HttpClient CreateClient(string name) => new(this, disposeHandler: false);
+
+    // Загрузчик результата поверх этого же фейка: хосты *.test не резолвятся, проверку адреса пропускаем
+    public SafeMediaDownloader Downloader() =>
+        new(this, (_, _) => Task.FromResult(SsrfGuard.AddressCheck.Public));
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {

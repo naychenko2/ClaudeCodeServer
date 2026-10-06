@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 //   лица        — ~/ComfyUI/run_facedetail.py (denoise 0.65, 16 шагов — выбор Андрея)
 //   видео H3    — ~/ComfyUI-h3-tools/workflows/ (build_workflows.py): одна карта, режимы A и AS,
 //                 кэш весов энкодера выключен; копии эталонов лежат в тестах (ComfyReference/)
-public static class ComfyWorkflows
+public static partial class ComfyWorkflows
 {
     // Подпапка output ComfyUI для наших выходов: чужие прогоны стенда не смешиваются с нашими
     public const string OutputFolder = "ccs-local-media";

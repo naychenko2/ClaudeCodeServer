@@ -15,25 +15,32 @@ public class LocalMediaDefaultContributorTests
         public bool IsEnabled(string userId, string key) => on.Contains(key);
     }
 
-    private static readonly string[] AllFlags = [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor];
+    private static readonly string[] AllFlags =
+        [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor, FeatureFlagKeys.AudioEditor, FeatureFlagKeys.VideoEditor];
 
     private static LocalMediaDefaultContributor Contributor(
-        string[]? flags = null, bool localMedia = true, bool images = true, bool agentLaunch = true) =>
+        string[]? flags = null, bool localMedia = true, bool images = true, bool agentLaunch = true,
+        bool audioAgentLaunch = true, bool videoAgentLaunch = true) =>
         new(new Flags(flags ?? AllFlags), new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["LocalMedia:Enabled"] = localMedia ? "true" : "false",
             ["Subsystems:images:Enabled"] = images ? "true" : "false",
             ["ImageEditor:AgentLaunch"] = agentLaunch ? "true" : "false",
+            ["AudioEditor:AgentLaunch"] = audioAgentLaunch ? "true" : "false",
+            ["VideoEditor:AgentLaunch"] = videoAgentLaunch ? "true" : "false",
         }).Build());
 
     private static PromptSessionContext Project(bool hasLocalMediaMcp = true, bool unattended = false,
-        Session? session = null) =>
+        Session? session = null, bool hasAudioEditorMcp = false, bool hasVideoEditorMcp = false) =>
         new(session ?? new Session { ProjectId = "p1", OwnerId = "u1" }, "u1", null, "/root",
-            HasLocalMediaMcp: hasLocalMediaMcp, Unattended: unattended);
+            HasLocalMediaMcp: hasLocalMediaMcp, HasAudioEditorMcp: hasAudioEditorMcp, HasVideoEditorMcp: hasVideoEditorMcp,
+            Unattended: unattended);
 
-    private static PromptSessionContext Personal(bool unattended = false, bool hasImageEditorMcp = true) =>
+    private static PromptSessionContext Personal(bool unattended = false, bool hasImageEditorMcp = true,
+        bool hasAudioEditorMcp = false, bool hasVideoEditorMcp = false) =>
         new(new Session { OwnerId = "u1" }, "u1", null, null,
-            HasImageEditorMcp: hasImageEditorMcp, Unattended: unattended);
+            HasImageEditorMcp: hasImageEditorMcp, HasAudioEditorMcp: hasAudioEditorMcp, HasVideoEditorMcp: hasVideoEditorMcp,
+            Unattended: unattended);
 
     [Fact]
     public void Проект_с_local_media_и_флагом_видит_правило() =>
@@ -152,7 +159,7 @@ public class LocalMediaDefaultContributorTests
     {
         var text = personal ? LocalMediaDefaultContributor.PersonalRule : LocalMediaDefaultContributor.ProjectRule;
 
-        text.Should().Contain("если в блоке «Картинки в этом чате» указан поставщик — используй его (не подменяй)", "(б)")
+        text.Should().Contain("если в «Чем» контекста хода указан поставщик — используй его (не подменяй)", "(б)")
             .And.Contain("(это исключение из правила «не передавай provider»)", "(б)")
             .And.Contain("если числа нет — не называй его, скажи просто «рисую локально (бесплатно)»", "(в)")
             .And.NotContain("с/мин", "(в)")
@@ -162,6 +169,33 @@ public class LocalMediaDefaultContributorTests
     }
 
     // Внутри варианта текст не зависит от хода: иначе хвост гонял бы разный текст
+    // ── Строка контекста (ADR-023 §3.1, 2б-2): выбор человека виден в «Чем» контекста хода, полос больше нет ──
+
+    [Fact]
+    public async Task Ни_один_вариант_не_ссылается_на_полосы()
+    {
+        var contributor = Contributor();
+        var texts = new[]
+        {
+            await contributor.BuildAsync(Project(), "x"),
+            await contributor.BuildAsync(Personal(), "x"),
+            await contributor.BuildAsync(Project(hasAudioEditorMcp: true), "x"),
+            await contributor.BuildAsync(Personal(hasAudioEditorMcp: true), "x"),
+        }.Select(c => c!.Sections[0].Text).ToList();
+
+        foreach (var text in texts)
+        {
+            text.Should().NotContain("полосе «Картинки»").And.NotContain("полосе «Звук»")
+                .And.NotContain("виден в блоке «Картинки в этом чате»")
+                .And.NotContain("в блоке «Картинки в этом чате» указан поставщик");
+            text.Should().Contain("«Чем» контекста хода");
+        }
+        texts[0].Should().Contain("Выбор человека в строке контекста, если в «Чем» контекста хода указан исполнитель")
+            .And.Contain(LocalMediaDefaultContributor.BandProviderRule);
+        texts[2].Should().Contain("если в «Чем» контекста хода указан поставщик — используй его (не подменяй)");
+        texts[0].Should().Contain("Картинки: если в ходе есть блок «Картинки в этом чате»", "сам блок под флагом остаётся");
+    }
+
     [Fact]
     public async Task Текст_варианта_не_зависит_от_хода()
     {
@@ -174,4 +208,119 @@ public class LocalMediaDefaultContributorTests
     public void Стоит_сразу_после_блока_картинок() =>
         Contributor().Order.Should().Be(
             new ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor(new Flags()).Order + 10);
+
+    // Устаревшая фраза «локальных моделей для них нет» — уже ложь: у local-media есть 9 аудио-инструментов,
+    // из-за неё модель уводила звук в облако. Проектный вариант их перечисляет, личный — честно говорит, что нет.
+    [Fact]
+    public void Аудио_инструменты_в_правилах_вместо_устаревшей_фразы()
+    {
+        var project = LocalMediaDefaultContributor.ProjectRule;
+        var personal = LocalMediaDefaultContributor.PersonalRule;
+
+        project.Should().NotContain("локальных моделей для них нет");
+        personal.Should().NotContain("локальных моделей для них нет");
+
+        project.Should().Contain("local_speech").And.Contain("local_music_generate");
+        personal.Should().Contain("локальных моделей в этом чате нет");
+    }
+
+    // ADR-021 §5, вопрос 1: модуль «Звук» доехал до хода — звук идёт через audio_* с provider local,
+    // прямые local_* — только по прямой просьбе; картинки и видео те же
+    [Fact]
+    public async Task Проект_с_модулем_звука_звук_через_audio_generate()
+    {
+        var text = (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true), "озвучь"))!.Sections[0].Text;
+
+        text.Should().Be(LocalMediaDefaultContributor.ProjectRuleWithAudioEditor)
+            .And.Contain("audio_generate передавай с provider local")
+            .And.Contain("Прямые local_* для звука — только если человек явно попросил сделать напрямую")
+            .And.NotContain("озвучка — local_speech");
+        text.Should().StartWith(LocalMediaDefaultContributor.ProjectRule[..LocalMediaDefaultContributor.ProjectRule.IndexOf("Звук и музыка", StringComparison.Ordinal)],
+            "картинки и видео модуль звука не трогает");
+    }
+
+    [Fact]
+    public async Task Личный_чат_с_модулем_звука_облако_через_audio_generate()
+    {
+        var text = (await Contributor().BuildAsync(Personal(hasAudioEditorMcp: true), "озвучь"))!.Sections[0].Text;
+
+        text.Should().Be(LocalMediaDefaultContributor.PersonalRuleWithAudioEditor)
+            .And.Contain("локальных моделей в этом чате нет").And.Contain("audio_generate")
+            .And.NotContain("Прямые local_*", "в личной области локального звука нет вовсе");
+    }
+
+    // Без доставленного сервера, без флага модуля или без audio_generate — прежние варианты
+    [Theory]
+    [InlineData("сервер не доставлен")]
+    [InlineData("флаг audio-editor выключен")]
+    [InlineData("AudioEditor:AgentLaunch=false")]
+    public async Task Без_модуля_звука_прежние_тексты(string why)
+    {
+        var contributor = why switch
+        {
+            "флаг audio-editor выключен" => Contributor(flags: [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor]),
+            "AudioEditor:AgentLaunch=false" => Contributor(audioAgentLaunch: false),
+            _ => Contributor(),
+        };
+        var audio = why != "сервер не доставлен";
+
+        (await contributor.BuildAsync(Project(hasAudioEditorMcp: audio), null))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.ProjectRule, why);
+        (await contributor.BuildAsync(Personal(hasAudioEditorMcp: audio), null))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.PersonalRule, why);
+    }
+
+    // ── Модуль «Видео» (ADR-022 §5): видео — через video_*, прямые local_*_to_video только по прямой просьбе ──
+
+    [Fact]
+    public async Task Проект_с_модулем_видео_видео_через_video_shoot_а_картинки_и_звук_прежние()
+    {
+        var text = (await Contributor().BuildAsync(Project(hasVideoEditorMcp: true), "сними"))!.Sections[0].Text;
+
+        text.Should().Contain(LocalMediaDefaultContributor.ProjectVideoEditorRule)
+            .And.Contain("video_shoot передавай с provider local")
+            .And.Contain("Прямые local_text_to_video, local_image_to_video, local_reference_to_video — только если человек явно попросил")
+            .And.NotContain("Видео: local_text_to_video, local_image_to_video, local_reference_to_video.");
+        text.Should().Contain("озвучка — local_speech", "модуль звука не доехал — звук прежний");
+        text.Should().Contain("local_generate_image", "картинки модуль видео не трогает");
+    }
+
+    [Fact]
+    public async Task Личный_чат_с_модулем_видео_облако_через_video_shoot()
+    {
+        var text = (await Contributor().BuildAsync(Personal(hasVideoEditorMcp: true), "сними"))!.Sections[0].Text;
+
+        text.Should().Contain(LocalMediaDefaultContributor.PersonalVideoEditorRule)
+            .And.NotContain(LocalMediaDefaultContributor.PersonalNoVideoRule);
+    }
+
+    [Fact]
+    public async Task Модули_звука_и_видео_вместе_правят_свои_абзацы()
+    {
+        var text = (await Contributor().BuildAsync(Project(hasAudioEditorMcp: true, hasVideoEditorMcp: true), null))!.Sections[0].Text;
+
+        text.Should().Contain(LocalMediaDefaultContributor.ProjectVideoEditorRule)
+            .And.Contain(LocalMediaDefaultContributor.ProjectAudioEditorRule);
+    }
+
+    // Без доставленного сервера, без флага модуля или без video_shoot — прежние варианты
+    [Theory]
+    [InlineData("сервер не доставлен")]
+    [InlineData("флаг video-editor выключен")]
+    [InlineData("VideoEditor:AgentLaunch=false")]
+    public async Task Без_модуля_видео_прежние_тексты(string why)
+    {
+        var contributor = why switch
+        {
+            "флаг video-editor выключен" => Contributor(flags: [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor]),
+            "VideoEditor:AgentLaunch=false" => Contributor(videoAgentLaunch: false),
+            _ => Contributor(),
+        };
+        var video = why != "сервер не доставлен";
+
+        (await contributor.BuildAsync(Project(hasVideoEditorMcp: video), null))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.ProjectRule, why);
+        (await contributor.BuildAsync(Personal(hasVideoEditorMcp: video), null))!.Sections[0].Text
+            .Should().Be(LocalMediaDefaultContributor.PersonalRule, why);
+    }
 }

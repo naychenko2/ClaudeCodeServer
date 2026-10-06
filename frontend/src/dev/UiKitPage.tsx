@@ -26,7 +26,9 @@ import {
   Calendar, Share2, MessageCircle,
   Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug, ImageIcon, Info, Mic, Music, SlidersHorizontal } from 'lucide-react';
+import { GenerationPanel } from '../components/generation/GenerationPanel';
+import type { GenerationFoot } from '../components/generation/GenerationPanel';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
@@ -43,11 +45,12 @@ import {
   Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge, Badge,
   SidebarSection,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
-  Menu, MenuItem, BackButton, WaitingIndicator,
+  Menu, MenuItem, MenuSep, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel, Select,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
   Chip, ProgressBar, LiveDot,
+  Tabs, Stepper, ResizeHandle,
 } from '../components/ui';
 import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
@@ -65,6 +68,11 @@ import type {
 
 import { ColorsSection } from './ColorsSection';
 import { ToolProgressSection } from './ToolProgressSection';
+import { AudioPlayerKitSection } from './AudioPlayerKitSection';
+import { GenSharedKitSection } from './GenSharedKitSection';
+import { ContextRowKitSection } from './ContextRowKitSection';
+import { ContextPanelKitSection } from './ContextPanelKitSection';
+import { ComposerActionRowKitSection } from './ComposerActionRowKitSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -114,6 +122,13 @@ const BADGE_TONES: BadgeTone[] = ['neutral', 'accent', 'success', 'warning', 'da
 const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-viewport',   label: 'Замер экрана'      },
   { id: 'sec-toggles',    label: 'Переключатели'     },
+  { id: 'sec-gen-panel',  label: 'Примитивы генерации' },
+  { id: 'sec-gen-scaffold', label: 'Панель генерации' },
+  { id: 'sec-gen-shared', label: 'Общий слой генерации' },
+  { id: 'sec-context-row', label: 'Строка контекста' },
+  { id: 'sec-composer-actions', label: 'Чипы действий' },
+  { id: 'sec-context-panel', label: 'Панель «Контекст»' },
+  { id: 'sec-audio-player', label: 'Звук: плеер' },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
   { id: 'sec-buttons',    label: 'Кнопки'            },
@@ -209,6 +224,41 @@ export function UiKitPage() {
             {/* Примитивы — переключатели */}
             <div id="sec-toggles" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <TogglesSection />
+            </div>
+
+            {/* Примитивы панели генерации — Tabs, Stepper, ResizeHandle */}
+            <div id="sec-gen-panel" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <GenPanelPrimitivesSection />
+            </div>
+
+            {/* Каркас GenerationPanel — четыре вида */}
+            <div id="sec-gen-scaffold" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <GenPanelScaffoldSection />
+            </div>
+
+            {/* Общий слой панелей генерации (Г1) — переключатель, меню выбора, исполнитель, «Вернуть» */}
+            <div id="sec-gen-shared" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <GenSharedKitSection />
+            </div>
+
+            {/* Строка контекста хода над полем ввода (ADR-023) — все ступени лестницы */}
+            <div id="sec-context-row" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ContextRowKitSection />
+            </div>
+
+            {/* Чипы действий поля ввода (ADR-023 §Д2) */}
+            <div id="sec-composer-actions" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ComposerActionRowKitSection />
+            </div>
+
+            {/* Панель «Контекст» чата (ADR-023 §Д1) — секции, пустые состояния, шторка */}
+            <div id="sec-context-panel" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ContextPanelKitSection />
+            </div>
+
+            {/* Звук: плеер — волна, выделение куска, A/B, микшер стемов (синусы из браузера) */}
+            <div id="sec-audio-player" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <AudioPlayerKitSection />
             </div>
 
             {/* Примитивы — оверлеи и меню */}
@@ -741,6 +791,219 @@ function OverlaysSection() {
           onCancel={() => setConfirmOpen(false)}
         />
       )}
+    </Island>
+  );
+}
+
+// === Секция «Примитивы панели генерации» ===========================
+// Вкладки, счётчик «− N +» и ручка ширины общей боковой панели «Картинок» и «Звука»
+// (ADR-021 §3). Ручка показана на макете панели: ширина живая, 340–520 px.
+function GenPanelPrimitivesSection() {
+  const isMobile = useIsMobile();
+  const [tab, setTab] = useState<'settings' | 'characters'>('settings');
+  const [voiceTab, setVoiceTab] = useState<'settings' | 'voices'>('voices');
+  const [count, setCount] = useState(2);
+  const [single, setSingle] = useState(1);
+  const [width, setWidth] = useState(380);
+
+  return (
+    <Island>
+      <IslandHeader
+        icon={<Columns2 size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />}
+        title="Примитивы — панель генерации"
+      />
+      <div style={{ padding: ISLAND.pad, display: 'flex', flexDirection: 'column', gap: ISLAND.gap }}>
+        {/* Tabs: tablist/tab, стрелки ←/→ (и Home/End) двигают выбор по кругу */}
+        <SubBlock label="Tabs — вкладки панели (стрелки ←/→, счётчик)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, maxWidth: 420 }}>
+            <Tabs
+              ariaLabel="Панель «Картинки»"
+              value={tab}
+              onChange={setTab}
+              items={[
+                { value: 'settings', label: 'Настройки', icon: <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+                { value: 'characters', label: 'Персонажи', icon: <Users size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, count: 3 },
+              ]}
+            />
+            <Tabs
+              ariaLabel="Панель «Звук»"
+              value={voiceTab}
+              onChange={setVoiceTab}
+              items={[
+                { value: 'settings', label: 'Настройки' },
+                { value: 'voices', label: 'Голоса', count: 12 },
+              ]}
+            />
+          </div>
+        </SubBlock>
+
+        {/* Stepper: на потолке «+» гаснет и объясняет причину подсказкой */}
+        <SubBlock label="Stepper — «− N +», причина на недоступной «+»">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.lg, alignItems: 'center' }}>
+            <ToggleRow label={`вариантов: ${count} (1–4)`}>
+              <Stepper ariaLabel="Сколько вариантов" value={count} min={1} max={4} onChange={setCount} />
+            </ToggleRow>
+            <ToggleRow label="потолок: «Эта операция даёт один вариант»">
+              <Stepper ariaLabel="Сколько вариантов" value={single} min={1} max={1} onChange={setSingle} maxHint="Эта операция даёт один вариант" />
+            </ToggleRow>
+          </div>
+        </SubBlock>
+
+        {/* ResizeHandle: за левый край, мышь + клавиатура (←/→ по 16 px) */}
+        <SubBlock label={`ResizeHandle — ширина ${width} px (340–520), тяните левый край или фокус + ←/→`}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', overflow: 'hidden' }}>
+            <div style={{
+              position: 'relative', width: isMobile ? '100%' : width, maxWidth: '100%', flexShrink: 0,
+              height: 160, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.lg,
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            }}>
+              <ResizeHandle value={width} onChange={setWidth} />
+              <Tabs
+                value={tab}
+                onChange={setTab}
+                items={[
+                  { value: 'settings', label: 'Настройки' },
+                  { value: 'characters', label: 'Персонажи', count: 3 },
+                ]}
+              />
+              <div style={{ flex: 1, padding: SP.md, fontSize: FS.sm, color: C.textSecondary }}>
+                Тело панели. На мобиле панель — шторка, ширина не тянется.
+              </div>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px`,
+                borderTop: `1px solid ${C.borderLight}`,
+              }}>
+                <Stepper value={count} min={1} max={4} onChange={setCount} />
+                <span style={{ fontSize: FS.sm, color: C.textMuted }}>низ панели</span>
+              </div>
+            </div>
+          </div>
+        </SubBlock>
+      </div>
+    </Island>
+  );
+}
+
+// Каркас панели генерации (ADR-021 §3): колонка, корешок, шторка и опущенная шторка.
+// Виды заданы явно (layout, collapsed, peeked), чтобы витрина показывала все четыре
+// на любой ширине; шторка — contained, внутри своей рамки, а не во весь экран.
+type GenTab = 'settings' | 'characters';
+
+function GenPanelScaffoldSection() {
+  const [tab, setTab] = useState<GenTab>('settings');
+  const [count, setCount] = useState(2);
+  const [width, setWidth] = useState(380);
+  const [blocked, setBlocked] = useState(false);
+  const [queue, setQueue] = useState(false);
+  const [longVerb, setLongVerb] = useState(false);
+
+  const tabs = [
+    { value: 'settings' as const, label: 'Настройки', icon: <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+    { value: 'characters' as const, label: 'Персонажи', icon: <Users size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, count: 2 },
+  ];
+  const foot: GenerationFoot = {
+    reason: blocked ? 'Нужен текст в поле ввода — модели нечего менять' : undefined,
+    queue: queue ? 'GPU: 2-я в очереди · старт ≈ через 1 мин' : undefined,
+    count, maxCount: 4, onCountChange: setCount,
+    price: [`≈ $${(count * 0.04).toFixed(2)}`, `${count} × $0.04 за картинку`],
+    runLabel: longVerb ? 'Перегенерировать' : 'Изменить',
+    onRun: () => showToast('Запуск', `${longVerb ? 'Перегенерировать' : 'Изменить'} · витрина`),
+  };
+  const common = {
+    title: 'Картинки',
+    subtitle: 'fal · FLUX Kontext',
+    icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+    tabs, tab, onTabChange: setTab,
+    context: tab === 'settings'
+      ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Работаем с: <b>cover.png</b> · версия 3</span>
+      : <span>Папка <code>characters/</code> проекта</span>,
+    foot,
+    peekSummary: 'Изменить · fal · FLUX Kontext · 2 варианта',
+    onClose: () => showToast('Панель закрыта', 'Сводка осталась в полосе'),
+  };
+  const body = tab === 'settings' ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, paddingTop: SP.sm }}>
+      {(['Операция', 'Поставщик', 'Модель'] as const).map((h, i) => (
+        <div key={h} style={{ display: 'flex', flexDirection: 'column', gap: SP.xs + 2 }}>
+          <div style={{ fontSize: FS.xs, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: C.textMuted }}>{h}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs + 1 }}>
+            {[['Изменить', 'Дорисовать', 'Убрать фон'], ['fal', 'Higgsfield', 'Локально'], ['Авто', 'Nano Banana 2', 'FLUX Kontext', 'FLUX Fill']][i]
+              .map((o, j) => <Chip key={o} selected={j === (i === 2 ? 2 : 0)}>{o}</Chip>)}
+          </div>
+        </div>
+      ))}
+      <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.5 }}>
+        Тело прокручивается само, низ с ценой и запуском закреплён под ним.
+        {Array.from({ length: 6 }, (_, k) => <p key={k} style={{ margin: `${SP.sm}px 0 0` }}>Строка-заполнитель {k + 1}: проверяем прокрутку тела.</p>)}
+      </div>
+    </div>
+  ) : (
+    <div style={{ paddingTop: SP.sm, fontSize: FS.sm, color: C.textSecondary }}>Аня · Борис — персонажи проекта.</div>
+  );
+  const charsFoot = tab === 'characters'
+    ? <div style={{ fontSize: FS.sm, color: C.textSecondary }}>Подключён: <b style={{ color: C.textHeading }}>Аня</b></div>
+    : undefined;
+  // Подложка «лента» под шторкой: видно, что опущенная шторка её не перекрывает
+  const feed = (
+    <div style={{ position: 'absolute', inset: 0, padding: SP.md, display: 'flex', flexDirection: 'column', gap: SP.sm, background: C.bgMain }}>
+      {[0, 1, 2].map(k => (
+        <div key={k} style={{ height: 52, borderRadius: R.lg, background: C.bgCard, border: `1px solid ${C.borderLight}` }} />
+      ))}
+    </div>
+  );
+  // scroll — рамка уже панели прокручивается вбок: колонка не ужимается ниже своего минимума
+  const frame = (h: number, children: React.ReactNode, scroll = false) => (
+    <div style={{
+      position: 'relative', height: h, display: 'flex',
+      overflowX: scroll ? 'auto' : 'hidden', overflowY: 'hidden', justifyContent: scroll ? 'flex-start' : 'flex-end',
+      border: `1px solid ${C.border}`, borderRadius: R.xxl, background: C.bgMain, padding: SP.sm,
+    }}>{children}</div>
+  );
+
+  return (
+    <Island>
+      <IslandHeader
+        icon={<Columns2 size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />}
+        title="Панель генерации — GenerationPanel"
+      />
+      <div style={{ padding: ISLAND.pad, display: 'flex', flexDirection: 'column', gap: ISLAND.gap }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.lg }}>
+          <ToggleRow label="причина: запуск невозможен"><Toggle checked={blocked} onChange={setBlocked} /></ToggleRow>
+          <ToggleRow label="очередь GPU"><Toggle checked={queue} onChange={setQueue} /></ToggleRow>
+          <ToggleRow label="длинный глагол"><Toggle checked={longVerb} onChange={setLongVerb} /></ToggleRow>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 420px), 1fr))', gap: SP.lg }}>
+          <SubBlock label={`Колонка — ${width} px, тянется за левый край (340–520); рамка уже — прокрутка вбок`}>
+            {frame(560, (
+              <GenerationPanel {...common} layout="column" collapsed={false} width={width} onWidthChange={setWidth}
+                footContent={charsFoot}>
+                {body}
+              </GenerationPanel>
+            ), true)}
+          </SubBlock>
+          <SubBlock label="Корешок — 44 px: развернуть, вкладки, запуск">
+            {frame(560, (
+              <GenerationPanel {...common} layout="column" collapsed footContent={charsFoot}>{body}</GenerationPanel>
+            ))}
+          </SubBlock>
+          <SubBlock label="Шторка телефона — 88 % высоты, тап по затемнению опускает">
+            {frame(560, (
+              <>
+                {feed}
+                <GenerationPanel {...common} layout="sheet" contained peeked={false} footContent={charsFoot}>{body}</GenerationPanel>
+              </>
+            ))}
+          </SubBlock>
+          <SubBlock label="Опущенная шторка — сводка и низ, лента доступна">
+            {frame(560, (
+              <>
+                {feed}
+                <GenerationPanel {...common} layout="sheet" contained peeked footContent={charsFoot}>{body}</GenerationPanel>
+              </>
+            ))}
+          </SubBlock>
+        </div>
+      </div>
     </Island>
   );
 }
@@ -3466,6 +3729,8 @@ function ToolbarAndEmptySection() {
             <Notice tone="danger" icon={Unplug} title="Не запускалась: устройство так и не вышло на связь" />
           </div>
         </SubBlock>
+
+        <KitOptionsDemo />
       </div>
     </Island>
   );
@@ -4028,5 +4293,92 @@ function VisualPlanCardDemo() {
         </div>
       )}
     </div>
+  );
+}
+
+// Опции сегментов (disabled / muted / title), группы Select, тон info у Notice и Menu
+// во всю ширину — заготовки кита под панель «Звук». «Обработка» без выбранного звука
+// приглушена, но кликабельна: открывает меню «Что обработать?»
+type SoundModeDemo = 'voice' | 'music' | 'process';
+
+function KitOptionsDemo() {
+  const isMobile = useIsMobile();
+  const [mode, setMode] = useState<SoundModeDemo>('voice');
+  const [hasSound, setHasSound] = useState(false);
+  const [pickOpen, setPickOpen] = useState(false);
+  const [op, setOp] = useState<string>('speak');
+  const [stems, setStems] = useState('vocals');
+  const pick = (m: SoundModeDemo) => {
+    if (m === 'process' && !hasSound) { setPickOpen(true); return; }
+    setMode(m);
+  };
+  const processHint = hasSound ? undefined : 'Обработка — сначала выберите звук';
+  const modes = [
+    { value: 'voice' as const, label: 'Голос', icon: <Mic size={12} /> },
+    { value: 'music' as const, label: 'Музыка', icon: <Music size={12} /> },
+    { value: 'process' as const, label: 'Обработка', icon: <SlidersHorizontal size={12} />, muted: !hasSound, title: processHint },
+  ];
+  const sourceGroup = { label: hasSound ? 'С выбранным звуком' : 'С выбранным звуком · выберите звук в ленте', disabled: !hasSound };
+  return (
+    <>
+      <SubBlock label={`Опции сегментов: muted «Обработка» (звук ${hasSound ? 'выбран' : 'не выбран'}) — режим: ${mode}`}>
+        <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          <SegmentedControl value={mode} onChange={pick} options={modes} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+            <InlineSegmented value={mode} onChange={pick} options={modes} isMobile={isMobile} />
+            <IconSegmented<SoundModeDemo>
+              value={mode}
+              onChange={pick}
+              options={modes.map(m => ({ ...m, icon: { voice: <Mic size={14} />, music: <Music size={14} />, process: <SlidersHorizontal size={14} /> }[m.value] }))}
+            />
+            <Toggle checked={hasSound} onChange={v => { setHasSound(v); if (!v && mode === 'process') setMode('voice'); }} />
+            <span style={{ fontSize: FS.sm, color: C.textMuted }}>звук выбран</span>
+          </div>
+          {pickOpen && (
+            // Во всю ширину родителя, вверх от низа блока — как над полосой на 360
+            <Menu onClose={() => setPickOpen(false)} bottom={0} fullWidth>
+              <MenuItem icon={<Music size={ICON_SIZE.xs} />} label="Песня про кота" hint="2:14 · агент · 3 мин назад" onClick={() => { setHasSound(true); setMode('process'); setPickOpen(false); }} />
+              <MenuItem icon={<Mic size={ICON_SIZE.xs} />} label="Озвучка вступления" hint="0:12 · вы · 10 мин назад" onClick={() => { setHasSound(true); setMode('process'); setPickOpen(false); }} />
+              <MenuSep />
+              <MenuItem label="Склеить несколько…" onClick={() => setPickOpen(false)} />
+            </Menu>
+          )}
+        </div>
+      </SubBlock>
+
+      <SubBlock label="SegmentedControl — disabled с подсказкой (у поставщика нет «6 стемов»)">
+        <SegmentedControl
+          value={stems}
+          onChange={setStems}
+          options={[
+            { value: 'vocals', label: 'Вокал+минус' },
+            { value: '4', label: '4 стема' },
+            { value: '6', label: '6 стемов', disabled: true, title: 'У этого поставщика нет разделения на 6 стемов' },
+            { value: 'karaoke', label: 'Караоке' },
+          ]}
+        />
+      </SubBlock>
+
+      <SubBlock label={`Select — группы (optgroup), группа «С выбранным звуком» ${hasSound ? 'доступна' : 'выключена'}: ${op}`}>
+        <Select
+          value={op}
+          onChange={v => setOp(v || 'speak')}
+          options={[
+            { value: 'speak', label: 'Озвучить текст', group: 'Новый звук' },
+            { value: 'song', label: 'Песня', group: 'Новый звук' },
+            { value: 'denoise', label: 'Убрать шум', group: sourceGroup },
+            { value: 'separate', label: 'Разделить на стемы', group: sourceGroup },
+            { value: 'trim', label: 'Обрезать', group: 'Без ИИ · бесплатно' },
+            { value: 'concat', label: 'Склеить несколько звуков', group: 'Без ИИ · бесплатно' },
+          ]}
+        />
+      </SubBlock>
+
+      <SubBlock label="Notice — тон info">
+        <Notice tone="info" icon={Info} title="Выбор звука снят">
+          Режим вернулся к «Голосу». Вернуть «Обработку» можно в течение 4 секунд.
+        </Notice>
+      </SubBlock>
+    </>
   );
 }

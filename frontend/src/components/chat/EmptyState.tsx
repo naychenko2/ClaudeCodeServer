@@ -7,6 +7,7 @@ import { useAssistantName } from './contexts';
 import { personaLabel, personaTitleLines } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { useContextPersona } from '../../lib/contextPersona';
+import { useCreateShortcuts } from './composerShortcuts';
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
 // Внизу — настройка будущего чата (модель, усилие, время жизни, теги), пока не отправлено первое сообщение.
@@ -30,6 +31,8 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
   greetingAbove?: boolean;
 }) {
   const asstName = useAssistantName();
+  // Ярлыки полос над композером («Голос», «Музыка» у «Звука») — кнопками под приветствием
+  const shortcuts = useCreateShortcuts(project?.id ?? null, session?.id ?? null);
   // Лицо пустого чата: аватар персоны чата (или дефолт-персоны контекста);
   // нейтральный favicon — только когда персоны нет
   const facePersona = useContextPersona({
@@ -104,6 +107,17 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
                   </div>
                 )}
               </>
+            )}
+
+            {shortcuts.length > 0 && (
+              <div data-empty-shortcuts="" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: SP.sm }}>
+                {shortcuts.map(sc => (
+                  <Button key={sc.key} variant="secondary" size="sm" leftIcon={sc.icon}
+                    title={sc.hint ? `${sc.title} — ${sc.hint}` : sc.title} onClick={sc.onSelect}>
+                    {sc.title}
+                  </Button>
+                ))}
+              </div>
             )}
 
             {/* Ряд персон «Поговорить с…» — назначить персону текущему пустому чату.

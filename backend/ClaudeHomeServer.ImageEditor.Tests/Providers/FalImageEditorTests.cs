@@ -16,7 +16,7 @@ public class FalImageEditorTests
 
     private static FalImageEditor Editor(FakeHttp http, string? key = "fal-key") =>
         new(http, TestImages.Config(("Fal:ApiKey", key), ("Fal:QueueBase", Queue), ("Fal:ApiBase", Api)),
-            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero };
+            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero, Downloader = http.Downloader() };
 
     private static ImageEditQuoteRequest QuoteRequest(int count, int? w = null, int? h = null) =>
         new("fal", "auto", EditMode.Fast, ImageEditOp.Edit, count, false, 0, false, w, h);
@@ -69,6 +69,29 @@ public class FalImageEditorTests
     public void БезКлюча_ПоставщикНедоступен()
     {
         Editor(new FakeHttp(_ => FakeHttp.Json("{}")), key: "").Enabled.Should().BeFalse();
+    }
+
+    // Ключ уходит на адреса из ответа очереди — чужой хост или http не опрашиваем вовсе
+    [Theory]
+    [InlineData("https://evil.test/r1/status", "https://queue.test/r1", "https://queue.test/r1/cancel")]
+    [InlineData("https://queue.test/r1/status", "https://evil.test/r1", "https://queue.test/r1/cancel")]
+    [InlineData("https://queue.test/r1/status", "https://queue.test/r1", "https://evil.test/r1/cancel")]
+    [InlineData("http://queue.test/r1/status", "https://queue.test/r1", "https://queue.test/r1/cancel")]
+    public async Task Запуск_АдресОчередиВнеХостовFal_ОтказЗначением_КлючНеУходит(string status, string response, string cancel)
+    {
+        var http = new FakeHttp(c => c.Method == HttpMethod.Post
+            ? FakeHttp.Json($$"""{"request_id":"r1","status_url":"{{status}}","response_url":"{{response}}","cancel_url":"{{cancel}}"}""")
+            : FakeHttp.Json("""{"status":"COMPLETED"}"""));
+        var png = TestImages.Png(4, 4, tail: 7);
+        var request = new ImageEditRequest(ImageEditOp.Edit, "убрать провод", new ImageBytes(png, "image/png"), null,
+            [], 1, null, null, FalImageEditor.NanoBananaEdit, null);
+
+        var result = await Editor(http).RunAsync(request, new SyncProgress(_ => { }), default);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        result.Error.Should().Contain("вне своих хостов");
+        http.Calls.Should().ContainSingle("после отправки ни опроса, ни отмены с ключом")
+            .Which.Url.Should().Be($"{Queue}/{FalImageEditor.NanoBananaEdit}");
     }
 
     [Fact]

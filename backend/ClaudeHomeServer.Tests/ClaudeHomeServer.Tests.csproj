@@ -84,6 +84,11 @@
     <!-- ImageEditor — динамический модуль (ADR-018 §10.1): тесты контроллера и фейки
          драйверов живут здесь, им нужны типы модуля напрямую. -->
     <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" />
+    <!-- AudioEditor — динамический модуль (ADR-021): типы нужны сторожам границ (форс-загрузка
+         сборки) и будущим тестам контроллера. -->
+    <ProjectReference Include="..\ClaudeHomeServer.AudioEditor\ClaudeHomeServer.AudioEditor.csproj" />
+    <!-- VideoEditor — динамический модуль (ADR-022): типы нужны сторожам границ и тестам ручек. -->
+    <ProjectReference Include="..\ClaudeHomeServer.VideoEditor\ClaudeHomeServer.VideoEditor.csproj" />
     <!-- Core — спинка (этап 3, Этап 5). Тесты ссылаются на Core-DTO
          (`SubagentRunPassport`/`TurnRunPassport`/`RecallItem`/`RecallBlock` после
          переезда, И на Core-интерфейсы вроде `IKnowledgeIndex`). Транзитивно
@@ -183,6 +188,18 @@
     <Copy SourceFiles="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll"
           DestinationFolder="$(OutDir)modules\image-editor" SkipUnchangedFiles="true"
           Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
+  </Target>
+  <!-- AudioEditor: тот же паттерн — dll в modules/audio-editor/ для ModuleLoader. -->
+  <Target Name="CopyAudioEditorModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll"
+          DestinationFolder="$(OutDir)modules\audio-editor" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll')" />
+  </Target>
+  <!-- VideoEditor: тот же паттерн — dll в modules/video-editor/ для ModuleLoader. -->
+  <Target Name="CopyVideoEditorModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.VideoEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.VideoEditor.dll"
+          DestinationFolder="$(OutDir)modules\video-editor" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.VideoEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.VideoEditor.dll')" />
   </Target>
   <!-- Architecture (Viaduct 10.2): динамический модуль, как Notes. Без копии хосты
        WebApplicationFactory не найдут dll — раздела нет, тулсет arch_* выпадает из реестра,

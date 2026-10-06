@@ -15,6 +15,11 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      # ffmpeg для тестов монтажа без ИИ модуля «Звук» (ADR-021, этап 5).
+      # В ubuntu-latest он есть в репозитории universe, но ставится явно — без
+      # зависимости от состава предустановленного софта в будущих образах.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - uses: actions/setup-dotnet@v4
         with:
           # Проекты на net10.0. Раньше тут стояло 9.0.x, и сборка проходила лишь потому,
@@ -175,10 +180,11 @@ jobs:
       - name: Lint (non-blocking)
         run: npm run lint
         continue-on-error: true
-      # Сторож импортов MF-модуля «Редактор картинок» (ADR-018 §10.3) — жёсткий гейт
-      # отдельным конфигом: в общем линте выше он тонул бы в легаси-долге
-      - name: Lint remote guard (image-editor)
-        run: npx eslint --config eslint.remote.config.js src/features/imageEditor
+      # Сторож импортов MF-модулей «Редактор картинок» (ADR-018 §10.3) и «Звук» (ADR-021 §3) —
+      # жёсткий гейт отдельным конфигом: в общем линте выше он тонул бы в легаси-долге
+      # Видео — ADR-022, хосты контекста хода — ADR-023 §Д6
+      - name: Lint remote guard (image-editor, audio-editor, video-editor, хосты контекста)
+        run: npx eslint --config eslint.remote.config.js src/features/imageEditor src/features/audioEditor src/features/videoEditor src/components/chat src/components/generation
       - name: Build (tsc -b + vite)
         run: npm run build
       - name: Test

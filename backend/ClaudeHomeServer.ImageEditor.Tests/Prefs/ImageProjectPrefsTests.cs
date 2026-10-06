@@ -63,9 +63,10 @@ public class ImageProjectPrefsTests : IDisposable
     {
         var slug = Character();
 
+        // Персонаж в префы не пишется (он ref контекста чата): слаг из тела игнорируется
         var saved = await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", " m1 ", 3, false, slug));
 
-        saved.Should().Be(new ImageProjectPrefs("fal", "m1", 3, false, slug));
+        saved.Should().Be(new ImageProjectPrefs("fal", "m1", 3, false, null));
         _prefs.Get(Owner, _project).Should().Be(saved);
         _store.Get("owner-2", ProjectId).Should().Be(ImageProjectPrefs.Default, "у другого владельца свой выбор");
         var sent = _broadcaster.ToOwnerCalls.Should().ContainSingle().Subject;
@@ -93,7 +94,10 @@ public class ImageProjectPrefsTests : IDisposable
     public async Task Удалённый_персонаж_читается_как_null()
     {
         var slug = Character();
-        await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs(null, null, 2, true, slug));
+        // Старый файл префов со слагом: читается, запись не меняет
+        _store.Save(Owner, ProjectId, new ImageProjectPrefs(null, null, 2, true, slug));
+        (await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", null, 2, true, null))).CharacterSlug
+            .Should().Be(slug, "слаг старого файла запись не стирает");
 
         CharacterStore.Delete(_root, slug).Should().BeTrue();
 
@@ -121,29 +125,105 @@ public class ImageProjectPrefsTests : IDisposable
         again.Thread!.Settings.Should().Be(expected, "у уже взятой картинки свои настройки");
     }
 
+    // ── Выбор по режимам «Создать» и «Править» (панель v5) ─────────────────────
+
+    private static readonly ImageCreatePrefs CreateLocal = new("local", "qwen-image-2.1", 1);
+    private static readonly ImageEditPrefs EditHiggs = new("higgsfield", null, 4, "removeBackground", "fast", "16:9");
+
     [Fact]
-    public async Task Блок_хода_показывает_выбор_человека_и_правило()
+    public async Task Запись_без_режимов_не_затирает_сохранённые_режимы()
+    {
+        await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", null, 2, true, null, CreateLocal, EditHiggs));
+
+        // Старый фронт из другой вкладки шлёт только плоские поля
+        var saved = await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", "m2", 3, false, null));
+
+        saved.Should().Be(new ImageProjectPrefs("fal", "m2", 3, false, null, CreateLocal, EditHiggs));
+        _store.Get(Owner, ProjectId).Should().Be(saved);
+
+        var edit = EditHiggs with { Op = "outpaint", Count = 1 };
+        (await _prefs.SetAsync(Owner, _project, saved with { Edit = edit, Create = null }))
+            .Should().Be(saved with { Edit = edit }, "присланный режим заменяется, неприсланный остаётся");
+    }
+
+    [Fact]
+    public void Старый_файл_без_режимов_читается_и_даёт_прежние_настройки()
+    {
+        var path = _store.PathOf(Owner, ProjectId);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """{"provider":"fal","model":"m1","count":3,"matchSourceSize":false,"characterSlug":null}""");
+
+        var prefs = _store.Get(Owner, ProjectId);
+
+        prefs.Should().Be(new ImageProjectPrefs("fal", "m1", 3, false, null));
+        prefs.HasModes.Should().BeFalse();
+        var flat = new ImageThreadSettings("fal", "m1", 3, false);
+        prefs.CreateSettings().Should().Be(flat);
+        prefs.EditSettings().Should().Be(flat);
+        _prefs.SettingsFor(Owner, ProjectId).Should().Be(flat);
+    }
+
+    [Fact]
+    public void Режим_берёт_поставщика_и_модель_парой_а_число_с_запасом_из_плоских()
+    {
+        var prefs = new ImageProjectPrefs("fal", "flux", 3, false, null,
+            new ImageCreatePrefs("local", null, null), new ImageEditPrefs(null, null, 2, "upscale", null, null));
+
+        prefs.CreateSettings().Should().Be(new ImageThreadSettings("local", null, 3, false),
+            "модель плоских полей выбрана у другого поставщика");
+        prefs.EditSettings().Should().Be(new ImageThreadSettings("fal", "flux", 2, false));
+    }
+
+    [Fact]
+    public async Task Новая_нить_получает_настройки_режима_Править()
     {
         var threads = new ImageThreadStore(Path.Combine(_dir, ImageThreadStore.DirName));
-        var slug = Character();
-        await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", "m1", 3, true, slug));
-        var focused = threads.Open(Owner, Chat, "images/hero.png", null, 0, new ImageThreadSettings("higgsfield", null, 1, true));
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ImageEditor)).Returns(true);
-        var contributor = new ImageEditorStateContributor(flags.Object, threads: threads, prefs: _prefs);
-        var context = new PromptSessionContext(new Session { Id = Chat, OwnerId = Owner, ProjectId = ProjectId }, Owner, null, _root);
+        var service = new ImageThreadService(threads, NullLogger<ImageThreadService>.Instance, prefs: _prefs);
+        await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", null, 2, true, null, CreateLocal, EditHiggs));
 
-        var text = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
+        var opened = await service.OpenAsync(Owner, ProjectId, Chat, "images/hero.png", null, 0, default);
 
-        text.Should().Contain($"Выбор человека в полосе «Картинки»: поставщик higgsfield, модель auto, вариантов 1, персонаж {slug}",
-            "у картинки в работе — её настройки, персонаж — из полосы проекта");
-        text.Should().Contain("не передавай provider/model/character в image_generate, если он сам не просил сменить");
+        opened.Thread!.Settings.Should().Be(new ImageThreadSettings("higgsfield", null, 4, true));
+    }
 
-        threads.SetFocus(Owner, Chat, null, focused.State.Revision);
-        CharacterStore.Delete(_root, slug);
-        var unfocused = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
-        unfocused.Should().Contain("Выбор человека в полосе «Картинки»: поставщик fal, модель m1, вариантов 3, персонаж не подключён",
-            "без картинки в работе — выбор проекта; удалённый персонаж не подключён");
+    [Theory]
+    [InlineData("edit", null, null, 2, null)]
+    [InlineData("removeBackground", "photoreal", "9:16", 4, null)]
+    [InlineData("generate", null, null, 2, "Недопустимая операция правки: generate")]
+    [InlineData("bogus", null, null, 2, "Недопустимая операция правки: bogus")]
+    [InlineData("RemoveBackground", null, null, 2, "Недопустимая операция правки: RemoveBackground")]
+    [InlineData(null, "slow", null, 2, "Недопустимый режим подбора: slow")]
+    [InlineData(null, null, "4:3", 2, "Пропорции 4:3 не поддерживаются: только 1:1, 16:9, 9:16")]
+    [InlineData(null, null, null, 5, "Число вариантов — от 1 до 4")]
+    [InlineData(null, null, null, 0, "Число вариантов — от 1 до 4")]
+    public void Режим_Править_проверяется_белыми_списками(string? op, string? mode, string? ratio, int count, string? error)
+    {
+        ImageProjectPrefsService.Validate(ImageProjectPrefs.Default with { Edit = new(null, null, count, op, mode, ratio) })
+            .Should().Be(error);
+    }
+
+    [Fact]
+    public void Число_вариантов_режима_Создать_проверяется_лимитом()
+    {
+        ImageProjectPrefsService.Validate(ImageProjectPrefs.Default with { Create = new(null, null, 5) })
+            .Should().Be("Число вариантов — от 1 до 4");
+        ImageProjectPrefsService.Validate(ImageProjectPrefs.Default with { Create = new(null, null, null) }).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Текст_выбора_с_режимами_показывает_оба_выбора()
+    {
+        await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("fal", null, 2, true, null, CreateLocal, EditHiggs));
+        var prefs = _prefs.Get(Owner, _project);
+
+        ImageEditorStateContributor.ChoiceText(prefs, null).Should().Be("Выбор человека в строке контекста: "
+            + "новая картинка (генерация по тексту) — поставщик local, модель qwen-image-2.1, вариантов 1; "
+            + "правка — поставщик higgsfield, модель auto, вариантов 4, операция removeBackground");
+
+        ImageEditorStateContributor.ChoiceText(prefs, new ImageThreadSettings("fal", "m1", 2, true))
+            .Should().Contain("правка картинки в работе — поставщик fal, модель m1, вариантов 2, операция removeBackground",
+                "у картинки в работе правка идёт по её настройкам")
+            .And.Contain("новая картинка (генерация по тексту) — поставщик local");
     }
 
     private (ImageEditorStateContributor Contributor, PromptSessionContext Context, ImageThreadStore Threads) Contributor(
@@ -157,6 +237,45 @@ public class ImageProjectPrefsTests : IDisposable
         var context = new PromptSessionContext(
             new Session { Id = Chat, OwnerId = Owner, ProjectId = personal ? null : ProjectId }, Owner, null, _root);
         return (contributor, context, threads);
+    }
+
+    // ── Строка контекста (ADR-023 §3.1, 2б-2): блок без «В работе» и «Выбора человека» ──
+
+    [Fact]
+    public async Task Блок_без_В_работе_и_Выбора_человека_но_с_правилами_и_списком_нитей()
+    {
+        var (contributor, context, threads) = Contributor();
+        var opened = threads.Open(Owner, Chat, "images/hero.png", null, 0, new ImageThreadSettings("fal", null, 1, true));
+        var id = opened.Thread!.Id;
+
+        var text = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
+
+        text.Should().NotContain("В работе:").And.NotContain("Выбор человека в полосе").And.NotContain("полос")
+            .And.NotContain("(в работе)", "фокус вертикали — проекция контекста, пометка путала бы");
+        text.Should().Contain(ImageEditorStateContributor.ChoiceRule);
+        text.Should().Contain(ImageEditorStateContributor.PriorityRuleFor(personal: false));
+        text.Should().Contain(ImageEditorStateContributor.FocusIsNotBindingText);
+        text.Should().Contain($"- {id}: файл images/hero.png", "список нитей остаётся");
+    }
+
+    [Fact]
+    public async Task Личный_чат_без_нитей_только_правило_приоритета()
+    {
+        var (contributor, context, _) = Contributor(personal: true);
+
+        var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
+
+        text.Should().Be(ImageEditorStateContributor.RenderEmpty());
+        text.Should().StartWith("## Картинки в этом чате\n").And.NotContain("В работе").And.NotContain("полос");
+    }
+
+    [Fact]
+    public void ChoiceText_без_персонажа_из_префов()
+    {
+        var prefs = new ImageProjectPrefs("fal", "m1", 3, true, "anya");
+
+        ImageEditorStateContributor.ChoiceText(prefs, null)
+            .Should().Be("Выбор человека в строке контекста: поставщик fal, модель m1, вариантов 3");
     }
 
     [Fact]
@@ -177,10 +296,9 @@ public class ImageProjectPrefsTests : IDisposable
         contributor.IsEnabled(context).Should().BeTrue("выбор в полосе сохранён явно");
         var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
 
-        text.Should().Contain("В работе: ничего не выбрано");
-        text.Should().Contain("Выбор человека в полосе «Картинки»: поставщик local, модель qwen-image-2.1, вариантов 2, персонаж не подключён");
+        text.Should().NotContain("В работе:").And.NotContain("Выбор человека в полосе");
         text.Should().Contain(ImageEditorStateContributor.ChoiceRule);
-        text.Should().Contain(ImageEditorStateContributor.PriorityRule);
+        text.Should().Contain(ImageEditorStateContributor.PriorityRuleFor(personal: false));
         text.Should().NotContain("С прошлого сообщения");
     }
 
@@ -204,8 +322,8 @@ public class ImageProjectPrefsTests : IDisposable
 
         var text = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
 
-        text.Should().Contain($"- {opened.Thread!.Id} (в работе): файл images/hero.png");
-        text.Should().Contain(ImageEditorStateContributor.PriorityRule);
+        text.Should().Contain($"- {opened.Thread!.Id}: файл images/hero.png");
+        text.Should().Contain(ImageEditorStateContributor.PriorityRuleFor(personal: false));
     }
 
     // ── Личный чат вне проекта: блок всегда при флаге и AgentLaunch (решение Андрея 29.09) ──
@@ -219,8 +337,7 @@ public class ImageProjectPrefsTests : IDisposable
         var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
 
         text.Should().Be(ImageEditorStateContributor.RenderEmpty());
-        text.Should().Contain("В работе: ничего не выбрано");
-        text.Should().Contain(ImageEditorStateContributor.PersonalPriorityRule);
+        text.Should().Contain(ImageEditorStateContributor.PriorityRuleFor(personal: true));
         text.Should().NotContain("Выбор человека", "выбора человека нет");
         text.Should().NotContain(ImageEditorStateContributor.ChoiceRule);
         text.Should().NotContain("local-media", "в личном чате local-media нет");
@@ -244,10 +361,9 @@ public class ImageProjectPrefsTests : IDisposable
 
         var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
 
-        text.Should().Contain("Выбор человека в полосе «Картинки»: поставщик local, модель qwen-image-2.1, вариантов 2, персонаж не подключён");
         text.Should().Contain(ImageEditorStateContributor.ChoiceRule);
-        text.Should().Contain(ImageEditorStateContributor.PersonalPriorityRule);
-        text.Should().NotContain(ImageEditorStateContributor.PriorityRule);
+        text.Should().Contain(ImageEditorStateContributor.PriorityRuleFor(personal: true));
+        text.Should().NotContain(ImageEditorStateContributor.PriorityRuleFor(personal: false));
     }
 
     [Fact]
@@ -258,12 +374,12 @@ public class ImageProjectPrefsTests : IDisposable
 
         var text = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
 
-        text.Should().Contain($"- {draft.Thread!.Id} (в работе): новая картинка, ещё не сохранена (человек скачает её)");
-        text.Should().Contain(ImageEditorStateContributor.PersonalPriorityRule);
+        text.Should().Contain($"- {draft.Thread!.Id}: новая картинка, ещё не сохранена (человек скачает её)");
+        text.Should().Contain(ImageEditorStateContributor.PriorityRuleFor(personal: true));
         text.Should().NotContain("корень проекта");
     }
 
-    // Фокус с прошлого сообщения не должен превращать просьбу о новой картинке в правку (баг 30.09)
+    // Выбор с прошлого сообщения не должен превращать просьбу о новой картинке в правку (баг 30.09)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -274,8 +390,8 @@ public class ImageProjectPrefsTests : IDisposable
 
         var text = (await contributor.BuildAsync(context, "нарисуй собаку"))!.Sections.Single().Text;
 
-        text.Should().Contain($"В работе: картинка {draft.Thread!.Id} — {ImageEditorStateContributor.FocusIsNotBindingText}");
-        text.Should().Contain(ImageEditorStateContributor.NewOrContinueRule);
+        text.Should().Contain($"Картинка в «С чем» {ImageEditorStateContributor.FocusIsNotBindingText}");
+        text.Should().Contain("Новая картинка или продолжение");
     }
 
     [Fact]
@@ -284,7 +400,7 @@ public class ImageProjectPrefsTests : IDisposable
         foreach (var rule in new[] { ImageEditorStateContributor.PriorityRule, ImageEditorStateContributor.PersonalPriorityRule })
             rule.Should().Contain(ImageEditorStateContributor.NewOrContinueRule);
         ImageEditorStateContributor.NewOrContinueRule.Should().Contain("всегда image_new")
-            .And.Contain("даже если другая картинка в работе")
+            .And.Contain("даже если другая картинка стоит в «С чем»")
             .And.Contain("Сомневаешься — новая картинка")
             // Опорные примеры обеих сторон: без них модель хуже различает граничные просьбы
             .And.Contain("«нарисуй собаку»")

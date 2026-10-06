@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
@@ -26,8 +27,9 @@ public class PersonalImageEditorController(
     IImageEditJobs? jobs = null,
     ImageEditSteps? steps = null,
     IConfiguration? config = null,
-    IImageRaster? raster = null)
-    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster)
+    IImageRaster? raster = null,
+    ImageContextLaunch? context = null)
+    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
     [HttpGet("catalog")]
     public IActionResult Catalog(string sessionId) =>
@@ -42,6 +44,12 @@ public class PersonalImageEditorController(
     [RequestFormLimits(MultipartBodyLengthLimit = MaxJobBodyBytes)]
     public async Task<IActionResult> Start(string sessionId, [FromForm] StartJobForm form, CancellationToken ct) =>
         Gate(sessionId, out var scope, out var denied) ? await StartIn(scope, form, ct) : denied;
+
+    [HttpPost("uploads")]
+    [RequestSizeLimit(MaxUploadBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBodyBytes)]
+    public async Task<IActionResult> Upload(string sessionId, IFormFile? file, CancellationToken ct) =>
+        Gate(sessionId, out _, out var denied) ? await UploadIn(file, ct) : denied;
 
     [HttpGet("jobs/{jobId}")]
     public IActionResult GetJob(string sessionId, string jobId) =>

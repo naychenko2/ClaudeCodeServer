@@ -2,8 +2,10 @@ using System.Globalization;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Chats;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Threads;
 
@@ -28,7 +30,9 @@ public sealed class ImageThreadService(
     IChatFeed? feed = null,
     ISessionBroadcaster? broadcaster = null,
     ImageEditSteps? steps = null,
-    Prefs.ImageProjectPrefsService? prefs = null)
+    Prefs.ImageProjectPrefsService? prefs = null,
+    IMediaEvents? mediaEvents = null,
+    ChatContextFocusMirror? mirror = null)
 {
     public const string ModuleKey = "imageeditor";
 
@@ -58,6 +62,29 @@ public sealed class ImageThreadService(
 
     public ImageThreadsState Get(string ownerId, string sessionId) => store.Get(ownerId, sessionId);
 
+    // Состояние для DTO (ручка GET и событие): фокус — проекция из контекста чата
+    // (основной объект своего вида).
+    // Читатели хода (`*_state`, ответы фокуса) берут её же; сырой Focus нити — внутреннее «до/после» для Sync
+    public ImageThreadsState View(string ownerId, string sessionId) => Project(ownerId, sessionId, store.Get(ownerId, sessionId));
+
+    private ImageThreadsState Project(string ownerId, string sessionId, ImageThreadsState state)
+    {
+        if (mirror is null) return state;
+        var focus = mirror.ProjectFocus(ownerId, sessionId, ChatContext.ImageContextKind.Kind, state.Focus,
+            id => state.Threads.Any(t => t.Id == id));
+        return focus == state.Focus ? state : state with { Focus = focus };
+    }
+
+    // Запись, которая может сменить фокус: смена попадает в стор контекста
+    private ImageThreadWrite Tracked(string ownerId, string sessionId, Func<ImageThreadWrite> write, ContextActor by)
+    {
+        var before = store.Get(ownerId, sessionId).Focus;
+        var written = write();
+        if (written.Status == ImageThreadWriteStatus.Ok)
+            mirror?.Sync(ownerId, sessionId, ChatContext.ImageContextKind.Kind, before, written.State.Focus, by, claim: by == ContextActor.Agent);
+        return written;
+    }
+
     // Чат этой области (область уже своя — её проверил вызывающий): владение следует из области.
     // scopeKey — id проекта или ImageEditScope.Personal у личного чата вне проекта. Ключ Personal
     // общий у всех владельцев, и владения он не доказывает: его держат гейт личного маршрута и
@@ -77,17 +104,25 @@ public sealed class ImageThreadService(
     public async Task<ImageThreadWrite> OpenAsync(string ownerId, string projectId, string sessionId,
         string? file, string? draftFolder, long revision, CancellationToken ct)
     {
-        var written = store.Open(ownerId, sessionId, file, draftFolder, revision, NewThreadSettings(ownerId, projectId));
+        var written = Tracked(ownerId, sessionId,
+            () => store.Open(ownerId, sessionId, file, draftFolder, revision, NewThreadSettings(ownerId, projectId)), ContextActor.Human);
         if (written.Status == ImageThreadWriteStatus.Ok && written is { Existing: false, Thread: { } thread })
             await AnchorAsync(sessionId, thread, ct);
         return await AfterAsync(ownerId, projectId, sessionId, written);
     }
 
     public Task<ImageThreadWrite> FocusAsync(string ownerId, string projectId, string sessionId, string? threadId, long revision) =>
-        AfterAsync(ownerId, projectId, sessionId, store.SetFocus(ownerId, sessionId, threadId, revision));
+        AfterAsync(ownerId, projectId, sessionId,
+            Tracked(ownerId, sessionId, () => store.SetFocus(ownerId, sessionId, threadId, revision), ContextActor.Human));
 
-    public Task<ImageThreadWrite> RemoveAsync(string ownerId, string projectId, string sessionId, string threadId, long revision) =>
-        AfterAsync(ownerId, projectId, sessionId, store.Remove(ownerId, sessionId, threadId, revision));
+    public Task<ImageThreadWrite> RemoveAsync(string ownerId, string projectId, string sessionId, string threadId, long revision)
+    {
+        var written = store.Remove(ownerId, sessionId, threadId, revision);
+        // Нить исчезла — из контекста чата уходит и она сама, и её референсы
+        if (written.Status == ImageThreadWriteStatus.Ok)
+            mirror?.Forget(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId);
+        return AfterAsync(ownerId, projectId, sessionId, written);
+    }
 
     // Откат стопки — только у нити до 27.09: у новой нити стопок нет, её «откат» — продолжить от версии
     public Task<ImageThreadWrite> RollbackAsync(string ownerId, string projectId, string sessionId, string threadId,
@@ -100,7 +135,9 @@ public sealed class ImageThreadService(
     public Task<ImageThreadWrite> ContinueAsync(string ownerId, string projectId, string sessionId, string threadId,
         string versionId, string? stepId, long revision) =>
         AfterAsync(ownerId, projectId, sessionId,
-            store.SetCurrentVersion(ownerId, sessionId, threadId, versionId, stepId, revision, focus: true));
+            Tracked(ownerId, sessionId,
+                () => store.SetCurrentVersion(ownerId, sessionId, threadId, versionId, stepId, revision, focus: true),
+                ContextActor.Human));
 
     // Агент выбрал версию («поправь вторую»): она становится текущей. Ревизию агент не держит
     public Task<ImageThreadWrite> AgentContinueAsync(string ownerId, string projectId, string sessionId, string threadId,
@@ -138,7 +175,7 @@ public sealed class ImageThreadService(
         for (var attempt = 0; ; attempt++)
         {
             var before = store.Get(ownerId, sessionId);
-            var written = store.SetFocus(ownerId, sessionId, threadId, before.Revision);
+            var written = Tracked(ownerId, sessionId, () => store.SetFocus(ownerId, sessionId, threadId, before.Revision), ContextActor.Agent);
             if (written.Status == ImageThreadWriteStatus.Conflict && attempt < AgentAttempts - 1) continue;
             if (written.Status == ImageThreadWriteStatus.Ok && written.State.Revision != before.Revision)
                 await FocusLineAsync(sessionId, written.State, before, ct);
@@ -155,8 +192,8 @@ public sealed class ImageThreadService(
         for (var attempt = 0; ; attempt++)
         {
             var before = store.Get(ownerId, sessionId);
-            var written = store.Open(ownerId, sessionId, file, draftFolder, before.Revision,
-                NewThreadSettings(ownerId, projectId));
+            var written = Tracked(ownerId, sessionId, () => store.Open(ownerId, sessionId, file, draftFolder, before.Revision,
+                NewThreadSettings(ownerId, projectId)), ContextActor.Agent);
             if (written.Status == ImageThreadWriteStatus.Conflict && attempt < AgentAttempts - 1) continue;
             if (written.Status == ImageThreadWriteStatus.Ok && written.State.Revision != before.Revision)
                 await FocusLineAsync(sessionId, written.State, before, ct);
@@ -164,6 +201,96 @@ public sealed class ImageThreadService(
                 await AnchorAsync(sessionId, thread, ct);
             return await AfterAsync(ownerId, projectId, sessionId, written);
         }
+    }
+
+    // Агент позвал local_* напрямую, мимо image_*: картинка легла файлом в проект. Нить по файлу и якорь в
+    // ленте дают ту же карточку, что запуск через редактор. Выбор человека не трогаем (Open отдаёт сырой фокус
+    // новой нити — возвращаем прежний; в контекст чата усыновление не пишет вовсе), тихой строки «взял в работу» нет: Claude картинку не выбирал.
+    // Нить по этому файлу уже есть — второго якоря нет
+    public async Task AdoptFileAsync(string ownerId, string projectId, string sessionId, string file, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < AgentAttempts; attempt++)
+        {
+            var before = store.Get(ownerId, sessionId);
+            var written = store.Open(ownerId, sessionId, file, null, before.Revision, NewThreadSettings(ownerId, projectId));
+            if (written.Status == ImageThreadWriteStatus.Conflict) continue;
+            if (written is not { Status: ImageThreadWriteStatus.Ok, Thread: { } thread }) return;
+            if (!written.Existing) await AnchorAsync(sessionId, thread, ct);
+            var state = written.State;
+            if (before.Focus is not null && state.Focus != before.Focus
+                && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
+                state = back.State;
+            await BroadcastAsync(ownerId, projectId, sessionId, state);
+            return;
+        }
+    }
+
+    // Результат local_* с несколькими картинками (count > 1) — как у кнопки: ОДНА нить-черновик, запуск с
+    // якорем image_launch_versions и вариант каждой картинки версией. Повторное усыновление той же задачи
+    // (нить с её запуском уже есть) ничего не пишет. Одна картинка или нет рабочей папки шагов — по нити на
+    // файл (AdoptFileAsync)
+    public async Task AdoptFilesAsync(string ownerId, string projectId, string sessionId, string jobId,
+        IReadOnlyList<ProjectImage> images, CancellationToken ct)
+    {
+        if (images.Count == 0) return;
+        if (images.Count == 1 || steps is null)
+        {
+            foreach (var image in images)
+                await AdoptFileAsync(ownerId, projectId, sessionId, image.RelativePath, ct);
+            return;
+        }
+        if (store.Get(ownerId, sessionId).Threads.Any(t => t.Launches.Any(l => l.JobId == jobId))) return;
+
+        var first = images[0].RelativePath;
+        var folder = first.Contains('/') ? first[..first.LastIndexOf('/')] : "";
+        ImageThreadWrite? opened = null;
+        ImageThreadsState before = ImageThreadsState.Empty;
+        for (var attempt = 0; attempt < AgentAttempts && opened is not { Status: ImageThreadWriteStatus.Ok }; attempt++)
+        {
+            before = store.Get(ownerId, sessionId);
+            opened = store.Open(ownerId, sessionId, null, folder, before.Revision, NewThreadSettings(ownerId, projectId));
+        }
+        if (opened is not { Status: ImageThreadWriteStatus.Ok, Thread: { } thread }) return;
+
+        var text = $"Claude получил картинки напрямую из local-media: {images.Count} {ImageEditorStateContributor.Variants(images.Count)}";
+        var launched = store.AddLaunch(ownerId, sessionId, thread.Id,
+            new ImageThreadLaunch(jobId, null, null, store.Now(), ImageThreadLaunchStatus.Running, SpendInitiators.Agent, null),
+            new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched, text, thread.Id, jobId));
+        if (launched.Status != ImageThreadWriteStatus.Ok) return;
+
+        List<(int Variant, string StepId)> taken = [];
+        for (var n = 0; n < images.Count; n++)
+        {
+            var step = steps.TakeFile(ownerId, projectId, jobId, n + 1, images[n]);
+            if (step.Value is { } s) taken.Add((n + 1, s.StepId));
+            else log.LogWarning("Редактор картинок: файл {Path} задачи {JobId} не стал версией: {Error}",
+                images[n].RelativePath, jobId, step.Error);
+        }
+        var finished = store.FinishLaunch(ownerId, sessionId, thread.Id, jobId,
+            taken.Count == 0 ? ImageThreadLaunchStatus.Failed : ImageThreadLaunchStatus.Done, taken,
+            (_, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
+                all.Count == 0 ? "Картинки local-media не стали версиями"
+                    : $"Готово: картинки local-media, {(all.Count == 1 ? $"версия {all[0].Number}" : $"версии {all[0].Number}–{all[^1].Number}")}",
+                thread.Id, jobId));
+        await RecordAsync(sessionId, RecordTypes.LaunchVersions, $"Claude получил картинки: {images.Count} {ImageEditorStateContributor.Variants(images.Count)}",
+            new
+            {
+                threadId = thread.Id,
+                jobId,
+                prompt = "local-media",
+                provider = "local",
+                model = "local-media",
+                count = images.Count,
+                initiator = SpendInitiators.Agent,
+                baseVersionId = (string?)null,
+            }, ct);
+
+        var state = finished.Status == ImageThreadWriteStatus.Ok ? finished.State : launched.State;
+        // Выбор человека не трогаем: возвращаем, пока ревизию никто не двигал (конфликт — человек выбрал сам)
+        if (before.Focus is not null && state.Focus != before.Focus
+            && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
+            state = back.State;
+        await BroadcastAsync(ownerId, projectId, sessionId, state);
     }
 
     // Новая нить (от человека и от агента) начинает с выбора человека в полосе «Картинки» проекта
@@ -295,17 +422,22 @@ public sealed class ImageThreadService(
         try
         {
             ImageThreadWrite written;
+            string initiator;
             await _versionsGate.WaitAsync();
             try
             {
                 if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
                 var taken = TakeVariants(ownerId, job, thread, launch);
                 if (taken.Count == 0) return;
+                initiator = launch.Initiator;
                 written = store.AddLaunchVersions(ownerId, sessionId, threadId, job.JobId, taken);
             }
             finally { _versionsGate.Release(); }
             if (written.Status == ImageThreadWriteStatus.Ok)
+            {
                 await AfterAsync(ownerId, job.ProjectId, sessionId, written);
+                await PublishVersionsAsync(ownerId, job.ProjectId, sessionId, threadId, written, initiator);
+            }
         }
         catch (Exception ex)
         {
@@ -325,11 +457,13 @@ public sealed class ImageThreadService(
         try
         {
             ImageThreadWrite written;
+            string initiator;
             await _versionsGate.WaitAsync();
             try
             {
                 if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
 
+                initiator = launch.Initiator;
                 var taken = steps is null ? [] : TakeVariants(ownerId, job, thread, launch);
                 var versions = thread.Versions.Count(v => v.JobId == job.JobId) + taken.Count;
                 var status = job.Status switch
@@ -345,12 +479,32 @@ public sealed class ImageThreadService(
             }
             finally { _versionsGate.Release(); }
             if (written.Status == ImageThreadWriteStatus.Ok)
+            {
                 await AfterAsync(ownerId, job.ProjectId, sessionId, written);
+                await PublishVersionsAsync(ownerId, job.ProjectId, sessionId, threadId, written, initiator);
+            }
         }
         catch (Exception ex)
         {
             log.LogWarning(ex, "Редактор картинок: варианты задачи {JobId} не стали версиями нити {ThreadId}", job.JobId, threadId);
         }
+    }
+
+    // Версии уже записаны в нить и разосланы: теперь о них узнают подписчики (шов IMediaEvents). Событие
+    // идёт ПОСЛЕ записи, из асинхронного пути исполнителя, а не из синхронного Report прогресса — иначе
+    // подписчик прочитал бы нить без новой версии. Сбой подписчика хаб гасит сам
+    internal async Task PublishVersionsAsync(string ownerId, string projectId, string sessionId, string threadId,
+        ImageThreadWrite written, string initiator)
+    {
+        // Первая новая версия — та же, на которую переезжает текущая версия нити (ImageThreadStore, moveCurrent)
+        if (written.NewVersions.Count > 0)
+        {
+            var first = written.NewVersions[0];
+            mirror?.AdvanceVersion(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId, first.BaseVersionId, first.Id);
+        }
+        if (mediaEvents is null) return;
+        foreach (var version in written.NewVersions)
+            await mediaEvents.PublishAsync(new ImageVersionAdded(ownerId, sessionId, projectId, threadId, version.Id, initiator));
     }
 
     // Идущий запуск задачи в нити своего чата; иначе null
@@ -478,7 +632,7 @@ public sealed class ImageThreadService(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId, new ImageThreadChangedMessage(projectId, state.Revision, state) { SessionId = sessionId });
+            await broadcaster.ToOwner(ownerId, new ImageThreadChangedMessage(projectId, state.Revision, Project(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)
         {
@@ -492,7 +646,7 @@ public sealed class ImageThreadService(
     {
         if (written.Status == ImageThreadWriteStatus.Ok)
             await BroadcastAsync(ownerId, projectId, sessionId, written.State);
-        return written;
+        return written.Status == ImageThreadWriteStatus.Ok ? written with { State = Project(ownerId, sessionId, written.State) } : written;
     }
 
     // Якорь нити — карточка исходника

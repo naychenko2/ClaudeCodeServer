@@ -44,14 +44,19 @@
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
 
-**features/** — [decision-history-import-texts.md](features/decision-history-import-texts.md)
+**features/** — [audio-editor.md](features/audio-editor.md) (редактор звука: режимы
+Голос / Музыка / Обработка, поставщики, нити и версии, «Голоса», склейка и монтаж, агент),
+[video-editor.md](features/video-editor.md) (редактор видео: сцены, фильм, сборка, агент `video_*`),
+[decision-history-import-texts.md](features/decision-history-import-texts.md)
 (тексты README ветки `ccs/dossiers/v1` и подписей импорта в панели «История решений»),
 [desktop-agent.md](features/desktop-agent.md) и
 [desktop-agent-client.md](features/desktop-agent-client.md) (исторические: руки ADR-008, удалены
 2026-09-30),
 [image-generation.md](features/image-generation.md) (выбор генератора картинок:
 иконка проекта, аватар персоны), [image-editor.md](features/image-editor.md) (редактор
-картинок v2: поставщики, чат картинки, агент, правки без ИИ), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
+картинок v2: поставщики, чат картинки, агент, правки без ИИ),
+[midi-editor.md](features/midi-editor.md) (просмотрщик нот: нотная лента, проигрывание через
+Tone.js, где встроен, инварианты ленивой загрузки), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
 [model-providers-rework.md](features/model-providers-rework.md),
 [model-route-format-validation.md](features/model-route-format-validation.md),
 [project-backgrounds.md](features/project-backgrounds.md),
@@ -130,7 +135,14 @@ Viaduct Community без форка; лицензионные рамки BUSL-1.
 агентом через MCP-сервер `image-editor`, «Сохранить как…», правки без ИИ на ImageSharp — черновик),
 [ADR-019](adr/ADR-019-image-editor-v3-in-chat.md) (редактор v3: работа с картинкой в основном чате
 проекта — нити и фокус в хранилище модуля, швы ядра `IChatFeed`, `module_record` и события
-жизненного цикла чата, чаты v2 уходят в архив, реестр полос над композером);
+жизненного цикла чата, чаты v2 уходят в архив, реестр полос над композером),
+[ADR-020](adr/ADR-020-local-media-audio.md) (аудио в local-media: музыка нативными нодами ComfyUI,
+голос, стемы и реставрация — venv-воркерами через узел `CcsAudioWorker` в общей очереди GPU1),
+[ADR-021](adr/ADR-021-audio-editor-and-generation-panel.md) (модуль «Звук» отдельной сборкой и
+MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.Media`, общий каркас панели
+генерации и перенос настроек картинок в неё, тулсет `audio_*`, этапы — черновик; полосы и панели заменены ADR-023),
+[ADR-022](adr/ADR-022-video-editor.md) (модуль «Видео»: сцены между двумя кадрами и фильм, `local` / fal / Higgsfield),
+[ADR-023](adr/ADR-023-turn-context.md) (контекст хода: строка над полем ввода и панель «Контекст» вместо полос и режимов поля, стор `Services.ChatContext`, правило ✦ и «основной объект один»; контракты — [ADR-023-contracts.md](adr/ADR-023-contracts.md));
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

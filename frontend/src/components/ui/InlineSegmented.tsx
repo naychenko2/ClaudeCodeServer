@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { C, FS, SP, TB } from '../../lib/design';
+import { SEG_MUTED_BORDER, type SegmentOptionState } from './Segmented';
 
 // === Компактный inline-сегмент (режимы в строках списков) ===
 // Отличия от PillSwitch: без скользящей пилюли и drag (строка и так плотная),
@@ -9,12 +10,16 @@ import { C, FS, SP, TB } from '../../lib/design';
 // icon — необязательная иконка слева от подписи; используется сегментами
 // «Текстом / Схемой» в PlanSection/PlanReviewView (нужен был свой локальный
 // SegmentedToggle с точно такой же геометрией — единая точка закрывает оба).
-export function InlineSegmented<T extends string>({ value, options, onChange, disabled, isMobile }: {
+// disabled группы — «занято» (курсор ожидания), disabled/muted/title опции — про
+// отдельный сегмент (см. SegmentOptionState).
+// touchWidth — на телефоне сегмент не уже тач-цели (короткие подписи «1:1», «16:9»)
+export function InlineSegmented<T extends string>({ value, options, onChange, disabled, isMobile, touchWidth }: {
   value: T | null;
-  options: { value: T; label: string; tone?: { bg: string; fg: string }; icon?: ReactNode }[];
+  options: ({ value: T; label: string; tone?: { bg: string; fg: string }; icon?: ReactNode } & SegmentOptionState)[];
   onChange: (v: T) => void;
   disabled?: boolean;
   isMobile?: boolean;
+  touchWidth?: boolean;
 }) {
   return (
     <div style={{
@@ -28,8 +33,10 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
         return (
           <button
             key={o.value}
-            disabled={disabled}
+            disabled={disabled || o.disabled}
             aria-pressed={active}
+            title={o.title}
+            aria-label={o.title}
             onClick={() => onChange(o.value)}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -38,9 +45,14 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
               fontFamily: 'inherit', fontSize: FS.xs, fontWeight: 600,
               padding: `${SP.xs}px ${SP.sm}px`,
               minHeight: isMobile ? TB.iconHitMobile : TB.iconHitDesktop,
+              ...(isMobile && touchWidth ? { minWidth: TB.iconHitMobile, justifyContent: 'center' } : null),
               background: tone ? tone.bg : 'transparent',
               color: tone ? tone.fg : C.textMuted,
               transition: 'background 0.12s, color 0.12s',
+              // Выключенный гасится прозрачностью, приглушённый — цветом обычного сегмента
+              // с пунктирной рамкой (см. SEG_MUTED_BORDER); поля меньше на ширину рамки
+              ...(o.disabled && !disabled ? { cursor: 'not-allowed', opacity: 0.4 }
+                : o.muted && !active ? { border: SEG_MUTED_BORDER, padding: `${SP.xs - 1}px ${SP.sm - 1}px` } : null),
             }}
           >
             {o.icon}

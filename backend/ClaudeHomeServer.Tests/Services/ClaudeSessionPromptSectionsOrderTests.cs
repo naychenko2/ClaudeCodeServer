@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -332,6 +333,46 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         first.SystemPrompt.Should().Be(second.SystemPrompt, "стабильная секция не рвёт prefix cache между ходами");
     }
 
+    // Хвост «Контекст хода» (ADR-023 §3.1, 2б-2): секция turn-context едет только хвостом при любой настройке
+    // RecallInTurnText, а системный блок не зависит от того, что в контексте чата
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TurnContext_ВсегдаХвостомХода_СистемныйБлокНеЗависитОтКонтекста(bool recallInTurnText)
+    {
+        var first = await RunTurnContextTurnAsync(recallInTurnText, "МАРКЕР_КОНТЕКСТА_ОДИН.md");
+        var second = await RunTurnContextTurnAsync(recallInTurnText, "МАРКЕР_КОНТЕКСТА_ДВА.md");
+
+        first.SystemPrompt.Should().NotContain("МАРКЕР_КОНТЕКСТА").And.NotContain("## Контекст хода",
+            "контекст хода меняется от хода к ходу и в системном блоке обнулял бы prefix cache");
+        first.SystemPrompt.Should().Be(second.SystemPrompt);
+
+        var tail = first.Sections.Should().ContainSingle(s => s.Key == "turn-context").Subject;
+        tail.Kind.Should().Be("turn", "секция едет вклейкой в текст хода");
+        tail.Title.Should().Be("Контекст хода");
+        tail.Text.Should().Contain("МАРКЕР_КОНТЕКСТА_ОДИН.md");
+    }
+
+    private Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTurnContextTurnAsync(
+        bool recallInTurnText, string label)
+    {
+        var item = new ClaudeHomeServer.Services.ChatContext.ContextItem("ci_1", "project-file",
+            new System.Text.Json.Nodes.JsonObject { ["path"] = label }, null,
+            ClaudeHomeServer.Services.ChatContext.ContextActor.Human, DateTime.UtcNow);
+        var store = new Moq.Mock<ClaudeHomeServer.Services.ChatContext.IChatContextStore>();
+        store.Setup(x => x.Get(Moq.It.IsAny<string>(), Moq.It.IsAny<string>()))
+            .Returns(new ClaudeHomeServer.Services.ChatContext.ChatContextState(1, item, []));
+        var contributor = new TurnContextContributor(
+            new ServiceCollection()
+                .AddSingleton(store.Object).BuildServiceProvider(),
+            new ClaudeHomeServer.Services.ChatContext.ContextKindRegistry(
+                [new ClaudeHomeServer.Services.ChatContext.ProjectFileContextKind()]),
+            new Moq.Mock<ClaudeHomeServer.Services.IProjectManager>().Object);
+        return RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            new Session { Model = "qwen-test-27b", OwnerId = "u1" });
+    }
+
     // Порядок хвоста (шаг 3 «локальная по умолчанию»): правило local-media-default едет хвостом
     // сразу после блока «Картинки в этом чате» и ссылается на него; в системный блок не попадает
     [Theory]
@@ -512,6 +553,91 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
     }
 
     private static readonly TestsMcpContext TestsMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+
+    // Блок «Звук в этом чате» (ADR-021 §5): признак HasAudioEditorMcp ClaudeSession собирает сам из
+    // доставки сервера audio-editor в конфиг хода; секция едет хвостом, в системный блок не попадает
+    private static readonly AudioEditorMcpContext AudioEditorMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+
+    private async Task<(string SystemPrompt, PromptSectionDto? Section)> AudioEditorStateSectionAsync(
+        bool recallInTurnText, Func<LlmSessionContext, LlmSessionContext> tweak,
+        Dictionary<string, string?>? providerConfig = null)
+    {
+        var contributor = new ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor(new AllFlags());
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            ProjectChat(), tweak, providerConfig);
+        return (systemPrompt, sections.SingleOrDefault(s => s.Key == "audio-editor-state"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AudioEditorState_СерверДоставлен_ХвостомХода(bool recallInTurnText)
+    {
+        var (systemPrompt, section) = await AudioEditorStateSectionAsync(recallInTurnText,
+            c => c with { AudioEditorMcp = AudioEditorMcp });
+
+        section.Should().NotBeNull("сервер audio-editor доехал до хода — блок «Звук» обязан прийти");
+        section!.Kind.Should().Be("turn", "блок едет вклейкой в текст хода");
+        section.Text.Should().Contain(ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor.PriorityRuleFor(personal: false));
+        systemPrompt.Should().NotContain("## Звук в этом чате",
+            "блок меняется от хода к ходу и в системный блок не попадает ни при какой настройке провайдера");
+    }
+
+    [Theory]
+    [InlineData("модуль звука выключен")]
+    [InlineData("TrimMcpServers без audio-editor")]
+    public async Task AudioEditorState_СервераНетУХода_БлокаНет(string why)
+    {
+        var (_, section) = why == "модуль звука выключен"
+            ? await AudioEditorStateSectionAsync(false, c => c)
+            : await AudioEditorStateSectionAsync(false, c => c with { AudioEditorMcp = AudioEditorMcp }, TrimToTasks);
+
+        section.Should().BeNull($"{why}: audio_* у хода нет («No such tool available»)");
+    }
+
+    // Блок «Видео в этом чате» (ADR-022 §5): признак HasVideoEditorMcp ClaudeSession собирает сам из доставки сервера
+    // video-editor в конфиг хода; секция едет хвостом, в системный блок не попадает
+    private static readonly VideoEditorMcpContext VideoEditorMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
+
+    private async Task<(string SystemPrompt, PromptSectionDto? Section)> VideoEditorStateSectionAsync(
+        bool recallInTurnText, Func<LlmSessionContext, LlmSessionContext> tweak,
+        Dictionary<string, string?>? providerConfig = null)
+    {
+        var contributor = new ClaudeHomeServer.Services.VideoEditor.Chats.VideoEditorStateContributor(new AllFlags());
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
+            ProjectChat(), tweak, providerConfig);
+        return (systemPrompt, sections.SingleOrDefault(s => s.Key == "video-editor-state"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task VideoEditorState_СерверДоставлен_ХвостомХода(bool recallInTurnText)
+    {
+        var (systemPrompt, section) = await VideoEditorStateSectionAsync(recallInTurnText,
+            c => c with { VideoEditorMcp = VideoEditorMcp });
+
+        section.Should().NotBeNull("сервер video-editor доехал до хода — блок «Видео» обязан прийти");
+        section!.Kind.Should().Be("turn", "блок едет вклейкой в текст хода");
+        section.Text.Should().Contain(ClaudeHomeServer.Services.VideoEditor.Chats.VideoEditorStateContributor.PriorityRule)
+            .And.Contain(ClaudeHomeServer.Services.VideoEditor.Chats.VideoEditorStateContributor.PaceRule);
+        systemPrompt.Should().NotContain("## Видео в этом чате",
+            "блок меняется от хода к ходу и в системный блок не попадает ни при какой настройке провайдера");
+    }
+
+    [Theory]
+    [InlineData("модуль видео выключен")]
+    [InlineData("TrimMcpServers без video-editor")]
+    public async Task VideoEditorState_СервераНетУХода_БлокаНет(string why)
+    {
+        var (_, section) = why == "модуль видео выключен"
+            ? await VideoEditorStateSectionAsync(false, c => c)
+            : await VideoEditorStateSectionAsync(false, c => c with { VideoEditorMcp = VideoEditorMcp }, TrimToTasks);
+
+        section.Should().BeNull($"{why}: video_* у хода нет («No such tool available»)");
+    }
 
     private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
     {

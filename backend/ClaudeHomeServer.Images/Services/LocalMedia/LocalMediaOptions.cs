@@ -46,6 +46,13 @@ public sealed class LocalMediaOptions
     public string ComfyInputDir { get; set; } = "";
     public string ComfyOutputDir { get; set; } = "";
 
+    // Аудио: на стенде стоят узел CcsAudioWorker и venv моделей (deploy/comfyui/audio). Без них
+    // граф ComfyUI не примет — тумблер отдельный, чтобы машина без аудиостека честно отказывала
+    public bool AudioEnabled { get; set; }
+
+    // Потолок длины входного звука, с: стемы, смена голоса, MIDI, распознавание
+    public int MaxAudioInputSeconds { get; set; } = 600;
+
     public bool CleanupEnabled => !string.IsNullOrWhiteSpace(ComfyInputDir) && !string.IsNullOrWhiteSpace(ComfyOutputDir);
 
     public static LocalMediaOptions Read(IConfiguration config)

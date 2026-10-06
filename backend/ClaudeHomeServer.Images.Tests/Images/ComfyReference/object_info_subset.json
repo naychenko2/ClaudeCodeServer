@@ -109,17 +109,27 @@
    "required": {
     "vae_name": [
      [
+      "ace_1.5_vae.safetensors",
       "minimax_h3_audio_vae_fp32.safetensors",
       "minimax_h3_video_vae_int8_convrot.safetensors",
       "qwen_image_2.1_vae_bf16.safetensors",
       "qwen_image_vae.safetensors",
+      "minimax_music3_dav.safetensors",
       "pixel_space"
      ]
     ]
    }
   },
+  "input_order": {
+   "required": [
+    "vae_name"
+   ]
+  },
   "output": [
    "VAE"
+  ],
+  "output_is_list": [
+   false
   ],
   "output_name": [
    "VAE"
@@ -388,8 +398,25 @@
     ]
    }
   },
+  "input_order": {
+   "required": [
+    "model",
+    "seed",
+    "steps",
+    "cfg",
+    "sampler_name",
+    "scheduler",
+    "positive",
+    "negative",
+    "latent_image",
+    "denoise"
+   ]
+  },
   "output": [
    "LATENT"
+  ],
+  "output_is_list": [
+   false
   ],
   "output_name": [
    "LATENT"
@@ -887,8 +914,10 @@
    "required": {
     "unet_name": [
      [
+      "acestep_v1.5_xl_sft_bf16.safetensors",
       "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
       "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "minimax_music3_dit_fp16.safetensors",
       "qwen_image_2.1_bf16.safetensors",
       "qwen_image_2.1_int8_convrot.safetensors",
       "qwen_image_fp8_e4m3fn.safetensors"
@@ -907,8 +936,17 @@
     ]
    }
   },
+  "input_order": {
+   "required": [
+    "unet_name",
+    "weight_dtype"
+   ]
+  },
   "output": [
    "MODEL"
+  ],
+  "output_is_list": [
+   false
   ],
   "output_name": [
    "MODEL"
@@ -1130,10 +1168,13 @@
    "required": {
     "clip_name": [
      [
+      "minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
       "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
       "qwen3vl_8b_bf16.safetensors",
       "qwen3vl_8b_int8_convrot.safetensors",
-      "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+      "qwen_0.6b_ace15.safetensors",
+      "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "qwen_4b_ace15.safetensors"
      ]
     ],
     "type": [
@@ -1182,8 +1223,20 @@
     ]
    }
   },
+  "input_order": {
+   "required": [
+    "clip_name",
+    "type"
+   ],
+   "optional": [
+    "device"
+   ]
+  },
   "output": [
    "CLIP"
+  ],
+  "output_is_list": [
+   false
   ],
   "output_name": [
    "CLIP"
@@ -1605,8 +1658,17 @@
     ]
    }
   },
+  "input_order": {
+   "required": [
+    "samples",
+    "vae"
+   ]
+  },
   "output": [
    "AUDIO"
+  ],
+  "output_is_list": [
+   false
   ],
   "output_name": [
    "AUDIO"
@@ -3611,5 +3673,1166 @@
   ],
   "essentials_category": null,
   "has_intermediate_output": false
+ },
+ "ModelSamplingAuraFlow": {
+  "input": {
+   "required": {
+    "model": [
+     "MODEL"
+    ],
+    "shift": [
+     "FLOAT",
+     {
+      "default": 1.73,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.01
+     }
+    ]
+   },
+   "optional": {
+    "sampling": [
+     [
+      "flow",
+      "img_to_img_velocity"
+     ],
+     {
+      "default": "flow",
+      "advanced": true
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model",
+    "shift"
+   ],
+   "optional": [
+    "sampling"
+   ]
+  },
+  "output": [
+   "MODEL"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "MODEL"
+  ]
+ },
+ "DualCLIPLoader": {
+  "input": {
+   "required": {
+    "clip_name1": [
+     [
+      "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "qwen3vl_8b_bf16.safetensors",
+      "qwen3vl_8b_int8_convrot.safetensors",
+      "qwen_0.6b_ace15.safetensors",
+      "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "qwen_4b_ace15.safetensors"
+     ]
+    ],
+    "clip_name2": [
+     [
+      "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "qwen3vl_8b_bf16.safetensors",
+      "qwen3vl_8b_int8_convrot.safetensors",
+      "qwen_0.6b_ace15.safetensors",
+      "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "qwen_4b_ace15.safetensors"
+     ]
+    ],
+    "type": [
+     [
+      "sdxl",
+      "sd3",
+      "flux",
+      "hunyuan_video",
+      "hidream",
+      "hunyuan_image",
+      "hunyuan_video_15",
+      "kandinsky5",
+      "kandinsky5_image",
+      "ltxv",
+      "newbie",
+      "ace"
+     ]
+    ]
+   },
+   "optional": {
+    "device": [
+     [
+      "default",
+      "cpu"
+     ],
+     {
+      "advanced": true
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "clip_name1",
+    "clip_name2",
+    "type"
+   ],
+   "optional": [
+    "device"
+   ]
+  },
+  "output": [
+   "CLIP"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "CLIP"
+  ]
+ },
+ "TextEncodeAceStepAudio1.5": {
+  "input": {
+   "required": {
+    "clip": [
+     "CLIP",
+     {}
+    ],
+    "tags": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true
+     }
+    ],
+    "lyrics": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 18446744073709551615,
+      "control_after_generate": true
+     }
+    ],
+    "bpm": [
+     "INT",
+     {
+      "default": 120,
+      "min": 10,
+      "max": 300
+     }
+    ],
+    "duration": [
+     "FLOAT",
+     {
+      "default": 120.0,
+      "min": 0.0,
+      "max": 2000.0,
+      "step": 0.1
+     }
+    ],
+    "timesignature": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [
+       "2",
+       "3",
+       "4",
+       "6"
+      ]
+     }
+    ],
+    "language": [
+     "COMBO",
+     {
+      "default": "en",
+      "multiselect": false,
+      "options": [
+       "ar",
+       "az",
+       "bg",
+       "bn",
+       "ca",
+       "cs",
+       "da",
+       "de",
+       "el",
+       "en",
+       "es",
+       "fa",
+       "fi",
+       "fr",
+       "he",
+       "hi",
+       "hr",
+       "ht",
+       "hu",
+       "id",
+       "is",
+       "it",
+       "ja",
+       "ko",
+       "la",
+       "lt",
+       "ms",
+       "ne",
+       "nl",
+       "no",
+       "pa",
+       "pl",
+       "pt",
+       "ro",
+       "ru",
+       "sa",
+       "sk",
+       "sr",
+       "sv",
+       "sw",
+       "ta",
+       "te",
+       "th",
+       "tl",
+       "tr",
+       "uk",
+       "ur",
+       "vi",
+       "yue",
+       "zh",
+       "unknown"
+      ]
+     }
+    ],
+    "keyscale": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [
+       "C major",
+       "C# major",
+       "Db major",
+       "D major",
+       "D# major",
+       "Eb major",
+       "E major",
+       "F major",
+       "F# major",
+       "Gb major",
+       "G major",
+       "G# major",
+       "Ab major",
+       "A major",
+       "A# major",
+       "Bb major",
+       "B major",
+       "C minor",
+       "C# minor",
+       "Db minor",
+       "D minor",
+       "D# minor",
+       "Eb minor",
+       "E minor",
+       "F minor",
+       "F# minor",
+       "Gb minor",
+       "G minor",
+       "G# minor",
+       "Ab minor",
+       "A minor",
+       "A# minor",
+       "Bb minor",
+       "B minor"
+      ]
+     }
+    ],
+    "generate_audio_codes": [
+     "BOOLEAN",
+     {
+      "tooltip": "Enable the LLM that generates audio codes. This can be slow but will increase the quality of the generated audio. Turn this off if you are giving the model an audio reference.",
+      "advanced": true,
+      "default": true
+     }
+    ],
+    "cfg_scale": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 2.0,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.1
+     }
+    ],
+    "temperature": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 0.85,
+      "min": 0.0,
+      "max": 2.0,
+      "step": 0.01
+     }
+    ],
+    "top_p": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 0.9,
+      "min": 0.0,
+      "max": 2000.0,
+      "step": 0.01
+     }
+    ],
+    "top_k": [
+     "INT",
+     {
+      "advanced": true,
+      "default": 0,
+      "min": 0,
+      "max": 100
+     }
+    ],
+    "min_p": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 0.0,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.001
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "clip",
+    "tags",
+    "lyrics",
+    "seed",
+    "bpm",
+    "duration",
+    "timesignature",
+    "language",
+    "keyscale",
+    "generate_audio_codes",
+    "cfg_scale",
+    "temperature",
+    "top_p",
+    "top_k",
+    "min_p"
+   ]
+  },
+  "output": [
+   "CONDITIONING"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "CONDITIONING"
+  ]
+ },
+ "ConditioningZeroOut": {
+  "input": {
+   "required": {
+    "conditioning": [
+     "CONDITIONING"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "conditioning"
+   ]
+  },
+  "output": [
+   "CONDITIONING"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "CONDITIONING"
+  ]
+ },
+ "EmptyAceStep1.5LatentAudio": {
+  "input": {
+   "required": {
+    "seconds": [
+     "FLOAT",
+     {
+      "default": 120.0,
+      "min": 1.0,
+      "max": 1000.0,
+      "step": 0.01
+     }
+    ],
+    "batch_size": [
+     "INT",
+     {
+      "tooltip": "The number of latent images in the batch.",
+      "default": 1,
+      "min": 1,
+      "max": 4096
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "seconds",
+    "batch_size"
+   ]
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "LATENT"
+  ]
+ },
+ "SaveAudioMP3": {
+  "input": {
+   "required": {
+    "audio": [
+     "AUDIO",
+     {}
+    ],
+    "filename_prefix": [
+     "STRING",
+     {
+      "default": "audio/ComfyUI",
+      "multiline": false
+     }
+    ],
+    "quality": [
+     "COMBO",
+     {
+      "default": "V0",
+      "multiselect": false,
+      "options": [
+       "V0",
+       "128k",
+       "320k"
+      ]
+     }
+    ]
+   },
+   "hidden": {
+    "prompt": [
+     "PROMPT"
+    ],
+    "extra_pnginfo": [
+     "EXTRA_PNGINFO"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "audio",
+    "filename_prefix",
+    "quality"
+   ],
+   "hidden": [
+    "prompt",
+    "extra_pnginfo"
+   ]
+  },
+  "output": [
+   "AUDIO"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "audio"
+  ]
+ },
+ "CheckpointLoaderSimple": {
+  "input": {
+   "required": {
+    "ckpt_name": [
+     [
+      "yue2_3b_int8_convrot.safetensors"
+     ],
+     {
+      "tooltip": "The name of the checkpoint (model) to load."
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "ckpt_name"
+   ]
+  },
+  "output": [
+   "MODEL",
+   "CLIP",
+   "VAE"
+  ],
+  "output_is_list": [
+   false,
+   false,
+   false
+  ],
+  "output_name": [
+   "MODEL",
+   "CLIP",
+   "VAE"
+  ]
+ },
+ "YuE2GenerateABC": {
+  "input": {
+   "required": {
+    "clip": [
+     "CLIP",
+     {}
+    ],
+    "style": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true
+     }
+    ],
+    "lyrics": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 18446744073709551615,
+      "control_after_generate": true
+     }
+    ],
+    "mode": [
+     "COMBO",
+     {
+      "tooltip": "full: generates melody and chords; melody: generates melody only, recommended for covers.",
+      "multiselect": false,
+      "options": [
+       "full",
+       "melody"
+      ]
+     }
+    ],
+    "max_abc_tokens": [
+     "INT",
+     {
+      "advanced": true,
+      "default": 8192,
+      "min": 1,
+      "max": 20000
+     }
+    ],
+    "temperature": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 0.7,
+      "min": 0.0,
+      "max": 5.0,
+      "step": 0.05
+     }
+    ],
+    "top_p": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 0.9,
+      "min": 0.01,
+      "max": 1.0,
+      "step": 0.01
+     }
+    ],
+    "top_k": [
+     "INT",
+     {
+      "advanced": true,
+      "default": 30,
+      "min": 1,
+      "max": 32768
+     }
+    ],
+    "repetition_penalty": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 1.005,
+      "min": 0.01,
+      "max": 10.0,
+      "step": 0.005
+     }
+    ],
+    "penalty_window": [
+     "INT",
+     {
+      "tooltip": "Number of recent ABC tokens used to penalize repetition.",
+      "advanced": true,
+      "default": 100,
+      "min": 1,
+      "max": 20000
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "clip",
+    "style",
+    "lyrics",
+    "seed",
+    "mode",
+    "max_abc_tokens",
+    "temperature",
+    "top_p",
+    "top_k",
+    "repetition_penalty",
+    "penalty_window"
+   ]
+  },
+  "output": [
+   "STRING"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "abc"
+  ]
+ },
+ "YuE2GenerateMusic": {
+  "input": {
+   "required": {
+    "clip": [
+     "CLIP",
+     {}
+    ],
+    "style": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true
+     }
+    ],
+    "lyrics": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true
+     }
+    ],
+    "abc": [
+     "STRING",
+     {
+      "tooltip": "Connect the ABC generator or supply an edited score. Leave empty to use off mode automatically.",
+      "default": "",
+      "multiline": true
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 18446744073709551615,
+      "control_after_generate": true
+     }
+    ],
+    "mode": [
+     "COMBO",
+     {
+      "tooltip": "full: generates melody and chords; melody: generates melody only, recommended for covers.",
+      "multiselect": false,
+      "options": [
+       "full",
+       "melody"
+      ]
+     }
+    ],
+    "max_duration": [
+     "FLOAT",
+     {
+      "tooltip": "Maximum duration in seconds. Automatically reduced for long prompts; generation can stop earlier.",
+      "default": 360.0,
+      "min": 0.04,
+      "max": 900.0,
+      "step": 0.04
+     }
+    ],
+    "temperature": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 1.0,
+      "min": 0.0,
+      "max": 5.0,
+      "step": 0.05
+     }
+    ],
+    "top_p": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 0.95,
+      "min": 0.01,
+      "max": 1.0,
+      "step": 0.01
+     }
+    ],
+    "top_k": [
+     "INT",
+     {
+      "advanced": true,
+      "default": 100,
+      "min": 1,
+      "max": 32768
+     }
+    ],
+    "repetition_penalty": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 1.2,
+      "min": 0.01,
+      "max": 10.0,
+      "step": 0.01
+     }
+    ]
+   },
+   "optional": {
+    "cfg_scale": [
+     "FLOAT",
+     {
+      "tooltip": "Autoregressive guidance for style and lyrics. 1.0 disables CFG, matching the ABC workflow. Use 1.01 to match the original off-mode guidance.",
+      "advanced": true,
+      "default": 1.0,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.01
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "clip",
+    "style",
+    "lyrics",
+    "abc",
+    "seed",
+    "mode",
+    "max_duration",
+    "temperature",
+    "top_p",
+    "top_k",
+    "repetition_penalty"
+   ],
+   "optional": [
+    "cfg_scale"
+   ]
+  },
+  "output": [
+   "CONDITIONING",
+   "FLOAT"
+  ],
+  "output_is_list": [
+   false,
+   false
+  ],
+  "output_name": [
+   "CONDITIONING",
+   "seconds"
+  ]
+ },
+ "EmptyYuE2LatentAudio": {
+  "input": {
+   "required": {
+    "seconds": [
+     "FLOAT",
+     {
+      "default": 120.0,
+      "min": 0.04,
+      "max": 1000.0,
+      "step": 0.04
+     }
+    ],
+    "batch_size": [
+     "INT",
+     {
+      "default": 1,
+      "min": 1,
+      "max": 4096
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "seconds",
+    "batch_size"
+   ]
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "LATENT"
+  ]
+ },
+ "PreviewAny": {
+  "input": {
+   "required": {
+    "source": [
+     "*",
+     {}
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "source"
+   ]
+  },
+  "output": [
+   "STRING"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "STRING"
+  ]
+ },
+ "MiniMaxMusic3TextEncode": {
+  "input": {
+   "required": {
+    "clip": [
+     "CLIP",
+     {}
+    ],
+    "caption": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true
+     }
+    ],
+    "lyrics": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 18446744073709551615,
+      "control_after_generate": true
+     }
+    ],
+    "max_duration": [
+     "FLOAT",
+     {
+      "tooltip": "Maximum duration in seconds; the model can end the song earlier.",
+      "default": 120.0,
+      "min": 0.04,
+      "max": 360.0,
+      "step": 0.04
+     }
+    ],
+    "cfg_scale": [
+     "FLOAT",
+     {
+      "advanced": true,
+      "default": 1.5,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.1,
+      "round": 0.01
+     }
+    ],
+    "top_k": [
+     "INT",
+     {
+      "advanced": true,
+      "default": 50,
+      "min": 1,
+      "max": 16384
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "clip",
+    "caption",
+    "lyrics",
+    "seed",
+    "max_duration",
+    "cfg_scale",
+    "top_k"
+   ]
+  },
+  "output": [
+   "CONDITIONING",
+   "FLOAT"
+  ],
+  "output_is_list": [
+   false,
+   false
+  ],
+  "output_name": [
+   "CONDITIONING",
+   "seconds"
+  ]
+ },
+ "EmptyMiniMaxMusic3LatentAudio": {
+  "input": {
+   "required": {
+    "seconds": [
+     "FLOAT",
+     {
+      "default": 120.0,
+      "min": 0.04,
+      "max": 360.0,
+      "step": 0.04
+     }
+    ],
+    "batch_size": [
+     "INT",
+     {
+      "default": 1,
+      "min": 1,
+      "max": 4096
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "seconds",
+    "batch_size"
+   ]
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "LATENT"
+  ]
+ },
+ "VAEDecodeAudioTiled": {
+  "input": {
+   "required": {
+    "samples": [
+     "LATENT",
+     {}
+    ],
+    "vae": [
+     "VAE",
+     {}
+    ],
+    "tile_size": [
+     "INT",
+     {
+      "default": 512,
+      "min": 32,
+      "max": 8192,
+      "step": 8
+     }
+    ],
+    "overlap": [
+     "INT",
+     {
+      "default": 64,
+      "min": 0,
+      "max": 1024,
+      "step": 8
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "samples",
+    "vae",
+    "tile_size",
+    "overlap"
+   ]
+  },
+  "output": [
+   "AUDIO"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "AUDIO"
+  ]
+ },
+ "CcsAudioWorker": {
+  "input": {
+   "required": {
+    "op": [
+     [
+      "audio_to_midi",
+      "denoise",
+      "master",
+      "music_edit",
+      "rvc_convert",
+      "rvc_train",
+      "separate",
+      "transcribe",
+      "tts",
+      "tts_chatterbox",
+      "tts_moss",
+      "upsample",
+      "voice_clone",
+      "voice_convert"
+     ]
+    ],
+    "params_json": [
+     "STRING",
+     {
+      "default": "{}",
+      "multiline": true
+     }
+    ],
+    "inputs": [
+     "STRING",
+     {
+      "default": "",
+      "multiline": true
+     }
+    ],
+    "filename_prefix": [
+     "STRING",
+     {
+      "default": "job"
+     }
+    ],
+    "timeout_minutes": [
+     "INT",
+     {
+      "default": 30,
+      "min": 1,
+      "max": 240
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "op",
+    "params_json",
+    "inputs",
+    "filename_prefix",
+    "timeout_minutes"
+   ]
+  },
+  "output": [],
+  "output_is_list": [],
+  "output_name": []
+ },
+ "AudioEncoderLoader": {
+  "input": {
+   "required": {
+    "audio_encoder_name": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [
+       "sheetsage2_bf16.safetensors"
+      ]
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "audio_encoder_name"
+   ]
+  },
+  "output": [
+   "AUDIO_ENCODER"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "AUDIO_ENCODER"
+  ]
+ },
+ "SheetSage2AudioToABC": {
+  "input": {
+   "required": {
+    "audio_encoder": [
+     "AUDIO_ENCODER",
+     {}
+    ],
+    "audio": [
+     "AUDIO",
+     {}
+    ],
+    "mode": [
+     "COMBO",
+     {
+      "tooltip": "full: generates melody and chords; melody: generates melody only, recommended for covers.",
+      "multiselect": false,
+      "options": [
+       "melody",
+       "full"
+      ]
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "audio_encoder",
+    "audio",
+    "mode"
+   ]
+  },
+  "output": [
+   "STRING"
+  ],
+  "output_is_list": [
+   true
+  ],
+  "output_name": [
+   "abc"
+  ]
  }
 }

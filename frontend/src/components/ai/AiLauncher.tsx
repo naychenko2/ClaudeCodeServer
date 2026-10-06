@@ -20,6 +20,7 @@ import {
 import { fabControlsAt } from '../../lib/ai/fabProbe';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useGenSheetRaised } from '../../lib/genSheet';
 import { useListAutoFocus } from '../../lib/listAutoFocus';
 import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
 import { rankContext } from '../../lib/ai/suggest';
@@ -165,6 +166,8 @@ export function AiLauncher() {
   const [semanticCaps, setSemanticCaps] = useState(false);
   // Мобильный вид — палитра становится нижней шторкой
   const isMobile = useIsMobile();
+  // Поднятая шторка панели генерации — кнопка лежала бы поверх её опций
+  const sheetRaised = useGenSheetRaised();
   const aiBusy = useAiBusy();
   // Какие чаты ждут ответа человека (permission_request / ask_question без ответа).
   // Глобальный стор — AiLauncher видит «нужен ответ» из любого раздела, даже уйдя из чата.
@@ -693,7 +696,7 @@ export function AiLauncher() {
       <span ref={fabAnchorRef} aria-hidden style={{
         ...fabAnchorStyle, ...(isMobile ? { right: 16 } : {}),
       }} />
-      {!open && (
+      {!open && !sheetRaised && (
         <button
           ref={fabRef}
           className="cc-fab" data-cc-fab=""

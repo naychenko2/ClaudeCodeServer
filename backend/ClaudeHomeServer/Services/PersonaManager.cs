@@ -326,7 +326,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         List<string>? disallowedTools = null, PersonaSpecialty specialty = PersonaSpecialty.None,
         bool allProjectsAccess = false, string? handle = null,
         string? modelTier = null,
-        string? tierStrong = null, string? tierMedium = null, string? tierWeak = null)
+        string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
+        bool? lightContext = null)
     {
         var persona = new Persona
         {
@@ -351,6 +352,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             ProjectId = scope == PersonaScope.Project ? projectId : null,
             Greeting = greeting,
             MemoryEnabled = memoryEnabled,
+            // Явное false, а не null: null — «решение не принято», его подбирает разовая миграция
+            LightContext = lightContext ?? false,
             Tools = NormalizeTools(tools),
             Access = access,
             // Свой список запретов имеет смысл только при Custom-профиле
@@ -386,6 +389,26 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                 $"В команде: {PersonaLabel(persona)}", persona.Id);
         OnPersonaCreated?.Invoke(persona);
         return persona;
+    }
+
+    // Разовая миграция облегчённого контекста: персонам, у которых решение ещё не принято
+    // (LightContext == null), выставляет значение от predicate. Идемпотентна — после прохода
+    // null не остаётся, повторный запуск ничего не находит. UpdatedAt не бампаем (как у
+    // миграции уровней: иначе перетасовался бы список персон).
+    public int MigrateLightContext(Func<Persona, bool> shouldBeLight)
+    {
+        var migrated = 0;
+        lock (_saveLock)
+        {
+            foreach (var persona in _personas.Values)
+            {
+                if (persona.LightContext is not null) continue;
+                persona.LightContext = shouldBeLight(persona);
+                migrated++;
+            }
+        }
+        if (migrated > 0) Save();
+        return migrated;
     }
 
     // Подпись персоны для логов: «Роль (Имя)» либо просто имя.
@@ -615,7 +638,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         List<string>? disallowedTools = null, PersonaSpecialty? specialty = null,
         bool? allProjectsAccess = null, string? handle = null,
         string? modelTier = null,
-        string? tierStrong = null, string? tierMedium = null, string? tierWeak = null)
+        string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
+        bool? lightContext = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -678,6 +702,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             if (color is not null) persona.Avatar.Color = color.Length == 0 ? null : color;
             if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;
             if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
+            if (lightContext is not null) persona.LightContext = lightContext.Value;
             // null — не менять; список — установить (полный набор нормализуется в null)
             if (tools is not null) persona.Tools = NormalizeTools(tools);
             // Профиль доступа: null — не менять; свой список запретов живёт только при Custom

@@ -158,12 +158,15 @@ public sealed partial class PersonasToolset(
             }
 
             case "personas_create":
+                if (ScopeDenial(arguments, null, isCreate: true) is { } createDenied) return Deny(createDenied);
                 return Unwrap(await crud.CreateAsync(ownerId,
                     BuildCreateRequest(arguments, projectId), session.Id));
 
             case "personas_update":
             {
                 var id = StringArg(arguments, "id");
+                if (ScopeDenial(arguments, personas.Get(id, ownerId), isCreate: false) is { } updateDenied)
+                    return Deny(updateDenied);
                 // Привязки — отдельным путём (как stdio): себе менять нельзя
                 if (arguments.ContainsKey("bindings"))
                 {
@@ -599,6 +602,25 @@ public sealed partial class PersonasToolset(
 
     private static PersonaSpecialty? SpecialtyArg(JsonObject arguments) =>
         Enum.TryParse<PersonaSpecialty>(StringArg(arguments, "specialty"), true, out var parsed) ? parsed : null;
+
+    internal const string SphereZoneDenial = "Зону персоны сферы меняет только человек";
+
+    // Зону персоны через MCP не расширяют и не выдают: модель не создаёт персон сферы и не уводит
+    // персону из сферы (в т.ч. себя) в глобальную — это решение человека. Неизвестное значение scope —
+    // отказ, а не молчаливое «Global» (fail-open). Пустой scope при создании — как отсутствие (Global).
+    internal static string? ScopeDenial(JsonObject arguments, Persona? current, bool isCreate)
+    {
+        var fromSphere = current is not null && PersonaZone.IsSpherePersona(current);
+        if (!arguments.ContainsKey("scope")) return null;
+        if (fromSphere) return SphereZoneDenial;
+
+        var raw = StringArg(arguments, "scope").Trim();
+        if (isCreate && raw.Length == 0) return null;
+        if (string.Equals(raw, "sphere", StringComparison.OrdinalIgnoreCase)) return SphereZoneDenial;
+        if (string.Equals(raw, "project", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "global", StringComparison.OrdinalIgnoreCase)) return null;
+        return $"Неизвестный scope «{raw}»: допустимы «project» и «global».";
+    }
 
     private static CreatePersonaRequest BuildCreateRequest(JsonObject arguments, string? sessionProjectId)
     {

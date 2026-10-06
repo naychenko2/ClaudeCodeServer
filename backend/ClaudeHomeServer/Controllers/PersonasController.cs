@@ -1682,7 +1682,9 @@ public record CreatePersonaRequest(
     string? TierWeak = null,
     // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
     // (при создании — выключен)
-    bool? LightContext = null);
+    bool? LightContext = null,
+    // Сфера для Scope.Sphere: обязательна и должна быть сферой владельца; при другом scope сбрасывается
+    string? SphereId = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -1719,7 +1721,9 @@ public record UpdatePersonaRequest(
     string? TierWeak = null,
     // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
     // (при создании — выключен)
-    bool? LightContext = null);
+    bool? LightContext = null,
+    // Сфера для Scope.Sphere (смена scope на Sphere требует её); null — не менять
+    string? SphereId = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

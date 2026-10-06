@@ -361,7 +361,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool allProjectsAccess = false, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null)
+        bool? lightContext = null, string? sphereId = null)
     {
         var persona = new Persona
         {
@@ -384,6 +384,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             Specialty = specialty,
             Scope = scope,
             ProjectId = scope == PersonaScope.Project ? projectId : null,
+            SphereId = scope == PersonaScope.Sphere && !string.IsNullOrEmpty(sphereId) ? sphereId : null,
             Greeting = greeting,
             MemoryEnabled = memoryEnabled,
             // Явное false, а не null: null — «решение не принято», его подбирает разовая миграция
@@ -673,7 +674,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool? allProjectsAccess = null, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null)
+        bool? lightContext = null, string? sphereId = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -689,6 +690,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             var effProjectId = effScope == PersonaScope.Project
                 ? (scope is not null ? projectId : projectId ?? persona.ProjectId)
                 : null;
+            var effSphereId = effScope == PersonaScope.Sphere
+                ? (scope is not null ? sphereId : sphereId ?? persona.SphereId)
+                : null;
             // "" — маркер сброса кастомного handle (авто-генерация ниже); непустой — ручной handle
             string? resolvedHandle = null;
             if (handle is not null)
@@ -698,7 +702,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                 {
                     var norm = NormalizeHandle(handle);
                     if (norm is null || PersonaAgentFileSync.IsReserved(norm)
-                        || OccupiedHandles(userId, effScope, effProjectId, persona.Id, persona.SphereId).Contains(norm))
+                        || OccupiedHandles(userId, effScope, effProjectId, persona.Id, effSphereId).Contains(norm))
                         throw new ArgumentException($"Handle @{handle} занят или невалиден");
                     resolvedHandle = norm;
                 }
@@ -726,12 +730,16 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             {
                 persona.Scope = scope.Value;
                 persona.ProjectId = scope.Value == PersonaScope.Project ? projectId : null;
+                persona.SphereId = scope.Value == PersonaScope.Sphere && !string.IsNullOrEmpty(sphereId) ? sphereId : null;
                 // Доступ ко всем проектам имеет смысл только у глобальных персон
                 if (scope.Value == PersonaScope.Project) persona.AllProjectsAccess = false;
             }
-            else if (projectId is not null && persona.Scope == PersonaScope.Project)
+            else
             {
-                persona.ProjectId = projectId;
+                if (projectId is not null && persona.Scope == PersonaScope.Project)
+                    persona.ProjectId = projectId;
+                if (!string.IsNullOrEmpty(sphereId) && persona.Scope == PersonaScope.Sphere)
+                    persona.SphereId = sphereId;
             }
             if (color is not null) persona.Avatar.Color = color.Length == 0 ? null : color;
             if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;

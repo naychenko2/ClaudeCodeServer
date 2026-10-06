@@ -103,7 +103,7 @@ public sealed class FilmAssemblyAcceptanceTests : IDisposable
         status.File.Should().Be("video/a/film.mp4");
         var info = await dsp.ProbeAsync(Path.Combine(_root, "video", "a", "film.mp4"), default);
         info.Should().NotBeNull();
-        (info!.Width, info.Height).Should().Be((1280, 720), "три клипа разного размера приведены к 16:9");
+        (info!.Width, info.Height).Should().Be((320, 240), "фильм собирается в формате первой сцены (ADR-025), клипы другого размера получают полосы");
         info.HasAudio.Should().BeTrue();
         info.Seconds.Should().BeApproximately(7.5, 0.4, "3 + 3 − 0,5 наплыва + 2");
         service.List(scope).Value!.Single().Stale.Should().BeFalse();

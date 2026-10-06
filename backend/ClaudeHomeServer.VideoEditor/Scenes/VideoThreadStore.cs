@@ -25,9 +25,12 @@ public sealed class VideoThreadStore(string root, TimeProvider? time = null)
 
     public string Root { get; } = root;
 
+    // Конвертер enum'ов нужен вложенному MediaFormat (ступень и автор правки): без него в файл ушли бы числа,
+    // а ручки (Program.cs: camelCase-строки) и файлы разошлись бы
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     public static VideoThreadStore FromConfig(IConfiguration config)

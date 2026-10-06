@@ -291,9 +291,14 @@ JSON ниже — единственное описание формы для ф
   "durationSec": 8,
   "aspect": "16:9",
   "sound": true,
-  "count": 2
+  "count": 2,
+  "format": { "mode": "aspect", "aspect": "16:9", "tier": "high", "by": "human", "at": "2026-10-06T12:00:00Z" },
+  "frameFit": { "anchor": "left" }
 }
 ```
+
+`format` — желание «Формата» ([ADR-025](ADR-025-media-format.md)); `aspect` остаётся зеркалом `format.aspect` (его пишут оба пути, читает `FilmSceneSaver`
+и старый фронт). `frameFit.anchor` — рамка подрезки кадров A/B под формат сцены (`left | center | right | top | bottom`, не указан — по центру).
 
 #### VideoClipVersionDto
 
@@ -312,9 +317,14 @@ JSON ниже — единственное описание формы для ф
   "cost": { "currency": "usd", "amount": 3.2 },
   "initiator": "human",
   "inputs": { "text": "Камера медленно приближается к окну", "frameA": "image:t-1:v-3", "frameB": "file:video/утро/кадры/кадр-3.png" },
-  "createdAt": "2026-10-02T15:00:00Z"
+  "createdAt": "2026-10-02T15:00:00Z",
+  "width": 2528,
+  "height": 1440
 }
 ```
+
+`width` и `height` — размер ролика, если драйвер его знает (local — всегда). Увеличение «Макс» local H3 не удалось (ошибка или отмена), версия — съёмка 768p как есть:
+`"width": 1344, "height": 768, "upscaleError": "Увеличение до 1440p не удалось: ComfyUI завершил задачу ошибкой"` — поле `upscaleError` и есть пометка «увеличение не удалось».
 
 #### VideoLaunchDto
 
@@ -349,7 +359,7 @@ JSON ниже — единственное описание формы для ф
 #### VideoPrefsDto
 
 ```json
-{ "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": false, "count": 1 }
+{ "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": false, "count": 1, "format": { "mode": "aspect", "aspect": "16:9", "tier": "standard", "by": "agent", "at": "2026-10-06T12:00:00Z" } }
 ```
 
 #### VideoCatalogDto
@@ -364,7 +374,15 @@ JSON ниже — единственное описание формы для ф
       "available": false,
       "reason": "Нет ключа fal",
       "models": [
-        { "id": "veo-3.1", "label": "Veo 3.1", "durations": [4, 6, 8], "aspects": ["16:9", "9:16"], "sound": true, "lastFrame": true, "license": "watermark" }
+        { "id": "veo-3.1", "label": "Veo 3.1", "durations": [4, 6, 8], "aspects": ["16:9", "9:16"], "sound": true, "lastFrame": true, "license": "watermark",
+          "format": {
+            "modelLabel": "Veo 3.1", "aspects": ["16:9", "9:16"],
+            "tiers": [
+              { "tier": "standard", "label": "720p", "sizes": { "16:9": { "w": 1280, "h": 720 }, "9:16": { "w": 720, "h": 1280 } }, "wireValue": "720p", "priceFactor": 1 },
+              { "tier": "max", "label": "1440p", "sizes": { "16:9": { "w": 2528, "h": 1440 }, "9:16": { "w": 1440, "h": 2528 } }, "wireValue": "full", "priceFactor": 1, "postStep": "upscale" }
+            ],
+            "wireParam": "resolution"
+          } }
       ]
     }
   ],
@@ -408,9 +426,16 @@ JSON ниже — единственное описание формы для ф
   "stale": { "text": false, "frameA": true, "frameB": false, "versionId": "ver-1" },
   "savedFiles": [ { "versionId": "ver-1", "path": "video/утро/scene-02.mp4" } ],
   "filmRef": { "path": "video/утро/утро.film", "position": 1 },
-  "createdAt": "2026-10-02T14:00:00Z"
+  "createdAt": "2026-10-02T14:00:00Z",
+  "lockedBy": { "filmPath": "video/утро/утро.film", "aspect": "16:9" },
+  "formatMismatch": true,
+  "framesCropped": { "aspect": "9:16", "frameA": "16:9", "anchor": "center" }
 }
 ```
+
+`lockedBy` — замок формата: сцена фильма на позиции > 0 следует пропорциям фильма (их задала сцена 1), смена без `force` — `409 film_format_locked`.
+`formatMismatch` — пропорции сцены не совпадают с фильмом (в склейке пойдут чёрные полосы; «Привести к 16:9» — смена формата сцены, переснимать или нет, решает человек).
+`framesCropped` — кадры ПОСЛЕДНЕЙ съёмки подрезали под формат сцены; `frameA`/`frameB` — пропорции исходных кадров, `null` — кадр не подрезался. Превью до съёмки — `frames/preview`.
 
 #### VideoThreadsStateDto
 
@@ -455,8 +480,39 @@ JSON ниже — единственное описание формы для ф
 #### VideoSceneSettingsRequest
 
 ```json
-{ "settings": { "frameA": { "kind": "file", "path": "a.png" }, "frameB": { "kind": "file", "path": "b.png" }, "text": "т", "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": true, "count": 1 }, "revision": 3 }
+{ "settings": { "frameA": { "kind": "file", "path": "a.png" }, "frameB": { "kind": "file", "path": "b.png" }, "text": "т", "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": true, "count": 1 }, "revision": 3, "force": true }
 ```
+
+#### VideoFormatLockedError
+
+```json
+{
+  "error": "Фильм «утро» — 16:9. Сцена в 9:16 даст чёрные полосы по бокам при склейке.",
+  "code": "film_format_locked",
+  "lockedBy": { "filmPath": "video/утро/утро.film", "aspect": "16:9" }
+}
+```
+
+Тело `409 film_format_locked`: ручка `scenes/{sceneId}/settings` и инструменты агента отвечают одинаково; с `force: true` («Всё равно 9:16») замок снимается для этого запроса.
+
+#### VideoFramesPreviewRequest
+
+```json
+{ "sessionId": "s-1", "sceneId": "scene-1", "aspect": "9:16", "anchor": "left" }
+```
+
+#### VideoFramesPreviewDto
+
+```json
+{
+  "aspect": "9:16",
+  "anchor": "left",
+  "frameA": { "sourceWidth": 1920, "sourceHeight": 1080, "sourceAspect": "16:9", "cropped": true, "resultWidth": 608, "resultHeight": 1080, "x": 0, "y": 0, "w": 0.3166667, "h": 1 },
+  "frameB": { "sourceWidth": 1080, "sourceHeight": 1920, "sourceAspect": "9:16", "cropped": false, "resultWidth": 1080, "resultHeight": 1920, "x": 0, "y": 0, "w": 1, "h": 1 }
+}
+```
+
+`frames/preview` — dryRun подрезки кадров A/B: тот же расчёт `AspectCrop.Rect`, что у съёмки, ничего не пишет и не тратит; не указаны `aspect` и `anchor` — берутся из сцены.
 
 #### VideoSceneCurrentRequest
 
@@ -471,14 +527,18 @@ JSON ниже — единственное описание формы для ф
   "jobId": "job-7", "scopeKey": "p-1", "status": "completed", "provider": "fal", "model": "veo-3.1", "count": 2,
   "variants": [1, 2], "cost": { "currency": "usd", "amount": 3.2 }, "outcome": "ok", "charged": true, "error": "нет",
   "queuePosition": 1, "etaSeconds": 120, "createdAt": "2026-10-02T15:00:00Z", "chatSessionId": "s-1", "sceneId": "scene-1",
-  "initiator": "human", "license": "watermark"
+  "initiator": "human", "license": "watermark", "upscaleEtaSeconds": 915, "variant": 1
 }
 ```
+
+`status` — `queued | running | upscaling | downloading | completed | failed | cancelled`. `upscaling` — вторая тяжёлая задача GPU: латентный апскейл «Макс» local H3
+(съёмка `full` 1344×768 → 2528×1440); `etaSeconds` и процент в событии `video_edit_progress` на этой стадии — свои, отдельные от съёмки. `upscaleEtaSeconds` — время
+апскейла, пока идёт съёмка («следом · ~15 мин»).
 
 #### VideoQuoteRequest
 
 ```json
-{ "sessionId": "s-1", "sceneId": "scene-1", "provider": "fal", "model": "veo-3.1", "count": 2, "durationSec": 8, "aspect": "16:9", "sound": true }
+{ "sessionId": "s-1", "sceneId": "scene-1", "provider": "fal", "model": "veo-3.1", "count": 2, "durationSec": 8, "aspect": "16:9", "sound": true, "format": { "mode": "aspect", "aspect": "9:16", "tier": "max", "by": "human", "at": "2026-10-06T12:00:00Z" } }
 ```
 
 #### VideoQuoteResponse
@@ -487,9 +547,13 @@ JSON ниже — единственное описание формы для ф
 {
   "quoteId": "q-1", "provider": "fal", "model": "veo-3.1", "count": 2, "durationSec": 8,
   "price": { "amount": 3.2, "unit": "usd", "approx": true, "source": "pricing", "eta": 240, "queueLength": 1 },
-  "license": "watermark", "heavy": false, "expiresAt": "2026-10-02T15:10:00Z"
+  "license": "watermark", "heavy": false, "expiresAt": "2026-10-02T15:10:00Z",
+  "format": { "mode": "aspect", "aspect": "9:16", "tier": "max", "width": 1440, "height": 2528, "wireValue": "full", "postStep": "upscale", "substituted": false, "rounded": false }
 }
 ```
+
+У «Макс» local H3 `price.eta` = съёмка + апскейл, `price.upscaleEta` — его часть, `price.postStep = "upscale"`; ролик, апскейл которого не замерен, — `eta` без поля и `postStep`
+(«время не замерено»).
 
 #### RetryQuote
 
@@ -584,7 +648,7 @@ JSON ниже — единственное описание формы для ф
     "builds": []
   },
   "spent": { "usd": 6.4, "credits": 12, "gpuSeconds": 300 },
-  "marks": [ { "index": 0, "claude": true, "updated": true, "stale": false } ],
+  "marks": [ { "index": 0, "claude": true, "updated": true, "stale": false, "formatMismatch": true } ],
   "build": { "state": "running", "progress": 0.4, "file": "video/утро/film.mp4", "error": "нет", "startedAt": "2026-10-02T16:00:00Z" },
   "stale": true
 }
@@ -666,6 +730,27 @@ JSON ниже — единственное описание формы для ф
   }
 }
 ```
+
+#### VideoEditProgressMessage
+
+```json
+{
+  "type": "video_edit_progress",
+  "sessionId": "s-1",
+  "jobId": "job-7",
+  "scopeKey": "p-1",
+  "sceneId": "scene-1",
+  "stage": "upscaling",
+  "etaSeconds": 915,
+  "variant": 1,
+  "count": 1,
+  "initiator": "human",
+  "percent": 0.4
+}
+```
+
+`stage` — `queued | running | upscaling | downloading` (`VideoProgressStages`). `upscaling` — латентный апскейл «Макс» local H3 после съёмки, отдельные `etaSeconds` и `percent`;
+во время съёмки того же запуска `upscaleEtaSeconds` говорит, сколько займёт увеличение следом.
 
 ## Отвергнуто
 

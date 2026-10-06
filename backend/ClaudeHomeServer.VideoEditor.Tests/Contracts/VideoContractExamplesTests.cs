@@ -16,6 +16,7 @@ public sealed class VideoContractExamplesTests
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     // Имя в заголовке ADR → тип контракта. Типы без записи здесь вложенные и проверяются через родителей
@@ -53,6 +54,10 @@ public sealed class VideoContractExamplesTests
         [nameof(FilmBuildStatusDto)] = typeof(FilmBuildStatusDto),
         [nameof(FilmMusicRequest)] = typeof(FilmMusicRequest),
         [nameof(FilmMusicDraftDto)] = typeof(FilmMusicDraftDto),
+        [nameof(VideoFormatLockedError)] = typeof(VideoFormatLockedError),
+        [nameof(VideoFramesPreviewRequest)] = typeof(VideoFramesPreviewRequest),
+        [nameof(VideoFramesPreviewDto)] = typeof(VideoFramesPreviewDto),
+        [nameof(VideoEditProgressMessage)] = typeof(VideoEditProgressMessage),
         [nameof(VideoThreadChangedMessage)] = typeof(VideoThreadChangedMessage),
         [nameof(VideoFilmChangedMessage)] = typeof(VideoFilmChangedMessage),
     };

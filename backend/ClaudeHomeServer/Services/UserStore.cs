@@ -349,9 +349,14 @@ public class UserStore : IForgejoAccountStore, IUserStore
 
             (user.FeatureFlags ??= new())[key] = enabled;
             Save();
-            return true;
         }
+        // Вне лока: подписчики ходят в другие сторы и не должны держать замок пользователей
+        OnFeatureFlagChanged?.Invoke(id, key, enabled);
+        return true;
     }
+
+    /// <summary>Флаг пользователя переключён явно (userId, key, enabled).</summary>
+    public event Action<string, string, bool>? OnFeatureFlagChanged;
 
     /// <summary>
     /// Сохраняет IANA-таймзону пользователя (для планировщика напоминаний).

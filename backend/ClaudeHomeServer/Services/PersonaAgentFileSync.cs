@@ -97,6 +97,12 @@ public sealed class PersonaAgentFileSync
         // пути в ResolvePaths); новые файлы запишет следующий за этим OnPersonaChanged.
         // Проект вошёл в сферу или вышел из неё: персоны сферы получают/теряют его файл
         projects.OnSphereMembershipChanged += e => SyncSpherePersonas(e);
+        // Флаг «spheres» переключён: зона персон сферы пуста при выключенном флаге (fail-closed),
+        // поэтому пересинк убирает их файлы из проектов, а при включении — возвращает
+        users.OnFeatureFlagChanged += (ownerId, key, _) =>
+        {
+            if (key == FeatureFlagKeys.Spheres) ResyncSpherePersonas(ownerId);
+        };
         personas.OnPersonaHandleChanged += (p, oldHandle) =>
             Safe(() => RemovePersona(PersonaManager.WithHandle(p, oldHandle)), "rename", p);
     }
@@ -113,6 +119,13 @@ public sealed class PersonaAgentFileSync
             if (persona.SphereId != e.OldSphereId && persona.SphereId != e.NewSphereId) continue;
             Safe(() => SyncPersona(persona), "sphere-membership", persona);
         }
+    }
+
+    private void ResyncSpherePersonas(string ownerId)
+    {
+        foreach (var persona in _personas.GetByOwner(ownerId))
+            if (PersonaZone.IsSpherePersona(persona))
+                Safe(() => SyncPersona(persona), "spheres-flag", persona);
     }
 
     // Папки для --add-dir хода: только для чатов БЕЗ проекта (личные сессии).

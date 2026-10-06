@@ -92,6 +92,10 @@ public class PersonalVideoEditorController(
     public async Task<IActionResult> Settings(string sessionId, string sceneId, [FromBody] VideoSceneSettingsRequest? req) =>
         Gate(sessionId, out var scope, out var denied) ? await SettingsIn(scope, sessionId, sceneId, req) : denied;
 
+    [HttpPost(VideoEditorRoutes.SceneVersionUpscaleRetry)]
+    public async Task<IActionResult> RetryUpscale(string sessionId, string sceneId, string versionId, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await RetryUpscaleIn(scope, sessionId, sceneId, versionId, ct) : denied;
+
     [HttpPut(VideoEditorRoutes.SceneCurrent)]
     public async Task<IActionResult> Current(string sessionId, string sceneId, [FromBody] VideoSceneCurrentRequest? req) =>
         Gate(sessionId, out var scope, out var denied) ? await CurrentIn(scope, sessionId, sceneId, req) : denied;

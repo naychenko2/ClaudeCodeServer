@@ -97,6 +97,12 @@ public abstract class VideoEditorEndpoints(
     protected async Task<IActionResult> CancelUpscaleIn(VideoEditScope scope, string jobId, CancellationToken ct) =>
         Map(await jobs.CancelUpscaleAsync(UserId, scope.Key, jobId, ct), Ok);
 
+    // «Повторить увеличение» версии с upscaleError: новая задача (стадия upscaling), удачный итог — новая версия 1440p
+    protected async Task<IActionResult> RetryUpscaleIn(VideoEditScope scope, string sessionId, string sceneId, string versionId,
+        CancellationToken ct) =>
+        Map(await jobs.RetryUpscaleAsync(UserId, scope, sessionId, sceneId, versionId, VideoInitiators.Human, ct),
+            result => StatusCode(StatusCodes.Status202Accepted, result));
+
     // dryRun подрезки кадров под пропорции сцены: ничего не пишет и не тратит
     protected async Task<IActionResult> FramesPreviewIn(VideoEditScope scope, VideoFramesPreviewRequest? req, CancellationToken ct)
     {

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.Media;
+using ClaudeHomeServer.Services.VideoEditor.Contracts;
 
 namespace ClaudeHomeServer.Services.VideoEditor;
 
@@ -45,7 +46,20 @@ public interface IVideoEngine
     // Ключи частных параметров (Params), которые модель принимает: по ним тулсет и ручки отказывают на
     // неизвестном ключе с именем поля. null — частных параметров у модели нет
     IReadOnlySet<string>? ParamNames(VideoModelInfo model) => null;
+
+    // «Повторить увеличение» (только «Макс» local H3): причина, по которой повтор по тикету съёмки невозможен, или null.
+    // По умолчанию — у поставщика увеличения нет
+    string? UpscaleRetryRefusal(string shotTicket) => VideoUpscaleRetryTexts.NoUpscale;
+
+    // Повторный апскейл по живому тикету съёмки, без пересъёмки. Удача — клип увеличенного размера без UpscaleError;
+    // сбой — Failed, отмена «Отменить увеличение» — Cancelled: съёмку 768p заново версией не сохраняем
+    Task<VideoResult> RetryUpscaleAsync(UpscaleRetryRequest request, IProgress<VideoProgress> progress, CancellationToken ct) =>
+        Task.FromResult(VideoResult.Fail(VideoOutcome.Rejected, VideoUpscaleRetryTexts.NoUpscale));
 }
+
+// ShotTicket — тикет съёмки у драйвера (только в памяти сервера); Format — формат запуска, из которого взята съёмка:
+// по нему результат получает размер ступени
+public sealed record UpscaleRetryRequest(string ShotTicket, ResolvedFormat? Format, int? UpscaleEtaSeconds = null);
 
 // Котировка драйвера: сумма в единицах поставщика, время и очередь. Драйвер без этого шва котируется
 // по PriceHint модели

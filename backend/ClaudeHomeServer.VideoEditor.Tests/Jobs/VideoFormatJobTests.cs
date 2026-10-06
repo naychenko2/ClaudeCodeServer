@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Media;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.VideoEditor.Catalog;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Engines;
@@ -93,6 +94,18 @@ public sealed class VideoFormatJobTests : IDisposable
         public List<VideoRequest> Probes { get; } = [];
         public List<VideoRequest> Runs { get; } = [];
         public List<string> Cancelled { get; } = [];
+        public List<UpscaleRetryRequest> Retries { get; } = [];
+        // «Повторить увеличение»: причина отказа (null — можно) и прогон; без прогона повтор молча удаётся
+        public string? RetryRefusal { get; set; }
+        public Func<UpscaleRetryRequest, IProgress<VideoProgress>, CancellationToken, Task<VideoResult>>? Retry { get; set; }
+
+        public string? UpscaleRetryRefusal(string shotTicket) => RetryRefusal;
+
+        public Task<VideoResult> RetryUpscaleAsync(UpscaleRetryRequest request, IProgress<VideoProgress> progress, CancellationToken ct)
+        {
+            lock (Retries) Retries.Add(request);
+            return Retry!(request, progress, ct);
+        }
 
         public IReadOnlyList<VideoModelInfo> Models { get; } =
         [
@@ -128,16 +141,42 @@ public sealed class VideoFormatJobTests : IDisposable
         }
     }
 
+    private sealed class CountingSpend : ISpendCollector
+    {
+        public List<SpendRecord> Records { get; } = [];
+        public void Record(SpendRecord record) { lock (Records) Records.Add(record); }
+    }
+
+    // Облачный сосед с моделью под сцену: при отказе local исполнитель предложил бы «Повторить через …»
+    private sealed class Neighbor : IVideoEngine
+    {
+        public string Key => "fal";
+        public string Label => "fal";
+        public string PriceUnit => VideoPriceUnits.Usd;
+        public bool Enabled => true;
+
+        public IReadOnlyList<VideoModelInfo> Models { get; } =
+        [
+            new("fal-model", "fal модель", new VideoCaps([5], ["16:9"], false, true, VideoLicense.Commercial, VideoPriceUnits.Usd),
+                new VideoPriceHint(0.1, VideoPriceUnits.Usd, "sec")),
+        ];
+
+        public Task<VideoResult> RunAsync(VideoRequest req, IProgress<VideoProgress> progress, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(true);
+    }
+
     private (VideoEditJobService Svc, VideoPrefsService Prefs) Service(H3Fake engine, FakeRaster? raster = null, Frames? frames = null,
-        bool withRaster = true)
+        bool withRaster = true, ISpendCollector? spend = null, bool withNeighbor = false)
     {
         var workspace = new VideoEditWorkspace(Path.Combine(_root, "ws"));
         var prefs = new VideoPrefsService(_prefsStore);
         var threads = new VideoJobThreads(_store, NullLogger<VideoJobThreads>.Instance, broadcaster: _events);
         frames ??= new Frames(new() { ["t16x9"] = 1, ["t9x16"] = 2 });
         var reader = new VideoFrameReader(frames, workspace, withRaster ? raster ?? new FakeRaster() : null);
-        var svc = new VideoEditJobService(new IVideoEngine[] { engine }, workspace, threads, NullLogger<VideoEditJobService>.Instance,
-            prefs, null, _events, flags: null, frames: reader);
+        var svc = new VideoEditJobService(withNeighbor ? new IVideoEngine[] { engine, new Neighbor() } : [engine], workspace, threads, NullLogger<VideoEditJobService>.Instance,
+            prefs, spend, _events, flags: null, frames: reader);
         return (svc, prefs);
     }
 
@@ -450,6 +489,178 @@ public sealed class VideoFormatJobTests : IDisposable
         engine.Cancelled.Should().BeEmpty();
         gate.SetResult();
         await svc.WhenDone(jobId);
+    }
+
+
+    // ── «Повторить увеличение» ───────────────────────────────────────────────────
+
+    private static VideoResult ShotWithMark(string ticket = "t-shot") =>
+        new(VideoOutcome.Ok, new VideoFile([1], "video/mp4", ".mp4", 5, true, 1344, 768, "Увеличение до 1440p не удалось: oom"),
+            null, false, ticket, null);
+
+    // Съёмка «Макс», у которой упало увеличение: версия 768p с пометкой; возвращает сцену и версию
+    private async Task<(string Scene, string Version)> FailedUpscaleVersion(VideoEditJobService svc)
+    {
+        var scene = AddScene(Wish("16:9", FormatTier.Max));
+        await Shoot(svc, scene);
+        var version = _store.Get(Owner, Session).Scenes.Single().Versions.Single();
+        version.UpscaleError.Should().NotBeNull();
+        return (scene, version.VersionId);
+    }
+
+    private static Task<VideoResult> Big(UpscaleRetryRequest r, IProgress<VideoProgress> p, CancellationToken ct)
+    {
+        p.Report(new VideoProgress(VideoStage.Upscaling, EtaSeconds: 915, RemoteId: "t-up2"));
+        return Task.FromResult(new VideoResult(VideoOutcome.Ok, new VideoFile([9, 9], "video/mp4", ".mp4", 5, true, 2528, 1440), null,
+            false, "t-up2", null));
+    }
+
+    [Fact]
+    public async Task Retry_upscale_adds_a_new_1440p_version_keeps_768p_and_writes_no_spend()
+    {
+        var engine = new H3Fake((r, p, ct) => Task.FromResult(ShotWithMark())) { Retry = Big };
+        var spend = new CountingSpend();
+        var (svc, _) = Service(engine, spend: spend);
+        var (scene, versionId) = await FailedUpscaleVersion(svc);
+        var spendBefore = spend.Records.Count;
+
+        var started = await svc.RetryUpscaleAsync(Owner, Scope, Session, scene, versionId, VideoInitiators.Human, default);
+        started.ErrorCode.Should().BeNull();
+        started.Value!.SourceVersionId.Should().Be(versionId);
+        await svc.WhenDone(started.Value.JobId);
+
+        engine.Retries.Should().ContainSingle().Which.ShotTicket.Should().Be("t-shot");
+        engine.Runs.Should().ContainSingle("пересъёмки нет: второй запуск — только увеличение");
+        var versions = _store.Get(Owner, Session).Scenes.Single().Versions;
+        versions.Should().HaveCount(2);
+        var old = versions.Single(v => v.VersionId == versionId);
+        (old.Width, old.Height).Should().Be((1344, 768));
+        old.UpscaleError.Should().NotBeNull("версия 768p остаётся как была");
+        var fresh = versions.Single(v => v.VersionId != versionId);
+        (fresh.Width, fresh.Height, fresh.UpscaleError).Should().Be((2528, 1440, null), "пометки на новой версии нет");
+        _store.Get(Owner, Session).Scenes.Single().CurrentVersionId.Should().Be(fresh.VersionId);
+        svc.Get(Owner, Scope.Key, started.Value.JobId)!.Status.Should().Be("completed");
+        spend.Records.Should().HaveCount(spendBefore, "повтор — не новая генерация: траты нет");
+    }
+
+    [Fact]
+    public async Task Retry_upscale_runs_as_its_own_job_with_upscaling_stage_and_can_be_cancelled_without_a_new_version()
+    {
+        var gate = new TaskCompletionSource();
+        var engine = new H3Fake((r, p, ct) => Task.FromResult(ShotWithMark()))
+        {
+            Retry = async (r, p, ct) =>
+            {
+                p.Report(new VideoProgress(VideoStage.Upscaling, EtaSeconds: 915, RemoteId: "t-up2"));
+                await gate.Task;
+                return VideoResult.Fail(VideoOutcome.Cancelled, "Увеличение отменено");
+            },
+        };
+        var (svc, _) = Service(engine);
+        var (scene, versionId) = await FailedUpscaleVersion(svc);
+
+        var jobId = (await svc.RetryUpscaleAsync(Owner, Scope, Session, scene, versionId, VideoInitiators.Human, default)).Value!.JobId;
+        await WaitFor(() => svc.Get(Owner, Scope.Key, jobId)!, j => j.Status == "upscaling");
+        (await svc.CancelUpscaleAsync(Owner, Scope.Key, jobId, default)).ErrorCode.Should().BeNull();
+        engine.Cancelled.Should().Equal("t-up2");
+        gate.SetResult();
+        await svc.WhenDone(jobId);
+
+        svc.Get(Owner, Scope.Key, jobId)!.Status.Should().Be("cancelled");
+        _store.Get(Owner, Session).Scenes.Single().Versions.Should().ContainSingle("отмена повтора версий не добавляет");
+    }
+
+    [Fact]
+    public async Task Retry_upscale_failure_adds_no_version_and_offers_no_other_provider()
+    {
+        var engine = new H3Fake((r, p, ct) => Task.FromResult(ShotWithMark()))
+        {
+            Retry = (r, p, ct) => Task.FromResult(VideoResult.Fail(VideoOutcome.Failed, "Увеличение до 1440p не удалось: oom")),
+        };
+        var (svc, _) = Service(engine, withNeighbor: true);
+        var (scene, versionId) = await FailedUpscaleVersion(svc);
+
+        var jobId = (await svc.RetryUpscaleAsync(Owner, Scope, Session, scene, versionId, VideoInitiators.Human, default)).Value!.JobId;
+        await svc.WhenDone(jobId);
+
+        svc.Get(Owner, Scope.Key, jobId)!.Status.Should().Be("failed");
+        _store.Get(Owner, Session).Scenes.Single().Versions.Should().ContainSingle();
+        _events.Sent.OfType<VideoEditFailedMessage>().Last().RetryQuote.Should().BeNull("повтор увеличения не предлагает «снять у соседа»");
+    }
+
+    [Fact]
+    public async Task Retry_upscale_refused_with_unavailable_when_the_shot_ticket_is_gone()
+    {
+        var engine = new H3Fake((r, p, ct) => Task.FromResult(ShotWithMark())) { Retry = Big };
+        var (svc, _) = Service(engine);
+        var (scene, versionId) = await FailedUpscaleVersion(svc);
+        engine.RetryRefusal = VideoUpscaleRetryTexts.Gone;
+
+        var result = await svc.RetryUpscaleAsync(Owner, Scope, Session, scene, versionId, VideoInitiators.Human, default);
+
+        result.ErrorCode.Should().Be(VideoEditorErrors.UpscaleRetryUnavailable);
+        result.Error.Should().Be("Повторить увеличение уже нельзя — переснимите сцену");
+        engine.Retries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Retry_upscale_is_unavailable_after_server_restart_context_is_in_memory_only()
+    {
+        var engine = new H3Fake((r, p, ct) => Task.FromResult(ShotWithMark())) { Retry = Big };
+        var (svc, _) = Service(engine);
+        var (scene, versionId) = await FailedUpscaleVersion(svc);
+        engine.RetryRefusal = null;
+        // «Рестарт»: новый исполнитель над теми же нитями на диске — контекста тикета в нём нет
+        var (restarted, _) = Service(engine);
+
+        var result = await restarted.RetryUpscaleAsync(Owner, Scope, Session, scene, versionId, VideoInitiators.Human, default);
+
+        result.ErrorCode.Should().Be(VideoEditorErrors.UpscaleRetryUnavailable);
+    }
+
+    [Fact]
+    public async Task Retry_upscale_of_a_version_without_mark_or_unknown_ids_is_refused()
+    {
+        var engine = new H3Fake { Retry = Big };
+        var (svc, _) = Service(engine);
+        var scene = AddScene(Wish("16:9", FormatTier.High));
+        await Shoot(svc, scene);
+        var healthy = _store.Get(Owner, Session).Scenes.Single().Versions.Single().VersionId;
+
+        (await svc.RetryUpscaleAsync(Owner, Scope, Session, scene, healthy, VideoInitiators.Human, default))
+            .Should().Match<VideoEditCallResult<VideoUpscaleRetryResult>>(r => r.ErrorCode == VideoEditorErrors.InvalidRequest
+                && r.Error == VideoUpscaleRetryTexts.NotFailed);
+        (await svc.RetryUpscaleAsync(Owner, Scope, Session, scene, "нет-такой", VideoInitiators.Human, default))
+            .ErrorCode.Should().Be(VideoEditorErrors.VersionNotFound);
+        (await svc.RetryUpscaleAsync(Owner, Scope, Session, "нет-такой", healthy, VideoInitiators.Human, default))
+            .ErrorCode.Should().Be(VideoEditorErrors.SceneNotFound);
+        (await svc.RetryUpscaleAsync("чужой", Scope, Session, scene, healthy, VideoInitiators.Human, default))
+            .ErrorCode.Should().Be(VideoEditorErrors.SceneNotFound, "чужая сцена неотличима от несуществующей");
+        engine.Retries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Retry_upscale_goes_through_the_same_heavy_slot_as_a_shoot()
+    {
+        var gate = new TaskCompletionSource();
+        var calls = 0;
+        var engine = new H3Fake(async (r, p, ct) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1) return ShotWithMark();
+            await gate.Task;
+            return ShotWithMark("t-other");
+        }) { Retry = Big };
+        var (svc, _) = Service(engine);
+        var (scene, versionId) = await FailedUpscaleVersion(svc);
+        var second = AddScene(Wish("16:9", FormatTier.Max));
+        var quote = (await svc.QuoteAsync(Owner, Scope, Quote(second), default)).Value!;
+        var busy = (await svc.StartAsync(Owner, Scope, new VideoLaunchRequest(quote.QuoteId, Session, second), default)).Value!.JobId;
+
+        var result = await svc.RetryUpscaleAsync(Owner, Scope, Session, scene, versionId, VideoInitiators.Human, default);
+
+        result.ErrorCode.Should().Be(VideoEditorErrors.HeavyBusy, "локальная карта одна: второй тяжёлой задаче очереди помимо слота нет");
+        gate.SetResult();
+        await svc.WhenDone(busy);
     }
 
     private static async Task<T> WaitFor<T>(Func<T> read, Func<T, bool> done)

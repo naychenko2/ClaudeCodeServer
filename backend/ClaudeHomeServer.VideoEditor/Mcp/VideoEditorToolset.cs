@@ -342,6 +342,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             return Deny("Не указан sceneId: съёмка идёт только в конкретную сцену чата. "
                 + "Возьми id из video_state (или заведи сцену через video_new).");
         if (GateTurn(owner, session, "Съёмка видео") is { } denied) return denied;
+        if (Str(args, "retryUpscaleOfVersionId") is { } retryVersion)
+            return await RetryUpscaleAsync(args, retryVersion, sceneId, owner, session, scope, ct);
         if (args["params"] is { } rawParams && rawParams is not JsonObject)
             return Deny("params — объект с частными параметрами модели.");
         if (!TryInt(args, "durationSec", out var duration) || !TryInt(args, "count", out var count))
@@ -383,6 +385,26 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
                 + "Результат — версии сцены в video_state (запуск running → done); ждать — video_wait (цикл до allDone); не выдумывай результат, пока он не готов. "
                 + "Каждый вариант станет версией сцены. После сцены спроси человека «Снимать следующую?»; "
                 + "подряд снимать можно только по его явному «сними все» — тогда после последней сцены сохрани и собери фильм сам.",
+        });
+    }
+
+    // «Повторить увеличение» — тот же сервисный метод, что у кнопки человека; шире ничего не снимает и не тратит
+    private async Task<McpToolCallResult> RetryUpscaleAsync(JsonObject args, string versionId, string sceneId, string owner,
+        Session session, VideoEditScope scope, CancellationToken ct)
+    {
+        var extra = args.Select(p => p.Key)
+            .FirstOrDefault(k => k is not ("sceneId" or "retryUpscaleOfVersionId"));
+        if (extra is not null)
+            return Deny($"С retryUpscaleOfVersionId аргумент «{extra}» не передаётся: повтор увеличения не меняет настройки съёмки.");
+        var started = await _jobs.RetryUpscaleAsync(owner, scope, session.Id, sceneId, versionId, VideoInitiators.Agent, ct);
+        if (started.Value is not { } created) return Fail(started.ErrorCode, started.Error, started.Retry);
+        return Json(new
+        {
+            jobId = created.JobId,
+            sceneId,
+            sourceVersionId = created.SourceVersionId,
+            note = "Идёт только увеличение до 1440p (стадия upscaling), отдельно от хода; отмена — video_cancel. "
+                + "Готовый ролик станет новой версией сцены, версия 768p останется. Ждать — video_wait.",
         });
     }
 

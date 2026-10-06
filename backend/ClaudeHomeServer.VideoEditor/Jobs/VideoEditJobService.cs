@@ -61,6 +61,9 @@ public sealed class VideoEditJobService : IDisposable
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, Quote> _quotes = new();
     private readonly ConcurrentDictionary<string, Job> _jobs = new();
+    // Контекст «Повторить увеличение»: (задача, вариант) версии с upscaleError → тикет съёмки у драйвера и исходная котировка.
+    // Только в памяти и не дольше ILocalVideoMedia.ShotTtl — столько же живёт латент у адаптера; рестарт стирает и то, и другое
+    private readonly ConcurrentDictionary<string, UpscaleRetryContext> _retryContexts = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Lock _startLock = new();
     private int _disposed;
@@ -107,6 +110,10 @@ public sealed class VideoEditJobService : IDisposable
         public string License => Model.Caps.License.Label;
     }
 
+    private sealed record UpscaleRetryContext(string ShotTicket, Quote Quote, DateTime At);
+
+    private static string RetryKey(string jobId, int variant) => $"{jobId}:{variant}";
+
     private sealed class Job(string id, string ownerId, VideoEditScope scope, Quote quote, CancellationTokenSource cts)
     {
         public readonly Lock Gate = new();
@@ -121,6 +128,8 @@ public sealed class VideoEditJobService : IDisposable
         public string Initiator { get; init; } = VideoInitiators.Human;
         public string SpendLabel { get; init; } = "";
         public string SpendSource { get; init; } = "";
+        // «Повторить увеличение»: вторая стадия уже снятой версии; денег и «соседнего поставщика» у неё нет
+        public bool UpscaleRetry { get; init; }
         public VideoInputsSnapshotDto Inputs { get; set; } = new("", null, null);
         public VideoEditJobStatus Status { get; set; } = VideoEditJobStatus.Queued;
         public int Variant { get; set; } = 1;
@@ -240,6 +249,7 @@ public sealed class VideoEditJobService : IDisposable
         var quote = new Quote(NewId(), ownerId, scope.Key, request.SessionId, request.SceneId, engine.Key, model, count,
             duration, aspect, sound, price, Now() + QuoteTtl, request.ContextRevision, resolved, wish);
         PruneQuotes();
+        PruneRetryContexts();
         _quotes[quote.Id] = quote;
         return VideoEditCallResult<VideoQuoteResponse>.Ok(ToDto(quote));
     }
@@ -425,13 +435,16 @@ public sealed class VideoEditJobService : IDisposable
 
         var request = new VideoRequest(quote.Model.Id, scope, prompt, frameA.Bytes, frameB.Bytes, quote.DurationSec,
             quote.Aspect, quote.Sound, parameters, input.Seed, quote.Format);
-        job.Completion = Task.Run(() => RunAsync(job, engine, request));
+        job.Completion = Task.Run(() => RunAsync(job, engine, (variant, progress, token) =>
+            engine.RunAsync(request.Seed is { } seed ? request with { Seed = seed + variant - 1 } : request, progress, token)));
 
         _workspace.Sweep(Now());
         return VideoEditCallResult<VideoJobCreated>.Ok(new VideoJobCreated(job.Id));
     }
 
-    private async Task RunAsync(Job job, IVideoEngine engine, VideoRequest request)
+    private delegate Task<VideoResult> VariantRunner(int variant, IProgress<VideoProgress> progress, CancellationToken ct);
+
+    private async Task RunAsync(Job job, IVideoEngine engine, VariantRunner runner)
     {
         VideoResult? failure = null;
         var cancelled = false;
@@ -441,11 +454,10 @@ public sealed class VideoEditJobService : IDisposable
             for (var variant = 1; variant <= job.Quote.Count; variant++)
             {
                 lock (job.Gate) job.Variant = variant;
-                var run = request.Seed is { } seed ? request with { Seed = seed + variant - 1 } : request;
                 VideoResult result;
                 try
                 {
-                    result = await engine.RunAsync(run, new JobProgress(this, job, variant), job.Cts.Token);
+                    result = await runner(variant, new JobProgress(this, job, variant), job.Cts.Token);
                 }
                 catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
                 {
@@ -471,6 +483,8 @@ public sealed class VideoEditJobService : IDisposable
                         : result;
                     break;
                 }
+                if (result.File?.UpscaleError is not null && result.RemoteId is { } shotTicket)
+                    _retryContexts[RetryKey(job.Id, variant)] = new UpscaleRetryContext(shotTicket, job.Quote, Now());
                 OnAccepted(job);
                 costs.Add(result.ActualCost);
                 lock (job.Gate) job.Variants.Add(saved with { Cost = CostOf(job.Quote, result.ActualCost) });
@@ -548,7 +562,7 @@ public sealed class VideoEditJobService : IDisposable
         else if (charged == true)
             RecordSpend(job, (result.ActualCost ?? EstimateCost(job.Quote))?.Amount);
 
-        var retry = cancelled || result.Outcome == VideoOutcome.Rejected ? null : RetryQuote(job, engine);
+        var retry = cancelled || job.UpscaleRetry || result.Outcome == VideoOutcome.Rejected ? null : RetryQuote(job, engine);
         List<VideoVariantResult> variants;
         lock (job.Gate)
         {
@@ -614,6 +628,7 @@ public sealed class VideoEditJobService : IDisposable
     // позже, догоняет её отдельной записью без генераций
     private void RecordSpend(Job job, double? amount)
     {
+        if (job.UpscaleRetry) return;
         int generations;
         lock (job.Gate)
         {
@@ -751,6 +766,82 @@ public sealed class VideoEditJobService : IDisposable
             .FirstOrDefault(e => string.Equals(e.Key, job.Quote.Provider, StringComparison.OrdinalIgnoreCase));
         if (engine is not null) await CancelRemoteQuietly(engine, remote);
         return VideoEditCallResult<VideoJobDto>.Ok(ToDto(job));
+    }
+
+    // «Повторить увеличение»: у версии «Макс» local H3 с upscaleError запускает ТОЛЬКО вторую стадию по живому тикету
+    // съёмки — новой задачей, которую можно отменить как обычное увеличение. Удача — новая версия 1440p, версия 768p
+    // остаётся как была (файлы не перезаписываются); сбой и отмена версий не добавляют. Тяжёлая задача GPU: тот же потолок
+    // «одна на карту», что у съёмки, второго семафора нет. Денег и записи траты у повтора нет
+    public async Task<VideoEditCallResult<VideoUpscaleRetryResult>> RetryUpscaleAsync(string ownerId, VideoEditScope scope,
+        string sessionId, string sceneId, string versionId, string initiator, CancellationToken ct)
+    {
+        if (!_threads.OwnScene(ownerId, scope.Key, sessionId, sceneId))
+            return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.SceneNotFound, "Сцена не найдена");
+        var scene = _threads.Store.Get(ownerId, sessionId).Scenes.First(s => s.SceneId == sceneId);
+        if (scene.Versions.FirstOrDefault(v => v.VersionId == versionId) is not { } version)
+            return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.VersionNotFound, "Версия не найдена");
+        if (version.UpscaleError is null)
+            return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.InvalidRequest, VideoUpscaleRetryTexts.NotFailed);
+
+        var engine = VideoCatalog.Available(_engines)
+            .FirstOrDefault(e => string.Equals(e.Key, version.Provider, StringComparison.OrdinalIgnoreCase));
+        if (engine is null)
+            return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.ProviderUnavailable, $"Поставщик «{version.Provider}» больше недоступен");
+        if (engine.ScopeRefusal(scope) is { } refusal)
+            return Fail<VideoUpscaleRetryResult>(ScopeRefusalCode(scope), refusal);
+
+        PruneRetryContexts();
+        _retryContexts.TryGetValue(RetryKey(version.JobId, version.Variant), out var context);
+        if (engine.UpscaleRetryRefusal(context?.ShotTicket ?? "") is { } gone)
+            return Fail<VideoUpscaleRetryResult>(
+                gone == VideoUpscaleRetryTexts.NoUpscale ? VideoEditorErrors.InvalidRequest : VideoEditorErrors.UpscaleRetryUnavailable, gone);
+        if (context is null)
+            return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.UpscaleRetryUnavailable, VideoUpscaleRetryTexts.Gone);
+
+        // Котировки у повтора нет: «котировка» только несёт модель, формат и лицензию исходного запуска
+        var quote = context.Quote with
+        {
+            Id = NewId(), Count = 1, Price = context.Quote.Price with { Eta = null, UpscaleEta = null, PostStep = null },
+            ExpiresAt = Now(),
+        };
+        Job job;
+        lock (_startLock)
+        {
+            var active = _jobs.Values.Where(j => j.IsActive).ToList();
+            if (active.Count(j => j.OwnerId == ownerId) >= MaxJobsPerOwner)
+                return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.TooManyJobs, OwnerLimitText);
+            if (active.Count >= MaxJobsPerInstance)
+                return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.TooManyJobs, InstanceLimitText);
+            if (IsLocalHeavy(quote) && active.Any(j => IsLocalHeavy(j.Quote)))
+                return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.HeavyBusy, HeavyBusyText);
+            job = new Job(NewId(), ownerId, scope, quote, CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token))
+            {
+                CreatedAt = Now(),
+                Initiator = initiator == VideoInitiators.Agent ? VideoInitiators.Agent : VideoInitiators.Human,
+                SpendLabel = SpendLabelOf(quote),
+                SpendSource = engine.SpendSource,
+                ChatSessionId = sessionId,
+                SceneId = sceneId,
+                Inputs = version.Inputs,
+                UpscaleRetry = true,
+            };
+            _jobs[job.Id] = job;
+        }
+
+        var current = _threads.Store.Get(ownerId, sessionId).Scenes.First(s => s.SceneId == sceneId);
+        await _threads.OnLaunchedAsync(ownerId, scope.Key, sessionId, sceneId, job.Id, ToDto(quote),
+            "Повтор увеличения до 1440p", job.Initiator, current.Settings, ct, current.FramesCropped);
+
+        var request = new UpscaleRetryRequest(context.ShotTicket, quote.Format);
+        job.Completion = Task.Run(() => RunAsync(job, engine, (_, progress, token) => engine.RetryUpscaleAsync(request, progress, token)));
+        return VideoEditCallResult<VideoUpscaleRetryResult>.Ok(new VideoUpscaleRetryResult(job.Id, versionId));
+    }
+
+    private void PruneRetryContexts()
+    {
+        var now = Now();
+        foreach (var (key, context) in _retryContexts)
+            if (now - context.At > ILocalVideoMedia.ShotTtl) _retryContexts.TryRemove(key, out _);
     }
 
     // Ожидание конца задачи — для тестов и выключения

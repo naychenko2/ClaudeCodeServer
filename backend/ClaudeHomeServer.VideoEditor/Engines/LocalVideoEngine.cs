@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.VideoEditor.Catalog;
+using ClaudeHomeServer.Services.VideoEditor.Contracts;
 
 namespace ClaudeHomeServer.Services.VideoEditor.Engines;
 
@@ -117,6 +118,18 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     // Размер съёмки — ступень формата (half | full, «Макс» снимается full); формата нет — full, как раньше
     private static string SizeOf(VideoRequest req) => req.Format?.WireValue is "half" or "full" ? req.Format.WireValue : "full";
 
+    // ── Повтор увеличения ────────────────────────────────────────────────────────
+
+    public string? UpscaleRetryRefusal(string shotTicket) =>
+        media?.CanUpscale(shotTicket) == true ? null : VideoUpscaleRetryTexts.Gone;
+
+    public async Task<VideoResult> RetryUpscaleAsync(UpscaleRetryRequest request, IProgress<VideoProgress> progress, CancellationToken ct)
+    {
+        if (media is null) return VideoResult.Fail(VideoOutcome.Unavailable, "Локальные модели недоступны на этом сервере");
+        if (UpscaleRetryRefusal(request.ShotTicket) is { } refusal) return VideoResult.Fail(VideoOutcome.Rejected, refusal);
+        return await UpscaleAsync(request.Format, request.ShotTicket, null, request.UpscaleEtaSeconds, progress, ct);
+    }
+
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<VideoResult> RunAsync(VideoRequest req, IProgress<VideoProgress> progress, CancellationToken ct)
@@ -159,7 +172,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
             }
             // «Макс»: в карточке съёмка получает размер своей ступени, итог — после апскейла
             shotFile = shotFile with { Width = ShotWidth(req), Height = ShotHeight(req) };
-            return await UpscaleAsync(req, submitted.Ticket, shotFile, upscaleEta, progress, ct);
+            return await UpscaleAsync(req.Format, submitted.Ticket, shotFile, upscaleEta, progress, ct);
         }
         catch (OperationCanceledException)
         {
@@ -183,7 +196,8 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
 
     // Вторая стадия «Макс»: латентный апскейл завершённой съёмки. Любой сбой или отмена САМОГО увеличения (не запуска)
     // оставляют съёмку 768p с пометкой UpscaleError, пока KeepShotWhenUpscaleFails; 768p вместо 1440p молча не подставляется
-    private async Task<VideoResult> UpscaleAsync(VideoRequest req, string shotTicket, VideoFile shot, int? upscaleEta,
+    // shot == null — повтор увеличения: съёмка уже сохранена версией, сбой и отмена версий не добавляют
+    private async Task<VideoResult> UpscaleAsync(ResolvedFormat? format, string shotTicket, VideoFile? shot, int? upscaleEta,
         IProgress<VideoProgress> progress, CancellationToken ct)
     {
         string? upTicket = null;
@@ -209,7 +223,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
                     cancelled: cancelledByUser);
             _upscaleTickets.TryRemove(finished, out _);
             progress.Report(new VideoProgress(VideoStage.Downloading, RemoteId: finished));
-            var size = req.Format is { Width: { } w, Height: { } h } ? (w, h) : ((int, int)?)null;
+            var size = format is { Width: { } w, Height: { } h } ? (w, h) : ((int, int)?)null;
             return new VideoResult(VideoOutcome.Ok,
                 new VideoFile(done.File.Bytes, done.File.ContentType, done.File.Extension, HasSound: done.File.HasSound,
                     Width: size?.Item1, Height: size?.Item2),
@@ -228,9 +242,11 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         }
     }
 
-    private VideoResult UpscaleFailed(VideoFile shot, string shotTicket, string reason, bool cancelled = false)
+    private VideoResult UpscaleFailed(VideoFile? shot, string shotTicket, string reason, bool cancelled = false)
     {
         var text = cancelled ? reason : "Увеличение до 1440p не удалось: " + reason;
+        if (shot is null)
+            return VideoResult.Fail(cancelled ? VideoOutcome.Cancelled : VideoOutcome.Failed, text);
         return KeepShotWhenUpscaleFails
             ? new VideoResult(VideoOutcome.Ok, shot with { UpscaleError = text }, Free, false, shotTicket, null)
             : new VideoResult(VideoOutcome.Failed, null, Free, false, shotTicket, text + ". Съёмка 768p не сохранена");

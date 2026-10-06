@@ -245,6 +245,29 @@ public class VideoEditorControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task Повтор_увеличения_закрыт_входом_и_владельцем_и_отказывает_по_делу()
+    {
+        var chat = await ProjectChat();
+        var sceneId = await AddScene(Chat(chat));
+        var versionId = await Shoot(Root, chat, sceneId);
+        var url = $"{Chat(chat)}/scenes/{sceneId}/versions/{versionId}/upscale";
+
+        (await _factory.CreateClient().PostAsync(url, null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        EnableFlag(TestWebApplicationFactory.SecondUsername);
+        (await second.PostAsync(url, null)).StatusCode.Should().Be(HttpStatusCode.NotFound, "чужой чат неотличим от несуществующего");
+
+        var healthy = await _client.PostAsync(url, null);
+        healthy.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await Json(healthy)).GetProperty("code").GetString().Should().Be(VideoEditorErrors.InvalidRequest);
+
+        var unknown = await _client.PostAsync($"{Chat(chat)}/scenes/{sceneId}/versions/нет-такой/upscale", null);
+        unknown.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Json(unknown)).GetProperty("code").GetString().Should().Be(VideoEditorErrors.VersionNotFound);
+    }
+
+    [Fact]
     public async Task Сцена_с_версиями_не_удаляется_а_пустая_удаляется()
     {
         var chat = await ProjectChat();

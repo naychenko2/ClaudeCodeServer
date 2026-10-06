@@ -3,6 +3,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.VideoEditor;
+using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Engines;
 using FluentAssertions;
 using Moq;
@@ -274,5 +275,77 @@ public class LocalVideoEngineUpscaleTests
         var result = await Fast(media.Object).RunAsync(Scene(Tier(FormatTier.Max, "9:16")), new Recorder(), CancellationToken.None);
 
         (result.File!.Width, result.File.Height).Should().Be((1440, 2528));
+    }
+
+    // ── Повторить увеличение ─────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Retry_upscales_the_live_shot_without_reshooting_and_gives_the_big_clip_without_mark()
+    {
+        var media = Seam(Running(0.4), new LocalVideoPoll(LocalVideoState.Completed, null, Big, null));
+        media.Setup(m => m.CanUpscale("t-shot")).Returns(true);
+        var recorder = new Recorder();
+
+        var result = await Fast(media.Object).RetryUpscaleAsync(new UpscaleRetryRequest("t-shot", Tier(FormatTier.Max)), recorder,
+            CancellationToken.None);
+
+        result.Outcome.Should().Be(VideoOutcome.Ok);
+        result.File!.Bytes.Should().Equal(new byte[] { 1, 4, 4, 0 });
+        result.File.UpscaleError.Should().BeNull();
+        (result.File.Width, result.File.Height).Should().Be((2528, 1440));
+        media.Verify(m => m.SubmitAsync(It.IsAny<LocalVideoRequest>(), It.IsAny<CancellationToken>()), Times.Never, "пересъёмки нет");
+        media.Verify(m => m.SubmitUpscaleAsync("t-shot", "1440p", It.IsAny<CancellationToken>()), Times.Once);
+        recorder.Events.Select(e => e.Stage).Should().ContainInOrder(VideoStage.Upscaling, VideoStage.Downloading);
+    }
+
+    [Fact]
+    public async Task Retry_failure_returns_failed_without_the_768p_clip()
+    {
+        var media = Seam(new LocalVideoPoll(LocalVideoState.Failed, null, null, "oom"));
+        media.Setup(m => m.CanUpscale("t-shot")).Returns(true);
+
+        var result = await Fast(media.Object).RetryUpscaleAsync(new UpscaleRetryRequest("t-shot", Tier(FormatTier.Max)),
+            new Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(VideoOutcome.Failed);
+        result.File.Should().BeNull("съёмка 768p уже есть версией — второй раз её не сохраняем");
+        result.Error.Should().Contain("не удалось").And.Contain("oom");
+    }
+
+    [Fact]
+    public async Task Retry_cancelled_by_user_returns_cancelled()
+    {
+        var media = Seam();
+        media.Setup(m => m.CanUpscale("t-shot")).Returns(true);
+        LocalVideoEngine? engine = null;
+        media.Setup(m => m.PollAsync("t-up", It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                await engine!.CancelRemoteAsync("t-up", CancellationToken.None);
+                return new LocalVideoPoll(LocalVideoState.Failed, null, null, "Interrupted");
+            });
+        media.Setup(m => m.CancelAsync("t-up", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        engine = Fast(media.Object);
+
+        var result = await engine.RetryUpscaleAsync(new UpscaleRetryRequest("t-shot", Tier(FormatTier.Max)), new Recorder(),
+            CancellationToken.None);
+
+        result.Outcome.Should().Be(VideoOutcome.Cancelled);
+        result.File.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Retry_is_refused_before_the_seam_when_the_shot_context_is_gone()
+    {
+        var media = Seam();
+        media.Setup(m => m.CanUpscale("t-shot")).Returns(false);
+        var engine = Fast(media.Object);
+
+        engine.UpscaleRetryRefusal("t-shot").Should().Be("Повторить увеличение уже нельзя — переснимите сцену");
+        var result = await engine.RetryUpscaleAsync(new UpscaleRetryRequest("t-shot", Tier(FormatTier.Max)), new Recorder(),
+            CancellationToken.None);
+
+        result.Outcome.Should().Be(VideoOutcome.Rejected);
+        media.Verify(m => m.SubmitUpscaleAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

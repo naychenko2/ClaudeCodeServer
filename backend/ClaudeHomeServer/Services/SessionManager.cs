@@ -3144,6 +3144,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public bool PersonaVisibleIn(Persona persona, string? projectId) =>
         PersonaZone.VisibleIn(persona, projectId, SphereDir);
 
+    /// <summary>Отказ хода, если проект вышел из сферы персоны; null — ход разрешён (см. <see cref="PersonaZone.OutOfZoneRefusal"/>).</summary>
+    public string? OutOfZoneRefusal(Persona persona, string? projectId) =>
+        PersonaZone.OutOfZoneRefusal(persona, projectId, SphereDir);
+
     // Отказ 400 (InvalidOperationException), если персона не видна в проекте чата
     private void EnsurePersonaVisible(Persona persona, string? projectId)
     {
@@ -4355,6 +4359,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return SendUserOutcome.Started;
     }
 
+    // Ход, не начатый по причине отказа: сообщение об ошибке в ленту, статус Error, процесс не трогаем
+    private async Task RefuseTurnAsync(string sessionId, SessionEntry entry, string reason)
+    {
+        _log.LogWarning("Ход чата {Session} отклонён: {Reason}", sessionId, reason);
+        var runId = Interlocked.Increment(ref _runSeq);
+        entry.RunId = runId;
+        var acc = entry.Accumulator!;
+        await OnMessageAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true), runId);
+        await OnMessageAsync(sessionId, acc, new ResultMessage(
+            Subtype: "error", DurationMs: 0, NumTurns: 0, Usage: null, TotalCostUsd: null), runId);
+        await OnMessageAsync(sessionId, acc, new ExitedMessage(), runId);
+    }
+
     // Непосредственный запуск хода в процесс (гейты очереди уже пройдены либо не требуются).
     // fromQueue — доставка пользовательского сообщения из очереди: клиент рисовал его
     // призраком, поэтому live-баллон бродкастим так же, как для сервер-инициированных отправок.
@@ -4363,6 +4380,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
         bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
     {
+        // Проект вышел из сферы персоны чата: ход не стартует, персону молча не подменяем
+        if (entry.Info.PersonaId is { } zonePersonaId && ResolveOwnerId(entry.Info) is { } zoneOwnerId
+            && _personas.Get(zonePersonaId, zoneOwnerId) is { } zonePersona
+            && OutOfZoneRefusal(zonePersona, entry.Info.ProjectId) is { } refusal)
+        {
+            await RefuseTurnAsync(sessionId, entry, refusal);
+            return;
+        }
+
         // ДИАГНОСТИКА повторных доставок (инцидент 2026-08-10): каждая доставка хода в
         // процесс проходит через эту точку. src различает источник — hub (пользователь
         // через SignalR), auto (серверный ход: цикл/автоматизация/доклад исполнителя),

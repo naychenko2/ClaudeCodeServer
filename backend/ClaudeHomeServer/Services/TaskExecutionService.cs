@@ -269,6 +269,15 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                     task.PersonaId, task.Id);
         }
 
+        // Проект задачи вышел из сферы персоны-исполнителя: исполнитель не стартует, персону не подменяем
+        if (persona is not null && _sessions.OutOfZoneRefusal(persona, task.ProjectId) is { } zoneRefusal)
+        {
+            _log.LogWarning("Задача {TaskId}: исполнитель отклонён — {Reason}", task.Id, zoneRefusal);
+            if (_tasks.MarkClaudeResult(task.Id, "error") is { } refused)
+                await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", refused));
+            throw new InvalidOperationException(zoneRefusal);
+        }
+
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
         // Модель исполнителя (ADR-007 §5.3): единая точка резолвера — уровень задачи →
         // модель персоны → уровень с матрицами (персона → специальность → слоты). Разворачивается

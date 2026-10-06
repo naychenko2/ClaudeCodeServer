@@ -96,4 +96,44 @@ public class SphereChatZoneTests : IDisposable
         sessions.PersonaVisibleIn(persona, inside).Should().BeTrue();
         sessions.PersonaVisibleIn(persona, outside).Should().BeFalse();
     }
+
+    // B5: проект вышел из сферы после начала чата — следующий ход не стартует, а завершается error
+    [Fact]
+    public async Task ХодВПроектеВышедшемИзСферы_Отказ_ErrorСТекстом_ПерсонаНеПодменяется()
+    {
+        var (inside, _, persona) = await ArrangeAsync();
+        var chatId = await IdOf(await _client.PostAsJsonAsync($"/api/personas/{persona.Id}/chats", new { projectId = inside }));
+        var sessions = Svc<SessionManager>();
+        (await _client.PutAsJsonAsync($"/api/projects/{inside}", new { groupId = "" })).EnsureSuccessStatusCode();
+
+        await sessions.SendMessageAsync(chatId, "привет", []);
+
+        var session = sessions.GetById(chatId)!;
+        session.Status.Should().Be(SessionStatus.Error);
+        session.PersonaId.Should().Be(persona.Id, "собеседника молча не меняем");
+        var history = await sessions.GetHistoryAsync(chatId);
+        history.OfType<ClaudeHomeServer.Protocol.StoredErrorMessage>().Should()
+            .ContainSingle(e => e.Text.StartsWith("Проект больше не в сфере «чаты»") && e.Text.Contains("смените собеседника"));
+        _factory.LlmAdapters.Adapters[chatId].SentMessages.Should().BeEmpty("ход в процесс не уходил");
+    }
+
+    // B5: исполнитель-персона сферы на задаче проекта, вышедшего из сферы, не стартует
+    [Fact]
+    public async Task ЗадачаВПроектеВышедшемИзСферы_ИсполнительОтклонён_ResultError()
+    {
+        var (inside, _, persona) = await ArrangeAsync();
+        var tasks = Svc<ClaudeHomeServer.Services.Tasks.TaskManager>();
+        var created = await _client.PostAsJsonAsync($"/api/projects/{inside}/tasks",
+            new { title = "задача сферы", personaId = persona.Id });
+        created.EnsureSuccessStatusCode();
+        var task = tasks.GetById(await IdOf(created))!;
+        (await _client.PutAsJsonAsync($"/api/projects/{inside}", new { groupId = "" })).EnsureSuccessStatusCode();
+
+        var resp = await _client.PostAsync($"/api/tasks/{task.Id}/execute", null);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("смените собеседника");
+        tasks.GetById(task.Id)!.ClaudeResult.Should().Be("error");
+        task.LinkedSessionId.Should().BeNull("сессия исполнителя не создавалась");
+    }
 }

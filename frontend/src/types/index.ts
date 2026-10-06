@@ -1521,7 +1521,8 @@ export interface UsageResponse {
   providers?: Record<string, UsageSnapshot[]>;
   // Статус опроса api/oauth/usage по ключам аккаунтов: "ok" | "unauthorized" (токен
   // не подходит — setup-токен вместо полноценного входа) | "rate_limited" (429: опрос
-  // упёрся в лимит частоты, ждёт backoff) | "error"
+  // упёрся в лимит частоты, ждёт backoff) | "refresh_rate_limited" (429 на продлении
+  // access-токена профиля: вход живой, повтор сам) | "error"
   pollStatuses?: Record<string, string>;
   // Локальная модель (Ollama или llama-server): какая модель и на какие фоновые действия
   // она заведена. Имя поля контрактное и не переименовывается вместе с движком.

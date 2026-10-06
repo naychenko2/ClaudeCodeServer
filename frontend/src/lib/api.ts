@@ -1323,7 +1323,7 @@ export const api = {
     // Быстрое создание персоны по свободному промпту: LLM заполняет роль/имя/описание/
     // характер/приветствие/цвет, фото-аватар генерируется автоматически.
     // Запрос долгий (LLM ~10-40с + fal ~10-40с, до ~90с) — таймаут расширен. 502 — можно повторить.
-    quickCreate: (body: { prompt: string; scope?: PersonaScope; projectId?: string }) =>
+    quickCreate: (body: { prompt: string; scope?: PersonaScope; projectId?: string; sphereId?: string }) =>
       request<Persona>('/personas/ai/quick-create', {
         method: 'POST',
         body: JSON.stringify(body),

@@ -7,6 +7,7 @@ import { featureReason, isLocalProject, useProjectFeature } from '../lib/project
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { useSphereOf } from '../lib/useSphereOf';
+import { isZoneRefusal } from '../lib/personaZone';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { isArchivedChat } from '../lib/chatFilters';
@@ -546,6 +547,22 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Резолвим персону сессии из стора (реактивно — при обновлении списка перечитываем).
   const personasVersion = usePersonasVersion();
   const sphereOf = useSphereOf();
+  // Отказ хода «проект вышел из сферы персоны»: введённый текст возвращаем в поле ввода,
+  // чтобы он не пропал при смене собеседника. Один раз на карточку, только в пустое поле
+  const zoneRefusalHandled = useRef<unknown>(null);
+  useEffect(() => {
+    const last = items[items.length - 1];
+    if (!last || last.kind !== 'error' || !isZoneRefusal(last) || zoneRefusalHandled.current === last) return;
+    zoneRefusalHandled.current = last;
+    for (let i = items.length - 2; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === 'user_message' && !it.auto && !it.systemDirective) {
+        sessionStorage.setItem('cc_pending_chat_prompt', it.text);
+        window.dispatchEvent(new Event('cc-compose-prefill'));
+        break;
+      }
+    }
+  }, [items]);
   const persona = useMemo(
     () => session.personaId ? getPersonaById(session.personaId) ?? null : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — версия внешнего стора: бамп заставляет перечитать getPersonaById (стор нереактивен сам по себе)

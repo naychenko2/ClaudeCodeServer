@@ -13,6 +13,7 @@ import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
 import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { isZoneRefusal, OPEN_COMPANION_PICKER_EVENT } from '../../lib/personaZone';
 import { prunedHeadline, prunedDetails } from '../../lib/contextPruned';
 import { Button } from '../ui/Button';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -2150,6 +2151,35 @@ function ErrorRetryButton({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+// Отказ хода: проект вышел из сферы персоны чата. Не ошибка сбоя, а требование решения —
+// warning-карточка с единственным действием «Сменить собеседника» (откроет выбор в композере).
+// Повтор бессмыслен, «Вернуть проект в сферу» намеренно нет (решение владельца).
+function ZoneRefusalCard({ text }: { text: string }) {
+  return (
+    <div style={{
+      background: C.warningBg, borderRadius: R.lg, padding: '10px 12px',
+      border: `1px solid ${C.warning}`, color: C.warningText, fontFamily: FONT.sans,
+      display: 'flex', alignItems: 'flex-start', gap: 8,
+    }}>
+      <AlertTriangle size={ICON_SIZE.sm} strokeWidth={2} style={{ flexShrink: 0, marginTop: 2 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: FS.base, fontWeight: 600, overflowWrap: 'break-word' }}>{text}</div>
+        <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>
+          Сообщение сохранено в поле ввода — отправится новому собеседнику.
+        </div>
+        <div style={{ marginTop: 9 }}>
+          <Button
+            size="xs"
+            onClick={() => window.dispatchEvent(new Event(OPEN_COMPANION_PICKER_EVENT))}
+          >
+            Сменить собеседника
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Карточка ошибки хода. Три возможных действия: «Повторить» (canRetry, inline справа от
 // текста), «Продолжить в стандартном окне» (item.action === 'window-1m-drop', вторичная
 // кнопка под текстом — отказ по окну 1M, единственный путь снять суффикс [1m] с чата),
@@ -2201,6 +2231,8 @@ function ErrorCard({ item, online, onRetry, onDropWindow1M }: {
       setDropLoading(false);
     }
   }, [onDropWindow1M, dropLoading]);
+
+  if (isZoneRefusal(item)) return <ZoneRefusalCard text={item.text} />;
 
   return (
     <div style={{

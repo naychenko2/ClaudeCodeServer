@@ -30,6 +30,10 @@ import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
 // Slug для @handle — общий хелпер, зеркалящий backend Slugify (см. lib/slug)
 import { slugify as slugifyHandle } from '../../lib/slug';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
+import { PersonaZoneSelect } from './PersonaZoneSelect';
+import { isProjectPersona, isSpherePersona } from '../../lib/personaZone';
+import { useSpheres } from '../../lib/useSpheres';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 
 // Императивный API формы для тулбара-родителя: сохранить / удалить.
 export interface PersonaFormHandle {
@@ -81,6 +85,7 @@ interface PersonaFormProps {
   // сразу «Проект» + id текущего проекта, чтобы персона создавалась проектной.
   defaultScope?: PersonaScope;
   defaultProjectId?: string;
+  defaultSphereId?: string;
 }
 
 // Инлайн-форма создания/редактирования персоны (без Modal-обёртки).
@@ -90,7 +95,7 @@ interface PersonaFormProps {
 // (сохранить/удалить/отмена) живут в тулбаре РОДИТЕЛЯ: форма экспонирует
 // save()/remove() через ref и сообщает своё состояние через onStatus.
 export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(function PersonaForm(
-  { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, defaultScope, defaultProjectId }, ref,
+  { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, defaultScope, defaultProjectId, defaultSphereId }, ref,
 ) {
   const isEdit = !!persona;
   const isMobile = useIsMobile();
@@ -150,6 +155,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [templateNote, setTemplateNote] = useState<string | null>(null);
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
   const [projectId, setProjectId] = useState(persona?.projectId ?? defaultProjectId ?? '');
+  const [sphereId, setSphereId] = useState(persona?.sphereId ?? defaultSphereId ?? '');
+  const spheresOn = useFeature(FLAGS.spheres);
+  const spheres = useSpheres(spheresOn);
+  const isProjectZone = isProjectPersona({ scope });
+  const isSphereZone = isSpherePersona({ scope });
   const [greeting, setGreeting] = useState(persona?.greeting ?? initial?.greeting ?? '');
   const [color, setColor] = useState(persona?.avatar?.color ?? initial?.color ?? 'orange');
   // Возможности персоны: массив включённых ключей. null у персоны = все включены.
@@ -466,15 +476,15 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // При выборе зоны «Проект» без выбранного проекта — подставим первый доступный
   useEffect(() => {
-    if (scope === 'project' && !projectId && projects.length > 0) setProjectId(projects[0].id);
-  }, [scope, projectId, projects]);
+    if (isProjectZone && !projectId && projects.length > 0) setProjectId(projects[0].id);
+  }, [isProjectZone, projectId, projects]);
 
   // Авто-подстановка handle из имени — только при создании и пока поле не трогали вручную
   useEffect(() => {
     if (!isEdit && !handleEdited) setHandle(slugifyHandle(name));
   }, [name, isEdit, handleEdited]);
 
-  const canSave = name.trim().length > 0 && !(scope === 'project' && !projectId);
+  const canSave = name.trim().length > 0 && !(isProjectZone && !projectId) && !(isSphereZone && !sphereId);
 
   // Снимок редактируемых полей — для вычисления «есть несохранённые правки» (dirty)
   const snapshot = JSON.stringify({
@@ -488,7 +498,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     },
     model, modelTier, effort, scope,
     tierStrong, tierMedium, tierWeak,
-    projectId: scope === 'project' ? projectId : '',
+    projectId: isProjectZone ? projectId : '',
+    sphereId: isSphereZone ? sphereId : '',
     color, greeting: greeting.trim(), memoryEnabled, lightContext,
     tools: [...tools].sort(),
     access,
@@ -576,7 +587,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       tierWeak: isEdit ? tierWeak : (tierWeak || undefined),
       effort: isEdit ? effort : (effort || undefined),
       scope,
-      projectId: scope === 'project' ? projectId : undefined,
+      projectId: isProjectZone ? projectId : undefined,
+      sphereId: isSphereZone ? sphereId : undefined,
       color,
       greeting: greeting.trim() || undefined,
       memoryEnabled,
@@ -1235,25 +1247,34 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         </Field>
 
         <Field label="Зона">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <PillSwitch<PersonaScope>
-              fill
-              value={scope}
-              onChange={setScope}
-              options={[{ value: 'global', label: 'Глобальный' }, { value: 'project', label: 'Проект' }]}
+          {spheresOn ? (
+            <PersonaZoneSelect
+              value={{ scope, projectId, sphereId }}
+              onChange={z => { setScope(z.scope); setProjectId(z.projectId ?? ''); setSphereId(z.sphereId ?? ''); }}
+              projects={projects}
+              spheres={spheres}
             />
-            {scope === 'project' && (
-              <select
-                value={projectId}
-                onChange={e => setProjectId(e.target.value)}
-                style={selectStyle}
-                aria-label="Проект"
-              >
-                {projects.length === 0 && <option value="">— нет доступных проектов —</option>}
-                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            )}
-          </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <PillSwitch<PersonaScope>
+                fill
+                value={scope}
+                onChange={setScope}
+                options={[{ value: 'global', label: 'Глобальный' }, { value: 'project', label: 'Проект' }]}
+              />
+              {isProjectZone && (
+                <select
+                  value={projectId}
+                  onChange={e => setProjectId(e.target.value)}
+                  style={selectStyle}
+                  aria-label="Проект"
+                >
+                  {projects.length === 0 && <option value="">— нет доступных проектов —</option>}
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              )}
+            </div>
+          )}
         </Field>
 
         <Field label="Приветствие" hint="С чего персона начинает разговор">

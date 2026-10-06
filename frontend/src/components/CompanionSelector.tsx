@@ -7,7 +7,7 @@ import { personaLabel } from '../lib/personas';
 import { modelProvider } from '../lib/models';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
-import { isZonedPersona } from '../lib/personaZone';
+import { isZonedPersona, OPEN_COMPANION_PICKER_EVENT } from '../lib/personaZone';
 
 // Результат выбора: ровно одно из полей задано (либо оба null — «без собеседника»)
 export interface CompanionSelection {
@@ -69,6 +69,13 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
+
+  // Карточка отказа хода («Сменить собеседника») просит открыть этот же выбор
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener(OPEN_COMPANION_PICKER_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_COMPANION_PICKER_EVENT, onOpen);
+  }, []);
 
   // Закрытие дропдауна сбрасывает мультивыбор группы
   useEffect(() => {

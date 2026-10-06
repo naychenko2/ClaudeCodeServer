@@ -77,3 +77,25 @@ export function zoneFromValue(value: string): { scope: Persona['scope']; project
   if (value.startsWith('project:')) return { scope: 'project', projectId: value.slice(8) };
   return { scope: 'global' };
 }
+
+// Событие «открыть выбор собеседника» — слушает CompanionSelector композера
+export const OPEN_COMPANION_PICKER_EVENT = 'cc-open-companion-picker';
+
+// Отказ хода: проект чата вышел из сферы персоны («Проект больше не в сфере «…» — смените
+// собеседника»). Бэк пока не ставит action, поэтому узнаём и по тексту, и по action
+export function isZoneRefusal(item: { text: string; action?: string | null }): boolean {
+  return item.action === 'change-companion'
+    || /^Проект больше не в сфере .+ — смените собеседника$/.test(item.text.trim());
+}
+
+// Строка о последствиях выбора зоны (форма и мастер персоны); projectCount — проектов в сфере
+export function zoneHint(zone: Pick<Persona, 'scope'>, projectCount: number): string {
+  switch (zone.scope) {
+    case 'sphere':
+      return `Персона работает во всех проектах сферы — сейчас их ${projectCount} — и в тех, что появятся в ней позже. Пишет в память сферы.`;
+    case 'project':
+      return 'Персона видит только этот проект.';
+    default:
+      return 'Персона видит все ваши проекты и сферы, а в проекте сферы — и память этой сферы.';
+  }
+}

@@ -33,6 +33,9 @@ import { PersonasHub } from './PersonasHub';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
 import { DeletePersonaDialog } from './DeletePersonaDialog';
+import { isProjectPersona, isSpherePersona, zoneLabel as zoneLabelOf } from '../../lib/personaZone';
+import { useSpheres } from '../../lib/useSpheres';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 
 export function PersonasPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
@@ -433,11 +436,14 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
     setView(v);
   };
 
-  const isProjectScope = persona.scope === 'project';
+  const isProjectScope = isProjectPersona(persona);
+  const spheres = useSpheres(useFeature(FLAGS.spheres));
   const zoneName = isProjectScope
     ? (projects.find(p => p.id === persona.projectId)?.name ?? persona.projectId ?? 'Проект')
     : null;
-  const zoneLabel = isProjectScope ? `Проект · ${zoneName}` : 'Глобальный';
+  const zoneLabel = isProjectScope ? `Проект · ${zoneName}`
+    : isSpherePersona(persona) ? zoneLabelOf(persona, { sphereName: id => spheres.find(x => x.id === id)?.name }, true)
+    : 'Глобальный';
 
   // Живой цвет из формы (перекрашивает акцент мгновенно) с фолбэком на сохранённый
   const [liveColor, setLiveColor] = useState<string | undefined>(undefined);

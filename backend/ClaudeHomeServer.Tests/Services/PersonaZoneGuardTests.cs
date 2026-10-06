@@ -37,28 +37,6 @@ public class PersonaZoneGuardTests
 
     private static readonly Dictionary<string, int> FrontendAllowed = new()
     {
-        ["frontend/src/components/chat/ChatHeaderBar.tsx"] = 1,
-        ["frontend/src/components/chat/EmptyState.tsx"] = 1,
-        ["frontend/src/components/chat/PersonaTaskView.tsx"] = 2,
-        ["frontend/src/components/chat/TeamPlanView.tsx"] = 1,
-        ["frontend/src/components/CompanionSelector.tsx"] = 1,
-        ["frontend/src/components/PersonaContextTab.tsx"] = 1,
-        ["frontend/src/features/home/TeamWidget.tsx"] = 3,
-        ["frontend/src/features/notes/DocComments.tsx"] = 2,
-        ["frontend/src/features/personas/DeletePersonaDialog.tsx"] = 2,
-        ["frontend/src/features/personas/PersonaBindingsPanel.tsx"] = 1,
-        ["frontend/src/features/personas/PersonaForm.tsx"] = 5,
-        ["frontend/src/features/personas/PersonaList.tsx"] = 3,
-        ["frontend/src/features/personas/PersonaPreview.tsx"] = 1,
-        ["frontend/src/features/personas/PersonasPage.tsx"] = 1,
-        ["frontend/src/features/personas/PersonaTasksPanel.tsx"] = 1,
-        ["frontend/src/features/personas/ProjectPersonasPanel.tsx"] = 1,
-        ["frontend/src/features/personas/TeamCommandCenter.tsx"] = 1,
-        ["frontend/src/features/projects/ProjectIntroCard.tsx"] = 2,
-        ["frontend/src/features/tasks/board/TaskBoard.tsx"] = 5,
-        ["frontend/src/features/tasks/ExecutorPicker.tsx"] = 1,
-        ["frontend/src/lib/defaultPersona.ts"] = 1,
-        ["frontend/src/types/index.ts"] = 1,
     };
 
     private static string RepoRoot()

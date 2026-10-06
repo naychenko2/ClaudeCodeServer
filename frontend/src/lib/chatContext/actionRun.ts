@@ -140,6 +140,7 @@ export function runLabel(o: Parameters<typeof runLabelParts>[0]): string {
 export function runBlockReason(action: ContextAction | null, text: string): string | null {
   if (!action) return null;
   if (action.disabledReason) return action.disabledReason;
+  if (action.blockReason) return action.blockReason;
   if (action.text === 'required' && !text.trim()) return `Напишите текст: ${action.placeholder ?? action.label}`;
   return null;
 }

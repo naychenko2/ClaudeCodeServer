@@ -51,6 +51,11 @@ export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actio
 export { refOf, rolesFor } from '../chatContext/fill';
 export type { ContextCandidate } from '../chatContext/fill';
 export type { ContextRole, ContextUpload, ContextNote, ContextMenuItem } from '../chatContext/types';
+export type {
+  FormatModel, FormatEditModel, MediaFormatState, MediaFormatWish, MediaFormatCaps, FormatTierOption, FormatTierKey,
+  ResolvedFormat, FormatMode, CropAnchor,
+} from '../chatContext/formatTypes';
+export { FORMAT_TEXT, TIER_NAME, generateChip, priceLabel, sizeLabel } from '../chatContext/formatText';
 export { notifyKindChanged } from '../chatContext/actionRun';
 export { ReportedError } from '../chatContext/errors';
 export { etaTicker, etaFraction } from '../chatContext/etaProgress';

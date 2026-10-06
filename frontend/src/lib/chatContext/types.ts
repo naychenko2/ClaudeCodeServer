@@ -5,6 +5,7 @@
 import type { ReactNode } from 'react';
 import type { ExecutorRow } from '../../components/generation/ExecutorList';
 import { CHAT_CONTEXT_EVENT } from './errors';
+import type { FormatModel } from './formatTypes';
 
 // ── DTO сервера ──
 
@@ -96,6 +97,9 @@ export interface ContextAction {
   question?: { param: string; title: string; options: readonly { value: string; label: string }[] };
   // Серая кнопка с причиной
   disabledReason?: string;
+  // Действие выбрать можно, но запуск пока заблокирован: причина ложится на кнопку запуска («Дорисовать» без
+  // выбранных в «Формате» пропорций). В отличие от disabledReason чип остаётся выбираемым
+  blockReason?: string;
   // Только у editor
   open?: () => void;
   // Только у menu
@@ -152,6 +156,10 @@ export interface ContextKindApi {
   // у действий без вопроса null
   executors?: (ctx: ContextKindCtx, actionId: string, answer?: string | null) => ExecutorListModel | null;
   params?: (ctx: ContextKindCtx, actionId: string) => readonly LaunchParam[];
+  // Чип «Формат» (ADR-025): модель под выбранное действие; actionId = null — «Чат», чип виден и там. Как и
+  // `executors`, зовётся на каждый рендер: вид отдаёт дешёвую модель из кэшей, а не строит её заново.
+  // null — у этого вида формата нет (звук, файл). Данные приходят с сервера: арифметики формата на фронте нет
+  format?: (ctx: ContextKindCtx, actionId: string | null) => FormatModel | null;
   // Роли, под которыми объект вида candidateKind входит референсом в основной объект ЭТОГО вида. Зеркало
   // AcceptedRefs провайдера на бэкенде (он и принимает роль: чужая — 400 role_not_accepted). Пусто —
   // основной такой референс не берёт; одна роль — «В контекст» без вопроса

@@ -3401,6 +3401,11 @@ public class ClaudeSession : ILlmSessionAdapter
             if (contributorSections.TryGetValue("dossier-trailer", out var dossierTrailer))
                 Add("dossier-trailer", "Трейлер истории решений", dossierTrailer.Text, group: "project");
 
+            // Устав сферы проекта: стабильная секция системного блока (меняется только правкой
+            // сферы), при RecallInTurnText хвостом не уезжает. Текст даёт SphereCharterContributor.
+            if (contributorSections.TryGetValue("sphere-charter", out var sphereCharter))
+                Add("sphere-charter", "Устав сферы", sphereCharter.Text, group: "project");
+
             // Подсказка про базу заметок — только когда notes-server доехал до этого хода
             if (_notesMcp is not null && McpDelivered("notes"))
             {

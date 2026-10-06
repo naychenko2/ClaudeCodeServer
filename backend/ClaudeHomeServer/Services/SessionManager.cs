@@ -3544,7 +3544,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     // Блок-подсказка о консультациях: две группы — сабагенты (Task) и persona_ask
-    private string? BuildMentionsHint(string ownerId, Session session, List<Persona> others)
+    internal string? BuildMentionsHint(string ownerId, Session session, List<Persona> others)
     {
         if (others.Count == 0) return null;
         var (subagents, viaAsk) = SplitConsultants(ownerId, session, others);
@@ -3586,8 +3586,20 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // не путать тёзок из разных команд.
     private void AppendPersonaLines(System.Text.StringBuilder sb, List<Persona> personas, string? currentProjectId)
     {
-        foreach (var p in personas)
+        // Персоны сферы — отдельной группой «Команда сферы»: в одном списке с проектными и
+        // глобальными их не отличить
+        var ordered = personas.Where(p => !PersonaZone.IsSpherePersona(p))
+            .Concat(personas.Where(PersonaZone.IsSpherePersona)).ToList();
+        var sphereHeaderDone = false;
+        foreach (var p in ordered)
         {
+            if (PersonaZone.IsSpherePersona(p) && !sphereHeaderDone)
+            {
+                sphereHeaderDone = true;
+                var sphereName = p.OwnerId is not null && p.SphereId is not null
+                    ? SphereDir.SphereName(p.OwnerId, p.SphereId) : null;
+                sb.AppendLine(sphereName is null ? "Команда сферы:" : $"Команда сферы «{sphereName}»:");
+            }
             var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
             sb.Append($"- @{p.Handle} — {title}");
             if (PersonaZone.IsProjectPersona(p) && p.ProjectId != currentProjectId

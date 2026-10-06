@@ -136,4 +136,35 @@ public class SphereChatZoneTests : IDisposable
         tasks.GetById(task.Id)!.ClaudeResult.Should().Be("error");
         task.LinkedSessionId.Should().BeNull("сессия исполнителя не создавалась");
     }
+
+    // B6: в подсказке @упоминаний персоны сферы идут отдельной группой «Команда сферы»
+    [Fact]
+    public async Task MentionsHint_ПерсонаСферы_ОтдельнойГруппойКомандаСферы()
+    {
+        var (inside, _, persona) = await ArrangeAsync();
+        var plain = Svc<PersonaManager>().Create(
+            OwnerId, "Обычная", null, null, null, null, null, PersonaScope.Global, null, null, null, false);
+
+        var hint = Svc<SessionManager>().BuildMentionsHint(OwnerId, new Session { ProjectId = inside }, [persona, plain]);
+
+        hint.Should().NotBeNull();
+        var groupAt = hint!.IndexOf("Команда сферы «чаты»:", StringComparison.Ordinal);
+        groupAt.Should().BeGreaterThan(0);
+        hint.IndexOf($"@{plain.Handle}", StringComparison.Ordinal).Should().BeLessThan(groupAt, "обычные персоны — до группы");
+        hint.IndexOf($"@{persona.Handle}", StringComparison.Ordinal).Should().BeGreaterThan(groupAt);
+    }
+
+    [Fact]
+    public async Task УставСферы_ТолькоПриВключённомФлаге()
+    {
+        var (_, _, persona) = await ArrangeAsync();
+        var spheres = Svc<SphereManager>();
+        spheres.Update(persona.SphereId!, null, null, charter: "Устав X");
+
+        spheres.CharterOf(OwnerId, persona.SphereId!).Should().Be("Устав X");
+
+        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.Spheres}", new { enabled = false }))
+            .EnsureSuccessStatusCode();
+        spheres.CharterOf(OwnerId, persona.SphereId!).Should().BeNull("флаг выключен — устав не доставляется");
+    }
 }

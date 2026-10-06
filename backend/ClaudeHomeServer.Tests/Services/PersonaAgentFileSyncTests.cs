@@ -32,6 +32,7 @@ public class PersonaAgentFileSyncTests : IDisposable
             ProjectSphere.Where(kv => kv.Value == sphereId).Select(kv => kv.Key).ToList();
         public bool Enabled(string ownerId) => true;
         public string? SphereName(string ownerId, string sphereId) => "сфера";
+        public string? CharterOf(string ownerId, string sphereId) => null;
     }
 
     public PersonaAgentFileSyncTests()

@@ -10,4 +10,5 @@ internal sealed class NoSphereDirectory : ISphereDirectory
     public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) => [];
     public bool Enabled(string ownerId) => false;
     public string? SphereName(string ownerId, string sphereId) => null;
+    public string? CharterOf(string ownerId, string sphereId) => null;
 }

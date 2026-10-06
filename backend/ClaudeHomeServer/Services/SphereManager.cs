@@ -59,6 +59,9 @@ public class SphereManager : ISphereDirectory
 
     public string? SphereName(string ownerId, string sphereId) => GetOwned(sphereId, ownerId)?.Name;
 
+    public string? CharterOf(string ownerId, string sphereId) =>
+        Enabled(ownerId) && GetOwned(sphereId, ownerId)?.Charter is { } c && !string.IsNullOrWhiteSpace(c) ? c : null;
+
     public Sphere Create(string name, string color, string userId)
     {
         var maxOrder = _groups.Values.Where(g => g.OwnerId == userId)

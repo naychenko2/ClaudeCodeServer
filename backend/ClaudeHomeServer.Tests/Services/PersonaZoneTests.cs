@@ -20,6 +20,7 @@ public class PersonaZoneTests
         public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) =>
             IsEnabled && Spheres.TryGetValue(sphereId, out var l) ? l.ToList() : [];
         public string? SphereName(string ownerId, string sphereId) => Spheres.ContainsKey(sphereId) ? "Работа" : null;
+        public string? CharterOf(string ownerId, string sphereId) => null;
     }
 
     private static Persona SpherePersona(string? sphereId = "s1") =>
@@ -55,6 +56,7 @@ public class PersonaZoneTests
         public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) =>
             Spheres.TryGetValue(sphereId, out var l) ? l.ToList() : [];
         public string? SphereName(string ownerId, string sphereId) => null;
+        public string? CharterOf(string ownerId, string sphereId) => null;
     }
 
     [Fact]

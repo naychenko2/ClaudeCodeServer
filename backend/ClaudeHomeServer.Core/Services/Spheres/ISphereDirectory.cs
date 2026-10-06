@@ -17,6 +17,9 @@ public interface ISphereDirectory
 
     /// <summary>Название сферы для текстов отказов; null — сферы нет.</summary>
     string? SphereName(string ownerId, string sphereId);
+
+    /// <summary>Устав сферы (markdown); null — сферы нет, она чужая, флаг выключен или устав пуст.</summary>
+    string? CharterOf(string ownerId, string sphereId);
 }
 
 /// <summary>Проект сменил сферу (<c>null</c> — вне сфер).</summary>

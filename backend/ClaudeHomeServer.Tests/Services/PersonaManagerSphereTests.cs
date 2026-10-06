@@ -25,6 +25,7 @@ public class PersonaManagerSphereTests : IDisposable
         public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) =>
             Spheres.TryGetValue(sphereId, out var l) ? l.ToList() : [];
         public string? SphereName(string ownerId, string sphereId) => null;
+        public string? CharterOf(string ownerId, string sphereId) => null;
     }
 
     public PersonaManagerSphereTests()

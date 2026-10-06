@@ -1,0 +1,31 @@
+Description: не класть в Type2 пару MsvAvFlags со значением 0
+ Windows SSPI правит пришедшую в Type2 пару MsvAvFlags на месте (|= MIC_PRESENT)
+ и считает MIC по своей, уже изменённой копии CHALLENGE_MESSAGE. Акцептор хранит и
+ подписывает Type2 как отправил, поэтому MIC клиента не сходился (DEFECTIVE_TOKEN).
+ Без пары в Type2 Windows дописывает флаги в отдельный blob, и MIC идёт по Type2 с
+ провода — как у клиентов по спецификации. Проверка MIC не ослаблена.
+Author: Claude Code Server <noreply@anthropic.com>
+Forwarded: no
+Last-Update: 2026-10-06
+
+--- a/src/gss_sec_ctx.c	2023-02-07 19:31:20.447164538 +0300
++++ b/src/gss_sec_ctx.c	2026-10-06 16:46:28.208883365 +0300
+@@ -751,12 +751,17 @@
+ 
+         timestamp = ntlm_timestamp_now();
+ 
++        /* Пара MsvAvFlags со значением 0 в Type2 не нужна, а вредна: Windows SSPI
++         * правит её в своей копии CHALLENGE_MESSAGE на месте (|= MIC_PRESENT) и
++         * считает MIC уже по правленому Type2, тогда как без этой пары дописывает
++         * флаги в отдельный blob и MIC считается по Type2 с провода. */
+         retmin = ntlm_encode_target_info(ctx->ntlm,
+                                          nb_computer_name,
+                                          nb_domain_name,
+                                          server_name->data.server.name,
+                                          NULL, NULL,
+-                                         &av_flags, &timestamp,
++                                         av_flags ? &av_flags : NULL,
++                                         &timestamp,
+                                          NULL,
+                                          server_name->data.server.spn,
+                                          NULL,

@@ -11,7 +11,7 @@ for a in "$@"; do
   if [[ "$a" == "--test" ]]; then RUN_TEST=1; else OUT="$(realpath -m "$a")"; fi
 done
 UBUNTU_VER="1.2.0-1build5"        # версия пакета на хосте: dpkg -l gss-ntlmssp
-CCS_SUFFIX="+ccs1"
+CCS_SUFFIX="+ccs2"
 POOL=https://archive.ubuntu.com/ubuntu/pool/universe/g/gss-ntlmssp
 IMAGE=ubuntu:26.04
 
@@ -24,9 +24,11 @@ mkdir /b && cd /b
 for f in gss-ntlmssp_1.2.0-1build5.dsc gss-ntlmssp_1.2.0-1build5.debian.tar.xz gss-ntlmssp_1.2.0.orig.tar.gz; do curl -fsSO $POOL/\$f; done
 dpkg-source -x gss-ntlmssp_$UBUNTU_VER.dsc >/dev/null
 cd gss-ntlmssp-1.2.0
-cp /in/ntlm-key-exch-requires-sign-seal.diff debian/patches/
-echo ntlm-key-exch-requires-sign-seal.diff >> debian/patches/series
-dch --force-distribution -D resolute -v $UBUNTU_VER$CCS_SUFFIX 'Локальная сборка CCS: KEY_EXCH без SIGN/SEAL не ведёт к расшифровке EncryptedRandomSessionKey (MS-NLMP 3.1.5.1.2, 3.2.5.1.2)'
+for d in ntlm-key-exch-requires-sign-seal.diff ntlm-no-empty-msvavflags-in-type2.diff; do
+  cp /in/\$d debian/patches/
+  echo \$d >> debian/patches/series
+done
+dch --force-distribution -D resolute -v $UBUNTU_VER$CCS_SUFFIX 'Локальная сборка CCS: KEY_EXCH без SIGN/SEAL не ведёт к расшифровке EncryptedRandomSessionKey (MS-NLMP 3.1.5.1.2, 3.2.5.1.2); Type2 без пары MsvAvFlags=0 (Windows правит её на месте и считает MIC по изменённому Type2)'
 DEBIAN_FRONTEND=noninteractive apt-get build-dep -y -qq . >/dev/null
 dpkg-buildpackage -us -uc -b >/dev/null
 cp /b/*.deb /out/

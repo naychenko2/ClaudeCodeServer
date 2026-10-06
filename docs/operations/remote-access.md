@@ -303,6 +303,24 @@ deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на �
 **Upstream.** Текст issue и PR — [upstream-issue-and-pr.md](../../deploy/gss-ntlmssp/upstream-issue-and-pr.md),
 не опубликован: отправка только по явной просьбе.
 
+#### Разбор 2026-10-06 (ночь): причина найдена — Windows правит Type2 на месте
+
+Живой Windows 11 24H2 (`curl.exe --ntlm`, Type3 `0xE2888235`) против стенда с `STAND_DUMP=1`: полные Type1/Type2/Type3
+позволили пересчитать MIC офлайн (пароль тестовой учётки известен). MIC клиента сходится **только** по Type2 с
+`MsvAvFlags = 0x2` (однобитная правка байта 106), хотя сервер отправил `MsvAvFlags = 0`. Эталон — Chromium
+`ntlm_test_data.h` (MIC по Type1+Type2+Type3), проба на нём сходится.
+
+Механика: gss-ntlmssp всегда кладёт в TargetInfo Type2 пару `MsvAvFlags` (значение 0). Windows SSPI правит эту пару в
+своей копии CHALLENGE_MESSAGE на месте (`|= MIC_PRESENT`) и считает MIC уже по изменённому Type2; когда пары нет, он
+дописывает флаги в отдельный blob, и MIC идёт по Type2 с провода (так считают и клиенты по спецификации — потому
+`client.py`, pyspnego и прежний Windows-клиент проходили). Лишние 32 байта AV-пар в Type3 — просто
+`MsvAvSingleHost` размером 80 байт у Windows 24H2, к MIC отношения не имеют.
+
+Исправление — патч [ntlm-no-empty-msvavflags-in-type2.diff](../../deploy/gss-ntlmssp/ntlm-no-empty-msvavflags-in-type2.diff)
+(Type2 без пары `MsvAvFlags=0`), пакет `1.2.0-1build5+ccs2` собирается тем же `build-deb.sh` вместе с первым патчем.
+Проверка MIC не ослаблена. Установка `+ccs2` — тем же порядком, что у `+ccs1` (раздел выше); контрольную сумму
+считать после сборки.
+
 #### Разбор 2026-10-06 (вечер): +ccs1 не помог, Type3 реального Windows — 0xE2888235
 
 После установки `+ccs1` Windows всё равно получает отказ, и на этот раз в Type3 **есть** SIGN и SEAL

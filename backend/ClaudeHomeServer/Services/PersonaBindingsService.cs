@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Notes;
@@ -122,6 +123,8 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private readonly ILogger<PersonaBindingsService> _log;
 
     // Кэш имён Dify-датасетов (id → отображаемое имя без префикса владельца).
+    private readonly ISphereDirectory? _spheres;
+
     // Наполняется при листинге целей-знаний, чтобы синхронный BuildTargetLabel мог
     // показать понятное имя базы, а не сырой id (иначе — фолбэк на id).
     private readonly ConcurrentDictionary<string, string> _datasetLabelCache = new();
@@ -137,8 +140,11 @@ public class PersonaBindingsService : IPersonaServerToolGate
         // Подсистема Notes отключаемая (Subsystems:Notes:Enabled=false) — null, если она
         // выключена. Датасет заметок пропадает из каталога целей знаний, а recall по
         // заметочным привязкам тихо возвращает пусто (ExtractNotesAsync).
-        INoteSemanticIndex? notesKb = null)
+        INoteSemanticIndex? notesKb = null,
+        // Зона персоны сферы; без справочника (юнит-тесты) сфер нет
+        ISphereDirectory? spheres = null)
     {
+        _spheres = spheres;
         _personas = personas;
         _projects = projects;
         _wkStore = wkStore;
@@ -469,14 +475,30 @@ public class PersonaBindingsService : IPersonaServerToolGate
     public IReadOnlyList<(string ProjectId, bool ReadOnly)> BuildExternalTaskScopes(
         string ownerId, Persona? persona)
     {
-        if (persona?.Bindings is null) return [];
-        return persona.Bindings
+        if (persona is null) return [];
+        var scopes = (persona.Bindings ?? [])
             .Where(b => b.Mode != PersonaBindingMode.Off && b.Type == PersonaBindingType.ProjectTasks
                 && !string.IsNullOrWhiteSpace(b.Target))
             .GroupBy(b => b.Target)
             .Select(g => (ProjectId: g.Key,
                 ReadOnly: g.Any(b => string.Equals(b.Path, "readonly", StringComparison.OrdinalIgnoreCase))))
             .ToList();
+        // Персона сферы: синтетические полные скоупы по проектам сферы (на каждый вызов, в стор
+        // привязок не пишутся) — выход проекта из сферы снимает доступ со следующего вызова
+        if (BuildZoneScopes(persona) is { } zone)
+        {
+            scopes.RemoveAll(s => zone.Contains(s.ProjectId));
+            scopes.AddRange(zone.Select(id => (id, false)));
+        }
+        return scopes;
+    }
+
+    // Проекты зоны персоны сферы (на текущий момент); null — не персона сферы. Пустой список —
+    // зона пуста (флаг выключен, сфера удалена): fail-closed, а не «без сужения».
+    public IReadOnlyList<string>? BuildZoneScopes(Persona? persona)
+    {
+        if (persona is null || !PersonaZone.IsSpherePersona(persona)) return null;
+        return _spheres is null ? [] : PersonaZone.ProjectIds(persona, _spheres) ?? [];
     }
 
     // Датасеты из Knowledge-привязок (Mode != Off) — симметричный хелпер для сужения знаний

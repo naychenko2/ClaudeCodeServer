@@ -455,6 +455,13 @@ public static class TaskPersonaValidator
     {
         var persona = personas.Get(personaId, userId);
         if (persona is null) return "Персона не найдена или недоступна";
+        // Персона сферы — исполнитель в любом проекте своей сферы: синтетические полные скоупы
+        // зоны приходят в externalScopes (PersonaBindingsService.BuildExternalTaskScopes)
+        if (PersonaZone.IsSpherePersona(persona))
+            return taskProjectId is not null
+                && externalScopes?.Any(s => s.ProjectId == taskProjectId && !s.ReadOnly) == true
+                ? null
+                : "Персона сферы может выполнять только задачи проектов своей сферы";
         if (PersonaZone.IsProjectPersona(persona) && persona.ProjectId != taskProjectId)
         {
             // Кросс-проектная ProjectTasks-привязка с полным доступом разрешает

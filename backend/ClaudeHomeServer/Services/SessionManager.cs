@@ -3649,6 +3649,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     internal sealed record WorkspaceMcpPlan(IReadOnlyList<string> Sections,
         IReadOnlyList<string>? AllowedProjectIds);
 
+    // Id-заглушка пустой зоны: ни один проект владельца под ним не живёт
+    internal const string NoProjectsZone = "__no-projects__";
+
     internal WorkspaceMcpPlan? BuildWorkspacePlan(string ownerId, string? projectId, Persona? persona)
     {
         var sections = new List<string>();
@@ -3711,7 +3714,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         IReadOnlyList<string>? allowedIds = null;
         var fileScopes = _bindings.BuildFileScopes(ownerId, persona);
-        if (fileScopes is { Count: > 0 } || chatScopes is { Count: > 0 })
+        // Персона сферы: зона — проекты сферы ∪ проекты привязок, никогда не null (иначе все проекты
+        // владельца). Проект сессии вне сферы не добавляем — чат уже отказан по OutOfZoneRefusal.
+        if (_bindings.BuildZoneScopes(persona) is { } zone)
+        {
+            var set = new HashSet<string>(zone);
+            foreach (var id in fileScopes ?? []) set.Add(id);
+            foreach (var id in chatScopes ?? []) set.Add(id);
+            // Потребители читают пустой список как «без сужения» — пустую зону гасим заглушкой
+            allowedIds = set.Count > 0 ? set.ToList() : [NoProjectsZone];
+        }
+        else if (fileScopes is { Count: > 0 } || chatScopes is { Count: > 0 })
         {
             // Привязки есть — зона ужимается; проект самой сессии всегда доступен
             var set = new HashSet<string>(fileScopes ?? []);

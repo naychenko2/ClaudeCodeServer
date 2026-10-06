@@ -44,6 +44,9 @@ public static class PersonaZone
     /// <summary>Проектная ли зона у запрошенного скоупа (для запросов создания/правки).</summary>
     public static bool IsProjectScope(PersonaScope? scope) => scope == PersonaScope.Project;
 
+    /// <summary>Персона сферы (зона — проекты сферы).</summary>
+    public static bool IsSpherePersona(Persona persona) => persona.Scope == PersonaScope.Sphere;
+
     /// <summary>Проектная ли персона (зона — один проект).</summary>
     public static bool IsProjectPersona(Persona persona) => persona.Scope == PersonaScope.Project;
 

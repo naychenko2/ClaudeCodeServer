@@ -415,6 +415,8 @@ public sealed partial class WorkspaceToolset(
                         + "без rootPath (папка появится в стандартном каталоге) либо попросите "
                         + "пользователя подключить нужную папку через интерфейс.");
                 var groupId = OptionalArg(arguments, "groupId");
+                if (groups.GroupRefusal(context.OwnerId, groupId) is { } createGroupRefusal)
+                    return Deny(createGroupRefusal);
                 try
                 {
                     var username = users.GetById(context.OwnerId)?.Username ?? context.OwnerId;
@@ -441,6 +443,11 @@ public sealed partial class WorkspaceToolset(
                 var systemPrompt = arguments.ContainsKey("systemPrompt")
                     ? StringArg(arguments, "systemPrompt") : null;
                 var groupId = arguments.ContainsKey("groupId") ? StringArg(arguments, "groupId") : null;
+                // С включённым флагом сфера проекта — решение человека: модель её не меняет
+                if (arguments.ContainsKey("groupId") && groups.Enabled(context.OwnerId))
+                    return Deny("Переносить проект в сферу может только человек");
+                if (groups.GroupRefusal(context.OwnerId, groupId) is { } updateGroupRefusal)
+                    return Deny(updateGroupRefusal);
                 var oldName = p.Name;
                 try
                 {

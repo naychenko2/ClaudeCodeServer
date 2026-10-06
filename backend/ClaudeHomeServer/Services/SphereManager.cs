@@ -36,6 +36,12 @@ public class SphereManager : ISphereDirectory
     public Sphere? GetOwned(string id, string ownerId) =>
         _groups.GetValueOrDefault(id) is { } g && g.OwnerId == ownerId ? g : null;
 
+    // Отказ для groupId проекта: пусто/null — «без сферы», иначе сфера обязана быть своей
+    public string? GroupRefusal(string ownerId, string? groupId) =>
+        string.IsNullOrEmpty(groupId) || GetOwned(groupId, ownerId) is not null
+            ? null
+            : "Сфера не найдена или принадлежит другому владельцу";
+
     public bool Enabled(string ownerId) => _flags.IsEnabled(ownerId, FeatureFlagKeys.Spheres);
 
     public string? SphereOf(string ownerId, string projectId)

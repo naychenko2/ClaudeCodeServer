@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/project-groups")]
-public class ProjectGroupsController(SphereManager groups, ProjectManager projects) : ControllerBase
+public class ProjectGroupsController(SphereManager groups, ProjectManager projects, PersonaManager personas) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -55,6 +55,16 @@ public class ProjectGroupsController(SphereManager groups, ProjectManager projec
     {
         var g = groups.GetById(id);
         if (g is null || g.OwnerId != UserId) return NotFound();
+        // Сфера с командой или памятью не удаляется: сначала их переносят или удаляют
+        var team = personas.GetByOwner(UserId).Count(p => p.Scope == PersonaScope.Sphere && p.SphereId == id);
+        var memory = SpheresController.MemoryCount(id);
+        if (team > 0 || memory > 0)
+        {
+            var parts = new List<string>();
+            if (team > 0) parts.Add($"персон сферы: {team}");
+            if (memory > 0) parts.Add($"записей памяти: {memory}");
+            return Conflict(new { error = $"Сферу нельзя удалить — в ней {string.Join(", ", parts)}", personas = team, memory });
+        }
         groups.Delete(id);
         // Проекты удалённой группы возвращаются в список «без группы»
         projects.ClearGroup(id);

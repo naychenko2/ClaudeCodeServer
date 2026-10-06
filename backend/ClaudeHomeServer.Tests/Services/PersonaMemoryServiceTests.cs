@@ -252,6 +252,7 @@ public class PersonaMemoryServiceSphereRecallTests : IDisposable
     private readonly PersonaManager _personas;
     private readonly PersonaMemoryService _sut;
     private readonly SphereMemoryService _sphereMemory;
+    private readonly TeamMemoryService _teamMemory;
     private readonly FakeDir _dir = new();
 
     public PersonaMemoryServiceSphereRecallTests()
@@ -269,20 +270,24 @@ public class PersonaMemoryServiceSphereRecallTests : IDisposable
             Microsoft.Extensions.Options.Options.Create(new DifyOptions()), new WorkspaceKnowledgeStore(config));
         _personas = new PersonaManager(config);
         _sphereMemory = new SphereMemoryService(config);
+        _teamMemory = new TeamMemoryService(config);
         _sut = new PersonaMemoryService(knowledge, _personas, _personas,
             new PersonaDirectoryAdapter(_personas), new NoopPersonaEvents(),
             new NoopDifyMetrics(), userStore, config, NullLogger<PersonaMemoryService>.Instance,
-            sphereMemory: _sphereMemory, spheres: _dir);
+            teamMemory: _teamMemory, sphereMemory: _sphereMemory, spheres: _dir);
 
         _dir.Spheres["S1"] = ["p1"];
         _dir.Spheres["S2"] = ["p2"];
         _sphereMemory.Add(OwnerId, "S1", "релизы сферы первой идут по четвергам");
         _sphereMemory.Add(OwnerId, "S2", "релизы сферы второй идут по пятницам");
+        _teamMemory.Add(OwnerId, "p1", "команда проекта первого катит релиз по средам");
+        _teamMemory.Add(OwnerId, "p-вне-сфер", "команда внешнего проекта катит релиз по субботам");
     }
 
     public void Dispose()
     {
         _sphereMemory.Dispose();
+        _teamMemory.Dispose();
         if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
     }
 
@@ -306,6 +311,43 @@ public class PersonaMemoryServiceSphereRecallTests : IDisposable
         recall!.Text.Should().Contain("«Сфера S2»").And.Contain("по пятницам");
         recall.Text.Should().NotContain("по четвергам", "полка S1 не принадлежит проекту чата");
         recall.SphereHits.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Recall_ПерсонаСферыВПроектеСферы_ВидитИПолкуПроекта_ИПолкуСферы()
+    {
+        var persona = Make(PersonaScope.Sphere, "S1");
+
+        var recall = await _sut.BuildRecallAsync(OwnerId, persona.Id, "релиз идут катит", 5, 0.1,
+            sessionProjectId: "p1");
+
+        recall!.TeamHits.Should().ContainSingle(h => h.Text.Contains("по средам"));
+        recall.SphereHits.Should().ContainSingle(h => h.Text.Contains("по четвергам"));
+        recall.Text.Should().Contain("## Память команды проекта").And.Contain("## Память сферы");
+    }
+
+    [Fact]
+    public async Task Recall_ПерсонаСферыВПроектеВнеСферы_НиПолкиПроекта_НиПолкиСферы()
+    {
+        var persona = Make(PersonaScope.Sphere, "S1");
+
+        var recall = await _sut.BuildRecallAsync(OwnerId, persona.Id, "релиз идут катит", 5, 0.1,
+            sessionProjectId: "p-вне-сфер");
+
+        recall!.TeamHits.Should().BeEmpty("вне зоны персона сферы не работает, чужую команду не вспоминает");
+        recall.SphereHits.Should().BeEmpty();
+        recall.Text.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Recall_ПерсонаСферыS1ВПроектеСферыS2_ПолкаПроектаНеПодмешиваетсяВнеЗоны()
+    {
+        var persona = Make(PersonaScope.Sphere, "S1");
+
+        var recall = await _sut.BuildRecallAsync(OwnerId, persona.Id, "релиз идут катит", 5, 0.1,
+            sessionProjectId: "p2");
+
+        recall!.TeamHits.Should().BeEmpty("p2 не входит в зону сферы S1");
     }
 
     [Fact]

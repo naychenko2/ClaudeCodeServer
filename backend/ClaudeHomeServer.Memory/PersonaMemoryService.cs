@@ -513,18 +513,25 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
 
         var top = hits.Where(h => h.Score >= minScore).Take(topK).ToList();
 
-        // Память команды проекта (③-3.4): проектная персона recall'ит общую память команды
+        // Память команды проекта (③-3.4): проектная персона recall'ит общую память команды своего
+        // проекта; персона сферы — команды проекта ЧАТА, но только там, где она работает (видна зоне).
+        // Ключ полки сферы и полки проекта у персоны сферы один — проект сессии.
         string? teamBlock = null;
         IReadOnlyList<TeamMemoryEntry> teamHits = [];
-        if (_teamMemory is not null && PersonaZone.OwnProjectId(persona) is not null)
+        var teamProjectId = PersonaZone.OwnProjectId(persona)
+            ?? (PersonaZone.IsSpherePersona(persona) && sessionProjectId is not null && _spheres is not null
+                && PersonaZone.VisibleIn(persona, sessionProjectId, _spheres)
+                ? sessionProjectId
+                : null);
+        if (_teamMemory is not null && teamProjectId is not null)
         {
             try
             {
-                var teamRecall = await _teamMemory.BuildRecallBlockAsync(ownerId, persona.ProjectId!, query);
+                var teamRecall = await _teamMemory.BuildRecallBlockAsync(ownerId, teamProjectId, query);
                 teamBlock = teamRecall.Text;
                 teamHits = teamRecall.Used;
             }
-            catch (Exception ex) { _logger.LogDebug(ex, "team-memory recall {Project}", persona.ProjectId); }
+            catch (Exception ex) { _logger.LogDebug(ex, "team-memory recall {Project}", teamProjectId); }
         }
 
         // Память сферы: ключ — сфера ПРОЕКТА ЧАТА (справочник сам отдаёт null при выключенном

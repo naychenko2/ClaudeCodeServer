@@ -315,8 +315,9 @@ export function FormatBody({ m, isMobile, projectName, onOpenExec }: {
             {m.hint && <small style={{ display: 'block', color: C.textMuted, fontSize: FS.xs }}>{m.hint}</small>}
           </span>
         </div>
-        <Notice tone="info" icon={Info} data-fmt-note="nocaps" action={onOpenExec ? <Button size="xs" variant="secondary" onClick={onOpenExec}>{FORMAT_TEXT.changeModel}</Button> : undefined}>
+        <Notice tone="info" icon={Info} data-fmt-note="nocaps">
           {FORMAT_TEXT.noCapsMore}
+          {onOpenExec && <div style={{ marginTop: SP.sm - 2 }}><Button size="xs" variant="secondary" onClick={onOpenExec}>{FORMAT_TEXT.changeModel}</Button></div>}
         </Notice>
       </>,
     );
@@ -324,8 +325,9 @@ export function FormatBody({ m, isMobile, projectName, onOpenExec }: {
 
   const r = state.resolved;
   const exactActive = r.mode === 'exact';
-  const pickAspect = (a: string) => m.onChange({ mode: 'aspect', aspect: a, tier: r.tier ?? 'standard' });
-  const pickTier = (t: FormatTierOption) => m.onChange({ mode: 'aspect', aspect: r.aspect ?? state.caps?.aspects[0] ?? null, tier: t.tier });
+  // Меняется одно из двух: второе вид возьмёт из желания, а не из ещё не обновлённого ответа ручки — быстрые клики не теряют друг друга
+  const pickAspect = (a: string) => m.onChange({ mode: 'aspect', aspect: a });
+  const pickTier = (t: FormatTierOption) => m.onChange({ mode: 'aspect', tier: t.tier });
   return head(
     <>
       {m.locked && <Notice tone="info" icon={Info} data-fmt-note="locked">Формат фильма — {m.locked.aspect}.</Notice>}
@@ -341,7 +343,7 @@ export function FormatBody({ m, isMobile, projectName, onOpenExec }: {
             <Info size={ICON_SIZE.xs - 1} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 1 }} />{state.exactUnavailableReason}
           </div>
         : state.exact && (exactOpen
-          ? <ExactPanel m={m} state={state} isMobile={isMobile} onClose={() => { setExactOpen(false); if (exactActive) pickAspect(r.aspect ?? state.caps?.aspects[0] ?? '16:9'); }} />
+          ? <ExactPanel m={m} state={state} isMobile={isMobile} onClose={() => { setExactOpen(false); if (exactActive) pickAspect(r.aspect ?? state.caps?.aspects[0] ?? ''); }} />
           : <div><button type="button" data-fmt-exact-open="" onClick={() => setExactOpen(true)} style={linkStyle}>{FORMAT_TEXT.exactLink}</button></div>)}
     </>,
   );

@@ -153,6 +153,18 @@ async function cropNow(ctx: ContextKindCtx, scope: string, thread: ImageThread) 
 const projectNoun = (scope: string, projectName: string | null, by: string | null) =>
   `Запомнится для картинок ${isPersonalScope(scope) || !projectName ? 'личных чатов' : `проекта «${projectName}»`}${by === 'agent' ? ' · поставил Claude ✦' : ''}.`;
 
+// Правка одного из двух (пропорции или ступень) берёт второе из оптимистичного желания в префах, затем из ответа
+// ручки: быстрые клики подряд не теряют друг друга, пока ответ ещё не пришёл
+function mergeWish(scope: string, wish: Omit<MediaFormatWish, 'by' | 'at'>, state: MediaFormatState | null): Omit<MediaFormatWish, 'by' | 'at'> {
+  if (wish.mode !== 'aspect') return wish;
+  const cur = getPrefs(scope).format;
+  return {
+    mode: 'aspect',
+    aspect: wish.aspect ?? cur?.aspect ?? state?.resolved.aspect ?? state?.caps?.aspects[0] ?? null,
+    tier: wish.tier ?? cur?.tier ?? state?.resolved.tier ?? 'standard',
+  };
+}
+
 export function imageFormat(ctx: ContextKindCtx, actionId: string | null): FormatModel | null {
   const primary = getChatContextState(ctx.sessionId).primary;
   if (!primary || primary.kind !== IMAGE_KIND) return null;
@@ -193,7 +205,7 @@ export function imageFormat(ctx: ContextKindCtx, actionId: string | null): Forma
       chip: generateChip(state),
       footer: name => projectNoun(scope, name, by),
       hint: FORMAT_TEXT.noCaps(pv.label, m.label),
-      onChange: wish => setWish(scope, wish),
+      onChange: wish => setWish(scope, mergeWish(scope, wish, state)),
     };
   }
 

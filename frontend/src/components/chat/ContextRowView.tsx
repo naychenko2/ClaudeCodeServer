@@ -79,7 +79,7 @@ export const rowFacts = (p: Pick<ContextRowViewProps, 'git' | 'primary' | 'refs'
   project: !!p.git,
   hasPrimary: !!p.primary,
   hasExec: !!p.exec,
-  hasFormat: !!p.format && !!p.primary,
+  ...(p.format && p.primary ? { hasFormat: true } : null),
   refs: p.refs.length,
   mobile: p.isMobile,
 });

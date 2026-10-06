@@ -562,6 +562,10 @@ function TogglesSection() {
             {/* Пара строки карточки: шаги идут сплошной заливкой, оценка — пунктиром */}
             <ProgressBar value={48} size="thin" estimate />
             <ProgressBar value={0} size="thin" indeterminate />
+            {/* muted — полоса под карточкой инструмента: факт, оценка и бегущая */}
+            <ProgressBar value={48} size="thin" tone="muted" />
+            <ProgressBar value={48} size="thin" tone="muted" estimate />
+            <ProgressBar value={0} size="thin" tone="muted" indeterminate />
             <ProgressBar value={100} tone="success" />
             <ProgressBar value={75} tone="warning" />
             <ProgressBar value={20} tone="danger" />

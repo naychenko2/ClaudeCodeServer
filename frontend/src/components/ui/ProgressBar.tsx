@@ -1,10 +1,12 @@
 import { useState, type CSSProperties } from 'react';
 import { C, R } from '../../lib/design';
 
-export type ProgressTone = 'accent' | 'success' | 'warning' | 'danger';
+// muted — вторичный прогресс (полоса под карточкой инструмента в ленте): серая заливка не спорит
+// с акцентом главного действия, а конец видимой дорожки по-прежнему говорит, сколько осталось
+export type ProgressTone = 'accent' | 'muted' | 'success' | 'warning' | 'danger';
 
 const FILL: Record<ProgressTone, string> = {
-  accent: C.accent, success: C.success, warning: C.warning, danger: C.danger,
+  accent: C.accent, muted: C.textMuted, success: C.success, warning: C.warning, danger: C.danger,
 };
 
 // Высота дорожки: default — 4px, thin — 3px (строка карточки в ленте, где 4px давят;
@@ -64,7 +66,7 @@ export function ProgressBar({ value, tone = 'accent', estimate, transition = 'wi
       <span style={{
         display: 'block', height: '100%', width: `${pct}%`, borderRadius: R.max,
         minWidth: pct > 0 ? MIN_FILL_PX[size] : 0,
-        background: estimate && tone === 'accent' ? estimateFill(FILL[tone]) : FILL[tone], transition,
+        background: estimate && (tone === 'accent' || tone === 'muted') ? estimateFill(FILL[tone]) : FILL[tone], transition,
       }} />
     </span>
   );

@@ -350,6 +350,14 @@ describe('ToolUseView — витрина Веры', () => {
     expect(html).toContain('cc-live-dot');
   });
 
+  it('полоса серая (muted): факт — сплошная, оценка — пунктир тем же цветом, без акцента', () => {
+    const exact = render(wait({ progress: { stage: 'running', percent: 40, exact: true } }));
+    expect(exact).toMatch(/width:40%[^"]*background:var\(--c-text-muted\)/);
+    expect(exact).not.toMatch(/role="progressbar"[^]*background:var\(--c-accent\)/);
+    const estimate = render(wait({ progress: { stage: 'running', percent: 40 } }));
+    expect(estimate).toContain('repeating-linear-gradient(90deg, var(--c-text-muted)');
+  });
+
   it('п. 4: ожидание в очереди — только точка, полосы нет', () => {
     const html = render(wait({ progress: { stage: 'queued', queuePosition: 2, percent: 0 } }));
     expect(html).not.toContain('progressbar');

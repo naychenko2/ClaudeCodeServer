@@ -41,7 +41,8 @@ type ProgressPct = { value: number; estimate: boolean; label?: string };
 function ProgressMeter({ pct, text }: { pct: ProgressPct; text: string | null }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, height: CAPTION_LINE_H, paddingLeft: BELOW_PAD, paddingRight: SP.sm }}>
-      <ProgressBar value={pct.value} estimate={pct.estimate} size="thin" label={pct.label} transition="width .5s linear" style={{ flex: 1, minWidth: 0 }} />
+      {/* Серая (muted): вторичная информация не спорит с акцентом главного действия */}
+      <ProgressBar value={pct.value} estimate={pct.estimate} tone="muted" size="thin" label={pct.label} transition="width .5s linear" style={{ flex: 1, minWidth: 0 }} />
       {text && (
         <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
           {text}

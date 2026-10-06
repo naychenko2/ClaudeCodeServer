@@ -860,8 +860,8 @@ public sealed partial class TestRunService
                 ? TestRunSummaryFormatter.FilesProgressLabel(_filesDone, _counts.Failed, _total)
                 : TestRunSummaryFormatter.ProgressLabel(_counts, _total);
             _lastLabel = label;
-            return new TestRunProgress("running", label, TestRunSummaryFormatter.ProgressPercent(done, _total),
-                _total is > 0 ? true : null);
+            var percent = TestRunSummaryFormatter.ProgressPercent(done, _total);
+            return new TestRunProgress("running", label, percent, percent is null ? null : true);
         }
 
         public IEnumerable<string> BuildErrorCandidates()

@@ -150,10 +150,12 @@ public static class TestRunSummaryFormatter
         _ => $"на {r.ProgressLabel ?? ProgressLabel(r.Counts, r.Total)}",
     };
 
-    // «412 из 7951 · упало 2»; без общего числа — «412 · упало 2»
+    // «412 из 7951 · упало 2»; без общего числа — «412 · упало 2». Общее число из --list-tests —
+    // оценка снизу: теорию xUnit с несериализуемыми данными список показывает одной строкой, а
+    // прогон печатает исход на каждый случай. Перевалили его — «из M» было бы враньём («100 из 70»)
     public static string ProgressLabel(TestCounts counts, int? total)
     {
-        var done = total is { } t ? $"{counts.Done} из {t}" : $"{counts.Done}";
+        var done = total is { } t && counts.Done <= t ? $"{counts.Done} из {t}" : $"{counts.Done}";
         return counts.Failed > 0 ? $"{done} · упало {counts.Failed}" : done;
     }
 
@@ -184,11 +186,12 @@ public static class TestRunSummaryFormatter
     }
 
     // Процент по настоящим тестам из --list-tests; потолок 99 — «готово» говорит только
-    // результат вызова. Нет общего числа — процента нет (полоса неопределённая)
+    // результат вызова. Нет общего числа — процента нет (полоса неопределённая). Перевалили общее
+    // число — тоже нет: оно оказалось заниженным (см. ProgressLabel), и полоса на 99% врала бы
     public const int MaxProgressPercent = 99;
 
     public static int? ProgressPercent(int done, int? total) =>
-        total is > 0 ? Math.Min(MaxProgressPercent, (int)(done * 100L / total.Value)) : null;
+        total is > 0 && done <= total ? Math.Min(MaxProgressPercent, (int)(done * 100L / total.Value)) : null;
 
     public static string SummaryLine(TestReport s)
     {

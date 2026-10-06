@@ -173,10 +173,20 @@ public class TestRunParsersTests
     [InlineData(412, 7951, 5)]
     [InlineData(7950, 7951, 99)]
     [InlineData(7951, 7951, 99)]
-    [InlineData(8000, 7951, 99)]
     public void Процент_ПотолокДевяностоДевять(int done, int total, int expected)
     {
         TestRunSummaryFormatter.ProgressPercent(done, total).Should().Be(expected);
+    }
+
+    // Перевал общего числа: --list-tests занизил его (теория с несериализуемыми данными идёт
+    // одной строкой, а в прогоне — по случаю) — процента нет, а не 99, и в подписи нет «из M».
+    // Прежнее «прижать перевал к 99» отменено сознательно: полоса на 99% врала бы
+    [Fact]
+    public void Перевал_ОбщегоЧисла_БезПроцентаИБезИз()
+    {
+        TestRunSummaryFormatter.ProgressPercent(8000, 7951).Should().BeNull();
+        TestRunSummaryFormatter.ProgressLabel(new TestCounts(98, 2, 0), 70).Should().Be("100 · упало 2");
+        TestRunSummaryFormatter.ProgressLabel(new TestCounts(70, 0, 0), 70).Should().Be("70 из 70");
     }
 
     [Theory]

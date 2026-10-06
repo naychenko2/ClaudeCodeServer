@@ -821,47 +821,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // стене центрировать нечего (лента идёт во всю ширину колонки), там хук только
   // добирает правый паддинг до ширины левого поля. На мобиле поля задаёт разметка.
   useChatGutter(scrollRef, CHAT_MAX_W, isMobile ? 'off' : embedded ? 'pad' : 'center');
-  // Пустой чат на десктопе: композер стоит не у низа, а по центру — вместе с приветствием
-  // над ним они образуют одну группу посреди области. С первым сообщением композер уезжает
-  // вниз. На мобиле не поднимаем (там центр закрыла бы экранная клавиатура), на стене и под
-  // гейтом онбординга (greetingBubble) — тоже. Подъём считаем замером, а не процентом:
-  // группа «приветствие + композер» центрируется целиком и не вылезает за верх в низком окне.
-  const centerComposer = !isMobile && !embedded && !greetingBubble && online
-    && !isHistoryLoading && items.length === 0 && pending.length === 0;
-  const feedAreaRef = useRef<HTMLDivElement>(null);
-  const emptyStateRef = useRef<HTMLDivElement>(null);
-  const [feedAreaH, setFeedAreaH] = useState(0);
-  const [emptyStateH, setEmptyStateH] = useState(0);
-  useLayoutEffect(() => {
-    if (!centerComposer) return;
-    const area = feedAreaRef.current;
-    const empty = emptyStateRef.current;
-    if (!area || !empty) return;
-    const measure = () => {
-      setFeedAreaH(area.clientHeight);
-      setEmptyStateH(empty.offsetHeight);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(area);
-    ro.observe(empty);
-    return () => ro.disconnect();
-  }, [centerComposer]);
-  // Свободное место делится поровну сверху и снизу группы; верхний отступ ленты (20) и
-  // нижний (8) входят в группу
-  const composerLift = centerComposer && feedAreaH > 0
-    ? Math.max(0, Math.floor((feedAreaH - emptyStateH - composerH - 28) / 2))
-    : 0;
-  // Переезд композера анимируем только внутри одного чата (отправка первого сообщения).
-  // При смене чата и при первом показе подъём встаёт сразу — иначе композер «плыл» бы
-  // при каждом переключении между пустым и непустым чатом
-  const [liftInstant, setLiftInstant] = useState(true);
-  useLayoutEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- подъём без анимации на кадр смены чата
-    setLiftInstant(true);
-    const raf = requestAnimationFrame(() => setLiftInstant(false));
-    return () => cancelAnimationFrame(raf);
-  }, [session.id]);
   // Композер — нижнее препятствие для круглешка AI: тот остаётся в углу, но ужимается,
   // когда композер доходит до него (замер пересечения — в AiLauncher). Публикуем узел
   // САМОГО композера, а не растянутую обёртку: та шириной во всю область чата, и по ней
@@ -2682,7 +2641,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           прокрутки рисуется по краю широкого центра и на большом экране висит
           в сотне пикселей от текста, рядом с кнопкой «вниз». Внешняя обёртка
           только центрирует колонку и сама не скроллится. */}
-      <div ref={feedAreaRef} style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center' }}>
       <div ref={scrollRef} onScroll={handleMessagesScroll} data-selection-scope="chat" data-selection-target="[data-selection-doc]" data-selection-priority="1" style={{ flex: 1, minWidth: 0,
         // Область прокрутки = боковое поле слева + колонка сообщений +
         // место под полосу справа. Полоса идёт вплотную к правому краю сообщений (не
@@ -2707,9 +2666,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера
         // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область
         // прокрутки, поэтому overflow обрезает сообщения по её нижней границе.
-        marginBottom: composerH + composerLift }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto',
-          // Композер по центру: приветствие прижато к его верхней кромке
-          ...(centerComposer ? { minHeight: '100%', justifyContent: 'flex-end' } : {}), opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
+        marginBottom: composerH }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && showHistorySpinner && (
           <div style={{
@@ -2725,14 +2682,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             greetingBubble (гейт онбординга) заменяет пустую ленту целиком */}
         {items.length === 0 && !isHistoryLoading && online && (
           greetingBubble ?? (
-            // Обёртка — для замера высоты группы над центрированным композером
-            <div ref={emptyStateRef} style={{ display: 'flex', flexDirection: 'column', flex: centerComposer ? undefined : 1 }}>
+            <>
               {personaGreeting}
               <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
                 session={session} project={project} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
                 personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange}
-                compact={embedded} greetingAbove={!!personaGreeting} centered={centerComposer} />
-            </div>
+                compact={embedded} greetingAbove={!!personaGreeting} />
+            </>
           )
         )}
 
@@ -2945,9 +2901,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
       {/* Composer — плавающий над лентой; фон прозрачный, контент виден под/вокруг него */}
       <div ref={composerWrapRef} style={{
-        // bottom > 0 — композер поднят в центр пустого чата (composerLift)
-        position: 'absolute', left: 0, right: 0, bottom: composerLift,
-        transition: liftInstant ? 'none' : 'bottom 0.25s ease-out',
+        position: 'absolute', left: 0, right: 0, bottom: 0,
         // Снизу воздуха нет, когда чат стоит прямо на холсте (headerIsland): его
         // даёт padding холста (ISLAND.pad), и губа композера встаёт на одну линию
         // с нижней кромкой соседних островов. Внутри острова (split чат|файл)

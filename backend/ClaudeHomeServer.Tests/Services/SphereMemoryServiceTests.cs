@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -141,5 +142,89 @@ public class SphereMemoryServiceTests : IDisposable
     public void DatasetName_ИмеетФормуUsernameSphereId()
     {
         SphereMemoryService.DatasetName("alice", "s-42").Should().Be("alice:sphere:s-42");
+    }
+
+    // --- Dify: удаление датасета вместе со сферой и подъём записи через асинхронный путь ---
+
+    [Fact]
+    public async Task DeleteAllForSphere_УдаляетDifyДатасетСферы()
+    {
+        var dify = new FakeDify();
+        using var svc = new SphereMemoryService(_config, knowledge: dify);
+        svc.Add("u1", "s1", "запись, уходящая в Dify");
+        await svc.SyncAsync("u1", "s1");
+        dify.Datasets.Should().ContainSingle();
+        var datasetId = dify.Datasets.Single();
+
+        await svc.DeleteAllForSphereAsync("u1", "s1");
+
+        dify.DeletedDatasets.Should().Equal(datasetId);
+    }
+
+    [Fact]
+    public async Task Sync_ПослеУдаленияСферы_НеВоскрешаетДатасет()
+    {
+        var dify = new FakeDify();
+        using var svc = new SphereMemoryService(_config, knowledge: dify);
+        svc.Add("u1", "s1", "запись до удаления");   // синк отложен дебаунсом — датасета ещё нет
+        await svc.DeleteAllForSphereAsync("u1", "s1");
+
+        await svc.SyncAsync("u1", "s1");
+
+        dify.Datasets.Should().BeEmpty("пустая удалённая сфера не должна получить новый датасет");
+    }
+
+    [Fact]
+    public async Task AdoptAsync_ОтправляетЗаписьВDifyСразу_ИПеремещаетЕё()
+    {
+        var dify = new FakeDify();
+        using var svc = new SphereMemoryService(_config, knowledge: dify);
+        using var team = new TeamMemoryService(_config);
+        var entry = team.Add("u1", "p1", "договорённость проекта про релизы");
+
+        var adopted = await svc.AdoptAsync("u1", "s1", team, "p1", entry.Id);
+
+        adopted.Should().NotBeNull();
+        dify.Indexed.Should().ContainSingle().Which.Should().Contain("договорённость проекта про релизы");
+        team.List("u1", "p1").Should().BeEmpty();
+        svc.List("u1", "s1").Should().ContainSingle();
+    }
+
+    private sealed class FakeDify : IKnowledgeIndex
+    {
+        public bool IsConfigured => true;
+        public List<string> Datasets { get; } = [];
+        public List<string> DeletedDatasets { get; } = [];
+        public List<string> Indexed { get; } = [];
+
+        public Task<string> CreateDatasetAsync(string name, string permission = "only_me", string? description = null,
+            string? indexingTechnique = null)
+        {
+            var id = "ds-" + (Datasets.Count + DeletedDatasets.Count + 1);
+            Datasets.Add(id);
+            return Task.FromResult(id);
+        }
+
+        public Task DeleteDocumentAsync(string datasetId, string documentId) => Task.CompletedTask;
+
+        public Task DeleteDatasetAsync(string datasetId)
+        {
+            Datasets.Remove(datasetId);
+            DeletedDatasets.Add(datasetId);
+            return Task.CompletedTask;
+        }
+
+        public Task RenameDatasetAsync(string datasetId, string newName) => Task.CompletedTask;
+
+        public Task<DifyDocumentInfo> IndexFileByTextAsync(string datasetId, string fileName, string content,
+            List<string>? tags = null)
+        {
+            Indexed.Add(content);
+            return Task.FromResult(new DifyDocumentInfo("doc-" + Indexed.Count, fileName, "completed"));
+        }
+
+        public Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8,
+            IReadOnlyList<KnowledgeMetadataFilter>? filters = null) =>
+            Task.FromResult<IReadOnlyList<DifyRetrieveChunk>>([]);
     }
 }

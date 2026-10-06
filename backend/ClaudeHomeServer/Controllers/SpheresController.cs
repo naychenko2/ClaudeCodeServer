@@ -28,6 +28,7 @@ public class SpheresController(
     [HttpGet("{id}/overview")]
     public IActionResult Overview(string id)
     {
+        if (!spheres.Enabled(UserId)) return NotFound();
         var sphere = spheres.GetOwned(id, UserId);
         if (sphere is null) return NotFound();
 
@@ -81,13 +82,14 @@ public class SpheresController(
     [HttpGet("{id}/memory")]
     public IActionResult MemoryList(string id)
     {
+        if (!spheres.Enabled(UserId)) return NotFound();
         if (spheres.GetOwned(id, UserId) is null) return NotFound();
         var projectShelves = spheres.ProjectsOf(UserId, id)
             .Select(pid => projects.GetById(pid))
             .OfType<Project>()
             .OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase)
             .Select(p => new SphereMemoryProjectShelf(p.Id, p.Name,
-                [.. teamMemory.List(UserId, p.Id).Select(SphereMemoryEntryDto.From)]))
+                [.. teamMemory.List(UserId, p.Id).Select(ProjectMemoryEntryDto.From)]))
             .ToList();
         return Ok(new SphereMemoryResponse(
             [.. sphereMemory.List(UserId, id).Select(SphereMemoryEntryDto.From)],
@@ -99,6 +101,7 @@ public class SpheresController(
     [HttpPost("{id}/memory")]
     public IActionResult MemoryAdd(string id, [FromBody] SphereMemoryAddRequest req)
     {
+        if (!spheres.Enabled(UserId)) return NotFound();
         if (spheres.GetOwned(id, UserId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
         if (TeamMemoryService.LengthViolation(req.Text, 0) is { } tooLong) return BadRequest(new { error = tooLong });
@@ -109,18 +112,20 @@ public class SpheresController(
     [HttpDelete("{id}/memory/{entryId}")]
     public IActionResult MemoryRemove(string id, string entryId)
     {
+        if (!spheres.Enabled(UserId)) return NotFound();
         if (spheres.GetOwned(id, UserId) is null) return NotFound();
         return sphereMemory.Remove(UserId, id, entryId) ? NoContent() : NotFound();
     }
 
     /// <summary>Поднять запись с полки проекта сферы на полку сферы (перемещение; тот же код, что у MCP adopt).</summary>
     [HttpPost("{id}/memory/adopt")]
-    public IActionResult MemoryAdopt(string id, [FromBody] SphereMemoryAdoptRequest req)
+    public async Task<IActionResult> MemoryAdopt(string id, [FromBody] SphereMemoryAdoptRequest req)
     {
+        if (!spheres.Enabled(UserId)) return NotFound();
         if (spheres.GetOwned(id, UserId) is null) return NotFound();
         if (string.IsNullOrEmpty(req.ProjectId) || !spheres.ProjectsOf(UserId, id).Contains(req.ProjectId))
             return BadRequest(new { error = "Проект не входит в сферу" });
-        var adopted = sphereMemory.Adopt(UserId, id, teamMemory, req.ProjectId, req.EntryId ?? "");
+        var adopted = await sphereMemory.AdoptAsync(UserId, id, teamMemory, req.ProjectId, req.EntryId ?? "");
         return adopted is null ? NotFound(new { error = "Запись не найдена в памяти проекта" })
             : Ok(SphereMemoryEntryDto.From(adopted));
     }
@@ -131,7 +136,8 @@ public record SphereMemoryAdoptRequest(string ProjectId, string EntryId);
 
 public record SphereMemoryPromotionDto(string ProjectId, string EntryId, DateTime At);
 
-public record SphereMemoryEntryDto(string Id, string ProjectId, string Text, string Type, double Salience,
+// Запись полки СФЕРЫ: ScopeId — id сферы (в сторе это поле TeamMemoryEntry.ProjectId)
+public record SphereMemoryEntryDto(string Id, string ScopeId, string Text, string Type, double Salience,
     string Source, DateTime CreatedAt, SphereMemoryPromotionDto? PromotedFrom)
 {
     public static SphereMemoryEntryDto From(TeamMemoryEntry e) => new(e.Id, e.ProjectId, e.Text,
@@ -139,6 +145,14 @@ public record SphereMemoryEntryDto(string Id, string ProjectId, string Text, str
         e.PromotedFrom is { } p ? new SphereMemoryPromotionDto(p.ProjectId, p.EntryId, p.At) : null);
 }
 
-public record SphereMemoryProjectShelf(string ProjectId, string ProjectName, List<SphereMemoryEntryDto> Entries);
+// Запись полки ПРОЕКТА сферы: ProjectId — id проекта
+public record ProjectMemoryEntryDto(string Id, string ProjectId, string Text, string Type, double Salience,
+    string Source, DateTime CreatedAt)
+{
+    public static ProjectMemoryEntryDto From(TeamMemoryEntry e) => new(e.Id, e.ProjectId, e.Text,
+        e.Type.ToString().ToLowerInvariant(), e.Salience, e.Source.ToString().ToLowerInvariant(), e.CreatedAt);
+}
+
+public record SphereMemoryProjectShelf(string ProjectId, string ProjectName, List<ProjectMemoryEntryDto> Entries);
 
 public record SphereMemoryResponse(List<SphereMemoryEntryDto> Sphere, List<SphereMemoryProjectShelf> Projects, int MaxEntries);

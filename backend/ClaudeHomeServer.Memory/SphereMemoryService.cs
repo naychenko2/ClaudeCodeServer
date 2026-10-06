@@ -74,6 +74,12 @@ public class SphereMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposa
         var promoted = await AddAsync(ownerId, sphereId, source.Text, source.Type, source.Salience,
             new MemoryPromotion(projectId, source.Id, DateTime.UtcNow));
         projectShelf.Remove(ownerId, projectId, entryId);
+        // Не ждём дебаунса: перенесённая запись должна находиться семантическим поиском сразу
+        if (Available)
+        {
+            try { await SyncAsync(ownerId, sphereId); }
+            catch { /* best-effort: дозреет обычным дебаунс-синком, запись уже в сторе */ }
+        }
         return promoted;
     }
 

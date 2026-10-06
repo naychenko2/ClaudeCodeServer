@@ -335,8 +335,8 @@ public sealed class PersonaAgentFileSync
             if (!keepSet.Contains(path)) TryDelete(path);
         }
 
-        // Если глобальная — чистим проекты, где её не должно быть (= вернули projectId
-        // или сменили scope с project на global и надо убрать из чужих проектов)
+        // Чистим проекты, где персоне быть не должно: цикл работает и для глобальных, и для сферных
+        // (keep уже содержит файлы её зоны), и при смене scope или переносе проекта между сферами
         foreach (var p in _projects.GetByOwner(persona.OwnerId))
         {
             if (p.Id == persona.ProjectId || ServerRootOf(p) is null) continue;

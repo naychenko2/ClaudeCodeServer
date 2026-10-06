@@ -404,7 +404,7 @@ public sealed class MemoryToolset(
             default: // sphere_memory_adopt
             {
                 var id = StringArg(arguments, "entryId");
-                var adopted = sphereMemory.Adopt(context.OwnerId, sphereId, teamMemory, project.Id, id);
+                var adopted = await sphereMemory.AdoptAsync(context.OwnerId, sphereId, teamMemory, project.Id, id);
                 if (adopted is null) return Deny($"Запись {id} не найдена в памяти проекта.");
                 await BroadcastTeamAsync(context.OwnerId, project.Id, "removed", id);
                 return Json(adopted);

@@ -134,7 +134,9 @@ public class SpheresApiTests : IDisposable
             .Which.GetProperty("type").GetString().Should().Be("convention");
         var shelf = list.GetProperty("projects").EnumerateArray().Should().ContainSingle().Subject;
         shelf.GetProperty("projectId").GetString().Should().Be(projectId);
-        shelf.GetProperty("entries").EnumerateArray().Should().ContainSingle();
+        shelf.GetProperty("entries").EnumerateArray().Should().ContainSingle()
+            .Which.GetProperty("projectId").GetString().Should().Be(projectId);
+        list.GetProperty("sphere")[0].GetProperty("scopeId").GetString().Should().Be(sphere);
 
         (await _client.PostAsJsonAsync($"/api/spheres/{sphere}/memory/adopt", new { projectId = outside, entryId = onShelf.Id }))
             .StatusCode.Should().Be(HttpStatusCode.BadRequest);
@@ -153,6 +155,35 @@ public class SpheresApiTests : IDisposable
         (await _stranger.DeleteAsync($"/api/spheres/{sphere}/memory/{addedId}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await _stranger.PostAsJsonAsync($"/api/spheres/{sphere}/memory/adopt", new { projectId, entryId = "e" })).StatusCode
             .Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task SphereManagerUpdate_ХартияДлиннееПотолка_ОтказНаУровнеСервиса()
+    {
+        var sphere = await CreateSphereAsync(_client, "хартия");
+        var manager = _factory.Services.GetRequiredService<SphereManager>();
+
+        var act = () => manager.Update(sphere, null, null, charter: new string('x', Sphere.CharterMaxLength + 1));
+
+        act.Should().Throw<ArgumentException>();
+        manager.GetById(sphere)!.Charter.Should().BeNull();
+        manager.Update(sphere, null, null, charter: new string('x', Sphere.CharterMaxLength)).Charter!.Length
+            .Should().Be(Sphere.CharterMaxLength);
+    }
+
+    [Fact]
+    public async Task ПамятьИОбзорСферы_ФлагВыключен_404НаКаждойРучке()
+    {
+        var sphere = await CreateSphereAsync(_client, "без флага");
+        var projectId = await CreateProjectAsync(_client, sphere);
+
+        (await _client.GetAsync($"/api/spheres/{sphere}/overview")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.GetAsync($"/api/spheres/{sphere}/memory")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.PostAsJsonAsync($"/api/spheres/{sphere}/memory", new { text = "x" })).StatusCode
+            .Should().Be(HttpStatusCode.NotFound);
+        (await _client.DeleteAsync($"/api/spheres/{sphere}/memory/e1")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.PostAsJsonAsync($"/api/spheres/{sphere}/memory/adopt", new { projectId, entryId = "e1" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]

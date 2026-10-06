@@ -82,6 +82,8 @@ public class SphereManager : ISphereDirectory
     {
         var group = _groups.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Группа не найдена: {id}");
+        if (charter is { Length: > Sphere.CharterMaxLength })
+            throw new ArgumentException($"Хартия не длиннее {Sphere.CharterMaxLength} символов", nameof(charter));
         if (name is not null) group.Name = name;
         if (color is not null) group.Color = color;
         // Пустая строка очищает значок и хартию

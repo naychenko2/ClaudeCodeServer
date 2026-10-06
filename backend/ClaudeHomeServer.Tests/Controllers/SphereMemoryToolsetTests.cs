@@ -116,20 +116,41 @@ public class SphereMemoryToolsetTests : IDisposable
     }
 
     [Fact]
-    public async Task ПерсонаДругойСферы_ПишетТолькоВСвоюСферуПроекта_Отказ()
+    public async Task ЧужойSphereIdВАргументах_Игнорируется_ЗаписьУходитВСферуПроектаСессии()
+    {
+        await EnableFlagAsync();
+        var s1 = await SphereAsync("первая");
+        var s2 = await SphereAsync("вторая");
+        var projectInS2 = await ProjectAsync(s2);
+        var personaS2 = NewPersona(PersonaScope.Sphere, sphereId: s2);
+        var mem = _factory.Services.GetRequiredService<SphereMemoryService>();
+
+        // Персона сферы s2 и человек пытаются адресовать записью чужую сферу s1 через аргумент
+        IsError(await CallAsync(personaS2.Id, projectInS2, "sphere_memory_remember",
+            new { text = "от персоны", sphereId = s1 })).Should().BeFalse();
+        IsError(await CallAsync(null, projectInS2, "sphere_memory_remember",
+            new { text = "от человека", sphereId = s1 })).Should().BeFalse();
+
+        mem.Count(OwnerId, s1).Should().Be(0, "sphereId из аргументов игнорируется");
+        mem.List(OwnerId, s2).Select(e => e.Text).Should().BeEquivalentTo("от персоны", "от человека");
+    }
+
+    [Fact]
+    public async Task ПерсонаДругойСферы_ПисатьВСферуПроектаНеМожет_Отказ()
     {
         await EnableFlagAsync();
         var s1 = await SphereAsync("первая");
         var s2 = await SphereAsync("вторая");
         var projectInS2 = await ProjectAsync(s2);
         var personaS1 = NewPersona(PersonaScope.Sphere, sphereId: s1);
+        var mem = _factory.Services.GetRequiredService<SphereMemoryService>();
 
-        // sphereId в аргументах — чужой, игнорируется: сфера берётся из проекта чата
         var denied = await CallAsync(personaS1.Id, projectInS2, "sphere_memory_remember",
             new { text = "в чужую сферу", sphereId = s1 });
+
         IsError(denied).Should().BeTrue();
-        _factory.Services.GetRequiredService<SphereMemoryService>().Count(OwnerId, s1).Should().Be(0);
-        _factory.Services.GetRequiredService<SphereMemoryService>().Count(OwnerId, s2).Should().Be(0);
+        mem.Count(OwnerId, s1).Should().Be(0);
+        mem.Count(OwnerId, s2).Should().Be(0);
     }
 
     [Fact]

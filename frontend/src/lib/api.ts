@@ -971,8 +971,9 @@ export const api = {
   // Группы проектов
   projectGroups: {
     list: () => request<ProjectGroup[]>('/project-groups'),
-    create: (name: string, color: string) =>
-      request<ProjectGroup>('/project-groups', { method: 'POST', body: JSON.stringify({ name, color }) }),
+    // icon и charter необязательны — сфера создаётся сразу со значком и уставом
+    create: (name: string, color: string, extra?: { icon?: string; charter?: string }) =>
+      request<ProjectGroup>('/project-groups', { method: 'POST', body: JSON.stringify({ name, color, ...extra }) }),
     // icon: '' снимает значок; charter — устав сферы (до 4000 символов)
     update: (id: string, data: { name?: string; color?: string; icon?: string; charter?: string }) =>
       request<ProjectGroup>(`/project-groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),

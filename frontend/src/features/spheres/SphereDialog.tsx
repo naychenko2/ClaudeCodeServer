@@ -55,9 +55,7 @@ export function SphereDialog({ sphere, existingCount, onSaved, onClose }: Props)
       if (sphere) {
         saved = await api.projectGroups.update(sphere.id, { name: trimmed, color, icon, charter });
       } else {
-        // Создание принимает только имя и цвет — значок и устав доезжают правкой
-        saved = await api.projectGroups.create(trimmed, color);
-        if (icon || charter) saved = await api.projectGroups.update(saved.id, { icon, charter });
+        saved = await api.projectGroups.create(trimmed, color, { icon, charter });
       }
       invalidateProjectsCache();
       onSaved(saved);

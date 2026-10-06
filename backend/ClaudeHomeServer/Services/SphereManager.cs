@@ -62,8 +62,10 @@ public class SphereManager : ISphereDirectory
     public string? CharterOf(string ownerId, string sphereId) =>
         Enabled(ownerId) && GetOwned(sphereId, ownerId)?.Charter is { } c && !string.IsNullOrWhiteSpace(c) ? c : null;
 
-    public Sphere Create(string name, string color, string userId)
+    public Sphere Create(string name, string color, string userId, string? icon = null, string? charter = null)
     {
+        if (charter is { Length: > Sphere.CharterMaxLength })
+            throw new ArgumentException($"Хартия не длиннее {Sphere.CharterMaxLength} символов", nameof(charter));
         var maxOrder = _groups.Values.Where(g => g.OwnerId == userId)
             .Select(g => (int?)g.Order).Max() ?? -1;
         var group = new Sphere
@@ -72,6 +74,8 @@ public class SphereManager : ISphereDirectory
             Color = color,
             OwnerId = userId,
             Order = maxOrder + 1,
+            Icon = string.IsNullOrEmpty(icon) ? null : icon,
+            Charter = string.IsNullOrEmpty(charter) ? null : charter,
         };
         _groups[group.Id] = group;
         Save();

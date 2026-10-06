@@ -44,6 +44,33 @@ public class ProjectGroupsControllerTests : IClassFixture<TestWebApplicationFact
     }
 
     [Fact]
+    public async Task Create_СоЗначкомИУставом_СохраняетОбаСразу()
+    {
+        var response = await _client.PostAsJsonAsync("/api/project-groups",
+            new { name = "Со значком", color = "#D97757", icon = "house", charter = "Устав сферы" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("icon").GetString().Should().Be("house");
+        body.GetProperty("charter").GetString().Should().Be("Устав сферы");
+    }
+
+    [Fact]
+    public async Task Create_НегодныйЗначок_400()
+    {
+        var response = await _client.PostAsJsonAsync("/api/project-groups",
+            new { name = "Х", icon = "нет-такой-иконки" });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_СлишкомДлинныйУстав_400()
+    {
+        var response = await _client.PostAsJsonAsync("/api/project-groups",
+            new { name = "Х", charter = new string('x', ClaudeHomeServer.Models.Sphere.CharterMaxLength + 1) });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
     public async Task Update_МеняетИмяИЦвет()
     {
         var group = await CreateGroupAsync("до");

@@ -24,7 +24,18 @@ public class ProjectGroupsController(SphereManager groups, ProjectManager projec
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Укажите название группы" });
-        var g = groups.Create(req.Name.Trim(), req.Color ?? "", UserId);
+        if (req.Charter is { Length: > Sphere.CharterMaxLength })
+            return BadRequest(new { error = $"Хартия не длиннее {Sphere.CharterMaxLength} символов" });
+        // Значок — по белому списку lucide, как в Update; пусто — без значка
+        var icon = req.Icon?.Trim();
+        if (!string.IsNullOrEmpty(icon))
+        {
+            var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(icon);
+            if (candidate is null)
+                return BadRequest(new { error = "Негодный значок: нужно имя иконки из набора lucide" });
+            icon = candidate.Name;
+        }
+        var g = groups.Create(req.Name.Trim(), req.Color ?? "", UserId, icon, req.Charter);
         return Ok(g);
     }
 
@@ -73,6 +84,6 @@ public class ProjectGroupsController(SphereManager groups, ProjectManager projec
 /// <summary>Ответ удаления сферы: сколько записей её памяти удалено вместе с ней.</summary>
 public record DeleteGroupResponse(int DeletedMemory);
 
-public record CreateGroupRequest(string Name, string? Color);
+public record CreateGroupRequest(string Name, string? Color, string? Icon = null, string? Charter = null);
 public record UpdateGroupRequest(string? Name, string? Color, string? Icon = null, string? Charter = null);
 public record ReorderGroupsRequest(List<string>? OrderedIds);

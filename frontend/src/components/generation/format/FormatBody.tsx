@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, Info, Maximize2, Send, TriangleAlert } from 'lucide-react';
 import { C, FS, R, SP } from '../../../lib/design';
 import { FORMAT_TEXT, TIER_NAME, TIER_ORDER, tierCaption } from '../../../lib/chatContext/formatText';
-import type { CropAnchor, FormatEditModel, FormatModel, FormatTierOption, MediaFormatState } from '../../../lib/chatContext/formatTypes';
+import type { CropAnchor, FormatEditModel, FormatFramesModel, FormatModel, FormatTierOption, MediaFormatState } from '../../../lib/chatContext/formatTypes';
 import { Button, InlineSegmented, Notice, TextField } from '../../ui';
 import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
 import { previewRects, ratioOf } from './formatPreview';
@@ -62,7 +62,7 @@ function Tier({ o, on, onPick }: { o: FormatTierOption; on: boolean; onPick: () 
     <>
       <b style={{ fontSize: FS.sm, color: on ? C.accent : C.textHeading }}>{TIER_NAME[o.tier]}</b>
       <span style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{cap.size}</span>
-      <em style={{ fontStyle: 'normal', fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>{cap.price || ' '}</em>
+      <em title={cap.price || undefined} style={{ fontStyle: 'normal', fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{cap.price || ' '}</em>
     </>
   );
   const style = {
@@ -80,6 +80,7 @@ function Tiers({ state, onPick }: { state: MediaFormatState; onPick: (t: FormatT
   const byTier = new Map(state.tiers.map(t => [t.tier, t]));
   const grey = state.tiers.find(t => t.disabledReason)?.disabledReason;
   const exact = state.resolved.mode === 'exact';
+  const note = exact ? null : state.tiers.find(t => t.tier === state.resolved.tier)?.note;
   return (
     <>
       <Lab>Качество</Lab>
@@ -89,6 +90,7 @@ function Tiers({ state, onPick }: { state: MediaFormatState; onPick: (t: FormatT
         ))}
       </div>
       {grey && <div data-fmt-hint="" style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>{grey}</div>}
+      {note && <div data-fmt-hint="tier-note" style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>{note}</div>}
     </>
   );
 }
@@ -237,6 +239,24 @@ function Ask({ e, isMobile }: { e: FormatEditModel; isMobile: boolean }) {
   );
 }
 
+// Кадры A/B будут подрезаны под формат сцены (видео): превью в рамке цели и якорь подрезки
+function Frames({ f, isMobile }: { f: FormatFramesModel; isMobile: boolean }) {
+  return (
+    <Notice tone="warning" icon={TriangleAlert} data-fmt-note="frames">
+      {f.text}
+      <div data-fmt-frames="" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: SP.xs }}>
+        {f.previews.map(p => (
+          <div key={p.slot} style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, alignItems: 'flex-start' }}>
+            <Preview source={{ aspect: p.aspect, thumb: p.thumb }} target={f.target} mode="crop" anchor={f.anchor} height={56} />
+            <span style={{ fontSize: FS.xs, color: C.textMuted }}>Кадр {p.slot} · {p.aspect}</span>
+          </div>
+        ))}
+      </div>
+      {f.anchors && <div style={{ marginTop: SP.xs }}><Anchors value={f.anchor} onChange={f.onAnchor} isMobile={isMobile} /></div>}
+    </Notice>
+  );
+}
+
 function EditPanel({ e, state, isMobile }: { e: FormatEditModel; state: MediaFormatState | null; isMobile: boolean }) {
   const aspects = state?.caps?.aspects.filter(a => a !== e.source?.aspect) ?? [];
   const asSource = e.aspect === null;
@@ -330,8 +350,23 @@ export function FormatBody({ m, isMobile, projectName, onOpenExec }: {
   const pickTier = (t: FormatTierOption) => m.onChange({ mode: 'aspect', tier: t.tier });
   return head(
     <>
-      {m.locked && <Notice tone="info" icon={Info} data-fmt-note="locked">Формат фильма — {m.locked.aspect}.</Notice>}
-      {m.mismatch && <Notice tone="warning" icon={TriangleAlert} data-fmt-note="mismatch">{m.mismatch}</Notice>}
+      {m.lockAsk && (
+        <Notice tone="warning" icon={TriangleAlert} data-fmt-note="lock-ask">
+          {m.lockAsk.text}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: SP.xs }}>
+            <Button size="xs" variant="primary" data-fmt-lock="keep" onClick={m.lockAsk.onKeep}>{m.lockAsk.keepLabel}</Button>
+            <Button size="xs" variant="secondary" data-fmt-lock="force" onClick={m.lockAsk.onForce}>{m.lockAsk.forceLabel}</Button>
+          </div>
+        </Notice>
+      )}
+      {m.locked && <Notice tone="info" icon={Info} data-fmt-note="locked">{m.locked.note ?? `Формат фильма — ${m.locked.aspect}.`}</Notice>}
+      {m.mismatch && (
+        <Notice tone="warning" icon={TriangleAlert} data-fmt-note="mismatch">
+          {m.mismatch}
+          {m.mismatchAction && <div style={{ marginTop: SP.xs }}><Button size="xs" variant="primary" data-fmt-fix="" onClick={m.mismatchAction.onClick}>{m.mismatchAction.label}</Button></div>}
+        </Notice>
+      )}
+      {m.frames && <Frames f={m.frames} isMobile={isMobile} />}
       {r.substituted && r.note && <Notice tone="info" icon={Info} data-fmt-note="substituted">{r.note}</Notice>}
       <Lab aside={state.caps.modelLabel}>Пропорции</Lab>
       <div style={exactActive ? { opacity: 0.45 } : undefined}>

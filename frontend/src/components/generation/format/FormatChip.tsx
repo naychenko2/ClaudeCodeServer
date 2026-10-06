@@ -24,7 +24,7 @@ export function FormatChip({ m, short, open, onOpen, onAgentTip }: {
       <b data-fmt-chip-main="" style={{ ...ellipsis, fontWeight: 600, color: c.tone === 'warn' ? 'inherit' : C.textHeading }}>{c.main}</b>
       {sub && <span data-fmt-chip-sub="" style={{ ...ellipsis, color: c.tone === 'warn' ? 'inherit' : C.textMuted, flexShrink: 1 }}>{sub}</span>}
       {m.locked && <Lock size={ICON_SIZE.xs - 3} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} aria-label="Как у фильма" />}
-      {m.mismatch && <TriangleAlert size={ICON_SIZE.xs - 3} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} aria-label="Предупреждение" />}
+      {(m.mismatch || m.frames) && <TriangleAlert size={ICON_SIZE.xs - 3} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} aria-label="Предупреждение" />}
       {m.by === 'agent' && (
         <button type="button" data-agent-mark="" title="Формат поставил Claude · ручная правка снимет метку" aria-label="Формат поставил Claude"
           onClick={e => { e.stopPropagation(); onAgentTip?.(); }}

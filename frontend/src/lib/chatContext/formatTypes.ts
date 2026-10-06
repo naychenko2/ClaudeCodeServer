@@ -62,6 +62,10 @@ export interface FormatTierOption {
   postStep?: string | null;
   price?: FormatPrice | null;
   disabledReason?: string | null;
+  // Время ступени после цены («~21 мин»): видео знает его из котировки, у картинок не бывает
+  extra?: string | null;
+  // Пояснение под рядом ступеней, пока ступень выбрана («Макс» local H3: съёмка и увеличение — два прогона)
+  note?: string | null;
 }
 
 // Ответ GET …/image-editor/format
@@ -75,6 +79,26 @@ export interface MediaFormatState {
 }
 
 export type CropAnchor = 'left' | 'center' | 'right';
+
+// Предупреждение «кадры будут подрезаны» (видео): превью исходных кадров в рамке цели и выбор якоря рамки
+export interface FormatFramesModel {
+  text: string;
+  previews: { slot: string; aspect: string; thumb: string | null }[];
+  target: string;
+  anchor: CropAnchor;
+  // Выбор рамки «Слева · По центру · Справа» осмыслен только при подрезке по бокам
+  anchors: boolean;
+  onAnchor: (anchor: CropAnchor) => void;
+}
+
+// Вопрос при попытке сменить формат у сцены фильма: сервер ответил 409 film_format_locked
+export interface FormatLockAsk {
+  text: string;
+  keepLabel: string;
+  forceLabel: string;
+  onKeep: () => void;
+  onForce: () => void;
+}
 
 // Правка картинки: другие пропорции. Выбор «Дорисовать / Обрезать» вид держит сам, хост только рисует
 export interface FormatEditModel {
@@ -113,9 +137,14 @@ export interface FormatModel {
   // Только для чтения (kind = readonly): пояснение вместо органов управления
   readonlyNote?: string;
   edit?: FormatEditModel;
-  // Сцена фильма / предупреждение (Б4)
-  locked?: { filmPath: string; aspect: string };
+  // Сцена фильма: 🔒 на чипе; note — пояснение в теле («Формат фильма «…» — 16:9, его задала сцена 1…»)
+  locked?: { filmPath: string; aspect: string; note?: string };
+  lockAsk?: FormatLockAsk;
+  // Пропорции сцены не совпадают с фильмом: жёлтый чип с ⚠ и кнопка «Привести к 16:9»
   mismatch?: string;
+  mismatchAction?: { label: string; onClick: () => void };
+  // Кадры A/B будут подрезаны: ⚠ на чипе, превью и якорь в теле
+  frames?: FormatFramesModel;
   onChange: (wish: Omit<MediaFormatWish, 'by' | 'at'>) => void;
   // Пояснение: у модели без размеров — что она рисует по умолчанию; у «Дорисовать» без пропорций — что выбрать
   hint?: string;

@@ -117,6 +117,33 @@ public sealed class VideoContextKind(
             VideoCatalog.IsAuto(modelId) ? VideoCatalog.AutoModelLabel : model?.Label ?? modelId!);
     }
 
+    // «Формат» (ADR-025): желание сцены под модель её выбора — то, что уйдёт в съёмку; у сцены фильма — замок
+    // пропорций. Строка и в режиме «Чат», с правилом «не передавай aspect/quality без просьбы человека»
+    public string? DescribeFormat(ContextScope scope, ContextItem primary)
+    {
+        if (primary.Kind != SceneKind || Text(primary.Ref, SceneKey) is not { } sceneId || Find(scope, sceneId) is not { } scene)
+            return null;
+        var chosen = prefs?.Get(scope.OwnerId, VideoEditScope.Of(scope.Session));
+        var wish = scene.Settings.Format;
+        if (wish is null && (scene.Settings.Aspect ?? chosen?.Aspect) is { } legacyAspect)
+            wish = new MediaFormat(FormatModes.Aspect, legacyAspect, null, null, null, ContextActor.Human, DateTime.UtcNow);
+        wish ??= chosen?.Format;
+        var providerKey = scene.Settings.Provider ?? chosen?.Provider;
+        var modelId = scene.Settings.Model ?? chosen?.Model;
+        var engine = VideoCatalog.IsAuto(providerKey) ? null
+            : engines?.FirstOrDefault(e => string.Equals(e.Key, providerKey!.Trim(), StringComparison.OrdinalIgnoreCase));
+        var model = VideoCatalog.IsAuto(modelId) ? null : engine?.Models.FirstOrDefault(m => m.Id == modelId!.Trim());
+        var caps = model?.Caps.Format;
+        if (wish is { Mode: FormatModes.Aspect, Tier: null } && engine is not null && model is not null)
+            wish = wish with { Tier = VideoFormatCatalog.DefaultTier(engine.Key, model.Id) };
+        var line = "формат сцены — " + MediaFormatText.Line(wish, MediaFormatResolver.Resolve(caps, wish));
+        if (scene.LockedBy is { } locked)
+            line += $"; сцена фильма «{FilmName(locked.FilmPath)}» — пропорции фильма {locked.Aspect}, смена без force даёт film_format_locked";
+        if (scene.Settings.FrameFit?.Anchor is { } anchor)
+            line += $"; кадры A и B подрезаются под формат, рамка: {anchor}";
+        return line;
+    }
+
     // Из фокуса «Видео»: сцена в работе, а без неё открытый фильм
     public ContextItem? SeedPrimary(ContextScope scope)
     {

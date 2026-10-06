@@ -16,10 +16,13 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
     public const string ScenesRoot = "video";
 
     // Результат операции: либо отказ проверки входа (ErrorCode + Error), либо запись хранилища
-    public sealed record Call(VideoThreadWrite? Written, string? ErrorCode, string? Error)
+    // Locked — замок формата фильма (film_format_locked): ручка отвечает 409 с телом VideoFormatLockedError
+    public sealed record Call(VideoThreadWrite? Written, string? ErrorCode, string? Error, VideoFormatLockDto? Locked = null)
     {
         public static Call Refuse(string code, string error) => new(null, code, error);
         public static Call Of(VideoThreadWrite written) => new(written, null, null);
+        public static Call Lock(VideoFormatLockDto locked, string sceneAspect) =>
+            new(null, VideoEditorErrors.FilmFormatLocked, VideoSceneFormat.LockedText(locked.FilmPath, locked.Aspect, sceneAspect), locked);
     }
 
     public VideoThreadStore Store => threads.Store;
@@ -31,6 +34,9 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
         if (FolderProblem(scope, rawFolder, out var folder) is { } badFolder) return badFolder;
         var settings = given ?? prefs.ForNewScene(ownerId, scope);
         if (SettingsProblem(scope, settings) is { } badSettings) return badSettings;
+        // Желание формата ставит автор правки (человек или агент), время — сервер; Aspect зеркалится
+        // Из префов желание приходит уже с автором и временем — не перештамповываем его автором этой правки
+        if (given is not null) settings = VideoSceneFormat.Normalize(settings, null, by, Store.Now());
 
         var written = threads.Tracked(ownerId, sessionId, () => Store.AddScene(ownerId, sessionId, folder, settings, revision,
             string.IsNullOrWhiteSpace(name) ? null : name.Trim()), by);
@@ -56,10 +62,18 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
             threads.Tracked(ownerId, sessionId, () => Store.SetFocus(ownerId, sessionId, clean, revision), by));
     }
 
+    // force — «Всё равно 9:16»: снимает замок формата фильма для этого запроса. Замок держит сервер для ручки и агента одинаково
     public async Task<Call> SettingsAsync(string ownerId, VideoEditScope scope, string sessionId, string sceneId,
-        VideoSceneSettingsDto settings, long? revision)
+        VideoSceneSettingsDto settings, long? revision, bool force = false, ContextActor by = ContextActor.Human)
     {
         if (SettingsProblem(scope, settings) is { } bad) return bad;
+        var scene = Store.Get(ownerId, sessionId).Scenes.FirstOrDefault(s => s.SceneId == sceneId);
+        if (scene is not null)
+        {
+            settings = VideoSceneFormat.Normalize(settings, scene.Settings, by, Store.Now());
+            if (VideoSceneFormat.LockedConflict(scene, settings, force) is { } locked)
+                return Call.Lock(locked, VideoSceneFormat.AspectOf(settings) ?? "");
+        }
         return await PublishedAsync(ownerId, scope, sessionId, Store.SetSettings(ownerId, sessionId, sceneId, settings, revision));
     }
 
@@ -116,6 +130,8 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
             return Call.Refuse(VideoEditorErrors.InvalidRequest, $"Вариантов — от 1 до {VideoThreadStore.MaxCount}");
         if (s.DurationSec is <= 0)
             return Call.Refuse(VideoEditorErrors.InvalidRequest, "Длительность должна быть положительной");
+        if ((VideoSceneFormat.Validate(s.Format) ?? VideoSceneFormat.ValidateFit(s.FrameFit)) is { } badFormat)
+            return Call.Refuse(VideoEditorErrors.InvalidRequest, badFormat);
         foreach (var frame in new[] { s.FrameA, s.FrameB })
         {
             if (frame is null) continue;

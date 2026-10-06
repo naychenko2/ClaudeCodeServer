@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 
 namespace ClaudeHomeServer.Services.Media;
 
@@ -50,6 +51,24 @@ public static class AspectCrop
         return r is null
             ? null
             : new FormatSize(Math.Max(1, (int)Math.Round(width * r.Width)), Math.Max(1, (int)Math.Round(height * r.Height)));
+    }
+
+    // Подрезка байтов картинки по рамке через шов растра: одна точка для видео (кадры A/B до модели). Ошибка — текст;
+    // Busy — потолок одновременных операций растра. Формат результата — исходника (JPEG/WebP/PNG)
+    public sealed record CropBytes(byte[]? Bytes, string? ContentType, string? Error, bool Busy);
+
+    public static CropBytes Crop(IImageRaster raster, byte[] data, ImageFractionRect rect)
+    {
+        var outcome = raster.Apply(data, [new CropOp(rect)]);
+        if (!outcome.Ok) return new CropBytes(null, null, outcome.Message ?? "Не удалось подрезать кадр", outcome.Error == RasterError.Busy);
+        var image = outcome.Image!;
+        var type = image.Format switch
+        {
+            ImageEncodeFormat.Jpeg => "image/jpeg",
+            ImageEncodeFormat.Webp => "image/webp",
+            _ => "image/png",
+        };
+        return new CropBytes(image.Bytes, type, null, false);
     }
 
     // «W:H» → отношение; на плохую запись false

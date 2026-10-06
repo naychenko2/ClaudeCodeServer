@@ -50,7 +50,8 @@ public sealed record VideoThreadWrite(VideoThreadWriteStatus Status, VideoThread
 }
 
 // Итог одного варианта запуска: файл лежит в рабочей папке задачи (VideoEditWorkspace), здесь — метаданные
-public sealed record VideoVariantResult(int Variant, double DurationSec, long SizeBytes, bool HasSound, VideoCostDto? Cost);
+public sealed record VideoVariantResult(int Variant, double DurationSec, long SizeBytes, bool HasSound, VideoCostDto? Cost,
+    int? Width = null, int? Height = null, string? UpscaleError = null);
 
 public static class VideoSignatures
 {
@@ -70,7 +71,12 @@ public static class VideoSignatures
 // «Кадр/текст изменён после съёмки»: текущие входы сцены против снимка её текущей версии
 public static class VideoStale
 {
-    public static VideoSceneDto Apply(VideoSceneDto scene) => scene with { Stale = Compute(scene) };
+    public static VideoSceneDto Apply(VideoSceneDto scene) =>
+        scene with { Stale = Compute(scene), FormatMismatch = Mismatch(scene) };
+
+    // Сцена фильма (позиция > 0) в пропорциях, не совпадающих с фильмом: при склейке пойдут чёрные полосы
+    public static bool? Mismatch(VideoSceneDto scene) =>
+        scene.LockedBy is { } locked && VideoSceneFormat.AspectOf(scene.Settings) is { } aspect && aspect != locked.Aspect ? true : null;
 
     public static VideoSceneStaleDto? Compute(VideoSceneDto scene)
     {

@@ -126,12 +126,13 @@ public sealed class VideoThreadStore(string root, TimeProvider? time = null)
         });
 
     // Запуск в сцену. Повтор с тем же jobId ничего не дописывает
+    // framesCropped — кадры этой съёмки подрезали под формат сцены (null — нет, прежнее значение сбрасывается)
     public VideoThreadWrite AddLaunch(string ownerId, string sessionId, string sceneId, VideoLaunchDto launch,
-        VideoThreadEvent? log = null) =>
+        VideoThreadEvent? log = null, VideoFramesCroppedDto? framesCropped = null) =>
         Mutate(ownerId, sessionId, sceneId, null, (state, scene) =>
             scene.Launches.Any(l => l.JobId == launch.JobId)
                 ? new VideoThreadWrite(VideoThreadWriteStatus.Ok, state)
-                : Replace(state, scene with { Launches = [.. scene.Launches, launch] }, log));
+                : Replace(state, scene with { Launches = [.. scene.Launches, launch], FramesCropped = framesCropped }, log));
 
     // Запуск кончился: status — VideoLaunchStatus.*, results — варианты по порядку. Каждый вариант — новая
     // версия внизу с провайдером/моделью/лицензией запуска и снимком входов; вариант, уже ставший
@@ -150,7 +151,7 @@ public sealed class VideoThreadStore(string root, TimeProvider? time = null)
             List<VideoClipVersionDto> added = [.. results
                 .Where(r => !scene.Versions.Any(v => v.JobId == jobId && v.Variant == r.Variant))
                 .Select((r, i) => new VideoClipVersionDto(NewId(), number + i, jobId, r.Variant, launch.Provider, launch.Model,
-                    r.DurationSec, r.SizeBytes, r.HasSound, launch.License, r.Cost, launch.Initiator, inputs, now))];
+                    r.DurationSec, r.SizeBytes, r.HasSound, launch.License, r.Cost, launch.Initiator, inputs, now, r.Width, r.Height, r.UpscaleError))];
             var after = scene with
             {
                 Versions = [.. scene.Versions, .. added],
@@ -171,8 +172,11 @@ public sealed class VideoThreadStore(string root, TimeProvider? time = null)
                 : Replace(state, scene with { SavedFiles = [.. scene.SavedFiles, saved] }, log));
 
     // Место сцены в фильме (блок 2 вызывает при «В фильм →»); null — вне фильма
-    public VideoThreadWrite SetFilmRef(string ownerId, string sessionId, string sceneId, VideoFilmRefDto? filmRef) =>
-        Mutate(ownerId, sessionId, sceneId, null, (state, scene) => Replace(state, scene with { FilmRef = filmRef }));
+    // Место сцены в фильме и замок формата: сцена на позиции > 0 следует пропорциям фильма (lockedBy), сцена 1 их задаёт
+    public VideoThreadWrite SetFilmRef(string ownerId, string sessionId, string sceneId, VideoFilmRefDto? filmRef,
+        VideoFormatLockDto? lockedBy = null) =>
+        Mutate(ownerId, sessionId, sceneId, null,
+            (state, scene) => Replace(state, scene with { FilmRef = filmRef, LockedBy = filmRef is null ? null : lockedBy }));
 
     // Состояние для блока хода и записи журнала, ещё не показанные ходу; курсор сдвигается.
     // Ревизию не трогает: сборка хода — не правка состояния

@@ -126,7 +126,10 @@ public sealed class VideoEditorStateContributor(
         "Видео — сцены между двумя кадрами и фильм из них — делай только через video_new → video_scene_set → video_shoot "
         + "(сохранить в проект — video_save_scene, фильм — video_film_edit и video_film_build): они ведут сцену и версии, "
         + "показывают цену и пишут в ленту ту же карточку, что кнопка человека, и уважают его выбор. "
-        + "Не передавай provider/model, если человек сам не просил сменить.";
+        + "Не передавай provider/model, если человек сам не просил сменить. "
+        + "Формат (aspect, quality, anchor) без просьбы человека тоже не передавай: он выбирает его в «Формате», а явный формат от "
+        + "тебя меняет формат видео проекта. Размер задаёт только quality (standard, high, max), а не частные параметры resolution и size; "
+        + "у local MiniMax H3 «max» — съёмка плюс увеличение до 1440p, вторая тяжёлая задача видеокарты.";
 
     public const string PriorityRule = EditorFirst
         + " Просьба снять локально / на своей видеокарте / бесплатно — video_shoot с provider local. "

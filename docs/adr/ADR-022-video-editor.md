@@ -594,6 +594,19 @@ JSON ниже — единственное описание формы для ф
 }
 ```
 
+#### VideoUpscaleRetryResult
+
+```json
+{ "jobId": "job-8", "sourceVersionId": "ver-1" }
+```
+
+«Повторить увеличение»: `POST …/scenes/{sceneId}/versions/{versionId}/upscale` (проектный — с префиксом `sessions/{sessionId}/`), тело пустое, ответ `202`.
+Работает у версии с `upscaleError` («Макс» local H3, съёмка 768p сохранена, а увеличение упало или отменено): сервер повторяет только апскейл
+по живому тикету съёмки, без пересъёмки. Идёт стадия `upscaling` у **новой** задачи `jobId` (события `video_edit_*`, отмена — `DELETE jobs/{jobId}/upscale`),
+тяжёлая задача GPU через ту же очередь. Удачный итог — **новая версия 1440p** (без `upscaleError`), версия 768p остаётся как была; сбой или отмена версий не добавляют.
+Отказы — `{ "error", "code" }`: `409 upscale_retry_unavailable` «Повторить увеличение уже нельзя — переснимите сцену» (тикет съёмки недоступен: рестарт сервера или прошло
+больше 12 ч), `400 invalid_request` — у версии нет `upscaleError` или у модели нет увеличения, `404 scene_not_found` / `version_not_found`, `429 heavy_busy` — GPU занят другой тяжёлой задачей.
+
 #### SaveSceneRequest
 
 ```json

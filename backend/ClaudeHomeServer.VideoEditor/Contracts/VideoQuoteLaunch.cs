@@ -70,6 +70,10 @@ public sealed record VideoLaunchRequest(
 // Либо JobId, либо Error с кодом (VideoEditorErrors.*). Retry — котировка соседа у отказа поставщика
 public sealed record VideoLaunchResult(string? JobId, string? ErrorCode, string? Error, RetryQuote? Retry);
 
+// «Повторить увеличение»: JobId — новая задача (стадия upscaling, отмена — DELETE jobs/{jobId}/upscale),
+// SourceVersionId — версия 768p, из которой она растёт. Готовый ролик станет НОВОЙ версией сцены, исходная остаётся
+public sealed record VideoUpscaleRetryResult(string JobId, string SourceVersionId);
+
 // «Сохранить сцену» в проект: версия → файл video/<фильм>/scene-NN.mp4 (перезаписи нет → .v2.mp4)
 // вместе с кадрами-нитями в кадры/. Реализация — блок 2. FilmPath — необязательный полный путь открытого фильма
 // (video/<папка>/<любое имя>.film): есть — сцена встаёт именно в него, а папка сцены = папка фильма (Folder игнорируется);

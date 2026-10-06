@@ -44,6 +44,7 @@ public sealed class VideoContractExamplesTests
         [nameof(RetryQuote)] = typeof(RetryQuote),
         [nameof(VideoLaunchRequest)] = typeof(VideoLaunchRequest),
         [nameof(VideoLaunchResult)] = typeof(VideoLaunchResult),
+        [nameof(VideoUpscaleRetryResult)] = typeof(VideoUpscaleRetryResult),
         [nameof(SaveSceneRequest)] = typeof(SaveSceneRequest),
         [nameof(SaveSceneResult)] = typeof(SaveSceneResult),
         [nameof(FilmDocument)] = typeof(FilmDocument),

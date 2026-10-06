@@ -231,7 +231,7 @@ public abstract class VideoEditorEndpoints(
             return StatusCode(StatusCodes.Status409Conflict, new Protocol.ChatContextConflictDto(code, fresh));
         var status = code switch
         {
-            VideoEditorErrors.ProviderUnavailable or VideoEditorErrors.NameTaken
+            VideoEditorErrors.ProviderUnavailable or VideoEditorErrors.NameTaken or VideoEditorErrors.UpscaleRetryUnavailable
                 or VideoEditorErrors.RevisionConflict => StatusCodes.Status409Conflict,
             VideoEditorErrors.QuoteNotFound or VideoEditorErrors.JobNotFound or VideoEditorErrors.SceneNotFound
                 or VideoEditorErrors.VersionNotFound or VideoEditorErrors.FileNotFound => StatusCodes.Status404NotFound,

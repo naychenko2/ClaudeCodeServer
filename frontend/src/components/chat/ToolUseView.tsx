@@ -1,12 +1,12 @@
 import { memo, useState, useEffect, useMemo, useContext } from 'react';
 import { Plug, Eye, SquarePen, Terminal, Globe, CircleUser, Sparkles, SquareCheck, Wrench } from 'lucide-react';
-import type { ChatItem } from '../../types';
+import type { ChatItem, ToolRunFailure } from '../../types';
 import { C, FONT, FS, SP } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
-import { LiveDot, ProgressUnderline } from '../ui';
-import { awaitsToolStart, formatClock, isQueued, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
+import { LiveDot, ProgressBar } from '../ui';
+import { awaitsToolStart, formatClock, isQueued, meterText, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
 import { useRunningElapsed } from '../../hooks/useRunningElapsed';
 import { toolLabel, toolWord, toolCardLabel, testRunArg, buildArg, localJobsWaitArg, consoleCaption, isConsoleTool, RUN_TESTS_TOOL, BUILD_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -26,24 +26,55 @@ const MONO_PRE_STYLE: React.CSSProperties = {
 };
 
 // Место слева в шапке: пока инструмент идёт — живая точка (LiveDot), у готовой карточки —
-// пустое место той же ширины, и шапка при завершении не прыгает вбок. Полосы нет вовсе:
-// пока сколько осталось неизвестно, живость показывает точка, а с процентом подчёркивается
-// то, что идёт сейчас (ProgressUnderline). Строки под шапкой отступают на это место плюс зазор
+// пустое место той же ширины, и шапка при завершении не прыгает вбок. Пока сколько осталось
+// неизвестно, живость показывает точка; с процентом под карточкой встаёт полоса на видимой
+// дорожке (ProgressMeter). Строки под шапкой отступают на это место плюс зазор
 const LEAD_W = 18;
 const HEAD_GAP = 10;
 const BELOW_PAD = LEAD_W + HEAD_GAP;
-// Подчёркнутая подпись в узкой строке режется многоточием сама: линия лежит внутри блока
-const UNDERLINE_TRUNC: React.CSSProperties = {
-  maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom',
-};
-// Процент прогресса для подчёркивания: факт (настоящие шаги) — сплошная линия, оценка — точечная
+// Процент прогресса: факт (настоящие шаги) — сплошная заливка, оценка — пунктир
 type ProgressPct = { value: number; estimate: boolean; label?: string };
-// Подчеркнуть текст на долю процента; процента нет — текст как есть
-function Underlined({ pct, style, children }: { pct: ProgressPct | null; style?: React.CSSProperties; children: React.ReactNode }) {
-  return pct
-    ? <ProgressUnderline value={pct.value} estimate={pct.estimate} label={pct.label} style={style}>{children}</ProgressUnderline>
-    : <>{children}</>;
+
+// Полоса прогресса под карточкой: дорожка на всю ширину строки — видно, где конец, — и справа
+// процент с «осталось». Высота строки фиксирована: смена подписи ленту не двигает
+function ProgressMeter({ pct, text }: { pct: ProgressPct; text: string | null }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, height: CAPTION_LINE_H, paddingLeft: BELOW_PAD, paddingRight: SP.sm }}>
+      <ProgressBar value={pct.value} estimate={pct.estimate} size="thin" label={pct.label} transition="width .5s linear" style={{ flex: 1, minWidth: 0 }} />
+      {text && (
+        <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+          {text}
+        </span>
+      )}
+    </div>
+  );
 }
+
+// Упавшие тесты на закрытой карточке — без раскрытия вывода: имя (режется слева, конец имени —
+// метод — виден всегда) и первая строка сообщения; сверх показанных — «ещё N»
+function FailureList({ failures, failed }: { failures: ToolRunFailure[]; failed: number }) {
+  const more = failed - failures.length;
+  const row: React.CSSProperties = { display: 'flex', minWidth: 0, gap: SP.xs, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, whiteSpace: 'nowrap' };
+  return (
+    <div aria-live="polite" style={{ paddingLeft: BELOW_PAD, paddingRight: SP.sm, paddingBottom: SP.xxs }}>
+      {failures.map((f, i) => (
+        <div key={i} title={f.message ? `${f.name}\n${f.message}` : f.name} style={row}>
+          <span style={{ flexShrink: 0, color: C.dangerText }}>✕</span>
+          <span className="cc-trunc-left" style={{ minWidth: 0, maxWidth: f.message ? '60%' : '100%', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', color: C.textSecondary }}>
+            {f.name}
+          </span>
+          {f.message && (
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', color: C.textMuted }}>
+              — {f.message}
+            </span>
+          )}
+        </div>
+      ))}
+      {more > 0 && <div style={{ ...row, color: C.textMuted }}>ещё {more} — в выводе</div>}
+    </div>
+  );
+}
+
 function LeadSlot({ live }: { live: boolean }) {
   return (
     <span aria-hidden={!live} style={{ width: LEAD_W, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
@@ -62,9 +93,9 @@ function ProgressCaption({ text }: { text: string }) {
 // Строка этапов прогона: «✓ сборка 1:42 · тесты 2:13 · 412 из 7951».
 // Прошедшие прижимаются и режутся многоточием, текущий этап с подписью прогресса — никогда:
 // даже на 320 px видно, что идёт сейчас. Этап, на котором оборвалось, — крестиком и красным.
-// С процентом текущий этап подчёркнут на его долю («тесты 1:25»)
-function StageLine({ stages, caption, pct }: { stages: StageView[]; caption: string | null; pct: ProgressPct | null }) {
-  const clock = (s: StageView) => s.ms != null ? ` ${formatClock(s.ms)}` : '';
+// Единственный этап (сборка) без часов: его время — то же «идёт»/«готово» в шапке
+function StageLine({ stages, caption }: { stages: StageView[]; caption: string | null }) {
+  const clock = (s: StageView) => s.ms != null && stages.length > 1 ? ` ${formatClock(s.ms)}` : '';
   const tail = stages[stages.length - 1].state === 'done' ? null : stages[stages.length - 1];
   const past = (tail ? stages.slice(0, -1) : stages).map(s => `✓ ${s.label}${clock(s)}`).join(' · ');
   return (
@@ -76,7 +107,7 @@ function StageLine({ stages, caption, pct }: { stages: StageView[]; caption: str
           {past ? ' · ' : ''}
           {tail.state === 'failed'
             ? <span style={{ color: C.dangerText }}>✕ {tail.label}{clock(tail)}</span>
-            : <span style={{ color: C.textSecondary, fontWeight: 600 }}><Underlined pct={pct}>{tail.label}{clock(tail)}</Underlined></span>}
+            : <span style={{ color: C.textSecondary, fontWeight: 600 }}>{tail.label}{clock(tail)}</span>}
           {caption && <> · <ProgressCaption text={caption} /></>}
         </span>
       )}
@@ -275,12 +306,13 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   const elapsed = toolClockMs(item, running, shownElapsed, aborted ? liveness?.abortedAt?.get(item.id) : null);
   const showClock = elapsed != null && elapsed >= TOOL_TIMER_MIN_MS;
   // Живой прогресс поверх таймера (tool_progress: сабагент, тесты, локальная генерация) —
-  // подпись и, только если источник знает процент, подчёркивание текущего этапа или подписи на
-  // его долю. Ожидание в очереди линии не даёт вовсе: ничего не выполняется, живость — точка
-  const progressText = running ? toolProgressText(item.progress) : null;
+  // подпись и, только если источник знает процент, полоса под карточкой с процентом и
+  // «осталось» справа (в подписи их тогда нет). Ожидание в очереди полосы не даёт вовсе:
+  // ничего не выполняется, живость — точка
   const progressValue = running && !isQueued(item.progress) ? toolProgressPercent(item.progress) : null;
+  const progressText = running ? toolProgressText(item.progress, progressValue == null) : null;
   const progressPct: ProgressPct | null = progressValue != null
-    ? { value: progressValue, estimate: item.progress?.exact !== true, label: progressText ?? undefined }
+    ? { value: progressValue, estimate: item.progress?.exact !== true, label: toolProgressText(item.progress) ?? undefined }
     : null;
   // Строка этапов прогона тестов (этапы шлёт сервер, они же в истории вызова): идёт — «сейчас»
   // по часам карточки, закрыта — до результата или до обрыва
@@ -295,6 +327,9 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // очередь — «занято 2»); «сборка» и подсчёт под «тестами» сами себе подпись — при них только
   // счётчик этапа
   const stageCaption = hasStages ? stageCaptionOf(item.progress, item.name) : null;
+  // «Осталось» по темпу текущего этапа — от его начала, а не от старта вызова (сборка не в счёт)
+  const currentStage = stages.length > 0 && stages[stages.length - 1].state === 'current' ? stages[stages.length - 1] : null;
+  const meter = progressPct ? meterText(item.progress, currentStage?.ms ?? null) : null;
   // На мобиле подпись прогресса и итог — отдельной строкой под шапкой у ВСЕХ карточек
   // (шапка остаётся описанию, итог у всех стоит на одном месте). Строка держится с начала
   // выполнения, поэтому завершение ленту не сдвигает
@@ -319,7 +354,9 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   );
 
   return (
-    <div>
+    // data-tool-id — по нему лента следит, видна ли карточка активного инструмента: видна —
+    // индикатор ожидания не повторяет её подпись и время
+    <div data-tool-id={item.id}>
       <div
         // Справа — запас под полосу прокрутки ленты: таймер и итог прижаты к правому краю
         // колонки, и полоса-накладка (её ширина в замере 0, рисуется поверх) съедала
@@ -373,7 +410,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
           : <span style={{ flex: 1 }} />}
         {headCaption && !captionBelow && (
           <span title={headCaption} style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-            <Underlined pct={progressPct} style={UNDERLINE_TRUNC}><ProgressCaption text={headCaption} /></Underlined>
+            <ProgressCaption text={headCaption} />
           </span>
         )}
         {running && showClock && (
@@ -395,7 +432,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
           У прогона тестов подпись едет в строке этапов, поэтому отдельной строки нет */}
       {captionBelow && running && !hasStages && (
         <div title={progressText ?? undefined} style={{ margin: `${SP.xxs}px 0 0`, paddingLeft: BELOW_PAD, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-          {progressText && <Underlined pct={progressPct} style={UNDERLINE_TRUNC}><ProgressCaption text={progressText} /></Underlined>}
+          {progressText && <ProgressCaption text={progressText} />}
         </div>
       )}
       {captionBelow && (settled || aborted) && (
@@ -404,14 +441,18 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         </div>
       )}
       {/* Строка этапов — и пока идёт, и на закрытой карточке без раскрытия (после F5 — из
-          истории). Процент — подчёркиванием текущего этапа, отдельной строки под полосу нет.
-          Справа тот же запас под полосу прокрутки ленты, что у шапки: иначе на 320 px хвост
-          «упало K» уезжал под полосу-накладку */}
+          истории). Справа тот же запас под полосу прокрутки ленты, что у шапки: иначе на 320 px
+          хвост «упало K» уезжал под полосу-накладку */}
       {hasStages && (
         <div style={{ paddingLeft: BELOW_PAD, paddingRight: SP.sm, paddingBottom: SP.xxs }}>
-          <StageLine stages={stages} caption={running ? stageCaption : null} pct={progressPct} />
+          <StageLine stages={stages} caption={running ? stageCaption : null} />
         </div>
       )}
+      {/* Полоса — последней строкой живой карточки: под подписью или этапами, к которым относится */}
+      {progressPct && <ProgressMeter pct={progressPct} text={meter} />}
+      {(settled || aborted) && item.totals?.failures?.length ? (
+        <FailureList failures={item.totals.failures} failed={item.totals.failed} />
+      ) : null}
       {/* Медиа (изображения + видео) — сразу под шапкой, без клика */}
       {hasMedia && (
         <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>

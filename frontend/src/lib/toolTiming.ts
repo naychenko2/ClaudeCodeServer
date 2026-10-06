@@ -28,7 +28,8 @@ function inlineToolName(name: string, kind?: string | null): string {
 // имя инструмента — по-русски, как в остальной ленте.
 // Локальная генерация: место в очереди либо процент и сколько осталось. Процент по настоящим
 // шагам ComfyUI (exact) — без «≈», шаг — в label; оценка по ETA — с «≈»
-export function toolProgressText(p: ToolProgress | null | undefined): string | null {
+// meter false — без процента и «осталось»: их показывает полоса прогресса справа от себя
+export function toolProgressText(p: ToolProgress | null | undefined, meter = true): string | null {
   if (!p) return null;
   const parts: string[] = [];
   if (p.stage === 'working') {
@@ -42,10 +43,25 @@ export function toolProgressText(p: ToolProgress | null | undefined): string | n
       if (typeof p.queuePosition === 'number' && p.queuePosition > 0) parts.push(`${p.queuePosition}-я в очереди`);
       else if (!p.label) parts.push('в очереди');
     }
-    if (typeof p.percent === 'number') parts.push(`${p.exact ? '' : '≈'}${Math.round(p.percent)}%`);
-    if (typeof p.etaSeconds === 'number' && p.etaSeconds > 0) parts.push(`осталось ~${formatClock(p.etaSeconds * 1000)}`);
+    if (meter && typeof p.percent === 'number') parts.push(`${p.exact ? '' : '≈'}${Math.round(p.percent)}%`);
+    if (meter && typeof p.etaSeconds === 'number' && p.etaSeconds > 0) parts.push(`осталось ~${formatClock(p.etaSeconds * 1000)}`);
   }
   return parts.length ? parts.join(' · ') : null;
+}
+
+// Подпись справа от полосы: процент («≈» у оценки) и сколько осталось. Осталось — от источника
+// (etaSeconds local-media), а без него у текущего этапа с настоящим процентом — по темпу этапа:
+// stageMs / percent × (100 − percent). Пока выборка мала (до 10% или 15 с), темп скачет — молчим
+export const ETA_MIN_PERCENT = 10;
+export const ETA_MIN_STAGE_MS = 15_000;
+
+export function meterText(p: ToolProgress | null | undefined, stageMs: number | null): string | null {
+  if (typeof p?.percent !== 'number') return null;
+  const parts = [`${p.exact ? '' : '≈'}${Math.round(toolProgressPercent(p)!)}%`];
+  if (typeof p.etaSeconds === 'number' && p.etaSeconds > 0) parts.push(`осталось ~${formatClock(p.etaSeconds * 1000)}`);
+  else if (p.exact && stageMs != null && stageMs >= ETA_MIN_STAGE_MS && p.percent >= ETA_MIN_PERCENT && p.percent < 100)
+    parts.push(`осталось ≈${formatClock(stageMs / p.percent * (100 - p.percent))}`);
+  return parts.join(' · ');
 }
 
 // Процент для полосы; null — полоса остаётся неопределённой. Потолок: у оценки 95, у настоящих

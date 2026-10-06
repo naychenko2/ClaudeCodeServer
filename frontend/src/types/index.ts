@@ -2022,6 +2022,13 @@ export interface ToolRunTotals {
   passed: number;
   failed: number;
   total: number;
+  // Первые упавшие (до трёх): имя и первая строка сообщения — список под строкой этапов
+  failures?: ToolRunFailure[] | null;
+}
+
+export interface ToolRunFailure {
+  name: string;
+  message?: string | null;
 }
 
 // Элементы чата

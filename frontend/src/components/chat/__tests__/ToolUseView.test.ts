@@ -258,12 +258,14 @@ describe('ToolUseView — мобила: строка подписи пережи
     expect(done).toContain('готово · 0:15');
   });
 
-  it('настоящие шаги ComfyUI — сплошное подчёркивание, оценка по ETA — точечное', () => {
+  it('настоящие шаги ComfyUI — сплошная заливка полосы, оценка по ETA — пунктир и «≈»', () => {
     const exact = render(wait({ progress: { stage: 'running', percent: 40, exact: true } }), true);
-    expect(exact).toContain('border-top:2px solid');
-    expect(exact).not.toContain('dotted');
+    expect(exact).toContain('aria-valuenow="40"');
+    expect(exact).not.toContain('repeating-linear-gradient');
+    expect(exact).toContain('>40%<');
     const estimate = render(wait({ progress: { stage: 'running', percent: 40 } }), true);
-    expect(estimate).toContain('border-top:2px dotted');
+    expect(estimate).toContain('repeating-linear-gradient');
+    expect(estimate).toContain('≈40%');
   });
 });
 
@@ -331,16 +333,20 @@ describe('ToolUseView — витрина Веры', () => {
     expect(done).toContain(SLOT);
   });
 
-  it('вариант З: процента нет — живая точка без линии; с процентом — подчёркнута подпись, полосы нет', () => {
+  it('процента нет — живая точка без полосы; с процентом — полоса на дорожке, процент и «осталось» справа', () => {
     const idle = render(wait());
     expect(idle).toContain('cc-live-dot');
     expect(idle).not.toContain('progressbar');
     expect(idle).not.toContain('cc-progress-run');
-    const html = render(wait({ progress: { stage: 'running', label: 'осталось ≈1:15', percent: 40, exact: true } }));
-    // Подчёркивание обнимает саму подпись прогресса, а не стоит отдельной строкой
-    expect(html).toMatch(/role="progressbar"[^>]*aria-valuenow="40"[^>]*>осталось ≈1:15/);
-    expect(html).toContain('width:max(4px, 40%)');
-    expect(html).not.toContain('max-width:200px');
+    const html = render(wait({ progress: { stage: 'running', label: 'шаг 8 из 20', percent: 40, exact: true, etaSeconds: 45 } }));
+    // Полоса — на видимой дорожке во всю строку: конец виден
+    expect(html).toMatch(/role="progressbar"[^>]*aria-valuenow="40"/);
+    expect(html).toContain('background:var(--c-progress-track)');
+    expect(html).toContain('40% · осталось ~0:45');
+    // Процент и «осталось» только у полосы: в подписи остаётся шаг
+    // (полная подпись с процентом — только в aria-label полосы, для скринридера)
+    expect(html).toContain('>шаг 8 из 20<');
+    expect(html).toContain('шаг 8 из 20');
     expect(html).toContain('cc-live-dot');
   });
 
@@ -450,8 +456,10 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     const item = run({ stages });
     const html = render(item, [item, { kind: 'interrupted', ts: 70_500 }], false);
     expect(html).toContain('прервано · 1:10');
-    expect(html).toContain('✕ сборка 1:10');
-    expect(html).not.toContain('очередь'); // очередь короче 2 с не показываем
+    // Видимый этап один (очередь короче 2 с не показываем) — его время уже в шапке
+    expect(html).toContain('✕ сборка');
+    expect(html).not.toContain('✕ сборка 1:10');
+    expect(html).not.toContain('очередь');
     expect(html).not.toContain(' из ');
   });
 
@@ -469,7 +477,7 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     expect(html).toContain('✕ сборка');
   });
 
-  it('идёт: текущий этап выделен, не режется и подчёркнут на долю процента, подпись прогресса при нём', () => {
+  it('идёт: текущий этап выделен и не режется, подпись прогресса при нём, полоса — строкой ниже', () => {
     const item = run({
       stages: [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 102_000 }, { stage: 'running', label: 'тесты', startedAt: 102_000 }],
       progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true },
@@ -477,12 +485,41 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     const html = render(item);
     expect(html).toContain('✓ сборка 1:42');
     expect(html).toContain('flex-shrink:0');
-    // Подчёркнут именно текущий этап «тесты M:SS», а не счётчик
-    expect(html).toMatch(/font-weight:600"><span role="progressbar"[^>]*aria-valuenow="5"[^>]*>тесты/);
+    expect(html).toContain('font-weight:600">тесты');
     expect(html).toContain('412 из 7951 · <span style="color:var(--c-danger-text)">упало 2</span>');
     expect(html.match(/role="progressbar"/g)?.length).toBe(1);
-    expect(html).not.toContain('max-width:200px');
+    // Полоса после строки этапов, а не внутри неё
+    expect(html.indexOf('role="progressbar"')).toBeGreaterThan(html.indexOf('412 из 7951'));
+    expect(html).toContain('>5%<');
     expect(html).toContain('cc-live-dot');
+  });
+
+  it('единственный этап — без своих часов: время уже в шапке', () => {
+    const stages = [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 16_000 }];
+    const html = render(run({ name: 'mcp__dev__build', input: { target: 'backend' }, result: 'ok', finishedAt: 16_000, stages }), undefined, false);
+    expect(html).toContain('✓ сборка');
+    expect(html).not.toContain('✓ сборка 0:16');
+    expect(html).toContain('готово · 0:16');
+  });
+
+  it('готово с упавшими: первые упавшие списком без раскрытия, сверх — «ещё N»', () => {
+    const failures = [
+      { name: 'App.Tests.Foo.Падает', message: 'Expected 1 but was 2' },
+      { name: 'App.Tests.Bar.ТожеПадает' },
+    ];
+    const html = render(run({ result: 'итог', finishedAt: 135_000, stages: done3, totals: { passed: 174, failed: 3, total: 177, failures } }), undefined, false);
+    expect(html).toContain('App.Tests.Foo.Падает');
+    expect(html).toContain('— Expected 1 but was 2');
+    expect(html).toContain('App.Tests.Bar.ТожеПадает');
+    expect(html).toContain('ещё 1 — в выводе');
+    expect(html).toContain('cc-trunc-left');
+  });
+
+  it('пока идёт, списка упавших нет', () => {
+    const item = run({ stages: done3.slice(0, 1), totals: { passed: 1, failed: 1, total: 2, failures: [{ name: 'X' }] } });
+    const html = render(item);
+    expect(html).not.toContain('ещё');
+    expect(html).not.toContain('cc-trunc-left');
   });
 
   // Регрессия с 320 px: хвост «упало 2» строки этапов уезжал под полосу прокрутки ленты.

@@ -1,5 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { activeToolLabel, awaitsToolStart, captionLeadMs, formatClock, formatWaitClock, isQueued, isToolGroupDone, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption } from '../toolTiming';
+import { activeToolLabel, awaitsToolStart, captionLeadMs, formatClock, formatWaitClock, isQueued, isToolGroupDone, meterText, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption } from '../toolTiming';
+
+describe('meterText — подпись справа от полосы', () => {
+  it('процента нет — молчим', () => {
+    expect(meterText({ stage: 'running', label: 'x' }, 60_000)).toBeNull();
+  });
+  it('оценка — с «≈», ETA источника — «осталось ~»', () => {
+    expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null)).toBe('≈40% · осталось ~1:15');
+  });
+  it('настоящий процент без ETA — «осталось ≈» по темпу этапа', () => {
+    // 25% за 30 с → ещё 90 с
+    expect(meterText({ stage: 'running', percent: 25, exact: true }, 30_000)).toBe('25% · осталось ≈1:30');
+  });
+  it('мало выборки (до 10% или 15 с) — только процент', () => {
+    expect(meterText({ stage: 'running', percent: 5, exact: true }, 60_000)).toBe('5%');
+    expect(meterText({ stage: 'running', percent: 50, exact: true }, 10_000)).toBe('50%');
+  });
+  it('оценка без ETA темпом не считается', () => {
+    expect(meterText({ stage: 'running', percent: 50 }, 60_000)).toBe('≈50%');
+  });
+});
+
+describe('toolProgressText без счётчика полосы', () => {
+  it('meter=false — без процента и «осталось»', () => {
+    expect(toolProgressText({ stage: 'running', label: 'шаг 8 из 20', percent: 40, exact: true, etaSeconds: 45 }, false)).toBe('шаг 8 из 20');
+  });
+});
 import { BUILD_TOOL, RUN_TESTS_TOOL, START_STAND_TOOL, buildArg, toolCardLabel } from '../toolLabels';
 
 // Дефект Киры: карточка разрешения встаёт ПОСЛЕ группы и сворачивала её в «N действий»

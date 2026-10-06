@@ -36,6 +36,28 @@ public class PersonaZoneTests
     }
 
     [Fact]
+    public void Сфера_ФлагВыключен_СправочникНеГейтитсяФлагом_ЗонаПустаСамаПоПравилу()
+    {
+        var dir = new UngatedDir { Spheres = { ["s1"] = ["p1"] } };
+        var persona = SpherePersona();
+
+        PersonaZone.VisibleIn(persona, "p1", dir).Should().BeFalse();
+        PersonaZone.ProjectIds(persona, dir).Should().BeEmpty();
+    }
+
+    // Справочник, у которого ProjectsOf не зависит от флага: гейт обязана держать сама PersonaZone
+    private sealed class UngatedDir : ISphereDirectory
+    {
+        public Dictionary<string, List<string>> Spheres = new();
+
+        public bool Enabled(string ownerId) => false;
+        public string? SphereOf(string ownerId, string projectId) => null;
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) =>
+            Spheres.TryGetValue(sphereId, out var l) ? l.ToList() : [];
+        public string? SphereName(string ownerId, string sphereId) => null;
+    }
+
+    [Fact]
     public void Сфера_СфераУдалена_ЗонаПуста()
     {
         var dir = new FakeDir { Spheres = { ["s1"] = ["p1"] } };

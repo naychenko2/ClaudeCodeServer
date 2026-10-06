@@ -415,6 +415,10 @@ public sealed partial class WorkspaceToolset(
                         + "без rootPath (папка появится в стандартном каталоге) либо попросите "
                         + "пользователя подключить нужную папку через интерфейс.");
                 var groupId = OptionalArg(arguments, "groupId");
+                // С включённым флагом сфера проекта — решение человека: иначе модель создала бы
+                // проект сразу в сфере и выдала персонам сферы доступ в обход человека
+                if (!string.IsNullOrEmpty(groupId) && groups.Enabled(context.OwnerId))
+                    return Deny("Переносить проект в сферу может только человек");
                 if (groups.GroupRefusal(context.OwnerId, groupId) is { } createGroupRefusal)
                     return Deny(createGroupRefusal);
                 try

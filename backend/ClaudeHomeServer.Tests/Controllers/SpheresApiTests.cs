@@ -160,4 +160,22 @@ public class SpheresApiTests : IDisposable
         IsError(await CallToolAsync(session, "projects_update", new { projectId, name = "переименован-" + Guid.NewGuid().ToString("N") }))
             .Should().BeFalse();
     }
+
+    [Fact]
+    public async Task MCP_projects_create_groupId_ФлагВключён_Отказ_ВыключенСвоя()
+    {
+        var sphere = await CreateSphereAsync(_client, "для create");
+        var session = await IdOf(await _client.PostAsJsonAsync($"/api/projects/{await CreateProjectAsync(_client)}/sessions", new { mode = "acceptEdits" }));
+
+        // флаг выключен: своя сфера — проект создан в ней
+        var created = await CallToolAsync(session, "projects_create", new { name = "в-сфере-" + Guid.NewGuid().ToString("N"), groupId = sphere });
+        IsError(created).Should().BeFalse();
+        TextOf(created).Should().Contain(sphere);
+
+        // флаг включён: любой непустой groupId — отказ
+        await EnableFlagAsync();
+        var denied = await CallToolAsync(session, "projects_create", new { name = "отказ-" + Guid.NewGuid().ToString("N"), groupId = sphere });
+        IsError(denied).Should().BeTrue();
+        TextOf(denied).Should().Contain("Переносить проект в сферу может только человек");
+    }
 }

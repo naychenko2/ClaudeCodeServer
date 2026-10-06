@@ -22,6 +22,7 @@ public class SpheresController(
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     // Записей памяти сферы; хранилище памяти сферы подключат позже, пока всегда 0
+    // TODO(Spheres C): подключить счётчик полки сферы; запись — только через PersonaZone.CanWriteSphereMemory
     internal static int MemoryCount(string sphereId) => 0;
 
     /// <summary>Сводка сферы: проекты с матрицей возможностей, команда, память, открытые задачи.</summary>

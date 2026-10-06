@@ -1552,7 +1552,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     };
                 // Состав инструментов памяти зависит от секции паспортов и транспорта —
                 // оба в сигнатуру запуска (переключение рубильника обязано пробить доживание)
-                shapes["memory"] = $"d{memoryDossierTools}:t:{(memoryHttp ? "http" : "stdio")}";
+                // Секция sphere_memory_* — только http-ветка (stdio заморожен); бит добавляется лишь
+                // при включённом флаге, чтобы у выключенных сигнатура не менялась
+                shapes["memory"] = $"d{memoryDossierTools}:t:{(memoryHttp ? "http" : "stdio")}"
+                    + (_memoryMcp.SphereToolsEnabled ? ":s1" : "");
             }
 
             // Проверка _personasMcp избыточна по смыслу (hasPersonas истинен только когда контекст

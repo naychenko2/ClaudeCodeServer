@@ -39,6 +39,8 @@ public sealed class MemoryToolset(
     ProjectManager projects,
     PersonaMemoryService memory,
     TeamMemoryService teamMemory,
+    SphereMemoryService sphereMemory,
+    Spheres.ISphereDirectory sphereDirectory,
     DossierStore dossiers,
     DossierRecallService dossierRecall,
     FeatureFlagService flags,
@@ -278,6 +280,13 @@ public sealed class MemoryToolset(
                 return Json(entry);
             }
 
+            case "sphere_memory_search":
+            case "sphere_memory_list":
+            case "sphere_memory_remember":
+            case "sphere_memory_forget":
+            case "sphere_memory_adopt":
+                return await CallSphereAsync(tool, arguments, context, persona, project);
+
             case "dossier_lookup":
             {
                 if (!team || !DossierToolsEnabled(context)) return DenyDossier();
@@ -315,6 +324,98 @@ public sealed class MemoryToolset(
                 throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         }
     }
+
+    // --- Память сферы: сфера берётся ТОЛЬКО из проекта чата (хвост маршрута, проверенный
+    // TryResolve), любой sphereId в аргументах игнорируется ---
+
+    private async Task<McpToolCallResult> CallSphereAsync(string tool, JsonObject arguments,
+        McpToolCallContext context, Persona? persona, Project? project)
+    {
+        if (!SphereToolsEnabled(context)) return Deny(
+            "Память сферы не доступна: у владельца выключен флаг «Сферы».");
+        if (project is null || sphereDirectory.SphereOf(context.OwnerId, project.Id) is not { } sphereId)
+            return Deny("Проект не входит в сферу — памяти сферы здесь нет.");
+
+        switch (tool)
+        {
+            case "sphere_memory_search":
+            {
+                var query = StringArg(arguments, "query");
+                if (string.IsNullOrWhiteSpace(query)) return Json(Array.Empty<TeamMemoryEntry>());
+                return Json(await sphereMemory.SearchAsync(context.OwnerId, sphereId, query.Trim(),
+                    IntArg(arguments, "topK", 8, 1, 20)));
+            }
+
+            case "sphere_memory_list":
+            {
+                var list = sphereMemory.List(context.OwnerId, sphereId);
+                var wantedId = StringArg(arguments, "id");
+                if (wantedId.Length > 0)
+                {
+                    var entry = list.FirstOrDefault(e => e.Id == wantedId);
+                    return entry is not null
+                        ? Json(entry)
+                        : Deny($"Запись {wantedId} не найдена в памяти сферы.");
+                }
+                var limit = IntArg(arguments, "limit", 20, 1, 50);
+                var offset = Math.Max(IntArg(arguments, "offset", 0, 0, int.MaxValue), 0);
+                var full = arguments["full"] is JsonValue fv && fv.TryGetValue<bool>(out var f) && f;
+                var items = list.Skip(offset).Take(limit)
+                    .Select(e => full || e.Text.Length <= TeamTextLimit
+                        ? e
+                        : (object)new
+                        {
+                            e.Id, e.OwnerId, e.ProjectId,
+                            Text = e.Text[..TeamTextLimit].TrimEnd() + "…",
+                            e.Type, e.Tags, e.Salience, e.Source, e.SourceSessionId, e.PromotedFrom, e.CreatedAt,
+                        })
+                    .ToList();
+                return Json(new { total = list.Count, offset, limit, items });
+            }
+        }
+
+        // Запись: человек (чат без персоны) и персоны ЭТОЙ сферы; проектная и глобальная — отказ
+        if (!PersonaZone.CanWriteSphereMemory(persona, sphereId))
+            return Deny("Запись в память сферы доступна только персонам ЭТОЙ сферы. Ты — проектная, "
+                + "глобальная персона или персона другой сферы: можешь читать память сферы "
+                + "(sphere_memory_list/sphere_memory_search), но не менять её. Предложи пользователю "
+                + "или персоне сферы записать это.");
+
+        switch (tool)
+        {
+            case "sphere_memory_remember":
+            {
+                var text = StringArg(arguments, "text");
+                if (string.IsNullOrWhiteSpace(text)) return Deny("Пустой текст");
+                if (TeamMemoryService.LengthViolation(text, 0) is { } tooLong) return Deny(tooLong);
+                var type = Enum.TryParse<TeamMemoryType>(StringArg(arguments, "type"), true, out var tt)
+                    ? tt : TeamMemoryType.Fact;
+                return Json(sphereMemory.Add(context.OwnerId, sphereId, text, type));
+            }
+
+            case "sphere_memory_forget":
+            {
+                var id = StringArg(arguments, "id");
+                return sphereMemory.Remove(context.OwnerId, sphereId, id)
+                    ? Text($"Запись {id} удалена из памяти сферы.")
+                    : Deny($"Запись {id} не найдена в памяти сферы.");
+            }
+
+            default: // sphere_memory_adopt
+            {
+                var id = StringArg(arguments, "entryId");
+                var adopted = sphereMemory.Adopt(context.OwnerId, sphereId, teamMemory, project.Id, id);
+                if (adopted is null) return Deny($"Запись {id} не найдена в памяти проекта.");
+                await BroadcastTeamAsync(context.OwnerId, project.Id, "removed", id);
+                return Json(adopted);
+            }
+        }
+    }
+
+    // Флаг владельца spheres: единственный гейт состава (не членство проекта — иначе состав
+    // менялся бы от переноса проекта между сферами); решается по владельцу, стабильно в сессии
+    private bool SphereToolsEnabled(McpToolCallContext context) =>
+        flags.IsEnabled(context.OwnerId, FeatureFlagKeys.Spheres);
 
     // --- Маршрут: /mcp/memory/{personaId}/{projectId}, «-» = параметра нет ---
 
@@ -401,6 +502,9 @@ public sealed class MemoryToolset(
             tools.AddRange(TeamTools);
             if (DossierToolsEnabled(context)) tools.AddRange(DossierTools);
         }
+        // Память сферы — по флагу владельца, а не по членству проекта: отказ «проект не входит
+        // в сферу» выдаёт сам вызов
+        if (SphereToolsEnabled(context)) tools.AddRange(SphereTools);
         return tools;
     }
 
@@ -715,6 +819,88 @@ public sealed class MemoryToolset(
                 {
                     ["id"] = new JsonObject { ["type"] = "string", ["description"] = "ID переписываемой записи командной памяти" },
                     ["text"] = new JsonObject { ["type"] = "string", ["description"] = "Новый текст записи (заменит прежний)" },
+                },
+            }),
+    ];
+
+    internal static readonly IReadOnlyList<McpToolSchema> SphereTools =
+    [
+        Tool("sphere_memory_search",
+            "Поиск по общей памяти СФЕРЫ проекта (решения/договорённости/факты/термины, общие для всех "
+            + "проектов и персон сферы) по смыслу. Сфера определяется проектом чата.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "query" },
+                ["properties"] = new JsonObject
+                {
+                    ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Смысловой запрос" },
+                    ["topK"] = new JsonObject
+                    {
+                        ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 20,
+                        ["description"] = "Сколько записей (по умолчанию 8)",
+                    },
+                },
+            }),
+        Tool("sphere_memory_list",
+            "Перечислить память сферы проекта. Без параметров — первая страница с усечёнными текстами "
+            + "(полный текст — id или full); total подскажет, нужна ли следующая страница (offset).",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "Вернуть одну запись целиком по id" },
+                    ["limit"] = new JsonObject
+                    {
+                        ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 50,
+                        ["description"] = "Сколько записей на странице (по умолчанию 20)",
+                    },
+                    ["offset"] = new JsonObject { ["type"] = "integer", ["minimum"] = 0, ["description"] = "Сколько записей пропустить" },
+                    ["full"] = new JsonObject { ["type"] = "boolean", ["description"] = "Не усекать текст записей страницы" },
+                },
+            }),
+        Tool("sphere_memory_remember",
+            "Запомнить факт в общую память СФЕРЫ — увидят все проекты и персоны сферы. Пиши то, что верно "
+            + "для сферы в целом, а не для одного проекта. Доступно только персонам ЭТОЙ сферы; "
+            + "проектная и глобальная персоны получат отказ.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "text" },
+                ["properties"] = new JsonObject
+                {
+                    ["text"] = new JsonObject { ["type"] = "string", ["description"] = "Общий факт/договорённость сферы (кратко)" },
+                    ["type"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray { "decision", "convention", "fact", "glossary" },
+                        ["description"] = "Тип знания; по умолчанию fact.",
+                    },
+                },
+            }),
+        Tool("sphere_memory_forget",
+            "Удалить запись из памяти сферы по id (устарела/оказалась неверной). Только персоны ЭТОЙ сферы.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "id" },
+                ["properties"] = new JsonObject
+                {
+                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "ID записи памяти сферы" },
+                },
+            }),
+        Tool("sphere_memory_adopt",
+            "Поднять запись из памяти ТЕКУЩЕГО проекта в память сферы: запись ПЕРЕМЕЩАЕТСЯ (с полки проекта "
+            + "уходит, на полке сферы помечается происхождением). Используй, когда факт проекта оказался "
+            + "общим для сферы. entryId узнаёшь через team_memory_list. Только персоны ЭТОЙ сферы.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "entryId" },
+                ["properties"] = new JsonObject
+                {
+                    ["entryId"] = new JsonObject { ["type"] = "string", ["description"] = "ID записи памяти проекта" },
                 },
             }),
     ];

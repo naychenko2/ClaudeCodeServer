@@ -1347,7 +1347,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new MemoryMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId, projectId,
             DossierToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall),
-            UseHttp: HttpEndpointUsable(apiUrl));
+            UseHttp: HttpEndpointUsable(apiUrl),
+            SphereToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.Spheres));
     }
 
     // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —

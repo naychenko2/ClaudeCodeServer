@@ -61,6 +61,21 @@ public class SphereMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposa
         MemoryPromotion? promotedFrom = null) =>
         _shelf.AddAsync(ownerId, sphereId, text, type, TeamMemorySource.Manual, null, salience, promotedFrom);
 
+    // Подъём записи с полки проекта на полку сферы — ПЕРЕМЕЩЕНИЕ: запись уходит с полки проекта,
+    // на полке сферы получает PromotedFrom. Единая точка для MCP sphere_memory_adopt и REST;
+    // вызывающий обязан сам проверить, что проект входит в сферу и что у него есть право записи.
+    // null — записи нет на полке проекта.
+    public TeamMemoryEntry? Adopt(string ownerId, string sphereId, TeamMemoryService projectShelf,
+        string projectId, string entryId)
+    {
+        var source = projectShelf.List(ownerId, projectId).FirstOrDefault(e => e.Id == entryId);
+        if (source is null) return null;
+        var promoted = Add(ownerId, sphereId, source.Text, source.Type, source.Salience,
+            new MemoryPromotion(projectId, source.Id, DateTime.UtcNow));
+        projectShelf.Remove(ownerId, projectId, entryId);
+        return promoted;
+    }
+
     public TeamMemoryEntry? Update(string ownerId, string sphereId, string entryId, string text) =>
         _shelf.Update(ownerId, sphereId, entryId, text);
 

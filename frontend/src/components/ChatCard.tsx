@@ -25,7 +25,7 @@ import { useTasks } from '../lib/tasks';
 import { agentDotColor } from './AgentSelector';
 import { PersonaBackdrop } from '../features/personas/PersonaFace';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
-import { teamTurnPreview } from '../features/team/teamMechanics';
+import { ChatPreviewLine } from './ChatPreviewLine';
 import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 import { useCanHover } from '../lib/pointer';
@@ -1042,7 +1042,7 @@ function ChatCardView({
                 minWidth: 0, fontSize: 12, color: C.textMuted, lineHeight: 1.4,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
-                {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
+                <ChatPreviewLine text={s.lastMessage} />
               </div>
             )}
 

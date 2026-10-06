@@ -7,20 +7,26 @@
 // показываем ВСЕГДА, даже с пустым диффом — иначе после переключения в свежее дерево
 // узнать «где мы работаем» было бы неоткуда (композер значение дерева не показывает,
 // там только кнопка-тумблер).
+//
+// Оболочка и анимация сворачивания — общие для всех полос (ComposerLipShell): на
+// чистом дереве (нет правок, нет незапушенных) в развёрнутом виде показываем бейдж
+// «чисто» — делать всё равно нечего, и сегмент «Зафиксировать»/«Опубликовать»
+// выглядел бы пусто.
 import { useCallback, useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { GitBranch, FolderGit2, Check, CloudUpload, ChevronDown, ChevronUp, MessageSquare, Sparkles } from 'lucide-react';
 import type { Project, Session } from '../types';
-import { C, FONT, R, SP, composerLip } from '../lib/design';
+import { C, FONT, R, SP } from '../lib/design';
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../lib/breakpoints';
 import { basename } from '../lib/paths';
 import { plural } from '../lib/plural';
-import { ensureGit, useGitState, loadUnpushedLog, clearGitError, workingDiffStat, gitStripIdle, gitStripStatus } from '../lib/git';
+import { ensureGit, useGitState, loadUnpushedLog, clearGitError, workingDiffStat, gitStripStatus } from '../lib/git';
 import type { TurnTree } from '../lib/turnWorktree';
 import { wsPanels } from '../pages/workspace/panelStackState';
 import { PublishDialog } from './PublishDialog';
 import { CommitPromptDialog } from './CommitPromptDialog';
-import { Menu, MenuItem, MenuSep } from './ui';
+import { Badge, Menu, MenuItem, MenuSep } from './ui';
 import { ICON_STROKE } from './ui/icons';
+import { ComposerLipShell } from './chat/ComposerLipShell';
 
 // Ключ сворачивания гит-бара на планшете. На десктопе свернутого режима нет, и
 // пользовательский выбор здесь не играет роли — оставлено для единой точки истины
@@ -140,7 +146,6 @@ export function ProjectGitBar({
   // С переключателем полос бар виден и чистым: иначе пропал бы сам переключатель
   if (!status?.isRepo || (!treeActive && isEmpty && !switcher)) return null;
   const strip = gitStripStatus(status, st.unpushed.length);
-  const toneColor = strip.tone === 'changes' ? C.warning : strip.tone === 'ahead' ? C.accent : C.success;
 
   // Метка: ветка worktree чата > имя папки (проект сам открыт как worktree) > ветка
   const label = worktreeBranch ?? (status.isWorktree ? basename(project.rootPath) : (status.branch ?? '—'));
@@ -160,28 +165,16 @@ export function ProjectGitBar({
   // Правило видимости уточняем для планшета: есть активное дерево, но действий нет —
   // показываем микростроку с одной меткой ветки. Разворачивать нечего, slim не поможет.
   const microOnly = !hosted && isCompact && isEmpty && treeActive;
+  // С хостом полос свёрнутость — выбор человека (useComposerStrip / isStripCollapsed):
+  // на чистом дереве полоса тоже уважает ручной выбор, выбора «всегда свёрнуто» больше нет.
   // На планшете: либо микрострока (свёрнуто, либо действий нет), либо slim-бар
-  // С хостом полос чистое дерево без своего worktree — всегда строка: переключатель полос
-  // держит плашку на экране, а показывать в полный рост нечего. Выбор человека в сторе
-  // хоста не трогаем — появятся правки, вернётся тот вид, что был выбран
-  const autoMicro = hosted && gitStripIdle(status, st.unpushed.length, treeActive);
-  const showMicro = hosted ? !!hostCollapsed || autoMicro : isCompact && (collapsed || microOnly);
+  const showMicro = hosted ? !!hostCollapsed : isCompact && (collapsed || microOnly);
   const expand = () => (hosted ? onCollapsedChange!(false) : setCollapsedPersist(false));
 
   // Вне телефона полоса — верхняя губа композера: заезжает под поле ввода, как нижний
   // ряд кнопок, и геометрию берёт у него же (composerLip). На телефоне губ нет —
   // остаётся отдельная плашка.
   const lip = ww > MOBILE_MAX;
-
-  // Базовый контейнер плашки: общий для slim и full, геометрия — параметром.
-  const shellStyle = lip
-    ? { display: 'flex', alignItems: 'center', gap: slim ? 8 : 12, marginTop: slim ? 6 : 10, ...composerLip('top') }
-    : {
-        // Телефон: 44 + поля 6/6 = 56px
-        display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0',
-        height: 44, padding: '0 6px 0 10px',
-        background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
-      };
 
   // Метка ветки — без изменений на всех раскладках: это ответ на «где мы работаем».
   const branchLabel = (
@@ -359,49 +352,12 @@ export function ProjectGitBar({
     </button>
   ) : null;
 
-  // Микрострока: 28 + поля 4/4 = 36px. Вся строка — одна tap-цель (role=button).
-  // Тап разворачивает. Действия в свёрнутом виде недоступны: на touch-экране
-  // дробить 28px на четыре цели нельзя, и «Зафиксировать» без диффа не имеет смысла.
-  // Здесь же рисуются дефолтные индикаторы действий (+N, −M, ↑N) — как «превью»,
-  // чтобы человек видел состояние, не разворачивая.
-  // С хостом полос строка — div: внутри неё живёт переключатель-кнопка, а <button> в
-  // <button> вложить нельзя
-  // Строка чистого дерева (autoMicro) не разворачивается: в полный рост в ней нечего
-  // делать, поэтому она не кнопка — без шеврона, hover-подложки и клика
-  const MicroTag = switcher || autoMicro ? 'div' : 'button';
-  const microRow = (
-    <MicroTag
-      // Свой key: иначе при развороте React переиспользует этот же div под полную
-      // полосу, и цвет наведения, выставленный onMouseEnter напрямую в style, залипает
-      key="mini"
-      {...(autoMicro
-        ? {}
-        : switcher
-          ? { role: 'button', tabIndex: 0, onKeyDown: (e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); } } }
-          : { type: 'button' as const })}
-      data-git-strip="mini"
-      onClick={autoMicro ? undefined : expand}
-      title={autoMicro ? undefined : 'Развернуть полосу «Git»'}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        width: '100%', boxSizing: 'border-box', minWidth: 0,
-        // Вне телефона свёрнутая строка — та же губа, но с низким рядом: иначе ⌄ не
-        // уменьшает полосу, а только пустит её ряд
-        ...(lip
-          ? { marginTop: 4, ...composerLip('top', { tab: true }) }
-          : {
-              margin: hosted ? '4px 0 6px' : '4px 0',
-              background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
-              padding: switcher ? '0 6px 0 4px' : '0 8px 0 10px', height: hosted ? 30 : 28,
-            }),
-        cursor: autoMicro ? 'default' : 'pointer',
-        // Не скрываем по hover — на тач-экране hover'а нет, и без подложки кнопка
-        // выглядит как обычная подпись. Десктопный курсор получает лёгкий tint.
-        transition: 'background 0.12s',
-      }}
-      onMouseEnter={autoMicro ? undefined : e => { e.currentTarget.style.background = C.bgSelected; }}
-      onMouseLeave={autoMicro ? undefined : e => { e.currentTarget.style.background = lip ? C.bgMain : C.bgPanel; }}
-    >
+  // Свёрнутая строка: вся зона тапа. С переключателем (hosted) — div+role, чтобы
+  // не вкладывать <button> в <button>. Без переключателя — обычная <button>.
+  // С autoMicro-логикой покончено: на чистом дереве свёрнутая строка разворачивается
+  // (выбор человека в сторе полос, и планшетный выбор в ProjectGitBar тоже).
+  const microRowInner = (
+    <>
       {switcher}
       {worktreeBranch
         ? <FolderGit2 size={14} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />
@@ -421,15 +377,151 @@ export function ProjectGitBar({
       {diff.added > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.diffAddText, fontWeight: 700, flexShrink: 0 }}>+{diff.added}</span>}
       {diff.deleted > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.diffRemText, fontWeight: 700, flexShrink: 0 }}>−{diff.deleted}</span>}
       {publishN > 0 && <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.accent, fontWeight: 700, flexShrink: 0 }}>↑{publishN}</span>}
-      {!autoMicro && !hosted && <ChevronUp size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
-    </MicroTag>
+      {!hosted && <ChevronUp size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+    </>
+  );
+  // ВАЖНО: hover-стили (`background: C.bgSelected`) задаём через прямое
+  // мутирование style на элементе в onMouseEnter/Leave — НЕ через React state.
+  // Так дешевле и без перерисовки. А чтобы стиль залипал при первом развороте
+  // (React переиспользует тот же DOM-узел), `onMouseLeave` сбрасывает на исходный
+  // цвет в зависимости от того, на lip мы или на телефоне.
+  const microButton = switcher ? (
+    <div
+      role="button" tabIndex={0}
+      data-git-strip="mini"
+      onClick={expand}
+      onKeyDown={(e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); } }}
+      title="Развернуть полосу «Git»"
+      style={{
+        width: '100%', boxSizing: 'border-box', minWidth: 0, cursor: 'pointer',
+        // Не скрываем по hover — на тач-экране hover'а нет, и без подложки кнопка
+        // выглядит как обычная подпись. Десктопный курсор получает лёгкий tint.
+        transition: 'background 0.12s',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+      onMouseLeave={e => { e.currentTarget.style.background = lip ? C.bgMain : C.bgPanel; }}
+    >
+      {microRowInner}
+    </div>
+  ) : (
+    <button
+      type="button"
+      data-git-strip="mini"
+      onClick={expand}
+      title="Развернуть полосу «Git»"
+      style={{
+        width: '100%', boxSizing: 'border-box', minWidth: 0, cursor: 'pointer',
+        background: 'transparent', border: 'none', padding: 0,
+        color: 'inherit', font: 'inherit', textAlign: 'left',
+        transition: 'background 0.12s',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+      onMouseLeave={e => { e.currentTarget.style.background = lip ? C.bgMain : C.bgPanel; }}
+    >
+      {microRowInner}
+    </button>
+  );
+  const miniNode = microButton;
+
+  // Развёрнутая полоса: левая группа (заголовок-переключатель полос + ветка/рабочее дерево
+  // + сегмент дерева хода), затем `flex: 1`, и правая группа кнопок. На чистом дереве без
+  // активного своего worktree — бейдж «чисто» вместо кнопок действий, иначе центр
+  // полосы выглядит пустым.
+  const cleanBadge = !treeActive && strip.tone === 'clean' && !diffPill && !commitBtn && !publishBtn ? (
+    <Badge tone="success" size="xs" dot title="Всё закоммичено и опубликовано">{strip.text}</Badge>
+  ) : null;
+  const fullNode = (
+    <div data-git-tone={strip.tone} style={{
+      // display/gap/alignItems — для ComposerLipShell (это inner-стиль обёртки
+      // мини-/полного слоя); внешние margin/height/background кладёт оболочка.
+      display: 'flex', alignItems: 'center', gap: slim ? 8 : 12,
+    }}>
+      {/* Заголовок-селектор полос (composer-strip). Когда переключатель есть, он заменяет
+          отдельную плашку «Git ▾» сверху — единая плашка с веткой и действиями */}
+      {switcher}
+      {/* Ветка / имя worktree; папка-иконка — чат в отдельном дереве */}
+      {branchLabel}
+
+      {/* Дерево ХОДА (агент ушёл в свой worktree внутри хода): нейтральный сегмент
+          рядом с меткой чата — читаются все сочетания: только ветка, только дерево
+          чата, только дерево хода, оба дерева сразу. Полный путь — в title */}
+      {turnTreeSegment}
+
+      <div style={{ flex: 1 }} />
+
+      {/* diff-пилюля +N/−M — кликом открывает панель «Изменения» */}
+      {diffPill}
+
+      {/* Зафиксировать — делегирует коммит чату; меню выбирает область: только
+          изменения этого диалога («своё») или всё рабочее дерево. */}
+      {commitBtn}
+
+      {/* Опубликовать N — git push с подтверждением */}
+      {publishBtn}
+
+      {/* Бейдж «чисто» на чистом дереве: заменяет самодельный span «чисто» (старый
+          держался только на телефоне в хосте полос). На активном дереве хода
+          isEmpty=false из-за turnTree, и место занимает он. */}
+      {cleanBadge}
+
+      {/* Шеврон сворачивания: только планшет, только в slim-режиме (в full свернуть
+          нечего — десктоп-вариант всегда развёрнут). В microOnly рендер не заходим,
+          поэтому здесь collapseBtn=null и сюда не попадёт. */}
+      {collapseBtn}
+    </div>
+  );
+
+  // Inner-стили дочерних слоёв (ComposerLipShell обернёт их оболочкой с
+  // composerLip-геометрией): общий стиль — display:flex с центровкой. На lip
+  // minWidth/max-width не нужны, оболочка задаёт width. На телефоне разница
+  // минимальна: вместо одного общего inner берём тот же самый стиль, что и раньше.
+  const innerStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center',
+    minWidth: 0, width: '100%', height: '100%',
+    // На телефоне оболочка задаёт padding: 0 6px 0 10px (full) / 0 6px 0 4px (mini);
+    // на lip composerLip кладёт 8 по бокам, и inner не должен добавлять ещё.
+    ...(lip ? null : { paddingLeft: switcher ? 6 : 10, paddingRight: 6 }),
+  };
+  // Полная полоса: gap варьируется (планшет теснее).
+  const fullInnerStyle: React.CSSProperties = {
+    ...innerStyle,
+    gap: slim ? 8 : 12,
+  };
+  // Своднутая строка: gap 8 на всех ширинах.
+  const miniInnerStyle: React.CSSProperties = {
+    ...innerStyle,
+    gap: 8,
+  };
+
+  const lipShell = (
+    <ComposerLipShell
+      collapsed={showMicro}
+      isMobile={!lip}
+      isSlim={slim}
+      miniStyle={miniInnerStyle}
+      fullStyle={fullInnerStyle}
+      miniNode={miniNode}
+      fullNode={fullNode}
+      miniAttrs={{ 'data-git-strip': 'mini' }}
+      fullAttrs={{ 'data-git-strip': 'full', 'data-git-tone': strip.tone }}
+    />
   );
 
   // Планшет: при активном дереве без действий — только микрострока (slim не развернуть)
   if (microOnly) {
     return (
       <>
-        {microRow}
+        <ComposerLipShell
+          collapsed
+          isMobile={!lip}
+          isSlim={slim}
+          miniStyle={miniInnerStyle}
+          fullStyle={fullInnerStyle}
+          miniNode={miniNode}
+          fullNode={fullNode}
+          miniAttrs={{ 'data-git-strip': 'mini' }}
+          fullAttrs={{ 'data-git-strip': 'full', 'data-git-tone': strip.tone }}
+        />
         {st.error && (
           <div
             onClick={() => clearGitError(project.id)}
@@ -451,48 +543,7 @@ export function ProjectGitBar({
     // Фрагмент: под плашкой должна вставать строка ошибки (родитель — вертикальный
     // поток ChatPanel), а самой плашке нужен свой height и фон без лишних наследников
     <>
-    {showMicro ? microRow : (
-    <div key="full" data-git-strip="full" data-git-tone={strip.tone} style={{ ...shellStyle, ...(switcher ? { gap: slim ? 6 : 8, ...(lip ? null : { paddingLeft: 6 }) } : null) }}>
-      {/* Заголовок-селектор полос (composer-strip). Когда переключатель есть, он заменяет
-          отдельную плашку «Git ▾» сверху — единая плашка с веткой и действиями */}
-      {switcher}
-      {/* Ветка / имя worktree; папка-иконка — чат в отдельном дереве */}
-      {branchLabel}
-
-      {/* Дерево ХОДА (агент ушёл в свой worktree внутри хода): нейтральный сегмент
-          рядом с меткой чата — читаются все сочетания: только ветка, только дерево
-          чата, только дерево хода, оба дерева сразу. Полный путь — в title */}
-      {turnTreeSegment}
-
-      {/* Строки состояния в полосе нет: всё, что она говорила, уже на кнопках — файлы
-          и строки в diff-пилюле, коммиты в «Опубликовать N», «чисто» в свёрнутой строке.
-          Текст состояния остался в меню переключателя полос (action.status) */}
-      <div style={{ flex: 1 }} />
-
-      {/* diff-пилюля +N/−M — кликом открывает панель «Изменения» */}
-      {diffPill}
-
-      {/* Зафиксировать — делегирует коммит чату; меню выбирает область: только
-          изменения этого диалога («своё») или всё рабочее дерево. */}
-      {commitBtn}
-
-      {/* Опубликовать N — git push с подтверждением */}
-      {publishBtn}
-
-      {/* Телефон: чистое дерево — короткая метка вместо кнопок */}
-      {hosted && slim && isEmpty && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, flexShrink: 0 }}>
-          <span style={{ width: 6, height: 6, borderRadius: R.full, background: toneColor }} />чисто
-        </span>
-      )}
-
-      {/* Шеврон сворачивания: только планшет, только в slim-режиме (в full свернуть
-          нечего — десктоп-вариант всегда развёрнут). В microOnly рендер не заходим,
-          поэтому здесь collapseBtn=null и сюда не попадёт. */}
-      {collapseBtn}
-
-    </div>
-    )}
+    {lipShell}
 
     {/* Ошибка git-операции: публикация запускается прямо из бара, и без этой строки
         её провал (например отклонённый push) остался бы невидимым при закрытой

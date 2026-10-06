@@ -368,13 +368,13 @@ public sealed class ImageThreadService(
         var finished = store.FinishLaunch(ownerId, sessionId, threadId, jobId, ImageThreadLaunchStatus.Done,
             [(1, transformed.StepId!)],
             (_, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
-                $"Обрезано без ИИ: {label} · {ImageThread.Label(all[0])}", threadId, jobId));
+                $"{(agent ? "Claude обрезал" : "Вы обрезали")} без ИИ: {label} · бесплатно · {ImageThread.Label(all[0])}", threadId, jobId));
         if (finished.Status != ImageThreadWriteStatus.Ok)
             return Fail(ImageEditErrorCodes.InvalidRequest, "Версия не записана");
 
         var created = finished.NewVersions.FirstOrDefault();
         await RecordAsync(sessionId, RecordTypes.LaunchVersions,
-            $"Обрезано без ИИ: {label} · {(created is null ? "версия" : ImageThread.Label(created))}",
+            $"{(agent ? "✦ Claude обрезал" : "Вы обрезали")} без ИИ: {label} · бесплатно · {(created is null ? "версия" : ImageThread.Label(created))}",
             new
             {
                 threadId,

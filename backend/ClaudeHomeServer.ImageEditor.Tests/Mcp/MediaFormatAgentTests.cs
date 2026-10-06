@@ -36,6 +36,7 @@ public class MediaFormatAgentTests : IDisposable
     private readonly List<(string SessionId, StoredModuleRecord Record)> _records = [];
     private readonly ImageThreadStore _store;
     private readonly ImageProjectPrefsService _prefs;
+    private readonly ImageProjectPrefsStore _prefsStore;
     private readonly ImageThreadService _threads;
     private readonly ImageEditorToolset _toolset;
     private readonly ImageEditJobService _jobs;
@@ -63,8 +64,8 @@ public class MediaFormatAgentTests : IDisposable
         directory.Setup(d => d.GetById(ChatId)).Returns(session);
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
-        _prefs = new ImageProjectPrefsService(new ImageProjectPrefsStore(Path.Combine(_dir, ImageProjectPrefsStore.DirName)),
-            NullLogger<ImageProjectPrefsService>.Instance, projects.Object);
+        _prefsStore = new ImageProjectPrefsStore(Path.Combine(_dir, ImageProjectPrefsStore.DirName));
+        _prefs = new ImageProjectPrefsService(_prefsStore, NullLogger<ImageProjectPrefsService>.Instance, projects.Object);
         var feed = new Mock<IChatFeed>();
         feed.Setup(f => f.AppendRecordAsync(It.IsAny<string>(), It.IsAny<StoredModuleRecord>(), It.IsAny<CancellationToken>()))
             .Callback((string id, StoredModuleRecord r, CancellationToken _) => { lock (_records) _records.Add((id, r)); })
@@ -137,9 +138,9 @@ public class MediaFormatAgentTests : IDisposable
 
         human.Ok.Should().BeTrue(human.Error);
         var humanRecord = _records.Single(r => r.Record.RecordType == ImageThreadService.RecordTypes.LaunchVersions);
-        agentRecord.Record.Fallback.Should().Be("Обрезано без ИИ: 1200×1200 · 1:1 · версия 1");
-        humanRecord.Record.Fallback.Should().Be("Обрезано без ИИ: 1200×1200 · 1:1 · версия 2",
-            "одна карточка в ленте у человека и у агента, различается только номер версии");
+        agentRecord.Record.Fallback.Should().Be("✦ Claude обрезал без ИИ: 1200×1200 · 1:1 · бесплатно · версия 1");
+        humanRecord.Record.Fallback.Should().Be("Вы обрезали без ИИ: 1200×1200 · 1:1 · бесплатно · версия 2",
+            "одна карточка в ленте у человека и у агента, различаются только автор и номер версии");
         humanRecord.Record.Data!.Value.GetProperty("crop").ToString().Should()
             .Be(agentRecord.Record.Data!.Value.GetProperty("crop").ToString());
         _store.Get(Owner, ChatId).Threads.Single().Versions.Where(v => !v.IsOrigin).Should().HaveCount(2);
@@ -256,5 +257,38 @@ public class MediaFormatAgentTests : IDisposable
         result.IsError.Should().BeFalse(result.Text);
         _prefs.Get(Owner, Scope).Format.Should().BeNull();
         Parse(result)["quote"]!["format"]!["mode"]!.GetValue<string>().Should().Be(FormatModes.Model);
+    }
+
+    // ── строка «Формат:» хвоста хода ───────────────────────────────────────
+
+    private string TailFormat()
+    {
+        var editors = new IImageEditor[] { HiggsfieldImageEditorTests.Create().Editor };
+        var kind = new ImageContextKind(_store, _prefsStore, editors);
+        var primary = new ContextItem("ci", ImageContextKind.Kind, new JsonObject { ["threadId"] = Draft() }, null, ContextActor.Human, DateTime.UtcNow);
+        var session = new Session { Id = ChatId, OwnerId = Owner, ProjectId = ProjectId };
+        return kind.DescribeFormat(new ContextScope(Owner, session, new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root }), primary)!;
+    }
+
+    [Fact]
+    public async Task Хвост_без_сохранённого_формата_говорит_Как_у_модели_и_не_просит_передавать()
+    {
+        TailFormat().Should().StartWith("как у модели").And.Contain("не передавай");
+
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Хвост_несёт_формат_проекта_с_метками_автора_и_подменой()
+    {
+        await _prefs.SetFormatAsync(Owner, Scope, new MediaFormat(FormatModes.Aspect, "16:9", FormatTier.High, null, null,
+            ContextActor.Agent, DateTime.UtcNow), ContextActor.Agent);
+
+        // Higgsfield по умолчанию — Nano Banana 2: 16:9 есть, «Высокое» = 2k
+        TailFormat().Should().Be("16:9 · Высокое — ✦ поставил Claude");
+
+        await _prefs.SetFormatAsync(Owner, Scope, new MediaFormat(FormatModes.Aspect, "16:9", FormatTier.High, null, null,
+            ContextActor.Human, DateTime.UtcNow), ContextActor.Human);
+        TailFormat().Should().Be("16:9 · Высокое — выбор человека");
     }
 }

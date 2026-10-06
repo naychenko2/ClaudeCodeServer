@@ -27,7 +27,7 @@ interface FormatModel {
   "count": 1, "format": { "mode": "aspect", "aspect": "16:9", "tier": "high" } }
 ```
 
-Обрезка (`POST /api/projects/{id}/image-editor/sessions/{sessionId}/threads/{threadId}/crop`, в личном чате — `/api/image-editor/chats/{sessionId}/threads/{threadId}/crop`; тот же метод сервиса `ImageThreadService.CropToAspectAsync`, что у `image_generate op = crop`): тело `{ "aspect": "1:1", "anchor": "left", "versionId": null, "dryRun": false }`; ответ `{ width, height, aspect, versionId, state }` (`state` — нити чата), при `dryRun: true` версия не создаётся, `versionId = null`. Лента: запись `image_launch_versions` с `provider: "none"`, `model: "crop"`, `crop {aspect, anchor, width, height}` и текстом «Обрезано без ИИ: 1200×1200 · 1:1 · версия 3».
+Обрезка (`POST /api/projects/{id}/image-editor/sessions/{sessionId}/threads/{threadId}/crop`, в личном чате — `/api/image-editor/chats/{sessionId}/threads/{threadId}/crop`; тот же метод сервиса `ImageThreadService.CropToAspectAsync`, что у `image_generate op = crop`): тело `{ "aspect": "1:1", "anchor": "left", "versionId": null, "dryRun": false }`; ответ `{ width, height, aspect, versionId, state }` (`state` — нити чата), при `dryRun: true` версия не создаётся, `versionId = null`. Лента: запись `image_launch_versions` с `provider: "none"`, `model: "crop"`, `crop {aspect, anchor, width, height}` и текстом «Вы обрезали без ИИ: 1200×1200 · 1:1 · бесплатно · версия 3» (у агента — «✦ Claude обрезал без ИИ: …»).
 
 Тихая строка агента при смене формата: запись `image_format` `{ by: "agent", before, after }`, текст «✦ Claude сменил формат картинок проекта: 16:9 → 9:16».
 

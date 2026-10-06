@@ -58,6 +58,9 @@ public sealed class TurnContextParityTests : IDisposable
 
         public string? DescribeExecutor(ContextScope scope, ContextItem primary) =>
             primary.Kind == "image" ? "Авто · локально · Qwen-Image Edit · бесплатно" : null;
+
+        public string? DescribeFormat(ContextScope scope, ContextItem primary) =>
+            primary.Kind == "image" ? "16:9 · Высокое (1792×1024) — выбор человека" : null;
     }
 
     private static ContextItem Item(string kind, JsonObject reference, string? role, ContextActor by) =>
@@ -113,6 +116,26 @@ public sealed class TurnContextParityTests : IDisposable
         tail.Should().Contain("hero_Final.PNG [t4] · версия 2 — образец стиля (style) ✦ поставил Claude");
         tail.Should().Contain("картинка недоступна [t9] — образец стиля (style) (недоступен)");
         tail.Should().EndWith(TurnContextContributor.Footer);
+    }
+
+    // «Формат» (ADR-025): строка хвоста — ровно то, что отдал DescribeFormat вида, сразу за «Чем». Хвост собирается
+    // одинаково в любом режиме строки, в том числе в «Чате», где чип «Чем» человек не видит
+    [Fact]
+    public async Task Хвост_несёт_строку_Формат_сразу_за_Чем()
+    {
+        Fill();
+        var lines = (await TailAsync()).Split('\n').ToList();
+
+        var executor = lines.FindIndex(l => l.StartsWith("Чем:", StringComparison.Ordinal));
+        lines[executor + 1].Should().Be("Формат: 16:9 · Высокое (1792×1024) — выбор человека");
+    }
+
+    [Fact]
+    public void Вид_без_формата_отдаёт_null_по_умолчанию_интерфейса()
+    {
+        var item = Item("project-file", new JsonObject { ["path"] = "a.md" }, null, ContextActor.Human);
+
+        ((IContextKindProvider)new ProjectFileContextKind()).DescribeFormat(new ContextScope(Owner, _session, null), item).Should().BeNull();
     }
 
     [Fact]

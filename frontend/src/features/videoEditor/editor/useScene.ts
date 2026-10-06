@@ -93,9 +93,11 @@ export const progressLabel = (scene: VideoScene | null, jobs: JobProgress[], cou
   if (j.stage === 'queued') {
     return { label: j.queuePosition ? `${name}: GPU, ${j.queuePosition}-я в очереди` : `${name}: ждём очередь` };
   }
+  const p = Math.round(jobFraction(j) * 100);
+  // Увеличение «Макс» — вторая задача GPU: свой процент, свой отсчёт
+  if (j.stage === 'upscaling') return { label: `${name}: увеличиваем · ${p} %`, p };
   const total = j.count || count;
   const word = plural(total, 'вариант', 'варианта', 'вариантов');
-  const p = Math.round(jobFraction(j) * 100);
   return { label: `${name}: снимаем ${total} ${word} · ${p} %`, p };
 };
 

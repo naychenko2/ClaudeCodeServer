@@ -370,6 +370,7 @@ export const ERR = {
   heavyBusy: 'heavy_busy',
   frameUnavailable: 'frame_unavailable',
   filmFormatLocked: 'film_format_locked',
+  upscaleRetryUnavailable: 'upscale_retry_unavailable',
 } as const;
 
 // recordType карточек ленты (module_record, module «videoeditor»)
@@ -389,6 +390,9 @@ export interface VideoFramePreview {
   resultWidth: number; resultHeight: number; x: number; y: number; w: number; h: number;
 }
 export interface VideoFramesPreview { aspect: string; anchor: FrameAnchor; frameA?: VideoFramePreview; frameB?: VideoFramePreview }
+
+// «Повторить увеличение»: новая задача `jobId` со стадией upscaling; прежняя версия 768p остаётся как была
+export interface VideoUpscaleRetryResult { jobId: string; sourceVersionId: string }
 
 // Тело 409 film_format_locked: замок держит сервер, «Всё равно» — повтор с force
 export interface VideoFormatLocked { error: string; code: 'film_format_locked'; lockedBy: VideoFilmLock }
@@ -445,6 +449,9 @@ export const videoApi = {
   // dryRun подрезки кадров A/B: тот же расчёт, что у съёмки, ничего не пишет и не тратит
   framesPreview: (scope: string, sessionId: string, req: VideoFramesPreviewRequest) =>
     json<VideoFramesPreview>(`${videoBase(scope, sessionId)}/frames/preview`, req),
+  // Повторить увеличение версии с upscaleError (ADR-022): 202 с новым jobId; 409 upscale_retry_unavailable — переснимите сцену
+  retryUpscale: (scope: string, sessionId: string, sceneId: string, versionId: string) =>
+    json<VideoUpscaleRetryResult>(`${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/upscale`, {}),
   // Отменить только увеличение «Макс» local H3: съёмка 768p остаётся версией с пометкой
   cancelUpscale: (scope: string, sessionId: string | null, jobId: string) =>
     request<VideoJob>(`${videoBase(scope, sessionId)}/jobs/${encodeURIComponent(jobId)}/upscale`, { method: 'DELETE' }),

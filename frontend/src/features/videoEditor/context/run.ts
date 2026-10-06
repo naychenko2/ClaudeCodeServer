@@ -3,7 +3,7 @@
 // стора контекста по ревизии, поэтому здесь только `op`, текст, `params` и `contextRevision`; текст поля
 // едет в `params.request` — просьба поверх текста сцены.
 
-import { getChatContextState, revealContextPanel } from 'aihome_shell/kit';
+import { FLAGS, getChatContextState, getFlag, revealContextPanel } from 'aihome_shell/kit';
 import type { ActionQuote, ContextKindCtx, LaunchHandle, LaunchParam, LaunchRequest } from 'aihome_shell/kit';
 import { ERR, errorCode, errorText, videoApi, type FilmBuildStatus, type VideoCatalog, type VideoQuoteRequest } from '../api';
 import { DSP_TEXT } from '../editor/montage/FilmTab';
@@ -58,7 +58,11 @@ export function quoteBody(ctx: ContextKindCtx, req: LaunchRequest): { scope: str
       ...(r.provider && r.model ? { provider: r.provider.key, model: r.model.id } : {}),
       count: typeof variants === 'number' ? variants : r.count,
       durationSec: typeof duration === 'number' ? duration : r.durationSec,
-      aspect: r.aspect, sound: r.sound, contextRevision: req.contextRevision,
+      // Под флагом media-format пропорции и ступень едут желанием «Формата»; прежний `aspect` — только без флага
+      ...(getFlag(FLAGS.mediaFormat)
+        ? { ...(r.format ? { format: r.format } : null), ...(r.frameAnchor !== 'center' ? { frameFit: { anchor: r.frameAnchor } } : null) }
+        : { aspect: r.aspect }),
+      sound: r.sound, contextRevision: req.contextRevision,
     },
   };
 }

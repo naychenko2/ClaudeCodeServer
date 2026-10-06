@@ -53,7 +53,7 @@ export type { ContextCandidate } from '../chatContext/fill';
 export type { ContextRole, ContextUpload, ContextNote, ContextMenuItem } from '../chatContext/types';
 export type {
   FormatModel, FormatEditModel, MediaFormatState, MediaFormatWish, MediaFormatCaps, FormatTierOption, FormatTierKey,
-  ResolvedFormat, FormatMode, CropAnchor,
+  ResolvedFormat, FormatMode, CropAnchor, FormatFramesModel, FormatLockAsk,
 } from '../chatContext/formatTypes';
 export { FORMAT_TEXT, TIER_NAME, generateChip, priceLabel, sizeLabel } from '../chatContext/formatText';
 export { notifyKindChanged } from '../chatContext/actionRun';
@@ -152,7 +152,7 @@ export {
   IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem, MenuSep,
   SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
   Island, EmptyState, Field, TextField, TextArea, IconField, ModalActions, Menu, SegmentedControl, Checkbox,
-  Chip, ChipX, ProgressBar, MetaChip, Select, InlineSegmented,
+  Chip, ChipX, ProgressBar, MetaChip, Select, InlineSegmented, Notice,
 } from '../../components/ui';
 export type { SelectOption } from '../../components/ui';
 

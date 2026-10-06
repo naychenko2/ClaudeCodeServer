@@ -7,21 +7,22 @@
 // Клик по карточке, а не по её кнопке, — выбор человеком: панель следует за ним, только если открыта.
 
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Save, Target, Zap } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Save, Target, TriangleAlert, Zap } from 'lucide-react';
 import {
-  Badge, Button, ByClaude, C, FLAGS, FS, IconButton, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useChatContext, useFeature,
+  Badge, Button, ByClaude, C, FLAGS, FS, IconButton, Notice, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useChatContext, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
 import { filmFolder, filmPathOf, newFilmPath, saveTargetFor, snapshotOf, type SaveTarget } from '../film/model';
 import { progressLabel } from '../editor/useScene';
-import { downloadClip, openFilmPanel, openScenePanel, saveScene, selectFilmByHuman, selectSceneByHuman, takeVersion } from '../scene/actions';
+import { downloadClip, openFilmPanel, openScenePanel, retryUpscale, saveScene, selectFilmByHuman, selectSceneByHuman, stopJob, stopUpscale, takeVersion } from '../scene/actions';
 import { currentVersion, modelLabel, plural, staleNotes } from '../scene/model';
 import { isPersonalScope, videoScope } from '../scope';
 import {
   filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, loadFilmList, patchFilm, useFilmList, useJobTick, useVideoStoreVersion, useVideoThreads, type JobProgress,
 } from '../store/videoStore';
 import { SCENE_KIND } from '../context/state';
+import { stagesOf, upscaleFailText, upscaleInfo, upscaledCaption, type CardStage } from './upscale';
 import { ic } from '../editor/primitives';
 import { recordOf, str } from './records';
 
@@ -62,6 +63,12 @@ export interface SceneCardView {
   byClaude: boolean;
   // Ход съёмки; null — не идёт
   progress: { label: string; p?: number } | null;
+  // «Макс» local H3: две стадии хода (съёмка и увеличение); null — запуск без увеличения
+  stages: CardStage[] | null;
+  // Увеличение не удалось: версия 768p сохранена с пометкой, кнопка «Повторить»
+  upscaleFail: { text: string; jobId: string; versionId: string } | null;
+  // «Версия 1 · 1440p · 2528×1440» под превью увеличенного клипа
+  upscaledCaption: string | null;
   // «Veo 3.1 · 2 вар. · ≈ $3.20» — что запустили и почём
   launchLine: string | null;
   failure: string | null;
@@ -98,6 +105,11 @@ export function sceneCardView(p: {
   const model = modelLabel(p.catalog ?? null, str(record?.provider) ?? launch?.provider, str(record?.model) ?? launch?.model);
   const count = typeof record?.count === 'number' ? record.count : launch?.count;
   const price = priceOfRecord(record?.price) ?? priceOfVersions(versions);
+  const aspect = scene.settings.format?.aspect ?? scene.settings.aspect;
+  // Увеличение «Макс» — по модели идущего запуска, а у готовой версии — по модели версии
+  const runLaunch = jobs[0] ? scene.launches.find(l => l.jobId === jobs[0].jobId) : undefined;
+  const stages = !jobId && jobs[0] ? stagesOf(upscaleInfo(p.catalog ?? null, runLaunch?.provider ?? scene.settings.provider, runLaunch?.model ?? scene.settings.model, aspect), jobs[0]) : null;
+  const vInfo = version ? upscaleInfo(p.catalog ?? null, version.provider, version.model, aspect) : null;
   const launchLine = jobId
     ? [model, count ? `${count} вар.` : null, price].filter(Boolean).join(' · ') || null
     : null;
@@ -120,6 +132,9 @@ export function sceneCardView(p: {
     byClaude: initiator === 'agent',
     // Ход съёмки показывает только полная карточка сцены: строка запуска не дублирует полосу
     progress: running && !jobId ? progressLabel(scene, jobs, count ?? 1) : null,
+    stages,
+    upscaleFail: !jobId && !running && version?.upscaleError && vInfo ? { text: upscaleFailText(vInfo, version), jobId: version.jobId, versionId: version.versionId } : null,
+    upscaledCaption: !jobId && version ? upscaledCaption(vInfo, version) : null,
     launchLine,
     failure,
     outcome,
@@ -161,6 +176,33 @@ export interface SceneCardActions {
   onReshoot: () => void;
   onWork: () => void;
   onOpenFilm: () => void;
+  // «Макс» local H3: отмена запуска и только увеличения, «Повторить» после сбоя увеличения
+  onCancelJob?: () => void;
+  onCancelUpscale?: () => void;
+  onRetryUpscale?: () => void;
+}
+
+// Стадии «Макс» local H3: «Снимаем · 1344×768…» и «Увеличиваем до 1440p…», на второй своя отмена
+function Stages({ rows, a }: { rows: CardStage[]; a: SceneCardActions }) {
+  return (
+    <div data-video-stages="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+      {rows.map(r => (
+        <div key={r.n} data-video-stage={r.n} data-state={r.state} style={{
+          display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: SP.xs, fontSize: FS.sm,
+          color: r.state === 'wait' ? C.textMuted : C.textSecondary,
+        }}>
+          <b style={{ width: 18, height: 18, borderRadius: R.max, border: `1px solid ${r.state === 'now' ? C.accent : C.border}`, color: r.state === 'now' ? C.accent : C.textMuted,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: FS.xs, flexShrink: 0 }}>{r.n}</b>
+          <span style={{ flex: '1 1 8em', minWidth: 0, color: r.state === 'now' ? C.textHeading : undefined }}>{r.text}</span>
+          {r.badge && <Badge size="xs" tone={r.state === 'done' ? 'success' : r.state === 'now' ? 'accent' : 'neutral'}>{r.badge}</Badge>}
+          {r.cancel && (
+            <Button size="xs" variant="secondary" data-video-stage-cancel={r.cancel}
+              onClick={r.cancel === 'upscale' ? a.onCancelUpscale : a.onCancelJob}>{r.cancel === 'upscale' ? 'Отменить увеличение' : 'Отменить'}</Button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; src: string | null; busy: boolean; a: SceneCardActions; chooser?: ReactNode }) {
@@ -181,9 +223,10 @@ export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; 
         {v.focused && <Badge size="xs" tone="accent" icon={ic(Target)}>{v.byClaude ? 'В работе ✦' : 'В работе'}</Badge>}
       </div>
       {v.launchLine && <div data-video-launch-line="" style={{ fontSize: FS.sm, color: C.textSecondary }}>{v.launchLine}</div>}
+      {v.stages && <Stages rows={v.stages} a={a} />}
       {v.progress && (
         <div data-video-card-progress="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-          <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{v.progress.label}</span>
+          {!v.stages && <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{v.progress.label}</span>}
           {v.progress.p !== undefined && <ProgressBar value={v.progress.p} />}
         </div>
       )}
@@ -191,6 +234,13 @@ export function SceneCardView({ v, src, busy, a, chooser }: { v: SceneCardView; 
       {v.version && src && (
         <video data-video-player="" controls preload="metadata" playsInline src={src}
           style={{ width: '100%', maxHeight: PLAYER_MAX_H, borderRadius: R.md, background: C.bgInset, display: 'block' }} />
+      )}
+      {v.upscaledCaption && <div data-video-upscaled="" style={{ fontSize: FS.xs, color: C.textMuted }}>{v.upscaledCaption}</div>}
+      {v.upscaleFail && (
+        <Notice tone="warning" icon={TriangleAlert} data-video-upscale-fail=""
+          action={a.onRetryUpscale && <Button size="xs" variant="primary" data-video-upscale-retry="" onClick={a.onRetryUpscale}>Повторить</Button>}>
+          {v.upscaleFail.text}
+        </Notice>
       )}
       {v.versions.length > 1 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
@@ -340,6 +390,9 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
         onAddToFilm: () => start('film'),
         onWork: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); },
         onReshoot: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId).then(() => openScenePanel(sessionId)); },
+        onCancelJob: () => { const j = getJobsOf(sessionId, scene.sceneId)[0]; if (j) void stopJob(scope, sessionId, j.jobId); },
+        onCancelUpscale: () => { const j = getJobsOf(sessionId, scene.sceneId)[0]; if (j) void stopUpscale(scope, sessionId, j.jobId); },
+        onRetryUpscale: () => { const f = v.upscaleFail; if (f) void run(() => retryUpscale(scope, sessionId, scene.sceneId, f.versionId)); },
         onOpenFilm: () => { if (v.film) { const p = v.film.path; void selectFilmByHuman(scope, sessionId, p).then(() => openFilmPanel(sessionId, p)); } },
       }} />
   );

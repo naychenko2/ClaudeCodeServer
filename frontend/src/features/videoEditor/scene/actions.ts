@@ -129,6 +129,18 @@ async function rememberFormat(scope: string, sessionId: string, format: NonNulla
   } catch { /* память формата не обязательна: сцена уже сохранена */ }
 }
 
+// Желание «Формата» сцены: пишется вместе с зеркалом `aspect`; прежний вопрос замка снимается — выбор новый
+export function setSceneFormat(scope: string, sessionId: string, sceneId: string, wish: NonNullable<VideoSceneSettings['format']>) {
+  setLockAsk(sessionId, null);
+  changeSettings(scope, sessionId, { format: wish, ...(wish.aspect ? { aspect: wish.aspect } : {}) }, false, sceneId);
+}
+
+// «Привести к 16:9»: пропорции сцены берутся у фильма, ступень остаётся своей
+export function fitSceneToFilm(scope: string, sessionId: string, scene: VideoScene, filmAspect: string) {
+  const cur = scene.settings.format;
+  setSceneFormat(scope, sessionId, scene.sceneId, { mode: 'aspect', aspect: filmAspect, tier: cur?.tier ?? 'standard', by: 'human', at: new Date().toISOString() });
+}
+
 // «Всё равно 9:16»: та же правка повторяется с force — замок снимается для этого запроса
 export async function forceLockedFormat(scope: string, sessionId: string, ask: LockAsk): Promise<boolean> {
   await ensureVideoThreads(scope, sessionId);
@@ -235,6 +247,22 @@ export async function runScene(i: RunInput, extraText = ''): Promise<boolean> {
 
 export async function stopJob(scope: string, sessionId: string, jobId: string) {
   try { await videoApi.cancelJob(scope, sessionId, jobId); } catch (e) { showToast(errorText(e), '', 'error'); }
+}
+
+// «Отменить увеличение»: съёмка 768p остаётся версией с пометкой «увеличение не удалось»
+export async function stopUpscale(scope: string, sessionId: string, jobId: string) {
+  try { await videoApi.cancelUpscale(scope, sessionId, jobId); } catch (e) { showToast(errorText(e), '', 'error'); }
+}
+
+// «Повторить» после сбоя увеличения: сервер повторяет только апскейл (без пересъёмки), ход виден как у любой задачи
+export async function retryUpscale(scope: string, sessionId: string, sceneId: string, versionId: string): Promise<boolean> {
+  try {
+    await videoApi.retryUpscale(scope, sessionId, sceneId, versionId);
+    return true;
+  } catch (e) {
+    showToast(errorText(e, 'Не удалось повторить увеличение'), '', 'error');
+    return false;
+  }
 }
 
 // «Продолжить от версии»

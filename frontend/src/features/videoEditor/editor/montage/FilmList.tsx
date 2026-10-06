@@ -23,6 +23,8 @@ export interface RowActions {
   // Сцена строки есть в этом чате (иначе «Работать» заведёт новую по снимку из фильма)
   hasScene?: (i: number) => boolean;
   onReveal: (i: number) => void;
+  // Строка не в формате фильма: пропорции сцены (нет сцены в чате — null), пропорции фильма, «Привести к …» (нет сцены — без кнопки)
+  formatFix?: (i: number) => { sceneAspect: string | null; filmAspect: string; fix: (() => void) | null };
 }
 
 // Миниатюра строки и номер на ней: размеры макета v7
@@ -94,12 +96,14 @@ function Row({ scope, it, i, mark, last, highlight, dragging, over, isMobile, tr
               style={{ height: isMobile ? TOUCH : THUMB.trimBtn, minHeight: isMobile ? TOUCH : undefined, padding: `0 ${SP.xxs}px` }}>{trimLabel(it)}</Button>
             {mark?.updated && <span data-video-mark="updated" title="Новый файл сцены — пересоберите"><Badge size="xs" tone="info" icon={<Dot color={C.info} size={THUMB.dot} />}>обновлена</Badge></span>}
             {mark?.claude && <ByClaude />}
+ {mark?.formatMismatch && <span data-video-mark="format" title="Формат сцены не совпадает с фильмом" style={{ color: C.warningText, display: 'inline-flex' }}>{ic(AlertTriangle)}</span>}
             {mark?.stale && <span data-video-mark="stale" title="Текст или кадр изменён — переснимите" style={{ color: C.warningText, display: 'inline-flex' }}>{ic(AlertTriangle)}</span>}
           </span>
         </span>
         <IconButton size={isMobile ? 'lg' : 'xs'} title="Действия со сценой" ariaLabel="Действия со сценой" style={isMobile ? { width: TOUCH, height: TOUCH } : undefined}
           onClick={e => setMenuAt((e.currentTarget as HTMLElement).getBoundingClientRect())}>{ic(MoreHorizontal)}</IconButton>
       </div>
+      {mark?.formatMismatch && <FormatLine fix={a.formatFix?.(i)} />}
       {trimOpen && <Trim scope={scope} it={it} isMobile={isMobile} onDone={t => { a.onTrim(i, t); onTrimToggle(); }} />}
       {menuAt && (
         <Menu onClose={() => setMenuAt(null)} anchor={menuAt} anchorAlign="end" minWidth={240}>
@@ -115,6 +119,17 @@ function Row({ scope, it, i, mark, last, highlight, dragging, over, isMobile, tr
           <MenuItem icon={ic(Trash2)} label="Убрать из фильма" hint="Файл останется в проекте" onClick={() => { setMenuAt(null); a.onRemove(i); }} />
         </Menu>
       )}
+    </div>
+  );
+}
+
+// «9:16 в фильме 16:9 — при склейке будут чёрные полосы. Привести к 16:9» (записка, строка фильма)
+function FormatLine({ fix }: { fix?: { sceneAspect: string | null; filmAspect: string; fix: (() => void) | null } }) {
+  if (!fix) return null;
+  return (
+    <div data-video-film-mismatch="" style={{ padding: `0 ${SP.sm}px ${SP.xs}px`, fontSize: FS.xs, color: C.warningText, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.xs }}>
+      <span>{fix.sceneAspect ? `${fix.sceneAspect} в фильме ${fix.filmAspect}` : `Сцена не в формате фильма — ${fix.filmAspect}`} — при склейке будут чёрные полосы.</span>
+      {fix.fix && <Button size="xs" variant="ghost" data-video-film-fix="" onClick={fix.fix}>Привести к {fix.filmAspect}</Button>}
     </div>
   );
 }

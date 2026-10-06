@@ -3,7 +3,7 @@
 // и есть умолчание (Р1: первое `run` без `disabledReason`). `enhanceFaces` и режим подбора
 // (EditMode) — не чипы: ими пользуется агент.
 
-import type { ContextAction } from 'aihome_shell/kit';
+import { FORMAT_TEXT, type ContextAction } from 'aihome_shell/kit';
 import type { ImageEditOp } from '../api';
 import { pickOp } from '../format';
 
@@ -24,6 +24,9 @@ export interface ImageActionInput {
   // Какие быстрые операции умеет хоть один поставщик каталога; не умеет никто — действие серое
   offered: { removeBackground: boolean; upscale: boolean; outpaint: boolean };
   openBrush: () => void;
+  // Флаг media-format: пропорции дорисовки задаются в «Формате», а не вопросом под чипом (ADR-025);
+  // outpaintAspect — выбранные там пропорции, null — ещё не выбраны. Нет поля — флаг выключен
+  format?: { outpaintAspect: string | null; pendingAspect: boolean };
 }
 
 export const imageState = (i: Pick<ImageActionInput, 'hasFile' | 'marks'>): ImageState =>
@@ -62,6 +65,8 @@ function rawImageActions(i: ImageActionInput): readonly ContextAction[] {
       id: 'edit', kind: 'run', op: EDIT_OP(i.hasMask), text: 'required',
       label: marked ? 'Изменить отмеченное' : 'Изменить',
       hint: marked ? 'Изменить отмеченное место: отметки уйдут вместе с описанием' : 'Изменить картинку по описанию',
+      // Другие пропорции выбраны, а способ — нет: модель сама пропорции не тянет и не режет
+      ...(i.format?.pendingAspect ? { blockReason: FORMAT_TEXT.pendingChoice } : null),
       placeholder: marked ? 'Что сделать с отмеченным…' : 'Что изменить на картинке…',
     },
     {
@@ -75,10 +80,9 @@ function rawImageActions(i: ImageActionInput): readonly ContextAction[] {
     {
       id: 'outpaint', kind: 'run', label: 'Дорисовать', op: 'outpaint', text: 'none',
       hint: 'Дорисовать картинку за края до выбранных пропорций',
-      question: {
-        param: 'aspect', title: 'Пропорции',
-        options: ASPECT_OPTIONS.map(r => ({ value: r, label: r })),
-      },
+      ...(i.format
+        ? (i.format.outpaintAspect ? null : { blockReason: FORMAT_TEXT.outpaintNeedsFormat })
+        : { question: { param: 'aspect', title: 'Пропорции', options: ASPECT_OPTIONS.map(r => ({ value: r, label: r })) } }),
       ...off(i.offered.outpaint, 'дорисовывать за края'),
     },
     {

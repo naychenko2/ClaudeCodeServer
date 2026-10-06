@@ -9,6 +9,8 @@
 // Мок повторяет контракт целиком, включая SignalR-события задачи.
 
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
+import type { MediaFormatState, MediaFormatWish } from 'aihome_shell/kit';
+import { mockFormatState } from './mockFormat';
 import { projectBase, scopeBase } from './scope';
 import { transformedSize } from './transforms';
 
@@ -87,6 +89,9 @@ export interface ImageEditQuoteRequest {
   // Чат и ревизия контекста (ADR-023 §Д2.1): с ревизией сервер берёт образцы, персонажа и размер из стора
   sessionId?: string | null;
   contextRevision?: number | null;
+  // Формат генерации (ADR-025): желание проекта; без него сервер берёт сохранённое, но общий кэш котировок
+  // ключуется телом, поэтому выбранный формат уходит явно
+  format?: MediaFormatWish | null;
 }
 
 export interface ImageEditEstimate {
@@ -344,6 +349,8 @@ export function nameTakenSuggestion(e: unknown): string | null {
 export interface ImageEditorApi {
   catalog(projectId: string): Promise<ImageEditCatalog>;
   quote(projectId: string, req: ImageEditQuoteRequest): Promise<ImageEditQuote>;
+  // Состояние чипа «Формат» (ADR-025): возможности модели, желание, действующий формат, ступени с ценой
+  format(projectId: string, q: { provider: string; model: string; op: ImageEditOp }): Promise<MediaFormatState>;
   startJob(projectId: string, input: ImageEditJobInput): Promise<{ jobId: string }>;
   // Образец с диска человека в рабочую папку модуля; дальше он встаёт в контекст чата ref'ом {upload}
   uploadSample(projectId: string, file: Blob, name: string): Promise<{ uploadId: string }>;
@@ -389,6 +396,8 @@ const liveApi: ImageEditorApi = {
   catalog: projectId => request<ImageEditCatalog>(`${base(projectId)}/catalog`, { live: true }),
   quote: (projectId, req) =>
     request<ImageEditQuote>(`${base(projectId)}/quote`, { method: 'POST', body: JSON.stringify(req), timeoutMs: 60_000 }),
+  format: (projectId, q) =>
+    request<MediaFormatState>(`${base(projectId)}/format?${new URLSearchParams(q)}`, { live: true, timeoutMs: 60_000 }),
   startJob: (projectId, input) =>
     request<{ jobId: string }>(`${base(projectId)}/jobs`, { method: 'POST', body: jobForm(input), timeoutMs: 120_000 }),
   uploadSample: (projectId, file, name) => {
@@ -531,6 +540,12 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       limits: { maxFileMb: 20, maxReferences: 6, maxCount: 4, heavyFileMb: 5 },
       reason: providers.length ? null : 'no_provider_configured',
     }),
+    format: async (projectId, q) => {
+      // Желание мок читает из кэша префов устройства: запись префов оптимистична и пишет туда сразу
+      let wish: MediaFormatWish | null = null;
+      try { wish = (JSON.parse(localStorage.getItem(`cc-image-prefs:${projectId}`) ?? 'null') as { format?: MediaFormatWish | null } | null)?.format ?? null; } catch { /* мусор в хранилище */ }
+      return delay(mockFormatState(q.model, q.op, wish), 80);
+    },
     quote: async (_projectId, req) => {
       const p = providers.find(x => x.key === req.provider);
       if (!p) throw Object.assign(new Error('Поставщик рисования не настроен'), { status: 409, body: { code: 'provider_unavailable' } });

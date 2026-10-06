@@ -112,7 +112,12 @@ const one = (projectId: string, sessionId: string, threadId: string) =>
 const post = <T>(url: string, body: unknown, method = 'POST') =>
   request<T>(url, { method, body: JSON.stringify(body) });
 
+// «Обрезать» из «Формата» (ADR-025 §4): новая версия нити без ИИ; dryRun — только размер результата
+export interface ThreadCropResponse { width: number; height: number; aspect: string; versionId: string | null; state: ImageThreadsState }
+
 export const threadsApi = {
+  crop: (projectId: string, sessionId: string, threadId: string, body: { aspect: string; anchor: string; versionId?: string | null; dryRun?: boolean }) =>
+    request<ThreadCropResponse>(`${one(projectId, sessionId, threadId)}/crop`, { method: 'POST', body: JSON.stringify(body), timeoutMs: 60_000 }),
   get: (projectId: string, sessionId: string) =>
     request<ImageThreadsState>(base(projectId, sessionId), { live: true }),
   // file — взять файл проекта в работу; draftFolder — черновик «Новая картинка»

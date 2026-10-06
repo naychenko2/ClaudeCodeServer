@@ -2,6 +2,7 @@
 // в трёх местах и копии расходились: у быстрых операций при стрелках на холсте цена уходила с
 // hasAnnotations: true, а запуск — с false. Теперь «что уйдёт вместе с запуском» решает одна функция.
 
+import type { MediaFormatWish } from 'aihome_shell/kit';
 import type { EditMode, ImageEditOp, ImageEditQuoteRequest } from '../api';
 import { hasAnnotationMark, type Mark } from '../marks';
 
@@ -26,6 +27,8 @@ export interface QuoteBodyInput {
   size: { w: number; h: number } | null;
   // Чат и ревизия контекста: с ними сервер берёт образцы, персонажа и размер из стора
   context?: { sessionId: string; contextRevision: number } | null;
+  // Формат генерации (ADR-025): желание проекта; undefined — флаг выключен, поле в тело не кладётся
+  format?: MediaFormatWish | null;
 }
 
 export function buildQuoteBody(i: QuoteBodyInput): ImageEditQuoteRequest {
@@ -37,5 +40,6 @@ export function buildQuoteBody(i: QuoteBodyInput): ImageEditQuoteRequest {
     references: i.references, hasCharacter: i.hasCharacter,
     width: i.size?.w ?? null, height: i.size?.h ?? null,
     ...(i.context ? { sessionId: i.context.sessionId, contextRevision: i.context.contextRevision } : null),
+    ...(i.format !== undefined ? { format: i.format } : null),
   };
 }

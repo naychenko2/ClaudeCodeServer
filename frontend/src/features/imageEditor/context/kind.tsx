@@ -10,7 +10,8 @@ import {
 import { enterScope } from '../scope';
 import { getCatalog, loadCatalog } from '../thread/catalog';
 import { createDraft } from '../thread/actions';
-import { ensurePrefs, subscribePrefs } from '../thread/prefs';
+import { ensurePrefs, formatSig, subscribePrefs } from '../thread/prefs';
+import { wishForQuote } from './formatChoice';
 import { findVersion, threadHasImage, threadName, versionName, versionsOf } from '../thread/model';
 import { getThreadMarks, getThreadsState, setThreadMarks, subscribeThreadStore, useThreadStoreVersion } from '../thread/threadStore';
 import { activeSrc, resolveModel, versionSrc } from '../thread/useThreadLaunch';
@@ -19,6 +20,7 @@ import type { ImageEditOp } from '../api';
 import type { ImageThread } from '../thread/threadsApi';
 import { executorModel, settingsOf } from './executors';
 import { launchAction, paramsFor, quoteAction } from './run';
+import { imageFormat } from './format';
 import { imageRefRoles, IMAGE_SAMPLE_ROLES } from './roles';
 import { SAMPLE_ACCEPT, uploadSampleRef } from './samples';
 import { actionOf, IMAGE_KIND, imageActions, threadOfPrimary } from './state';
@@ -133,6 +135,7 @@ export const imageKindApi: ContextKindApi = {
       catalog, hasImage: found.input.hasFile, hasMask: found.input.hasMask,
     });
   },
+  format: imageFormat,
   params: (ctx, actionId) => {
     const found = actionOf(ctx, actionId);
     if (!found?.action.op) return [];
@@ -170,7 +173,8 @@ export const imageKindApi: ContextKindApi = {
     if (!found) return '';
     // Исполнитель входит в ключ цены: смена «Чем» и приход настроек с сервера пересчитывают котировку
     const { pv, m } = resolveModel(getCatalog(found.scope), settingsOf(found.scope, found.thread, (found.action.op ?? 'edit') as ImageEditOp));
-    return `${found.input.marks}:${found.input.hasMask}:${pv?.key ?? ''}/${m?.id ?? ''}`;
+    // Желание формата входит в ключ цены: смена формата пересчитывает котировку ступени
+    return `${found.input.marks}:${found.input.hasMask}:${pv?.key ?? ''}/${m?.id ?? ''}:${formatSig(wishForQuote(found.scope))}`;
   },
   quote: quoteAction,
   launch: launchAction,

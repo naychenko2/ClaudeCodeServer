@@ -14,6 +14,7 @@ import type { ImageThreadSettings } from './threadsApi';
 import type { EditMode, ImageEditOp } from '../api';
 import type { OutpaintRatio } from '../editorInputs';
 import type { ImageMode } from './modeState';
+import type { MediaFormatWish } from 'aihome_shell/kit';
 
 // Выбор режимов «Создать» и «Править» панели v5; null в полях — берётся плоское поле. Сервер
 // сливает PUT: нет режима в теле — сохранённый остаётся
@@ -31,6 +32,9 @@ export interface ProjectPrefs extends ImageThreadSettings {
   characterSlug: string | null;
   create?: ImageCreatePrefs | null;
   edit?: ImageEditPrefs | null;
+  // Формат картинок проекта (ADR-025): желание человека или агента, а не подставленное значение.
+  // В PUT уходит только когда его правили здесь: любой PUT с format сервер штампует «человеком»
+  format?: MediaFormatWish | null;
 }
 
 // Событие SignalR владельцу на каждую запись prefs проекта
@@ -87,26 +91,29 @@ const sameCreate = (a: ImageCreatePrefs | null | undefined, b: ImageCreatePrefs 
   !a || !b ? !a === !b : a.provider === b.provider && a.model === b.model && a.count === b.count;
 const sameEdit = (a: ImageEditPrefs | null | undefined, b: ImageEditPrefs | null | undefined) =>
   !a || !b ? !a === !b : sameCreate(a, b) && a.op === b.op && a.editMode === b.editMode && a.ratio === b.ratio;
+// Подпись желания без времени: сервер ставит своё, и эхо с другим `at` — не правка
+export const formatSig = (f: MediaFormatWish | null | undefined) =>
+  f ? [f.mode, f.aspect ?? '', f.tier ?? '', f.width ?? '', f.height ?? '', f.by].join('|') : '';
 const same = (a: ProjectPrefs, b: ProjectPrefs) =>
-  a.provider === b.provider && a.model === b.model && a.count === b.count
+  formatSig(a.format) === formatSig(b.format) && a.provider === b.provider && a.model === b.model && a.count === b.count
   && a.matchSourceSize === b.matchSourceSize && a.characterSlug === b.characterSlug
   && sameCreate(a.create, b.create) && sameEdit(a.edit, b.edit);
 
 // Режимные части, правленные здесь и ещё не отправленные. PUT несёт режим, только если его
 // правили: сервер без режима в теле оставляет сохранённый, и устаревший кэш вкладки не
 // затрёт свежий выбор, сделанный в другой
-const _modesDirty = new Map<string, { create: boolean; edit: boolean }>();
+const _modesDirty = new Map<string, { create: boolean; edit: boolean; format: boolean }>();
 
 function body(projectId: string): ProjectPrefs {
-  const { create, edit, ...flat } = getPrefs(projectId);
+  const { create, edit, format, ...flat } = getPrefs(projectId);
   const d = _modesDirty.get(projectId);
   _modesDirty.delete(projectId);
-  return { ...flat, ...(d?.create ? { create } : null), ...(d?.edit ? { edit } : null) };
+  return { ...flat, ...(d?.create ? { create } : null), ...(d?.edit ? { edit } : null), ...(d?.format ? { format } : null) };
 }
 
 function markModes(projectId: string, sent: ProjectPrefs) {
-  const d = _modesDirty.get(projectId) ?? { create: false, edit: false };
-  _modesDirty.set(projectId, { create: d.create || 'create' in sent, edit: d.edit || 'edit' in sent });
+  const d = _modesDirty.get(projectId) ?? { create: false, edit: false, format: false };
+  _modesDirty.set(projectId, { create: d.create || 'create' in sent, edit: d.edit || 'edit' in sent, format: d.format || 'format' in sent });
 }
 
 function readStored(projectId: string): ProjectPrefs | null {
@@ -149,13 +156,31 @@ async function flush(projectId: string) {
     s.inflight = false;
     if (s.dirty) { void flush(projectId); return; }
     applyServer(projectId, normalize(saved));
+    settle(projectId);
   } catch (e) {
     s.inflight = false;
     // Неотправленный выбор режима уйдёт со следующей записью
     markModes(projectId, sent);
     if (s.dirty) { void flush(projectId); return; }
     showToast(`Настройки картинок не сохранились: ${(e as Error).message}`, '', 'error');
+    settle(projectId);
   }
+}
+
+// Ожидающие записи: формат считает сервер по сохранённым префам, поэтому ручку format читают после PUT
+const _waiters = new Map<string, (() => void)[]>();
+
+function settle(projectId: string) {
+  const s = sync(projectId);
+  if (s.inflight || s.dirty) return;
+  _waiters.get(projectId)?.splice(0).forEach(fn => fn());
+}
+
+// Резолвится, когда последняя локальная правка префов проекта дошла до сервера (или отказала)
+export function prefsSettled(projectId: string): Promise<void> {
+  const s = sync(projectId);
+  if (!s.inflight && !s.dirty) return Promise.resolve();
+  return new Promise(resolve => { _waiters.set(projectId, [...(_waiters.get(projectId) ?? []), resolve]); });
 }
 
 export function setPrefs(projectId: string, patch: Partial<ProjectPrefs>) {

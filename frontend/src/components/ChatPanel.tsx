@@ -35,8 +35,8 @@ import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
-import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart } from '../lib/toolTiming';
-import { RUN_TESTS_TOOL } from '../lib/toolLabels';
+import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart, stageCaptionOf } from '../lib/toolTiming';
+import { BUILD_TOOL, RUN_TESTS_TOOL } from '../lib/toolLabels';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, sanitizeForSpeech, splitSentences, type StreamSpeech } from '../lib/tts';
@@ -1529,6 +1529,32 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const activeToolStart = activeTool?.kind === 'tool_use' ? activeTool.startedAt ?? null : null;
   const activeToolTimed = activeTool?.kind === 'tool_use' ? !awaitsToolStart(activeTool) : true;
   const activeToolAppeared = activeTool?.kind === 'tool_use' ? activeTool.appearedAt ?? null : null;
+  // Счётчик текущего этапа прогона («412 из 7951 · упало 1») — ход прогона виден и без прокрутки
+  // ленты к карточке; у инструментов без этапов — ничего
+  const activeToolDetail = activeTool?.kind === 'tool_use' && activeTool.stages?.length
+    ? stageCaptionOf(activeTool.progress, activeTool.name) : null;
+  // Видна ли карточка активного инструмента в ленте: видна — индикатор ожидания не повторяет
+  // её подпись и время (иначе один текст стоит дважды подряд), ушла за край — повторяет
+  const activeToolId = activeTool?.kind === 'tool_use' ? activeTool.id : null;
+  const [activeToolOnScreen, setActiveToolOnScreen] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс при смене активного инструмента
+    setActiveToolOnScreen(false);
+    const root = scrollRef.current;
+    if (!activeToolId || !root || typeof IntersectionObserver === 'undefined') return;
+    let io: IntersectionObserver | null = null;
+    let raf = 0;
+    let tries = 0;
+    // Карточка может встать в DOM на кадр позже, чем вызов попал в ленту
+    const attach = () => {
+      const el = root.querySelector(`[data-tool-id="${CSS.escape(activeToolId)}"]`);
+      if (!el) { if (++tries < 30) raf = requestAnimationFrame(attach); return; }
+      io = new IntersectionObserver(([e]) => setActiveToolOnScreen(e.isIntersecting), { root, threshold: 0.5 });
+      io.observe(el);
+    };
+    attach();
+    return () => { cancelAnimationFrame(raf); io?.disconnect(); };
+  }, [activeToolId, scrollRef]);
   // Ждёт ответа от пользователя (permission_request / ask_question) — для режима текста
   const awaitingResponse = items.some(it =>
     (it.kind === 'permission_request' || it.kind === 'ask_question') && !it.resolved
@@ -2283,7 +2309,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         const isOwnCardEntry = (it: ChatItem) => it.kind === 'tool_use' && ownToolNames.has(it.name);
         // Прогон тестов — итог хода, который ищут глазами: карточка «Тесты · vitest» с исходом
         // остаётся видна и в свёрнутой группе
-        const isTestRunEntry = (it: ChatItem) => it.kind === 'tool_use' && it.name === RUN_TESTS_TOOL;
+        // Упавшая сборка — тоже: красное «ошибка» не прячется в свёрнутые «N действий»
+        const isTestRunEntry = (it: ChatItem) => it.kind === 'tool_use' && (it.name === RUN_TESTS_TOOL
+          || (it.name === BUILD_TOOL && it.stages?.some(s => s.failed) === true));
         const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it) || isOwnCardEntry(it) || isTestRunEntry(it);
         const toolCount = slice.filter(([it]) => it.kind === 'tool_use' && !isPinnedEntry(it)).length;
         // Группа завершена, как только после неё появился следующий видимый элемент
@@ -2758,6 +2786,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 activeToolStartedAt={activeToolStart}
                 activeToolTimer={activeToolTimed}
                 activeToolAppearedAt={activeToolAppeared}
+                activeToolDetail={activeToolDetail}
+                activeToolOnScreen={activeToolOnScreen}
               />
             </div>
             {/* Пилюле — не больше половины строки: иначе на 320px её 300px съедали всё, и у

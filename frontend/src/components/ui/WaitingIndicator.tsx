@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { C, FS, SP } from '../../lib/design';
 import { captionLeadMs, waitingToolCaption } from '../../lib/toolTiming';
 import { useRunningElapsed } from '../../hooks/useRunningElapsed';
@@ -28,8 +28,8 @@ const ECHO_FACE_H = 56;
 // Идёт долгий инструмент (activeToolLabel) — вместо глагола его русская подпись и время:
 // «Синхронизирую транскрипты · 52 с». Пропы примитивами: объект пересоздавался бы на каждом
 // рендере ленты. Подпись встаёт только с порога TOOL_TIMER_MIN_MS, чтобы быстрые Read/Grep
-// не мигали поверх глаголов, и без печати — она сменяет глагол целиком.
-export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks, activeToolLabel, activeToolStartedAt, activeToolTimer = true, activeToolAppearedAt }: {
+// не мигали поверх глаголов; впечатывается один раз и не стирается, курсор в конце мигает.
+export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks, activeToolLabel, activeToolStartedAt, activeToolTimer = true, activeToolAppearedAt, activeToolDetail, activeToolOnScreen = false }: {
   planning?: 'planning' | 'replanning';
   hint?: string;
   awaitingResponse?: boolean;
@@ -46,6 +46,11 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   activeToolTimer?: boolean;
   // Момент появления вызова до сдвига старта на tool_started; null — старт не сдвигался
   activeToolAppearedAt?: number | null;
+  // Счётчик текущего этапа прогона («412 из 7951 · упало 1») — после времени, режется первым
+  activeToolDetail?: string | null;
+  // Карточка инструмента видна в ленте: подпись, время и счётчик не повторяем — остаются
+  // лицо с кольцами и мигающий курсор
+  activeToolOnScreen?: boolean;
 } = {}) {
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -95,6 +100,34 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
   // Порог — от появления вызова: подпись, вставшая до tool_started, на старте не уходит в глаголы
   const tool = waitingToolCaption(activeToolLabel, toolElapsed, activeToolTimer, !!awaitingResponse,
     captionLeadMs(activeToolStartedAt, activeToolAppearedAt));
+
+  // Подпись инструмента впечатывается один раз — при появлении и при смене — и дальше стоит:
+  // это факт, его не стирают и не перебирают, как глаголы. Время и счётчик встают после печати,
+  // чтобы растущий текст не толкал цифры; живость дальше держит мигающий курсор в конце строки
+  // Подпись, что уже стояла при монтировании (F5 посреди инструмента), — сразу целиком
+  const toolText = tool?.label ?? null;
+  // Напечатанное привязано к своей подписи: при смене подписи до первого тика печати не
+  // мелькает прежняя целиком — показывается пусто
+  const [typed, setTyped] = useState<{ of: string | null; text: string }>({ of: toolText, text: toolText ?? '' });
+  const prevToolText = useRef(toolText);
+  useEffect(() => {
+    const changed = prevToolText.current !== toolText;
+    prevToolText.current = toolText;
+    if (!toolText || reduced || !changed) { setTyped({ of: toolText, text: toolText ?? '' }); return; }
+    let n = 0;
+    let timer = 0;
+    const tick = () => {
+      n++;
+      setTyped({ of: toolText, text: toolText.slice(0, n) });
+      if (n < toolText.length) timer = window.setTimeout(tick, 25 + Math.random() * 25);
+    };
+    timer = window.setTimeout(tick, 60);
+    return () => clearTimeout(timer);
+  }, [toolText, reduced]);
+  const typedTool = typed.of === toolText ? typed.text : '';
+  const toolTyped = toolText != null && typedTool === toolText;
+  // Тихий режим: инструмент идёт, но его карточка на экране — текст не дублируем
+  const quietTool = !!tool && activeToolOnScreen;
 
   // Обёртка лица: внешний бокс с вертикальным резервом (ECHO_FACE_H), внутри — аватар
   // 28px по центру с двумя кольцами «Эхо» поверх. Резерв вмещает размах колец, чтобы они
@@ -156,14 +189,14 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
             baseline: в пустой фазе (между глаголами) baseline задаёт один курсор, и
             строку чуть перекашивало по высоте каждый цикл. */}
         <span style={{ display: 'inline-flex', alignItems: 'center', minHeight: 17, minWidth: 0, overflow: 'hidden' }}>
-          <span className="cc-shimmer-text" title={tool?.label} style={{
+          <span className="cc-shimmer-text" title={quietTool ? undefined : tool?.label} style={{
             fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
             whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden',
           }}>
-            {tool ? tool.label : text}
+            {tool ? (quietTool ? '' : typedTool) : text}
           </span>
           {/* Время инструмента не сжимается: обрезается подпись, а не цифры */}
-          {tool?.clock && (
+          {!quietTool && toolTyped && tool?.clock && (
             <span style={{
               marginLeft: SP.sm, flexShrink: 0, fontSize: FS.sm, color: C.textMuted,
               whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
@@ -171,12 +204,21 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
               {tool.clock}
             </span>
           )}
-          {/* Курсор печатной машинки — только у глаголов: подпись инструмента не печатается */}
-          {!tool && <span style={{
-            display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2, flexShrink: 0,
+          {!quietTool && toolTyped && activeToolDetail && (
+            <span title={activeToolDetail} style={{
+              marginLeft: SP.xs, minWidth: 0, fontSize: FS.sm, color: C.textMuted,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontVariantNumeric: 'tabular-nums',
+            }}>
+              · {activeToolDetail}
+            </span>
+          )}
+          {/* Курсор печатной машинки — и у глаголов, и у подписи инструмента: у неё он стоит в
+              конце строки (после времени и счётчика) и мигает всё время, пока инструмент идёт */}
+          <span style={{
+            display: 'inline-block', width: 2, height: '0.95em', marginLeft: tool && toolTyped && !quietTool ? SP.xs : 2, flexShrink: 0,
             background: pulseColor, borderRadius: 1, alignSelf: 'center',
             animation: (reduced || awaitingResponse) ? 'none' : 'blink 1s step-start infinite',
-          }} />}
+          }} />
         </span>
       </div>
       {hint && (

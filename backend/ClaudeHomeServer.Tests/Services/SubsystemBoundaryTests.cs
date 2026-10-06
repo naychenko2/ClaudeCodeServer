@@ -1753,6 +1753,7 @@ public class SubsystemBoundaryTests
         // (IContextKindProvider) и DTO — спина: вертикали объявляют виды, а спина
         // знает только строки Kind и не ссылается на вертикали.
         "ClaudeHomeServer.Services.ChatContext",
+        "ClaudeHomeServer.Services.Spheres",      // ISphereDirectory и событие членства — спина зон персон
         // Этап 5, волна D (Notes): INoteTaskBridge + узкие Core-типы (NoteTaskRef/
         // NoteTaskCreateRequest/NoteTaskUpdateRequest/NoteTaskStatus/NoteTaskKind/
         // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes

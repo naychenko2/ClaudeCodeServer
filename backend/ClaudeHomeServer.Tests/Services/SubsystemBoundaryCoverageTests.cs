@@ -255,6 +255,7 @@ public class SubsystemBoundaryCoverageTests
             "ClaudeHomeServer.Services.Higgsfield",   // IHiggsfieldAccess
             "ClaudeHomeServer.Services.Media",        // ProjectLinkGuard
             "ClaudeHomeServer.Services.ChatContext",  // ADR-023: стор и контракты контекста чата
+            "ClaudeHomeServer.Services.Spheres",      // ISphereDirectory: справочник членства для зон персон
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

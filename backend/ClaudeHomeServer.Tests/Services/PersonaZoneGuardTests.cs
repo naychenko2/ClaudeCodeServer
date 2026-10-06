@@ -14,7 +14,7 @@ public class PersonaZoneGuardTests
     private const string Scope = @"(?:[A-Za-z_][A-Za-z0-9_]*\.)*PersonaScope\.(Project|Sphere)";
 
     private static readonly Regex BackendPattern = new(
-        $@"(==|!=)\s*{Scope}\b|\b{Scope}\s*(==|!=)|\bis\s+(not\s+)?{Scope}\b|\bcase\s+{Scope}\b|=>\s*{Scope}\b",
+        $@"(==|!=)\s*{Scope}\b|\b{Scope}\s*(==|!=)|\bis\s+(not\s+)?{Scope}\b|\bcase\s+{Scope}\b|=>\s*{Scope}\b|\bScope\s*:\s*{Scope}\b",
         RegexOptions.Compiled);
 
     private static readonly Regex FrontendPattern = new(
@@ -112,6 +112,8 @@ public class PersonaZoneGuardTests
     [InlineData("if (p.Scope != PersonaScope.Sphere) { }")]
     [InlineData("if (p.Scope is PersonaScope.Project) { }")]
     [InlineData("case PersonaScope.Sphere:")]
+    [InlineData("if (p is { Scope: PersonaScope.Project }) { }")]
+    [InlineData("if (p is not { Scope: ClaudeHomeServer.Models.PersonaScope.Sphere, SphereId: not null }) { }")]
     [InlineData("var z = k switch { 1 => PersonaScope.Sphere, _ => x };")]
     [InlineData("=> p.Scope == ClaudeHomeServer.Models.PersonaScope.Project;")]
     public void Шаблон_ЛовитСравнениеНаБэке(string line) =>

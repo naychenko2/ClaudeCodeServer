@@ -277,17 +277,19 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           {useCompact ? compactChevron : (
             <>
               {/* Роль над именем в две строки: «Роль (Имя)» одной строкой съедал губе
-                  до 270 px. Без роли — одна строка имени */}
+                  до 270 px. Без роли — одна строка имени. Цвет — как у соседних кнопок губы
+                  (наследуется от кнопки), вес 500: две строки 600 тёмным заголовочным цветом
+                  выбивались из ряда пятном */}
               <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, fontFamily: FONT.sans, lineHeight: 1.15, textAlign: 'left' }}>
                 {selectedPersona.role?.trim() && (
-                  <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: FS.sm, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {selectedPersona.role.trim()}
                   </span>
                 )}
-                {/* Имя — подпись под ролью; без роли это единственная строка, и она главная */}
+                {/* Имя — подпись под ролью; без роли это единственная строка */}
                 <span style={selectedPersona.role?.trim()
                   ? { fontSize: FS.xs, fontWeight: 400, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
-                  : { fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  : { fontSize: FS.sm, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {selectedPersona.name}
                 </span>
               </span>

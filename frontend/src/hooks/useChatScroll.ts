@@ -25,6 +25,15 @@ try {
 // свои ~180 и область прокрутки ужимается: открытие чата даёт рывок снизу.
 let _lastComposerH = 96;
 
+// Человек держит выделение внутри ленты (long-press и маркеры на мобиле): программно
+// гнать ленту к низу в этот момент нельзя — позиция уезжает из-под маркеров, а текст,
+// занимающий несколько экранов, не удаётся дотянуть. Прилипание догонит, когда выделение снимут.
+function hasSelectionIn(el: HTMLElement | null): boolean {
+  const sel = window.getSelection();
+  if (!el || !sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  return el.contains(sel.getRangeAt(0).commonAncestorContainer);
+}
+
 // Скролл-механика ленты чата: прилипание к низу, восстановление позиции чтения
 // после перезагрузки страницы, автоскролл в конец при открытии чата, измерение
 // высоты плавающего composer и кнопка «вниз».
@@ -180,7 +189,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     const el = scrollRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      if (atBottomRef.current && pendingRestoreRef.current == null) el.scrollTop = el.scrollHeight;
+      if (atBottomRef.current && pendingRestoreRef.current == null && !hasSelectionIn(el)) el.scrollTop = el.scrollHeight;
       syncScrollState();
     });
     ro.observe(el);
@@ -211,7 +220,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     if (!content || !el) return;
     const ro = new ResizeObserver(() => {
       if (!restoredRef.current && pendingRestoreRef.current != null) { applyRestore(); return; }
-      if (atBottomRef.current) el.scrollTop = el.scrollHeight;
+      if (atBottomRef.current && !hasSelectionIn(el)) el.scrollTop = el.scrollHeight;
       syncScrollState();
     });
     ro.observe(content);
@@ -243,7 +252,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     if (!restoredRef.current && pendingRestoreRef.current != null) { applyRestore(); return; }
     if (atBottomRef.current) {
       const el = scrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (el && !hasSelectionIn(el)) el.scrollTop = el.scrollHeight;
       setShowScrollDown(false);
     } else {
       setShowScrollDown(true);

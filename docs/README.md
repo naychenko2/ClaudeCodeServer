@@ -44,7 +44,8 @@
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
 
-**features/** — [audio-editor.md](features/audio-editor.md) (редактор звука: режимы
+**features/** — [spheres.md](features/spheres.md) (сферы: зоны персоны, две полки памяти, граница MVP),
+[audio-editor.md](features/audio-editor.md) (редактор звука: режимы
 Голос / Музыка / Обработка, поставщики, нити и версии, «Голоса», склейка и монтаж, агент),
 [video-editor.md](features/video-editor.md) (редактор видео: сцены, фильм, сборка, агент `video_*`),
 [decision-history-import-texts.md](features/decision-history-import-texts.md)
@@ -142,7 +143,8 @@ Viaduct Community без форка; лицензионные рамки BUSL-1.
 MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.Media`, общий каркас панели
 генерации и перенос настроек картинок в неё, тулсет `audio_*`, этапы — черновик; полосы и панели заменены ADR-023),
 [ADR-022](adr/ADR-022-video-editor.md) (модуль «Видео»: сцены между двумя кадрами и фильм, `local` / fal / Higgsfield),
-[ADR-023](adr/ADR-023-turn-context.md) (контекст хода: строка над полем ввода и панель «Контекст» вместо полос и режимов поля, стор `Services.ChatContext`, правило ✦ и «основной объект один»; контракты — [ADR-023-contracts.md](adr/ADR-023-contracts.md));
+[ADR-023](adr/ADR-023-turn-context.md) (контекст хода: строка над полем ввода и панель «Контекст» вместо полос и режимов поля, стор `Services.ChatContext`, правило ✦ и «основной объект один»; контракты — [ADR-023-contracts.md](adr/ADR-023-contracts.md)),
+[ADR-024](adr/ADR-024-spheres.md) (сферы: зона персоны `PersonaZone` и две полки памяти над проектами, fail-closed, членство меняет только человек; описание — [features/spheres.md](features/spheres.md));
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDownAZ, Clock, List, Plus, Search } from 'lucide-react';
+import { ArrowDownAZ, Clock, List, Orbit, Plus, Search } from 'lucide-react';
 import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
@@ -9,7 +9,7 @@ import { MOBILE_MAX } from '../lib/breakpoints';
 import { PanelZone } from './workspace/PanelZone';
 import { projectsPanels } from './workspace/panelStackState';
 import { PROJECTS_KEYS } from './workspace/panelCatalog';
-import { Button, IslandScaffold } from '../components/ui';
+import { Button, EmptyState, IslandScaffold } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE } from '../components/ui/icons';
 import { PillSwitch } from '../components/Toolbar';
@@ -26,6 +26,12 @@ import { DeleteDialog } from '../features/projects/dialogs/DeleteDialog';
 import { MoveToGroupDialog } from '../features/projects/dialogs/MoveToGroupDialog';
 import { GroupManagerDialog } from '../features/projects/dialogs/GroupManagerDialog';
 import { onProjectIconBackfilled } from '../features/projects/useAllProjects';
+import { FLAGS, useFeature } from '../lib/featureFlags';
+import { SphereHeader } from '../features/spheres/SphereHeader';
+import { SphereDialog } from '../features/spheres/SphereDialog';
+import { SphereDeleteDialog } from '../features/spheres/SphereDeleteDialog';
+import { RemoveFromSphereDialog } from '../features/spheres/RemoveFromSphereDialog';
+import { SpherePage } from '../features/spheres/SpherePage';
 
 type ActiveDialog =
   | { type: 'add' }
@@ -33,6 +39,9 @@ type ActiveDialog =
   | { type: 'delete'; project: Project }
   | { type: 'move'; project: Project }
   | { type: 'groups' }
+  | { type: 'sphereNew' }
+  | { type: 'sphereDelete'; group: ProjectGroup }
+  | { type: 'unsphere'; project: Project; group: ProjectGroup }
   | null;
 
 type SortMode = 'activity' | 'name';
@@ -79,6 +88,7 @@ function useMeasuredWidth<T extends HTMLElement>() {
 
 export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const online = useOnline();
+  const spheresOn = useFeature(FLAGS.spheres);
   const wide = useWide();
   const [listRef, listW] = useMeasuredWidth<HTMLDivElement>();
   const twoCol = listW >= 760;   // две колонки, когда панель достаточно широкая
@@ -91,6 +101,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'offline' | 'error'>('loading');
   const [retryKey, setRetryKey] = useState(0);
+  // Флаг spheres: открытая страница сферы (id группы) вместо списка
+  const [sphereId, setSphereId] = useState<string | null>(null);
 
   // Раздел живёт на рельсе панелей: ширина, сворачивание и раскладка — в состоянии
   // зон (прежние sidebarMode и общая на все разделы ширина больше не нужны)
@@ -156,24 +168,43 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const closeDialog = () => setActiveDialog(null);
   const upsertProject = (updated: Project) => setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
   const idx = (p: Project) => colorIndex.get(p.id) ?? 0;
-  const hasAny = filtered.length > 0;
+  // Сфера удалена: её проекты уходят в «Без сферы» (бэкенд сбросил groupId), вид возвращается к списку
+  const removeSphere = (id: string) => {
+    setGroups(prev => prev.filter(g => g.id !== id));
+    setProjects(prev => prev.map(p => p.groupId === id ? { ...p, groupId: undefined } : p));
+    if (view === id) setView('all');
+    if (sphereId === id) setSphereId(null);
+    closeDialog();
+  };
+  const openSpherePage = spheresOn ? (id: string) => setSphereId(id) : undefined;
+  const removeFromSphere = spheresOn
+    ? (pr: Project) => {
+        const group = groups.find(g => g.id === pr.groupId);
+        if (group) setActiveDialog({ type: 'unsphere', project: pr, group });
+      }
+    : undefined;
+  const sphereOpen = spheresOn ? groups.find(g => g.id === sphereId) : undefined;
+  const openProjectById = (id: string) => { const pr = projects.find(x => x.id === id); if (pr) onOpen(pr); };
+  const hasAny = filtered.length > 0 || (spheresOn && groups.length > 0);
 
   // Секции для десктопа в зависимости от выбранного пункта сайдбара
-  type Section = { key: string; name: string; color?: string; items: Project[] };
+  type Section = { key: string; name: string; color?: string; items: Project[]; group?: ProjectGroup };
   const UNGROUPED_COLOR = C.textMuted;
   // Инициализатор не нужен: все ветки ниже (all/sleeping/группа) гарантированно присваивают
   let sections: Section[];
+  const ungroupedName = spheresOn ? 'Без сферы' : 'Без группы';
   let title = 'Проекты';
   if (view === 'all') {
-    sections = byGroup.map(({ group, items }) => ({ key: group.id, name: group.name, color: group.color, items }));
-    if (ungrouped.length) sections.push({ key: '__ungrouped', name: 'Без группы', color: UNGROUPED_COLOR, items: ungrouped });
+    sections = byGroup.map(({ group, items }) => ({ key: group.id, name: group.name, color: group.color, items, group }));
+    // Сферы показываются и пустыми, а «Без сферы» стоит последней всегда, пока есть сферы
+    if (ungrouped.length) sections.push({ key: '__ungrouped', name: ungroupedName, color: UNGROUPED_COLOR, items: ungrouped });
   } else if (view === 'sleeping') {
-    title = 'Без группы';
-    sections = [{ key: '__ungrouped', name: 'Без группы', color: UNGROUPED_COLOR, items: ungrouped }];
+    title = ungroupedName;
+    sections = [{ key: '__ungrouped', name: ungroupedName, color: UNGROUPED_COLOR, items: ungrouped }];
   } else {
     const g = byGroup.find(x => x.group.id === view);
     title = g?.group.name ?? 'Проекты';
-    sections = g ? [{ key: g.group.id, name: g.group.name, color: g.group.color, items: g.items }] : [];
+    sections = g ? [{ key: g.group.id, name: g.group.name, color: g.group.color, items: g.items, group: g.group }] : [];
   }
 
   // ===== Общие диалоги =====
@@ -223,6 +254,31 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           groups={orderedGroups}
           onChange={g => { setGroups(g); if (view !== 'all' && view !== 'sleeping' && !g.some(x => x.id === view)) setView('all'); }}
           onClose={closeDialog}
+          onRequestCreate={() => setActiveDialog({ type: 'sphereNew' })}
+          onRequestDelete={group => setActiveDialog({ type: 'sphereDelete', group })}
+        />
+      )}
+      {activeDialog?.type === 'sphereNew' && (
+        <SphereDialog
+          existingCount={groups.length}
+          onSaved={created => { setGroups(prev => [...prev, created]); closeDialog(); }}
+          onClose={closeDialog}
+        />
+      )}
+      {activeDialog?.type === 'sphereDelete' && (
+        <SphereDeleteDialog
+          sphere={activeDialog.group}
+          onDeleted={removeSphere}
+          onOpenPage={id => { closeDialog(); setSphereId(id); }}
+          onClose={closeDialog}
+        />
+      )}
+      {activeDialog?.type === 'unsphere' && (
+        <RemoveFromSphereDialog
+          project={activeDialog.project}
+          sphere={activeDialog.group}
+          onDone={updated => { upsertProject(updated); closeDialog(); }}
+          onClose={closeDialog}
         />
       )}
     </>
@@ -259,11 +315,12 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
         <ProjectSidebar
           view={view}
-          onSelect={setView}
+          onSelect={v => { setView(v); setSphereId(null); }}
           total={filtered.length}
           groups={byGroup.map(({ group, items }) => ({ group, count: items.length }))}
           sleepingCount={ungrouped.length}
           onManageGroups={() => setActiveDialog({ type: 'groups' })}
+          onCreateSphere={() => setActiveDialog({ type: 'sphereNew' })}
         />
       </div>
     ),
@@ -289,8 +346,19 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           // вместе со списком, тот раздувался до полной высоты контента, и прокрутка
           // не включалась совсем: хвост уезжал за нижний край экрана без доступа
           <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
+            {sphereOpen && (
+              <SpherePage
+                key={sphereOpen.id}
+                sphere={sphereOpen}
+                existingCount={groups.length}
+                onBack={() => setSphereId(null)}
+                onOpenProject={openProjectById}
+                onChanged={g => setGroups(prev => prev.map(x => x.id === g.id ? g : x))}
+                onDeleted={removeSphere}
+              />
+            )}
             {/* Шапка панели: заголовок + сортировка + Проект */}
-            <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            {!sphereOpen && <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
               {/* Заголовок раздела — единый стиль с «Календарём» (serif 28 / 500) */}
               <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {title}
@@ -313,24 +381,33 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                   Проект
                 </Button>
               )}
-            </div>
+            </div>}
 
             {/* Список секций */}
-            <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 26px 18px' }}>
+            {!sphereOpen && <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 26px 18px' }}>
               {loadState === 'offline' && retryBlock('Сервер недоступен — нет сохранённых данных для офлайн-доступа')}
               {loadState === 'error' && retryBlock('Ошибка загрузки проектов')}
               {loadState === 'ok' && !hasAny && (search
                 ? emptyBlock(`Ничего не найдено по запросу «${search}»`)
                 : projectsEmptyHero())}
 
-              {loadState === 'ok' && sections.map(sec => (
+              {loadState === 'ok' && spheresOn && groups.length === 0 && view === 'all' && (
+                <EmptyState inline icon={<Orbit size={ICON_SIZE.lg} strokeWidth={2} />} title="Сфер пока нет"
+                  subtitle="Сфера — область жизни или работы со своей командой персон и памятью, общей для её проектов."
+                  action={online ? <Button variant="primary" size="md" onClick={() => setActiveDialog({ type: 'sphereNew' })}>Создать сферу</Button> : undefined} />
+              )}
+              {loadState === 'ok' && sections.filter(sec => !(spheresOn && search && sec.items.length === 0)).map(sec => (
                 <div key={sec.key} style={{ marginBottom: 20 }}>
+                  {spheresOn ? (
+                    <SphereHeader sphere={sec.group ?? null} count={sec.items.length} onOpenPage={openSpherePage} />
+                  ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
                     <span style={{ width: 5, height: 18, borderRadius: 2, background: sec.color || UNGROUPED_COLOR, flexShrink: 0 }} />
                     <span style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary }}>{sec.name}</span>
                     <span style={{ fontSize: 11.5, color: C.textMuted }}>{sec.items.length}</span>
                     <div style={{ flex: 1, height: 1, background: C.divider }} />
                   </div>
+                  )}
                   <div style={twoCol
                     // minmax(0,1fr): длинный nowrap-путь в карточке не распирает колонки за экран
                     ? { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }
@@ -346,17 +423,20 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                         onMove={pr => setActiveDialog({ type: 'move', project: pr })}
                         onEdit={(pr, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: pr }); }}
                         onDelete={pr => setActiveDialog({ type: 'delete', project: pr })}
+                        onRemoveFromSphere={removeFromSphere}
                       />
                     ))}
                     {sec.items.length === 0 && (
                       <div style={{ fontSize: 12.5, color: C.textMuted, padding: '0 2px 2px' }}>
-                        Пусто — переместите сюда проект через меню «⋯»
+                        {spheresOn
+                          ? 'В сфере пока нет проектов. Перенесите проект через его меню или создайте новый.'
+                          : 'Пусто — переместите сюда проект через меню «⋯»'}
                       </div>
                     )}
                   </div>
                 </div>
               ))}
-            </div>
+            </div>}
           </main>
             }
           />
@@ -367,6 +447,35 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   }
 
   // ===== Мобильный: одна колонка =====
+  const renderCard = (p: Project) => (
+    <ProjectCard key={p.id} project={p} index={idx(p)} online={online} hasActiveSession={activeSessions.has(p.id)}
+      onOpen={onOpen}
+      onMove={pr => setActiveDialog({ type: 'move', project: pr })}
+      onEdit={(pr, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: pr }); }}
+      onDelete={pr => setActiveDialog({ type: 'delete', project: pr })}
+      onRemoveFromSphere={removeFromSphere} />
+  );
+
+  if (sphereOpen) {
+    return (
+      <PageCanvas>
+        <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
+        <div style={{ maxWidth: 640, width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <SpherePage
+            key={sphereOpen.id}
+            sphere={sphereOpen}
+            existingCount={groups.length}
+            onBack={() => setSphereId(null)}
+            onOpenProject={openProjectById}
+            onChanged={g => setGroups(prev => prev.map(x => x.id === g.id ? g : x))}
+            onDeleted={removeSphere}
+          />
+        </div>
+        {dialogs}
+      </PageCanvas>
+    );
+  }
+
   return (
     // Дудл-фон и на мобиле — под списком проектов
     <PageCanvas>
@@ -394,7 +503,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           {online && (
             <button
               onClick={() => setActiveDialog({ type: 'groups' })}
-              title="Управление группами"
+              title={spheresOn ? 'Управление сферами' : 'Управление группами'}
               style={{
                 flexShrink: 0, width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
                 background: C.bgWhite, color: C.textSecondary, border: `1px solid ${C.border}`, borderRadius: R.xl, cursor: 'pointer',
@@ -421,34 +530,40 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             без него скроллер растёт вместе с содержимым вместо прокрутки) */}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 14, paddingRight: 6 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-            {ungrouped.map(p => (
-              <ProjectCard key={p.id} project={p} index={idx(p)} online={online} hasActiveSession={activeSessions.has(p.id)}
-                onOpen={onOpen}
-                onMove={pr => setActiveDialog({ type: 'move', project: pr })}
-                onEdit={(pr, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: pr }); }}
-                onDelete={pr => setActiveDialog({ type: 'delete', project: pr })} />
-            ))}
+            {!spheresOn && ungrouped.map(renderCard)}
+
+            {spheresOn && loadState === 'ok' && groups.length === 0 && (
+              <EmptyState inline icon={<Orbit size={ICON_SIZE.lg} strokeWidth={2} />} title="Сфер пока нет"
+                subtitle="Сфера — область жизни или работы со своей командой персон и памятью, общей для её проектов."
+                action={online ? <Button variant="primary" size="md" onClick={() => setActiveDialog({ type: 'sphereNew' })}>Создать сферу</Button> : undefined} />
+            )}
 
             {byGroup.map(({ group, items }) => {
               if (items.length === 0 && search !== '') return null;
               return (
                 <div key={group.id} style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-                  <GroupHeader group={group} count={items.length} />
-                  {items.map(p => (
-                    <ProjectCard key={p.id} project={p} index={idx(p)} online={online} hasActiveSession={activeSessions.has(p.id)}
-                      onOpen={onOpen}
-                      onMove={pr => setActiveDialog({ type: 'move', project: pr })}
-                      onEdit={(pr, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: pr }); }}
-                      onDelete={pr => setActiveDialog({ type: 'delete', project: pr })} />
-                  ))}
+                  {spheresOn
+                    ? <SphereHeader sphere={group} count={items.length} onOpenPage={openSpherePage} compact />
+                    : <GroupHeader group={group} count={items.length} />}
+                  {items.map(renderCard)}
                   {items.length === 0 && (
                     <div style={{ fontSize: 12.5, color: C.textMuted, padding: '0 2px 2px' }}>
-                      Пусто — переместите сюда проект через меню «⋯»
+                      {spheresOn
+                        ? 'В сфере пока нет проектов. Перенесите проект через его меню или создайте новый.'
+                        : 'Пусто — переместите сюда проект через меню «⋯»'}
                     </div>
                   )}
                 </div>
               );
             })}
+
+            {/* «Без сферы» стоит последней секцией */}
+            {spheresOn && ungrouped.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+                <SphereHeader sphere={null} count={ungrouped.length} compact />
+                {ungrouped.map(renderCard)}
+              </div>
+            )}
           </div>
 
           {loadState === 'offline' && retryBlock('Сервер недоступен — нет сохранённых данных для офлайн-доступа')}

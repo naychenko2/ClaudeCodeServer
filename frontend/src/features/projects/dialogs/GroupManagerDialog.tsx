@@ -6,15 +6,20 @@ import { Modal, Button } from '../../../components/ui';
 import { ChevronUp, ChevronDown, Trash2 } from 'lucide-react';
 import { ICON_SIZE } from '../../../components/ui/icons';
 import { NO_AUTOFILL } from '../../../lib/noAutofill';
+import { FLAGS, useFeature } from '../../../lib/featureFlags';
 
 interface Props {
   groups: ProjectGroup[];
   onChange: (groups: ProjectGroup[]) => void;   // синхронизация со списком проектов
   onClose: () => void;
+  // Флаг spheres: создание и удаление идут через диалоги сфер (родитель закрывает менеджер и открывает их)
+  onRequestCreate?: () => void;
+  onRequestDelete?: (g: ProjectGroup) => void;
 }
 
 // Модалка-менеджер групп: создать, переименовать, сменить цвет, поменять порядок, удалить.
-export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
+export function GroupManagerDialog({ groups, onChange, onClose, onRequestCreate, onRequestDelete }: Props) {
+  const spheres = useFeature(FLAGS.spheres) && !!onRequestCreate && !!onRequestDelete;
   const [list, setList] = useState<ProjectGroup[]>(groups);
   const [paletteFor, setPaletteFor] = useState<string | null>(null);   // id группы с открытой палитрой
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -78,8 +83,8 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
 
   return (
     <Modal
-      title="Группы проектов"
-      subtitle="Организуйте проекты по группам: название, цвет и порядок."
+      title={spheres ? 'Сферы' : 'Группы проектов'}
+      subtitle={spheres ? 'Название, цвет и порядок сфер.' : 'Организуйте проекты по группам: название, цвет и порядок.'}
       width={MODAL_W.form}
       onClose={onClose}
       footer={<Button variant="secondary" size="md" fullWidth onClick={onClose}>Готово</Button>}
@@ -88,7 +93,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
 
       {list.length === 0 && (
         <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', padding: '6px 0' }}>
-          Пока нет ни одной группы
+          {spheres ? 'Сфер пока нет' : 'Пока нет ни одной группы'}
         </div>
       )}
 
@@ -130,7 +135,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
                 <ChevronDown size={ICON_SIZE.xs} strokeWidth={2} />
               </button>
               {/* Удаление */}
-              <button onClick={() => setConfirmDelete(g.id)} title="Удалить группу"
+              <button onClick={() => (spheres ? onRequestDelete!(g) : setConfirmDelete(g.id))} title={spheres ? 'Удалить сферу' : 'Удалить группу'}
                 style={{ ...arrowBtn(false), color: C.textMuted }}>
                 <Trash2 size={ICON_SIZE.xs} strokeWidth={2} />
               </button>
@@ -168,7 +173,11 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
         ))}
       </div>
 
-      {/* Новая группа */}
+      {/* Новая группа / сфера */}
+      {spheres ? (
+        <Button variant="secondary" size="md" fullWidth onClick={onRequestCreate}>Новая сфера</Button>
+      ) : (
+        <>
       <div style={{ display: 'flex', gap: 8 }}>
         <input
           {...NO_AUTOFILL}
@@ -186,6 +195,8 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
           Добавить
         </Button>
       </div>
+        </>
+      )}
     </Modal>
   );
 }

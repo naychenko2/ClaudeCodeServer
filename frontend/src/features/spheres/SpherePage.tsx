@@ -1,0 +1,270 @@
+import { useCallback, useEffect, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
+import { Brain, Laptop, MoreVertical, SquarePen, Trash2 } from 'lucide-react';
+import type { DesktopDevice, ProjectGroup, SphereOverview } from '../../types';
+import { api } from '../../lib/api';
+import { C, FONT, FS, R, SHADOW } from '../../lib/design';
+import { PRIORITY_COLOR, PRIORITY_LABEL } from '../../lib/tasks';
+import { useIsMobile } from '../../lib/breakpoints';
+import { BackButton, Badge, Button, IconButton, Menu, MenuItem } from '../../components/ui';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { SphereTile } from './SphereTile';
+import { SphereDialog } from './SphereDialog';
+import { SphereDeleteDialog } from './SphereDeleteDialog';
+
+interface Props {
+  sphere: ProjectGroup;
+  existingCount: number;
+  onBack: () => void;
+  onOpenProject: (projectId: string) => void;
+  onChanged: (sphere: ProjectGroup) => void;
+  onDeleted: (id: string) => void;
+}
+
+const TASKS_SHOWN = 5;
+const CHARTER_COLLAPSED = 160;
+
+function plural(n: number, one: string, few: string, many: string) {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? few : many;
+}
+
+const card: CSSProperties = {
+  background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, boxShadow: SHADOW.card,
+  padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10, boxSizing: 'border-box',
+};
+
+function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
+  return (
+    <section style={card}>
+      <div>
+        <div style={{ fontFamily: FONT.serif, fontSize: FS.xl, fontWeight: 500, color: C.textHeading }}>{title}</div>
+        {subtitle && <div style={{ fontSize: FS.sm, color: C.textMuted, marginTop: 2 }}>{subtitle}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+const hint: CSSProperties = { fontSize: FS.base, color: C.textMuted, lineHeight: 1.5 };
+
+// Страница сферы: проекты (локальный — с бейджем устройства и причиной из capabilities),
+// команда, память (место под следующий шаг) и открытые задачи со всех проектов сферы.
+export function SpherePage({ sphere, existingCount, onBack, onOpenProject, onChanged, onDeleted }: Props) {
+  const isMobile = useIsMobile();
+  const [data, setData] = useState<SphereOverview | null>(null);
+  const [error, setError] = useState('');
+  const [devices, setDevices] = useState<DesktopDevice[]>([]);
+  const [charterOpen, setCharterOpen] = useState(false);
+  const [menu, setMenu] = useState<DOMRect | null>(null);
+  const [dialog, setDialog] = useState<'edit' | 'delete' | null>(null);
+  const [showAllTasks, setShowAllTasks] = useState(false);
+
+  const load = useCallback(() => {
+    api.spheres.overview(sphere.id)
+      .then(o => { setData(o); setError(''); })
+      .catch(e => setError(e instanceof Error ? e.message : 'Не удалось загрузить сферу'));
+  }, [sphere.id]);
+
+  useEffect(() => { load(); }, [load]);
+  // Имена устройств для бейджей локальных проектов; сбой не мешает странице
+  useEffect(() => { api.devices.list().then(setDevices).catch(() => {}); }, []);
+
+  const projectName = (id: string | null) => data?.projects.find(p => p.id === id)?.name;
+  const today = new Date().toISOString().slice(0, 10);
+  const charter = data?.sphere.charter ?? sphere.charter ?? '';
+  const longCharter = charter.length > CHARTER_COLLAPSED;
+  const tasks = data?.openTasks ?? [];
+  const visibleTasks = showAllTasks ? tasks : tasks.slice(0, TASKS_SHOWN);
+
+  const counts = data ? [
+    `${data.projects.length} ${plural(data.projects.length, 'проект', 'проекта', 'проектов')}`,
+    `${data.team.length} ${plural(data.team.length, 'персона', 'персоны', 'персон')}`,
+    `${data.memory.count} ${plural(data.memory.count, 'запись памяти', 'записи памяти', 'записей памяти')}`,
+    `${data.openTasks.length} ${plural(data.openTasks.length, 'открытая задача', 'открытые задачи', 'открытых задач')}`,
+  ].join(' · ') : '';
+
+  const projectsCard = (
+    <Card title="Проекты">
+      {data && data.projects.length === 0 && (
+        <div style={hint}>В сфере пока нет проектов. Перенесите проект через его меню или создайте новый.</div>
+      )}
+      {data?.projects.map(p => {
+        const caps = p.capabilities;
+        const local = caps.host === 'device';
+        const reason = caps.files.reason ?? caps.exec.reason ?? caps.platform.reason ?? caps.serverContent.reason;
+        const deviceName = devices.find(d => d.id === caps.deviceId)?.name;
+        return (
+          <div key={p.id}
+            style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '8px 0', borderTop: `1px solid ${C.divider}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" onClick={() => onOpenProject(p.id)}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.md, fontWeight: 600, color: C.textHeading, textAlign: 'left' }}>
+                {p.name}
+              </button>
+              {local && (
+                <Badge tone={reason ? 'warning' : 'neutral'} size="xs" icon={<Laptop size={11} />}>
+                  {deviceName ? `На устройстве «${deviceName}»` : 'На устройстве'}
+                </Badge>
+              )}
+            </div>
+            {local && reason && (
+              <div style={{ fontSize: FS.sm, color: C.warningText, lineHeight: 1.45 }}>
+                {reason}. Пока устройство не вернётся, персоны сферы не видят файлы проекта и не могут работать
+                в его чатах; задачи и память проекта доступны.
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </Card>
+  );
+
+  const teamCard = (
+    <Card title="Команда" subtitle="Работают во всех проектах сферы и пишут в её память.">
+      {data && data.team.length === 0 && (
+        <div style={hint}>Персон пока нет. Персона сферы работает во всех её проектах и помнит решения соседних.</div>
+      )}
+      {data?.team.map(m => (
+        <div key={m.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', padding: '6px 0', borderTop: `1px solid ${C.divider}` }}>
+          <span style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading }}>
+            {m.role ? `${m.role} (${m.name})` : m.name}
+          </span>
+          <span style={{ fontSize: FS.sm, color: C.textMuted }}>@{m.handle}</span>
+        </div>
+      ))}
+    </Card>
+  );
+
+  const tasksCard = (
+    <Card title="Открытые задачи" subtitle="Из всех проектов сферы: сначала срочные, потом по сроку.">
+      {data && tasks.length === 0 && <div style={hint}>Открытых задач нет.</div>}
+      {visibleTasks.map(t => {
+        const overdue = !!t.dueDate && t.dueDate < today;
+        const pName = projectName(t.projectId);
+        return (
+          <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderTop: `1px solid ${C.divider}` }}>
+            <span title={PRIORITY_LABEL[t.priority]}
+              style={{ width: 8, height: 8, borderRadius: '50%', background: PRIORITY_COLOR[t.priority], flexShrink: 0 }} />
+            <span style={{ flex: 1, minWidth: 0, fontSize: FS.base, color: C.textPrimary, overflowWrap: 'anywhere' }}>{t.title}</span>
+            {pName && <Badge tone="neutral" size="xs">{pName}</Badge>}
+            {t.dueDate && (
+              <span style={{ fontSize: FS.xs, flexShrink: 0, color: overdue ? C.dangerText : C.textMuted }}>{t.dueDate}</span>
+            )}
+          </div>
+        );
+      })}
+      {tasks.length > TASKS_SHOWN && !showAllTasks && (
+        <button type="button" onClick={() => setShowAllTasks(true)}
+          style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.base, color: C.accent }}>
+          и ещё {tasks.length - TASKS_SHOWN}
+        </button>
+      )}
+    </Card>
+  );
+
+  // Место под следующий шаг (D3): полки памяти сферы и проектов сферы
+  const memoryCard = (
+    <Card title="Память" subtitle="В проекте сферы персоны помнят обе полки.">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.textSecondary, fontSize: FS.base }}>
+        <Brain size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+        {data ? `${data.memory.count} ${plural(data.memory.count, 'запись', 'записи', 'записей')} в памяти сферы` : '…'}
+      </div>
+      {data?.memory.count === 0 && (
+        <div style={hint}>Здесь соберутся решения и договорённости, которые переживут любой проект сферы.</div>
+      )}
+    </Card>
+  );
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '12px 16px 18px' : '14px 26px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 12, borderBottom: `2px solid ${sphere.color || C.border}` }}>
+        <BackButton onClick={onBack}>Проекты</BackButton>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <SphereTile sphere={sphere} size={44} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: FONT.serif, fontSize: isMobile ? FS.h2 : FS.h1, fontWeight: 500, color: C.textHeading, letterSpacing: '-0.01em', overflowWrap: 'anywhere' }}>
+              {sphere.name}
+            </div>
+            <div style={{ fontSize: FS.sm, color: C.textMuted }}>{counts || ' '}</div>
+          </div>
+          {!isMobile && (
+            <Button variant="secondary" size="md" onClick={() => setDialog('edit')}>Изменить</Button>
+          )}
+          <IconButton title="Действия" size="sm" active={!!menu}
+            onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setMenu(prev => (prev ? null : r)); }}>
+            <MoreVertical size={ICON_SIZE.sm} fill="currentColor" />
+          </IconButton>
+          {menu && (
+            <Menu anchor={menu} onClose={() => setMenu(null)} maxHeight={2 * 34 + 10} gap={4}>
+              <MenuItem label="Изменить сферу" onClick={() => { setMenu(null); setDialog('edit'); }}
+                icon={<SquarePen size={15} strokeWidth={ICON_STROKE} />} />
+              <MenuItem label="Удалить сферу" danger onClick={() => { setMenu(null); setDialog('delete'); }}
+                icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />} />
+            </Menu>
+          )}
+        </div>
+        {charter && (
+          <div style={{ fontSize: FS.base, color: C.textSecondary, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            {longCharter && !charterOpen ? `${charter.slice(0, CHARTER_COLLAPSED).trimEnd()}…` : charter}
+            {longCharter && (
+              <>
+                {' '}
+                <button type="button" onClick={() => setCharterOpen(o => !o)}
+                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.base, color: C.accent }}>
+                  {charterOpen ? 'Свернуть' : 'Показать полностью'}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {data && !charter && data.projects.length === 0 && data.team.length === 0 && (
+          <div style={hint}>Пока пусто</div>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ ...hint, color: C.danger }}>
+          {error}{' '}
+          <button type="button" onClick={load}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.accent, textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit' }}>
+            Повторить
+          </button>
+        </div>
+      )}
+
+      {/* Две колонки на flex-wrap с базисами 380 и 320; на узком экране — одна: проекты, команда, задачи, память */}
+      {isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {projectsCard}{teamCard}{tasksCard}{memoryCard}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-start' }}>
+          <div style={{ flex: '1 1 380px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {projectsCard}{tasksCard}
+          </div>
+          <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {teamCard}{memoryCard}
+          </div>
+        </div>
+      )}
+
+      {dialog === 'edit' && (
+        <SphereDialog
+          sphere={sphere}
+          existingCount={existingCount}
+          onSaved={s => { setDialog(null); onChanged(s); load(); }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'delete' && (
+        <SphereDeleteDialog
+          sphere={sphere}
+          onDeleted={id => { setDialog(null); onDeleted(id); }}
+          onOpenPage={() => setDialog(null)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+    </div>
+  );
+}

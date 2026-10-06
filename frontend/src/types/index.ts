@@ -481,7 +481,28 @@ export interface ProjectGroup {
   name: string;
   color: string;   // hex из палитры GROUP_COLORS
   order: number;
+  // Поля сферы (флаг spheres): имя значка из белого списка lucide и устав («Чем занимается сфера»)
+  icon?: string | null;
+  charter?: string | null;
 }
+
+// Сфера — группа проектов с командой персон и памятью; на проводе это тот же /api/project-groups
+export type Sphere = ProjectGroup;
+
+// GET /api/spheres/{id}/overview
+export interface SphereOverview {
+  sphere: { id: string; name: string; color: string; icon: string | null; charter: string | null };
+  projects: { id: string; name: string; capabilities: ProjectCapabilitiesView }[];
+  team: { id: string; name: string; handle: string; role: string | null }[];
+  memory: { count: number };
+  openTasks: {
+    id: string; title: string; projectId: string | null;
+    status: 'todo' | 'inProgress' | 'done'; priority: 'low' | 'medium' | 'high' | 'urgent'; dueDate: string | null;
+  }[];
+}
+
+// Ответ DELETE /api/project-groups/{id}: сколько записей памяти ушло вместе со сферой
+export interface DeleteSphereResponse { deletedMemory: number }
 
 // --- Задачи ---
 

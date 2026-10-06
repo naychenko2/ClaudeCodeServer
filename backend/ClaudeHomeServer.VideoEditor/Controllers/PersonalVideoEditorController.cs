@@ -59,6 +59,14 @@ public class PersonalVideoEditorController(
     public IActionResult GetJob(string sessionId, string jobId) =>
         Gate(sessionId, out var scope, out var denied) ? JobIn(scope, jobId) : denied;
 
+    [HttpDelete(VideoEditorRoutes.JobUpscale)]
+    public async Task<IActionResult> CancelUpscale(string sessionId, string jobId, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await CancelUpscaleIn(scope, jobId, ct) : denied;
+
+    [HttpPost(VideoEditorRoutes.FramesPreview)]
+    public async Task<IActionResult> FramesPreview(string sessionId, [FromBody] VideoFramesPreviewRequest? req, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await FramesPreviewIn(scope, req, ct) : denied;
+
     [HttpDelete(VideoEditorRoutes.Job)]
     public async Task<IActionResult> Cancel(string sessionId, string jobId, CancellationToken ct) =>
         Gate(sessionId, out var scope, out var denied) ? await CancelIn(scope, jobId, ct) : denied;

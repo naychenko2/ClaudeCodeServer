@@ -52,6 +52,8 @@ public abstract class VideoEditorEndpoints(
                 $"Вариантов — от 1 до {VideoThreadStore.MaxCount}");
         if (req.DurationSec is <= 0)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Длительность должна быть положительной");
+        if (VideoSceneFormat.Validate(req.Format) is { } badFormat)
+            return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, badFormat);
         prefs.Save(UserId, scope, req);
         return Ok(prefs.Get(UserId, scope));
     }
@@ -91,6 +93,19 @@ public abstract class VideoEditorEndpoints(
     protected async Task<IActionResult> CancelIn(VideoEditScope scope, string jobId, CancellationToken ct) =>
         await jobs.CancelAsync(UserId, scope.Key, jobId, ct) is { } job ? Ok(job) : JobNotFound();
 
+    // «Отменить увеличение»: только вторая стадия «Макс» local H3, запуск остаётся
+    protected async Task<IActionResult> CancelUpscaleIn(VideoEditScope scope, string jobId, CancellationToken ct) =>
+        Map(await jobs.CancelUpscaleAsync(UserId, scope.Key, jobId, ct), Ok);
+
+    // dryRun подрезки кадров под пропорции сцены: ничего не пишет и не тратит
+    protected async Task<IActionResult> FramesPreviewIn(VideoEditScope scope, VideoFramesPreviewRequest? req, CancellationToken ct)
+    {
+        if (req is null || string.IsNullOrWhiteSpace(req.SessionId) || string.IsNullOrWhiteSpace(req.SceneId))
+            return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указана сцена");
+        return Map(await jobs.PreviewFramesAsync(UserId, scope,
+            req with { SessionId = req.SessionId.Trim(), SceneId = req.SceneId.Trim() }, ct), Ok);
+    }
+
     // ── Сцены ────────────────────────────────────────────────────────────────────
 
     protected IActionResult ScenesIn(string sessionId) => Ok(threads.View(UserId, sessionId));
@@ -125,7 +140,7 @@ public abstract class VideoEditorEndpoints(
     {
         if (req?.Settings is not { } settings)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Пустые настройки");
-        return Reply(sessionId, await scenes.SettingsAsync(UserId, scope, sessionId, sceneId, settings, req.Revision));
+        return Reply(sessionId, await scenes.SettingsAsync(UserId, scope, sessionId, sceneId, settings, req.Revision, req.Force == true));
     }
 
     // «Продолжить от версии»: версия становится текущей, сцена — в работе. Ничего не удаляет
@@ -162,6 +177,8 @@ public abstract class VideoEditorEndpoints(
     // Отказ проверки входа — 400 с кодом; запись хранилища — по статусу
     private IActionResult Reply(string sessionId, VideoSceneService.Call call)
     {
+        if (call.Locked is { } locked)
+            return StatusCode(StatusCodes.Status409Conflict, new VideoFormatLockedError(call.Error!, call.ErrorCode!, locked));
         if (call.Written is not { } written)
             return Error(StatusCodes.Status400BadRequest, call.ErrorCode ?? VideoEditorErrors.InvalidRequest, call.Error ?? "Запрос не выполнен");
         return written.Status switch

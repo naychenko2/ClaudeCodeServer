@@ -55,6 +55,14 @@ public class VideoEditorController(
     public async Task<IActionResult> Cancel(string projectId, string jobId, CancellationToken ct) =>
         Gate(projectId, out var scope, out var denied) ? await CancelIn(scope, jobId, ct) : denied;
 
+    [HttpDelete(VideoEditorRoutes.JobUpscale)]
+    public async Task<IActionResult> CancelUpscale(string projectId, string jobId, CancellationToken ct) =>
+        Gate(projectId, out var scope, out var denied) ? await CancelUpscaleIn(scope, jobId, ct) : denied;
+
+    [HttpPost(VideoEditorRoutes.FramesPreview)]
+    public async Task<IActionResult> FramesPreview(string projectId, [FromBody] VideoFramesPreviewRequest? req, CancellationToken ct) =>
+        Gate(projectId, out var scope, out var denied) ? await FramesPreviewIn(scope, req, ct) : denied;
+
     // ── Чат проекта: состояние, сцены, файлы версий ───────────────────────────────
 
     [HttpGet("sessions/{sessionId}/" + VideoEditorRoutes.State)]

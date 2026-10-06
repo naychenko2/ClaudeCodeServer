@@ -41,4 +41,32 @@ describe('освежение фич-флагов', () => {
     t += 100; await refresh(); t += 100; await refresh();
     expect(getFlag('spheres')).toBe(true);
   });
+
+  it('markFresh: после стартового запроса освежение запроса не делает, по истечении интервала — второй', async () => {
+    let t = 0;
+    const fetchFlags = vi.fn().mockResolvedValue({ spheres: true });
+    const refresh = createFlagsRefresher(fetchFlags, () => t, 45_000);
+
+    refresh.markFresh();
+    expect(await refresh()).toBe(false);
+    expect(fetchFlags).not.toHaveBeenCalled();
+
+    t += 46_000;
+    expect(await refresh()).toBe(true);
+    expect(fetchFlags).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancel: ответ, пришедший после отмены (выход, смена пользователя), не меняет стор', async () => {
+    setAllFlags({ spheres: false });
+    let resolve!: (v: Record<string, boolean>) => void;
+    const pending = new Promise<Record<string, boolean>>(r => { resolve = r; });
+    const refresh = createFlagsRefresher(() => pending, () => 0, 10);
+
+    const run = refresh(true);
+    refresh.cancel();
+    resolve({ spheres: true });
+    await run;
+
+    expect(getFlag('spheres')).toBe(false);
+  });
 });

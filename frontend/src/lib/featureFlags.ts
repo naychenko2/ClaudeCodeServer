@@ -115,17 +115,27 @@ export function createFlagsRefresher(
   minIntervalMs: number = FLAGS_REFRESH_MIN_INTERVAL_MS,
 ) {
   let last = Number.NEGATIVE_INFINITY;
-  return async function refresh(force = false): Promise<boolean> {
+  let generation = 0;
+  async function refresh(force = false): Promise<boolean> {
     const t = now();
     if (!force && t - last < minIntervalMs) return false;
     last = t;
+    const mine = generation;
     try {
-      mergeFlags(await fetchFlags());
+      const flags = await fetchFlags();
+      // ответ после cancel (выход, смена пользователя) в стор не попадает
+      if (mine === generation) mergeFlags(flags);
     } catch {
       // сбой освежения не критичен: остаются прежние значения
     }
     return true;
-  };
+  }
+  return Object.assign(refresh, {
+    // Флаги только что получены другим путём (стартовый /auth/me): запрос не нужен
+    markFresh() { last = now(); },
+    // Отбросить ответы всех запросов, ещё летящих
+    cancel() { generation++; },
+  });
 }
 
 // Один раз на всё приложение (после авторизации): при монтировании и при возврате
@@ -134,12 +144,14 @@ export function useFeatureFlagsRefresh(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     const refresh = createFlagsRefresher(() => api.auth.me().then(me => me?.featureFlags));
-    void refresh(true);
+    // Стартовый /auth/me в App.tsx сам кладёт флаги в стор — здесь только отметка времени
+    refresh.markFresh();
     const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
     const onFocus = () => { void refresh(); };
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onFocus);
     return () => {
+      refresh.cancel();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onFocus);
     };

@@ -31,7 +31,9 @@ public static class BackupSchema
     //     (дефект «два лимита по 20»: цикл теперь считает возвраты из ожидания, не запуски
     //     задач). System.Text.Json молча игнорирует лишние поля — старые сессии с этими
     //     полями читаются штатно, но SchemaVersion всё равно поднимаем для ArchiveSchema.
+    // 10 — PersonaScope.Sphere в personas.json: старый код не знает значения enum и уронил бы
+    //     десериализацию personas.json при восстановлении (тот же кейс, что 3→4 и 6→7)
     // (не инкремент) — удалены Session.DesktopChat и Project.DesktopAgentEnabled (руки ADR-008):
     //     аддитивные bool с дефолтом false, старый архив читается новым кодом, новый — старым.
-    public const int Version = 9;
+    public const int Version = 10;
 }

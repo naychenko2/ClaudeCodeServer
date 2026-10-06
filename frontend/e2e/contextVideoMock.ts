@@ -46,7 +46,7 @@ export function newCtxWorld(primary: ReturnType<typeof primaryOf> | null = null,
 
 const pushCtx = () => hubSend({ type: 'chat_context_changed', sessionId: S, context: ctxWorld.ctx });
 
-export async function mockContext(page: Page) {
+export async function mockContext(page: Page, flags: Record<string, boolean> = {}) {
   await page.route(u => u.pathname.startsWith('/api/'), async (r: Route) => {
     const url = new URL(r.request().url());
     const p = decodeURIComponent(url.pathname.replace(/^\/api/, ''));
@@ -55,7 +55,7 @@ export async function mockContext(page: Page) {
     if (p === '/auth/me') {
       return json({
         id: 'u1', userId: 'u1', username: 'admin', displayName: 'Андрей', role: 'admin', executionEnvironment: 'local',
-        featureFlags: { 'video-editor': true, 'image-editor': true, 'audio-editor': true, 'chat-context': true }, subsystems: [],
+        featureFlags: { 'video-editor': true, 'image-editor': true, 'audio-editor': true, 'chat-context': true, ...flags }, subsystems: [],
       });
     }
     if (p === '/subsystem-modules') return json({ items: [] });
@@ -141,6 +141,10 @@ export interface OpenVideoOptions {
   focus?: { sceneId?: string; filmPath?: string };
   // Кадры основной сцены лежат в контексте референсами frame-a/frame-b (иначе слоты пусты)
   frames?: boolean;
+  // Дополнительные фичефлаги пользователя (например, media-format)
+  flags?: Record<string, boolean>;
+  // Дополнительные маршруты спеки: регистрируются после моков видео и контекста, до открытия чата
+  extra?: (page: Page) => Promise<void>;
 }
 
 // Чат проекта с видео-API мока, контекстом хода и манифестами вертикалей; ждёт строку чипов действий
@@ -159,7 +163,8 @@ export async function openVideoChat(page: Page, primary: (() => ReturnType<typeo
     localStorage.setItem('theme-mode', th as string);
   }, o.theme ?? 'light');
   await mockApi(page);
-  await mockContext(page);
+  await mockContext(page, o.flags);
+  await o.extra?.(page);
   await page.goto(`/#/project/${P}/chat/${S}`);
   await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
   await registerVideo(page);

@@ -61,8 +61,8 @@ function Tier({ o, on, onPick }: { o: FormatTierOption; on: boolean; onPick: () 
   const body = (
     <>
       <b style={{ fontSize: FS.sm, color: on ? C.accent : C.textHeading }}>{TIER_NAME[o.tier]}</b>
-      <span title={cap.size} style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{cap.size}</span>
-      <em title={cap.price || undefined} style={{ fontStyle: 'normal', fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{cap.price || ' '}</em>
+      <span title={cap.size} style={{ fontSize: FS.xs, color: C.textSecondary, maxWidth: '100%', overflowWrap: 'anywhere' }}>{cap.size}</span>
+      <em title={cap.price || undefined} style={{ fontStyle: 'normal', fontSize: FS.xs, color: C.textMuted, maxWidth: '100%', overflowWrap: 'anywhere' }}>{cap.price || ' '}</em>
     </>
   );
   const style = {
@@ -363,7 +363,7 @@ export function FormatBody({ m, isMobile, projectName, onOpenExec }: {
       {m.mismatch && (
         <Notice tone="warning" icon={TriangleAlert} data-fmt-note="mismatch">
           {m.mismatch}
-          {m.mismatchAction && <div data-fmt-fix="" style={{ marginTop: SP.xs, display: 'flex' }}><Button size="xs" variant="primary" onClick={m.mismatchAction.onClick}>{m.mismatchAction.label}</Button></div>}
+          {m.mismatchAction && <div style={{ marginTop: SP.xs }}><span data-fmt-fix="" style={{ display: 'inline-flex' }}><Button size="xs" variant="primary" onClick={m.mismatchAction.onClick}>{m.mismatchAction.label}</Button></span></div>}
         </Notice>
       )}
       {m.frames && <Frames f={m.frames} isMobile={isMobile} />}

@@ -30,6 +30,9 @@ internal sealed record TaskPromptMetrics(int TotalChars, int TotalTokensEst,
     int MandatoryChars, int RestrictionsChars, int DelegationChars,
     int OmOChars, int ContextChars, int NotesContextChars);
 
+/// <summary>Кто запустил исполнителя: сессия и персона; пустые значения сбрасывают прежнего запустившего.</summary>
+public sealed record ExecutorLauncher(string? SessionId, string? PersonaId);
+
 // Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
 // автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
 // и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
@@ -201,7 +204,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     /// (личная — чат вне проекта) в режиме acceptEdits, первым сообщением — постановка.
     /// </summary>
     /// <exception cref="InvalidOperationException">задача не подходит или уже выполняется</exception>
-    public async Task<TaskItem> ExecuteAsync(TaskItem task, bool auto)
+    public async Task<TaskItem> ExecuteAsync(TaskItem task, bool auto, ExecutorLauncher? launcher = null)
     {
         if (task.Status == TaskItemStatus.Done)
             throw new InvalidOperationException("Задача уже завершена");
@@ -224,7 +227,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             throw new InvalidOperationException("По задаче уже запускается исполнитель — подождите и повторите");
         try
         {
-            return await ExecuteClaimedAsync(task, auto).ConfigureAwait(false);
+            return await ExecuteClaimedAsync(task, auto, launcher).ConfigureAwait(false);
         }
         finally
         {
@@ -235,7 +238,15 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
     }
 
-    private async Task<TaskItem> ExecuteClaimedAsync(TaskItem task, bool auto)
+    // Запустивший исполнителя записывается только после того, как запуск принят (отказ гардов не должен
+    // перехватывать доклад у прежнего адресата); null — запуск автоматикой, поля не трогаем.
+    private void ApplyLauncher(TaskItem task, ExecutorLauncher? launcher)
+    {
+        if (launcher is null) return;
+        _tasks.SetExecutorLauncher(task.Id, launcher.SessionId, launcher.PersonaId);
+    }
+
+    private async Task<TaskItem> ExecuteClaimedAsync(TaskItem task, bool auto, ExecutorLauncher? launcher)
     {
         // Инвариант проверен в ExecuteAsync ДО claim'а; повторяем ради nullability-анализа
         // этого метода (граница методов рвёт поток null-check из вызывающего)
@@ -256,6 +267,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         {
             if (!gate.MustWait)
                 throw new InvalidOperationException(gate.Reason ?? ProjectCapabilities.DeviceMissingReason);
+            ApplyLauncher(task, launcher);
             return await EnterDeviceWaitAsync(task, gate.Reason);
         }
 
@@ -304,6 +316,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             _log.LogWarning("Дерево {Worktree} задачи {TaskId} не подошло (нет на диске либо не числится " +
                 "в git worktree list проекта) — исполнитель стартует в корне проекта", worktree, task.Id);
 
+        ApplyLauncher(task, launcher);
         var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
             ?? throw new InvalidOperationException("Задача удалена");
         await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", updated));
@@ -1510,13 +1523,16 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // (ReportToSessionId ?? запустивший ?? создатель). Идём, пока не упрёмся в сессию, не являющуюся
     // исполнителем; предохранители — глубина и защита от цикла. Звено мёртвое/чужое — остаёмся на
     // последней живой сессии цепочки.
-    private Session? ResolveAddressee(string? startSessionId, string? ownerId)
+    // keepAwaitingStart: стартовая сессия — запустивший; пока её собственная задача ждёт результата,
+    // она координатор и сама ждёт доклад — выше не поднимаемся.
+    private Session? ResolveAddressee(string? startSessionId, string? ownerId, bool keepAwaitingStart = false)
     {
         var current = OwnedSession(startSessionId, ownerId);
         var visited = new HashSet<string>();
         for (var depth = 0; current is not null && depth < MaxReportChainDepth && visited.Add(current.Id); depth++)
         {
             if (_tasks.GetBySession(current.Id) is not { } t) break;
+            if (keepAwaitingStart && depth == 0 && IsAwaitingResult(t)) break;
             var nextId = t.ReportToSessionId ?? t.ExecutorLaunchedBySessionId ?? t.SourceSessionId;
             if (OwnedSession(nextId, ownerId) is not { } next || visited.Contains(next.Id)) break;
             current = next;
@@ -1553,7 +1569,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);
             return;
         }
-        var addressee = ResolveAddressee(task.ExecutorLaunchedBySessionId, task.OwnerId)
+        var addressee = ResolveAddressee(task.ExecutorLaunchedBySessionId, task.OwnerId, keepAwaitingStart: true)
             ?? ResolveAddressee(task.ReportToSessionId, task.OwnerId);
         // Персона авто-хода — персона сессии-адресата, а не создателя карточки
         var delegatorPersonaId = addressee is not null ? addressee.PersonaId : task.CreatedByPersonaId;
@@ -1570,7 +1586,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             ?? ResolveReportTarget(executorSession, task.SourceSessionId, new TaskLookupAdapter(_tasks), out fromFallback);
         if (targetId is null)
         {
-            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — нет целевого чата для доклада", task.Id);
             return;
         }
         if (fromFallback)

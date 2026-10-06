@@ -146,6 +146,44 @@ public class TaskExecutionServiceJoinTests : IDisposable
         failure.Error.Should().ContainAny("уже запускается", "уже работает сессия");
     }
 
+    // ─── Запустивший записывается только после принятого запуска ─────
+
+    [Fact]
+    public async Task ExecuteAsync_ОтказПоУжеРаботающейСессии_ЗапустившийОстаётсяПрежним()
+    {
+        var user = _userStore.Add("launcher-owner", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Запуск из чата A"));
+        await _sut.ExecuteAsync(task, auto: false, new ExecutorLauncher("chat-a", "persona-a"));
+
+        var fromB = async () => await _sut.ExecuteAsync(_tasks.GetById(task.Id)!, auto: false,
+            new ExecutorLauncher("chat-b", "persona-b"));
+        var fromUi = async () => await _sut.ExecuteAsync(_tasks.GetById(task.Id)!, auto: false,
+            new ExecutorLauncher(null, null));
+
+        await fromB.Should().ThrowAsync<InvalidOperationException>().WithMessage("*уже работает сессия*");
+        await fromUi.Should().ThrowAsync<InvalidOperationException>();
+        var after = _tasks.GetById(task.Id)!;
+        after.ExecutorLaunchedBySessionId.Should().Be("chat-a", "отказ не перехватывает доклад, кнопка UI поле не затирает");
+        after.ExecutorLaunchedByPersonaId.Should().Be("persona-a");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_УспешныйПовторныйЗапуск_ОбновляетЗапустившего_КнопкаUIСбрасывает()
+    {
+        var user = _userStore.Add("relaunch-owner", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Перезапуск"));
+        _tasks.Update(task.Id, new UpdateTaskRequest(ExecutorLaunchedBySessionId: "chat-a",
+            ExecutorLaunchedByPersonaId: "persona-a"));
+
+        await _sut.ExecuteAsync(_tasks.GetById(task.Id)!, auto: false, new ExecutorLauncher("chat-c", "persona-c"));
+        _tasks.GetById(task.Id)!.ExecutorLaunchedBySessionId.Should().Be("chat-c");
+
+        var second = _tasks.Create(null, user.Id, new CreateTaskRequest("Запуск человеком"));
+        _tasks.Update(second.Id, new UpdateTaskRequest(ExecutorLaunchedBySessionId: "chat-a"));
+        await _sut.ExecuteAsync(_tasks.GetById(second.Id)!, auto: false, new ExecutorLauncher(null, null));
+        _tasks.GetById(second.Id)!.ExecutorLaunchedBySessionId.Should().BeNullOrEmpty("человек без чата — адресат прежний, поле пусто");
+    }
+
     private async Task<(bool Ok, string? Error)> InvokeExecuteAsyncSafe(TaskItem task)
     {
         try

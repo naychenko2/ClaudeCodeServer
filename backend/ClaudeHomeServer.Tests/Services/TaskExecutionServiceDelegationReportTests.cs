@@ -312,11 +312,12 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
 
     // Задача, которую исполняет чат executorChat (планировщик/QA), поставленная из source и запущенная launchedBy
     private TaskItem MakeExecuting(Team team, Session executorChat, string? sourceId, string? launchedById,
-        string? reportTo = null)
+        string? reportTo = null, bool finished = false)
     {
         var t = _tasks.Create(null, team.OwnerId, new CreateTaskRequest("План " + executorChat.Name,
             ReportToSessionId: reportTo));
         _tasks.MarkClaudeStarted(t.Id, executorChat.Id, DateTime.UtcNow);
+        if (finished) _tasks.MarkClaudeResult(t.Id, "success");
         var task = _tasks.GetById(t.Id)!;
         task.SourceSessionId = sourceId;
         task.ExecutorLaunchedBySessionId = launchedById;
@@ -365,10 +366,23 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     }
 
     [Fact]
-    public async Task Доклад_ПланировщикСамЗапустилИсполнителя_ПодъёмПоЦепочкеДоСофьи()
+    public async Task Доклад_ПланировщикСамЗапустилИсполнителя_ЕгоЗадачаВРаботе_ДокладПланировщику()
     {
         var team = await ArrangeTeamAsync();
         MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
+        var leaf = MakeLeaf(team, team.Egor, reportTo: null, launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "Егор ещё исполняет свою задачу и ждёт итога — он координатор");
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ПланировщикСамЗапустилИсполнителя_ЕгоЗадачаЗавершена_ПодъёмДоСофьи()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id, finished: true);
         var leaf = MakeLeaf(team, team.Egor, reportTo: null, launchedById: team.Egor.Id);
 
         await _sut.TryDeliverCompletionAsync(leaf);
@@ -394,7 +408,7 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     {
         var team = await ArrangeTeamAsync();
         MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
-        MakeExecuting(team, team.Vera, team.Egor.Id, team.Egor.Id);
+        MakeExecuting(team, team.Vera, team.Egor.Id, team.Egor.Id, finished: true);
         var leaf = MakeLeaf(team, team.Vera, reportTo: null, launchedById: team.Vera.Id);
 
         await _sut.TryDeliverCompletionAsync(leaf);
@@ -431,7 +445,7 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     public async Task Доклад_ЦиклВЦепочке_НеВисит()
     {
         var team = await ArrangeTeamAsync();
-        MakeExecuting(team, team.Egor, team.Vera.Id, team.Vera.Id);
+        MakeExecuting(team, team.Egor, team.Vera.Id, team.Vera.Id, finished: true);
         MakeExecuting(team, team.Vera, team.Egor.Id, team.Egor.Id);
         var leaf = MakeLeaf(team, team.Egor, reportTo: null, launchedById: team.Egor.Id);
 

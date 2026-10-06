@@ -420,14 +420,13 @@ public class TasksController(
 
         try
         {
-            // Кнопка в UI: сессии-вызывателя нет — поля сбрасываются, доклад идёт прежним адресатом
+            // Кнопка в UI: сессии-вызывателя нет — после успешного запуска поля сбрасываются; на идущей
+            // задаче запуск отказывает раньше записи, поле запустившего не затирается
             var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
             var callerSession = callerSessionId is not null && sessions.GetById(callerSessionId) is { } cs
                 && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
-            tasks.Update(task.Id, new UpdateTaskRequest(
-                ExecutorLaunchedBySessionId: callerSession?.Id ?? "",
-                ExecutorLaunchedByPersonaId: callerSession?.PersonaId ?? ""));
-            return Ok(await executor.ExecuteAsync(task, auto: false));
+            return Ok(await executor.ExecuteAsync(task, auto: false,
+                new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId)));
         }
         catch (InvalidOperationException ex)
         {

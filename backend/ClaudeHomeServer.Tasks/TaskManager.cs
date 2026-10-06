@@ -528,6 +528,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // ожидание фиксируется ПЕРВЫМ разом — от него считается потолок, повторные попытки его не
     // сдвигают; причина обновляется (офлайн → «обновите агента»). Статус не трогаем: задача
     // остаётся в todo, запуска не было.
+    // Запустивший исполнителя (адресат доклада о завершении); пустые значения сбрасывают поля
+    public TaskItem? SetExecutorLauncher(string id, string? sessionId, string? personaId)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.ExecutorLaunchedBySessionId = Trimmed(sessionId ?? "");
+        task.ExecutorLaunchedByPersonaId = Trimmed(personaId ?? "");
+        ScheduleSave();
+        return task;
+    }
+
     public TaskItem? MarkDeviceWait(string id, DateTime atUtc, string? reason)
     {
         var task = _tasks.GetValueOrDefault(id);

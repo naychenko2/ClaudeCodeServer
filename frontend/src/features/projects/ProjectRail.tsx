@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { AlarmClock, ArrowDownToLine, Pin, ZoomIn } from 'lucide-react';
+import { AlarmClock, ArrowDownToLine, Pin, Search } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import { useWatchdogPresence } from '../../lib/watchdogPresence';
 import type { Project } from '../../types';
@@ -474,8 +474,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
 
         <RailSep />
         {/* Поиск по всем проектам: палитра умеет и переход, и создание, и «Все проекты» —
-            плюс внутри лупы про это, отдельная кнопка «+» рядом не нужна.
-            Кружок — сколько проектов не поместилось в док. */}
+            отдельная кнопка «+» ей не нужна. Кружок — сколько проектов не поместилось в док. */}
         <RailIconButton
           side={side}
           label={hiddenCount > 0
@@ -484,7 +483,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
           onClick={() => setPaletteOpen(true)}
         >
           <div style={{ position: 'relative', display: 'flex' }}>
-            <ZoomIn size={17} strokeWidth={ICON_STROKE} />
+            <Search size={17} strokeWidth={ICON_STROKE} />
             {/* Счётчик спрятанных проектов — нейтральный: это справка о размере списка,
                 а не событие. Цвет он берёт только когда среди скрытых кто-то ЖДЁТ
                 ответа — вот на это оторваться от дела стоит. Тон — тот же warning,

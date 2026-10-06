@@ -1,12 +1,12 @@
 // Чип «Формат» вида «видео» (ADR-025, макет media-format-v1, сценарии 5, 6 и 10): модель для хоста по
 // выбранной сцене. Пропорции и ступени берутся из каталога модели (`VideoModelInfo.format`), действующий
-// формат, подмену и цену со временем ступени отдаёт котировка (`VideoQuote.format`, `price.eta`), подрезку
+// формат, подмену и цену со временем ступени отдаёт котировка (`VideoQuote.format`, `price.eta`, `price.shotEta`), подрезку
 // кадров считает `frames/preview` (dryRun). Своей арифметики формата здесь нет: только выбор строки каталога,
 // форматирование времени и сопоставление с замком фильма.
 
 import {
   FORMAT_TEXT, TIER_NAME, getChatContextState, notifyKindChanged,
-  type ContextKindCtx, type CropAnchor, type FormatFramesModel, type FormatModel, type FormatTierKey, type FormatTierOption,
+  type ContextKindCtx, type FramesAnchor, type FormatFramesModel, type FormatModel, type FormatTierKey, type FormatTierOption,
   type MediaFormatCaps, type MediaFormatState, type MediaFormatWish, type ResolvedFormat,
 } from 'aihome_shell/kit';
 import { videoApi, type FrameAnchor, type VideoFramePreview, type VideoFramesPreview, type VideoQuote, type VideoScene } from '../api';
@@ -44,9 +44,10 @@ function remember<T>(cache: Map<string, Slot<T>>, key: string): Slot<T> {
   return slot;
 }
 
-const wishKey = (w: MediaFormatWish | null | undefined) => (w ? `${w.mode}:${w.aspect ?? ''}:${w.tier ?? ''}:${w.width ?? ''}x${w.height ?? ''}` : '-');
+type WishAsk = Omit<MediaFormatWish, 'by' | 'at'>;
+const wishKey = (w: WishAsk | null | undefined) => (w ? `${w.mode}:${w.aspect ?? ''}:${w.tier ?? ''}:${w.width ?? ''}x${w.height ?? ''}` : '-');
 
-function quoteFor(ctx: ContextKindCtx, scope: string, r: ResolvedScene, wish: MediaFormatWish | null): VideoQuote | null {
+function quoteFor(ctx: ContextKindCtx, scope: string, r: ResolvedScene, wish: WishAsk | null): VideoQuote | null {
   if (!r.provider || !r.model) return null;
   const revision = getChatContextState(ctx.sessionId).revision;
   const key = [ctx.sessionId, revision, r.provider.key, r.model.id, r.count, r.durationSec, r.sound, wishKey(wish)].join('|');
@@ -76,10 +77,50 @@ function previewFor(ctx: ContextKindCtx, scope: string, scene: VideoScene, aspec
 // «Кадры A и B — 16:9, сцена — 9:16: кадры будут подрезаны по бокам до модели.» (записка, «Кадры видео»)
 export function framesText(target: string, frames: { slot: string; aspect: string; sides: boolean }[]): string {
   const where = (sides: boolean) => (sides ? 'по бокам' : 'сверху и снизу');
-  if (frames.length === 2 && frames[0].aspect === frames[1].aspect && frames[0].sides === frames[1].sides) {
-    return `Кадры A и B — ${frames[0].aspect}, сцена — ${target}: кадры будут подрезаны ${where(frames[0].sides)} до модели.`;
+  if (frames.length === 2) {
+    const [a, b] = frames;
+    if (a.sides !== b.sides) {
+      return `Сцена — ${target}: кадр ${a.slot} (${a.aspect}) будет подрезан ${where(a.sides)}, кадр ${b.slot} (${b.aspect}) — ${where(b.sides)} до модели.`;
+    }
+    if (a.aspect === b.aspect) return `Кадры A и B — ${a.aspect}, сцена — ${target}: кадры будут подрезаны ${where(a.sides)} до модели.`;
+    return `Кадр ${a.slot} — ${a.aspect}, кадр ${b.slot} — ${b.aspect}, сцена — ${target}: кадры будут подрезаны ${where(a.sides)} до модели.`;
   }
   return frames.map(f => `Кадр ${f.slot} — ${f.aspect}, сцена — ${target}: кадр будет подрезан ${where(f.sides)} до модели.`).join(' ');
+}
+
+// Ось выбора рамки: все кадры режутся по бокам — «Слева/По центру/Справа», все по высоте — «Сверху/По центру/Снизу»,
+// в разные стороны — выбора нет. Сохранённый якорь чужой оси показываем «По центру»: сервер режет по центру
+export function framesAxis(frames: { sides: boolean }[]): 'sides' | 'height' | 'mixed' {
+  if (frames.every(f => f.sides)) return 'sides';
+  return frames.every(f => !f.sides) ? 'height' : 'mixed';
+}
+
+export function framesAnchor(axis: 'sides' | 'height' | 'mixed', stored: FrameAnchor): FramesAnchor {
+  if (axis === 'sides') return stored === 'left' || stored === 'right' ? stored : 'center';
+  if (axis === 'height') return stored === 'top' || stored === 'bottom' ? stored : 'center';
+  return 'center';
+}
+
+// Модель предупреждения по ответу `frames/preview`: кадры, которые сервер подрезает, текст, превью и якорь рамки
+export function framesFromPreview(
+  pv: VideoFramesPreview, target: string, stored: FrameAnchor, thumbOf: (slot: 'A' | 'B') => string | null, onAnchor: (a: FramesAnchor) => void,
+): FormatFramesModel | undefined {
+  const cropped: { slot: string; aspect: string; sides: boolean; thumb: string | null }[] = [];
+  const add = (slot: 'A' | 'B', f: VideoFramePreview | undefined) => {
+    if (f?.cropped) cropped.push({ slot, aspect: f.sourceAspect, sides: f.resultWidth < f.sourceWidth, thumb: thumbOf(slot) });
+  };
+  add('A', pv.frameA);
+  add('B', pv.frameB);
+  if (!cropped.length) return undefined;
+  const axis = framesAxis(cropped);
+  return {
+    text: framesText(target, cropped),
+    previews: cropped.map(c => ({ slot: c.slot, aspect: c.aspect, thumb: c.thumb })),
+    target,
+    anchor: framesAnchor(axis, stored),
+    axis,
+    onAnchor,
+  };
 }
 
 function framesModel(
@@ -88,21 +129,8 @@ function framesModel(
   const pv = previewFor(ctx, scope, scene, target, r.frameAnchor);
   if (!pv) return undefined;
   const refs = getChatContextState(ctx.sessionId).refs;
-  const cropped: { slot: string; aspect: string; sides: boolean; thumb: string | null }[] = [];
-  const add = (slot: 'A' | 'B', f: VideoFramePreview | undefined) => {
-    if (f?.cropped) cropped.push({ slot, aspect: f.sourceAspect, sides: f.resultWidth < f.sourceWidth, thumb: frameRefOf(refs, slot)?.thumb ?? null });
-  };
-  add('A', pv.frameA);
-  add('B', pv.frameB);
-  if (!cropped.length) return undefined;
-  return {
-    text: framesText(target, cropped),
-    previews: cropped.map(c => ({ slot: c.slot, aspect: c.aspect, thumb: c.thumb })),
-    target,
-    anchor: r.frameAnchor === 'left' || r.frameAnchor === 'right' ? r.frameAnchor : 'center',
-    anchors: cropped.some(c => c.sides),
-    onAnchor: (a: CropAnchor) => changeSettings(scope, ctx.sessionId, { frameFit: { anchor: a } }, false, scene.sceneId),
-  };
+  return framesFromPreview(pv, target, r.frameAnchor, slot => frameRefOf(refs, slot)?.thumb ?? null,
+    a => changeSettings(scope, ctx.sessionId, { frameFit: { anchor: a } }, false, scene.sceneId));
 }
 
 // ── Ступени ──
@@ -114,7 +142,7 @@ function priceOf(q: VideoQuote | null) {
   return typeof p.amount === 'number' ? { amount: p.amount, unit: p.unit, approx: p.approx } : null;
 }
 
-function tierOptions(
+export function tierOptions(
   caps: MediaFormatCaps, aspect: string, quotes: Map<FormatTierKey, VideoQuote | null>,
 ): FormatTierOption[] {
   if (caps.tiers.length === 0) return [];
@@ -134,13 +162,13 @@ function tierOptions(
 }
 
 // «„Макс“ — два прогона на вашей видеокарте: съёмка 1344×768 (~5,5 мин), затем увеличение до 2528×1440 (~15 мин).
-// Увеличение можно отменить.» Время съёмки — котировка минус увеличение; нет замера — без скобок
-function upscaleNote(caps: MediaFormatCaps, _label: string, aspect: string, q: VideoQuote | null): string {
+// Увеличение можно отменить.» Время съёмки — `price.shotEta`; нет замера — без скобок
+export function upscaleNote(caps: MediaFormatCaps, _label: string, aspect: string, q: VideoQuote | null): string {
   const max = caps.tiers.find(t => t.postStep);
   const shot = max ? caps.tiers.find(t => !t.postStep && t.wireValue === max.wireValue) : null;
   const size = (s: { w: number; h: number } | undefined) => (s ? `${s.w}×${s.h}` : '');
   const up = q?.price.upscaleEta;
-  const shotSec = q?.price.eta !== undefined && up !== undefined ? q.price.eta - up : undefined;
+  const shotSec = q?.price.shotEta;
   const t = (sec: number | undefined) => { const e = etaText(sec); return e ? ` (${e})` : ''; };
   return `«${TIER_NAME.max}» — два прогона на вашей видеокарте: съёмка ${size(shot?.sizes[aspect])}${t(shotSec)}, затем увеличение до ${size(max?.sizes[aspect])}${t(up)}. Увеличение можно отменить.`;
 }
@@ -195,10 +223,10 @@ export function videoFormat(ctx: ContextKindCtx, actionId: string | null): Forma
     : { mode: 'model', substituted: false, rounded: false });
   const aspect = resolved.aspect ?? (caps.aspects[0] ?? '');
 
-  // Время и цена каждой ступени — котировка с этой ступенью; текущая берётся из ответа по желанию
+  // Время и цена каждой ступени — котировка с этой ступенью без автора и времени (она ничего не пишет); текущая берётся из ответа по желанию
   const tierQuotes = new Map<FormatTierKey, VideoQuote | null>();
   for (const spec of caps.tiers) {
-    tierQuotes.set(spec.tier, quoteFor(ctx, scope, r, humanWish({ mode: 'aspect', aspect, tier: spec.tier })));
+    tierQuotes.set(spec.tier, quoteFor(ctx, scope, r, { mode: 'aspect', aspect, tier: spec.tier }));
   }
   const tiers = tierOptions(caps, aspect, tierQuotes);
   const fmt: MediaFormatState = { caps, wish, resolved, tiers };

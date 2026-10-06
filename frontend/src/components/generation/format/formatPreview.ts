@@ -19,7 +19,7 @@ export function ratioOf(aspect: string): number | null {
 }
 
 // pad — «дорисовать»: рамка цели, внутри исходник; crop — «обрезать»: исходник целиком, рамка цели поверх
-export function previewRects(sourceAspect: string, targetAspect: string, mode: PreviewMode, anchor: 'left' | 'center' | 'right', H: number): PreviewRects | null {
+export function previewRects(sourceAspect: string, targetAspect: string, mode: PreviewMode, anchor: 'left' | 'center' | 'right' | 'top' | 'bottom', H: number): PreviewRects | null {
   const sr = ratioOf(sourceAspect);
   const tr = ratioOf(targetAspect);
   if (!sr || !tr) return null;
@@ -33,5 +33,6 @@ export function previewRects(sourceAspect: string, targetAspect: string, mode: P
   const fw = sr > tr ? H * tr : W;
   const fh = sr > tr ? H : W / tr;
   const fx = anchor === 'left' ? 0 : anchor === 'right' ? W - fw : (W - fw) / 2;
-  return { width: W, height: H, image: { x: 0, y: 0, w: W, h: H }, frame: { x: fx, y: (H - fh) / 2, w: fw, h: fh } };
+  const fy = anchor === 'top' ? 0 : anchor === 'bottom' ? H - fh : (H - fh) / 2;
+  return { width: W, height: H, image: { x: 0, y: 0, w: W, h: H }, frame: { x: fx, y: fy, w: fw, h: fh } };
 }

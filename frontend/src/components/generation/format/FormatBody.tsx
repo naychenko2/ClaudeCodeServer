@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, Info, Maximize2, Send, TriangleAlert } from 'lucide-react';
 import { C, FS, R, SP } from '../../../lib/design';
 import { FORMAT_TEXT, TIER_NAME, TIER_ORDER, tierCaption } from '../../../lib/chatContext/formatText';
-import type { CropAnchor, FormatEditModel, FormatFramesModel, FormatModel, FormatTierOption, MediaFormatState } from '../../../lib/chatContext/formatTypes';
+import type { CropAnchor, FramesAnchor, FormatEditModel, FormatFramesModel, FormatModel, FormatTierOption, MediaFormatState } from '../../../lib/chatContext/formatTypes';
 import { Button, InlineSegmented, Notice, TextField } from '../../ui';
 import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
 import { previewRects, ratioOf } from './formatPreview';
@@ -166,7 +166,7 @@ const linkStyle = {
 // ── Правка картинки ──
 
 function Preview({ source, target, mode, anchor, height = 64 }: {
-  source: { aspect: string; thumb: string | null }; target: string; mode: 'pad' | 'crop'; anchor: CropAnchor; height?: number;
+  source: { aspect: string; thumb: string | null }; target: string; mode: 'pad' | 'crop'; anchor: FramesAnchor; height?: number;
 }) {
   const g = previewRects(source.aspect, target, mode, anchor, height);
   if (!g) return null;
@@ -252,7 +252,14 @@ function Frames({ f, isMobile }: { f: FormatFramesModel; isMobile: boolean }) {
           </div>
         ))}
       </div>
-      {f.anchors && <div style={{ marginTop: SP.xs }}><Anchors value={f.anchor} onChange={f.onAnchor} isMobile={isMobile} /></div>}
+      {f.axis === 'sides' && <div style={{ marginTop: SP.xs }}><Anchors value={f.anchor as CropAnchor} onChange={f.onAnchor} isMobile={isMobile} /></div>}
+      {f.axis === 'height' && (
+        <div data-fmt-anchors="height" style={{ marginTop: SP.xs }}>
+          <InlineSegmented<FramesAnchor> isMobile={isMobile} value={f.anchor} onChange={f.onAnchor}
+            options={(['top', 'center', 'bottom'] as const).map(a => ({ value: a, label: FORMAT_TEXT.anchorsHeight[a] }))} />
+        </div>
+      )}
+      {f.axis === 'mixed' && <div data-fmt-anchors="mixed" style={{ marginTop: SP.xs, fontSize: FS.xs, color: C.textMuted }}>{FORMAT_TEXT.anchorMixed}</div>}
     </Notice>
   );
 }

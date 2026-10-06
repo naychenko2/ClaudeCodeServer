@@ -64,6 +64,8 @@ export interface VideoClipVersion {
   height?: number;
   // «Макс» local H3: увеличение не удалось или отменено, версия — съёмка 768p как есть
   upscaleError?: string;
+  // Увеличение отменил человек (у сбоя поля нет): отличать по тексту upscaleError нельзя
+  upscaleCancelled?: boolean;
 }
 
 export type VideoLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
@@ -164,8 +166,9 @@ export interface VideoQuoteRequest {
   durationSec?: number;
   aspect?: string;
   sound?: boolean;
-  // Желание «Формата»: сервер возвращает по нему действующий формат и цену со временем ступени
-  format?: MediaFormatWish;
+  // Желание «Формата»: сервер возвращает по нему действующий формат и цену со временем ступени. У котировки by и at
+  // необязательны и игнорируются: она ничего не пишет, ступень спрашивают без автора и времени
+  format?: Omit<MediaFormatWish, 'by' | 'at'>;
   frameFit?: { anchor: FrameAnchor };
   // Ревизия контекста чата (ADR-023 §Д2.1): сцену и кадры сервер берёт из стора, sceneId может быть пустым
   contextRevision?: number;
@@ -180,6 +183,8 @@ export interface VideoPrice {
   queueLength?: number;
   // «Макс» local H3: часть eta, которую занимает увеличение следом за съёмкой; postStep = 'upscale'
   upscaleEta?: number;
+  // Часть eta на саму съёмку (только при postStep): разность eta − upscaleEta на клиенте не считается
+  shotEta?: number;
   postStep?: string;
 }
 

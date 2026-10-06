@@ -53,7 +53,7 @@ export type { ContextCandidate } from '../chatContext/fill';
 export type { ContextRole, ContextUpload, ContextNote, ContextMenuItem } from '../chatContext/types';
 export type {
   FormatModel, FormatEditModel, MediaFormatState, MediaFormatWish, MediaFormatCaps, FormatTierOption, FormatTierKey,
-  ResolvedFormat, FormatMode, CropAnchor, FormatFramesModel, FormatLockAsk,
+  ResolvedFormat, FormatMode, CropAnchor, FramesAnchor, FormatFramesModel, FormatLockAsk,
 } from '../chatContext/formatTypes';
 export { FORMAT_TEXT, TIER_NAME, generateChip, priceLabel, sizeLabel } from '../chatContext/formatText';
 export { notifyKindChanged } from '../chatContext/actionRun';

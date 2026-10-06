@@ -81,16 +81,19 @@ export interface MediaFormatState {
 }
 
 export type CropAnchor = 'left' | 'center' | 'right';
+// Якорь рамки подрезки кадров видео: по бокам — left/right, по высоте — top/bottom
+export type FramesAnchor = CropAnchor | 'top' | 'bottom';
 
 // Предупреждение «кадры будут подрезаны» (видео): превью исходных кадров в рамке цели и выбор якоря рамки
 export interface FormatFramesModel {
   text: string;
   previews: { slot: string; aspect: string; thumb: string | null }[];
   target: string;
-  anchor: CropAnchor;
-  // Выбор рамки «Слева · По центру · Справа» осмыслен только при подрезке по бокам
-  anchors: boolean;
-  onAnchor: (anchor: CropAnchor) => void;
+  anchor: FramesAnchor;
+  // Ось выбора рамки: sides — «Слева · По центру · Справа» (режутся бока), height — «Сверху · По центру · Снизу»
+  // (режется высота), mixed — кадры режутся в разные стороны: выбора нет, рамка по центру
+  axis: 'sides' | 'height' | 'mixed';
+  onAnchor: (anchor: FramesAnchor) => void;
 }
 
 // Вопрос при попытке сменить формат у сцены фильма: сервер ответил 409 film_format_locked

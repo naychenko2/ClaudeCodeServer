@@ -684,8 +684,8 @@ function shootCard(s) {
   if (k === 'shoot') tail = `<button class="sim" data-k="shoot-next">Симуляция: съёмка готова</button>`;
   if (k === 'up') tail = `<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="sim" data-k="up-done">Симуляция: готово</button><button class="sim" data-k="up-fail">Симуляция: сбой</button></div>`;
   if (k === 'done') tail = `<div class="pics">${picBox(s.mem.video.aspect, port ? 110 : 62, 'mount', '1440p')}</div><div class="hint">Версия 1 · 1440p · ${big}</div>`;
-  if (k === 'fail') tail = `<div class="alert warn">${I('warn', 's')}<div class="tx">Увеличение до 1440p не удалось. Съёмка 768p сохранена версией 1 — в 1440p её нет.<div class="acts"><button class="btn xs pri" data-k="up-retry">Повторить</button></div></div></div><span class="pend">макет: текст ждёт решения Андрея — сохранять ли 768p</span>`;
-  if (k === 'cancel') tail = `<div class="alert mut">${I('info', 's')}<div class="tx">Увеличение отменено. Съёмка 768p сохранена версией 1 — в 1440p её нет.<div class="acts"><button class="btn xs" data-k="up-retry">Увеличить до 1440p</button></div></div></div><span class="pend">макет: текст ждёт решения Андрея — сохранять ли 768p</span>`;
+  if (k === 'fail') tail = `<div class="alert warn">${I('warn', 's')}<div class="tx">Увеличение до 1440p не удалось. Съёмка 768p сохранена версией 1 — в 1440p её нет.<div class="acts"><button class="btn xs pri" data-k="up-retry">Повторить</button></div></div></div>`;
+  if (k === 'cancel') tail = `<div class="alert mut">${I('info', 's')}<div class="tx">Увеличение отменено. Съёмка 768p сохранена версией 1 — в 1440p её нет.<div class="acts"><button class="btn xs" data-k="up-retry">Увеличить до 1440p</button></div></div></div>`;
   return `<div class="icard"><div class="t">${I('film', 's')}<b>Рассвет · съёмка</b><span class="sub">MiniMax H3 · локально · ${s.mem.video.aspect} · 1440p · бесплатно</span></div>${r1}${r2}${tail}</div>`;
 }
 // Обрезка без ИИ — новая версия; строка и карточка одни для человека и для агента
@@ -798,9 +798,9 @@ const SCN = {
       ['Закрыть: чип «16:9 · 1440p», кнопка «Снять · бесплатно · ~21 мин»', 'fmt', s => { s.pop = null; }],
       ['Снять — карточка: стадия 1 «Снимаем», стадия 2 следом', 'run', s => { runNow(s); }],
       ['Съёмка готова — «Увеличиваем до 1440p… ещё ~15 мин»', 'shoot-next', s => { s.shoot = 'up'; }],
-      ['«Отменить увеличение» (текст ждёт решения)', 'up-cancel', s => { s.shoot = 'cancel'; }],
+      ['«Отменить увеличение»', 'up-cancel', s => { s.shoot = 'cancel'; }],
       ['«Увеличить до 1440p» — стадия 2 снова идёт', 'up-retry', s => { s.shoot = 'up'; }],
-      ['Сбой увеличения — «Повторить» (текст ждёт решения)', 'up-fail', s => { s.shoot = 'fail'; }],
+      ['Сбой увеличения — «Повторить»', 'up-fail', s => { s.shoot = 'fail'; }],
       ['«Повторить» → готово: версия 1 · 1440p', 'up-retry', s => { s.shoot = 'done'; }],
     ] },
   s11: { t: '11 · Агент обрезает: «обрежь до 1:1»', why: 'Обрезка без ИИ — новая версия картинки, а не шаг. Строка ленты и карточка те же, что у ручной «Обрезать» (сценарий 4), только «Вы» → «✦ Claude». Формат проекта обрезка не меняет.',

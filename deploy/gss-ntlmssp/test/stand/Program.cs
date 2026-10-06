@@ -1,0 +1,15 @@
+using Microsoft.AspNetCore.Authentication.Negotiate;
+using System.Security.Cryptography.X509Certificates;
+using ClaudeHomeServer.WebDav;
+var b = WebApplication.CreateBuilder(args);
+var cert = X509CertificateLoader.LoadPkcs12FromFile("c.pfx", "x");
+b.WebHost.ConfigureKestrel(k => k.ListenLocalhost(5443, o => o.UseHttps(cert)));
+b.Configuration["WebDav:NtlmUserFile"] = Path.GetFullPath("users.txt");
+b.Services.AddSingleton<NtlmUserFile>();
+b.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme).AddNegotiate(o => o.Events = new NegotiateEvents { OnAuthenticationFailed = NegotiateFailure.HandleAsync });
+b.Services.AddAuthorization(o => o.FallbackPolicy = o.DefaultPolicy);
+var app = b.Build();
+app.UseMiddleware<NtlmHandshakeRecorder>();
+app.UseAuthentication(); app.UseAuthorization();
+app.MapGet("/", (HttpContext c) => "hello " + c.User.Identity?.Name);
+app.Run();

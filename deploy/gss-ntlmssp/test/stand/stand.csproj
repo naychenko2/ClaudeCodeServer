@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><NoWarn>CS1574;CS1580</NoWarn></PropertyGroup>
+  <ItemGroup><PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="10.0.10" /></ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../../../backend/ClaudeHomeServer/WebDav/NegotiateFailure.cs" />
+    <Compile Include="../../../../backend/ClaudeHomeServer/WebDav/NtlmMicProbe.cs" />
+    <Compile Include="../../../../backend/ClaudeHomeServer/WebDav/NtlmHandshakeRecorder.cs" />
+    <Compile Include="../../../../backend/ClaudeHomeServer/WebDav/NtlmUserFile.cs" />
+    <Compile Include="../../../../backend/ClaudeHomeServer/WebDav/NtlmHelper.cs" />
+  </ItemGroup>
+</Project>

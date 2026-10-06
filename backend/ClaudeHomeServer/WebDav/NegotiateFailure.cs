@@ -19,9 +19,10 @@ public static class NegotiateFailure
         var (domain, user) = TryReadType3Identity(http.Request.Headers.Authorization.ToString());
         // Статус .NET различает причины: InvalidToken — дефектный токен (MIC, channel binding),
         // GenericFailure — не сошёлся NTLMv2-ответ (пароль, регистр или написание домена)
-        logger?.LogWarning("NTLM отклонён: домен '{Domain}', пользователь '{User}', {Path}: {Error}; Type3: {Shape}",
+        var authorization = http.Request.Headers.Authorization.ToString();
+        logger?.LogWarning("NTLM отклонён: домен '{Domain}', пользователь '{User}', {Path}: {Error}; транспорт: {Transport}; Type3: {Shape}; MIC: {Mic}",
             domain ?? "?", user ?? "?", http.Request.Path.Value, ctx.Exception?.GetBaseException().Message,
-            DescribeType3(http.Request.Headers.Authorization.ToString()));
+            DescribeTransport(authorization), DescribeType3(authorization), ProbeMic(http, authorization, user));
 
         http.Response.StatusCode = StatusCodes.Status401Unauthorized;
         http.Response.ContentLength = 0;
@@ -57,6 +58,86 @@ public static class NegotiateFailure
             if (off < 0 || off + len > m.Length) return null;
             var bytes = m.Slice(off, len);
             return unicode ? Encoding.Unicode.GetString(bytes) : Encoding.ASCII.GetString(bytes);
+        }
+    }
+
+    /// <summary>
+    /// Что именно Windows положил в заголовок Negotiate: сырой NTLMSSP (base64 начинается с
+    /// «TlRMTVNT») или SPNEGO (ASN.1: 0x60 — NegTokenInit, 0xA1 — NegTokenResp), и есть ли в
+    /// SPNEGO-ответе mechListMIC. Секретов не раскрывает.
+    /// </summary>
+    internal static string DescribeTransport(string authorization)
+    {
+        const string prefix = "Negotiate ";
+        if (!authorization.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return "не Negotiate";
+        byte[] blob;
+        try { blob = Convert.FromBase64String(authorization[prefix.Length..].Trim()); }
+        catch (FormatException) { return "не base64"; }
+        if (blob.Length == 0) return "пусто";
+        if (blob.AsSpan().StartsWith("NTLMSSP\0"u8)) return "сырой NTLMSSP";
+        return blob[0] switch
+        {
+            0x60 => "SPNEGO NegTokenInit",
+            0xA1 => "SPNEGO NegTokenResp" + (HasMechListMic(blob) ? " с mechListMIC" : " без mechListMIC"),
+            _ => $"неизвестный формат (первый байт 0x{blob[0]:X2})",
+        };
+    }
+
+    /// <summary>NegTokenResp ::= [1] SEQUENCE { negState [0], supportedMech [1], responseToken [2], mechListMIC [3] }.</summary>
+    private static bool HasMechListMic(byte[] blob)
+    {
+        try
+        {
+            var span = blob.AsSpan();
+            if (!ReadHeader(span, out var skip, out var len) || span[0] != 0xA1) return false;
+            span = span.Slice(skip, len);
+            if (span.Length == 0 || span[0] != 0x30 || !ReadHeader(span, out skip, out len)) return false;
+            span = span.Slice(skip, len);
+            while (span.Length > 0)
+            {
+                var tag = span[0];
+                if (!ReadHeader(span, out skip, out len)) return false;
+                if (tag == 0xA3) return true;
+                span = span[(skip + len)..];
+            }
+        }
+        catch (ArgumentOutOfRangeException) { }
+        return false;
+
+        static bool ReadHeader(ReadOnlySpan<byte> s, out int skip, out int len)
+        {
+            skip = 2; len = 0;
+            if (s.Length < 2) return false;
+            if (s[1] < 0x80) { len = s[1]; return true; }
+            var n = s[1] & 0x7F;
+            if (n is 0 or > 3 || s.Length < 2 + n) return false;
+            for (var i = 0; i < n; i++) len = (len << 8) | s[2 + i];
+            skip = 2 + n;
+            return skip + len <= s.Length;
+        }
+    }
+
+    /// <summary>
+    /// Пересчёт MIC по записанным Type1/Type2 и NT-хэшу из нашего файла: говорит, при какой
+    /// гипотезе (ключ, Type1, смещение) подпись клиента сошлась. Любой сбой — просто текст.
+    /// </summary>
+    private static string ProbeMic(HttpContext http, string authorization, string? user)
+    {
+        try
+        {
+            if (user is null) return "нет пользователя";
+            var handshake = NtlmHandshakeRecorder.Get(http);
+            if (handshake is null) return "рукопожатие не записано";
+            var hash = http.RequestServices.GetService<NtlmUserFile>()?.TryGetHash(user);
+            if (hash is null) return "хэша пользователя в файле нет";
+            var type3 = NtlmHandshakeRecorder.ExtractNtlm(authorization["Negotiate ".Length..]);
+            if (type3 is null) return "Type3 не найден";
+            var (type1s, type2s) = handshake.Snapshot();
+            return NtlmMicProbe.Explain(type1s, type2s, type3, hash);
+        }
+        catch (Exception ex)
+        {
+            return $"диагностика упала: {ex.GetType().Name}";
         }
     }
 

@@ -303,6 +303,63 @@ deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на �
 **Upstream.** Текст issue и PR — [upstream-issue-and-pr.md](../../deploy/gss-ntlmssp/upstream-issue-and-pr.md),
 не опубликован: отправка только по явной просьбе.
 
+#### Разбор 2026-10-06 (вечер): +ccs1 не помог, Type3 реального Windows — 0xE2888235
+
+После установки `+ccs1` Windows всё равно получает отказ, и на этот раз в Type3 **есть** SIGN и SEAL
+(`0xE2888235`: `SIGN|SEAL|KEY_EXCH|128|56`, NTLMv2, MIC, ненулевой CBT, `MsvAvTargetName HTTP/naychenko.me`).
+Вывод «причина — KEY_EXCH без SIGN/SEAL» к этому клиенту **не относится**: патч для него ничего не меняет
+(ключ расшифровывается и без патча). Причина **не найдена**: на стенде отказ не воспроизводится.
+
+Что проверено на стенде (gss-ntlmssp 1.2.0 и `+ccs1`, Kestrel по HTTPS, NTLMv2 + MIC; клиент
+[client.py](../../deploy/gss-ntlmssp/test/client.py) собирает Type1/Type3 по MS-NLMP, стенд —
+[test/stand](../../deploy/gss-ntlmssp/test/stand)) — все варианты проходят и без патча, и с ним:
+
+| Что варьировали | Результат |
+|---|---|
+| Type1 `0xE2088297/237/207/235`, Type3 `0xE2888235`, структура Version в Type1 и Type3 | OK |
+| ненулевой `MsvAvChannelBindings`, `MsvAvTargetName`, `MsvAvSingleHost`, нулевой LM-ответ | OK |
+| сырой NTLMSSP в `Negotiate` и SPNEGO (NegTokenInit/NegTokenResp, mechListMIC по MS-NLMP 3.4) | OK |
+| прямой GSSAPI-акцептор без .NET (`run-test.sh`) | OK |
+
+Опровергнутые гипотезы: **MIT SPNEGO подменяет Type1** — нет, MIC сходится и в сыром, и в обёрнутом виде;
+**.NET искажает Type2** — нет, записанный на сервере Type2 совпадает с тем, по которому клиент считал
+NTProofStr и MIC; **CBT ломает MIC** — нет, и более того, ASP.NET Negotiate на Linux **не передаёт channel
+bindings** в GSSAPI вообще (заведомо чужой CBT принимается), так что CBT сервером не проверяется;
+**RC4-расшифровка EncryptedRandomSessionKey** — корректна при `KEY_EXCH+SIGN|SEAL`. Попутно: по
+**HTTP/2** хендлер Negotiate не аутентифицирует вовсе (на любой Authorization отвечает «challenged»), так что
+до gss-ntlmssp Windows доходит только по HTTP/1.1.
+
+Остаётся то, чего стенд знать не может: **реальные байты Type1/Type2/Type3 от Windows**. Чтобы не гонять
+токены с паролем, сервер теперь диагностирует отказ сам: `NtlmHandshakeRecorder` держит в памяти Type1/Type2
+соединения, а при отказе `NtlmMicProbe` пересчитывает MIC по NT-хэшу из `NTLM_USER_FILE` при каждой
+гипотезе (ключ = KeyExchangeKey или RC4(KeyExchangeKey, EncryptedRandomSessionKey); каждый записанный
+Type1; смещение MIC 72/64) и пишет в лог **только признаки**: какая гипотеза сошлась, флаги Type1/2/3,
+размер EncryptedRandomSessionKey. Ключи, хэш и подписи в лог не попадают, токены не сохраняются.
+
+Строка отказа теперь: `NTLM отклонён: домен…, пользователь…: <статус>; транспорт: <…>; Type3: <…>; MIC: <…>`.
+
+- `транспорт`: `сырой NTLMSSP` (заголовок начинается с `TlRMTVNT`) или `SPNEGO NegTokenResp с/без mechListMIC`
+  (ASN.1: `0x60` — NegTokenInit, `0xA1` — NegTokenResp).
+- `MIC: MIC СХОДИТСЯ при: <ключ>; Type1 №N; смещение MIC …` — подпись клиента сходится при этой гипотезе, а
+  gss-ntlmssp выбирает другую: это и есть причина (например, `KeyExchangeKey` при `SIGN|SEAL` значит, что
+  клиент не шифровал ключ, а сервер расшифровывает; `RC4(…)` при отсутствии SIGN/SEAL — наоборот).
+- `MIC не сходится ни в одной из N комбинаций (NTProofStr верен)` — расходятся сами сообщения (Type1/Type2/Type3),
+  а не ключ: смотреть `Type1 записано N` и флаги Type1/Type2 в той же строке.
+- `NTProofStr не сходится` — это не MIC, а пароль/хэш/написание домена.
+
+**Живая проверка с Windows (одна попытка, без Wireshark и без записи токенов).**
+1. Тестовый пользователь с тестовым паролем, не основной: Type3 содержит NTLMv2-ответ, по нему пароль подбирается офлайн.
+2. Подключить `\\naychenko.me@SSL\DavWWWRoot\projects` (Проводник → «Подключить сетевой диск») или
+   `net use * https://naychenko.me/projects /user:andrey`. HTTP/1.1 — это обязательно (см. про HTTP/2 выше).
+3. В `/srv/ccs/data/logs/server-<дата>.log` найти `NTLM отклонён` и приложить строку целиком — в ней уже всё
+   нужное для вывода. В боевом логе приложения 6 октября строк `NTLM` не оказалось — проверить уровень логов
+   `ClaudeHomeServer.WebDav` (нужен Warning), иначе диагностика не видна.
+4. Без боевого сервера: дев-стенд [test/stand](../../deploy/gss-ntlmssp/test/stand) на другом порту и
+   Windows `curl.exe --negotiate -u andrey:secret -k https://<хост-стенда>:5443/` (предположительно curl на Windows
+   ходит через SSPI и даёт настоящие Type1/Type3; не проверено — доступа к Windows не было; стенд пишет ту же
+   диагностическую строку). Виртуалка `windows` из
+   `docs/operations/linux-dualboot-kvm-windows-passthrough.md` для этого подходит; её запускает человек.
+
 ### Безопасность
 
 В файле лежат NT-хэши **основного пароля**: по ним возможен pass-the-hash, а MD4 без соли

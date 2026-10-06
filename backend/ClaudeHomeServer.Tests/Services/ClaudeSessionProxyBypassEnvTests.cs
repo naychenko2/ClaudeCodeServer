@@ -16,6 +16,9 @@ namespace ClaudeHomeServer.Tests.Services;
 //
 // Платформонезависимость (CI — ubuntu): «CLI» — cmd/sh-сон без вывода, смерть без событий —
 // легитимный случай (см. ClaudeSessionProcessDeathTests).
+// Коллекция процесс-глобального состояния: тест выставляет NO_PROXY в среде процесса, и параллельный
+// ClaudeSessionServerGatewayTests (сигнатура запуска зависит от env) унаследовал бы чужой сентинел.
+[Collection(TestCollections.ProcessGlobalState)]
 public class ClaudeSessionProxyBypassEnvTests : IDisposable
 {
     private const string Sentinel = "ccs-no-proxy-sentinel.example";

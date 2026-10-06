@@ -18,6 +18,9 @@ namespace ClaudeHomeServer.Tests.Services;
 //
 // Платформонезависимость (CI — ubuntu): «CLI» — cmd/sh-сон без вывода, как в
 // ClaudeSessionProxyBypassEnvTests.
+// Коллекция процесс-глобального состояния — общая с ClaudeSessionProxyBypassEnvTests: тот выставляет
+// NO_PROXY процесса, а сигнатура запуска в тесте стабильности читает env.
+[Collection(TestCollections.ProcessGlobalState)]
 public sealed class ClaudeSessionServerGatewayTests : IDisposable
 {
     private const string GatewayApi = "http://ccs-gw-host:5000";

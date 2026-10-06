@@ -3,9 +3,9 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // Фоновый сбор результатов локальной генерации: агент мог закончить ход, не дождавшись
 // видео, а файл всё равно должен появиться в проекте. Тумблер LocalMedia:Enabled читается
 // живьём: выключенный сервер цикл не трогает ComfyUI вовсе. Здесь же — забывание старых задач
-// и чистка их файлов в ComfyUI (LocalMediaCleanup)
+// и чистка их файлов в ComfyUI (LocalMediaCleanup), плюс вымет контекста съёмок видео (LocalVideoMediaAdapter.Sweep)
 public sealed class LocalMediaCollector(LocalMediaService media, LocalMediaCleanup cleanup,
-    ILogger<LocalMediaCollector> log) : BackgroundService
+    ILogger<LocalMediaCollector> log, LocalVideoMediaAdapter? videos = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -18,6 +18,8 @@ public sealed class LocalMediaCollector(LocalMediaService media, LocalMediaClean
                 {
                     await media.CollectPendingAsync(stoppingToken);
                     cleanup.Run(options, DateTime.UtcNow);
+                    // Контекст съёмок видео и их латенты — по таймеру, а не только при новой съёмке
+                    videos?.Sweep();
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

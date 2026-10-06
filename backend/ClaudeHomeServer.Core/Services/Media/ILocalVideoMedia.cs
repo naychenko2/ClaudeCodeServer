@@ -33,6 +33,13 @@ public interface ILocalVideoMedia
     Task<LocalVideoSubmitted> SubmitUpscaleAsync(string ticket, string target, CancellationToken ct) =>
         Task.FromResult(LocalVideoSubmitted.Fail("Увеличение недоступно: адаптер локальной съёмки его не поддерживает."));
 
+    // Сколько живёт контекст съёмки для увеличения (латент и входы в ComfyUI, тикет в памяти): после этого срока
+    // «Повторить увеличение» уже нельзя, а файлы убирает чистка адаптера
+    static readonly TimeSpan ShotTtl = TimeSpan.FromHours(12);
+
+    // Можно ли сейчас увеличить съёмку по её тикету (контекст жив, латент сохранён). Нет — Fail у SubmitUpscaleAsync
+    bool CanUpscale(string ticket) => false;
+
     // Снять задачу: ждущую — из очереди, идущую — прервать адресно по её prompt_id. Задачи в очереди нет — false
     Task<bool> CancelAsync(string ticket, CancellationToken ct);
 }

@@ -14,29 +14,101 @@ public sealed class LocalVideoMediaAdapter(
     ComfyClient comfy,
     IConfiguration config,
     ILocalImageMedia images,
-    ILogger<LocalVideoMediaAdapter> log) : ILocalVideoMedia
+    ILogger<LocalVideoMediaAdapter> log,
+    LocalMediaCleanup? cleanup = null,
+    TimeProvider? time = null) : ILocalVideoMedia
 {
+    private DateTime Now => (time ?? TimeProvider.System).GetUtcNow().UtcDateTime;
+
     private const string IdPrefix = "lv_";
     private const string FirstSlot = "первый кадр";
     private const string LastSlot = "последний кадр";
 
     // Контекст завершённых съёмок для апскейла: тикет → то, из чего пересобирается conditioning (промпт, первый
     // кадр в input ComfyUI, сид, число кадров) и пути латентов в output. Только в памяти: рестарт сервера
-    // делает увеличение недоступным (отказ с причиной). Записи старше ShotTtl выметаются при новой съёмке
-    private static readonly TimeSpan ShotTtl = TimeSpan.FromHours(12);
+    // делает увеличение недоступным (отказ с причиной). Записи старше ILocalVideoMedia.ShotTtl выметает Sweep:
+    // при новой съёмке и по таймеру фонового сборщика, вместе с их файлами в ComfyUI
     private readonly ConcurrentDictionary<string, Shot> _shots = new();
 
-    private sealed class Shot(string prompt, string firstName, (int Width, int Height) size, int seconds, long seed)
+    // Входы идущих и ещё не убранных апскейлов: тикет апскейла → id, по которому строятся имена копий латентов в input.
+    // Копии нужны только пока идёт задача: после конца (удача, сбой, отмена) их удаляют сразу, остаток выметает Sweep
+    private readonly ConcurrentDictionary<string, UpscaleInputs> _upscales = new();
+
+    private sealed record UpscaleInputs(string Id, string ShotTicket, DateTime At)
     {
+        public IEnumerable<string> Names => [UpscaleLatentName(Id, "video"), UpscaleLatentName(Id, "audio")];
+    }
+
+    private static string UpscaleLatentName(string id, string kind) => $"{ComfyClient.InputFolder}-{id}-{kind}.latent";
+
+    private sealed class Shot(string id, string prompt, string firstName, string? lastName, (int Width, int Height) size,
+        int seconds, long seed, DateTime at)
+    {
+        public string Id { get; } = id;
         public string Prompt { get; } = prompt;
         public string FirstName { get; } = firstName;
+        public string? LastName { get; } = lastName;
         public (int Width, int Height) Size { get; } = size;
         public int Seconds { get; } = seconds;
         public long Seed { get; } = seed;
-        public DateTime At { get; } = DateTime.UtcNow;
+        public DateTime At { get; } = at;
         public volatile string? LatentVideo;
         public volatile string? LatentAudio;
     }
+
+    // Имя вида lv_ + 32 строчных hex — только такие id считаются нашими при удалении файлов
+    public static bool LooksLikeShotId(string value) =>
+        value.StartsWith(IdPrefix, StringComparison.Ordinal) && value.Length == IdPrefix.Length + 32
+        && value[IdPrefix.Length..].All(char.IsAsciiHexDigitLower);
+
+    // Выметает контекст съёмок старше ShotTtl и убирает их файлы в ComfyUI: латенты в output, входы (кадры, копии
+    // латентов апскейла) в input. Удаляются только имена, построенные из id самой съёмки, по точному имени — через
+    // LocalMediaCleanup.DeleteOwn (SafePath, ссылки, каталоги не трогаем); масок нет. Чистка файлов выключена
+    // (не заданы каталоги ComfyUI) — выметается одна память. Безопасен при гонках: удаляет тот, кто убрал запись
+    public void Sweep() => Sweep(Now);
+
+    internal void Sweep(DateTime now)
+    {
+        var options = LocalMediaOptions.Read(config);
+        foreach (var (ticket, shot) in _shots)
+        {
+            if (now - shot.At <= ILocalVideoMedia.ShotTtl || !_shots.TryRemove(ticket, out _)) continue;
+            PurgeShot(shot, options);
+            foreach (var (upTicket, up) in _upscales)
+                if (up.ShotTicket == ticket && _upscales.TryRemove(upTicket, out _)) PurgeUpscaleInputs(up, options);
+        }
+        foreach (var (upTicket, up) in _upscales)
+            if (now - up.At > ILocalVideoMedia.ShotTtl && _upscales.TryRemove(upTicket, out _)) PurgeUpscaleInputs(up, options);
+    }
+
+    private void PurgeShot(Shot shot, LocalMediaOptions options)
+    {
+        if (cleanup is null || !options.CleanupEnabled) return;
+        var input = options.ComfyInputDir.Trim();
+        var output = options.ComfyOutputDir.Trim();
+        foreach (var latent in new[] { shot.LatentVideo, shot.LatentAudio })
+            if (latent is not null) cleanup.DeleteOwn(output, latent, shot.Id, LocalMediaCleanup.OutputPrefixes, '_');
+        foreach (var frame in new[] { shot.FirstName, shot.LastName })
+            if (frame is not null) cleanup.DeleteOwn(input, frame, shot.Id, LocalMediaCleanup.InputPrefixes, '-');
+    }
+
+    private void PurgeUpscaleInputs(UpscaleInputs up, LocalMediaOptions options)
+    {
+        if (cleanup is null || !options.CleanupEnabled) return;
+        foreach (var name in up.Names)
+            cleanup.DeleteOwn(options.ComfyInputDir.Trim(), name, up.Id, LocalMediaCleanup.InputPrefixes, '-');
+    }
+
+    // Увеличение кончилось (удача, сбой, отмена): его копии латентов больше не нужны
+    private void ReleaseUpscale(string ticket)
+    {
+        if (_upscales.TryRemove(ticket, out var up)) PurgeUpscaleInputs(up, LocalMediaOptions.Read(config));
+    }
+
+    private bool Expired(Shot shot) => Now - shot.At > ILocalVideoMedia.ShotTtl;
+
+    public bool CanUpscale(string ticket) =>
+        _shots.TryGetValue(ticket, out var shot) && !Expired(shot) && shot.LatentVideo is not null && shot.LatentAudio is not null;
 
     // Прогресс сэмплеров идущих задач: ticket → слушатель сокета ComfyUI. Живёт, пока опрашивают задачу
     private readonly ConcurrentDictionary<string, ProgressWatch> _watches = new();
@@ -136,9 +208,8 @@ public sealed class LocalVideoMediaAdapter(
                 $"{ComfyWorkflows.OutputFolder}/latents/{id}");
             var queued = await comfy.QueuePromptAsync(graph, ct);
             StartWatch(queued.PromptId);
-            foreach (var (key, shot) in _shots)
-                if (DateTime.UtcNow - shot.At > ShotTtl) _shots.TryRemove(key, out _);
-            _shots[queued.PromptId] = new Shot(plan.Prompt, firstName, plan.Size, plan.Seconds, seed);
+            Sweep();
+            _shots[queued.PromptId] = new Shot(id, plan.Prompt, firstName, lastName, plan.Size, plan.Seconds, seed, Now);
             return new LocalVideoSubmitted(queued.PromptId, queue,
                 LocalMediaService.ImageToVideoEta(plan.Size, plan.Seconds, plan.Fast), null);
         }
@@ -168,6 +239,7 @@ public sealed class LocalVideoMediaAdapter(
             if (history.Failed) return Failed(history.Error ?? "ComfyUI завершил задачу ошибкой.");
             if (!history.Completed) return new LocalVideoPoll(LocalVideoState.Running, 0, null, null, Percent: PercentOf(ticket));
             StopWatch(ticket);
+            ReleaseUpscale(ticket);
             if (_shots.TryGetValue(ticket, out var shot))
             {
                 shot.LatentVideo = LatentPath(history.Latents, "_video_");
@@ -198,6 +270,9 @@ public sealed class LocalVideoMediaAdapter(
         LocalVideoPoll Failed(string error)
         {
             StopWatch(ticket);
+            ReleaseUpscale(ticket);
+            // Съёмка не удалась — латента нет и увеличивать нечего: контекст и входы убираем сразу
+            if (_shots.TryRemove(ticket, out var failedShot)) PurgeShot(failedShot, LocalMediaOptions.Read(config));
             return new(LocalVideoState.Failed, null, null, error);
         }
     }
@@ -224,7 +299,7 @@ public sealed class LocalVideoMediaAdapter(
         if (!options.Enabled) return LocalVideoSubmitted.Fail("Локальные модели выключены на этом сервере.");
         if (!string.Equals(target?.Trim(), "1440p", StringComparison.OrdinalIgnoreCase))
             return LocalVideoSubmitted.Fail("Увеличение — только до 1440p.");
-        if (!_shots.TryGetValue(ticket, out var shot))
+        if (!_shots.TryGetValue(ticket, out var shot) || Expired(shot))
             return LocalVideoSubmitted.Fail("Съёмка больше не доступна для увеличения: сервер перезапускался или прошло много времени.");
         if (shot.LatentVideo is null || shot.LatentAudio is null)
             return LocalVideoSubmitted.Fail("У съёмки нет сохранённого латента — увеличить её нельзя.");
@@ -242,20 +317,23 @@ public sealed class LocalVideoMediaAdapter(
         var id = IdPrefix + Guid.NewGuid().ToString("N");
         var size = ComfyWorkflows.Upscale1440;
         if (portrait) size = (size.Height, size.Width);
+        var inputs = new UpscaleInputs(id, ticket, Now);
         try
         {
-            var latentVideo = await CopyLatentAsync(shot.LatentVideo, $"{ComfyClient.InputFolder}-{id}-video.latent", ct);
-            var latentAudio = await CopyLatentAsync(shot.LatentAudio, $"{ComfyClient.InputFolder}-{id}-audio.latent", ct);
+            var latentVideo = await CopyLatentAsync(shot.LatentVideo, UpscaleLatentName(id, "video"), ct);
+            var latentAudio = await CopyLatentAsync(shot.LatentAudio, UpscaleLatentName(id, "audio"), ct);
             var frames = ComfyWorkflows.FramesFor(shot.Seconds);
             var graph = ComfyWorkflows.UpscaleVideo(latentVideo, latentAudio, shot.FirstName, shot.Prompt, size.Width, size.Height,
                 frames, shot.Seed, options.Upscale1440Tiled, $"{ComfyWorkflows.OutputFolder}/{id}");
             var queued = await comfy.QueuePromptAsync(graph, ct);
+            _upscales[queued.PromptId] = inputs;
             StartWatch(queued.PromptId);
             return new LocalVideoSubmitted(queued.PromptId, queue,
                 LocalMediaService.Upscale1440Eta(frames, options.Upscale1440Tiled), null);
         }
         catch (ComfyException ex)
         {
+            PurgeUpscaleInputs(inputs, options);
             log.LogWarning("ComfyUI не принял апскейл видео: {Error}", ex.Message);
             return LocalVideoSubmitted.Fail(ex.Message, busy: true);
         }
@@ -272,6 +350,7 @@ public sealed class LocalVideoMediaAdapter(
     public async Task<bool> CancelAsync(string ticket, CancellationToken ct)
     {
         StopWatch(ticket);
+        // Съёмку не трогаем: после её конца отмену могут звать по её тикету, а латент ещё нужен увеличению
         try
         {
             var queue = await comfy.GetQueueAsync(ct);
@@ -291,6 +370,10 @@ public sealed class LocalVideoMediaAdapter(
         catch (ComfyException)
         {
             return false;
+        }
+        finally
+        {
+            ReleaseUpscale(ticket);
         }
     }
 

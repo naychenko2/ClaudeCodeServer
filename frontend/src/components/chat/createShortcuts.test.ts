@@ -6,7 +6,7 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
   matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
 }));
 
-const { createShortcuts } = await import('./composerShortcuts');
+const { createShortcuts, shortcutOverflowItems } = await import('./composerShortcuts');
 type Kinds = Parameters<typeof createShortcuts>[0];
 
 const run = vi.fn();
@@ -25,5 +25,21 @@ describe('createShortcuts', () => {
 
   it('без чата ярлыков нет: черновику некуда лечь', () => {
     expect(createShortcuts([image], { ...o, sessionId: null })).toEqual([]);
+  });
+});
+
+describe('shortcutOverflowItems', () => {
+  const list = createShortcuts([image], o);
+
+  it('«＋» ушла с полосы — ярлыки строками «⋯», клик заводит объект', () => {
+    const items = shortcutOverflowItems(list, false);
+    expect(items).toMatchObject([{ key: 'create:image', label: 'Картинка', sublabel: 'черновик' }]);
+    run.mockClear();
+    items[0].onClick();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('«＋» стоит в ряду — в «⋯» не дублируем: ярлыки живут в её меню', () => {
+    expect(shortcutOverflowItems(list, true)).toEqual([]);
   });
 });

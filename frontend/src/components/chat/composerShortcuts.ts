@@ -27,6 +27,15 @@ export function createShortcuts(
     }));
 }
 
+// Ярлыки строками «⋯»: «＋» уехала с полосы (не влезла или скрыта глазиком), а её пункт в «⋯» —
+// только «Прикрепить файл». Без этих строк «Картинка», «Звук», «Видео» были бы недостижимы
+export function shortcutOverflowItems(
+  shortcuts: readonly ComposerShortcut[], attachInStrip: boolean,
+): { key: string; icon: ComposerShortcut['icon']; label: string; sublabel?: string; onClick: () => void }[] {
+  if (attachInStrip) return [];
+  return shortcuts.map(sc => ({ key: sc.key, icon: sc.icon, label: sc.title, sublabel: sc.hint, onClick: sc.onSelect }));
+}
+
 // Подсказка кнопки «＋»: «Прикрепить файл, звук…» — из ярлыков, а не зашитой строкой
 export function plusButtonTitle(shortcuts: Pick<ComposerShortcut, 'title'>[]): string {
   if (shortcuts.length === 0) return 'Прикрепить файл';

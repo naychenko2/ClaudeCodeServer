@@ -35,7 +35,7 @@ import { middleEllipsis } from '../lib/paths';
 import { dativeName } from '../lib/russianName';
 import { showToast } from '../lib/toast';
 import { Button, Chip, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
-import { plusButtonTitle, useCreateShortcuts } from './chat/composerShortcuts';
+import { plusButtonTitle, shortcutOverflowItems, useCreateShortcuts } from './chat/composerShortcuts';
 import { SLOT_COMPOSER_CHIP, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx } from '../lib/subsystems/registry';
 import { modeDraftText, modeSubmitButton, nextModeDraft, nextPrefill, type ModeDraftState, type PrefillState } from '../lib/composerActionMemory';
@@ -2447,8 +2447,10 @@ export function Composer({
   // В «⋯» — ВСЕ кнопки ряда: клик по строке выполняет действие, глазик справа решает,
   // стоит ли кнопка в самой полосе. Не влезшие по ширине и скрытые пользователем
   // отличаются только состоянием глаза — отдельных секций не нужно
+  const stripKeys = new Set(shownCollapsible.slice(0, visibleCount).map(c => c.key));
   const hiddenItems: OverflowItem[] = [
     ...collapsible.map(c => ({ ...c.item, action: visAction(c.key) })),
+    ...shortcutOverflowItems(stripShortcuts, stripKeys.has('attach')),
     ...activeModeItems,
   ];
 
@@ -2456,7 +2458,6 @@ export function Composer({
   // которых в самой полосе сейчас нет: в hiddenItems теперь входит ВЕСЬ ряд
   // (ради глазиков), проверка «есть toggle» без этого гейта горела бы и тогда, когда
   // включённая кнопка стоит на виду
-  const stripKeys = new Set(shownCollapsible.slice(0, visibleCount).map(c => c.key));
   const menuOnlyActive = hiddenItems.some(i => i.toggle && !stripKeys.has(i.key));
 
   // Right-click по губе (desktop) открывает то же «Ещё» — но ВСЕГДА в полном составе,

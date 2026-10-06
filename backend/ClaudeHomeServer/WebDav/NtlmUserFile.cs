@@ -237,19 +237,25 @@ public sealed class NtlmUserFile
         string.Equals(a, b, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>
-    /// Без патча +ccs Windows SSPI (KEY_EXCH без SIGN/SEAL) получает InvalidToken при верном хэше:
+    /// Без патча +ccs2 Windows SSPI (KEY_EXCH без SIGN/SEAL) получает InvalidToken при верном хэше:
     /// при apt upgrade патч слетает молча, поэтому громко пишем об этом при старте.
     /// Установка и откат — docs/operations/remote-access.md.
     /// </summary>
     private void WarnIfUnpatched(string? version)
     {
         if (version is null || IsPatchedVersion(version)) return;
-        _logger.LogWarning("gss-ntlmssp {Version} без патча '+ccs': Windows SSPI получит InvalidToken при верном хэше "
+        _logger.LogWarning("gss-ntlmssp {Version} без патча '+ccs2' или новее: Windows SSPI получит InvalidToken при верном хэше "
             + "(KEY_EXCH без SIGN/SEAL). Поставьте пропатченный пакет, см. docs/operations/remote-access.md", version);
     }
 
-    internal static bool IsPatchedVersion(string version) =>
-        version.Contains("+ccs", StringComparison.Ordinal);
+    /// <summary>Минимальный номер локальной сборки: +ccs1 без правки Type2 (MsvAvFlags) Windows по-прежнему не пускает.</summary>
+    private const int MinCcsBuild = 2;
+
+    internal static bool IsPatchedVersion(string version)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(version, @"\+ccs(\d+)");
+        return m.Success && int.TryParse(m.Groups[1].Value, out var n) && n >= MinCcsBuild;
+    }
 
     /// <summary>Версия пакета gss-ntlmssp из файла статуса dpkg; null — файла или пакета нет.</summary>
     internal static string? ReadPackageVersion(string dpkgStatusPath)

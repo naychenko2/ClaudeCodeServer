@@ -290,9 +290,9 @@ deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на �
 `WebDAV: NTLM-вход WORKGROUP\andrey` без `NTLM отклонён … InvalidToken`.
 
 **Сторож отката.** `apt upgrade` без hold молча вернёт оригинал. Защиты две: hold и проверка
-[check-gss-ntlmssp.sh](../../deploy/gss-ntlmssp/check-gss-ntlmssp.sh) (exit 1 — версия без `+ccs`, exit 2 —
+[check-gss-ntlmssp.sh](../../deploy/gss-ntlmssp/check-gss-ntlmssp.sh) (exit 1 — версия без `+ccs2` или новее, exit 2 —
 нет hold; печатает `WARNING` в stderr; добавьте вызов в `/opt/ccs/check-release.sh` или cron). Плюс
-сервер при старте пишет warning `gss-ntlmssp … без патча '+ccs'` (`NtlmUserFile`), если читает
+сервер при старте пишет warning `gss-ntlmssp … без патча '+ccs2' или новее` (`NtlmUserFile`), если читает
 `/var/lib/dpkg/status` и версия без суффикса.
 
 **Откат:** `sudo apt-mark unhold gss-ntlmssp && sudo apt install --reinstall gss-ntlmssp=1.2.0-1build5`
@@ -320,6 +320,13 @@ deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на �
 (Type2 без пары `MsvAvFlags=0`), пакет `1.2.0-1build5+ccs2` собирается тем же `build-deb.sh` вместе с первым патчем.
 Проверка MIC не ослаблена. Установка `+ccs2` — тем же порядком, что у `+ccs1` (раздел выше); контрольную сумму
 считать после сборки.
+
+**Пакет `+ccs2` проверен живым Windows (2026-10-06):** `curl.exe --negotiate` против стенда с этой `.so` → 200,
+неверный пароль → 401, снова верный → 200. Файл: `/home/an/ccs-packages/gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb`,
+sha256 `ea89f8576e721462da21e49c8801fa56a9cec7b4a9bc28eb4ebb512b1ec426e6`
+(`gssntlmssp.so` внутри — sha256 `3f2c5b9803469985a801663eca9f7819918122cc8501e331e4ef2ab73f38ed97`; повторная сборка даёт
+ту же `.so`, но другой sha256 самого `.deb`). Сторож (`check-gss-ntlmssp.sh` и warning при старте сервера) требует `+ccs2`
+или новее: `+ccs1` Windows не пускает.
 
 #### Разбор 2026-10-06 (вечер): +ccs1 не помог, Type3 реального Windows — 0xE2888235
 

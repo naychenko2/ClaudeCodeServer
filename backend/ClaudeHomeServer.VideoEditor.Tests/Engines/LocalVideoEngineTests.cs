@@ -98,7 +98,12 @@ public class LocalVideoEngineTests
         caps.Sound.Should().BeTrue();
         caps.LastFrame.Should().BeTrue();
         caps.PriceUnit.Should().Be(VideoPriceUnits.Free);
-        engine.ParamNames(H3(engine)).Should().BeEquivalentTo(["size", "fast"]);
+        engine.ParamNames(H3(engine)).Should().BeEquivalentTo(["fast"], "size теперь задаёт формат");
+        caps.Format!.Tiers.Select(t => (t.Tier, t.Label, t.WireValue, t.PostStep)).Should().Equal(
+            (FormatTier.Standard, "480p", "half", null),
+            (FormatTier.High, "768p", "full", null),
+            (FormatTier.Max, "1440p", "full", FormatPostSteps.Upscale));
+        caps.Format.Tiers[2].Sizes["9:16"].Should().Be(new FormatSize(1440, 2528), "у портрета стороны меняются местами");
     }
 
     [Fact]
@@ -150,7 +155,12 @@ public class LocalVideoEngineTests
             });
         var engine = Fast(media.Object);
 
-        var request = Scene(VideoEditScope.Of(ServerProject)) with { Params = new JsonObject { ["size"] = "half", ["fast"] = false } };
+        // Размер съёмки задаёт ступень формата (half | full), а не частный параметр size
+        var request = Scene(VideoEditScope.Of(ServerProject)) with
+        {
+            Format = new ResolvedFormat(FormatModes.Aspect, "16:9", FormatTier.Standard, 864, 480, "half", null, false, false, null),
+            Params = new JsonObject { ["fast"] = false },
+        };
         var result = await engine.RunAsync(request, recorder, CancellationToken.None);
 
         result.Outcome.Should().Be(VideoOutcome.Ok);

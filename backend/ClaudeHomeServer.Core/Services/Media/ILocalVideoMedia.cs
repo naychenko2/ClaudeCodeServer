@@ -23,6 +23,16 @@ public interface ILocalVideoMedia
 
     Task<LocalVideoPoll> PollAsync(string ticket, CancellationToken ct);
 
+    // Время апскейла «Макс» (1440p) после съёмки этого запроса по таблице замеров; null — ролик такой длины не замерен.
+    // Сумма с EtaSeconds даёт полное время запуска (ADR-025, решение 1)
+    int? UpscaleEtaSeconds(LocalVideoRequest request) => null;
+
+    // Вторая тяжёлая задача: латентный апскейл ЗАВЕРШЁННОЙ съёмки по её тикету (target — "1440p"). Латент съёмки
+    // адаптер держит до конца апскейла; новый тикет опрашивают PollAsync и снимают CancelAsync, как у съёмки.
+    // Тикета нет в памяти (рестарт) или латент не сохранился — Fail с причиной. Реализация по умолчанию — «не умею»
+    Task<LocalVideoSubmitted> SubmitUpscaleAsync(string ticket, string target, CancellationToken ct) =>
+        Task.FromResult(LocalVideoSubmitted.Fail("Увеличение недоступно: адаптер локальной съёмки его не поддерживает."));
+
     // Снять задачу: ждущую — из очереди, идущую — прервать адресно по её prompt_id. Задачи в очереди нет — false
     Task<bool> CancelAsync(string ticket, CancellationToken ct);
 }

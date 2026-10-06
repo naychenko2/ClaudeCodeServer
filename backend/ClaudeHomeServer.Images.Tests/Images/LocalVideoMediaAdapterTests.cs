@@ -210,6 +210,131 @@ public class LocalVideoMediaAdapterTests
         _comfy.Prompts.Should().BeEmpty();
     }
 
+    // ── Апскейл «Макс» (ADR-025, решение 1): вторая тяжёлая задача по латенту завершённой съёмки ──────────────
+
+    private async Task<(LocalVideoMediaAdapter Adapter, string Ticket, string Id)> ShotDone(bool latents = true, byte[]? first = null,
+        string size = "full", int seconds = 5)
+    {
+        var adapter = Build(fastDefault: false);
+        var submitted = await adapter.SubmitAsync(Scene(seconds: seconds, size: size) with { FirstFrame = first ?? LocalMediaTestImages.Png(1344, 768) },
+            default);
+        submitted.Ticket.Should().NotBeNull(submitted.Error);
+        var id = _comfy.Uploads[0][..35]; // lv_ + 32 hex
+        _comfy.CompleteVideo(submitted.Ticket!, id, [1, 2, 3], latents);
+        (await adapter.PollAsync(submitted.Ticket!, default)).State.Should().Be(LocalVideoState.Completed);
+        return (adapter, submitted.Ticket!, id);
+    }
+
+    [Fact]
+    public async Task Апскейл_1440p_ставит_шаблон_по_латентам_съёмки_с_её_кадром_промптом_и_сидом()
+    {
+        var (adapter, ticket, id) = await ShotDone();
+
+        var up = await adapter.SubmitUpscaleAsync(ticket, "1440p", default);
+
+        up.Error.Should().BeNull();
+        up.Ticket.Should().NotBeNullOrEmpty().And.NotBe(ticket);
+        up.EtaSeconds.Should().Be(LocalMediaService.Upscale1440Eta(ComfyWorkflows.FramesFor(5), true));
+        var graph = Graph(1);
+        var scale = graph["up"]!["inputs"]!.AsObject();
+        (scale["mode.width"]!.GetValue<int>(), scale["mode.height"]!.GetValue<int>()).Should().Be(ComfyWorkflows.Upscale1440);
+        graph.ContainsKey("refine").Should().BeTrue("по умолчанию 1440p доводится тайлами");
+        // Латенты съёмки скопированы в корень input под именем с id апскейла, первый кадр — тот же файл, что у съёмки
+        _comfy.UploadPaths.Should().Contain(p => p.EndsWith("-video.latent") && p.Contains("lv_")).And.Contain(p => p.EndsWith("-audio.latent"));
+        graph["img"]!["inputs"]!["image"]!.GetValue<string>().Should().EndWith(_comfy.Uploads[0]);
+        graph["i2v_hi"]!["inputs"]!["prompt"]!.GetValue<string>().Should().Be("идёт снег");
+        graph["refine_noise"]!["inputs"]!["noise_seed"]!.GetValue<long>().Should().Be(7, "сид съёмки");
+        _ = id;
+    }
+
+    [Fact]
+    public async Task У_портретной_съёмки_апскейл_меняет_стороны_местами()
+    {
+        var (adapter, ticket, _) = await ShotDone(first: LocalMediaTestImages.Png(768, 1344));
+
+        var up = await adapter.SubmitUpscaleAsync(ticket, "1440p", default);
+
+        up.Error.Should().BeNull();
+        var scale = Graph(1)["up"]!["inputs"]!.AsObject();
+        (scale["mode.width"]!.GetValue<int>(), scale["mode.height"]!.GetValue<int>())
+            .Should().Be((ComfyWorkflows.Upscale1440.Height, ComfyWorkflows.Upscale1440.Width));
+    }
+
+    [Fact]
+    public async Task Готовый_апскейл_опрашивается_как_съёмка_и_отдаёт_клип()
+    {
+        var (adapter, ticket, _) = await ShotDone();
+        var up = await adapter.SubmitUpscaleAsync(ticket, "1440p", default);
+        (await adapter.PollAsync(up.Ticket!, default)).State.Should().BeOneOf(LocalVideoState.Queued, LocalVideoState.Running);
+
+        _comfy.CompleteVideo(up.Ticket!, "lv_" + new string('a', 32), [9, 9, 9], withLatents: false);
+        var poll = await adapter.PollAsync(up.Ticket!, default);
+
+        poll.State.Should().Be(LocalVideoState.Completed);
+        poll.File!.Bytes.Should().Equal(9, 9, 9);
+    }
+
+    [Fact]
+    public async Task Отмена_идущего_апскейла_снимает_его_тикет_адресно_а_не_съёмку()
+    {
+        var (adapter, ticket, _) = await ShotDone();
+        var up = await adapter.SubmitUpscaleAsync(ticket, "1440p", default);
+        _comfy.Pending.Remove(up.Ticket!);
+        _comfy.Running.Add(up.Ticket!);
+
+        (await adapter.CancelAsync(up.Ticket!, default)).Should().BeTrue();
+
+        _comfy.Interrupted.Should().Equal(up.Ticket!);
+    }
+
+    [Fact]
+    public async Task Апскейл_только_для_full_и_только_до_1440p_и_только_по_известной_съёмке()
+    {
+        var (adapter, ticket, _) = await ShotDone(size: "half");
+        (await adapter.SubmitUpscaleAsync(ticket, "1440p", default)).Error.Should().Contain("full");
+        (await adapter.SubmitUpscaleAsync("нет-такой", "1440p", default)).Error.Should().Contain("не доступна");
+
+        var (full, fullTicket, _) = await ShotDone();
+        (await full.SubmitUpscaleAsync(fullTicket, "2k", default)).Error.Should().Contain("1440p");
+        _comfy.Prompts.Should().HaveCount(2, "ни один отказ ничего не ставит в ComfyUI");
+    }
+
+    [Fact]
+    public async Task Без_сохранённого_латента_апскейл_честный_отказ_без_постановки()
+    {
+        var (adapter, ticket, _) = await ShotDone(latents: false);
+
+        var up = await adapter.SubmitUpscaleAsync(ticket, "1440p", default);
+
+        up.Ticket.Should().BeNull();
+        up.Error.Should().Contain("латент");
+        _comfy.Prompts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Занятая_очередь_апскейла_busy_без_постановки()
+    {
+        var (adapter, ticket, _) = await ShotDone();
+        _comfy.Running.AddRange(["чужой-1", "чужой-2", "чужой-3", "чужой-4"]);
+
+        var up = await adapter.SubmitUpscaleAsync(ticket, "1440p", default);
+
+        up.Busy.Should().BeTrue();
+        _comfy.Prompts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ETA_съёмки_и_апскейла_считается_без_кадров_и_для_длинного_ролика_апскейл_не_замерен()
+    {
+        var adapter = Build(fastDefault: false);
+        var noFrames = new LocalVideoRequest("", [], null, 5, "full");
+
+        adapter.EtaSeconds(noFrames).Should().Be(LocalMediaService.ImageToVideoEta(Full, 5, false), "котировка идёт до выбора кадров");
+        adapter.UpscaleEtaSeconds(noFrames).Should().Be(LocalMediaService.Upscale1440Eta(ComfyWorkflows.FramesFor(5), true));
+        adapter.UpscaleEtaSeconds(noFrames with { Seconds = 10 }).Should().BeNull("апскейл замерен только до 5 с");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Отмена_ждущей_снимает_её_из_очереди()
     {

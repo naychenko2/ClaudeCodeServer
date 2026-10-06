@@ -9,6 +9,8 @@ import {
 } from 'aihome_shell/kit';
 import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
+import { isGlobalPersona, visibleIn, type SphereOf } from '../../lib/personaZone';
+import { useSphereOf } from '../../lib/useSphereOf';
 
 // Комментарии к MD-документам (флаг doc-annotations): обёртка над MarkdownViewer
 // для просмотра .md проекта — выделение → попап «Комментировать», маркеры якорных
@@ -240,7 +242,8 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   // «Поручить персоне»: создаёт задачу проекта с персоной-исполнителем и ссылкой
   // на комментарий («create issue from comment» — второй трекер не строим)
   const personas = usePersonas();
-  const assignable = useMemo(() => filterAssignablePersonas(personas, scope), [personas, scope]);
+  const sphereOf = useSphereOf();
+  const assignable = useMemo(() => filterAssignablePersonas(personas, scope, sphereOf), [personas, scope, sphereOf]);
   // Открытое меню поручения: комментарий + кнопка-якорь (позиционирование порталом)
   const [assignFor, setAssignFor] = useState<{ a: DocAnnotation; el: HTMLElement } | null>(null);
   const [assignedMsg, setAssignedMsg] = useState<string | null>(null);
@@ -846,9 +849,9 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
 
 // Персоны, которым можно поручить обработку комментария: команда проекта документа
 // + обычные глобальные (материализованный пантеон — templateKey — как в композере, не включаем)
-export function filterAssignablePersonas(personas: Persona[], scope: string): Persona[] {
-  const project = scope === 'personal' ? [] : personas.filter(p => p.scope === 'project' && p.projectId === scope);
-  const globals = personas.filter(p => p.scope === 'global' && !p.templateKey);
+export function filterAssignablePersonas(personas: Persona[], scope: string, sphereOf?: SphereOf): Persona[] {
+  const project = scope === 'personal' ? [] : personas.filter(p => !isGlobalPersona(p) && visibleIn(p, scope, sphereOf));
+  const globals = personas.filter(p => isGlobalPersona(p) && !p.templateKey);
   return [...project, ...globals];
 }
 
@@ -893,8 +896,8 @@ export function PersonaAssignMenu({ personas, anchorEl, onPick, onClose }: {
     };
   }, [anchorEl, onClose]);
 
-  const project = personas.filter(p => p.scope === 'project');
-  const globals = personas.filter(p => p.scope === 'global');
+  const project = personas.filter(p => !isGlobalPersona(p));
+  const globals = personas.filter(isGlobalPersona);
   const header = (text: string) => (
     <div style={{
       padding: '7px 10px 3px', fontSize: 10.5, fontWeight: 700, color: C.textMuted,

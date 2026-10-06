@@ -34,6 +34,7 @@ public class KnowledgeAccessTests
     [Theory]
     [InlineData("alice:persona:reviewer")]  // своя память персоны — внутренняя
     [InlineData("alice:team:proj")]         // своя память команды — внутренняя
+    [InlineData("alice:sphere:s-1")]        // своя память сферы — внутренняя
     public void IsRelevant_СвояВнутренняяПамять_False(string name)
     {
         KnowledgeAccess.IsRelevant(name, "alice", Others).Should().BeFalse();

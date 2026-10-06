@@ -481,7 +481,41 @@ export interface ProjectGroup {
   name: string;
   color: string;   // hex из палитры GROUP_COLORS
   order: number;
+  // Поля сферы (флаг spheres): имя значка из белого списка lucide и устав («Чем занимается сфера»)
+  icon?: string | null;
+  charter?: string | null;
 }
+
+// Сфера — группа проектов с командой персон и памятью; на проводе это тот же /api/project-groups
+export type Sphere = ProjectGroup;
+
+// GET /api/spheres/{id}/overview
+export interface SphereOverview {
+  sphere: { id: string; name: string; color: string; icon: string | null; charter: string | null };
+  projects: { id: string; name: string; capabilities: ProjectCapabilitiesView }[];
+  team: { id: string; name: string; handle: string; role: string | null }[];
+  memory: { count: number };
+  openTasks: {
+    id: string; title: string; projectId: string | null;
+    status: 'todo' | 'inProgress' | 'done'; priority: 'low' | 'medium' | 'high' | 'urgent'; dueDate: string | null;
+  }[];
+}
+
+// Память сферы: две полки — сама сфера и проекты сферы (GET /api/spheres/{id}/memory)
+export type SphereMemoryType = 'decision' | 'convention' | 'fact' | 'glossary';
+export interface SphereMemoryPromotion { projectId: string; entryId: string; at: string }
+export interface SphereMemoryEntry {
+  id: string; scopeId: string; text: string; type: SphereMemoryType; salience: number; source: string;
+  createdAt: string; promotedFrom: SphereMemoryPromotion | null;
+}
+export interface ProjectMemoryEntry {
+  id: string; projectId: string; text: string; type: string; salience: number; source: string; createdAt: string;
+}
+export interface SphereMemoryProjectShelf { projectId: string; projectName: string; entries: ProjectMemoryEntry[] }
+export interface SphereMemoryResponse { sphere: SphereMemoryEntry[]; projects: SphereMemoryProjectShelf[]; maxEntries: number }
+
+// Ответ DELETE /api/project-groups/{id}: сколько записей памяти ушло вместе со сферой
+export interface DeleteSphereResponse { deletedMemory: number }
 
 // --- Задачи ---
 
@@ -2480,8 +2514,8 @@ export interface KnowledgeDocumentContent {
 
 // ===== Персоны (олицетворённые ИИ-собеседники) =====
 
-// Зона контекста персоны: глобально (личное пространство) или в рамках проекта
-export type PersonaScope = 'global' | 'project';
+// Зона контекста персоны: глобально (личное пространство), в рамках проекта или сферы (флаг spheres)
+export type PersonaScope = 'global' | 'project' | 'sphere';
 
 // Профиль доступа персоны (P6): full — без ограничений; readOnly — смотрит и
 // советует, но ничего не меняет; custom — свой список запрещённых инструментов
@@ -2761,7 +2795,8 @@ export interface Persona {
   tierWeak?: string | null;
   effort?: string;
   scope: PersonaScope;
-  projectId?: string;         // задан только для scope === 'project'
+  projectId?: string;         // задан только у проектной зоны
+  sphereId?: string;          // задан только у зоны сферы (флаг spheres)
   avatar: PersonaAvatar;
   voice?: PersonaVoice | null; // личный голос; null/отсутствие — голос инстанса
   greeting?: string;          // приветствие персоны в начале чата
@@ -2932,6 +2967,7 @@ export interface CreatePersonaDto {
   effort?: string;
   scope?: PersonaScope;
   projectId?: string;
+  sphereId?: string;
   color?: string;             // ключ палитры AGENT_COLORS для аватара-инициалов
   greeting?: string;
   memoryEnabled?: boolean;

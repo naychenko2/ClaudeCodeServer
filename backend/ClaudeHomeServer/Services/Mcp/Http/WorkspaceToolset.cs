@@ -55,7 +55,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// </summary>
 public sealed partial class WorkspaceToolset(
     ProjectManager projects,
-    ProjectGroupManager groups,
+    SphereManager groups,
     SessionManager sessions,
     PersonaManager personas,
     FileService files,
@@ -415,6 +415,12 @@ public sealed partial class WorkspaceToolset(
                         + "без rootPath (папка появится в стандартном каталоге) либо попросите "
                         + "пользователя подключить нужную папку через интерфейс.");
                 var groupId = OptionalArg(arguments, "groupId");
+                // С включённым флагом сфера проекта — решение человека: иначе модель создала бы
+                // проект сразу в сфере и выдала персонам сферы доступ в обход человека
+                if (!string.IsNullOrEmpty(groupId) && groups.Enabled(context.OwnerId))
+                    return Deny("Переносить проект в сферу может только человек");
+                if (groups.GroupRefusal(context.OwnerId, groupId) is { } createGroupRefusal)
+                    return Deny(createGroupRefusal);
                 try
                 {
                     var username = users.GetById(context.OwnerId)?.Username ?? context.OwnerId;
@@ -441,6 +447,11 @@ public sealed partial class WorkspaceToolset(
                 var systemPrompt = arguments.ContainsKey("systemPrompt")
                     ? StringArg(arguments, "systemPrompt") : null;
                 var groupId = arguments.ContainsKey("groupId") ? StringArg(arguments, "groupId") : null;
+                // С включённым флагом сфера проекта — решение человека: модель её не меняет
+                if (arguments.ContainsKey("groupId") && groups.Enabled(context.OwnerId))
+                    return Deny("Переносить проект в сферу может только человек");
+                if (groups.GroupRefusal(context.OwnerId, groupId) is { } updateGroupRefusal)
+                    return Deny(updateGroupRefusal);
                 var oldName = p.Name;
                 try
                 {
@@ -1591,7 +1602,8 @@ public sealed partial class WorkspaceToolset(
         CancellationToken ct)
     {
         if (projects.GetById(projectId)?.DefaultPersonaId is { } leadId
-            && personas.Get(leadId, ownerId) is { } lead)
+            && personas.Get(leadId, ownerId) is { } lead
+            && sessions.PersonaVisibleIn(lead, projectId))
             return lead.Id;
         return (await provisioner.EnsureAsync(ownerId, ct))?.Id;
     }

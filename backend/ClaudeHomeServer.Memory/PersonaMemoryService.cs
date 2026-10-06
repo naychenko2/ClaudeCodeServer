@@ -40,6 +40,9 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     private readonly IDifyMetrics _metrics;
     private readonly IUserStore _users;
     private readonly TeamMemoryService? _teamMemory;
+    // Полка памяти сферы и справочник членства: ключ полки берётся ТОЛЬКО из проекта чата
+    private readonly SphereMemoryService? _sphereMemory;
+    private readonly Spheres.ISphereDirectory? _spheres;
     // Заметки — для выноса записи памяти в общий vault (③-3.3); null в юнит-тестах
     private readonly INoteAccessor? _notes;
     // Recall паспортов изменений (этап 2, ADR-004 §5); null в юнит-тестах и без флага.
@@ -71,8 +74,11 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         IPersonaEvents personaEvents, IDifyMetrics metrics, IUserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
         TeamMemoryService? teamMemory = null, Memory.MemoryWriteResolver? resolver = null,
-        Dossiers.IDossierRecallSource? dossierRecall = null, INoteAccessor? notes = null)
+        Dossiers.IDossierRecallSource? dossierRecall = null, INoteAccessor? notes = null,
+        SphereMemoryService? sphereMemory = null, Spheres.ISphereDirectory? spheres = null)
     {
+        _sphereMemory = sphereMemory;
+        _spheres = spheres;
         _knowledge = knowledge;
         _personas = personas;
         _personaLookup = personaLookup;
@@ -464,7 +470,10 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     // (дефолт, persona_ask и выключенный флаг) досье остаётся ВНУТРИ Text, как до фичи.
     public sealed record PersonaRecallResult(string? Text, IReadOnlyList<PersonaMemoryHit> Hits,
         IReadOnlyList<TeamMemoryEntry> TeamHits, IReadOnlyList<ChangeDossier> DossierHits,
-        string? DossierText = null);
+        string? DossierText = null, IReadOnlyList<TeamMemoryEntry>? SphereHitsOrNull = null)
+    {
+        public IReadOnlyList<TeamMemoryEntry> SphereHits => SphereHitsOrNull ?? [];
+    }
 
     // Подключён ли канал паспортов изменений: спрашивают через шов `IPersonaRecallSource`
     // те, кто решает, собирать ли `DossierRecallRequest` (Этап 5, узкие швы Turn).
@@ -482,7 +491,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     // в Text (см. комментарий записи выше); false (дефолт) — поведение «как до фичи».
     public async Task<PersonaRecallResult?> BuildRecallAsync(string ownerId, string personaId, string query,
         int topK, double minScore, Dossiers.DossierRecallRequest? dossierRequest = null,
-        bool splitDossier = false)
+        bool splitDossier = false, string? sessionProjectId = null)
     {
         var persona = _personas.Get(personaId, ownerId);
         if (persona is null || !persona.MemoryEnabled) return null;
@@ -504,18 +513,49 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
 
         var top = hits.Where(h => h.Score >= minScore).Take(topK).ToList();
 
-        // Память команды проекта (③-3.4): проектная персона recall'ит общую память команды
+        // Память команды проекта (③-3.4): проектная персона recall'ит общую память команды своего
+        // проекта; персона сферы — команды проекта ЧАТА, но только там, где она работает (видна зоне).
+        // Ключ полки сферы и полки проекта у персоны сферы один — проект сессии.
         string? teamBlock = null;
         IReadOnlyList<TeamMemoryEntry> teamHits = [];
-        if (_teamMemory is not null && persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+        var teamProjectId = PersonaZone.OwnProjectId(persona)
+            ?? (PersonaZone.IsSpherePersona(persona) && sessionProjectId is not null && _spheres is not null
+                && PersonaZone.VisibleIn(persona, sessionProjectId, _spheres)
+                ? sessionProjectId
+                : null);
+        if (_teamMemory is not null && teamProjectId is not null)
         {
             try
             {
-                var teamRecall = await _teamMemory.BuildRecallBlockAsync(ownerId, persona.ProjectId!, query);
+                var teamRecall = await _teamMemory.BuildRecallBlockAsync(ownerId, teamProjectId, query);
                 teamBlock = teamRecall.Text;
                 teamHits = teamRecall.Used;
             }
-            catch (Exception ex) { _logger.LogDebug(ex, "team-memory recall {Project}", persona.ProjectId); }
+            catch (Exception ex) { _logger.LogDebug(ex, "team-memory recall {Project}", teamProjectId); }
+        }
+
+        // Память сферы: ключ — сфера ПРОЕКТА ЧАТА (справочник сам отдаёт null при выключенном
+        // флаге / чужом проекте). Не из persona.SphereId: полку сферы вспоминают все персоны чата,
+        // включая глобальных, а персона сферы S1 в проекте сферы S2 не должна получить полку S1.
+        string? sphereBlock = null;
+        IReadOnlyList<TeamMemoryEntry> sphereHits = [];
+        if (_sphereMemory is not null && _spheres is not null && sessionProjectId is not null
+            && _spheres.SphereOf(ownerId, sessionProjectId) is { } sphereId)
+        {
+            try
+            {
+                var sphereRecall = await _sphereMemory.BuildRecallBlockAsync(ownerId, sphereId, query);
+                if (sphereRecall.Text is not null)
+                {
+                    var name = _spheres.SphereName(ownerId, sphereId);
+                    const string header = "## Память сферы";
+                    sphereBlock = !string.IsNullOrWhiteSpace(name) && sphereRecall.Text.StartsWith(header, StringComparison.Ordinal)
+                        ? $"{header} «{name}»" + sphereRecall.Text[header.Length..]
+                        : sphereRecall.Text;
+                    sphereHits = sphereRecall.Used;
+                }
+            }
+            catch (Exception ex) { _logger.LogDebug(ex, "sphere-memory recall {Sphere}", sphereId); }
         }
 
         // Паспорта изменений (этап 2, ADR-004 §5): третья секция того же блока — по якорям
@@ -535,7 +575,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
             catch (Exception ex) { _logger.LogDebug(ex, "dossiers recall {Project}", dossierRequest.ProjectId); }
         }
 
-        if (top.Count == 0 && focus is null && teamBlock is null && dossierBlock is null)
+        if (top.Count == 0 && focus is null && teamBlock is null && sphereBlock is null && dossierBlock is null)
             return new PersonaRecallResult(null, [], [], []);
 
         var sb = new StringBuilder();
@@ -562,13 +602,18 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
             if (sb.Length > 0) sb.AppendLine();
             sb.Append(teamBlock);
         }
+        if (sphereBlock is not null)
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.Append(sphereBlock);
+        }
         if (dossierBlock is not null && !splitDossier)
         {
             if (sb.Length > 0) sb.AppendLine();
             sb.Append(dossierBlock);
         }
         return new PersonaRecallResult(sb.Length > 0 ? sb.ToString() : null, top, teamHits, dossierHits,
-            DossierText: splitDossier ? dossierBlock : null);
+            DossierText: splitDossier ? dossierBlock : null, SphereHitsOrNull: sphereHits);
     }
 
     // Reinforcement: отметить обращение к записям (LastAccessedAt = now). Dify не трогаем —

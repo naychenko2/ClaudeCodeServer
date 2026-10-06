@@ -8,6 +8,7 @@ import { PersonaAvatar } from '../personas/PersonaAvatar';
 import type { HubTab } from '../../components/HubTabs';
 import { PENDING_PERSONA_CREATE_KEY } from './QuickActions';
 import { WidgetCard, WidgetAction, WidgetEmpty, MiniSegment } from './WidgetCard';
+import { isGlobalPersona, isProjectPersona } from '../../lib/personaZone';
 
 type TeamMode = 'global' | 'all';
 
@@ -36,9 +37,9 @@ export function TeamWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
   // Глобальные впереди: при длинном списке проектных основные помощники не должны
   // уезжать вниз. Жёсткого капа нет — вместо него прокрутка (см. плитки ниже).
   const team = useMemo(() => {
-    const globals = personas.filter(p => p.scope === 'global');
+    const globals = personas.filter(isGlobalPersona);
     if (mode !== 'all') return globals;
-    return [...globals, ...personas.filter(p => p.scope === 'project')];
+    return [...globals, ...personas.filter(p => !isGlobalPersona(p))];
   }, [personas, mode]);
 
   const openProfile = (id: string) => {
@@ -82,7 +83,7 @@ export function TeamWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
               <button
                 key={p.id}
                 onClick={() => openProfile(p.id)}
-                title={[p.role ? `${p.role} (${p.name})` : p.name, p.scope === 'project' ? projectName(p.projectId) : null].filter(Boolean).join(' · ')}
+                title={[p.role ? `${p.role} (${p.name})` : p.name, isProjectPersona(p) ? projectName(p.projectId) : null].filter(Boolean).join(' · ')}
                 style={{
                   display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
                   width: 76, padding: '8px 4px', borderRadius: 10, cursor: 'pointer',
@@ -108,13 +109,13 @@ export function TeamWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
                 )}
                 {/* Чип проекта — чтобы проектная персона не выглядела глобальной. Пока
                     список проектов не доехал, показываем нейтральное «Проект» */}
-                {p.scope === 'project' && (
+                {!isGlobalPersona(p) && (
                   <span style={{
                     fontFamily: FONT.sans, fontSize: 9.5, color: C.textSecondary, maxWidth: '100%',
                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                     background: C.bgInset, borderRadius: R.pill, padding: '1px 6px', boxSizing: 'border-box',
                   }}>
-                    {projectName(p.projectId) ?? 'Проект'}
+                    {isProjectPersona(p) ? (projectName(p.projectId) ?? 'Проект') : 'Сфера'}
                   </span>
                 )}
               </button>

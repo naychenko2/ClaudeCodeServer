@@ -5,7 +5,7 @@ namespace ClaudeHomeServer.Models;
 
 // Зона контекста персоны: Global — доступ ко всем данным владельца (заметки/задачи/проекты),
 // Project — только к своему проекту.
-public enum PersonaScope { Global, Project }
+public enum PersonaScope { Global, Project, Sphere }
 
 // Тип долгой памяти (таксономия 2026):
 // Semantic — устойчивые факты/предпочтения; Episodic — резюме прошлых диалогов;
@@ -115,6 +115,8 @@ public class Persona
     public PersonaScope Scope { get; set; } = PersonaScope.Global;
     // Для Scope == Project — id проекта, к которому привязана персона
     public string? ProjectId { get; set; }
+    // Для Scope == Sphere — id сферы (Project.GroupId), к которой привязана персона
+    public string? SphereId { get; set; }
     public PersonaAvatar Avatar { get; set; } = new();
     // Как персона звучит в голосовом режиме; null — голосом инстанса из конфига.
     // Аддитивное nullable-поле: старый personas.json читается без миграции

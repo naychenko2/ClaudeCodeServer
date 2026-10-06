@@ -37,7 +37,8 @@ public sealed class PersonasCrudService(
     IConfiguration config,
     ILogger<PersonasCrudService> log,
     ISessionBroadcaster broadcaster,
-    INoteAccessor? notes = null)
+    INoteAccessor? notes = null,
+    Services.Spheres.ISphereDirectory? spheres = null)
 {
     // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
     private const string ImageGenerationOffError =
@@ -67,6 +68,8 @@ public sealed class PersonasCrudService(
         var scope = req.Scope ?? PersonaScope.Global;
         if (scope == PersonaScope.Project && !ValidProject(userId, req.ProjectId))
             return BadRequest("Для проектной персоны нужен корректный projectId");
+        if (scope == PersonaScope.Sphere && !ValidSphere(userId, req.SphereId))
+            return BadRequest("Для персоны сферы нужен корректный sphereId");
         if (!TryParseAccess(req.Access, out var access))
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
@@ -126,7 +129,7 @@ public sealed class PersonasCrudService(
                 req.MemoryEnabled ?? true, templated.Tools, req.Contract,
                 templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
                 req.AllProjectsAccess ?? false, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, sphereId: req.SphereId);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindingList.Count > 0)
@@ -180,6 +183,10 @@ public sealed class PersonasCrudService(
         // Любой непустой projectId (в т.ч. при partial-update без scope) — только свой проект
         if (!string.IsNullOrEmpty(req.ProjectId) && !ValidProject(userId, req.ProjectId))
             return BadRequest("Проект не найден или недоступен");
+        if (req.Scope == PersonaScope.Sphere && !ValidSphere(userId, req.SphereId))
+            return BadRequest("Для персоны сферы нужен корректный sphereId");
+        if (!string.IsNullOrEmpty(req.SphereId) && !ValidSphere(userId, req.SphereId))
+            return BadRequest("Сфера не найдена или недоступна");
         if (!TryParseAccess(req.Access, out var access))
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
@@ -229,7 +236,7 @@ public sealed class PersonasCrudService(
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
                 req.MemoryEnabled, templated.Tools, req.Contract, templated.Access, templated.DisallowedTools,
                 req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, sphereId: req.SphereId);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         // Ручная правка заготовки снимает её статус (план 2.8): если у нетронутой заготовки
@@ -1126,6 +1133,10 @@ public sealed class PersonasCrudService(
     }
 
     // Проект существует и принадлежит владельцу
+    // Сфера валидна, если она есть у ЭТОГО владельца (справочник отдаёт null для чужой/удалённой)
+    internal bool ValidSphere(string userId, string? sphereId) =>
+        !string.IsNullOrEmpty(sphereId) && spheres?.SphereName(userId, sphereId) is not null;
+
     internal bool ValidProject(string userId, string? projectId)
     {
         if (string.IsNullOrWhiteSpace(projectId)) return false;

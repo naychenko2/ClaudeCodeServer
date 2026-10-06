@@ -37,7 +37,7 @@ import { requestOpenModelsSpend } from './lib/modelProvidersNav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { resetChatContextMemory } from './lib/chatContext/forget'
-import { setAllFlags } from './lib/featureFlags'
+import { setAllFlags, useFeatureFlagsRefresh } from './lib/featureFlags'
 import { SUBSYSTEMS, isSubsystemEnabled, setAllSubsystems, useSubsystem } from './lib/subsystems'
 import { getSubsystem, getSubsystemTab } from './lib/subsystems/registry'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
@@ -468,6 +468,8 @@ export default function App() {
   const uiInspectorOn = useUiInspector()
   useEffect(() => { wireUiInspectorHotkey() }, [])
   useEffect(() => { setUiInspectorAdmin(auth?.role === 'admin') }, [auth?.role])
+  // Освежение фич-флагов для всех потребителей useFeature: возврат фокуса, с дросселем
+  useFeatureFlagsRefresh(!!auth)
 
   // Ctrl+A/Ctrl+C по «активному документу» (файл, заметка, последний ответ в чате)
   useEffect(() => installSelectionScopes(), [])

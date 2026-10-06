@@ -18,10 +18,11 @@ interface Props {
   onMove: (p: Project) => void;
   onEdit: (p: Project, e: MouseEvent) => void;
   onDelete: (p: Project) => void;
+  onRemoveFromSphere?: (p: Project) => void;
 }
 
 // Десктопная строка проекта: плитка + имя/путь, справа — статус, действия, шеврон.
-export function ProjectRow({ project: p, online, hasActiveSession, onOpen, onMove, onEdit, onDelete }: Props) {
+export function ProjectRow({ project: p, online, hasActiveSession, onOpen, onMove, onEdit, onDelete, onRemoveFromSphere }: Props) {
   const [hover, setHover] = useState(false);
   const pinned = usePinnedIds().includes(p.id);
 
@@ -65,7 +66,7 @@ export function ProjectRow({ project: p, online, hasActiveSession, onOpen, onMov
       {/* Действия (появляются при наведении) */}
       {online && (
         <div style={{ opacity: hover ? 1 : 0, transition: 'opacity 0.12s', flexShrink: 0 }}>
-          <ProjectActionsMenu project={p} color={C.textMuted} onMove={onMove} onEdit={onEdit} onDelete={onDelete} />
+          <ProjectActionsMenu project={p} color={C.textMuted} onMove={onMove} onEdit={onEdit} onDelete={onDelete} onRemoveFromSphere={onRemoveFromSphere} />
         </div>
       )}
 

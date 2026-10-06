@@ -19,6 +19,7 @@ import { bindingsCounter } from './bindingMeta';
 import { useBindingLabels } from './useBindingLabels';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
+import { isGlobalPersona, zoneLabel as personaZoneLabel } from '../../lib/personaZone';
 
 // Режим «Обзор» студии персоны: read-only визитка со сводкой — кто это,
 // как настроена (модель/возможности/память), её характер и недавние разговоры.
@@ -265,7 +266,7 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
     { label: 'Облегчённый контекст', value: persona.lightContext ? 'вкл' : 'выкл' },
     { label: 'Доступ', value: accessText },
     { label: 'Возможности', value: toolsText },
-    { label: 'Зона', value: zoneLabel ?? (persona.scope === 'project' ? 'Проект' : 'Глобальная') },
+    { label: 'Зона', value: zoneLabel ?? (isGlobalPersona(persona) ? 'Глобальная' : personaZoneLabel(persona, {}, true)) },
   ];
   // Подпись голоса: label из каталога, «…» пока он едет, сырой ключ — если голос выпал
   // из белого списка. Нестандартная скорость — рядом, как «Модель · усилие» выше

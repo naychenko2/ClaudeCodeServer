@@ -23,6 +23,7 @@ import { Toolbar, PillSwitch, tbBtnPrimary } from '../../components/Toolbar';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
+import { isProjectTeam } from '../../lib/personaZone';
 
 // Командный центр проекта (①-L1, табовый): 3 вкладки — Обзор / Память команды / Активность-таймлайн.
 type Tab = 'overview' | 'memory' | 'activity';
@@ -63,7 +64,7 @@ export function TeamCommandCenter({
   onClose?: () => void;
 }) {
   const personas = usePersonas();
-  const team = useMemo(() => personas.filter(p => p.scope === 'project' && p.projectId === project.id), [personas, project.id]);
+  const team = useMemo(() => personas.filter(p => isProjectTeam(p, project.id)), [personas, project.id]);
   const [events, setEvents] = useState<EventRow[] | null>(null);
   const [mem, setMem] = useState<TeamMemoryEntry[] | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);

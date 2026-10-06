@@ -44,6 +44,33 @@ public class ProjectGroupsControllerTests : IClassFixture<TestWebApplicationFact
     }
 
     [Fact]
+    public async Task Create_СоЗначкомИУставом_СохраняетОбаСразу()
+    {
+        var response = await _client.PostAsJsonAsync("/api/project-groups",
+            new { name = "Со значком", color = "#D97757", icon = "house", charter = "Устав сферы" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("icon").GetString().Should().Be("house");
+        body.GetProperty("charter").GetString().Should().Be("Устав сферы");
+    }
+
+    [Fact]
+    public async Task Create_НегодныйЗначок_400()
+    {
+        var response = await _client.PostAsJsonAsync("/api/project-groups",
+            new { name = "Х", icon = "нет-такой-иконки" });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_СлишкомДлинныйУстав_400()
+    {
+        var response = await _client.PostAsJsonAsync("/api/project-groups",
+            new { name = "Х", charter = new string('x', ClaudeHomeServer.Models.Sphere.CharterMaxLength + 1) });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
     public async Task Update_МеняетИмяИЦвет()
     {
         var group = await CreateGroupAsync("до");
@@ -59,6 +86,23 @@ public class ProjectGroupsControllerTests : IClassFixture<TestWebApplicationFact
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("name").GetString().Should().Be("после");
         body.GetProperty("color").GetString().Should().Be("#000000");
+    }
+
+    [Fact]
+    public async Task Update_ПринимаетЗначокИХартию_ОтвергаетНегодные()
+    {
+        var id = (await CreateGroupAsync("сфера")).GetProperty("id").GetString();
+
+        var ok = await _client.PutAsJsonAsync($"/api/project-groups/{id}", new { icon = "piggy-bank", charter = "# Хартия" });
+        ok.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await ok.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("icon").GetString().Should().Be("piggy-bank");
+        body.GetProperty("charter").GetString().Should().Be("# Хартия");
+
+        (await _client.PutAsJsonAsync($"/api/project-groups/{id}", new { icon = "нет-такой-иконки" }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _client.PutAsJsonAsync($"/api/project-groups/{id}", new { charter = new string('x', 4001) }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]
@@ -95,7 +139,8 @@ public class ProjectGroupsControllerTests : IClassFixture<TestWebApplicationFact
         var id = (await CreateGroupAsync("на удаление")).GetProperty("id").GetString();
 
         var response = await _client.DeleteAsync($"/api/project-groups/{id}");
-        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("deletedMemory").GetInt32().Should().Be(0);
 
         var list = await _client.GetFromJsonAsync<JsonElement>("/api/project-groups");
         list.EnumerateArray().Select(g => g.GetProperty("id").GetString()).Should().NotContain(id);

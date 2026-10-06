@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Сферы — макеты v1</title>
+<style>
+/* Значения — копия frontend/src/lib/theme.css (светлая :root и тёмная data-theme="dark") */
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-on-dark:#FFFFFF;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+}
+html[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-dropdown:0 8px 28px rgba(0,0,0,.5);
+  --shadow-modal:0 24px 60px rgba(0,0,0,.6);
+}
+/* Палитра сфер = GROUP_COLORS из design.ts (не зависит от темы, как у групп сегодня) */
+.s-blue{--sph:#3E7CA6}.s-green{--sph:#3F7A4F}.s-orange{--sph:#C2693B}.s-violet{--sph:#8E4A82}
+.s-red{--sph:#B4452F}.s-indigo{--sph:#4B6BB0}.s-khaki{--sph:#7A7250}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--c-bg-main);color:var(--c-text-primary);
+  font-family:"Hanken Grotesk",-apple-system,"Segoe UI",sans-serif;font-size:13px}
+.page{max-width:1240px;margin:0 auto;padding:20px 20px 72px}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;position:sticky;top:0;z-index:20;
+  background:var(--c-bg-main);padding:14px 0;border-bottom:1px solid var(--c-border);margin-bottom:16px}
+.top h1{font-family:"PT Serif",Georgia,serif;font-size:22px;margin:0;flex:1;min-width:220px;color:var(--c-text-heading);font-weight:600}
+.tbtn{background:var(--c-bg-card);border:1px solid var(--c-border);color:var(--c-text-secondary);
+  border-radius:10px;padding:8px 14px;font:600 13px inherit;cursor:pointer}
+.tbtn[aria-pressed="true"]{background:var(--c-accent);color:var(--c-on-accent);border-color:transparent}
+.toc{display:flex;gap:6px;flex-wrap:wrap;width:100%}
+.toc a{font-size:12px;color:var(--c-text-secondary);text-decoration:none;border:1px solid var(--c-border-light);
+  border-radius:999px;padding:3px 10px;background:var(--c-bg-card)}
+h2{font-family:"PT Serif",Georgia,serif;font-size:19px;color:var(--c-text-heading);margin:40px 0 6px;font-weight:600;scroll-margin-top:110px}
+.lead{color:var(--c-text-secondary);margin:0 0 16px;max-width:78ch;line-height:1.6}
+.lead code{font-size:12px}
+.frames{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+.frame{border:1px solid var(--c-border);border-radius:14px;background:var(--c-bg-main);overflow:hidden;box-shadow:var(--shadow-card);position:relative}
+.frame.m{width:360px}
+.cap{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--c-text-muted);
+  padding:8px 12px;background:var(--c-bg-inset);border-bottom:1px solid var(--c-border);display:flex;justify-content:space-between;gap:10px}
+.note{border-left:3px solid var(--c-accent);background:var(--c-accent-light);border-radius:0 10px 10px 0;
+  padding:10px 14px;margin:14px 0;font-size:12.5px;line-height:1.55;max-width:80ch}
+.note b{color:var(--c-text-heading)}
+
+.ic{width:16px;height:16px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ic.s12{width:12px;height:12px}.ic.s14{width:14px;height:14px}.ic.s18{width:18px;height:18px}.ic.s20{width:20px;height:20px}.ic.s24{width:24px;height:24px}
+
+/* Контролы — визуальные копии components/ui */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 14px;border-radius:10px;
+  font:600 13px inherit;cursor:pointer;border:1px solid transparent;white-space:nowrap}
+.btn.primary{background:var(--c-accent);color:var(--c-on-accent)}
+.btn.secondary{background:var(--c-bg-white);border-color:var(--c-border);color:var(--c-text-primary)}
+.btn.ghost{background:none;color:var(--c-text-secondary)}
+.btn.danger{background:var(--c-danger);color:var(--c-on-dark)}
+.btn.sm{height:28px;padding:0 10px;font-size:12px;border-radius:8px}
+.btn[disabled]{opacity:.5;cursor:default}
+.ib{width:32px;height:32px;border-radius:8px;border:none;background:none;color:var(--c-text-secondary);
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
+.ib.on{background:var(--c-bg-selected)}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;white-space:nowrap;
+  background:var(--c-bg-selected);color:var(--c-text-secondary)}
+.badge.warn{background:var(--c-warning-bg);color:var(--c-warning-text)}
+.badge.info{background:var(--c-info-bg);color:var(--c-info)}
+.badge.acc{background:var(--c-accent-light);color:var(--c-accent)}
+.badge.sph{background:color-mix(in srgb,var(--sph) 14%,transparent);color:var(--sph)}
+.notice{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:11px 13px;font-size:13px;line-height:1.5;border:1px solid}
+.notice.warn{background:var(--c-warning-bg);border-color:color-mix(in srgb,var(--c-warning) 35%,transparent);color:var(--c-text-primary)}
+.notice.warn>.ic{color:var(--c-warning)}
+.notice.danger{background:var(--c-danger-bg);border-color:var(--c-danger-border)}
+.notice.danger>.ic{color:var(--c-danger)}
+.notice.info{background:var(--c-info-bg);border-color:color-mix(in srgb,var(--c-info) 30%,transparent)}
+.notice.info>.ic{color:var(--c-info)}
+.notice b{color:var(--c-text-heading)}
+.field{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+.field>label{font-size:12px;font-weight:700;color:var(--c-text-heading)}
+.field .hint{font-size:11.5px;color:var(--c-text-muted);line-height:1.45}
+.input{height:38px;border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-white);padding:0 12px;
+  display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--c-text-primary)}
+.input.focus{border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.input .ph{color:var(--c-text-muted)}
+.textarea{min-height:120px;align-items:flex-start;padding:10px 12px;line-height:1.5;height:auto}
+.counter{font-size:11px;color:var(--c-text-muted);text-align:right}
+.menu{position:absolute;background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:12px;box-shadow:var(--shadow-dropdown);
+  padding:5px;min-width:220px;z-index:5}
+.mi{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:8px;font-size:13px;color:var(--c-text-primary);white-space:nowrap}
+.mi.hl{background:var(--c-bg-selected)}
+.mi.danger{color:var(--c-danger-text)}
+.mi .ic{color:var(--c-text-muted)}
+.mi.danger .ic,.mi .tile .ic{color:inherit}
+.msep{height:1px;background:var(--c-border-light);margin:4px 6px}
+.mhead{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);padding:7px 10px 3px}
+.mi .chk{margin-left:auto;color:var(--c-accent)}
+
+/* Модалка */
+.scrim{background:var(--c-overlay);padding:28px;display:flex;justify-content:center;align-items:flex-start}
+.scrim.m{padding:0;align-items:flex-end;min-height:640px}
+.modal{background:var(--c-bg-card);border-radius:20px;box-shadow:var(--shadow-modal);width:100%;overflow:hidden}
+.modal.sheet{border-radius:22px 22px 0 0}
+.mh{display:flex;align-items:center;gap:10px;padding:16px 18px 6px}
+.mh h3{flex:1;margin:0;font-family:"PT Serif",Georgia,serif;font-size:18px;font-weight:600;color:var(--c-text-heading)}
+.mb{padding:10px 18px 4px}
+.mf{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px 16px;border-top:1px solid var(--c-border-light);margin-top:8px}
+.mf.stack{flex-direction:column-reverse}
+.mf.stack .btn{width:100%;height:40px}
+
+/* Значок сферы: плитка цвета сферы, lucide-глиф цветом on-dark */
+.tile{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:6px;background:var(--sph);color:var(--c-on-dark);width:22px;height:22px}
+.tile .ic{width:13px;height:13px}
+.tile.md{width:32px;height:32px;border-radius:8px}.tile.md .ic{width:17px;height:17px}
+.tile.lg{width:44px;height:44px;border-radius:12px}.tile.lg .ic{width:23px;height:23px}
+.tile.letter{font:700 12px inherit}
+.tile.none{background:none;border:1.5px dashed var(--c-dashed);color:var(--c-text-muted)}
+
+/* Приложение: шапка раздела, сайдбар, карточки проектов */
+.app{display:flex;min-height:520px}
+.side{width:220px;flex-shrink:0;background:var(--c-bg-panel);border-right:1px solid var(--c-border-light);padding:14px 10px;display:flex;flex-direction:column;gap:2px}
+.side .sh{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);padding:10px 8px 4px;display:flex;align-items:center;justify-content:space-between}
+.srow{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;font-size:13px;color:var(--c-text-primary)}
+.srow.sel{background:var(--c-bg-selected);font-weight:600}
+.srow .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow .c{font-size:11px;color:var(--c-text-muted)}
+.main{flex:1;min-width:0;padding:16px 20px}
+.ph1{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.ph1 h3{flex:1;margin:0;font-family:"PT Serif",Georgia,serif;font-size:20px;color:var(--c-text-heading);font-weight:600}
+.sphh{display:flex;align-items:center;gap:9px;margin:16px 2px 8px}
+.sphh .n{font-size:13.5px;font-weight:700;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sphh .c{font-size:11.5px;color:var(--c-text-muted)}
+.sphh .sp{flex:1}
+.sphh .lnk{font-size:12px;font-weight:600;color:var(--c-text-secondary);display:inline-flex;align-items:center;gap:2px;white-space:nowrap}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.pc{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px;padding:11px 12px;display:flex;flex-direction:column;gap:6px;position:relative;min-width:0}
+.pc .t{display:flex;align-items:center;gap:8px}
+.pc .t b{flex:1;min-width:0;font-size:13.5px;color:var(--c-text-heading);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pc .d{font-size:11.5px;color:var(--c-text-muted)}
+.pc.hl{border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.pava{width:26px;height:26px;border-radius:8px;background:var(--c-bg-selected);color:var(--c-text-secondary);display:flex;align-items:center;justify-content:center;font:700 11px inherit;flex-shrink:0}
+
+/* Страница сферы */
+.shead{display:flex;align-items:flex-start;gap:14px;padding:18px 20px 14px;border-bottom:3px solid color-mix(in srgb,var(--sph) 45%,transparent)}
+.shead .tt{flex:1;min-width:0}
+.shead h3{margin:0;font-family:"PT Serif",Georgia,serif;font-size:24px;font-weight:600;color:var(--c-text-heading)}
+.shead .meta{font-size:12.5px;color:var(--c-text-muted);margin-top:3px}
+.charter{font-size:13px;line-height:1.55;color:var(--c-text-secondary);margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:80ch}
+.more{font-size:12px;font-weight:600;color:var(--c-accent)}
+.sgrid{display:flex;flex-wrap:wrap;gap:18px;padding:18px 20px}
+.scol{flex:1 1 380px;min-width:0;display:flex;flex-direction:column;gap:18px}
+.scol.r{flex:1 1 320px}
+.card{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-card);padding:14px 16px}
+.card h4{margin:0;display:flex;align-items:center;gap:8px;font-family:"PT Serif",Georgia,serif;font-size:16px;font-weight:600;color:var(--c-text-heading)}
+.card h4 .c{font-family:"Hanken Grotesk",sans-serif;font-size:12px;color:var(--c-text-muted);font-weight:600}
+.card h4 .sp{flex:1}
+.card .sub{font-size:12px;color:var(--c-text-muted);margin:2px 0 10px;line-height:1.45}
+.row{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--c-border-light)}
+.row:first-of-type{border-top:none}
+.row .tx{flex:1;min-width:0}
+.row .tx b{display:block;font-size:13px;color:var(--c-text-heading);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .tx u{display:block;text-decoration:none;font-size:11.5px;color:var(--c-text-muted);margin-top:1px}
+.row .tx .why{display:flex;gap:6px;align-items:flex-start;font-size:12px;color:var(--c-warning-text);margin-top:4px;line-height:1.45;white-space:normal}
+.ava{width:30px;height:30px;border-radius:50%;flex-shrink:0;color:var(--c-on-dark);display:flex;align-items:center;justify-content:center;font:700 11px inherit}
+.shelf{border:1px solid var(--c-border-light);border-radius:12px;padding:10px 12px;margin-top:10px;background:var(--c-bg-white)}
+.shelf .sh{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--c-text-heading);margin-bottom:2px}
+.shelf .sh .c{color:var(--c-text-muted);font-weight:600}
+.mem{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--c-border-light)}
+.mem .tx{flex:1;min-width:0;font-size:12.5px;line-height:1.45;color:var(--c-text-primary)}
+.mem .tx u{display:flex;gap:6px;align-items:center;text-decoration:none;font-size:11px;color:var(--c-text-muted);margin-top:3px;flex-wrap:wrap}
+.task{display:flex;align-items:center;gap:9px;padding:7px 0;border-top:1px solid var(--c-border-light)}
+.task:first-of-type{border-top:none}
+.task .pr{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.pr.urgent{background:var(--c-danger)}.pr.high{background:var(--c-warning)}.pr.medium{background:var(--c-info)}.pr.low{background:var(--c-text-muted)}
+.task .tx{flex:1;min-width:0;font-size:13px;color:var(--c-text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task .due{font-size:11.5px;color:var(--c-text-muted);white-space:nowrap}
+.task .due.late{color:var(--c-danger-text);font-weight:600}
+.empty{padding:14px 4px 6px;font-size:12.5px;color:var(--c-text-muted);line-height:1.5}
+
+/* Выбор значка и цвета */
+.glyphs{display:grid;grid-template-columns:repeat(auto-fill,36px);gap:6px}
+.gl{width:36px;height:36px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-bg-white);color:var(--c-text-secondary);display:flex;align-items:center;justify-content:center}
+.gl.sel{border-color:var(--sph);background:color-mix(in srgb,var(--sph) 14%,transparent);color:var(--sph);box-shadow:0 0 0 2px color-mix(in srgb,var(--sph) 30%,transparent)}
+.gl.auto{font-size:10.5px;font-weight:700;color:var(--c-text-muted);border-style:dashed}
+.swatches{display:flex;gap:8px;flex-wrap:wrap}
+.sw{width:26px;height:26px;border-radius:50%;background:var(--sph);border:2px solid var(--c-bg-card);box-shadow:0 0 0 1px var(--c-border)}
+.sw.sel{box-shadow:0 0 0 2px var(--sph)}
+.preview{display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:10px;background:var(--c-bg-inset);font-size:12px;color:var(--c-text-muted)}
+
+/* Чат */
+.chat{display:flex;flex-direction:column;min-height:440px}
+.chead{display:flex;align-items:center;gap:9px;padding:10px 14px;border-bottom:1px solid var(--c-border-light);background:var(--c-bg-panel)}
+.chead .tx{flex:1;min-width:0}
+.chead b{display:block;font-size:13.5px;color:var(--c-text-heading)}
+.chead u{text-decoration:none;font-size:11.5px;color:var(--c-text-muted)}
+.cbody{flex:1;padding:14px;display:flex;flex-direction:column;gap:12px}
+.bub{max-width:82%;padding:9px 13px;border-radius:16px;font-size:13px;line-height:1.5}
+.bub.me{align-self:flex-end;background:var(--c-accent-light);border-radius:16px 16px 4px 16px}
+.bub.as{align-self:flex-start;background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:4px 16px 16px 16px}
+.composer{margin:0 12px 12px;border:1px solid var(--c-border);border-radius:16px;background:var(--c-bg-white);padding:10px 12px;display:flex;align-items:center;gap:8px;color:var(--c-text-muted);font-size:13px}
+.composer.off{background:var(--c-bg-inset);opacity:.75}
+
+/* Форма персоны */
+.form{padding:18px 20px}
+.selectopen{position:relative}
+.selectopen .menu{position:static;margin-top:4px;min-width:0}
+.zonehint{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--c-text-secondary);line-height:1.5;background:var(--c-bg-inset);border-radius:10px;padding:9px 11px}
+.zonehint .ic{color:var(--c-text-muted);margin-top:1px}
+.steps{display:flex;gap:6px;padding:14px 16px 0}
+.steps i{flex:1;height:4px;border-radius:2px;background:var(--c-border)}
+.steps i.on{background:var(--c-accent)}
+.mono{font-family:"JetBrains Mono",monospace;font-size:11.5px}
+table.tx{border-collapse:collapse;font-size:12.5px;margin:8px 0;max-width:100%}
+table.tx td,table.tx th{border:1px solid var(--c-border-light);padding:6px 9px;text-align:left;vertical-align:top}
+table.tx th{background:var(--c-bg-inset);font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--c-text-muted)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<g id="i-pencil"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></g>
+<g id="i-landmark"><path d="M10 18v-7"/><path d="M11.119 2.205a2 2 0 0 1 1.762 0l7.84 3.846A.5.5 0 0 1 20.5 7h-17a.5.5 0 0 1-.22-.949z"/><path d="M14 18v-7"/><path d="M18 18v-7"/><path d="M3 22h18"/><path d="M6 18v-7"/></g>
+<g id="i-heart-pulse"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/><path d="M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></g>
+<g id="i-house"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g>
+<g id="i-briefcase"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></g>
+<g id="i-graduation-cap"><path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></g>
+<g id="i-sprout"><path d="M14 9.536V7a4 4 0 0 1 4-4h1.5a.5.5 0 0 1 .5.5V5a4 4 0 0 1-4 4 4 4 0 0 0-4 4c0 2 1 3 1 5a5 5 0 0 1-1 3"/><path d="M4 9a5 5 0 0 1 8 4 5 5 0 0 1-8-4"/><path d="M5 21h14"/></g>
+<g id="i-plane"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></g>
+<g id="i-code"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></g>
+<g id="i-music"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></g>
+<g id="i-palette"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/></g>
+<g id="i-dumbbell"><path d="M17.596 12.768a2 2 0 1 0 2.829-2.829l-1.768-1.767a2 2 0 0 0 2.828-2.829l-2.828-2.828a2 2 0 0 0-2.829 2.828l-1.767-1.768a2 2 0 1 0-2.829 2.829z"/><path d="m2.5 21.5 1.4-1.4"/><path d="m20.1 3.9 1.4-1.4"/><path d="M5.343 21.485a2 2 0 1 0 2.829-2.828l1.767 1.768a2 2 0 1 0 2.829-2.829l-6.364-6.364a2 2 0 1 0-2.829 2.829l1.768 1.767a2 2 0 0 0-2.828 2.829z"/><path d="m9.6 14.4 4.8-4.8"/></g>
+<g id="i-wallet"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/></g>
+<g id="i-chevron-right"><path d="m9 18 6-6-6-6"/></g>
+<g id="i-chevron-down"><path d="m6 9 6 6 6-6"/></g>
+<g id="i-chevron-left"><path d="m15 18-6-6 6-6"/></g>
+<g id="i-ellipsis-vertical"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></g>
+<g id="i-plus"><path d="M5 12h14"/><path d="M12 5v14"/></g>
+<g id="i-users"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/></g>
+<g id="i-brain"><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></g>
+<g id="i-square-check-big"><path d="M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"/><path d="m9 11 3 3L22 4"/></g>
+<g id="i-folder"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></g>
+<g id="i-laptop"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></g>
+<g id="i-arrow-up-right"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g>
+<g id="i-triangle-alert"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></g>
+<g id="i-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></g>
+<g id="i-trash-2"><path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></g>
+<g id="i-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></g>
+<g id="i-message-square"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></g>
+<g id="i-calendar"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></g>
+<g id="i-search"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g>
+<g id="i-folder-input"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></g>
+<g id="i-folder-output"><path d="M2 7.5V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-1.5"/><path d="M2 13h10"/><path d="m5 10-3 3 3 3"/></g>
+</defs></svg>
+
+<div class="page">
+<div class="top">
+  <h1>Сферы — макеты v1</h1>
+  <button class="tbtn" id="th" aria-pressed="false">Тёмная тема</button>
+  <nav class="toc">
+    <a href="#s1">1. Вкладка «Проекты»</a><a href="#s2">2. Новая сфера</a><a href="#s3">3. Страница сферы</a>
+    <a href="#s4">4. Зона персоны</a><a href="#s5">5. Меню проекта</a><a href="#s6">6. Отказ хода</a><a href="#s7">7. Удаление сферы</a>
+  </nav>
+</div>
+
+<p class="lead">Все экраны — под флагом <code>spheres</code>. Флаг выключен — вкладка, меню и форма персоны выглядят как сегодня
+(«Группы», «Переместить в группу», зона «Глобальная / Проект»). Обоснование решений и новые тексты — в
+<a href="spheres-proposal.md" style="color:var(--c-accent)">spheres-proposal.md</a>. Переключатель темы — в шапке; в каждой секции
+есть кадр 360 px.</p>
+
+<!-- ======================= 1 ======================= -->
+<h2 id="s1">1. Вкладка «Проекты»: сферы вместо групп</h2>
+<p class="lead">Заголовок группы (полоска 4×15 + имя) становится заголовком сферы: плитка с глифом цвета сферы, имя, счётчик проектов
+и ссылка на страницу сферы. Проекты без сферы — последней секцией «Без сферы» с пунктирной плиткой. В сайдбаре — тот же
+перечень. Значок не задан — на плитке первая буква имени.</p>
+
+<div class="frames">
+  <div class="frame" style="width:840px">
+    <div class="cap"><span>Десктоп · есть сферы</span><span>ProjectListPage + ProjectSidebar</span></div>
+    <div class="app">
+      <aside class="side">
+        <div class="srow"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-folder"/></svg><span class="n">Все проекты</span><span class="c">7</span></div>
+        <div class="sh"><span>Сферы</span><button class="ib" style="width:22px;height:22px" title="Создать сферу"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg></button></div>
+        <div class="srow sel s-blue"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span><span class="n">Банк</span><span class="c">3</span></div>
+        <div class="srow s-green"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-heart-pulse"/></svg></span><span class="n">Здоровье</span><span class="c">2</span></div>
+        <div class="srow s-orange"><span class="tile letter">Д</span><span class="n">Дом</span><span class="c">0</span></div>
+        <div class="srow"><span class="tile none"></span><span class="n">Без сферы</span><span class="c">2</span></div>
+      </aside>
+      <div class="main">
+        <div class="ph1"><h3>Проекты</h3><button class="btn secondary sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Создать сферу</button><button class="btn primary sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Проект</button></div>
+
+        <div class="sphh s-blue"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span><span class="n">Банк</span><span class="c">3</span><span class="sp"></span><span class="lnk">Страница сферы<svg viewBox="0 0 24 24" class="ic s14"><use href="#i-chevron-right"/></svg></span></div>
+        <div class="cards">
+          <div class="pc"><div class="t"><span class="pava">ВП</span><b>ВФЛА-ПСБ</b><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-ellipsis-vertical"/></svg></div><span class="d">12 чатов · сегодня</span></div>
+          <div class="pc"><div class="t"><span class="pava">АБ</span><b>Архитектура банка</b><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-ellipsis-vertical"/></svg></div><span class="d">31 чат · вчера</span></div>
+          <div class="pc"><div class="t"><span class="pava">МП</span><b>Миграция платежей</b><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-ellipsis-vertical"/></svg></div><span class="d"><span class="badge"><svg viewBox="0 0 24 24" class="ic s12"><use href="#i-laptop"/></svg>Ноутбук</span> · 3 дня назад</span></div>
+        </div>
+
+        <div class="sphh s-green"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-heart-pulse"/></svg></span><span class="n">Здоровье</span><span class="c">2</span><span class="sp"></span><span class="lnk">Страница сферы<svg viewBox="0 0 24 24" class="ic s14"><use href="#i-chevron-right"/></svg></span></div>
+        <div class="cards">
+          <div class="pc"><div class="t"><span class="pava">ПТ</span><b>План тренировок</b></div><span class="d">4 чата · 2 дня назад</span></div>
+          <div class="pc"><div class="t"><span class="pava">АН</span><b>Анализы 2026</b></div><span class="d">2 чата · неделю назад</span></div>
+        </div>
+
+        <div class="sphh s-orange"><span class="tile letter">Д</span><span class="n">Дом</span><span class="c">0</span><span class="sp"></span><span class="lnk">Страница сферы<svg viewBox="0 0 24 24" class="ic s14"><use href="#i-chevron-right"/></svg></span></div>
+        <div class="empty" style="padding:2px 2px 4px">В сфере пока нет проектов. Перенесите проект через его меню или создайте новый.</div>
+
+        <div class="sphh"><span class="tile none"></span><span class="n">Без сферы</span><span class="c">2</span></div>
+        <div class="cards">
+          <div class="pc"><div class="t"><span class="pava">AI</span><b>AI Home</b></div><span class="d">214 чатов · сейчас</span></div>
+          <div class="pc"><div class="t"><span class="pava">Ч</span><b>Черновики</b></div><span class="d">5 чатов · месяц назад</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame m">
+    <div class="cap"><span>360 · есть сферы</span><span>сайдбара нет</span></div>
+    <div class="main" style="padding:12px 14px">
+      <div class="ph1"><h3>Проекты</h3><button class="ib" title="Создать сферу"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-folder-input"/></svg></button><button class="btn primary sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Проект</button></div>
+      <div class="sphh s-blue" style="margin-top:6px"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span><span class="n">Банк</span><span class="c">3</span><span class="sp"></span><button class="ib" title="Страница сферы"><svg viewBox="0 0 24 24" class="ic"><use href="#i-chevron-right"/></svg></button></div>
+      <div class="cards" style="grid-template-columns:1fr">
+        <div class="pc"><div class="t"><span class="pava">ВП</span><b>ВФЛА-ПСБ</b></div><span class="d">12 чатов · сегодня</span></div>
+        <div class="pc"><div class="t"><span class="pava">АБ</span><b>Архитектура банка</b></div><span class="d">31 чат · вчера</span></div>
+        <div class="pc"><div class="t"><span class="pava">МП</span><b>Миграция платежей</b></div><span class="d"><span class="badge"><svg viewBox="0 0 24 24" class="ic s12"><use href="#i-laptop"/></svg>Ноутбук</span> · 3 дня назад</span></div>
+      </div>
+      <div class="sphh s-green"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-heart-pulse"/></svg></span><span class="n">Здоровье</span><span class="c">2</span><span class="sp"></span><button class="ib" title="Страница сферы"><svg viewBox="0 0 24 24" class="ic"><use href="#i-chevron-right"/></svg></button></div>
+      <div class="cards" style="grid-template-columns:1fr">
+        <div class="pc"><div class="t"><span class="pava">ПТ</span><b>План тренировок</b></div><span class="d">4 чата · 2 дня назад</span></div>
+      </div>
+      <div class="sphh"><span class="tile none"></span><span class="n">Без сферы</span><span class="c">2</span></div>
+      <div class="cards" style="grid-template-columns:1fr">
+        <div class="pc"><div class="t"><span class="pava">AI</span><b>AI Home</b></div><span class="d">214 чатов · сейчас</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="frames" style="margin-top:20px">
+  <div class="frame" style="width:640px">
+    <div class="cap"><span>Пустое состояние · сфер ещё нет</span><span>EmptyState inline</span></div>
+    <div class="main">
+      <div class="ph1"><h3>Проекты</h3><button class="btn primary sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Проект</button></div>
+      <div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:28px 24px;border:1px dashed var(--c-dashed);border-radius:14px;background:var(--c-bg-card)">
+        <div style="width:56px;height:56px;border-radius:16px;background:var(--c-bg-panel);color:var(--c-accent);display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" class="ic s24"><use href="#i-folder-input"/></svg></div>
+        <div style="font-family:'PT Serif',Georgia,serif;font-size:17px;font-weight:600;color:var(--c-text-heading)">Сфер пока нет</div>
+        <div style="font-size:13px;color:var(--c-text-secondary);max-width:46ch;line-height:1.55">Сфера объединяет проекты одной темы: у неё своя команда и общая память, которые живут дольше любого проекта.</div>
+        <button class="btn primary" style="margin-top:6px">Создать сферу</button>
+      </div>
+      <div class="sphh"><span class="tile none"></span><span class="n">Без сферы</span><span class="c">4</span></div>
+      <div class="cards">
+        <div class="pc"><div class="t"><span class="pava">AI</span><b>AI Home</b></div><span class="d">214 чатов</span></div>
+        <div class="pc"><div class="t"><span class="pava">ВП</span><b>ВФЛА-ПСБ</b></div><span class="d">12 чатов</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="frame m">
+    <div class="cap"><span>360 · пустое состояние</span></div>
+    <div class="main" style="padding:12px 14px">
+      <div class="ph1"><h3>Проекты</h3><button class="btn primary sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Проект</button></div>
+      <div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:22px 16px;border:1px dashed var(--c-dashed);border-radius:14px;background:var(--c-bg-card)">
+        <div style="width:44px;height:44px;border-radius:16px;background:var(--c-bg-panel);color:var(--c-accent);display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" class="ic s20"><use href="#i-folder-input"/></svg></div>
+        <div style="font-family:'PT Serif',Georgia,serif;font-size:16px;font-weight:600;color:var(--c-text-heading)">Сфер пока нет</div>
+        <div style="font-size:12.5px;color:var(--c-text-secondary);line-height:1.55">Сфера объединяет проекты одной темы: у неё своя команда и общая память, которые живут дольше любого проекта.</div>
+        <button class="btn primary" style="margin-top:4px;width:100%">Создать сферу</button>
+      </div>
+      <div class="sphh"><span class="tile none"></span><span class="n">Без сферы</span><span class="c">4</span></div>
+      <div class="cards" style="grid-template-columns:1fr"><div class="pc"><div class="t"><span class="pava">AI</span><b>AI Home</b></div><span class="d">214 чатов</span></div></div>
+    </div>
+  </div>
+</div>
+<div class="note"><b>Текст пустого состояния разбит</b> на заголовок «Сфер пока нет» и подзаголовок из второго предложения — так устроен
+<code>EmptyState</code> (title + subtitle). Слова дословно из заметки.</div>
+
+<!-- ======================= 2 ======================= -->
+<h2 id="s2">2. Диалог «Новая сфера»</h2>
+<p class="lead">Обычный <code>Modal</code> шириной <code>MODAL_W.form</code>; на мобиле — шторка снизу. Значок — сетка lucide-глифов из белого
+списка (как у значка проекта, ADR-009), первая клетка «Аа» — без значка, буква имени. Цвет — палитра <code>GROUP_COLORS</code>.
+Над кнопками — живое превью заголовка сферы. Счётчик устава появляется после 3500 символов.</p>
+
+<div class="frames">
+  <div class="frame" style="width:600px">
+    <div class="cap"><span>Десктоп · заполнение</span><span>Modal · MODAL_W.form</span></div>
+    <div class="scrim s-blue">
+      <div class="modal" style="max-width:520px">
+        <div class="mh"><h3>Новая сфера</h3><button class="ib"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-x"/></svg></button></div>
+        <div class="mb">
+          <div class="field"><label>Название</label><div class="input focus">Банк</div></div>
+          <div class="field"><label>Значок</label>
+            <div class="glyphs">
+              <span class="gl auto">Аа</span>
+              <span class="gl sel"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-landmark"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-briefcase"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-heart-pulse"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-house"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-graduation-cap"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-sprout"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-code"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-music"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-palette"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-dumbbell"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-wallet"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-plane"/></svg></span>
+            </div>
+          </div>
+          <div class="field"><label>Цвет</label>
+            <div class="swatches"><span class="sw sel s-blue"></span><span class="sw s-violet"></span><span class="sw s-green"></span><span class="sw s-orange"></span><span class="sw s-red"></span><span class="sw s-indigo"></span><span class="sw s-khaki"></span></div>
+          </div>
+          <div class="field"><label>Чем занимается сфера</label>
+            <div class="input textarea">Работа с банком-заказчиком: архитектура, миграции, сопровождение. Тон — деловой, без жаргона. Документы — по ГОСТ 34. Персональные данные клиентов в чатах не обсуждаем.</div>
+            <div class="hint">Персоны сферы прочитают это в каждом её проекте: тема, конвенции, тон, запреты. До 4000 символов.</div>
+          </div>
+          <div class="preview"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span><b style="color:var(--c-text-heading);font-size:13px">Банк</b><span>— так сфера будет выглядеть на вкладке «Проекты»</span></div>
+        </div>
+        <div class="mf"><button class="btn ghost">Отмена</button><button class="btn primary">Создать сферу</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame m">
+    <div class="cap"><span>360 · шторка</span><span>устав почти на пределе</span></div>
+    <div class="scrim m s-blue">
+      <div class="modal sheet">
+        <div class="mh"><h3>Новая сфера</h3><button class="ib"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-x"/></svg></button></div>
+        <div class="mb">
+          <div class="field"><label>Название</label><div class="input">Банк</div></div>
+          <div class="field"><label>Значок</label>
+            <div class="glyphs">
+              <span class="gl auto">Аа</span><span class="gl sel"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-landmark"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-briefcase"/></svg></span><span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-heart-pulse"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-house"/></svg></span><span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-graduation-cap"/></svg></span>
+              <span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-sprout"/></svg></span><span class="gl"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-code"/></svg></span>
+            </div>
+          </div>
+          <div class="field"><label>Цвет</label>
+            <div class="swatches"><span class="sw sel s-blue"></span><span class="sw s-violet"></span><span class="sw s-green"></span><span class="sw s-orange"></span><span class="sw s-red"></span><span class="sw s-indigo"></span><span class="sw s-khaki"></span></div>
+          </div>
+          <div class="field"><label>Чем занимается сфера</label>
+            <div class="input textarea focus" style="min-height:96px">…Документы — по ГОСТ 34. Персональные данные клиентов в чатах не обсуждаем.</div>
+            <div class="counter" style="color:var(--c-warning-text)">3 870 / 4 000</div>
+          </div>
+        </div>
+        <div class="mf stack"><button class="btn ghost">Отмена</button><button class="btn primary">Создать сферу</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 3 ======================= -->
+<h2 id="s3">3. Страница сферы</h2>
+<p class="lead">Шапка: плитка, имя, сводка счётчиков, устав в две строки с «Показать полностью», меню ⋮ («Изменить сферу», «Удалить сферу»).
+Ниже — две колонки на базисах 380/320 (переносятся сами, как в карточке персоны): слева «Проекты» и «Открытые задачи», справа
+«Команда» и «Память». На 360 — одна колонка в том же порядке, кроме «Памяти», которая уходит в конец.</p>
+
+<div class="frames">
+  <div class="frame s-blue" style="width:1000px">
+    <div class="cap"><span>Десктоп · сфера «Банк»</span><span>GET /api/spheres/{id}/overview</span></div>
+    <div class="shead">
+      <button class="ib" title="Назад к проектам"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-chevron-left"/></svg></button>
+      <span class="tile lg"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span>
+      <div class="tt">
+        <h3>Банк</h3>
+        <div class="meta">3 проекта · 2 персоны · 14 записей памяти · 7 открытых задач</div>
+        <div class="charter">Работа с банком-заказчиком: архитектура, миграции, сопровождение. Тон — деловой, без жаргона. Документы — по ГОСТ 34. Персональные данные клиентов в чатах не обсуждаем. Решения фиксируем в памяти сферы, а не проекта, если они переживут проект.</div>
+        <span class="more">Показать полностью</span>
+      </div>
+      <button class="btn secondary sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-pencil"/></svg>Изменить</button>
+      <button class="ib"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-ellipsis-vertical"/></svg></button>
+    </div>
+    <div class="sgrid">
+      <div class="scol">
+        <div class="card">
+          <h4>Проекты <span class="c">3</span><span class="sp"></span><button class="btn ghost sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Проект в сфере</button></h4>
+          <div style="margin-top:8px">
+            <div class="row"><span class="pava">ВП</span><div class="tx"><b>ВФЛА-ПСБ</b><u>12 чатов · 3 открытые задачи</u></div><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-chevron-right"/></svg></div>
+            <div class="row"><span class="pava">АБ</span><div class="tx"><b>Архитектура банка</b><u>31 чат · 4 открытые задачи</u></div><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-chevron-right"/></svg></div>
+            <div class="row" style="align-items:flex-start"><span class="pava">МП</span><div class="tx"><b>Миграция платежей</b><u><span class="badge"><svg viewBox="0 0 24 24" class="ic s12"><use href="#i-laptop"/></svg>На устройстве «Ноутбук»</span></u>
+              <span class="why"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-triangle-alert"/></svg><span>Устройство проекта не в сети. Пока оно не вернётся, персоны сферы не видят файлы проекта и не могут работать в его чатах; задачи и память проекта доступны.</span></span></div><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-chevron-right"/></svg></div>
+          </div>
+        </div>
+        <div class="card">
+          <h4>Открытые задачи <span class="c">7</span><span class="sp"></span><span class="more" style="font-family:'Hanken Grotesk';font-size:12px">Все в «Задачах»</span></h4>
+          <div class="sub">Из всех проектов сферы: сначала срочные, потом по сроку.</div>
+          <div class="task"><span class="pr urgent"></span><span class="tx">Согласовать схему шлюза платежей</span><span class="badge">Архитектура банка</span><span class="due late">вчера</span></div>
+          <div class="task"><span class="pr high"></span><span class="tx">Выгрузить реестр ВФЛА за сентябрь</span><span class="badge">ВФЛА-ПСБ</span><span class="due">8 окт</span></div>
+          <div class="task"><span class="pr high"></span><span class="tx">Прогнать миграцию на тестовом контуре</span><span class="badge">Миграция платежей</span><span class="due">10 окт</span></div>
+          <div class="task"><span class="pr medium"></span><span class="tx">ADR по ретраям интеграции с АБС</span><span class="badge info">В работе</span><span class="badge">Архитектура банка</span><span class="due">—</span></div>
+          <div class="task"><span class="pr low"></span><span class="tx">Обновить глоссарий сферы</span><span class="badge">ВФЛА-ПСБ</span><span class="due">—</span></div>
+          <div style="font-size:12px;color:var(--c-text-muted);padding-top:6px">и ещё 2</div>
+        </div>
+      </div>
+      <div class="scol r">
+        <div class="card">
+          <h4>Команда <span class="c">2</span><span class="sp"></span><button class="btn ghost sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Персона</button></h4>
+          <div class="sub">Работают во всех проектах сферы и пишут в её память.</div>
+          <div class="row"><span class="ava" style="background:#3E7CA6">АЛ</span><div class="tx"><b>Архитектор (Алексей)</b><u>@aleksey</u></div><button class="ib" title="Поговорить"><svg viewBox="0 0 24 24" class="ic"><use href="#i-message-square"/></svg></button></div>
+          <div class="row"><span class="ava" style="background:#8E4A82">ИР</span><div class="tx"><b>Аналитик (Ирина)</b><u>@irina</u></div><button class="ib" title="Поговорить"><svg viewBox="0 0 24 24" class="ic"><use href="#i-message-square"/></svg></button></div>
+        </div>
+        <div class="card">
+          <h4><svg viewBox="0 0 24 24" class="ic s18" style="color:var(--c-text-muted)"><use href="#i-brain"/></svg>Память</h4>
+          <div class="sub">В проекте сферы персоны помнят обе полки.</div>
+          <div class="shelf"><div class="sh">Память сферы <span class="c">14</span></div>
+            <div class="mem"><div class="tx">Интеграция с АБС — только через шлюз, прямые вызовы запрещены.<u><span class="badge acc">решение</span>из «Архитектура банка» · 2 окт</u></div></div>
+            <div class="mem"><div class="tx">Сроки сдачи у заказчика — по вторникам, отчёт за день до.<u><span class="badge">договорённость</span>Аналитик (Ирина) · 28 сен</u></div></div>
+          </div>
+          <div class="shelf"><div class="sh">Память проектов сферы <span class="c">9</span></div>
+            <div class="mem"><div class="tx">Реестр ВФЛА пересчитывается ночью, днём данные устаревают на сутки.<u><span class="badge">факт</span>ВФЛА-ПСБ · 4 окт</u></div><button class="btn secondary sm" title="Запись переедет в память сферы и станет видна во всех её проектах">Перенести в сферу</button></div>
+            <div class="mem"><div class="tx">Тестовый контур поднимаем из ветки release/*, не из master.<u><span class="badge">договорённость</span>Миграция платежей · 1 окт</u></div><button class="btn secondary sm">Перенести в сферу</button></div>
+            <div style="font-size:12px;color:var(--c-text-muted);padding-top:6px">и ещё 7 · <span class="more">Вся память</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="frames" style="margin-top:20px">
+  <div class="frame m s-blue">
+    <div class="cap"><span>360 · верх страницы</span></div>
+    <div class="shead" style="padding:12px 14px;gap:10px">
+      <button class="ib"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-chevron-left"/></svg></button>
+      <span class="tile md"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span>
+      <div class="tt"><h3 style="font-size:20px">Банк</h3><div class="meta">3 проекта · 2 персоны · 14 записей</div></div>
+      <button class="ib"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-ellipsis-vertical"/></svg></button>
+    </div>
+    <div style="padding:10px 14px 0"><div class="charter" style="margin:0">Работа с банком-заказчиком: архитектура, миграции, сопровождение. Тон — деловой, без жаргона.</div><span class="more">Показать полностью</span></div>
+    <div class="sgrid" style="padding:12px 12px 16px;gap:12px">
+      <div class="scol" style="gap:12px">
+        <div class="card" style="padding:12px">
+          <h4>Проекты <span class="c">3</span></h4>
+          <div style="margin-top:6px">
+            <div class="row"><span class="pava">ВП</span><div class="tx"><b>ВФЛА-ПСБ</b><u>3 открытые задачи</u></div></div>
+            <div class="row"><span class="pava">АБ</span><div class="tx"><b>Архитектура банка</b><u>4 открытые задачи</u></div></div>
+            <div class="row" style="align-items:flex-start"><span class="pava">МП</span><div class="tx"><b>Миграция платежей</b><u><span class="badge"><svg viewBox="0 0 24 24" class="ic s12"><use href="#i-laptop"/></svg>На устройстве «Ноутбук»</span></u>
+              <span class="why"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-triangle-alert"/></svg><span>Устройство проекта не в сети. Пока оно не вернётся, персоны сферы не видят файлы проекта и не могут работать в его чатах; задачи и память проекта доступны.</span></span></div></div>
+          </div>
+          <button class="btn ghost sm" style="margin-top:4px"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Проект в сфере</button>
+        </div>
+        <div class="card" style="padding:12px">
+          <h4>Команда <span class="c">2</span><span class="sp"></span><button class="ib" title="Персона"><svg viewBox="0 0 24 24" class="ic"><use href="#i-plus"/></svg></button></h4>
+          <div class="row"><span class="ava" style="background:#3E7CA6">АЛ</span><div class="tx"><b>Архитектор (Алексей)</b><u>@aleksey</u></div></div>
+          <div class="row"><span class="ava" style="background:#8E4A82">ИР</span><div class="tx"><b>Аналитик (Ирина)</b><u>@irina</u></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame m s-blue">
+    <div class="cap"><span>360 · низ страницы</span></div>
+    <div class="sgrid" style="padding:12px;gap:12px">
+      <div class="scol" style="gap:12px">
+        <div class="card" style="padding:12px">
+          <h4>Открытые задачи <span class="c">7</span></h4>
+          <div class="task"><span class="pr urgent"></span><span class="tx">Согласовать схему шлюза платежей</span><span class="due late">вчера</span></div>
+          <div class="task"><span class="pr high"></span><span class="tx">Выгрузить реестр ВФЛА за сентябрь</span><span class="due">8 окт</span></div>
+          <div class="task"><span class="pr high"></span><span class="tx">Прогнать миграцию на тестовом контуре</span><span class="due">10 окт</span></div>
+          <div style="font-size:12px;color:var(--c-text-muted);padding-top:6px">и ещё 4 · <span class="more">Все в «Задачах»</span></div>
+        </div>
+        <div class="card" style="padding:12px">
+          <h4>Память</h4>
+          <div class="shelf"><div class="sh">Память сферы <span class="c">14</span></div>
+            <div class="mem"><div class="tx">Интеграция с АБС — только через шлюз, прямые вызовы запрещены.<u><span class="badge acc">решение</span>2 окт</u></div></div>
+          </div>
+          <div class="shelf"><div class="sh">Память проектов сферы <span class="c">9</span></div>
+            <div class="mem" style="flex-direction:column;gap:6px"><div class="tx">Реестр ВФЛА пересчитывается ночью, днём данные устаревают на сутки.<u><span class="badge">факт</span>ВФЛА-ПСБ · 4 окт</u></div><button class="btn secondary sm">Перенести в сферу</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame m s-orange">
+    <div class="cap"><span>360 · новая пустая сфера</span></div>
+    <div class="shead" style="padding:12px 14px;gap:10px">
+      <button class="ib"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-chevron-left"/></svg></button>
+      <span class="tile md letter">Д</span>
+      <div class="tt"><h3 style="font-size:20px">Дом</h3><div class="meta">Пока пусто</div></div>
+      <button class="ib"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-ellipsis-vertical"/></svg></button>
+    </div>
+    <div class="sgrid" style="padding:12px;gap:12px"><div class="scol" style="gap:12px">
+      <div class="card" style="padding:12px"><h4>Проекты <span class="c">0</span></h4><div class="empty">В сфере пока нет проектов. Перенесите проект через его меню или создайте новый.</div><button class="btn secondary sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Проект в сфере</button></div>
+      <div class="card" style="padding:12px"><h4>Команда <span class="c">0</span></h4><div class="empty">Персон пока нет. Персона сферы работает во всех её проектах и помнит решения соседних.</div><button class="btn secondary sm"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-plus"/></svg>Персона</button></div>
+      <div class="card" style="padding:12px"><h4>Память</h4><div class="empty">Здесь соберутся решения и договорённости, которые переживут любой проект сферы.</div></div>
+      <div class="card" style="padding:12px"><h4>Открытые задачи <span class="c">0</span></h4><div class="empty">Открытых задач нет.</div></div>
+    </div></div>
+  </div>
+</div>
+<div class="note"><b>Контракт сейчас отдаёт только <code>memory.count</code></b> — записей обеих полок и счётчика «Память проектов сферы» в нём нет,
+у проекта нет числа чатов и задач. Блок «Память» в макете требует расширения контракта или отдельной ручки — см. вопросы в proposal.</div>
+
+<!-- ======================= 4 ======================= -->
+<h2 id="s4">4. Зона персоны: форма и мастер</h2>
+<p class="lead">Сегодня зона — <code>PillSwitch</code> «Глобальный / Проект» плюс селект проекта. Трёх длинных подписей пилюли не выдержат
+(на 360 «В сфере «Банк»» уже не помещается), поэтому под флагом это <strong>один <code>Select</code></strong> с тремя группами:
+первая строка — «Во всех моих данных», затем сферы, затем проекты. Под селектом — одна строка о последствиях выбора.</p>
+
+<div class="frames">
+  <div class="frame" style="width:560px">
+    <div class="cap"><span>Форма персоны · селект открыт</span><span>PersonaForm, поле «Зона»</span></div>
+    <div class="form">
+      <div class="field"><label>Роль</label><div class="input">Архитектор</div></div>
+      <div class="field" style="margin-bottom:0"><label>Зона</label>
+        <div class="selectopen">
+          <div class="input focus"><span class="tile s-blue"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span><span style="flex:1">В сфере «Банк»</span><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-chevron-down"/></svg></div>
+          <div class="menu">
+            <div class="mi"><svg viewBox="0 0 24 24" class="ic"><use href="#i-users"/></svg>Во всех моих данных</div>
+            <div class="mhead">Сферы</div>
+            <div class="mi hl s-blue"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span>В сфере «Банк»<svg viewBox="0 0 24 24" class="ic chk"><use href="#i-square-check-big"/></svg></div>
+            <div class="mi s-green"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-heart-pulse"/></svg></span>В сфере «Здоровье»</div>
+            <div class="mhead">Проекты</div>
+            <div class="mi"><span class="pava" style="width:22px;height:22px;font-size:9px">AI</span>В проекте «AI Home»</div>
+            <div class="mi"><span class="pava" style="width:22px;height:22px;font-size:9px">ВП</span>В проекте «ВФЛА-ПСБ»</div>
+            <div class="mi"><span class="pava" style="width:22px;height:22px;font-size:9px">АБ</span>В проекте «Архитектура банка»</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame" style="width:560px">
+    <div class="cap"><span>Форма персоны · три зоны закрытым селектом</span></div>
+    <div class="form">
+      <div class="field"><label>Зона</label>
+        <div class="input"><svg viewBox="0 0 24 24" class="ic" style="color:var(--c-text-muted)"><use href="#i-users"/></svg><span style="flex:1">Во всех моих данных</span><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-chevron-down"/></svg></div>
+        <div class="zonehint"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-info"/></svg><span>Персона видит все ваши проекты и сферы, а в проекте сферы — и память этой сферы.</span></div>
+      </div>
+      <div class="field"><label>Зона</label>
+        <div class="input"><span class="tile s-blue"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span><span style="flex:1">В сфере «Банк»</span><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-chevron-down"/></svg></div>
+        <div class="zonehint"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-info"/></svg><span>Персона работает во всех проектах сферы — сейчас их 3 — и в тех, что появятся в ней позже. Пишет в память сферы.</span></div>
+      </div>
+      <div class="field" style="margin-bottom:0"><label>Зона</label>
+        <div class="input"><span class="pava" style="width:22px;height:22px;font-size:9px">ВП</span><span style="flex:1">В проекте «ВФЛА-ПСБ»</span><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-chevron-down"/></svg></div>
+        <div class="zonehint"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-info"/></svg><span>Персона видит только этот проект.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame m">
+    <div class="cap"><span>360 · мастер, шаг 1</span><span>PersonaWizard</span></div>
+    <div class="steps"><i class="on"></i><i></i><i></i><i></i></div>
+    <div class="form" style="padding:14px 16px">
+      <div style="font-family:'PT Serif',Georgia,serif;font-size:18px;font-weight:600;color:var(--c-text-heading);margin-bottom:12px">Как создать персону</div>
+      <div class="input" style="height:auto;padding:10px 12px;margin-bottom:8px;border-color:var(--c-accent)">✨ <span>Описать словами — ИИ заполнит</span></div>
+      <div class="input" style="height:auto;padding:10px 12px;margin-bottom:16px">Из шаблона</div>
+      <div style="border-top:1px solid var(--c-border-light);padding-top:16px" class="field"><label>Зона</label>
+        <div class="input"><span class="tile s-blue"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">В сфере «Банк»</span><svg viewBox="0 0 24 24" class="ic s14" style="color:var(--c-text-muted)"><use href="#i-chevron-down"/></svg></div>
+        <div class="zonehint"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-info"/></svg><span>Персона работает во всех проектах сферы — сейчас их 3 — и в тех, что появятся в ней позже. Пишет в память сферы.</span></div>
+      </div>
+      <div class="notice info" style="font-size:12px"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-info"/></svg><span>Зона выбрана за вас: мастер открыт со страницы сферы «Банк».</span></div>
+      <button class="btn primary" style="width:100%;margin-top:14px;height:40px">Далее</button>
+    </div>
+  </div>
+</div>
+<div class="note"><b>Чип «Зона» в визитке персоны</b> под флагом показывает те же формулировки короче: «Все данные» / «Сфера · Банк» /
+«Проект · ВФЛА-ПСБ» — по образцу сегодняшнего «Проект · Название». Бейдж зоны в хедере карточки — «Сфера» цветом сферы.</div>
+
+<!-- ======================= 5 ======================= -->
+<h2 id="s5">5. Меню проекта и перенос в сферу</h2>
+<p class="lead">«Переместить в группу» под флагом становится «Перенести в сферу…» (многоточие — дальше диалог выбора). «Убрать из сферы» видно
+только у проекта в сфере и требует подтверждения: у сферы может быть команда, которая потеряет доступ к проекту. Если у сферы
+персон нет — убираем без вопроса.</p>
+
+<div class="frames">
+  <div class="frame" style="width:420px;height:300px">
+    <div class="cap"><span>Меню ⋮ проекта в сфере</span><span>ProjectActionsMenu</span></div>
+    <div style="padding:16px;position:relative">
+      <div class="pc hl" style="width:230px"><div class="t"><span class="pava">ВП</span><b>ВФЛА-ПСБ</b><button class="ib on" style="width:24px;height:24px"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-ellipsis-vertical"/></svg></button></div><span class="d">12 чатов · сегодня</span></div>
+      <div class="menu" style="left:150px;top:62px">
+        <div class="mi">Закрепить</div>
+        <div class="mi hl"><svg viewBox="0 0 24 24" class="ic"><use href="#i-folder-input"/></svg>Перенести в сферу…</div>
+        <div class="mi"><svg viewBox="0 0 24 24" class="ic"><use href="#i-folder-output"/></svg>Убрать из сферы</div>
+        <div class="msep"></div>
+        <div class="mi">Редактировать</div>
+        <div class="mi danger"><svg viewBox="0 0 24 24" class="ic"><use href="#i-trash-2"/></svg>Удалить</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame" style="width:440px">
+    <div class="cap"><span>Диалог выбора сферы</span><span>MODAL_W.confirm</span></div>
+    <div class="scrim" style="padding:20px">
+      <div class="modal">
+        <div class="mh"><h3>Перенести в сферу</h3><button class="ib"><svg viewBox="0 0 24 24" class="ic s18"><use href="#i-x"/></svg></button></div>
+        <div class="mb" style="padding-bottom:14px">
+          <div style="font-size:12.5px;color:var(--c-text-secondary);margin-bottom:10px">Проект «ВФЛА-ПСБ»</div>
+          <div class="mi s-blue" style="border:1px solid var(--c-border-light);margin-bottom:6px"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span>Банк<span class="badge" style="margin-left:auto">сейчас здесь</span></div>
+          <div class="mi hl s-green" style="margin-bottom:6px"><span class="tile"><svg viewBox="0 0 24 24" class="ic"><use href="#i-heart-pulse"/></svg></span>Здоровье</div>
+          <div class="mi s-orange" style="margin-bottom:10px"><span class="tile letter">Д</span>Дом</div>
+          <div class="notice warn" style="font-size:12.5px"><svg viewBox="0 0 24 24" class="ic s14"><use href="#i-triangle-alert"/></svg><span>Персоны сферы «Банк» перестанут видеть этот проект, а их чаты в нём остановятся. В сфере «Здоровье» проект сразу увидит её команда.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame m">
+    <div class="cap"><span>360 · «Убрать из сферы»</span><span>ConfirmDialog</span></div>
+    <div class="scrim m" style="min-height:420px">
+      <div class="modal sheet">
+        <div class="mh"><h3>Убрать «ВФЛА-ПСБ» из сферы «Банк»?</h3></div>
+        <div class="mb" style="font-size:13px;line-height:1.55;color:var(--c-text-secondary)">
+          Персоны сферы — Архитектор (Алексей) и Аналитик (Ирина) — перестанут видеть этот проект, а их чаты в нём остановятся.
+          Память проекта останется при нём; то, что уже перенесено в сферу, останется в сфере.
+        </div>
+        <div class="mf stack"><button class="btn ghost">Отмена</button><button class="btn primary">Убрать из сферы</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 6 ======================= -->
+<h2 id="s6">6. Отказ хода в чате: проект ушёл из сферы</h2>
+<p class="lead">Собеседник чата — персона сферы, а проект из сферы убрали. Ход не уходит: вместо ответа — карточка в ленте с текстом отказа
+и действием. Поле ввода остаётся живым (сообщение не теряется), но отправка ведёт к той же карточке, пока собеседник не сменён.
+«Сменить собеседника» открывает тот же выбор персоны, что в шапке чата.</p>
+
+<div class="frames">
+  <div class="frame" style="width:600px">
+    <div class="cap"><span>Десктоп · чат проекта «ВФЛА-ПСБ»</span></div>
+    <div class="chat">
+      <div class="chead"><span class="ava" style="background:#3E7CA6;width:28px;height:28px">АЛ</span><div class="tx"><b>Архитектор (Алексей)</b><u>@aleksey · <span class="badge sph s-blue" style="padding:0 6px">Сфера · Банк</span></u></div></div>
+      <div class="cbody">
+        <div class="bub as">Схему шлюза я сверил с решением из «Архитектуры банка» — расхождений нет.</div>
+        <div class="bub me">Тогда распиши, что поменяется в реестре ВФЛА.</div>
+        <div class="notice warn" style="align-self:stretch"><svg viewBox="0 0 24 24" class="ic"><use href="#i-triangle-alert"/></svg>
+          <div style="flex:1"><b>Проект больше не в сфере «Банк» — смените собеседника</b>
+            <div style="color:var(--c-text-secondary);font-size:12.5px;margin-top:2px">Архитектор (Алексей) работает только в проектах этой сферы. Сообщение сохранено — отправится новому собеседнику.</div>
+            <div style="display:flex;gap:8px;margin-top:9px;flex-wrap:wrap"><button class="btn primary sm">Сменить собеседника</button><button class="btn ghost sm">Вернуть проект в сферу</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="composer">Тогда распиши, что поменяется в реестре ВФЛА.</div>
+    </div>
+  </div>
+  <div class="frame m">
+    <div class="cap"><span>360 · тот же отказ</span></div>
+    <div class="chat">
+      <div class="chead"><span class="ava" style="background:#3E7CA6;width:26px;height:26px">АЛ</span><div class="tx"><b>Архитектор (Алексей)</b><u>Сфера · Банк</u></div></div>
+      <div class="cbody" style="padding:10px">
+        <div class="bub me">Тогда распиши, что поменяется в реестре ВФЛА.</div>
+        <div class="notice warn"><svg viewBox="0 0 24 24" class="ic"><use href="#i-triangle-alert"/></svg>
+          <div style="flex:1;min-width:0"><b>Проект больше не в сфере «Банк» — смените собеседника</b>
+            <div style="color:var(--c-text-secondary);font-size:12.5px;margin-top:2px">Архитектор (Алексей) работает только в проектах этой сферы. Сообщение сохранено — отправится новому собеседнику.</div>
+            <button class="btn primary sm" style="margin-top:9px;width:100%">Сменить собеседника</button>
+            <button class="btn ghost sm" style="margin-top:4px;width:100%">Вернуть проект в сферу</button>
+          </div>
+        </div>
+      </div>
+      <div class="composer" style="margin:0 10px 10px">Тогда распиши, что поменяется…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 7 ======================= -->
+<h2 id="s7">7. Удаление сферы</h2>
+<p class="lead">Сервер отвечает <code>409</code> с числами <code>personas</code> и <code>memory</code>. Интерфейс не показывает сырой текст ошибки,
+а строит диалог из этих чисел: что мешает, почему так задумано и что сделать — со ссылкой на страницу сферы, где всё это
+делается. Пустая сфера удаляется обычным подтверждением.</p>
+
+<div class="frames">
+  <div class="frame" style="width:520px">
+    <div class="cap"><span>Нельзя удалить: есть персоны и память</span><span>409 → Modal</span></div>
+    <div class="scrim" style="padding:20px">
+      <div class="modal s-blue">
+        <div class="mh"><span class="tile md"><svg viewBox="0 0 24 24" class="ic"><use href="#i-landmark"/></svg></span><h3>Сферу «Банк» нельзя удалить</h3></div>
+        <div class="mb">
+          <div class="notice danger" style="margin-bottom:12px"><svg viewBox="0 0 24 24" class="ic"><use href="#i-info"/></svg><span>В ней <b>2 персоны</b> и <b>14 записей памяти</b>. Они живут только в этой сфере — удаление унесло бы их без следа.</span></div>
+          <div style="font-size:12px;font-weight:700;color:var(--c-text-heading);margin-bottom:6px">Что сделать</div>
+          <ol style="margin:0;padding-left:20px;font-size:13px;line-height:1.6;color:var(--c-text-primary)">
+            <li>Персонам сферы смените зону — «Во всех моих данных», другая сфера или проект — или удалите их.</li>
+            <li>Память сферы просмотрите и удалите записи, которые больше не нужны.</li>
+          </ol>
+          <div style="font-size:12px;color:var(--c-text-muted);margin-top:8px">Проекты сферы удалению не мешают: они вернутся в «Без сферы».</div>
+        </div>
+        <div class="mf"><button class="btn ghost">Закрыть</button><button class="btn primary">Открыть страницу сферы</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame m">
+    <div class="cap"><span>360 · нельзя удалить (только память)</span></div>
+    <div class="scrim m" style="min-height:470px">
+      <div class="modal sheet s-green">
+        <div class="mh"><span class="tile md"><svg viewBox="0 0 24 24" class="ic"><use href="#i-heart-pulse"/></svg></span><h3>Сферу «Здоровье» нельзя удалить</h3></div>
+        <div class="mb">
+          <div class="notice danger" style="margin-bottom:12px"><svg viewBox="0 0 24 24" class="ic"><use href="#i-info"/></svg><span>В ней <b>5 записей памяти</b>. Они живут только в этой сфере — удаление унесло бы их без следа.</span></div>
+          <div style="font-size:12px;font-weight:700;color:var(--c-text-heading);margin-bottom:6px">Что сделать</div>
+          <ol style="margin:0;padding-left:20px;font-size:13px;line-height:1.6"><li>Память сферы просмотрите и удалите записи, которые больше не нужны.</li></ol>
+        </div>
+        <div class="mf stack"><button class="btn ghost">Закрыть</button><button class="btn primary">Открыть страницу сферы</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame" style="width:420px">
+    <div class="cap"><span>Пустая сфера — обычное подтверждение</span><span>ConfirmDialog</span></div>
+    <div class="scrim" style="padding:20px">
+      <div class="modal">
+        <div class="mh"><h3>Удалить сферу «Дом»?</h3></div>
+        <div class="mb" style="font-size:13px;line-height:1.55;color:var(--c-text-secondary)">Проекты сферы вернутся в «Без сферы». Сами проекты, их чаты и память не пострадают.</div>
+        <div class="mf"><button class="btn ghost">Отмена</button><button class="btn danger">Удалить сферу</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+<script>
+const b=document.getElementById('th');
+b.onclick=()=>{const d=document.documentElement;const dark=d.dataset.theme!=='dark';d.dataset.theme=dark?'dark':'light';
+  b.setAttribute('aria-pressed',dark);b.textContent=dark?'Светлая тема':'Тёмная тема'};
+</script>
+</body>
+</html>

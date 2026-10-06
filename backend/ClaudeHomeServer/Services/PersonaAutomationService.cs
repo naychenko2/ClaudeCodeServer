@@ -279,7 +279,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
     // персоны (EnsureRuleChatAsync), глобальная работает вне проектов — там устройства нет.
     private ProjectBackgroundGate? RuleDeviceGate(Persona persona)
     {
-        if (_deviceGate is null || persona.Scope != PersonaScope.Project || persona.ProjectId is not { } pid) return null;
+        if (_deviceGate is null || PersonaZone.OwnProjectId(persona) is not { } pid) return null;
         if (_projects.GetById(pid) is not { } project) return null;
         var gate = _deviceGate.Check(project);
         return gate.IsReady ? null : gate;

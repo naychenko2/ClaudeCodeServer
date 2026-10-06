@@ -24,9 +24,11 @@ public interface IPersonaRecallSource
     // null — персона не найдена / память выключена. Аргументы один-в-один с
     // `PersonaMemoryService.BuildRecallAsync`; необязательных значений у шва нет
     // намеренно — вызывающий один, дефолты фасада ему не нужны.
+    // sessionProjectId — проект ЧАТА: единственный ключ полки сферы (не персона и не аргументы
+    // модели); null — чат вне проекта, полка сферы не вспоминается.
     Task<PersonaRecallBlock?> BuildRecallAsync(
         string ownerId, string personaId, string query, int topK, double minScore,
-        DossierRecallRequest? dossierRequest, bool splitDossier);
+        DossierRecallRequest? dossierRequest, bool splitDossier, string? sessionProjectId = null);
 }
 
 // Запись памяти, попавшая в блок recall: только то, что нужно манифесту атрибуции F3
@@ -42,4 +44,5 @@ public sealed record PersonaRecallBlock(
     string? DossierText,
     IReadOnlyList<PersonaRecallEntry> Hits,
     IReadOnlyList<PersonaRecallEntry> TeamHits,
-    IReadOnlyList<ChangeDossier> DossierHits);
+    IReadOnlyList<ChangeDossier> DossierHits,
+    IReadOnlyList<PersonaRecallEntry>? SphereHits = null);

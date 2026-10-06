@@ -66,7 +66,7 @@ public static class BackupValidation
         CheckList<Session>(problems, dataDir, "sessions.json", SessionOpts);
         CheckList<Persona>(problems, dataDir, "personas.json", PersonaOpts);
         CheckList<TaskItem>(problems, dataDir, "tasks.json", CaseInsensitiveOpts);
-        CheckList<ProjectGroup>(problems, dataDir, "groups.json", CaseInsensitiveOpts);
+        CheckList<Sphere>(problems, dataDir, "groups.json", CaseInsensitiveOpts);
         // devices.json — реестр устройств десктопного агента (ADR-008). Стор критичный:
         // в нём живут надгробия отозванных устройств и монотонные версии токенов, а
         // молчаливо пустой стор после восстановления означал бы «все устройства пропали,

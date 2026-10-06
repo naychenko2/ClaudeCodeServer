@@ -2,8 +2,10 @@ import type { ReactNode } from 'react';
 import type { ProjectGroup } from '../../types';
 import { C, R, FONT, SHADOW } from '../../lib/design';
 import { IconButton } from '../../components/ui';
-import { Settings, LayoutGrid, Inbox } from 'lucide-react';
+import { Settings, LayoutGrid, Inbox, Plus } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { NoSphereTile, SphereTile } from '../spheres/SphereTile';
 
 export type ProjectView = 'all' | 'sleeping' | string;   // string = groupId
 
@@ -14,10 +16,13 @@ interface Props {
   groups: { group: ProjectGroup; count: number }[];
   sleepingCount: number;
   onManageGroups?: () => void;
+  // Флаг spheres: «+» у заголовка «Сферы»
+  onCreateSphere?: () => void;
 }
 
 // Левый сайдбар навигации: «Все проекты» + список групп + «Без группы».
-export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, onManageGroups }: Props) {
+export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, onManageGroups, onCreateSphere }: Props) {
+  const spheres = useFeature(FLAGS.spheres);
   return (
     <aside style={{
       width: '100%', height: '100%', boxSizing: 'border-box', background: C.bgPanel,
@@ -33,10 +38,15 @@ export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, o
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '13px 4px 9px' }}>
         <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 10, letterSpacing: '0.08em', color: C.textMuted }}>
-          ГРУППЫ
+          {spheres ? 'СФЕРЫ' : 'ГРУППЫ'}
         </span>
+        {spheres && onCreateSphere && (
+          <IconButton onClick={onCreateSphere} title="Новая сфера" size="sm">
+            <Plus size={ICON_SIZE.sm} strokeWidth={2} />
+          </IconButton>
+        )}
         {onManageGroups && (
-          <IconButton onClick={onManageGroups} title="Управление группами" size="sm">
+          <IconButton onClick={onManageGroups} title={spheres ? 'Управление сферами' : 'Управление группами'} size="sm">
             <Settings size={ICON_SIZE.sm} strokeWidth={2} />
           </IconButton>
         )}
@@ -54,7 +64,9 @@ export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, o
               background: selected ? C.bgWhite : 'transparent', boxShadow: selected ? SHADOW.card : 'none',
             }}
           >
-            <span style={{ width: 4, height: 17, borderRadius: 2, background: g.color || C.textMuted, flexShrink: 0 }} />
+            {spheres
+              ? <SphereTile sphere={g} size={22} />
+              : <span style={{ width: 4, height: 17, borderRadius: 2, background: g.color || C.textMuted, flexShrink: 0 }} />}
             <span style={{
               flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: selected ? 700 : 500,
               color: selected ? C.textHeading : C.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -66,16 +78,16 @@ export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, o
         );
       })}
       {groups.length === 0 && (
-        <div style={{ fontSize: 12.5, color: C.textMuted, padding: '2px 11px 4px' }}>Групп пока нет</div>
+        <div style={{ fontSize: 12.5, color: C.textMuted, padding: '2px 11px 4px' }}>{spheres ? 'Сфер пока нет' : 'Групп пока нет'}</div>
       )}
 
       <Row
         selected={view === 'sleeping'}
         onClick={() => onSelect('sleeping')}
-        label="Без группы"
+        label={spheres ? 'Без сферы' : 'Без группы'}
         count={sleepingCount}
         muted
-        icon={<Inbox size={ICON_SIZE.sm} strokeWidth={2} />}
+        icon={spheres ? <NoSphereTile size={18} /> : <Inbox size={ICON_SIZE.sm} strokeWidth={2} />}
       />
 
       <div style={{ flex: 1 }} />

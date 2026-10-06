@@ -112,7 +112,7 @@ public class ImageChatV3MigrationTests : IDisposable
 
     [Fact]
     public void Схема_бэкапа_не_растёт() =>
-        BackupSchema.Version.Should().Be(9, "маркер MigratedAt аддитивный, формат файлов тот же");
+        BackupSchema.Version.Should().Be(10, "маркер MigratedAt аддитивный, формат файлов тот же");
 
     private sealed class ManualTime(DateTimeOffset now) : TimeProvider
     {

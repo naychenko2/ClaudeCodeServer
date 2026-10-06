@@ -16,10 +16,11 @@ interface Props {
   onMove: (p: Project) => void;
   onEdit: (p: Project, e: MouseEvent) => void;
   onDelete: (p: Project) => void;
+  onRemoveFromSphere?: (p: Project) => void;
 }
 
 // Мобильная карточка проекта: плитка + имя (+ меню) + путь + подпись «N чатов · дата».
-export function ProjectCard({ project: p, online, hasActiveSession, onOpen, onMove, onEdit, onDelete }: Props) {
+export function ProjectCard({ project: p, online, hasActiveSession, onOpen, onMove, onEdit, onDelete, onRemoveFromSphere }: Props) {
   const pinned = usePinnedIds().includes(p.id);
 
   const count = p.sessionCount ?? 0;
@@ -53,7 +54,7 @@ export function ProjectCard({ project: p, online, hasActiveSession, onOpen, onMo
             {p.name}
           </span>
           {pinned && <Pin size={13} strokeWidth={2} color={C.accent} style={{ flexShrink: 0 }} aria-label="Закреплён" />}
-          {online && <ProjectActionsMenu project={p} onMove={onMove} onEdit={onEdit} onDelete={onDelete} />}
+          {online && <ProjectActionsMenu project={p} onMove={onMove} onEdit={onEdit} onDelete={onDelete} onRemoveFromSphere={onRemoveFromSphere} />}
         </div>
         {/* Путь */}
         <div style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.textMuted, margin: '3px 0 6px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.rootPath}>

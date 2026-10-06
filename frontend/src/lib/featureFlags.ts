@@ -2,7 +2,8 @@
 // (через /api/auth/me и /api/feature-flags) и раздаются компонентам хуком useFeature.
 // Паттерн — как у offline.ts: модульное состояние + подписки + useSyncExternalStore.
 
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
+import { api } from './api';
 
 // Тонкий реестр ключей для type-safe вызовов useFeature. Дублирует ключи из
 // бэкового FeatureFlagCatalog (одна строка на флаг). Описания/дефолты/стадии
@@ -46,6 +47,8 @@ export const FLAGS = {
   videoEditor: 'video-editor',
 // MIDI-просмотрщик: ноты из .mid в файлах и в редакторе звука.
   midiEditor: 'midi-editor',
+  // Сферы: группы проектов с общей командой персон и хартией; зона персоны «Сфера».
+  spheres: 'spheres',
   // Панель «Картинки» v5 «Создать / Править»: режим на чат и выбор по режиму. Выключен —
   // картинки ведут себя побайтно как раньше.
   imagePanelV5: 'image-panel-v5',
@@ -63,6 +66,14 @@ function emit() {
 // Заменить весь набор флагов (на старте/после логина из ответа me)
 export function setAllFlags(flags: Record<string, boolean>) {
   _flags = { ...flags };
+  emit();
+}
+
+// Влить пришедшие значения поверх известных: пустой или частичный ответ не затирает
+// ключи, которых в нём нет (в отличие от setAllFlags, которая заменяет набор целиком)
+export function mergeFlags(flags: Record<string, boolean> | null | undefined) {
+  if (!flags) return;
+  _flags = { ..._flags, ...flags };
   emit();
 }
 
@@ -92,4 +103,57 @@ export function useFeature(key: FlagKey): boolean {
     () => getFlag(key),
     () => getFlag(key),
   );
+}
+
+// Освежение стора: флаги читаются при старте SPA, а тумблер мог сменить другой клиент
+// или прямой PUT. Дросселирование — чтобы alt-tab не дёргал сервер на каждый возврат.
+export const FLAGS_REFRESH_MIN_INTERVAL_MS = 45_000;
+
+export function createFlagsRefresher(
+  fetchFlags: () => Promise<Record<string, boolean> | null | undefined>,
+  now: () => number = Date.now,
+  minIntervalMs: number = FLAGS_REFRESH_MIN_INTERVAL_MS,
+) {
+  let last = Number.NEGATIVE_INFINITY;
+  let generation = 0;
+  async function refresh(force = false): Promise<boolean> {
+    const t = now();
+    if (!force && t - last < minIntervalMs) return false;
+    last = t;
+    const mine = generation;
+    try {
+      const flags = await fetchFlags();
+      // ответ после cancel (выход, смена пользователя) в стор не попадает
+      if (mine === generation) mergeFlags(flags);
+    } catch {
+      // сбой освежения не критичен: остаются прежние значения
+    }
+    return true;
+  }
+  return Object.assign(refresh, {
+    // Флаги только что получены другим путём (стартовый /auth/me): запрос не нужен
+    markFresh() { last = now(); },
+    // Отбросить ответы всех запросов, ещё летящих
+    cancel() { generation++; },
+  });
+}
+
+// Один раз на всё приложение (после авторизации): при монтировании и при возврате
+// окну видимости/фокуса.
+export function useFeatureFlagsRefresh(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    const refresh = createFlagsRefresher(() => api.auth.me().then(me => me?.featureFlags));
+    // Стартовый /auth/me в App.tsx сам кладёт флаги в стор — здесь только отметка времени
+    refresh.markFresh();
+    const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
+    const onFocus = () => { void refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      refresh.cancel();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [enabled]);
 }

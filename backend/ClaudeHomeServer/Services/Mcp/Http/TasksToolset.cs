@@ -45,6 +45,7 @@ public sealed class TasksToolset(
     ISessionBroadcaster broadcaster,
     // Подсистема Notes отключаемая: null — обратная запись в заметку-источник тихо
     // пропускается (см. использование ниже, паритет с TasksController).
+    ClaudeHomeServer.Services.Spheres.ISphereDirectory spheres,
     INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
@@ -205,10 +206,10 @@ public sealed class TasksToolset(
                 // чужой привязкой вызывателя (блокер приёмки волны 2.1)
                 if (personaId.Length > 0
                     && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId,
-                        AssignedPersonaScopes(context.OwnerId, personaId)) is { } personaError)
+                        AssignedPersonaScopes(context.OwnerId, personaId), spheres) is { } personaError)
                     return Deny(personaError);
                 if (selfPersonaId is not null
-                    && TaskPersonaValidator.Error(personas, context.OwnerId, selfPersonaId, targetProjectId, extraScopes) is { } creatorError)
+                    && TaskPersonaValidator.Error(personas, context.OwnerId, selfPersonaId, targetProjectId, extraScopes, spheres) is { } creatorError)
                     return Deny(creatorError);
 
                 // Дефект: гейты DefectRules.EnsureNotClosedAtCreate (статус/категория колонки)
@@ -304,7 +305,7 @@ public sealed class TasksToolset(
                 // Скоупы назначаемой персоны, не вызывателя — как REST Update (блокер 2.1)
                 if (personaId.Length > 0
                     && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId,
-                        AssignedPersonaScopes(context.OwnerId, personaId)) is { } personaError)
+                        AssignedPersonaScopes(context.OwnerId, personaId), spheres) is { } personaError)
                     return Deny(personaError);
 
                 // Дефект: вердикт. VerifiedAt/PersonaId подставляет сервер из сессии вызова —

@@ -7,6 +7,7 @@ import { personaLabel } from '../lib/personas';
 import { modelProvider } from '../lib/models';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
+import { isZonedPersona, OPEN_COMPANION_PICKER_EVENT } from '../lib/personaZone';
 
 // Результат выбора: ровно одно из полей задано (либо оба null — «без собеседника»)
 export interface CompanionSelection {
@@ -69,6 +70,13 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
+  // Карточка отказа хода («Сменить собеседника») просит открыть этот же выбор
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener(OPEN_COMPANION_PICKER_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_COMPANION_PICKER_EVENT, onOpen);
+  }, []);
+
   // Закрытие дропдауна сбрасывает мультивыбор группы
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс мультивыбора при закрытии dropdown
@@ -93,7 +101,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
   // Подгруппы персон в порядке отображения: проектные → обычные глобальные.
   // Материализованный пантеон OmO (scope=global + templateKey) в выбор собеседника
   // не включаем — как и виртуальные роли; подключение только через раздел «Персоны».
-  const projectPersonas = personas.filter(p => p.scope === 'project');
+  const projectPersonas = personas.filter(isZonedPersona);
   const regularGlobals = personas.filter(p => p.scope === 'global' && !p.templateKey);
   const selectablePersonas = [...projectPersonas, ...regularGlobals];
 

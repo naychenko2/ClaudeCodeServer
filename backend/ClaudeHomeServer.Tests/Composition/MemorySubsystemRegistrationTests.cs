@@ -151,9 +151,9 @@ public class MemorySubsystemRegistrationTests
         // проверяется в `KnowledgeSubsystemRegistrationTests` — здесь держим страховку
         // со стороны Memory-подсистемы.
         sp.GetServices<IKnowledgeSyncParticipant>().Should().HaveCount(
-            5,
-            "пять форвардеров `IKnowledgeSyncParticipant → {PersonaMemoryService, TeamMemoryService, " +
-            "DossierStore, NotesKnowledgeService, ProjectKnowledgeSyncService}` остаются в Program.cs — " +
+            6,
+            "шесть форвардеров `IKnowledgeSyncParticipant → {PersonaMemoryService, TeamMemoryService, " +
+            "DossierStore, SphereMemoryService, NotesKnowledgeService, ProjectKnowledgeSyncService}` остаются в Program.cs — " +
             "проверка ловит регрессию «удалили вместе с блоком Memory»");
     }
 }

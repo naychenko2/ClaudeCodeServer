@@ -19,6 +19,7 @@ public static class PromptSectionContributorsDi
     public static IServiceCollection AddPromptSectionContributors(this IServiceCollection services)
     {
         services.AddPromptSectionContributor<DossierTrailerContributor>();
+        services.AddPromptSectionContributor<SphereCharterContributor>();
         services.AddPromptSectionContributor<PromptSectionsContributor>();
         services.AddPromptSectionContributor<PersonaBindingsContributor>();
         // PersonaLayerContributor и PersonaRecallContributor живут в Turn: тянет по

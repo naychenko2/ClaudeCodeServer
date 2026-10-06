@@ -18,7 +18,7 @@ import { sharedQuote } from '../useQuote';
 import { contextInputCounts } from './samples';
 import { ASPECT_AUTO, ASPECT_OPTIONS } from './actions';
 import { settingsOf } from './executors';
-import { editAspectOf, resetEdit, wishForQuote } from './formatChoice';
+import { editAspectOf, editOf, resetEdit, wishForQuote } from './formatChoice';
 import { prefsSettled } from '../thread/prefs';
 import { threadOfPrimary } from './state';
 
@@ -99,6 +99,11 @@ export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Pro
   if (formatOn && req.op === 'outpaint') {
     aspect = editAspectOf(thread.id);
     if (!aspect) { showToast(FORMAT_TEXT.outpaintNeedsFormat, '', 'error'); throw new ReportedError(FORMAT_TEXT.outpaintNeedsFormat); }
+  }
+  // Другие пропорции выбраны, а способ — нет: правка модели их не применит (она пропорции не тянет и не режет)
+  if (formatOn && (req.op === 'edit' || req.op === 'inpaint') && editAspectOf(thread.id) && editOf(thread.id).how === null) {
+    showToast(FORMAT_TEXT.pendingChoice, '', 'error');
+    throw new ReportedError(FORMAT_TEXT.pendingChoice);
   }
   // Формат считает сервер по сохранённому желанию: запуск ждёт, пока последняя правка формата дойдёт до него
   if (formatOn) await prefsSettled(scope);

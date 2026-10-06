@@ -238,6 +238,39 @@ for (const { name, vp } of VIEWPORTS) {
   }
 }
 
+// «Дорисовать» без пропорций: чип выбирается, «Формат» открывается сам с подсказкой, запуск заблокирован до выбора
+test('чип «Дорисовать» без формата открывает «Формат» с подсказкой, после выбора пропорций запуск разблокирован', async ({ page }) => {
+  await open(page, VIEWPORTS[0].vp, 'light', { kind: 'hero', model: NANO });
+  await expect(chip(page)).toBeVisible({ timeout: 15_000 });
+  await page.locator('[data-composer-actions] [data-action-chip="outpaint"]').click();
+  await expect(page.locator('[data-fmt-note="needs-choice"]')).toContainText('«Дорисовать»: выберите в «Формате» пропорции, до которых дорисовать.', { timeout: 10_000 });
+  await expect(runBtn(page)).toBeDisabled();
+  // Вопроса «Пропорции» под чипами под флагом нет
+  await expect(page.locator('[data-composer-actions]').getByText('Пропорции')).toHaveCount(0);
+  await aspect(page, '9:16').click();
+  await expect(page.locator('[data-fmt-note="outpaint"]')).toContainText('Края дорисует ИИ');
+  await expect(runBtn(page)).toBeEnabled({ timeout: 10_000 });
+  await expect(runBtn(page)).toContainText('✦ Дорисовать');
+  await expect.poll(() => chipText(page)).toContain('9:16 · дорисовать');
+  await page.keyboard.press('Escape');
+  await runBtn(page).click();
+  await expect(page.locator('[data-composer-mode-bar]')).toContainText(/Дорисов|Готово/, { timeout: 10_000 });
+});
+
+// Панель «Контекст»: секция «Формат» под «Чем» с тем же содержимым; правка в ней видна и на чипе строки
+test('панель «Контекст»: секция «Формат» под «Чем», правка из панели меняет чип строки', async ({ page }) => {
+  await open(page, VIEWPORTS[0].vp, 'light', { kind: 'draft', model: NANO });
+  await expect(chip(page)).toBeVisible({ timeout: 15_000 });
+  await page.locator('[data-context-row] [data-chip="primary"]').click();
+  const panel = page.locator('[data-context-panel]');
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  const sections = await panel.locator('[data-ctx-section]').evaluateAll(els => els.map(e => e.getAttribute('data-ctx-section')));
+  expect(sections.indexOf('format')).toBe(sections.indexOf('by') + 1);
+  await panel.locator('[data-ctx-section="format"] [data-fmt-aspect="9:16"]').click();
+  await expect.poll(() => chipText(page)).toContain('9:16');
+  await expect(panel.locator('[data-ctx-section="format"] [data-fmt-foot]')).toContainText('Запомнится для картинок проекта «Сайт студии».');
+});
+
 // Два клика подряд, пока ответ ручки ещё не пришёл: ступень не должна затереть выбранные пропорции (и наоборот)
 test('быстрые клики подряд: пропорции и ступень не теряют друг друга', async ({ page }) => {
   await open(page, VIEWPORTS[0].vp, 'light', { kind: 'draft', model: NANO });

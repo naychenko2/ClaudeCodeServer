@@ -274,6 +274,24 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         (await CountAsync(creatorChat.Id)).Should().Be((1, 0));
     }
 
+    [Fact]
+    public async Task Доклад_ЧатИсполнительВынесенВКорень_НеУходитНикомуДажеПриЖивомЗапустившем()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        var launcher = await LaunchChatAsync(task, "Чат запустившего");
+        var executorChat = await LaunchChatAsync(task, "Чат исполнителя");
+        executorChat.ParentDetached = true;
+        task.LinkedSessionId = executorChat.Id;
+        task.ExecutorLaunchedBySessionId = launcher.Id;
+        task.ExecutorLaunchedByPersonaId = launcher.PersonaId;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(launcher.Id)).Should().Be((0, 0));
+        (await CountAsync(creatorChat.Id)).Should().Be((0, 0));
+        (await CountAsync(executorChat.Id)).Should().Be((0, 0));
+    }
+
     // --- Адресат по цепочке: планировщик/QA создают и запускают задачи, доклад идёт оркестратору ---
 
     private sealed record Team(string OwnerId, Session Sofya, Session Egor, Session Vera, Persona Denis);

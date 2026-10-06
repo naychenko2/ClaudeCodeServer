@@ -104,9 +104,9 @@ public class TaskItem
     // из него — второй источник истины не заводим).
     public string? CreatedByPersonaId { get; set; }
     public string? SourceSessionId { get; set; }
-    // Кто последним запустил исполнителя (tasks_run_executor из чата / кнопка в UI): доклад о
+    // Кто последним запустил исполнителя (tasks_run_executor из чата): доклад о
     // завершении идёт в эту сессию, а не только в SourceSessionId (создателя карточки). Повторный
-    // запуск перезаписывает. Оба null — запуск человеком без чата или старые задачи: адресат
+    // запуск перезаписывает. Оба null — запуск человеком без чата (кнопка в UI не шлёт X-Caller-Session-Id и поля сбрасывает) или старые задачи: адресат
     // прежний. Аддитивные nullable-поля: tasks.json читается штатно, BackupSchema.Version не растёт.
     public string? ExecutorLaunchedBySessionId { get; set; }
     public string? ExecutorLaunchedByPersonaId { get; set; }

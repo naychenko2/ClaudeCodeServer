@@ -1545,6 +1545,14 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // затем унаследованный от родительской задачи (ReportToSessionId). Оба поднимаются по цепочке:
         // если сессия сама исполняет другую задачу, доклад идёт её адресату (планировщик → оркестратор).
         // Чужая/мёртвая сессия — откат на следующий пункт, в конце — создатель карточки.
+        // Чат-исполнитель вынесен пользователем в корень (ParentDetached) — «вынес из группы» значит
+        // «не докладывай»: инвариант сильнее любого адресата (запустивший, ReportToSessionId).
+        var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
+        if (executorSession?.ParentDetached == true)
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);
+            return;
+        }
         var addressee = ResolveAddressee(task.ExecutorLaunchedBySessionId, task.OwnerId)
             ?? ResolveAddressee(task.ReportToSessionId, task.OwnerId);
         // Персона авто-хода — персона сессии-адресата, а не создателя карточки
@@ -1557,7 +1565,6 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // ручная группировка (перетаскивание в списке чатов) побеждает связь по задаче, а явный
         // вынос в корень её гасит — «вынес из группы» значит «не докладывай туда». Чата-исполнителя
         // нет (задача закрыта без запуска) — остаётся SourceSessionId, как было.
-        var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
         var fromFallback = false;
         var targetId = addressee?.Id
             ?? ResolveReportTarget(executorSession, task.SourceSessionId, new TaskLookupAdapter(_tasks), out fromFallback);

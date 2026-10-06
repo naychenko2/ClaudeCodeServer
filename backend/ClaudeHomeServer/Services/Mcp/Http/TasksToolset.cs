@@ -246,7 +246,7 @@ public sealed class TasksToolset(
                     // Вид карточки и шаги воспроизведения дефекта. null Kind — Task (дефолт)
                     Kind: KindArg(arguments),
                     Repro: ReproArg(arguments),
-                    ReportToSessionId: InheritedReportTarget(session.Id));
+                    ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId));
                 TaskItem created;
                 try
                 {
@@ -791,12 +791,20 @@ public sealed class TasksToolset(
     // Сессия-вызыватель — чат-исполнитель другой задачи T, ждущий результата (планировщик, QA):
     // новая задача докладывает туда же, куда докладывает T, а не этой сессии, которая по правилу
     // «решать нечего» промолчит. Не исполнитель (обычный чат, человек) — null, адресат прежний.
-    private string? InheritedReportTarget(string callerSessionId)
+    // Адресат должен принадлежать владельцу вызова: чужая/несуществующая сессия — null.
+    private string? InheritedReportTarget(string callerSessionId, string ownerId) =>
+        InheritedReportTarget(callerSessionId, ownerId, tasks.GetBySession, id => sessions.GetById(id) is { } s
+            && sessions.ResolveOwnerId(s) == ownerId);
+
+    internal static string? InheritedReportTarget(string callerSessionId, string ownerId,
+        Func<string, TaskItem?> taskBySession, Func<string, bool> isOwnedSession)
     {
-        if (tasks.GetBySession(callerSessionId) is not { } parent || !TaskExecutionService.IsAwaitingResult(parent))
+        if (taskBySession(callerSessionId) is not { } parent || !TaskExecutionService.IsAwaitingResult(parent))
             return null;
         var target = parent.ReportToSessionId ?? parent.ExecutorLaunchedBySessionId ?? parent.SourceSessionId;
-        return string.IsNullOrEmpty(target) || target == callerSessionId ? null : target;
+        if (string.IsNullOrEmpty(target) || target == callerSessionId || !isOwnedSession(target))
+            return null;
+        return target;
     }
 
     private static string StringArg(JsonObject arguments, string name) =>

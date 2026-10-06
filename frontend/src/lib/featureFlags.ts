@@ -52,6 +52,8 @@ export const FLAGS = {
   // Панель «Картинки» v5 «Создать / Править»: режим на чат и выбор по режиму. Выключен —
   // картинки ведут себя побайтно как раньше.
   imagePanelV5: 'image-panel-v5',
+  // «Формат»: чип пропорций и размера в строке контекста, формат доходит до модели (ADR-025).
+  mediaFormat: 'media-format',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

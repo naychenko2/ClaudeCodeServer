@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ChatItem, ServerMessage, TeamEscalationKind, SessionTeamImplement } from '../../types';
 import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, retryableInterruptedIndex, type ChatState } from '../chatReducer';
 
@@ -373,6 +373,30 @@ describe('applyServerMessage: инструменты', () => {
 });
 
 // --- bg_agent_done (завершение фоновых агентов) ---
+
+// Метка последнего события прогресса: от неё карточка отсчитывает «осталось»
+describe('applyServerMessage: tool_progress ставит progressAt', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const at = (s: ChatState) => (s.items.find(it => it.kind === 'tool_use') as Extract<ChatItem, { kind: 'tool_use' }>).progressAt;
+  const progress = (p: Partial<Extract<ServerMessage, { type: 'tool_progress' }>>) =>
+    ({ sessionId: 's', type: 'tool_progress', toolUseId: 't1', stage: 'running', ...p }) as ServerMessage;
+
+  it('новый процент, подпись или ETA двигают метку; повтор того же снимка — нет', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let s = applyServerMessage(initialChatState(), { sessionId: 's', type: 'tool_use', id: 't1', name: 'mcp__tests__run_tests', input: {}, startedAt: 0 } as ServerMessage);
+    s = applyServerMessage(s, progress({ label: '10 из 100', percent: 10, exact: true }));
+    expect(at(s)).toBe(1_000);
+    vi.setSystemTime(5_000);
+    s = applyServerMessage(s, progress({ label: '10 из 100', percent: 10, exact: true }));
+    expect(at(s)).toBe(1_000);
+    s = applyServerMessage(s, progress({ label: '11 из 100', percent: 11, exact: true }));
+    expect(at(s)).toBe(5_000);
+    vi.setSystemTime(9_000);
+    s = applyServerMessage(s, progress({ label: '11 из 100', percent: 11, exact: true, etaSeconds: 30 }));
+    expect(at(s)).toBe(9_000);
+  });
+});
 
 describe('applyServerMessage: bg_agent_done', () => {
   it('помечает bgDone у всех перечисленных tool_use', () => {

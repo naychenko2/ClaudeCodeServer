@@ -47,7 +47,7 @@ function ProgressMeter({ pct, text }: { pct: ProgressPct; text: string | null })
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, height: CAPTION_LINE_H, paddingLeft: BELOW_PAD, paddingRight: SP.sm }}>
       {/* Серая (muted): вторичная информация не спорит с акцентом главного действия */}
-      <ProgressBar value={pct.value} estimate={pct.estimate} tone="muted" size="thin" label={pct.label} transition="width .5s linear" style={{ flex: 1, minWidth: 0 }} />
+      <ProgressBar value={pct.value} estimate={pct.estimate} tone="muted" size="thin" label={[pct.label, text].filter(Boolean).join(' · ') || undefined} transition="width .5s linear" style={{ flex: 1, minWidth: 0 }} />
       {text && (
         <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
           {text}
@@ -328,7 +328,9 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   const progressValue = running && !isQueued(item.progress) ? toolProgressPercent(item.progress) : null;
   const progressText = running ? toolProgressText(item.progress, progressValue == null) : null;
   const progressPct: ProgressPct | null = progressValue != null
-    ? { value: progressValue, estimate: item.progress?.exact !== true, label: toolProgressText(item.progress) ?? undefined }
+    // Подпись для скринридера — без процента и ETA источника: их полоса добавит из того же
+    // отсчёта, что видно глазами (иначе скринридер читал бы застывшее «осталось»)
+    ? { value: progressValue, estimate: item.progress?.exact !== true, label: toolProgressText(item.progress, false) ?? undefined }
     : null;
   // Строка этапов прогона тестов (этапы шлёт сервер, они же в истории вызова): идёт — «сейчас»
   // по часам карточки, закрыта — до результата или до обрыва
@@ -345,7 +347,11 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   const stageCaption = hasStages ? stageCaptionOf(item.progress, item.name) : null;
   // «Осталось» по темпу текущего этапа — от его начала, а не от старта вызова (сборка не в счёт)
   const currentStage = stages.length > 0 && stages[stages.length - 1].state === 'current' ? stages[stages.length - 1] : null;
-  const meter = progressPct ? meterText(item.progress, currentStage?.ms ?? null) : null;
+  // «Сейчас» — тот же кадр часов карточки, что у строки этапов (startedAt + shownElapsed): оба
+  // на клиентском Date.now(), как и progressAt из редьюсера. Date.now() в рендере не берём
+  const nowMs = typeof item.startedAt === 'number' && shownElapsed != null ? item.startedAt + shownElapsed : null;
+  const sinceProgress = nowMs != null && typeof item.progressAt === 'number' ? nowMs - item.progressAt : null;
+  const meter = progressPct ? meterText(item.progress, currentStage?.ms ?? null, sinceProgress) : null;
   // На мобиле подпись прогресса и итог — отдельной строкой под шапкой у ВСЕХ карточек
   // (шапка остаётся описанию, итог у всех стоит на одном месте). Строка держится с начала
   // выполнения, поэтому завершение ленту не сдвигает

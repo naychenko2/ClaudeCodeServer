@@ -54,21 +54,41 @@ describe('nextTypewriterStep — машинка индикатора (вариа
 
 describe('meterText — подпись справа от полосы', () => {
   it('процента нет — молчим', () => {
-    expect(meterText({ stage: 'running', label: 'x' }, 60_000)).toBeNull();
+    expect(meterText({ stage: 'running', label: 'x' }, 60_000, 0)).toBeNull();
   });
   it('оценка — с «≈», ETA источника — «осталось ~»', () => {
-    expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null)).toBe('≈40% · осталось ~1:15');
+    expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 0)).toBe('≈40% · осталось ~1:15');
   });
   it('настоящий процент без ETA — «осталось ≈» по темпу этапа', () => {
     // 25% за 30 с → ещё 90 с
-    expect(meterText({ stage: 'running', percent: 25, exact: true }, 30_000)).toBe('25% · осталось ≈1:30');
+    expect(meterText({ stage: 'running', percent: 25, exact: true }, 30_000, 0)).toBe('25% · осталось ≈1:30');
   });
-  it('мало выборки (до 10% или 15 с) — только процент', () => {
-    expect(meterText({ stage: 'running', percent: 5, exact: true }, 60_000)).toBe('5%');
-    expect(meterText({ stage: 'running', percent: 50, exact: true }, 10_000)).toBe('50%');
+  it('мало выборки (до 10% или 15 с этапа на момент события) — только процент', () => {
+    expect(meterText({ stage: 'running', percent: 5, exact: true }, 60_000, 0)).toBe('5%');
+    expect(meterText({ stage: 'running', percent: 50, exact: true }, 10_000, 0)).toBe('50%');
+    // Этап идёт 20 с, но событие было 8 с назад — на момент события этапу 12 с: порог не пройден
+    expect(meterText({ stage: 'running', percent: 50, exact: true }, 20_000, 8_000)).toBe('50%');
   });
   it('оценка без ETA темпом не считается', () => {
-    expect(meterText({ stage: 'running', percent: 50 }, 60_000)).toBe('≈50%');
+    expect(meterText({ stage: 'running', percent: 50 }, 60_000, 0)).toBe('≈50%');
+  });
+  it('отсчёт тает между событиями, а не пересчитывается', () => {
+    // На событии: этап 30 с, 25% → ещё 90 с. Прошло 30 с без событий → осталось 60 с
+    expect(meterText({ stage: 'running', percent: 25, exact: true }, 60_000, 30_000)).toBe('25% · осталось ≈1:00');
+  });
+  it('срок вышел, а событий нет (висит хвост) — «осталось» убираем', () => {
+    expect(meterText({ stage: 'running', percent: 25, exact: true }, 150_000, 120_000)).toBe('25%');
+  });
+  it('хвост (≥ 98%) темпом не обещаем', () => {
+    expect(meterText({ stage: 'running', percent: 99, exact: true }, 378_000, 0)).toBe('99%');
+  });
+  it('без метки события (после F5) — без «осталось»', () => {
+    expect(meterText({ stage: 'running', percent: 25, exact: true }, 30_000, null)).toBe('25%');
+    expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, null)).toBe('≈40%');
+  });
+  it('ETA источника тоже отсчитывается', () => {
+    expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 15_000)).toBe('≈40% · осталось ~1:00');
+    expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 80_000)).toBe('≈40%');
   });
 });
 

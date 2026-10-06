@@ -625,7 +625,14 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         // перетирается: иначе «✕ сборка» оборванного прогона вернулась бы в «✓ сборка»
         if (stages != null && !(isFinalStages(it.stages, it.totals) && !isFinalStages(stages, totals)))
           next = { ...next, stages, ...(totals != null ? { totals } : {}) };
-        if (it.result == null && !final) next = { ...next, progress: rest };
+        if (it.result == null && !final) {
+          // Метка последнего события, сдвинувшего прогресс: от неё отсчитывается «осталось» —
+          // оценка фиксируется на момент события и честно тает, а не пересчитывается вечно.
+          // Повтор того же снимка метку не двигает (иначе новый ETA вычитался бы дважды)
+          const moved = it.progress?.percent !== rest.percent || it.progress?.label !== rest.label
+            || it.progress?.etaSeconds !== rest.etaSeconds;
+          next = { ...next, progress: rest, ...(moved ? { progressAt: Date.now() } : {}) };
+        }
         return next;
       }), toolUseId));
     }

@@ -360,7 +360,11 @@ describe('ToolUseView — витрина Веры', () => {
     // Полоса — на видимой дорожке во всю строку: конец виден
     expect(html).toMatch(/role="progressbar"[^>]*aria-valuenow="40"/);
     expect(html).toContain('background:var(--c-progress-track)');
-    expect(html).toContain('40% · осталось ~0:45');
+    // Справа от полосы — процент; «осталось» отсчитывается от события прогресса (progressAt) по
+    // часам карточки, которых у статики нет, — отсчёт покрыт тестами meterText. Застывшего ETA
+    // источника нет ни глазами, ни в подписи для скринридера
+    expect(html).toContain('>40%<');
+    expect(html).not.toContain('осталось ~0:45');
     // Процент и «осталось» только у полосы: в подписи остаётся шаг
     // (полная подпись с процентом — только в aria-label полосы, для скринридера)
     expect(html).toContain('>шаг 8 из 20<');

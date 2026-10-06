@@ -2071,7 +2071,7 @@ export type ChatItem =
   // appearedAt — прежний startedAt до сдвига (только живая лента): порог индикатора ожидания;
   // progress — последний tool_progress (только живая лента, в историю не пишется);
   // stages/totals — этапы и итог run_tests: из tool_progress вживую и из истории после F5
-  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean; workflowAborted?: boolean; bgDone?: boolean; bgAborted?: boolean; startedAt?: number; finishedAt?: number; started?: boolean; appearedAt?: number; progress?: ToolProgress; stages?: ToolStage[]; totals?: ToolRunTotals }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean; workflowAborted?: boolean; bgDone?: boolean; bgAborted?: boolean; startedAt?: number; finishedAt?: number; started?: boolean; appearedAt?: number; progress?: ToolProgress; progressAt?: number; stages?: ToolStage[]; totals?: ToolRunTotals }
   // decision — вердикт пользователя (только живая лента: permission_request в history не персистится)
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean; decision?: 'allowed' | 'denied' | 'always' }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }

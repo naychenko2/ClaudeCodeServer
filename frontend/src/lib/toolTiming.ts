@@ -55,12 +55,29 @@ export function toolProgressText(p: ToolProgress | null | undefined, meter = tru
 export const ETA_MIN_PERCENT = 10;
 export const ETA_MIN_STAGE_MS = 15_000;
 
-export function meterText(p: ToolProgress | null | undefined, stageMs: number | null): string | null {
+// Хвост прогона темпом не обещаем: на последних процентах копятся самые долгие тесты
+export const ETA_TAIL_PERCENT = 98;
+
+// sinceMs — сколько прошло с последнего события прогресса (progressAt); null — метки нет (после
+// F5 до первого события): «осталось» тогда не показываем. Оценка фиксируется на МОМЕНТ события
+// и отсчитывается вниз, а не пересчитывается на каждом рендере: пока хвостовые тесты висят,
+// процент стоит, а время этапа растёт — пересчёт держал бы «≈0:03» вечно. Истекла — молчим
+export function meterText(p: ToolProgress | null | undefined, stageMs: number | null, sinceMs: number | null): string | null {
   if (typeof p?.percent !== 'number') return null;
   const parts = [`${p.exact ? '' : '≈'}${Math.round(toolProgressPercent(p)!)}%`];
-  if (typeof p.etaSeconds === 'number' && p.etaSeconds > 0) parts.push(`осталось ~${formatClock(p.etaSeconds * 1000)}`);
-  else if (p.exact && stageMs != null && stageMs >= ETA_MIN_STAGE_MS && p.percent >= ETA_MIN_PERCENT && p.percent < 100)
-    parts.push(`осталось ≈${formatClock(stageMs / p.percent * (100 - p.percent))}`);
+  const since = sinceMs == null ? null : Math.max(0, sinceMs);
+  let left: number | null = null;
+  if (since == null) left = null;
+  else if (typeof p.etaSeconds === 'number' && p.etaSeconds > 0) left = p.etaSeconds * 1000 - since;
+  else if (p.exact && stageMs != null && p.percent < ETA_TAIL_PERCENT) {
+    // Сколько шёл этап на момент события — по нему и темп, и пороги выборки
+    const stageAt = stageMs - since;
+    if (stageAt >= ETA_MIN_STAGE_MS && p.percent >= ETA_MIN_PERCENT)
+      left = stageAt / p.percent * (100 - p.percent) - since;
+  }
+  // Меньше секунды — уже «0:00»: не обещаем то, что истекает на глазах
+  if (left != null && left >= 1000)
+    parts.push(`осталось ${typeof p.etaSeconds === 'number' && p.etaSeconds > 0 ? '~' : '≈'}${formatClock(left)}`);
   return parts.join(' · ');
 }
 

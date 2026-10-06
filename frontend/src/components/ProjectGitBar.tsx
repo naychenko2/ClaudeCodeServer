@@ -435,6 +435,9 @@ export function ProjectGitBar({
       // display/gap/alignItems — для ComposerLipShell (это inner-стиль обёртки
       // мини-/полного слоя); внешние margin/height/background кладёт оболочка.
       display: 'flex', alignItems: 'center', gap: slim ? 8 : 12,
+      // Во всю ширину слоя: иначе обёртка по содержимому, и распорка flex: 1 не уводит
+      // кнопки действий к правому краю
+      minWidth: 0, width: '100%', height: '100%',
     }}>
       {/* Заголовок-селектор полос (composer-strip). Когда переключатель есть, он заменяет
           отдельную плашку «Git ▾» сверху — единая плашка с веткой и действиями */}

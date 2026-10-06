@@ -358,7 +358,9 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
     ? <SettingsPanel projectId={projectId} L={L} catalog={L.catalog} isMobile={isMobile} thread={thread} /> : null;
 
   const fullNode = (
-    <div ref={shell}>
+    // Обёртка — единственный ребёнок слоя оболочки: ряд раскладывает она (распорка flex: 1
+    // уводит настройки вправо), иначе чип прилипал влево, а персонаж уезжал на вторую строку
+    <div ref={shell} style={fullInnerStyle}>
       {title}
       {thread ? (
         <span style={{ display: 'inline-flex', minWidth: 72, flex: '0 1 auto' }}>

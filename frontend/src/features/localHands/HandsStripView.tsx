@@ -198,7 +198,9 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
   );
 
   const fullNode = (
-    <div ref={narrowRef}>
+    // Обёртка — единственный ребёнок слоя оболочки: ряд раскладывает она (распорка flex: 1
+    // уводит «Стоп» вправо)
+    <div ref={narrowRef} style={fullInnerStyle}>
       {title}
       {chip}
       {!isMobile && (

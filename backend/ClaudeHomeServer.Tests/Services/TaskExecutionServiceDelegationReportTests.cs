@@ -211,4 +211,246 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         queued.StaffNote.Should().Be(TaskExecutionService.DelegatorReactionStaffNote);
         _sessions.GetVisiblePending(parent.Id).Should().BeEmpty();
     }
+
+    // --- Адресат доклада — запустивший исполнителя, а не только создатель карточки ---
+
+    private async Task<Session> LaunchChatAsync(TaskItem task, string name)
+    {
+        var persona = CreatePersona(task.OwnerId!, "Запускающий " + name);
+        var chat = await _sessions.CreatePersonaChatAsync(task.OwnerId!, persona.Id, ClaudeMode.AcceptEdits, name: name);
+        StubProcess(chat);
+        return chat;
+    }
+
+    private async Task<(int Cards, int Reactions)> CountAsync(string sessionId)
+    {
+        var history = await _sessions.GetHistoryAsync(sessionId);
+        return (history.OfType<StoredTextMessage>().Count(m => m.DelegationTaskId is not null),
+            history.OfType<StoredUserMessage>().Count(m => m.StaffNote == TaskExecutionService.DelegatorReactionStaffNote));
+    }
+
+    [Fact]
+    public async Task Доклад_ЗапускИзДругогоЧата_КарточкаИАвтоХодЗапустившему_СоздателюТолькоКарточка()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        var launcher = await LaunchChatAsync(task, "Чат запустившего");
+        task.ExecutorLaunchedBySessionId = launcher.Id;
+        task.ExecutorLaunchedByPersonaId = launcher.PersonaId;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(launcher.Id)).Should().Be((1, 1), "запустивший ждёт результат: карточка и авто-ход");
+        (await CountAsync(creatorChat.Id)).Should().Be((1, 0), "создателю — только карточка, без платного авто-хода");
+    }
+
+    [Fact]
+    public async Task Доклад_ЗапускИзЧатаСоздателя_КакРаньше()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        task.ExecutorLaunchedBySessionId = creatorChat.Id;
+        task.ExecutorLaunchedByPersonaId = creatorChat.PersonaId;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(creatorChat.Id)).Should().Be((1, 1), "одна карточка и один авто-ход, без дубля");
+    }
+
+    [Fact]
+    public async Task Доклад_ПовторныйЗапускИзТретьегоЧата_АдресатПоследнийЗапустивший()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        var first = await LaunchChatAsync(task, "Первый");
+        var last = await LaunchChatAsync(task, "Третий");
+        task.ExecutorLaunchedBySessionId = first.Id;
+        task.ExecutorLaunchedByPersonaId = first.PersonaId;
+        // повторный запуск перезаписывает поля — так делает tasks.Update в tasks_run_executor
+        _tasks.Update(task.Id, new UpdateTaskRequest(
+            ExecutorLaunchedBySessionId: last.Id, ExecutorLaunchedByPersonaId: last.PersonaId));
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(last.Id)).Should().Be((1, 1));
+        (await CountAsync(first.Id)).Should().Be((0, 0));
+        (await CountAsync(creatorChat.Id)).Should().Be((1, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ЧатИсполнительВынесенВКорень_НеУходитНикомуДажеПриЖивомЗапустившем()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        var launcher = await LaunchChatAsync(task, "Чат запустившего");
+        var executorChat = await LaunchChatAsync(task, "Чат исполнителя");
+        executorChat.ParentDetached = true;
+        task.LinkedSessionId = executorChat.Id;
+        task.ExecutorLaunchedBySessionId = launcher.Id;
+        task.ExecutorLaunchedByPersonaId = launcher.PersonaId;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(launcher.Id)).Should().Be((0, 0));
+        (await CountAsync(creatorChat.Id)).Should().Be((0, 0));
+        (await CountAsync(executorChat.Id)).Should().Be((0, 0));
+    }
+
+    // --- Адресат по цепочке: планировщик/QA создают и запускают задачи, доклад идёт оркестратору ---
+
+    private sealed record Team(string OwnerId, Session Sofya, Session Egor, Session Vera, Persona Denis);
+
+    private async Task<Team> ArrangeTeamAsync()
+    {
+        var user = _userStore.Add("chain-owner", "password123", "user");
+        async Task<Session> Chat(string name)
+        {
+            var chat = await _sessions.CreatePersonaChatAsync(user.Id,
+                CreatePersona(user.Id, name).Id, ClaudeMode.AcceptEdits, name: name);
+            StubProcess(chat);
+            return chat;
+        }
+        return new Team(user.Id, await Chat("Софья"), await Chat("Егор"), await Chat("Вера"),
+            CreatePersona(user.Id, "Денис"));
+    }
+
+    // Задача, которую исполняет чат executorChat (планировщик/QA), поставленная из source и запущенная launchedBy
+    private TaskItem MakeExecuting(Team team, Session executorChat, string? sourceId, string? launchedById,
+        string? reportTo = null, bool finished = false)
+    {
+        var t = _tasks.Create(null, team.OwnerId, new CreateTaskRequest("План " + executorChat.Name,
+            ReportToSessionId: reportTo));
+        _tasks.MarkClaudeStarted(t.Id, executorChat.Id, DateTime.UtcNow);
+        if (finished) _tasks.MarkClaudeResult(t.Id, "success");
+        var task = _tasks.GetById(t.Id)!;
+        task.SourceSessionId = sourceId;
+        task.ExecutorLaunchedBySessionId = launchedById;
+        return task;
+    }
+
+    // Лист цепочки: задачу создал чат creatorChat, исполнил Денис, доклад готов уходить
+    private TaskItem MakeLeaf(Team team, Session creatorChat, string? reportTo, string? launchedById)
+    {
+        var t = _tasks.Create(null, team.OwnerId, new CreateTaskRequest("Лист", ReportToSessionId: reportTo));
+        _tasks.MarkClaudeStarted(t.Id, "leaf-executor-session", DateTime.UtcNow);
+        _tasks.MarkClaudeResult(t.Id, "success");
+        var task = _tasks.GetById(t.Id)!;
+        task.CreatedByPersonaId = creatorChat.PersonaId;
+        task.PersonaId = team.Denis.Id;
+        task.SourceSessionId = creatorChat.Id;
+        task.ExecutorLaunchedBySessionId = launchedById;
+        task.ResultMarkdown = "Готово.";
+        task.Status = TaskItemStatus.Done;
+        return task;
+    }
+
+    [Fact]
+    public async Task Доклад_ПланировщикСоздалСофьяЗапустила_КарточкаИАвтоХодСофье_ПланировщикуТолькоКарточка()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
+        var leaf = MakeLeaf(team, team.Egor, reportTo: team.Sofya.Id, launchedById: team.Sofya.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ПланировщикСоздалЧеловекЗапустилИзUI_АдресатReportToSessionId()
+    {
+        var team = await ArrangeTeamAsync();
+        var leaf = MakeLeaf(team, team.Egor, reportTo: team.Sofya.Id, launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ПланировщикСамЗапустилИсполнителя_ЕгоЗадачаВРаботе_ДокладПланировщику()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
+        var leaf = MakeLeaf(team, team.Egor, reportTo: null, launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "Егор ещё исполняет свою задачу и ждёт итога — он координатор");
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ПланировщикСамЗапустилИсполнителя_ЕгоЗадачаЗавершена_ПодъёмДоСофьи()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id, finished: true);
+        var leaf = MakeLeaf(team, team.Egor, reportTo: null, launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_СоздательНеИсполнитель_КакПослеЗапускаИзЧата()
+    {
+        var team = await ArrangeTeamAsync();
+        var leaf = MakeLeaf(team, team.Sofya, reportTo: null, launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ЦепочкаИзДвухУровней_ДоСофьи()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
+        MakeExecuting(team, team.Vera, team.Egor.Id, team.Egor.Id, finished: true);
+        var leaf = MakeLeaf(team, team.Vera, reportTo: null, launchedById: team.Vera.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((0, 0));
+        (await CountAsync(team.Vera.Id)).Should().Be((1, 0), "создателю листа — только карточка");
+    }
+
+    [Fact]
+    public async Task Доклад_РодительскаяСессияМертва_ОткатНаПоследнююЖивуюБезПадения()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, "ghost-session", "ghost-session");
+        var leaf = MakeLeaf(team, team.Egor, reportTo: "ghost-session", launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "цепочка оборвалась на Егоре — он последняя живая сессия");
+    }
+
+    [Fact]
+    public async Task Доклад_ReportToМёртвый_ОткатНаСоздателяКарточки()
+    {
+        var team = await ArrangeTeamAsync();
+        var leaf = MakeLeaf(team, team.Egor, reportTo: "ghost-session", launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1));
+    }
+
+    [Fact]
+    public async Task Доклад_ЦиклВЦепочке_НеВисит()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Vera.Id, team.Vera.Id, finished: true);
+        MakeExecuting(team, team.Vera, team.Egor.Id, team.Egor.Id);
+        var leaf = MakeLeaf(team, team.Egor, reportTo: null, launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf).WaitAsync(TimeSpan.FromSeconds(10));
+
+        (await CountAsync(team.Vera.Id)).Should().Be((1, 1), "цикл Егор → Вера → Егор останавливается на Вере");
+    }
 }

@@ -184,6 +184,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             SourceNoteLine = req.SourceNoteLine,
             CreatedByPersonaId = string.IsNullOrEmpty(req.CreatedByPersonaId) ? null : req.CreatedByPersonaId,
             SourceSessionId = string.IsNullOrEmpty(req.SourceSessionId) ? null : req.SourceSessionId,
+            ReportToSessionId = string.IsNullOrEmpty(req.ReportToSessionId) ? null : req.ReportToSessionId,
             DelegationDepth = ComputeDelegationDepth(req.SourceSessionId),
             Order = NextOrder(ownerId),
             // Создаём задачу сразу готовой (редко) — фиксируем момент завершения
@@ -364,6 +365,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // Дерево чата-исполнителя: null = не менять, "" (и пробелы) = сбросить
         if (req.WorktreePath is not null) task.WorktreePath = Trimmed(req.WorktreePath);
         if (req.WorktreeBranch is not null) task.WorktreeBranch = Trimmed(req.WorktreeBranch);
+        if (req.ExecutorLaunchedBySessionId is not null) task.ExecutorLaunchedBySessionId = Trimmed(req.ExecutorLaunchedBySessionId);
+        if (req.ExecutorLaunchedByPersonaId is not null) task.ExecutorLaunchedByPersonaId = Trimmed(req.ExecutorLaunchedByPersonaId);
         if (req.ResultMarkdown is not null) task.ResultMarkdown = req.ResultMarkdown;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
@@ -525,6 +528,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // ожидание фиксируется ПЕРВЫМ разом — от него считается потолок, повторные попытки его не
     // сдвигают; причина обновляется (офлайн → «обновите агента»). Статус не трогаем: задача
     // остаётся в todo, запуска не было.
+    // Запустивший исполнителя (адресат доклада о завершении); пустые значения сбрасывают поля
+    public TaskItem? SetExecutorLauncher(string id, string? sessionId, string? personaId)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.ExecutorLaunchedBySessionId = Trimmed(sessionId ?? "");
+        task.ExecutorLaunchedByPersonaId = Trimmed(personaId ?? "");
+        ScheduleSave();
+        return task;
+    }
+
     public TaskItem? MarkDeviceWait(string id, DateTime atUtc, string? reason)
     {
         var task = _tasks.GetValueOrDefault(id);
@@ -830,7 +844,9 @@ public record CreateTaskRequest(
     TaskKind? Kind = null,
     // Шаги воспроизведения дефекта (DefectRules.EnsureReproOnReview требует Repro.Steps
     // при попадании в review-колонку); у обычной задачи игнорируется.
-    DefectRepro? Repro = null);
+    DefectRepro? Repro = null,
+    // Адресат доклада от родительской задачи (см. TaskItem.ReportToSessionId); UI/REST не шлют
+    string? ReportToSessionId = null);
 
 public record CreateSubtaskRequest(string Title);
 
@@ -877,6 +893,9 @@ public record UpdateTaskRequest(
     TaskVerification? Verification = null,
     // Исход дефекта: null = не менять. Единственное значение этой волны — ClosedWithoutCheck
     // (внутренние пути закрытия без отдельной проверки)
-    DefectOutcome? Outcome = null);
+    DefectOutcome? Outcome = null,
+    // Запустивший исполнителя (адресат доклада): null = не менять, "" = сбросить
+    string? ExecutorLaunchedBySessionId = null,
+    string? ExecutorLaunchedByPersonaId = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

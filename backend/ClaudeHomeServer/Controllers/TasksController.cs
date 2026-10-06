@@ -420,7 +420,13 @@ public class TasksController(
 
         try
         {
-            return Ok(await executor.ExecuteAsync(task, auto: false));
+            // Кнопка в UI: сессии-вызывателя нет — после успешного запуска поля сбрасываются; на идущей
+            // задаче запуск отказывает раньше записи, поле запустившего не затирается
+            var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
+            var callerSession = callerSessionId is not null && sessions.GetById(callerSessionId) is { } cs
+                && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
+            return Ok(await executor.ExecuteAsync(task, auto: false,
+                new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId)));
         }
         catch (InvalidOperationException ex)
         {

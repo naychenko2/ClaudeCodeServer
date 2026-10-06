@@ -104,6 +104,18 @@ public class TaskItem
     // из него — второй источник истины не заводим).
     public string? CreatedByPersonaId { get; set; }
     public string? SourceSessionId { get; set; }
+    // Кто последним запустил исполнителя (tasks_run_executor из чата): доклад о
+    // завершении идёт в эту сессию, а не только в SourceSessionId (создателя карточки). Повторный
+    // запуск перезаписывает. Оба null — запуск человеком без чата (кнопка в UI не шлёт X-Caller-Session-Id и поля сбрасывает) или старые задачи: адресат
+    // прежний. Аддитивные nullable-поля: tasks.json читается штатно, BackupSchema.Version не растёт.
+    public string? ExecutorLaunchedBySessionId { get; set; }
+    // Нужно только для аудита: персона авто-хода доклада берётся из сессии-адресата, это поле не читается.
+    public string? ExecutorLaunchedByPersonaId { get; set; }
+    // Адресат доклада, унаследованный от родительской задачи: если задачу создала сессия — чат-исполнитель
+    // другой задачи T (планировщик, QA), доклад идёт туда, куда он сам докладывает по T (оркестратору),
+    // а не этой молчаливой сессии. Ставит только tasks_create при создании; аддитивное nullable-поле,
+    // BackupSchema.Version не растёт.
+    public string? ReportToSessionId { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
     // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /

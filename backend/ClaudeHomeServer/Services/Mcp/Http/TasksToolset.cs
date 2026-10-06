@@ -245,7 +245,8 @@ public sealed class TasksToolset(
                     WorktreeBranch: OptionalArg(arguments, "worktreeBranch"),
                     // Вид карточки и шаги воспроизведения дефекта. null Kind — Task (дефолт)
                     Kind: KindArg(arguments),
-                    Repro: ReproArg(arguments));
+                    Repro: ReproArg(arguments),
+                    ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId));
                 TaskItem created;
                 try
                 {
@@ -482,7 +483,11 @@ public sealed class TasksToolset(
                 }
                 try
                 {
-                    var executed = await executor.ExecuteAsync(task, auto: false);
+                    // Доклад о завершении пойдёт в чат ЗАПУСТИВШЕГО (он ждёт результат), а не только
+                    // в чат-создатель карточки; запись делает сам запуск после захвата claim'а —
+                    // отказ («уже работает сессия») адресата не меняет
+                    var executed = await executor.ExecuteAsync(task, auto: false,
+                        new ExecutorLauncher(session.Id, session.PersonaId));
                     // Волна 1 team-blocker-honest: координатор перезапустил исполнителя по
                     // задаче-блокеру — гасим блокер по факту, стадия возвращается в работу.
                     // S2 (фикс-волна): caller == SourceSessionId — иначе запуск из чата
@@ -781,6 +786,25 @@ public sealed class TasksToolset(
         new(JsonSerializer.Serialize(value, JsonOpts));
 
     private static McpToolCallResult Deny(string text) => new(text, IsError: true);
+
+    // Сессия-вызыватель — чат-исполнитель другой задачи T, ждущий результата (планировщик, QA):
+    // новая задача докладывает туда же, куда докладывает T, а не этой сессии, которая по правилу
+    // «решать нечего» промолчит. Не исполнитель (обычный чат, человек) — null, адресат прежний.
+    // Адресат должен принадлежать владельцу вызова: чужая/несуществующая сессия — null.
+    private string? InheritedReportTarget(string callerSessionId, string ownerId) =>
+        InheritedReportTarget(callerSessionId, ownerId, tasks.GetBySession, id => sessions.GetById(id) is { } s
+            && sessions.ResolveOwnerId(s) == ownerId);
+
+    internal static string? InheritedReportTarget(string callerSessionId, string ownerId,
+        Func<string, TaskItem?> taskBySession, Func<string, bool> isOwnedSession)
+    {
+        if (taskBySession(callerSessionId) is not { } parent || !TaskExecutionService.IsAwaitingResult(parent))
+            return null;
+        var target = parent.ReportToSessionId ?? parent.ExecutorLaunchedBySessionId ?? parent.SourceSessionId;
+        if (string.IsNullOrEmpty(target) || target == callerSessionId || !isOwnedSession(target))
+            return null;
+        return target;
+    }
 
     private static string StringArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : "";

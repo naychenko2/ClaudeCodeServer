@@ -44,6 +44,13 @@ const ratio = (a: string) => { const [x, y] = a.split(':').map(Number); return x
 const nearest = (aspect: string, list: readonly string[]) =>
   [...list].sort((p, q) => Math.abs(Math.log(ratio(p) / ratio(aspect))) - Math.abs(Math.log(ratio(q) / ratio(aspect))))[0];
 
+// Множитель цены ступени, которую выбрал формат запроса (у моделей без размеров и вне генерации — 1)
+export function mockTierFactor(model: string, op: string, wish: MediaFormatWish | null | undefined): number {
+  if (op !== 'generate' || !wish) return 1;
+  const r = mockFormatState(model, op, wish).resolved;
+  return CAPS[model]?.tiers.find(t => t.tier === r.tier)?.priceFactor ?? 1;
+}
+
 export function mockFormatState(model: string, op: string, wish: MediaFormatWish | null): MediaFormatState {
   const caps = CAPS[model] ?? null;
   const isGen = op === 'generate';

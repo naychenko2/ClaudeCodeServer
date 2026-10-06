@@ -10,7 +10,7 @@
 
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
 import type { MediaFormatState, MediaFormatWish } from 'aihome_shell/kit';
-import { mockFormatState } from './mockFormat';
+import { mockFormatState, mockTierFactor } from './mockFormat';
 import { projectBase, scopeBase } from './scope';
 import { transformedSize } from './transforms';
 
@@ -557,7 +557,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
         quoteId: `q${++seq}`, provider: p.key, model: m.id,
         estimate: free
           ? { amount: 0, unit: 'free', approx: false, source: 'provider', etaSeconds: seconds, queueLength: localQueue }
-          : { amount: Math.round(per * req.count * 100) / 100, unit: p.priceUnit, approx: true, source: 'catalog' },
+          : { amount: Math.round(per * req.count * mockTierFactor(m.id, req.op, req.format) * 100) / 100, unit: p.priceUnit, approx: true, source: 'catalog' },
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
         expectedSeconds: seconds,
       };

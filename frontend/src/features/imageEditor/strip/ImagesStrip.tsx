@@ -12,8 +12,9 @@ import {
   AlertTriangle, ChevronDown, FolderOpen, Image as ImageIcon, Minus, Plus, SlidersHorizontal, Sparkles, Upload, User, X,
 } from 'lucide-react';
 import {
-  Button, Checkbox, Chip, IconButton, Menu, MenuItem, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, ICON_STROKE, api as appApi, COMPOSER_LIP, composerLip,
+  Button, Checkbox, Chip, IconButton, Menu, MenuItem, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, ICON_STROKE, api as appApi, COMPOSER_LIP,
 } from 'aihome_shell/kit';
+import { ComposerLipShell } from '../../../components/chat/ComposerLipShell';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
 import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ReferenceRole } from '../api';
 import { CharactersPanel } from '../characters/CharactersPanel';
@@ -300,30 +301,55 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
     </span>
   );
 
+  // Inner-стили дочерних слоёв оболочки ComposerLipShell. Здесь только display/gap/align
+  // (высоту/поля/фон берёт оболочка). На телефоне ширина 100%, на десктопе —
+  // в потоке оболочки, тоже 100%.
+  const fullInnerStyle = {
+    position: 'relative' as const,
+    display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 8,
+    boxSizing: 'border-box' as const, minWidth: 0, width: '100%', height: '100%',
+  };
+  const miniInnerStyle = {
+    display: 'flex', alignItems: 'center', gap: SP.sm,
+    boxSizing: 'border-box' as const, minWidth: 0, width: '100%', height: '100%',
+    cursor: 'pointer',
+  };
+  const imagesAttrs = { 'data-composer-strip': 'images' };
+
+  const miniNode = (
+    <div
+      role="button" tabIndex={0}
+      onClick={() => setCollapsed(false)}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(false); } }}
+      title="Развернуть полосу «Картинки»"
+    >
+      {title}
+      <Thumb src={src} />
+      <span data-images-summary="" style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {stripSummary(parts)}
+      </span>
+      {thread && (
+        <span style={{ display: 'inline-flex' }} onClick={e => e.stopPropagation()}>
+          <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}
+            style={isMobile ? undefined : { width: COMPOSER_LIP.rowMini, height: COMPOSER_LIP.rowMini }}>{ic(X)}</IconButton>
+        </span>
+      )}
+    </div>
+  );
+
   if (collapsed) {
     return (
-      <div role="button" tabIndex={0} data-composer-strip="images" data-images-strip="mini" title="Развернуть полосу «Картинки»"
-        onClick={() => setCollapsed(false)}
-        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(false); } }}
-        style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm, boxSizing: 'border-box', minWidth: 0, cursor: 'pointer',
-          // Вне телефона свёрнутая строка — верхняя губа композера с низким рядом, как у Git
-          ...(isMobile
-            ? { height: 30, margin: '4px 0 6px', padding: '0 6px 0 4px', background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg }
-            : { marginTop: 4, ...composerLip('top', { tab: true }) }),
-        }}>
-        {title}
-        <Thumb src={src} />
-        <span data-images-summary="" style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {stripSummary(parts)}
-        </span>
-        {thread && (
-          <span style={{ display: 'inline-flex' }} onClick={e => e.stopPropagation()}>
-            <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}
-              style={isMobile ? undefined : { width: COMPOSER_LIP.rowMini, height: COMPOSER_LIP.rowMini }}>{ic(X)}</IconButton>
-          </span>
-        )}
-      </div>
+      <ComposerLipShell
+        ref={shell}
+        collapsed
+        isMobile={isMobile}
+        miniStyle={miniInnerStyle}
+        fullStyle={fullInnerStyle}
+        miniNode={miniNode}
+        fullNode={null}
+        miniAttrs={{ ...imagesAttrs, 'data-images-strip': 'mini' }}
+        fullAttrs={{ ...imagesAttrs, 'data-images-strip': 'full' }}
+      />
     );
   }
 
@@ -331,14 +357,8 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const settings = L.catalog && !noProviders
     ? <SettingsPanel projectId={projectId} L={L} catalog={L.catalog} isMobile={isMobile} thread={thread} /> : null;
 
-  return (
-    <div ref={shell} data-composer-strip="images" data-images-strip="full" style={{
-      position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 8, boxSizing: 'border-box', minWidth: 0,
-      // Вне телефона — верхняя губа композера: заезжает под поле ввода, как нижний ряд
-      ...(isMobile
-        ? { height: 44, margin: '6px 0', padding: '0 6px', background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl }
-        : { marginTop: 10, ...composerLip('top') }),
-    }}>
+  const fullNode = (
+    <div ref={shell}>
       {title}
       {thread ? (
         <span style={{ display: 'inline-flex', minWidth: 72, flex: '0 1 auto' }}>
@@ -407,6 +427,20 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
         </Modal>
       )}
     </div>
+  );
+
+  return (
+    <ComposerLipShell
+      ref={shell}
+      collapsed={false}
+      isMobile={isMobile}
+      miniStyle={miniInnerStyle}
+      fullStyle={fullInnerStyle}
+      miniNode={null}
+      fullNode={fullNode}
+      miniAttrs={{ ...imagesAttrs, 'data-images-strip': 'mini' }}
+      fullAttrs={{ ...imagesAttrs, 'data-images-strip': 'full' }}
+    />
   );
 }
 

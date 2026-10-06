@@ -14,11 +14,12 @@ import {
   HANDS_ANY_WINDOW_TEXT, handsBadgeStatus, handsProviderLabel, handsProviderVision, handsStripSummary, handsStripView,
   type HandsBadgeTone,
 } from '../../lib/localHands';
-import { C, FS, R, SP, COMPOSER_LIP, composerLip } from '../../lib/design';
+import { C, FS, SP, COMPOSER_LIP } from '../../lib/design';
 import { TABLET_WIDE_MIN, useWindowWidth } from '../../lib/breakpoints';
 import { useNarrowContainer } from '../../hooks/useContainerWidth';
 import { Button, Dot, Menu, Modal, Notice } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { ComposerLipShell } from '../../components/chat/ComposerLipShell';
 import type { ComposerStripCtx } from '../../lib/subsystems/registryCore';
 import { useProviders } from '../../lib/models';
 import { getHandsProject, getHandsSession, useHandsStripVersion } from './handsStrip';
@@ -123,42 +124,60 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
     </>
   );
 
-  const shell = {
-    display: 'flex', alignItems: 'center', minWidth: 0, boxSizing: 'border-box' as const,
-    background: C.bgPanel, border: `1px solid ${C.border}`, color: C.textSecondary, fontSize: FS.sm,
-  };
-  const attrs = {
+  const handsAttrs = {
     'data-composer-strip': 'hands',
     'data-hands-state': status?.state ?? 'initial',
   };
+  // Inner-стили дочерних слоёв оболочки ComposerLipShell. Здесь только display/gap/align
+  // (высоту/поля берёт оболочка).
+  const fullInnerStyle = {
+    display: 'flex', alignItems: 'center', gap: slim ? 6 : SP.sm,
+    color: C.textSecondary, fontSize: FS.sm,
+    minWidth: 0, width: '100%', height: '100%',
+  };
+  const miniInnerStyle = {
+    display: 'flex', alignItems: 'center', gap: SP.sm, cursor: 'pointer',
+    color: C.textSecondary, fontSize: FS.sm,
+    minWidth: 0, width: '100%', height: '100%',
+  };
+
+  const miniNode = (
+    <div
+      role="button" tabIndex={0}
+      ref={collapsed ? narrowRef : undefined}
+      onClick={() => setCollapsed?.(false)}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed?.(false); } }}
+      title="Развернуть полосу «Руки»"
+    >
+      {title}
+      {dot}
+      <span data-hands-chip="" title={hint} style={{ flexShrink: 0, whiteSpace: 'nowrap', color: statusColor }}>
+        {view.short}
+      </span>
+      {miniSummary && (
+        <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.textMuted }}>
+          · {miniSummary}
+        </span>
+      )}
+      {!miniSummary && <span style={{ flex: 1 }} />}
+      {stopBtn(COMPOSER_LIP.rowMini)}
+    </div>
+  );
 
   if (collapsed) {
     return (
-      <div {...attrs} data-hands-strip="mini" ref={narrowRef}
-        role="button" tabIndex={0}
-        title="Развернуть полосу «Руки»"
-        onClick={() => setCollapsed?.(false)}
-        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed?.(false); } }}
-        style={{
-          ...shell, gap: SP.sm, cursor: 'pointer',
-          // Вне телефона свёрнутая строка — верхняя губа композера с низким рядом, как у Git
-          ...(isMobile
-            ? { height: 30, margin: `${SP.xs}px 0 6px`, padding: '0 6px 0 4px', borderRadius: R.lg }
-            : { marginTop: SP.xs, ...composerLip('top', { tab: true }) }),
-        }}>
-        {title}
-        {dot}
-        <span data-hands-chip="" title={hint} style={{ flexShrink: 0, whiteSpace: 'nowrap', color: statusColor }}>
-          {view.short}
-        </span>
-        {miniSummary && (
-          <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.textMuted }}>
-            · {miniSummary}
-          </span>
-        )}
-        {!miniSummary && <span style={{ flex: 1 }} />}
-        {stopBtn(COMPOSER_LIP.rowMini)}
-      </div>
+      <ComposerLipShell
+        ref={narrowRef}
+        collapsed
+        isMobile={isMobile}
+        isSlim={slim}
+        miniStyle={miniInnerStyle}
+        fullStyle={fullInnerStyle}
+        miniNode={miniNode}
+        fullNode={null}
+        miniAttrs={{ ...handsAttrs, 'data-hands-strip': 'mini' }}
+        fullAttrs={{ ...handsAttrs, 'data-hands-strip': 'full' }}
+      />
     );
   }
 
@@ -178,14 +197,8 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
     </span>
   );
 
-  return (
-    <div {...attrs} data-hands-strip="full" ref={narrowRef} style={{
-      ...shell,
-      // Вне телефона — верхняя губа композера: заезжает под поле ввода, как нижний ряд
-      ...(isMobile
-        ? { height: 44, margin: '6px 0', padding: '0 6px', gap: 6, borderRadius: R.xxl }
-        : { marginTop: slim ? 6 : 10, gap: slim ? 6 : SP.sm, ...composerLip('top') }),
-    }}>
+  const fullNode = (
+    <div ref={narrowRef}>
       {title}
       {chip}
       {!isMobile && (
@@ -203,5 +216,20 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
       {stopBtn(slim ? 32 : 28)}
       {overlays}
     </div>
+  );
+
+  return (
+    <ComposerLipShell
+      ref={narrowRef}
+      collapsed={false}
+      isMobile={isMobile}
+      isSlim={slim}
+      miniStyle={miniInnerStyle}
+      fullStyle={fullInnerStyle}
+      miniNode={null}
+      fullNode={fullNode}
+      miniAttrs={{ ...handsAttrs, 'data-hands-strip': 'mini' }}
+      fullAttrs={{ ...handsAttrs, 'data-hands-strip': 'full' }}
+    />
   );
 }

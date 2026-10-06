@@ -235,6 +235,19 @@ public sealed class FalVideoEngineTests
     // ── Сбои после принятия ─────────────────────────────────────────────────────
 
     [Fact]
+    public async Task Result_Empty_NsfwFlag_RejectedWithReason()
+    {
+        var endpoint = FalVideoCatalog.KlingO1;
+        _fal.Job(endpoint, "re1", ["COMPLETED"], """{"has_nsfw_concepts":[true]}""");
+
+        var result = await Engine().RunAsync(Request(endpoint), new Recorder(), CancellationToken.None);
+
+        result.Outcome.Should().Be(VideoOutcome.Rejected);
+        result.RemoteId.Should().Be("re1");
+        result.Error.Should().Be("fal.ai не вернул ролик — результат скрыт фильтром безопасности");
+    }
+
+    [Fact]
     public async Task Result_Failed_AfterAcceptance_NotCharged()
     {
         var endpoint = FalVideoCatalog.KlingO1;

@@ -148,7 +148,14 @@ public sealed class FalVideoEngine : IVideoEngine, IVideoQuoter
 
         progress.Report(new VideoProgress(VideoStage.Downloading, RemoteId: requestId));
         if (VideoUrl(run.Output!.Value) is not { } url)
-            return new VideoResult(VideoOutcome.Failed, null, null, null, requestId, "fal.ai не вернул ролик");
+        {
+            // Тело пустого ответа — в лог, человеку — причина, если fal её назвал
+            _log.LogWarning("fal.ai: задача {RequestId} ({Model}) без ролика, ответ: {Body}",
+                requestId, model.Info.Id, FalEmptyResult.LogBody(run.Output.Value));
+            var why = FalEmptyResult.Explain(run.Output.Value);
+            return new VideoResult(why is { Rejected: true } ? VideoOutcome.Rejected : VideoOutcome.Failed, null, null, null,
+                requestId, why is { } w ? "fal.ai не вернул ролик — " + w.Reason : "fal.ai не вернул ролик");
+        }
         try
         {
             var download = await Downloader.DownloadAsync(url, MaxDownloadBytes, timeout.Token);

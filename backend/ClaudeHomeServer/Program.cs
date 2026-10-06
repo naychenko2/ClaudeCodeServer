@@ -431,6 +431,8 @@ if (SubsystemGate.IsEnabled(builder.Configuration, ClaudeHomeServer.Services.Cod
     builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.IArchitectureCodeSource,
         ClaudeHomeServer.Services.CodeGraph.ArchitectureCodeSource>();
 builder.Services.AddSingleton<SphereManager>();
+// Форвардер: единый стор сфер; PersonaManager берёт зону персон через ISphereDirectory
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Spheres.ISphereDirectory>(sp => sp.GetRequiredService<SphereManager>());
 builder.Services.AddSingleton<ProjectEventLogService>();
 // Этап 5, волна E: узкий Core-шов IProjectEventLogService для выноса Notes (NotesService
 // пишет ProjectEventTypes.NoteChanged при мутациях заметок). Полный сервис в Main,

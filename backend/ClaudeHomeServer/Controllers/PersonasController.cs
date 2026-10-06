@@ -88,31 +88,18 @@ public class PersonasController(
     [HttpGet]
     public ActionResult<IReadOnlyList<Persona>> List(
         [FromQuery] string? scope, [FromQuery] string? projectId,
-        [FromQuery] string? extraProjectIds = null, [FromQuery] string? extraPersonaIds = null)
+        [FromQuery] string? extraProjectIds = null, [FromQuery] string? extraPersonaIds = null,
+        [FromQuery] string? sphereId = null)
     {
         if (string.Equals(scope, "context", StringComparison.OrdinalIgnoreCase))
         {
-            var result = _personas.GetForContext(UserId, projectId).ToList();
-            var extraProjects = SplitCsv(extraProjectIds);
-            var extraPersonas = SplitCsv(extraPersonaIds).ToHashSet(StringComparer.Ordinal);
-            if (extraProjects.Count > 0 || extraPersonas.Count > 0)
-            {
-                var seen = result.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
-                foreach (var p in _personas.GetByOwner(UserId))
-                {
-                    if (seen.Contains(p.Id)) continue;
-                    var included = extraPersonas.Contains(p.Id)
-                        || (PersonaZone.OwnProjectId(p) is { } pid && extraProjects.Contains(pid));
-                    if (!included) continue;
-                    result.Add(p);
-                    seen.Add(p.Id);
-                }
-            }
-            return Ok(result);
+            return Ok(_personas.GetForContextWithExtras(UserId, projectId,
+                SplitCsv(extraProjectIds), SplitCsv(extraPersonaIds)));
         }
         if (string.Equals(scope, "project", StringComparison.OrdinalIgnoreCase))
-            return Ok(_personas.GetByOwner(UserId)
-                .Where(p => PersonaZone.IsProjectTeam(p, projectId)).ToList());
+            return Ok(_personas.GetProjectTeam(UserId, projectId));
+        if (string.Equals(scope, "sphere", StringComparison.OrdinalIgnoreCase))
+            return Ok(_personas.GetSphereTeam(UserId, sphereId));
         if (string.Equals(scope, "global", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetByOwner(UserId)
                 .Where(p => p.Scope == PersonaScope.Global).ToList());

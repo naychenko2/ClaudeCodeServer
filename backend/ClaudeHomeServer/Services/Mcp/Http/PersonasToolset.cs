@@ -127,28 +127,12 @@ public sealed partial class PersonasToolset(
                     return Deny("Текущая сессия вне проекта — проектных персон здесь нет "
                         + "(используй scope \"global\" или \"all\").");
                 if (scope == "project")
-                    return Json(personas.GetByOwner(ownerId)
-                        .Where(p => PersonaZone.IsProjectTeam(p, projectId)).ToList());
+                    return Json(personas.GetProjectTeam(ownerId, projectId));
                 if (scope == "global")
                     return Json(personas.GetByOwner(ownerId)
                         .Where(p => p.Scope == PersonaScope.Global).ToList());
                 // context: глобальные + проекта чата + кросс-проектные привязки персоны
-                var result = personas.GetForContext(ownerId, projectId).ToList();
-                if (extraProjectIds.Count > 0 || extraPersonaIds.Count > 0)
-                {
-                    var seen = result.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
-                    var extraSet = extraPersonaIds.ToHashSet(StringComparer.Ordinal);
-                    foreach (var p in personas.GetByOwner(ownerId))
-                    {
-                        if (seen.Contains(p.Id)) continue;
-                        var included = extraSet.Contains(p.Id)
-                            || (PersonaZone.OwnProjectId(p) is { } pid && extraProjectIds.Contains(pid));
-                        if (!included) continue;
-                        result.Add(p);
-                        seen.Add(p.Id);
-                    }
-                }
-                return Json(result);
+                return Json(personas.GetForContextWithExtras(ownerId, projectId, extraProjectIds, extraPersonaIds));
             }
 
             case "personas_get":

@@ -364,6 +364,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // Дерево чата-исполнителя: null = не менять, "" (и пробелы) = сбросить
         if (req.WorktreePath is not null) task.WorktreePath = Trimmed(req.WorktreePath);
         if (req.WorktreeBranch is not null) task.WorktreeBranch = Trimmed(req.WorktreeBranch);
+        if (req.ExecutorLaunchedBySessionId is not null) task.ExecutorLaunchedBySessionId = Trimmed(req.ExecutorLaunchedBySessionId);
+        if (req.ExecutorLaunchedByPersonaId is not null) task.ExecutorLaunchedByPersonaId = Trimmed(req.ExecutorLaunchedByPersonaId);
         if (req.ResultMarkdown is not null) task.ResultMarkdown = req.ResultMarkdown;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
@@ -877,6 +879,9 @@ public record UpdateTaskRequest(
     TaskVerification? Verification = null,
     // Исход дефекта: null = не менять. Единственное значение этой волны — ClosedWithoutCheck
     // (внутренние пути закрытия без отдельной проверки)
-    DefectOutcome? Outcome = null);
+    DefectOutcome? Outcome = null,
+    // Запустивший исполнителя (адресат доклада): null = не менять, "" = сбросить
+    string? ExecutorLaunchedBySessionId = null,
+    string? ExecutorLaunchedByPersonaId = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

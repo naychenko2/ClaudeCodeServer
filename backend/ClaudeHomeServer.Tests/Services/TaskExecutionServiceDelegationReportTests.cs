@@ -211,4 +211,66 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         queued.StaffNote.Should().Be(TaskExecutionService.DelegatorReactionStaffNote);
         _sessions.GetVisiblePending(parent.Id).Should().BeEmpty();
     }
+
+    // --- Адресат доклада — запустивший исполнителя, а не только создатель карточки ---
+
+    private async Task<Session> LaunchChatAsync(TaskItem task, string name)
+    {
+        var persona = CreatePersona(task.OwnerId!, "Запускающий " + name);
+        var chat = await _sessions.CreatePersonaChatAsync(task.OwnerId!, persona.Id, ClaudeMode.AcceptEdits, name: name);
+        StubProcess(chat);
+        return chat;
+    }
+
+    private async Task<(int Cards, int Reactions)> CountAsync(string sessionId)
+    {
+        var history = await _sessions.GetHistoryAsync(sessionId);
+        return (history.OfType<StoredTextMessage>().Count(m => m.DelegationTaskId is not null),
+            history.OfType<StoredUserMessage>().Count(m => m.StaffNote == TaskExecutionService.DelegatorReactionStaffNote));
+    }
+
+    [Fact]
+    public async Task Доклад_ЗапускИзДругогоЧата_КарточкаИАвтоХодЗапустившему_СоздателюТолькоКарточка()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        var launcher = await LaunchChatAsync(task, "Чат запустившего");
+        task.ExecutorLaunchedBySessionId = launcher.Id;
+        task.ExecutorLaunchedByPersonaId = launcher.PersonaId;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(launcher.Id)).Should().Be((1, 1), "запустивший ждёт результат: карточка и авто-ход");
+        (await CountAsync(creatorChat.Id)).Should().Be((1, 0), "создателю — только карточка, без платного авто-хода");
+    }
+
+    [Fact]
+    public async Task Доклад_ЗапускИзЧатаСоздателя_КакРаньше()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        task.ExecutorLaunchedBySessionId = creatorChat.Id;
+        task.ExecutorLaunchedByPersonaId = creatorChat.PersonaId;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(creatorChat.Id)).Should().Be((1, 1), "одна карточка и один авто-ход, без дубля");
+    }
+
+    [Fact]
+    public async Task Доклад_ПовторныйЗапускИзТретьегоЧата_АдресатПоследнийЗапустивший()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        var first = await LaunchChatAsync(task, "Первый");
+        var last = await LaunchChatAsync(task, "Третий");
+        task.ExecutorLaunchedBySessionId = first.Id;
+        task.ExecutorLaunchedByPersonaId = first.PersonaId;
+        // повторный запуск перезаписывает поля — так делает tasks.Update в tasks_run_executor
+        _tasks.Update(task.Id, new UpdateTaskRequest(
+            ExecutorLaunchedBySessionId: last.Id, ExecutorLaunchedByPersonaId: last.PersonaId));
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(last.Id)).Should().Be((1, 1));
+        (await CountAsync(first.Id)).Should().Be((0, 0));
+        (await CountAsync(creatorChat.Id)).Should().Be((1, 0));
+    }
 }

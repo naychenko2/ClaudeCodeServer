@@ -482,6 +482,11 @@ public sealed class TasksToolset(
                 }
                 try
                 {
+                    // Доклад о завершении пойдёт в чат ЗАПУСТИВШЕГО (он ждёт результат), а не только
+                    // в чат-создатель карточки; пишем до запуска, чтобы доклад не обогнал запись
+                    tasks.Update(task.Id, new UpdateTaskRequest(
+                        ExecutorLaunchedBySessionId: session.Id,
+                        ExecutorLaunchedByPersonaId: session.PersonaId ?? ""));
                     var executed = await executor.ExecuteAsync(task, auto: false);
                     // Волна 1 team-blocker-honest: координатор перезапустил исполнителя по
                     // задаче-блокеру — гасим блокер по факту, стадия возвращается в работу.

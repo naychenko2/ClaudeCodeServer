@@ -1516,8 +1516,15 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
         // Постановщик-персона нужен только чтобы реакция шла от её лица и чтобы был fallback
         // в новый чат. Его отсутствие (задачу поставил человек) доклад больше не отменяет.
-        var delegator = task.CreatedByPersonaId is not null
-            ? _personas.Get(task.CreatedByPersonaId, task.OwnerId!)
+        // Запустивший исполнителя (tasks_run_executor из чата) — тот, кто ждёт результат: доклад и
+        // авто-ход идут ему, а не только создателю карточки. Чужая/мёртвая сессия запустившего —
+        // откат на прежнюю схему (создатель карточки).
+        var launcherSession = task.ExecutorLaunchedBySessionId is { } launcherId ? _sessions.GetById(launcherId) : null;
+        if (launcherSession is not null && _sessions.ResolveOwnerId(launcherSession) != task.OwnerId)
+            launcherSession = null;
+        var delegatorPersonaId = launcherSession is not null ? task.ExecutorLaunchedByPersonaId : task.CreatedByPersonaId;
+        var delegator = delegatorPersonaId is not null
+            ? _personas.Get(delegatorPersonaId, task.OwnerId!)
             : null;
 
         // Цель доклада — ЭФФЕКТИВНЫЙ родитель чата-исполнителя, а не сырой SourceSessionId:
@@ -1525,7 +1532,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // вынос в корень её гасит — «вынес из группы» значит «не докладывай туда». Чата-исполнителя
         // нет (задача закрыта без запуска) — остаётся SourceSessionId, как было.
         var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId, new TaskLookupAdapter(_tasks), out var fromFallback);
+        var fromFallback = false;
+        var targetId = launcherSession?.Id
+            ?? ResolveReportTarget(executorSession, task.SourceSessionId, new TaskLookupAdapter(_tasks), out fromFallback);
         if (targetId is null)
         {
             _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);
@@ -1575,26 +1584,37 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // контракт для фронта (формат карточки/маркера — фронт)
         // Лицо доклада: персона-исполнитель, иначе — нейтральная карточка с именем её чата
         // («Задача: починить билд»), тот же вид, что у входящих сообщений без персоны
-        var reportText = BuildDelegationReportText(task);
-        var executorChatName = executorSession?.Name;
-        // Время доклада ставим один раз и кладём в оба слоя (история + живая лента) —
-        // тот же приём, что у reportTs в ReportUpAsync: фронт дедупит призрачный повтор
-        // (BroadcastSessionMessageAsync шлёт событие и в session-, и в project_/user_-группу)
-        // по совпадению timestamp+текста, без общего timestamp дедуп ключа не было бы.
-        var reportTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        // B1: id задачи едет структурным полем в ОБОИХ вариантах записи (исполнитель-персона →
-        // guest_text, исполнитель без персоны → user_message) и в обоих слоях (история + живая
-        // лента) — по нему карточка открывает задачу, не выковыривая id из текста маркера.
-        await _sessions.AppendStoredAsync(targetSessionId,
-            executor is not null
-                ? new StoredTextMessage(reportText, personaId: executor.Id, timestamp: reportTs,
-                    delegationTaskId: task.Id)
-                : new StoredUserMessage(reportText, viaAgent: true, senderChatName: executorChatName,
-                    timestamp: reportTs, delegationTaskId: task.Id),
-            executor is not null
-                ? new GuestTextMessage(reportText, executor.Id, reportTs, DelegationTaskId: task.Id)
-                : new UserMessageMessage(reportText, null, null, true, null, executorChatName,
-                    Timestamp: reportTs, DelegationTaskId: task.Id));
+        async Task AppendReportCardAsync(string cardSessionId)
+        {
+            var reportText = BuildDelegationReportText(task);
+            var executorChatName = executorSession?.Name;
+            // Время доклада ставим один раз и кладём в оба слоя (история + живая лента) —
+            // тот же приём, что у reportTs в ReportUpAsync: фронт дедупит призрачный повтор
+            // (BroadcastSessionMessageAsync шлёт событие и в session-, и в project_/user_-группу)
+            // по совпадению timestamp+текста, без общего timestamp дедуп ключа не было бы.
+            var reportTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // B1: id задачи едет структурным полем в ОБОИХ вариантах записи (исполнитель-персона →
+            // guest_text, исполнитель без персоны → user_message) и в обоих слоях (история + живая
+            // лента) — по нему карточка открывает задачу, не выковыривая id из текста маркера.
+            await _sessions.AppendStoredAsync(cardSessionId,
+                executor is not null
+                    ? new StoredTextMessage(reportText, personaId: executor.Id, timestamp: reportTs,
+                        delegationTaskId: task.Id)
+                    : new StoredUserMessage(reportText, viaAgent: true, senderChatName: executorChatName,
+                        timestamp: reportTs, delegationTaskId: task.Id),
+                executor is not null
+                    ? new GuestTextMessage(reportText, executor.Id, reportTs, DelegationTaskId: task.Id)
+                    : new UserMessageMessage(reportText, null, null, true, null, executorChatName,
+                        Timestamp: reportTs, DelegationTaskId: task.Id));
+        }
+
+        await AppendReportCardAsync(targetSessionId);
+        // Запустивший не создатель карточки: создателю — только карточка доклада (ШАГ 1), без
+        // авто-хода: он не ждёт результата, но должен видеть итог своей задачи
+        if (launcherSession is not null && task.SourceSessionId is { } creatorId && creatorId != targetSessionId
+            && _sessions.GetById(creatorId) is { } creatorSession
+            && _sessions.ResolveOwnerId(creatorSession) == task.OwnerId)
+            await AppendReportCardAsync(creatorId);
 
         // ШАГ 2 (платный авто-ход постановщика) — только при живом постановщике-персоне.
         // Задачу мог поставить человек из обычного чата (без персоны): тогда ход не от чьего

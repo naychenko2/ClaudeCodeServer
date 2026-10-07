@@ -82,6 +82,9 @@ public sealed class SubscriptionWindowMismatchGuard(
     // Последняя свежая пара снимков окна по каналам: setup-токен (probe/turn) и oauth.
     // null — пары нет: у канала нет снимков свежее Freshness. Снимки без Source (легаси,
     // записаны до появления поля) канал не определяют и не участвуют.
+    // Снимок, чей сброс уже прошёл, описывает отжившее окно: на перекате один канал успевает
+    // записать старое окно, другой — новое, и без этого фильтра свежая пара даёт ложное
+    // расхождение ровно на длину окна (300 мин, алерт 07.10.2026)
     internal static (UsageSnapshot SetupToken, UsageSnapshot Oauth)? LatestFreshPair(
         IReadOnlyList<UsageSnapshot> windowSnapshots, DateTime now)
     {
@@ -89,6 +92,7 @@ public sealed class SubscriptionWindowMismatchGuard(
         foreach (var s in windowSnapshots)
         {
             if (now - s.Timestamp > Freshness) continue;
+            if (ParseReset(s.ResetsAt) is { } reset && reset.UtcDateTime <= now) continue;
             switch (s.Source)
             {
                 case "oauth":

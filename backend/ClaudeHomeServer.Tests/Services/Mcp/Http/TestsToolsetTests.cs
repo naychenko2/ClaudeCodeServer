@@ -112,7 +112,7 @@ public class TestsToolsetTests : IDisposable
     [Fact]
     public async Task ВызовСToolUseId_СтавитФактическийСтартКарточке()
     {
-        var env = Build(withService: false);
+        var env = Build();
         var acc = env.Sessions.AccumulatorOf(env.Session.Id);
         acc.OnToolUse("toolu_run1", "mcp__tests__run_tests", new { }, startedAt: 1_000);
         acc.OnToolUse("toolu_run2", "mcp__tests__run_tests", new { }, startedAt: 1_000);
@@ -124,6 +124,19 @@ public class TestsToolsetTests : IDisposable
         started.Started.Should().BeTrue();
         started.StartedAt.Should().BeGreaterThan(1_000);
         tools.Single(t => t.Id == "toolu_run2").Started.Should().BeNull("второй вызов ещё ждёт своей очереди");
+    }
+
+    // Мгновенный отказ «выключено на сервере» — не работа инструмента: карточка не мигает «идёт»
+    [Fact]
+    public async Task ПодсистемаВыключена_СтартНеСтавится()
+    {
+        var env = Build(withService: false);
+        env.Sessions.AccumulatorOf(env.Session.Id).OnToolUse("toolu_off", "mcp__tests__run_tests", new { }, startedAt: 1_000);
+
+        await Call(env, context: env.Context with { ToolUseId = "toolu_off" });
+
+        (await env.Sessions.GetHistoryAsync(env.Session.Id)).OfType<Protocol.StoredToolUseMessage>()
+            .Single().Started.Should().BeNull();
     }
 
     [Fact]

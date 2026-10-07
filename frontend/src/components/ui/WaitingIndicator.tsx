@@ -29,7 +29,7 @@ const WAIT_CLOCK_MIN_W = '9ch';
 
 // Живой индикатор ожидания: значок-логотип «AI Home» с расходящимися кольцами «Эхо»
 // вокруг аватара персоны (или логотипа, если персоны нет) + «печатная машинка» по синонимам.
-// Текст печатается посимвольно с курсором, в конце дописывается «…», держит паузу,
+// Текст печатается посимвольно (без курсора), в конце дописывается «…», держит паузу,
 // затем стирается и сменяется новым случайным синонимом. Общий для чата и любых
 // других долгих ИИ-операций (подбор/генерация по кнопке «✨ …») — hint поясняет,
 // что именно происходит и сколько примерно ждать.
@@ -115,7 +115,7 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
     captionLeadMs(activeToolStartedAt, activeToolAppearedAt));
 
   // Печатная машинка по делу (вариант D): по кругу «подпись → счётчик этапа», стирая и печатая
-  // заново; без счётчика подпись впечатывается один раз и стоит. Курсора у инструмента нет —
+  // заново; без счётчика подпись впечатывается один раз и стоит. Курсора нет ни здесь, ни у глаголов —
   // живость несут сама печать, шиммер и кольца. Логика шагов — nextTypewriterStep (lib).
   // Подпись, что уже стояла при монтировании (F5 посреди инструмента), — сразу целиком и держится
   const toolText = tool?.label ?? null;
@@ -154,7 +154,7 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
     ? phrases.join(' · ')
     : tw.of === toolText ? typewriterText(tw.st, phrases) : '';
   // Тихий режим: инструмент идёт, но его карточка на экране — подпись и время не дублируем,
-  // вместо них крутятся глаголы с курсором (ход жив, а факты — на карточке)
+  // вместо них крутятся глаголы (ход жив, а факты — на карточке)
   const quietTool = !!tool && activeToolOnScreen;
   const OpIcon = activeToolOperation ? OPERATION_ICON[activeToolOperation] : null;
 
@@ -212,16 +212,16 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
             WebkitMaskSize: 'contain', maskSize: 'contain',
           }} />
         )}
-        {/* Текст + курсор. nowrap + ellipsis: длинный глагол не переносится (высота
+        {/* Текст. nowrap + ellipsis: длинный глагол не переносится (высота
             стабильна), а обрезается многоточием — у типичных коротких вариантов
             («Думаю», «Работаю») места хватает на любой ширине. alignItems center, а не
-            baseline: в пустой фазе (между глаголами) baseline задаёт один курсор, и
+            baseline: в пустой фазе (между глаголами) строка пуста, и
             строку чуть перекашивало по высоте каждый цикл. */}
         {tool && !quietTool ? (
           // Идёт инструмент: [иконка операции] [время] [печатаемый текст]. Иконка и время не
           // сжимаются и стоят на месте (время — фиксированной ширины): стирание текста их не
           // двигает; режется многоточием текст. Тихий режим (карточка видна) — факты не
-          // повторяем, а печатаем глаголы: иначе без курсора индикатор выглядел мёртвым
+          // повторяем, а печатаем глаголы: иначе пустая строка индикатора выглядела мёртвой
           (
             <span data-waiting-tool="" style={{ display: 'inline-flex', alignItems: 'center', minHeight: 17, minWidth: 0, overflow: 'hidden' }}>
               {OpIcon && (
@@ -254,12 +254,6 @@ export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReas
             }}>
               {text}
             </span>
-            {/* Курсор печатной машинки — только у глаголов */}
-            <span style={{
-              display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2, flexShrink: 0,
-              background: pulseColor, borderRadius: 1, alignSelf: 'center',
-              animation: (reduced || awaitingResponse) ? 'none' : 'blink 1s step-start infinite',
-            }} />
           </span>
         )}
       </div>

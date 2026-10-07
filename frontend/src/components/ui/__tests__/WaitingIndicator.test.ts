@@ -43,18 +43,18 @@ describe('WaitingIndicator — идёт инструмент (вариант D)'
     expect(html.indexOf('lucide-flask-conical')).toBeLessThan(html.indexOf('data-waiting-clock'));
   });
 
-  it('тихий режим (карточка видна) — подписи, времени и иконки нет, вместо них глаголы с курсором', () => {
+  it('тихий режим (карточка видна) — подписи, времени и иконки нет, вместо них глаголы без курсора', () => {
     const html = render({ activeToolOnScreen: true, activeToolOperation: 'tests', activeToolDetail: '412 из 7951' });
     expect(html).not.toContain('Тесты · dotnet');
     expect(html).not.toContain('data-waiting-clock');
     expect(html).not.toContain('lucide-flask-conical');
     expect(html).not.toContain('data-waiting-tool');
-    expect(html).toContain('blink');
+    expect(html).not.toContain('blink');
   });
 
-  it('без инструмента — глаголы с курсором, как раньше', () => {
+  it('без инструмента — глаголы без мигающего курсора', () => {
     const html = renderToStaticMarkup(createElement(WaitingIndicator, {}));
-    expect(html).toContain('blink');
+    expect(html).not.toContain('blink');
     expect(html).not.toContain('data-waiting-tool');
   });
 });

@@ -103,7 +103,8 @@ public sealed class VideoPrefsService(
     }
 
     // Единая точка рассылки: любая запись префов (человек, агент) уходит во все вкладки владельца событием
-    // video_prefs_changed. Сбой рассылки запись не откатывает
+    // video_prefs_changed. Сбой рассылки запись не откатывает. Рассылка fire-and-forget, а не await, как у картинок:
+    // Save синхронный и входит в публичный API, асинхронность ему не навязать
     private void Broadcast(string ownerId, string scopeKey, VideoPrefsDto prefs)
     {
         if (broadcaster is null) return;

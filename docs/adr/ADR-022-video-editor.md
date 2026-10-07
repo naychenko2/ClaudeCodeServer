@@ -753,13 +753,13 @@ JSON ниже — единственное описание формы для ф
 ```json
 {
   "type": "video_prefs_changed",
-  "sessionId": "s-1",
+  "sessionId": "",
   "scopeKey": "p-1",
   "prefs": { "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": false, "count": 1, "format": { "mode": "aspect", "aspect": "16:9", "tier": "standard", "by": "human", "at": "2026-10-06T12:00:00Z" } }
 }
 ```
 
-Уходит владельцу при любой записи префов области: ручка PUT человека и запись формата агентом.
+Уходит владельцу при любой записи префов области: ручка PUT человека и запись формата агентом. `sessionId` у этого события всегда пуст: событие на область, а не на чат.
 
 #### VideoEditProgressMessage
 

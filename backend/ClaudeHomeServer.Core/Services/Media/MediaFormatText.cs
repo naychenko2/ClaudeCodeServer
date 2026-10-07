@@ -37,14 +37,19 @@ public static class MediaFormatText
         };
     }
 
-    // Строка хвоста после «Формат: »: итог, чей выбор и подмена под модель
-    public static string Line(MediaFormat? wish, ResolvedFormat resolved)
+    // Строка хвоста после «Формат: »: итог, чей выбор и подмена под модель.
+    // modelChosen: модель известна (выбрана или подобрана); без неё в генерацию не уходит ничего, а у модели без размеров
+    // драйвер шлёт только пропорции (fal и Higgsfield — aspect_ratio)
+    public static string Line(MediaFormat? wish, ResolvedFormat resolved, bool modelChosen = true)
     {
         if (wish is null || wish.Mode == FormatModes.Model)
             return "как у модели — не задан; не передавай aspect/quality/width/height без просьбы человека";
         var who = wish.By == ContextActor.Agent ? "✦ поставил Claude" : "выбор человека";
-        // Модель не выбрана или размеров не сообщает: Resolve вернул «как у модели», но желание задано — его и называем
-        var shown = resolved.Mode == FormatModes.Model ? Wish(wish) + " (модель не выбрана или размеров не сообщает — уйдёт как есть)" : Resolved(resolved);
+        // Resolve вернул «как у модели», но желание задано — его и называем, с честной оговоркой по случаю
+        var shown = resolved.Mode != FormatModes.Model ? Resolved(resolved)
+            : Wish(wish) + (modelChosen
+                ? " (модель сообщает только пропорции — ступень и точный размер не учтутся)"
+                : " (модель не выбрана — формат применится, когда выберете модель)");
         var text = $"{shown} — {who}";
         if (resolved.Substituted)
             text += $"; желание {Wish(wish)}, модель его не умеет: {resolved.Note}";

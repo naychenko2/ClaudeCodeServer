@@ -175,7 +175,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
         var call = await _scenes.AddAsync(owner, scope, session.Id, folder, settings, Str(args, "name"), null, ct, ContextActor.Agent);
         if (call.Written is { Status: VideoThreadWriteStatus.Ok } && ExplicitFormat(args, settings) is { } given)
-            await WriteAgentFormatAsync(owner, scope, session, given);
+            await WriteAgentFormatAsync(owner, scope, session, given, call.Written.Scene, sceneIsNew: true);
         return await ThreadsResultAsync(call, owner, session, scope,
             "Сцена заведена и в работе. Снять её — video_shoot; человек видит карточку сцены в ленте.");
     }
@@ -307,15 +307,17 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
     // Явный формат агента меняет формат видео проекта (решение 2 Андрея): желание в префы с By = Agent и тихая строка
     // «✦ Claude сменил формат видео проекта». Ту же правку человека (PUT prefs) снимает ✦
+    // sceneIsNew — video_new: сцена создана сразу с форматом, строка называет и её, и проект, как у video_scene_set
     // scene — сцена до правки (video_scene_set): формат меняется и у неё, строка называет оба уровня, как делает человек в чипе
-    private async Task WriteAgentFormatAsync(string owner, VideoEditScope scope, Session session, MediaFormat wish, VideoSceneDto? scene = null)
+    private async Task WriteAgentFormatAsync(string owner, VideoEditScope scope, Session session, MediaFormat wish, VideoSceneDto? scene = null, bool sceneIsNew = false)
     {
         var before = _prefs.Get(owner, scope);
         var prefsSame = before.Format is { } had && had.Mode == wish.Mode && had.Aspect == wish.Aspect && had.Tier == wish.Tier;
-        var sceneBefore = scene is null ? null : scene.Settings.Format ?? FormatOfAspect(scene.Settings.Aspect);
+        // Новая сцена уже заведена с форматом агента: «до» у неё — прежний формат проекта, и называем её всегда
+        var sceneBefore = scene is null ? null : sceneIsNew ? before.Format ?? FormatOfAspect(before.Aspect) : scene.Settings.Format ?? FormatOfAspect(scene.Settings.Aspect);
         var sceneSame = scene is null
-            || (sceneBefore is { } sb && sb.Mode == wish.Mode && sb.Aspect == wish.Aspect && sb.Tier == wish.Tier);
-        if (prefsSame && sceneSame) return;
+            || (!sceneIsNew && sceneBefore is { } sb && sb.Mode == wish.Mode && sb.Aspect == wish.Aspect && sb.Tier == wish.Tier);
+        if (prefsSame && (sceneSame || sceneIsNew)) return;
         if (!prefsSame) _prefs.Save(owner, scope, before with { Format = wish, Aspect = wish.Aspect }, ContextActor.Agent);
         var was = MediaFormatText.Wish(scene is not null && !sceneSame ? sceneBefore : before.Format ?? FormatOfAspect(before.Aspect));
         var what = (scene is not null && !sceneSame, !prefsSame) switch

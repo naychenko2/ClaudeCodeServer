@@ -103,6 +103,18 @@ public sealed class VideoEditorToolsetFormatTests
     }
 
     [Fact]
+    public async Task New_with_aspect_names_scene_and_project_in_quiet_line()
+    {
+        using var w = new AgentWorld();
+
+        var result = await w.Call(ToolNew, new JsonObject { ["aspect"] = "16:9" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        w.F.Feed.Records.Select(r => r.Record.Fallback).Where(t => t.Contains("сменил формат")).Should().ContainSingle()
+            .Which.Should().Match("✦ Claude сменил формат сцены «*» и видео проекта: *");
+    }
+
+    [Fact]
     public async Task Scene_set_with_aspect_writes_scene_wish_by_agent_and_mirrors_aspect()
     {
         using var w = new AgentWorld();
@@ -142,7 +154,8 @@ public sealed class VideoEditorToolsetFormatTests
         var item = new ContextItem("i", "video-scene", new JsonObject { ["sceneId"] = scene.SceneId }, null, ContextActor.Human, DateTime.UtcNow);
         var tail = new ClaudeHomeServer.Services.VideoEditor.ChatContext.VideoContextKind(w.F.Threads)
             .DescribeFormat(new ContextScope(w.Owner, session, null), item);
-        tail.Should().Contain("16:9").And.Contain("✦ поставил Claude").And.NotContain("не задан");
+        tail.Should().Contain("16:9").And.Contain("✦ поставил Claude").And.NotContain("не задан")
+            .And.Contain("16:9 · Макс (модель не выбрана — формат применится, когда выберете модель) — ✦ поставил Claude");
 
         w.F.Feed.Records.Select(r => r.Record.Fallback).Where(t => t.Contains("сменил формат")).Should().ContainSingle()
             .Which.Should().Be("✦ Claude сменил формат сцены «Сцена 1» и видео проекта: 9:16 · Макс → 16:9 · Макс");

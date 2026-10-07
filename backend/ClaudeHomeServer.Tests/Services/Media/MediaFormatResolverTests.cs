@@ -207,4 +207,17 @@ public sealed class MediaFormatResolverTests
 
         MediaFormatText.Wish(broken).Should().NotBe("как у модели").And.Contain("не заданы");
     }
+
+    // Правка Глеба Б2.7: оговорка хвоста различает «модель не выбрана» и «модель сообщает только пропорции»
+    [Fact]
+    public void Строка_хвоста_честно_разводит_модель_не_выбрана_и_модель_без_размеров()
+    {
+        var wish = new MediaFormat(FormatModes.Aspect, "16:9", FormatTier.High, null, null, ContextActor.Human, DateTime.UtcNow);
+        var model = MediaFormatResolver.Resolve(null, wish);
+
+        MediaFormatText.Line(wish, model, modelChosen: false).Should()
+            .Be("16:9 · Высокое (модель не выбрана — формат применится, когда выберете модель) — выбор человека");
+        MediaFormatText.Line(wish, model, modelChosen: true).Should()
+            .Be("16:9 · Высокое (модель сообщает только пропорции — ступень и точный размер не учтутся) — выбор человека");
+    }
 }

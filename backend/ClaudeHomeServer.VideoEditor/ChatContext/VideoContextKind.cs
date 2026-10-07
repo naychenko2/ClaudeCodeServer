@@ -136,7 +136,7 @@ public sealed class VideoContextKind(
         var caps = model?.Caps.Format;
         if (wish is { Mode: FormatModes.Aspect, Tier: null } && engine is not null && model is not null)
             wish = wish with { Tier = VideoFormatCatalog.DefaultTier(engine.Key, model.Id) };
-        var line = "формат сцены — " + MediaFormatText.Line(wish, MediaFormatResolver.Resolve(caps, wish));
+        var line = "формат сцены — " + MediaFormatText.Line(wish, MediaFormatResolver.Resolve(caps, wish), model is not null);
         if (scene.LockedBy is { } locked)
             line += $"; сцена фильма «{FilmName(locked.FilmPath)}» — пропорции фильма {locked.Aspect}, смена без force даёт film_format_locked";
         if (scene.Settings.FrameFit?.Anchor is { } anchor)

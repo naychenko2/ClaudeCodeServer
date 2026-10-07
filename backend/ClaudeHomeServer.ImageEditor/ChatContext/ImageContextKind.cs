@@ -136,8 +136,8 @@ public sealed class ImageContextKind(
         if (primary.Kind != Kind || prefs is null) return null;
         var saved = prefs.Get(scope.OwnerId, scope.Project?.Id ?? ImageEditScope.Personal);
         var settings = saved.CreateSettings();
-        var caps = FormatCapsOf(settings.Provider, settings.Model);
-        var line = MediaFormatText.Line(saved.Format, MediaFormatResolver.Resolve(caps, saved.Format));
+        var (caps, modelChosen) = FormatCapsOf(settings.Provider, settings.Model);
+        var line = MediaFormatText.Line(saved.Format, MediaFormatResolver.Resolve(caps, saved.Format), modelChosen);
         var thread = Text(primary.Ref, "threadId") is { } id ? Find(scope, id) : null;
         var hasImage = thread is not null && (thread.File is { Length: > 0 } || thread.CurrentVersion is { Steps.Count: > 0 });
         return hasImage
@@ -147,21 +147,21 @@ public sealed class ImageContextKind(
     }
 
     // Возможности формата модели выбора человека; «Авто» и неизвестная пара — модель, которую выберет поставщик
-    private MediaFormatCaps? FormatCapsOf(string? provider, string? model)
+    private (MediaFormatCaps? Caps, bool ModelChosen) FormatCapsOf(string? provider, string? model)
     {
         try
         {
             var all = editors?.ToList() ?? [];
             var editor = string.IsNullOrWhiteSpace(provider) ? all.FirstOrDefault(e => e.Enabled) : all.FirstOrDefault(e => e.Key == provider);
-            if (editor is null) return null;
+            if (editor is null) return (null, false);
             var info = string.IsNullOrWhiteSpace(model) || model == ImageEditCatalog.AutoModelId
                 ? editor.PickModel(ImageEditOp.Generate, EditMode.Auto, new EditTraits(false, 0, false))
                 : editor.Models.FirstOrDefault(m => m.Id == model);
-            return info?.Caps.Format;
+            return (info?.Caps.Format, info is not null);
         }
         catch
         {
-            return null;
+            return (null, false);
         }
     }
 

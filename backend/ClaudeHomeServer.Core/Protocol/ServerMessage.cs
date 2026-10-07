@@ -97,9 +97,12 @@ public record ToolUseMessage(string Id, string Name, object Input, string? Paren
     long? StartedAt = null)
     : ServerMessage("tool_use");
 
-// Фактический старт выполнения инструмента — по system/task_started CLI (Bash, сабагенты).
+// Фактический старт выполнения инструмента — по system/task_started CLI (Bash, сабагенты)
+// либо из самого tools/call MCP-инструментов с прогрессом (run_tests, build, start_stand:
+// CLI выполняет их по очереди, SessionManager.RecordToolStarted).
 // Между tool_use и стартом может пройти заметное время (хуки PreToolUse, ожидание
-// разрешения), поэтому таймер карточки сдвигается сюда. StartedAt проставляет SessionManager.
+// разрешения, очередь соседних вызовов), поэтому таймер карточки сдвигается сюда.
+// StartedAt проставляет SessionManager.
 public record ToolStartedMessage(string ToolUseId, long? StartedAt = null)
     : ServerMessage("tool_started");
 

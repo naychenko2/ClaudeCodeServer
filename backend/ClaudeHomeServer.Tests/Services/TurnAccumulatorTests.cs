@@ -351,6 +351,65 @@ public class TurnAccumulatorTests : IDisposable
         tool.Started.Should().BeTrue();
     }
 
+    // Старт MCP-инструмента с прогрессом (run_tests/build/start_stand) приходит из его
+    // tools/call мимо пампа CLI: карточка уже в ленте — событие уходит сразу, метка — в историю
+    [Fact]
+    public void ExternalStart_КарточкаВЛенте_СлатьСразу_МеткаВИстории()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { }, startedAt: 1_000);
+        acc.OnToolAnnounced("t1").Should().BeNull();
+
+        acc.OnExternalToolStarted("t1", 7_000).Should().BeTrue();
+
+        var tool = acc.GetAll().OfType<StoredToolUseMessage>().Single();
+        tool.StartedAt.Should().Be(7_000);
+        tool.Started.Should().BeTrue();
+    }
+
+    // Вызов обогнал и разбор tool_use, и его рассылку: старт ждёт анонса карточки и уходит
+    // следом за ней, а запоздавший финальный tool_use фактический старт не перетирает
+    [Fact]
+    public void ExternalStart_ОбогналКарточку_ЖдётАнонса_ФинальныйToolUseНеПеретирает()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnExternalToolStarted("t1", 7_000).Should().BeFalse();
+        acc.OnToolUse("t1", "mcp__dev__build", new { }, startedAt: 8_000);
+        acc.OnToolUse("t1", "mcp__dev__build", new { target = "x" }, startedAt: 9_000);
+
+        var tool = acc.GetAll().OfType<StoredToolUseMessage>().Single();
+        tool.StartedAt.Should().Be(7_000);
+        tool.Started.Should().BeTrue();
+        acc.OnToolAnnounced("t1").Should().Be(7_000);
+        acc.OnToolAnnounced("t1").Should().BeNull(); // отложенный старт уходит один раз
+    }
+
+    // Карточка разобрана, но в ленту ещё не ушла: событие сейчас клиент выбросил бы
+    [Fact]
+    public void ExternalStart_КарточкаНеАнонсирована_ОткладываетсяДоАнонса()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__dev__start_stand", new { }, startedAt: 1_000);
+
+        acc.OnExternalToolStarted("t1", 4_000).Should().BeFalse();
+        acc.GetAll().OfType<StoredToolUseMessage>().Single().Started.Should().BeTrue();
+        acc.OnToolAnnounced("t1").Should().Be(4_000);
+    }
+
+    // Старт после результата — опоздал: ни события, ни правки длительности
+    [Fact]
+    public void ExternalStart_ПослеРезультата_Игнорируется()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("t1", "mcp__tests__run_tests", new { }, startedAt: 1_000);
+        acc.OnToolAnnounced("t1");
+        acc.OnToolResult("t1", "ok", false, finishedAt: 5_000);
+
+        acc.OnExternalToolStarted("t1", 9_000).Should().BeFalse();
+        acc.GetAll().OfType<StoredToolUseMessage>().Single().StartedAt.Should().Be(1_000);
+        acc.OnToolAnnounced("t1").Should().BeNull();
+    }
+
     // Без фактического старта признака нет: карточка Bash после F5 не покажет «идёт»,
     // пока длится ожидание разрешения
     [Fact]

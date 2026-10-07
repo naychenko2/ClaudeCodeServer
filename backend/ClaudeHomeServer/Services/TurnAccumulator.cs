@@ -134,13 +134,20 @@ internal class TurnAccumulator
             // Дедуп: ранняя карточка из стрима (пустой input) + финальный assistant с тем же id → обновляем, не дублируем.
             // Старт тоже сдвигается на финальный: ранняя карточка приходит в начале стрима
             // аргументов, а выполняться инструмент начнёт только после него
+            // Фактический старт уже пришёл — его не трогаем: финальный tool_use бывает и позже него
             if (_pendingTools.TryGetValue(id, out var existing))
             {
                 existing.Input = input;
-                if (startedAt is not null) existing.StartedAt = startedAt;
+                if (startedAt is not null && existing.Started != true) existing.StartedAt = startedAt;
                 return;
             }
             var msg = new StoredToolUseMessage { Id = id, Name = name, Input = input, ParentToolUseId = parentToolUseId, StartedAt = startedAt };
+            // Старт MCP-вызова обогнал саму карточку (OnExternalToolStarted)
+            if (_unannouncedStarts.TryGetValue(id, out var early))
+            {
+                msg.StartedAt = early;
+                msg.Started = true;
+            }
             _pendingTools[id] = msg;
             _currentTurn.Add(msg);
         }
@@ -193,6 +200,47 @@ internal class TurnAccumulator
             }
         }
     }
+
+    // Фактический старт, пришедший мимо пампа CLI: MCP-инструмент с прогрессом (run_tests,
+    // build, start_stand) сообщает о нём сам из HTTP-запроса tools/call, и тот может обогнать
+    // и разбор tool_use из stdout, и его рассылку в ленту — тогда клиент выбросил бы старт
+    // неизвестной карточки и ждал бы его до результата. Поэтому событие уходит сразу, только
+    // если карточка уже в ленте (OnToolAnnounced); иначе старт ждёт её анонса, и SessionManager
+    // шлёт его следом за tool_use. Решение под тем же локом, что и анонс, — окна между ними нет.
+    // true — слать tool_started сейчас; false — отложен либо опоздал (результат уже есть)
+    public bool OnExternalToolStarted(string toolUseId, long startedAt)
+    {
+        lock (_lock)
+        {
+            var msg = FindTool(toolUseId);
+            if (msg is { Result: not null }) return false;
+            if (msg is not null)
+            {
+                msg.StartedAt = startedAt;
+                msg.Started = true;
+                // Карточка прошлого хода (уже в _history) в ленте заведомо есть
+                if (_announcedTools.Contains(toolUseId) || !_pendingTools.ContainsKey(toolUseId)) return true;
+            }
+            // Потолок — от вызовов с id, карточка которых так и не придёт
+            if (_unannouncedStarts.Count < MaxUnannouncedStarts) _unannouncedStarts[toolUseId] = startedAt;
+            return false;
+        }
+    }
+
+    // tool_use ушёл в ленту. Возвращает отложенный старт, который теперь можно слать следом
+    public long? OnToolAnnounced(string toolUseId)
+    {
+        lock (_lock)
+        {
+            _announcedTools.Add(toolUseId);
+            return _unannouncedStarts.Remove(toolUseId, out var startedAt) ? startedAt : null;
+        }
+    }
+
+    private const int MaxUnannouncedStarts = 64;
+    // Карточки хода, уже ушедшие в ленту, и старты, ждущие анонса своей карточки
+    private readonly HashSet<string> _announcedTools = [];
+    private readonly Dictionary<string, long> _unannouncedStarts = [];
 
     // Этапы и итоговые счётчики долгого инструмента (run_tests): снимок целиком заменяет
     // прежний (правило — ApplyToolStages). Ищется и в _history: прогон, оборванный вместе с
@@ -748,6 +796,8 @@ internal class TurnAccumulator
             // где ход обрывается мимо него (страховка от переезда строки в следующий ход)
             _outOfTurn.Clear();
             _pendingTools.Clear();
+            _announcedTools.Clear();
+            _unannouncedStarts.Clear();
             _pendingQuestions.Clear();
             _pendingPlans.Clear();
             _teamRawText.Clear();

@@ -7070,6 +7070,20 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 m => TurnAccumulator.ApplyToolStages(m, stages, totals));
     }
 
+    // Фактический старт MCP-инструмента с прогрессом (run_tests, build, start_stand) — из его
+    // tools/call, мимо пампа CLI. CLI выполняет такие вызовы по очереди, и без этой метки все
+    // выписанные в одном ответе карточки сразу показывали бы «идёт» с отсчётом от tool_use.
+    // Тот же tool_started, что у Bash/агентов: метка ложится в историю вызова, событие уходит
+    // в ленту сразу либо следом за tool_use, если вызов обогнал его рассылку (OnExternalToolStarted)
+    public void RecordToolStarted(string sessionId, string toolUseId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Accumulator is not { } acc) return;
+        var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (acc.OnExternalToolStarted(toolUseId, startedAt))
+            FireAndForget(BroadcastAsync(sessionId, new ToolStartedMessage(toolUseId, startedAt)),
+                $"старт инструмента ({sessionId})");
+    }
+
     // Публичный (волна Д): TeamDecisionService зовёт его вместо прямой работы с
     // entry.Accumulator. Счётчик и момент последнего оклика пишутся на карточку в истории —
     // переживают рестарт сервера, чтобы после перезапуска не начать оклик заново.
@@ -9559,6 +9573,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
 
         if (sendBroadcast) await BroadcastAsync(sessionId, msg);
+        // Карточка в ленте — старт MCP-вызова, обогнавший её рассылку, уходит следом
+        if (msg is ToolUseMessage announced && acc.OnToolAnnounced(announced.Id) is { } earlyStart)
+            await BroadcastAsync(sessionId, new ToolStartedMessage(announced.Id, earlyStart));
 
         if (entry is not null && OnSessionMessage is { } observers)
         {

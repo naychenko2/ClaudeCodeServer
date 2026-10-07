@@ -33,9 +33,7 @@ public class UserStore : IForgejoAccountStore, IUserStore
         _providers = providers;
         _logger = logger;
         _ntlm = ntlm;
-        var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
-        var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
-        _filePath = Path.Combine(dataDir, "users.json");
+        _filePath = ResolveUsersFilePath(config);
 
         // DevPassword — мастер-пароль для всех аккаунтов; допустим ТОЛЬКО в Development.
         // В проде игнорируем, даже если задан в конфиге (иначе один пароль открывает всё).
@@ -51,6 +49,14 @@ public class UserStore : IForgejoAccountStore, IUserStore
         Load(logger); // конструктор однопоточен — отдельный лок не нужен
         // Пользователи, удалённые при остановленном сервере, не должны входить по NTLM
         _ntlm?.Retain(_users.Select(u => u.Username));
+    }
+
+    /// <summary>Путь users.json экземпляра: рядом с projects.json из DataPath. Им же метится файл NTLM-хэшей.</summary>
+    internal static string ResolveUsersFilePath(IConfiguration config)
+    {
+        var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
+        var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
+        return Path.Combine(dataDir, "users.json");
     }
 
     private void Load(ILogger logger)

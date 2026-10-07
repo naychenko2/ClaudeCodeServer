@@ -105,6 +105,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Транскрипт чата на диске сервера. false — локальный проект (ADR-016): транскрипт на
     // устройстве в единственном профиле CLI, провайдера выбирает шлюз — переносить нечего
     private readonly bool _transcriptOnServer;
+    // Владелец хода: у проектной сессии Info.OwnerId пуст (см. LlmSessionContext.OwnerId)
+    private readonly string? _turnOwnerId;
     private readonly CancellationTokenSource _cts = new();
 
     // Активная оркестрация фолбэка (null — сообщения проходят насквозь)
@@ -141,7 +143,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         Turn.ITurnEventBus? events = null,
         TimeSpan? egressRetryDelay = null,
         ILocalEndpointProbe? localProbe = null,
-        bool transcriptOnServer = true)
+        bool transcriptOnServer = true,
+        string? turnOwnerId = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -165,6 +168,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _events = events;
         _localProbe = localProbe;
         _transcriptOnServer = transcriptOnServer;
+        _turnOwnerId = turnOwnerId ?? Info.OwnerId;
         _egressRetryDelay = egressRetryDelay ?? EgressRetryDelay;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey(Info.Model));
     }
@@ -1175,7 +1179,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     _ = _events.PublishAsync(new TurnCompleted(
                         Turn: new TurnContext(
                             SessionId: Info.Id,
-                            OwnerId: Info.OwnerId,
+                            OwnerId: _turnOwnerId,
                             TurnSeq: (int)SubmittedTurnSeq,
                             AgentDepth: 0,
                             ProjectId: Info.ProjectId),

@@ -35,6 +35,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
     internal string? EffectiveTurnModel => EffectiveModel;
 
+    // Владелец хода: у проектной сессии Info.OwnerId пуст, владелец приходит из контекста
+    private readonly string? _turnOwnerId;
+    internal string? TurnOwnerId => _turnOwnerId;
+
     // Модель для --model / set_model. Хранится семейство (opus/fable/sonnet/haiku), окно 1M
     // дописывает пул по плану подписки хода (ClaudeSubscriptionPool.LaunchModel): Max получает
     // opus[1m], Pro — opus с объявленным окном 200K, и CLI сожмёт контекст вовремя.
@@ -946,6 +950,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _subscriptionPool = subscriptionPool;
         _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
+        _turnOwnerId = context.OwnerId ?? info.OwnerId;
         _rootPath = context.RootPath;
         _mainRootPath = context.MainRootPath;
         _serverContent = context.ServerContent;
@@ -3243,7 +3248,7 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 var promptContext = new Turn.PromptSessionContext(
                     Session: Info,
-                    OwnerId: Info.OwnerId,
+                    OwnerId: _turnOwnerId,
                     Persona: _personaProvider?.Invoke(),
                     RootPath: _rootPath,
                     MainRootPath: _mainRootPath,
@@ -4782,7 +4787,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // SessionId/OwnerId/ProjectId берём из сессии, TurnSeq — счётчик ходов прогона,
     // AgentDepth пока 0 (этап 0: глубина делегирования не прокинута на шину).
     private Turn.TurnContext CurrentTurnContext() =>
-        new(Info.Id, Info.OwnerId, (int)Interlocked.Read(ref _turnSeq),
+        new(Info.Id, _turnOwnerId, (int)Interlocked.Read(ref _turnSeq),
             AgentDepth: 0, ProjectId: Info.ProjectId);
 
     /// <summary>

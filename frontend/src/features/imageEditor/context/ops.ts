@@ -8,7 +8,7 @@ import { AUTO_MODEL, type EditMode, type ImageEditEstimate, type ImageEditModel,
 import { etaText, isFreeUnit, money, pickOp, priceSum, variantsWord } from '../format';
 import type { OutpaintRatio, QuickAction } from '../editorInputs';
 import { getPrefs, setEditChoice, type ProjectPrefs } from '../thread/prefs';
-import { modeAware, type ImageMode } from '../thread/modeState';
+import type { ImageMode } from '../thread/modeState';
 
 export type PanelOp = 'auto' | ImageEditOp;
 
@@ -85,26 +85,19 @@ export interface PanelChoice { op: PanelOp; mode: EditMode; ratio: OutpaintRatio
 
 export const DEFAULT_CHOICE: PanelChoice = { op: 'auto', mode: 'auto', ratio: '16:9' };
 
-const _choice = new Map<string, PanelChoice>();
 let _version = 0;
 const _listeners = new Set<() => void>();
 
-export const getPanelChoice = (projectId: string): PanelChoice => _choice.get(projectId) ?? DEFAULT_CHOICE;
-
 export function setPanelChoice(projectId: string, patch: Partial<PanelChoice>) {
-  // Под флагом image-panel-v5 выбор живёт в префах «Править» проекта. «Авто» там нет —
-  // это «Изменить» с инпейнтом по отметкам; «По тексту» — режим «Создать», а не операция
-  if (modeAware()) {
-    const op = patch.op === 'auto' ? 'edit' : patch.op === 'generate' ? undefined : patch.op;
-    setEditChoice(projectId, {
-      ...(op ? { op } : null),
-      ...(patch.mode ? { editMode: patch.mode } : null),
-      // Под флагом media-format пропорции правки живут в «Формате» одну правку и в префы режима не пишутся
-      ...(patch.ratio && !getFlag(FLAGS.mediaFormat) ? { ratio: patch.ratio } : null),
-    });
-  } else {
-    _choice.set(projectId, { ...getPanelChoice(projectId), ...patch });
-  }
+  // Выбор живёт в префах «Править» проекта. «Авто» там нет — это «Изменить» с инпейнтом
+  // по отметкам; «По тексту» — режим «Создать», а не операция
+  const op = patch.op === 'auto' ? 'edit' : patch.op === 'generate' ? undefined : patch.op;
+  setEditChoice(projectId, {
+    ...(op ? { op } : null),
+    ...(patch.mode ? { editMode: patch.mode } : null),
+    // Под флагом media-format пропорции правки живут в «Формате» одну правку и в префы режима не пишутся
+    ...(patch.ratio && !getFlag(FLAGS.mediaFormat) ? { ratio: patch.ratio } : null),
+  });
   _version++;
   _listeners.forEach(fn => fn());
 }
@@ -115,10 +108,8 @@ export function editChoice(prefs: ProjectPrefs): PanelChoice {
   return { op: e?.op ?? 'edit', mode: e?.editMode ?? 'auto', ratio: e?.ratio ?? DEFAULT_CHOICE.ratio };
 }
 
-// Выбор, с которым пойдёт запуск. С режимом (флаг image-panel-v5): «Создать» — всегда по
-// тексту, «Править» — выбор «Править» проекта
-export function activeChoice(projectId: string, mode: ImageMode | null = null): PanelChoice {
-  if (!mode) return getPanelChoice(projectId);
+// Выбор, с которым пойдёт запуск: «Создать» — всегда по тексту, «Править» — выбор «Править» проекта
+export function activeChoice(projectId: string, mode: ImageMode): PanelChoice {
   const edit = editChoice(getPrefs(projectId));
   return mode === 'create' ? { op: 'generate', mode: 'auto', ratio: edit.ratio } : edit;
 }
@@ -140,7 +131,6 @@ export function usePanelChoiceVersion() {
 }
 
 export function __resetPanelChoice() {
-  _choice.clear();
   _createRatio.clear();
   _version++;
 }

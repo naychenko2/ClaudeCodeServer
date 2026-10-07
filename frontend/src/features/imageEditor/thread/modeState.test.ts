@@ -18,7 +18,6 @@ vi.stubGlobal('window', win);
 const toasts: string[] = [];
 win.addEventListener('cc-local-toast', e => toasts.push((e as CustomEvent<{ title: string }>).detail.title));
 
-const { setFlagLocal, FLAGS } = await import('../../../lib/featureFlags');
 const { imageEditorApi } = await import('../api');
 const { loadCatalog } = await import('./catalog');
 const { __resetPrefs, ensurePrefs, getPrefs, prefsApi, setPrefs } = await import('./prefs');
@@ -64,7 +63,6 @@ async function withPrefs(v: ProjectPrefs) {
 beforeEach(() => {
   storage.clear();
   storage.set('cc-image-editor-mock', 'all');
-  setFlagLocal(FLAGS.imagePanelV5, true);
   __resetThreadStore();
   __resetPrefs();
   __resetPanelChoice();
@@ -75,7 +73,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   toasts.length = 0;
-  setFlagLocal(FLAGS.imagePanelV5, false);
   vi.restoreAllMocks();
 });
 
@@ -121,16 +118,6 @@ describe('режим «Создать / Править» на чат', () => {
     expect(getStoredImageMode(S)).toBeNull();
     win.dispatchEvent(Object.assign(new Event('storage'), { key: `cc-image-mode:${S}`, newValue: 'edit' }));
     expect(getStoredImageMode(S)).toBe('edit');
-  });
-
-  it('флаг выключен — режим не пишется', async () => {
-    setFlagLocal(FLAGS.imagePanelV5, false);
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    vi.spyOn(threadsApi, 'current').mockResolvedValue(state(t, 2));
-    await continueFrom(P, S, t, 'v1');
-    expect(getStoredImageMode(S)).toBeNull();
-    expect(localStorage.getItem(`cc-image-mode:${S}`)).toBeNull();
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { pickOp } from '../format';
 import {
-  activeChoice, DEFAULT_CHOICE, footPrice, isOneVariant, launchMarks, modeOp, opBlockReason, PANEL_OPS, queueText, quickOf,
+  footPrice, isOneVariant, launchMarks, modeOp, opBlockReason, PANEL_OPS, queueText, quickOf,
   resolveOp, runVerb,
 } from './ops';
 
@@ -54,13 +54,6 @@ describe('операция запуска с режимом', () => {
     expect(modeOp('removeBackground', false, false).reason).toBe('Сначала выберите картинку в ленте или загрузите её');
   });
 });
-
-describe('выбор, с которым идёт запуск', () => {
-  it('без режима — выбор вкладки по умолчанию', () => {
-    expect(activeChoice('ops-test-p')).toEqual(DEFAULT_CHOICE);
-  });
-});
-
 describe('пометки запуска', () => {
   const mask = { type: 'mask' };
   const arrow = { type: 'arrow' };

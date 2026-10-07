@@ -7,7 +7,7 @@ import { onReconnected, showToast } from 'aihome_shell/kit';
 import type { Sample } from '../editorInputs';
 import type { Mark, Tool } from '../marks';
 import { conflictState, EMPTY_THREADS, threadsApi, type ImageThread, type ImageThreadsState } from './threadsApi';
-import { noteImageMode } from './modeState';
+import { setImageMode } from './modeState';
 
 // Ключ элемента выбора агента и черновиков — тот же, что IMAGES_PANEL в characters/panel
 const PANEL = 'images';
@@ -53,8 +53,8 @@ function apply(sessionId: string, projectId: string, state: ImageThreadsState) {
   if (e?.loaded && e.state.revision > state.revision) return;
   const prevFocus = e?.loaded ? e.state.focus : null;
   _entries.set(sessionId, { projectId, state, loaded: true, loading: false });
-  // Выбор сняли — человек или агент: дальше рисуем новую (режим «Создать», флаг image-panel-v5)
-  if (prevFocus && !state.focus) noteImageMode(sessionId, 'create');
+  // Выбор сняли — человек или агент: дальше рисуем новую (режим «Создать»)
+  if (prevFocus && !state.focus) setImageMode(sessionId, 'create');
   emit();
 }
 

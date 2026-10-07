@@ -185,6 +185,19 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             ? new ImageEditQuoteInfo(q.Op, q.ContextRevision)
             : null;
 
+    // Пропорции, которые человек выбрал явно в старом интерфейсе (поле aspectRatio запуска генерации), стоят выше
+    // формата из префов, который подставила котировка: без флага «Формат» сохранённая ✦ агента не вправе
+    // перебивать видимый выбор. Ступень остаётся от котировки; пропорции пересчитывает резолвер под модель
+    private static ResolvedFormat? ExplicitAspectOver(Quote quote, string? explicitAspect)
+    {
+        if (quote.Op != ImageEditOp.Generate || explicitAspect is null || quote.Format is not { } format
+            || format.Aspect == explicitAspect || !AspectCrop.TryParse(explicitAspect, out _))
+            return quote.Format;
+        var wish = new MediaFormat(FormatModes.Aspect, explicitAspect, format.Tier, null, null,
+            ClaudeHomeServer.Services.ChatContext.ContextActor.Human, DateTime.UtcNow);
+        return ImageFormatPlan.For(quote.Op, quote.Model.Caps.Format, wish) ?? quote.Format;
+    }
+
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(
@@ -216,8 +229,9 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 matchSize = (w, h);
         }
 
+        var format = ExplicitAspectOver(quote, input.AspectRatio);
         var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count,
-            quote.Format?.Aspect ?? input.AspectRatio, quote.Format);
+            format?.Aspect ?? input.AspectRatio, format);
         if (composed.Value is not { } request)
             return Fail<ImageEditJobCreatedDto>(composed.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
                 composed.Error ?? "Неверный запрос");

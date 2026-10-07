@@ -409,6 +409,38 @@ public sealed class VideoFormatJobTests : IDisposable
         engine.Runs.Single().FrameA!.Bytes.Should().Equal(new byte[] { 1 });
     }
 
+    // Без флага «Формат» старый UI всегда шлёт aspect (по умолчанию 16:9): портретный кадр, который раньше задавал
+    // ориентацию, подрезаться не вправе, а без растра запуск не должен падать с dsp_unavailable
+    [Fact]
+    public async Task Old_aspect_field_never_crops_frames_and_does_not_need_raster()
+    {
+        var engine = new H3Fake();
+        var (svc, _) = Service(engine, frames: new Frames(new() { ["t9x16"] = 2 }), withRaster: false);
+        var scene = AddScene(frameA: FrameRef.Image("t9x16", "v1"));
+        var quote = (await svc.QuoteAsync(Owner, Scope, Quote(scene, aspect: "16:9"), default)).Value!;
+
+        var started = await svc.StartAsync(Owner, Scope, new VideoLaunchRequest(quote.QuoteId, Session, scene), default);
+
+        started.ErrorCode.Should().BeNull(started.Error);
+        await svc.WhenDone(started.Value!.JobId);
+        engine.Runs.Single().FrameA!.Bytes.Should().Equal(new byte[] { 2 }, "кадр уходит как есть");
+        _store.Get(Owner, Session).Scenes.Single().FramesCropped.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Old_scene_aspect_field_does_not_crop_frames_either()
+    {
+        var engine = new H3Fake();
+        var raster = new FakeRaster();
+        var (svc, _) = Service(engine, raster, new Frames(new() { ["t9x16"] = 2 }));
+        var scene = AddScene(aspect: "16:9", frameA: FrameRef.Image("t9x16", "v1"));
+
+        await Shoot(svc, scene);
+
+        raster.Crops.Should().BeEmpty();
+        engine.Runs.Single().FrameA!.Bytes.Should().Equal(new byte[] { 2 });
+    }
+
     [Fact]
     public async Task Preview_dry_run_gives_the_same_crop_as_the_shot_and_writes_nothing()
     {

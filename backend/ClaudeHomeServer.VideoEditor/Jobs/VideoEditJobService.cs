@@ -104,7 +104,9 @@ public sealed class VideoEditJobService : IDisposable
     private sealed record Quote(
         string Id, string OwnerId, string ScopeKey, string? SessionId, string? SceneId, string Provider, VideoModelInfo Model,
         int Count, int DurationSec, string? Aspect, bool Sound, VideoPriceDto Price, DateTime ExpiresAt,
-        long? ContextRevision = null, ResolvedFormat? Format = null, MediaFormat? Wish = null)
+        long? ContextRevision = null, ResolvedFormat? Format = null, MediaFormat? Wish = null,
+        // Желание пришло из поля «Формат» (запрос, сцена, префы), а не собрано из прежнего поля aspect: только оно подрезает кадры
+        bool FormatExplicit = false)
     {
         public bool Heavy => Model.Caps.Heavy;
         public string License => Model.Caps.License.Label;
@@ -226,7 +228,9 @@ public sealed class VideoEditJobService : IDisposable
 
         // Формат (ADR-025): желание запроса → сцены → префов; у старого клиента — прежнее поле aspect. Хранится желание,
         // действующий формат считается здесь, под выбранную модель; подмена показывается в ответе, а не пишется в сцену
-        var wish = request.Format ?? WishOf(request.Aspect, settings.Format, settings.Aspect, prefs.Format, prefs.Aspect);
+        var (wish, explicitFormat) = request.Format is { } given
+            ? (given, true)
+            : WishOf(request.Aspect, settings.Format, settings.Aspect, prefs.Format, prefs.Aspect);
         if (VideoSceneFormat.Validate(wish) is { } badFormat)
             return Fail<VideoQuoteResponse>(VideoEditorErrors.InvalidRequest, badFormat);
         var resolved = Resolve(engine, model, wish);
@@ -247,7 +251,7 @@ public sealed class VideoEditJobService : IDisposable
         }
 
         var quote = new Quote(NewId(), ownerId, scope.Key, request.SessionId, request.SceneId, engine.Key, model, count,
-            duration, aspect, sound, price, Now() + QuoteTtl, request.ContextRevision, resolved, wish);
+            duration, aspect, sound, price, Now() + QuoteTtl, request.ContextRevision, resolved, wish, explicitFormat);
         PruneQuotes();
         PruneRetryContexts();
         _quotes[quote.Id] = quote;
@@ -259,14 +263,15 @@ public sealed class VideoEditJobService : IDisposable
         new(model.Id, scope, text, null, null, duration, aspect, sound, Format: format);
 
     // Желание по цепочке «запрос → сцена → префы»: Format главнее, прежнее поле aspect — только когда Format не задан
-    private MediaFormat? WishOf(string? requestAspect, MediaFormat? sceneFormat, string? sceneAspect, MediaFormat? prefsFormat,
-        string? prefsAspect)
+    // Второй элемент — желание явное (поле «Формат»): прежнее поле aspect желанием «Формата» не считается
+    private (MediaFormat? Wish, bool Explicit) WishOf(string? requestAspect, MediaFormat? sceneFormat, string? sceneAspect,
+        MediaFormat? prefsFormat, string? prefsAspect)
     {
-        if (requestAspect is not null) return AspectWish(requestAspect);
-        if (sceneFormat is not null) return sceneFormat;
-        if (sceneAspect is not null) return AspectWish(sceneAspect);
-        if (prefsFormat is not null) return prefsFormat;
-        return prefsAspect is not null ? AspectWish(prefsAspect) : null;
+        if (requestAspect is not null) return (AspectWish(requestAspect), false);
+        if (sceneFormat is not null) return (sceneFormat, true);
+        if (sceneAspect is not null) return (AspectWish(sceneAspect), false);
+        if (prefsFormat is not null) return (prefsFormat, true);
+        return prefsAspect is not null ? (AspectWish(prefsAspect), false) : (null, false);
     }
 
     private MediaFormat AspectWish(string aspect) =>
@@ -381,7 +386,7 @@ public sealed class VideoEditJobService : IDisposable
         // Подрезка кадров под пропорции формата сцены — ДО модели, там же до слота и денег (ADR-025 §5): так local H3
         // получает 9:16 из 16:9-кадра, а превью (frames/preview) считает то же самое
         VideoFramesCroppedDto? framesCropped = null;
-        if (quote.Format?.Aspect is { } fitAspect && (frameA.Bytes is not null || frameB.Bytes is not null))
+        if (quote.FormatExplicit && quote.Format?.Aspect is { } fitAspect && (frameA.Bytes is not null || frameB.Bytes is not null))
         {
             var anchor = settings.FrameFit?.Anchor ?? CropAnchors.Center;
             var fitA = frameA.Bytes is { } a ? _frames.Fit(a, fitAspect, anchor) : null;

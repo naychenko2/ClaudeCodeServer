@@ -27,6 +27,8 @@ interface FormatModel {
   "count": 1, "format": { "mode": "aspect", "aspect": "16:9", "tier": "high" } }
 ```
 
+Дорисовка («Дорисовать за края») — та же ручка с `op: "outpaint"`: пропорции холста — **любые читаемые `W:H`** (4:3, 21:9…), а не три значения старого пути правки. Желание идёт полем `format` котировки (`{ "mode": "aspect", "aspect": "4:3" }`), в котировке его читает `ImageFormatPlan`; у запуска (`aspectRatio`) белый список `1:1/16:9/9:16` для `outpaint` снят — остаётся проверка читаемости (`AspectCrop.TryParse`, 400 `invalid_request` на «широкая»). Модели дорисовки формата не объявляют (`caps.format = null`), поэтому проверки по списку пропорций модели нет: холст задаёт сама дорисовка. У правки (`edit`/`inpaint`) белый список прежний.
+
 Обрезка (`POST /api/projects/{id}/image-editor/sessions/{sessionId}/threads/{threadId}/crop`, в личном чате — `/api/image-editor/chats/{sessionId}/threads/{threadId}/crop`; тот же метод сервиса `ImageThreadService.CropToAspectAsync`, что у `image_generate op = crop`): тело `{ "aspect": "1:1", "anchor": "left", "versionId": null, "dryRun": false }`; ответ `{ width, height, aspect, versionId, state }` (`state` — нити чата), при `dryRun: true` версия не создаётся, `versionId = null`. Лента: запись `image_launch_versions` с `provider: "none"`, `model: "crop"`, `crop {aspect, anchor, width, height}` и текстом «Вы обрезали без ИИ: 1200×1200 · 1:1 · бесплатно · версия 3» (у агента — «✦ Claude обрезал без ИИ: …»).
 
 Тихая строка агента при смене формата: запись `image_format` `{ by: "agent", before, after }`, текст «✦ Claude сменил формат картинок проекта: 16:9 → 9:16».

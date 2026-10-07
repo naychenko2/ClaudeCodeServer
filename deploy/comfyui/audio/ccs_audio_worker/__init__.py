@@ -51,6 +51,7 @@ OPS = {
     "master": "sep",
     "music_edit": "acestep",
     "transcribe": "asr",
+    "transcribe_diarize": "whisperx",
 }
 
 OUTPUT_SUBFOLDER = "ccs-local-media"

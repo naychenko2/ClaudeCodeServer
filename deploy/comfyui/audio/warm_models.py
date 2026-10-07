@@ -40,6 +40,10 @@ elif family == "audiosr":
     print(snapshot_download("roberta-base", allow_patterns=["*.json", "*.txt", "model.safetensors"]), flush=True)
 elif family == "whisper":
     print(snapshot_download("mobiuslabsgmbh/faster-whisper-large-v3-turbo"), flush=True)
+elif family == "diarize":
+    print(snapshot_download("mobiuslabsgmbh/faster-whisper-large-v3-turbo"), flush=True)
+    print(snapshot_download("pyannote/speaker-diarization-community-1", token=os.environ.get("HF_TOKEN")),
+          flush=True)
 elif family == "qwen3tts":
     for repo in ["Qwen/Qwen3-TTS-Tokenizer-12Hz", "Qwen/Qwen3-TTS-12Hz-1.7B-Base", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
                  "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"]:

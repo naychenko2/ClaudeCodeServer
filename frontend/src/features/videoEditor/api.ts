@@ -350,11 +350,13 @@ export interface VideoFailedEvent extends VideoEventBase {
   initiator: VideoInitiator;
 }
 
+export interface VideoPrefsChangedEvent { type: 'video_prefs_changed'; scopeKey: string; prefs: VideoPrefs }
+
 export type VideoEvent =
-  | VideoThreadChangedEvent | VideoFilmChangedEvent | VideoProgressEvent | VideoCompletedEvent | VideoFailedEvent;
+  | VideoPrefsChangedEvent | VideoThreadChangedEvent | VideoFilmChangedEvent | VideoProgressEvent | VideoCompletedEvent | VideoFailedEvent;
 
 export const VIDEO_EVENTS: ReadonlySet<string> = new Set([
-  'video_thread_changed', 'video_film_changed', 'video_edit_progress', 'video_edit_completed', 'video_edit_failed',
+  'video_thread_changed', 'video_film_changed', 'video_prefs_changed', 'video_edit_progress', 'video_edit_completed', 'video_edit_failed',
 ]);
 
 // ── Коды ошибок (VideoEditorErrors) ──

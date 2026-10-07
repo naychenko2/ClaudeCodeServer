@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FILM, record, scene, standardFilm, standardScenes, w, type Scene } from './videoPanelMock';
+import { FILM, hubSend, P, record, scene, standardFilm, standardScenes, w, type Scene } from './videoPanelMock';
 import { openVideoChat, primaryOf } from './contextVideoMock';
 import { applyFormatCatalog, fmt, mockFormat, newFmtWorld, progress, upscaleDone } from './mediaFormatVideoMock';
 
@@ -254,6 +254,19 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(chip(page).locator('[data-agent-mark]')).toHaveCount(0);
         await expect.poll(() => chipText(page)).toContain('16:9 · 720p');
         await shot(page, `s7-${name}-${theme}.png`);
+      });
+
+      test('7 · агент сменил формат проекта (video_prefs_changed): чип сам показывает 9:16 и ✦, без перезагрузки', async ({ page }) => {
+        await open(page, { vp, theme });
+        await actionChip(page, 'shoot').click();
+        await expect.poll(() => chipText(page), { timeout: 15_000 }).toContain('16:9 · 720p');
+        await expect(chip(page).locator('[data-agent-mark]')).toHaveCount(0);
+        hubSend({
+          type: 'video_prefs_changed', scopeKey: P,
+          prefs: { provider: 'fal', model: 'veo-3.1', durationSec: 8, aspect: '9:16', sound: true, count: 2, format: { mode: 'aspect', aspect: '9:16', tier: 'standard', by: 'agent', at: '2026-10-07T09:00:00Z' } },
+        });
+        await expect.poll(() => chipText(page), { timeout: 15_000 }).toContain('9:16 · 720p');
+        await expect(chip(page).locator('[data-agent-mark]')).toBeVisible();
       });
 
       test('10 · «Макс» local H3: «Снимаем» → «Увеличиваем до 1440p…» → отмена увеличения → «Повторить» → версия 1440p', async ({ page }) => {

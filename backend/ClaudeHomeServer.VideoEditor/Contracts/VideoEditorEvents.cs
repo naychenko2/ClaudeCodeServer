@@ -10,6 +10,8 @@ public static class VideoEditorEventNames
     public const string ThreadChanged = "video_thread_changed";
     // Фильм изменён (правка, сборка, пометки): в состоянии — свежий FilmStateDto
     public const string FilmChanged = "video_film_changed";
+    // Префы области записал агент (формат проекта): свежие префы нужны чипу «Формат», он читает их из стора
+    public const string PrefsChanged = "video_prefs_changed";
     public const string Progress = "video_edit_progress";
     public const string Completed = "video_edit_completed";
     public const string Failed = "video_edit_failed";
@@ -29,6 +31,9 @@ public record VideoThreadChangedMessage(string ScopeKey, long Revision, VideoThr
 
 public record VideoFilmChangedMessage(string ScopeKey, string Path, FilmStateDto State)
     : ServerMessage(VideoEditorEventNames.FilmChanged);
+
+public record VideoPrefsChangedMessage(string ScopeKey, VideoPrefsDto Prefs)
+    : ServerMessage(VideoEditorEventNames.PrefsChanged);
 
 // Stage — VideoProgressStages.* (queued | running | upscaling | downloading); Variant — номер варианта, который идёт;
 // Percent — доля готовности 0..1 текущей стадии от поставщика (необязательно: нет данных — поля нет, клиент считает

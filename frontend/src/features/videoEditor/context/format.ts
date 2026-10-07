@@ -5,7 +5,7 @@
 // форматирование времени и сопоставление с замком фильма.
 
 import {
-  FORMAT_TEXT, TIER_NAME, getChatContextState, notifyKindChanged,
+  FORMAT_TEXT, TIER_NAME, getChatContextState, notifyKindChanged, thumbOf,
   type ContextKindCtx, type FramesAnchor, type FormatFramesModel, type FormatModel, type FormatTierKey, type FormatTierOption,
   type MediaFormatCaps, type MediaFormatState, type MediaFormatWish, type ResolvedFormat,
 } from 'aihome_shell/kit';
@@ -129,7 +129,8 @@ function framesModel(
   const pv = previewFor(ctx, scope, scene, target, r.frameAnchor);
   if (!pv) return undefined;
   const refs = getChatContextState(ctx.sessionId).refs;
-  return framesFromPreview(pv, target, r.frameAnchor, slot => frameRefOf(refs, slot)?.thumb ?? null,
+  // Сервер миниатюру не присылает (thumb = null): адрес собирает вид кадра, как у чипов строки контекста
+  return framesFromPreview(pv, target, r.frameAnchor, slot => { const ref = frameRefOf(refs, slot); return ref ? thumbOf(ctx, ref) : null; },
     a => changeSettings(scope, ctx.sessionId, { frameFit: { anchor: a } }, false, scene.sceneId));
 }
 

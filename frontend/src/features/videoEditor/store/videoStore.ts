@@ -186,6 +186,10 @@ export function handleEvent(ev: VideoEvent) {
       apply(ev.sessionId, ev.scopeKey, ev.state);
       return;
     }
+    case 'video_prefs_changed':
+      // Агент сменил формат проекта: чип «Формат» читает префы из стора
+      if (ev.scopeKey && ev.prefs) setScopePrefs(ev.scopeKey, ev.prefs);
+      return;
     case 'video_film_changed':
       applyFilmEvent(ev.scopeKey, ev.path, ev.state);
       return;

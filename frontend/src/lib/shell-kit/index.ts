@@ -48,6 +48,7 @@ export {
   useChatContext, getChatContextState, refreshChatContext, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
 } from '../chatContext/store';
 export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
+export { thumbOf } from '../chatContext/thumbs';
 export { refOf, rolesFor } from '../chatContext/fill';
 export type { ContextCandidate } from '../chatContext/fill';
 export type { ContextRole, ContextUpload, ContextNote, ContextMenuItem } from '../chatContext/types';

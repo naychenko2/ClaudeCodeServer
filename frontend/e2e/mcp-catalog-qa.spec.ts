@@ -17,13 +17,6 @@ async function login(request: APIRequestContext): Promise<string> {
   return (await r.json()).token as string;
 }
 
-async function ensureCatalogFlag(request: APIRequestContext, token: string) {
-  await request.put('/api/feature-flags/mcp-catalog', {
-    headers: { Authorization: `Bearer ${token}` },
-    data: { enabled: true },
-  });
-}
-
 async function loginAndOpenMcpCatalog(page: Page) {
   await page.goto('/');
   await page.waitForLoadState('networkidle');
@@ -52,7 +45,6 @@ async function loginAndOpenMcpCatalog(page: Page) {
 
 test('каталог MCP не падает на поиске, показывает имя и валидную ссылку', async ({ page, request }) => {
   const token = await login(request);
-  await ensureCatalogFlag(request, token);
 
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
@@ -128,7 +120,6 @@ test('каталог MCP не падает на поиске, показывае
 // содержит имя пакета с версией (подстрока '@' + semver)
 test('импорт stdio-сервера из каталога кладёт имя пакета с версией в args', async ({ page, request }) => {
   const token = await login(request);
-  await ensureCatalogFlag(request, token);
 
   await loginAndOpenMcpCatalog(page);
 
@@ -190,7 +181,6 @@ test('импорт stdio-сервера из каталога кладёт им�
 // revisions/revision) — фиксируем тестом, чтобы третий раз не ходить
 test('ревизия каталога отвечает 200 и возвращает items', async ({ request }) => {
   const token = await login(request);
-  await ensureCatalogFlag(request, token);
 
   // Имя, по которому реестр обычно что-то отдаёт — точное содержимое не важно:
   // бэк сам фильтрует по «есть ли у владельца запись с таким CatalogRef.name»,

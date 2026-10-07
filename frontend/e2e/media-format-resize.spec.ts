@@ -23,7 +23,7 @@ async function setup(page: Page, errors: string[], width = 1280) {
   page.on('console', m => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
   const t = heroThread();
   newWorld({
-    threads: [t], flags: { 'image-editor': true, 'media-format': true }, imagePrefs: prefs,
+    threads: [t], flags: {}, imagePrefs: prefs,
     ctx: { primary: primary({ by: 'human', label: 'hero.png', ref: { threadId: t.id, versionId: 'origin' } }) },
   });
   await page.addInitScript(() => {
@@ -85,7 +85,7 @@ for (const opened of [false, true]) {
     await page.addInitScript(() => localStorage.setItem('cc_chat_filters:proj-ctx', JSON.stringify({ statuses: ['active', 'waiting', 'done', 'error'] })));
     await openVideoChat(page, () => primaryOf('video-scene', { sceneId: 'scene-5' }), {
       focus: { sceneId: 'scene-5' }, vp: { width: 1280, height: 800 }, theme: 'light', frames: true,
-      flags: { 'media-format': true }, autoFinish: false, extra: mockFormat,
+      flags: {}, autoFinish: false, extra: mockFormat,
     });
     const chip = page.locator('[data-context-row] [data-chip="format"]');
     await expect(chip).toBeVisible({ timeout: 30_000 });

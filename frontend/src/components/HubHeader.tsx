@@ -544,7 +544,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowModelsSpend={() => setShowModelsSpend(true)}
           onShowMcpServers={() => setShowMcpServers(true)}
-          // Устройства — агенты локальных проектов (local-projects)
+          // Устройства — агенты локальных проектов
           onShowDevices={() => setShowDevices(true)}
           onShowUserManagement={() => setShowUserMgmt(true)}
           // Админский список подсистем инстанса (Этап 5, волна 3): только

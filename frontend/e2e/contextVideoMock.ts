@@ -55,7 +55,7 @@ export async function mockContext(page: Page, flags: Record<string, boolean> = {
     if (p === '/auth/me') {
       return json({
         id: 'u1', userId: 'u1', username: 'admin', displayName: 'Андрей', role: 'admin', executionEnvironment: 'local',
-        featureFlags: { 'video-editor': true, 'image-editor': true, 'audio-editor': true, 'chat-context': true, ...flags }, subsystems: [],
+        featureFlags: { ...flags }, subsystems: [],
       });
     }
     if (p === '/subsystem-modules') return json({ items: [] });

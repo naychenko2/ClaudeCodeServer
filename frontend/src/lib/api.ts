@@ -740,7 +740,7 @@ export const api = {
       // ADR-016 §3.4: локальный проект создаётся с привязкой к устройству. deviceId
       // берётся из реестра ADR-008. Контракт 3.1 (CreateProjectRequest): путь НА устройстве
       // едет в том же rootPath, отдельного поля под него нет — local.rootPath заменяет
-      // аргумент rootPath. Передавать ТОЛЬКО когда флаг `local-projects` включён; иначе бэк откажет 400.
+      // аргумент rootPath. Передавать, только когда создаётся локальный проект.
       local?: { deviceId: string; rootPath: string }) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({
         name, rootPath: local ? local.rootPath : rootPath, createDirectory, groupId, ...git, color,

@@ -26,10 +26,10 @@ describe('освежение фич-флагов', () => {
   });
 
   it('частичный, пустой ответ и сбой не затирают известные ключи', async () => {
-    setAllFlags({ spheres: true, 'audio-editor': true });
+    setAllFlags({ spheres: true, 'workspace-destructive': true });
     let t = 0;
     const answers: Array<() => Promise<Record<string, boolean> | undefined>> = [
-      async () => ({ 'audio-editor': false }),
+      async () => ({ 'workspace-destructive': false }),
       async () => undefined,
       async () => { throw new Error('offline'); },
     ];
@@ -37,7 +37,7 @@ describe('освежение фич-флагов', () => {
 
     await refresh(true);
     expect(getFlag('spheres')).toBe(true);
-    expect(getFlag('audio-editor')).toBe(false);
+    expect(getFlag('workspace-destructive')).toBe(false);
     t += 100; await refresh(); t += 100; await refresh();
     expect(getFlag('spheres')).toBe(true);
   });

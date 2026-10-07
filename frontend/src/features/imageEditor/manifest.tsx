@@ -1,6 +1,6 @@
 // Манифест MF-модуля «Редактор картинок» (ADR-018 §10.3, ADR-019). Ключ совпадает с
 // ImageEditorSubsystem.Key бэкенда: гейт слотов сверяется с активными подсистемами
-// из /api/auth/me. Фич-флаг владельца (image-editor) проверяют сами входы.
+// из /api/auth/me.
 
 import { Contact } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';

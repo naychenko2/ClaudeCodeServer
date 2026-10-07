@@ -56,7 +56,7 @@ async function drag(page: Page, from: number, to: number) {
 for (const { name, vp } of [{ name: '1440', vp: D }, { name: '360', vp: M }] as const) {
   test(`редактор звука · ${name}: кусок на волне → «Применить» даёт версию → «Готово» → «Перегенерировать кусок» живой`, async ({ page }) => {
     newWorld({
-      flags: { 'audio-editor': true }, audio: [songThread()],
+      flags: {}, audio: [songThread()],
       ctx: { primary: primary({ kind: 'audio', ref: { threadId: SONG, versionId: 'origin' }, label: 'intro.mp3', version: 'origin' }) },
     });
     await openChat(page, { vp });
@@ -126,7 +126,7 @@ const ids = (page: Page) => actions(page).locator('[data-action-chip]').evaluate
 
 async function openFeed(page: Page, vp: { width: number; height: number }, theme: 'light' | 'dark', o: { voice?: boolean; flags?: Record<string, boolean> } = {}) {
   newWorld({
-    feed: [anchor], audio: [songThread()], flags: { 'audio-editor': true, ...o.flags },
+    feed: [anchor], audio: [songThread()], flags: { ...o.flags },
     ctx: { refs: o.voice ? [voiceRef()] : [] },
   });
   await openChat(page, { vp, theme });
@@ -205,7 +205,7 @@ for (const { name, vp } of VIEWPORTS) {
 for (const { name, vp } of VIEWPORTS.filter(v => v.name !== '360')) {
   test(`«Голоса» · ${name}: «В контекст» → «В контексте ✓», «Обучить голос» запускает обучение`, async ({ page }) => {
     newWorld({
-      feed: [anchor], audio: [songThread()], flags: { 'audio-editor': true },
+      feed: [anchor], audio: [songThread()], flags: {},
       ctx: { primary: primary({ kind: 'audio', ref: { threadId: SONG }, label: 'intro.mp3', version: 'origin' }) },
     });
     await openChat(page, { vp });

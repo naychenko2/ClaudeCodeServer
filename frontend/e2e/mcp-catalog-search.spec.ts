@@ -18,13 +18,6 @@ async function login(request: APIRequestContext): Promise<string> {
   return (await r.json()).token as string;
 }
 
-async function ensureCatalogFlag(request: APIRequestContext, token: string) {
-  await request.put('/api/feature-flags/mcp-catalog', {
-    headers: { Authorization: `Bearer ${token}` },
-    data: { enabled: true },
-  });
-}
-
 async function openMcpModal(page: Page) {
   await page.goto('/');
   await page.waitForLoadState('networkidle');
@@ -53,7 +46,6 @@ async function openCatalogTab(page: Page) {
 
 test('D6: поиск уходит в реестр с q и подгружает следующие страницы', async ({ page, request }) => {
   const token = await login(request);
-  await ensureCatalogFlag(request, token);
 
   // Все запросы поиска: без правки фронт звал эндпоинт РОВНО ОДИН раз с пустым q
   const searchUrls: string[] = [];
@@ -116,7 +108,6 @@ test('D6: поиск уходит в реестр с q и подгружает �
 
 test('D7: проба каталожного stdio-сервера спрашивает подтверждение запуска', async ({ page, request }) => {
   const token = await login(request);
-  await ensureCatalogFlag(request, token);
   const auth = { Authorization: `Bearer ${token}` };
 
   // Владелец должен быть local — иначе порога подтверждения нет по замыслу

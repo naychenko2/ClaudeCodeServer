@@ -112,7 +112,7 @@ async function mockApi(page: Page) {
     if (p === '/auth/me') {
       return json({
         id: 'u1', username: 'admin', displayName: 'Андрей', role: 'admin', executionEnvironment: 'local',
-        featureFlags: { 'audio-editor': true }, subsystems: ['audioeditor'],
+        featureFlags: {}, subsystems: ['audioeditor'],
       });
     }
     if (p === '/subsystem-modules') return json({ items: [{ id: 'audioeditor', remoteUrl: '/audio-editor-remote/remoteEntry.js', exposedModule: './subsystem' }] });

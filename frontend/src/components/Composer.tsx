@@ -1544,10 +1544,9 @@ export function Composer({
     padding: isMobile
       ? `${8 + stripeShift}px 10px ${8 - stripeShift}px`
       : `${7 + stripeShift}px 8px ${7 - stripeShift}px`,
-    // Подъём как у островов, но разлётом ВВЕРХ (SHADOW.lift): композер стоит на
-    // самой кромке холста — его губа выровнена по низу соседних островов, и
-    // нижнюю половину обычной тени срезал бы край
-    boxShadow: dragOver ? SHADOW.focus : SHADOW.lift,
+    // Своей тени у поля нет: сверху оно лежит на верхней губе, снизу — на нижней,
+    // а подъём над холстом дают сами губы. Кольцо остаётся только на перетаскивании
+    boxShadow: dragOver ? SHADOW.focus : 'none',
     display: 'flex',
     flexDirection: 'column',
     gap: 0,

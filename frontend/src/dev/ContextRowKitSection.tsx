@@ -1,7 +1,7 @@
 import { AudioLines, ChevronDown, Mic, MessageSquareText, MoreHorizontal, Plus, Zap } from 'lucide-react';
 import { Island, IslandHeader } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
-import { C, FS, ISLAND, R, SHADOW, SP, composerLip } from '../lib/design';
+import { C, FS, ISLAND, R, SP, composerLip } from '../lib/design';
 import { ContextRowView, rowFacts, type ContextRowViewProps, type RowExec, type RowGit } from '../components/chat/ContextRowView';
 import { ladderNominal, ladderRungs } from '../lib/chatContext/ladder';
 import type { ChatContextPrimary, ChatContextRef } from '../lib/chatContext/types';
@@ -56,7 +56,7 @@ function ComposerMock({ row, mobile }: { row: ContextRowViewProps; mobile?: bool
       <ContextRowView {...row} />
       <div style={{
         position: 'relative', zIndex: 2, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xxl,
-        padding: mobile ? '8px 10px' : '7px 8px', boxShadow: SHADOW.lift, display: 'flex', alignItems: 'center', gap: SP.sm,
+        padding: mobile ? '8px 10px' : '7px 8px', display: 'flex', alignItems: 'center', gap: SP.sm,
       }}>
         <span style={{ flex: 1, minHeight: 34, display: 'flex', alignItems: 'center', padding: '0 4px', fontSize: mobile ? 16 : 15, color: C.textMuted }}>Написать Вере…</span>
         <MessageSquareText size={ICON_SIZE.md} strokeWidth={ICON_STROKE} color={C.textMuted} />

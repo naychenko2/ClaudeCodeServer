@@ -225,10 +225,11 @@ public sealed class FalVideoEngine : IVideoEngine, IVideoQuoter
             }
             // Модель без поля пропорции следует кадру — запрошенную пропорцию молча не навязываем
         }
-        // Ступень формата → частный параметр модели (resolution). Желания нет — «Стандарт» каталога: прежнее умолчание
+        // Ступень формата → частный параметр модели (resolution). Желания нет — умолчание драйвера (DefaultTier): прежнее умолчание
         // (у MiniMax H3 fal это родные 768P, а не 2K-апскейл по умолчанию самого fal)
         if (model.Info.Caps.Format is { WireParam: { Length: > 0 } wire } caps
-            && (req.Format?.WireValue ?? caps.Tiers.FirstOrDefault(t => t.Tier == FormatTier.Standard)?.WireValue) is { } tierValue)
+            && (req.Format?.WireValue
+                ?? caps.Tiers.FirstOrDefault(t => t.Tier == VideoFormatCatalog.DefaultTier(ProviderKey, model.Info.Id))?.WireValue) is { } tierValue)
             body[wire] = tierValue;
         if (model.Sound is not null) body[model.Sound] = req.Sound;
         if (model.Seed is not null && req.Seed is { } seed) body[model.Seed] = seed;

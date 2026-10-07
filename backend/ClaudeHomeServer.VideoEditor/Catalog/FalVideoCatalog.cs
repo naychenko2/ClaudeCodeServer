@@ -79,11 +79,14 @@ public static class FalVideoCatalog
             EtaSeconds: 90, PriceVaries: true),
 
         // MiniMax H3: последний кадр необязателен, пропорция — по кадру; по умолчанию у fal 2K-апскейл,
-        // мы берём родные 768P (меньше файл, цена по разрешению меняется)
+        // мы берём родные 768P (меньше файл, цена по разрешению меняется). Схема 2026-10-07: «480P и 768P — родные
+        // режимы, 2K и 4K — увеличение 768P-основы», а автоматического апскейла у нас нет (решение Андрея): ступени
+        // Стандарт = 480P, Высокое = 768P, «Макс» серая
         new(new VideoModelInfo(MiniMaxH3, "MiniMax H3",
                 Caps([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], [], sound: true, lastFrame: true,
                     new MediaFormatCaps("MiniMax H3", [],
-                        VideoFormatCatalog.TiersFromOptions([], ["768P", "2K", "4K"]), WireParam: "resolution")),
+                        VideoFormatCatalog.TiersFromOptions([], ["480P", "768P"]), WireParam: "resolution",
+                        NativeNote: "в родных 480P и 768P (2K и 4K у неё — увеличение, а не родной размер)")),
                 PerSec(0.05)),
             First: "image_url", Last: "end_image_url", LastRequired: false,
             Duration: "duration", DurationForm: FalDurationForm.Int,

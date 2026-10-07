@@ -73,8 +73,8 @@ public sealed class FalVideoEngineTests
     }
 
     [Theory]
-    [InlineData(FormatTier.High, "2K")]
-    [InlineData(FormatTier.Max, "4K")]
+    [InlineData(FormatTier.Standard, "480P")]
+    [InlineData(FormatTier.High, "768P")]
     public void BuildBody_H3Tiers_By_LiveSchemaEnum(FormatTier tier, string wire)
     {
         var body = FalVideoEngine.BuildBody(FalVideoCatalog.Find(FalVideoCatalog.MiniMaxH3)!,
@@ -82,6 +82,16 @@ public sealed class FalVideoEngineTests
 
         body["resolution"]!.GetValue<string>().Should().Be(wire);
         body.ContainsKey("aspect_ratio").Should().BeFalse("пропорция H3 следует кадру, её режет подрезка кадров");
+    }
+
+    [Fact]
+    public void BuildBody_H3_NeverSendsUpscaledResolution_MaxIsGray()
+    {
+        var model = FalVideoCatalog.Find(FalVideoCatalog.MiniMaxH3)!;
+
+        model.Info.Caps.Format!.Tiers.Select(t => t.WireValue).Should().Equal("480P", "768P");
+        var max = MediaFormatResolver.TierOptions(model.Info.Caps.Format, null).Single(t => t.Tier == FormatTier.Max);
+        max.DisabledReason.Should().Contain("2K и 4K").And.Contain("увеличение, а не родной размер");
     }
 
     [Fact]

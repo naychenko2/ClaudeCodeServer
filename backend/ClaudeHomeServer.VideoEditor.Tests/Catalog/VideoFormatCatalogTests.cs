@@ -48,12 +48,14 @@ public sealed class VideoFormatCatalogTests
     }
 
     [Fact]
-    public void Max_of_fal_h3_is_its_own_native_4k_not_our_upscale()
+    public void Fal_h3_has_only_native_480p_and_768p_and_max_is_gray_with_a_reason()
     {
-        var max = Max(Caps("fal", FalVideoCatalog.MiniMaxH3));
+        var caps = Caps("fal", FalVideoCatalog.MiniMaxH3);
 
-        max.WireValue.Should().Be("4K");
-        max.PostStep.Should().BeNull("у fal 2K/4K — их родная ступень по схеме endpoint, апскейл мы не делаем");
+        caps.Tiers.Select(t => (t.Tier, t.WireValue)).Should().Equal((FormatTier.Standard, "480P"), (FormatTier.High, "768P"));
+        var max = MediaFormatResolver.TierOptions(caps, null).Single(t => t.Tier == FormatTier.Max);
+        max.DisabledReason.Should().Contain("увеличение, а не родной размер", "у fal 2K и 4K — апскейл 768P-основы, а у нас его нет");
+        VideoFormatCatalog.DefaultTier("fal", FalVideoCatalog.MiniMaxH3).Should().Be(FormatTier.High, "прежнее умолчание — родные 768P");
     }
 
     [Fact]

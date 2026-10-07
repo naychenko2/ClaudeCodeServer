@@ -62,8 +62,10 @@ public static class VideoFormatCatalog
 
     // Ступень, когда желание её не называет (aspect без tier — старый клиент, агент): прежнее умолчание драйвера.
     // У local H3 это full (768p) — раньше съёмка всегда шла full; у остальных — «Стандарт» (родное умолчание fal и Higgsfield)
+    // У fal H3 «Стандарт» — родные 480P, а прежнее умолчание — 768P («Высокое»)
     public static FormatTier DefaultTier(string provider, string modelId) =>
-        provider == "local" && modelId == "minimax-h3" ? FormatTier.High : FormatTier.Standard;
+        (provider == "local" && modelId == "minimax-h3") || (provider == "fal" && modelId == FalVideoCatalog.MiniMaxH3)
+            ? FormatTier.High : FormatTier.Standard;
 
     // Пропорции для формата: без «auto» (авто-режим модели не пропорция формата)
     public static IReadOnlyList<string> RealAspects(IEnumerable<string> aspects) =>

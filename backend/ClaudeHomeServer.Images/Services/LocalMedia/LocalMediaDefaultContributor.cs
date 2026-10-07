@@ -4,16 +4,15 @@ using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
-// Правило «локальная модель по умолчанию» для картинок и видео (флаг local-media-default,
-// план 876d395f, разрез 7b663adb). Показ зависит только от РЕГИСТРАЦИИ локальных моделей, а не
+// Правило «локальная модель по умолчанию» для картинок и видео (план 876d395f, разрез 7b663adb). Показ зависит только от РЕГИСТРАЦИИ локальных моделей, а не
 // от живости ComfyUI: Available мигает и менял бы текст хвоста от хода к ходу; о недоступности
 // агент узнаёт из ответа инструмента. Ходы без человека (исполнители, автоматика, делегированные)
 // правило не получают — иначе ночные исполнители займут общую GPU.
 //
-// Типов модулей ImageEditor и AudioEditor секция не знает (правило границ): флаги модулей и их тумблеры
-// запуска агентом читаются по строковым ключам. Внутри варианта текст стабилен — едет хвостом
+// Типов модулей ImageEditor и AudioEditor секция не знает (правило границ): тумблеры запуска агентом
+// читаются по строковым ключам. Внутри варианта текст стабилен — едет хвостом
 // хода, но и там незачем гонять разный текст.
-public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfiguration config) : IPromptSectionContributor
+public sealed class LocalMediaDefaultContributor(IConfiguration config) : IPromptSectionContributor
 {
     public const string SectionKey = "local-media-default";
 
@@ -33,37 +32,30 @@ public sealed class LocalMediaDefaultContributor(IFeatureFlagGate flags, IConfig
     public string Group => "misc";
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
-        sessionContext.OwnerId is { Length: > 0 } ownerId
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.LocalMediaDefault)
+        sessionContext.OwnerId is { Length: > 0 }
         && !sessionContext.Unattended
         && LocalMediaOptions.IsEnabled(config)
         && SubsystemGate.IsEnabled(config, "images")
         && (sessionContext.Session.ProjectId is null
-            ? PersonalEditorReady(ownerId, sessionContext)
+            ? PersonalEditorReady(sessionContext)
             : sessionContext.HasLocalMediaMcp);
 
     // Личный вариант зовёт image_new/image_generate: сервер редактора обязан доехать до хода (как
-    // local-media у проектного). Флаг читается живьём — контекст MCP собран при создании сессии и
-    // выключение флага посреди чата не увидит; без AgentLaunch сервер едет, но без image_generate
-    private bool PersonalEditorReady(string ownerId, PromptSessionContext sessionContext) =>
+    // local-media у проектного). Без AgentLaunch сервер едет, но без image_generate
+    private bool PersonalEditorReady(PromptSessionContext sessionContext) =>
         sessionContext.HasImageEditorMcp
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)
         && config.GetValue(EditorAgentLaunchKey, true);
 
     // Звук идёт через модуль «Звук» (ADR-021 §5, вопрос 1), когда его сервер доехал до хода и у агента
     // есть audio_generate; прямые local_* для звука остаются, но только по явной просьбе
     private bool AudioEditorReady(PromptSessionContext sessionContext) =>
         sessionContext.HasAudioEditorMcp
-        && sessionContext.OwnerId is { Length: > 0 } ownerId
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.AudioEditor)
         && config.GetValue(AudioAgentLaunchKey, true);
 
     // Видео идёт через модуль «Видео» (ADR-022 §5), когда его сервер доехал до хода и у агента есть video_shoot;
     // прямые local_*_to_video, generate_video Higgsfield и fal остаются, но только по явной просьбе
     private bool VideoEditorReady(PromptSessionContext sessionContext) =>
         sessionContext.HasVideoEditorMcp
-        && sessionContext.OwnerId is { Length: > 0 } ownerId
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.VideoEditor)
         && config.GetValue(VideoAgentLaunchKey, true);
 
     public Task<PromptSectionContribution?> BuildAsync(PromptSessionContext sessionContext, string? turnText)

@@ -367,8 +367,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         {
             ["LocalMedia:Enabled"] = "true",
         }).Build();
-        var contributor = new ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor(
-            new AllFlags(), config);
+        var contributor = new ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor(config);
 
         var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
             bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
@@ -405,7 +404,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         int agentDepth = 0)
     {
         var contributor = new ClaudeHomeServer.Services.Images.LocalMedia.LocalMediaDefaultContributor(
-            new AllFlags(), new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["LocalMedia:Enabled"] = "true",
             }).Build());
@@ -556,11 +555,6 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             : await VideoEditorStateSectionAsync(false, c => c with { VideoEditorMcp = VideoEditorMcp }, TrimToTasks);
 
         section.Should().BeNull($"{why}: video_* у хода нет («No such tool available»)");
-    }
-
-    private sealed class AllFlags : ClaudeHomeServer.Services.Composition.IFeatureFlagGate
-    {
-        public bool IsEnabled(string userId, string key) => true;
     }
 
     private async Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTailTurnAsync(

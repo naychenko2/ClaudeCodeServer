@@ -34,6 +34,25 @@ public class WebDavNtlmUserFileTests : IDisposable
         Directory.CreateDirectory(_dataDir);
     }
 
+    [Theory]
+    [InlineData("1.2.0-1build5", false)]
+    [InlineData("1.2.0-1build5+ccs1", false)]
+    [InlineData("1.2.0-1build5+ccs2", true)]
+    [InlineData("1.2.0-1build5+ccs10", true)]
+    public void IsPatchedVersion_требует_ccs2_или_новее(string version, bool expected) =>
+        NtlmUserFile.IsPatchedVersion(version).Should().Be(expected);
+
+    [Fact]
+    public void ReadPackageVersion_берёт_версию_именно_gss_ntlmssp()
+    {
+        var status = Path.Combine(_dataDir, "dpkg-status");
+        File.WriteAllText(status,
+            "Package: gss-ntlmssp-dev\nVersion: 9.9\n\nPackage: gss-ntlmssp\nStatus: install ok installed\nVersion: 1.2.0-1build5+ccs1\n\nPackage: other\nVersion: 1\n");
+
+        NtlmUserFile.ReadPackageVersion(status).Should().Be("1.2.0-1build5+ccs1");
+        NtlmUserFile.ReadPackageVersion(Path.Combine(_dataDir, "нет-файла")).Should().BeNull();
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(Path.GetDirectoryName(_dataDir)!, recursive: true); } catch { /* временная папка */ }
@@ -334,6 +353,51 @@ public class WebDavNtlmUserFileTests : IDisposable
         NegotiateFailure.TryReadType3Identity(header).Should().Be(("DESKTOP-PC", "andrey"));
         NegotiateFailure.TryReadType3Identity("Negotiate не-base64").Should().Be(((string?)null, (string?)null));
         NegotiateFailure.TryReadType3Identity(Basic("a", "b")).Should().Be(((string?)null, (string?)null));
+    }
+
+    [Fact]
+    public void Type3_ФормаДляЛога_ПоказываетMicИCbtИSpn()
+    {
+        static byte[] Av(ushort id, byte[] value) =>
+            [.. BitConverter.GetBytes(id), .. BitConverter.GetBytes((ushort)value.Length), .. value];
+        var avPairs = new List<byte>();
+        avPairs.AddRange(Av(6, BitConverter.GetBytes(2u)));
+        avPairs.AddRange(Av(9, Encoding.Unicode.GetBytes("HTTP/host")));
+        avPairs.AddRange(Av(10, Enumerable.Repeat((byte)7, 16).ToArray()));
+        avPairs.AddRange(Av(0, []));
+        // NTProofStr(16) + заголовок blob(28) + AV-пары
+        var nt = new byte[44].Concat(avPairs).ToArray();
+
+        var msg = new byte[64 + nt.Length];
+        "NTLMSSP\0"u8.CopyTo(msg);
+        BitConverter.GetBytes(3u).CopyTo(msg, 8);
+        BitConverter.GetBytes((ushort)nt.Length).CopyTo(msg, 20);
+        BitConverter.GetBytes(64u).CopyTo(msg, 24);
+        BitConverter.GetBytes(0xE2888235u).CopyTo(msg, 60);
+        nt.CopyTo(msg, 64);
+
+        var shape = NegotiateFailure.DescribeType3("Negotiate " + Convert.ToBase64String(msg));
+
+        shape.Should().Contain("NTLMv2").And.Contain("0xE2888235").And.Contain("(MIC)")
+            .And.Contain("HTTP/host").And.Contain("CBT задан");
+        NegotiateFailure.DescribeType3(Basic("a", "b")).Should().Be("нет");
+    }
+
+    [Theory]
+    [InlineData(0xE2088205u, true)]   // Windows в HTTP-стиле: KEY_EXCH без SIGN/SEAL
+    [InlineData(0xE2888235u, false)]  // SIGN и SEAL согласованы — ключ действительно шифруется
+    [InlineData(0xE2888215u, false)]  // хватает одного SIGN
+    [InlineData(0xA2088205u, false)]  // KEY_EXCH не просили вовсе
+    public void Type3_KeyExchБезSignSeal_ПомечаетсяВЛоге(uint flags, bool flagged)
+    {
+        var msg = new byte[64];
+        "NTLMSSP\0"u8.CopyTo(msg);
+        BitConverter.GetBytes(3u).CopyTo(msg, 8);
+        BitConverter.GetBytes(flags).CopyTo(msg, 60);
+
+        NegotiateFailure.HasKeyExchWithoutSignSeal(flags).Should().Be(flagged);
+        NegotiateFailure.DescribeType3("Negotiate " + Convert.ToBase64String(msg))
+            .Contains("KEY_EXCH без SIGN/SEAL").Should().Be(flagged);
     }
 
     // Минимальный NTLM Type3: заголовок 64 байта, домен и имя в UTF-16LE, флаг UNICODE

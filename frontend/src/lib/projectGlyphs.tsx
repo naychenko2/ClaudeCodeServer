@@ -109,6 +109,9 @@ function loadGlyph(name: string): Promise<void> {
   return load;
 }
 
+// Пустой fallback: место значка остаётся пустым, пока чанк едет (или не доедет)
+export const Blank = () => null;
+
 export type GlyphIconProps = Omit<GlyphSvgProps, 'name' | 'fallback'> & {
   name: string;
   /** Компонент (НЕ JSX-элемент). Обязателен. */

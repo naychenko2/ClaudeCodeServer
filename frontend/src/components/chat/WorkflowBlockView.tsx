@@ -12,6 +12,7 @@ import { AgentTextBlock, AgentThinkingBlock, AgentStructuredBlock, NEUTRAL_AGENT
 import { AGENT_COLORS } from '../AgentSelector';
 import { type ActivityEntry } from './timeline';
 import { ChatProjectContext } from './contexts';
+import { useSphereOf } from '../../lib/useSphereOf';
 
 function parseTranscriptDir(result: string | undefined): string | null {
   if (!result) return null;
@@ -46,6 +47,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   // её карточкой-консультацией (как Task-вызовы персон в обычной ленте)
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
+  const sphereOf = useSphereOf();
   const project = useContext(ChatProjectContext);
   // Локальный проект: папка workflow на устройстве — ватчера нет, REST её не прочитает
   const transcriptReason = project?.transcriptReason ?? null;
@@ -249,7 +251,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                   !(agentAnswer !== null && e.item.kind === 'text' && e.item.text.trim() === agentAnswer));
                 const toolCount = children.filter(e => e.item.kind === 'tool_use').length;
                 // Стрим-агент консультируется с персоной → её карточка с активностью внутри
-                if (findConsultedPersona(agent, personas, project?.id ?? null)) {
+                if (findConsultedPersona(agent, personas, project?.id ?? null, sphereOf)) {
                   return (
                     <div key={agent.id} style={{ padding: '8px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
                       <PersonaTaskView item={agent} online activity={children.length > 0 ? children : undefined} onOpenFile={onOpenFile} badge={null} />
@@ -333,7 +335,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                     // Персона (agentType == handle) → её карточка; обычный агент — та же
                     // карточка с нейтральной серой шапкой «Агент» + роль вызова (agentType,
                     // если информативен — дефолтный workflow-subagent не показываем)
-                    const persona = findPersonaByAgentType(agent.agentType, personas, project?.id ?? null);
+                    const persona = findPersonaByAgentType(agent.agentType, personas, project?.id ?? null, sphereOf);
                     const role = !persona && agent.agentType && agent.agentType !== 'workflow-subagent'
                       ? agent.agentType : undefined;
                     const accent = persona

@@ -7,6 +7,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Turn;
@@ -771,8 +772,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         IServiceProvider? services = null,
         // Опционально (в тестах не передаётся): снимок загруженных подсистем — факт загрузки
         // динамических модулей (Architecture). Без него сервер arch_* ходу не объявляется.
-        Composition.SubsystemStateStore? subsystemStates = null)
+        Composition.SubsystemStateStore? subsystemStates = null,
+        // Опционально (в тестах без сфер не передаётся): справочник сфер для зоны персон; без него
+        // персона сферы нигде не видна (fail-closed)
+        ISphereDirectory? spheres = null)
     {
+        _spheres = spheres;
         _deviceGate = deviceGate;
         _services = services;
         _subsystemStates = subsystemStates;
@@ -1365,7 +1370,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new MemoryMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId, projectId,
             DossierToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall),
-            UseHttp: HttpEndpointUsable(apiUrl));
+            UseHttp: HttpEndpointUsable(apiUrl),
+            SphereToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.Spheres));
     }
 
     // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —
@@ -3145,6 +3151,26 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return session;
     }
 
+    private readonly ISphereDirectory? _spheres;
+
+    private ISphereDirectory SphereDir => _spheres ?? NoSphereDirectory.Instance;
+
+    /// <summary>Видна ли персоне работа в проекте (зона Global/Project/Sphere) — единая проверка чатов.</summary>
+    public bool PersonaVisibleIn(Persona persona, string? projectId) =>
+        PersonaZone.VisibleIn(persona, projectId, SphereDir);
+
+    /// <summary>Отказ хода, если проект вышел из сферы персоны; null — ход разрешён (см. <see cref="PersonaZone.OutOfZoneRefusal"/>).</summary>
+    public string? OutOfZoneRefusal(Persona persona, string? projectId) =>
+        PersonaZone.OutOfZoneRefusal(persona, projectId, SphereDir);
+
+    // Отказ 400 (InvalidOperationException), если персона не видна в проекте чата
+    private void EnsurePersonaVisible(Persona persona, string? projectId)
+    {
+        if (!PersonaVisibleIn(persona, projectId))
+            throw new InvalidOperationException(
+                $"Персона «{persona.Name}» не работает в этом проекте: он вне её сферы");
+    }
+
     // Создание чата от лица персоны. Маршрутизация по зоне:
     // проектная персона → сессия в её проекте (scope = проект); глобальная (или проект
     // недоступен) → чат вне проекта (scope = все данные владельца). Модель по умолчанию — из персоны.
@@ -3158,9 +3184,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ?? throw new KeyNotFoundException($"Персона не найдена: {personaId}");
 
         // Проект сессии: у проектной персоны — её собственный; у глобальной — контекстный
-        var targetProjectId = persona.Scope == PersonaScope.Project
+        var targetProjectId = PersonaZone.IsProjectPersona(persona)
             ? persona.ProjectId
             : contextProjectId;
+        // Персона сферы без проекта сферы чата не получает: её зона — только проекты сферы
+        if (PersonaZone.IsSpherePersona(persona)) EnsurePersonaVisible(persona, targetProjectId);
 
         // Персона без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной».
         // Дефолт места (Strong) передаётся в резолв, чтобы ячейка персоны без явного уровня сработала.
@@ -3215,7 +3243,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateGroupChatAsync(string ownerId, IReadOnlyList<string> personaIds,
         ClaudeMode mode, string? name = null)
     {
-        var participants = ValidateParticipants(ownerId, personaIds);
+        // Проект группового чата — проект ведущей проектной персоны; у остальных чат вне проекта,
+        // и персоне сферы в нём не место
+        var groupProjectId = _personas.Get(personaIds.FirstOrDefault() ?? "", ownerId) is { } l
+            ? PersonaZone.OwnProjectId(l) : null;
+        var participants = ValidateParticipants(ownerId, personaIds, groupProjectId);
         var leader = participants[0];
         var participantIds = participants.Select(p => p.Id).ToList();
         // Ведущая без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной»
@@ -3225,8 +3257,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 Llm.LocalActionCatalog.DefaultTierOf(Llm.LocalActionCatalog.ChatPersona)),
             resumeSessionId: null, ownerId);
 
-        if (leader.Scope == PersonaScope.Project && !string.IsNullOrEmpty(leader.ProjectId)
-            && _projects.GetById(leader.ProjectId) is { } project && project.OwnerId == ownerId)
+        if (PersonaZone.OwnProjectId(leader) is { } leaderProjectId
+            && _projects.GetById(leaderProjectId) is { } project && project.OwnerId == ownerId)
         {
             var projectSession = new Session
             {
@@ -3271,7 +3303,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (ResolveOwnerId(entry.Info) != ownerId) return null;
 
-        var participants = ValidateParticipants(ownerId, personaIds);
+        var participants = ValidateParticipants(ownerId, personaIds, entry.Info.ProjectId);
         entry.Info.Participants = participants.Select(p => p.Id).ToList();
         var speaker = participants.FirstOrDefault(p => p.Id == entry.Info.PersonaId) ?? participants[0];
         SwitchSpeaker(entry, speaker);
@@ -3279,14 +3311,18 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     // Участники группового чата: 2-4 уникальные персоны, все принадлежат владельцу
-    private List<Persona> ValidateParticipants(string ownerId, IReadOnlyList<string> personaIds)
+    private List<Persona> ValidateParticipants(string ownerId, IReadOnlyList<string> personaIds,
+        string? projectId = null)
     {
         var ids = (personaIds ?? Array.Empty<string>())
             .Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
         if (ids.Count is < 2 or > 8)
             throw new InvalidOperationException("В групповом чате участвуют от 2 до 8 персон");
-        return ids.Select(id => _personas.Get(id, ownerId)
+        var result = ids.Select(id => _personas.Get(id, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}")).ToList();
+        // Участник сферы обязан быть виден в проекте чата (у группового чата вне проекта — нигде)
+        foreach (var p in result.Where(PersonaZone.IsSpherePersona)) EnsurePersonaVisible(p, projectId);
+        return result;
     }
 
     // Чаты владельца, ведущиеся от лица конкретной персоны (для раздела «Персоны»)
@@ -3409,7 +3445,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         ? new[] { single } : Array.Empty<Persona>();
                 else
                     toAdd = _personas.GetByOwner(ownerId).Where(p =>
-                        p.Scope == PersonaScope.Project && p.ProjectId == extProjectId);
+                        PersonaZone.IsProjectTeam(p, extProjectId));
                 foreach (var p in toAdd)
                 {
                     if (p.Id == session.PersonaId || !seen.Add(p.Id)) continue;
@@ -3532,7 +3568,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     // Блок-подсказка о консультациях: две группы — сабагенты (Task) и persona_ask
-    private string? BuildMentionsHint(string ownerId, Session session, List<Persona> others)
+    internal string? BuildMentionsHint(string ownerId, Session session, List<Persona> others)
     {
         if (others.Count == 0) return null;
         var (subagents, viaAsk) = SplitConsultants(ownerId, session, others);
@@ -3574,11 +3610,23 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // не путать тёзок из разных команд.
     private void AppendPersonaLines(System.Text.StringBuilder sb, List<Persona> personas, string? currentProjectId)
     {
-        foreach (var p in personas)
+        // Персоны сферы — отдельной группой «Команда сферы»: в одном списке с проектными и
+        // глобальными их не отличить
+        var ordered = personas.Where(p => !PersonaZone.IsSpherePersona(p))
+            .Concat(personas.Where(PersonaZone.IsSpherePersona)).ToList();
+        var sphereHeaderDone = false;
+        foreach (var p in ordered)
         {
+            if (PersonaZone.IsSpherePersona(p) && !sphereHeaderDone)
+            {
+                sphereHeaderDone = true;
+                var sphereName = p.OwnerId is not null && p.SphereId is not null
+                    ? SphereDir.SphereName(p.OwnerId, p.SphereId) : null;
+                sb.AppendLine(sphereName is null ? "Команда сферы:" : $"Команда сферы «{sphereName}»:");
+            }
             var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
             sb.Append($"- @{p.Handle} — {title}");
-            if (p.Scope == PersonaScope.Project && p.ProjectId != currentProjectId
+            if (PersonaZone.IsProjectPersona(p) && p.ProjectId != currentProjectId
                 && _projects.GetById(p.ProjectId!) is { } foreignProject)
                 sb.Append($" [проект «{foreignProject.Name}»]");
             if (!string.IsNullOrWhiteSpace(p.Description)) sb.Append($": {p.Description.Trim()}");
@@ -3672,6 +3720,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     internal sealed record WorkspaceMcpPlan(IReadOnlyList<string> Sections,
         IReadOnlyList<string>? AllowedProjectIds);
 
+    // Id-заглушка пустой зоны: ни один проект владельца под ним не живёт
+    internal const string NoProjectsZone = "__no-projects__";
+
     internal WorkspaceMcpPlan? BuildWorkspacePlan(string ownerId, string? projectId, Persona? persona)
     {
         var sections = new List<string>();
@@ -3734,7 +3785,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         IReadOnlyList<string>? allowedIds = null;
         var fileScopes = _bindings.BuildFileScopes(ownerId, persona);
-        if (fileScopes is { Count: > 0 } || chatScopes is { Count: > 0 })
+        // Персона сферы: зона — проекты сферы ∪ проекты привязок, никогда не null (иначе все проекты
+        // владельца). Проект сессии вне сферы не добавляем — чат уже отказан по OutOfZoneRefusal.
+        if (_bindings.BuildZoneScopes(persona) is { } zone)
+        {
+            var set = new HashSet<string>(zone);
+            foreach (var id in fileScopes ?? []) set.Add(id);
+            foreach (var id in chatScopes ?? []) set.Add(id);
+            // Потребители читают пустой список как «без сужения» — пустую зону гасим заглушкой
+            allowedIds = set.Count > 0 ? set.ToList() : [NoProjectsZone];
+        }
+        else if (fileScopes is { Count: > 0 } || chatScopes is { Count: > 0 })
         {
             // Привязки есть — зона ужимается; проект самой сессии всегда доступен
             var set = new HashSet<string>(fileScopes ?? []);
@@ -3951,6 +4012,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             persona = _personas.Get(personaId, ownerId)
                 ?? throw new KeyNotFoundException("Персона не найдена");
+            EnsurePersonaVisible(persona, entry.Info.ProjectId);
         }
 
         SwitchSpeaker(entry, persona, agentName);
@@ -4326,6 +4388,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return SendUserOutcome.Started;
     }
 
+    // Ход, не начатый по причине отказа: сообщение об ошибке в ленту, статус Error, процесс не трогаем
+    private async Task RefuseTurnAsync(string sessionId, SessionEntry entry, string reason)
+    {
+        _log.LogWarning("Ход чата {Session} отклонён: {Reason}", sessionId, reason);
+        var runId = Interlocked.Increment(ref _runSeq);
+        entry.RunId = runId;
+        var acc = entry.Accumulator!;
+        await OnMessageAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true, Action: PersonaZone.ChangeCompanionAction), runId);
+        await OnMessageAsync(sessionId, acc, new ResultMessage(
+            Subtype: "error", DurationMs: 0, NumTurns: 0, Usage: null, TotalCostUsd: null), runId);
+        await OnMessageAsync(sessionId, acc, new ExitedMessage(), runId);
+    }
+
     // Непосредственный запуск хода в процесс (гейты очереди уже пройдены либо не требуются).
     // fromQueue — доставка пользовательского сообщения из очереди: клиент рисовал его
     // призраком, поэтому live-баллон бродкастим так же, как для сервер-инициированных отправок.
@@ -4334,6 +4409,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
         bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
     {
+        // Проект вышел из сферы персоны чата: ход не стартует, персону молча не подменяем
+        if (entry.Info.PersonaId is { } zonePersonaId && ResolveOwnerId(entry.Info) is { } zoneOwnerId
+            && _personas.Get(zonePersonaId, zoneOwnerId) is { } zonePersona
+            && OutOfZoneRefusal(zonePersona, entry.Info.ProjectId) is { } refusal)
+        {
+            await RefuseTurnAsync(sessionId, entry, refusal);
+            return;
+        }
+
         // ДИАГНОСТИКА повторных доставок (инцидент 2026-08-10): каждая доставка хода в
         // процесс проходит через эту точку. src различает источник — hub (пользователь
         // через SignalR), auto (серверный ход: цикл/автоматизация/доклад исполнителя),
@@ -9192,7 +9276,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // за которой пошла подмена, адаптер наружу не выпускает (её текст едет
                     // в ErrorDetails маркера) — значит и LoopTurnFailed на ней не взводится.
                     // Details — сырой техтекст под «Подробностями» карточки.
-                    await acc.OnErrorAsync(m.Text, _history, m.Details);
+                    await acc.OnErrorAsync(m.Text, _history, m.Details, m.Action);
                     // Ошибка хода (в т.ч. упавший старт процесса) — цикл «до готово»
                     // не продолжаем; иначе ретрай-шторм до лимита итераций
                     if (entry is not null) entry.LoopTurnFailed = true;

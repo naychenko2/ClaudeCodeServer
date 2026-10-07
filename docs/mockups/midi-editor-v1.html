@@ -1,0 +1,1078 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ноты (MIDI) v1 — просмотр, прослушивание и правка</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет был самодостаточным.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R из lib/design.ts.
+     Цвета дорожек — GROUP_COLORS (легальное исключение из правила «только C.*»). */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F; --c-danger-border: #F5C6BF;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px;
+    --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-sheet: 22px; --r-max: 999px;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #454037;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-success: #7CB86A; --c-success-bg: #1F2B1C; --c-success-text: #8FC47E;
+    --c-warning: #E0A955; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72; --c-danger-border: #5A302A;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: #E9E4DA; color: #39332B;
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--fs-base); }
+  button, input { font: inherit; color: inherit; }
+  .doc-wrap { max-width: 1480px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; color: #2A251F; margin: 0 0 6px; }
+  p.lead { color: #756B5E; margin: 0 0 10px; max-width: 1040px; line-height: 1.55; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 90; background: #E9E4DA; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 8px 0 12px; }
+  .demo .grp { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .demo .lbl { font-size: 11px; color: #9A8F7E; margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid #D0C6B4; background: #FBF8F2; border-radius: 10px; padding: 5px 10px; color: #39332B; }
+  .tbtn[aria-pressed="true"] { background: #D97757; color: #FBF8F2; border-color: transparent; }
+  .tbtn[hidden] { display: none; }
+  .vnote { background: #FBF8F2; border: 1px solid #E0D7C8; border-radius: 12px; padding: 10px 14px; margin: 0 0 12px; line-height: 1.55; max-width: 1040px; }
+  .vnote b { color: #2A251F; }
+
+  .frames { display: flex; flex-direction: column; gap: 16px; }
+  .frames.row { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+  .frame { background: var(--c-bg-main); color: var(--c-text-primary); border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; overflow-x: auto; }
+  .frame .cap { font-size: 11px; color: var(--c-text-muted); margin: 0 0 8px; }
+
+  /* ── Раскладка приложения ── */
+  .app { position: relative; height: 820px; display: flex; gap: 8px; width: 1420px; margin: 0 auto; }
+  .app.mobile { width: 360px; height: 740px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; flex-direction: column; gap: 0; background: var(--c-bg-main); }
+  .rail { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; color: var(--c-text-muted); }
+  .rail .ib.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: var(--r-xxl); box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; position: relative; }
+  .island.main { flex: 1; }
+  .island.tree { width: 250px; flex: 0 0 250px; }
+  .feed { flex: 1; overflow: hidden; padding: 14px 18px 10px; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 640px; line-height: 1.5; }
+  .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 8px 12px; }
+  .acard { background: var(--c-bg-card); border: 1px solid var(--c-accent); border-radius: var(--r-xl); box-shadow: var(--shadow-card); flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .composer { margin: 0 12px 12px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xxl); padding: 10px 12px; color: var(--c-text-muted); font-size: var(--fs-md); }
+  .ihead { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); font-weight: 600; color: var(--c-text-heading); min-width: 0; }
+  .ihead .sub { font-weight: 400; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .ftree { padding: 8px; overflow: auto; flex: 1; }
+  .frow { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: var(--r-md); font-size: var(--fs-sm); color: var(--c-text-primary); }
+  .frow.dir { color: var(--c-text-secondary); font-weight: 600; }
+  .frow.on { background: var(--c-accent-light); color: var(--c-accent); font-weight: 600; }
+  .frow .ext { margin-left: auto; font-size: 10px; color: var(--c-text-muted); }
+
+  /* ── Кирпичи UI-кита (имена — как в components/ui) ── */
+  svg.i { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+  svg.i.s { width: 13px; height: 13px; } svg.i.l { width: 18px; height: 18px; } svg.i.xl { width: 30px; height: 30px; stroke-width: 1.5; }
+  svg.i.fill { fill: currentColor; stroke: none; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-md);
+    border: 1px solid var(--c-border); background: var(--c-bg-card); cursor: pointer; font-size: var(--fs-sm); white-space: nowrap; color: var(--c-text-primary); }
+  .btn:hover:not(:disabled) { background: var(--c-bg-selected); }
+  .btn:disabled, .ib:disabled, .seg button:disabled { opacity: .45; cursor: not-allowed; }
+  .btn:focus-visible, .ib:focus-visible, .seg button:focus-visible, .chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); font-weight: 600; }
+  .btn.pri:hover:not(:disabled) { background: var(--c-accent); filter: brightness(1.05); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover:not(:disabled) { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.xs { height: 24px; padding: 0 8px; font-size: var(--fs-xs); border-radius: 7px; }
+  .btn.lg { height: 40px; font-size: var(--fs-base); width: 100%; }
+  .ib { width: 28px; height: 28px; border-radius: var(--r-md); border: none; background: transparent; color: var(--c-text-secondary); display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto; padding: 0; }
+  .ib:hover:not(:disabled) { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .ib.play { width: 32px; height: 32px; border-radius: 50%; background: var(--c-accent); color: var(--c-on-accent); box-shadow: var(--shadow-button); }
+  .ib.play:hover:not(:disabled) { background: var(--c-accent); color: var(--c-on-accent); filter: brightness(1.05); }
+  .seg { display: inline-flex; background: var(--c-bg-inset); border-radius: var(--r-lg); padding: 2px; gap: 2px; }
+  .seg button { border: none; background: transparent; color: var(--c-text-secondary); height: 26px; padding: 0 8px; border-radius: var(--r-md); cursor: pointer; font-size: var(--fs-sm); display: inline-flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); font-weight: 600; }
+  .seg.full { display: flex; } .seg.full button { flex: 1; height: 32px; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: var(--r-sm); font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+  .badge.ok { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.info { background: var(--c-info-bg); color: var(--c-info); }
+  .badge.mut { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .badge.acc { background: var(--c-accent-light); color: var(--c-accent); }
+  .badge.dng { background: var(--c-danger-bg); color: var(--c-danger-text); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; display: inline-block; }
+  .stepper { display: inline-flex; align-items: center; border: 1px solid var(--c-border); border-radius: var(--r-md); height: 28px; background: var(--c-bg-card); }
+  .stepper button { width: 24px; height: 26px; border: none; background: transparent; cursor: pointer; color: var(--c-text-secondary); }
+  .stepper button:disabled { opacity: .4; cursor: default; }
+  .stepper span { min-width: 30px; text-align: center; font-size: var(--fs-sm); font-weight: 600; }
+  .notice { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-radius: var(--r-md); font-size: var(--fs-sm); line-height: 1.45; border: 1px solid transparent; }
+  .notice .tx { flex: 1; min-width: 0; } .notice .tx b { display: block; color: var(--c-text-heading); }
+  .notice.info { background: var(--c-info-bg); color: var(--c-text-primary); } .notice.info > svg { color: var(--c-info); }
+  .notice.warn { background: var(--c-warning-bg); color: var(--c-text-primary); } .notice.warn > svg { color: var(--c-warning); }
+  .notice.ok { background: var(--c-success-bg); color: var(--c-text-primary); } .notice.ok > svg { color: var(--c-success); }
+  .notice.dng { background: var(--c-danger-bg); border-color: var(--c-danger-border); color: var(--c-text-primary); } .notice.dng > svg { color: var(--c-danger); }
+  .pbar { height: 4px; background: var(--c-track); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+  .pbar i { display: block; height: 100%; background: var(--c-accent); border-radius: 2px; transition: width .2s; }
+  .pbar.ind i { width: 35%; animation: ind 1.1s ease-in-out infinite; }
+  @keyframes ind { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+  input[type=range].vol { -webkit-appearance: none; appearance: none; width: 80px; height: 4px; background: var(--c-track); border-radius: 2px; accent-color: var(--c-accent); }
+  input[type=range].vol::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--c-bg-card); border: 2px solid var(--c-accent); cursor: pointer; }
+  input[type=range].vol::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--c-bg-card); border: 2px solid var(--c-accent); }
+  .menu { position: absolute; z-index: 20; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-dropdown); padding: 4px; min-width: 210px; }
+  .menu .mi { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 8px; border: none; background: transparent; border-radius: var(--r-md); cursor: pointer; font-size: var(--fs-sm); text-align: left; color: var(--c-text-primary); }
+  .menu .mi:hover { background: var(--c-bg-selected); }
+  .menu .mi.on { color: var(--c-accent); font-weight: 600; }
+  .menu .mi .ck { margin-left: auto; }
+  .menu .sep { height: 1px; background: var(--c-border-light); margin: 4px 2px; }
+  .menu .mh { font-size: var(--fs-xs); color: var(--c-text-muted); padding: 4px 8px 2px; line-height: 1.4; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: var(--r-max); border: 1px solid var(--c-border); background: var(--c-bg-card); font-size: var(--fs-sm); cursor: pointer; white-space: nowrap; color: var(--c-text-primary); }
+  .chip.on { border-color: var(--c-accent); background: var(--c-accent-light); color: var(--c-accent); font-weight: 600; }
+  .chip small { font-size: 10px; color: var(--c-text-muted); font-weight: 600; }
+  .chip.on small { color: var(--c-accent); }
+  .chip.new { animation: pop .5s ease; }
+  @keyframes pop { 0% { transform: scale(.8); opacity: 0; } 100% { transform: none; opacity: 1; } }
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 8px; padding: 24px; color: var(--c-text-secondary); }
+  .empty .eic { width: 56px; height: 56px; border-radius: 16px; background: var(--c-bg-inset); color: var(--c-text-muted); display: grid; place-items: center; }
+  .empty .eic.dng { background: var(--c-danger-bg); color: var(--c-danger); }
+  .empty h3 { margin: 4px 0 0; font-size: var(--fs-lg); color: var(--c-text-heading); }
+  .empty p { margin: 0; max-width: 380px; line-height: 1.5; font-size: var(--fs-base); }
+  .empty .acts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
+  .details { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; background: var(--c-bg-inset); border-radius: var(--r-md); padding: 8px 10px; text-align: left; color: var(--c-text-secondary); max-width: 420px; white-space: pre-wrap; }
+
+  /* ── MIDI-редактор ── */
+  /* сетка и клавиши — производные от токенов, своих цветов нет; объявлены на .me, чтобы тема кадра их пересчитывала */
+  .me { --roll-bg: var(--c-bg-card); --roll-black: var(--c-bg-inset); --roll-line: var(--c-border-light); --roll-bar: var(--c-divider);
+    --key-white: var(--c-bg-white); --key-black: var(--c-text-primary); --key-label: var(--c-text-muted); }
+  [data-theme="dark"] .me { --roll-black: var(--c-bg-panel); --key-white: var(--c-text-secondary); --key-black: var(--c-bg-inset); --key-label: var(--c-bg-main); }
+  .me { display: flex; flex-direction: column; min-height: 0; flex: 1; position: relative; background: var(--c-bg-card); }
+  .me-ctx { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--c-border-light); min-width: 0; flex: 0 0 auto; }
+  .me-ctx .ttl { font-weight: 600; color: var(--c-text-heading); white-space: nowrap; }
+  .me-ctx .meta { font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .me-ctx .vers { display: flex; gap: 4px; align-items: center; overflow-x: auto; min-width: 0; flex: 1; scrollbar-width: none; }
+  .me-ctx .grow { flex: 1; min-width: 0; }
+  .me-ctx .acts { display: flex; gap: 6px; align-items: center; flex: 0 0 auto; }
+  .me-tb { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--c-border-light); flex-wrap: wrap; flex: 0 0 auto; background: var(--c-bg-panel); }
+  .me-tb .sep { width: 1px; height: 20px; background: var(--c-divider); margin: 0 4px; }
+  .me-tb .pos { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; color: var(--c-text-secondary); min-width: 118px; }
+  .me-tb .lb { font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .me-tb .zg { display: inline-flex; align-items: center; gap: 0; }
+  .me-ntc { padding: 8px 12px 0; flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; }
+  .me-ntc:empty { display: none; }
+  .me-body { flex: 1; min-height: 0; display: flex; }
+  .me-side { width: 214px; flex: 0 0 214px; border-right: 1px solid var(--c-border-light); display: flex; flex-direction: column; background: var(--c-bg-panel); position: relative; }
+  .me-side .sh { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .4px; padding: 10px 10px 4px; }
+  .trk { margin: 2px 6px; padding: 6px 8px; border-radius: var(--r-md); border: 1px solid transparent; cursor: pointer; display: flex; flex-direction: column; gap: 5px; }
+  .trk:hover { background: var(--c-bg-selected); }
+  .trk.on { background: var(--c-bg-card); border-color: var(--c-border); box-shadow: var(--shadow-card); }
+  .trk.quiet { opacity: .55; }
+  .trk .l1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .trk .nm { flex: 1; min-width: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trk .l2 { display: flex; align-items: center; gap: 4px; }
+  .ms { width: 22px; height: 20px; border-radius: var(--r-sm); border: 1px solid var(--c-border); background: var(--c-bg-card); font-size: 10.5px; font-weight: 700; color: var(--c-text-muted); cursor: pointer; padding: 0; }
+  .ms.m.on { background: var(--c-warning-bg); color: var(--c-warning-text); border-color: var(--c-warning); }
+  .ms.s.on { background: var(--c-info-bg); color: var(--c-info); border-color: var(--c-info); }
+  .ichip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px 0 8px; border-radius: var(--r-sm); border: 1px solid var(--c-border); background: var(--c-bg-card); font-size: var(--fs-xs); cursor: pointer; color: var(--c-text-primary); max-width: 92px; }
+  .ichip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ichip:disabled { opacity: .5; cursor: not-allowed; }
+  .me-side .foot { margin-top: auto; padding: 10px; font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.45; border-top: 1px solid var(--c-border-light); }
+  .me-roll { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+  .mini { height: 26px; flex: 0 0 26px; position: relative; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border-light); cursor: pointer; overflow: hidden; }
+  .mini i { position: absolute; bottom: 2px; width: 3px; background: var(--c-text-muted); opacity: .5; border-radius: 1px; }
+  .mini .vp { position: absolute; top: 1px; bottom: 1px; border: 1.5px solid var(--c-accent); border-radius: 4px; background: var(--c-accent-light); opacity: .55; }
+  .mini .ph { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--c-accent); }
+  .scr { flex: 1; min-height: 0; overflow: auto; position: relative; background: var(--roll-bg); overscroll-behavior: contain; }
+  .rul { position: sticky; top: 0; z-index: 4; display: flex; height: 24px; }
+  .rul .corner { position: sticky; left: 0; z-index: 5; background: var(--c-bg-panel); border-right: 1px solid var(--c-border-light); border-bottom: 1px solid var(--c-border-light); flex: 0 0 auto; font-size: 10px; color: var(--c-text-muted); display: grid; place-items: center; }
+  .rul .rt { position: relative; background: var(--c-bg-panel); border-bottom: 1px solid var(--c-border-light); cursor: pointer; flex: 0 0 auto; }
+  .rul .bn { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--c-divider); font-size: 10px; color: var(--c-text-muted); padding: 5px 0 0 4px; pointer-events: none; }
+  .rul .lp { position: absolute; top: 2px; bottom: 2px; background: var(--c-accent-light); border: 1px solid var(--c-accent-muted); border-radius: 4px; }
+  .rul .lp.off { background: transparent; border-style: dashed; border-color: var(--c-dashed); }
+  .rul .lp .h { position: absolute; top: -1px; bottom: -1px; width: 8px; cursor: ew-resize; }
+  .rul .lp .h.a { left: -4px; } .rul .lp .h.b { right: -4px; }
+  .rul .phr { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--c-accent); pointer-events: none; }
+  .rul .phr::before { content: ''; position: absolute; top: 0; left: -6px; border: 5px solid transparent; border-top: 7px solid var(--c-accent); }
+  .rbody { display: flex; }
+  .keys { position: sticky; left: 0; z-index: 3; flex: 0 0 auto; background: var(--c-bg-card); border-right: 1px solid var(--c-border); }
+  .key { position: relative; border-bottom: 1px solid var(--c-border-light); font-size: 9.5px; color: var(--key-label); display: flex; align-items: center; justify-content: flex-end; padding-right: 4px; background: var(--key-white); white-space: nowrap; overflow: hidden; }
+  .key.blk { background: var(--key-black); border-bottom-color: var(--key-black); width: 62%; color: transparent; border-radius: 0 3px 3px 0; }
+  .key.blk.drum { width: 100%; background: var(--key-white); border-bottom-color: var(--c-border-light); border-radius: 0; color: var(--key-label); }
+  .key.c { font-weight: 700; }
+  .key.hit { background: var(--c-accent) !important; color: var(--c-on-accent) !important; }
+  .key.named { font-weight: 600; justify-content: flex-start; padding-left: 5px; }
+  .grid { position: relative; flex: 0 0 auto; touch-action: none; }
+  .grid.t-pencil { cursor: crosshair; } .grid.t-erase { cursor: not-allowed; } .grid.ro { cursor: default; }
+  .grid .rowb { position: absolute; left: 0; right: 0; background: var(--roll-black); pointer-events: none; }
+  .grid .vl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--roll-line); pointer-events: none; }
+  .grid .vl.beat { background: var(--c-border); } .grid .vl.bar { background: var(--roll-bar); width: 1.5px; }
+  .grid .ol { position: absolute; left: 0; right: 0; height: 1px; background: var(--c-border); pointer-events: none; }
+  .grid .lpz { position: absolute; top: 0; bottom: 0; background: var(--c-accent); opacity: .05; pointer-events: none; }
+  .grid .ph { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--c-accent); pointer-events: none; z-index: 2; }
+  .note { position: absolute; border-radius: 3px; border: 1px solid rgba(0,0,0,.18); cursor: grab; overflow: hidden; }
+  .note .rz { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
+  .note.ghost { pointer-events: none; border-color: transparent; }
+  .note.sel { box-shadow: 0 0 0 2px var(--c-text-heading); z-index: 1; }
+  .note.hit { filter: brightness(1.35) saturate(1.2); box-shadow: 0 0 8px var(--c-accent); }
+  .note.sel.hit { box-shadow: 0 0 0 2px var(--c-text-heading), 0 0 8px var(--c-accent); }
+  .grid.t-pencil .note, .grid.ro .note { cursor: pointer; }
+  .grid.t-erase .note:hover { outline: 2px dashed var(--c-danger); }
+  .roll-ov { position: absolute; inset: 24px 0 0 0; display: grid; place-items: center; pointer-events: none; z-index: 5; }
+  .roll-ov > div { pointer-events: auto; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xl); box-shadow: var(--shadow-card); }
+  .vel { flex: 0 0 auto; height: 74px; display: flex; border-top: 1px solid var(--c-border); background: var(--c-bg-panel); }
+  .vel .vlab { flex: 0 0 auto; font-size: 10px; color: var(--c-text-muted); padding: 6px; border-right: 1px solid var(--c-border); line-height: 1.3; background: var(--c-bg-card); }
+  .vel .vwin { flex: 1; min-width: 0; overflow: hidden; position: relative; }
+  .vel .vin { position: absolute; top: 0; bottom: 0; left: 0; }
+  .vel .vb { position: absolute; bottom: 4px; width: 5px; border-radius: 2px 2px 0 0; cursor: ns-resize; }
+  .vel .vb::after { content: ''; position: absolute; top: -3px; left: -1.5px; width: 8px; height: 8px; border-radius: 50%; background: inherit; }
+  .vel .vb.sel { outline: 2px solid var(--c-text-heading); }
+  .vel .vtip { position: absolute; top: 4px; right: 8px; font-size: var(--fs-xs); color: var(--c-text-secondary); background: var(--c-bg-card); padding: 0 6px; border-radius: var(--r-sm); }
+  .toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 30; background: var(--c-text-heading); color: var(--c-bg-card); border-radius: var(--r-lg); padding: 8px 14px; font-size: var(--fs-sm); box-shadow: var(--shadow-dropdown); display: flex; align-items: center; gap: 10px; max-width: 90%; animation: pop .25s ease; }
+  .toast button { border: none; background: transparent; color: var(--c-accent-muted); font-weight: 600; cursor: pointer; padding: 0; }
+  .skel { background: var(--c-bg-inset); border-radius: 4px; position: relative; overflow: hidden; }
+  .skel::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--c-bg-selected), transparent); animation: sh 1.3s infinite; }
+  @keyframes sh { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+  /* мобильная раскладка редактора */
+  .me.m .me-top { height: 48px; flex: 0 0 48px; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 4px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-panel); }
+  .me.m .me-top .t { flex: 1; min-width: 0; line-height: 1.2; }
+  .me.m .me-top .t b { display: block; font-size: var(--fs-md); color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .me.m .me-top .t span { font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; }
+  .me.m .me-ctx { padding: 6px 8px; }
+  .me.m .trow { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--c-border-light); }
+  .me.m .tsel { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px; border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-bg-white); cursor: pointer; text-align: left; font-size: var(--fs-sm); }
+  .me.m .tsel b { color: var(--c-text-heading); } .me.m .tsel .v { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .me.m .ms { width: 32px; height: 34px; font-size: var(--fs-sm); border-radius: var(--r-md); }
+  .me.m .trans { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--c-border-light); background: var(--c-bg-panel); }
+  .me.m .trans .pos { flex: 1; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--c-text-secondary); text-align: center; }
+  .me.m .ib { width: 36px; height: 36px; }
+  .me.m .ib.play { width: 42px; height: 42px; }
+  .me.m .btbar { display: flex; align-items: stretch; border-top: 1px solid var(--c-border); background: var(--c-bg-card); padding: 4px 4px 8px; gap: 2px; }
+  .me.m .btbar button { flex: 1; border: none; background: transparent; border-radius: var(--r-md); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 5px 0; font-size: 10.5px; color: var(--c-text-secondary); cursor: pointer; }
+  .me.m .btbar button.on { background: var(--c-accent-light); color: var(--c-accent); font-weight: 600; }
+  .me.m .btbar button:disabled { opacity: .4; }
+  .me.m .vel { height: 56px; }
+  .gest { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 6; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xl); box-shadow: var(--shadow-dropdown); padding: 10px 12px; font-size: var(--fs-sm); line-height: 1.5; }
+  .gest b { color: var(--c-text-heading); }
+  .gest ul { margin: 4px 0 6px; padding-left: 16px; }
+  .sheet-ov { position: absolute; inset: 0; background: var(--c-overlay); z-index: 40; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 82%; z-index: 41; background: var(--c-bg-card); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); display: flex; flex-direction: column; overflow: hidden; }
+  .sheet .grab { align-self: center; width: 40px; height: 4px; border-radius: var(--r-sm); background: var(--c-track); margin: 8px 0 2px; }
+  .sheet .sh-h { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; font-weight: 600; color: var(--c-text-heading); font-size: var(--fs-md); }
+  .sheet .sh-b { overflow: auto; padding: 0 12px 16px; }
+  .sheet .srow { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 4px; border-bottom: 1px solid var(--c-border-light); }
+  .sheet .srow:last-child { border-bottom: none; }
+  .sheet .srow .nm { flex: 1; min-width: 0; font-size: var(--fs-base); }
+  .sheet .srow .nm small { display: block; color: var(--c-text-muted); font-size: var(--fs-xs); }
+  .sheet .srow.on .nm { color: var(--c-accent); font-weight: 600; }
+  .sheet .srow.pick { cursor: pointer; }
+  .sheet .lbl2 { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .4px; margin: 12px 0 6px; }
+  .sheet .actcol { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">Ноты (MIDI) v1 — смотреть, слушать, править</h1>
+  <p class="lead">Один компонент в трёх местах: в редакторе звука (ноты — ещё одна версия звука, результат «звук → ноты» открывается сразу), в просмотрщике файла <span class="mono">.mid</span> серверного проекта и в просмотрщике файла локального проекта (файл на устройстве). Музыки нет: «звучание» показано бегущей линией, подсветкой нот и клавиш. Всё, что нарисовано, нажимается. Пояснение — <span class="mono">midi-editor-v1-proposal.md</span>.</p>
+  <div class="demo" id="demo"></div>
+  <div class="vnote" id="vnote"></div>
+  <div id="frames" class="frames"></div>
+</div>
+
+<script>
+/* ───────────── Иконки (контуры в духе lucide) ───────────── */
+const P = {
+  play: '<path d="M7 4.5v15l12-7.5z" class="f"/>',
+  pause: '<rect x="6" y="5" width="4" height="14" rx="1" class="f"/><rect x="14" y="5" width="4" height="14" rx="1" class="f"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  loop: '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>',
+  pointer: '<path d="M4 4l7 17 2.5-7.5L21 11z"/>',
+  pencil: '<path d="M17 3l4 4L8 20H4v-4z"/><path d="M14 6l4 4"/>',
+  eraser: '<path d="M7 21h10"/><path d="M5.5 15.5l9-9a2 2 0 0 1 2.8 0l2.2 2.2a2 2 0 0 1 0 2.8L13 18H8z"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
+  redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>',
+  zin: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"/>',
+  zout: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6"/>',
+  hplus: '<path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>',
+  save: '<path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h8V3M8 21v-7h8v7"/>',
+  wave: '<path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0"/>',
+  notes: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+  chev: '<path d="M6 9l6 6 6-6"/>',
+  back: '<path d="M15 18l-6-6 6-6"/>',
+  more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  vol: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/>',
+  check: '<path d="M5 12l5 5L20 7"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+  magnet: '<path d="M6 3v8a6 6 0 0 0 12 0V3"/><path d="M6 7h4M14 7h4"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  laptop: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
+  wifioff: '<path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 5.2-2.7M16.8 10.9A10 10 0 0 1 19 13M2 8.8a15 15 0 0 1 4.2-2.7M10.7 5.1A15 15 0 0 1 22 8.8"/><circle cx="12" cy="20" r=".6"/>',
+  folder: '<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+  sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  gesture: '<path d="M9 11V5a1.5 1.5 0 0 1 3 0v5M12 10V4a1.5 1.5 0 0 1 3 0v6M15 10V6a1.5 1.5 0 0 1 3 0v7a7 7 0 0 1-7 7h-1a6 6 0 0 1-5-3l-2.5-4a1.5 1.5 0 0 1 2.5-1.6L9 13"/>',
+  sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.9-3.5M4 4v4h4M4 13a8 8 0 0 0 14.9 3.5M20 20v-4h-4"/>',
+};
+const ic = (n, c = '') => `<svg class="i ${c}" viewBox="0 0 24 24">${P[n].replace(/class="f"/g, 'fill="currentColor" stroke="none"')}</svg>`;
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+/* ───────────── Данные ───────────── */
+const TRACK_COLORS = ['#3E7CA6', '#3F7A4F', '#8E4A82', '#C2693B', '#4B6BB0', '#7A7250']; // GROUP_COLORS
+const INSTR = [
+  { k: 'piano', n: 'Пианино' }, { k: 'keys', n: 'Клавишные' }, { k: 'strings', n: 'Струнные' }, { k: 'pad', n: 'Пэд' },
+  { k: 'brass', n: 'Медные' }, { k: 'lead', n: 'Лид' }, { k: 'bass', n: 'Бас' },
+];
+const instrName = k => k === 'drums' ? 'Ударные' : (INSTR.find(x => x.k === k) || INSTR[0]).n;
+const DRUM_NAMES = { 36: 'Бочка', 38: 'Малый', 40: 'Малый 2', 42: 'Хэт закр.', 44: 'Хэт ногой', 46: 'Хэт откр.', 41: 'Том низ.', 45: 'Том ср.', 48: 'Том выс.', 49: 'Тарелка', 51: 'Райд', 39: 'Хлопок' };
+const NOTE_RU = ['до', 'до♯', 'ре', 'ре♯', 'ми', 'фа', 'фа♯', 'соль', 'соль♯', 'ля', 'ля♯', 'си'];
+const LO = 36, HI = 84;
+const isBlack = p => [1, 3, 6, 8, 10].includes(p % 12);
+const pname = p => NOTE_RU[p % 12] + ' ' + (Math.floor(p / 12) - 1);
+
+function rng(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+let NID = 1;
+const N = (p, s, l, v) => ({ id: NID++, p, s, l, v: Math.round(v) });
+
+function genRecorded(bars) {
+  // как из Basic Pitch: одна дорожка, длины неровные, сила разная
+  const r = rng(7), notes = [], scale = [60, 62, 64, 65, 67, 69, 71, 72, 74];
+  let t = 0, idx = 4;
+  while (t < bars * 4 - 0.5) {
+    const len = [0.5, 0.5, 0.75, 1, 0.25, 1.5][Math.floor(r() * 6)];
+    idx = Math.max(0, Math.min(scale.length - 1, idx + Math.floor(r() * 5) - 2));
+    if (r() > 0.12) notes.push(N(scale[idx] + (r() > 0.93 ? 1 : 0), Math.round(t * 16) / 16, Math.max(0.1875, len - 0.06 - r() * 0.1), 55 + r() * 60));
+    t += len;
+  }
+  return [{ id: 't1', name: 'Мелодия', instr: 'piano', drum: false, notes, mute: false, solo: false }];
+}
+function genMulti(bars) {
+  const r = rng(11), mel = [], bass = [], str = [], dr = [];
+  const prog = [[48, 52, 55], [45, 48, 52], [41, 45, 48], [43, 47, 50]];
+  const motif = [[0, 67, 1], [1, 69, .5], [1.5, 67, .5], [2, 64, 1], [3, 62, 1], [4, 64, .5], [4.5, 65, .5], [5, 67, 1.5], [6.5, 72, .5], [7, 71, 1]];
+  for (let b = 0; b < bars; b++) {
+    const ch = prog[b % 4], o = b * 4;
+    if (b % 2 === 0) for (const [s, p, l] of motif) mel.push(N(p + (b % 8 >= 4 ? 2 : 0) - (p > 70 && b % 8 >= 4 ? 2 : 0), o + s, l * 0.92, 70 + r() * 45));
+    bass.push(N(ch[0] - 12 + 12, o, 1.5, 95), N(ch[0], o + 2, .5, 70), N(ch[0] + 7, o + 2.5, 1.5, 80));
+    for (const p of ch) str.push(N(p + 12, o, 4, 50 + r() * 20));
+    for (let q = 0; q < 4; q++) {
+      dr.push(N(q % 2 === 0 ? 36 : 38, o + q, .25, q % 2 ? 100 : 115));
+      dr.push(N(42, o + q, .25, 60 + r() * 30), N(42, o + q + .5, .25, 45 + r() * 30));
+    }
+    if (b % 4 === 3) dr.push(N(49, o + 3.5, .5, 110));
+  }
+  return [
+    { id: 't1', name: 'Мелодия', instr: 'lead', drum: false, notes: mel, mute: false, solo: false },
+    { id: 't2', name: 'Бас', instr: 'bass', drum: false, notes: bass.map(n => (n.p -= 0, n)), mute: false, solo: false },
+    { id: 't3', name: 'Аккорды', instr: 'strings', drum: false, notes: str, mute: false, solo: false },
+    { id: 't4', name: 'Барабаны', instr: 'drums', drum: true, notes: dr, mute: false, solo: false },
+  ];
+}
+
+/* ───────────── Состояние демо ───────────── */
+const D = { ctx: 'audio', src: 'rec', st: 'ok', dev: 'on', rend: 'ok', theme: 'light', size: '1440' };
+const DEMO = [
+  ['ctx', 'Где открыт', [['audio', 'Редактор звука'], ['file', 'Файл в проекте'], ['local', 'Локальный проект']]],
+  ['src', 'Ноты', [['rec', 'Сняты с записи · 1 дорожка'], ['mid', 'Загруженный .mid · 4 дорожки']]],
+  ['st', 'Состояние', [['ok', 'Обычный'], ['empty', 'Пустой файл'], ['loading', 'Загрузка'], ['error', 'Ошибка разбора'], ['long', 'Длинный трек']]],
+  ['dev', 'Устройство', [['on', 'в сети'], ['off', 'не в сети']]],
+  ['rend', 'Сборка WAV', [['ok', 'получится'], ['fail', 'упадёт']]],
+  ['theme', 'Тема', [['light', 'Светлая'], ['dark', 'Тёмная'], ['both', 'Обе']]],
+  ['size', 'Ширина', [['1440', '1440'], ['360', '360'], ['both', '1440 + 360']]],
+];
+const NOTES = {
+  audio: '<b>Редактор звука.</b> Человек напел мелодию и попросил снять ноты. Операция «Звук → ноты» вернула новую версию <b>в3 · Ноты</b>, она открылась сразу. Ноты из записи — всегда одна дорожка. «Сохранить как новую версию» добавляет версию в ряд, «Собрать звук (WAV)» — версию со звуком. Попробуйте: ▶, карандаш по сетке, перетащить ноту, потянуть её правый край, столбики силы внизу, ↶/↷, смену инструмента в заголовке дорожки.',
+  file: '<b>Файл в проекте.</b> Открыли <span class="mono">music/melody.mid</span> в файлах проекта, как картинку или markdown. Версий тут нет: «Сохранить» перезаписывает файл, «Сохранить копией» кладёт рядом новый. Звук из нот сохраняется в проект файлом <span class="mono">.wav</span>.',
+  local: '<b>Локальный проект.</b> Файл живёт на устройстве человека («Ноутбук-дом»). Сохранение идёт на устройство. Переключите «Устройство: не в сети»: смотреть и слушать можно (последняя открытая копия), правка и сохранение недоступны, скачать .mid можно.',
+};
+
+/* ───────────── Редактор ───────────── */
+const INSTANCES = [];
+const PPB = [12, 18, 24, 32, 44, 60, 84];
+const ROWH = [8, 10, 12, 14, 18, 22];
+const GRIDS = [[1, '1/4'], [0.5, '1/8'], [0.25, '1/16']];
+
+class MidiEditor {
+  constructor(root, o) {
+    this.root = root; this.o = o; this.m = o.mobile;
+    this.ro = o.ctx === 'local' && o.offline;
+    const bars = o.st === 'long' ? 160 : 16;
+    this.bars = bars;
+    NID = 1;
+    this.tracks = o.st === 'empty' ? [{ id: 't1', name: 'Дорожка 1', instr: 'piano', drum: false, notes: [], mute: false, solo: false }]
+      : (o.src === 'rec' ? genRecorded(bars) : genMulti(bars));
+    this.active = this.tracks[0].id;
+    this.sel = new Set();
+    this.tool = 'select'; this.grid = 0.25; this.bpm = o.src === 'rec' ? 92 : 104; this.vol = 80;
+    this.zx = this.m ? 2 : 3; this.zy = this.m ? 3 : 2;
+    this.playing = false; this.pos = 0; this.loop = false; this.la = 0; this.lb = 16;
+    this.undo = []; this.redo = []; this.edits = 0; this.savedOnce = false;
+    this.render = { phase: 'idle', pct: 0 };
+    this.menu = null; this.sheet = null; this.toastMsg = null; this.gest = this.m && o.st === 'ok';
+    this.showVel = !this.m;
+    this.loading = o.st === 'loading';
+    this.versions = o.ctx === 'audio' ? (o.src === 'rec'
+      ? [{ n: 1, t: 'Запись', k: 'snd' }, { n: 2, t: 'Без шума', k: 'snd' }, { n: 3, t: 'Ноты', k: 'midi' }]
+      : [{ n: 1, t: 'Загружено', k: 'midi' }]) : [];
+    this.curVer = this.versions.length ? this.versions[this.versions.length - 1].n : 0;
+    this.newVer = 0;
+    this.fname = o.ctx === 'audio' ? 'Мелодия, напетая' : 'melody.mid';
+    this.copyN = 1;
+    INSTANCES.push(this);
+    root.addEventListener('click', e => this.onClick(e));
+    root.addEventListener('input', e => { if (e.target.dataset.act === 'vol') { this.vol = +e.target.value; const l = this.root.querySelector('[data-vol-l]'); if (l) l.textContent = this.vol + '%'; } });
+    this.build();
+  }
+  get ppb() { return PPB[this.zx]; } get rh() { return ROWH[this.zy]; }
+  get kw() { return this.m ? 40 : 60; }
+  get beats() { return this.bars * 4; }
+  get trk() { return this.tracks.find(t => t.id === this.active); }
+  audible(t) { return this.tracks.some(x => x.solo) ? t.solo : !t.mute; }
+
+  /* ── каркас ── */
+  build() {
+    const o = this.o;
+    if (o.st === 'error') { this.root.innerHTML = this.shell(this.errorView()); this.paintChrome(); return; }
+    if (this.loading) {
+      this.root.innerHTML = this.shell(this.loadingView()); this.paintChrome();
+      clearTimeout(this.lt); this.lt = setTimeout(() => { if (!this.dead) { this.loading = false; this.o.st = 'ok'; this.build(); } }, 2600);
+      return;
+    }
+    this.root.innerHTML = this.shell(`<div class="me-roll"><div class="mini-s"></div><div class="scr"></div><div class="roll-ov-s"></div></div>`);
+    this.paintChrome(); this.paintRoll(); this.paintVel();
+  }
+  shell(center) {
+    if (this.m) return `<div class="me m">
+      <div class="me-top"></div><div class="me-ctx"></div><div class="me-ntc"></div><div class="trow-s"></div>
+      <div class="me-body">${center}</div>
+      <div class="vel-s"></div><div class="trans-s"></div><div class="bt-s"></div>
+      <div class="gest-s"></div><div class="sheet-s"></div><div class="toast-s"></div></div>`;
+    return `<div class="me">
+      <div class="me-ctx"></div><div class="me-tb"></div><div class="me-ntc"></div>
+      <div class="me-body"><div class="me-side"></div>${center}</div>
+      <div class="vel-s"></div><div class="toast-s"></div></div>`;
+  }
+  q(s) { return this.root.querySelector(s); }
+  set(s, h) { const el = this.q(s); if (el) el.innerHTML = h; }
+
+  loadingView() {
+    let rows = ''; for (let i = 0; i < 9; i++) rows += `<div class="skel" style="height:10px;width:${20 + (i * 37) % 60}%;margin:${10 + (i % 3) * 6}px 0 0 ${(i * 53) % 40}%"></div>`;
+    return `<div class="me-roll" style="padding:16px"><div style="max-width:420px;margin:30px auto 10px;text-align:center;color:var(--c-text-secondary)">
+      <div style="font-weight:600;color:var(--c-text-heading)">Открываем ${esc(this.o.ctx === 'audio' ? 'ноты' : 'melody.mid')}…</div>
+      <div style="font-size:var(--fs-sm);margin-top:2px">${this.o.ctx === 'local' ? 'Читаем файл с устройства «Ноутбук-дом»' : 'Разбираем дорожки и ноты'}</div>
+      <div class="pbar ind"><i></i></div></div>${rows}</div>`;
+  }
+  errorView() {
+    const a = this.o.ctx === 'audio';
+    return `<div class="me-roll"><div class="empty" style="flex:1">
+      <div class="eic dng">${ic('alert', 'xl')}</div>
+      <h3>Не получилось открыть ноты</h3>
+      <p>Файл повреждён или это не MIDI. ${a ? 'Можно снять ноты с записи ещё раз.' : 'Его можно скачать как есть и проверить в другой программе.'}</p>
+      <div class="acts">${a ? `<button class="btn pri" data-act="toast" data-msg="Снимаем ноты заново — в макете не запускается">${ic('refresh', 's')}Снять ноты заново</button>` : ''}
+        <button class="btn" data-act="toast" data-msg="Файл скачан как есть">${ic('download', 's')}Скачать как есть</button>
+        <button class="btn ghost" data-act="details">Подробности</button></div>
+      <div class="details" data-details hidden>Ожидали заголовок «MThd», а в начале файла «RIFF».\nПохоже, это WAV с расширением .mid.</div>
+    </div></div>`;
+  }
+
+  /* ── шапка, тулбар, дорожки ── */
+  dirtyBadge() {
+    if (this.edits) return `<span class="badge warn" title="Правки есть только здесь, пока не сохраните">● Не сохранено${this.m ? '' : ' · ' + this.edits + ' ' + plural(this.edits, 'правка', 'правки', 'правок')}</span>`;
+    if (this.savedOnce) return `<span class="badge ok">${ic('check', 's')}Сохранено</span>`;
+    return this.m ? '' : `<span class="badge mut">Без изменений</span>`;
+  }
+  saveLabel() { return { audio: 'Сохранить как новую версию', file: 'Сохранить', local: 'Сохранить на устройство' }[this.o.ctx]; }
+  ctxHtml() {
+    const o = this.o, broken = o.st === 'error' || this.loading;
+    if (o.ctx === 'audio') {
+      const v = this.versions.map(x => `<button class="chip ${x.n === this.curVer ? 'on' : ''} ${x.n === this.newVer ? 'new' : ''}" data-act="ver" data-n="${x.n}" title="${x.k === 'midi' ? 'Ноты (MIDI)' : 'Звук'}">${ic(x.k === 'midi' ? 'notes' : 'wave', 's')}в${x.n} · ${esc(x.t)}${x.k === 'midi' ? '<small>MIDI</small>' : ''}</button>`).join('');
+      if (this.m) return `<div class="vers">${v}</div>`;
+      return `${ic('notes', 'l')}<span class="ttl">${esc(this.fname)}</span><div class="vers">${v}</div>${this.saveActs(broken)}`;
+    }
+    const meta = broken ? '' : `${this.tracks.length} ${plural(this.tracks.length, 'дорожка', 'дорожки', 'дорожек')} · ${this.bars} тактов · ${fmtTime(this.beats * 60 / this.bpm)}`;
+    const dev = o.ctx === 'local' ? (this.ro
+      ? `<span class="badge dng">${ic('wifioff', 's')}Ноутбук-дом не в сети</span>`
+      : `<span class="badge ok">${ic('laptop', 's')}На устройстве · Ноутбук-дом</span>`) : '';
+    if (this.m) return `<span class="meta mono">music/melody.mid</span><span class="grow"></span>${dev}`;
+    return `${ic('file', 'l')}<span class="ttl mono">music/melody.mid</span><span class="meta">${meta}</span>${dev}<span class="grow"></span>${this.saveActs(broken)}`;
+  }
+  saveActs(broken) {
+    const ro = this.ro, dis = broken ? 'disabled' : '';
+    const rbusy = this.render.phase === 'run';
+    return `<div class="acts">${broken ? '' : this.dirtyBadge()}
+      <button class="btn" data-act="render" ${dis || ro || rbusy ? 'disabled' : ''} title="${ro ? 'Устройство не в сети' : 'Сыграть ноты выбранными инструментами и сохранить обычным звуком'}">${ic('wave', 's')}Собрать звук (WAV)</button>
+      <button class="btn" data-act="download" ${dis}>${ic('download', 's')}Скачать .mid</button>
+      ${this.o.ctx === 'file' ? `<button class="btn" data-act="savecopy" ${dis || !this.edits ? 'disabled' : ''}>Сохранить копией</button>` : ''}
+      <button class="btn pri" data-act="save" ${dis || ro || !this.edits ? 'disabled' : ''} title="${ro ? 'Устройство не в сети — правка вернётся, когда оно подключится' : ''}">${ic('save', 's')}${this.saveLabel()}</button></div>`;
+  }
+  tbHtml() {
+    const broken = this.o.st === 'error' || this.loading, d = broken ? 'disabled' : '', ro = this.ro || broken ? 'disabled' : '';
+    return `<button class="ib play" data-act="play" ${d} title="${this.playing ? 'Пауза' : 'Слушать'} (пробел)">${ic(this.playing ? 'pause' : 'play')}</button>
+      <button class="ib" data-act="stop" ${d} title="В начало">${ic('stop')}</button>
+      <button class="ib ${this.loop ? 'on' : ''}" data-act="loop" ${d} title="Повторять отрезок — границы тянутся на линейке">${ic('loop')}</button>
+      <span class="pos" data-pos>${this.posText()}</span>
+      <span class="lb">Темп</span><span class="stepper"><button data-act="bpm" data-d="-4" ${d}>−</button><span>${this.bpm}</span><button data-act="bpm" data-d="4" ${d}>+</button></span>
+      <span title="Громкость прослушивания">${ic('vol', 's')}</span><input type="range" class="vol" min="0" max="100" value="${this.vol}" data-act="vol" ${d}/><span class="lb" data-vol-l style="min-width:30px">${this.vol}%</span>
+      <span class="sep"></span>
+      <span class="seg">${[['select', 'pointer', 'Выбор'], ['pencil', 'pencil', 'Карандаш'], ['erase', 'eraser', 'Ластик']].map(([k, i, t]) => `<button class="${this.tool === k ? 'on' : ''}" data-act="tool" data-t="${k}" ${ro} title="${t}">${ic(i, 's')}${t}</button>`).join('')}</span>
+      <span class="lb">Сетка</span><span class="seg">${GRIDS.map(([g, t]) => `<button class="${this.grid === g ? 'on' : ''}" data-act="grid" data-g="${g}" ${d}>${t}</button>`).join('')}</span>
+      <button class="btn ghost" data-act="quant" ${ro} title="Подвинуть начала нот к ближайшей линии сетки">${ic('magnet', 's')}Выровнять${this.sel.size ? ' выбранные' : ''}</button>
+      <button class="ib" data-act="del" ${ro || !this.sel.size ? 'disabled' : ''} title="Удалить выбранные (Delete)">${ic('trash')}</button>
+      <span class="sep"></span>
+      <button class="ib" data-act="undo" ${ro || !this.undo.length ? 'disabled' : ''} title="Отменить (Ctrl+Z)">${ic('undo')}</button>
+      <button class="ib" data-act="redo" ${ro || !this.redo.length ? 'disabled' : ''} title="Повторить (Ctrl+Shift+Z)">${ic('redo')}</button>
+      <span class="sep"></span>
+      <span class="zg" title="Масштаб по времени">${ic('zin', 's')}<button class="ib" data-act="zx" data-d="-1" ${d}>−</button><button class="ib" data-act="zx" data-d="1" ${d}>+</button></span>
+      <span class="zg" title="Масштаб по высоте">${ic('hplus', 's')}<button class="ib" data-act="zy" data-d="-1" ${d}>−</button><button class="ib" data-act="zy" data-d="1" ${d}>+</button></span>`;
+  }
+  sideHtml() {
+    const broken = this.o.st === 'error' || this.loading;
+    if (broken) return `<div class="sh">Дорожки</div>${this.loading ? '<div style="padding:8px"><div class="skel" style="height:44px;margin-bottom:6px"></div><div class="skel" style="height:44px"></div></div>' : ''}`;
+    const rows = this.tracks.map((t, i) => `<div class="trk ${t.id === this.active ? 'on' : ''} ${this.audible(t) ? '' : 'quiet'}" data-act="track" data-id="${t.id}">
+        <div class="l1"><span class="dot" style="background:${TRACK_COLORS[i]}"></span><span class="nm">${esc(t.name)}</span><span style="font-size:10px;color:var(--c-text-muted)">${t.notes.length}</span></div>
+        <div class="l2"><button class="ichip" data-act="imenu" data-id="${t.id}" ${this.ro ? 'disabled' : ''} title="Инструмент дорожки">${ic(t.drum ? 'sparkle' : 'notes', 's')}<span>${instrName(t.instr)}</span>${ic('chev', 's')}</button>
+          ${t.drum ? '<span class="badge info" title="Ударные всегда играют на отдельном 10-м канале: каждая клавиша — свой барабан">канал 10</span>' : ''}
+          <span style="flex:1"></span>
+          <button class="ms m ${t.mute ? 'on' : ''}" data-act="mute" data-id="${t.id}" title="Заглушить">M</button>
+          <button class="ms s ${t.solo ? 'on' : ''}" data-act="solo" data-id="${t.id}" title="Только эта">S</button></div>
+      </div>${this.menu === t.id ? this.instrMenu(t) : ''}`).join('');
+    const foot = this.o.src === 'rec' && this.o.st !== 'empty'
+      ? 'Ноты сняты с записи — это всегда одна дорожка. Несколько дорожек бывают у загруженных .mid.'
+      : 'Ноты остальных дорожек видны бледно. Править можно выбранную.';
+    return `<div class="sh">Дорожки · ${this.tracks.length}</div>${rows}<div class="foot">${foot}</div>`;
+  }
+  instrMenu(t) {
+    return `<div class="menu" style="left:10px;right:10px;margin-top:-2px;position:relative">
+      <div class="mh">Чем играть «${esc(t.name)}»</div>
+      ${INSTR.map(x => `<button class="mi ${t.instr === x.k ? 'on' : ''}" data-act="instr" data-id="${t.id}" data-k="${x.k}">${x.n}${t.instr === x.k ? `<span class="ck">${ic('check', 's')}</span>` : ''}</button>`).join('')}
+      <div class="sep"></div>
+      <button class="mi ${t.drum ? 'on' : ''}" data-act="instr" data-id="${t.id}" data-k="drums">Ударные <span class="badge info">канал 10</span>${t.drum ? `<span class="ck">${ic('check', 's')}</span>` : ''}</button>
+      <div class="mh">Ударные идут отдельным каналом: каждая клавиша — свой барабан, высота нот не важна.</div></div>`;
+  }
+  ntcHtml() {
+    const out = [];
+    if (this.ro) out.push(`<div class="notice warn">${ic('wifioff')}<div class="tx"><b>Ноутбук-дом не в сети — правка недоступна</b>Слушать и смотреть можно: показываем копию, открытую ${this.m ? 'последней' : 'последней, сегодня в 10:42'}. Когда устройство подключится, можно будет править и сохранять.</div></div>`);
+    const r = this.render;
+    if (r.phase === 'run') out.push(`<div class="notice info">${ic('wave')}<div class="tx"><b>Собираем звук из нот… ${Math.round(r.pct)}%</b>${this.edits ? 'В звук попадут и несохранённые правки. ' : ''}Можно продолжать слушать и править.<div class="pbar"><i style="width:${r.pct}%"></i></div></div><button class="btn xs ghost" data-act="rcancel">Отменить</button></div>`);
+    if (r.phase === 'done') {
+      const where = { audio: `Новая версия <b>в${r.ver} · Звук из нот</b> появилась рядом с остальными.`, file: 'Файл <span class="mono">music/melody.wav</span> сохранён в проект.', local: 'Файл <span class="mono">music/melody.wav</span> сохранён на устройство «Ноутбук-дом».' }[this.o.ctx];
+      out.push(`<div class="notice ok">${ic('check')}<div class="tx"><b>Звук готов</b>${where}</div><button class="btn xs" data-act="toast" data-msg="${this.o.ctx === 'audio' ? 'Откроется волна новой версии' : 'Откроется просмотр melody.wav'}">Открыть</button><button class="ib" data-act="rclose" title="Закрыть">${ic('x', 's')}</button></div>`);
+    }
+    if (r.phase === 'fail') out.push(`<div class="notice dng">${ic('alert')}<div class="tx"><b>Не получилось собрать звук</b>Сервер не справился с дорожкой «${esc(this.tracks[this.tracks.length - 1].name)}»: инструмент не загрузился. Ноты не пострадали.</div><button class="btn xs" data-act="render">Повторить</button><button class="ib" data-act="rclose" title="Закрыть">${ic('x', 's')}</button></div>`);
+    return out.join('');
+  }
+  posText() {
+    const b = Math.floor(this.pos / 4) + 1, q = Math.floor(this.pos % 4) + 1;
+    return `такт ${b}.${q} · ${fmtTime(this.pos * 60 / this.bpm)}`;
+  }
+  paintChrome() {
+    this.set('.me-ctx', this.ctxHtml());
+    this.set('.me-ntc', this.ntcHtml());
+    if (this.m) { this.paintMobileChrome(); return; }
+    this.set('.me-tb', this.tbHtml());
+    this.set('.me-side', this.sideHtml());
+    this.paintToast();
+  }
+
+  /* ── мобильный хром ── */
+  paintMobileChrome() {
+    const broken = this.o.st === 'error' || this.loading, t = this.trk, i = this.tracks.indexOf(t);
+    this.set('.me-top', `<button class="ib" data-act="toast" data-msg="Назад к ${this.o.ctx === 'audio' ? 'ленте' : 'файлам'}">${ic('back', 'l')}</button>
+      <div class="t"><b>${esc(this.fname)}</b><span>${broken ? '' : `${this.tracks.length} ${plural(this.tracks.length, 'дорожка', 'дорожки', 'дорожек')} · ${this.bars} тактов`}</span></div>
+      ${broken ? '' : this.dirtyBadge()}
+      ${this.edits && !this.ro ? `<button class="btn pri xs" data-act="save">${this.o.ctx === 'audio' ? 'Сохранить' : 'Сохранить'}</button>` : ''}
+      <button class="ib" data-act="sheet" data-s="more" ${broken ? 'disabled' : ''}>${ic('more', 'l')}</button>`);
+    if (broken) { ['.trow-s', '.trans-s', '.bt-s', '.vel-s', '.gest-s', '.sheet-s'].forEach(s => this.set(s, '')); this.paintToast(); return; }
+    this.set('.trow-s', `<div class="trow"><button class="tsel" data-act="sheet" data-s="tracks"><span class="dot" style="background:${TRACK_COLORS[i]}"></span><span class="v"><b>${esc(t.name)}</b> · ${instrName(t.instr)}</span>${t.drum ? '<span class="badge info">к. 10</span>' : ''}${ic('chev', 's')}</button>
+      <button class="ms m ${t.mute ? 'on' : ''}" data-act="mute" data-id="${t.id}">M</button><button class="ms s ${t.solo ? 'on' : ''}" data-act="solo" data-id="${t.id}">S</button></div>`);
+    this.set('.trans-s', `<div class="trans"><button class="ib" data-act="stop">${ic('stop', 'l')}</button><button class="ib play" data-act="play">${ic(this.playing ? 'pause' : 'play', 'l')}</button><button class="ib ${this.loop ? 'on' : ''}" data-act="loop">${ic('loop', 'l')}</button>
+      <span class="pos" data-pos>${this.posText()}</span><span class="stepper"><button data-act="bpm" data-d="-4">−</button><span>${this.bpm}</span><button data-act="bpm" data-d="4">+</button></span></div>`);
+    const ro = this.ro ? 'disabled' : '';
+    this.set('.bt-s', `<div class="btbar">
+      ${[['select', 'pointer', 'Выбор'], ['pencil', 'pencil', 'Карандаш'], ['erase', 'eraser', 'Ластик']].map(([k, ii, tt]) => `<button class="${this.tool === k ? 'on' : ''}" data-act="tool" data-t="${k}" ${ro}>${ic(ii, 'l')}${tt}</button>`).join('')}
+      <button data-act="undo" ${ro || !this.undo.length ? 'disabled' : ''}>${ic('undo', 'l')}Отменить</button>
+      <button data-act="redo" ${ro || !this.redo.length ? 'disabled' : ''}>${ic('redo', 'l')}Вернуть</button>
+      <button data-act="sheet" data-s="more">${ic('sliders', 'l')}Ещё</button></div>`);
+    this.set('.gest-s', this.gest ? `<div class="gest"><b>${ic('gesture', 's')} Как управлять пальцами</b><ul>
+      <li>Двумя пальцами — приблизить и отдалить</li><li>Одним пальцем по пустому месту — прокрутка</li>
+      <li>Долгое нажатие на ноту — выбрать, потом тянуть</li><li>Тянуть правый край ноты — длина</li></ul>
+      <button class="btn xs" data-act="gest">Понятно</button></div>` : '');
+    this.paintSheet(); this.paintToast();
+  }
+  paintSheet() {
+    if (!this.m) return;
+    const s = this.sheet;
+    if (!s) { this.set('.sheet-s', ''); return; }
+    let h = '', b = '';
+    if (s === 'tracks') {
+      h = `Дорожки · ${this.tracks.length}`;
+      b = this.tracks.map((t, i) => `<div class="srow pick ${t.id === this.active ? 'on' : ''}" data-act="track" data-id="${t.id}">
+          <span class="dot" style="background:${TRACK_COLORS[i]}"></span><span class="nm">${esc(t.name)}<small>${t.notes.length} нот</small></span>
+          <button class="ichip" data-act="sheet" data-s="instr:${t.id}" ${this.ro ? 'disabled' : ''}><span>${instrName(t.instr)}</span>${ic('chev', 's')}</button>
+          ${t.drum ? '<span class="badge info">к. 10</span>' : ''}
+          <button class="ms m ${t.mute ? 'on' : ''}" data-act="mute" data-id="${t.id}">M</button><button class="ms s ${t.solo ? 'on' : ''}" data-act="solo" data-id="${t.id}">S</button></div>`).join('')
+        + (this.o.src === 'rec' ? `<div class="hint" style="font-size:var(--fs-xs);color:var(--c-text-muted);margin-top:8px">Ноты сняты с записи — это всегда одна дорожка.</div>` : '');
+    } else if (s.startsWith('instr:')) {
+      const t = this.tracks.find(x => x.id === s.slice(6));
+      h = `Инструмент · ${esc(t.name)}`;
+      b = INSTR.map(x => `<div class="srow pick ${t.instr === x.k ? 'on' : ''}" data-act="instr" data-id="${t.id}" data-k="${x.k}"><span class="nm">${x.n}</span>${t.instr === x.k ? ic('check') : ''}</div>`).join('')
+        + `<div class="lbl2">Отдельный канал</div><div class="srow pick ${t.drum ? 'on' : ''}" data-act="instr" data-id="${t.id}" data-k="drums"><span class="nm">Ударные <span class="badge info">канал 10</span><small>Каждая клавиша — свой барабан</small></span>${t.drum ? ic('check') : ''}</div>`;
+    } else if (s === 'more') {
+      const ro = this.ro ? 'disabled' : '', rb = this.render.phase === 'run';
+      h = 'Ещё';
+      b = `<div class="lbl2">Сетка</div><div class="seg full">${GRIDS.map(([g, t]) => `<button class="${this.grid === g ? 'on' : ''}" data-act="grid" data-g="${g}">${t}</button>`).join('')}</div>
+        <div class="actcol"><button class="btn lg" data-act="quant" ${ro}>${ic('magnet', 's')}Выровнять ${this.sel.size ? 'выбранные' : 'все'} ноты по сетке</button>
+        <button class="btn lg" data-act="del" ${ro || !this.sel.size ? 'disabled' : ''}>${ic('trash', 's')}Удалить выбранные${this.sel.size ? ' · ' + this.sel.size : ''}</button></div>
+        <div class="lbl2">Масштаб</div><div style="display:flex;gap:6px;align-items:center">По времени <span class="stepper"><button data-act="zx" data-d="-1">−</button><span>${this.zx + 1}</span><button data-act="zx" data-d="1">+</button></span>
+        <span style="flex:1"></span>По высоте <span class="stepper"><button data-act="zy" data-d="-1">−</button><span>${this.zy + 1}</span><button data-act="zy" data-d="1">+</button></span></div>
+        <div class="lbl2">Звук</div><div style="display:flex;gap:8px;align-items:center">${ic('vol')}<input type="range" class="vol" style="flex:1" min="0" max="100" value="${this.vol}" data-act="vol"/><span data-vol-l>${this.vol}%</span></div>
+        <div class="srow pick" data-act="velt"><span class="nm">Панель силы нот<small>Столбики под сеткой: тяните вверх и вниз</small></span><span class="badge ${this.showVel ? 'acc' : 'mut'}">${this.showVel ? 'показана' : 'скрыта'}</span></div>
+        <div class="actcol"><button class="btn pri lg" data-act="save" ${ro || !this.edits ? 'disabled' : ''}>${ic('save', 's')}${this.saveLabel()}</button>
+        ${this.o.ctx === 'file' ? `<button class="btn lg" data-act="savecopy" ${!this.edits ? 'disabled' : ''}>Сохранить копией</button>` : ''}
+        <button class="btn lg" data-act="render" ${ro || rb ? 'disabled' : ''}>${ic('wave', 's')}Собрать звук (WAV)</button>
+        <button class="btn lg" data-act="download">${ic('download', 's')}Скачать .mid</button></div>`;
+    }
+    this.set('.sheet-s', `<div class="sheet-ov" data-act="sheetclose"></div><div class="sheet"><div class="grab"></div><div class="sh-h">${h}<span style="flex:1"></span><button class="ib" data-act="sheetclose">${ic('x')}</button></div><div class="sh-b">${b}</div></div>`);
+  }
+
+  /* ── piano roll ── */
+  paintRoll() {
+    const scr = this.q('.scr'); if (!scr) return;
+    const keep = { l: scr.scrollLeft / (this._ppbOld || this.ppb), t: scr.scrollTop / (this._rhOld || this.rh), init: !this._built };
+    const ppb = this.ppb, rh = this.rh, W = this.beats * ppb, rows = HI - LO + 1, H = rows * rh, kw = this.kw, t = this.trk;
+    let keys = '', rowsBg = '', lines = '', bars = '';
+    for (let p = HI; p >= LO; p--) {
+      const blk = isBlack(p), dn = t.drum && DRUM_NAMES[p];
+      const cls = ['key', blk ? 'blk' : '', p % 12 === 0 ? 'c' : '', t.drum ? 'drum' : '', dn ? 'named' : ''].join(' ');
+      const lab = t.drum ? (dn || '') : (p % 12 === 0 || rh >= 14 && !blk ? pname(p) : '');
+      keys += `<div class="${cls}" data-k="${p}" style="height:${rh}px">${lab}</div>`;
+      if (blk && !t.drum) rowsBg += `<div class="rowb" style="top:${(HI - p) * rh}px;height:${rh}px"></div>`;
+      if (p % 12 === 0) rowsBg += `<div class="ol" style="top:${(HI - p + 1) * rh - 1}px"></div>`;
+    }
+    const sub = ppb * this.grid >= 6 ? this.grid : (ppb >= 6 ? 1 : 4);
+    for (let b = 0; b <= this.beats; b += sub) {
+      const cls = b % 4 === 0 ? 'bar' : (b % 1 === 0 ? 'beat' : '');
+      if (!cls && ppb * sub < 5) continue;
+      lines += `<div class="vl ${cls}" style="left:${b * ppb}px"></div>`;
+    }
+    const every = ppb * 4 < 40 ? (ppb * 4 < 20 ? 8 : 4) : 1;
+    for (let b = 0; b < this.bars; b += every) bars += `<div class="bn" style="left:${b * 4 * ppb}px">${b + 1}</div>`;
+    scr.innerHTML = `<div class="rul" style="width:${W + kw}px"><div class="corner" style="width:${kw}px">${t.drum ? 'удары' : 'ноты'}</div>
+        <div class="rt" data-ruler style="width:${W}px">${bars}<div class="lp ${this.loop ? '' : 'off'}" data-lp><span class="h a" data-lh="a"></span><span class="h b" data-lh="b"></span></div><div class="phr" data-phr></div></div></div>
+      <div class="rbody"><div class="keys" style="width:${kw}px">${keys}</div>
+        <div class="grid t-${this.tool} ${this.ro ? 'ro' : ''}" data-grid style="width:${W}px;height:${H}px">${rowsBg}${lines}<div class="lpz" data-lpz></div><div data-notes></div><div class="ph" data-ph></div></div></div>`;
+    this.grid$ = scr.querySelector('[data-grid]');
+    this.keyEls = {}; scr.querySelectorAll('.key').forEach(k => this.keyEls[k.dataset.k] = k);
+    this.paintNotes(); this.paintLoop(); this.paintPlayhead();
+    if (keep.init) { scr.scrollTop = Math.max(0, (HI - (t.drum ? 52 : 74)) * rh); scr.scrollLeft = 0; this._built = true; }
+    else { scr.scrollLeft = keep.l * ppb; scr.scrollTop = keep.t * rh; }
+    this._ppbOld = ppb; this._rhOld = rh;
+    if (!scr._wired) {
+      scr._wired = true;
+      scr.addEventListener('scroll', () => this.syncScroll());
+      scr.addEventListener('wheel', e => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); this.zoom('zx', e.deltaY < 0 ? 1 : -1); } }, { passive: false });
+      scr.addEventListener('pointerdown', e => this.onPointer(e));
+    }
+    this.paintMini(); this.paintOverlay();
+  }
+  noteHtml(n, t, ti, active) {
+    const ppb = this.ppb, rh = this.rh, a = 0.3 + 0.7 * n.v / 127;
+    if (n.p < LO || n.p > HI) return '';
+    const st = `left:${n.s * ppb}px;top:${(HI - n.p) * rh + 1}px;width:${Math.max(3, n.l * ppb - 1)}px;height:${rh - 2}px;background:${TRACK_COLORS[ti]};opacity:${active ? a : 0.16}`;
+    return `<div class="note ${active ? '' : 'ghost'} ${this.sel.has(n.id) && active ? 'sel' : ''}" data-id="${n.id}" style="${st}" title="${active ? `${t.drum ? (DRUM_NAMES[n.p] || pname(n.p)) : pname(n.p)} · сила ${n.v}` : ''}">${active && !this.ro ? '<span class="rz"></span>' : ''}</div>`;
+  }
+  paintNotes() {
+    const box = this.q('[data-notes]'); if (!box) return;
+    let h = '';
+    this.tracks.forEach((t, i) => { if (t.id !== this.active) t.notes.forEach(n => h += this.noteHtml(n, t, i, false)); });
+    const ai = this.tracks.indexOf(this.trk);
+    this.trk.notes.forEach(n => h += this.noteHtml(n, this.trk, ai, true));
+    box.innerHTML = h;
+    this.noteEls = {}; box.querySelectorAll('.note').forEach(el => this.noteEls[el.dataset.id] = el);
+    this.hitPrev = new Set();
+    this.paintOverlay();
+  }
+  paintOverlay() {
+    const s = this.q('.roll-ov-s'); if (!s) return;
+    const empty = this.tracks.every(t => !t.notes.length);
+    s.innerHTML = empty ? `<div class="roll-ov"><div class="empty" style="padding:20px 24px">
+      <div class="eic">${ic('notes', 'xl')}</div><h3>Здесь пока нет нот</h3>
+      <p>Нарисуйте первую карандашом прямо на сетке${this.o.ctx === 'audio' ? ' или снимите ноты с записи: «Звук → ноты» в панели звука' : ''}.</p>
+      <div class="acts"><button class="btn pri" data-act="tool" data-t="pencil" ${this.ro ? 'disabled' : ''}>${ic('pencil', 's')}Взять карандаш</button></div></div></div>` : '';
+  }
+  paintLoop() {
+    const lp = this.q('[data-lp]'), z = this.q('[data-lpz]'); if (!lp) return;
+    const l = this.la * this.ppb, w = (this.lb - this.la) * this.ppb;
+    lp.style.left = l + 'px'; lp.style.width = w + 'px'; lp.classList.toggle('off', !this.loop);
+    lp.title = this.loop ? `Повтор: такты ${this.la / 4 + 1}–${this.lb / 4}` : 'Повтор выключен';
+    z.style.left = l + 'px'; z.style.width = (this.loop ? w : 0) + 'px';
+  }
+  paintPlayhead() {
+    const x = this.pos * this.ppb;
+    const ph = this.q('[data-ph]'), pr = this.q('[data-phr]');
+    if (ph) ph.style.left = x + 'px'; if (pr) pr.style.left = x + 'px';
+    const pt = this.root.querySelectorAll('[data-pos]'); pt.forEach(e => e.textContent = this.posText());
+    const mp = this.q('.mini .ph'); if (mp) mp.style.left = (this.pos / this.beats * 100) + '%';
+  }
+  paintMini() {
+    const s = this.q('.mini-s'); if (!s) return;
+    if (this.bars <= 32) { s.innerHTML = ''; return; }
+    const dens = new Array(this.bars).fill(0);
+    this.tracks.forEach(t => t.notes.forEach(n => dens[Math.min(this.bars - 1, Math.floor(n.s / 4))]++));
+    const mx = Math.max(...dens, 1);
+    s.innerHTML = `<div class="mini" data-mini title="Обзор всего трека — нажмите, чтобы перейти">${dens.map((d, i) => `<i style="left:${i / this.bars * 100}%;height:${3 + d / mx * 18}px"></i>`).join('')}<div class="vp" data-vp></div><div class="ph"></div></div>`;
+    this.syncScroll();
+  }
+  syncScroll() {
+    const scr = this.q('.scr'); if (!scr) return;
+    const vin = this.q('.vin'); if (vin) vin.style.transform = `translateX(${-scr.scrollLeft}px)`;
+    const vp = this.q('[data-vp]');
+    if (vp) { const W = this.beats * this.ppb; vp.style.left = (scr.scrollLeft / W * 100) + '%'; vp.style.width = Math.max(1, (scr.clientWidth - this.kw) / W * 100) + '%'; }
+  }
+
+  /* ── панель силы ── */
+  paintVel() {
+    const s = this.q('.vel-s'); if (!s) return;
+    if (!this.showVel || this.o.st === 'error' || this.loading) { s.innerHTML = ''; return; }
+    const t = this.trk, i = this.tracks.indexOf(t), ppb = this.ppb, H = this.m ? 44 : 60;
+    const bars = t.notes.map(n => `<div class="vb ${this.sel.has(n.id) ? 'sel' : ''}" data-vid="${n.id}" style="left:${n.s * ppb + 1}px;height:${Math.max(2, n.v / 127 * H)}px;background:${TRACK_COLORS[i]};opacity:${0.4 + 0.6 * n.v / 127}" title="Сила ${n.v}"></div>`).join('');
+    s.innerHTML = `<div class="vel"><div class="vlab" style="width:${this.m ? this.kw : 214 + this.kw}px;text-align:${this.m ? 'left' : 'right'}">Сила<br>нот</div><div class="vwin"><div class="vin" style="width:${this.beats * ppb}px">${bars}</div><span class="vtip" data-vtip>${this.ro ? 'только просмотр' : 'тяните столбик'}</span></div></div>`;
+    s.querySelector('.vwin').addEventListener('pointerdown', e => this.onVel(e));
+    this.syncScroll();
+  }
+
+  /* ── история правок ── */
+  snap() { return JSON.stringify(this.tracks.map(t => ({ instr: t.instr, drum: t.drum, notes: t.notes }))); }
+  restore(j) { JSON.parse(j).forEach((x, i) => Object.assign(this.tracks[i], x)); }
+  commit(before) { this.undo.push(before); this.redo = []; this.edits++; }
+  doUndo() { if (!this.undo.length || this.ro) return; this.redo.push(this.snap()); this.restore(this.undo.pop()); this.edits = Math.max(0, this.edits - 1); this.sel.clear(); this.refresh(true); this.toast('Отменено'); }
+  doRedo() { if (!this.redo.length || this.ro) return; this.undo.push(this.snap()); this.restore(this.redo.pop()); this.edits++; this.sel.clear(); this.refresh(true); this.toast('Возвращено'); }
+  refresh(roll) { if (roll) this.paintRoll(); else this.paintNotes(); this.paintVel(); this.paintChrome(); }
+
+  /* ── указатель на сетке ── */
+  hit(e) {
+    const r = this.grid$.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top, beat: (e.clientX - r.left) / this.ppb, p: HI - Math.floor((e.clientY - r.top) / this.rh) };
+  }
+  onPointer(e) {
+    if (e.button !== 0) return;
+    const lh = e.target.closest('[data-lh]'), rul = e.target.closest('[data-ruler]');
+    if (lh) return this.dragLoop(e, lh.dataset.lh);
+    if (rul) { const r = rul.getBoundingClientRect(); this.pos = Math.max(0, Math.min(this.beats, (e.clientX - r.left) / this.ppb)); this.paintPlayhead(); return; }
+    if (!e.target.closest('[data-grid]')) return;
+    this.gest = false; this.set('.gest-s', '');
+    const nEl = e.target.closest('.note:not(.ghost)'), t = this.trk;
+    if (this.ro) { if (nEl) { this.sel = new Set([+nEl.dataset.id]); this.paintNotes(); this.paintVel(); } this.toast('Ноутбук-дом не в сети — сейчас можно только слушать и смотреть'); return; }
+    const h = this.hit(e);
+    if (this.tool === 'erase') {
+      if (!nEl) return;
+      const before = this.snap(); t.notes = t.notes.filter(n => n.id !== +nEl.dataset.id); this.sel.delete(+nEl.dataset.id); this.commit(before); this.refresh(); return;
+    }
+    if (!nEl) {
+      if (this.tool !== 'pencil') {
+        if (this.sel.size) { this.sel.clear(); this.paintNotes(); this.paintVel(); this.paintChrome(); }
+        return this.rubber(e, h);
+      }
+      if (h.p < LO || h.p > HI) return;
+      const before = this.snap();
+      const n = N(h.p, Math.floor(h.beat / this.grid) * this.grid, t.drum ? 0.25 : this.grid, 96);
+      t.notes.push(n); this.sel = new Set([n.id]); this.commit(before); this.refresh();
+      return this.drag(e, n, 'resize', h, null, true);
+    }
+    const id = +nEl.dataset.id, n = t.notes.find(x => x.id === id);
+    if (e.shiftKey) { this.sel.has(id) ? this.sel.delete(id) : this.sel.add(id); this.paintNotes(); this.paintVel(); this.paintChrome(); return; }
+    if (!this.sel.has(id)) { this.sel = new Set([id]); this.paintNotes(); this.paintVel(); this.paintChrome(); }
+    const mode = e.target.classList.contains('rz') ? 'resize' : 'move';
+    this.drag(e, n, mode, h, this.snap(), false);
+  }
+  drag(e, n, mode, h0, before, fresh) {
+    const t = this.trk, sel = t.notes.filter(x => this.sel.has(x.id)), orig = sel.map(x => ({ x, s: x.s, p: x.p, l: x.l }));
+    let moved = false;
+    const mv = ev => {
+      const h = this.hit(ev);
+      if (mode === 'move') {
+        const db = Math.round((h.beat - h0.beat) / this.grid) * this.grid, dp = h.p - h0.p;
+        orig.forEach(o => { o.x.s = Math.max(0, Math.min(this.beats - o.l, o.s + db)); o.x.p = Math.max(LO, Math.min(HI, o.p + dp)); });
+        moved = moved || db !== 0 || dp !== 0;
+      } else {
+        const end = Math.max(n.s + this.grid, Math.ceil(h.beat / this.grid) * this.grid);
+        const dl = end - n.s - orig.find(o => o.x === n).l;
+        orig.forEach(o => o.x.l = Math.max(this.grid, o.l + dl));
+        moved = moved || dl !== 0;
+      }
+      this.paintNotes();
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
+      if (moved && !fresh) this.commit(before);
+      if (moved || fresh) { this.paintVel(); this.paintChrome(); }
+    };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  }
+  rubber(e, h0) {
+    const box = document.createElement('div');
+    box.style.cssText = 'position:absolute;border:1px dashed var(--c-accent);background:var(--c-accent-light);opacity:.6;pointer-events:none;z-index:3';
+    this.grid$.appendChild(box);
+    const mv = ev => {
+      const h = this.hit(ev), x = Math.min(h.x, h0.x), y = Math.min(h.y, h0.y), w = Math.abs(h.x - h0.x), hh = Math.abs(h.y - h0.y);
+      Object.assign(box.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: hh + 'px' });
+      const b0 = x / this.ppb, b1 = (x + w) / this.ppb, p1 = HI - Math.floor(y / this.rh), p0 = HI - Math.floor((y + hh) / this.rh);
+      this.sel = new Set(this.trk.notes.filter(n => n.s < b1 && n.s + n.l > b0 && n.p >= p0 && n.p <= p1).map(n => n.id));
+      Object.values(this.noteEls).forEach(el => el.classList.toggle('sel', this.sel.has(+el.dataset.id)));
+    };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); box.remove(); this.paintVel(); this.paintChrome(); };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  }
+  dragLoop(e, which) {
+    e.stopPropagation();
+    const r = this.q('[data-ruler]').getBoundingClientRect();
+    const mv = ev => {
+      const b = Math.round((ev.clientX - r.left) / this.ppb / 4) * 4;
+      if (which === 'a') this.la = Math.max(0, Math.min(this.lb - 4, b)); else this.lb = Math.min(this.beats, Math.max(this.la + 4, b));
+      this.loop = true; this.paintLoop();
+    };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); this.paintChrome(); };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  }
+  onVel(e) {
+    const b = e.target.closest('.vb'); if (!b) return;
+    if (this.ro) { this.toast('Ноутбук-дом не в сети — сейчас можно только слушать и смотреть'); return; }
+    const id = +b.dataset.vid, t = this.trk, n = t.notes.find(x => x.id === id), before = this.snap();
+    const targets = this.sel.has(id) ? t.notes.filter(x => this.sel.has(x.id)) : [n];
+    const win = b.parentElement.getBoundingClientRect(), H = this.m ? 44 : 60;
+    let moved = false;
+    const mv = ev => {
+      const v = Math.max(1, Math.min(127, Math.round((win.bottom - 4 - ev.clientY) / H * 127)));
+      targets.forEach(x => x.v = v); moved = true;
+      this.q('.vel-s').querySelectorAll('.vb').forEach(el => { const x = t.notes.find(q => q.id === +el.dataset.vid); el.style.height = Math.max(2, x.v / 127 * H) + 'px'; el.style.opacity = 0.4 + 0.6 * x.v / 127; });
+      const tip = this.q('[data-vtip]'); if (tip) tip.textContent = `сила ${v}${targets.length > 1 ? ' · ' + targets.length + ' нот' : ''}`;
+      this.paintNotes();
+    };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); if (moved) { this.commit(before); this.paintChrome(); } };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  }
+
+  /* ── проигрывание (имитация) ── */
+  togglePlay() {
+    this.playing = !this.playing;
+    if (this.playing) { if (this.pos >= this.beats) this.pos = 0; this.last = performance.now(); requestAnimationFrame(ts => this.tick(ts)); }
+    else this.clearHits();
+    this.paintChrome();
+  }
+  tick(ts) {
+    if (!this.playing || this.dead) return;
+    const dt = (ts - this.last) / 1000; this.last = ts;
+    this.pos += dt * this.bpm / 60;
+    if (this.loop && this.pos >= this.lb) this.pos = this.la;
+    if (this.pos >= this.beats) { this.pos = this.beats; this.playing = false; this.clearHits(); this.paintChrome(); this.paintPlayhead(); return; }
+    this.paintPlayhead(); this.lightHits(); this.follow();
+    requestAnimationFrame(t2 => this.tick(t2));
+  }
+  follow() {
+    const scr = this.q('.scr'); if (!scr) return;
+    const x = this.pos * this.ppb, vw = scr.clientWidth - this.kw;
+    if (x < scr.scrollLeft || x > scr.scrollLeft + vw - 20) scr.scrollLeft = Math.max(0, x - 40);
+  }
+  lightHits() {
+    const now = new Set(), keys = new Set();
+    for (const t of this.tracks) {
+      if (!this.audible(t)) continue;
+      for (const n of t.notes) if (n.s <= this.pos && this.pos < n.s + n.l) { now.add(String(n.id)); if (t.id === this.active) keys.add(String(n.p)); }
+    }
+    this.hitPrev.forEach(id => { if (!now.has(id) && this.noteEls[id]) this.noteEls[id].classList.remove('hit'); });
+    now.forEach(id => { if (this.noteEls[id]) this.noteEls[id].classList.add('hit'); });
+    this.hitPrev = now;
+    (this.keyPrev || new Set()).forEach(p => { if (!keys.has(p) && this.keyEls[p]) this.keyEls[p].classList.remove('hit'); });
+    keys.forEach(p => this.keyEls[p] && this.keyEls[p].classList.add('hit'));
+    this.keyPrev = keys;
+  }
+  clearHits() { this.root.querySelectorAll('.hit').forEach(el => el.classList.remove('hit')); this.hitPrev = new Set(); this.keyPrev = new Set(); }
+
+  /* ── действия ── */
+  zoom(k, d) {
+    const arr = k === 'zx' ? PPB : ROWH, v = Math.max(0, Math.min(arr.length - 1, this[k] + d));
+    if (v === this[k]) return; this[k] = v; this.paintRoll(); this.paintVel(); this.paintChrome();
+  }
+  toast(msg, act) { this.toastMsg = { msg, act }; this.paintToast(); clearTimeout(this.tt); this.tt = setTimeout(() => { this.toastMsg = null; this.paintToast(); }, 2800); }
+  paintToast() { this.set('.toast-s', this.toastMsg ? `<div class="toast">${this.toastMsg.msg}${this.toastMsg.act ? `<button data-act="toast" data-msg="${esc(this.toastMsg.act[1])}">${this.toastMsg.act[0]}</button>` : ''}</div>` : ''); }
+  save(copy) {
+    if (this.ro || !this.edits) return;
+    const o = this.o;
+    if (o.ctx === 'audio') {
+      const n = Math.max(...this.versions.map(v => v.n)) + 1;
+      this.versions.push({ n, t: 'Ноты, правка', k: 'midi' }); this.curVer = n; this.newVer = n;
+      this.toast(`Сохранено как версия в${n}`, ['Скачать .mid', `Скачан файл melody-v${n}.mid`]);
+    } else if (o.ctx === 'local') {
+      this.toast('Сохранено на устройство «Ноутбук-дом»: music/melody.mid');
+    } else if (copy) {
+      this.copyN++; this.toast(`Сохранено копией: music/melody (${this.copyN}).mid`);
+    } else this.toast('Сохранено: music/melody.mid');
+    this.edits = 0; this.undo = []; this.redo = []; this.savedOnce = true; this.sheet = null;
+    this.paintChrome();
+  }
+  startRender() {
+    if (this.ro) return;
+    clearInterval(this.ri);
+    this.render = { phase: 'run', pct: 0 }; this.sheet = null; this.paintChrome();
+    const fail = this.o.rendFail;
+    this.ri = setInterval(() => {
+      if (this.dead) return clearInterval(this.ri);
+      this.render.pct += 7 + Math.random() * 9;
+      if (fail && this.render.pct > 62) { clearInterval(this.ri); this.render = { phase: 'fail' }; this.paintChrome(); return; }
+      if (this.render.pct >= 100) {
+        clearInterval(this.ri);
+        let ver = 0;
+        if (this.o.ctx === 'audio') { ver = Math.max(...this.versions.map(v => v.n)) + 1; this.versions.push({ n: ver, t: 'Звук из нот', k: 'snd' }); this.newVer = ver; }
+        this.render = { phase: 'done', ver }; this.paintChrome(); return;
+      }
+      this.paintChrome();
+    }, 260);
+  }
+  onClick(e) {
+    const el = e.target.closest('[data-act]'); if (!el || el.disabled) return;
+    const a = el.dataset.act, t = this.trk;
+    if (a !== 'imenu' && a !== 'instr' && this.menu && !el.closest('.menu')) this.menu = null;
+    switch (a) {
+      case 'play': this.togglePlay(); break;
+      case 'stop': this.playing = false; this.clearHits(); this.pos = this.loop ? this.la : 0; this.paintPlayhead(); this.paintChrome(); { const s = this.q('.scr'); if (s) s.scrollLeft = this.pos * this.ppb; } break;
+      case 'loop': this.loop = !this.loop; this.paintLoop(); this.paintChrome(); if (this.loop) this.toast(`Повтор тактов ${this.la / 4 + 1}–${this.lb / 4}. Границы тянутся на линейке`); break;
+      case 'bpm': this.bpm = Math.max(40, Math.min(220, this.bpm + +el.dataset.d)); this.paintChrome(); break;
+      case 'tool': this.tool = el.dataset.t; this.sheet = null; this.paintChrome(); { const g = this.q('[data-grid]'); if (g) g.className = `grid t-${this.tool}`; } break;
+      case 'grid': this.grid = +el.dataset.g; this.paintRoll(); this.paintChrome(); break;
+      case 'quant': {
+        const ns = (this.sel.size ? t.notes.filter(n => this.sel.has(n.id)) : t.notes);
+        if (!ns.length) break;
+        const before = this.snap(); let c = 0;
+        ns.forEach(n => { const s = Math.round(n.s / this.grid) * this.grid; if (s !== n.s) { n.s = s; c++; } });
+        if (c) { this.commit(before); this.refresh(); this.toast(`Выровнено по сетке ${GRIDS.find(g => g[0] === this.grid)[1]}: ${c} ${plural(c, 'нота', 'ноты', 'нот')}`); }
+        else { this.sheet = null; this.paintChrome(); this.toast('Все ноты уже стоят на сетке'); }
+        break;
+      }
+      case 'del': if (!this.sel.size) break; { const before = this.snap(), c = this.sel.size; t.notes = t.notes.filter(n => !this.sel.has(n.id)); this.sel.clear(); this.commit(before); this.sheet = null; this.refresh(); this.toast(`Удалено: ${c}`, ['Отменить', 'Отменено']); } break;
+      case 'undo': this.doUndo(); break;
+      case 'redo': this.doRedo(); break;
+      case 'zx': case 'zy': this.zoom(a, +el.dataset.d); break;
+      case 'track': if (e.target.closest('button') && e.target.closest('button') !== el) break; this.active = el.dataset.id; this.sel.clear(); this.sheet = null; this.paintRoll(); this.paintVel(); this.paintChrome(); break;
+      case 'mute': case 'solo': { const x = this.tracks.find(q => q.id === el.dataset.id); x[a] = !x[a]; this.paintChrome(); } break;
+      case 'imenu': this.menu = this.menu === el.dataset.id ? null : el.dataset.id; this.paintChrome(); break;
+      case 'instr': {
+        const x = this.tracks.find(q => q.id === el.dataset.id), k = el.dataset.k;
+        this.menu = null; if (this.sheet && this.sheet.startsWith('instr:')) this.sheet = 'tracks';
+        if (x.instr === k) { this.paintChrome(); break; }
+        const before = this.snap(); x.instr = k; x.drum = k === 'drums'; this.commit(before);
+        this.refresh(x.id === this.active);
+        this.toast(k === 'drums' ? `«${esc(x.name)}» теперь играет ударными — на отдельном 10-м канале` : `«${esc(x.name)}» теперь играет: ${instrName(k).toLowerCase()}`);
+        break;
+      }
+      case 'save': this.save(false); break;
+      case 'savecopy': this.save(true); break;
+      case 'download': this.sheet = null; this.paintChrome(); this.toast(`Скачан файл ${this.o.ctx === 'audio' ? 'melody-v' + this.curVer : 'melody'}.mid${this.edits ? ' — с несохранёнными правками' : ''}`); break;
+      case 'render': this.startRender(); break;
+      case 'rcancel': clearInterval(this.ri); this.render = { phase: 'idle' }; this.paintChrome(); this.toast('Сборка звука отменена'); break;
+      case 'rclose': this.render = { phase: 'idle' }; this.paintChrome(); break;
+      case 'ver': { const v = this.versions.find(q => q.n === +el.dataset.n); if (v.k === 'snd') this.toast(`в${v.n} — это звук: откроется волна, ноты закроются${this.edits ? ' (сначала спросим про несохранённые правки)' : ''}`); else { this.curVer = v.n; this.paintChrome(); } } break;
+      case 'sheet': this.sheet = el.dataset.s; this.paintSheet(); break;
+      case 'sheetclose': this.sheet = null; this.paintSheet(); break;
+      case 'velt': this.showVel = !this.showVel; this.paintVel(); this.paintSheet(); break;
+      case 'gest': this.gest = false; this.set('.gest-s', ''); break;
+      case 'details': { const d = this.q('[data-details]'); d.hidden = !d.hidden; } break;
+      case 'toast': this.toast(el.dataset.msg); break;
+    }
+  }
+  onKey(e) {
+    if (this.dead || !this.root.isConnected) return;
+    if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); return; }
+    if (this.ro) return;
+    const z = e.ctrlKey || e.metaKey;
+    if (z && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? this.doRedo() : this.doUndo(); }
+    else if (z && e.key.toLowerCase() === 'y') { e.preventDefault(); this.doRedo(); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && this.sel.size) { e.preventDefault(); const b = document.createElement('button'); b.dataset.act = 'del'; this.onClick({ target: b }); }
+  }
+  destroy() { this.dead = true; this.playing = false; clearInterval(this.ri); clearTimeout(this.lt); clearTimeout(this.tt); }
+}
+function plural(n, a, b, c) { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : (m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c); }
+function fmtTime(s) { return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); }
+
+/* ───────────── Обвязка приложения вокруг редактора ───────────── */
+function rail(on) {
+  return `<div class="rail"><button class="ib ${on === 'chat' ? 'on' : ''}">${ic('chat')}</button><button class="ib ${on === 'files' ? 'on' : ''}">${ic('folder')}</button><button class="ib">${ic('wave')}</button></div>`;
+}
+function desktopApp() {
+  if (D.ctx === 'audio') return `<div class="app">${rail('chat')}<div class="island main">
+    <div class="ihead">Детская песенка <span class="sub">· чат</span></div>
+    <div class="feed"><div class="msg user">Я напела мелодию — сними с неё ноты, хочу поправить пару мест</div>
+      <div class="msg">Сняла ноты с версии «Без шума»: получилась одна дорожка, ${D.st === 'empty' ? 'но нот в ней не нашлось' : 'около сотни нот'}. Открыла их ниже — можно послушать и поправить.</div>
+      <div class="acard" data-ed></div></div>
+    <div class="composer">Напишите, что сделать со звуком…</div></div></div>`;
+  return `<div class="app">${rail('files')}<div class="island tree"><div class="ihead">Файлы <span class="sub">· ${D.ctx === 'local' ? 'Песни (на устройстве)' : 'Песни'}</span></div>
+    <div class="ftree"><div class="frow dir">${ic('folder', 's')}music</div>
+      <div class="frow" style="padding-left:24px">${ic('wave', 's')}idea.m4a</div>
+      <div class="frow on" style="padding-left:24px">${ic('notes', 's')}melody.mid<span class="ext">${D.st === 'long' ? '96 КБ' : '6 КБ'}</span></div>
+      <div class="frow" style="padding-left:24px">${ic('wave', 's')}vocal-take2.wav</div>
+      <div class="frow dir">${ic('folder', 's')}lyrics</div><div class="frow">${ic('file', 's')}README.md</div></div></div>
+    <div class="island main" style="background:var(--c-bg-card)"><div data-ed style="display:flex;flex-direction:column;flex:1;min-height:0"></div></div></div>`;
+}
+function mobileApp() { return `<div class="app mobile"><div data-ed style="display:flex;flex-direction:column;flex:1;min-height:0;position:relative"></div></div>`; }
+
+function renderAll() {
+  INSTANCES.splice(0).forEach(x => x.destroy());
+  const themes = D.theme === 'both' ? ['light', 'dark'] : [D.theme];
+  const sizes = D.size === 'both' ? ['1440', '360'] : [D.size];
+  const fr = document.getElementById('frames');
+  fr.className = 'frames' + (sizes.length > 1 || (themes.length > 1 && sizes[0] === '360') ? ' row' : '');
+  fr.innerHTML = '';
+  const ctxName = { audio: 'редактор звука', file: 'файл в проекте', local: 'локальный проект' }[D.ctx];
+  for (const sz of sizes) for (const th of themes) {
+    const f = document.createElement('div'); f.className = 'frame'; f.dataset.theme = th;
+    f.innerHTML = `<div class="cap">${ctxName}${D.ctx === 'local' ? (D.dev === 'off' ? ' · устройство не в сети' : ' · устройство в сети') : ''} · ${sz} · ${th === 'dark' ? 'тёмная' : 'светлая'}</div>` + (sz === '360' ? mobileApp() : desktopApp());
+    fr.appendChild(f);
+    new MidiEditor(f.querySelector('[data-ed]'), { ctx: D.ctx, src: D.src, st: D.st, offline: D.dev === 'off', rendFail: D.rend === 'fail', mobile: sz === '360' });
+  }
+  document.getElementById('vnote').innerHTML = NOTES[D.ctx];
+}
+function renderDemo() {
+  document.getElementById('demo').innerHTML = DEMO.map(([k, l, opts]) =>
+    `<div class="grp" ${k === 'dev' && D.ctx !== 'local' ? 'hidden style="display:none"' : ''}><span class="lbl">${l}</span>${opts.map(([v, t]) => `<button class="tbtn" data-k="${k}" data-v="${v}" aria-pressed="${D[k] === v}">${t}</button>`).join('')}</div>`).join('');
+}
+document.getElementById('demo').addEventListener('click', e => {
+  const b = e.target.closest('.tbtn'); if (!b) return;
+  D[b.dataset.k] = b.dataset.v; renderDemo(); renderAll();
+});
+document.addEventListener('keydown', e => {
+  if (e.target.closest && e.target.closest('input')) return;
+  const ed = INSTANCES.find(x => x.root.matches(':hover')) || INSTANCES[0];
+  if (ed && !ed.loading && ed.o.st !== 'error') ed.onKey(e);
+});
+renderDemo(); renderAll();
+</script>
+</body>
+</html>

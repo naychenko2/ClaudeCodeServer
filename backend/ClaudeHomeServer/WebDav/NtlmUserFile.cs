@@ -15,8 +15,10 @@ namespace ClaudeHomeServer.WebDav;
 ///
 /// Формат — smbpasswd: <c>[DOM\]USER:UID:LM:NT:FLAGS:LCT-…:</c>. gss-ntlmssp берёт ПЕРВУЮ
 /// строку, где имя совпало, а домен совпал без учёта регистра или отсутствует в строке; в
-/// NTLMv2-хэш домен входит с учётом регистра. Поэтому строки с доменами идут раньше строки
-/// без домена, а на домен — ровно один вариант написания. LM-поле обязано быть валидным hex,
+/// NTLMv2-хэш домен входит с учётом регистра, причём строка БЕЗ домена считает хэш с ПУСТЫМ
+/// доменом, а не с присланным клиентом: Type3 с непустым доменом такая строка не сойдётся.
+/// Поэтому строки с доменами идут раньше строки без домена, а на домен — ровно один вариант
+/// написания. LM-поле обязано быть валидным hex,
 /// но при уровне LM_COMPAT_LEVEL по умолчанию (3) gss-ntlmssp его не читает.
 /// </summary>
 public sealed class NtlmUserFile
@@ -66,6 +68,8 @@ public sealed class NtlmUserFile
                 EnvVar, Path);
         if (!mechanismPresent)
             _logger.LogInformation("Механизм gss-ntlmssp не найден в /etc/gss: NTLM для WebDAV выключен, только Basic");
+        else
+            WarnIfUnpatched(ReadPackageVersion("/var/lib/dpkg/status"));
 
         Load();
     }
@@ -225,6 +229,50 @@ public sealed class NtlmUserFile
 
     private static bool PathsEqual(string a, string b) =>
         string.Equals(a, b, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    /// <summary>
+    /// Без патча +ccs2 Windows SSPI (KEY_EXCH без SIGN/SEAL) получает InvalidToken при верном хэше:
+    /// при apt upgrade патч слетает молча, поэтому громко пишем об этом при старте.
+    /// Установка и откат — docs/operations/remote-access.md.
+    /// </summary>
+    private void WarnIfUnpatched(string? version)
+    {
+        if (version is null || IsPatchedVersion(version)) return;
+        _logger.LogWarning("gss-ntlmssp {Version} без патча '+ccs2' или новее: Windows SSPI получит InvalidToken при верном хэше "
+            + "(KEY_EXCH без SIGN/SEAL). Поставьте пропатченный пакет, см. docs/operations/remote-access.md", version);
+    }
+
+    /// <summary>Минимальный номер локальной сборки: +ccs1 без правки Type2 (MsvAvFlags) Windows по-прежнему не пускает.</summary>
+    private const int MinCcsBuild = 2;
+
+    internal static bool IsPatchedVersion(string version)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(version, @"\+ccs(\d+)");
+        return m.Success && int.TryParse(m.Groups[1].Value, out var n) && n >= MinCcsBuild;
+    }
+
+    /// <summary>Версия пакета gss-ntlmssp из файла статуса dpkg; null — файла или пакета нет.</summary>
+    internal static string? ReadPackageVersion(string dpkgStatusPath)
+    {
+        try
+        {
+            if (!File.Exists(dpkgStatusPath)) return null;
+            var inPackage = false;
+            foreach (var line in File.ReadLines(dpkgStatusPath))
+            {
+                if (line.Length == 0) { inPackage = false; continue; }
+                if (line.StartsWith("Package: ", StringComparison.Ordinal))
+                    inPackage = line.AsSpan(9).Trim().SequenceEqual("gss-ntlmssp");
+                else if (inPackage && line.StartsWith("Version: ", StringComparison.Ordinal))
+                    return line[9..].Trim();
+            }
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>Установлен ли механизм gss-ntlmssp: его регистрирует файл в /etc/gss/mech.d (или /etc/gss/mech).</summary>
     internal static bool DetectMechanism(string gssDir)

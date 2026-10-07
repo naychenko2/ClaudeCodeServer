@@ -21,6 +21,7 @@ import {
 import { useBindingLabels } from './useBindingLabels';
 import { Stepper, Crumb } from './stepperUi';
 import { ToolTargetPicker } from './ToolTargetPicker';
+import { ownProjectId } from '../../lib/personaZone';
 
 // Вкладка «Умения» студии персоны (фича persona-bindings): карточки привязок
 // «источник + правило, когда им пользоваться». Семантика мгновенного сохранения
@@ -1058,7 +1059,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             accent={accent}
             isMobile={isMobile}
             aiBusy={panelAiBusy}
-            ownProjectId={persona.scope === 'project' ? persona.projectId : undefined}
+            ownProjectId={ownProjectId(persona)}
             toolPicker={{
               personaId: persona.id,
               bindings: list,

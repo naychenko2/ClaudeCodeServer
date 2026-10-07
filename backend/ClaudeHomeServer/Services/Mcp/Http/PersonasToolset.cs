@@ -127,29 +127,12 @@ public sealed partial class PersonasToolset(
                     return Deny("Текущая сессия вне проекта — проектных персон здесь нет "
                         + "(используй scope \"global\" или \"all\").");
                 if (scope == "project")
-                    return Json(personas.GetByOwner(ownerId)
-                        .Where(p => p.Scope == PersonaScope.Project && p.ProjectId == projectId).ToList());
+                    return Json(personas.GetProjectTeam(ownerId, projectId));
                 if (scope == "global")
                     return Json(personas.GetByOwner(ownerId)
                         .Where(p => p.Scope == PersonaScope.Global).ToList());
                 // context: глобальные + проекта чата + кросс-проектные привязки персоны
-                var result = personas.GetForContext(ownerId, projectId).ToList();
-                if (extraProjectIds.Count > 0 || extraPersonaIds.Count > 0)
-                {
-                    var seen = result.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
-                    var extraSet = extraPersonaIds.ToHashSet(StringComparer.Ordinal);
-                    foreach (var p in personas.GetByOwner(ownerId))
-                    {
-                        if (seen.Contains(p.Id)) continue;
-                        var included = extraSet.Contains(p.Id)
-                            || (p.Scope == PersonaScope.Project && p.ProjectId is not null
-                                && extraProjectIds.Contains(p.ProjectId));
-                        if (!included) continue;
-                        result.Add(p);
-                        seen.Add(p.Id);
-                    }
-                }
-                return Json(result);
+                return Json(personas.GetForContextWithExtras(ownerId, projectId, extraProjectIds, extraPersonaIds));
             }
 
             case "personas_get":
@@ -175,12 +158,15 @@ public sealed partial class PersonasToolset(
             }
 
             case "personas_create":
+                if (ScopeDenial(arguments, null, isCreate: true) is { } createDenied) return Deny(createDenied);
                 return Unwrap(await crud.CreateAsync(ownerId,
                     BuildCreateRequest(arguments, projectId), session.Id));
 
             case "personas_update":
             {
                 var id = StringArg(arguments, "id");
+                if (ScopeDenial(arguments, personas.Get(id, ownerId), isCreate: false) is { } updateDenied)
+                    return Deny(updateDenied);
                 // Привязки — отдельным путём (как stdio): себе менять нельзя
                 if (arguments.ContainsKey("bindings"))
                 {
@@ -617,6 +603,25 @@ public sealed partial class PersonasToolset(
     private static PersonaSpecialty? SpecialtyArg(JsonObject arguments) =>
         Enum.TryParse<PersonaSpecialty>(StringArg(arguments, "specialty"), true, out var parsed) ? parsed : null;
 
+    internal const string SphereZoneDenial = "Зону персоны сферы меняет только человек";
+
+    // Зону персоны через MCP не расширяют и не выдают: модель не создаёт персон сферы и не уводит
+    // персону из сферы (в т.ч. себя) в глобальную — это решение человека. Неизвестное значение scope —
+    // отказ, а не молчаливое «Global» (fail-open). Пустой scope при создании — как отсутствие (Global).
+    internal static string? ScopeDenial(JsonObject arguments, Persona? current, bool isCreate)
+    {
+        var fromSphere = current is not null && PersonaZone.IsSpherePersona(current);
+        if (!arguments.ContainsKey("scope")) return null;
+        if (fromSphere) return SphereZoneDenial;
+
+        var raw = StringArg(arguments, "scope").Trim();
+        if (isCreate && raw.Length == 0) return null;
+        if (string.Equals(raw, "sphere", StringComparison.OrdinalIgnoreCase)) return SphereZoneDenial;
+        if (string.Equals(raw, "project", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "global", StringComparison.OrdinalIgnoreCase)) return null;
+        return $"Неизвестный scope «{raw}»: допустимы «project» и «global».";
+    }
+
     private static CreatePersonaRequest BuildCreateRequest(JsonObject arguments, string? sessionProjectId)
     {
         var scope = string.Equals(StringArg(arguments, "scope"), "project", StringComparison.OrdinalIgnoreCase)
@@ -630,7 +635,7 @@ public sealed partial class PersonasToolset(
             Model: null,   // конкретная модель через MCP не задаётся — только уровнями
             Effort: OptionalArg(arguments, "effort"),
             Scope: scope,
-            ProjectId: scope == PersonaScope.Project
+            ProjectId: PersonaZone.IsProjectScope(scope)
                 ? OptionalArg(arguments, "projectId") ?? sessionProjectId : null,
             Color: OptionalArg(arguments, "color"),
             Greeting: OptionalArg(arguments, "greeting"),
@@ -672,7 +677,7 @@ public sealed partial class PersonasToolset(
             Model: null,
             Effort: arguments.ContainsKey("effort") ? StringArg(arguments, "effort") : null,
             Scope: scope,
-            ProjectId: scope == PersonaScope.Project
+            ProjectId: PersonaZone.IsProjectScope(scope)
                 ? OptionalArg(arguments, "projectId") ?? sessionProjectId
                 : OptionalArg(arguments, "projectId"),
             Color: arguments.ContainsKey("color") ? StringArg(arguments, "color") : null,

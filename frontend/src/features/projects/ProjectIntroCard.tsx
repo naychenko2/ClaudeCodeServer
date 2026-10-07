@@ -21,6 +21,7 @@ import { makeLead } from '../personas/TeamCommandCenter';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { setFabObstacle } from '../../lib/ai/fabObstacle';
+import { isProjectTeam } from '../../lib/personaZone';
 
 // Ключи отказа — РАЗДЕЛЬНЫЕ для двух вариантов карточки: «познакомиться» и
 // «разложить каркас» — отдельные намерения, повторно показывать должны независимо.
@@ -64,11 +65,11 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
   const [pickerOpen, setPickerOpen] = useState(false);
 
   // Список персон проекта — тот же источник и фильтр, что в TeamCommandCenter
-  // (usePersonas + scope === 'project' && projectId === ...). Перерендер
+  // (usePersonas + isProjectTeam(p, projectId)). Перерендер
   // сработает и при приходе personas_changed (realtime, см. lib/personas.ts).
   const personas = usePersonas();
   const team = useMemo(
-    () => personas.filter(p => p.scope === 'project' && p.projectId === projectId),
+    () => personas.filter(p => isProjectTeam(p, projectId)),
     [personas, projectId],
   );
 

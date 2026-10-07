@@ -84,6 +84,9 @@ public static class FeatureFlagKeys
     // Панель «Картинки» v5 «Создать / Править» (переходный флаг до снятия старой панели):
     // режим на чат и свой выбор у каждого режима. Сервер префов по режиму под флагом не прячется
     public const string ImagePanelV5 = "image-panel-v5";
+    // Сферы: проекты группируются в сферы с общей командой персон и хартией; зона персоны
+    // «Сфера». Dark launch, выключено по умолчанию
+    public const string Spheres = "spheres";
     // Модуль «Видео» (ADR-022): сцены и фильм в боковой панели. Гейтит и серверные ручки модуля video-editor.
     public const string VideoEditor = "video-editor";
 }
@@ -234,6 +237,12 @@ public static class FeatureFlagCatalog
             Default: false,
             Stage: "dev"),
         // Модуль «Видео» (ADR-022): сцены (клип между двумя кадрами) и фильм из них
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.Spheres,
+            Title: "Сферы",
+            Description: "Проекты объединяются в сферы: у сферы своя команда персон и общая хартия, персона сферы видит все проекты сферы.",
+            Default: false,
+            Stage: "dev"),
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.VideoEditor,
             Title: "Видео: сцены и фильм",

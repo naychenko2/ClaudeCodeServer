@@ -17,6 +17,8 @@ import { TeamPlanScheme } from '../plan/TeamPlanScheme';
 import { FileLink, MarkdownContent } from './MarkdownContent';
 import { markdownToPlain } from '../../lib/markdownPlain';
 import { ChatProjectContext, ChatOpenFileContext, TeamPlanContext } from './contexts';
+import { visibleIn } from '../../lib/personaZone';
+import { useSphereOf } from '../../lib/useSphereOf';
 
 // Склонение числительного (ру): 1 под-задача, 2 под-задачи, 5 под-задач
 function plural(n: number, one: string, few: string, many: string): string {
@@ -487,6 +489,7 @@ export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
   const onOpenFile = useContext(ChatOpenFileContext);
   const isMobile = useIsMobile();
   const personas = usePersonas();
+  const sphereOf = useSphereOf();
   usePersonasVersion();
   const [editing, setEditing] = useState(false);
   const [feedback, setFeedback] = useState('');
@@ -526,12 +529,12 @@ export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
   ) : null;
 
   // Кандидаты для смены исполнителя: явно выбранный состав либо вся команда контекста
-  // (глобальные персоны + персоны этого проекта) — зеркало TeamPlanningService.ResolveCandidates
+  // (глобальные персоны + персоны этого проекта и его сферы) — зеркало TeamPlanningService.ResolveCandidates
   const candidates = useMemo(() => {
     const chosen = ctx?.executorPersonaIds ?? [];
     if (chosen.length > 0) return chosen.map(id => personas.find(p => p.id === id)).filter((p): p is Persona => !!p);
-    return personas.filter(p => p.scope === 'global' || (p.scope === 'project' && p.projectId === project?.id));
-  }, [ctx?.executorPersonaIds, personas, project?.id]);
+    return personas.filter(p => visibleIn(p, project?.id, sphereOf));
+  }, [ctx?.executorPersonaIds, personas, project?.id, sphereOf]);
 
   // === Решённое состояние: план запущен ===
   if (item.resolved && item.approved) {

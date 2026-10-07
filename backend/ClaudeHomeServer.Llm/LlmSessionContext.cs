@@ -41,12 +41,15 @@ public record NotesMcpContext(string ApiUrl, Func<string> TokenFactory, string? 
 // DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включается
 // по флагу ВЛАДЕЛЬЦА change-dossiers-recall (не по свойствам хода — инвариант стабильности
 // состава tools/list); сама секция требует ещё и проектный чат.
+// SphereToolsEnabled — секция sphere_memory_*: гейт по флагу ВЛАДЕЛЬЦА spheres (не по членству
+// проекта и не по свойствам хода), входит в отпечаток состава сервера памяти.
 // TokenFactory, а не строка: контекст живёт столько же, сколько адаптер, а у чата старше
 // срока жизни сервисного JWT эндпоинт начал бы отвечать 401, и инструменты памяти пропали
 // бы молча (ADR-012, урок фазы 1). UseHttp — схема адреса (рубильник живой, см.
 // TasksMcpContext): false — ход объявляет прежний stdio-сервер на node (путь отката).
 public record MemoryMcpContext(string ApiUrl, Func<string> TokenFactory, string PersonaId,
-    string? ProjectId = null, bool DossierToolsEnabled = false, bool UseHttp = false);
+    string? ProjectId = null, bool DossierToolsEnabled = false, bool UseHttp = false,
+    bool SphereToolsEnabled = false);
 
 // Контекст MCP-сервера рабочего пространства: доступ сессии ко всем проектам владельца
 // (список, файлы, базы знаний, единый поиск). Sections — включённые секции инструментов

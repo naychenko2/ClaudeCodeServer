@@ -439,7 +439,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.ICodeGraphInsp
 if (SubsystemGate.IsEnabled(builder.Configuration, ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem.SubsystemKey))
     builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.IArchitectureCodeSource,
         ClaudeHomeServer.Services.CodeGraph.ArchitectureCodeSource>();
-builder.Services.AddSingleton<ProjectGroupManager>();
+builder.Services.AddSingleton<SphereManager>();
+// Форвардер: единый стор сфер; PersonaManager берёт зону персон через ISphereDirectory
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Spheres.ISphereDirectory>(sp => sp.GetRequiredService<SphereManager>());
 builder.Services.AddSingleton<ProjectEventLogService>();
 // Этап 5, волна E: узкий Core-шов IProjectEventLogService для выноса Notes (NotesService
 // пишет ProjectEventTypes.NoteChanged при мутациях заметок). Полный сервис в Main,
@@ -1119,6 +1121,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Memory.TeamMemoryService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>());
+// Полка памяти сферы: без форвардера удаление пользователя оставляет sphere-memory.json
+// и датасеты {user}:sphere:*, а реконсайлер не чинит упавшие документы полки.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Memory.SphereMemoryService>());
 // Гейт подсистемы Notes: NotesKnowledgeService не попадёт в DI при выключенной подсистеме
 // (NotesSubsystem.Register не вызывается) — безусловный форвардер уронил бы резолв ВСЕЙ
 // коллекции IKnowledgeSyncParticipant (а не только заметки), блокер ревью notes-optional Б2.

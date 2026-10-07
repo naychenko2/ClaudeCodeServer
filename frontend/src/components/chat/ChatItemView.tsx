@@ -13,6 +13,8 @@ import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
 import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { useSpheres } from '../../lib/useSpheres';
+import { isZoneRefusal, OPEN_COMPANION_PICKER_EVENT } from '../../lib/personaZone';
 import { prunedHeadline, prunedDetails } from '../../lib/contextPruned';
 import { Button } from '../ui/Button';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -2151,6 +2153,43 @@ function ErrorRetryButton({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+// Отказ хода: проект вышел из сферы персоны чата. Не ошибка сбоя, а требование решения —
+// warning-карточка с единственным действием «Сменить собеседника» (откроет выбор в композере).
+// Повтор бессмыслен, «Вернуть проект в сферу» намеренно нет (решение владельца).
+function ZoneRefusalCard({ text }: { text: string }) {
+  // Имя персоны и сферы — из данных чата, а не из текста ошибки; нет данных — короткая подпись
+  const persona = useContext(PersonaContext);
+  const spheresOn = useFeature(FLAGS.spheres);
+  const spheres = useSpheres(spheresOn);
+  const sphereName = persona?.sphereId ? spheres.find(s => s.id === persona.sphereId)?.name : undefined;
+  const caption = persona && sphereName
+    ? `${persona.name} работает только в проектах сферы «${sphereName}». Сообщение сохранено в поле ввода — отправится новому собеседнику.`
+    : 'Сообщение сохранено в поле ввода — отправится новому собеседнику.';
+  return (
+    <div role="alert" style={{
+      background: C.warningBg, borderRadius: R.lg, padding: `${SP.md}px ${SP.lg}px`,
+      border: `1px solid ${C.warning}`, color: C.warningText, fontFamily: FONT.sans,
+      display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+    }}>
+      <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 2 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: FS.base, fontWeight: 600, overflowWrap: 'break-word' }}>{text}</div>
+        <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>
+          {caption}
+        </div>
+        <div style={{ marginTop: SP.md }}>
+          <Button
+            size="xs"
+            onClick={() => window.dispatchEvent(new Event(OPEN_COMPANION_PICKER_EVENT))}
+          >
+            Сменить собеседника
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Карточка ошибки хода. Три возможных действия: «Повторить» (canRetry, inline справа от
 // текста), «Продолжить в стандартном окне» (item.action === 'window-1m-drop', вторичная
 // кнопка под текстом — отказ по окну 1M, единственный путь снять суффикс [1m] с чата),
@@ -2202,6 +2241,8 @@ function ErrorCard({ item, online, onRetry, onDropWindow1M }: {
       setDropLoading(false);
     }
   }, [onDropWindow1M, dropLoading]);
+
+  if (isZoneRefusal(item)) return <ZoneRefusalCard text={item.text} />;
 
   return (
     <div style={{

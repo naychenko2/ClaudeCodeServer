@@ -8,6 +8,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -21,7 +22,8 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/tasks")]
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
-    ISessionBroadcaster broadcaster, PersonaBindingsService bindings) : ControllerBase
+    ISessionBroadcaster broadcaster, PersonaBindingsService bindings,
+    ISphereDirectory spheres) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -61,7 +63,7 @@ public class ProjectTasksController(
         {
             var p = personas.Get(req.PersonaId, UserId);
             var scopes = p is not null ? bindings.BuildExternalTaskScopes(UserId, p) : [];
-            if (TaskPersonaValidator.Error(personas, UserId, req.PersonaId, projectId, scopes) is { } personaError)
+            if (TaskPersonaValidator.Error(personas, UserId, req.PersonaId, projectId, scopes, spheres) is { } personaError)
                 return BadRequest(new { error = personaError });
         }
 
@@ -70,7 +72,7 @@ public class ProjectTasksController(
         {
             var p = personas.Get(req.CreatedByPersonaId, UserId);
             var scopes = p is not null ? bindings.BuildExternalTaskScopes(UserId, p) : [];
-            if (TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, projectId, scopes) is { } creatorError)
+            if (TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, projectId, scopes, spheres) is { } creatorError)
                 return BadRequest(new { error = creatorError });
         }
 
@@ -96,7 +98,7 @@ public class ProjectTasksController(
 public class TasksController(
     TaskManager tasks, ISessionBroadcaster broadcaster, TaskAiService ai, ProjectManager projects,
     PersonaManager personas, TaskExecutionService executor,
-    PersonaBindingsService bindings, SessionManager sessions,
+    PersonaBindingsService bindings, SessionManager sessions, ISphereDirectory spheres,
     // Подсистема Notes отключаемая: null — обратная запись чекбокса в заметку-источник
     // тихо пропускается (SyncTaskToNoteAsync ниже, флаг notes-task-sync и так no-op
     // для задач не из заметки).
@@ -228,12 +230,12 @@ public class TasksController(
 
         // Персона-исполнитель: своя; проектная персона личную задачу не берёт
         if (!string.IsNullOrEmpty(req.PersonaId)
-            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, taskProjectId: null) is { } personaError)
+            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, taskProjectId: null, spheres: spheres) is { } personaError)
             return BadRequest(new { error = personaError });
 
         // Персона-постановщик (происхождение): та же валидация, что у исполнителя
         if (!string.IsNullOrEmpty(req.CreatedByPersonaId)
-            && TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, taskProjectId: null) is { } creatorError)
+            && TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, taskProjectId: null, spheres: spheres) is { } creatorError)
             return BadRequest(new { error = creatorError });
 
         TaskItem task;
@@ -342,7 +344,7 @@ public class TasksController(
         {
             var p = personas.Get(req.PersonaId, UserId);
             var scopes = p is not null ? bindings.BuildExternalTaskScopes(UserId, p) : [];
-            if (TaskPersonaValidator.Error(personas, UserId, req.PersonaId, targetProjectId, scopes) is { } personaError)
+            if (TaskPersonaValidator.Error(personas, UserId, req.PersonaId, targetProjectId, scopes, spheres) is { } personaError)
                 return BadRequest(new { error = personaError });
         }
 
@@ -451,11 +453,23 @@ public static class TaskPersonaValidator
 {
     public static string? Error(PersonaManager personas, string userId, string personaId,
         string? taskProjectId,
-        IReadOnlyList<(string ProjectId, bool ReadOnly)>? externalScopes = null)
+        IReadOnlyList<(string ProjectId, bool ReadOnly)>? externalScopes = null,
+        ISphereDirectory? spheres = null)
     {
         var persona = personas.Get(personaId, userId);
         if (persona is null) return "Персона не найдена или недоступна";
-        if (persona.Scope == PersonaScope.Project && persona.ProjectId != taskProjectId)
+        // Персона сферы — исполнитель в любом проекте своей сферы: синтетические полные скоупы
+        // зоны приходят в externalScopes (PersonaBindingsService.BuildExternalTaskScopes)
+        // Зона — единая точка правды PersonaZone.VisibleIn (как у исполнителя): внешняя
+        // ProjectTasks-привязка не расширяет зону персоны сферы. Без справочника (null) —
+        // отказ: fail-closed, зону проверить нечем
+        if (PersonaZone.IsSpherePersona(persona))
+            return taskProjectId is not null
+                && spheres is not null && PersonaZone.VisibleIn(persona, taskProjectId, spheres)
+                && externalScopes?.Any(s => s.ProjectId == taskProjectId && !s.ReadOnly) == true
+                ? null
+                : "Персона сферы может выполнять только задачи проектов своей сферы";
+        if (PersonaZone.IsProjectPersona(persona) && persona.ProjectId != taskProjectId)
         {
             // Кросс-проектная ProjectTasks-привязка с полным доступом разрешает
             if (externalScopes is not null)

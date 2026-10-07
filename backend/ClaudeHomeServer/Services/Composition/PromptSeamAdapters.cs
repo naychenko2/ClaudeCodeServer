@@ -21,10 +21,10 @@ public sealed class PersonaRecallSourceAdapter(PersonaMemoryService memory) : IP
 
     public async Task<PersonaRecallBlock?> BuildRecallAsync(
         string ownerId, string personaId, string query, int topK, double minScore,
-        DossierRecallRequest? dossierRequest, bool splitDossier)
+        DossierRecallRequest? dossierRequest, bool splitDossier, string? sessionProjectId = null)
     {
         var recall = await memory.BuildRecallAsync(
-            ownerId, personaId, query, topK, minScore, dossierRequest, splitDossier);
+            ownerId, personaId, query, topK, minScore, dossierRequest, splitDossier, sessionProjectId);
         if (recall is null) return null;
 
         // Проекция в Core-DTO: наружу идут только Id и текст записи — скоринг, теги и
@@ -34,7 +34,8 @@ public sealed class PersonaRecallSourceAdapter(PersonaMemoryService memory) : IP
             recall.DossierText,
             [.. recall.Hits.Select(h => new PersonaRecallEntry(h.Id, h.Text))],
             [.. recall.TeamHits.Select(e => new PersonaRecallEntry(e.Id, e.Text))],
-            recall.DossierHits);
+            recall.DossierHits,
+            [.. recall.SphereHits.Select(e => new PersonaRecallEntry(e.Id, e.Text))]);
     }
 }
 

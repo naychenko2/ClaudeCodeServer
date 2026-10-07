@@ -3,10 +3,11 @@ import type { MouseEvent } from 'react';
 import type { Project } from '../../types';
 import { C } from '../../lib/design';
 import { IconButton, Menu, MenuItem } from '../../components/ui';
-import { MoreVertical, Folder, SquarePen, Trash2, Pin, PinOff } from 'lucide-react';
+import { MoreVertical, Folder, FolderInput, FolderOutput, SquarePen, Trash2, Pin, PinOff } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { isPinned, togglePin } from '../../lib/pinnedProjects';
 import { useUserScrollGate } from '../../lib/userScrollGate';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 interface Props {
   project: Project;
@@ -14,13 +15,16 @@ interface Props {
   onMove: (p: Project) => void;
   onEdit: (p: Project, e: MouseEvent) => void;
   onDelete: (p: Project) => void;
+  // Флаг spheres: «Убрать из сферы» (показывается у проекта в сфере)
+  onRemoveFromSphere?: (p: Project) => void;
 }
 
 // Высота меню (4 пункта) — по ней Menu решает, раскрываться вниз или вверх
-const MENU_H = 4 * 34 + 10;
+const MENU_H = 5 * 34 + 10;
 
 // Меню действий карточки проекта: «⋯» → переместить / редактировать / удалить.
-export function ProjectActionsMenu({ project: p, color = C.textMuted, onMove, onEdit, onDelete }: Props) {
+export function ProjectActionsMenu({ project: p, color = C.textMuted, onMove, onEdit, onDelete, onRemoveFromSphere }: Props) {
+  const spheres = useFeature(FLAGS.spheres);
   // rect кнопки, а не булев флаг: absolute-меню всегда росло ВНИЗ от триггера, и у
   // карточек нижнего ряда уезжало за край экрана — на узких мобиле/планшете туда
   // попадает почти любая карточка. Anchor-режим рисует меню порталом по rect и сам
@@ -60,8 +64,12 @@ export function ProjectActionsMenu({ project: p, color = C.textMuted, onMove, on
         <Menu anchor={menu} onClose={() => setMenu(null)} maxHeight={MENU_H} gap={4}>
           <MenuItem label={pinned ? 'Открепить' : 'Закрепить'} onClick={() => { setMenu(null); togglePin(p.id); }}
             icon={pinned ? <PinOff size={15} strokeWidth={ICON_STROKE} /> : <Pin size={15} strokeWidth={ICON_STROKE} />} />
-          <MenuItem label="Переместить в группу" onClick={() => { setMenu(null); onMove(p); }}
-            icon={<Folder size={15} strokeWidth={ICON_STROKE} />} />
+          <MenuItem label={spheres ? 'Перенести в сферу…' : 'Переместить в группу'} onClick={() => { setMenu(null); onMove(p); }}
+            icon={spheres ? <FolderInput size={15} strokeWidth={ICON_STROKE} /> : <Folder size={15} strokeWidth={ICON_STROKE} />} />
+          {spheres && p.groupId && onRemoveFromSphere && (
+            <MenuItem label="Убрать из сферы" onClick={() => { setMenu(null); onRemoveFromSphere(p); }}
+              icon={<FolderOutput size={15} strokeWidth={ICON_STROKE} />} />
+          )}
           <MenuItem label="Редактировать" onClick={(e) => { setMenu(null); onEdit(p, e); }}
             icon={<SquarePen size={15} strokeWidth={ICON_STROKE} />} />
           <MenuItem label="Удалить" danger onClick={() => { setMenu(null); onDelete(p); }}

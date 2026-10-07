@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using ClaudeHomeServer.Services.Spheres;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
@@ -204,6 +205,16 @@ public class ProjectManager : IProjectManager
         return project;
     }
 
+    /// <summary>Проект сменил сферу (<c>GroupId</c>); вызывается после сохранения.</summary>
+    public event Action<SphereMembershipChanged>? OnSphereMembershipChanged;
+
+    private void RaiseMembership(Project project, string? oldSphereId)
+    {
+        if (project.OwnerId is null || project.GroupId == oldSphereId) return;
+        try { OnSphereMembershipChanged?.Invoke(new SphereMembershipChanged(project.OwnerId, project.Id, oldSphereId, project.GroupId)); }
+        catch { /* подписчик не должен ломать правку проекта */ }
+    }
+
     public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
         bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null, string? groupId = null,
         string? color = null, List<string>? mcpServersOn = null, bool? autoImportDossiers = null)
@@ -211,6 +222,7 @@ public class ProjectManager : IProjectManager
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
 
+        var oldSphereId = project.GroupId;
         if (name is not null) project.Name = name;
         if (rootPath is not null)
         {
@@ -249,6 +261,7 @@ public class ProjectManager : IProjectManager
         if (autoImportDossiers is not null) project.AutoImportDossiers = autoImportDossiers.Value;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
+        RaiseMembership(project, oldSphereId);
         return project;
     }
 
@@ -600,13 +613,10 @@ public class ProjectManager : IProjectManager
     // Отвязывает все проекты от удаляемой группы (вызывается при удалении группы)
     public void ClearGroup(string groupId)
     {
-        var changed = false;
-        foreach (var p in _projects.Values.Where(p => p.GroupId == groupId))
-        {
-            p.GroupId = null;
-            changed = true;
-        }
-        if (changed) Save();
+        var moved = _projects.Values.Where(p => p.GroupId == groupId).ToList();
+        foreach (var p in moved) p.GroupId = null;
+        if (moved.Count > 0) Save();
+        foreach (var p in moved) RaiseMembership(p, groupId);
     }
 
     // Сборка частей промпта переехала в спину (Core: Services/Llm/SystemPromptComposer) —

@@ -1,4 +1,6 @@
-﻿namespace ClaudeHomeServer.Models;
+using System.Text.Json.Serialization;
+
+namespace ClaudeHomeServer.Models;
 
 // Значок проекта (ADR-009 §6). Номера закреплены ЯВНО, значение 1 выведено из
 // обращения: в старом сторе им была растровая картинка (Image), enum лежит на диске
@@ -74,8 +76,9 @@ public class Project
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public string? OwnerId { get; set; }
-    // Группа проектов; null = проект вне групп (см. ProjectGroup)
+    // Группа проектов; null = проект вне групп. GroupId = id сферы (см. Sphere)
     public string? GroupId { get; set; }
+    [JsonIgnore] public string? SphereId => GroupId;
     public string? DifyDatasetId { get; set; }
     public string? SystemPrompt { get; set; }
     public bool ShowHiddenFiles { get; set; } = false;

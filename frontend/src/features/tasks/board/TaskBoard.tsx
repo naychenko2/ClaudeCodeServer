@@ -56,10 +56,11 @@ export function TaskBoard({
   const [activeId, setActiveId] = useState<string | null>(null);
 
   // В проекте группировка «по проекту» бессмысленна — сбрасываем на «без дорожек»
-  const groupOptions: BoardGroupBy[] = scope === 'project'
+  const isProjectBoard = scope !== 'hub';
+  const groupOptions: BoardGroupBy[] = isProjectBoard
     ? ['none', 'priority', 'assignee', 'due']
     : ['none', 'priority', 'assignee', 'project', 'due'];
-  useEffect(() => { if (scope === 'project' && groupBy === 'project') setGroupBy('none'); }, [scope, groupBy]);
+  useEffect(() => { if (isProjectBoard && groupBy === 'project') setGroupBy('none'); }, [isProjectBoard, groupBy]);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: DRAG_MOUSE_ACTIVATION }),
@@ -146,7 +147,7 @@ export function TaskBoard({
     const dto: UpdateTaskDto = { order };
     // Категория колонки становится статусом; проектная доска фиксирует конкретную колонку
     if (destCol.category !== activeTask.status) dto.status = destCol.category;
-    if (scope === 'project') dto.columnId = destColId;
+    if (isProjectBoard) dto.columnId = destColId;
     // Перенос между дорожками меняет поле — только priority/assignee (drag-to-change)
     if (sourceLaneKey && destLaneKey !== sourceLaneKey) {
       if (groupBy === 'priority') dto.priority = destLaneKey as TaskPriority;
@@ -156,7 +157,7 @@ export function TaskBoard({
     // Оптимистично двигаем карточку в сторе сразу — иначе оверлей «отлетает» назад
     const optimistic: Task = { ...activeTask, order };
     if (dto.status) optimistic.status = dto.status;
-    if (scope === 'project') optimistic.columnId = destColId;
+    if (isProjectBoard) optimistic.columnId = destColId;
     if (dto.priority) optimistic.priority = dto.priority;
     if (dto.assignee) optimistic.assignee = dto.assignee;
     upsertTaskLocal(optimistic);
@@ -282,7 +283,7 @@ export function TaskBoard({
                   projectNameOf={projectNameOf}
                   deviceNameOf={deviceNameOf}
                   onOpen={onOpenTask}
-                  onQuickAdd={grouped ? undefined : title => void createTask(quickAddProjectId, { title, status: col.category, columnId: scope === 'project' ? col.id : undefined })}
+                  onQuickAdd={grouped ? undefined : title => void createTask(quickAddProjectId, { title, status: col.category, columnId: isProjectBoard ? col.id : undefined })}
                   minEmptyHeight={minEmptyHeight}
                 />
               ))}

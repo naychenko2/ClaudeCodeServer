@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Notes;
@@ -122,6 +123,8 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private readonly ILogger<PersonaBindingsService> _log;
 
     // Кэш имён Dify-датасетов (id → отображаемое имя без префикса владельца).
+    private readonly ISphereDirectory? _spheres;
+
     // Наполняется при листинге целей-знаний, чтобы синхронный BuildTargetLabel мог
     // показать понятное имя базы, а не сырой id (иначе — фолбэк на id).
     private readonly ConcurrentDictionary<string, string> _datasetLabelCache = new();
@@ -137,8 +140,11 @@ public class PersonaBindingsService : IPersonaServerToolGate
         // Подсистема Notes отключаемая (Subsystems:Notes:Enabled=false) — null, если она
         // выключена. Датасет заметок пропадает из каталога целей знаний, а recall по
         // заметочным привязкам тихо возвращает пусто (ExtractNotesAsync).
-        INoteSemanticIndex? notesKb = null)
+        INoteSemanticIndex? notesKb = null,
+        // Зона персоны сферы; без справочника (юнит-тесты) сфер нет
+        ISphereDirectory? spheres = null)
     {
+        _spheres = spheres;
         _personas = personas;
         _projects = projects;
         _wkStore = wkStore;
@@ -469,14 +475,30 @@ public class PersonaBindingsService : IPersonaServerToolGate
     public IReadOnlyList<(string ProjectId, bool ReadOnly)> BuildExternalTaskScopes(
         string ownerId, Persona? persona)
     {
-        if (persona?.Bindings is null) return [];
-        return persona.Bindings
+        if (persona is null) return [];
+        var scopes = (persona.Bindings ?? [])
             .Where(b => b.Mode != PersonaBindingMode.Off && b.Type == PersonaBindingType.ProjectTasks
                 && !string.IsNullOrWhiteSpace(b.Target))
             .GroupBy(b => b.Target)
             .Select(g => (ProjectId: g.Key,
                 ReadOnly: g.Any(b => string.Equals(b.Path, "readonly", StringComparison.OrdinalIgnoreCase))))
             .ToList();
+        // Персона сферы: синтетические полные скоупы по проектам сферы (на каждый вызов, в стор
+        // привязок не пишутся) — выход проекта из сферы снимает доступ со следующего вызова
+        if (BuildZoneScopes(persona) is { } zone)
+        {
+            scopes.RemoveAll(s => zone.Contains(s.ProjectId));
+            scopes.AddRange(zone.Select(id => (id, false)));
+        }
+        return scopes;
+    }
+
+    // Проекты зоны персоны сферы (на текущий момент); null — не персона сферы. Пустой список —
+    // зона пуста (флаг выключен, сфера удалена): fail-closed, а не «без сужения».
+    public IReadOnlyList<string>? BuildZoneScopes(Persona? persona)
+    {
+        if (persona is null || !PersonaZone.IsSpherePersona(persona)) return null;
+        return _spheres is null ? [] : PersonaZone.ProjectIds(persona, _spheres) ?? [];
     }
 
     // Датасеты из Knowledge-привязок (Mode != Off) — симметричный хелпер для сужения знаний
@@ -519,9 +541,9 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private (List<PersonaBinding> Bindings, bool Added) CollectProjectDefaults(
         Persona persona, string ownerId, List<PersonaBinding> bindings)
     {
-        if (persona.Scope != PersonaScope.Project || string.IsNullOrEmpty(persona.ProjectId))
+        if (PersonaZone.OwnProjectId(persona) is not { } ownProjectId)
             return (bindings, false);
-        var project = _projects.GetById(persona.ProjectId);
+        var project = _projects.GetById(ownProjectId);
         if (project is null || project.OwnerId != ownerId) return (bindings, false);
 
         bool Missing(PersonaBindingType type, string target) =>
@@ -530,19 +552,19 @@ public class PersonaBindingsService : IPersonaServerToolGate
 
         var added = false;
         // Файлы проекта
-        if (Missing(PersonaBindingType.Project, persona.ProjectId))
+        if (Missing(PersonaBindingType.Project, ownProjectId))
         {
-            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Project, Target = persona.ProjectId });
+            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Project, Target = ownProjectId });
             added = true;
         }
         // Заметки проекта (ключ источника заметок = projectId)
-        if (Missing(PersonaBindingType.Notes, persona.ProjectId))
+        if (Missing(PersonaBindingType.Notes, ownProjectId))
         {
-            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Notes, Target = persona.ProjectId });
+            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Notes, Target = ownProjectId });
             added = true;
         }
         // База знаний проекта — только если у проекта есть свой Dify-датасет
-        var dataset = KnownDatasets(ownerId).FirstOrDefault(d => d.ProjectId == persona.ProjectId);
+        var dataset = KnownDatasets(ownerId).FirstOrDefault(d => d.ProjectId == ownProjectId);
         if (dataset.Id is not null && Missing(PersonaBindingType.Knowledge, dataset.Id))
         {
             bindings.Add(new PersonaBinding { Type = PersonaBindingType.Knowledge, Target = dataset.Id });
@@ -1116,12 +1138,12 @@ public class PersonaBindingsService : IPersonaServerToolGate
                     var project = _projects.GetById(binding.Target);
                     if (project is null || project.OwnerId != ownerId)
                         return "Проект не найден или недоступен";
-                    if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
+                    if (owningPersona is not null && PersonaZone.IsProjectTeam(owningPersona, binding.Target))
                         return "Персона уже в команде этого проекта — привязка к своему же проекту не нужна";
                     if (!string.IsNullOrEmpty(binding.Path))
                     {
                         var target = _personas.Get(binding.Path, ownerId);
-                        if (target is null || target.Scope != PersonaScope.Project || target.ProjectId != binding.Target)
+                        if (target is null || !PersonaZone.IsProjectTeam(target, binding.Target))
                             return "Персона не найдена в этом проекте";
                     }
                     break;
@@ -1131,7 +1153,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
                     var project = _projects.GetById(binding.Target);
                     if (project is null || project.OwnerId != ownerId)
                         return "Проект не найден или недоступен";
-                    if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
+                    if (owningPersona is not null && PersonaZone.IsProjectTeam(owningPersona, binding.Target))
                         return "Персона уже в этом проекте — привязка к своему же проекту не нужна";
                     if (!string.IsNullOrEmpty(binding.Path)
                         && !string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase))

@@ -8,6 +8,7 @@ import { C, FONT, R, SHADOW } from '../lib/design';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { BINDING_ICONS } from '../features/personas/bindingMeta';
 import { useBindingLabels } from '../features/personas/useBindingLabels';
+import { ownProjectId } from '../lib/personaZone';
 
 // Вкладка «Контекст персоны» в ArtifactsPanel (①-L2a + ①-L2b): показывает рядом с чатом то,
 // что делает персону «не stateless» — долгую память, привязанные знания и активные задачи,
@@ -19,7 +20,7 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
   const [mem, setMem] = useState<PersonaMemoryEntry[] | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [teamMem, setTeamMem] = useState<TeamMemoryEntry[] | null>(null);
-  const projectId = persona?.scope === 'project' ? persona.projectId : undefined;
+  const projectId = ownProjectId(persona);
 
   useEffect(() => {
     let alive = true;

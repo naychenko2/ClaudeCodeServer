@@ -11,6 +11,7 @@ import { Modal, ModalActions, ConfirmDialog } from '../../components/ui';
 import { showToast } from '../../lib/toast';
 import { personaLabel, usePersonas } from '../../lib/personas';
 import { PersonaAvatar } from './PersonaAvatar';
+import { isProjectPersona, isSpherePersona, zoneToValue } from '../../lib/personaZone';
 
 export function DeletePersonaDialog({ persona, onDeleted, onCancel }: {
   persona: Persona;
@@ -24,9 +25,8 @@ export function DeletePersonaDialog({ persona, onDeleted, onCancel }: {
   const [busy, setBusy] = useState(false);
 
   // Кандидаты той же зоны (бэк валидирует ещё раз): глобальной — глобальные,
-  // проектной — команда её проекта. Сама удаляемая исключена.
-  const candidates = personas.filter(p => p.id !== persona.id && p.scope === persona.scope
-    && (persona.scope !== 'project' || p.projectId === persona.projectId));
+  // проектной — команда её проекта, сферной — команда её сферы. Сама удаляемая исключена.
+  const candidates = personas.filter(p => p.id !== persona.id && zoneToValue(p) === zoneToValue(persona));
 
   const doDelete = async (successor?: string) => {
     setBusy(true);
@@ -75,7 +75,7 @@ export function DeletePersonaDialog({ persona, onDeleted, onCancel }: {
       {candidates.length === 0 ? (
         <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>
           Подходящих преемников нет — сначала создайте другую персону
-          {persona.scope === 'project' ? ' в этом проекте' : ''}.
+          {isProjectPersona(persona) ? ' в этом проекте' : isSpherePersona(persona) ? ' в этой сфере' : ''}.
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflowY: 'auto' }}>

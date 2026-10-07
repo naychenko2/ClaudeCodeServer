@@ -18,6 +18,9 @@ import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { PersonaFace } from '../../features/personas/PersonaFace';
 import { GroupParticipantsPopover } from '../../features/personas/GroupParticipantsPopover';
 import { personaTitleLines } from '../../lib/personas';
+import { isProjectPersona, isSpherePersona, zoneLabel } from '../../lib/personaZone';
+import { useSpheres } from '../../lib/useSpheres';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
 import { type RateWindow, type RatePillSegment, RATE_COLORS, windowLabel, fmtReset, worstWindow, withAccountFallback, ratePillSegments, ratePillCompact, ratePillVisible, ratePillMoreText } from '../../lib/rateLimit';
 import { useAccountUsage, accountSnapshotsFor } from '../../lib/accountUsage';
@@ -1184,10 +1187,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   }, [session.model, providerKey, isCliProvider]);
   // Цвет персоны (её акцент бренда) — тонирует заголовок, пилюлю зоны и левую границу тулбара.
   const personaAccent = persona ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent) : null;
-  const personaIsProject = persona?.scope === 'project';
-  const personaZoneText = personaIsProject
-    ? (personaZoneName ? `Проект · ${personaZoneName}` : 'Проект')
-    : 'Глобальный';
+  const personaIsProject = isProjectPersona(persona);
+  const personaIsSphere = isSpherePersona(persona);
+  const spheresOn = useFeature(FLAGS.spheres);
+  const spheres = useSpheres(spheresOn);
+  const personaZoneText = personaIsSphere && persona
+    ? zoneLabel(persona, { sphereName: id => spheres.find(x => x.id === id)?.name }, true)
+    : personaIsProject
+      ? (personaZoneName ? `Проект · ${personaZoneName}` : 'Проект')
+      : 'Глобальный';
   // Происхождение чата (задача/автоматизация) — рисуется в мета-строке заголовка
   // (см. metaRow): на мобиле компактной иконкой, на десктопе коротким бейджем.
   const origin = resolveChatOrigin(session);
@@ -1287,7 +1295,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Пилюля зоны — только когда зона персоны ОТЛИЧАЕТСЯ от контекста чата
   // (глобальная персона в проектном чате и т.п.): совпадающая зона — шум,
   // проект и так виден в сайдбаре воркспейса
-  const zoneDiffers = personaIsProject ? !project : !!project;
+  const zoneDiffers = personaIsProject ? !project : personaIsSphere ? false : !!project;
   const speakerName = personaLines ? personaLines.secondary ?? personaLines.primary : null;
 
   // Мета-строка шапки: слоты опциональны и схлопываются. Ужимается первым название
@@ -1328,7 +1336,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       <span key="zone" style={{
         flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: '0.02em',
         padding: '1px 7px', borderRadius: R.pill,
-        background: `${personaAccent}${personaIsProject ? '2E' : '17'}`, color: personaAccent,
+        background: `${personaAccent}${personaIsProject || personaIsSphere ? '2E' : '17'}`, color: personaAccent,
       }}>
         {personaZoneText}
       </span>

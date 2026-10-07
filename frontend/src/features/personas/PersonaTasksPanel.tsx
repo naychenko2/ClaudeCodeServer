@@ -15,6 +15,7 @@ import {
 } from '../../lib/tasks';
 import { TaskCard } from '../tasks/TaskCard';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
+import { ownProjectId } from '../../lib/personaZone';
 
 export function PersonaTasksPanel({ persona, isMobile }: { persona: Persona; isMobile?: boolean }) {
   const allTasks = useTasks();
@@ -93,7 +94,7 @@ export function PersonaTasksPanel({ persona, isMobile }: { persona: Persona; isM
       {showCreate && (
         <NewTaskDialog
           defaultPersonaId={persona.id}
-          defaultProjectId={persona.scope === 'project' ? persona.projectId : undefined}
+          defaultProjectId={ownProjectId(persona)}
           onCreated={(task, configure) => {
             setShowCreate(false);
             // «Создать и настроить» — открыть задачу в её разделе; иначе остаёмся,

@@ -224,12 +224,21 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
                 "dossier-trailer", "МАРКЕР_DOSSIER_TRAILER"));
             return next();
         }, "Test.DossierTrailer");
+        bus.OnFilter<PromptAssembling>(150, (e, next) =>
+        {
+            // Устав сферы: стабильная секция — остаётся в системном блоке и при RecallInTurnText
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "sphere-charter", "МАРКЕР_УСТАВ_СФЕРЫ"));
+            return next();
+        }, "Test.SphereCharter");
         bus.OnFilter<PromptAssembling>(200, async (e, next) =>
         {
             e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
                 "recall-notes", "МАРКЕР_RECALL_NOTES"));
             e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
-                "recall-memory", "МАРКЕР_RECALL_MEMORY"));
+                "recall-memory", "МАРКЕР_RECALL_MEMORY\n## Память сферы «Сфера»\nМАРКЕР_ПАМЯТЬ_СФЕРЫ"));
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "dossier-recall", "МАРКЕР_DOSSIER_RECALL"));
             e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
                 "persona-bindings", "МАРКЕР_PERSONA_BINDINGS"));
             e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
@@ -269,9 +278,12 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
 
         prompt.Should().Contain("МАРКЕР_DOSSIER_TRAILER",
             "стабильная секция остаётся в системном блоке при любой настройке ручки");
+        prompt.Should().Contain("МАРКЕР_УСТАВ_СФЕРЫ",
+            "устав сферы стабилен: при RecallInTurnText он остаётся в системном блоке, а не уезжает хвостом");
 
         foreach (var marker in new[]
-                 { "МАРКЕР_RECALL_NOTES", "МАРКЕР_RECALL_MEMORY", "МАРКЕР_PERSONA_BINDINGS", "МАРКЕР_CODE_GRAPH" })
+                 { "МАРКЕР_RECALL_NOTES", "МАРКЕР_RECALL_MEMORY", "МАРКЕР_ПАМЯТЬ_СФЕРЫ", "МАРКЕР_DOSSIER_RECALL",
+                   "МАРКЕР_PERSONA_BINDINGS", "МАРКЕР_CODE_GRAPH" })
         {
             if (enabled)
                 prompt.Should().NotContain(marker,

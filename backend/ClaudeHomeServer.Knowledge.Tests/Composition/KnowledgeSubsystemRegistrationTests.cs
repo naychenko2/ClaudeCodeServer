@@ -188,27 +188,28 @@ public class KnowledgeSubsystemRegistrationTests
     private const string PersonaType = "ClaudeHomeServer.Services.Memory.PersonaMemoryService";
     private const string TeamType = "ClaudeHomeServer.Services.Memory.TeamMemoryService";
     private const string DossierType = "ClaudeHomeServer.Services.Dossiers.DossierStore";
+    private const string SphereType = "ClaudeHomeServer.Services.Memory.SphereMemoryService";
     private const string NotesType = "ClaudeHomeServer.Services.Notes.NotesKnowledgeService";
     private const string ProjectType = "ClaudeHomeServer.Services.Knowledge.ProjectKnowledgeSyncService";
 
     [Fact]
-    public void Program_WhenNotesModuleLoaded_RegistersFiveParticipantsByType()
+    public void Program_WhenNotesModuleLoaded_RegistersSixParticipantsByType()
     {
         // Дефолтный TestWebApplicationFactory: Notes Enabled (appsettings.Testing.json) +
         // ClaudeHomeServer.Notes.dll лежит в OutDir/modules/notes (см. CopyNotesModuleForTests).
         using var factory = new TestWebApplicationFactory();
         var sp = factory.Services;
 
-        AssertParticipants(sp, expected: [PersonaType, TeamType, DossierType, NotesType, ProjectType],
-            scenario: "при загруженном модуле Notes ожидаются 5 участников: 4 форвардера " +
-                "Main (PersonaMemoryService, TeamMemoryService, DossierStore, ProjectKnowledgeSyncService) " +
+        AssertParticipants(sp, expected: [PersonaType, TeamType, DossierType, SphereType, NotesType, ProjectType],
+            scenario: "при загруженном модуле Notes ожидаются 6 участников: 5 форвардеров " +
+                "Main (PersonaMemoryService, TeamMemoryService, DossierStore, SphereMemoryService, ProjectKnowledgeSyncService) " +
                 "+ NotesKnowledgeService через INoteSemanticIndex из динамической сборки. " +
-                "Если пятого нет — либо dll Notes не доехала до теста, либо гейт или форвардер " +
+                "Если шестого нет — либо dll Notes не доехала до теста, либо гейт или форвардер " +
                 "в Program.cs отключился.");
     }
 
     [Fact]
-    public void Program_WhenNotesModuleDisabled_RegistersFourParticipantsByType()
+    public void Program_WhenNotesModuleDisabled_RegistersFiveParticipantsByType()
     {
         // Гасим модуль через переменную окружения без префикса (unprefixed env vars в ASP.NET
 // имеют более высокий приоритет, чем appsettings.{ENV}.json — стек 2 в порядке
@@ -225,10 +226,10 @@ public class KnowledgeSubsystemRegistrationTests
         {
             using var factory = new TestWebApplicationFactory();
             var sp = factory.Services;
-            AssertParticipants(sp, expected: [PersonaType, TeamType, DossierType, ProjectType],
-                scenario: "при не загруженном модуле Notes (dll не найдена) ожидаются 4 участника: " +
+            AssertParticipants(sp, expected: [PersonaType, TeamType, DossierType, SphereType, ProjectType],
+                scenario: "при не загруженном модуле Notes (dll не найдена) ожидаются 5 участников: " +
                     "форвардер `IKnowledgeSyncParticipant → NotesKnowledgeService` в Program.cs пропускается " +
-                    "(условие `notesModuleActive` не выполнено). Если здесь всплыл пятый — гейт перестал работать " +
+                    "(условие `notesModuleActive` не выполнено). Если здесь всплыл шестой — гейт перестал работать " +
                     "и форвардер регистрируется бездумно (роет старт хоста через нерезолвимый INoteSemanticIndex " +
                     "в коллекции).");
         }

@@ -13,6 +13,8 @@ import { api } from '../../lib/api';
 import { personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 import { ClaudeBadge, MeBadge } from './bits';
+import { isGlobalPersona, visibleIn } from '../../lib/personaZone';
+import { useSphereOf } from '../../lib/useSphereOf';
 
 export interface ExecutorValue {
   assignee: TaskAssignee;
@@ -33,6 +35,7 @@ export function ExecutorPicker({ assignee, personaId, projectId, onChange, disab
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const sphereOf = useSphereOf();
 
   // Персоны, доступные в контексте задачи (глобальные + её проекта)
   useEffect(() => {
@@ -57,8 +60,8 @@ export function ExecutorPicker({ assignee, personaId, projectId, onChange, disab
   const selectedPersona = personaId ? personas.find(p => p.id === personaId) ?? null : null;
 
   // Группы персон: команда проекта / глобальные
-  const projectPersonas = personas.filter(p => p.scope === 'project' && p.projectId === projectId);
-  const globalPersonas = personas.filter(p => p.scope === 'global');
+  const projectPersonas = personas.filter(p => !isGlobalPersona(p) && visibleIn(p, projectId ?? undefined, sphereOf));
+  const globalPersonas = personas.filter(isGlobalPersona);
 
   const pick = (v: ExecutorValue) => { onChange(v); setOpen(false); };
 

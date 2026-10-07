@@ -53,6 +53,8 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             var lead = projects.GetById(projectId)?.DefaultPersonaId is { } leadId
                 ? personas.Get(leadId, UserId)
                 : null;
+            // Руководитель вне своей зоны (персона сферы, проект вышел из сферы) не считается
+            if (lead is not null && !sessions.PersonaVisibleIn(lead, projectId)) lead = null;
             if (lead is not null) personaId = lead.Id;
             else
             {

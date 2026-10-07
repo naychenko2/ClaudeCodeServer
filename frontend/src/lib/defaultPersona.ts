@@ -140,7 +140,7 @@ export function getContextDefaultPersonaId(project?: Pick<Project, 'defaultPerso
 export class OnboardingRequiredError extends Error {
   readonly scope: 'user' | 'project';
   constructor(scope: 'user' | 'project') {
-    super(scope === 'project'
+    super(scope !== 'user'
       ? 'Сначала пройдите онбординг проекта — у проекта ещё нет персоны по умолчанию'
       : 'Сначала пройдите онбординг — у вас ещё нет персоны по умолчанию');
     this.scope = scope;

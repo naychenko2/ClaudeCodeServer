@@ -21,6 +21,19 @@ public class PersonaAgentFileSyncTests : IDisposable
     private readonly ProjectManager _projects;
     private readonly PersonaAgentFileSync _sut;
     private readonly string _agentsBase;
+    private readonly FakeSphereDirectory _spheres = new();
+
+    // Справочник сфер для тестов: состав сфер задаёт тест, проекты читаются у него же
+    private sealed class FakeSphereDirectory : ClaudeHomeServer.Services.Spheres.ISphereDirectory
+    {
+        public Dictionary<string, string> ProjectSphere { get; } = [];
+        public string? SphereOf(string ownerId, string projectId) => ProjectSphere.GetValueOrDefault(projectId);
+        public IReadOnlyList<string> ProjectsOf(string ownerId, string sphereId) =>
+            ProjectSphere.Where(kv => kv.Value == sphereId).Select(kv => kv.Key).ToList();
+        public bool Enabled(string ownerId) => true;
+        public string? SphereName(string ownerId, string sphereId) => "сфера";
+        public string? CharterOf(string ownerId, string sphereId) => null;
+    }
 
     public PersonaAgentFileSyncTests()
     {
@@ -48,7 +61,7 @@ public class PersonaAgentFileSyncTests : IDisposable
             knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notes, notesKb: notesKb);
         var generator = new PersonaAgentFileGenerator(new PersonaPromptBuilder(providers));
         _sut = new PersonaAgentFileSync(config, _personas, projects, providers, bindings, generator,
-            users, appSettings, NullLogger<PersonaAgentFileSync>.Instance);
+            users, appSettings, NullLogger<PersonaAgentFileSync>.Instance, spheres: _spheres);
         _agentsBase = Path.Combine(_tempDir, "persona-agents");
     }
 
@@ -92,6 +105,56 @@ public class PersonaAgentFileSyncTests : IDisposable
 
         var p = Create("Проектный", scope: PersonaScope.Project, projectId: project.Id);
         File.Exists(Path.Combine(projRoot, ".claude", "agents", p.Handle + ".md")).Should().BeTrue();
+    }
+
+    private string NewProject(string name)
+    {
+        var root = Path.Combine(_tempDir, name);
+        Directory.CreateDirectory(root);
+        return _projects.Create(name, root, "owner-1", "owner").Id;
+    }
+
+    private string SphereAgent(string projectId, Persona p) =>
+        Path.Combine(_projects.GetById(projectId)!.RootPath!, ".claude", "agents", p.Handle + ".md");
+
+    [Fact]
+    public void ПерсонаСферы_РаскладываетсяВоВсеПроектыСферы_ИНеВДругие()
+    {
+        var a = NewProject("sa");
+        var b = NewProject("sb");
+        var outside = NewProject("so");
+        _spheres.ProjectSphere[a] = "sph";
+        _spheres.ProjectSphere[b] = "sph";
+        var p = Create("Сферная", scope: PersonaScope.Sphere);
+        p.SphereId = "sph";
+
+        _sut.SyncPersona(p);
+
+        File.Exists(SphereAgent(a, p)).Should().BeTrue();
+        File.Exists(SphereAgent(b, p)).Should().BeTrue();
+        File.Exists(SphereAgent(outside, p)).Should().BeFalse();
+        File.Exists(AgentPath("shared", p.Handle)).Should().BeFalse("чата вне проекта у персоны сферы нет");
+    }
+
+    [Fact]
+    public void ПроектВошёлВСферуИВышел_ФайлПоявляетсяИУбирается()
+    {
+        var a = NewProject("ma");
+        var joiner = NewProject("mj");
+        _spheres.ProjectSphere[a] = "sph";
+        var p = Create("Сферная2", scope: PersonaScope.Sphere);
+        p.SphereId = "sph";
+        _sut.SyncPersona(p);
+        File.Exists(SphereAgent(joiner, p)).Should().BeFalse();
+
+        _spheres.ProjectSphere[joiner] = "sph";
+        _projects.Update(joiner, null, null, groupId: "sph");
+        File.Exists(SphereAgent(joiner, p)).Should().BeTrue("проект вошёл — файл появился");
+
+        _spheres.ProjectSphere.Remove(joiner);
+        _projects.Update(joiner, null, null, groupId: "");
+        File.Exists(SphereAgent(joiner, p)).Should().BeFalse("проект вышел — файл убран");
+        File.Exists(SphereAgent(a, p)).Should().BeTrue();
     }
 
     [Fact]

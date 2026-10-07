@@ -22,7 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, SphereManager spheres, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -236,6 +236,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         try
         {
+            if (spheres.GroupRefusal(UserId, req.GroupId) is { } groupRefusal)
+                return BadRequest(new { error = groupRefusal });
             var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
             Project p;
             string? folderNotice = null;
@@ -323,6 +325,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
                     });
             }
         }
+
+        if (spheres.GroupRefusal(UserId, req.GroupId) is { } updateGroupRefusal)
+            return BadRequest(new { error = updateGroupRefusal });
 
         try
         {
@@ -550,7 +555,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // Проектные персоны осиротели вместе с проектом — каскад: память (стор + Dify-датасет),
         // сама персона (файлы сабагента снимет OnPersonaDeleted), событие фронту
         foreach (var persona in personas.GetByOwner(UserId)
-                     .Where(x => x.Scope == PersonaScope.Project && x.ProjectId == id).ToList())
+                     .Where(x => PersonaZone.IsProjectTeam(x, id)).ToList())
         {
             try { await personaMemory.DeletePersonaAsync(persona.Id); }
             catch { /* память персоны — best-effort */ }

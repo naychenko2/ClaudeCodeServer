@@ -102,7 +102,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
             var splitDossier = _flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.SpecialtyPromptSections);
             var recallTask = _recall.BuildRecallAsync(
                 sessionContext.OwnerId, sessionContext.Persona.Id, query,
-                topK, minScore, dossier, splitDossier);
+                topK, minScore, dossier, splitDossier, session.ProjectId);
             var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
             if (completed != recallTask) return null;
             var recall = await recallTask;
@@ -110,6 +110,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
 
             var items = (recall!.Hits.Select(h => new RecallItem("memory", h.Id, h.Text, null)))
                 .Concat(recall.TeamHits.Select(e => new RecallItem("team", e.Id, e.Text, null)))
+                .Concat((recall.SphereHits ?? []).Select(e => new RecallItem("sphere", e.Id, e.Text, null)))
                 .Concat(recall.DossierHits.Select(d => new RecallItem("dossier", d.Id,
                     $"Паспорт {d.CommitSha[..Math.Min(7, d.CommitSha.Length)]}: {d.CommitSubject}", null)))
                 .ToList();

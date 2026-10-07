@@ -1,6 +1,8 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Memory;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -9,7 +11,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/project-groups")]
-public class ProjectGroupsController(ProjectGroupManager groups, ProjectManager projects) : ControllerBase
+public class ProjectGroupsController(SphereManager groups, ProjectManager projects, PersonaManager personas,
+    SphereMemoryService sphereMemory) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -21,7 +24,18 @@ public class ProjectGroupsController(ProjectGroupManager groups, ProjectManager 
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Укажите название группы" });
-        var g = groups.Create(req.Name.Trim(), req.Color ?? "", UserId);
+        if (req.Charter is { Length: > Sphere.CharterMaxLength })
+            return BadRequest(new { error = $"Хартия не длиннее {Sphere.CharterMaxLength} символов" });
+        // Значок — по белому списку lucide, как в Update; пусто — без значка
+        var icon = req.Icon?.Trim();
+        if (!string.IsNullOrEmpty(icon))
+        {
+            var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(icon);
+            if (candidate is null)
+                return BadRequest(new { error = "Негодный значок: нужно имя иконки из набора lucide" });
+            icon = candidate.Name;
+        }
+        var g = groups.Create(req.Name.Trim(), req.Color ?? "", UserId, icon, req.Charter);
         return Ok(g);
     }
 
@@ -30,7 +44,18 @@ public class ProjectGroupsController(ProjectGroupManager groups, ProjectManager 
     {
         var g = groups.GetById(id);
         if (g is null || g.OwnerId != UserId) return NotFound();
-        var updated = groups.Update(id, req.Name?.Trim(), req.Color);
+        if (req.Charter is { Length: > Sphere.CharterMaxLength })
+            return BadRequest(new { error = $"Хартия не длиннее {Sphere.CharterMaxLength} символов" });
+        // Значок валидируется по белому списку lucide, как у проекта (ADR-009); "" — снять
+        var icon = req.Icon?.Trim();
+        if (!string.IsNullOrEmpty(icon))
+        {
+            var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(icon);
+            if (candidate is null)
+                return BadRequest(new { error = "Негодный значок: нужно имя иконки из набора lucide" });
+            icon = candidate.Name;
+        }
+        var updated = groups.Update(id, req.Name?.Trim(), req.Color, icon, req.Charter);
         return Ok(updated);
     }
 
@@ -39,17 +64,26 @@ public class ProjectGroupsController(ProjectGroupManager groups, ProjectManager 
         => Ok(groups.Reorder(UserId, req.OrderedIds ?? []));
 
     [HttpDelete("{id}")]
-    public IActionResult Delete(string id)
+    public async Task<IActionResult> Delete(string id)
     {
         var g = groups.GetById(id);
         if (g is null || g.OwnerId != UserId) return NotFound();
+        // С командой сфера не удаляется: персон сначала переносят или удаляют. Память живёт и
+        // умирает вместе со сферой — её забирает удаление, отказа из-за неё нет
+        var team = personas.GetByOwner(UserId).Count(p => PersonaZone.IsSphereTeam(p, id));
+        if (team > 0)
+            return Conflict(new { error = $"Сферу нельзя удалить — в ней персон сферы: {team}", personas = team });
         groups.Delete(id);
         // Проекты удалённой группы возвращаются в список «без группы»
         projects.ClearGroup(id);
-        return NoContent();
+        var deletedMemory = await sphereMemory.DeleteAllForSphereAsync(UserId, id);
+        return Ok(new DeleteGroupResponse(deletedMemory));
     }
 }
 
-public record CreateGroupRequest(string Name, string? Color);
-public record UpdateGroupRequest(string? Name, string? Color);
+/// <summary>Ответ удаления сферы: сколько записей её памяти удалено вместе с ней.</summary>
+public record DeleteGroupResponse(int DeletedMemory);
+
+public record CreateGroupRequest(string Name, string? Color, string? Icon = null, string? Charter = null);
+public record UpdateGroupRequest(string? Name, string? Color, string? Icon = null, string? Charter = null);
 public record ReorderGroupsRequest(List<string>? OrderedIds);

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
 
@@ -38,11 +39,15 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     private readonly SpecialtySettingsStore? _specialty;
     // Сведение родного Claude к семейству на записи; без реестра (юнит-тесты) — по форме id
     private readonly LlmProviderRegistry? _providers;
+    // Справочник сфер: зона персоны сферы (видимость, уникальность handle); без него (юнит-тесты) сфер нет
+    private readonly ISphereDirectory? _spheres;
 
     public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null,
         ProjectEventLogService? events = null, UserModelTierResolver? userTiers = null,
-        SpecialtySettingsStore? specialty = null, LlmProviderRegistry? providers = null)
+        SpecialtySettingsStore? specialty = null, LlmProviderRegistry? providers = null,
+        ISphereDirectory? spheres = null)
     {
+        _spheres = spheres;
         _providers = providers;
         _log = log;
         _events = events;
@@ -90,12 +95,53 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         _personas.Values.Where(p => p.OwnerId == userId)
             .OrderByDescending(p => p.UpdatedAt).ToList();
 
-    // Персоны, доступные в контексте: глобальные + привязанные к конкретному проекту
-    public IReadOnlyCollection<Persona> GetForContext(string userId, string? projectId) =>
-        _personas.Values.Where(p => p.OwnerId == userId
+    // Сфера проекта на текущий момент (без кэша); null — вне сфер, флаг выключен или справочника нет
+    private string? SphereOfProject(string userId, string? projectId) =>
+        projectId is null ? null : _spheres?.SphereOf(userId, projectId);
+
+    // Персоны, доступные в контексте: глобальные + проекта + сферы проекта
+    public IReadOnlyCollection<Persona> GetForContext(string userId, string? projectId)
+    {
+        var sphereId = SphereOfProject(userId, projectId);
+        return _personas.Values.Where(p => p.OwnerId == userId
                 && (p.Scope == PersonaScope.Global
-                    || (p.Scope == PersonaScope.Project && p.ProjectId == projectId)))
+                    || PersonaZone.IsProjectTeam(p, projectId)
+                    || (sphereId is not null && PersonaZone.IsSphereTeam(p, sphereId))))
             .OrderByDescending(p => p.UpdatedAt).ToList();
+    }
+
+    // Контекст + внешние кросс-проектные scope-ы вызывающей персоны (ProjectPersonas-привязки):
+    // extraProjectIds — вся команда проекта, extraPersonaIds — точечные персоны. Общая точка для
+    // REST, MCP и persona_ask: фильтр не дублируется по местам.
+    public List<Persona> GetForContextWithExtras(string userId, string? projectId,
+        IReadOnlyCollection<string>? extraProjectIds, IReadOnlyCollection<string>? extraPersonaIds)
+    {
+        var pool = GetForContext(userId, projectId).ToList();
+        if (extraProjectIds is not { Count: > 0 } && extraPersonaIds is not { Count: > 0 }) return pool;
+        var seen = pool.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+        var extraPersonaSet = (extraPersonaIds ?? []).ToHashSet(StringComparer.Ordinal);
+        foreach (var p in GetByOwner(userId))
+        {
+            if (seen.Contains(p.Id)) continue;
+            var included = extraPersonaSet.Contains(p.Id)
+                || (PersonaZone.OwnProjectId(p) is { } ownProjectId
+                    && extraProjectIds is not null && extraProjectIds.Contains(ownProjectId));
+            if (!included) continue;
+            pool.Add(p);
+            seen.Add(p.Id);
+        }
+        return pool;
+    }
+
+    // Команда сферы; пусто, если флаг сфер выключен (fail-closed, как зона)
+    public IReadOnlyList<Persona> GetSphereTeam(string userId, string? sphereId) =>
+        string.IsNullOrEmpty(sphereId) || _spheres?.Enabled(userId) != true
+            ? []
+            : GetByOwner(userId).Where(p => PersonaZone.IsSphereTeam(p, sphereId)).ToList();
+
+    // Команда проекта (проектные персоны)
+    public IReadOnlyList<Persona> GetProjectTeam(string userId, string? projectId) =>
+        GetByOwner(userId).Where(p => PersonaZone.IsProjectTeam(p, projectId)).ToList();
 
     // Персона по id с проверкой владельца (null — нет или чужая)
     public Persona? Get(string id, string userId) =>
@@ -116,16 +162,20 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         _personas.Values.FirstOrDefault(p => p.OwnerId == userId
             && string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase));
 
-    // Персона по handle В КОНТЕКСТЕ (глобальные + проектные projectId). Именно так резолвятся
-    // @упоминания и persona_ask: две проектные «маши» из разных проектов не путаются.
-    // Страховка на случай остаточных дублей: проектная приоритетнее глобальной.
-    public Persona? GetByHandle(string userId, string handle, string? projectId) =>
-        _personas.Values.Where(p => p.OwnerId == userId
+    // Персона по handle В КОНТЕКСТЕ (глобальные + проектные projectId + сферы проекта). Именно так
+    // резолвятся @упоминания и persona_ask: две проектные «маши» из разных проектов не путаются.
+    // Страховка на случай остаточных дублей: проектная приоритетнее сферной, сферная — глобальной.
+    public Persona? GetByHandle(string userId, string handle, string? projectId)
+    {
+        var sphereId = SphereOfProject(userId, projectId);
+        return _personas.Values.Where(p => p.OwnerId == userId
                 && string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase)
                 && (p.Scope == PersonaScope.Global
-                    || (p.Scope == PersonaScope.Project && p.ProjectId == projectId)))
-            .OrderByDescending(p => p.Scope == PersonaScope.Project)
+                    || PersonaZone.IsProjectTeam(p, projectId)
+                    || (sphereId is not null && PersonaZone.IsSphereTeam(p, sphereId))))
+            .OrderBy(p => PersonaZone.IsProjectPersona(p) ? 0 : PersonaZone.IsSpherePersona(p) ? 1 : 2)
             .FirstOrDefault();
+    }
 
     // Пул персон, ДОСТИЖИМЫХ из контекста вызывающего: глобальные + текущего проекта (как
     // GetForContext) + внешние кросс-проектные scope-ы (ProjectPersonas-привязки вызывающей
@@ -135,23 +185,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     private List<Persona> AccessiblePool(string userId, string? projectId,
         IReadOnlyList<string>? extraProjectIds, IReadOnlyList<string>? extraPersonaIds)
     {
-        var pool = GetForContext(userId, projectId).ToList();
-        if (extraProjectIds is { Count: > 0 } || extraPersonaIds is { Count: > 0 })
-        {
-            var seen = pool.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
-            var extraPersonaSet = (extraPersonaIds ?? []).ToHashSet(StringComparer.Ordinal);
-            foreach (var p in GetByOwner(userId))
-            {
-                if (seen.Contains(p.Id)) continue;
-                var included = extraPersonaSet.Contains(p.Id)
-                    || (p.Scope == PersonaScope.Project && p.ProjectId is not null
-                        && extraProjectIds is not null && extraProjectIds.Contains(p.ProjectId));
-                if (!included) continue;
-                pool.Add(p);
-                seen.Add(p.Id);
-            }
-        }
-        return pool;
+        return GetForContextWithExtras(userId, projectId, extraProjectIds, extraPersonaIds);
     }
 
     // Кандидаты по handle в достижимом пуле (см. AccessiblePool). Используется persona_ask
@@ -327,7 +361,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool allProjectsAccess = false, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null)
+        bool? lightContext = null, string? sphereId = null)
     {
         var persona = new Persona
         {
@@ -350,6 +384,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             Specialty = specialty,
             Scope = scope,
             ProjectId = scope == PersonaScope.Project ? projectId : null,
+            SphereId = scope == PersonaScope.Sphere && !string.IsNullOrEmpty(sphereId) ? sphereId : null,
             Greeting = greeting,
             MemoryEnabled = memoryEnabled,
             // Явное false, а не null: null — «решение не принято», его подбирает разовая миграция
@@ -370,7 +405,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             {
                 var norm = NormalizeHandle(handle);
                 if (norm is null || PersonaAgentFileSync.IsReserved(norm)
-                    || OccupiedHandles(userId, persona.Scope, persona.ProjectId, null).Contains(norm))
+                    || OccupiedHandles(userId, persona.Scope, persona.ProjectId, null, persona.SphereId).Contains(norm))
                     throw new ArgumentException($"Handle @{handle} занят или невалиден");
                 persona.Handle = norm;
                 persona.HandleCustom = true;
@@ -378,7 +413,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             else
             {
                 persona.Handle = MakeUniqueHandle(persona.Name, userId, persona.Scope,
-                    persona.ProjectId, null, persona.Role);
+                    persona.ProjectId, null, persona.Role, persona.SphereId);
             }
             _personas[persona.Id] = persona;
         }
@@ -639,7 +674,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool? allProjectsAccess = null, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null)
+        bool? lightContext = null, string? sphereId = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -655,6 +690,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             var effProjectId = effScope == PersonaScope.Project
                 ? (scope is not null ? projectId : projectId ?? persona.ProjectId)
                 : null;
+            var effSphereId = effScope == PersonaScope.Sphere
+                ? (scope is not null ? sphereId : sphereId ?? persona.SphereId)
+                : null;
             // "" — маркер сброса кастомного handle (авто-генерация ниже); непустой — ручной handle
             string? resolvedHandle = null;
             if (handle is not null)
@@ -664,7 +702,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                 {
                     var norm = NormalizeHandle(handle);
                     if (norm is null || PersonaAgentFileSync.IsReserved(norm)
-                        || OccupiedHandles(userId, effScope, effProjectId, persona.Id).Contains(norm))
+                        || OccupiedHandles(userId, effScope, effProjectId, persona.Id, effSphereId).Contains(norm))
                         throw new ArgumentException($"Handle @{handle} занят или невалиден");
                     resolvedHandle = norm;
                 }
@@ -692,12 +730,16 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             {
                 persona.Scope = scope.Value;
                 persona.ProjectId = scope.Value == PersonaScope.Project ? projectId : null;
+                persona.SphereId = scope.Value == PersonaScope.Sphere && !string.IsNullOrEmpty(sphereId) ? sphereId : null;
                 // Доступ ко всем проектам имеет смысл только у глобальных персон
                 if (scope.Value == PersonaScope.Project) persona.AllProjectsAccess = false;
             }
-            else if (projectId is not null && persona.Scope == PersonaScope.Project)
+            else
             {
-                persona.ProjectId = projectId;
+                if (projectId is not null && persona.Scope == PersonaScope.Project)
+                    persona.ProjectId = projectId;
+                if (!string.IsNullOrEmpty(sphereId) && persona.Scope == PersonaScope.Sphere)
+                    persona.SphereId = sphereId;
             }
             if (color is not null) persona.Avatar.Color = color.Length == 0 ? null : color;
             if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;
@@ -719,7 +761,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             {
                 persona.HandleCustom = false;
                 persona.Handle = MakeUniqueHandle(persona.Name, userId, persona.Scope,
-                    persona.ProjectId, persona.Id, persona.Role);
+                    persona.ProjectId, persona.Id, persona.Role, persona.SphereId);
             }
             else if (resolvedHandle is not null)
             {
@@ -727,10 +769,10 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                 persona.HandleCustom = true;
             }
             else if (!persona.HandleCustom
-                     && OccupiedHandles(userId, persona.Scope, persona.ProjectId, persona.Id).Contains(persona.Handle))
+                     && OccupiedHandles(userId, persona.Scope, persona.ProjectId, persona.Id, persona.SphereId).Contains(persona.Handle))
             {
                 persona.Handle = MakeUniqueHandle(persona.Name, userId, persona.Scope,
-                    persona.ProjectId, persona.Id, persona.Role);
+                    persona.ProjectId, persona.Id, persona.Role, persona.SphereId);
             }
             persona.UpdatedAt = DateTime.UtcNow;
         }
@@ -929,31 +971,54 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // проекты владельца — её handle не должен пересекаться ни с кем. Проектная конфликтует
     // только с глобальными и проектными СВОЕГО проекта (файлы в разных корнях, per-turn
     // контекст их не сводит вместе) — проектные других проектов могут делить handle.
-    private HashSet<string> OccupiedHandles(string userId, PersonaScope scope, string? projectId, string? excludeId)
+    // Персона сферы конфликтует с глобальными, со своей сферой и с проектными персонами проектов
+    // сферы; проектная — дополнительно с персонами сферы своего проекта.
+    private HashSet<string> OccupiedHandles(string userId, PersonaScope scope, string? projectId, string? excludeId,
+        string? sphereId = null)
     {
         var scoped = _personas.Values.Where(p => p.OwnerId == userId && p.Id != excludeId);
-        if (scope != PersonaScope.Global)
+        if (scope == PersonaScope.Sphere)
+        {
+            var sphereProjects = (string.IsNullOrEmpty(sphereId) ? [] : _spheres?.ProjectsOf(userId, sphereId) ?? [])
+                .ToHashSet(StringComparer.Ordinal);
             scoped = scoped.Where(p => p.Scope == PersonaScope.Global
-                || (p.Scope == PersonaScope.Project && p.ProjectId == projectId));
+                || PersonaZone.IsSphereTeam(p, sphereId)
+                || (PersonaZone.OwnProjectId(p) is { } pid && sphereProjects.Contains(pid)));
+        }
+        else if (scope != PersonaScope.Global)
+        {
+            var ownSphere = SphereOfProject(userId, projectId);
+            scoped = scoped.Where(p => p.Scope == PersonaScope.Global
+                || PersonaZone.IsProjectTeam(p, projectId)
+                || (ownSphere is not null && PersonaZone.IsSphereTeam(p, ownSphere)));
+        }
         return scoped.Select(p => p.Handle).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     // Пересекаются ли зоны уникальности двух персон одного владельца (тогда одинаковый handle —
     // это коллизия). Глобальная видна везде → пересекается с любой; две проектные — только внутри
-    // одного проекта. Симметрично.
-    private static bool InUniquenessZone(Persona a, Persona b) =>
-        a.OwnerId == b.OwnerId
-        && (a.Scope == PersonaScope.Global || b.Scope == PersonaScope.Global
-            || a.ProjectId == b.ProjectId);
+    // одного проекта; сферная — со своей сферой и проектными персонами её проектов. Симметрично.
+    private bool InUniquenessZone(Persona a, Persona b)
+    {
+        if (a.OwnerId != b.OwnerId) return false;
+        if (a.Scope == PersonaScope.Global || b.Scope == PersonaScope.Global) return true;
+        if (a.Scope == PersonaScope.Sphere && b.Scope == PersonaScope.Sphere) return a.SphereId == b.SphereId;
+        if (a.Scope == PersonaScope.Sphere || b.Scope == PersonaScope.Sphere)
+        {
+            var (sphere, project) = a.Scope == PersonaScope.Sphere ? (a, b) : (b, a);
+            return SphereOfProject(sphere.OwnerId, project.ProjectId) is { } sid && sid == sphere.SphereId;
+        }
+        return a.ProjectId == b.ProjectId;
+    }
 
     // Уникальный В КОНТЕКСТЕ slug из имени. При коллизии — осмысленный суффикс из роли
     // (masha-analitik), затем числовой (masha-2). Зону уникальности задаёт OccupiedHandles.
     private string MakeUniqueHandle(string name, string userId, PersonaScope scope,
-        string? projectId, string? excludeId, string? role)
+        string? projectId, string? excludeId, string? role, string? sphereId = null)
     {
         var baseSlug = Slugify(name);
         if (baseSlug.Length == 0) baseSlug = "agent";
-        var occupied = OccupiedHandles(userId, scope, projectId, excludeId);
+        var occupied = OccupiedHandles(userId, scope, projectId, excludeId, sphereId);
         if (!occupied.Contains(baseSlug)) return baseSlug;
 
         // Осмысленный суффикс из роли — вместо безликой цифры
@@ -987,6 +1052,14 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         var norm = NormalizeHandle(handle);
         if (norm is null || PersonaAgentFileSync.IsReserved(norm)) return false;
         return !OccupiedHandles(userId, scope, projectId, excludeId).Contains(norm);
+    }
+
+    // Свободен ли handle в зоне уникальности персоны СФЕРЫ (сфера ∪ глобальные ∪ проектные персоны её проектов)
+    public bool IsHandleAvailableForSphere(string userId, string handle, string sphereId, string? excludeId)
+    {
+        var norm = NormalizeHandle(handle);
+        if (norm is null || PersonaAgentFileSync.IsReserved(norm)) return false;
+        return !OccupiedHandles(userId, PersonaScope.Sphere, null, excludeId, sphereId).Contains(norm);
     }
 
     // Лёгкий клон персоны с другим handle — чтобы PersonaAgentFileSync.ResolvePaths указал на
@@ -1028,7 +1101,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         foreach (var p in _personas.Values.Where(p => string.IsNullOrEmpty(p.Handle))
                      .OrderBy(p => p.CreatedAt).ToList())
         {
-            p.Handle = MakeUniqueHandle(p.Name, p.OwnerId, p.Scope, p.ProjectId, p.Id, p.Role);
+            p.Handle = MakeUniqueHandle(p.Name, p.OwnerId, p.Scope, p.ProjectId, p.Id, p.Role, p.SphereId);
             changed = true;
         }
 
@@ -1045,7 +1118,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             if (conflict)
             {
                 var old = p.Handle;
-                p.Handle = MakeUniqueHandle(p.Name, p.OwnerId, p.Scope, p.ProjectId, p.Id, p.Role);
+                p.Handle = MakeUniqueHandle(p.Name, p.OwnerId, p.Scope, p.ProjectId, p.Id, p.Role, p.SphereId);
                 _log?.LogWarning("Дубль handle в контексте у владельца {OwnerId}: «{Name}» @{Old} → @{New}",
                     p.OwnerId, p.Name, old, p.Handle);
                 changed = true;
@@ -1077,7 +1150,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                 var baseSlug = m.Groups[1].Value;
                 // База не должна быть зарезервирована и должна быть свободна в контексте персоны
                 if (PersonaAgentFileSync.IsReserved(baseSlug)) continue;
-                if (OccupiedHandles(p.OwnerId, p.Scope, p.ProjectId, p.Id).Contains(baseSlug)) continue;
+                if (OccupiedHandles(p.OwnerId, p.Scope, p.ProjectId, p.Id, p.SphereId).Contains(baseSlug)) continue;
                 var old = p.Handle;
                 p.Handle = baseSlug;
                 p.UpdatedAt = DateTime.UtcNow;

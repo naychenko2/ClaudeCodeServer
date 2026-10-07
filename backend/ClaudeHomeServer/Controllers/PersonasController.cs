@@ -88,32 +88,18 @@ public class PersonasController(
     [HttpGet]
     public ActionResult<IReadOnlyList<Persona>> List(
         [FromQuery] string? scope, [FromQuery] string? projectId,
-        [FromQuery] string? extraProjectIds = null, [FromQuery] string? extraPersonaIds = null)
+        [FromQuery] string? extraProjectIds = null, [FromQuery] string? extraPersonaIds = null,
+        [FromQuery] string? sphereId = null)
     {
         if (string.Equals(scope, "context", StringComparison.OrdinalIgnoreCase))
         {
-            var result = _personas.GetForContext(UserId, projectId).ToList();
-            var extraProjects = SplitCsv(extraProjectIds);
-            var extraPersonas = SplitCsv(extraPersonaIds).ToHashSet(StringComparer.Ordinal);
-            if (extraProjects.Count > 0 || extraPersonas.Count > 0)
-            {
-                var seen = result.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
-                foreach (var p in _personas.GetByOwner(UserId))
-                {
-                    if (seen.Contains(p.Id)) continue;
-                    var included = extraPersonas.Contains(p.Id)
-                        || (p.Scope == PersonaScope.Project && p.ProjectId is not null
-                            && extraProjects.Contains(p.ProjectId));
-                    if (!included) continue;
-                    result.Add(p);
-                    seen.Add(p.Id);
-                }
-            }
-            return Ok(result);
+            return Ok(_personas.GetForContextWithExtras(UserId, projectId,
+                SplitCsv(extraProjectIds), SplitCsv(extraPersonaIds)));
         }
         if (string.Equals(scope, "project", StringComparison.OrdinalIgnoreCase))
-            return Ok(_personas.GetByOwner(UserId)
-                .Where(p => p.Scope == PersonaScope.Project && p.ProjectId == projectId).ToList());
+            return Ok(_personas.GetProjectTeam(UserId, projectId));
+        if (string.Equals(scope, "sphere", StringComparison.OrdinalIgnoreCase))
+            return Ok(_personas.GetSphereTeam(UserId, sphereId));
         if (string.Equals(scope, "global", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetByOwner(UserId)
                 .Where(p => p.Scope == PersonaScope.Global).ToList());
@@ -517,7 +503,7 @@ public class PersonasController(
             return BadRequest(new { error = "Опишите, кто это и чем будет заниматься" });
 
         var scope = req.Scope ?? PersonaScope.Global;
-        if (scope == PersonaScope.Project && !_crud.ValidProject(UserId, req.ProjectId))
+        if (PersonaZone.IsProjectScope(scope) && !_crud.ValidProject(UserId, req.ProjectId))
             return BadRequest(new { error = "Для проектной персоны нужен корректный projectId" });
 
         // 1. Черновик всех полей одним one-shot вызовом (строгий JSON-объект).
@@ -1139,7 +1125,7 @@ public class PersonasController(
                 // Второй уровень пикера ProjectPersonas: команда конкретного (чужого) проекта —
                 // сужение привязки до одной персоны вместо всей команды.
                 return Ok(_personas.GetByOwner(UserId)
-                    .Where(p => p.Scope == PersonaScope.Project && p.ProjectId == source)
+                    .Where(p => PersonaZone.IsProjectTeam(p, source))
                     .Select(p => new { id = p.Id, label = PersonaManager.PersonaLabel(p), hint = p.Description, meta = source }));
 
             case "knowledge":
@@ -1696,7 +1682,9 @@ public record CreatePersonaRequest(
     string? TierWeak = null,
     // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
     // (при создании — выключен)
-    bool? LightContext = null);
+    bool? LightContext = null,
+    // Сфера для Scope.Sphere: обязательна и должна быть сферой владельца; при другом scope сбрасывается
+    string? SphereId = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -1733,7 +1721,9 @@ public record UpdatePersonaRequest(
     string? TierWeak = null,
     // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
     // (при создании — выключен)
-    bool? LightContext = null);
+    bool? LightContext = null,
+    // Сфера для Scope.Sphere (смена scope на Sphere требует её); null — не менять
+    string? SphereId = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

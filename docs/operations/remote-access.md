@@ -209,6 +209,64 @@ Basic. Иначе Mini-Redirector цепляется за Negotiate и крут�
 (`WebDav/NegotiateFailure.cs`) превращает его в `401` с **одним** Basic. Без этого клиент получал
 500, а Explorer крутил сохранённую учётку по кругу.
 
+### InvalidToken: причина, патчи, пакет (итог 2026-10-06)
+
+Статус в `NTLM отклонён: …: <статус>` различает причины: `GenericFailure` — не сошёлся NTLMv2-ответ
+(пароль, регистр или написание домена); `InvalidToken` — gss-ntlmssp вернул `GSS_S_DEFECTIVE_TOKEN`
+после успешной проверки хэша (MIC, channel bindings или разбор AV-пар). Строка отказа также несёт
+транспорт (сырой NTLMSSP или SPNEGO) и форму Type3: флаги, `MsvAvFlags`, `MsvAvChannelBindings`,
+`MsvAvTargetName`. Секретов там нет. ASP.NET Negotiate на Linux channel bindings в GSSAPI не передаёт,
+а по HTTP/2 хендлер Negotiate не аутентифицирует вовсе — до gss-ntlmssp Windows доходит по HTTP/1.1.
+
+**Причина.** Два дефекта gss-ntlmssp 1.2.0 против Windows 11 24H2 (Mini-Redirector, Word):
+
+1. Ключ сессии расшифровывался по одному флагу `KEY_EXCH`, хотя по MS-NLMP 3.1.5.1.2 / 3.2.5.1.2 нужен
+   `KEY_EXCH` вместе с `SIGN` или `SEAL`. Клиент с Type1 `0xE2088207` слал KeyExchangeKey, сервер
+   получал чужой ключ — MIC не сходился.
+2. Type2 всегда нёс `MsvAvFlags=0`. Windows SSPI правит эту пару в своей копии CHALLENGE_MESSAGE на месте
+   (`|= MIC_PRESENT`) и считает MIC по изменённому Type2, поэтому подпись не сходилась. Без этой пары
+   Windows считает MIC по Type2 с провода, как и клиенты по спецификации.
+
+**Патчи** (проверка MIC не ослаблена, меняется только выбор ключа и состав Type2):
+[ntlm-key-exch-requires-sign-seal.diff](../../deploy/gss-ntlmssp/ntlm-key-exch-requires-sign-seal.diff) (`+ccs1`) и
+[ntlm-no-empty-msvavflags-in-type2.diff](../../deploy/gss-ntlmssp/ntlm-no-empty-msvavflags-in-type2.diff) (`+ccs2`).
+Пакет `1.2.0-1build5+ccs2` (Ubuntu 26.04) собирает [build-deb.sh](../../deploy/gss-ntlmssp/build-deb.sh) в контейнере;
+готовый .deb лежит в `deploy/gss-ntlmssp/out/` (в git не коммитится), тесты матрицы флагов — `build-deb.sh --test`.
+Пакет правит только акцептор (`gss_sec_ctx.c`). `+ccs1` Windows не пускает: нужен `+ccs2` или новее.
+
+**Установка (делает человек, на хосте с боевым `ccs.service`).** Пакет:
+`/home/an/ccs-packages/gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb`, sha256
+`ea89f8576e721462da21e49c8801fa56a9cec7b4a9bc28eb4ebb512b1ec426e6` (`gssntlmssp.so` внутри — sha256
+`3f2c5b9803469985a801663eca9f7819918122cc8501e331e4ef2ab73f38ed97`; повторная сборка даёт ту же `.so`, но другой
+sha256 самого `.deb`).
+
+```bash
+sha256sum gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb   # сверить с суммой выше
+sudo dpkg -i gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb
+sudo apt-mark hold gss-ntlmssp
+sudo systemctl restart ccs.service
+deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на месте
+```
+
+**Проверка.** Живой Windows (curl.exe `--negotiate`, Word по WebDAV) и бой 2026-10-06: `200`, в логе
+`WebDAV: NTLM-вход WORKGROUP\andrey`, неверный пароль — `401`. Воспроизведение без боевого сервера —
+дев-стенд [test/stand](../../deploy/gss-ntlmssp/test/stand) и клиент [client.py](../../deploy/gss-ntlmssp/test/client.py);
+если на Windows нужны полные токены тестовой учётки, стенд печатает их сам (`STAND_DUMP=1`).
+Трассировка gss-ntlmssp — `Environment=GSSNTLMSSP_DEBUG=/tmp/gssntlm.log` в юните (после проверки убрать).
+
+**Сторож отката.** `apt upgrade` без hold молча вернёт оригинал. Защиты две: hold и проверка
+[check-gss-ntlmssp.sh](../../deploy/gss-ntlmssp/check-gss-ntlmssp.sh) (exit 1 — версия без `+ccs2` или новее, exit 2 —
+нет hold; печатает `WARNING` в stderr; добавьте вызов в `/opt/ccs/check-release.sh` или cron). Плюс сервер при
+старте пишет warning `gss-ntlmssp … без патча '+ccs2' или новее` (`NtlmUserFile`), если читает
+`/var/lib/dpkg/status` и версия без суффикса.
+
+**Откат:** `sudo apt-mark unhold gss-ntlmssp && sudo apt install --reinstall gss-ntlmssp=1.2.0-1build5`
+(при отсутствии версии в индексе — `sudo apt install --reinstall gss-ntlmssp`), затем
+`sudo systemctl restart ccs.service`. Без патчей NTLM у Windows снова даст InvalidToken, Basic продолжит работать.
+
+**Upstream.** Текст issue и PR — [upstream-issue-and-pr.md](../../deploy/gss-ntlmssp/upstream-issue-and-pr.md),
+не опубликован: отправка только по явной просьбе.
+
 ### Безопасность
 
 В файле лежат NT-хэши **основного пароля**: по ним возможен pass-the-hash, а MD4 без соли

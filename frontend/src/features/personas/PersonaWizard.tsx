@@ -42,6 +42,10 @@ import { fetchBindingTargets } from './bindingMeta';
 import { Stepper } from './stepperUi';
 import { PERSONA_TEMPLATES, type PersonaTemplate } from './personaTemplates';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
+import { PersonaZoneSelect } from './PersonaZoneSelect';
+import { isProjectPersona, isSpherePersona } from '../../lib/personaZone';
+import { useSpheres } from '../../lib/useSpheres';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
 
@@ -67,9 +71,10 @@ const WIZARD_STEPS = [
 
 type Method = 'ai' | 'template' | 'blank';
 
-export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStartChat, onCancel, onBack, isMobile }: {
+export function PersonaWizard({ scope, projectId, sphereId, projects, onOpenStudio, onStartChat, onCancel, onBack, isMobile }: {
   scope: PersonaScope;
   projectId?: string;
+  sphereId?: string;
   projects: Project[];
   // «Открыть студию персоны» на шаге «Готово»
   onOpenStudio: (p: Persona) => void;
@@ -90,6 +95,11 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
 
   const [wizScope, setWizScope] = useState<PersonaScope>(scope);
   const [wizProjectId, setWizProjectId] = useState(projectId ?? projects[0]?.id ?? '');
+  const [wizSphereId, setWizSphereId] = useState(sphereId ?? '');
+  const spheresOn = useFeature(FLAGS.spheres);
+  const spheres = useSpheres(spheresOn);
+  const wizIsProject = isProjectPersona({ scope: wizScope });
+  const wizIsSphere = isSpherePersona({ scope: wizScope });
   // Проект по умолчанию, если выбора ещё нет (список проектов мог доехать позже
   // монтирования): вычисляется при рендере вместо синхронизирующего эффекта —
   // все места чтения и так смотрят на значение только при wizScope === 'project'
@@ -243,7 +253,8 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
       contract: buildContract(),
       systemPrompt: '',
       scope: wizScope,
-      projectId: wizScope === 'project' ? effProjectId : undefined,
+      projectId: wizIsProject ? effProjectId : undefined,
+      sphereId: wizIsSphere ? wizSphereId : undefined,
       color,
       greeting: greeting.trim() || undefined,
       memoryEnabled,
@@ -376,7 +387,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   // === Навигация по шагам ===
 
   const canProceedStep1 = method === 'ai' ? aiPrompt.trim().length > 0 : method === 'template' ? !!selectedTemplateKey : true;
-  const canProceedStep2 = name.trim().length > 0 && !(wizScope === 'project' && !effProjectId);
+  const canProceedStep2 = name.trim().length > 0 && !(wizIsProject && !effProjectId) && !(wizIsSphere && !wizSphereId);
   const canProceed = step === 1 ? canProceedStep1 : step === 2 ? canProceedStep2 : true;
 
   async function goNext() {
@@ -388,7 +399,8 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
         try {
           const created = await api.personas.quickCreate({
             prompt: aiPrompt.trim(), scope: wizScope,
-            projectId: wizScope === 'project' ? effProjectId : undefined,
+            projectId: wizIsProject ? effProjectId : undefined,
+            sphereId: wizIsSphere ? wizSphereId : undefined,
           });
           hydrateFromPersona(created);
           setPersona(created);
@@ -587,19 +599,29 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
 
               <div style={{ borderTop: `1px solid ${C.borderLight}`, paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <FieldLabel>Зона</FieldLabel>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <PillSwitch<PersonaScope>
-                    value={wizScope}
-                    onChange={setWizScope}
-                    options={[{ value: 'global', label: 'Глобальная' }, { value: 'project', label: 'Проект' }]}
+                {spheresOn ? (
+                  <PersonaZoneSelect
+                    value={{ scope: wizScope, projectId: effProjectId, sphereId: wizSphereId }}
+                    onChange={z => { setWizScope(z.scope); setWizProjectId(z.projectId ?? ''); setWizSphereId(z.sphereId ?? ''); }}
+                    projects={projects}
+                    spheres={spheres}
                   />
-                  {wizScope === 'project' && (
-                    <select value={effProjectId} onChange={e => setWizProjectId(e.target.value)} style={selectStyle} aria-label="Проект">
-                      {projects.length === 0 && <option value="">— нет доступных проектов —</option>}
-                      {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
-                  )}
-                </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <PillSwitch<PersonaScope>
+                      value={wizScope}
+                      onChange={setWizScope}
+                      options={[{ value: 'global', label: 'Глобальная' }, { value: 'project', label: 'Проект' }]}
+                    />
+                    {wizScope === 'project' && (
+                      <select value={effProjectId} onChange={e => setWizProjectId(e.target.value)} style={selectStyle} aria-label="Проект">
+                        {projects.length === 0 && <option value="">— нет доступных проектов —</option>}
+                        {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    )}
+                  </div>
+
+                )}
               </div>
             </>
           )}
@@ -950,7 +972,8 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                     </div>
                   )}
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
-                    <Tag>{wizScope === 'project' ? (projects.find(p => p.id === effProjectId)?.name ?? 'Проект') : 'Глобальная'}</Tag>
+                    <Tag>{wizIsProject ? (projects.find(p => p.id === effProjectId)?.name ?? 'Проект')
+                      : wizIsSphere ? (spheres.find(x => x.id === wizSphereId)?.name ?? 'Сфера') : 'Глобальная'}</Tag>
                     <Tag>{access === 'full' ? 'Полный доступ' : access === 'readOnly' ? 'Только чтение' : 'Свой доступ'}</Tag>
                     <Tag>{memoryEnabled ? 'Память включена' : 'Память выключена'}</Tag>
                     {bindingsCount != null && <Tag>{bindingsCount} {bindingsCount === 1 ? 'умение' : 'умений'}</Tag>}

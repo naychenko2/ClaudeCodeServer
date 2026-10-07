@@ -1577,7 +1577,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     };
                 // Состав инструментов памяти зависит от секции паспортов и транспорта —
                 // оба в сигнатуру запуска (переключение рубильника обязано пробить доживание)
-                shapes["memory"] = $"d{memoryDossierTools}:t:{(memoryHttp ? "http" : "stdio")}";
+                // Секция sphere_memory_* — только http-ветка (stdio заморожен); бит добавляется лишь
+                // при включённом флаге, чтобы у выключенных сигнатура не менялась
+                shapes["memory"] = $"d{memoryDossierTools}:t:{(memoryHttp ? "http" : "stdio")}"
+                    + (_memoryMcp.SphereToolsEnabled ? ":s1" : "");
             }
 
             // Проверка _personasMcp избыточна по смыслу (hasPersonas истинен только когда контекст
@@ -3479,6 +3482,11 @@ public class ClaudeSession : ILlmSessionAdapter
             // через Filter-событие prompt/assembling.
             if (contributorSections.TryGetValue("dossier-trailer", out var dossierTrailer))
                 Add("dossier-trailer", "Трейлер истории решений", dossierTrailer.Text, group: "project");
+
+            // Устав сферы проекта: стабильная секция системного блока (меняется только правкой
+            // сферы), при RecallInTurnText хвостом не уезжает. Текст даёт SphereCharterContributor.
+            if (contributorSections.TryGetValue("sphere-charter", out var sphereCharter))
+                Add("sphere-charter", "Устав сферы", sphereCharter.Text, group: "project");
 
             // Подсказка про базу заметок — только когда notes-server доехал до этого хода
             if (_notesMcp is not null && McpDelivered("notes"))

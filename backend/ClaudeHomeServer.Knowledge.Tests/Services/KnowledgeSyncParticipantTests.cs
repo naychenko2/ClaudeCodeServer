@@ -159,6 +159,24 @@ public class KnowledgeSyncParticipantTests : IDisposable
     }
 
     [Fact]
+    public async Task SphereMemoryService_Соблюдает_Контракт_УчастникаИУдаляетДатасет()
+    {
+        var svc = new SphereMemoryService(_config, null, _knowledge, null, _users);
+        var entry = svc.Add(_ownerId, "sph-1", "общая договорённость сферы");
+        await svc.SyncAsync(_ownerId, "sph-1");   // ds-1, doc-1
+
+        var target = ((IKnowledgeSyncParticipant)svc).ListTargets().Should().ContainSingle().Subject;
+        target.Label.Should().Be($"sphere:{_ownerId}:sph-1");
+        target.OwnerUserIds.Should().BeEquivalentTo([_ownerId]);
+        await AssertContractAsync(target, "doc-1", entry.Id, () => svc.SyncAsync(_ownerId, "sph-1"));
+
+        // Удаление сферы уносит Dify-датасет вместе с записями
+        (await svc.DeleteAllForSphereAsync(_ownerId, "sph-1")).Should().Be(1);
+        _dify.CallsOf("DELETE", "/datasets/ds-1").Should().NotBeEmpty();
+        ((IKnowledgeSyncParticipant)svc).ListTargets().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task DossierStore_Соблюдает_Контракт_Участника()
     {
         var svc = new DossierStore(_config, null, _knowledge, null, _users);

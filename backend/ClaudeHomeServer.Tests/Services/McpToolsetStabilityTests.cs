@@ -1186,6 +1186,10 @@ public class McpToolsetStabilityTests
 
         body.Should().Contain("ChangeDossiersRecall",
             "секция dossier_* гейтится флагом владельца change-dossiers-recall");
+        body.Should().Contain("FeatureFlagKeys.Spheres",
+            "секция sphere_memory_* гейтится флагом владельца spheres, а не членством проекта");
+        body.Should().NotContain("SphereOf",
+            "членство проекта в сфере не смеет влиять на состав инструментов (перенос проекта перезапускал бы CLI)");
         body.Should().Contain("IsEnabled(",
             "решение принимает FeatureFlagService.IsEnabled по владельцу сессии");
         body.Should().NotContain("_currentTurn",

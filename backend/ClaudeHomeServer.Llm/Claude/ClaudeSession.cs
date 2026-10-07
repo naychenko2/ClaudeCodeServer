@@ -3969,6 +3969,12 @@ public class ClaudeSession : ILlmSessionAdapter
         if (_lastBareModeApplied)
             envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
 
+        // План хода (TaskCreate/TaskUpdate): с CLI 2.1.281 (24.09) план-тулы в -p отдаются
+        // лишь части моделей, остальным — только по этой переменной (гейт найден в бинарнике
+        // 2.1.292; замер: без неё у Fable 5.1 и Sonnet 5.5 их нет). Ставим всегда:
+        // исполнителю задачи план-тулы всё равно закрыты через --disallowedTools.
+        envOverrides["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1";
+
         foreach (var (k, v) in PlaywrightMcpEnv(_browserEnabled, _launcher.IsSandboxed, _rootPath))
             envOverrides[k] = v;
 

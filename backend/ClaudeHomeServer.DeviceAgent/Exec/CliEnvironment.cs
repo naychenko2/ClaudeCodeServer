@@ -55,6 +55,7 @@ internal static class CliEnvironment
     public static readonly IReadOnlySet<string> AllowedFromServer = new HashSet<string>(StringComparer.Ordinal)
     {
         "CLAUDE_CODE_DISABLE_CLAUDE_MDS",
+        "CLAUDE_CODE_ENABLE_TODO_TOOLS",
     };
 
     /// <summary>Полный список имён, которые вообще могут оказаться в env CLI.</summary>

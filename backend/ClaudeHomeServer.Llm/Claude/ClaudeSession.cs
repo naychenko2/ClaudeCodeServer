@@ -1669,9 +1669,6 @@ public class ClaudeSession : ILlmSessionAdapter
                 // захваченный строкой JWT у долгоживущего чата истекал, и инструменты
                 // пропадали у модели молча
                 var wspToken = _workspaceMcp.TokenFactory();
-                // Инструмент context_list: включён флагом владельца chat-context (решение
-                // принято в SessionManager.BuildWorkspaceContext, от хода не зависит)
-                var workspaceChatContext = _workspaceMcp.ChatContextEnabled ? "1" : "0";
                 // Ключ сервера — "wsp", НЕ "workspace": claude CLI молча отбрасывает
                 // MCP-сервер с зарезервированным именем "workspace" из --mcp-config
                 // (сервер не стартует, инструменты не появляются). Отсюда же префикс
@@ -1717,23 +1714,20 @@ public class ClaudeSession : ILlmSessionAdapter
                         // workspace-server): их состав должен быть одинаков на всех ходах, иначе
                         // инструменты «мерцают» между ходами вместе с сигнатурой MCP.
                         ["WORKSPACE_WRITE"] = workspaceWrite,
-                        // context_list (материалы чата) — гейт по флагу ВЛАДЕЛЬЦА chat-context,
-                        // как MEMORY_DOSSIER_TOOLS: значение постоянно в рамках сессии, а от
-                        // СОДЕРЖИМОГО контекста состав инструментов не зависит вовсе (иначе
-                        // добавление материала мид-сессию перезапускало бы CLI).
-                        ["WORKSPACE_CHAT_CONTEXT"] = workspaceChatContext,
+                        // context_list (материалы чата) в stdio-откате есть всегда
+                        ["WORKSPACE_CHAT_CONTEXT"] = "1",
                     },
                     // alwaysLoad как у memory/personas: аккаунт-коннекторы claude.ai переводят
                     // CLI в режим deferred-tools, где ленивые серверы прячут инструменты от модели.
                     // Персона-секретарь опирается на workspace-инструменты — держим их всегда видимыми.
                     ["alwaysLoad"] = true,
                 };
-                // Состав wsp-инструментов зависит от write-режима, набора секций, базового
-                // context_list и транспорта — всё в сигнатуру. Секции и их отпечаток считает
+                // Состав wsp-инструментов зависит от write-режима, набора секций и
+                // транспорта — всё в сигнатуру. Секции и их отпечаток считает
                 // ОДНА формула (SessionManager.BuildWorkspacePlan): её же на каждый tools/list
                 // зовёт WorkspaceToolset (блокер приёмки волны 2 — состав и shape по разным
-                // формулам расходятся); переключение флага корректно перезапустит CLI
-                shapes["wsp"] = $"w{workspaceWrite}c{workspaceChatContext}:{sectionsJoined}:t:{(workspaceHttp ? "http" : "stdio")}";
+                // формулам расходятся)
+                shapes["wsp"] = $"w{workspaceWrite}:{sectionsJoined}:t:{(workspaceHttp ? "http" : "stdio")}";
             }
 
             if (hasNotifications)
@@ -3571,14 +3565,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     "подожди мгновение и повтори тот же вызов.";
                 Add("mcp-workspace", "Как искать по проектам и файлам", workspaceHint, group: "mcp");
 
-                // Материалы, закреплённые за чатом (фича chat-context). Три условия, и все
-                // обязательны: инструмент context_list живёт в wsp-сервере (здесь он есть по
-                // определению — мы внутри его блока), флаг владельца поднимает его в составе,
-                // а сам состав контекста берётся ЖИВЫМ провайдером — материал, добавленный
-                // в идущем разговоре, попадает в подсказку следующего хода. Пустой контекст
-                // секции не даёт: звать инструмент незачем.
-                if (_workspaceMcp.ChatContextEnabled
-                    && Prompts.ChatContextPrompts.SectionFor(_chatContextProvider?.Invoke()) is { } chatContextHint)
+                // Материалы, закреплённые за чатом: инструмент context_list живёт в wsp-сервере,
+                // состав контекста берётся ЖИВЫМ провайдером — материал, добавленный в идущем
+                // разговоре, попадает в подсказку следующего хода. Пустой контекст секции не
+                // даёт: звать инструмент незачем.
+                if (Prompts.ChatContextPrompts.SectionFor(_chatContextProvider?.Invoke()) is { } chatContextHint)
                     Add("mcp-context", "Что приложено к этому чату", chatContextHint, group: "mcp");
             }
 

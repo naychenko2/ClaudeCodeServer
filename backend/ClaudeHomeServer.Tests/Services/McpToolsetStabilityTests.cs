@@ -1119,8 +1119,8 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Без флага владельца chat-context инструмента нет вовсе: dark launch означает, что
-    /// схема инструмента не висит в контексте каждого хода при выключенной фиче.
+    /// Откат на stdio-скрипт: WORKSPACE_CHAT_CONTEXT=0 прячет инструмент у самого скрипта
+    /// (бэкенд выставляет всегда «1»).
     /// </summary>
     [SkippableTheory]
     [InlineData("search")]
@@ -1132,18 +1132,17 @@ public class McpToolsetStabilityTests
         if (tools is null) return;
 
         tools.Should().NotContain("context_list",
-            "флаг владельца chat-context выключен — инструмента быть не должно");
+            "env WORKSPACE_CHAT_CONTEXT=0 — stdio-скрипт инструмент не отдаёт");
         tools.Should().Contain("search_unified", "остальной состав не пострадал");
     }
 
     /// <summary>
-    /// Гейт context_list решается в BuildWorkspaceContext по ВЛАДЕЛЬЦУ (флаг chat-context),
-    /// а не по свойствам хода и не по непустоте контекста: значение уезжает в env
-    /// WORKSPACE_CHAT_CONTEXT и входит в отпечаток состава (shapes wsp) — мерцание между
+    /// context_list безусловно входит в состав wsp-сервера: BuildWorkspaceContext не зависит ни
+    /// от флагов, ни от свойств хода, ни от непустоты контекста — мерцание состава между
     /// ходами убивало бы процесс CLI.
     /// </summary>
     [SkippableFact]
-    public void ContextListГейт_РешаетсяФлагомВладельцаАНеХодом()
+    public void ContextList_СоставНеЗависитОтХода()
     {
         var path = FindSource("Services", "SessionManager.cs");
         Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
@@ -1151,10 +1150,10 @@ public class McpToolsetStabilityTests
         var body = MethodBody(File.ReadAllText(path!),
             "private WorkspaceMcpContext? BuildWorkspaceContext");
 
-        body.Should().Contain("ChatContext",
-            "инструмент context_list гейтится флагом владельца chat-context");
+        body.Should().NotContain("ChatContext",
+            "гейта фич-флага chat-context больше нет — инструмент в составе всегда");
         body.Should().NotContain(".Context",
-            "содержимое контекста чата не смеет решать состав инструментов — только флаг владельца");
+            "содержимое контекста чата не смеет решать состав инструментов");
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав инструментов рабочего пространства");
     }

@@ -3677,11 +3677,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new WorkspaceMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
             plan.Sections, plan.AllowedProjectIds, selfSessionId,
-            UseHttp: HttpEndpointUsable(apiUrl),
-            // context_list (материалы контекста чата) — базовый инструмент wsp-сервера за флагом
-            // ВЛАДЕЛЬЦА chat-context: решение принимается по владельцу, а не по ходу и не по
-            // непустоте контекста, иначе состав tools/list мерцал бы между ходами.
-            ChatContextEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChatContext));
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     /// <summary>

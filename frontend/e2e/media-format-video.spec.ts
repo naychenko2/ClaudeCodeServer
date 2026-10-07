@@ -77,6 +77,17 @@ const h3Scene = (tierKey: string): Scene => {
   return s;
 };
 
+// Б4.3: на 360 чип «Формат» виден в первом экране строки, «Чем» сжат до имени модели
+test('360: чип «Формат» в первом экране · сцена + MiniMax H3', async ({ page }) => {
+  await open(page, { vp: { width: 360, height: 780 }, theme: 'light' });
+  await expect(chip(page)).toBeVisible({ timeout: 15_000 });
+  const row = await page.locator('[data-context-row]').boundingBox();
+  const c = await chip(page).boundingBox();
+  expect(c!.x + c!.width).toBeLessThanOrEqual(row!.x + row!.width);
+  expect(await page.locator('[data-context-row] [data-chip="exec"]').innerText()).not.toMatch(/\$|local|локал/i);
+  await shot(page, 'chip-360-video-scene.png');
+});
+
 for (const { name, vp } of VIEWPORTS) {
   for (const theme of ['light', 'dark'] as const) {
     test.describe(`«Формат» видео · ${name} · ${theme}`, () => {

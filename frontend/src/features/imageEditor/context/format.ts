@@ -242,7 +242,7 @@ export function imageFormat(ctx: ContextKindCtx, actionId: string | null): Forma
 
   let chip: FormatModel['chip'];
   if (outpaintAction && !aspect) chip = { main: 'Выберите пропорции', tone: 'warn' };
-  else if (!aspect) chip = { main: FORMAT_TEXT.asSource, ...(source ? { sub: `· ${source.aspect}` } : null), tone: 'normal' };
+  else if (!aspect) chip = { main: FORMAT_TEXT.asSource, ...(source ? { sub: `· ${source.aspect}`, mainBare: source.aspect, subBare: '' } : null), tone: 'normal' };
   else if (how === 'outpaint') chip = { main: aspect, sub: `· дорисовать${outSize ? ` · ${outSize}` : ''}`, subShort: '· дорисовать', tone: 'normal' };
   else chip = { main: aspect, sub: choice.cropping ? '· обрезаем…' : '· выберите способ', tone: 'normal' };
 

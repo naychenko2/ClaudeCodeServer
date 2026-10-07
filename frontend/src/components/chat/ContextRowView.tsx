@@ -179,7 +179,8 @@ function PrimaryChip({ p, form, icon, onOpen, onRelease, onAgentTip }: {
   );
 }
 
-function ExecChip({ e, form, onOpen }: { e: RowExec; form: 1 | 2 | 3; onOpen: (r: DOMRect) => void }) {
+// bare — телефон со строкой «Формат»: одно имя модели без поставщика и бейджа цены (цена — на кнопке запуска и во всплывашке)
+function ExecChip({ e, form, bare, onOpen }: { e: RowExec; form: 1 | 2 | 3; bare?: boolean; onOpen: (r: DOMRect) => void }) {
   const row = e.rows.find(r => r.id === e.value) ?? e.rows[0];
   if (!row) return null;
   // «Авто» с названием модели в now: «Авто · локально · Qwen»; строка группы auto с другим именем («Без ИИ») — как обычная
@@ -189,10 +190,14 @@ function ExecChip({ e, form, onOpen }: { e: RowExec; form: 1 | 2 | 3; onOpen: (r
   const full = auto ? `Авто${row.now ? ` · ${row.now}` : ''}` : `${row.sub ? `${row.sub} · ` : ''}${row.name}`;
   const title = `Чем: ${full} · ${price} — сменить исполнителя`;
   const open = (ev: { currentTarget: HTMLElement }) => onOpen(ev.currentTarget.getBoundingClientRect());
+  // Имя облачной модели приходит с поставщиком («fal · Nano Banana 2»): в голой форме оставляем саму модель
+  const bareName = auto ? 'Авто' : row.name.split(' · ').pop() ?? row.name;
   const badge = <Badge size="xs" tone={free ? 'success' : 'neutral'}>{price}</Badge>;
   return (
-    <RowChip kind="exec" max={NOM[`e${form}` as 'e1']} title={title} onClick={open}>
-      {form === 1
+    <RowChip kind="exec" max={bare ? NOM.eBare : NOM[`e${form}` as 'e1']} title={title} onClick={open}>
+      {bare
+        ? <b style={{ ...ellipsis, color: C.textHeading, fontWeight: 600 }}>{bareName}</b>
+        : form === 1
         ? <Cpu size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
         : form === 2
           ? <b style={{ ...ellipsis, color: C.textHeading, fontWeight: 600 }}>{row.name}</b>
@@ -204,7 +209,7 @@ function ExecChip({ e, form, onOpen }: { e: RowExec; form: 1 | 2 | 3; onOpen: (r
                   : <>{row.sub ? `${row.sub} · ` : ''}<b style={{ color: C.textHeading, fontWeight: 600 }}>{row.name}</b></>}
               </span>
             </>}
-      <span style={{ flexShrink: 0, display: 'inline-flex' }}>{badge}</span>
+      {!bare && <span style={{ flexShrink: 0, display: 'inline-flex' }}>{badge}</span>}
       <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
     </RowChip>
   );
@@ -360,8 +365,9 @@ function FormatNote({ text, onClose }: { text: string; onClose: () => void }) {
 
 // ── Строка ──
 
-// Высота всплывашки «Формата»: не больше 560 и не больше места над якорем (иначе Menu уйдёт вниз и обрежется окном)
-const formatMenuMax = (rect: DOMRect) => Math.max(240, Math.min(560, Math.max(rect.top, window.innerHeight - rect.bottom) - 14));
+// Высота всплывашки «Формата»: не больше 560 и не больше места над якорем за вычетом зазора Menu (6) и поля окна (8):
+// иначе Menu уйдёт вниз и обрежется окном или упрётся в его верх
+const formatMenuMax = (rect: DOMRect) => Math.max(240, Math.min(560, Math.max(rect.top, window.innerHeight - rect.bottom) - 16));
 
 type OpenMenu = { kind: 'git' | 'exec' | 'refs' | 'format'; rect: DOMRect } | null;
 
@@ -390,10 +396,18 @@ export function ContextRowView(props: ContextRowViewProps) {
   const wasNeeding = useRef(false);
   const [menu, setMenu] = useState<OpenMenu>(null);
   const [tip, setTip] = useState(false);
+  // Всплывашка «Формата» посчитана по якорю и высоте окна: при ресайзе закрываем, как и подложка меню
+  const formatOpen = menu?.kind === 'format';
+  useEffect(() => {
+    if (!formatOpen) return;
+    const shut = () => setMenu(null);
+    window.addEventListener('resize', shut);
+    return () => window.removeEventListener('resize', shut);
+  }, [formatOpen]);
   const facts = rowFacts(props);
   // Телефон: лестницы нет, строка прокручивается; ветка иконкой, «Чем» без подписи
   const base = props.pick ?? (isMobile
-    ? { form: { g: 0 as const, o: 2 as const, e: 2 as const, k: refs.length, ...(format ? { f: 0 as const } : null) }, index: -1, count: 0, need: 0, scroll: true }
+    ? { form: { g: 0 as const, o: (format && primary ? 1 : 2) as 1 | 2, e: 2 as const, k: refs.length, ...(format ? { f: 0 as const } : null) }, index: -1, count: 0, need: 0, scroll: true }
     : contextRowLadder(props.width ?? 10_000, facts));
   // Номиналы ступеней — верхняя оценка (чип не шире номинала), реальные чипы уже. Поэтому после вёрстки
   // пробуем ступень богаче: влезла без прокрутки — оставляем, нет — возвращаемся на шаг назад и закрепляем
@@ -480,7 +494,7 @@ export function ContextRowView(props: ContextRowViewProps) {
           <PrimaryChip p={primary} form={f.o} icon={iconOf(primary.kind)} onOpen={props.onOpenPrimary}
             onRelease={props.onRelease} onAgentTip={() => setTip(t => !t)} />
         )}
-        {primary && exec && <ExecChip e={exec} form={f.e} onOpen={open('exec')} />}
+        {primary && exec && <ExecChip e={exec} form={f.e} bare={isMobile && !!format} onOpen={open('exec')} />}
         {format && <FormatChip m={format} short={f.f !== 2} bare={isMobile || f.f === 0} open={menu?.kind === 'format'} onOpen={e => open('format')(e.currentTarget.getBoundingClientRect())} />}
         {refs.length > 0 && (
           <>
@@ -499,7 +513,7 @@ export function ContextRowView(props: ContextRowViewProps) {
       {menu && body && (isMobile
         ? <Modal title={menu.kind === 'git' ? 'Ветка' : menu.kind === 'exec' ? exec?.title ?? 'Чем выполнить' : menu.kind === 'format' ? format?.title ?? 'Формат' : 'Подключено к ходу'} onClose={close}>{body}</Modal>
         : menu.kind === 'format'
-          ? <Menu anchor={menu.rect} onClose={close} minWidth={360} maxWidth={420} maxHeight={formatMenuMax(menu.rect)} preferUp anchorAlign="start">
+          ? <Menu anchor={menu.rect} onClose={close} minWidth={360} maxWidth={420} maxHeight={formatMenuMax(menu.rect)} innerScroll preferUp anchorAlign="start">
               <MenuHead><b style={{ color: C.textHeading }}>{format?.title}</b></MenuHead>{body}
             </Menu>
           : <Menu anchor={menu.rect} onClose={close} minWidth={300} maxWidth={340} maxHeight={320} preferUp anchorAlign="start">{body}</Menu>)}

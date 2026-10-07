@@ -28,7 +28,7 @@ export function handleMenuEscape(e: { key: string; defaultPrevented: boolean; pr
   return true;
 }
 
-export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, children }: {
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, innerScroll, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
@@ -66,6 +66,8 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   // прежнее. Для телефона 360, где меню встаёт над полосой, а не узкой карточкой у
   // триггера. С anchorSide не сочетается и игнорируется
   fullWidth?: boolean;
+  // Прокрутку организует содержимое (середина скроллится, подвал стоит): карточка сама не прокручивается
+  innerScroll?: boolean;
   children: ReactNode;
 }) {
   const opener = useRef<Element | null>(typeof document !== 'undefined' ? document.activeElement : null);
@@ -141,7 +143,7 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
         // maxHeight участвует только в расчёте openUp выше — без явного ограничения
         // здесь высокое содержимое (длинный список этапов плана) вылезало за экран,
         // а не обрезалось/скроллилось.
-        ...(anchorSide ? { maxHeight, overflow: 'hidden' } : anchor ? { maxHeight, overflow: 'auto' } : null),
+        ...(anchorSide ? { maxHeight, overflow: 'hidden' } : anchor ? { maxHeight, overflow: innerScroll ? 'hidden' : 'auto' } : null),
       }}>
         {children}
       </div>

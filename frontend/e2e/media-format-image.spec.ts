@@ -165,8 +165,9 @@ for (const { name, vp } of VIEWPORTS) {
       test('4 · правка 4:3 → 1:1: «Дорисовать края» (outpaint) и «Обрезать» (новая версия, рамка «Слева»)', async ({ page }) => {
         const crops = await open(page, vp, theme, { kind: 'hero', model: NANO });
         await expect(chip(page)).toBeVisible({ timeout: 15_000 });
-        // По умолчанию — «Как у исходника · 4:3»
-        await expect.poll(() => chipText(page)).toContain('Как у исходника · 4:3');
+        // По умолчанию — «Как у исходника · 4:3»; на телефоне чип голый — «4:3» (место нужно «Формату» в первом экране)
+        const asSrc = name === '360' ? '4:3' : 'Как у исходника · 4:3';
+        await expect.poll(() => chipText(page)).toContain(asSrc);
         await chip(page).click();
         await expect(page.locator('[data-fmt-source]')).toContainText('400×300');
         await aspect(page, '1:1').click();
@@ -183,7 +184,7 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(page.getByText('Пропорции', { exact: true })).toHaveCount(0);
         // Второй путь: назад к исходнику → 1:1 → «Обрезать» с рамкой «Слева»
         await page.locator('[data-fmt-source]').click();
-        await expect.poll(() => chipText(page)).toContain('Как у исходника · 4:3');
+        await expect.poll(() => chipText(page)).toContain(asSrc);
         await aspect(page, '1:1').click();
         await page.getByRole('button', { name: 'Слева' }).first().click();
         await expect.poll(() => crops.some(c => c.dryRun && c.aspect === '1:1' && c.anchor === 'left')).toBe(true);
@@ -191,7 +192,7 @@ for (const { name, vp } of VIEWPORTS) {
         await expect.poll(() => crops.filter(c => !c.dryRun).map(c => `${c.aspect}/${c.anchor}`)).toEqual(['1:1/left']);
         // Обрезка дала новую версию и вернула «Как у исходника»
         await expect.poll(() => (w().threads![0] as ReturnType<typeof heroThread>).versions.length).toBe(2);
-        await expect.poll(() => chipText(page)).toContain('Как у исходника');
+        await expect.poll(() => chipText(page)).toMatch(name === '360' ? /^\d+:\d+$/ : /Как у исходника/);
         expect(await noOverflow(page)).toBe(true);
       });
 
@@ -238,6 +239,26 @@ for (const { name, vp } of VIEWPORTS) {
   }
 }
 
+// Б4.3: на 360 чип «Формат» виден в первом экране строки (правый край ≤ правого края строки), «Чем» сжат до имени модели
+async function expectFormatInRow(page: Page) {
+  await expect(chip(page)).toBeVisible({ timeout: 15_000 });
+  const row = await page.locator('[data-context-row]').boundingBox();
+  const c = await chip(page).boundingBox();
+  expect(c!.x + c!.width).toBeLessThanOrEqual(row!.x + row!.width);
+  const exec = await execChip(page).innerText();
+  expect(exec).not.toMatch(/\$|fal/);
+}
+for (const [label, setup] of [
+  ['новая картинка + Nano Banana 2', { kind: 'draft', model: NANO }],
+  ['правка «Как у исходника · 4:3»', { kind: 'hero', model: NANO }],
+] as const) {
+  test(`360: чип «Формат» в первом экране · ${label}`, async ({ page }) => {
+    await open(page, { width: 360, height: 780 }, 'light', setup);
+    await expectFormatInRow(page);
+    await shot(page, `chip-360-${setup.kind}.png`);
+  });
+}
+
 // Всплывашка с 15 пропорциями помещается в окно любой высоты: скроллится середина, «Макс» достижим
 for (const height of [800, 600]) {
   test(`всплывашка «Формата» с 15 пропорциями помещается в окно 1280×${height}`, async ({ page }) => {
@@ -247,7 +268,7 @@ for (const height of [800, 600]) {
     await expect(page.locator('[data-fmt-aspect]')).toHaveCount(15);
     const menu = page.locator('[data-fmt-body]').locator('xpath=..');
     const box = await menu.boundingBox();
-    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y).toBeGreaterThanOrEqual(8);
     expect(box!.y + box!.height).toBeLessThanOrEqual(height);
     // «Макс» либо видна сразу, либо до неё можно докрутить внутри всплывашки; подвал остаётся на месте
     await tier(page, 'max').scrollIntoViewIfNeeded();
@@ -258,6 +279,16 @@ for (const height of [800, 600]) {
     await shot(page, `popover-15-aspects-${height}.png`);
   });
 }
+
+// Ресайз окна закрывает всплывашку: высота и якорь посчитаны по прежнему окну
+test('всплывашка «Формата» закрывается при ресайзе окна', async ({ page }) => {
+  await open(page, { width: 1280, height: 800 }, 'light', { kind: 'draft', model: NANO });
+  await expect(chip(page)).toBeVisible({ timeout: 15_000 });
+  await chip(page).click();
+  await expect(body(page)).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await expect(page.locator('[data-fmt-body]')).toHaveCount(0);
+});
 
 // «Дорисовать» без пропорций: чип выбирается, «Формат» открывается сам с подсказкой, запуск заблокирован до выбора
 test('чип «Дорисовать» без формата открывает «Формат» с подсказкой, после выбора пропорций запуск разблокирован', async ({ page }) => {

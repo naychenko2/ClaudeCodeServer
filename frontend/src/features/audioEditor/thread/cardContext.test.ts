@@ -13,7 +13,6 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
-import { setAllFlags } from '../../../lib/featureFlags';
 import { __applyChatContext, __resetChatContextStore } from '../../../lib/chatContext/store';
 import type { AudioThread } from '../api';
 import { ThreadAnchor } from './ThreadCard';
@@ -47,7 +46,6 @@ beforeEach(() => {
 
 describe('карточка звука в контексте хода', () => {
   it('«Обработать ▾» не рисуется, вместо него «Работать с этой» и «В контекст»', () => {
-    setAllFlags({ 'audio-editor': true });
     __applyChatContext(S, { revision: 1, primary: primary('human'), refs: [] });
     const html = card('origin');
     expect(html).not.toContain('data-audio-process');
@@ -56,7 +54,6 @@ describe('карточка звука в контексте хода', () => {
   });
 
   it('«в работе» — карточка основного объекта: рамка и бейдж, кнопок наполнения нет', () => {
-    setAllFlags({ 'audio-editor': true });
     __applyChatContext(S, { revision: 1, primary: primary('human'), refs: [] });
     const html = card('v1');
     expect(html).toContain('data-current="true"');
@@ -66,7 +63,6 @@ describe('карточка звука в контексте хода', () => {
   });
 
   it('основной объект выбрал агент — «в работе ✦»; другая версия той же нити не подсвечена', () => {
-    setAllFlags({ 'audio-editor': true });
     __applyChatContext(S, { revision: 1, primary: primary('agent'), refs: [] });
     expect(card('v1')).toContain('В работе ✦');
     const other = card('origin');

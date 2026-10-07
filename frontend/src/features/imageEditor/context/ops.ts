@@ -7,7 +7,7 @@ import { FLAGS, getFlag } from 'aihome_shell/kit';
 import { AUTO_MODEL, type EditMode, type ImageEditEstimate, type ImageEditModel, type ImageEditOp } from '../api';
 import { etaText, isFreeUnit, money, pickOp, priceSum, variantsWord } from '../format';
 import type { OutpaintRatio, QuickAction } from '../editorInputs';
-import { getPrefs, setEditChoice, type ProjectPrefs } from '../thread/prefs';
+import { getPrefs, type ProjectPrefs } from '../thread/prefs';
 import type { ImageMode } from '../thread/modeState';
 
 export type PanelOp = 'auto' | ImageEditOp;
@@ -33,10 +33,6 @@ export const PANEL_OPS: OpInfo[] = [
 ];
 
 const info = (op: PanelOp) => PANEL_OPS.find(o => o.op === op)!;
-
-// Операция, которой пойдёт запуск: «Авто» — по состоянию холста, как полоса всегда
-export const resolveOp = (op: PanelOp, hasImage: boolean, hasMask: boolean): ImageEditOp =>
-  op === 'auto' ? pickOp(hasImage, hasMask) : op;
 
 // Операции без промпта запускаются тем же путём, что быстрые действия редактора
 export function quickOf(op: ImageEditOp): QuickAction | null {
@@ -87,20 +83,6 @@ export const DEFAULT_CHOICE: PanelChoice = { op: 'auto', mode: 'auto', ratio: '1
 
 let _version = 0;
 const _listeners = new Set<() => void>();
-
-export function setPanelChoice(projectId: string, patch: Partial<PanelChoice>) {
-  // Выбор живёт в префах «Править» проекта. «Авто» там нет — это «Изменить» с инпейнтом
-  // по отметкам; «По тексту» — режим «Создать», а не операция
-  const op = patch.op === 'auto' ? 'edit' : patch.op === 'generate' ? undefined : patch.op;
-  setEditChoice(projectId, {
-    ...(op ? { op } : null),
-    ...(patch.mode ? { editMode: patch.mode } : null),
-    // Под флагом media-format пропорции правки живут в «Формате» одну правку и в префы режима не пишутся
-    ...(patch.ratio && !getFlag(FLAGS.mediaFormat) ? { ratio: patch.ratio } : null),
-  });
-  _version++;
-  _listeners.forEach(fn => fn());
-}
 
 // Выбор режима «Править» из префов проекта
 export function editChoice(prefs: ProjectPrefs): PanelChoice {

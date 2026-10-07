@@ -11,7 +11,7 @@ import { invalidateProjectsCache } from '../projects/useAllProjects';
 import { deviceLabel, isLocalProjectDevice, NO_DEVICES_HINT } from './deviceOptions';
 
 // Секция «Устройство» в настройках проекта (ADR-016 §3.4): показывает привязку и
-// позволяет перепривязать/отвязать. Скрывается через флаг `local-projects` снаружи.
+// позволяет перепривязать/отвязать.
 // Здесь НЕТ проверок локальности руками — всё через поле `project.device`
 // и хелпер `hasDevice` ниже. Сторож G10 (ProjectCapabilitiesGuardTests) ловит
 // любые ручные обращения к project.deviceId вне projectCapabilities.ts.

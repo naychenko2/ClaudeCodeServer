@@ -255,11 +255,6 @@ export function usePrefs(projectId: string): ProjectPrefs {
   return getPrefs(projectId);
 }
 
-// Настройки, с которыми пойдёт запуск: у нити — свои, иначе умолчания проекта
-export function effectiveSettings(prefs: ProjectPrefs, own: ImageThreadSettings | null | undefined): ImageThreadSettings {
-  return own ?? { provider: prefs.provider, model: prefs.model, count: prefs.count, matchSourceSize: prefs.matchSourceSize };
-}
-
 // Выбор режима «Создать» и «Править». Поставщик и модель — парой, как на
 // сервере: модель плоских полей могла быть выбрана у другого поставщика
 function modePick(prefs: ProjectPrefs, m: ImageCreatePrefs | null | undefined): ImageThreadSettings {

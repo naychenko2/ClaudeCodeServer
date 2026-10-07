@@ -1,20 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { pickOp } from '../format';
 import {
   footPrice, isOneVariant, launchMarks, modeOp, opBlockReason, PANEL_OPS, queueText, quickOf,
-  resolveOp, runVerb,
+  runVerb,
 } from './ops';
 
 const STATES: [boolean, boolean][] = [[false, false], [true, false], [true, true]];
 
-describe('«Авто» — ровно pickOp', () => {
+describe('«Авто» — всегда доступно', () => {
   it.each(STATES)('картинка %s, отметки %s', (hasImage, hasMask) => {
-    expect(resolveOp('auto', hasImage, hasMask)).toBe(pickOp(hasImage, hasMask));
     expect(opBlockReason('auto', hasImage, hasMask)).toBe('');
-  });
-
-  it('явная операция идёт как есть', () => {
-    expect(resolveOp('upscale', true, true)).toBe('upscale');
   });
 });
 

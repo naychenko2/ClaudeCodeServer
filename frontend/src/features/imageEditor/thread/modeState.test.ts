@@ -26,7 +26,7 @@ const { threadsApi } = await import('./threadsApi');
 const { continueFrom, createDraft } = await import('./actions');
 const { __resetImageModes, effectiveImageMode, getStoredImageMode, setImageMode } = await import('./modeState');
 const { launchThread, useThreadLaunch } = await import('./useThreadLaunch');
-const { __resetPanelChoice, setPanelChoice } = await import('../context/ops');
+const { __resetPanelChoice } = await import('../context/ops');
 import type { ImageEditQuoteRequest } from '../api';
 import type { Mark } from '../marks';
 import type { ImagePrefsChangedEvent, ProjectPrefs } from './prefs';
@@ -204,14 +204,6 @@ describe('запуск по режиму', () => {
     expect(getPrefs(P).edit).toEqual(MODES.edit);
     expect(getPrefs(P).count).toBe(2);
     expect(settings).not.toHaveBeenCalled();
-  });
-
-  it('выбор операции панели под флагом живёт в «Править»', async () => {
-    await withPrefs(MODES);
-    setPanelChoice(P, { op: 'removeBackground', mode: 'photoreal' });
-    expect(getPrefs(P).edit).toMatchObject({ op: 'removeBackground', editMode: 'photoreal' });
-    setPanelChoice(P, { op: 'auto' });
-    expect(getPrefs(P).edit?.op).toBe('edit');
   });
 });
 

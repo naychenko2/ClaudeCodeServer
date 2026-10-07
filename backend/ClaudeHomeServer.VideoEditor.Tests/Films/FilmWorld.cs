@@ -124,10 +124,11 @@ internal sealed class FilmWorld : IDisposable
     public sealed class RecordingBroadcaster : ISessionBroadcaster
     {
         public List<ServerMessage> Sent { get; } = [];
+        public List<(string OwnerId, ServerMessage Message)> ToOwnerCalls { get; } = [];
 
         public Task ToOwner(string ownerId, ServerMessage message)
         {
-            lock (Sent) Sent.Add(message);
+            lock (Sent) { Sent.Add(message); ToOwnerCalls.Add((ownerId, message)); }
             return Task.CompletedTask;
         }
 

@@ -311,8 +311,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     {
         var before = _prefs.Get(owner, scope);
         if (before.Format is { } had && had.Mode == wish.Mode && had.Aspect == wish.Aspect && had.Tier == wish.Tier) return;
-        var saved = _prefs.Save(owner, scope, before with { Format = wish, Aspect = wish.Aspect }, ContextActor.Agent);
-        await _threads.BroadcastPrefsAsync(owner, scope.Key, saved);
+        _prefs.Save(owner, scope, before with { Format = wish, Aspect = wish.Aspect }, ContextActor.Agent);
         await _threads.NoteAsync(session.Id,
             $"✦ Claude сменил формат видео проекта: {MediaFormatText.Wish(before.Format ?? FormatOfAspect(before.Aspect))} → {MediaFormatText.Wish(wish)}",
             new { kind = "video_format", by = "agent", before = before.Format, after = wish });

@@ -52,7 +52,7 @@ internal sealed class AgentWorld : IDisposable
     {
         F = new FilmWorld(new ToolDsp(), withContext);
         Engine = new FakeEngine("fal", blocking);
-        Prefs = new VideoPrefsService(new VideoPrefsStore(Path.Combine(F.Dir, "prefs")));
+        Prefs = new VideoPrefsService(new VideoPrefsStore(Path.Combine(F.Dir, "prefs")), F.Broadcaster);
         Jobs = new VideoEditJobService([Engine], F.Workspace, F.JobThreads, NullLogger<VideoEditJobService>.Instance,
             Prefs, Spend, F.Broadcaster);
         Scenes = new VideoSceneService(F.JobThreads, Prefs);

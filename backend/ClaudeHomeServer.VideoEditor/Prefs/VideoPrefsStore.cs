@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Scenes;
@@ -75,7 +76,10 @@ public sealed class VideoPrefsStore(string root)
 
 // Префы области поверх хранилища. Область — уже своя: владение проверяет вызывающий (ручка, тулсет).
 // Настройки новой сцены наследуют префы: выбор поставщика, модели, длительности, пропорций, звука и числа
-public sealed class VideoPrefsService(VideoPrefsStore store)
+public sealed class VideoPrefsService(
+    VideoPrefsStore store,
+    ISessionBroadcaster? broadcaster = null,
+    ILogger<VideoPrefsService>? log = null)
 {
     public VideoPrefsDto Get(string ownerId, VideoEditScope scope) => store.Get(ownerId, scope.Key);
 
@@ -94,7 +98,25 @@ public sealed class VideoPrefsService(VideoPrefsStore store)
             Aspect = format is { Mode: FormatModes.Aspect } ? format.Aspect : prefs.Aspect,
         };
         store.Save(ownerId, scope.Key, result);
+        Broadcast(ownerId, scope.Key, result);
         return result;
+    }
+
+    // Единая точка рассылки: любая запись префов (человек, агент) уходит во все вкладки владельца событием
+    // video_prefs_changed. Сбой рассылки запись не откатывает
+    private void Broadcast(string ownerId, string scopeKey, VideoPrefsDto prefs)
+    {
+        if (broadcaster is null) return;
+        try
+        {
+            _ = broadcaster.ToOwner(ownerId, new VideoPrefsChangedMessage(scopeKey, prefs))
+                .ContinueWith(t => log?.LogDebug(t.Exception, "Видео: префы области {ScopeKey} не разосланы", scopeKey),
+                    TaskContinuationOptions.OnlyOnFaulted);
+        }
+        catch (Exception ex)
+        {
+            log?.LogDebug(ex, "Видео: префы области {ScopeKey} не разосланы", scopeKey);
+        }
     }
 
     // Новая сцена засевает своё желание из формата проекта; Aspect — его зеркало

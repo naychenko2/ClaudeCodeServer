@@ -186,20 +186,6 @@ public sealed class VideoJobThreads(
         }
     }
 
-    // Префы области сменил агент: свежие префы уходят владельцу (человеческий PUT получает их в ответе)
-    public async Task BroadcastPrefsAsync(string ownerId, string scopeKey, VideoPrefsDto prefs)
-    {
-        if (broadcaster is null) return;
-        try
-        {
-            await broadcaster.ToOwner(ownerId, new VideoPrefsChangedMessage(scopeKey, prefs));
-        }
-        catch (Exception ex)
-        {
-            log.LogDebug(ex, "Видео: префы области {ScopeKey} не разосланы", scopeKey);
-        }
-    }
-
     public async Task BroadcastAsync(string ownerId, string scopeKey, string sessionId, VideoThreadsState state)
     {
         if (broadcaster is null) return;

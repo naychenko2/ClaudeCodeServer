@@ -2,7 +2,7 @@
 // сцена, съёмка по котировке (деньги — только quote → job), снятие выбора, кадры и «Картинки».
 
 import {
-  api, clearContextReturn, clearGenDraft, createReleaseUndo, followSelection, getChatContextState, revealContextPanel, setPrimary, showToast,
+  api, clearContextReturn, clearGenDraft, createReleaseUndo, FLAGS, followSelection, getFlag, getChatContextState, revealContextPanel, setPrimary, showToast,
   type ChatContextItem,
 } from 'aihome_shell/kit';
 import {
@@ -95,7 +95,8 @@ async function flushNow(scope: string, sessionId: string): Promise<boolean> {
     let locked = false;
     const ok = await mutate(scope, sessionId, rev => videoApi.settings(scope, sessionId, scene.sceneId, settings, rev), false, e => {
       const l = filmLocked(e);
-      if (!l) return false;
+      // Без флага «Формат» вопроса нет: отказ сервера показывает обычный тост с его текстом
+      if (!l || !getFlag(FLAGS.mediaFormat)) return false;
       // Замок держит сервер: правка не применена, человека спрашивают «Оставить / Всё равно»
       locked = true;
       setLockAsk(sessionId, { sceneId: scene.sceneId, patch: pend.patch, aspect: pend.patch.format?.aspect ?? pend.patch.aspect ?? '', lockedBy: l.lockedBy, text: l.error });

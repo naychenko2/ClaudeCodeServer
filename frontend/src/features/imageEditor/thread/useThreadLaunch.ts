@@ -5,7 +5,7 @@
 // отсюда же, чтобы полоса и кнопка не разошлись.
 
 import { useCallback, useMemo } from 'react';
-import { api as appApi, clearGenDraft, FLAGS, followChat, showToast, useFeature } from 'aihome_shell/kit';
+import { api as appApi, clearGenDraft, FLAGS, followChat, getFlag, showToast, useFeature } from 'aihome_shell/kit';
 import {
   AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditOp, type ImageEditQuoteRequest,
 } from '../api';
@@ -16,7 +16,7 @@ import { currentModel } from '../ProviderModelPicker';
 import { contextInputCounts } from '../context/samples';
 import { exportAnnotated, exportMask, hasMaskMark, marksToJson } from '../marks';
 import {
-  quickAvailability, quickPlan, quickUsesOwnModel, samplesToJobInput,
+  outpaintFormatWish, quickAvailability, quickPlan, quickUsesOwnModel, samplesToJobInput,
   type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type QuickRoute,
 } from '../editorInputs';
 import { isPersonalScope } from '../scope';
@@ -184,7 +184,10 @@ export async function launchThread(
   const withMask = plan.useMask && hasMask;
   const withMarks = marksSent(plan.op, hasImage, marks);
   // Пропорции новой картинки из «Ещё настроек» «Создать»; у дорисовки — свои
-  const aspectRatio = plan.aspectRatio
+  // Под флагом дорисовка из «Формата» несёт пропорцию желанием котировки (любые W:H: 4:3, 21:9…), а не `aspectRatio`
+  // запуска, где у сервера белый список трёх значений правки
+  const outpaintFormat = outpaintFormatWish(getFlag(FLAGS.mediaFormat), !!cx, plan) ?? undefined;
+  const aspectRatio = outpaintFormat ? undefined : plan.aspectRatio
     ?? (cx ? (fromScratch ? cx.aspect : null) : mode === 'create' && fromScratch ? getCreateRatio(projectId) : null);
   try {
     // Запуск по ревизии берёт образцы и персонажа из контекста чата; без неё — из памяти вкладки и prefs
@@ -197,6 +200,7 @@ export async function launchThread(
       hasImage, marks, withMask, removal: plan.removal,
       ...inputCounts(),
       size, context: cx ? { sessionId, contextRevision: cx.contextRevision } : null,
+      format: outpaintFormat,
     }));
     const legacy = isLegacyThread(thread);
     const version = legacy ? null : currentVersion(thread);

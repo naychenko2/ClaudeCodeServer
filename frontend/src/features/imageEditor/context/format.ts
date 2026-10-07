@@ -23,6 +23,10 @@ import { quoteAction } from './run';
 import { editOf, resetEdit, setEdit } from './formatChoice';
 import { actionOf, IMAGE_KIND, threadOfPrimary } from './state';
 
+// imageFormat() зовётся прямо из рендера строки контекста: подписчики стора (notifyKindChanged) и сетевые
+// запросы запускаем после рендера, иначе React ругается на setState чужого компонента посреди рендера
+const defer = (fn: () => void) => queueMicrotask(fn);
+
 // ── Ответ ручки: кэш по (область, поставщик, модель, операция, эпоха) ──
 // Эпоха растёт, когда желание изменилось: своя запись — после того, как префы дошли до сервера (он считает формат
 // по сохранённому желанию), чужая (агент, другая вкладка) — сразу по событию префов
@@ -49,9 +53,11 @@ function stateFor(scope: string, provider: string, model: string, op: ImageEditO
   if (hit) return hit;
   if (!_loading.has(key)) {
     _loading.add(key);
-    void imageEditorApi().format(scope, { provider, model, op })
-      .then(s => { _state.set(key, s); _last.set(base, s); }, () => { _state.set(key, FALLBACK); })
-      .finally(() => { _loading.delete(key); notifyKindChanged(); });
+    defer(() => {
+      void imageEditorApi().format(scope, { provider, model, op })
+        .then(s => { _state.set(key, s); _last.set(base, s); }, () => { _state.set(key, FALLBACK); })
+        .finally(() => { _loading.delete(key); notifyKindChanged(); });
+    });
   }
   // Пока грузится новый ответ, показываем прежний: чип не мигает
   return _last.get(base) ?? null;
@@ -63,7 +69,7 @@ function watchWish(scope: string) {
   const prev = _seen.get(scope);
   if (prev !== sig) {
     _seen.set(scope, sig);
-    if (prev !== undefined && !_settling.has(scope)) bumpEpoch(scope);
+    if (prev !== undefined && !_settling.has(scope)) defer(() => bumpEpoch(scope));
   }
 }
 
@@ -98,7 +104,9 @@ function sourceSize(scope: string, thread: ImageThread): { w: number; h: number 
   if (!src) return null;
   if (_sizes.has(src)) return _sizes.get(src) ?? null;
   _sizes.set(src, null);
-  void loadImage(src).then(img => { _sizes.set(src, { w: img.naturalWidth, h: img.naturalHeight }); notifyKindChanged(); }, () => { /* картинки нет: исходник без размера */ });
+  defer(() => {
+    void loadImage(src).then(img => { _sizes.set(src, { w: img.naturalWidth, h: img.naturalHeight }); notifyKindChanged(); }, () => { /* картинки нет: исходник без размера */ });
+  });
   return null;
 }
 
@@ -120,8 +128,10 @@ function cropSizeOf(scope: string, sessionId: string, thread: ImageThread, aspec
   const key = `${versionKey(thread)}|${aspect}|${anchor}`;
   if (_cropSize.has(key)) return _cropSize.get(key) ?? null;
   _cropSize.set(key, null);
-  void threadsApi.crop(scope, sessionId, thread.id, { aspect, anchor, dryRun: true })
-    .then(r => { _cropSize.set(key, `${r.width}×${r.height}`); notifyKindChanged(); }, () => { /* размер не покажем, обрезка от этого не ломается */ });
+  defer(() => {
+    void threadsApi.crop(scope, sessionId, thread.id, { aspect, anchor, dryRun: true })
+      .then(r => { _cropSize.set(key, `${r.width}×${r.height}`); notifyKindChanged(); }, () => { /* размер не покажем, обрезка от этого не ломается */ });
+  });
   return null;
 }
 
@@ -129,8 +139,10 @@ function outpaintPrice(ctx: ContextKindCtx, thread: ImageThread, modelKey: strin
   const key = `${versionKey(thread)}|${modelKey}`;
   if (_outQuote.has(key)) return _outQuote.get(key) ?? null;
   _outQuote.set(key, null);
-  void quoteAction(ctx, { op: 'outpaint', text: '', params: {}, contextRevision: getChatContextState(ctx.sessionId).revision })
-    .then(q => { _outQuote.set(key, q.price); notifyKindChanged(); }, () => { /* цены нет — строка без неё */ });
+  defer(() => {
+    void quoteAction(ctx, { op: 'outpaint', text: '', params: {}, contextRevision: getChatContextState(ctx.sessionId).revision })
+      .then(q => { _outQuote.set(key, q.price); notifyKindChanged(); }, () => { /* цены нет — строка без неё */ });
+  });
   return null;
 }
 

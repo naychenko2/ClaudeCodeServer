@@ -396,14 +396,19 @@ export function ContextRowView(props: ContextRowViewProps) {
   const wasNeeding = useRef(false);
   const [menu, setMenu] = useState<OpenMenu>(null);
   const [tip, setTip] = useState(false);
-  // Всплывашка «Формата» посчитана по якорю и высоте окна: при ресайзе закрываем, как и подложка меню
+  // Всплывашка «Формата» посчитана по якорю и высоте окна: при ресайзе на десктопе закрываем, как и подложку меню.
+  // Шторку телефона ресайз не касается (появление клавиатуры на Android — тоже ресайз); её закрывает смена раскладки
   const formatOpen = menu?.kind === 'format';
   useEffect(() => {
-    if (!formatOpen) return;
+    if (!formatOpen || isMobile) return;
     const shut = () => setMenu(null);
     window.addEventListener('resize', shut);
     return () => window.removeEventListener('resize', shut);
-  }, [formatOpen]);
+  }, [formatOpen, isMobile]);
+  const wasMobile = useRef(isMobile);
+  useEffect(() => {
+    if (wasMobile.current !== isMobile) { wasMobile.current = isMobile; setMenu(m => (m?.kind === 'format' ? null : m)); }
+  }, [isMobile]);
   const facts = rowFacts(props);
   // Телефон: лестницы нет, строка прокручивается; ветка иконкой, «Чем» без подписи
   const base = props.pick ?? (isMobile

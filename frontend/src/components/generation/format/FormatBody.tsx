@@ -118,7 +118,7 @@ function ExactPanel({ m, state, isMobile, onClose }: { m: FormatModel; state: Me
   const box = isMobile ? 96 : 84;
   const input = (value: string, aria: string, onChange: (v: string) => void) => (
     <div style={{ width: box }}>
-      <TextField value={value} placeholder={aria} title={aria} onChange={onChange}
+      <TextField value={value} placeholder={aria} title={aria} inputMode="numeric" onChange={onChange}
         style={{ padding: `${SP.xs + 1}px ${SP.sm}px`, fontSize: isMobile ? FS.lg : FS.base, fontVariantNumeric: 'tabular-nums' }} />
     </div>
   );

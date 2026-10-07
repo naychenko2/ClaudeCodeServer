@@ -5,7 +5,7 @@
 import { useState, type DragEvent } from 'react';
 import { AlertTriangle, ArrowDown, ArrowUp, Clapperboard, FolderTree, GripVertical, MoreHorizontal, Scissors, Trash2 } from 'lucide-react';
 import {
-  api, Badge, Button, ByClaude, C, Dot, FS, IconButton, Menu, MenuItem, MenuSep, R, SegmentedControl, SHADOW, SP,
+  api, Badge, Button, ByClaude, C, Dot, FS, IconButton, Menu, MenuItem, MenuSep, R, SegmentedControl, SHADOW, SP, FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import type { FilmCut, FilmCutType, FilmItem, FilmItemMark } from '../../api';
 import { ic } from '../primitives';
@@ -70,6 +70,8 @@ function Row({ scope, it, i, mark, last, highlight, dragging, over, isMobile, tr
   onDragStart: () => void; onDragEnter: () => void; onDrop: () => void; onDragEnd: () => void; a: RowActions;
 }) {
   const [menuAt, setMenuAt] = useState<DOMRect | null>(null);
+  // Без флага «Формат» строка фильма выглядит как раньше: ни пометки, ни «Привести к …»
+  const formatOn = useFeature(FLAGS.mediaFormat);
   const src = api.files.fileUrl(scope, it.file);
   const prevent = (e: DragEvent) => { e.preventDefault(); };
   return (
@@ -96,14 +98,14 @@ function Row({ scope, it, i, mark, last, highlight, dragging, over, isMobile, tr
               style={{ height: isMobile ? TOUCH : THUMB.trimBtn, minHeight: isMobile ? TOUCH : undefined, padding: `0 ${SP.xxs}px` }}>{trimLabel(it)}</Button>
             {mark?.updated && <span data-video-mark="updated" title="Новый файл сцены — пересоберите"><Badge size="xs" tone="info" icon={<Dot color={C.info} size={THUMB.dot} />}>обновлена</Badge></span>}
             {mark?.claude && <ByClaude />}
- {mark?.formatMismatch && <span data-video-mark="format" title="Формат сцены не совпадает с фильмом" style={{ color: C.warningText, display: 'inline-flex' }}>{ic(AlertTriangle)}</span>}
+ {formatOn && mark?.formatMismatch && <span data-video-mark="format" title="Формат сцены не совпадает с фильмом" style={{ color: C.warningText, display: 'inline-flex' }}>{ic(AlertTriangle)}</span>}
             {mark?.stale && <span data-video-mark="stale" title="Текст или кадр изменён — переснимите" style={{ color: C.warningText, display: 'inline-flex' }}>{ic(AlertTriangle)}</span>}
           </span>
         </span>
         <IconButton size={isMobile ? 'lg' : 'xs'} title="Действия со сценой" ariaLabel="Действия со сценой" style={isMobile ? { width: TOUCH, height: TOUCH } : undefined}
           onClick={e => setMenuAt((e.currentTarget as HTMLElement).getBoundingClientRect())}>{ic(MoreHorizontal)}</IconButton>
       </div>
-      {mark?.formatMismatch && <FormatLine fix={a.formatFix?.(i)} />}
+      {formatOn && mark?.formatMismatch && <FormatLine fix={a.formatFix?.(i)} />}
       {trimOpen && <Trim scope={scope} it={it} isMobile={isMobile} onDone={t => { a.onTrim(i, t); onTrimToggle(); }} />}
       {menuAt && (
         <Menu onClose={() => setMenuAt(null)} anchor={menuAt} anchorAlign="end" minWidth={240}>

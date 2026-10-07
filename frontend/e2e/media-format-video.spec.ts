@@ -378,6 +378,39 @@ for (const { name, vp } of VIEWPORTS) {
     expect(fmt().settingsPuts).toHaveLength(0);
   });
 
+  // Без флага строка фильма прежняя: ни пометки «формат не совпадает», ни «Привести к …» (расхождение сервер всё равно считает)
+  test(`флаг выключен · ${name}: в фильме нет строки «формат не совпадает» и кнопки «Привести к …»`, async ({ page }) => {
+    const scenes = standardScenes();
+    scenes[1] = {
+      ...scenes[1], lockedBy: { filmPath: FILM, aspect: '16:9' }, formatMismatch: true,
+      settings: { ...scenes[1].settings, aspect: '9:16' },
+    } as Scene;
+    const film = standardFilm();
+    film.marks = [{ index: 1, claude: false, updated: false, stale: false, formatMismatch: true } as never];
+    await open(page, { vp, theme: 'light', scenes, films: [film], primary: filmPrimary, focus: { filmPath: FILM }, flags: {} });
+    await actionChip(page, 'montage').click();
+    await expect(page.locator('[data-video-montage] [data-video-film-row="1"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-video-montage] [data-video-film-mismatch]')).toHaveCount(0);
+    await expect(page.locator('[data-video-montage] [data-video-mark="format"]')).toHaveCount(0);
+    await expect(page.locator('[data-video-film-fix]')).toHaveCount(0);
+  });
+
+  // Без флага вопроса «Оставить / Всё равно» нет: отказ замка (409 film_format_locked) приходит тостом с текстом сервера
+  test(`флаг выключен · ${name}: 409 film_format_locked даёт тост с текстом сервера, а не молчание`, async ({ page }) => {
+    const s = scene(5);
+    s.lockedBy = { filmPath: FILM, aspect: '16:9' } as never;
+    await open(page, { vp, theme: 'light', scenes: [...standardScenes().slice(0, 4), s], flags: {} });
+    await actionChip(page, 'shoot').click();
+    await page.locator('[data-context-row] [data-chip="primary"]').click();
+    const panel = page.locator('[data-context-panel]');
+    await expect(panel).toBeVisible({ timeout: 10_000 });
+    await panel.getByRole('button', { name: 'Редактор сцены' }).click();
+    const ed = page.locator('[data-video-scene-editor]');
+    await expect(ed).toBeVisible({ timeout: 10_000 });
+    await ed.getByRole('button', { name: '9:16' }).click();
+    await expect(page.getByText('Фильм «утро-в-горах» — 16:9. Сцена в 9:16 даст чёрные полосы по бокам при склейке.')).toBeVisible({ timeout: 10_000 });
+  });
+
   test(`флаг включён · ${name}: в редакторе сцены нет прежних «Пропорций» — формат в чипе`, async ({ page }) => {
     await open(page, { vp, theme: 'light' });
     await actionChip(page, 'shoot').click();

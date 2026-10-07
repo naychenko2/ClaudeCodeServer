@@ -84,8 +84,17 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
     {
         var id = await SetupProjectAsync();
         var root = await RootPathAsync(id);
+        // Файл-кандидат нужен, чтобы у предложения была кнопка (Apply != null): иначе
+        // «применить всё при пустом ids» дало бы пустой набор и тест не краснел бы
+        var candidate = Path.Combine(root, "backend", "Core", "Models");
+        Directory.CreateDirectory(candidate);
+        File.WriteAllText(Path.Combine(candidate, "FeatureFlag.cs"), "// код");
         var scan = await ScanAsync(id);
-        var before = File.ReadAllBytes(Path.Combine(root, "CLAUDE.md"));
+        scan.GetProperty("suggestions").EnumerateArray()
+            .Should().Contain(s => s.GetProperty("apply").ValueKind == JsonValueKind.Object);
+        var path = Path.Combine(root, "CLAUDE.md");
+        var before = File.ReadAllBytes(path);
+        var mtime = File.GetLastWriteTimeUtc(path);
 
         var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/apply",
             new { baseSha = scan.GetProperty("baseSha").GetString(), ids = Array.Empty<string>() });
@@ -93,7 +102,8 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("applied").EnumerateArray().Should().BeEmpty();
-        File.ReadAllBytes(Path.Combine(root, "CLAUDE.md")).Should().Equal(before);
+        File.ReadAllBytes(path).Should().Equal(before);
+        File.GetLastWriteTimeUtc(path).Should().Be(mtime);
     }
 
     // Чужой писал бы в чужой CLAUDE.md, если бы проверка владения отсутствовала

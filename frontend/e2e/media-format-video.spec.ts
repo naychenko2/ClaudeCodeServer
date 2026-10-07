@@ -256,6 +256,16 @@ for (const { name, vp } of VIEWPORTS) {
         await shot(page, `s7-${name}-${theme}.png`);
       });
 
+      test('7 · сцена без выбранной модели: желание агента 16:9 · 720p на чипе с ✦, а не «Как у модели»', async ({ page }) => {
+        const s = scene(5);
+        s.settings = { ...s.settings, model: 'auto', aspect: '16:9', format: { mode: 'aspect', aspect: '16:9', tier: 'standard', by: 'agent', at: '2026-10-07T09:00:00Z' } } as Scene['settings'];
+        await open(page, { vp, theme, scenes: [...standardScenes().slice(0, 4), s] });
+        await actionChip(page, 'shoot').click();
+        await expect.poll(() => chipText(page), { timeout: 15_000 }).toContain('16:9');
+        expect(await chipText(page)).not.toContain('Как у модели');
+        await expect(chip(page).locator('[data-agent-mark]')).toBeVisible();
+      });
+
       test('7 · агент сменил формат проекта (video_prefs_changed): чип сам показывает 9:16 и ✦, без перезагрузки', async ({ page }) => {
         await open(page, { vp, theme });
         await actionChip(page, 'shoot').click();

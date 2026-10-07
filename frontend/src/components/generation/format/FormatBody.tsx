@@ -289,6 +289,7 @@ function EditPanel({ e, state, isMobile }: { e: FormatEditModel; state: MediaFor
       {aspects.length > 0 && (
         <>
           <Lab aside={state?.caps?.modelLabel}>Другие пропорции</Lab>
+          <div data-fmt-hint="edit-aspects" style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>{FORMAT_TEXT.editAspectsHint}</div>
           <Aspects aspects={aspects} active={e.aspect} isMobile={isMobile} onPick={e.onAspect} />
         </>
       )}

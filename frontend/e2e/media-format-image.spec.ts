@@ -170,6 +170,7 @@ for (const { name, vp } of VIEWPORTS) {
         await expect.poll(() => chipText(page)).toContain(asSrc);
         await chip(page).click();
         await expect(page.locator('[data-fmt-source]')).toContainText('400×300');
+        await expect(page.locator('[data-fmt-hint="edit-aspects"]').last()).toHaveText('Выберите пропорции — предложим дорисовать края или обрезать.');
         await aspect(page, '1:1').click();
         const ask = page.locator('[data-fmt-ask]');
         await expect(ask).toContainText('4:3 → 1:1. Как получить 1:1?');

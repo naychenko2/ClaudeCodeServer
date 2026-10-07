@@ -208,9 +208,15 @@ export function videoFormat(ctx: ContextKindCtx, actionId: string | null): Forma
 
   if (!caps || !r.provider || !r.model) {
     const none: MediaFormatState = { caps: null, wish: r.format, resolved: { mode: 'model', substituted: false, rounded: false }, tiers: [] };
+    // Модель не выбрана, но желание задано (агент или человек): называем его, а не «Как у модели», и сохраняем автора для ✦
+    const w = r.format && r.format.mode !== 'model' ? r.format : null;
+    const wishMain = !w ? null : w.mode === 'exact' && w.width && w.height ? `${w.width}×${w.height}` : w.aspect ?? null;
+    const wishTier = w && w.mode === 'aspect' && w.tier ? TIER_NAME[w.tier] : null;
     return {
-      kind: 'generate', title, state: none, by: null,
-      chip: { prefix: FORMAT_TEXT.chat, main: FORMAT_TEXT.asModel, tone: 'dim' },
+      kind: 'generate', title, state: none, by: wishMain ? w!.by ?? null : null,
+      chip: wishMain
+        ? { main: wishMain, ...(wishTier ? { sub: `· ${wishTier}`, subShort: `· ${wishTier}` } : null), tone: 'normal' }
+        : { prefix: FORMAT_TEXT.chat, main: FORMAT_TEXT.asModel, tone: 'dim' },
       footer: () => '',
       ...(r.model && r.provider ? { hint: FORMAT_TEXT.noCaps(r.provider.label, r.model.label) } : null),
       onChange: () => {},

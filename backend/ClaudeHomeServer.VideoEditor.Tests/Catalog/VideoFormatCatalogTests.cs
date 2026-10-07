@@ -233,4 +233,22 @@ public sealed class VideoFormatCatalogTests
         VideoSceneFormat.LockedConflict(scene, Set(null), force: false).Should().BeNull("«Как у модели» пропорции не меняет");
         VideoSceneFormat.LockedConflict(scene with { LockedBy = null }, Set("9:16"), force: false).Should().BeNull();
     }
+
+    // Желание, унаследованное из префов (автор и время чужие), не перештамповывается автором очередной правки:
+    // сравниваются режим, пропорции, ступень и размер, но не At и By
+    [Fact]
+    public void Normalize_does_not_restamp_the_same_wish_with_other_author_and_time()
+    {
+        var inherited = new MediaFormat(FormatModes.Aspect, "9:16", FormatTier.High, null, null, ContextActor.Human, new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc));
+        var settings = new VideoSceneSettingsDto(null, null, "", null, null, null, "9:16", null, null, inherited);
+        var current = settings with { Format = inherited with { By = ContextActor.Agent, At = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc) } };
+
+        var normalized = VideoSceneFormat.Normalize(settings, current, ContextActor.Agent, new DateTime(2026, 10, 7, 0, 0, 0, DateTimeKind.Utc));
+
+        normalized.Format.Should().Be(inherited, "то же желание: автор и время остаются прежними");
+
+        var changed = VideoSceneFormat.Normalize(settings with { Format = inherited with { Tier = FormatTier.Max } }, current,
+            ContextActor.Agent, new DateTime(2026, 10, 7, 0, 0, 0, DateTimeKind.Utc));
+        changed.Format!.By.Should().Be(ContextActor.Agent, "другая ступень — это уже правка автора");
+    }
 }

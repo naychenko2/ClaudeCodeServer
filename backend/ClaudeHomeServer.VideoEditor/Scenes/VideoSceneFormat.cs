@@ -37,15 +37,22 @@ public static class VideoSceneFormat
         ContextActor by, DateTime now)
     {
         var format = incoming.Format;
-        if (format is not null && current?.Format == format && incoming.Aspect is { } legacy && legacy != format.Aspect)
+        if (format is not null && SameWish(current?.Format, format) && incoming.Aspect is { } legacy && legacy != format.Aspect)
             format = format with { Mode = FormatModes.Aspect, Aspect = legacy };
         else if (format is null && current?.Format is { } kept && incoming.Aspect is null)
             format = kept;
         else if (format is null && incoming.Aspect is { } aspectOnly && current?.Format is { } old && old.Aspect != aspectOnly)
             format = old with { Mode = FormatModes.Aspect, Aspect = aspectOnly };
-        if (format is not null && format != current?.Format) format = Stamp(format, by, now);
+        if (format is not null && !SameWish(current?.Format, format)) format = Stamp(format, by, now);
         return incoming with { Format = format, Aspect = format is { Mode: FormatModes.Aspect } ? format.Aspect : incoming.Aspect };
     }
+
+    // То же желание: режим, пропорции, ступень и размер. Автор и время в сравнение не входят — иначе формат,
+    // унаследованный из префов (с чужим автором и временем), перештамповывался бы автором очередной правки: ложная ✦
+    public static bool SameWish(MediaFormat? a, MediaFormat? b) =>
+        a is null || b is null
+            ? a is null && b is null
+            : a.Mode == b.Mode && a.Aspect == b.Aspect && a.Tier == b.Tier && a.Width == b.Width && a.Height == b.Height;
 
     // Пропорции, которые сцена просит сейчас (желание или прежнее поле)
     public static string? AspectOf(VideoSceneSettingsDto s) => s.Format is { Mode: FormatModes.Aspect } f ? f.Aspect : s.Aspect;

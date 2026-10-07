@@ -35,8 +35,9 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
         var settings = given ?? prefs.ForNewScene(ownerId, scope);
         if (SettingsProblem(scope, settings) is { } badSettings) return badSettings;
         // Желание формата ставит автор правки (человек или агент), время — сервер; Aspect зеркалится
-        // Из префов желание приходит уже с автором и временем — не перештамповываем его автором этой правки
-        if (given is not null) settings = VideoSceneFormat.Normalize(settings, null, by, Store.Now());
+        // Из префов желание приходит уже с автором и временем — не перештамповываем его автором этой правки: основа
+        // сравнения — настройки новой сцены из префов, и совпавшее желание остаётся с прежним автором (без ложной ✦)
+        if (given is not null) settings = VideoSceneFormat.Normalize(settings, prefs.ForNewScene(ownerId, scope), by, Store.Now());
 
         var written = threads.Tracked(ownerId, sessionId, () => Store.AddScene(ownerId, sessionId, folder, settings, revision,
             string.IsNullOrWhiteSpace(name) ? null : name.Trim()), by);

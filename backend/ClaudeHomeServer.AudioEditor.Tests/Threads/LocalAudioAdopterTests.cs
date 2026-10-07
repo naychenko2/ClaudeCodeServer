@@ -26,7 +26,6 @@ public sealed class LocalAudioAdopterTests : IDisposable
     private readonly List<StoredModuleRecord> _records = [];
     private readonly Mock<IChatFeed> _feed = new();
     private readonly Mock<ISessionBroadcaster> _broadcaster = new();
-    private readonly Mock<IFeatureFlagGate> _flags = new();
     private readonly Mock<ISessionDirectory> _directory = new();
     private readonly Mock<IProjectManager> _projects = new();
 
@@ -35,7 +34,6 @@ public sealed class LocalAudioAdopterTests : IDisposable
         _store = new AudioThreadStore(_root);
         _feed.Setup(f => f.AppendRecordAsync(It.IsAny<string>(), It.IsAny<StoredModuleRecord>(), It.IsAny<CancellationToken>()))
             .Callback<string, StoredModuleRecord, CancellationToken>((_, r, _) => _records.Add(r)).ReturnsAsync(true);
-        _flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.AudioEditor)).Returns(true);
         var session = new Session { Id = Chat, OwnerId = Owner, ProjectId = Project };
         _directory.Setup(d => d.GetById(Chat)).Returns(session);
         _directory.Setup(d => d.ResolveOwnerId(session)).Returns(Owner);
@@ -50,7 +48,7 @@ public sealed class LocalAudioAdopterTests : IDisposable
     private LocalAudioAdopter Adopter()
     {
         var threads = new AudioJobThreads(_store, NullLogger<AudioJobThreads>.Instance, _directory.Object, _feed.Object, _broadcaster.Object);
-        return new LocalAudioAdopter(_store, threads, _directory.Object, _projects.Object, _flags.Object);
+        return new LocalAudioAdopter(_store, threads, _directory.Object, _projects.Object);
     }
 
     private static LocalMediaAdoption Result(params (string Path, string Type)[] files) =>
@@ -111,17 +109,6 @@ public sealed class LocalAudioAdopterTests : IDisposable
     public async Task Результат_без_звука_ничего_не_заводит()
     {
         await Adopter().AdoptAsync(Result((Score, "text/plain")), default);
-
-        _store.Get(Owner, Chat).Threads.Should().BeEmpty();
-        _records.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Выключенный_флаг_модуля_молчит()
-    {
-        _flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.AudioEditor)).Returns(false);
-
-        await Adopter().AdoptAsync(Result((Cover, "audio/mpeg")), default);
 
         _store.Get(Owner, Chat).Threads.Should().BeEmpty();
         _records.Should().BeEmpty();
@@ -195,13 +182,10 @@ public sealed class LocalAudioAdopterTests : IDisposable
     }
 
     [Fact]
-    public async Task Стемы_без_звуковых_файлов_и_при_выключенном_флаге_молчат()
+    public async Task Стемы_без_звуковых_файлов_молчат()
     {
         await Adopter().AdoptAsync(new LocalMediaAdoption(Owner, Project, Chat, "audio_separate", "lm_a",
             [new LocalMediaAdoptedFile("a/x.txt", "text/plain")]), default);
-        _flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.AudioEditor)).Returns(false);
-        await Adopter().AdoptAsync(Separated("vocals"), default);
-
         _store.Get(Owner, Chat).Threads.Should().BeEmpty();
         _records.Should().BeEmpty();
     }

@@ -33,7 +33,6 @@ public class AudioEditorDspControllerTests : IDisposable
         _factory.ExtraServices = services => services.AddSingleton<IAudioDsp>(_dsp);
         var users = _factory.Services.GetRequiredService<UserStore>();
         var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        users.SetFeatureFlag(user.Id, FeatureFlagKeys.AudioEditor, true).Should().BeTrue();
         var dir = Path.Combine(_factory.TempDir, "dsp_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         File.WriteAllBytes(Path.Combine(dir, "intro.mp3"), "INTRO"u8.ToArray());

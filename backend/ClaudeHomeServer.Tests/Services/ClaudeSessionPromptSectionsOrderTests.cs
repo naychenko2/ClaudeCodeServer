@@ -481,7 +481,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         bool recallInTurnText, Func<LlmSessionContext, LlmSessionContext> tweak,
         Dictionary<string, string?>? providerConfig = null)
     {
-        var contributor = new ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor(new AllFlags());
+        var contributor = new ClaudeHomeServer.Services.AudioEditor.Chats.AudioEditorStateContributor();
         var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
             bus => PromptSectionContributorsRegistration.RegisterAll(bus, [contributor]),
             ProjectChat(), tweak, providerConfig);

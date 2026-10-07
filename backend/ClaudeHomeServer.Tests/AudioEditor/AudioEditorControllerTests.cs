@@ -35,7 +35,6 @@ public class AudioEditorControllerTests : IDisposable
         _factory.ExtraServices = services => services.AddSingleton<IAudioEngine>(new FakeEngine());
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        EnableFlag(TestWebApplicationFactory.TestUsername);
         (_projectId, _projectRoot) = CreateProject(TestWebApplicationFactory.TestUsername);
         File.WriteAllBytes(Path.Combine(_projectRoot, "intro.mp3"), [9, 9, 9]);
         _client = _factory.CreateAuthenticatedClient();
@@ -72,12 +71,6 @@ public class AudioEditorControllerTests : IDisposable
     }
 
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();
-
-    private void EnableFlag(string username)
-    {
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(username)!.Id, FeatureFlagKeys.AudioEditor, true).Should().BeTrue();
-    }
 
     private (string Id, string Root) CreateProject(string username)
     {
@@ -153,29 +146,10 @@ public class AudioEditorControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Флаг_выключен_ручки_404()
-    {
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.AudioEditor, false).Should().BeTrue();
-        var chatId = await ProjectChat();
-
-        var responses = new[]
-        {
-            await _client.GetAsync($"{Root}/catalog"),
-            await _client.PostAsJsonAsync($"{Root}/quote", new { mode = "voice" }),
-            await _client.GetAsync($"{Chat(chatId)}/state"),
-            await _client.PostAsJsonAsync($"{Chat(chatId)}/threads", new { draftFolder = "", revision = 0 }),
-        };
-
-        responses.Select(r => r.StatusCode).Should().AllBeEquivalentTo(HttpStatusCode.NotFound);
-    }
-
-    [Fact]
     public async Task Чужой_проект_чат_нить_и_файл_неотличимы_от_несуществующих()
     {
         var (chatUrl, threadId, versionId) = await ProjectVersion();
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        EnableFlag(TestWebApplicationFactory.SecondUsername);
 
         // Чужой проект: каталог, состояние, файл версии и сохранение
         (await second.GetAsync($"{Root}/catalog")).StatusCode.Should().Be(HttpStatusCode.NotFound);

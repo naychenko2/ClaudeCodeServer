@@ -66,7 +66,6 @@ public class AudioVoicesControllerTests : IDisposable
         var users = _factory.Services.GetRequiredService<UserStore>();
         var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
         _ownerId = user.Id;
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.AudioEditor, true).Should().BeTrue();
         _projectRoot = Path.Combine(_factory.TempDir, "voices_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_projectRoot);
         _projectId = _factory.Services.GetRequiredService<ProjectManager>()
@@ -193,19 +192,15 @@ public class AudioVoicesControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Чужой_проект_и_выключенный_флаг_404()
+    public async Task Чужой_проект_404()
     {
         var slug = await CreateVoice();
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id, FeatureFlagKeys.AudioEditor, true);
 
         (await second.GetAsync(Voices)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await second.DeleteAsync($"{Voices}/{slug}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         Directory.Exists(Path.Combine(_projectRoot, "voices", slug)).Should().BeTrue();
 
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.AudioEditor, false);
-        (await _client.GetAsync(Voices)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await _factory.CreateClient().GetAsync(Voices)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 

@@ -66,7 +66,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
 
     private AudioEditorToolset Toolset(IAudioEngine[]? engines = null, bool agentLaunch = true, bool withGate = true,
         IAudioDsp? dsp = null, VoiceLibrary? library = null, bool withEdits = false,
-        AudioContextLaunch? context = null, string[]? extraFlags = null)
+        AudioContextLaunch? context = null)
     {
         engines ??= [new FakeEngine("fal")];
         _ctxStore = new ChatContextStore(Path.Combine(_dir, "chat-context"),
@@ -81,15 +81,12 @@ public sealed class AudioEditorToolsetTests : IDisposable
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string id, string owner) => _sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.AudioEditor)).Returns(true);
-        foreach (var key in extraFlags ?? []) flags.Setup(f => f.IsEnabled(It.IsAny<string>(), key)).Returns(true);
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { [AudioEditorToolset.AgentLaunchKey] = agentLaunch ? "true" : "false" })
             .Build();
-        return new AudioEditorToolset(accessor.Object, flags.Object, projects.Object, engines, threads, _jobs, _prefs,
+        return new AudioEditorToolset(accessor.Object, projects.Object, engines, threads, _jobs, _prefs,
             _workspace, withGate ? _turnGate.Object : null, concat,
             edits: withEdits ? new AudioAgentEdits(new DspAudioEngine(threads, _workspace, NullLogger<DspAudioEngine>.Instance, dsp)) : null,
             library: library, events: _bus, config: config, context: context);
@@ -370,7 +367,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
         store.AddRef(Owner, ChatId, new ContextItem("ci_voice", AudioContextKind.VoiceKind, new JsonObject { ["slug"] = slug },
             "voice", ContextActor.Human, DateTime.UtcNow), null);
         var engine = new FakeEngine("fal") { TakesLibraryVoices = true };
-        var toolset = Toolset([engine], library: library, context: launch, extraFlags: [FeatureFlagKeys.ChatContext]);
+        var toolset = Toolset([engine], library: library, context: launch);
 
         var result = await Call(toolset, AudioEditorToolset.ToolGenerate, Gen(Draft()));
         await WaitIdleAsync();

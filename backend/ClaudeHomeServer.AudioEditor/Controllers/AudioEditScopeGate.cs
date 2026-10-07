@@ -10,20 +10,15 @@ namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 // картинок). Отдаёт область, а не проект: у личной области Project = null, и каждая ветка «диск
 // проекта» обязана отказать до RootPath.
 //
-// Выключенный флаг, чужой проект и чужой чат одинаково 404: ручки не выдают ни фичу, ни чужие id.
+// Чужой проект и чужой чат одинаково 404: ручки не выдают чужие id.
 // Чужой, несуществующий, чат другого проекта и (для личной ручки) чат проекта неотличимы.
-public sealed class AudioEditScopeGate(IFeatureFlagGate flags, IProjectManager projects, ISessionDirectory directory)
+public sealed class AudioEditScopeGate(IProjectManager projects, ISessionDirectory directory)
 {
     // Ручки проекта без чата: проект свой
     public bool TryProject(string userId, string projectId,
         [NotNullWhen(true)] out AudioEditScope? scope, [NotNullWhen(false)] out IActionResult? denied)
     {
         scope = null;
-        if (!flags.IsEnabled(userId, FeatureFlagKeys.AudioEditor))
-        {
-            denied = Disabled();
-            return false;
-        }
         if (projects.GetById(projectId) is not { } found || found.OwnerId != userId)
         {
             denied = new NotFoundObjectResult(new { error = "Проект не найден" });
@@ -54,11 +49,6 @@ public sealed class AudioEditScopeGate(IFeatureFlagGate flags, IProjectManager p
         [NotNullWhen(true)] out AudioEditScope? scope, [NotNullWhen(false)] out IActionResult? denied)
     {
         scope = null;
-        if (!flags.IsEnabled(userId, FeatureFlagKeys.AudioEditor))
-        {
-            denied = Disabled();
-            return false;
-        }
         if (directory.GetById(sessionId) is not { } session
             || directory.ResolveOwnerId(session) != userId
             || session.ProjectId is not null)
@@ -70,8 +60,6 @@ public sealed class AudioEditScopeGate(IFeatureFlagGate flags, IProjectManager p
         denied = null;
         return true;
     }
-
-    private static NotFoundObjectResult Disabled() => new(new { error = "Модуль «Звук» выключен" });
 
     private static ObjectResult ChatNotFound() =>
         new(new { error = "Чат не найден", code = AudioEditErrorCodes.ChatNotFound }) { StatusCode = StatusCodes.Status404NotFound };

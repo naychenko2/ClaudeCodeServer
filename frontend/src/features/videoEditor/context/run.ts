@@ -3,7 +3,7 @@
 // стора контекста по ревизии, поэтому здесь только `op`, текст, `params` и `contextRevision`; текст поля
 // едет в `params.request` — просьба поверх текста сцены.
 
-import { FLAGS, getChatContextState, getFlag, revealContextPanel } from 'aihome_shell/kit';
+import { getChatContextState, revealContextPanel } from 'aihome_shell/kit';
 import type { ActionQuote, ContextKindCtx, LaunchHandle, LaunchParam, LaunchRequest } from 'aihome_shell/kit';
 import { ERR, errorCode, errorText, videoApi, type FilmBuildStatus, type VideoCatalog, type VideoQuoteRequest } from '../api';
 import { DSP_TEXT } from '../editor/montage/FilmTab';
@@ -59,10 +59,9 @@ export function quoteBody(ctx: ContextKindCtx, req: LaunchRequest): { scope: str
       ...(r.provider && r.model ? { provider: r.provider.key, model: r.model.id } : {}),
       count: typeof variants === 'number' ? variants : r.count,
       durationSec: typeof duration === 'number' ? duration : r.durationSec,
-      // Под флагом media-format пропорции и ступень едут желанием «Формата»; прежний `aspect` — только без флага
-      ...(getFlag(FLAGS.mediaFormat)
-        ? { ...(r.format ? { format: r.format } : null), ...(r.frameAnchor !== 'center' ? { frameFit: { anchor: r.frameAnchor } } : null) }
-        : { aspect: r.aspect }),
+      // Пропорции и ступень едут желанием «Формата»
+      ...(r.format ? { format: r.format } : null),
+      ...(r.frameAnchor !== 'center' ? { frameFit: { anchor: r.frameAnchor } } : null),
       sound: r.sound, contextRevision: req.contextRevision,
     },
   };
@@ -76,9 +75,9 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
   const lines = priceLines(q, q.count, q.durationSec);
   const model = modelLabel(getCatalog(scope), q.provider, q.model);
   return {
-    // Под флагом media-format у бесплатной съёмки время в подписи кнопки: «✦ Снять · бесплатно · ~21 мин» (у «Макс» — оба прогона)
+    // У бесплатной съёмки время в подписи кнопки: «✦ Снять · бесплатно · ~21 мин» (у «Макс» — оба прогона)
     price: q.price.unit === 'free'
-      ? ['бесплатно', getFlag(FLAGS.mediaFormat) ? etaText(q.price.eta) : null].filter(Boolean).join(' · ')
+      ? ['бесплатно', etaText(q.price.eta)].filter(Boolean).join(' · ')
       : lines?.[0] ?? 'цена станет известна после запуска',
     detail: [model, lines?.[1]].filter(Boolean).join(' · '),
   };

@@ -2,7 +2,7 @@
 // сцены, как в панели «Видео», и идёт в котировку явным поставщиком и моделью. «Собрать» идёт без ИИ,
 // у него одна строка. Модель держится по ключу: хост зовёт `executors()` на каждый рендер строки и панели.
 
-import { FLAGS, getFlag, type ExecutorListModel, type ExecutorRow } from 'aihome_shell/kit';
+import type { ExecutorListModel, ExecutorRow } from 'aihome_shell/kit';
 import type { VideoCatalog } from '../api';
 import { changeSettings } from '../scene/actions';
 import { executorRows, pickRow, rowId, type ResolvedScene } from '../scene/model';
@@ -20,13 +20,11 @@ export function shootExecutors(o: {
 }): ExecutorListModel | null {
   if (!o.catalog) return null;
   const value = rowId(o.r);
-  // Под флагом media-format пропорции не серят модели: желание переводится на ближайшую пропорцию модели с пояснением
-  const aspect = getFlag(FLAGS.mediaFormat) ? '' : o.r.aspect;
-  const key = [o.personal, aspect, o.r.auto, value].join('|');
+  const key = [o.personal, o.r.auto, value].join('|');
   const hit = _cache.get(o.sessionId);
   if (hit && hit.key === key && hit.catalog === o.catalog) return hit.model;
   const model: ExecutorListModel = {
-    rows: executorRows(o.catalog, o.personal, aspect, o.r.auto ? 'выбирает сервер' : ''),
+    rows: executorRows(o.catalog, o.personal, o.r.auto ? 'выбирает сервер' : ''),
     value,
     onChange: id => { const p = pickRow(id); changeSettings(o.scope, o.sessionId, { provider: p.provider, model: p.model }); },
   };

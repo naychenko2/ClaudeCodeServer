@@ -55,13 +55,12 @@ describe('причины «Снять» (тексты макета v7)', () => {
 
 describe('исполнитель и цена', () => {
   it('личный чат: local под замком, недоступный поставщик и модель без кадра B — серые с причиной', () => {
-    const rows = executorRows(CATALOG, true, '16:9', '');
+    const rows = executorRows(CATALOG, true, '');
     const local = rows.find(r => r.id === 'local|minimax-h3')!;
     expect(local).toMatchObject({ disabled: true, locked: true, reason: PERSONAL_LOCAL_REASON, group: 'local' });
     expect(rows.find(r => r.id === 'higgsfield|kling3_0')).toMatchObject({ disabled: true, reason: 'Нет доступа к Higgsfield' });
     expect(rows.find(r => r.id === 'fal|no-last')).toMatchObject({ disabled: true, reason: 'Не умеет «кадр A → кадр B»' });
     expect(rows.find(r => r.id === 'fal|seedance-2.5')!.disabled).toBeUndefined();
-    expect(executorRows(CATALOG, false, '9:16', '').find(r => r.id === 'fal|seedance-2.5')).toMatchObject({ reason: 'Не снимает в пропорциях 9:16' });
   });
   it('цена в две строки: итог и расшифровка; local — бесплатно с очередью', () => {
     expect(priceLines(QUOTE, 2, 8)).toEqual(['≈ $3.20', '2 × $1.60 за 8 с']);
@@ -106,9 +105,7 @@ describe('«Формат» сцены: желание и рамка кадров
     expect(settingsOf(r).frameFit).toEqual({ anchor: 'left' });
   });
 
-  it('«Чем»: пустые пропорции не серят модели (под флагом перевод на ближайшую делает «Формат»)', () => {
-    const gray = executorRows(CATALOG, false, '1:1', '').find(x => x.id === 'fal|veo-3.1');
-    expect(gray?.disabled).toBe(true);
-    expect(executorRows(CATALOG, false, '', '').find(x => x.id === 'fal|veo-3.1')?.disabled).toBeUndefined();
+  it('«Чем»: пропорции не серят модели (перевод на ближайшую делает «Формат»)', () => {
+    expect(executorRows(CATALOG, false, '').find(x => x.id === 'fal|veo-3.1')?.disabled).toBeUndefined();
   });
 });

@@ -157,8 +157,8 @@ const unitMark = (u: string) => (u === 'usd' ? '$' : u === 'credits' ? 'кред
 
 // Строки «Исполнителя»: Авто, свои модели, облако. Модель, не снимающая в нужных пропорциях или не
 // знающая «кадр → кадр», серая с причиной; у личного чата local закрыт замком
-// aspect пуст — пропорции не отсеивают модели («Формат» сам переводит желание на ближайшую пропорцию модели)
-export function executorRows(catalog: VideoCatalog, personal: boolean, aspect: string, autoSub: string): ExecutorRow[] {
+// Пропорции не отсеивают модели: «Формат» сам переводит желание на ближайшую пропорцию модели
+export function executorRows(catalog: VideoCatalog, personal: boolean, autoSub: string): ExecutorRow[] {
   const rows: ExecutorRow[] = [{ id: 'auto', group: 'auto', name: 'Авто', sub: autoSub, price: 'по цене модели' }];
   for (const p of catalog.providers) {
     const local = p.key === LOCAL_PROVIDER;
@@ -167,7 +167,6 @@ export function executorRows(catalog: VideoCatalog, personal: boolean, aspect: s
       if (local && personal) reason = PERSONAL_LOCAL_REASON;
       else if (!p.available) reason = p.reason ?? 'Поставщик недоступен';
       else if (!m.lastFrame) reason = 'Не умеет «кадр A → кадр B»';
-      else if (aspect && m.aspects.length && !m.aspects.includes(aspect)) reason = `Не снимает в пропорциях ${aspect}`;
       rows.push({
         id: `${p.key}|${m.id}`, group: local ? 'local' : 'cloud', name: m.label,
         sub: [p.label, m.durations.length ? `${m.durations.join(' / ')} с` : '', m.sound ? 'со звуком' : 'без звука'].filter(Boolean).join(' · '),

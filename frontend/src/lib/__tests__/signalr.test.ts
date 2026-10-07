@@ -17,6 +17,7 @@ const h = vi.hoisted(() => {
     invoke: vi.fn(async () => {}),
     on: vi.fn(),
     off: vi.fn(),
+    stop: vi.fn(async () => { fake.state = HubConnectionState.Disconnected; fake.closeCbs.forEach(cb => cb()); }),
     // Колбэки, зарегистрированные signalr.ts — дёргаем их из тестов как «события» соединения
     reconnectingCbs: [] as Array<() => void>,
     reconnectedCbs: [] as Array<() => void>,
@@ -29,6 +30,7 @@ const h = vi.hoisted(() => {
   return {
     HubConnectionState,
     fake,
+    build: vi.fn(),
     // Управляемое тестом бинарное состояние связи (имитация поведения offline.ts)
     isOnline: true,
     // Отвечает ли /api/health подтверждающему пингу. false = сервер молчит
@@ -47,7 +49,7 @@ vi.mock('@microsoft/signalr', () => ({
     withServerTimeout() { return this; }
     withKeepAliveInterval() { return this; }
     withAutomaticReconnect() { return this; }
-    build() { return h.fake; }
+    build() { h.build(); return h.fake; }
   },
 }));
 
@@ -73,6 +75,9 @@ beforeEach(async () => {
   h.fake.closeCbs.length = 0;
   h.fake.start.mockClear();
   h.fake.invoke.mockClear();
+  h.fake.stop.mockClear();
+  h.fake.off.mockClear();
+  h.build.mockClear();
   h.isOnline = true;
   h.serverAlive = false;
   h.setConnectionState.mockClear();
@@ -277,5 +282,56 @@ describe('onReconnected-подписки', () => {
 
     expect(() => fireReconnected()).not.toThrow();
     expect(good).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resetConnection: перезапуск хаба при смене аккаунта', () => {
+  it('stop зовётся один раз, индикатор связи не уходит в offline', async () => {
+    await signalr.resetConnection();
+    expect(h.fake.stop).toHaveBeenCalledTimes(1);
+    expect(h.setConnectionState).not.toHaveBeenCalledWith('offline');
+  });
+
+  it('после reset ensureConnected стартует заново, подписчик срабатывает один раз; первый старт — нет', async () => {
+    const cb = vi.fn();
+    signalr.onReconnected(cb);
+
+    h.fake.state = h.HubConnectionState.Disconnected;
+    await signalr.ensureConnected();
+    expect(cb).not.toHaveBeenCalled();
+
+    await signalr.resetConnection();
+    h.fake.start.mockClear();
+    await signalr.ensureConnected();
+    expect(h.fake.start).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    await signalr.ensureConnected();
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('подписки на объекте соединения не снимаются, билдер вызван один раз', async () => {
+    const unsub = signalr.onMessage(() => {});
+    await signalr.resetConnection();
+    await signalr.ensureConnected();
+    expect(h.fake.off).not.toHaveBeenCalled();
+    expect(h.build).toHaveBeenCalledTimes(1);
+    unsub();
+  });
+
+  it('ensureConnected во время незавершённого stop ждёт его и только потом стартует', async () => {
+    let finishStop!: () => void;
+    h.fake.stop.mockImplementationOnce(() => new Promise<void>(res => {
+      finishStop = () => { h.fake.state = h.HubConnectionState.Disconnected; res(); };
+    }));
+    const reset = signalr.resetConnection();
+    const ensured = signalr.ensureConnected();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.fake.start).not.toHaveBeenCalled();
+
+    finishStop();
+    await reset;
+    await ensured;
+    expect(h.fake.start).toHaveBeenCalledTimes(1);
   });
 });

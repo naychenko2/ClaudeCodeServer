@@ -10,6 +10,16 @@ let connection: signalR.HubConnection | null = null;
 // прямых conn.onreconnected(), которые не имеют публичного off())
 const _reconnectedCallbacks = new Set<() => void>();
 
+// Намеренная остановка (resetConnection): onclose в этот момент не должен ронять индикатор связи
+let _intentionalStop = false;
+let _stopPromise: Promise<void> | null = null;
+// После перезапуска хаба подписчикам нужен тот же досев, что и после реконнекта
+let _resyncOnNextStart = false;
+
+function fireReconnected(): void {
+  _reconnectedCallbacks.forEach(cb => { try { cb(); } catch { /* не даём одному упавшему обработчику блокировать остальных */ } });
+}
+
 export function getConnection(): signalR.HubConnection {
   if (!connection) {
     connection = new signalR.HubConnectionBuilder()
@@ -46,11 +56,11 @@ export function getConnection(): signalR.HubConnection {
     // число) onclose практически недостижим: реальный сигнал «хаб не поднялся»
     // приходит через ветки reject в ensureConnected ниже — таймаут ожидания
     // (8с) и переход в Disconnected, — где и поднимается offline.
-    connection.onclose(() => setConnectionState('offline'));
+    connection.onclose(() => { if (!_intentionalStop) setConnectionState('offline'); });
     // onreconnected — онлайн + диспатч подписчикам
     connection.onreconnected(() => {
       setConnectionState('online');
-      _reconnectedCallbacks.forEach(cb => { try { cb(); } catch { /* не даём одному упавшему обработчику блокировать остальных */ } });
+      fireReconnected();
     });
   }
   return connection;
@@ -58,7 +68,26 @@ export function getConnection(): signalR.HubConnection {
 
 let _startPromise: Promise<void> | null = null;
 
+// Перезапуск хаба под новым токеном (смена аккаунта). Объект connection остаётся тем же:
+// все подписки висят на нём, а accessTokenFactory при следующем start() возьмёт свежий JWT.
+export async function resetConnection(): Promise<void> {
+  if (!connection) return;
+  if (_stopPromise) { await _stopPromise; return; }
+  _intentionalStop = true;
+  try {
+    _stopPromise = connection.stop();
+    await _stopPromise;
+    _startPromise = null;
+    _resyncOnNextStart = true;
+  } finally {
+    _intentionalStop = false;
+    _stopPromise = null;
+  }
+}
+
 export async function ensureConnected(): Promise<signalR.HubConnection> {
+  // Гонка «вышел и сразу вошёл»: старт не должен обгонять незавершённый stop
+  if (_stopPromise) { try { await _stopPromise; } catch { /* исход stop разбирает resetConnection */ } }
   const conn = getConnection();
   if (conn.state === signalR.HubConnectionState.Disconnected) {
     if (!_startPromise) {
@@ -68,6 +97,10 @@ export async function ensureConnected(): Promise<signalR.HubConnection> {
           // Без явного подъёма флаг останется offline при заведомо живом хабе —
           // на экране логина это и был дефект «Повторить врёт».
           setConnectionState('online');
+          if (_resyncOnNextStart) {
+            _resyncOnNextStart = false;
+            fireReconnected();
+          }
         })
         .finally(() => { _startPromise = null; });
     }

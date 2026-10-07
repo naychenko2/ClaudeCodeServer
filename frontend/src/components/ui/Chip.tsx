@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 
 // Пилюля-чип: фильтр, действие, выбранный объект.
 //  • variant="soft" (по умолчанию) — светлый чип; selected — акцентный фон и рамка.
@@ -12,7 +12,7 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 // dense — узкие поля по бокам (6 вместо 10): тесный ряд, где каждый пиксель отдан подписи.
 export function Chip({
   children, onClick, selected, dashed, title, maxW, touch, leading, onRemove,
-  variant = 'soft', large, dense,
+  variant = 'soft', large, dense, removeLabel,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -23,6 +23,7 @@ export function Chip({
   touch?: boolean;
   leading?: ReactNode;
   onRemove?: () => void;
+  removeLabel?: string;  // подпись крестика для скринридера и тултипа
   variant?: 'soft' | 'toggle';
   large?: boolean;
   dense?: boolean;
@@ -34,7 +35,7 @@ export function Chip({
     <>
       {leading && <span style={{ display: 'inline-flex', width: 18, height: 18, flexShrink: 0, borderRadius: R.full, overflow: 'hidden' }}>{leading}</span>}
       {body}
-      {onRemove && <ChipX onClick={onRemove} touch={touch} />}
+      {onRemove && <ChipX onClick={onRemove} touch={touch} label={removeLabel} />}
     </>
   );
 
@@ -82,21 +83,41 @@ export function Chip({
   );
 }
 
-// Крестик внутри чипа. touch — тач-площадь: без неё цель 8×14px,
-// пальцем в неё не попасть (замер на планшете)
-export function ChipX({ onClick, touch }: { onClick: () => void; touch?: boolean }) {
+// Кольцо фокуса крестика с клавиатуры — инжектим один раз, как у IconButton
+const X_FOCUS_CLASS = 'cc-chipx';
+if (typeof document !== 'undefined' && !document.getElementById('cc-chipx-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-chipx-style';
+  el.textContent = `.${X_FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
+}
+
+// Крестик внутри чипа. Настоящая кнопка, а не span: иначе убрать чип нельзя ни с
+// клавиатуры, ни скринридером. label — что именно убираем («Убрать вложение x.ts»).
+// touch — тач-площадь: без неё цель 8×14px, пальцем в неё не попасть (замер на планшете).
+// В toggle-чип (он сам button) крестик не кладём: кнопка в кнопке — невалидная разметка
+export function ChipX({ onClick, touch, label = 'Убрать' }: { onClick: () => void; touch?: boolean; label?: string }) {
   return (
-    <span
+    <button
+      type="button"
+      className={X_FOCUS_CLASS}
       onClick={e => { e.stopPropagation(); onClick(); }}
-      style={touch
-        ? {
-            fontWeight: 700, opacity: 0.8, cursor: 'pointer', flexShrink: 0,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            minWidth: SP.xxl, minHeight: SP.xxl, margin: `-${SP.sm}px -${SP.sm}px -${SP.sm}px 0`,
-          }
-        : { fontWeight: 700, opacity: 0.8, cursor: 'pointer', padding: '0 1px' }}
+      title={label}
+      aria-label={label}
+      style={{
+        // Сброс нативной кнопки: крестик наследует цвет и шрифт чипа
+        background: 'none', border: 'none', color: 'inherit', font: 'inherit',
+        fontWeight: 700, opacity: 0.8, cursor: 'pointer', flexShrink: 0, lineHeight: 1,
+        borderRadius: R.max,
+        ...(touch
+          ? {
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+              minWidth: SP.xxl, minHeight: SP.xxl, margin: `-${SP.sm}px -${SP.sm}px -${SP.sm}px 0`,
+            }
+          : { padding: '0 1px' }),
+      }}
     >
       ×
-    </span>
+    </button>
   );
 }

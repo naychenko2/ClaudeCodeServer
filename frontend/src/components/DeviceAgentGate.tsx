@@ -3,7 +3,6 @@ import { Loader2, MonitorOff, Plug, ShieldAlert, Unplug } from 'lucide-react';
 import type { Project } from '../types';
 import { useDeviceAgent, probeDeviceAgent, type DeviceAgentStatus } from '../lib/deviceAgent';
 import { isRootNotAllowed } from '../lib/agentInstall';
-import { FLAGS, useFeature } from '../lib/featureFlags';
 import { C, FS, SP } from '../lib/design';
 import { EmptyState, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -21,7 +20,7 @@ interface Props {
 
 type View = { icon: ReactNode; title: string; subtitle: string } | null;
 
-function describe(status: DeviceAgentStatus, agentMode: boolean): View {
+function describe(status: DeviceAgentStatus): View {
   const icon = (I: typeof Unplug) => <I size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />;
   switch (status.kind) {
     case 'ready':
@@ -29,9 +28,7 @@ function describe(status: DeviceAgentStatus, agentMode: boolean): View {
     case 'checking':
       return { icon: <Loader2 size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} style={{ animation: 'spin 1s linear infinite' }} />, title: 'Ищем агент AI Home на этом компьютере', subtitle: 'Файлы, терминал и сервисы локального проекта открываются через агента AI Home на этом компьютере' };
     case 'unreachable':
-      return { icon: icon(Unplug), title: 'Агент AI Home на этом компьютере не найден', subtitle: agentMode
-        ? 'Файлы, терминал и сервисы локального проекта доступны на компьютере с агентом AI Home. Поставьте агента: Устройства → Подключить компьютер — или откройте проект с машины проекта'
-        : 'Файлы, терминал и сервисы локального проекта доступны только на его компьютере с запущенным агентом AI Home. Запустите агента или откройте проект с машины проекта' };
+      return { icon: icon(Unplug), title: 'Агент AI Home на этом компьютере не найден', subtitle: 'Файлы, терминал и сервисы локального проекта доступны на компьютере с агентом AI Home. Поставьте агента: Устройства → Подключить компьютер — или откройте проект с машины проекта' };
     case 'refused':
       return { icon: icon(ShieldAlert), title: 'Доступ к проекту на устройстве не выдан', subtitle: status.reason };
     case 'rejected':
@@ -49,7 +46,6 @@ function describe(status: DeviceAgentStatus, agentMode: boolean): View {
 // Серверному проекту гейт прозрачен. Хуки панели живут в children — ранний выход здесь их не ломает.
 export function DeviceAgentGate({ project, children, relayTitle }: Props) {
   const status = useDeviceAgent(project);
-  const agentMode = useFeature(FLAGS.localProjects);
   const [devicesOpen, setDevicesOpen] = useState(false);
   const retry = (
     <Button variant="secondary" size="sm" onClick={() => void probeDeviceAgent(project.id)}>
@@ -58,10 +54,10 @@ export function DeviceAgentGate({ project, children, relayTitle }: Props) {
   );
   const reason = 'reason' in status ? status.reason : null;
   // Агент отказал: папка проекта не под разрешёнными корнями машины — даём готовую команду
-  const rootsHint = agentMode && isRootNotAllowed(reason);
+  const rootsHint = isRootNotAllowed(reason);
   // Ретранслятор включается и там, где агента нет вовсе: присутствие «не здесь» неотличимо
   // от «агент не поставлен», поэтому подсказка установки видна на постоянной плашке, а не мелькает
-  const installHint = agentMode && !rootsHint && (status.kind === 'relay' || status.kind === 'relay-unavailable');
+  const installHint = !rootsHint && (status.kind === 'relay' || status.kind === 'relay-unavailable');
   const action = rootsHint
     ? (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.md, maxWidth: 420 }}>
@@ -95,9 +91,9 @@ export function DeviceAgentGate({ project, children, relayTitle }: Props) {
         {devicesModal}
       </>
     );
-  const view = describe(status, agentMode);
+  const view = describe(status);
   if (!view) return <>{children}</>;
-  const unreachableAction = agentMode && status.kind === 'unreachable'
+  const unreachableAction = status.kind === 'unreachable'
     ? (
       <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
         <Button variant="primary" size="sm" leftIcon={<Plug size={14} strokeWidth={2.2} />} onClick={() => setDevicesOpen(true)}>

@@ -18,7 +18,6 @@ import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
 import { DevicesModal } from '../features/desktop/DevicesModal';
-import { useDevicesMenuVisible } from '../features/desktop/deviceOptions';
 import { DeployModal } from './DeployModal';
 import { PowerModal } from './PowerModal';
 import { RemoteCommandsModal } from './RemoteCommandsModal';
@@ -180,9 +179,6 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     window.addEventListener(BADGE_EVENT, refresh);
     return () => { alive = false; window.removeEventListener(BADGE_EVENT, refresh); };
   }, [isAdmin]);
-
-  // Пункт «Устройства» — под флагом local-projects: без него подключать нечего
-  const devicesMenu = useDevicesMenuVisible();
 
   // Доступна ли выкатка на бой. Спрашиваем только у админа: фича admin-only и вдобавок
   // выключена в конфиге по умолчанию — на машинах, где раннера нет, пункта быть не должно.
@@ -549,7 +545,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowModelsSpend={() => setShowModelsSpend(true)}
           onShowMcpServers={() => setShowMcpServers(true)}
           // Устройства — агенты локальных проектов (local-projects)
-          onShowDevices={devicesMenu ? () => setShowDevices(true) : undefined}
+          onShowDevices={() => setShowDevices(true)}
           onShowUserManagement={() => setShowUserMgmt(true)}
           // Админский список подсистем инстанса (Этап 5, волна 3): только
           // чтение через GET /api/admin/subsystems, без тумблера — глобальный

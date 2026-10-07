@@ -21,7 +21,6 @@ import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/sign
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem, type RevealPanelDetail } from '../lib/subsystems/registry';
 import { markGenPanelDismissed } from '../lib/genPanelDismissed';
@@ -1726,9 +1725,8 @@ const windowWidth = useWindowWidth();
   // DesktopWorkspace, но с тач-габаритом 40 (isMobile). Сплита на телефоне нет,
   // поэтому клик по чипу ведёт штатным полноэкранным путём: файл — FileViewer
   // fullscreen, ссылка — ридер на всю контентную зону, задача — карточка в центре.
-  const contextOn = useFeature(FLAGS.chatContext);
   const hasContext = useHasChatContext(activeSession?.id ?? null);
-  const contextVisibleMobile = contextOn && !!activeSession && hasContext;
+  const contextVisibleMobile = !!activeSession && hasContext;
   const openContextEntryMobile = (e: SessionContextEntry) => {
     if (e.type === 'file') { handleOpenFileFromChat(e.id); return; }
     if (e.type === 'url') { handleOpenReader(e.id); return; }

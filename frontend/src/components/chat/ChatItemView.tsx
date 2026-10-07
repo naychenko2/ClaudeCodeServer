@@ -2215,8 +2215,7 @@ function ErrorCard({ item, online, onRetry, onDropWindow1M }: {
   const showDrop = item.action === 'window-1m-drop' && !!onDropWindow1M && !dropResolved;
   // Ход локального проекта отказан: папка не под разрешёнными корнями агента — команда для машины
   const projectCtx = useContext(ChatProjectContext);
-  const localProjects = useFeature(FLAGS.localProjects);
-  const rootsHint = localProjects && !!projectCtx?.local && isRootNotAllowed(item.text);
+  const rootsHint = !!projectCtx?.local && isRootNotAllowed(item.text);
 
   const handleDrop = useCallback(async () => {
     if (!onDropWindow1M || dropLoading) return;

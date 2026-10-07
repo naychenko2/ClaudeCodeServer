@@ -8,7 +8,7 @@ import { Button, ConfirmDialog, Select, TextField } from '../../components/ui';
 import { AccordionSection } from '../projects/dialogs/AccordionSection';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { invalidateProjectsCache } from '../projects/useAllProjects';
-import { deviceLabel, isLocalProjectDevice, useNoDevicesHint } from './deviceOptions';
+import { deviceLabel, isLocalProjectDevice, NO_DEVICES_HINT } from './deviceOptions';
 
 // Секция «Устройство» в настройках проекта (ADR-016 §3.4): показывает привязку и
 // позволяет перепривязать/отвязать. Скрывается через флаг `local-projects` снаружи.
@@ -43,7 +43,6 @@ function describeDevice(project: Project): { text: string; tone: 'ok' | 'err' | 
 
 export function DeviceSection({ project, onUpdated }: Props) {
   const [devices, setDevices] = useState<DesktopDevice[] | null>(null);
-  const noDevicesHint = useNoDevicesHint();
   const [picked, setPicked] = useState('');
   const [devicePath, setDevicePath] = useState('');
   const [busy, setBusy] = useState(false);
@@ -148,7 +147,7 @@ export function DeviceSection({ project, onUpdated }: Props) {
           <div style={{ fontSize: FS.xs, color: C.textMuted }}>Загружаем устройства…</div>
         ) : devices.length === 0 ? (
           <div style={{ fontSize: FS.xs, color: C.textSecondary }}>
-            {noDevicesHint}
+            {NO_DEVICES_HINT}
           </div>
         ) : (
           <>

@@ -69,8 +69,6 @@ function WithGit(props: Props & { project: Project }) {
   const git: RowGit | null = chip.isRepo ? {
     label: chip.label,
     changes: chip.diff.files,
-    added: chip.diff.added,
-    deleted: chip.diff.deleted,
     ahead: chip.ahead,
     publishN: chip.publishN,
     onCommitOwn: props.onCommitOwn,

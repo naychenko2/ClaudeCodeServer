@@ -15,7 +15,7 @@ import aiHomePng from '../assets/ai-home.png';
 
 const noop = () => {};
 const git: RowGit = {
-  label: 'feat/video-editor', changes: 3, added: 9, deleted: 2, ahead: 1, publishN: 1,
+  label: 'feat/video-editor', changes: 3, ahead: 1, publishN: 1,
   onCommitOwn: noop, onCommitAll: noop, onPublish: noop, onShowChanges: noop,
 };
 const exec: RowExec = {
@@ -110,6 +110,11 @@ export function ContextRowKitSection() {
         <div data-kit-composer="desk-git" style={{ width: 860, maxWidth: '100%' }}>
           <Frame px={860} caption="десктоп: только ветка — справа пилюля и кнопки Git">
             <ComposerMock row={view({ primary: null, exec: null, refs: [], width: 858 })} />
+          </Frame>
+        </div>
+        <div data-kit-composer="desk-clean" style={{ width: 860, maxWidth: '100%' }}>
+          <Frame px={860} caption="десктоп: только ветка, дерево чистое — только имя ветки, без меню">
+            <ComposerMock row={view({ primary: null, exec: null, refs: [], width: 858, git: { ...git, changes: 0, ahead: 0, publishN: 0 } })} />
           </Frame>
         </div>
         <div data-kit-composer="desk-full" style={{ width: 860, maxWidth: '100%' }}>

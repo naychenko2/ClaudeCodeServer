@@ -25,9 +25,6 @@ const CHIP_H = 22;
 export interface RowGit {
   label: string;
   changes: number;
-  // Строки диффа рабочего дерева — для пилюли «файлы +N −M» у правого края губы
-  added?: number;
-  deleted?: number;
   ahead: number;
   publishN: number;
   onCommitOwn: () => void;
@@ -181,12 +178,14 @@ function GitChip({ g, form, onOpen, bare }: { g: RowGit; form: 0 | 1 | 2 | 3; on
   const icon = <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />;
   // bare — справа в губе стоят пилюля и кнопки Git: чип — только ветка, без счётчиков и без
   // меню (всё, что в нём было, теперь кнопками)
+  // Отделка — прежняя подпись ветки Git-полосы (до строки контекста): моно 12.5 с иконкой 15,
+  // в один кегль с пилюлей и кнопками справа, а не мельче чипов строки
   if (bare) {
     return (
-      <RowChip kind="git" max={gitChipBox(form).chip} title={gitTitle(g)} mono>
-        {icon}
-        <span style={ellipsis}>{g.label}</span>
-      </RowChip>
+      <span data-chip="git" data-git-bare="" title={gitTitle(g)} style={{ display: 'flex', alignItems: 'center', gap: GIT_LABEL_GAP, minWidth: 0 }}>
+        <GitBranch size={GIT_LABEL_ICON} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
+        <span style={{ ...ellipsis, fontFamily: FONT.mono, fontSize: GIT_FONT, color: C.textSecondary }}>{g.label}</span>
+      </span>
     );
   }
   const clean = !g.changes && !g.publishN;
@@ -328,23 +327,25 @@ function CommitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
 // Старые пилюля «файлы +N −M» и кнопки «Зафиксировать ▾» / «Опубликовать N» Git-полосы — в губе
 // справа, прежние отделка и размер (высота 28, кегль 12.5): ряд губы — как у нижней (32)
 const GIT_BTN_H = 28;
+// Кегль и иконка ветки, пилюли и кнопок Git в губе — как у прежней Git-полосы: все в одном размере
+const GIT_FONT = 12.5;
+const GIT_LABEL_ICON = 15;
+const GIT_LABEL_GAP = 7;
+// Зазор между веткой, пилюлей и кнопками — как у прежней полосы
+const GIT_ROW_GAP = SP.md;
 function GitActions({ g, onCommit }: { g: RowGit; onCommit: (rect: DOMRect) => void }) {
-  const added = g.added ?? 0, deleted = g.deleted ?? 0;
   const base: CSSProperties = {
     display: 'flex', alignItems: 'center', gap: SP.xs + 2, height: GIT_BTN_H, boxSizing: 'border-box',
-    borderRadius: R.md, cursor: 'pointer', fontSize: 12.5, flexShrink: 0, whiteSpace: 'nowrap',
+    borderRadius: R.md, cursor: 'pointer', fontSize: GIT_FONT, flexShrink: 0, whiteSpace: 'nowrap',
   };
   const files = `${g.changes} ${plural(g.changes, 'файл', 'файла', 'файлов')}`;
   return (
-    <span data-git-actions="" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: SP.sm, flexShrink: 0 }}>
+    <span data-git-actions="" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: GIT_ROW_GAP, flexShrink: 0 }}>
       {g.changes > 0 && (
-        <button type="button" onClick={g.onShowChanges} title="Открыть изменения"
-          aria-label={`Открыть изменения: ${files}, +${added} −${deleted} строк`}
-          style={{ ...base, gap: SP.sm, padding: `0 ${SP.md - 1}px`, border: `1px solid ${C.border}`, background: C.bgWhite, fontFamily: FONT.mono }}>
-          <span title={`Изменено ${files}`} style={{ color: C.textSecondary }}>{g.changes}</span>
-          {added > 0 && <span title={`Добавлено строк: ${added}`} style={{ color: C.diffAddText }}>+{added}</span>}
-          {deleted > 0 && <span title={`Удалено строк: ${deleted}`} style={{ color: C.diffRemText }}>−{deleted}</span>}
-          {added === 0 && deleted === 0 && <span title="Строки не менялись" style={{ color: C.textMuted }}>±0</span>}
+        <button type="button" onClick={g.onShowChanges} title={`Изменено ${files} — открыть изменения`}
+          aria-label={`Открыть изменения: ${files}`}
+          style={{ ...base, padding: `0 ${SP.md - 1}px`, border: `1px solid ${C.border}`, background: C.bgWhite, fontFamily: FONT.mono, color: C.textSecondary }}>
+          {changesWord(g.changes)}
         </button>
       )}
       {g.changes > 0 && (
@@ -543,8 +544,11 @@ export function ContextRowView(props: ContextRowViewProps) {
   const hidden = refs.length - f.k;
 
   const open = (kind: 'git' | 'exec' | 'refs') => (rect: DOMRect) => setMenu({ kind, rect });
-  // Пилюля и кнопки Git справа — когда в строке одна ветка (десктоп) и есть что делать
-  const gitActions = !isMobile && !!git && !primary && refs.length === 0 && (git.changes > 0 || git.publishN > 0);
+  // В строке одна ветка (десктоп): ветка — прежней подписью Git-полосы без меню, и раскладка —
+  // как у полосы до строки контекста (поля и зазоры ниже). Справа пилюля и кнопки — если есть
+  // что делать; на чистом дереве — только ветка
+  const gitBare = !isMobile && !!git && !primary && refs.length === 0;
+  const gitActions = gitBare && (git.changes > 0 || git.publishN > 0);
 
   const body = !menu ? null
     : menu.kind === 'git' && git ? <GitMenuBody g={git} close={close} />
@@ -570,7 +574,9 @@ export function ContextRowView(props: ContextRowViewProps) {
         // симметричен, а в ряд встают кнопки Git прежнего размера. Чипы — по-прежнему слева
         ...composerLip('top', { row: COMPOSER_LIP.row }),
         width: '100%', maxWidth: '100%',
-        padding: `${COMPOSER_LIP.edge}px ${NOM.pad / 2}px ${inner}px`,
+        // Одна ветка — поля прежней Git-полосы (composerLip, padX); иначе — номинал лестницы
+        padding: `${COMPOSER_LIP.edge}px ${gitBare ? COMPOSER_LIP.padX : NOM.pad / 2}px ${inner}px`,
+        ...(gitBare ? { gap: GIT_ROW_GAP } : null),
         overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
       };
 
@@ -630,7 +636,7 @@ export function ContextRowView(props: ContextRowViewProps) {
           </>
         ) : (
           <>
-            {git && <GitChip g={git} form={f.g} onOpen={open('git')} bare={gitActions} />}
+            {git && <GitChip g={git} form={f.g} onOpen={open('git')} bare={gitBare} />}
             {/* Губа во всю ширину, а в строке одна ветка — место есть: справа старые пилюля и
                 кнопки Git-полосы (те же обработчики, что в меню ветки), а чип ветки — только имя.
                 Только без объекта и референсов: чипов, которые ужимает лестница, нет, и кнопки

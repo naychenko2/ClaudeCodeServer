@@ -52,6 +52,25 @@ describe('ContextRowView', () => {
     expect(has(h, 'primary')).toBe(false);
   });
 
+  it('десктоп, только ветка: подпись ветки без меню; есть что делать — пилюля и кнопки справа', () => {
+    const git = props({}).git!;
+    const clean = html(props({ primary: null, refs: [], git: { ...git, changes: 0, publishN: 0 } }));
+    expect(clean).toContain('data-git-bare');
+    expect(clean).not.toContain('lucide-chevron-down');
+    expect(clean).not.toContain('data-git-actions');
+    const dirty = html(props({ primary: null, refs: [], git: { ...git, changes: 3, publishN: 1 } }));
+    expect(dirty).toContain('data-git-actions');
+    expect(dirty).toContain('>3 изменения<');
+    expect(dirty).toContain('Зафиксировать');
+    expect(dirty).toContain('Опубликовать');
+  });
+
+  it('с объектом ветка — полным чипом строки, кнопок Git справа нет', () => {
+    const h = html(props({}));
+    expect(h).not.toContain('data-git-bare');
+    expect(h).not.toContain('data-git-actions');
+  });
+
   it('строка не форматирует подписи: label и version — ровно из DTO', () => {
     const h = html(props({ primary: primary({ label: 'Подпись из dto', version: 'версия из dto' }), refs: [ref('r1', { label: 'реф из dto' })] }));
     expect(h).toContain('>Подпись из dto<');

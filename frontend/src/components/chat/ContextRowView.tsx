@@ -4,7 +4,7 @@
 // (`label`, `version`), своих форматтеров нет. Ширина — снаружи; форму каждого чипа выбирает
 // чистая лестница lib/chatContext/ladder.ts, открытость панели в неё не входит.
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, Cpu, Eye, GitBranch, Plus, RotateCcw, Send, Trash2, X, Check, Info } from 'lucide-react';
+import { ChevronDown, ChevronRight, CloudUpload, Cpu, Eye, FolderGit2, GitBranch, MessageSquare, Plus, RotateCcw, Send, Trash2, X, Check, Info } from 'lucide-react';
 import { C, COMPOSER_LIP, FONT, FS, R, SP, SHADOW, Z, composerLip } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import { contextRowLadder, CAP, gitChipBox, ladderRungs, NOM, type LadderFacts, type LadderPick } from '../../lib/chatContext/ladder';
@@ -25,6 +25,9 @@ const CHIP_H = 22;
 export interface RowGit {
   label: string;
   changes: number;
+  // Строки диффа рабочего дерева — для пилюли «файлы +N −M» у правого края губы
+  added?: number;
+  deleted?: number;
   ahead: number;
   publishN: number;
   onCommitOwn: () => void;
@@ -174,8 +177,18 @@ function gitTitle(g: RowGit) {
   return `Ветка ${g.label} · ${g.changes ? changesWord(g.changes) : 'чисто'}${g.publishN ? ` · ${g.publishN} к публикации` : ''}`;
 }
 
-function GitChip({ g, form, onOpen }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: (r: DOMRect) => void }) {
+function GitChip({ g, form, onOpen, bare }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: (r: DOMRect) => void; bare?: boolean }) {
   const icon = <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />;
+  // bare — справа в губе стоят пилюля и кнопки Git: чип — только ветка, без счётчиков и без
+  // меню (всё, что в нём было, теперь кнопками)
+  if (bare) {
+    return (
+      <RowChip kind="git" max={gitChipBox(form).chip} title={gitTitle(g)} mono>
+        {icon}
+        <span style={ellipsis}>{g.label}</span>
+      </RowChip>
+    );
+  }
   const clean = !g.changes && !g.publishN;
   const up = g.publishN > 0 ? <span style={{ color: C.accent, fontWeight: 600, flexShrink: 0 }}>↑{g.publishN}</span> : null;
   const count = g.changes ? <span style={{ fontWeight: 600, flexShrink: 0 }}>{g.changes}</span> : null;
@@ -301,6 +314,58 @@ export function GitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
   );
 }
 
+// Меню кнопки «Зафиксировать» у правого края губы — область коммита, как у старой Git-полосы
+function CommitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
+  const run = (fn: () => void) => () => { close(); fn(); };
+  return (
+    <>
+      <MenuItem icon={<MessageSquare size={15} strokeWidth={ICON_STROKE} />} label="Только этот чат" onClick={run(g.onCommitOwn)} />
+      <MenuItem icon={<FolderGit2 size={15} strokeWidth={ICON_STROKE} />} label="Всё дерево" onClick={run(g.onCommitAll)} />
+    </>
+  );
+}
+
+// Старые пилюля «файлы +N −M» и кнопки «Зафиксировать ▾» / «Опубликовать N» Git-полосы — в губе
+// справа, прежние отделка и размер (высота 28, кегль 12.5): ряд губы — как у нижней (32)
+const GIT_BTN_H = 28;
+function GitActions({ g, onCommit }: { g: RowGit; onCommit: (rect: DOMRect) => void }) {
+  const added = g.added ?? 0, deleted = g.deleted ?? 0;
+  const base: CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: SP.xs + 2, height: GIT_BTN_H, boxSizing: 'border-box',
+    borderRadius: R.md, cursor: 'pointer', fontSize: 12.5, flexShrink: 0, whiteSpace: 'nowrap',
+  };
+  const files = `${g.changes} ${plural(g.changes, 'файл', 'файла', 'файлов')}`;
+  return (
+    <span data-git-actions="" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: SP.sm, flexShrink: 0 }}>
+      {g.changes > 0 && (
+        <button type="button" onClick={g.onShowChanges} title="Открыть изменения"
+          aria-label={`Открыть изменения: ${files}, +${added} −${deleted} строк`}
+          style={{ ...base, gap: SP.sm, padding: `0 ${SP.md - 1}px`, border: `1px solid ${C.border}`, background: C.bgWhite, fontFamily: FONT.mono }}>
+          <span title={`Изменено ${files}`} style={{ color: C.textSecondary }}>{g.changes}</span>
+          {added > 0 && <span title={`Добавлено строк: ${added}`} style={{ color: C.diffAddText }}>+{added}</span>}
+          {deleted > 0 && <span title={`Удалено строк: ${deleted}`} style={{ color: C.diffRemText }}>−{deleted}</span>}
+          {added === 0 && deleted === 0 && <span title="Строки не менялись" style={{ color: C.textMuted }}>±0</span>}
+        </button>
+      )}
+      {g.changes > 0 && (
+        <button type="button" onClick={e => onCommit(e.currentTarget.getBoundingClientRect())} title="Зафиксировать изменения (git commit)"
+          style={{ ...base, padding: `0 ${SP.sm + 2}px 0 ${SP.md}px`, border: `1px solid ${C.border}`, background: C.bgCard, fontFamily: FONT.sans, color: C.textHeading }}>
+          <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} />
+          Зафиксировать
+          <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} color={C.textMuted} />
+        </button>
+      )}
+      {g.publishN > 0 && (
+        <button type="button" onClick={g.onPublish} title="Опубликовать (git push)"
+          style={{ ...base, padding: `0 ${SP.md}px`, border: 'none', background: C.accent, color: C.onAccent, fontFamily: FONT.sans, fontWeight: 600 }}>
+          <CloudUpload size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          Опубликовать <span style={{ opacity: 0.85 }}>{g.publishN}</span>
+        </button>
+      )}
+    </span>
+  );
+}
+
 // Заголовок меню — у шторки на телефоне он в шапке окна, второй раз не повторяем
 function ExecMenuBody({ e, close, head = true }: { e: RowExec; close: () => void; head?: boolean }) {
   return (
@@ -396,7 +461,7 @@ const tipBtn = (primary: boolean) => ({
 
 // ── Строка ──
 
-type OpenMenu = { kind: 'git' | 'exec' | 'refs'; rect: DOMRect } | null;
+type OpenMenu = { kind: 'git' | 'exec' | 'refs' | 'commit'; rect: DOMRect } | null;
 
 // Счётчик загрузок шрифтов страницы: растёт, когда шрифты готовы и после каждой догрузки (`loadingdone`)
 function useFontsEpoch(): number {
@@ -478,9 +543,12 @@ export function ContextRowView(props: ContextRowViewProps) {
   const hidden = refs.length - f.k;
 
   const open = (kind: 'git' | 'exec' | 'refs') => (rect: DOMRect) => setMenu({ kind, rect });
+  // Пилюля и кнопки Git справа — когда в строке одна ветка (десктоп) и есть что делать
+  const gitActions = !isMobile && !!git && !primary && refs.length === 0 && (git.changes > 0 || git.publishN > 0);
 
   const body = !menu ? null
     : menu.kind === 'git' && git ? <GitMenuBody g={git} close={close} />
+    : menu.kind === 'commit' && git ? <CommitMenuBody g={git} close={close} />
     : menu.kind === 'exec' && exec ? <ExecMenuBody e={exec} close={close} head={!isMobile} />
     : menu.kind === 'refs' ? <RefsMenuBody refs={refs} grayIds={grayIds} grayHint={grayHint} iconOf={iconOf}
         onDetach={props.onDetach} onClear={props.onClear} close={close} />
@@ -498,9 +566,11 @@ export function ContextRowView(props: ContextRowViewProps) {
         padding: `${COMPOSER_LIP.edge}px ${NOM.pad / 2}px ${inner}px`,
       }
     : {
-        ...composerLip('top', { tab: true, row: CHIP_H }),
-        width: 'fit-content', maxWidth: '100%',
-        padding: `${COMPOSER_LIP.edgeTab}px ${NOM.pad / 2}px ${inner}px`,
+        // Губа во всю ширину поля и той же высоты, что нижняя (ряд COMPOSER_LIP.row): композер
+        // симметричен, а в ряд встают кнопки Git прежнего размера. Чипы — по-прежнему слева
+        ...composerLip('top', { row: COMPOSER_LIP.row }),
+        width: '100%', maxWidth: '100%',
+        padding: `${COMPOSER_LIP.edge}px ${NOM.pad / 2}px ${inner}px`,
         overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
       };
 
@@ -560,7 +630,12 @@ export function ContextRowView(props: ContextRowViewProps) {
           </>
         ) : (
           <>
-            {git && <GitChip g={git} form={f.g} onOpen={open('git')} />}
+            {git && <GitChip g={git} form={f.g} onOpen={open('git')} bare={gitActions} />}
+            {/* Губа во всю ширину, а в строке одна ветка — место есть: справа старые пилюля и
+                кнопки Git-полосы (те же обработчики, что в меню ветки), а чип ветки — только имя.
+                Только без объекта и референсов: чипов, которые ужимает лестница, нет, и кнопки
+                не отнимают у неё ширину. Высота — по ряду губы (CHIP_H): губа не растёт */}
+            {gitActions && git && <GitActions g={git} onCommit={rect => setMenu({ kind: 'commit', rect })} />}
             {git && (primary || refs.length > 0) && (
               <span data-row-sep="" style={{ width: NOM.vsep, height: 16, background: C.border, flexShrink: 0 }} />
             )}

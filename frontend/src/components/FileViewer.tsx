@@ -67,7 +67,6 @@ import { wsPanels, zoneOf } from '../pages/workspace/panelStackState';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { MidiEditor } from '../lib/shell-kit';
-import { FLAGS, useFeature } from '../lib/featureFlags';
 
 const CodeEditor = lazy(() =>
   import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
@@ -1087,8 +1086,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // (Windows), как есть — relPath не нормализует то, что вне корня проекта
   const fileName = basename(filePath) || filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
-  const midiOn = useFeature(FLAGS.midiEditor);
-  const isMidi = midiOn && /\.midi?$/i.test(fileName);
+  const isMidi = /\.midi?$/i.test(fileName);
   // «В контекст чата» (фича chat-context). Хостовый файл (путь вне проекта) туда не
   // кладём: запись контекста адресуется путём ОТ КОРНЯ ПРОЕКТА, чужой сервер её
   // не разрешит и пометит «не найден»

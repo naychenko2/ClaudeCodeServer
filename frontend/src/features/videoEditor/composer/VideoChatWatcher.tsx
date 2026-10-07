@@ -1,7 +1,6 @@
 // Невидимый вклад composer-chip: рисуется в каждом чате — грузит сцены чата и ловит клик по .film в дереве.
 
 import { useEffect } from 'react';
-import { FLAGS, useFeature } from 'aihome_shell/kit';
 import type { ComposerChipCtx } from '../../../lib/subsystems/registryCore';
 import { watchFilmFiles } from '../film/filmFileWatch';
 import { videoScope } from '../scope';
@@ -15,6 +14,5 @@ function Watch({ projectId, sessionId }: { projectId: string | null; sessionId: 
 }
 
 export function VideoChatWatcher({ ctx }: { ctx: ComposerChipCtx }) {
-  const on = useFeature(FLAGS.videoEditor);
-  return on && ctx.sessionId ? <Watch projectId={ctx.projectId} sessionId={ctx.sessionId} /> : null;
+  return ctx.sessionId ? <Watch projectId={ctx.projectId} sessionId={ctx.sessionId} /> : null;
 }

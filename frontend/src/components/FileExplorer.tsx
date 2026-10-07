@@ -49,7 +49,6 @@ import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { NO_AUTOFILL } from '../lib/noAutofill';
-import { FLAGS, useFeature } from '../lib/featureFlags';
 
 interface Props {
   project: Project;
@@ -909,7 +908,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // Вход — вклад MF-модуля image-editor: нет модуля или флага — нет и пунктов. Картинка
   // открывается в последнем активном чате проекта (ADR-019), попапом «Редактор»
   const imageEditor = useSlotItem<never, ImageEditorOpenerApi>('image-editor', 'opener')?.action;
-  const imageEditorOn = useFeature(FLAGS.imageEditor) && !!imageEditor;
+  const imageEditorOn = !!imageEditor;
   const openEditor = (target: ImageEditorOpenTarget) =>
     imageEditor?.open({ projectId: project.id, projectName: project.name, target, onShowInFiles: path => onOpenFile(path) });
   const doTransformMd = async (entry: FileEntry, targetDir: string | null) => {

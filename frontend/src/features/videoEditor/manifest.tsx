@@ -1,8 +1,6 @@
 // Манифест MF-модуля «Видео» (ADR-022). Ключ совпадает с VideoEditorSubsystem.Key бэкенда: гейт слотов
-// сверяется с активными подсистемами из /api/auth/me. Фич-флаг владельца (video-editor) проверяют сами
-// входы — каждый вклад через isAvailable с getFlag(FLAGS.videoEditor).
+// сверяется с активными подсистемами из /api/auth/me.
 
-import { FLAGS, getFlag } from 'aihome_shell/kit';
 import type { ChatItemToolCtx, ComposerChipCtx, ContextOpenerApi, SlotContribution, SubsystemManifest } from '../../lib/subsystems/registryCore';
 import { FramePickerHost } from './context/framePicker';
 import { videoKindApi } from './context/kind';
@@ -14,7 +12,6 @@ import { recordKey } from './feed/records';
 import { RECORD } from './api';
 
 // Карточки ленты (module_record модуля): якорь сцены, запуск с вариантами, тихие строки.
-// Флаг проверяют сами якоря: без него — строка fallback записи
 const ANCHORS: SlotContribution<ChatItemToolCtx>[] = [
   { name: recordKey(RECORD.scene), render: ctx => <SceneAnchor ctx={ctx} /> },
   { name: recordKey(RECORD.launchVersions), render: ctx => <LaunchAnchor ctx={ctx} /> },
@@ -35,7 +32,7 @@ export const manifest: SubsystemManifest = {
       {
         name: 'video-film',
         action: {
-          isOpenable: (path: string) => getFlag(FLAGS.videoEditor) && isFilmFile(path),
+          isOpenable: (path: string) => isFilmFile(path),
           toRef: ({ projectId, sessionId, path }) => filmRefOfPath(projectId, sessionId, path),
         } satisfies ContextOpenerApi as unknown as Record<string, unknown>,
       },

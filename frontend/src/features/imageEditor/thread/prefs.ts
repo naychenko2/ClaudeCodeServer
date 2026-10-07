@@ -291,12 +291,6 @@ export function setModeSettings(projectId: string, mode: ImageMode, patch: Parti
     : { ...flat, edit: { ...(prefs.edit ?? EMPTY_EDIT), ...part } });
 }
 
-// Операция, режим подбора и пропорции «Править» (бывший выбор панели в памяти вкладки)
-export function setEditChoice(projectId: string, patch: Partial<Pick<ImageEditPrefs, 'op' | 'editMode' | 'ratio'>>) {
-  const prefs = getPrefs(projectId);
-  setPrefs(projectId, { edit: { ...(prefs.edit ?? EMPTY_EDIT), ...patch } });
-}
-
 export function __resetPrefs() {
   _unsub?.();
   _unsub = null;

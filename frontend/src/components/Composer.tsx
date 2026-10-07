@@ -2558,8 +2558,7 @@ export function Composer({
           bandRef={auroraRef}
         />
       )}
-      {/* data-composer-field — по нему лента меряет верх поля (useChatScroll: высота губы) */}
-      <div data-composer-field="" style={{ ...containerStyle, position: 'relative', zIndex: 2 }}>
+      <div style={{ ...containerStyle, position: 'relative', zIndex: 2 }}>
       {/* Перетаскивание файла над композером: подсказка поверх карточки.
           pointerEvents:none — иначе слой перехватил бы drop у самой карточки */}
       {dragOver && (

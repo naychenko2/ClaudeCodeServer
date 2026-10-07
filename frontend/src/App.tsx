@@ -29,7 +29,9 @@ import { useOnline } from './hooks/useOnline'
 import { useThemeColor } from './hooks/useThemeColor'
 import { projectMainColor } from './features/projects/projectUtil'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
-import { onFilesChanged, onMessage } from './lib/signalr'
+import { onFilesChanged, onMessage, resetConnection } from './lib/signalr'
+import { resetTerminalConnection } from './lib/terminalSignalr'
+import { resetAgentHubs } from './lib/agentHub'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
@@ -43,7 +45,7 @@ import { getSubsystem, getSubsystemTab } from './lib/subsystems/registry'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
-import { useWallFocusProject } from './features/wall/wallStore'
+import { useWallFocusProject, resetWallOwner } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -548,6 +550,7 @@ export default function App() {
       sessionStorage.removeItem('cc_user_id')
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       clearMe()
+      resetWallOwner()
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
       // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
@@ -556,6 +559,8 @@ export default function App() {
       setHubTab('projects')
       navReplace({ screen: 'projects' })
       setProject(null)
+      // Хабы прежнего пользователя гасим до setAuth: иначе соединения доживут под старым токеном
+      void resetConnection(); void resetTerminalConnection(); void resetAgentHubs()
       setAuth(null)
     }
     window.addEventListener('cc-unauthorized', onUnauthorized)
@@ -1224,6 +1229,7 @@ export default function App() {
     sessionStorage.removeItem('cc_user_id')
     idbClear() // чистим кэш при смене аккаунта/сервера
     clearMe()
+    resetWallOwner()
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
     // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике
@@ -1232,6 +1238,7 @@ export default function App() {
     setHubTab('projects')
     navReplace({ screen: 'projects' })
     setProject(null)
+    void resetConnection(); void resetTerminalConnection(); void resetAgentHubs()
     setAuth(null)
   }
 

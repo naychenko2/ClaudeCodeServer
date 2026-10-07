@@ -111,12 +111,12 @@ public sealed class VideoPrefsService(
         try
         {
             _ = broadcaster.ToOwner(ownerId, new VideoPrefsChangedMessage(scopeKey, prefs))
-                .ContinueWith(t => log?.LogDebug(t.Exception, "Видео: префы области {ScopeKey} не разосланы", scopeKey),
+                .ContinueWith(t => log?.LogWarning(t.Exception, "Видео: префы области {ScopeKey} не разосланы", scopeKey),
                     TaskContinuationOptions.OnlyOnFaulted);
         }
         catch (Exception ex)
         {
-            log?.LogDebug(ex, "Видео: префы области {ScopeKey} не разосланы", scopeKey);
+            log?.LogWarning(ex, "Видео: префы области {ScopeKey} не разосланы", scopeKey);
         }
     }
 

@@ -633,6 +633,11 @@ public sealed class VideoFormatJobTests : IDisposable
         _store.Get(Owner, Session).Scenes.Single().CurrentVersionId.Should().Be(fresh.VersionId);
         svc.Get(Owner, Scope.Key, started.Value.JobId)!.Status.Should().Be("completed");
         spend.Records.Should().HaveCount(spendBefore, "повтор — не новая генерация: траты нет");
+
+        // Контекст повтора снят после удачи: второе «Повторить» по той же версии не плодит дубль 1440p
+        var again = await svc.RetryUpscaleAsync(Owner, Scope, Session, scene, versionId, VideoInitiators.Human, default);
+        again.ErrorCode.Should().Be(VideoEditorErrors.UpscaleRetryUnavailable);
+        _store.Get(Owner, Session).Scenes.Single().Versions.Should().HaveCount(2);
     }
 
     [Fact]

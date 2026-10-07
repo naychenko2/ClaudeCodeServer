@@ -217,11 +217,12 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
             var cancelledByUser = _upscaleTickets.TryGetValue(upTicket, out var flag) && flag;
             var finished = upTicket;
             upTicket = null;
+            // Тикет снимается и при сбое, и при отмене человеком: иначе запись о нём остаётся в словаре навсегда
+            _upscaleTickets.TryRemove(finished, out _);
             if (done.State == LocalVideoState.Failed || done.File is null)
                 return UpscaleFailed(shot, shotTicket,
                     cancelledByUser ? "Увеличение отменено" : done.Error ?? "Локальная модель не вернула увеличенного ролика",
                     cancelled: cancelledByUser);
-            _upscaleTickets.TryRemove(finished, out _);
             progress.Report(new VideoProgress(VideoStage.Downloading, RemoteId: finished));
             var size = format is { Width: { } w, Height: { } h } ? (w, h) : ((int, int)?)null;
             return new VideoResult(VideoOutcome.Ok,

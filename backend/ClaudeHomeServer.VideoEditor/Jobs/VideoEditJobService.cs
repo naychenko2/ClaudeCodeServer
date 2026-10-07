@@ -838,7 +838,15 @@ public sealed class VideoEditJobService : IDisposable
             "Повтор увеличения до 1440p", job.Initiator, current.Settings, ct, current.FramesCropped);
 
         var request = new UpscaleRetryRequest(context.ShotTicket, quote.Format);
-        job.Completion = Task.Run(() => RunAsync(job, engine, (_, progress, token) => engine.RetryUpscaleAsync(request, progress, token)));
+        // Удачный повтор снимает контекст: иначе «Повторить» у исходной версии остаётся и плодит дубли 1440p
+        var retryKey = RetryKey(version.JobId, version.Variant);
+        job.Completion = Task.Run(async () =>
+        {
+            await RunAsync(job, engine, (_, progress, token) => engine.RetryUpscaleAsync(request, progress, token));
+            bool succeeded;
+            lock (job.Gate) succeeded = job.Status == VideoEditJobStatus.Completed && job.Variants.Count > 0;
+            if (succeeded) _retryContexts.TryRemove(retryKey, out _);
+        });
         return VideoEditCallResult<VideoUpscaleRetryResult>.Ok(new VideoUpscaleRetryResult(job.Id, versionId));
     }
 

@@ -359,6 +359,9 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
     endAt: aborted ? liveness?.abortedAt?.get(item.id) ?? null : item.finishedAt ?? null,
   }), [item.stages, item.startedAt, item.finishedAt, item.id, running, aborted, shownElapsed, liveness]);
   const hasStages = stages.length > 0;
+  // Завершённый прогон с одним прошедшим этапом («✓ тесты») строку не держит: её время и итог —
+  // те же «0:04 готово» в шапке, а пустая строка лишь отодвигает список упавших
+  const showStageLine = hasStages && !(stages.length === 1 && stages[0].state === 'done');
   // С этапами подпись прогресса едет при текущем этапе, а не в шапке (тесты — счётчик,
   // очередь — «занято 2»); «сборка» и подсчёт под «тестами» сами себе подпись — при них только
   // счётчик этапа
@@ -500,7 +503,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
       {/* Строка этапов — и пока идёт, и на закрытой карточке без раскрытия (после F5 — из
           истории). Справа тот же запас под полосу прокрутки ленты, что у шапки: иначе на 320 px
           хвост «упало K» уезжал под полосу-накладку */}
-      {hasStages && (
+      {showStageLine && (
         <div style={{ paddingRight: SP.sm, paddingBottom: SP.xxs }}>
           <StageLine stages={stages} caption={running ? stageCaption : null} />
         </div>

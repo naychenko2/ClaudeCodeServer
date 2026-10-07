@@ -545,12 +545,18 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     expect(render(run({ name: 'mcp__notes__notes_list', input: {}, result: 'ok', finishedAt: 1_000 }), undefined, false)).toContain('lucide-plug');
   });
 
-  it('единственный этап — без своих часов: время уже в шапке', () => {
+  it('единственный прошедший этап у готовой карточки строку не держит: итог и время — в шапке', () => {
     const stages = [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 16_000 }];
     const html = render(run({ name: 'mcp__dev__build', input: { target: 'backend' }, result: 'ok', finishedAt: 16_000, stages }), undefined, false);
-    expect(html).toContain('✓ сборка');
-    expect(html).not.toContain('✓ сборка 0:16');
+    expect(html).not.toContain('сборка');
     expect(headStatus(html)).toBe('0:16 готово');
+  });
+
+  it('единственный этап, пока идёт, — строкой с прогрессом', () => {
+    const item = run({ stages: [{ stage: 'running', label: 'тесты', startedAt: 0 }], progress: { stage: 'running', label: '12 из 63' } });
+    const html = render(item);
+    expect(html).toContain('font-weight:600">тесты');
+    expect(html).toContain('12 из 63');
   });
 
   it('готово с упавшими: первые упавшие списком без раскрытия, сверх — «ещё N»', () => {

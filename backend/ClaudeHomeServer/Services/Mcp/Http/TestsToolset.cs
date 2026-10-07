@@ -55,6 +55,7 @@ public sealed class TestsToolset(
     {
         if (tool != ToolName) throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         if (!_caller.TryResolveSession(context, Refusals, out var session, out var error)) return Deny(error);
+        _caller.SendStarted(session.Id, context.ToolUseId);
         if (runs is null)
             return Deny("Прогон тестов выключен на этом сервере — запусти тесты Bash'ем.");
         if (!_caller.TryResolveProject(session, context.OwnerId, Refusals, out var project, out error)) return Deny(error);

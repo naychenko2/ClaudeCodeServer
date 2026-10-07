@@ -92,6 +92,14 @@ internal sealed class ProjectRunCaller(
     public static string? StringArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
+    // Фактический старт вызова — на карточку: до него она ждёт без «идёт» и без отсчёта (CLI
+    // выполняет выписанные подряд вызовы по очереди). Слать сразу после проверки сессии: очередь
+    // сборок — уже работа инструмента, её время на карточке честное
+    public void SendStarted(string sessionId, string? toolUseId)
+    {
+        if (toolUseId is not null) sessions.RecordToolStarted(sessionId, toolUseId);
+    }
+
     // Шлёт фазу в чат-вызыватель мимо CLI (CLI notifications/progress в stream-json не
     // пробрасывает). Потеря события безвредна — следующая фаза пришлёт новое. Каждое событие
     // несёт полный снимок этапов; смена этапа сразу пишется и в историю вызова

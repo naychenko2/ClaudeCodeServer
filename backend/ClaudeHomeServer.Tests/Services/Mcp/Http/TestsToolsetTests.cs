@@ -106,6 +106,34 @@ public class TestsToolsetTests : IDisposable
         env.Launchers.Calls.Should().Be(0);
     }
 
+    // Фактический старт — из самого tools/call: CLI выполняет выписанные подряд вызовы по
+    // очереди, и карточка ждёт без «идёт», пока её вызов не начнётся. Метка ложится в историю
+    // вызова (после F5 карточка не врёт); чужой вызов её не получает
+    [Fact]
+    public async Task ВызовСToolUseId_СтавитФактическийСтартКарточке()
+    {
+        var env = Build(withService: false);
+        var acc = AccumulatorOf(env);
+        acc.OnToolUse("toolu_run1", "mcp__tests__run_tests", new { }, startedAt: 1_000);
+        acc.OnToolUse("toolu_run2", "mcp__tests__run_tests", new { }, startedAt: 1_000);
+
+        await Call(env, context: env.Context with { ToolUseId = "toolu_run1" });
+
+        var tools = (await env.Sessions.GetHistoryAsync(env.Session.Id)).OfType<Protocol.StoredToolUseMessage>().ToList();
+        var started = tools.Single(t => t.Id == "toolu_run1");
+        started.Started.Should().BeTrue();
+        started.StartedAt.Should().BeGreaterThan(1_000);
+        tools.Single(t => t.Id == "toolu_run2").Started.Should().BeNull("второй вызов ещё ждёт своей очереди");
+    }
+
+    private static TurnAccumulator AccumulatorOf(Env env)
+    {
+        var entries = (System.Collections.IDictionary)typeof(SessionManager).GetField("_sessions",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(env.Sessions)!;
+        var entry = entries[env.Session.Id]!;
+        return (TurnAccumulator)entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
+    }
+
     [Fact]
     public async Task ЧатВнеПроекта_Отказ()
     {

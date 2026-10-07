@@ -77,6 +77,7 @@ public sealed class DevToolset(
         if (tool != ToolName) throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         if (!_caller.TryResolveSession(context, Refusals, out var session, out var error))
             return ProjectRunCaller.Deny(error);
+        _caller.SendStarted(session.Id, context.ToolUseId);
         if (dotnet is null || npm is null)
             return ProjectRunCaller.Deny("Сборка с прогрессом выключена на этом сервере — собирай Bash'ем.");
         if (!_caller.TryResolveProject(session, context.OwnerId, Refusals, out var project, out error))
@@ -136,6 +137,8 @@ public sealed class DevToolset(
     {
         if (!_caller.TryResolveSession(context, StandRefusals, out var session, out var error))
             return ProjectRunCaller.Deny(error);
+        // Только у подъёма стенда: у него прогресс и долгая работа, stop_stand мгновенный
+        if (tool == StartStandName) _caller.SendStarted(session.Id, context.ToolUseId);
         if (!_caller.TryResolveProject(session, context.OwnerId, StandRefusals, out var project, out error))
             return ProjectRunCaller.Deny(error);
         return tool == StartStandName

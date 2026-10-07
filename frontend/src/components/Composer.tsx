@@ -34,7 +34,7 @@ import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { dativeName } from '../lib/russianName';
 import { showToast } from '../lib/toast';
-import { Button, Chip, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
+import { Button, Chip, FileTypeTile, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
 import { plusButtonTitle, shortcutOverflowItems, useCreateShortcuts } from './chat/composerShortcuts';
 import { SLOT_COMPOSER_CHIP, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx } from '../lib/subsystems/registry';
@@ -236,27 +236,6 @@ function FieldBadge({ onClick, title, style, children }: {
 // Получить имя файла из пути
 function basename(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
-}
-
-// Иконка файла по расширению
-function FileIcon({ name }: { name: string }) {
-  const ext = name.split('.').pop()?.toLowerCase() ?? '';
-  const color =
-    ['ts', 'tsx'].includes(ext) ? '#3178C6' :
-    ['js', 'jsx'].includes(ext) ? '#F7DF1E' :
-    ext === 'json' ? '#CB8A1F' :
-    ext === 'md' ? '#5C5246' :
-    ext === 'cs' ? '#9B4F96' :
-    '#8A8072';
-
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ flexShrink: 0 }}>
-      <rect x="2" y="1" width="8" height="11" rx="1.5" fill={color} opacity="0.18" stroke={color} strokeWidth="1" />
-      <text x="6" y="9" textAnchor="middle" fontSize="4.5" fill={color} fontFamily="monospace" fontWeight="700">
-        {ext.slice(0, 3).toUpperCase()}
-      </text>
-    </svg>
-  );
 }
 
 // SVG стоп
@@ -2622,57 +2601,22 @@ export function Composer({
           style={{
             display: 'flex',
             flexWrap: 'wrap',
-            gap: 7,
-            padding: '11px 12px 8px',
+            gap: SP.sm,
+            // Поле карточки (7–10 px) уже есть: по бокам — как у строки действий (SP.xxs),
+            // иначе чипы стоят на 10 px правее «Чат / Нарисовать» и плейсхолдера
+            padding: `${SP.xs}px ${SP.xxs}px`,
           }}
         >
           {leadingChips}
+          {/* Плитку типа кладём в подпись, а не в leading: leading обрезает содержимое
+              кругом под аватар и срезал бы углы квадратной плитки */}
           {attachments.map((filePath) => {
             const name = basename(filePath);
             return (
-              <div
-                key={filePath}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  background: C.accentLight,
-                  borderRadius: R.md,
-                  height: 30,
-                  padding: '0 9px 0 7px',
-                  fontSize: 12,
-                  color: C.textSecondary,
-                }}
-              >
-                <FileIcon name={name} />
-                <span title={name} style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {middleEllipsis(name, isMobile ? 22 : 30)}
-                </span>
-                <button
-                  onClick={() => onRemoveAttachment(filePath)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: 0,
-                    marginLeft: 2,
-                    width: 24,
-                    height: 24,
-                    borderRadius: R.full,
-                    color: C.textMuted,
-                    lineHeight: 1,
-                    fontSize: 13,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                  }}
-                  title="Удалить"
-                  aria-label={`Удалить вложение ${name}`}
-                >
-                  <X size={13} strokeWidth={ICON_STROKE} />
-                </button>
-              </div>
+              <Chip key={filePath} title={name} touch={isMobile} onRemove={() => onRemoveAttachment(filePath)} removeLabel={`Убрать вложение ${name}`}>
+                <FileTypeTile name={name} />
+                {middleEllipsis(name, isMobile ? 22 : 30)}
+              </Chip>
             );
           })}
         </div>
@@ -2680,7 +2624,7 @@ export function Composer({
 
       {/* Чипы подсистем (слот composer-chip): вклад сам решает, рисоваться ли */}
       {slotChips.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, padding: '0 12px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, padding: `0 ${SP.xxs}px` }}>
           {slotChips.map(c => (
             <Fragment key={c.name}>{c.render?.({ projectId: project?.id ?? null, sessionId, isMobile: !!isMobile, modeId: activeMode ? modeId : null })}</Fragment>
           ))}

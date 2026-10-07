@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contextRowLadder, gitChipBox, ladderNominal, ladderRungs, type LadderFacts } from './ladder';
+import { contextRowLadder, gitChipBox, ladderNominal, ladderRungs, NOM, type LadderFacts } from './ladder';
 
 // Типовое состояние макета: проект, объект, «Чем», два референса
 const typical: LadderFacts = { project: true, hasPrimary: true, hasExec: true, refs: 2 };
@@ -85,5 +85,32 @@ describe('gitChipBox', () => {
     expect(gitChipBox(3).label).toBeNull();
     expect(gitChipBox(3).chip).toBeGreaterThan(300);
     expect(gitChipBox(2)).toEqual({ chip: 150, label: 76 });
+  });
+});
+
+describe('чип «Формат» в лестнице (ADR-025)', () => {
+  const withFormat: LadderFacts = { ...typical, hasFormat: true };
+
+  it('без чипа ступени прежние: лестница не знает про поле f', () => {
+    expect(ladderRungs(typical).every(f => f.f === undefined)).toBe(true);
+    expect(ladderRungs(typical)).toHaveLength(8);
+  });
+
+  it('с чипом на одну ступень длиннее: после «Чем» сжимается и сам «Формат»', () => {
+    const r = ladderRungs(withFormat);
+    expect(r).toHaveLength(10);
+    expect(r[0]).toMatchObject({ e: 3, f: 2 });
+    expect(r[1]).toMatchObject({ e: 2, f: 2 });
+    expect(r[2]).toMatchObject({ e: 2, f: 1 });
+    // До голых пропорций «16:9» чип сжимается после ветки g1, но раньше объекта и «Чем»
+    const bare = r.findIndex(x => x.f === 0);
+    expect(bare).toBeGreaterThan(r.findIndex(x => x.g === 1) - 1);
+    expect(r[bare]).toMatchObject({ o: 2, e: 2, g: 1 });
+    expect(r[bare + 1]).toMatchObject({ o: 1, f: 0 });
+  });
+
+  it('номинал растёт ровно на ширину чипа и зазор', () => {
+    const first = ladderRungs(typical)[0];
+    expect(ladderNominal(withFormat, ladderRungs(withFormat)[0]) - ladderNominal(typical, first)).toBe(NOM.f2 + NOM.gap);
   });
 });

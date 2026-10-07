@@ -26,7 +26,8 @@ public static class LocalMediaRegistration
         // Шов локальных аудио-моделей для модуля «Звук» (ADR-021)
         services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalAudioMedia, LocalAudioMediaAdapter>();
         // Шов локальной съёмки видео для модуля «Видео» (ADR-022)
-        services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalVideoMedia, LocalVideoMediaAdapter>();
+        services.AddSingleton<LocalVideoMediaAdapter>();
+        services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalVideoMedia>(sp => sp.GetRequiredService<LocalVideoMediaAdapter>());
         // Шов обработки звука без ИИ (ffmpeg на хосте) для модуля «Звук» (ADR-021)
         services.AddSingleton<ClaudeHomeServer.Services.Media.IAudioDsp, FfmpegAudioDsp>();
         // Шов обработки видео без ИИ для модуля «Видео» (ADR-022 §4): сборка фильма — тяжёлый запуск под общим

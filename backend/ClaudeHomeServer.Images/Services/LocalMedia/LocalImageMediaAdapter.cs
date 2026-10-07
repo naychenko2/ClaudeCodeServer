@@ -207,9 +207,9 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
 
             var graph = request.Op switch
             {
-                LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request.Aspect, seed, count, prefix),
+                LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
-                LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, SizeFor(request.Aspect), seed, prefix),
+                LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix),
                 LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix),
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
@@ -223,10 +223,14 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
     }
 
-    private static System.Text.Json.Nodes.JsonObject GenerateGraph(string prompt, string? aspect, long seed, int count,
+    // Холст генерации: точный размер формата, иначе по пропорции из таблицы Qwen-Image
+    internal static (int Width, int Height) CanvasFor(LocalImageRequest request) =>
+        request.Width is > 0 && request.Height is > 0 ? (request.Width.Value, request.Height.Value) : SizeFor(request.Aspect);
+
+    private static System.Text.Json.Nodes.JsonObject GenerateGraph(string prompt, LocalImageRequest request, long seed, int count,
         string prefix)
     {
-        var size = SizeFor(aspect);
+        var size = CanvasFor(request);
         return ComfyWorkflows.GenerateImage(prompt, "", size.Width, size.Height, seed, ComfyWorkflows.DefaultSteps,
             count, prefix);
     }

@@ -110,6 +110,10 @@ public sealed class ImageEditSteps(IImageRaster raster, ImageEditWorkspace works
         return ImageEditCallResult<ImageEditStep>.Ok(step);
     }
 
+    // Размер картинки с учётом ориентации; null — не распознана. Для расчёта обрезки под пропорции (ADR-025 §4)
+    public (int Width, int Height)? SizeOf(byte[] bytes) =>
+        raster.Probe(bytes) is { } probe ? (probe.DisplayWidth, probe.DisplayHeight) : null;
+
     // Шаг своего проекта; чужой владелец или проект неотличимы от отсутствующего
     public (ImageEditStep Step, EditedImage Image)? Open(string ownerId, string projectId, string stepId) =>
         workspace.OpenStep(ownerId, stepId) is { } found && found.Step.ProjectId == projectId ? found : null;

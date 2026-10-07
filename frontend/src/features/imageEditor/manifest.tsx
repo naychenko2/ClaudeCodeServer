@@ -55,7 +55,7 @@ export const manifest: SubsystemManifest = {
       { name: recordKey('image_thread'), render: (ctx: ChatItemToolCtx) => <ThreadAnchor ctx={ctx} /> },
       // Запуск ИИ в нить (изменение 27.09): строка запуска и карточка на каждый вариант
       { name: recordKey('image_launch_versions'), render: (ctx: ChatItemToolCtx) => <LaunchAnchor ctx={ctx} /> },
-      ...['image_launch', 'image_saved', 'image_stack_forked', 'image_focus'].map(t => (
+      ...['image_launch', 'image_saved', 'image_stack_forked', 'image_focus', 'image_format'].map(t => (
         { name: recordKey(t), render: (ctx: ChatItemToolCtx) => <ThreadSysLine ctx={ctx} /> }
       )),
     ],

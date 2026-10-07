@@ -48,6 +48,8 @@ public sealed class ImageThreadService(
         public const string Launch = "image_launch";
         public const string Saved = "image_saved";
         public const string StackForked = "image_stack_forked";
+        // Агент сменил формат картинок проекта: data { by: "agent", before, after } (ADR-025)
+        public const string Format = "image_format";
         // Агент сменил картинку в работе: data { threadId, by: "agent" }
         public const string Focus = "image_focus";
     }
@@ -291,6 +293,103 @@ public sealed class ImageThreadService(
             && store.SetFocus(ownerId, sessionId, before.Focus, state.Revision) is { Status: ImageThreadWriteStatus.Ok } back)
             state = back.State;
         await BroadcastAsync(ownerId, projectId, sessionId, state);
+    }
+
+    // Тихая строка «✦ Claude сменил формат картинок проекта: 16:9 → 9:16» (ADR-025, решение 2 Андрея)
+    public Task AgentFormatLineAsync(string sessionId, MediaFormat? before, MediaFormat after, CancellationToken ct) =>
+        RecordAsync(sessionId, RecordTypes.Format,
+            $"✦ Claude сменил формат картинок проекта: {MediaFormatText.Wish(before)} → {MediaFormatText.Wish(after)}",
+            new { by = SpendInitiators.Agent, before = MediaFormatText.Wish(before), after = MediaFormatText.Wish(after) }, ct);
+
+    // Обрезка под пропорции без ИИ (ADR-025 §4) — ОДНА точка для человека («Обрезать» в «Формате») и агента
+    // (image_generate op = crop). Считает прямоугольник по AspectCrop.Rect, выполняет существующий transform
+    // (crop) и кладёт результат НОВОЙ версией нити с якорем запуска в ленте: карточка та же, что у других
+    // операций. dryRun только считает размер результата. Бесплатно: провайдера, котировки и траты нет
+    public async Task<ImageCropOutcome> CropToAspectAsync(string ownerId, ImageEditScope scope, string sessionId,
+        string threadId, string? versionId, string aspect, string? anchor, ImageEditInitiator initiator, bool dryRun,
+        CancellationToken ct)
+    {
+        static ImageCropOutcome Fail(string code, string error) => new(false, code, error, 0, 0, null);
+
+        if (steps is null) return Fail(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена на этом сервере");
+        var anchorValue = string.IsNullOrWhiteSpace(anchor) ? CropAnchors.Center : anchor.Trim();
+        if (!AspectCrop.TryParse(aspect, out _)) return Fail(ImageEditErrorCodes.InvalidRequest, $"Пропорции «{aspect}» не читаются: нужен вид 16:9");
+        if (!CropAnchors.All.Contains(anchorValue))
+            return Fail(ImageEditErrorCodes.InvalidRequest, $"Якорь «{anchor}» не из списка: {string.Join(", ", CropAnchors.All)}");
+
+        var state = store.Get(ownerId, sessionId);
+        if (!OwnChat(scope.Key, sessionId) || state.Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
+            return Fail(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
+        var version = string.IsNullOrWhiteSpace(versionId) ? thread.CurrentVersion : thread.Version(versionId.Trim());
+        if (version is null) return Fail(ImageEditErrorCodes.VersionNotFound, "Версии нет в этой картинке");
+
+        // База — шаг версии, а у исходника файловой нити без шага — файл проекта
+        var stepId = thread.ImageStepOf(version);
+        ProjectImage? file = null;
+        byte[] bytes;
+        if (stepId is not null && steps.Open(ownerId, scope.Key, stepId) is { } found)
+            bytes = found.Image.Bytes;
+        else if (thread.File is { Length: > 0 } path && scope.Project is { } project)
+        {
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, path, "Файл картинки", ct);
+            if (read.Value is not { } image) return Fail(read.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, read.Error ?? "Файл не прочитан");
+            file = new ProjectImage(path, image.Bytes);
+            bytes = image.Bytes;
+            stepId = null;
+        }
+        else
+            return Fail(ImageEditErrorCodes.InvalidRequest, "У картинки ещё нет изображения: сначала нарисуйте её");
+
+        if (steps.SizeOf(bytes) is not { } size)
+            return Fail(ImageEditErrorCodes.InvalidRequest, "Картинка не распознана");
+        var rect = AspectCrop.Rect(size.Width, size.Height, aspect, anchorValue)!;
+        if (rect is { X: 0, Y: 0, Width: 1, Height: 1 })
+            return Fail(ImageEditErrorCodes.InvalidRequest, $"Картинка уже в пропорциях {aspect}: обрезать нечего");
+
+        var request = new ImageTransformRequest(
+            file is not null ? new ImageTransformBase(Path: file.RelativePath) : new ImageTransformBase(StepId: stepId),
+            [new CropOp(rect)]);
+        var done = steps.Transform(ownerId, scope.Key, request, file, dryRun);
+        if (done.Value is not { } transformed)
+            return Fail(done.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, done.Error ?? "Обрезка не выполнена");
+        if (dryRun) return new ImageCropOutcome(true, null, null, transformed.Width, transformed.Height, aspect, DryRun: true);
+
+        // Новая версия: запуск-«обрезка» открывается и закрывается сразу, вариант — шаг transform
+        var jobId = "crop-" + Guid.NewGuid().ToString("N");
+        var agent = initiator == ImageEditInitiator.Agent;
+        var actor = agent ? SpendInitiators.Agent : SpendInitiators.Human;
+        var label = $"{transformed.Width}×{transformed.Height} · {aspect}";
+        var launched = store.AddLaunch(ownerId, sessionId, threadId,
+            new ImageThreadLaunch(jobId, version.Id, stepId, store.Now(), ImageThreadLaunchStatus.Running, actor, $"обрезка {aspect}"),
+            new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched,
+                $"{(agent ? "Ты обрезал" : "Человек обрезал")} без ИИ: {label}", threadId, jobId));
+        if (launched.Status != ImageThreadWriteStatus.Ok)
+            return Fail(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
+        var finished = store.FinishLaunch(ownerId, sessionId, threadId, jobId, ImageThreadLaunchStatus.Done,
+            [(1, transformed.StepId!)],
+            (_, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
+                $"{(agent ? "Claude обрезал" : "Вы обрезали")} без ИИ: {label} · бесплатно · {ImageThread.Label(all[0])}", threadId, jobId));
+        if (finished.Status != ImageThreadWriteStatus.Ok)
+            return Fail(ImageEditErrorCodes.InvalidRequest, "Версия не записана");
+
+        var created = finished.NewVersions.FirstOrDefault();
+        await RecordAsync(sessionId, RecordTypes.LaunchVersions,
+            $"{(agent ? "✦ Claude обрезал" : "Вы обрезали")} без ИИ: {label} · бесплатно · {(created is null ? "версия" : ImageThread.Label(created))}",
+            new
+            {
+                threadId,
+                jobId,
+                prompt = $"обрезка {aspect}",
+                provider = "none",
+                model = "crop",
+                count = 1,
+                initiator = actor,
+                baseVersionId = version.Id,
+                crop = new { aspect, anchor = anchorValue, width = transformed.Width, height = transformed.Height },
+            }, ct);
+        await AfterAsync(ownerId, scope.Key, sessionId, finished);
+        await PublishVersionsAsync(ownerId, scope.Key, sessionId, threadId, finished, actor);
+        return new ImageCropOutcome(true, null, null, transformed.Width, transformed.Height, aspect, false, created, version.Id);
     }
 
     // Новая нить (от человека и от агента) начинает с выбора человека в полосе «Картинки» проекта
@@ -691,6 +790,10 @@ public sealed class ImageThreadService(
             ? string.Create(CultureInfo.InvariantCulture, $" · ≈ ${amount:0.##}")
             : string.Create(CultureInfo.InvariantCulture, $" · ≈ {amount:0.##} кр.");
 }
+
+// Итог обрезки под пропорции: Version — новая версия (null при dryRun), BaseVersionId — от какой обрезали
+public sealed record ImageCropOutcome(bool Ok, string? ErrorCode, string? Error, int Width, int Height, string? Aspect,
+    bool DryRun = false, ImageThreadVersion? Version = null, string? BaseVersionId = null);
 
 // Итог «Взять»: запись нити или отказ до неё (задача, шаг, растр) с кодом ImageEditErrorCodes.*
 public sealed record ImageThreadTake(ImageThreadWrite? Write, string? ErrorCode = null, string? Error = null)

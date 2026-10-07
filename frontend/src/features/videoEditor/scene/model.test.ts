@@ -79,3 +79,36 @@ describe('«изменено после съёмки»', () => {
     expect(staleNotes(scene('s1', { stale, versions: [version(1)] }))).toEqual(['Кадр B изменён после съёмки — переснимите']);
   });
 });
+
+describe('«Формат» сцены: желание и рамка кадров', () => {
+  const wish = { mode: 'aspect' as const, aspect: '9:16', tier: 'max' as const, by: 'human' as const, at: '2026-10-07T00:00:00Z' };
+
+  it('желание: правка старше сцены, сцена старше префов; в PUT уходят format и зеркало aspect', () => {
+    const base = scene('s1');
+    const r = resolveScene({ ...base, settings: { ...base.settings, format: { ...wish, aspect: '16:9' } } }, { format: wish, aspect: '9:16' }, PREFS, CATALOG);
+    expect(r.format?.aspect).toBe('9:16');
+    expect(r.aspect).toBe('9:16');
+    expect(settingsOf(r)).toMatchObject({ format: wish, aspect: '9:16' });
+  });
+
+  it('без желания format в PUT не появляется, рамка по умолчанию — центр и в PUT не пишется', () => {
+    const r = resolveScene(scene('s1'), null, PREFS, CATALOG);
+    expect(r.format).toBeNull();
+    expect(r.frameAnchor).toBe('center');
+    const out = settingsOf(r);
+    expect(out).not.toHaveProperty('format');
+    expect(out).not.toHaveProperty('frameFit');
+  });
+
+  it('рамка подрезки кадров едет в PUT, когда не по центру', () => {
+    const base = scene('s1');
+    const r = resolveScene({ ...base, settings: { ...base.settings, frameFit: { anchor: 'left' } } }, null, PREFS, CATALOG);
+    expect(settingsOf(r).frameFit).toEqual({ anchor: 'left' });
+  });
+
+  it('«Чем»: пустые пропорции не серят модели (под флагом перевод на ближайшую делает «Формат»)', () => {
+    const gray = executorRows(CATALOG, false, '1:1', '').find(x => x.id === 'fal|veo-3.1');
+    expect(gray?.disabled).toBe(true);
+    expect(executorRows(CATALOG, false, '', '').find(x => x.id === 'fal|veo-3.1')?.disabled).toBeUndefined();
+  });
+});

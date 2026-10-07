@@ -25,9 +25,11 @@ export interface JobProgress {
   jobId: string;
   sessionId: string | null;
   sceneId: string;
-  stage: 'queued' | 'running' | 'downloading';
+  stage: 'queued' | 'running' | 'upscaling' | 'downloading';
   queuePosition: number | null;
   etaSeconds: number | null;
+  // Во время съёмки: сколько займёт увеличение «Макс» следом («следом · ~15 мин»)
+  upscaleEtaSeconds: number | null;
   variant: number;
   count: number;
   // Начало текущего прогона (вариант или переход очереди → съёмка): от него идёт оценка доли по etaSeconds
@@ -41,6 +43,13 @@ export interface JobProgress {
 // Доля хода съёмки 0..1 на момент now. Есть Percent поставщика — берём его (доля варианта среди всех); нет —
 // оценка от времени, как у картинок: внутри прогона не выше 95 %, в очереди полоса стоит. Не ниже floor
 export function jobFraction(j: JobProgress, now: number = Date.now()): number {
+  // Увеличение — вторая задача GPU со своим процентом и ETA: доля считается внутри неё, а не среди вариантов съёмки
+  if (j.stage === 'upscaling') {
+    const f = j.percent !== null
+      ? Math.min(1, Math.max(0, j.percent))
+      : etaFraction({ run: 1, runs: 1, etaSeconds: j.etaSeconds ?? VIDEO_DEFAULT_ETA, queued: false }, j.runStartedAt, now);
+    return Math.max(0.02, j.floor, f);
+  }
   const total = Math.max(1, j.count);
   const run = Math.min(total, Math.max(1, j.variant));
   const f = j.percent !== null && j.stage !== 'queued'
@@ -177,6 +186,10 @@ export function handleEvent(ev: VideoEvent) {
       apply(ev.sessionId, ev.scopeKey, ev.state);
       return;
     }
+    case 'video_prefs_changed':
+      // Агент сменил формат проекта: чип «Формат» читает префы из стора
+      if (ev.scopeKey && ev.prefs) setScopePrefs(ev.scopeKey, ev.prefs);
+      return;
     case 'video_film_changed':
       applyFilmEvent(ev.scopeKey, ev.path, ev.state);
       return;
@@ -184,11 +197,14 @@ export function handleEvent(ev: VideoEvent) {
       const prev = _jobs.get(ev.jobId) ?? _resumable.get(ev.jobId);
       _resumable.delete(ev.jobId);
       // Отсчёт прогона начинается заново на новом варианте и на выходе из очереди
-      const same = !!prev && prev.variant === ev.variant && (prev.stage === 'queued') === (ev.stage === 'queued');
+      // Вход в увеличение и выход из него — новый отсчёт: у стадии своё время и свой процент
+      const same = !!prev && prev.variant === ev.variant && (prev.stage === 'queued') === (ev.stage === 'queued')
+        && (prev.stage === 'upscaling') === (ev.stage === 'upscaling');
       const percent = typeof ev.percent === 'number' ? ev.percent : null;
       const next: JobProgress = {
         jobId: ev.jobId, sessionId: ev.sessionId, sceneId: ev.sceneId, stage: ev.stage,
-        queuePosition: ev.queuePosition ?? null, etaSeconds: ev.etaSeconds ?? null, variant: ev.variant, count: ev.count,
+        queuePosition: ev.queuePosition ?? null, etaSeconds: ev.etaSeconds ?? null, upscaleEtaSeconds: ev.upscaleEtaSeconds ?? null,
+        variant: ev.variant, count: ev.count,
         runStartedAt: same ? prev.runStartedAt : Date.now(),
         // Процент монотонен внутри прогона; новый вариант начинается с нуля варианта
         percent: same && prev.percent !== null && percent !== null ? Math.max(prev.percent, percent) : percent,
@@ -321,6 +337,8 @@ export async function mutate(
   // Мутация меняет фокус (выбор сцены, фильма, новая сцена): пока она в полёте, событие с тем же
   // фокусом — эхо своего клика, а не выбор агента
   ownFocus = false,
+  // Отказ, о котором человеку скажет сам вызывающий (вопрос «Оставить / Всё равно»): тост не нужен
+  quiet?: (e: unknown) => boolean,
 ): Promise<boolean> {
   _mut.set(sessionId, (_mut.get(sessionId) ?? 0) + 1);
   if (ownFocus) _own.set(sessionId, (_own.get(sessionId) ?? 0) + 1);
@@ -334,7 +352,7 @@ if (ownFocus) void refreshChatContext(sessionId);
     if (st) {
       apply(sessionId, scope, st);
       showToast('Сцены только что поменяли в другом месте — показываем свежее состояние', '', 'info');
-    } else {
+    } else if (!quiet?.(e)) {
       showToast(errorText(e), '', 'error');
     }
     return false;
@@ -538,8 +556,30 @@ export function setPriceHint(sessionId: string, sceneId: string, text: string | 
   emit();
 }
 
+// ── Замок формата фильма: вопрос «Оставить 16:9 / Всё равно 9:16» (ответ 409 film_format_locked) ──
+
+export interface LockAsk {
+  sceneId: string;
+  // Что человек выбрал и сервер отклонил: повтор с force уходит с этой правкой
+  patch: Partial<VideoSceneSettings>;
+  aspect: string;
+  lockedBy: { filmPath: string; aspect: string };
+  text: string;
+}
+const _lockAsks = new Map<string, LockAsk>();
+export const getLockAsk = (sessionId: string | null, sceneId: string | null): LockAsk | null => {
+  const a = sessionId ? _lockAsks.get(sessionId) : null;
+  return a && a.sceneId === sceneId ? a : null;
+};
+export function setLockAsk(sessionId: string, a: LockAsk | null) {
+  if (a) _lockAsks.set(sessionId, a);
+  else if (!_lockAsks.delete(sessionId)) return;
+  emit();
+}
+
 // Сброс — только для тестов
 export function __resetVideoStore() {
+  _lockAsks.clear();
   _resumable.clear();
   _priceHints.clear();
   _failures.clear();

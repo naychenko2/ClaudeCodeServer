@@ -55,6 +55,14 @@ public class VideoEditorController(
     public async Task<IActionResult> Cancel(string projectId, string jobId, CancellationToken ct) =>
         Gate(projectId, out var scope, out var denied) ? await CancelIn(scope, jobId, ct) : denied;
 
+    [HttpDelete(VideoEditorRoutes.JobUpscale)]
+    public async Task<IActionResult> CancelUpscale(string projectId, string jobId, CancellationToken ct) =>
+        Gate(projectId, out var scope, out var denied) ? await CancelUpscaleIn(scope, jobId, ct) : denied;
+
+    [HttpPost(VideoEditorRoutes.FramesPreview)]
+    public async Task<IActionResult> FramesPreview(string projectId, [FromBody] VideoFramesPreviewRequest? req, CancellationToken ct) =>
+        Gate(projectId, out var scope, out var denied) ? await FramesPreviewIn(scope, req, ct) : denied;
+
     // ── Чат проекта: состояние, сцены, файлы версий ───────────────────────────────
 
     [HttpGet("sessions/{sessionId}/" + VideoEditorRoutes.State)]
@@ -82,6 +90,11 @@ public class VideoEditorController(
     public async Task<IActionResult> Settings(string projectId, string sessionId, string sceneId,
         [FromBody] VideoSceneSettingsRequest? req) =>
         ChatGate(projectId, sessionId, out var scope, out var denied) ? await SettingsIn(scope, sessionId, sceneId, req) : denied;
+
+    [HttpPost("sessions/{sessionId}/" + VideoEditorRoutes.SceneVersionUpscaleRetry)]
+    public async Task<IActionResult> RetryUpscale(string projectId, string sessionId, string sceneId, string versionId,
+        CancellationToken ct) =>
+        ChatGate(projectId, sessionId, out var scope, out var denied) ? await RetryUpscaleIn(scope, sessionId, sceneId, versionId, ct) : denied;
 
     [HttpPut("sessions/{sessionId}/" + VideoEditorRoutes.SceneCurrent)]
     public async Task<IActionResult> Current(string projectId, string sessionId, string sceneId,

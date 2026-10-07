@@ -120,6 +120,22 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
 - Режим чата («Создать» / «Править») живёт на фронте: в памяти и в `localStorage`
   (`cc-image-mode:{sessionId}`), вкладки одного чата сводит событие `storage`; сервер его не знает.
 
+**Формат (ADR-025, флаг `media-format`, держит только фронт).** Размер и пропорции картинки — `MediaFormatCaps` у модели
+в каталоге драйвера (`ImageEditCaps.Format`, `null` = «Как у модели»), желание человека или агента — `ImageProjectPrefs.Format`,
+действующий формат считает только `MediaFormatResolver` (Core, `Services.Media`). Инварианты:
+
+- **Хранится желание, а не подмена**: смена модели без нужной пропорции подставляет ближайшую только в `ResolvedFormat`,
+  в префы подставленное не пишется. Автора (`By`) и время ставит сервер, «✦» от клиента не получить.
+- **Формат уходит в модель и в цену** через `ImageFormatPlan` → `Quote.Format` → `ImageEditRequest.Format`; драйвер переводит
+  его в свои параметры (fal `resolution`, Higgsfield `resolution`/`aspect_ratio`, local `LocalImageRequest.Width/Height`).
+  Значения каталогов fal и Higgsfield сверены с живыми схемами; модель без сверенной схемы остаётся с `Format = null`.
+  Зеркало размеров Qwen-Image в `LocalImageEditor.QwenSizes` держит тест с `ComfyWorkflows.ImageSizes`.
+- **Правка размер не меняет**: у `edit`/`inpaint`/`removeBackground` — «Как у исходника»; другие пропорции — только `outpaint`
+  или обрезка `op = crop`. `ImageThreadService.CropToAspectAsync` — единственная точка обрезки для ручки `threads/{id}/crop`
+  и MCP; результат — новая версия нити (синтетический `crop-…` запуск), карточка в ленте одна и та же.
+- **Схемы MCP статичны**: пропорции моделей в `enum` не попадают (сторож `McpSchemaParityTests`), явный `aspect`/`quality`/
+  `width`/`height` агента пишет формат проекта с `By = Agent` и тихой строкой `image_format`.
+
 **Снесено в v3 и не возвращается:** `ImageChatsController` (ручки `image-editor/chats*`),
 `ImageChatStateStore`, `ImageChatPathTracker`, `IImageChatSessions`, метод хаба
 `SendImageChatMessage`, событие `image_chat_state`. Старые чаты «hero.png · правка» один раз

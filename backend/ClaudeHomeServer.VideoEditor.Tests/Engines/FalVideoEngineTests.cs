@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.VideoEditor;
 using ClaudeHomeServer.Services.VideoEditor.Catalog;
 using ClaudeHomeServer.Services.VideoEditor.Engines;
+using ClaudeHomeServer.Services.Media;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -41,10 +42,76 @@ public sealed class FalVideoEngineTests
     };
 
     private static VideoRequest Request(string model, int duration = 5, VideoFrameBytes? last = null, string? aspect = null,
-        bool sound = false, JsonObject? @params = null, long? seed = null) =>
-        new(model, Personal, "Камера медленно приближается к окну", FrameA, last, duration, aspect, sound, @params, seed);
+        bool sound = false, JsonObject? @params = null, long? seed = null, ResolvedFormat? format = null) =>
+        new(model, Personal, "Камера медленно приближается к окну", FrameA, last, duration, aspect, sound, @params, seed, format);
+
+    // Действующий формат, посчитанный резолвером по каталогу модели: ступень уходит в resolution
+    private static ResolvedFormat Resolved(string model, string aspect, FormatTier tier) =>
+        MediaFormatResolver.Resolve(Model(model).Caps.Format,
+            new MediaFormat(FormatModes.Aspect, aspect, tier, null, null, ClaudeHomeServer.Services.ChatContext.ContextActor.Human, DateTime.UtcNow));
 
     private static VideoModelInfo Model(string id) => FalVideoCatalog.Find(id)!.Info;
+
+    [Theory]
+    [InlineData(FormatTier.Standard, "720p")]
+    [InlineData(FormatTier.High, "1080p")]
+    public void BuildBody_TierGoesToResolutionByCatalog_Veo(FormatTier tier, string wire)
+    {
+        var body = FalVideoEngine.BuildBody(FalVideoCatalog.Find(FalVideoCatalog.VeoLite)!,
+            Request(FalVideoCatalog.VeoLite, duration: 8, last: FrameB, aspect: "9:16", format: Resolved(FalVideoCatalog.VeoLite, "9:16", tier)));
+
+        body["resolution"]!.GetValue<string>().Should().Be(wire);
+        body["aspect_ratio"]!.GetValue<string>().Should().Be("9:16");
+    }
+
+    [Fact]
+    public void BuildBody_NoFormat_H3KeepsNative768P_AsStandardTier()
+    {
+        var body = FalVideoEngine.BuildBody(FalVideoCatalog.Find(FalVideoCatalog.MiniMaxH3)!, Request(FalVideoCatalog.MiniMaxH3, duration: 5));
+
+        body["resolution"]!.GetValue<string>().Should().Be("768P", "умолчание fal — 2K-апскейл, наше «Стандарт» — родные 768P");
+    }
+
+    [Theory]
+    [InlineData(FormatTier.Standard, "480P")]
+    [InlineData(FormatTier.High, "768P")]
+    public void BuildBody_H3Tiers_By_LiveSchemaEnum(FormatTier tier, string wire)
+    {
+        var body = FalVideoEngine.BuildBody(FalVideoCatalog.Find(FalVideoCatalog.MiniMaxH3)!,
+            Request(FalVideoCatalog.MiniMaxH3, format: Resolved(FalVideoCatalog.MiniMaxH3, "16:9", tier)));
+
+        body["resolution"]!.GetValue<string>().Should().Be(wire);
+        body.ContainsKey("aspect_ratio").Should().BeFalse("пропорция H3 следует кадру, её режет подрезка кадров");
+    }
+
+    [Fact]
+    public void BuildBody_H3_NeverSendsUpscaledResolution_MaxIsGray()
+    {
+        var model = FalVideoCatalog.Find(FalVideoCatalog.MiniMaxH3)!;
+
+        model.Info.Caps.Format!.Tiers.Select(t => t.WireValue).Should().Equal("480P", "768P");
+        var max = MediaFormatResolver.TierOptions(model.Info.Caps.Format, null).Single(t => t.Tier == FormatTier.Max);
+        max.DisabledReason.Should().Contain("2K и 4K").And.Contain("увеличение, а не родной размер");
+    }
+
+    [Fact]
+    public void BuildBody_ResolutionInParams_IsRefused_SizeSetByFormat()
+    {
+        var act = () => FalVideoEngine.BuildBody(FalVideoCatalog.Find(FalVideoCatalog.VeoLite)!,
+            Request(FalVideoCatalog.VeoLite, duration: 8, last: FrameB, @params: new JsonObject { ["resolution"] = "1080p" }));
+
+        act.Should().Throw<ArgumentException>().WithMessage("*resolution*");
+    }
+
+    [Fact]
+    public void Catalog_FormatCaps_NoNativeMax_ForVeoAndNoTiersForFlux()
+    {
+        var veo = FalVideoCatalog.Find(FalVideoCatalog.VeoLite)!.Info.Caps.Format!;
+        veo.Tiers.Select(t => (t.Tier, t.WireValue)).Should().Equal((FormatTier.Standard, "720p"), (FormatTier.High, "1080p"));
+        veo.Tiers[1].Sizes["16:9"].Should().Be(new FormatSize(1920, 1080));
+        veo.Aspects.Should().Equal(["16:9", "9:16"], "«auto» — режим модели, а не пропорция формата");
+        FalVideoCatalog.Find(FalVideoCatalog.FluxDraft)!.Info.Caps.Format!.Tiers.Should().BeEmpty();
+    }
 
     // ── Нет ключа ────────────────────────────────────────────────────────────────
 
@@ -88,7 +155,7 @@ public sealed class FalVideoEngineTests
         var progress = new Recorder();
 
         var result = await Engine().RunAsync(Request(endpoint, duration: 6, last: FrameB, aspect: "16:9", sound: true,
-            @params: new JsonObject { ["resolution"] = "1080p" }, seed: 42), progress, CancellationToken.None);
+            seed: 42, format: Resolved(endpoint, "16:9", FormatTier.High)), progress, CancellationToken.None);
 
         result.Outcome.Should().Be(VideoOutcome.Ok);
         result.Charged.Should().BeTrue();
@@ -420,6 +487,26 @@ public sealed class FalVideoEngineTests
         veo.Amount.Should().BeApproximately(0.4, 1e-12);
         veo.Approx.Should().BeTrue();
         perRun.Amount.Should().BeApproximately(0.4, 1e-12);
+    }
+
+    // Прайс fal (get_pricing 2026-10-07) отдаёт одну цену на модель без разбивки по разрешению: «Высокое» не дороже
+    // «Стандарта» на бумаге, поэтому цена любой ступени помечена оценочной, а не выдана за точную. Если у ступени есть
+    // PriceFactor — он входит в сумму
+    [Theory]
+    [InlineData(FalVideoCatalog.VeoLite, "16:9")]
+    [InlineData(FalVideoCatalog.MiniMaxH3, "16:9")]
+    public async Task Estimate_OfAnyTier_IsApprox_WhenPriceDoesNotDifferByResolution(string model, string aspect)
+    {
+        _fal.Price(model, 0.05, "seconds");
+
+        var standard = await Engine().EstimateAsync(Model(model), Request(model, duration: 5,
+            format: Resolved(model, aspect, FormatTier.Standard)), CancellationToken.None);
+        var high = await Engine().EstimateAsync(Model(model), Request(model, duration: 5,
+            format: Resolved(model, aspect, FormatTier.High)), CancellationToken.None);
+
+        high.Amount.Should().BeGreaterThanOrEqualTo(standard.Amount!.Value);
+        (high.Amount > standard.Amount || high.Approx).Should().BeTrue("ступень дороже или цена помечена оценочной");
+        high.Approx.Should().BeTrue();
     }
 
     [Fact]

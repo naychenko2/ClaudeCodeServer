@@ -36,6 +36,19 @@ public static class VideoEditorErrors
     public const string FileNotFound = "file_not_found";
     // Кадр сцены прочитать нельзя: файла нет, он вне проекта или кадр из «Картинок» ещё не подключён швом
     public const string FrameUnavailable = "frame_unavailable";
+    // 409: сцена фильма следует пропорциям фильма (его задала сцена 1), а запрос меняет их без force.
+    // Тело — VideoFormatLockedError; одинаково для ручки и инструмента агента (ADR-025 §11)
+    public const string FilmFormatLocked = "film_format_locked";
+    // 409: «Повторить увеличение» уже нельзя — тикет съёмки недоступен (рестарт сервера или прошло больше 12 ч)
+    public const string UpscaleRetryUnavailable = "upscale_retry_unavailable";
     // 409: ревизия контекста чата устарела (ADR-023 §Д2.1); тело — свежий ChatContextDto
     public const string ContextChanged = "context_changed";
+}
+
+// Тексты отказов «Повторить увеличение»: показываются как есть (ADR-022, «Повторить увеличение»)
+public static class VideoUpscaleRetryTexts
+{
+    public const string Gone = "Повторить увеличение уже нельзя — переснимите сцену";
+    public const string NoUpscale = "У этой модели нет увеличения — повторять нечего";
+    public const string NotFailed = "У этой версии увеличение не падало — повторять нечего";
 }

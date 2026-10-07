@@ -67,7 +67,12 @@ public record ImageEditQuoteRequest(
     // Чат и ревизия контекста (ADR-023 §Д2.1): с ContextRevision сервер берёт References, HasCharacter,
     // Width/Height из стора контекста, а эти поля тела игнорирует; ревизия устарела — 409 context_changed
     string? SessionId = null,
-    long? ContextRevision = null);
+    long? ContextRevision = null,
+    // Желание формата этого запуска (ADR-025): генерация и «Дорисовать»; правка — «Как у исходника».
+    // Действующий формат под модель считает сервер (MediaFormatResolver), а не клиент
+    ClaudeHomeServer.Services.Media.MediaFormat? Format = null,
+    // Заполняет сервер перед обращением к драйверу котировки; из тела запроса игнорируется
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Resolved = null);
 
 // Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска».
 // EtaSeconds и QueueLength — у поставщика без цены (локальные модели, Unit = free): время
@@ -85,7 +90,9 @@ public record ImageEditQuoteDto(
     DateTime ExpiresAt,
     int? ExpectedSeconds,
     // Строки исполнителей для «Чем» строки и панели контекста (ADR-023 §Д2.1, Р2); null — котировка без контекста
-    IReadOnlyList<Protocol.ExecutorRowDto>? Executors = null);
+    IReadOnlyList<Protocol.ExecutorRowDto>? Executors = null,
+    // Действующий формат запуска (ADR-025): то, что уйдёт в модель и учтено в цене; null — «Как у модели»
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null);
 
 public static class ImageEditEstimateSources
 {

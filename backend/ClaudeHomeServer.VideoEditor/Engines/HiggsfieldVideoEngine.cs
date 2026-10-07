@@ -82,7 +82,8 @@ public sealed partial class HiggsfieldVideoEngine(HiggsfieldMcpClient client, Ti
 
     public IReadOnlySet<string>? ParamNames(VideoModelInfo model) =>
         Find(model.Id) is { } entry
-            ? entry.Params.Keys.Where(k => !HiggsfieldVideoCatalog.Reserved.Contains(k)).ToHashSet(StringComparer.Ordinal)
+            ? entry.Params.Keys.Where(k => !HiggsfieldVideoCatalog.Reserved.Contains(k) && !HiggsfieldVideoCatalog.FormatControlled.Contains(k))
+                .ToHashSet(StringComparer.Ordinal)
             : null;
 
     // ── Котировка ────────────────────────────────────────────────────────────────
@@ -284,6 +285,10 @@ public sealed partial class HiggsfieldVideoEngine(HiggsfieldMcpClient client, Ti
             if (!caps.Aspects.Contains(aspect)) return (null, $"Модель «{model.Info.Label}» не знает пропорции {aspect}");
             args["aspect_ratio"] = aspect;
         }
+        // Ступень формата — параметр resolution из схемы; значение — из её enum, поэтому проверка идёт в каталоге
+        if (req.Format?.WireValue is { Length: > 0 } tier && model.Params.TryGetValue("resolution", out var resolutionParam)
+            && resolutionParam.Options.Contains(tier))
+            args["resolution"] = tier;
         // Звук ставим явно в обе стороны: у многих моделей он включён по умолчанию и стоит дороже
         if (model.SoundParam is { } sound)
             args[sound] = model.SoundAsSwitch ? (req.Sound ? "on" : "off") : req.Sound;
@@ -291,7 +296,8 @@ public sealed partial class HiggsfieldVideoEngine(HiggsfieldMcpClient client, Ti
 
         foreach (var (name, value) in req.Params ?? new JsonObject())
         {
-            if (HiggsfieldVideoCatalog.Reserved.Contains(name) || !model.Params.TryGetValue(name, out var param) || value is null)
+            if (HiggsfieldVideoCatalog.Reserved.Contains(name) || HiggsfieldVideoCatalog.FormatControlled.Contains(name)
+                || !model.Params.TryGetValue(name, out var param) || value is null)
                 continue;
             if (Check(param, value) is { } bad) return (null, bad);
             args[name] = value.DeepClone();

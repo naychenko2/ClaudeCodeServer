@@ -27,7 +27,9 @@ public sealed partial class ImageEditorToolset
     // Операции, берущие образцы-референсы (контекст чата): у остальных образцов нет
     internal static readonly string[] RefOps = ["generate", "edit", "inpaint"];
 
-    internal static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale", "enhanceFaces"];
+    internal static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale", "enhanceFaces", "crop"];
+    private static readonly string[] Qualities = ["standard", "high", "max"];
+    private static readonly string[] Anchors = ["left", "center", "right", "top", "bottom"];
     private static readonly string[] Roles = ["character", "style", "object"];
 
     private static JsonArray StrEnum(params string[] values)
@@ -126,7 +128,25 @@ public sealed partial class ImageEditorToolset
                 ["character"] = Str("Персонаж проекта (slug папки characters/; только в чате проекта). "
                     + "Не передан — персонаж из контекста чата, пустая строка — без персонажа. " + NotWithoutAsk),
                 ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края, улучшить лица (enhanceFaces, "
-                    + "только local); по умолчанию — правка, а у новой картинки без файла — generate"),
+                    + "только local); crop — обрезать картинку под пропорции aspect без ИИ и бесплатно (результат — новая версия); "
+                    + "по умолчанию — правка, а у новой картинки без файла — generate"),
+                // Формат (ADR-025). Схема статична: пропорции и ступени модели в enum не попадают, они в image_state
+                ["aspect"] = Str("Пропорции «W:H». У generate — формат новой картинки (запишется как формат проекта, человек увидит ✦); "
+                    + "у outpaint — до каких пропорций дорисовать; у crop — до каких обрезать. Допустимые пропорции модели — в image_state. "
+                    + NotWithoutAsk),
+                ["quality"] = OneOf(Qualities, "Ступень качества новой картинки: размер зависит от модели, ступени — в image_state. "
+                    + NotWithoutAsk),
+                ["width"] = new JsonObject
+                {
+                    ["type"] = "integer",
+                    ["description"] = "Точная ширина новой картинки в px, только вместе с height; сервер округлит под модель. " + NotWithoutAsk,
+                },
+                ["height"] = new JsonObject
+                {
+                    ["type"] = "integer",
+                    ["description"] = "Точная высота новой картинки в px, только вместе с width. " + NotWithoutAsk,
+                },
+                ["anchor"] = OneOf(Anchors, "Только у op crop: к какой стороне прижать рамку обрезки; по умолчанию center"),
                 ["matchSourceSize"] = new JsonObject
                 {
                     ["type"] = "boolean",

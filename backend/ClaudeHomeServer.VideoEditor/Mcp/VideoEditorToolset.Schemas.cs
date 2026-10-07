@@ -36,6 +36,10 @@ public sealed partial class VideoEditorToolset
     private static readonly string[] FilmOps =
         [FilmPatchOps.Add, FilmPatchOps.Remove, FilmPatchOps.Move, FilmPatchOps.Cut, FilmPatchOps.Trim, FilmPatchOps.Music];
 
+    private static readonly string[] Qualities = ["standard", "high", "max"];
+
+    private static readonly string[] CropAnchors = ["left", "center", "right", "top", "bottom"];
+
     private static readonly string[] CutTypes = [FilmCutTypes.Butt, FilmCutTypes.Dissolve, FilmCutTypes.Fade];
 
     private static JsonArray StrEnum(params string[] values)
@@ -83,8 +87,14 @@ public sealed partial class VideoEditorToolset
         ["frameB"] = Frame("B (последний)"),
         ["provider"] = Str("Поставщик (ключ из video_state): fal, higgsfield, local. " + NotWithoutAsk),
         ["model"] = Str("Модель поставщика из video_state или auto. " + NotWithoutAsk),
-        ["durationSec"] = Int("Длительность клипа, с (из durations модели)"),
-        ["aspect"] = Str("Пропорции кадра: 16:9, 9:16… (из aspects модели)"),
+        ["durationSec"] = Int("Длительность клипа, с (из durations модели). " + NotWithoutAsk),
+        ["aspect"] = Str("Пропорции кадра: 16:9, 9:16… (список пропорций модели — в video_state). " + NotWithoutAsk
+            + ". Меняет формат видео проекта, человек видит «✦ Claude сменил формат»"),
+        ["quality"] = OneOf(Qualities, "Ступень качества: standard, high или max (размеры и цена модели — в video_state; "
+            + "у local MiniMax H3 «max» = съёмка плюс увеличение до 1440p, ещё ≈ 15 мин). " + NotWithoutAsk
+            + ". Размер задаётся только так, а не частным параметром resolution или size"),
+        ["anchor"] = OneOf([.. CropAnchors], "Рамка подрезки кадров A и B, когда их пропорции не совпадают с форматом сцены: "
+            + "left, center, right, top, bottom. " + NotWithoutAsk),
         ["sound"] = Bool("Со звуком, если модель умеет"),
         ["count"] = new JsonObject
         {
@@ -157,7 +167,12 @@ public sealed partial class VideoEditorToolset
         new(ToolSceneSet,
             "Меняет настройки сцены: текст, кадры, поставщика, модель, длительность, пропорции, звук, число вариантов. "
             + "Указанные поля заменяются, остальные остаются. Нельзя, пока у сцены идёт съёмка. Денег не тратит.",
-            Obj(MergeProps(new JsonObject { ["sceneId"] = Str("Сцена этого чата (sceneId из video_state)") }, SettingsProperties()),
+            Obj(MergeProps(new JsonObject { ["sceneId"] = Str("Сцена этого чата (sceneId из video_state)") }, SettingsProperties(),
+                new JsonObject
+                {
+                    ["force"] = Bool("Сменить пропорции сцены фильма вопреки замку (film_format_locked): только если человек явно "
+                        + "настоял на этом («всё равно 9:16»)"),
+                }),
                 "sceneId")),
 
         new(ToolSuggestPrompt,
@@ -182,7 +197,9 @@ public sealed partial class VideoEditorToolset
                 ["provider"] = Str("Поставщик (ключ из video_state). " + NotWithoutAsk),
                 ["model"] = Str("Модель поставщика или auto. " + NotWithoutAsk),
                 ["durationSec"] = Int("Длительность клипа, с. " + NotWithoutAsk),
-                ["aspect"] = Str("Пропорции кадра. " + NotWithoutAsk),
+                ["aspect"] = Str("Пропорции кадра. " + NotWithoutAsk + ". Меняет формат видео проекта, человек видит «✦ Claude сменил формат»"),
+                ["quality"] = OneOf(Qualities, "Ступень качества: standard, high или max (у local MiniMax H3 «max» — съёмка плюс "
+                    + "увеличение до 1440p). " + NotWithoutAsk),
                 ["sound"] = Bool("Со звуком. " + NotWithoutAsk),
                 ["count"] = new JsonObject
                 {
@@ -195,6 +212,10 @@ public sealed partial class VideoEditorToolset
                     ["type"] = "object",
                     ["description"] = "Частные параметры модели (у local — как у инструментов local-media). Проверяются по схеме модели",
                 },
+                ["retryUpscaleOfVersionId"] = Str("«Повторить увеличение»: versionId версии с upscaleError (local MiniMax H3 «max»: съёмка 768p сохранена, "
+                    + "увеличение до 1440p упало или отменено). Повторяет только увеличение по живой съёмке, без пересъёмки; готовый ролик станет "
+                    + "НОВОЙ версией 1440p, версия 768p останется. Другие аргументы (кроме sceneId) не передавай — отказ. "
+                    + "Если съёмка уже недоступна (рестарт сервера или прошло больше 12 ч) — отказ «переснимите сцену». " + NotWithoutAsk),
             }, "sceneId")),
 
         new(ToolCancel,
@@ -255,11 +276,11 @@ public sealed partial class VideoEditorToolset
             Obj(new JsonObject { ["path"] = Str("Фильм: путь к .film в video/**; не указан — открытый фильм") })),
     ];
 
-    private static JsonObject MergeProps(JsonObject first, JsonObject second)
+    private static JsonObject MergeProps(JsonObject first, JsonObject second, JsonObject? third = null)
     {
         var merged = new JsonObject();
-        foreach (var (key, value) in first) merged[key] = value?.DeepClone();
-        foreach (var (key, value) in second) merged[key] = value?.DeepClone();
+        foreach (var source in third is null ? new[] { first, second } : [first, second, third])
+            foreach (var (key, value) in source) merged[key] = value?.DeepClone();
         return merged;
     }
 }

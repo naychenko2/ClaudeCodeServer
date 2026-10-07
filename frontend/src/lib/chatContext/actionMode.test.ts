@@ -37,6 +37,12 @@ describe('действие как режим поля', () => {
     expect(run.run).toHaveBeenCalledWith('убери тень');
   });
 
+  it('blockReason: чип выбран, но запуска при пустом поле нет (в отличие от текста не обязательного действия)', () => {
+    const a = act({ text: 'none', placeholder: undefined, blockReason: 'выберите пропорции' });
+    const m = actionComposerMode({ action: a, run: stubActionRun(a), objectKey: 'k', preset: null });
+    expect(m.emptySubmit!(ctx)).toBeNull();
+  });
+
   it('предвыбор даёт затравку поля, текст поля уходит в run.setText', () => {
     const setText = vi.fn();
     const run = { ...stubActionRun(act()), setText };

@@ -38,6 +38,11 @@ public class ImageEditorController(
     public IActionResult Catalog(string projectId) =>
         Gate(projectId, out _, out var denied) ? CatalogOf() : denied;
 
+    [HttpGet("format")]
+    public async Task<IActionResult> Format(string projectId, [FromQuery] string? provider, [FromQuery] string? model,
+        [FromQuery] string? op, CancellationToken ct) =>
+        Gate(projectId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, ct) : denied;
+
     [HttpPost("quote")]
     public async Task<IActionResult> Quote(string projectId, [FromBody] ImageEditQuoteRequest req, CancellationToken ct) =>
         Gate(projectId, out var scope, out var denied) ? await QuoteIn(scope, req, ct) : denied;

@@ -74,6 +74,17 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     }
 
     [Fact]
+    public void Правило_приоритета_запрещает_ждать_съёмку_через_bash_и_ведёт_локально_в_video_shoot()
+    {
+        foreach (var rule in new[] { VideoEditorStateContributor.PriorityRule, VideoEditorStateContributor.PersonalPriorityRule })
+            rule.Should().Contain(VideoEditorStateContributor.WaitRule);
+        VideoEditorStateContributor.WaitRule.Should().Contain("Bash").And.Contain("sleep").And.Contain("только video_wait");
+        VideoEditorStateContributor.PriorityRule.Should().Contain("video_shoot с provider local, а не local_image_to_video");
+        // Редактор не снимает без первого кадра и не берёт референсы: туда его не отсылаем
+        VideoEditorStateContributor.PriorityRule.Should().NotContain("а не local_text_to_video").And.NotContain("а не local_reference_to_video");
+    }
+
+    [Fact]
     public async Task Блок_несёт_правило_приоритета_и_правило_после_сцены_спроси()
     {
         var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir));

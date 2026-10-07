@@ -89,6 +89,9 @@ public static class FeatureFlagKeys
     public const string Spheres = "spheres";
     // Модуль «Видео» (ADR-022): сцены и фильм в боковой панели. Гейтит и серверные ручки модуля video-editor.
     public const string VideoEditor = "video-editor";
+    // «Формат» (ADR-025): пропорции и размер картинок и видео в строке контекста. Сервер под флагом
+    // ничего не прячет — его держит только фронт.
+    public const string MediaFormat = "media-format";
 }
 
 /// <summary>
@@ -247,6 +250,12 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.VideoEditor,
             Title: "Видео: сцены и фильм",
             Description: "Видео в чате: снимает сцены между двумя кадрами тремя поставщиками, собирает из них фильм со склейками и музыкой.",
+            Default: false,
+            Stage: "dev"),
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.MediaFormat,
+            Title: "Формат картинок и видео",
+            Description: "Чип «Формат» в строке контекста: пропорции, качество и точный размер результата. Размер реально уходит в модель и в цену, а у правки картинки есть явный выбор «Дорисовать края» или «Обрезать».",
             Default: false,
             Stage: "dev"),
     ];

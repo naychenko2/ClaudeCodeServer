@@ -3,6 +3,7 @@ using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor.ChatContext;
 
@@ -126,6 +127,42 @@ public sealed class ImageContextKind(
         if (model?.PriceHint is { } price)
             parts.Add(ContextPriceText.Format(price.Amount, price.Unit, price.Per));
         return string.Join(" · ", parts);
+    }
+
+    // «Формат» (ADR-025): желание проекта под модель «Создать» — то, что уйдёт в генерацию по тексту. Правка
+    // идёт «Как у исходника», другие пропорции — только явным outpaint или crop. Строка и в режиме «Чат»
+    public string? DescribeFormat(ContextScope scope, ContextItem primary)
+    {
+        if (primary.Kind != Kind || prefs is null) return null;
+        var saved = prefs.Get(scope.OwnerId, scope.Project?.Id ?? ImageEditScope.Personal);
+        var settings = saved.CreateSettings();
+        var (caps, modelChosen) = FormatCapsOf(settings.Provider, settings.Model);
+        var line = MediaFormatText.Line(saved.Format, MediaFormatResolver.Resolve(caps, saved.Format), modelChosen);
+        var thread = Text(primary.Ref, "threadId") is { } id ? Find(scope, id) : null;
+        var hasImage = thread is not null && (thread.File is { Length: > 0 } || thread.CurrentVersion is { Steps.Count: > 0 });
+        return hasImage
+            ? "правка этой картинки — как у исходника (другие пропорции: op outpaint — дорисовать края, op crop — обрезать); "
+              + "новая картинка — " + line
+            : line;
+    }
+
+    // Возможности формата модели выбора человека; «Авто» и неизвестная пара — модель, которую выберет поставщик
+    private (MediaFormatCaps? Caps, bool ModelChosen) FormatCapsOf(string? provider, string? model)
+    {
+        try
+        {
+            var all = editors?.ToList() ?? [];
+            var editor = string.IsNullOrWhiteSpace(provider) ? all.FirstOrDefault(e => e.Enabled) : all.FirstOrDefault(e => e.Key == provider);
+            if (editor is null) return (null, false);
+            var info = string.IsNullOrWhiteSpace(model) || model == ImageEditCatalog.AutoModelId
+                ? editor.PickModel(ImageEditOp.Generate, EditMode.Auto, new EditTraits(false, 0, false))
+                : editor.Models.FirstOrDefault(m => m.Id == model);
+            return (info?.Caps.Format, info is not null);
+        }
+        catch
+        {
+            return (null, false);
+        }
     }
 
     public ContextItem? SeedPrimary(ContextScope scope)

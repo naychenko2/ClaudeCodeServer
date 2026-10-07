@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
 
@@ -31,7 +32,14 @@ public sealed record FrameRef(
     public static FrameRef File(string path, string? fileName = null) => new(KindFile, Path: path, FileName: fileName);
 }
 
-// Настройки сцены: что снимать и чем. null у поля — сцена его не задаёт, берётся из префов
+// Рамка подрезки кадров A/B под формат сцены (ADR-025 §5): Anchor — CropAnchors.* (left | center | right |
+// top | bottom); не указан — по центру. Кадр режется на сервере до модели, исходный файл не меняется
+public sealed record VideoFrameFitDto(string? Anchor = null);
+
+// Настройки сцены: что снимать и чем. null у поля — сцена его не задаёт, берётся из префов.
+// Format — желание «Формата» (ADR-025: хранится желание, действующий формат считает резолвер на каждом чтении);
+// Aspect остаётся ЗЕРКАЛОМ Format.Aspect (читают FilmSceneSaver и старый фронт), пишут его оба пути.
+// FrameFit — рамка подрезки кадров, когда их пропорции не совпадают с форматом сцены
 public sealed record VideoSceneSettingsDto(
     FrameRef? FrameA,
     FrameRef? FrameB,
@@ -41,7 +49,17 @@ public sealed record VideoSceneSettingsDto(
     int? DurationSec,
     string? Aspect,
     bool? Sound,
-    int? Count);
+    int? Count,
+    MediaFormat? Format = null,
+    VideoFrameFitDto? FrameFit = null);
+
+// Замок формата сцены фильма (ADR-025 §11): сцена на позиции > 0 следует пропорциям фильма (их задала сцена 1).
+// FilmPath — файл .film, Aspect — пропорции фильма. Смена пропорций у такой сцены без force — 409 film_format_locked
+public sealed record VideoFormatLockDto(string FilmPath, string Aspect);
+
+// Кадры последней съёмки сцены были подрезаны под её формат: Aspect — пропорции сцены, FrameA и FrameB —
+// пропорции исходных кадров («16:9»); null — этот кадр не подрезался. Превью до съёмки — ручка frames/preview
+public sealed record VideoFramesCroppedDto(string Aspect, string? FrameA, string? FrameB, string Anchor);
 
 // Цена в своей валюте поставщика: Currency — usd | credits | local (local бесплатен, Amount = 0)
 public sealed record VideoCostDto(string Currency, double Amount);
@@ -50,7 +68,10 @@ public sealed record VideoCostDto(string Currency, double Amount);
 // FrameA и FrameB — подписи кадров: «image:{threadId}:{versionId}» или «file:{path}»
 public sealed record VideoInputsSnapshotDto(string Text, string? FrameA, string? FrameB);
 
-// Версия клипа — один вариант запуска. File — путь в рабочей папке модуля от её корня; клиент читает
+// Версия клипа — один вариант запуска. Width и Height — размер ролика, если драйвер его знает (local — всегда).
+// UpscaleError — у «Макс» local H3 увеличение до 1440p не удалось (ошибка или отмена), а версия — съёмка 768p,
+// сохранённая как есть: текст причины. 768p вместо 1440p молча не подставляется никогда — поле и есть пометка
+// «увеличение не удалось»; UpscaleCancelled = true — его отменил человек (отличать от сбоя по тексту нельзя), иначе поля нет (решение Андрея по Б2 ждёт подтверждения: поведение переключается одной константой). File — путь в рабочей папке модуля от её корня; клиент читает
 // файл ручкой GET …/scenes/{sceneId}/versions/{versionId}/file. License — лицензия модели на момент запуска
 public sealed record VideoClipVersionDto(
     string VersionId,
@@ -66,7 +87,11 @@ public sealed record VideoClipVersionDto(
     VideoCostDto? Cost,
     string Initiator,
     VideoInputsSnapshotDto Inputs,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    int? Width = null,
+    int? Height = null,
+    string? UpscaleError = null,
+    bool? UpscaleCancelled = null);
 
 // Запуск в нить: якорь в ленте — по JobId. Status — VideoLaunchStatus.*. Interrupted дублирует
 // Status == "interrupted" ради простого условия на фронте: запуск оборвал перезапуск сервера,
@@ -122,7 +147,10 @@ public sealed record VideoSceneDto(
     VideoSceneStaleDto? Stale,
     IReadOnlyList<VideoSavedFileDto> SavedFiles,
     VideoFilmRefDto? FilmRef,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    VideoFormatLockDto? LockedBy = null,
+    bool? FormatMismatch = null,
+    VideoFramesCroppedDto? FramesCropped = null);
 
 // Фокус чата: сцена в работе и открытый фильм (путь .film). null — нет
 public sealed record VideoFocusDto(string? SceneId, string? FilmPath);
@@ -134,14 +162,16 @@ public sealed record VideoThreadsStateDto(VideoFocusDto Focus, long Revision, IR
 // Состояние модуля для чата одним запросом: нити, каталог, префы
 public sealed record VideoStateDto(VideoThreadsStateDto Threads, VideoCatalogDto Catalog, VideoPrefsDto Prefs);
 
-// Выбор человека для области: null у поля — не настраивал
+// Выбор человека для области: null у поля — не настраивал. Format — формат видео проекта (желание, ADR-025),
+// Aspect — его зеркало; новая сцена засевает своё желание отсюда
 public sealed record VideoPrefsDto(
     string? Provider,
     string? Model,
     int? DurationSec,
     string? Aspect,
     bool? Sound,
-    int? Count);
+    int? Count,
+    MediaFormat? Format = null);
 
 // Каталог для полосы и панели: заведённые поставщики в порядке показа, у каждого — доступен ли он
 // В ЭТОЙ области и почему нет. AutoProviders — порядок, в каком «Авто» их перебирает (одна точка
@@ -160,7 +190,8 @@ public sealed record VideoProviderDto(
     string? Reason,
     IReadOnlyList<VideoModelDto> Models);
 
-// Durations и Aspects — что модель принимает; LastFrame — умеет ли «кадр A → кадр B»
+// Durations и Aspects — что модель принимает; LastFrame — умеет ли «кадр A → кадр B»;
+// Format — возможности по формату (null — «Как у модели», размеров модель не сообщает)
 public sealed record VideoModelDto(
     string Id,
     string Label,
@@ -168,4 +199,5 @@ public sealed record VideoModelDto(
     IReadOnlyList<string> Aspects,
     bool Sound,
     bool LastFrame,
-    string? License);
+    string? License,
+    MediaFormatCaps? Format = null);

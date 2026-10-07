@@ -12,7 +12,7 @@ import type { WorkspacePanelDefCtx } from '../../../../lib/subsystems/registryCo
 import { ERR, errorCode, errorText, videoApi, type FilmState, type VideoScene } from '../../api';
 import { ProjectPicker } from '../ProjectPicker';
 import { Hint, ic, Label } from '../primitives';
-import { createScene } from '../../scene/actions';
+import { createScene, fitSceneToFilm } from '../../scene/actions';
 import { isPersonalScope, videoScope } from '../../scope';
 import {
   buildFilm, cancelBuild, filmName, focusFilm, loadFilmList, patchFilm, useFilm, useFilmList, useVideoStoreVersion,
@@ -331,6 +331,14 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
     onWork: reshoot,
     hasScene: (i: number) => !!sceneOfItem(scenes, doc.items[i]),
     onReveal: i => { void openProjectFile(doc.items[i].file, true); },
+    formatFix: i => {
+      const s = sceneOfItem(scenes, doc.items[i]);
+      return {
+        sceneAspect: s ? s.settings.format?.aspect ?? s.settings.aspect ?? null : null,
+        filmAspect: doc.aspect,
+        fix: s ? () => fitSceneToFilm(scope, sessionId, s, doc.aspect) : null,
+      };
+    },
   };
   const addFile = (file: string, scene?: VideoScene | null) => {
     setPicking(null);

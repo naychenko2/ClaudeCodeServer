@@ -1,7 +1,9 @@
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Prefs;
@@ -12,8 +14,10 @@ namespace ClaudeHomeServer.Services.ImageEditor.Prefs;
 // Create и Edit — выбор режимов «Создать» и «Править» панели v5; плоские поля — запасные для
 // обоих (старый фронт пишет только их). Персонаж и «размер оригинала» общие на оба режима.
 // Добавлять поля можно только аддитивно: файл живёт в бэкапе.
+// Format — формат картинок проекта (ADR-025): желание человека или агента, а не подставленное значение;
+// null — «Как у модели». Правка (edit) его не читает: у неё «Как у исходника» на один запуск.
 public sealed record ImageProjectPrefs(string? Provider, string? Model, int Count, bool MatchSourceSize, string? CharacterSlug,
-    ImageCreatePrefs? Create = null, ImageEditPrefs? Edit = null)
+    ImageCreatePrefs? Create = null, ImageEditPrefs? Edit = null, MediaFormat? Format = null)
 {
     public static ImageProjectPrefs Default { get; } = new(null, null, 2, true, null);
 
@@ -178,8 +182,27 @@ public sealed class ImageProjectPrefsService(
             return $"Недопустимый режим подбора: {mode}";
         if (req.Edit?.Ratio is { } ratio && !ImageEditLaunchAssembler.AspectRatios.Contains(ratio))
             return $"Пропорции {ratio} не поддерживаются: только {string.Join(", ", ImageEditLaunchAssembler.AspectRatios)}";
+        return req.Format is { } format ? ValidateFormat(format) : null;
+    }
+
+    // Белые списки формата (ADR-025): режим, пропорции «W:H», ступень, размер «Точно…»
+    public static string? ValidateFormat(MediaFormat format)
+    {
+        if (!FormatModes.All.Contains(format.Mode)) return $"Недопустимый режим формата: {format.Mode}";
+        if (format.Aspect is { } aspect && !AspectCrop.TryParse(aspect, out _)) return $"Недопустимые пропорции: {aspect}";
+        if (format.Tier is { } tier && !Enum.IsDefined(tier)) return "Недопустимая ступень формата";
+        if (format.Mode == FormatModes.Exact
+            && (format.Width is not (>= 16 and <= MaxExactSide) || format.Height is not (>= 16 and <= MaxExactSide)))
+            return $"Точный размер — от 16 до {MaxExactSide} px по каждой стороне";
+        if (format.Mode == FormatModes.Aspect && format.Aspect is null) return "Для пропорций нужно указать aspect";
         return null;
     }
+
+    private const int MaxExactSide = 16384;
+
+    // Время и автор ставит сервер: клиент их не присылает, а «✦» от чужого значения не получить
+    private static MediaFormat Stamp(MediaFormat format, ContextActor by) =>
+        format with { By = by, At = DateTime.UtcNow };
 
     private static bool CountOk(int count) => count >= 1 && count <= ImageEditCatalog.DefaultLimits.MaxCount;
 
@@ -192,10 +215,15 @@ public sealed class ImageProjectPrefsService(
     // Персонаж в префы больше не пишется (он ref контекста чата, ADR-023): в теле игнорируется, а то, что
     // записано в старом файле, остаётся как есть. Запись сливается с сохранённым: нет Create/Edit в теле (старый фронт, другая вкладка) —
     // выбор режима остаётся прежним; присланный режим заменяется целиком
-    public async Task<ImageProjectPrefs> SetAsync(string ownerId, ImageEditScope scope, ImageProjectPrefs prefs)
+    public Task<ImageProjectPrefs> SetAsync(string ownerId, ImageEditScope scope, ImageProjectPrefs prefs) =>
+        SetAsync(ownerId, scope, prefs, ContextActor.Human);
+
+    // Формат в теле: нет — остаётся сохранённым (старый фронт), есть — заменяется; автор ставится сервером
+    public async Task<ImageProjectPrefs> SetAsync(string ownerId, ImageEditScope scope, ImageProjectPrefs prefs, ContextActor by)
     {
         store.Update(ownerId, scope.Key, saved => prefs with
         {
+            Format = prefs.Format is { } format ? Stamp(format, by) : saved.Format,
             Provider = Blank(prefs.Provider),
             Model = Blank(prefs.Model),
             CharacterSlug = saved.CharacterSlug,
@@ -220,6 +248,32 @@ public sealed class ImageProjectPrefsService(
             }
         }
         return saved;
+    }
+
+    // Запись одного формата без остальных полей — путь агента (image_generate с aspect/quality/width/height):
+    // выбор человека в префах не трогается. Возвращает прежнее желание, чтобы вызывающий написал строку в ленту
+    public async Task<(MediaFormat? Before, ImageProjectPrefs After)> SetFormatAsync(
+        string ownerId, ImageEditScope scope, MediaFormat format, ContextActor by)
+    {
+        MediaFormat? before = null;
+        store.Update(ownerId, scope.Key, saved =>
+        {
+            before = saved.Format;
+            return saved with { Format = Stamp(format, by) };
+        });
+        var after = Get(ownerId, scope);
+        if (broadcaster is not null)
+        {
+            try
+            {
+                await broadcaster.ToOwner(ownerId, new ImageProjectPrefsChangedMessage(scope.Key, after));
+            }
+            catch (Exception ex)
+            {
+                log.LogDebug(ex, "Редактор картинок: формат области {ScopeKey} не разослан", scope.Key);
+            }
+        }
+        return (before, after);
     }
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

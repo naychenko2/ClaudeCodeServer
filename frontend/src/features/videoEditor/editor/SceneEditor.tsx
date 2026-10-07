@@ -5,8 +5,8 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import {
-  Button, C, FS, getChatContextState, ICON_SIZE, ICON_STROKE, Modal, MODAL_W, noteGenDraft, SegmentedControl, SP, Toggle,
-  useGenDraft,
+  Button, C, FLAGS, FS, getChatContextState, ICON_SIZE, ICON_STROKE, Modal, MODAL_W, noteGenDraft, SegmentedControl, SP, Toggle,
+  useFeature, useGenDraft,
 } from 'aihome_shell/kit';
 import type { VideoScene } from '../api';
 import { sceneOfPrimary } from '../context/state';
@@ -21,6 +21,8 @@ function Body({ scope, sessionId, scene }: { scope: string; sessionId: string; s
   const [expanded, setExpanded] = useState(false);
   const draftKey = sceneDraftKey(scene.sceneId);
   const draft = useGenDraft(draftKey);
+  // Под флагом media-format пропорции и «как у фильма» живут в чипе «Формат» строки контекста
+  const formatChip = useFeature(FLAGS.mediaFormat);
   const film = useFilm(scope, scene.filmRef && !personal ? sessionId : null, scene.filmRef?.path ?? null);
   const r = currentResolved(sessionId, scope, scene);
   const model = r.model;
@@ -33,13 +35,17 @@ function Body({ scope, sessionId, scene }: { scope: string; sessionId: string; s
   return (
     <>
       <SceneText value={r.text} onChange={edit} onExpand={() => setExpanded(true)} draft={draft} />
-      <Label>Пропорции</Label>
-      {lockAspect
-        ? <Hint>Как у фильма — {lockAspect}. Пропорции задаёт первая сцена, иначе сборка дала бы поля.</Hint>
-        : (
-          <SegmentedControl<string> value={r.aspect} onChange={v => change({ aspect: v })}
-            options={(model?.aspects.length ? model.aspects : ['16:9', '9:16', '1:1']).map(a => ({ value: a, label: a }))} />
-        )}
+      {!formatChip && (
+        <>
+          <Label>Пропорции</Label>
+          {lockAspect
+            ? <Hint>Как у фильма — {lockAspect}. Пропорции задаёт первая сцена, иначе сборка дала бы поля.</Hint>
+            : (
+              <SegmentedControl<string> value={r.aspect} onChange={v => change({ aspect: v })}
+                options={(model?.aspects.length ? model.aspects : ['16:9', '9:16', '1:1']).map(a => ({ value: a, label: a }))} />
+            )}
+        </>
+      )}
       <Label>Звук клипа</Label>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
         <Toggle checked={r.sound} disabled={!!model && !model.sound} onChange={v => change({ sound: v })} ariaLabel="Звук клипа" />

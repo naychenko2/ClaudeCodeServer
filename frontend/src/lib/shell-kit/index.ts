@@ -48,9 +48,15 @@ export {
   useChatContext, getChatContextState, refreshChatContext, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
 } from '../chatContext/store';
 export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
+export { thumbOf } from '../chatContext/thumbs';
 export { refOf, rolesFor } from '../chatContext/fill';
 export type { ContextCandidate } from '../chatContext/fill';
 export type { ContextRole, ContextUpload, ContextNote, ContextMenuItem } from '../chatContext/types';
+export type {
+  FormatModel, FormatEditModel, MediaFormatState, MediaFormatWish, MediaFormatCaps, FormatTierOption, FormatTierKey,
+  ResolvedFormat, FormatMode, CropAnchor, FramesAnchor, FormatFramesModel, FormatLockAsk,
+} from '../chatContext/formatTypes';
+export { FORMAT_TEXT, TIER_NAME, generateChip, priceLabel, sizeLabel } from '../chatContext/formatText';
 export { notifyKindChanged } from '../chatContext/actionRun';
 export { ReportedError } from '../chatContext/errors';
 export { etaTicker, etaFraction } from '../chatContext/etaProgress';
@@ -147,7 +153,7 @@ export {
   IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem, MenuSep,
   SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
   Island, EmptyState, Field, TextField, TextArea, IconField, ModalActions, Menu, SegmentedControl, Checkbox,
-  Chip, ChipX, ProgressBar, MetaChip, Select, InlineSegmented,
+  Chip, ChipX, ProgressBar, MetaChip, Select, InlineSegmented, Notice,
 } from '../../components/ui';
 export type { SelectOption } from '../../components/ui';
 

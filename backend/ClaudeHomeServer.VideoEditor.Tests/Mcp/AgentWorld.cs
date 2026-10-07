@@ -52,7 +52,7 @@ internal sealed class AgentWorld : IDisposable
     {
         F = new FilmWorld(new ToolDsp(), withContext);
         Engine = new FakeEngine("fal", blocking);
-        Prefs = new VideoPrefsService(new VideoPrefsStore(Path.Combine(F.Dir, "prefs")));
+        Prefs = new VideoPrefsService(new VideoPrefsStore(Path.Combine(F.Dir, "prefs")), F.Broadcaster);
         Jobs = new VideoEditJobService([Engine], F.Workspace, F.JobThreads, NullLogger<VideoEditJobService>.Instance,
             Prefs, Spend, F.Broadcaster);
         Scenes = new VideoSceneService(F.JobThreads, Prefs);
@@ -150,6 +150,12 @@ internal sealed class AgentWorld : IDisposable
     // Подставной поставщик: сразу отдаёт клип (или, blocking, висит до отмены — для video_cancel)
     internal sealed class FakeEngine(string key, bool blocking) : IVideoEngine
     {
+        // «Макс» с упавшим увеличением: съёмка возвращается с пометкой, а повтор (RetryRefusal = null) отдаёт клип 1440p
+        public bool MarkUpscaleError { get; set; }
+        // null — повтор возможен; по умолчанию у модели увеличения нет
+        public string? RetryRefusal { get; set; } = VideoUpscaleRetryTexts.NoUpscale;
+        public int Retries;
+
         public string Key => key;
         public string Label => key;
         public string PriceUnit => VideoPriceUnits.Usd;
@@ -168,8 +174,21 @@ internal sealed class AgentWorld : IDisposable
             Interlocked.Increment(ref Runs);
             progress.Report(new VideoProgress(VideoStage.Queued, RemoteId: "r1", Accepted: true));
             if (blocking) await Task.Delay(Timeout.Infinite, ct);
-            return new VideoResult(VideoOutcome.Ok, new VideoFile([1, 2, 3], "video/mp4", ".mp4", req.DurationSec, true),
+            return new VideoResult(VideoOutcome.Ok,
+                new VideoFile([1, 2, 3], "video/mp4", ".mp4", req.DurationSec, true,
+                    MarkUpscaleError ? 1344 : null, MarkUpscaleError ? 768 : null,
+                    MarkUpscaleError ? "Увеличение до 1440p не удалось: oom" : null),
                 null, true, "r1", null);
+        }
+
+        public string? UpscaleRetryRefusal(string shotTicket) => RetryRefusal;
+
+        public Task<VideoResult> RetryUpscaleAsync(UpscaleRetryRequest request, IProgress<VideoProgress> progress, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Retries);
+            progress.Report(new VideoProgress(VideoStage.Upscaling, RemoteId: "up1"));
+            return Task.FromResult(new VideoResult(VideoOutcome.Ok,
+                new VideoFile([9, 9], "video/mp4", ".mp4", 5, true, 2528, 1440), null, false, "up1", null));
         }
 
         public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(true);

@@ -91,6 +91,26 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
         return TakeResult(await threads.AddStepAsync(UserId, scope.Key, sessionId, threadId, req.StepId.Trim(), req.Revision));
     }
 
+    // «Обрезать» из «Формата» (ADR-025 §4): тот же метод сервиса, что у image_generate op = crop; результат — новая
+    // версия нити. dryRun — только размер результата, ничего не пишет
+    protected async Task<IActionResult> CropIn(ImageEditScope scope, string sessionId, string threadId,
+        ImageThreadCropRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Aspect))
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не указаны пропорции");
+        var done = await threads.CropToAspectAsync(UserId, scope, sessionId, threadId, req.VersionId, req.Aspect, req.Anchor,
+            ImageEditInitiator.Human, req.DryRun, ct);
+        if (done.Ok)
+            return Ok(new ImageThreadCropResponse(done.Width, done.Height, done.Aspect!, done.Version?.Id, threads.View(UserId, sessionId)));
+        var status = done.ErrorCode switch
+        {
+            ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound or ImageEditErrorCodes.StepNotFound => StatusCodes.Status404NotFound,
+            ImageEditErrorCodes.RasterUnavailable => StatusCodes.Status503ServiceUnavailable,
+            _ => StatusCodes.Status400BadRequest,
+        };
+        return Error(status, done.ErrorCode!, done.Error!);
+    }
+
     // «Взять» (нити до 27.09): вариант задачи этой нити (jobId + variant) или шаг правки без ИИ (stepId)
     protected async Task<IActionResult> TakeIn(ImageEditScope scope, string sessionId, string threadId,
         ImageThreadTakeRequest req, CancellationToken ct)
@@ -213,6 +233,11 @@ public class ThreadsController(
         [FromBody] ImageThreadStepRequest req) =>
         Gate(projectId, sessionId, out var scope, out var denied) ? await AddStepIn(scope, sessionId, threadId, req) : denied;
 
+    [HttpPost("{threadId}/crop")]
+    public async Task<IActionResult> Crop(string projectId, string sessionId, string threadId,
+        [FromBody] ImageThreadCropRequest req, CancellationToken ct) =>
+        Gate(projectId, sessionId, out var scope, out var denied) ? await CropIn(scope, sessionId, threadId, req, ct) : denied;
+
     [HttpPost("{threadId}/take")]
     public async Task<IActionResult> Take(string projectId, string sessionId, string threadId,
         [FromBody] ImageThreadTakeRequest req, CancellationToken ct) =>
@@ -251,5 +276,12 @@ public sealed record ImageThreadRollbackRequest(string? StepId, long Revision);
 public sealed record ImageThreadContinueRequest(string? VersionId, string? StepId, long Revision);
 
 public sealed record ImageThreadStepRequest(string? StepId, long Revision);
+
+// Обрезка под пропорции: Aspect «W:H», Anchor — left|center|right|top|bottom (null — по центру),
+// VersionId — от какой версии (null — текущая), DryRun — только посчитать размер
+public sealed record ImageThreadCropRequest(string? Aspect, string? Anchor = null, string? VersionId = null, bool DryRun = false);
+
+// State — нити чата после записи (при dryRun они не менялись); VersionId — новая версия, при dryRun null
+public sealed record ImageThreadCropResponse(int Width, int Height, string Aspect, string? VersionId, ImageThreadsState State);
 
 public sealed record ImageThreadSettingsRequest(ImageThreadSettings? Settings, long Revision);

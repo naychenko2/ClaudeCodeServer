@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Media;
+
 namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Поставщик «Локальные модели» (ADR-018, раздел «Локальные модели»): Qwen-Image 2.1 и
@@ -37,13 +39,34 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     public bool Registered => media?.Configured == true;
     public IReadOnlyList<ImageEditModelInfo> Models => Catalog;
 
+    // Формат (ADR-025): рекомендованные размеры Qwen-Image по пропорциям — зеркало
+    // ComfyWorkflows.ImageSizes (Images; модулю он не виден, расхождение ловит MediaFormatDriversTests.Размеры_Qwen_в_каталоге_совпадают_с_ComfyWorkflows).
+    // Размер один на пропорцию — «Высокое» и «Макс» серые. «Точно…» только у генерации (холст правки —
+    // исходник): кратно 16 (латент VAE 8× и патчи 2×2), потолок — как у лимита входа каталога.
+    public static readonly IReadOnlyDictionary<string, FormatSize> QwenSizes = new Dictionary<string, FormatSize>(StringComparer.Ordinal)
+    {
+        ["1:1"] = new(1328, 1328),
+        ["16:9"] = new(1664, 928),
+        ["9:16"] = new(928, 1664),
+        ["4:3"] = new(1472, 1104),
+        ["3:4"] = new(1104, 1472),
+        ["3:2"] = new(1584, 1056),
+        ["2:3"] = new(1056, 1584),
+    };
+
+    private static readonly MediaFormatCaps QwenFormat = new("Qwen-Image 2.1",
+        [.. QwenSizes.Keys],
+        [new FormatTierSpec(FormatTier.Standard, "~1,7 Мп", QwenSizes)],
+        new ExactSizeSpec(Step: 16, MinSide: 256, MaxSide: 1664, MaxMegapixels: 1.8),
+        null, "один размер ~1,7 Мп");
+
     // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов)
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
         new(QwenImage, "Qwen-Image 2.1",
             new ImageEditCaps([ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint, ImageEditOp.Outpaint],
                 MaskSupport.AsReference,
-                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1),
+                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1, Format: QwenFormat),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
@@ -110,7 +133,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             case ImageEditOp.Generate:
                 // Холст генерации по тексту не нужен: берутся только образцы человека. Прогон на
                 // вариант и без образцов: первый вариант виден сразу, а не после всей пачки
-                run = new LocalImageRequest(LocalImageOp.Generate, req.Prompt, references, req.AspectRatio, 1);
+                run = new LocalImageRequest(LocalImageOp.Generate, req.Prompt, references, req.AspectRatio, 1,
+                    Width: req.Format?.Width, Height: req.Format?.Height);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             case ImageEditOp.Edit or ImageEditOp.Inpaint

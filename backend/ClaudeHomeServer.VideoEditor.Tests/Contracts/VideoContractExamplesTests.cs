@@ -16,6 +16,7 @@ public sealed class VideoContractExamplesTests
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     // Имя в заголовке ADR → тип контракта. Типы без записи здесь вложенные и проверяются через родителей
@@ -43,6 +44,7 @@ public sealed class VideoContractExamplesTests
         [nameof(RetryQuote)] = typeof(RetryQuote),
         [nameof(VideoLaunchRequest)] = typeof(VideoLaunchRequest),
         [nameof(VideoLaunchResult)] = typeof(VideoLaunchResult),
+        [nameof(VideoUpscaleRetryResult)] = typeof(VideoUpscaleRetryResult),
         [nameof(SaveSceneRequest)] = typeof(SaveSceneRequest),
         [nameof(SaveSceneResult)] = typeof(SaveSceneResult),
         [nameof(FilmDocument)] = typeof(FilmDocument),
@@ -53,8 +55,13 @@ public sealed class VideoContractExamplesTests
         [nameof(FilmBuildStatusDto)] = typeof(FilmBuildStatusDto),
         [nameof(FilmMusicRequest)] = typeof(FilmMusicRequest),
         [nameof(FilmMusicDraftDto)] = typeof(FilmMusicDraftDto),
+        [nameof(VideoFormatLockedError)] = typeof(VideoFormatLockedError),
+        [nameof(VideoFramesPreviewRequest)] = typeof(VideoFramesPreviewRequest),
+        [nameof(VideoFramesPreviewDto)] = typeof(VideoFramesPreviewDto),
+        [nameof(VideoEditProgressMessage)] = typeof(VideoEditProgressMessage),
         [nameof(VideoThreadChangedMessage)] = typeof(VideoThreadChangedMessage),
         [nameof(VideoFilmChangedMessage)] = typeof(VideoFilmChangedMessage),
+        [nameof(VideoPrefsChangedMessage)] = typeof(VideoPrefsChangedMessage),
     };
 
     public static TheoryData<string> Names()
@@ -78,6 +85,17 @@ public sealed class VideoContractExamplesTests
 
         JsonNode.DeepEquals(original, back).Should().BeTrue(
             $"пример «{name}» и сериализация типа разошлись.\nПример: {original}\nТип:    {back}");
+    }
+
+    // Новые поля контракта «Формата» названы в ADR дословно: shotEta в примере котировки, upscaleCancelled в описании версии
+    [Fact]
+    public void Котировка_отдаёт_shotEta_рядом_с_upscaleEta_а_версия_описывает_upscaleCancelled()
+    {
+        var price = JsonNode.Parse(ReadExamples()[nameof(VideoQuoteResponse)])!["price"]!;
+        price["shotEta"]!.GetValue<int>().Should().Be(330);
+        price["upscaleEta"]!.GetValue<int>().Should().Be(915);
+        price["eta"]!.GetValue<int>().Should().Be(330 + 915, "eta остаётся суммой для совместимости");
+        File.ReadAllText(FindAdr()).Should().Contain("\"upscaleCancelled\": true");
     }
 
     [Fact]

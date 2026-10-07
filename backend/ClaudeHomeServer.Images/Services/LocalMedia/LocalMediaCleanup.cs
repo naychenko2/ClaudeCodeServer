@@ -46,8 +46,8 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
     }
 
     // Префиксы имён в input: подпапка наших загрузок и корень (копии латентов для LoadLatent)
-    private static readonly string[] InputPrefixes = [$"{ComfyClient.InputFolder}/", $"{ComfyClient.InputFolder}-"];
-    private static readonly string[] OutputPrefixes = [$"{ComfyWorkflows.OutputFolder}/", $"{ComfyWorkflows.OutputFolder}/latents/"];
+    internal static readonly string[] InputPrefixes = [$"{ComfyClient.InputFolder}/", $"{ComfyClient.InputFolder}-"];
+    internal static readonly string[] OutputPrefixes = [$"{ComfyWorkflows.OutputFolder}/", $"{ComfyWorkflows.OutputFolder}/latents/"];
 
     private void DeleteTransient(LocalMediaJob job, string inputDir, string outputDir, bool keepForUpscale)
     {
@@ -68,7 +68,7 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
     // Имя принадлежит задаче: {префикс}{jobId}{разделитель}{хвост}, хвост без каталогов
     public static bool IsOwnName(string name, string jobId, IReadOnlyList<string> prefixes, char separator)
     {
-        if (!LocalMediaService.LooksLikeJobId(jobId)) return false;
+        if (!LocalMediaService.LooksLikeJobId(jobId) && !LocalVideoMediaAdapter.LooksLikeShotId(jobId)) return false;
         foreach (var prefix in prefixes)
         {
             var head = prefix + jobId + separator;
@@ -79,7 +79,8 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
         return false;
     }
 
-    private void DeleteOwn(string root, string name, string jobId, IReadOnlyList<string> prefixes, char separator)
+    // Общий путь удаления «только своих файлов по точному имени»: зовёт и чистка задач стора, и адаптер видео
+    internal void DeleteOwn(string root, string name, string jobId, IReadOnlyList<string> prefixes, char separator)
     {
         if (!IsOwnName(name, jobId, prefixes, separator))
         {

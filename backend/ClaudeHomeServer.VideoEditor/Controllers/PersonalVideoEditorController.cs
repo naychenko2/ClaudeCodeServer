@@ -59,6 +59,14 @@ public class PersonalVideoEditorController(
     public IActionResult GetJob(string sessionId, string jobId) =>
         Gate(sessionId, out var scope, out var denied) ? JobIn(scope, jobId) : denied;
 
+    [HttpDelete(VideoEditorRoutes.JobUpscale)]
+    public async Task<IActionResult> CancelUpscale(string sessionId, string jobId, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await CancelUpscaleIn(scope, jobId, ct) : denied;
+
+    [HttpPost(VideoEditorRoutes.FramesPreview)]
+    public async Task<IActionResult> FramesPreview(string sessionId, [FromBody] VideoFramesPreviewRequest? req, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await FramesPreviewIn(scope, req, ct) : denied;
+
     [HttpDelete(VideoEditorRoutes.Job)]
     public async Task<IActionResult> Cancel(string sessionId, string jobId, CancellationToken ct) =>
         Gate(sessionId, out var scope, out var denied) ? await CancelIn(scope, jobId, ct) : denied;
@@ -83,6 +91,10 @@ public class PersonalVideoEditorController(
     [HttpPut(VideoEditorRoutes.SceneSettings)]
     public async Task<IActionResult> Settings(string sessionId, string sceneId, [FromBody] VideoSceneSettingsRequest? req) =>
         Gate(sessionId, out var scope, out var denied) ? await SettingsIn(scope, sessionId, sceneId, req) : denied;
+
+    [HttpPost(VideoEditorRoutes.SceneVersionUpscaleRetry)]
+    public async Task<IActionResult> RetryUpscale(string sessionId, string sceneId, string versionId, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await RetryUpscaleIn(scope, sessionId, sceneId, versionId, ct) : denied;
 
     [HttpPut(VideoEditorRoutes.SceneCurrent)]
     public async Task<IActionResult> Current(string sessionId, string sceneId, [FromBody] VideoSceneCurrentRequest? req) =>

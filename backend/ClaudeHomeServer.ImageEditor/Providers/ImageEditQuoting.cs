@@ -24,11 +24,12 @@ public static class ImageEditEstimates
 
     // Ориентир каталога: «за картинку» и «за запуск» умножаются на число вариантов,
     // мегапиксели — если известен размер. Прочее — «цена станет известна после запуска».
-    public static ImageEditEstimateDto FromHint(ImageEditModelInfo model, ImageEditQuoteRequest request, string unit)
+    public static ImageEditEstimateDto FromHint(ImageEditModelInfo model, ImageEditQuoteRequest request, string unit,
+        double tierFactor = 1)
     {
         if (model.PriceHint is not { } hint) return Unknown(unit);
         var amount = PerUnit(hint.Per, hint.Amount, request);
-        return amount is null ? Unknown(unit) : new(amount, unit, true, ImageEditEstimateSources.Catalog);
+        return amount is null ? Unknown(unit) : new(Math.Round(amount.Value * tierFactor, 6), unit, true, ImageEditEstimateSources.Catalog);
     }
 
     // Сумма по цене за единицу поставщика; null — единица без формулы

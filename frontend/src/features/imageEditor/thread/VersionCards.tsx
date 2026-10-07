@@ -83,9 +83,11 @@ function Picture({ src, onOpen }: { src: string | null; onOpen?: () => void }) {
 }
 
 // Карточка версии: шапка, картинка, подпись «вариант 1 из 2 · от исходника · модель», действия.
-export function VersionCard({ projectId, sessionId, thread, version, focused, model }: {
+export function VersionCard({ projectId, sessionId, thread, version, focused, model, cropNote }: {
   projectId: string; sessionId: string; thread: ImageThread; version: ImageThreadVersion; focused: boolean;
   model?: string | null;
+  // Обрезка без ИИ (image_launch_versions с model «crop»): вместо «вариант · от версии · модель» — размер и пометка
+  cropNote?: string | null;
 }) {
   const [busy, setBusy] = useState(false);
   const fill = useCardFill(sessionId, thread, version.id);
@@ -93,7 +95,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const src = versionSrc(projectId, thread, version);
   const saved = versionSaved(thread, version);
   const name = `${threadName(thread)} · ${versionName(version)}`;
-  const meta = versionMeta(thread, version, model);
+  const meta = cropNote ?? versionMeta(thread, version, model);
   const done = versionDone(thread, version);
   const personal = isPersonalScope(projectId);
   const primary = versionPrimary(thread, version, focused, saved, personal);
@@ -162,7 +164,7 @@ export function OriginAnchor({ projectId, sessionId, thread, focused }: {
 
 interface LaunchData {
   threadId?: unknown; jobId?: unknown; prompt?: unknown; model?: unknown; count?: unknown;
-  estimate?: unknown; initiator?: unknown; baseVersionId?: unknown;
+  estimate?: unknown; initiator?: unknown; baseVersionId?: unknown; crop?: unknown;
 }
 
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null);
@@ -216,11 +218,15 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const info = [model, variantsWord(count), estimateText(data.estimate)].filter(Boolean).join(' · ');
   const status = launch?.status ?? (versions.length ? 'done' : 'running');
   const endNote = launchEndNote(status, versions.length, count);
+  // Обрезка без ИИ (ADR-025): та же карточка версии, над ней строка «Вы обрезали…» / «✦ Claude обрезал…» из записи
+  const crop = model === 'crop' ? data.crop as { aspect?: string; width?: number; height?: number } | undefined : undefined;
+  const cropNote = crop ? `${crop.width}×${crop.height} · ${crop.aspect} · обрезано без ИИ${agent ? ' · ✦ Claude' : ''}` : null;
 
   return (
     <div data-image-launch={status} style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minWidth: 0 }}>
+      {crop && rec?.fallback && <Note>{rec.fallback}</Note>}
       {versions.map(v => (
-        <VersionCard key={v.id} projectId={projectId} sessionId={sessionId} thread={thread} version={v} focused={focused} model={model} />
+        <VersionCard key={v.id} projectId={projectId} sessionId={sessionId} thread={thread} version={v} focused={focused} model={model} cropNote={cropNote} />
       ))}
 
       {status === 'running' && (

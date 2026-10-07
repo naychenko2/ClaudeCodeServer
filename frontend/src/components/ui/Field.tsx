@@ -78,6 +78,8 @@ interface TextFieldProps {
   // Подкрашивает бордер C.dangerBorder и убирает focus-ring (красный сам по себе
   // уже достаточно заметный сигнал — лишний синий ореол перебивал бы тон)
   invalid?: boolean;
+  // Клавиатура телефона: числовые поля просят цифровую раскладку
+  inputMode?: 'numeric' | 'decimal' | 'text' | 'search';
   style?: CSSProperties;
 }
 
@@ -104,7 +106,7 @@ function noFillProps(type: string, autoComplete: string) {
 // AskQuestionView/PlanReviewView/TeamEscalationView.
 
 // === Однострочное поле ввода с focus-ring ===
-export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, invalid, autoComplete = 'off', style, voice, isMobile }: TextFieldProps & { voice?: boolean; isMobile?: boolean }) {
+export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, invalid, inputMode, autoComplete = 'off', style, voice, isMobile }: TextFieldProps & { voice?: boolean; isMobile?: boolean }) {
   const [focused, setFocused] = useState(false);
   const elRef = useRef<HTMLInputElement>(null);
   const [recording, setRecording] = useState(false);
@@ -124,6 +126,7 @@ export function TextField({ value, onChange, placeholder, type = 'text', mono, a
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         title={title}
+        inputMode={inputMode}
         autoComplete={autoComplete}
         autoFocus={autoFocus}
         disabled={disabled}

@@ -54,7 +54,9 @@ public sealed class FilmFormatAndStoreTests : IDisposable
     [Fact]
     public void Неизвестное_соотношение_сторон_и_битый_JSON_невалидны()
     {
-        FilmFormat.Parse(Json(aspect: "21:9")).Status.Should().Be(FilmFormat.Status.Invalid);
+        FilmFormat.Parse(Json(aspect: "широкий")).Status.Should().Be(FilmFormat.Status.Invalid);
+        // Фильм собирается в формате первой сцены, поэтому пропорции — любое «W:H», а не пять известных
+        FilmFormat.Parse(Json(aspect: "21:9")).Status.Should().Be(FilmFormat.Status.Ok);
         FilmFormat.Parse("{ не json").Status.Should().Be(FilmFormat.Status.Invalid);
         FilmFormat.Parse("[]").Status.Should().Be(FilmFormat.Status.Invalid);
     }

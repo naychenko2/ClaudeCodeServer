@@ -3,10 +3,15 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // Фоновый сбор результатов локальной генерации: агент мог закончить ход, не дождавшись
 // видео, а файл всё равно должен появиться в проекте. Тумблер LocalMedia:Enabled читается
 // живьём: выключенный сервер цикл не трогает ComfyUI вовсе. Здесь же — забывание старых задач
-// и чистка их файлов в ComfyUI (LocalMediaCleanup)
+// и чистка их файлов в ComfyUI (LocalMediaCleanup), плюс вымет контекста съёмок видео (LocalVideoMediaAdapter.Sweep)
 public sealed class LocalMediaCollector(LocalMediaService media, LocalMediaCleanup cleanup,
-    ILogger<LocalMediaCollector> log) : BackgroundService
+    ILogger<LocalMediaCollector> log, LocalVideoMediaAdapter? videos = null) : BackgroundService
 {
+    private readonly TaskCompletionSource _firstPass = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // Первый проход цикла выполнен (с любым исходом): хук для тестов, чтобы не угадывать паузу
+    internal Task FirstPass => _firstPass.Task;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -18,6 +23,8 @@ public sealed class LocalMediaCollector(LocalMediaService media, LocalMediaClean
                 {
                     await media.CollectPendingAsync(stoppingToken);
                     cleanup.Run(options, DateTime.UtcNow);
+                    // Контекст съёмок видео и их латенты — по таймеру, а не только при новой съёмке
+                    videos?.Sweep();
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -28,6 +35,8 @@ public sealed class LocalMediaCollector(LocalMediaService media, LocalMediaClean
             {
                 log.LogWarning(ex, "Сбор результатов локальной генерации не удался — повторю позже");
             }
+
+            _firstPass.TrySetResult();
 
             // Коллектор реже опроса агента: он страхует, а не ведёт
             var delay = TimeSpan.FromMilliseconds(Math.Clamp(options.PollIntervalMs * 3, 3000, 60000));

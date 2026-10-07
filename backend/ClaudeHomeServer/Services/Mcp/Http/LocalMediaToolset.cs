@@ -437,12 +437,23 @@ public sealed partial class LocalMediaToolset(
         + "Без него — вызывай ТОЛЬКО если пользователь явно попросил локальную генерацию (локально / нашими моделями / "
         + "на своей видеокарте / бесплатно) в ТЕКУЩЕЙ просьбе; иначе используй glif/fal. ";
 
+    // Перенаправление в редактор — только у тех local_*, что редактор умеет заменить целиком: картинка по тексту,
+    // правка по образцам, доводка лиц и оживление картинки. У остального (референсы, маска, апскейл по job_id, звук,
+    // видео без первого кадра) редактора с такими входами нет: обещание «делай через provider local» было бы враньём
+    internal const string ImageEditorRedirect =
+        "Но если тебе доступен image_generate (редактор картинок) — «локально» для картинок делай им с provider local, "
+        + "а не этим инструментом: иначе нет карточки в ленте и не записан формат. ";
+
+    internal const string VideoEditorRedirect =
+        "Но если тебе доступен video_shoot (редактор видео) — «локально» для видео с первым кадром делай им с provider local, "
+        + "а не этим инструментом: иначе нет карточки в ленте и не записан формат. ";
+
     private static IEnumerable<McpToolSchema> Schemas()
     {
         var aspects = new JsonArray([.. ComfyWorkflows.ImageSizes.Keys.Select(k => (JsonNode)k)]);
 
         yield return Tool("local_generate_image",
-            ExplicitOnly + "Сгенерировать картинку по тексту НАШЕЙ моделью Qwen-Image 2.1 на своей GPU (бесплатно, "
+            ExplicitOnly + ImageEditorRedirect + "Сгенерировать картинку по тексту НАШЕЙ моделью Qwen-Image 2.1 на своей GPU (бесплатно, "
             + "асинхронно). Возвращает job_id; результат жди через local_jobs_wait.",
             new JsonObject
             {
@@ -477,7 +488,7 @@ public sealed partial class LocalMediaToolset(
             });
 
         yield return Tool("local_edit_image",
-            ExplicitOnly + "Отредактировать картинку НАШЕЙ моделью Qwen-Image 2.1 на своей GPU по 1–16 референсам: "
+            ExplicitOnly + ImageEditorRedirect + "Отредактировать картинку НАШЕЙ моделью Qwen-Image 2.1 на своей GPU по 1–16 референсам: "
             + "первая картинка — основная (холст), остальные — дополнительные референсы (персонаж, предмет, стиль). "
             + "Возвращает job_id; результат жди через local_jobs_wait.",
             new JsonObject
@@ -506,7 +517,7 @@ public sealed partial class LocalMediaToolset(
             });
 
         yield return Tool("local_face_detail",
-            ExplicitOnly + "Довести лица на готовой картинке (FaceDetailer: находит лица и перерисовывает их "
+            ExplicitOnly + ImageEditorRedirect + "Довести лица на готовой картинке (FaceDetailer: находит лица и перерисовывает их "
             + "детальнее) НАШЕЙ моделью на своей GPU. Возвращает job_id.",
             new JsonObject
             {
@@ -539,7 +550,7 @@ public sealed partial class LocalMediaToolset(
             });
 
         yield return Tool("local_image_to_video",
-            ExplicitOnly + "Оживить картинку в видео со звуком НАШЕЙ моделью MiniMax H3 на своей GPU: первый кадр — "
+            ExplicitOnly + VideoEditorRedirect + "Оживить картинку в видео со звуком НАШЕЙ моделью MiniMax H3 на своей GPU: первый кадр — "
             + "картинка, необязательный last_frame — последний кадр; prompt описывает движение, камеру, речь и звук. "
             + "Долго (" + I2vEtaText + "). Результат можно потом увеличить local_video_upscale. Возвращает job_id; "
             + "жди через local_jobs_wait.",

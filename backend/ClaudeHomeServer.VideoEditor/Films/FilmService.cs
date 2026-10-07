@@ -135,10 +135,12 @@ public sealed class FilmService(
             ledger.Spends.Where(s => s.Currency == "credits").Sum(s => s.Amount),
             ledger.Spends.Sum(s => s.LocalSeconds));
         var staleScenes = StaleSceneFiles(ownerId, scope);
+        var mismatched = MismatchedSceneFiles(ownerId, scope, doc.Aspect);
         var marks = doc.Items.Select((item, i) => new FilmItemMarkDto(i,
             ledger.ClaudeFiles.Contains(item.File),
             read.Status == FilmStore.ReadStatus.Ok && FilmStaleness.IsUpdated(root, doc, item),
-            staleScenes.Contains(item.File))).ToList();
+            staleScenes.Contains(item.File),
+            i > 0 && mismatched.Contains(item.File) ? true : null)).ToList();
         var stale = read.Status == FilmStore.ReadStatus.Ok && FilmStaleness.IsStale(root, doc);
         return FilmCallResult<FilmStateDto>.Ok(new FilmStateDto(film.Relative, read.Revision, doc, spent, marks,
             builds.Get(ownerId, scope.Key, film.Relative), stale));
@@ -198,6 +200,18 @@ public sealed class FilmService(
         return files;
     }
 
+    // Файлы сцен, чьи пропорции не совпадают с фильмом: при склейке пойдут чёрные полосы. Сцена 1 формат задаёт — с ней сверять нечего
+    private HashSet<string> MismatchedSceneFiles(string ownerId, VideoEditScope scope, string filmAspect)
+    {
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (_, scene) in OwnerScenes(ownerId, scope))
+        {
+            if (VideoSceneFormat.AspectOf(scene.Settings) is not { } aspect || aspect == filmAspect) continue;
+            foreach (var saved in scene.SavedFiles) files.Add(saved.Path);
+        }
+        return files;
+    }
+
     // ── Новый фильм ───────────────────────────────────────────────────────────────
 
     // Отдельная операция, а не «первый патч по несуществующему пути»: патч всегда под ревизией и существующим
@@ -252,6 +266,8 @@ public sealed class FilmService(
         var applied = FilmPatcher.Apply(read.Document!, ops);
         if (applied.Document is null)
             return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.InvalidRequest, applied.Error ?? "Правка не подходит фильму");
+        // doc.Aspect — кеш: формат фильма задаёт первая сцена, и когда на её место встал другой клип, кеш пересчитывается
+        applied = applied with { Document = await RefreshAspectAsync(film.Project, read.Document!, applied.Document, ct) };
 
         var written = films.WriteFile(film.Full, applied.Document, patch.ExpectedRevision, create: false);
         switch (written.Status)
@@ -268,6 +284,16 @@ public sealed class FilmService(
         await AfterWriteAsync(ownerId, scope, film, written.Current, ct);
         await RecordPatchAsync(ownerId, scope, film.Relative, ops, applied.Document, initiator, sessionId, ct);
         return StateOf(ownerId, scope, film, written.Current);
+    }
+
+    private async Task<FilmDocument> RefreshAspectAsync(Project project, FilmDocument before, FilmDocument after, CancellationToken ct)
+    {
+        if (dsp is not { Available: true } || after.Items.Count == 0 || before.Items.Count > 0 && before.Items[0].File == after.Items[0].File)
+            return after;
+        var clip = ResolveInside(project, after.Items[0].File);
+        if (!clip.IsOk || !File.Exists(clip.Value!.Full)) return after;
+        var info = await dsp.ProbeAsync(clip.Value.Full, ct);
+        return info is { Width: > 0, Height: > 0 } ? after with { Aspect = FilmFormat.AspectOfSize(info.Width, info.Height) } : after;
     }
 
     // Тихая строка правки фильма. ЕДИНСТВЕННАЯ точка записи ленты для правки — зовут и ручка человека, и тулсет
@@ -398,8 +424,10 @@ public sealed class FilmService(
             var row = IndexOfSaved(doc, scene);
             var want = row >= 0 ? new VideoFilmRefDto(filmPath, row) : null;
             if (scene.FilmRef is { } have && have.Path != filmPath) continue;
-            if (scene.FilmRef == want) continue;
-            var written = threads.Store.SetFilmRef(ownerId, sessionId, scene.SceneId, want);
+            // Замок формата: сцена на позиции > 0 следует пропорциям фильма, сцена 1 их задаёт (ADR-025 §11)
+            var wantLock = row > 0 ? new VideoFormatLockDto(filmPath, doc.Aspect) : null;
+            if (scene.FilmRef == want && scene.LockedBy == wantLock) continue;
+            var written = threads.Store.SetFilmRef(ownerId, sessionId, scene.SceneId, want, wantLock);
             if (written.Status == VideoThreadWriteStatus.Ok)
                 await threads.BroadcastAsync(ownerId, scope.Key, sessionId, written.State);
         }

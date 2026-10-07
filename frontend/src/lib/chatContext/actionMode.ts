@@ -57,7 +57,7 @@ export function actionComposerMode(o: {
     submitLabel: () => createElement(RunLabel, { parts: run.labelParts }),
     onSubmit: (_ctx, text) => run.run(text),
     // Текст не обязателен — запуск при пустом поле штатный; обязательный текст кнопка ждёт
-    emptySubmit: () => (action.text === 'required' || action.disabledReason ? null : { label: createElement(RunLabel, { parts: run.labelParts }), run: () => run.run('') }),
+    emptySubmit: () => (action.text === 'required' || action.disabledReason || action.blockReason ? null : { label: createElement(RunLabel, { parts: run.labelParts }), run: () => run.run('') }),
     onTextChange: (_ctx, text) => run.setText(text),
     draftKey: () => actionDraftKey(o.objectKey, action.id),
     prefill: o.preset ? () => ({ key: o.preset!.key, text: o.preset!.value.prefill ?? null }) : undefined,

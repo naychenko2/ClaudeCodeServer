@@ -94,6 +94,38 @@ public class LocalMediaToolsetTests : IDisposable
             "состав статичный — не зависит ни от хода, ни от вызова");
     }
 
+    // Оговорка про редакторы: без неё модель, у которой есть image_generate/video_shoot, звала бы
+    // local_* мимо карточки в ленте и записи формата. Только у тех, что редактор заменяет целиком
+    [Theory]
+    [InlineData("local_generate_image", "image_generate")]
+    [InlineData("local_edit_image", "image_generate")]
+    [InlineData("local_face_detail", "image_generate")]
+    [InlineData("local_image_to_video", "video_shoot")]
+    public void ЗаменяемыеРедакторомИнструменты_ОписаниеУказываетНаРедакторСProviderLocal(string tool, string editor)
+    {
+        var env = Build();
+
+        var description = env.Toolset.ToolsFor(env.Context).Single(t => t.Name == tool).Description;
+
+        description.Should().Contain(editor).And.Contain("provider local");
+    }
+
+    // Обратная проверка: у остальных редактора с такими входами нет (звук, видео без кадра, референсы, маска,
+    // апскейл по job_id), и обещание «делай через provider local» было бы враньём
+    [Fact]
+    public void ОстальныеИнструменты_ОписаниеНеПеренаправляетВРедакторы()
+    {
+        var env = Build();
+        var redirected = new HashSet<string> { "local_generate_image", "local_edit_image", "local_face_detail", "local_image_to_video" };
+
+        foreach (var tool in env.Toolset.ToolsFor(env.Context).Where(t => !redirected.Contains(t.Name)))
+        {
+            tool.Description.Should().NotContain("provider local", tool.Name);
+            tool.Description.Should().NotContain("image_generate", tool.Name);
+            tool.Description.Should().NotContain("video_shoot", tool.Name);
+        }
+    }
+
     // Дефект 2 QA 1e099019: после локальной генерации модель звала local_generate_image на
     // «Нарисуй котика» без «локально». Запрет — первым предложением у каждого генерирующего
     [Fact]

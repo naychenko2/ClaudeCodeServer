@@ -124,7 +124,7 @@ public sealed class FilmAssemblerTests : IDisposable
     }
 
     [Fact]
-    public async Task План_собирается_из_документа_размер_по_соотношению_обрезка_по_длине_клипа()
+    public async Task План_собирается_из_документа_размер_первого_клипа_обрезка_по_длине_клипа()
     {
         ThreeClipFilm();
         _dsp.Info = new VideoDspInfo(5, 640, 360, 25, HasAudio: true);
@@ -136,12 +136,53 @@ public sealed class FilmAssemblerTests : IDisposable
         await assembler.WhenIdleAsync();
 
         var plan = _dsp.Plans.Should().ContainSingle().Subject;
-        (plan.Width, plan.Height).Should().Be((1280, 720));
-        plan.Timeout.Should().Be(TimeSpan.FromMinutes(7));
+        (plan.Width, plan.Height).Should().Be((640, 360), "размер — первого клипа, а не всегда 720p");
+        plan.Timeout.Should().Be(TimeSpan.FromMinutes(7), "меньше 720p таймаут не сокращается");
         plan.Clips.Select(c => (Path.GetFileName(c.Path), c.StartSeconds, c.EndSeconds, c.HasAudio)).Should().Equal(
             ("1.mp4", 0.0, 5.0, true), ("2.mp4", 1.0, 5.0, false), ("3.mp4", 0.0, 2.0, true));
         plan.Cuts.Select(c => (c.Type, c.Seconds)).Should().Equal(("dissolve", 0.5), ("fade", 1.0));
         plan.Music.Should().Match<FilmPlanMusic>(m => m.VolumePercent == 60 && m.FadeOutSeconds == 3 && m.Path.EndsWith("m.mp3"));
+    }
+
+    // Формат фильма — формат первой сцены (ADR-025 §11): размер её клипа, чётный, потолок 4096; таймаут растёт с площадью
+    [Theory]
+    [InlineData(1920, 1080, 1920, 1080, "16:9")]
+    [InlineData(2528, 1440, 2528, 1440, "16:9")]
+    [InlineData(1080, 1920, 1080, 1920, "9:16")]
+    [InlineData(1281, 721, 1280, 720, "16:9")]
+    [InlineData(5120, 2880, 4096, 2304, "16:9")]
+    [InlineData(1344, 768, 1344, 768, "16:9")]
+    public async Task Фильм_собирается_в_размере_первой_сцены_и_таймаут_растёт_с_площадью(int w, int h, int pw, int ph, string aspect)
+    {
+        ThreeClipFilm();
+        _dsp.Info = new VideoDspInfo(5, w, h, 24, HasAudio: true);
+        var assembler = Assembler();
+
+        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        await assembler.WhenIdleAsync();
+
+        var plan = _dsp.Plans.Should().ContainSingle().Subject;
+        (plan.Width, plan.Height).Should().Be((pw, ph));
+        // База 20 минут × площадь кадра сборки / (1280×720), не короче базы и не дольше 240
+        var expected = Math.Clamp(20.0 * Math.Max(1.0, (double)pw * ph / (1280 * 720)), 1, 240);
+        plan.Timeout.TotalMinutes.Should().BeApproximately(expected, 0.01);
+        var doc = _w.Films.ReadFile(_w.Full("video/a/a.film")).Document!;
+        doc.Aspect.Should().Be(aspect, "doc.Aspect — кеш пропорций первой сцены");
+        _w.Service.List(_w.Scope).Value!.Single().Stale.Should().BeFalse("хеш входов считан с уже обновлённым aspect — фильм не «устарел» сразу");
+    }
+
+    [Fact]
+    public async Task Фильм_без_размера_клипа_не_ломается_старый_файл_без_формата_читается()
+    {
+        ThreeClipFilm();
+        _dsp.Info = new VideoDspInfo(5, 0, 0, 24, HasAudio: true);
+
+        var assembler = Assembler();
+        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        await assembler.WhenIdleAsync();
+
+        var plan = _dsp.Plans.Should().ContainSingle().Subject;
+        (plan.Width, plan.Height).Should().Be((1280, 720), "размер клипа не определился — прежний размер по пропорциям файла");
     }
 
     [Fact]

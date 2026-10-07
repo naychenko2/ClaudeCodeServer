@@ -101,6 +101,8 @@ public sealed class TurnContextContributor(
             sb.AppendLine("С чем: " + (primaryDto is { } primary ? PrimaryText(primary) : "ничего не выбрано"));
             if (state.Primary is { } p && registry.Find(p.Kind)?.DescribeExecutor(scope, p) is { Length: > 0 } executor)
                 sb.AppendLine("Чем: " + executor);
+            if (state.Primary is { } fp && registry.Find(fp.Kind)?.DescribeFormat(scope, fp) is { Length: > 0 } format)
+                sb.AppendLine("Формат: " + format);
             if (refDtos.Count > 0)
             {
                 var accepted = state.Primary is { } ap && registry.Find(ap.Kind) is { } owner

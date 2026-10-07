@@ -1,22 +1,38 @@
 // Моки по контрактам ADR-022 (раздел «Контракты») — для юнит-тестов и спек e2e. В бандл remote не
 // попадают: их импортируют только тесты.
 
+import type { MediaFormatCaps } from 'aihome_shell/kit';
 import type {
   FilmState, VideoCatalog, VideoClipVersion, VideoPrefs, VideoQuote, VideoScene, VideoThreadsState,
 } from './api';
 
 export const NOW = '2026-10-02T15:00:00Z';
 
+// Ступени «Формата» (ADR-025): local H3 — 480p / 768p / «Макс» 1440p через увеличение; Veo — одна ступень, остальные серые
+const sizes = (w: number, h: number) => ({ '16:9': { w, h }, '9:16': { w: h, h: w } });
+export const H3_FORMAT: MediaFormatCaps = {
+  modelLabel: 'MiniMax H3', aspects: ['16:9', '9:16'], wireParam: 'size',
+  tiers: [
+    { tier: 'standard', label: '480p', sizes: sizes(864, 480), wireValue: 'half' },
+    { tier: 'high', label: '768p', sizes: sizes(1344, 768), wireValue: 'full' },
+    { tier: 'max', label: '1440p', sizes: sizes(2528, 1440), wireValue: 'full', postStep: 'upscale' },
+  ],
+};
+export const VEO_FORMAT: MediaFormatCaps = {
+  modelLabel: 'Veo 3.1', aspects: ['16:9', '9:16'], wireParam: 'resolution',
+  tiers: [{ tier: 'standard', label: '720p', sizes: sizes(1280, 720), wireValue: '720p' }],
+};
+
 export const CATALOG: VideoCatalog = {
   providers: [
     {
       key: 'local', label: 'Локальные модели', priceUnit: 'free', available: true,
-      models: [{ id: 'minimax-h3', label: 'MiniMax H3', durations: [5, 10], aspects: ['16:9', '9:16'], sound: true, lastFrame: true }],
+      models: [{ id: 'minimax-h3', label: 'MiniMax H3', durations: [5, 10], aspects: ['16:9', '9:16'], sound: true, lastFrame: true, format: H3_FORMAT }],
     },
     {
       key: 'fal', label: 'fal.ai', priceUnit: 'usd', available: true,
       models: [
-        { id: 'veo-3.1', label: 'Veo 3.1', durations: [4, 6, 8], aspects: ['16:9', '9:16'], sound: true, lastFrame: true, license: 'watermark' },
+        { id: 'veo-3.1', label: 'Veo 3.1', durations: [4, 6, 8], aspects: ['16:9', '9:16'], sound: true, lastFrame: true, license: 'watermark', format: VEO_FORMAT },
         { id: 'seedance-2.5', label: 'Seedance 2.5', durations: [5, 10], aspects: ['16:9', '1:1'], sound: false, lastFrame: true },
         { id: 'no-last', label: 'Без кадра B', durations: [5], aspects: ['16:9'], sound: false, lastFrame: false },
       ],

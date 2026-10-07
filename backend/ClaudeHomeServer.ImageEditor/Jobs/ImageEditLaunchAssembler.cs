@@ -111,8 +111,17 @@ public sealed class ImageEditLaunchAssembler(
         }
 
         var aspectRatio = string.IsNullOrWhiteSpace(req.AspectRatio) ? null : req.AspectRatio.Trim();
-        if (aspectRatio is not null && !AspectRatios.Contains(aspectRatio))
-            return Invalid($"Пропорции {aspectRatio} не поддерживаются: только {string.Join(", ", AspectRatios)}");
+        // «Дорисовать» (ADR-025): холст любых пропорций «W:H», белый список трёх пропорций — только у старого пути правки.
+        // Модели дорисовки формата не объявляют (caps.Format = null), поэтому проверка — читаемость пропорции,
+        // тот же разбор, что у ImageFormatPlan
+        var outpaint = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId.Trim())?.Op == ImageEditOp.Outpaint;
+        if (aspectRatio is not null)
+        {
+            if (outpaint && !AspectCrop.TryParse(aspectRatio, out _))
+                return Invalid($"Пропорции {aspectRatio} не читаются: нужен вид «W:H»");
+            if (!outpaint && !AspectRatios.Contains(aspectRatio))
+                return Invalid($"Пропорции {aspectRatio} не поддерживаются: только {string.Join(", ", AspectRatios)}");
+        }
 
         var limits = ImageEditCatalog.DefaultLimits;
         var sizes = new[] { source?.Bytes, req.Mask?.Bytes, req.Annotated?.Bytes }

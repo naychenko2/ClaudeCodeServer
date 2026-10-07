@@ -9,6 +9,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, GitBranch, Pencil, Plus, Slider
 import { C, FS, R, SP } from '../../lib/design';
 import { roleLabel } from '../../lib/chatContext/roleLabels';
 import { baseName } from '../../lib/chatContext/labels';
+import type { FormatModel } from '../../lib/chatContext/formatTypes';
 import type {
   ActionRun, ChatContextPrimary, ChatContextRef, ContextAction, ContextReturn, ExecutorListModel, LaunchParam,
 } from '../../lib/chatContext/types';
@@ -18,6 +19,7 @@ import { unusedBy } from '../../lib/chatContext/fill';
 import { changesWord, GitMenuBody, MenuHead, type RowGit } from '../chat/ContextRowView';
 import { ExecutorList, ExecutorSummaryRow, EXECUTOR_GROUP_LABEL, rowPriceShort, type ExecutorBadge } from './ExecutorList';
 import { GenerationPanel } from './GenerationPanel';
+import { FormatBody } from './format/FormatBody';
 import { RunLabel } from './RunLabel';
 
 // Тексты пустых состояний — из макета, раздел 4
@@ -50,6 +52,9 @@ export interface ContextPanelProps {
   // Выбранное run-действие; null — «Чат»
   action: ContextAction | null;
   exec: ExecutorListModel | null;
+  // Секция «Формат» под «Чем» (ADR-025, флаг media-format); null — секции нет
+  format?: FormatModel | null;
+  projectName?: string | null;
   params: readonly LaunchParam[];
   onParam: (p: LaunchParam, value: number | string) => void;
   addFrom: readonly AddFromItem[];
@@ -219,6 +224,19 @@ function BySection({ p }: { p: ContextPanelProps }) {
           )}
         </div>
       )}
+    </Section>
+  );
+}
+
+// ── Формат ──
+
+function FormatSection({ p, m }: { p: ContextPanelProps; m: FormatModel }) {
+  return (
+    <Section name="format" title="Формат">
+      {/* Тело то же, что во всплывашке строки; свои отступы тела внутри секции не нужны */}
+      <div style={{ margin: `0 -${SP.md}px` }}>
+        <FormatBody m={m} isMobile={p.isMobile} projectName={p.projectName ?? null} />
+      </div>
     </Section>
   );
 }
@@ -440,6 +458,7 @@ export function ContextPanel(p: ContextPanelProps) {
       <div data-context-panel="" style={{ display: 'flex', flexDirection: 'column' }}>
         <WithSection {...p} />
         <BySection p={p} />
+        {p.format && p.primary && <FormatSection p={p} m={p.format} />}
         <ParamsSection p={p} />
         <PlusSection p={p} />
         {p.git && <WhereSection git={p.git} />}

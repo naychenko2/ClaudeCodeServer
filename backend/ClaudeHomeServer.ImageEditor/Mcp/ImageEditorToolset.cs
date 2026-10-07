@@ -265,6 +265,12 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (version is null)
             return Deny($"У картинки {threadId} нет версии {versionId}. Список версий — image_state.");
 
+        // Обрезка под пропорции — без ИИ: ни котировки, ни поставщика, ни лимита запусков хода (ADR-025 §4).
+        // Сознательно ДО TryReserveLaunch: MaxLaunchesPerTurn считает траты на генерацию, а обрезка бесплатная операция
+        // над готовым файлом — её серия не должна выедать лимит запусков
+        if (string.Equals(Str(args, "op"), "crop", StringComparison.OrdinalIgnoreCase))
+            return await CropAsync(args, ownerId, session, scope, thread, version, ct);
+
         if (!TryReserveLaunch(session.Id))
             return Deny($"За один ход можно запустить не больше {MaxLaunchesPerTurn} генераций. "
                 + "Покажи человеку, что уже получилось, и дождись его ответа.");
@@ -278,6 +284,81 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         finally
         {
             if (!launched) ReleaseLaunch(session.Id);
+        }
+    }
+
+    // op = crop: тот же метод сервиса, что у кнопки «Обрезать» человека; результат — новая версия, карточка в ленте та же
+    private async Task<McpToolCallResult> CropAsync(JsonObject args, string ownerId, Session session, ImageEditScope scope,
+        ImageThread thread, ImageThreadVersion version, CancellationToken ct)
+    {
+        if (Str(args, "aspect") is not { } aspect)
+            return Deny("Для op crop укажи aspect — пропорции вида 1:1 или 16:9, до которых обрезать.");
+        var done = await _threads.CropToAspectAsync(ownerId, scope, session.Id, thread.Id, version.Id, aspect,
+            Str(args, "anchor"), ImageEditInitiator.Agent, dryRun: false, ct);
+        if (!done.Ok) return Deny(done.Error ?? "Обрезка не выполнена");
+        return Json(new
+        {
+            threadId = thread.Id,
+            baseVersion = new { versionId = version.Id, label = ImageThread.Label(version) },
+            newVersion = done.Version is { } v ? new { versionId = v.Id, label = ImageThread.Label(v) } : null,
+            size = new { done.Width, done.Height },
+            aspect = done.Aspect,
+            note = "Обрезано без ИИ, бесплатно: результат — новая версия картинки, оригинал не тронут.",
+        });
+    }
+
+    private static readonly string[] EditLikeOps = ["edit", "inpaint", "removebackground"];
+
+    // Формат запуска (ADR-025): явные аргументы агента → желание. Генерация записывает формат проекта (✦); у правки размер
+    // задаёт исходник, а другие пропорции — только outpaint или crop; прочее формата не имеет. Persist — записывать ли
+    private static (MediaFormat? Wish, string? Refusal, bool Persist) FormatFor(
+        JsonObject args, ImageEditOp op, (int Width, int Height)? size, MediaFormat? stored)
+    {
+        var aspect = Str(args, "aspect");
+        var quality = Str(args, "quality");
+        var width = Int(args, "width");
+        var height = Int(args, "height");
+        var given = aspect is not null || quality is not null || width is not null || height is not null;
+        FormatTier? tier = quality switch { "standard" => FormatTier.Standard, "high" => FormatTier.High, "max" => FormatTier.Max, _ => null };
+        // Неизвестная ступень — явный отказ, а не молчаливое «как есть»
+        if (quality is not null && tier is null) return (null, "quality — standard, high или max.", false);
+
+        switch (op)
+        {
+            case ImageEditOp.Generate:
+            {
+                if (!given) return (stored, null, false);
+                if ((width is null) != (height is null)) return (null, "width и height задаются вместе.", false);
+                var storedAspect = stored is { Mode: FormatModes.Aspect } ? stored.Aspect : null;
+                var wish = width is { } w && height is { } h
+                    ? new MediaFormat(FormatModes.Exact, null, tier, w, h, ClaudeHomeServer.Services.ChatContext.ContextActor.Agent, DateTime.UtcNow)
+                    : new MediaFormat(FormatModes.Aspect, aspect ?? storedAspect, tier ?? stored?.Tier,
+                        null, null, ClaudeHomeServer.Services.ChatContext.ContextActor.Agent, DateTime.UtcNow);
+                if (wish.Mode == FormatModes.Aspect && wish.Aspect is null)
+                    return (null, "Укажи aspect вместе с quality: пропорции проекта ещё не заданы.", false);
+                return ImageProjectPrefsService.ValidateFormat(wish) is { } bad ? (null, bad, false) : (wish, null, true);
+            }
+            case ImageEditOp.Outpaint:
+                if (quality is not null || width is not null || height is not null)
+                    return (null, "У outpaint размер задаёт исходник: передай только aspect — до каких пропорций дорисовать.", false);
+                return aspect is null
+                    ? (null, null, false)
+                    : (new MediaFormat(FormatModes.Aspect, aspect, null, null, null,
+                        ClaudeHomeServer.Services.ChatContext.ContextActor.Agent, DateTime.UtcNow), null, false);
+            default:
+                if (!given) return (null, null, false);
+                if (EditLikeOps.Contains(op.ToString().ToLowerInvariant()))
+                {
+                    if (quality is not null || width is not null || height is not null)
+                        return (null, "У правки размер задаёт исходник (quality/width/height не применяются). Дорисовать края до других пропорций — "
+                            + "op outpaint с aspect, обрезать — op crop с aspect.", false);
+                    if (aspect is not null && size is { } s && AspectCrop.TryParse(aspect, out var target)
+                        && Math.Abs((double)s.Width / s.Height / target - 1) > 0.01)
+                        return (null, $"Правка не меняет пропорции: исходник {s.Width}×{s.Height}, а запрошено {aspect}. "
+                            + "Дорисовать края — op outpaint с aspect, обрезать — op crop с aspect (без ИИ, бесплатно).", false);
+                    return (null, null, false);
+                }
+                return (null, "Формат (aspect/quality/width/height) у этой операции не применяется.", false);
         }
     }
 
@@ -315,6 +396,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             source = image;
         }
         var op = Enum<ImageEditOp>(args, "op") ?? (source is null ? ImageEditOp.Generate : ImageEditOp.Edit);
+        var (wish, formatRefusal, persistFormat) = FormatFor(args, op, source is null ? null : ImageDimensions.Read(source.Bytes), prefs?.Format);
+        if (formatRefusal is not null) return Deny(formatRefusal);
         if (source is null && op != ImageEditOp.Generate)
             return Deny("Картинки ещё нет: это новая картинка. Сначала нарисуй её — op generate или без op.");
         if (prompt.Length == 0 && op is ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint)
@@ -364,7 +447,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             HasCharacter: character is not null,
             Width: size?.Width,
             Height: size?.Height,
-            Removal: EditIntent.IsRemoval(prompt));
+            Removal: EditIntent.IsRemoval(prompt),
+            Format: wish);
         var quote = await _jobs!.QuoteAsync(ownerId, scope.Key, quoteRequest, ct);
         if (quote.Value is not { } q)
             return await FailAsync(quote.ErrorCode, quote.Error, ownerId, scope, quoteRequest, ct);
@@ -384,17 +468,27 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (started.Value is not { } created)
             return await FailAsync(started.ErrorCode, started.Error, ownerId, scope, quoteRequest, ct);
 
+        // Явный формат генерации — формат проекта с ✦ (решение 2 Андрея); запись и тихая строка — только после запуска
+        if (persistFormat && wish is not null && _prefs is not null && !SameFormat(prefs?.Format, wish))
+        {
+            var (before, _) = await _prefs.SetFormatAsync(ownerId, scope, wish, ClaudeHomeServer.Services.ChatContext.ContextActor.Agent);
+            await _threads.AgentFormatLineAsync(session.Id, before, wish, ct);
+        }
+
         return Json(new
         {
             jobId = created.JobId,
             threadId = thread.Id,
             baseVersion = new { versionId = version.Id, label = ImageThread.Label(version) },
-            quote = new { q.Provider, q.Model, q.Estimate, q.ExpectedSeconds },
+            quote = new { q.Provider, q.Model, q.Estimate, q.ExpectedSeconds, format = q.Format },
             note = "Генерация идёт отдельно от хода: остановка разговора её не отменяет, отмена — image_cancel. "
                 + "Каждый вариант станет новой версией картинки внизу ленты; "
                 + (scope.IsPersonal ? "скачать её может только человек." : "сохранить в проект может только человек."),
         });
     }
+
+    private static bool SameFormat(MediaFormat? a, MediaFormat b) =>
+        a is not null && a.Mode == b.Mode && a.Aspect == b.Aspect && a.Tier == b.Tier && a.Width == b.Width && a.Height == b.Height;
 
     // Отказ поставщика: в результате — котировка соседа, чтобы человек повторил одним кликом.
     // Сам тулсет второй раз не запускает — выбор поставщика не подменяется
@@ -485,6 +579,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             defaultModel = catalog.Default.Model,
             providers = catalog.Providers,
             agentLaunch = _agentLaunch,
+            formatNote = "Пропорции и ступени каждой модели — providers[].models[].caps.format (aspects, tiers). "
+                + "Формат — выбор человека: aspect/quality/width/height передавай только по его просьбе; "
+                + "op crop обрезает картинку под пропорции без ИИ, op outpaint дорисовывает края.",
             humanChoice = HumanChoice(ownerId, scope, state),
             note = (state.Threads.Count, scope.IsPersonal) switch
             {

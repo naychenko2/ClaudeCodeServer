@@ -380,7 +380,7 @@ JSON ниже — единственное описание формы для ф
             "modelLabel": "Veo 3.1", "aspects": ["16:9", "9:16"],
             "tiers": [
               { "tier": "standard", "label": "720p", "sizes": { "16:9": { "w": 1280, "h": 720 }, "9:16": { "w": 720, "h": 1280 } }, "wireValue": "720p", "priceFactor": 1 },
-              { "tier": "max", "label": "1440p", "sizes": { "16:9": { "w": 2528, "h": 1440 }, "9:16": { "w": 1440, "h": 2528 } }, "wireValue": "full", "priceFactor": 1, "postStep": "upscale" }
+              { "tier": "high", "label": "1080p", "sizes": { "16:9": { "w": 1920, "h": 1080 }, "9:16": { "w": 1080, "h": 1920 } }, "wireValue": "1080p", "priceFactor": 1 }
             ],
             "wireParam": "resolution"
           } }

@@ -40,7 +40,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     public IReadOnlyList<ImageEditModelInfo> Models => Catalog;
 
     // Формат (ADR-025): рекомендованные размеры Qwen-Image по пропорциям — зеркало
-    // ComfyWorkflows.ImageSizes (Images; модулю он не виден, расхождение ловит LocalFormatSizesGuardTests).
+    // ComfyWorkflows.ImageSizes (Images; модулю он не виден, расхождение ловит MediaFormatDriversTests.Размеры_Qwen_в_каталоге_совпадают_с_ComfyWorkflows).
     // Размер один на пропорцию — «Высокое» и «Макс» серые. «Точно…» только у генерации (холст правки —
     // исходник): кратно 16 (латент VAE 8× и патчи 2×2), потолок — как у лимита входа каталога.
     public static readonly IReadOnlyDictionary<string, FormatSize> QwenSizes = new Dictionary<string, FormatSize>(StringComparer.Ordinal)

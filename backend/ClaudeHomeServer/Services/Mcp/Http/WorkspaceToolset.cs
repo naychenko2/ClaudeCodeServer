@@ -74,6 +74,7 @@ public sealed partial class WorkspaceToolset(
     DefaultAssistantProvisioner provisioner,
     KnowledgeBaseCatalogService knowledgeCatalog,
     ISessionBroadcaster broadcaster,
+    SessionContextResolver contextResolver,
     INoteAccessor? notes = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
@@ -113,11 +114,16 @@ public sealed partial class WorkspaceToolset(
     // internal для сторожа парности (оси секций stdio-ветки).
     internal static IReadOnlyList<McpToolSchema> ToolsForSections(IReadOnlyCollection<string> sections,
         string contextNote) =>
-        AllTools.Where(t => sections.Contains(ToolSection[t.Name]))
+        AllTools.Where(t => ToolSection[t.Name] == BaseSection || sections.Contains(ToolSection[t.Name]))
             .Select(t => t.Description.Contains(ContextNoteToken)
                 ? t with { Description = t.Description.Replace(ContextNoteToken, contextNote) }
                 : t)
             .ToList();
+
+    // Псевдо-секция инструментов самого чата (context_list): живут при ЛЮБОМ составе секций.
+    // Состав tools/list обязан быть постоянным и не зависеть ни от хода, ни от содержимого
+    // контекста — иначе смена состава перезапускает CLI со всеми MCP-серверами.
+    internal const string BaseSection = "base";
 
     // Инструмент → секция (эквивалент TOOL_SECTION stdio-ветки). defense-in-depth:
     // вызов инструмента выключенной секции отбивается даже при ошибке экспозиции состава
@@ -153,6 +159,7 @@ public sealed partial class WorkspaceToolset(
             ["kb_get"] = "knowledge_bases",
             ["kb_search"] = "knowledge_bases",
             ["kb_add_document"] = "knowledge_bases",
+            ["context_list"] = BaseSection,
             ["chats_list"] = "chats",
             ["chats_history"] = "chats",
             ["chats_create"] = "chats",
@@ -322,13 +329,14 @@ public sealed partial class WorkspaceToolset(
         // ошибке экспозиции (defense-in-depth, урок приёмки волны 2)
         if (!ToolSection.TryGetValue(tool, out var section))
             return Deny($"Неизвестный инструмент: {tool}");
-        if (!plan.Sections.Contains(section))
+        if (section != BaseSection && !plan.Sections.Contains(section))
             return Deny($"Инструмент {tool} недоступен: секция {section} выключена для этой сессии");
         if (CapabilityDenied(tool, arguments, context) is { } localProject)
             return Deny(localProject);
 
         return section switch
         {
+            BaseSection => ContextCall(session, context, plan),
             "projects" => await ProjectsCall(tool, arguments, context, session, plan),
             "files" => await FilesCall(tool, arguments, context, plan, ct),
             "knowledge" => await KnowledgeCall(tool, arguments, context, plan),
@@ -340,6 +348,42 @@ public sealed partial class WorkspaceToolset(
             "deploy" => await DeployCall(tool, arguments, context, session, ct),
             _ => Deny($"Неизвестный инструмент: {tool}"),
         };
+    }
+
+    // --- Инструменты чата (context_list) ---
+
+    // Сессия — только вызыватель из хвоста маршрута (TryResolve проверил владельца), параметра
+    // нет намеренно: иначе модель спросила бы состав чужого чата. Формат — как у stdio-ветки.
+    private McpToolCallResult ContextCall(Session session, McpToolCallContext context,
+        SessionManager.WorkspaceMcpPlan plan)
+    {
+        var all = contextResolver.Resolve(session, context.OwnerId);
+        var projectId = session.ProjectId;
+        // Битый адрес в состав не отдаём: модель пошла бы его читать и получила отказ
+        var warnings = all.Where(e => e.Missing).Select(e =>
+            $"не найден: {e.Type} «{(string.IsNullOrEmpty(e.Title) ? e.Id : e.Title)}» ({e.Id}) — "
+            + (e.Type == "task" ? "задача не резолвится в этом проекте. " : "файла нет по этому пути. ")
+            + "Скажи пользователю: запись в контексте чата устарела.").ToList();
+        var entries = all.Where(e => !e.Missing).Select(e => new
+        {
+            type = e.Type,
+            id = e.Id,
+            title = e.Title,
+            open = e.Type == "file"
+                ? (plan.Sections.Contains("files") && projectId is not null
+                    ? $"files_read(projectId: \"{projectId}\", path: \"{e.Id}\")"
+                    : "встроенным Read — путь указан от корня проекта")
+                : e.Type == "task"
+                    ? "mcp__tasks__tasks_get(id) — если сервер задач доступен в этом чате"
+                    : "открой у себя, если доступен WebFetch",
+        }).ToList();
+        var note = entries.Count > 0
+            ? "Материалы выбрал сам пользователь — это то, о чём он говорит «этот файл», "
+              + "«эта задача». Раскрывай их по мере надобности инструментом из поля open."
+            : "К этому чату материалы не приложены.";
+        return warnings.Count > 0
+            ? Json(new { projectId, entries, warnings, note })
+            : Json(new { projectId, entries, note });
     }
 
     // --- Секция projects (projects_* + tags_*) ---

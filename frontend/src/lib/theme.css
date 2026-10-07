@@ -129,6 +129,8 @@
   /* Та же высота, что у острова, но разлёт ВВЕРХ: для элементов, стоящих на самой
      кромке холста (композер с губой) — там нижнюю половину обычной тени срезает край */
   --shadow-lift:     0 -1px 2px rgba(60, 50, 35, 0.06), 0 -6px 20px rgba(60, 50, 35, 0.10);
+  /* Мягкий подъём вверх — верхняя губа композера: над ней узкий зазор и лента */
+  --shadow-lift-soft: 0 -1px 2px rgba(60, 50, 35, 0.06), 0 -3px 10px rgba(60, 50, 35, 0.08);
   --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
   --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);
   /* Попап-превью панели: остров, поднятый НАД раскладкой. Один размытый слой
@@ -303,6 +305,7 @@
   --shadow-island:   0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
   --drop-island:     drop-shadow(0 1px 2px rgba(0, 0, 0, 0.30)) drop-shadow(0 8px 24px rgba(0, 0, 0, 0.45));
   --shadow-lift:     0 -1px 2px rgba(0, 0, 0, 0.30), 0 -8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lift-soft: 0 -1px 2px rgba(0, 0, 0, 0.30), 0 -4px 12px rgba(0, 0, 0, 0.35);
   --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
   --shadow-modal:    0 28px 70px rgba(0, 0, 0, 0.65);
   --shadow-peek:     0 2px 8px rgba(0, 0, 0, 0.50), 0 24px 56px rgba(0, 0, 0, 0.68);

@@ -615,7 +615,7 @@ export function ContextRowView(props: ContextRowViewProps) {
   const mobileLine: CSSProperties = { display: 'flex', alignItems: 'center', gap: SP.sm - 2, minWidth: 0 };
 
   return (
-    // Десктоп — отступ сверху, как у прежней Git-полосы (10): тень губы вверх (SHADOW.lift из
+    // Десктоп — отступ сверху, как у прежней Git-полосы (10): тень губы вверх (SHADOW.liftSoft из
     // composerLip) ложится на этот зазор, а не на низ ленты
     <div data-context-row-host="" style={{ position: 'relative', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}

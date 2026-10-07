@@ -160,6 +160,7 @@ export const SHADOW = {
   island:   'var(--shadow-island)',     // панель-остров: заметнее card (контакт + разлёт)
   islandDrop: 'var(--drop-island)',     // та же тень для CSS filter: повторяет контур (SVG, PNG с прозрачностью)
   lift:     'var(--shadow-lift)',       // тот же подъём, но ВВЕРХ — для стоящих на кромке холста
+  liftSoft: 'var(--shadow-lift-soft)',  // мягкий подъём ВВЕРХ — верхняя губа композера над лентой
   dropdown: 'var(--shadow-dropdown)',   // выпадающие меню
   modal:    'var(--shadow-modal)',      // модальные окна
   peek:     'var(--shadow-peek)',       // попап-превью панели: остров НАД раскладкой
@@ -235,8 +236,9 @@ export function composerLip(side: 'top' | 'bottom', { row, tab = false }: { row?
     padding: top ? `${edge}px ${padX}px ${inner}px` : `${inner}px ${padX}px ${edge}px`,
     background: C.bgMain, border: `1px solid ${C.borderLight}`,
     borderRadius: top ? `${R.xxl}px ${R.xxl}px 0 0` : `0 0 ${R.xxl}px ${R.xxl}px`,
-    // Тень обводит открытую сторону: вниз — как у островов, вверх — та же, но подъёмом
-    boxShadow: top ? SHADOW.lift : SHADOW.island,
+    // Тень обводит открытую сторону: вниз — как у островов; вверх — мягкий подъём:
+    // над губой узкий зазор и лента, полный разлёт ложился на неё ореолом
+    boxShadow: top ? SHADOW.liftSoft : SHADOW.island,
     ...(top ? { marginBottom: -overlap } : { marginTop: -overlap }),
   };
 }

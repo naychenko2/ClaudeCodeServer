@@ -432,7 +432,6 @@ function UserMessageBubble({ text, ts, onBranch, children }: {
   children: React.ReactNode;
 }) {
   const { tapped, handleTap } = usePostTap();
-  const branchEnabled = useFeature(FLAGS.chatBranch);
   return (
     <div className={`cc-msg${tapped ? ' cc-msg--tapped' : ''}`} onClick={handleTap}
       style={{
@@ -444,7 +443,7 @@ function UserMessageBubble({ text, ts, onBranch, children }: {
       {children}
       {/* Прижата вправо — по стороне, с которой стоит сам пузырь человека */}
       <PostActionBar align="right">
-        {branchEnabled && onBranch && (
+        {onBranch && (
           <BranchButton onClick={onBranch} label="Ветвление от этого сообщения" />
         )}
         <CopyButton text={text} label="Скопировать сообщение" />
@@ -475,7 +474,6 @@ function TextMessageView({ text, online, onRetry, onBranch, streaming, model, ts
   const project = useContext(ChatProjectContext);
   const iconBtn = postIconBtn;
   const { tapped, handleTap } = usePostTap();
-  const branchEnabled = useFeature(FLAGS.chatBranch);
   return (
     // Обёртка нужна, чтобы строка действий висела ПОД пузырём: у самого пузыря
     // overflow:hidden (обрезает контент), и вылезающую наружу строку он бы срезал
@@ -503,7 +501,7 @@ function TextMessageView({ text, online, onRetry, onBranch, streaming, model, ts
         <PostActionBar>
           <CopyButton text={text} label="Скопировать ответ" />
           {saveNoteC?.render?.({ text, projectId: project?.id, online })}
-          {branchEnabled && onBranch && (
+          {onBranch && (
             <BranchButton onClick={onBranch} label="Ветвление от этого ответа" />
           )}
           {online && (

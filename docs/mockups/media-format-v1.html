@@ -525,7 +525,7 @@ function fmtBody() {
     if (st.action === 'upscale') return `<div class="alert mut">${I('info', 's')}<div class="tx">У «Увеличить» размер задаёт сама операция: ×2 → 3200×2400. Пропорции не меняются.</div></div>`;
     const s = srcNow(), srcOn = st.edit.mode === 'source' && !st.edit.ask;
     h += `<button class="src ${srcOn ? 'on' : ''}" data-k="src"><span class="tx"><b>Как у исходника</b> · ${s.ar}<small>${s.w}×${s.h} — модель работает своим размером, результат вернётся к исходнику</small></span>${srcOn ? I('check', 's') : ''}</button>`;
-    h += `<div class="flab">Другие пропорции<span class="aside">${m.label}</span></div><div class="asp">${m.aspects.filter(a => a !== s.ar).map(a => {
+    h += `<div class="flab">Другие пропорции<span class="aside">${m.label}</span></div><div class="hint">Выберите пропорции — предложим дорисовать края или обрезать.</div><div class="asp">${m.aspects.filter(a => a !== s.ar).map(a => {
       const on = (st.edit.ask === a) || (st.edit.mode === 'outpaint' && st.edit.aspect === a && !st.edit.ask);
       return `<button class="${on ? 'on' : ''}" data-k="ear-${a}">${arGlyph(a)}<span>${a}</span></button>`; }).join('')}</div>`;
     if (st.edit.ask) h += askHtml(st.edit.ask);

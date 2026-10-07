@@ -216,11 +216,15 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
 
 // Компактная строка изменённого файла — для использования внутри общего контура
 // блока действий (рядом с карточками инструментов). Один ритм со строкой ToolUseView.
-export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpenFile, onRevert }: {
+// Справа — откуда правка: «в чате» (этот чат) или «вне чата» (дерево поменяли снаружи). Кнопки
+// «Откатить» в строке нет — откат в просмотрщике файла; метка стоит в слоте по «вне чата», и
+// обе начинаются с одной линии
+const FILE_ORIGIN_W = '8.5ch';
+
+export const FileChangedRow = memo(function FileChangedRow({ item, onOpenFile }: {
   item: Extract<ChatItem, { kind: 'file_changed' }>;
   online: boolean;
   onOpenFile?: (path: string) => void;
-  onRevert?: (path: string) => void;
 }) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
@@ -236,14 +240,9 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
       </span>
       <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
       <span style={{ fontSize: 11.5, color: C.diffRemText, fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
-      {item.external ? (
-        <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>вне чата</span>
-      ) : online && onRevert && (
-        <button onClick={() => onRevert(item.path)}
-          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgWhite, cursor: 'pointer', color: C.dangerText, flexShrink: 0 }}>
-          Откатить
-        </button>
-      )}
+      <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0, minWidth: FILE_ORIGIN_W }}>
+        {item.external ? 'вне чата' : 'в чате'}
+      </span>
     </div>
   );
 });

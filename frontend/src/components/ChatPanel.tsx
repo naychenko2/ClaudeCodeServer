@@ -2375,7 +2375,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             <Fragment key={itemKey(it, idx)}>
               <div data-feed-index={idx} style={topBorder ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
                 {it.kind === 'file_changed'
-                  ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
+                  ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} />
                   : renderItem(it, idx, isPersonaTask
                       ? { agentActivity: inlineChildren, agentRenderChild: renderItem }
                       : undefined)}
@@ -2394,7 +2394,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           .map(([it, idx]) => renderGroupEntry(it, idx, true));
         const filesSummary = [...fileAgg.values()].map(f => (
           <div key={`fsum-${f.path}`} style={{ borderTop: `1px solid ${C.bgInset}` }}>
-            <FileChangedRow item={f} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
+            <FileChangedRow item={f} online={online} onOpenFile={onOpenFile} />
           </div>
         ));
         const summaryNodes = [...agentSummary, ...filesSummary];

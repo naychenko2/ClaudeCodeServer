@@ -126,12 +126,11 @@ public class ImageEditorControllerTests : IDisposable
         return factory;
     }
 
+    // Флаг image-editor снят: метод флагов не включает, только резолвит пользователя
     private static string EnableFlag(TestWebApplicationFactory factory, string username)
     {
         var users = factory.Services.GetRequiredService<UserStore>();
-        var user = users.FindByUsername(username)!;
-        users.SetFeatureFlag(user.Id, FeatureFlagKeys.ImageEditor, true).Should().BeTrue();
-        return user.Id;
+        return users.FindByUsername(username)!.Id;
     }
 
     private static string CreateProject(TestWebApplicationFactory factory, string username)
@@ -166,44 +165,13 @@ public class ImageEditorControllerTests : IDisposable
         hasMask = false, references = 0, hasCharacter = false, width = 1024, height = 768,
     };
 
+    // Формат из префов (✦ агента) подставляется в генерацию человека, не дающую явного формата
     [Fact]
-    public async Task Флаг_выключен_все_ручки_404()
-    {
-        var jobs = new FakeJobs();
-        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
-        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
-        // Флаг включён по умолчанию — выключаем override'ом пользователя
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, FeatureFlagKeys.ImageEditor, false)
-            .Should().BeTrue();
-        var client = factory.CreateAuthenticatedClient();
-        var root = $"/api/projects/{projectId}/image-editor";
-
-        var responses = new[]
-        {
-            await client.GetAsync($"{root}/catalog"),
-            await client.PostAsJsonAsync($"{root}/quote", Quote("fal")),
-            await client.PostAsync($"{root}/jobs", JobForm()),
-            await client.GetAsync($"{root}/jobs/any"),
-            await client.DeleteAsync($"{root}/jobs/any"),
-            await client.GetAsync($"{root}/jobs/any/variants/1"),
-            await client.PostAsJsonAsync($"{root}/save", new { jobId = "any", variant = 1 }),
-        };
-
-        responses.Select(r => r.StatusCode).Should().AllBeEquivalentTo(HttpStatusCode.NotFound);
-        jobs.Jobs.Should().BeEmpty("при выключенном флаге запуск не должен дойти до исполнителя");
-    }
-
-    // Без флага «Формат» чипа нет, и формат из префов (✦ агента) не вправе молча менять генерацию человека
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Котировка_генерации_берёт_формат_префов_только_при_флаге_Формат(bool flagOn)
+    public async Task Котировка_генерации_берёт_формат_префов()
     {
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
         var userId = EnableFlag(factory, TestWebApplicationFactory.TestUsername);
-        if (flagOn) factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(userId, FeatureFlagKeys.MediaFormat, true);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var project = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!;
         await factory.Services.GetRequiredService<ClaudeHomeServer.Services.ImageEditor.Prefs.ImageProjectPrefsService>().SetFormatAsync(
@@ -218,8 +186,7 @@ public class ImageEditorControllerTests : IDisposable
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        if (flagOn) jobs.LastQuote!.Format!.Aspect.Should().Be("9:16");
-        else jobs.LastQuote!.Format.Should().BeNull("без флага сохранённый формат молча не подставляется");
+        jobs.LastQuote!.Format!.Aspect.Should().Be("9:16");
     }
 
     [Fact]

@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Turn;
@@ -23,7 +22,6 @@ namespace ClaudeHomeServer.Services.ImageEditor.Chats;
 // системном блоке обнуляла бы prefix cache всей истории у любого провайдера, а не только у
 // провайдера с RecallInTurnText (ADR-018 §10.4, риск 1 плана v2).
 public sealed class ImageEditorStateContributor(
-    IFeatureFlagGate flags,
     IImageEditJobs? jobs = null,
     ImageThreadStore? threads = null,
     Prefs.ImageProjectPrefsService? prefs = null,
@@ -42,7 +40,6 @@ public sealed class ImageEditorStateContributor(
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.OwnerId is { Length: > 0 } ownerId
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)
         && (PersonalAlways(sessionContext.Session)
             || HasThreads(ownerId, sessionContext.Session) || HasSavedPrefs(ownerId, sessionContext.Session));
 

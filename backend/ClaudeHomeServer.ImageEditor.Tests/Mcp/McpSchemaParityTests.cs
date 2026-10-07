@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
@@ -57,11 +56,9 @@ public class McpSchemaParityTests : IDisposable
         var threads = new ImageThreadService(new ImageThreadStore(Path.Combine(root, "threads")),
             NullLogger<ImageThreadService>.Instance, directory.Object, prefs: prefs);
         var launcher = new ImageEditLaunchAssembler(editors, jobs, new SkiaImageRaster(), threads);
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor)).Returns(true);
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(ChatId, Owner)).Returns(session);
-        return new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, threads, launcher,
+        return new ImageEditorToolset(accessor.Object, projects.Object, editors, threads, launcher,
             new Mock<IDelegatedTurnGate>().Object, jobs, prefs: prefs,
             config: TestImages.Config((ImageEditorToolset.AgentLaunchKey, "true")));
     }

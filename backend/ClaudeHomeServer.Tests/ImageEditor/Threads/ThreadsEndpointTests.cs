@@ -179,23 +179,6 @@ public class ThreadsEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task Флаг_выключен_404()
-    {
-        var chat = await Chat();
-        var (state, thread) = Store.Create(_ownerId, chat.Id, "a.png", null, focus: false);
-        // Флаг включён по умолчанию — выключаем override'ом пользователя
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ImageEditor, false).Should().BeTrue();
-
-        var get = await _client.GetAsync(Threads(chat.Id));
-        var put = await _client.PutAsJsonAsync($"{Threads(chat.Id)}/focus", new { threadId = thread.Id, revision = state.Revision });
-
-        get.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        put.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        Store.Get(_ownerId, chat.Id).Focus.Should().BeNull();
-    }
-
-    [Fact]
     public async Task Удаление_чата_сносит_его_нити()
     {
         var chat = await Chat();

@@ -1,6 +1,5 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Chats;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
@@ -227,13 +226,11 @@ public class ImageProjectPrefsTests : IDisposable
     }
 
     private (ImageEditorStateContributor Contributor, PromptSessionContext Context, ImageThreadStore Threads) Contributor(
-        bool agentLaunch = true, bool personal = false, bool flag = true)
+        bool agentLaunch = true, bool personal = false)
     {
         var threads = new ImageThreadStore(Path.Combine(_dir, ImageThreadStore.DirName));
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ImageEditor)).Returns(flag);
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
-        var contributor = new ImageEditorStateContributor(flags.Object, threads: threads, prefs: _prefs, config: config);
+        var contributor = new ImageEditorStateContributor(threads: threads, prefs: _prefs, config: config);
         var context = new PromptSessionContext(
             new Session { Id = Chat, OwnerId = Owner, ProjectId = personal ? null : ProjectId }, Owner, null, _root);
         return (contributor, context, threads);
@@ -427,14 +424,6 @@ public class ImageProjectPrefsTests : IDisposable
         contributor.IsEnabled(context).Should().BeTrue("нити есть — блок есть");
         (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text
             .Should().NotContain("image_new → image_generate");
-    }
-
-    [Fact]
-    public void Личный_чат_без_флага_блока_нет()
-    {
-        var (contributor, context, _) = Contributor(personal: true, flag: false);
-
-        contributor.IsEnabled(context).Should().BeFalse();
     }
 
     [Fact]

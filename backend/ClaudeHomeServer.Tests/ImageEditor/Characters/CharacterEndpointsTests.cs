@@ -60,11 +60,9 @@ public class CharacterEndpointsTests : IDisposable
         return factory;
     }
 
-    internal static void EnableFlag(TestWebApplicationFactory factory, string username)
-    {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(username)!.Id, FeatureFlagKeys.ImageEditor, true).Should().BeTrue();
-    }
+    // Флаг image-editor снят: метод — no-op, но жив как якорь вызовов в других тестовых файлах
+    internal static void EnableFlag(TestWebApplicationFactory factory, string username) =>
+        _ = factory.Services.GetRequiredService<UserStore>().FindByUsername(username)!;
 
     internal static (string Id, string Root) CreateProject(TestWebApplicationFactory factory, string username)
     {
@@ -91,32 +89,6 @@ public class CharacterEndpointsTests : IDisposable
 
     private static async Task<JsonElement> Json(HttpResponseMessage resp) =>
         JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
-
-    [Fact]
-    public async Task Флаг_выключен_ручки_персонажей_404()
-    {
-        var factory = Factory();
-        var (projectId, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
-        // Флаг включён по умолчанию — выключаем override'ом пользователя
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, FeatureFlagKeys.ImageEditor, false)
-            .Should().BeTrue();
-        var client = factory.CreateAuthenticatedClient();
-        var api = $"/api/projects/{projectId}/image-editor";
-
-        var responses = new[]
-        {
-            await client.GetAsync($"{api}/characters"),
-            await client.PostAsync($"{api}/characters", CharacterForm("Аня")),
-            await client.GetAsync($"{api}/characters/anya"),
-            await client.PutAsync($"{api}/characters/anya", CharacterForm("Аня", 0)),
-            await client.DeleteAsync($"{api}/characters/anya"),
-            await client.GetAsync($"{api}/characters/anya/photos/face-01.jpg"),
-        };
-
-        responses.Select(r => r.StatusCode).Should().AllBeEquivalentTo(HttpStatusCode.NotFound);
-        Directory.Exists(Path.Combine(root, "characters")).Should().BeFalse("при выключенном флаге запись не доходит до диска");
-    }
 
     [Fact]
     public async Task Создание_список_и_фото_у_владельца()

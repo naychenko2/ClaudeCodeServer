@@ -207,7 +207,7 @@ public class LocalMediaDefaultContributorTests
     [Fact]
     public void Стоит_сразу_после_блока_картинок() =>
         Contributor().Order.Should().Be(
-            new ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor(new Flags()).Order + 10);
+            new ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor().Order + 10);
 
     // Устаревшая фраза «локальных моделей для них нет» — уже ложь: у local-media есть 9 аудио-инструментов,
     // из-за неё модель уводила звук в облако. Проектный вариант их перечисляет, личный — честно говорит, что нет.

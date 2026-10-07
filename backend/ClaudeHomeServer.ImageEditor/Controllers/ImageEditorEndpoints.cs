@@ -53,7 +53,7 @@ public abstract class ImageEditorEndpoints(
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
         var heavy = config?.GetValue("ImageEditor:HeavyFileMb", DefaultHeavyFileMb) ?? DefaultHeavyFileMb;
         var limits = ImageEditCatalog.DefaultLimits with { HeavyFileMb = heavy > 0 ? heavy : DefaultHeavyFileMb };
-        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits, PreferLocal());
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits, PreferLocal);
         // Без растра (подсистема картинок выключена) редактор не работает: ответ остаётся 200,
         // чтобы фронт показал причину, а не общий сбой
         if (jobs is null || raster is null) catalog = catalog with { Reason = ImageEditCatalogReasons.SubsystemDisabled };
@@ -61,9 +61,6 @@ public abstract class ImageEditorEndpoints(
     }
 
     private ImageProjectPrefsService? PrefsService => HttpContext?.RequestServices.GetService<ImageProjectPrefsService>();
-
-    private bool FormatFlagOn() =>
-        HttpContext?.RequestServices.GetService<IFeatureFlagGate>()?.IsEnabled(UserId, FeatureFlagKeys.MediaFormat) == true;
 
     // Формат проекта для генерации без явного формата в теле (ADR-025: умолчание — желание из префов)
     private MediaFormat? StoredFormat(ImageEditScope scope) => PrefsService?.Get(UserId, scope).Format;
@@ -110,9 +107,9 @@ public abstract class ImageEditorEndpoints(
         // Желание в теле проходит те же белые списки, что и сохраняемое: «пропорции» без пропорций не маскируется под «как у модели»
         if (req.Format is { } given && ImageProjectPrefsService.ValidateFormat(given) is { } badFormat)
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, badFormat);
-        // Формат из префов подставляется только у тех, кто видит чип «Формат»: без флага фронт его не показывает, и
-        // сохранённая ✦ агента молча меняла бы ступень и цену генерации человека
-        if (req.Format is null && req.Op == ImageEditOp.Generate && FormatFlagOn()) req = req with { Format = StoredFormat(scope) };
+        // Формат из префов (✦ агента) подставляется в генерацию человека, не дающую явного формата:
+        // ступень и цену генерации человек видит в котировке
+        if (req.Format is null && req.Op == ImageEditOp.Generate) req = req with { Format = StoredFormat(scope) };
         var editor = ImageEditCatalog.FindAvailable(editors, req.Provider);
         if (editor is null)
             return Error(StatusCodes.Status409Conflict, ImageEditErrorCodes.ProviderUnavailable,
@@ -156,16 +153,15 @@ public abstract class ImageEditorEndpoints(
         var place = ImagePlaceKeys.ImageEditor;
         var adminProvider = placeSettings?.ProviderFor(place);
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
-        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, preferLocal: PreferLocal());
-        // Свою видеокарту «Авто» берёт только под операцию, которую она умеет; иначе — как без флага
-        if (PreferLocal() && !ImageExecutorRows.LocalCan(catalog, op, hasImage, hasMask))
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, preferLocal: PreferLocal);
+        // Свою видеокарту «Авто» берёт только под операцию, которую она умеет; иначе — как без неё
+        if (!ImageExecutorRows.LocalCan(catalog, op, hasImage, hasMask))
             catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel);
         return ImageExecutorRows.Build(catalog, editors, op, hasImage, hasMask);
     }
 
-    // Флаг local-media-default владельца (ADR-021 §2): «Авто» сначала пробует локальную модель
-    private bool PreferLocal() =>
-        HttpContext?.RequestServices.GetService<IFeatureFlagGate>()?.IsEnabled(UserId, FeatureFlagKeys.LocalMediaDefault) == true;
+    // «Авто» всегда сначала пробует локальную модель (ADR-021 §2, флаг local-media-default снят)
+    private const bool PreferLocal = true;
 
     protected async Task<IActionResult> StartIn(ImageEditScope scope, StartJobForm form, CancellationToken ct)
     {

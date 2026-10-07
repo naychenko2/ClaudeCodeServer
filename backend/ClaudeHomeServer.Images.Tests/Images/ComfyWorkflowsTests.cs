@@ -37,12 +37,17 @@ public class ComfyWorkflowsTests
     [Fact]
     public void Генерация_СовпадаетСЭталономСтенда()
     {
-        // Эталон — ~/ComfyUI/qwen-image21-1gpu-api.json, правки — как в run_gen.py
+        // Эталон — ~/ComfyUI/qwen-image21-int8-1gpu-api.json, правки — как в run_gen.py;
+        // SageAttention между моделью и сэмплером (замер 2026-10-08: ×2 к bf16 без потери качества)
         var wf = ComfyWorkflows.GenerateImage("котик", "", 1328, 1328, 42, 25, 2, "ccs-local-media/job");
 
-        wf.Select(p => p.Key).Should().BeEquivalentTo(["unet", "clip", "vae", "enc", "lat", "ks", "dec", "save"]);
-        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_bf16.safetensors");
-        Inputs(wf, "clip")["clip_name"]!.GetValue<string>().Should().Be("qwen3vl_8b_bf16.safetensors");
+        wf.Select(p => p.Key).Should().BeEquivalentTo(["unet", "clip", "vae", "sage", "enc", "lat", "ks", "dec", "save"]);
+        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_int8_convrot.safetensors");
+        Inputs(wf, "clip")["clip_name"]!.GetValue<string>().Should().Be("qwen3vl_8b_int8_convrot.safetensors");
+        Class(wf, "sage").Should().Be("PathchSageAttentionKJ");
+        Inputs(wf, "sage")["model"]!.ToJsonString().Should().Be("[\"unet\",0]");
+        Inputs(wf, "sage")["sage_attention"]!.GetValue<string>().Should().Be("auto");
+        Inputs(wf, "ks")["model"]!.ToJsonString().Should().Be("[\"sage\",0]");
         Inputs(wf, "clip")["type"]!.GetValue<string>().Should().Be("qwen_image");
         Inputs(wf, "vae")["vae_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_vae_bf16.safetensors");
         Class(wf, "enc").Should().Be("TextEncodeQwenImage21");
@@ -103,6 +108,7 @@ public class ComfyWorkflowsTests
         fd["steps"]!.GetValue<int>().Should().Be(16);
         fd["guide_size"]!.GetValue<int>().Should().Be(768);
         fd["bbox_detector"]!.ToJsonString().Should().Be("[\"det\",0]");
+        fd["model"]!.ToJsonString().Should().Be("[\"sage\",0]");
         Inputs(wf, "det")["model_name"]!.GetValue<string>().Should().Be("bbox/face_yolov8m.pt");
         Inputs(wf, "enc")["prompt"]!.GetValue<string>().Should().Be(ComfyWorkflows.FacePrompt);
         Inputs(wf, "save")["images"]!.ToJsonString().Should().Be("[\"fd\",0]");

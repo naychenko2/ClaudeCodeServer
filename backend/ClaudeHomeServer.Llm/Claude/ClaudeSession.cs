@@ -3649,8 +3649,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // Auto-recall долгой памяти персоны (этап 2): контрибьютор PersonaRecallContributor.
             // Гейт MemoryMcp != null живёт в IsEnabled — golden-фикстура 6 ловит потерю.
-            // Та же секция контрибьютора даёт dossier-recall (только при включённом флаге
-            // specialty-prompt-sections, как до фичи — см. комментарий в PersonaRecallContributor).
+            // Та же секция контрибьютора даёт dossier-recall (см. комментарий в PersonaRecallContributor).
             if (contributorSections.TryGetValue("recall-memory", out var memRecall))
                 Add("recall-memory", "Что персона помнит по теме", memRecall.Text, stable: false, group: "persona");
 
@@ -3660,8 +3659,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // Блок досье — едет ОТДЕЛЬНОЙ секцией рядом с recall-memory (контракт плана
             // «Секции промптов» этап 3). Контрибьютор PersonaRecallContributor добавляет
-            // её, только если выделение включено (splitDossier=true при
-            // specialty-prompt-sections); иначе досье остаётся внутри recall-memory.
+            // её, когда досье непустое.
             if (contributorSections.TryGetValue("dossier-recall", out var dossierRecall))
                 Add("dossier-recall", "История решений по коду хода", dossierRecall.Text,
                     stable: false, group: "persona");

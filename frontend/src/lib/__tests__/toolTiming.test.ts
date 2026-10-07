@@ -304,6 +304,13 @@ describe('toolClockMs — замирание после ожидания раз�
     expect(pickActiveTool(items, new Set(['a', 'b', 'c']))?.id).toBe('a');
   });
 
+  // История до tool_started: этапы — свидетельство старта и для индикатора под лентой
+  it('из выписанных run_tests активный — тот, у кого уже есть этапы', () => {
+    const run = (id: string, stages?: unknown[]) => ({ kind: 'tool_use', id, name: 'mcp__tests__run_tests', startedAt: 1_000, stages });
+    const items = [run('a', [{}]), run('b'), run('c')];
+    expect(pickActiveTool(items, new Set(['a', 'b', 'c']))?.id).toBe('a');
+  });
+
   it('инструменты без tool_started считают от tool_use, как прежде', () => {
     expect(awaitsToolStart({ name: 'Read' })).toBe(false);
     expect(toolClockMs({ name: 'mcp__x__y', startedAt: 1_000 }, true, 5_000)).toBe(5_000);

@@ -354,6 +354,7 @@ export function toolLiveness(items: readonly LivenessItem[], busy: boolean): Too
 type ActiveToolItem = {
   kind: string; id?: string; name?: string; input?: unknown; parentToolUseId?: string | null;
   streamingArg?: string | null; startedAt?: number | null; started?: boolean;
+  stages?: readonly unknown[] | null;
 };
 
 export function pickActiveTool<T extends ActiveToolItem>(items: readonly T[], live: ReadonlySet<string>): T | null {
@@ -364,7 +365,7 @@ export function pickActiveTool<T extends ActiveToolItem>(items: readonly T[], li
     const it = items[i];
     if (it.kind !== 'tool_use' || !it.id || !live.has(it.id)) continue;
     if (it.parentToolUseId || it.streamingArg != null || typeof it.startedAt !== 'number') continue;
-    if (!awaitsToolStart({ name: it.name ?? '', started: it.started })) return it;
+    if (!awaitsToolStart({ name: it.name ?? '', started: it.started, stages: it.stages })) return it;
     waiting ??= it;
   }
   return waiting;

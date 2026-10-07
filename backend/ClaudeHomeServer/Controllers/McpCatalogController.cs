@@ -20,7 +20,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/mcp/catalog")]
 [EnableRateLimiting("mcp-catalog")]
 public class McpCatalogController(McpCatalogClient catalog, McpRegistry registry,
-    McpCatalogOptions catalogOptions, FeatureFlagService flags,
+    McpCatalogOptions catalogOptions,
     ILogger<McpCatalogController> log) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -29,8 +29,6 @@ public class McpCatalogController(McpCatalogClient catalog, McpRegistry registry
     public async Task<IActionResult> Search([FromQuery] string? q, [FromQuery] string? cursor,
         CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.McpCatalog))
-            return NotFound(new { error = "Каталог MCP-серверов выключен" });
         // Пустой адрес = каталог выключен (второго рубильника нет): внятный отказ,
         // а не тишина и не 500 из глубины HttpClient
         if (!catalog.IsEnabled)
@@ -59,8 +57,6 @@ public class McpCatalogController(McpCatalogClient catalog, McpRegistry registry
     public async Task<IActionResult> Revision([FromBody] McpCatalogRevisionRequest req,
         CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.McpCatalog))
-            return NotFound(new { error = "Каталог MCP-серверов выключен" });
         if (!catalog.IsEnabled)
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = "Каталог MCP-серверов не настроен на этом сервере" });

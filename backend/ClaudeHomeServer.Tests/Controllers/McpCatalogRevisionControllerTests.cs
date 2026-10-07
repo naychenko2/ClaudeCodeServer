@@ -80,13 +80,6 @@ public class McpCatalogRevisionControllerTests
         }
     }
 
-    private static string UserIdOf(TestWebApplicationFactory factory) =>
-        factory.Services.GetRequiredService<UserStore>().GetFirst()!.Id;
-
-    private static void EnableFlag(TestWebApplicationFactory factory) =>
-        factory.Services.GetRequiredService<UserStore>()
-            .SetFeatureFlag(UserIdOf(factory), FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
-
     private static async Task<JsonElement> CreateCatalogServerAsync(HttpClient client,
         string name, string version)
     {
@@ -114,7 +107,6 @@ public class McpCatalogRevisionControllerTests
     public async Task Ревизия_возвращает_статус_и_флаг_новой_версии()
     {
         using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson("active", "2.0.0")) };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/one", "1.0.0");
 
@@ -132,7 +124,6 @@ public class McpCatalogRevisionControllerTests
     public async Task Явный_deprecated_ставит_плашку()
     {
         using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson("deprecated", "1.0.0")) };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/dep", "1.0.0");
 
@@ -146,7 +137,6 @@ public class McpCatalogRevisionControllerTests
     public async Task Лежащий_реестр_проверить_не_удалось_но_не_отозван()
     {
         using var factory = new RevisionFactory { Thrower = new ThrowingCatalogClient() };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/dead", "1.0.0");
 
@@ -163,7 +153,6 @@ public class McpCatalogRevisionControllerTests
     public async Task Список_серверов_жив_при_лежащем_реестре()
     {
         using var factory = new RevisionFactory { Thrower = new ThrowingCatalogClient() };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/alive", "1.0.0");
 
@@ -181,7 +170,6 @@ public class McpCatalogRevisionControllerTests
     public async Task Чужие_имена_и_записи_без_CatalogRef_в_ревизию_не_попадают()
     {
         using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/mine", "1.0.0");
         // ручная запись того же владельца — без указателя на каталог
@@ -215,13 +203,10 @@ public class McpCatalogRevisionControllerTests
     public async Task Изоляция_владельца_второй_юзер_видит_только_своё()
     {
         using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        EnableFlag(factory);
         var first = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(first, "io.github.o/first", "1.0.0");
-        // флаг включается первому пользователю — второму включаем отдельно
         var users = factory.Services.GetRequiredService<UserStore>();
         var secondId = users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
-        users.SetFeatureFlag(secondId, FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
         factory.Services.GetRequiredService<McpRegistry>().Create(secondId, new McpServerRecord
         {
             Key = "second-" + Guid.NewGuid().ToString("N")[..8],
@@ -241,7 +226,6 @@ public class McpCatalogRevisionControllerTests
     public async Task Две_записи_одного_имени_один_запрос_и_старшая_версия()
     {
         using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson("active", "2.0.0")) };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/dup", "1.0.0");
         await CreateCatalogServerAsync(client, "io.github.o/dup", "2.0.0");
@@ -257,20 +241,9 @@ public class McpCatalogRevisionControllerTests
     // --- гейты запроса ---
 
     [Fact]
-    public async Task Флаг_выключен_404()
-    {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        var client = factory.CreateAuthenticatedClient();
-        var resp = await client.PostAsJsonAsync("/api/mcp/catalog/revision",
-            new { names = new[] { "io.github.o/x" } });
-        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
-
-    [Fact]
     public async Task Не_настроен_503()
     {
         using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson(), enabled: false) };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         var resp = await client.PostAsJsonAsync("/api/mcp/catalog/revision",
             new { names = new[] { "io.github.o/x" } });
@@ -283,7 +256,6 @@ public class McpCatalogRevisionControllerTests
     public async Task Пустой_список_имён_400(int? count)
     {
         using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         var names = count is null
             ? null
@@ -296,7 +268,6 @@ public class McpCatalogRevisionControllerTests
     public async Task Потолок_батча_400()
     {
         using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         var names = Enumerable.Range(0, 51).Select(i => "io.github.o/n" + i).ToArray();
         var resp = await client.PostAsJsonAsync("/api/mcp/catalog/revision", new { names });
@@ -319,7 +290,6 @@ public class McpCatalogRevisionControllerTests
             services.RemoveAll<McpCatalogOptions>();
             services.AddSingleton(new McpCatalogOptions { BaseUrl = "https://127.0.0.1:1" });
         };
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/wired", "1.0.0");
 

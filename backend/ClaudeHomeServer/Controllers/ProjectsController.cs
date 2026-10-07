@@ -22,7 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, SphereManager spheres, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, SphereManager spheres, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -73,9 +73,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         d.HarnessProblem,
     };
 
-    // Отказ привязать проект к устройству: флаг local-projects + возможность exec (ADR-016 §1)
-    private string? BindRefusal(string deviceId) => ProjectCapabilities.BindRefusal(
-        flags.IsEnabled(UserId, FeatureFlagKeys.LocalProjects), deviceExec?.GetStatus(UserId, deviceId));
+    // Отказ привязать проект к устройству: возможность exec у устройства (ADR-016 §1)
+    private string? BindRefusal(string deviceId) => ProjectCapabilities.BindRefusal(deviceExec?.GetStatus(UserId, deviceId));
 
     // Папка на устройстве под проект: агент сам создаёт и разрешает её (DeviceFolderCheck.BindAsync),
     // старый агент — только проверка. Refusal — отказ; Notice — что агент создал или разрешил

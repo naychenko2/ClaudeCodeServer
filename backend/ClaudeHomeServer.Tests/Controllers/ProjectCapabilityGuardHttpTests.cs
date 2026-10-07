@@ -66,8 +66,6 @@ public sealed class ProjectCapabilityGuardHttpTests : IDisposable
     // Локальный проект в каталог-ловушку: серверный проект переезжает на устройство
     private async Task<(string Id, string Trap)> CreateTrapProjectAsync()
     {
-        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.LocalProjects}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
         var id = await CreateServerProjectAsync(MkDir());
         var trap = Path.Combine(_factory.TempDir, "trap_" + Guid.NewGuid().ToString("N")[..8]);
         (await _client.PutAsJsonAsync($"/api/projects/{id}/device", new { deviceId = "dev", rootPath = trap }))
@@ -174,8 +172,6 @@ public sealed class ProjectCapabilityGuardHttpTests : IDisposable
     [Fact]
     public async Task ПереездНаУстройство_ЗаписьЗнанийСервернойПапкиСнимается()
     {
-        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.LocalProjects}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
         var dir = MkDir();
         var id = await CreateServerProjectAsync(dir);
         var wkStore = _factory.Services.GetRequiredService<WorkspaceKnowledgeStore>();
@@ -191,8 +187,6 @@ public sealed class ProjectCapabilityGuardHttpTests : IDisposable
     [Fact]
     public async Task ПереездНаУстройство_СоседПоПапке_ЗаписьЗнанийОстаётся()
     {
-        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.LocalProjects}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
         var dir = MkDir();
         var id = await CreateServerProjectAsync(dir);
         var wkStore = _factory.Services.GetRequiredService<WorkspaceKnowledgeStore>();

@@ -148,21 +148,17 @@ public class ProjectCapabilitiesTests
             .Should().Throw<ArgumentException>();
 
     [Fact]
-    public void Привязка_БезФлага_Отказ() =>
-        ProjectCapabilities.BindRefusal(false, Device()).Should().NotBeNull();
-
-    [Fact]
     public void Привязка_БезExec_Отказ() =>
-        ProjectCapabilities.BindRefusal(true, Device(caps: [DeviceCapabilities.Files]))
+        ProjectCapabilities.BindRefusal(Device(caps: [DeviceCapabilities.Files]))
             .Should().Be(ProjectCapabilities.NoExecReason);
 
     [Fact]
     public void Привязка_УстройстваНет_Отказ() =>
-        ProjectCapabilities.BindRefusal(true, null).Should().Be(ProjectCapabilities.DeviceMissingReason);
+        ProjectCapabilities.BindRefusal(null).Should().Be(ProjectCapabilities.DeviceMissingReason);
 
     [Fact]
-    public void Привязка_ФлагИExec_ДажеОфлайн_Можно() =>
-        ProjectCapabilities.BindRefusal(true, Device(online: false)).Should().BeNull();
+    public void Привязка_Exec_ДажеОфлайн_Можно() =>
+        ProjectCapabilities.BindRefusal(Device(online: false)).Should().BeNull();
 
     // --- Руки (ADR-016 §7, план рук Ш1) ---
 

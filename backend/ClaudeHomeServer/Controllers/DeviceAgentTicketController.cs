@@ -24,7 +24,6 @@ namespace ClaudeHomeServer.Controllers;
 public sealed class DeviceAgentTicketController(
     ProjectManager projects,
     AgentTicketService tickets,
-    FeatureFlagService flags,
     IDeviceExecChannel? deviceExec = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -40,9 +39,6 @@ public sealed class DeviceAgentTicketController(
         if (project is null || project.OwnerId != UserId) return NotFound();
         if (!ProjectCapabilities.IsDeviceBound(project))
             return BadRequest(new { error = "Проект не локальный: его файлы на сервере" });
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.LocalProjects))
-            return StatusCode(StatusCodes.Status403Forbidden,
-                new { error = "Локальные проекты выключены (экспериментальная функция «Локальные проекты»)" });
 
         var files = ProjectCapabilities.For(project, deviceExec?.GetStatus(UserId, project.DeviceId!)).Files;
         if (!files.Available)

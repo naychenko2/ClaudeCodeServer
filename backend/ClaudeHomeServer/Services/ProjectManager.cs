@@ -99,7 +99,7 @@ public class ProjectManager : IProjectManager
     }
 
     // Локальный проект (ADR-016): папка живёт на устройстве, сервер её не видит и не создаёт.
-    // Флаг и возможность exec у устройства проверяет вызывающий (ProjectCapabilities.BindRefusal):
+    // Возможность exec у устройства проверяет вызывающий (ProjectCapabilities.BindRefusal):
     // устройства принадлежат вертикали Desktop, у менеджера проектов ссылки на неё нет.
     public Project CreateLocal(string name, string rootPath, string userId, string deviceId,
         string? groupId = null, string? color = null)

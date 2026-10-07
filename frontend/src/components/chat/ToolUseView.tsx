@@ -30,9 +30,9 @@ const MONO_PRE_STYLE: React.CSSProperties = {
 const HEAD_GAP = 10;
 // Период «дыхания» иконки — тот же, что у .cc-live-dot в index.css
 const BREATH_MS = 2400;
-// Слот слова статуса в шапке (десктоп): по самому частому исходу «готово» — слова начинаются с
-// одной линии, время слева от слота выровнено по правому краю, и у обычной карточки справа нет
-// дыры. Редкие «прервано»/«ошибка» на пару знаков шире — сдвигают своё время влево
+// Слот слова статуса в шапке (десктоп): по самому частому исходу «готово». Слово прижато к правому
+// краю слота — короткое «идёт» не оставляет дыры справа, время слева от слота выровнено по правому
+// краю. Редкие «прервано»/«ошибка» на пару знаков шире — сдвигают своё время влево
 const STATUS_SLOT_W = '6.5ch';
 // Место шеврона раскрытия: держится и у карточки без тела
 const CHEVRON_W = 11;
@@ -461,8 +461,8 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
           </span>
         )}
         {/* Десктоп: итог двумя колонками у правого края — [счётчики] [время] [слот статуса].
-            Слот фиксированной ширины, слово в нём слева: «готово», «ошибка», «прервано», «идёт»
-            начинаются с одной линии, а время, прижатое к слоту, — выровнено по правому краю. Так
+            Слот фиксированной ширины, слово в нём справа: «готово», «ошибка», «прервано», «идёт»
+            кончаются на одной линии, а время, прижатое к слоту, — выровнено по правому краю. Так
             колонка карточек в ленте ровная и при завершении ничего не прыгает. Красное — только
             слово статуса */}
         {!captionBelow && (settled || aborted) && totals && (
@@ -473,7 +473,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         {!captionBelow && (settled || aborted || (running && showClock)) && (
           <span data-tool-status="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexShrink: 0, fontSize: FS.xs, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
             {statusClock && <span style={{ color: C.textMuted }}>{statusClock}</span>}
-            <span style={{ minWidth: STATUS_SLOT_W, color: running ? C.textMuted : statusColor }}>
+            <span style={{ minWidth: STATUS_SLOT_W, textAlign: 'right', color: running ? C.textMuted : statusColor }}>
               {running ? 'идёт' : statusWord}
             </span>
           </span>

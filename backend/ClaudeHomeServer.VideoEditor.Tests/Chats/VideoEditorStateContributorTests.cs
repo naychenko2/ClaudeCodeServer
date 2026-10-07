@@ -79,7 +79,9 @@ public sealed class VideoEditorStateContributorTests : IDisposable
         foreach (var rule in new[] { VideoEditorStateContributor.PriorityRule, VideoEditorStateContributor.PersonalPriorityRule })
             rule.Should().Contain(VideoEditorStateContributor.WaitRule);
         VideoEditorStateContributor.WaitRule.Should().Contain("Bash").And.Contain("sleep").And.Contain("только video_wait");
-        VideoEditorStateContributor.PriorityRule.Should().Contain("video_shoot с provider local, а не local_text_to_video");
+        VideoEditorStateContributor.PriorityRule.Should().Contain("video_shoot с provider local, а не local_image_to_video");
+        // Редактор не снимает без первого кадра и не берёт референсы: туда его не отсылаем
+        VideoEditorStateContributor.PriorityRule.Should().NotContain("а не local_text_to_video").And.NotContain("а не local_reference_to_video");
     }
 
     [Fact]

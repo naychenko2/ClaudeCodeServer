@@ -1,6 +1,6 @@
 # ADR-025: «Формат» — размер и пропорции картинок и видео
 
-- **Статус:** реализовано в ветке `feat/media-format` (финальное ревью Александра 2026-10-07, правки Б2.8 внесены), за флагом `media-format` (dark launch, выключен по умолчанию); к мержу — после повторного короткого круга Веры. Разрез — Александр, решения Андрея 2026-10-06. Нарезка на блоки Б1–Б4 — [media-format-implementation-plan-2026-10.md](../research/media-format-implementation-plan-2026-10.md).
+- **Статус:** реализовано, смержено 2026-10-07. Разрез — Александр, решения Андрея 2026-10-06; финальное ревью Александра 2026-10-07 (правки Б2.8 внесены). За флагом `media-format` (dark launch, выключен по умолчанию). Нарезка на блоки Б1–Б4 — [media-format-implementation-plan-2026-10.md](../research/media-format-implementation-plan-2026-10.md).
 - **Основа:** макет [media-format-v1.html](../mockups/media-format-v1.html) и записка [media-format-v1-proposal.md](../mockups/media-format-v1-proposal.md) (тексты интерфейса, 9 сценариев), [ADR-023](ADR-023-turn-context.md) (строка контекста), [ADR-014](ADR-014-internal-subsystems.md) (границы вертикалей), [ADR-021](ADR-021-audio-editor-and-generation-panel.md), [ADR-022](ADR-022-video-editor.md).
 - **Контракты и JSON-примеры:** [ADR-025-contracts.md](ADR-025-contracts.md) — тест `MediaFormatContractExamplesTests` держит их синхронными с типами.
 

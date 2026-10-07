@@ -261,7 +261,7 @@ JSON ниже — единственное описание формы для ф
 `project_local_unsupported`, `outside_allowed_folders`, `film_invalid`, `film_schema_unsupported`, а также общие
 `invalid_request`, `provider_unavailable`, `quote_not_found`, `too_many_jobs`, `heavy_busy`, `chat_not_found`,
 `scene_not_found`, `version_not_found`, `job_not_found`, `file_not_found`, `frame_unavailable`.
-События: `video_thread_changed`, `video_film_changed`, `video_edit_progress|completed|failed`.
+События: `video_thread_changed`, `video_film_changed`, `video_prefs_changed`, `video_edit_progress|completed|failed`.
 `recordType` ленты: `video_scene`, `video_launch_versions`, `video_saved`, `video_film_built`, `video_note`.
 
 #### FrameRef (image)
@@ -747,6 +747,19 @@ JSON ниже — единственное описание формы для ф
   }
 }
 ```
+
+#### VideoPrefsChangedMessage
+
+```json
+{
+  "type": "video_prefs_changed",
+  "sessionId": "s-1",
+  "scopeKey": "p-1",
+  "prefs": { "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": false, "count": 1, "format": { "mode": "aspect", "aspect": "16:9", "tier": "standard", "by": "human", "at": "2026-10-06T12:00:00Z" } }
+}
+```
+
+Уходит владельцу при любой записи префов области: ручка PUT человека и запись формата агентом.
 
 #### VideoEditProgressMessage
 

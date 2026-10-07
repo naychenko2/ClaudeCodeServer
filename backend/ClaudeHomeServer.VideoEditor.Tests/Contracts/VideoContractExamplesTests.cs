@@ -61,6 +61,7 @@ public sealed class VideoContractExamplesTests
         [nameof(VideoEditProgressMessage)] = typeof(VideoEditProgressMessage),
         [nameof(VideoThreadChangedMessage)] = typeof(VideoThreadChangedMessage),
         [nameof(VideoFilmChangedMessage)] = typeof(VideoFilmChangedMessage),
+        [nameof(VideoPrefsChangedMessage)] = typeof(VideoPrefsChangedMessage),
     };
 
     public static TheoryData<string> Names()

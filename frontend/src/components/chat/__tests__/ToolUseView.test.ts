@@ -342,13 +342,12 @@ describe('ToolUseView — витрина Веры', () => {
   const wait = (over: Partial<ToolItem> = {}): ToolItem => ({
     kind: 'tool_use', id: 'w1', name: 'mcp__local-media__local_jobs_wait', input: { job_ids: ['lm_x', 'lm_y'] }, startedAt: 1_000, ...over,
   });
-  // Пустое место под живую точку у готовой карточки
-  const SLOT = 'aria-hidden="true" style="width:18px;flex-shrink:0;display:flex;justify-content:center"';
-
-  it('п. 2: у готовой карточки место под точку держится той же ширины', () => {
+  it('живость несёт сама иконка: у идущей она дышит, у готовой — нет; пустого места слева нет', () => {
+    const live = render(wait());
+    expect(live).toMatch(/class="cc-live-dot"[^>]*><svg/);
     const done = render(wait({ result: '{"all_done":true}', finishedAt: 16_000 }), undefined, false);
     expect(done).not.toContain('cc-live-dot');
-    expect(done).toContain(SLOT);
+    expect(done).not.toContain('width:18px');
   });
 
   it('процента нет — живая точка без полосы; с процентом — полоса на дорожке, процент и «осталось» справа', () => {
@@ -583,7 +582,7 @@ describe('ToolUseView — этапы и итог run_tests', () => {
       progress: { stage: 'running', label: '412 из 7951 · упало 2', percent: 5, exact: true },
     });
     const html = render(item);
-    expect(html).toMatch(/<div style="padding-left:\d+px;padding-right:8px;padding-bottom:\d+px"><div style="display:flex/);
+    expect(html).toMatch(/<div style="padding-right:8px;padding-bottom:\d+px"><div style="display:flex/);
     expect(html).toMatch(/<span style="flex-shrink:0;white-space:nowrap">[^]*412 из 7951 · <span style="color:var\(--c-danger-text\)">упало 2<\/span><\/span><\/div>/);
   });
 

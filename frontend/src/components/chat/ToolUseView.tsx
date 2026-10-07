@@ -5,7 +5,7 @@ import { C, FONT, FS, SP } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
-import { LiveDot, ProgressBar } from '../ui';
+import { ProgressBar } from '../ui';
 import { awaitsToolStart, FAILED_RE, formatClock, isQueued, meterParts, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
 import { useRunningElapsed } from '../../hooks/useRunningElapsed';
 import { toolLabel, toolWord, toolCardLabel, testRunArg, buildArg, localJobsWaitArg, consoleCaption, isConsoleTool, operationOf, RUN_TESTS_TOOL, BUILD_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
@@ -26,13 +26,10 @@ const MONO_PRE_STYLE: React.CSSProperties = {
   overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
 };
 
-// Место слева в шапке: пока инструмент идёт — живая точка (LiveDot), у готовой карточки —
-// пустое место той же ширины, и шапка при завершении не прыгает вбок. Пока сколько осталось
-// неизвестно, живость показывает точка; с процентом под карточкой встаёт полоса на видимой
-// дорожке (ProgressMeter). Строки под шапкой отступают на это место плюс зазор
-const LEAD_W = 18;
+// Зазор между колонками шапки (и колонками полосы прогресса под ней)
 const HEAD_GAP = 10;
-const BELOW_PAD = LEAD_W + HEAD_GAP;
+// Период «дыхания» иконки — тот же, что у .cc-live-dot в index.css
+const BREATH_MS = 2400;
 // Слот слова статуса в шапке (десктоп): по самому частому исходу «готово» — слова начинаются с
 // одной линии, время слева от слота выровнено по правому краю, и у обычной карточки справа нет
 // дыры. Редкие «прервано»/«ошибка» на пару знаков шире — сдвигают своё время влево
@@ -51,7 +48,7 @@ function ProgressMeter({ pct, meter, columns }: { pct: ProgressPct; meter: { per
   const text = meter ? (meter.left ? `${meter.percent} · осталось ${meter.left}` : meter.percent) : null;
   const cell: React.CSSProperties = { flexShrink: 0, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' };
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: columns ? HEAD_GAP : SP.sm, height: CAPTION_LINE_H, paddingLeft: BELOW_PAD, paddingRight: SP.sm }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: columns ? HEAD_GAP : SP.sm, height: CAPTION_LINE_H, paddingRight: SP.sm }}>
       {/* Серая (muted): вторичная информация не спорит с акцентом главного действия */}
       <ProgressBar value={pct.value} estimate={pct.estimate} tone="muted" size="thin" label={[pct.label, text].filter(Boolean).join(' · ') || undefined} transition="width .5s linear" style={{ flex: 1, minWidth: 0 }} />
       {columns ? (
@@ -78,7 +75,7 @@ function FailureList({ failures, failed }: { failures: ToolRunFailure[]; failed:
   const more = failed - failures.length;
   const row: React.CSSProperties = { display: 'flex', minWidth: 0, gap: SP.xs, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, whiteSpace: 'nowrap' };
   return (
-    <div aria-live="polite" style={{ paddingLeft: BELOW_PAD, paddingRight: SP.sm, paddingBottom: SP.xxs }}>
+    <div aria-live="polite" style={{ paddingRight: SP.sm, paddingBottom: SP.xxs }}>
       {failures.map((f, i) => (
         <div key={i} title={f.message ? `${f.name}\n${f.message}` : f.name} style={row}>
           <span style={{ flexShrink: 0, color: C.dangerText }}>✕</span>
@@ -97,12 +94,18 @@ function FailureList({ failures, failed }: { failures: ToolRunFailure[]; failed:
   );
 }
 
-function LeadSlot({ live }: { live: boolean }) {
-  return (
-    <span aria-hidden={!live} style={{ width: LEAD_W, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
-      {live && <LiveDot />}
+// Иконка инструмента: пока он идёт — «дышит» тем же ритмом, что LiveDot (отдельной точки и
+// пустого места под неё нет). Фаза привязана к часам — несколько живых карточек дышат в такт.
+// Пока сколько осталось неизвестно, живость несёт иконка; с процентом под карточкой встаёт
+// полоса на видимой дорожке (ProgressMeter)
+function LeadIcon({ live, children }: { live: boolean; children: React.ReactNode }) {
+  const [delay] = useState(() => -(Date.now() % BREATH_MS));
+  return live ? (
+    <span role="status" aria-label="Выполняется" className="cc-live-dot"
+      style={{ display: 'inline-flex', flexShrink: 0, animationDelay: `${delay}ms` }}>
+      {children}
     </span>
-  );
+  ) : <>{children}</>;
 }
 
 // «упало K» — единственный тревожный сигнал живой карточки: выделен цветом ошибки
@@ -403,9 +406,8 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         style={{ padding: `3px ${SP.sm}px 3px 0`, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
         onClick={() => hasBody && setOpen(o => !o)}
       >
-        <LeadSlot live={!settled && !aborted} />
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: meta.color }}>
-          {meta.icon}
+          <LeadIcon live={!settled && !aborted}>{meta.icon}</LeadIcon>
           <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>{displayName}</span>
         </span>
         {toolArg
@@ -486,12 +488,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
           итог «готово · M:SS» встаёт на её место той же высоты — завершение ленту не двигает.
           У прогона тестов подпись едет в строке этапов, поэтому отдельной строки нет */}
       {captionBelow && running && !hasStages && (
-        <div title={progressText ?? undefined} style={{ margin: `${SP.xxs}px 0 0`, paddingLeft: BELOW_PAD, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+        <div title={progressText ?? undefined} style={{ margin: `${SP.xxs}px 0 0`, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
           {progressText && <ProgressCaption text={progressText} />}
         </div>
       )}
       {captionBelow && (settled || aborted) && (
-        <div style={{ margin: `${SP.xxs}px 0 0`, paddingLeft: BELOW_PAD, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: statusColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+        <div style={{ margin: `${SP.xxs}px 0 0`, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: statusColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
           {status}
         </div>
       )}
@@ -499,7 +501,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
           истории). Справа тот же запас под полосу прокрутки ленты, что у шапки: иначе на 320 px
           хвост «упало K» уезжал под полосу-накладку */}
       {hasStages && (
-        <div style={{ paddingLeft: BELOW_PAD, paddingRight: SP.sm, paddingBottom: SP.xxs }}>
+        <div style={{ paddingRight: SP.sm, paddingBottom: SP.xxs }}>
           <StageLine stages={stages} caption={running ? stageCaption : null} />
         </div>
       )}

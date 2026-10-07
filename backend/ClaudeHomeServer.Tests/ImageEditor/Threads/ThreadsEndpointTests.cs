@@ -27,7 +27,6 @@ public class ThreadsEndpointTests : IDisposable
 
     public ThreadsEndpointTests()
     {
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.TestUsername);
         (_projectId, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
@@ -123,7 +122,6 @@ public class ThreadsEndpointTests : IDisposable
         Store.Create(_ownerId, chat.Id, "a.png", null, focus: true);
 
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
         var (otherProject, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.SecondUsername);
         var (myOtherProject, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
 
@@ -154,7 +152,6 @@ public class ThreadsEndpointTests : IDisposable
     {
         var chat = await Chat();
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
 
         var resp = await second.GetAsync(Threads(chat.Id));
 

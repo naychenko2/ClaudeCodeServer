@@ -32,7 +32,6 @@ public class PersonalChatEndpointTests : IDisposable
             services.AddSingleton<IImageEditJobs>(_jobs);
             services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
         };
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.TestUsername);
         (_projectId, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = OwnerOf(TestWebApplicationFactory.TestUsername);
         _client = _factory.CreateAuthenticatedClient();
@@ -137,7 +136,6 @@ public class PersonalChatEndpointTests : IDisposable
     [Fact]
     public async Task Чужой_личный_чат_чат_проекта_и_несуществующий_404_одним_телом()
     {
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
         var foreign = await PersonalChat(OwnerOf(TestWebApplicationFactory.SecondUsername));
         var projectChat = await Sessions.CreateAsync(_projectId, ClaudeMode.AcceptEdits, name: "Чат проекта");
 

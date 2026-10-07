@@ -60,10 +60,6 @@ public class CharacterEndpointsTests : IDisposable
         return factory;
     }
 
-    // Флаг image-editor снят: метод — no-op, но жив как якорь вызовов в других тестовых файлах
-    internal static void EnableFlag(TestWebApplicationFactory factory, string username) =>
-        _ = factory.Services.GetRequiredService<UserStore>().FindByUsername(username)!;
-
     internal static (string Id, string Root) CreateProject(TestWebApplicationFactory factory, string username)
     {
         var users = factory.Services.GetRequiredService<UserStore>();
@@ -94,7 +90,6 @@ public class CharacterEndpointsTests : IDisposable
     public async Task Создание_список_и_фото_у_владельца()
     {
         var factory = Factory();
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var (projectId, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";
@@ -129,8 +124,6 @@ public class CharacterEndpointsTests : IDisposable
     public async Task Чужой_пользователь_не_читает_фото_персонажа()
     {
         var factory = Factory();
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
-        EnableFlag(factory, TestWebApplicationFactory.SecondUsername);
         var (projectId, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var owner = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";
@@ -152,7 +145,6 @@ public class CharacterEndpointsTests : IDisposable
     {
         var jobs = new CapturingJobs();
         var factory = Factory(jobs);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var (projectId, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";

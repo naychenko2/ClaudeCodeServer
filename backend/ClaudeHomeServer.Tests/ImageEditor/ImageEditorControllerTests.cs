@@ -126,13 +126,6 @@ public class ImageEditorControllerTests : IDisposable
         return factory;
     }
 
-    // Флаг image-editor снят: метод флагов не включает, только резолвит пользователя
-    private static string EnableFlag(TestWebApplicationFactory factory, string username)
-    {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        return users.FindByUsername(username)!.Id;
-    }
-
     private static string CreateProject(TestWebApplicationFactory factory, string username)
     {
         var users = factory.Services.GetRequiredService<UserStore>();
@@ -171,7 +164,7 @@ public class ImageEditorControllerTests : IDisposable
     {
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
-        var userId = EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var userId = factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var project = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!;
         await factory.Services.GetRequiredService<ClaudeHomeServer.Services.ImageEditor.Prefs.ImageProjectPrefsService>().SetFormatAsync(
@@ -197,7 +190,6 @@ public class ImageEditorControllerTests : IDisposable
             new FakeImageEditor("higgsfield", enabled: false, models: FakeImageEditor.Model("nano_banana_2")),
             new FakeImageEditor("fal", models: FakeImageEditor.Model("fal-ai/nano-banana-2/edit")),
         ], new FakeJobs());
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -220,7 +212,6 @@ public class ImageEditorControllerTests : IDisposable
     public async Task Без_драйверов_каталог_пуст_а_запуск_понятный_отказ()
     {
         var factory = Factory();
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -244,7 +235,6 @@ public class ImageEditorControllerTests : IDisposable
     public async Task Higgsfield_НеАдмин_БезЦены_КотировкаИЗапуск202()
     {
         var factory = Factory([new FakeImageEditor("higgsfield", models: FakeImageEditor.Model("nano_banana_2"))]);
-        EnableFlag(factory, TestWebApplicationFactory.SecondUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.SecondUsername);
         var client = factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername,
             TestWebApplicationFactory.SecondPassword);
@@ -264,7 +254,6 @@ public class ImageEditorControllerTests : IDisposable
     {
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("fal-ai/nano-banana-2/edit"))], jobs);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var root = $"/api/projects/{projectId}/image-editor";
@@ -294,8 +283,6 @@ public class ImageEditorControllerTests : IDisposable
     {
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
-        EnableFlag(factory, TestWebApplicationFactory.SecondUsername);
         var ownProject = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var foreignProject = CreateProject(factory, TestWebApplicationFactory.SecondUsername);
         var owner = factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername,
@@ -326,7 +313,6 @@ public class ImageEditorControllerTests : IDisposable
     public async Task Подсистема_картинок_выключена_хост_жив_и_ручки_без_500()
     {
         var factory = Factory(imagesDisabled: true);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var root = $"/api/projects/{projectId}/image-editor";
@@ -364,7 +350,6 @@ public class ImageEditorControllerTests : IDisposable
         var jobs = new FakeJobs { Variant = new EditedImage([0x89, 0x50, 0x4E, 0x47], "image/png") };
         var saver = new FakeSaver();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs, saver: saver);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -386,7 +371,6 @@ public class ImageEditorControllerTests : IDisposable
     {
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -405,7 +389,6 @@ public class ImageEditorControllerTests : IDisposable
     {
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -424,7 +407,6 @@ public class ImageEditorControllerTests : IDisposable
     {
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         // Приманка рядом с папкой проекта: ровно туда ведёт images/../../escape.png
         File.WriteAllBytes(Path.Combine(factory.TempDir, "escape.png"), [0x89, 0x50, 0x4E, 0x47]);
@@ -459,7 +441,6 @@ public class ImageEditorControllerTests : IDisposable
     {
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
         var outside = Path.Combine(factory.TempDir, "outside_" + Guid.NewGuid().ToString("N")[..8]);

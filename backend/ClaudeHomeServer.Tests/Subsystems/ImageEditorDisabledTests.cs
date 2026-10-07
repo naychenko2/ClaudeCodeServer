@@ -70,8 +70,6 @@ public class ImageEditorDisabledTests : IDisposable
     [Fact]
     public void Выключенный_модуль_не_даёт_сервера_в_ход_чата_проекта()
     {
-        CharacterEndpointsTests.EnableFlag(_disabled, TestWebApplicationFactory.TestUsername);
-        CharacterEndpointsTests.EnableFlag(_enabled, TestWebApplicationFactory.TestUsername);
 
         ContextFor(_disabled).Should().BeNull("тулсета нет в реестре — сервер в ход не едет");
         ContextFor(_enabled).Should().NotBeNull("контроль: тот же чат при загруженном модуле сервер получает");
@@ -101,7 +99,6 @@ public class ImageEditorDisabledTests : IDisposable
     [InlineData("POST", "save")]
     public async Task Ручки_редактора_при_выключенном_модуле_404_а_не_500(string method, string tail)
     {
-        CharacterEndpointsTests.EnableFlag(_disabled, TestWebApplicationFactory.TestUsername);
         var (projectId, _) = CharacterEndpointsTests.CreateProject(_disabled, TestWebApplicationFactory.TestUsername);
         var client = _disabled.CreateAuthenticatedClient();
 

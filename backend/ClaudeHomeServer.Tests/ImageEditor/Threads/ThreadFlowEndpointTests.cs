@@ -41,7 +41,6 @@ public class ThreadFlowEndpointTests : IDisposable
             services.AddSingleton<ISessionBroadcaster>(_broadcaster);
             services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
         };
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.TestUsername);
         (_projectId, _root) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
@@ -366,7 +365,6 @@ public class ThreadFlowEndpointTests : IDisposable
         var chat = await Chat();
         var threadId = await OpenHero(chat.Id);
         var before = File.ReadAllText(Store.StatePath(_ownerId, chat.Id));
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
         var (otherProject, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.SecondUsername);
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         var rev = Revision(chat.Id);

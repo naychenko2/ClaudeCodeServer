@@ -142,6 +142,22 @@ public class FeatureFlagServiceTests : IDisposable
         reloaded.IsEnabled(_userId, "composer-context-row").Should().BeFalse("снятый ключ никого не включает");
     }
 
+    [Fact]
+    public void СнятыеФлаги_ОтсутствуютВКаталоге_ОстаётсяРовноТри()
+    {
+        string[] removed =
+        [
+            "chat-context", "chat-branch", "visual-plan", "specialty-prompt-sections", "chat-auto-archive",
+            "mcp-catalog", "project-map-hygiene", "image-editor", "local-projects", "local-media-default",
+            "audio-editor", "midi-editor", "image-panel-v5", "video-editor", "media-format",
+        ];
+        foreach (var key in removed)
+            FeatureFlagCatalog.Exists(key).Should().BeFalse($"флаг {key} снят и не должен возвращаться в каталог");
+
+        FeatureFlagCatalog.All.Select(f => f.Key).Should().BeEquivalentTo(
+            ["workspace-destructive", "spheres", "change-dossiers-recall"]);
+    }
+
     // --- GetDefinitions ---
 
     [Fact]

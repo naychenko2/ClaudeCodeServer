@@ -24,11 +24,6 @@ public sealed class VideoEditorStateContributorTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
-    private sealed class Flags(bool on) : IFeatureFlagGate
-    {
-        public bool IsEnabled(string userId, string key) => on && key == FeatureFlagKeys.VideoEditor;
-    }
-
     private static PromptSessionContext Ctx(bool hasMcp = true, string? projectId = "p1") =>
         new(new Session { Id = "s1", OwnerId = "u1", ProjectId = projectId }, "u1", null, null, HasVideoEditorMcp: hasMcp);
 
@@ -43,7 +38,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     {
         var allowed = new[]
         {
-            typeof(IFeatureFlagGate), typeof(VideoThreadStore), typeof(ClaudeHomeServer.Services.VideoEditor.Prefs.VideoPrefsService),
+            typeof(VideoThreadStore), typeof(ClaudeHomeServer.Services.VideoEditor.Prefs.VideoPrefsService),
             typeof(ClaudeHomeServer.Services.VideoEditor.Films.FilmSideStore), typeof(IConfiguration),
             typeof(Lazy<ChatContextFocusMirror>), // только ленивый: прямое зеркало замыкает цикл через SessionManager
         };
@@ -54,17 +49,16 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     }
 
     [Fact]
-    public void Блок_есть_только_когда_сервер_доехал_и_флаг_включён()
+    public void Блок_есть_только_когда_сервер_доехал()
     {
-        new VideoEditorStateContributor(new Flags(true)).IsEnabled(Ctx()).Should().BeTrue();
-        new VideoEditorStateContributor(new Flags(true)).IsEnabled(Ctx(hasMcp: false)).Should().BeFalse("инструментов у хода нет");
-        new VideoEditorStateContributor(new Flags(false)).IsEnabled(Ctx()).Should().BeFalse();
+        new VideoEditorStateContributor().IsEnabled(Ctx()).Should().BeTrue();
+        new VideoEditorStateContributor().IsEnabled(Ctx(hasMcp: false)).Should().BeFalse("инструментов у хода нет");
     }
 
     [Fact]
     public async Task Секция_едет_хвостом_хода_между_звуком_и_правилом_локальной_модели()
     {
-        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir));
+        var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir));
 
         var section = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single();
 
@@ -87,7 +81,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     [Fact]
     public async Task Блок_несёт_правило_приоритета_и_правило_после_сцены_спроси()
     {
-        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir));
+        var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir));
 
         var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
 
@@ -101,7 +95,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     [Fact]
     public async Task Сними_все_означает_снять_оставшиеся_сохранить_и_собрать_без_вопросов()
     {
-        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir));
+        var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir));
 
         var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
 
@@ -115,7 +109,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     [Fact]
     public async Task Личный_чат_получает_правило_без_локальных_моделей()
     {
-        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir));
+        var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir));
 
         var text = (await contributor.BuildAsync(Ctx(projectId: null), null))!.Sections.Single().Text;
 
@@ -125,7 +119,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     [Fact]
     public async Task Без_запуска_агентом_правил_про_video_shoot_нет()
     {
-        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir), config: Config(false));
+        var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir), config: Config(false));
 
         (await contributor.BuildAsync(Ctx(), null)).Should().BeNull("правил про video_shoot нет, а остального в блоке не осталось");
     }
@@ -149,7 +143,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
         store.AddLaunch("u1", "s1", scene.SceneId,
             new VideoLaunchDto("j1", DateTime.UtcNow, VideoLaunchStatus.Running, false, VideoInitiators.Agent, "fal", "m", 1, "т", null, null),
             new VideoThreadEvent(DateTime.UtcNow, VideoThreadEventKinds.Launched, "Claude запустил: съёмка", scene.SceneId, "j1"));
-        var contributor = new VideoEditorStateContributor(new Flags(true), store);
+        var contributor = new VideoEditorStateContributor(store);
 
         var first = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
         var second = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
@@ -168,7 +162,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
         store.SetFocus("u1", "s1", new VideoFocusDto(scene.SceneId, "video/утро/утро.film"), null);
         store.SetSettings("u1", "s1", scene.SceneId, scene.Settings, null,
             new VideoThreadEvent(DateTime.UtcNow, VideoThreadEventKinds.Versions, "Готово: новых версий 1", scene.SceneId));
-        var contributor = new VideoEditorStateContributor(new Flags(true), store);
+        var contributor = new VideoEditorStateContributor(store);
 
         var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
 
@@ -192,7 +186,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
         // Человек открывает B ручкой контекста: запись нити по-прежнему говорит «A»
         w.Context!.SetPrimary("u1", "s1",
             ChatContextFocusMirror.NewItem(VideoContextKind.FilmKind, "video/утро/b.film", ContextActor.Human, refKey: VideoContextKind.FilmKey), null);
-        var contributor = new VideoEditorStateContributor(new Flags(true), w.Threads, w.Side, mirror: new Lazy<ChatContextFocusMirror>(() => w.Mirror!));
+        var contributor = new VideoEditorStateContributor(w.Threads, w.Side, mirror: new Lazy<ChatContextFocusMirror>(() => w.Mirror!));
 
         var text = (await contributor.BuildAsync(Ctx(), null))!.Sections.Single().Text;
 
@@ -202,7 +196,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     [Fact]
     public async Task без_запуска_агентом_и_без_журнала_блока_нет()
     {
-        var contributor = new VideoEditorStateContributor(new Flags(true), new VideoThreadStore(_dir), config: Config(agentLaunch: false));
+        var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir), config: Config(agentLaunch: false));
 
         (await contributor.BuildAsync(Ctx(), null)).Should().BeNull();
     }

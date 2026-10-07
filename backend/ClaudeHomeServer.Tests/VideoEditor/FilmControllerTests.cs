@@ -31,7 +31,6 @@ public class FilmControllerTests : IDisposable
         _factory.ExtraServices = services => services.AddSingleton<IVideoEngine>(new FakeEngine());
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.VideoEditor, true).Should().BeTrue();
         var dir = Path.Combine(_factory.TempDir, "film_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         _projectRoot = dir;
@@ -218,9 +217,6 @@ public class FilmControllerTests : IDisposable
         (await _client.GetAsync($"/api/video-editor/chats/{strangers.Id}/films")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         var projectChat = await ProjectChat();
         (await _client.GetAsync($"/api/video-editor/chats/{projectChat}/films")).StatusCode.Should().Be(HttpStatusCode.NotFound);
-
-        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(_ownerId, FeatureFlagKeys.VideoEditor, false);
-        (await _client.GetAsync($"{Root}/films")).StatusCode.Should().Be(HttpStatusCode.NotFound, "без флага ручки фильма закрыты");
     }
 
     [Fact]

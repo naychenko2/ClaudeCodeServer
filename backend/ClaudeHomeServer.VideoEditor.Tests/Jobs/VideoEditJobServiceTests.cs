@@ -52,11 +52,6 @@ public sealed class VideoEditJobServiceTests : IDisposable
         public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 
-    private sealed class Flags(bool preferLocal) : IFeatureFlagGate
-    {
-        public bool IsEnabled(string userId, string key) => preferLocal && key == FeatureFlagKeys.LocalMediaDefault;
-    }
-
     private sealed class Fake(string key, string unit, Func<VideoRequest, IProgress<VideoProgress>, CancellationToken, Task<VideoResult>> run,
         double perSec = 0.1, string? refusal = null, bool enabled = true) : IVideoEngine
     {
@@ -90,12 +85,12 @@ public sealed class VideoEditJobServiceTests : IDisposable
             null, true, "r1", null));
     }
 
-    private VideoEditJobService Service(IEnumerable<IVideoEngine> engines, bool preferLocal = false)
+    private VideoEditJobService Service(IEnumerable<IVideoEngine> engines)
     {
         var workspace = new VideoEditWorkspace(Path.Combine(_root, "ws"));
         var threads = new VideoJobThreads(_store, NullLogger<VideoJobThreads>.Instance, broadcaster: _events);
         return new VideoEditJobService(engines, workspace, threads, NullLogger<VideoEditJobService>.Instance,
-            spend: _spend, broadcaster: _events, flags: new Flags(preferLocal));
+            spend: _spend, broadcaster: _events);
     }
 
     private string AddScene(string text = "закат над морем")
@@ -273,16 +268,14 @@ public sealed class VideoEditJobServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Авто_ставит_local_первым_только_по_флагу_владельца()
+    public async Task Авто_ставит_local_первым()
     {
         Fake[] Engines() => [new Fake("fal", "usd", Ok), new Fake("local", "free", Ok, perSec: 0)];
         var scene = AddScene();
 
-        var plain = (await Service(Engines()).QuoteAsync(Owner, Scope, QuoteOf(scene), default)).Value!;
-        var preferring = (await Service(Engines(), preferLocal: true).QuoteAsync(Owner, Scope, QuoteOf(scene), default)).Value!;
+        var quote = (await Service(Engines()).QuoteAsync(Owner, Scope, QuoteOf(scene), default)).Value!;
 
-        plain.Provider.Should().Be("fal");
-        preferring.Provider.Should().Be("local");
+        quote.Provider.Should().Be("local");
     }
 
     [Fact]

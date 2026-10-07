@@ -36,10 +36,10 @@ public abstract class VideoEditorEndpoints(
 
     protected IActionResult StateIn(VideoEditScope scope, string sessionId) =>
         Ok(new VideoStateDto(threads.View(UserId, sessionId),
-            VideoCatalogView.Build(engines, scope, jobs.PrefersLocal(UserId)), prefs.Get(UserId, scope)));
+            VideoCatalogView.Build(engines, scope, preferLocal: true), prefs.Get(UserId, scope)));
 
     protected IActionResult CatalogIn(VideoEditScope scope) =>
-        Ok(VideoCatalogView.Build(engines, scope, jobs.PrefersLocal(UserId)));
+        Ok(VideoCatalogView.Build(engines, scope, preferLocal: true));
 
     protected IActionResult PrefsIn(VideoEditScope scope) => Ok(prefs.Get(UserId, scope));
 

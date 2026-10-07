@@ -178,7 +178,7 @@ public sealed class VideoFormatJobTests : IDisposable
         frames ??= new Frames(new() { ["t16x9"] = 1, ["t9x16"] = 2 });
         var reader = new VideoFrameReader(frames, workspace, withRaster ? raster ?? new FakeRaster() : null);
         var svc = new VideoEditJobService(withNeighbor ? new IVideoEngine[] { engine, new Neighbor() } : [engine], workspace, threads, NullLogger<VideoEditJobService>.Instance,
-            prefs, spend, _events, flags: null, frames: reader);
+            prefs, spend, _events, frames: reader);
         return (svc, prefs);
     }
 

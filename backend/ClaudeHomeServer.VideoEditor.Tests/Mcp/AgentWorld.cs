@@ -48,7 +48,7 @@ internal sealed class AgentWorld : IDisposable
     public string Chat => FilmWorld.Session;
 
     public AgentWorld(bool blocking = false, bool agentLaunch = true, bool delegatedDenied = false, bool withGate = true,
-        bool flagOn = true, bool withContext = false)
+        bool withContext = false)
     {
         F = new FilmWorld(new ToolDsp(), withContext);
         Engine = new FakeEngine("fal", blocking);
@@ -68,18 +68,16 @@ internal sealed class AgentWorld : IDisposable
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string id, string owner) => Sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.VideoEditor)).Returns(flagOn);
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(F.Project);
         Gate.Setup(g => g.Deny(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string _, string _, string action) => delegatedDenied ? $"{action}: делегированный ход — отказ" : null);
 
-        Toolset = new VideoEditorToolset(accessor.Object, flags.Object, projects.Object, [Engine], F.JobThreads, Jobs, Prefs,
+        Toolset = new VideoEditorToolset(accessor.Object, projects.Object, [Engine], F.JobThreads, Jobs, Prefs,
             Scenes, F.Service, Saver, Assembler, withGate ? Gate.Object : null, config);
 
         // Ручки человека поверх тех же сервисов: гейт — настоящий, поверх подставных справочников
-        var scopeGate = new VideoEditScopeGate(flags.Object, projects.Object, F.Directory.Object);
+        var scopeGate = new VideoEditScopeGate(projects.Object, F.Directory.Object);
         Rest = new VideoEditorController(scopeGate, [Engine], Jobs, F.JobThreads, Prefs, F.Workspace, Scenes)
             { ControllerContext = UserContext() };
         var music = new FilmMusicComposer(F.Service, F.Side, F.JobThreads, projects.Object, NullLogger<FilmMusicComposer>.Instance);

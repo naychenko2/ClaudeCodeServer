@@ -111,7 +111,20 @@ function schedulePut() {
 // Вступление в группы статусов. БЕЗ кеша «уже вступили»: join идемпотентен и дёшев,
 // а кеш ломался о чужой leaveProject — воркспейс при размонтировании покидает группу
 // своего проекта, и стена после zoom-возврата оставалась глухой до реконнекта.
-async function joinGroups(ownerId: string | undefined) {
+// Владелец для JoinUser — ТЕКУЩИЙ из storage в момент вызова: запомненный _ownerId после
+// смены аккаунта без F5 принадлежал бы прежнему пользователю (сервер отказывает JoinUser
+// чужого id, а группа user_{новый} остаётся без подписки). _ownerId — лишь запасной вариант,
+// когда storage недоступен/пуст (док воркспейса зовёт initWall без id).
+function currentOwnerId(): string | undefined {
+  try {
+    const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+    if (uid) return uid;
+  } catch { /* storage недоступен */ }
+  return _ownerId;
+}
+
+async function joinGroups() {
+  const ownerId = currentOwnerId();
   const pids = new Set(_state.chats.map(c => c.projectId).filter((p): p is string => !!p));
   for (const pid of pids) {
     try { await joinProject(pid); } catch { /* офлайн — реконнект добъёт */ }
@@ -176,7 +189,7 @@ export async function refresh(): Promise<void> {
       // Фокус чинится, если его чат ушёл из набора
       focusId: _state.focusId && chats.some(c => c.id === _state.focusId) ? _state.focusId : (chats[0]?.id ?? null),
     });
-    void joinGroups(_ownerId);
+    void joinGroups();
   } catch {
     // Офлайн/ошибка: уже показанный состав НЕ стираем — пустой экран читался бы как
     // «стену снесли». loaded ставим только чтобы уйти с вечного «ничего» при старте.
@@ -204,7 +217,7 @@ export function addChat(s: Session): AddChatResult {
   if (_state.chats.some(c => c.id === s.id)) return 'duplicate';
   if (_state.chats.length >= MAX_CHATS) return 'full';
   setState({ chats: [..._state.chats, s], focusId: s.id });
-  void joinGroups(_ownerId);
+  void joinGroups();
   schedulePut();
   return 'added';
 }
@@ -331,6 +344,11 @@ export function updateChat(s: Session): void {
   // колонка стала бы призраком. removeChat сам чинит фокус и сохраняет состав PUT'ом
   if (isArchivedChat(s)) { removeChat(s.id); return; }
   setState({ chats: _state.chats.map(c => (c.id === s.id ? s : c)) });
+}
+
+// Выход / 401: запомненный владелец принадлежал ушедшему пользователю
+export function resetWallOwner(): void {
+  _ownerId = undefined;
 }
 
 // Для тестов: полный сброс модульного состояния

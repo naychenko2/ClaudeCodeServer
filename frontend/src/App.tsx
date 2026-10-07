@@ -45,7 +45,7 @@ import { getSubsystem, getSubsystemTab } from './lib/subsystems/registry'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
-import { useWallFocusProject } from './features/wall/wallStore'
+import { useWallFocusProject, resetWallOwner } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -550,6 +550,7 @@ export default function App() {
       sessionStorage.removeItem('cc_user_id')
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       clearMe()
+      resetWallOwner()
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
       // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
@@ -1228,6 +1229,7 @@ export default function App() {
     sessionStorage.removeItem('cc_user_id')
     idbClear() // чистим кэш при смене аккаунта/сервера
     clearMe()
+    resetWallOwner()
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
     // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике

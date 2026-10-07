@@ -24,10 +24,10 @@ vi.mock('../../../lib/api', () => ({
 
 import type { Project, Session } from '../../../types';
 import { api } from '../../../lib/api';
-import { onMessage } from '../../../lib/signalr';
+import { onMessage, onReconnected, joinUser } from '../../../lib/signalr';
 import {
   slotCount, MAX_SLOTS, addChat, removeChat, reorderChat, moveToVisible, updateChat,
-  getWallState, chatStatus, initWall, refresh, focusChat, getWallFocusProject, __resetWallForTests,
+  getWallState, chatStatus, initWall, resetWallOwner, refresh, focusChat, getWallFocusProject, __resetWallForTests,
 } from '../wallStore';
 
 function fakeSession(id: string, projectId?: string): Session {
@@ -230,5 +230,48 @@ describe('проект фокусной колонки (цвет титлбар�
     const handler = (onMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
     handler({ type: 'status_changed', sessionId: 'a', status: 'working' });
     expect(getWallFocusProject()).toBe(before);
+  });
+});
+
+describe('JoinUser после смены аккаунта', () => {
+  // Окружение vitest — node: storage подменяем простой картой
+  let store: Map<string, string>;
+  beforeEach(() => {
+    store = new Map();
+    const mem = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+    };
+    vi.stubGlobal('localStorage', mem);
+    vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {} });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('реконнект зовёт JoinUser с текущим cc_user_id, а не с запомненным прежним', async () => {
+    localStorage.setItem('cc_user_id', 'admin');
+    initWall('admin');
+    await vi.advanceTimersByTimeAsync(0);
+    (joinUser as ReturnType<typeof vi.fn>).mockClear();
+
+    // смена аккаунта без F5: storage уже у нового пользователя, стор про это не знает
+    localStorage.setItem('cc_user_id', 'userB');
+    const onRec = (onReconnected as ReturnType<typeof vi.fn>).mock.calls[0][0] as () => void;
+    onRec();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const ids = (joinUser as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0]);
+    expect(ids).toContain('userB');
+    expect(ids).not.toContain('admin');
+  });
+
+  it('после resetWallOwner запомненный владелец не используется', async () => {
+    initWall('admin');
+    await vi.advanceTimersByTimeAsync(0);
+    resetWallOwner();
+    (joinUser as ReturnType<typeof vi.fn>).mockClear();
+    const onRec = (onReconnected as ReturnType<typeof vi.fn>).mock.calls[0][0] as () => void;
+    onRec();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(joinUser).not.toHaveBeenCalled();
   });
 });

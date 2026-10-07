@@ -33,9 +33,10 @@ const MONO_PRE_STYLE: React.CSSProperties = {
 const LEAD_W = 18;
 const HEAD_GAP = 10;
 const BELOW_PAD = LEAD_W + HEAD_GAP;
-// Слот слова статуса в шапке (десктоп): по самому длинному частому слову «прервано» — слова
-// разной длины начинаются с одной линии, а время слева от слота выровнено по правому краю
-const STATUS_SLOT_W = '8.5ch';
+// Слот слова статуса в шапке (десктоп): по самому частому исходу «готово» — слова начинаются с
+// одной линии, время слева от слота выровнено по правому краю, и у обычной карточки справа нет
+// дыры. Редкие «прервано»/«ошибка» на пару знаков шире — сдвигают своё время влево
+const STATUS_SLOT_W = '6.5ch';
 // Место шеврона раскрытия: держится и у карточки без тела
 const CHEVRON_W = 11;
 // Процент прогресса: факт (настоящие шаги) — сплошная заливка, оценка — пунктир
@@ -59,7 +60,9 @@ function ProgressMeter({ pct, meter, columns }: { pct: ProgressPct; meter: { per
           {meter?.left && (
             <span data-meter-left="" style={{ ...cell, display: 'flex', alignItems: 'center', gap: SP.sm }}>
               <span>{meter.left}</span>
-              <span style={{ minWidth: STATUS_SLOT_W }}>осталось</span>
+              {/* Слот ровно по ширине шапки, «осталось» длиннее — выходит вправо на место
+                  шеврона (здесь оно пустое), и время остаётся в своей колонке */}
+              <span style={{ width: STATUS_SLOT_W, overflow: 'visible' }}>осталось</span>
             </span>
           )}
           <span aria-hidden style={{ width: CHEVRON_W, flexShrink: 0 }} />

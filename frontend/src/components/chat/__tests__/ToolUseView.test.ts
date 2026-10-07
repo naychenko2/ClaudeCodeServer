@@ -267,7 +267,7 @@ describe('ToolUseView — мобила: строка подписи пережи
 
   it('десктоп: время раньше слова статуса, слово — в слоте фиксированной ширины', () => {
     const done = render(wait({ result: '{"all_done":true}', finishedAt: 16_000 }), false);
-    expect(done).toMatch(/data-tool-status=""[^>]*><span[^>]*>0:15<\/span><span style="min-width:8\.5ch[^"]*">готово</);
+    expect(done).toMatch(/data-tool-status=""[^>]*><span[^>]*>0:15<\/span><span style="min-width:6\.5ch[^"]*">готово</);
   });
 
   it('десктоп: место шеврона держится и у карточки без тела', () => {
@@ -424,7 +424,7 @@ describe('ToolUseView — витрина Веры', () => {
     const html = render(bash, [bash, { kind: 'interrupted', ts: 71_000 }], false);
     expect(headStatus(html)).toBe('1:10 прервано');
     // Красное — только слово статуса, время серое
-    expect(html).toMatch(/>1:10<\/span><span style="min-width:8\.5ch;color:var\(--c-danger-text\)">прервано</);
+    expect(html).toMatch(/>1:10<\/span><span style="min-width:6\.5ch;color:var\(--c-danger-text\)">прервано</);
   });
 
   // Карточка PowerShell, как и Bash, ждёт tool_started: до фактического старта команда не
@@ -518,7 +518,7 @@ describe('ToolUseView — этапы и итог run_tests', () => {
     const stages = [{ stage: 'build', label: 'сборка', startedAt: 0, endedAt: 16_000, failed: true }];
     const html = render(run({ name, input, result: 'сборка упала (код выхода 1)', finishedAt: 16_000, stages }), undefined, false);
     expect(headStatus(html)).toBe('0:16 ошибка');
-    expect(html).toMatch(/>0:16<\/span><span style="min-width:8\.5ch;color:var\(--c-danger-text\)">ошибка</);
+    expect(html).toMatch(/>0:16<\/span><span style="min-width:6\.5ch;color:var\(--c-danger-text\)">ошибка</);
     expect(html).not.toContain('готово');
     expect(html).toContain('✕ сборка');
   });

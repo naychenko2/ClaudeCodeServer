@@ -136,7 +136,7 @@ public static class ImageEditCatalog
         }
         else
         {
-            // «Авто» при local-media-default (флаг владельца) идёт на свою видеокарту первой, если она доступна:
+            // «Авто» с preferLocal идёт на свою видеокарту первой, если она доступна:
             // облако — только явным выбором. Явный выбор админа сюда не попадает (ветка выше)
             var local = preferLocal ? providers.FirstOrDefault(p => p.Available && p.Key == LocalProviderKey) : null;
             def = new ImageEditDefaultDto((local ?? providers.FirstOrDefault(p => p.Available))?.Key, AutoModelId);

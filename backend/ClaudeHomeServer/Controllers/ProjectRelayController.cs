@@ -88,7 +88,7 @@ public sealed class ProjectRelayController(
         Conflict(new { error = reason, code = RelayProtocol.UnavailableCode });
 
     // Всё, что можно решить без устройства, решается до канала: чужой проект, чужой владелец,
-    // серверный проект, выключенный флаг, офлайн — отказ, а не таймаут
+    // серверный проект, офлайн — отказ, а не таймаут
     private async Task<IActionResult> RelayAsync(string projectId, string template,
         Func<Project, RelayRequest, RelayRequest> args, CancellationToken ct)
     {

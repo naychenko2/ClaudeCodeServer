@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 // только проходят свой гейт и зовут методы отсюда. Всё, что читает диск проекта, берёт
 // scope.Project и у личной области отказывает до обращения к RootPath.
 //
-// Гейты по порядку: флаг и область (404, у наследника) → поставщик доступен (409
+// Гейты по порядку: область (404, у наследника) → поставщик доступен (409
 // provider_unavailable) → исполнитель задач подключён (503). Всё, что приходит из отключаемых
 // подсистем, — nullable (ADR-014): без Images нет растра, и transform с jobs отвечают 503
 // raster_unavailable, а не 500.
@@ -53,7 +53,7 @@ public abstract class ImageEditorEndpoints(
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
         var heavy = config?.GetValue("ImageEditor:HeavyFileMb", DefaultHeavyFileMb) ?? DefaultHeavyFileMb;
         var limits = ImageEditCatalog.DefaultLimits with { HeavyFileMb = heavy > 0 ? heavy : DefaultHeavyFileMb };
-        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits, PreferLocal);
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits, preferLocal: true);
         // Без растра (подсистема картинок выключена) редактор не работает: ответ остаётся 200,
         // чтобы фронт показал причину, а не общий сбой
         if (jobs is null || raster is null) catalog = catalog with { Reason = ImageEditCatalogReasons.SubsystemDisabled };
@@ -153,15 +153,12 @@ public abstract class ImageEditorEndpoints(
         var place = ImagePlaceKeys.ImageEditor;
         var adminProvider = placeSettings?.ProviderFor(place);
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
-        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, preferLocal: PreferLocal);
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, preferLocal: true);
         // Свою видеокарту «Авто» берёт только под операцию, которую она умеет; иначе — как без неё
         if (!ImageExecutorRows.LocalCan(catalog, op, hasImage, hasMask))
             catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel);
         return ImageExecutorRows.Build(catalog, editors, op, hasImage, hasMask);
     }
-
-    // «Авто» всегда сначала пробует локальную модель (ADR-021 §2, флаг local-media-default снят)
-    private const bool PreferLocal = true;
 
     protected async Task<IActionResult> StartIn(ImageEditScope scope, StartJobForm form, CancellationToken ct)
     {

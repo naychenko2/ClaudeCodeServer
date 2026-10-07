@@ -1,8 +1,7 @@
 namespace ClaudeHomeServer.Services.Composition;
 
 // Узкий шов проверки фич-флага для выноса Turn (Этап 5). Контрибьюторы системного
-// промпта используют только `IsEnabled(userId, key)` — гейт секций (specialty-prompt-sections,
-// change-dossiers-recall). Полный FeatureFlagService содержит GetDefinitions/GetEffective/
+// промпта используют только `IsEnabled(userId, key)` — гейт секции (change-dossiers-recall). Полный FeatureFlagService содержит GetDefinitions/GetEffective/
 // Exists и тянет ModuleRegistry (внешние модули) — вертикали Turn они не нужны, а
 // прямая ссылка привела бы к циклу Turn → Main → Modules.
 //

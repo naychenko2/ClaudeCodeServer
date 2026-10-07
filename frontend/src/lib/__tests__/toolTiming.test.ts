@@ -76,25 +76,29 @@ describe('meterText — подпись справа от полосы', () => {
     // На событии: этап 30 с, 25% → ещё 90 с. Прошло 30 с без событий → осталось 60 с
     expect(meterText({ stage: 'running', percent: 25, exact: true }, 60_000, 30_000)).toBe('25% · осталось ≈1:00');
   });
-  it('срок вышел, а событий нет (висит хвост) — «осталось» убираем', () => {
-    expect(meterText({ stage: 'running', percent: 25, exact: true }, 150_000, 120_000)).toBe('25%');
+  it('срок вышел, а событий нет (висит хвост) — вместо времени «почти готово»', () => {
+    expect(meterText({ stage: 'running', percent: 25, exact: true }, 150_000, 120_000)).toBe('25% · почти готово');
   });
-  it('хвост (≥ 98%) темпом не обещаем', () => {
-    expect(meterText({ stage: 'running', percent: 99, exact: true }, 378_000, 0)).toBe('99%');
+  it('хвост (≥ 98%) темпом не обещаем — «почти готово»', () => {
+    expect(meterText({ stage: 'running', percent: 99, exact: true }, 378_000, 0)).toBe('99% · почти готово');
+  });
+  it('прогноза не было вовсе — «почти готово» не обещаем', () => {
+    expect(meterParts({ stage: 'running', percent: 5, exact: true }, 60_000, 0)).toEqual({ percent: '5%', left: null, almost: false });
+    expect(meterParts({ stage: 'running', percent: 99, exact: true }, 378_000, null)).toEqual({ percent: '99%', left: null, almost: false });
   });
   it('без метки события (после F5) — без «осталось»', () => {
     expect(meterText({ stage: 'running', percent: 25, exact: true }, 30_000, null)).toBe('25%');
     expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, null)).toBe('≈40%');
   });
   it('по частям — для колонок: процент отдельно, оставшееся время отдельно', () => {
-    expect(meterParts({ stage: 'running', percent: 25, exact: true }, 60_000, 30_000)).toEqual({ percent: '25%', left: '≈1:00' });
-    expect(meterParts({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 15_000)).toEqual({ percent: '≈40%', left: '~1:00' });
-    expect(meterParts({ stage: 'running', percent: 99, exact: true }, 378_000, 0)).toEqual({ percent: '99%', left: null });
+    expect(meterParts({ stage: 'running', percent: 25, exact: true }, 60_000, 30_000)).toEqual({ percent: '25%', left: '≈1:00', almost: false });
+    expect(meterParts({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 15_000)).toEqual({ percent: '≈40%', left: '~1:00', almost: false });
+    expect(meterParts({ stage: 'running', percent: 99, exact: true }, 378_000, 0)).toEqual({ percent: '99%', left: null, almost: true });
     expect(meterParts({ stage: 'running', label: 'x' }, 0, 0)).toBeNull();
   });
   it('ETA источника тоже отсчитывается', () => {
     expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 15_000)).toBe('≈40% · осталось ~1:00');
-    expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 80_000)).toBe('≈40%');
+    expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 80_000)).toBe('≈40% · почти готово');
   });
 });
 

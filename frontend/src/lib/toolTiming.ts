@@ -61,17 +61,20 @@ export const ETA_TAIL_PERCENT = 98;
 // sinceMs — сколько прошло с последнего события прогресса (progressAt); null — метки нет (после
 // F5 до первого события): «осталось» тогда не показываем. Оценка фиксируется на МОМЕНТ события
 // и отсчитывается вниз, а не пересчитывается на каждом рендере: пока хвостовые тесты висят,
-// процент стоит, а время этапа растёт — пересчёт держал бы «≈0:03» вечно. Истекла — молчим
+// процент стоит, а время этапа растёт — пересчёт держал бы «≈0:03» вечно. Истекла или хвост —
+// «почти готово» на месте времени: колонка не пропадает, и полоса не растягивается в конце
 export function meterText(p: ToolProgress | null | undefined, stageMs: number | null, sinceMs: number | null): string | null {
   const m = meterParts(p, stageMs, sinceMs);
-  return m ? (m.left ? `${m.percent} · осталось ${m.left}` : m.percent) : null;
+  return m ? (m.left ? `${m.percent} · осталось ${m.left}` : m.almost ? `${m.percent} · почти готово` : m.percent) : null;
 }
 
 // То же по частям — для раскладки колонками (десктоп): процент у конца полосы, оставшееся время —
-// в колонке времени шапки, слово «осталось» — в слоте статуса. left — «≈0:13» / «~1:00» или null
+// в колонке времени шапки, слово «осталось» — в слоте статуса. left — «≈0:13» / «~1:00» или null;
+// almost — прогноз был, но истёк, или хвост: вместо времени «почти готово». Прогноза не было
+// вовсе (мало выборки, после F5) — almost нет: «почти готово» на 5% было бы враньём
 export function meterParts(
   p: ToolProgress | null | undefined, stageMs: number | null, sinceMs: number | null,
-): { percent: string; left: string | null } | null {
+): { percent: string; left: string | null; almost: boolean } | null {
   if (typeof p?.percent !== 'number') return null;
   const percent = `${p.exact ? '' : '≈'}${Math.round(toolProgressPercent(p)!)}%`;
   const since = sinceMs == null ? null : Math.max(0, sinceMs);
@@ -88,7 +91,8 @@ export function meterParts(
   const shown = left != null && left >= 1000
     ? `${typeof p.etaSeconds === 'number' && p.etaSeconds > 0 ? '~' : '≈'}${formatClock(left)}`
     : null;
-  return { percent, left: shown };
+  const tail = since != null && p.exact === true && stageMs != null && p.percent >= ETA_TAIL_PERCENT;
+  return { percent, left: shown, almost: shown == null && (left != null || tail) };
 }
 
 // Процент для полосы; null — полоса остаётся неопределённой. Потолок: у оценки 95, у настоящих

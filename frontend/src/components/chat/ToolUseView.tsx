@@ -45,8 +45,10 @@ type ProgressPct = { value: number; estimate: boolean; label?: string };
 // columns (десктоп): справа те же колонки, что у итога в шапке — оставшееся время под временем
 // «0:25», слово «осталось» в слоте статуса под «идёт», место шеврона; зазоры — как в шапке.
 // Телефон: колонок в шапке нет — «63% · осталось ≈0:13» одной строкой
-function ProgressMeter({ pct, meter, columns }: { pct: ProgressPct; meter: { percent: string; left: string | null } | null; columns: boolean }) {
-  const text = meter ? (meter.left ? `${meter.percent} · осталось ${meter.left}` : meter.percent) : null;
+// Прогноз истёк или хвост — на месте времени «почти», в слоте статуса «готово»: колонка не
+// пропадает, и полоса в конце не растягивается на её место
+function ProgressMeter({ pct, meter, columns }: { pct: ProgressPct; meter: { percent: string; left: string | null; almost: boolean } | null; columns: boolean }) {
+  const text = meter ? (meter.left ? `${meter.percent} · осталось ${meter.left}` : meter.almost ? `${meter.percent} · почти готово` : meter.percent) : null;
   const cell: React.CSSProperties = { flexShrink: 0, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: columns ? HEAD_GAP : SP.sm, height: CAPTION_LINE_H, paddingRight: SP.sm }}>
@@ -55,12 +57,12 @@ function ProgressMeter({ pct, meter, columns }: { pct: ProgressPct; meter: { per
       {columns ? (
         <>
           {meter && <span style={cell}>{meter.percent}</span>}
-          {meter?.left && (
+          {(meter?.left || meter?.almost) && (
             <span data-meter-left="" style={{ ...cell, display: 'flex', alignItems: 'center', gap: SP.sm }}>
-              <span>{meter.left}</span>
+              <span>{meter.left ?? 'почти'}</span>
               {/* Слот ровно по ширине шапки, «осталось» длиннее — выходит вправо на место
                   шеврона (здесь оно пустое), и время остаётся в своей колонке */}
-              <span style={{ width: STATUS_SLOT_W, overflow: 'visible' }}>осталось</span>
+              <span style={{ width: STATUS_SLOT_W, overflow: 'visible' }}>{meter.left ? 'осталось' : 'готово'}</span>
             </span>
           )}
           <span aria-hidden style={{ width: CHEVRON_W, flexShrink: 0 }} />

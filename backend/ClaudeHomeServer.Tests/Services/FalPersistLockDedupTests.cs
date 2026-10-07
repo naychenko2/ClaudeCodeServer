@@ -192,39 +192,6 @@ public class FalPersistLockDedupTests : IDisposable
             .Stages.Should().Equal(final);
     }
 
-    // Старт MCP-инструмента с прогрессом: карточка уже в ленте — tool_started уходит сразу;
-    // ещё не ушла — событие не шлётся (клиент выбросил бы старт неизвестной карточки)
-    [Fact]
-    public void RecordToolStarted_КарточкаВЛенте_ШлётToolStarted_ИначеЖдёт()
-    {
-        var user = _userStore.Add("started-user", "pw-123456", "user");
-        var projDir = Directory.CreateDirectory(Path.Combine(_dir, "proj_started")).FullName;
-        var project = _projectManager.Create("Started", projDir, user.Id, user.Username);
-        var session = _sessions.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: "cs-started-1")
-            .GetAwaiter().GetResult();
-        var acc = AccumulatorOf(session.Id);
-        acc.OnToolUse("t1", "mcp__dev__build", new { }, startedAt: 1_000);
-        acc.OnToolUse("t2", "mcp__dev__build", new { }, startedAt: 1_000);
-        acc.OnToolAnnounced("t1");
-
-        _sessions.RecordToolStarted(session.Id, "t1");
-        _sessions.RecordToolStarted(session.Id, "t2");
-
-        var started = _broadcaster.Session.Select(t => t.Message).OfType<ToolStartedMessage>().ToList();
-        started.Should().ContainSingle().Which.ToolUseId.Should().Be("t1");
-        started[0].StartedAt.Should().BeGreaterThan(1_000);
-        started[0].SessionId.Should().Be(session.Id);
-        acc.OnToolAnnounced("t2").Should().NotBeNull("отложенный старт уходит следом за карточкой");
-    }
-
-    private TurnAccumulator AccumulatorOf(string sessionId)
-    {
-        var entries = (System.Collections.IDictionary)typeof(SessionManager).GetField("_sessions",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(_sessions)!;
-        var entry = entries[sessionId]!;
-        return (TurnAccumulator)entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
-    }
-
     // Сбрасывает Accumulator в null у записи SessionEntry — без этого CreateAsync
     // инициализирует Accumulator и Publish*/AppendStored используют его ветку
     // (у которой собственный внутренний лок). Сбрасывая Accumulator, заставляем

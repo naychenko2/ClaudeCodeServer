@@ -113,7 +113,7 @@ public class TestsToolsetTests : IDisposable
     public async Task ВызовСToolUseId_СтавитФактическийСтартКарточке()
     {
         var env = Build(withService: false);
-        var acc = AccumulatorOf(env);
+        var acc = env.Sessions.AccumulatorOf(env.Session.Id);
         acc.OnToolUse("toolu_run1", "mcp__tests__run_tests", new { }, startedAt: 1_000);
         acc.OnToolUse("toolu_run2", "mcp__tests__run_tests", new { }, startedAt: 1_000);
 
@@ -124,14 +124,6 @@ public class TestsToolsetTests : IDisposable
         started.Started.Should().BeTrue();
         started.StartedAt.Should().BeGreaterThan(1_000);
         tools.Single(t => t.Id == "toolu_run2").Started.Should().BeNull("второй вызов ещё ждёт своей очереди");
-    }
-
-    private static TurnAccumulator AccumulatorOf(Env env)
-    {
-        var entries = (System.Collections.IDictionary)typeof(SessionManager).GetField("_sessions",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(env.Sessions)!;
-        var entry = entries[env.Session.Id]!;
-        return (TurnAccumulator)entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
     }
 
     [Fact]
@@ -720,13 +712,13 @@ public class TestsToolsetTests : IDisposable
     }
 
     internal static (SessionManager Sessions, ProjectManager Projects, PersonaManager Personas) BuildSessionManager(
-        IConfiguration config)
+        IConfiguration config, TestSessionBroadcaster? broadcaster = null)
     {
         var userStore = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);
         var projectManager = new ProjectManager(config, userStore, appSettings);
         var history = new ChatHistoryService(config);
-        var broadcaster = new TestSessionBroadcaster();
+        broadcaster ??= new TestSessionBroadcaster();
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
         var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),

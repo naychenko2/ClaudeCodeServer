@@ -137,10 +137,11 @@ public sealed class VideoEditorStateContributor(
         + WaitRule;
 
     public const string PriorityRule = EditorFirst
-        + " Просьба снять локально / на своей видеокарте / бесплатно — video_shoot с provider local, а не local_text_to_video и не local_image_to_video. "
-        + "Прямые local_text_to_video, local_image_to_video, local_reference_to_video, generate_video Higgsfield и fal "
-        + "(run_model, submit_job) для видео — только если человек явно попросил сделать напрямую, мимо редактора: "
-        + "иначе получится ролик без карточки сцены.";
+        + " Просьба снять локально / на своей видеокарте / бесплатно по сцене с первым кадром — video_shoot с provider local, "
+        + "а не local_image_to_video: локальная модель редактора без первого кадра не снимает. "
+        + "Прямые local_text_to_video и local_reference_to_video (у редактора нет ни видео без кадра, ни референсов), "
+        + "generate_video Higgsfield и fal (run_model, submit_job) — только если человек явно попросил сделать напрямую, "
+        + "мимо редактора: иначе получится ролик без карточки сцены.";
 
     // Личный чат: локальных моделей для видео и фильмов нет
     public const string PersonalPriorityRule = EditorFirst

@@ -425,7 +425,7 @@ function fmtChip() {
     if (st.action === 'removeBg') return { cls: 'dim', html: `${I('ratio', 's')}<b>Как у исходника</b>` };
     if (st.edit.mode === 'outpaint') { const [w, h] = outpaintSize(st.edit.aspect); return { cls: '', html: `${I('ratio', 's')}<b>${st.edit.aspect}</b><span class="v">· дорисовать${mob ? '' : ` · ${w}×${h}`}</span>${ag}` }; }
     const src = srcNow();
-    return { cls: '', html: `${I('ratio', 's')}<b>Как у исходника</b><span class="v">· ${src.ar}</span>${ag}` };
+    return { cls: '', html: mob ? `${I('ratio', 's')}<b>${src.ar}</b>${ag}` : `${I('ratio', 's')}<b>Как у исходника</b><span class="v">· ${src.ar}</span>${ag}` };
   }
   if (o.kind === 'image') {
     if (e.exact) return { cls: e.notes.length ? 'warn' : '', html: `${I('ratio', 's')}<b>${e.w}×${e.h}</b><span class="v">· точно</span>${ag}` };

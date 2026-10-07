@@ -4169,6 +4169,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             ContentRootPath: AppContext.BaseDirectory,
             TasksMcp: tasksMcp,
+            OwnerId: ownerId,
             NotesMcp: notesMcp,
             PersonaProvider: BuildPersonaProvider(session, ownerId),
             MemoryMcp: memoryMcp,
@@ -5703,6 +5704,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 PermissionRules: null,
                 ContentRootPath: AppContext.BaseDirectory,
                 TasksMcp: tasksMcp,
+                OwnerId: entry.Info.OwnerId,
                 NotesMcp: notesMcp,
                 PersonaProvider: BuildPersonaProvider(entry.Info, entry.Info.OwnerId),
                 MemoryMcp: persona.Memory,
@@ -5779,6 +5781,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
                 ContentRootPath: AppContext.BaseDirectory,
                 TasksMcp: tasksMcp,
+                OwnerId: project.OwnerId,
                 NotesMcp: notesMcp,
                 PersonaProvider: BuildPersonaProvider(entry.Info, project.OwnerId),
                 MemoryMcp: memoryMcp,

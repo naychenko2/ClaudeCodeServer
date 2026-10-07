@@ -433,4 +433,6 @@ public sealed record LlmSessionContext(
     // MCP-сервер модуля «Видео» (ADR-022 §5): null — флаг video-editor выключен или модуль не загружен
     VideoEditorMcpContext? VideoEditorMcp = null,
     // MCP-сервер «Контекст чата» (ADR-023 §3.2)
-    TurnContextMcpContext? TurnContextMcp = null);
+    TurnContextMcpContext? TurnContextMcp = null,
+    // Владелец хода (SessionManager.ResolveOwnerId); у проектной сессии Session.OwnerId пуст по контракту.
+    string? OwnerId = null);

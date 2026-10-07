@@ -319,7 +319,7 @@ public class FileWatcherFullResyncTests : IDisposable
         context.Setup(c => c.ConnectionId).Returns("conn-1");
         context.Setup(c => c.User).Returns(principal);
 
-        var sessionHub = new SessionHub(null!, projects, svc, null!, null!)
+        var sessionHub = new SessionHub(null!, projects, svc, null!, null!, NullLogger<SessionHub>.Instance)
         {
             Context = context.Object,
             Groups = groups.Object,

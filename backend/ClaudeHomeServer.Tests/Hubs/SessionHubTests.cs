@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Hubs;
 
@@ -274,5 +275,100 @@ public class SessionHubTests : IClassFixture<TestWebApplicationFactory>, IAsyncL
 
         await act.Should().ThrowAsync<Exception>(); // 401 на negotiate
         await connection.DisposeAsync();
+    }
+}
+
+// Лог отказа доступа в хабе: отдельный хост со стоком Warning-записей
+public class SessionHubDeniedLogTests : IDisposable
+{
+    private readonly LoggingFactory _factory = new();
+
+    public void Dispose() => _factory.Dispose();
+
+    [Fact]
+    public async Task JoinSession_ЧужаяСессия_ПишетОдинWarningСSubИВладельцем()
+    {
+        var owner = _factory.CreateAuthenticatedClient();
+        var dir = Path.Combine(_factory.TempDir, "denied_log_proj");
+        Directory.CreateDirectory(dir);
+        var projResp = await owner.PostAsJsonAsync("/api/projects", new { name = "DeniedLog", rootPath = dir });
+        projResp.EnsureSuccessStatusCode();
+        var projectId = (await projResp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var sessResp = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        sessResp.EnsureSuccessStatusCode();
+        var sessionId = (await sessResp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        var ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var strangerId = users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+
+        var token = _factory.GetToken(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        await using var conn = new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "hubs/session"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(token);
+            })
+            .Build();
+        conn.HandshakeTimeout = TimeSpan.FromSeconds(60);
+        conn.ServerTimeout = TimeSpan.FromSeconds(60);
+        await conn.StartAsync();
+
+        var act = () => conn.InvokeAsync("JoinSession", sessionId);
+        await act.Should().ThrowAsync<HubException>();
+
+        var entry = await _factory.Sink.NextAsync(TimeSpan.FromSeconds(10));
+        entry.Should().Contain("JoinSession").And.Contain(strangerId).And.Contain(ownerId).And.Contain(sessionId);
+        entry.Should().NotContain("access_token").And.NotContain("eyJ");
+        _factory.Sink.Snapshot().Should().ContainSingle();
+    }
+
+    private sealed class LoggingFactory : TestWebApplicationFactory
+    {
+        public DeniedLogSink Sink { get; } = new();
+
+        protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.ConfigureServices(services => services.AddSingleton<ILoggerProvider>(Sink));
+        }
+    }
+
+    // Сток Warning-записей категории хаба; ожидание записи — через TaskCompletionSource
+    private sealed class DeniedLogSink : ILoggerProvider
+    {
+        private readonly List<string> _entries = [];
+        private TaskCompletionSource<string> _first = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<string> Snapshot()
+        {
+            lock (_entries) return [.. _entries];
+        }
+
+        public async Task<string> NextAsync(TimeSpan timeout) => await _first.Task.WaitAsync(timeout);
+
+        public ILogger CreateLogger(string categoryName) => new Sink(this, categoryName);
+
+        public void Dispose() { }
+
+        private void Add(string entry)
+        {
+            lock (_entries) _entries.Add(entry);
+            _first.TrySetResult(entry);
+        }
+
+        private sealed class Sink(DeniedLogSink owner, string category) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel != LogLevel.Warning || !category.EndsWith(".SessionHub")) return;
+                owner.Add(formatter(state, exception));
+            }
+        }
     }
 }

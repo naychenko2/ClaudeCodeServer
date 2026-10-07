@@ -117,7 +117,7 @@ public class SessionHubLeaveTests : IDisposable
 
         // FileWatcherService, ConnectionDiagnostics и DevServerService нужны только другим
         // методам хаба — LeaveSession их не трогает, поэтому не тянем сюда их зависимости
-        var hub = new SessionHub(sessions, _projectManager, null!, null!, null!)
+        var hub = new SessionHub(sessions, _projectManager, null!, null!, null!, NullLogger<SessionHub>.Instance)
         {
             Context = context.Object,
             Groups = _groups.Object,

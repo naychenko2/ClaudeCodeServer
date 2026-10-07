@@ -38,6 +38,8 @@ export interface FmtWorld {
   previews: Record<string, unknown>[];
   cancelUpscales: string[];
   retries: { sceneId: string; versionId: string }[];
+  // «Повторить увеличение» отвечает 409 upscale_retry_unavailable (съёмка уже не подлежит повтору)
+  retryUnavailable?: boolean;
   // Исходные кадры сцены: пропорции для превью подрезки (кадр B — свои, если заданы)
   sourceAspect: string;
   sourceAspectB?: string;
@@ -191,6 +193,7 @@ export async function mockFormat(page: Page) {
     const ru = /\/scenes\/([^/]+)\/versions\/([^/]+)\/upscale$/.exec(p);
     if (ru && method === 'POST') {
       fw.retries.push({ sceneId: ru[1], versionId: ru[2] });
+      if (fw.retryUnavailable) return json({ code: 'upscale_retry_unavailable', error: 'Повторить увеличение нельзя' }, 409);
       const s = sceneById(ru[1]);
       const jobId = `job-retry-${fw.retries.length}`;
       if (s) {

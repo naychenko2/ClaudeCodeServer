@@ -11,8 +11,8 @@ export const NOM = {
   o2: 150, o1: 112,
   e3: 320, e2: 196, e1: 112,
   plus: 14, ref: 104, more: 46,
-  // Чип «Формат» (ADR-025): полная форма и короткая («16:9 · 1792»)
-  f2: 250, f1: 150,
+  // Чип «Формат» (ADR-025): полная форма, короткая («16:9 · 1792») и голые пропорции («16:9»)
+  f2: 250, f1: 150, f0: 84,
 } as const;
 
 // Потолки ширины чипов на полной форме: номиналы нужны таблице макета, а реальный шрифт и имена файлов требуют
@@ -42,8 +42,8 @@ export interface LadderFacts {
 
 // Форма каждого чипа на ступени: g — ветка (3 полная … 0 телефон), o — объект, e — «Чем»,
 // k — сколько референсов остаётся на виду (остальные уходят в «+N ›»)
-// f — форма чипа «Формат» (2 полная, 1 короткая); нет у строки без этого чипа
-export interface LadderForm { g: 0 | 1 | 2 | 3; o: 1 | 2; e: 1 | 2 | 3; k: number; f?: 1 | 2 }
+// f — форма чипа «Формат» (2 полная, 1 короткая, 0 только пропорции); нет у строки без этого чипа
+export interface LadderForm { g: 0 | 1 | 2 | 3; o: 1 | 2; e: 1 | 2 | 3; k: number; f?: 0 | 1 | 2 }
 
 export interface LadderPick {
   form: LadderForm;
@@ -64,6 +64,7 @@ export function ladderRungs(f: LadderFacts): LadderForm[] {
   if (f.project) step({ g: 2 });
   for (let k = f.refs - 1; k >= 0; k--) step({ k });
   if (f.project) step({ g: 1 });
+  if (f.hasFormat) step({ f: 0 });
   if (f.hasPrimary) step({ o: 1 });
   if (exec) step({ e: 1 });
   return out;
@@ -77,7 +78,7 @@ export function ladderNominal(f: LadderFacts, form: LadderForm): number {
   const rest: number[] = [];
   if (f.hasPrimary) rest.push(form.o === 1 ? NOM.o1 : NOM.o2);
   if (exec) rest.push(NOM[`e${form.e}` as 'e1']);
-  if (f.hasFormat) rest.push(form.f === 1 ? NOM.f1 : NOM.f2);
+  if (f.hasFormat) rest.push(form.f === 0 ? NOM.f0 : form.f === 1 ? NOM.f1 : NOM.f2);
   if (f.refs > 0) {
     rest.push(NOM.plus);
     for (let i = 0; i < form.k; i++) rest.push(NOM.ref);

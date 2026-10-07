@@ -109,9 +109,9 @@ for (const { name, vp } of VIEWPORTS) {
         await expect(tier(page, 'high')).toContainText('1792×1024');
         await expect(tier(page, 'high')).toContainText('$0.08');
         await expect(tier(page, 'high')).toHaveAttribute('aria-pressed', 'true');
-        // Свёрнутый чип: «16:9 · 1792×1024», на телефоне хвост короче — «16:9 · 1792»
-        await expect.poll(() => chipText(page)).toContain(name === '360' ? '16:9 · 1792' : '16:9 · 1792×1024');
-        if (name === '360') expect(await chipText(page)).not.toContain('1792×1024');
+        // Свёрнутый чип: «16:9 · 1792×1024», на телефоне — только пропорции «16:9»
+        await expect.poll(() => chipText(page)).toContain(name === '360' ? '16:9' : '16:9 · 1792×1024');
+        if (name === '360') expect(await chipText(page)).not.toContain('1792');
         // Желание ушло в префы проекта человеком, а не подставлено
         await expect.poll(() => (w().imagePrefs as { format?: { aspect?: string; tier?: string; by?: string } }).format).toMatchObject({ aspect: '16:9', tier: 'high', by: 'human' });
         // Котировка пошла с ступенью: на кнопке поля цена «High» (вдвое дороже Standard: $0.04 → $0.08)
@@ -236,6 +236,27 @@ for (const { name, vp } of VIEWPORTS) {
       });
     });
   }
+}
+
+// Всплывашка с 15 пропорциями помещается в окно любой высоты: скроллится середина, «Макс» достижим
+for (const height of [800, 600]) {
+  test(`всплывашка «Формата» с 15 пропорциями помещается в окно 1280×${height}`, async ({ page }) => {
+    await open(page, { width: 1280, height }, 'light', { kind: 'draft', model: NANO });
+    await expect(chip(page)).toBeVisible({ timeout: 15_000 });
+    await chip(page).click();
+    await expect(page.locator('[data-fmt-aspect]')).toHaveCount(15);
+    const menu = page.locator('[data-fmt-body]').locator('xpath=..');
+    const box = await menu.boundingBox();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(height);
+    // «Макс» либо видна сразу, либо до неё можно докрутить внутри всплывашки; подвал остаётся на месте
+    await tier(page, 'max').scrollIntoViewIfNeeded();
+    const t = await tier(page, 'max').boundingBox();
+    expect(t!.y + t!.height).toBeLessThanOrEqual(height);
+    const scroll = page.locator('[data-fmt-scroll]');
+    expect(await scroll.evaluate(el => el.scrollHeight >= el.clientHeight)).toBe(true);
+    await shot(page, `popover-15-aspects-${height}.png`);
+  });
 }
 
 // «Дорисовать» без пропорций: чип выбирается, «Формат» открывается сам с подсказкой, запуск заблокирован до выбора

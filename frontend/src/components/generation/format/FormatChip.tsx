@@ -10,11 +10,12 @@ import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
 // Ширина чипа на ступенях лестницы строки: полная форма и короткая (телефон, теснота)
 export const FORMAT_CHIP_MAX = { full: 250, short: 150 } as const;
 
-export function FormatChip({ m, short, open, onOpen, onAgentTip }: {
-  m: FormatModel; short: boolean; open: boolean; onOpen: (e: { currentTarget: HTMLElement }) => void; onAgentTip?: () => void;
+// bare — без размера («16:9», subBare): телефон и самая узкая ступень лестницы
+export function FormatChip({ m, short, bare, open, onOpen, onAgentTip }: {
+  m: FormatModel; short: boolean; bare?: boolean; open: boolean; onOpen: (e: { currentTarget: HTMLElement }) => void; onAgentTip?: () => void;
 }) {
   const c = m.chip;
-  const sub = short && c.subShort !== undefined ? c.subShort : c.sub;
+  const sub = bare && c.subBare !== undefined ? c.subBare : short && c.subShort !== undefined ? c.subShort : c.sub;
   const title = `Формат: пропорции и размер${m.by === 'agent' ? ' · поставил Claude' : ''}${m.locked ? ` · как у фильма (${m.locked.aspect})` : ''}`;
   return (
     <RowChip kind="format" max={short ? FORMAT_CHIP_MAX.short : FORMAT_CHIP_MAX.full} title={title} onClick={onOpen} dim={c.tone === 'dim'}

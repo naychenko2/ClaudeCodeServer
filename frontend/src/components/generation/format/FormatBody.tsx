@@ -315,8 +315,9 @@ export function FormatBody({ m, isMobile, projectName, onOpenExec }: {
   useEffect(() => { if (wishExact) setExactOpen(true); }, [wishExact]);
 
   const head = (children: ReactNode) => (
-    <div data-fmt-body="" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px ${SP.md}px` }}>
-      {children}
+    // Всплывашка ограничена по высоте окна: прокручивается только середина, подвал остаётся на месте
+    <div data-fmt-body="" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px ${SP.md}px`, flex: '1 1 auto', minHeight: 0 }}>
+      <div data-fmt-scroll="" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{children}</div>
       <FormatFoot m={m} projectName={projectName} />
     </div>
   );

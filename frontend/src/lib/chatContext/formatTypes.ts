@@ -136,7 +136,7 @@ export interface FormatModel {
   by: FormatActor | null;
   // Подпись свёрнутого чипа считает вид: правка и «Увеличить» — не из ручки. main — жирным, sub — приглушённо
   // после него, subShort — вместо sub на телефоне (пустая строка — без хвоста), prefix — серая подпись перед main
-  chip: { main: string; sub?: string; subShort?: string; prefix?: string; tone: 'normal' | 'warn' | 'dim' };
+  chip: { main: string; sub?: string; subShort?: string; subBare?: string; prefix?: string; tone: 'normal' | 'warn' | 'dim' };
   // Низ всплывашки; проект подставляет хост («Запомнится для картинок проекта «AI Home».»)
   footer: (projectName: string | null) => string;
   // Только для чтения (kind = readonly): пояснение вместо органов управления

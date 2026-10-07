@@ -59,7 +59,7 @@ export function generateChip(state: MediaFormatState | null) {
   const size = r.width && r.height ? `${r.width}×${r.height}` : null;
   return {
     main: r.aspect ?? FORMAT_TEXT.asModel,
-    ...(size ? { sub: `· ${size}`, subShort: `· ${r.width}` } : null),
+    ...(size ? { sub: `· ${size}`, subShort: `· ${r.width}`, subBare: '' } : null),
     tone: 'normal' as const,
   };
 }

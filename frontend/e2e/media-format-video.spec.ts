@@ -308,6 +308,23 @@ for (const { name, vp } of VIEWPORTS) {
         await card.locator('[data-video-upscale-retry]').click();
         await expect.poll(() => fmt().retries).toEqual([{ sceneId: 'scene-5', versionId: 'ver-f1' }]);
       });
+
+      test('10 · «Повторить» при 409: тост «Повторить увеличение уже нельзя — переснимите сцену»', async ({ page }) => {
+        const s = h3Scene('max');
+        s.versions = [{
+          versionId: 'ver-f1', number: 1, jobId: 'job-f', variant: 0, provider: 'local', model: 'minimax-h3', durationSec: 5, sizeBytes: 36026, hasSound: false,
+          cost: { currency: 'local', amount: 0 }, initiator: 'human', inputs: { text: 'т' }, createdAt: '2026-10-07T10:00:00Z', width: 1344, height: 768,
+          upscaleError: 'Увеличение до 1440p не удалось: ComfyUI завершил задачу ошибкой',
+        }] as never;
+        s.currentVersionId = 'ver-f1';
+        await open(page, { vp, theme, scenes: [...standardScenes().slice(0, 4), s], feed: [record('video_scene', { sceneId: 'scene-5' }, 'Видео: Сцена 5')] });
+        fmt().retryUnavailable = true;
+        const card = page.locator('[data-video-card="scene"]');
+        await card.locator('[data-video-upscale-retry]').click();
+        await expect(page.getByText('Повторить увеличение уже нельзя — переснимите сцену')).toBeVisible({ timeout: 10_000 });
+        // Задача не поставлена: кнопка на месте
+        await expect(card.locator('[data-video-upscale-retry]')).toBeVisible();
+      });
     });
   }
 

@@ -98,10 +98,15 @@ describe('чип «Формат» в лестнице (ADR-025)', () => {
 
   it('с чипом на одну ступень длиннее: после «Чем» сжимается и сам «Формат»', () => {
     const r = ladderRungs(withFormat);
-    expect(r).toHaveLength(9);
+    expect(r).toHaveLength(10);
     expect(r[0]).toMatchObject({ e: 3, f: 2 });
     expect(r[1]).toMatchObject({ e: 2, f: 2 });
     expect(r[2]).toMatchObject({ e: 2, f: 1 });
+    // До голых пропорций «16:9» чип сжимается после ветки g1, но раньше объекта и «Чем»
+    const bare = r.findIndex(x => x.f === 0);
+    expect(bare).toBeGreaterThan(r.findIndex(x => x.g === 1) - 1);
+    expect(r[bare]).toMatchObject({ o: 2, e: 2, g: 1 });
+    expect(r[bare + 1]).toMatchObject({ o: 1, f: 0 });
   });
 
   it('номинал растёт ровно на ширину чипа и зазор', () => {

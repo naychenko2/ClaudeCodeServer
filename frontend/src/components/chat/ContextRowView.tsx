@@ -360,6 +360,9 @@ function FormatNote({ text, onClose }: { text: string; onClose: () => void }) {
 
 // ── Строка ──
 
+// Высота всплывашки «Формата»: не больше 560 и не больше места над якорем (иначе Menu уйдёт вниз и обрежется окном)
+const formatMenuMax = (rect: DOMRect) => Math.max(240, Math.min(560, Math.max(rect.top, window.innerHeight - rect.bottom) - 14));
+
 type OpenMenu = { kind: 'git' | 'exec' | 'refs' | 'format'; rect: DOMRect } | null;
 
 // Счётчик загрузок шрифтов страницы: растёт, когда шрифты готовы и после каждой догрузки (`loadingdone`)
@@ -390,7 +393,7 @@ export function ContextRowView(props: ContextRowViewProps) {
   const facts = rowFacts(props);
   // Телефон: лестницы нет, строка прокручивается; ветка иконкой, «Чем» без подписи
   const base = props.pick ?? (isMobile
-    ? { form: { g: 0 as const, o: 2 as const, e: 2 as const, k: refs.length, ...(format ? { f: 1 as const } : null) }, index: -1, count: 0, need: 0, scroll: true }
+    ? { form: { g: 0 as const, o: 2 as const, e: 2 as const, k: refs.length, ...(format ? { f: 0 as const } : null) }, index: -1, count: 0, need: 0, scroll: true }
     : contextRowLadder(props.width ?? 10_000, facts));
   // Номиналы ступеней — верхняя оценка (чип не шире номинала), реальные чипы уже. Поэтому после вёрстки
   // пробуем ступень богаче: влезла без прокрутки — оставляем, нет — возвращаемся на шаг назад и закрепляем
@@ -478,7 +481,7 @@ export function ContextRowView(props: ContextRowViewProps) {
             onRelease={props.onRelease} onAgentTip={() => setTip(t => !t)} />
         )}
         {primary && exec && <ExecChip e={exec} form={f.e} onOpen={open('exec')} />}
-        {format && <FormatChip m={format} short={isMobile || f.f === 1} open={menu?.kind === 'format'} onOpen={e => open('format')(e.currentTarget.getBoundingClientRect())} />}
+        {format && <FormatChip m={format} short={f.f !== 2} bare={isMobile || f.f === 0} open={menu?.kind === 'format'} onOpen={e => open('format')(e.currentTarget.getBoundingClientRect())} />}
         {refs.length > 0 && (
           <>
             <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} aria-label="Подключено к ходу" />
@@ -496,7 +499,7 @@ export function ContextRowView(props: ContextRowViewProps) {
       {menu && body && (isMobile
         ? <Modal title={menu.kind === 'git' ? 'Ветка' : menu.kind === 'exec' ? exec?.title ?? 'Чем выполнить' : menu.kind === 'format' ? format?.title ?? 'Формат' : 'Подключено к ходу'} onClose={close}>{body}</Modal>
         : menu.kind === 'format'
-          ? <Menu anchor={menu.rect} onClose={close} minWidth={360} maxWidth={420} maxHeight={560} preferUp anchorAlign="start">
+          ? <Menu anchor={menu.rect} onClose={close} minWidth={360} maxWidth={420} maxHeight={formatMenuMax(menu.rect)} preferUp anchorAlign="start">
               <MenuHead><b style={{ color: C.textHeading }}>{format?.title}</b></MenuHead>{body}
             </Menu>
           : <Menu anchor={menu.rect} onClose={close} minWidth={300} maxWidth={340} maxHeight={320} preferUp anchorAlign="start">{body}</Menu>)}

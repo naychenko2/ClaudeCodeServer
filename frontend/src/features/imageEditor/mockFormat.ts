@@ -30,9 +30,13 @@ const ONE_SIZE: MediaFormatCaps = {
   nativeNote: 'один из трёх размеров около 1,6 Мп',
 };
 
+// Nano Banana 2 в бою знает 15 пропорций: на них проверяется, что всплывашка помещается в окно
+const WIDE_ASPECTS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '4:5', '5:4', '21:9', '9:21', '1:4', '4:1', '1:8', '8:1'];
+const WIDE: MediaFormatCaps = { ...MULTI, modelLabel: 'Nano Banana 2', aspects: WIDE_ASPECTS };
+
 // Модели мока: нет в таблице — размеров не сообщает («Как у модели»)
 const CAPS: Record<string, MediaFormatCaps> = {
-  'fal-ai/nano-banana-2/edit': MULTI,
+  'fal-ai/nano-banana-2/edit': WIDE,
   'fal-ai/flux-pro/kontext': MULTI,
   'gpt_image_2_5': ONE_SIZE,
 };

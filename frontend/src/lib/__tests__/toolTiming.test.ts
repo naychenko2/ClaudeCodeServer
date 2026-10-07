@@ -285,6 +285,25 @@ describe('toolClockMs — замирание после ожидания раз�
     expect(awaitsToolStart({ name: 'KillShell' })).toBe(false);
   });
 
+  // CLI выполняет выписанные в одном ответе run_tests/build по очереди: «идёт» — только у
+  // реально вызванного, у остальных ожидание без отсчёта; после старта отсчёт с нуля
+  it('MCP с прогрессом (run_tests, build, start_stand) — до tool_started без цифры', () => {
+    for (const name of ['mcp__tests__run_tests', 'mcp__dev__build', 'mcp__dev__start_stand']) {
+      expect(awaitsToolStart({ name })).toBe(true);
+      expect(toolClockMs({ name, startedAt: 1_000 }, true, 17_000)).toBeNull();
+      expect(toolClockMs({ name, startedAt: 18_000, started: true }, true, 0)).toBe(0);
+    }
+    expect(awaitsToolStart({ name: 'mcp__dev__stop_stand' })).toBe(false);
+    // История до tool_started: этапы есть только у вызванного — длительность «прервано» не теряется
+    expect(awaitsToolStart({ name: 'mcp__dev__build', stages: [{}] })).toBe(false);
+  });
+
+  it('из трёх выписанных run_tests активный — стартовавший, а не последний', () => {
+    const run = (id: string, started?: boolean) => ({ kind: 'tool_use', id, name: 'mcp__tests__run_tests', startedAt: 1_000, started });
+    const items = [run('a', true), run('b'), run('c')];
+    expect(pickActiveTool(items, new Set(['a', 'b', 'c']))?.id).toBe('a');
+  });
+
   it('инструменты без tool_started считают от tool_use, как прежде', () => {
     expect(awaitsToolStart({ name: 'Read' })).toBe(false);
     expect(toolClockMs({ name: 'mcp__x__y', startedAt: 1_000 }, true, 5_000)).toBe(5_000);

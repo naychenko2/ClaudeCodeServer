@@ -216,6 +216,16 @@ describe('applyServerMessage: инструменты', () => {
     expect(next.items[0]).toMatchObject({ id: 't1', startedAt: 5000, finishedAt: 25000 });
   });
 
+  // Старт MCP-вызова приходит из tools/call мимо stdout CLI и может обогнать финальный tool_use
+  it('финальный tool_use не перетирает уже пришедший фактический старт', () => {
+    const next = run([
+      { type: 'tool_use', id: 't1', name: 'mcp__tests__run_tests', input: {}, startedAt: 1000 },
+      { type: 'tool_started', toolUseId: 't1', startedAt: 5000 },
+      { type: 'tool_use', id: 't1', name: 'mcp__tests__run_tests', input: { target: 'x' }, startedAt: 6000 },
+    ]);
+    expect(next.items[0]).toMatchObject({ startedAt: 5000, started: true, input: { target: 'x' } });
+  });
+
   it('таймер переживает F5: startedAt выполняющегося инструмента приходит из истории', () => {
     const items = normalizeHistory([{ kind: 'tool_use', id: 't1', name: 'Bash', input: {}, startedAt: 5000 }]);
     expect(items[0]).toMatchObject({ kind: 'tool_use', id: 't1', startedAt: 5000 });

@@ -333,7 +333,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // ToolLivenessContext), после результата — итоговая длительность. Короче порога не
   // показываем. Результата нет — через `== null`: из истории приходит "result": null.
   // Оборванный ход (Стоп, ошибка, падение) результата не пришлёт — карточка «прервано»
-  // Bash и агенты до tool_started «идёт» не показывают (см. awaitsToolStart)
+  // Bash, агенты и MCP с прогрессом до tool_started «идёт» не показывают (см. awaitsToolStart)
   const liveness = useContext(ToolLivenessContext);
   const settled = item.result != null;
   const aborted = !settled && liveness?.dead.has(item.id) === true;

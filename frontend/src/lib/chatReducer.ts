@@ -579,8 +579,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       if (idx >= 0) {
         const next = [...prev.items];
         const ex = next[idx] as Extract<ChatItem, { kind: 'tool_use' }>;
-        // Старт сдвигается на финальный tool_use — так же делает история (TurnAccumulator.OnToolUse)
-        next[idx] = { ...ex, name: msg.name, input: msg.input, streamingArg: undefined, parentToolUseId: msg.parentToolUseId ?? ex.parentToolUseId, startedAt: msg.startedAt ?? ex.startedAt };
+        // Старт сдвигается на финальный tool_use — так же делает история (TurnAccumulator.OnToolUse).
+        // Фактический старт (tool_started) не трогаем: MCP-вызов может стартовать раньше, чем
+        // финальный tool_use дойдёт до ленты
+        next[idx] = { ...ex, name: msg.name, input: msg.input, streamingArg: undefined, parentToolUseId: msg.parentToolUseId ?? ex.parentToolUseId, startedAt: ex.started ? ex.startedAt : msg.startedAt ?? ex.startedAt };
         const parent = msg.parentToolUseId ?? ex.parentToolUseId;
         return withItems(msg.name === RUN_TESTS_TOOL && parent ? withRunTestsKind(next, parent) : next);
       }

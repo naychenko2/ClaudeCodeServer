@@ -46,8 +46,9 @@ function buildDemos(t0: number): { groups: { title: string; demos: Demo[] }[]; l
   const ago = (s: number) => t0 - s * 1000;
   const tu = (id: string, name: string, input: unknown, over: Partial<ToolUseItem> = {}): ToolUseItem =>
     ({ kind: 'tool_use', id, name, input, ...over });
+  // Прогон уже вызван (tool_started из tools/call) — иначе карточка ждёт без «идёт»
   const tests = (id: string, input: Record<string, unknown>, over: Partial<ToolUseItem>) =>
-    tu(id, 'mcp__tests__run_tests', input, over);
+    tu(id, 'mcp__tests__run_tests', input, { started: true, ...over });
   const dotnet = { target: 'backend/ClaudeHomeServer.Tests', filter: 'FullyQualifiedName~ToolProgress' };
   // Этапы прогона, как их шлёт сервер: [ключ, подпись, длительность с] подряд от старта;
   // последний без длительности — идёт (или оборван, если open)
@@ -82,6 +83,9 @@ function buildDemos(t0: number): { groups: { title: string; demos: Demo[] }[]; l
     {
       title: 'Тесты · dotnet — фазы прогона',
       demos: [
+        // Несколько run_tests в одном ответе CLI выполняет по очереди: пока до вызова не дошло,
+        // tool_started нет — ни «идёт», ни отсчёта, ни полосы
+        { label: 'выписан, ещё не вызван — ждёт соседний вызов, без «идёт» и отсчёта', item: tests('k-t-wait', dotnet, { startedAt: ago(AGO.queue), started: false }) },
         { label: 'ждёт очереди сборок — точка, без полосы; очередь в этапах с 2 с', item: tests('k-t-queue', dotnet, { startedAt: ago(AGO.queue), progress: { stage: 'queued', label: 'ждёт очереди сборок (занято 2)' }, stages: st(ago(AGO.queue), ['queued', 'очередь', null]) }) },
         { label: 'сборка — после очереди', item: tests('k-t-build', dotnet, { startedAt: ago(AGO.build), progress: { stage: 'build', label: 'сборка' }, stages: st(ago(AGO.build), ['queued', 'очередь', 12], ['build', 'сборка', null]) }) },
         { label: 'подсчёт тестов — уже этап «тесты», без процента', item: tests('k-t-list', dotnet, { startedAt: ago(AGO.list + 102), progress: { stage: 'list', label: 'подсчёт тестов' }, stages: st(ago(AGO.list + 102), ['build', 'сборка', 102], ['running', 'тесты', null]) }) },

@@ -214,13 +214,21 @@ export function toolElapsedMs(
 // «идёт» не показываем вовсе: отсчёт от tool_use включал бы ожидание разрешения, и после
 // «Разрешить» цифра замирала бы, пока честный отсчёт от фактического старта её не догонит
 // (у PowerShell без этого индикатор ожидания показывал ложный отсчёт и сбрасывал его на старте).
+// MCP-инструменты с прогрессом (run_tests, build, start_stand) шлют старт сами из tools/call:
+// CLI выполняет выписанные в одном ответе вызовы по очереди, и без этого «идёт» тикало бы у
+// всех сразу, а полоса была бы только у реально работающего.
 // У остальных инструментов tool_started не бывает — у них отсчёт от tool_use. Список явный, а
 // не isConsoleTool: BashOutput и KillShell тоже «консоль» по имени, но старта не получают —
 // их таймер не появился бы никогда
 const STARTED_TOOLS = new Set(['bash', 'powershell', 'task', 'agent']);
+const STARTED_MCP_TOOLS = new Set([RUN_TESTS_TOOL, BUILD_TOOL, START_STAND_TOOL]);
 
-export function awaitsToolStart(item: { name: string; started?: boolean }): boolean {
-  return STARTED_TOOLS.has(item.name.toLowerCase()) && item.started !== true;
+// Этапы шлёт только уже вызванный MCP-инструмент — они и есть свидетельство старта: история до
+// tool_started у MCP иначе потеряла бы длительность «прервано»
+export function awaitsToolStart(item: { name: string; started?: boolean; stages?: readonly unknown[] | null }): boolean {
+  if (item.started === true) return false;
+  if (STARTED_MCP_TOOLS.has(item.name)) return !item.stages?.length;
+  return STARTED_TOOLS.has(item.name.toLowerCase());
 }
 
 // Показанное «идёт» привязано к своему startedAt. Сдвиг старта (финальный tool_use после

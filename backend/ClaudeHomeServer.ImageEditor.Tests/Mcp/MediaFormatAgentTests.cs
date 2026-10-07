@@ -330,4 +330,20 @@ public class MediaFormatAgentTests : IDisposable
             ContextActor.Human, DateTime.UtcNow), ContextActor.Human);
         TailFormat().Should().Be("16:9 · Высокое — выбор человека");
     }
+
+    // Личный чат вне проекта: формат хранится под ключом «personal», и хвост хода обязан читать именно его, а не умолчание
+    [Fact]
+    public async Task Хвост_личного_чата_несёт_сохранённый_формат_личной_области()
+    {
+        var personal = ImageEditScope.Of(new Session { Id = ChatId, OwnerId = Owner, ProjectId = null });
+        await _prefs.SetFormatAsync(Owner, personal, new MediaFormat(FormatModes.Aspect, "16:9", FormatTier.High, null, null,
+            ContextActor.Agent, DateTime.UtcNow), ContextActor.Agent);
+        var editors = new IImageEditor[] { HiggsfieldImageEditorTests.Create().Editor };
+        var kind = new ImageContextKind(_store, _prefsStore, editors);
+        var primary = new ContextItem("ci", ImageContextKind.Kind, new JsonObject { ["threadId"] = Draft() }, null, ContextActor.Human, DateTime.UtcNow);
+        var session = new Session { Id = ChatId, OwnerId = Owner, ProjectId = null };
+
+        kind.DescribeFormat(new ContextScope(Owner, session, null), primary)
+            .Should().Be("16:9 · Высокое — ✦ поставил Claude");
+    }
 }

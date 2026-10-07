@@ -77,6 +77,7 @@ export async function resetConnection(): Promise<void> {
   try {
     _stopPromise = connection.stop();
     await _stopPromise;
+    // Инвариант: зависший старт прежнего аккаунта не должен достаться новому ensureConnected
     _startPromise = null;
     _resyncOnNextStart = true;
   } finally {

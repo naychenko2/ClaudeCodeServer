@@ -75,6 +75,15 @@ export function onAgentHubMessage(handler: AgentHubHandler): () => void {
   return () => { handlers.delete(handler); };
 }
 
+// Смена аккаунта / 401: билеты хабов выданы прежнему пользователю, живые соединения к хабам
+// его локальных проектов гасим. Подписчиков (handlers) не трогаем — они живут дольше сессии.
+export async function resetAgentHubs(): Promise<void> {
+  const conns = [...live.values()];
+  live.clear();
+  pending.clear();
+  await Promise.allSettled(conns.map(c => c.stop()));
+}
+
 // Для тестов
 export function resetAgentHubForTests(): void {
   handlers.clear();

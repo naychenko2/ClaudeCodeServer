@@ -29,7 +29,9 @@ import { useOnline } from './hooks/useOnline'
 import { useThemeColor } from './hooks/useThemeColor'
 import { projectMainColor } from './features/projects/projectUtil'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
-import { onFilesChanged, onMessage } from './lib/signalr'
+import { onFilesChanged, onMessage, resetConnection } from './lib/signalr'
+import { resetTerminalConnection } from './lib/terminalSignalr'
+import { resetAgentHubs } from './lib/agentHub'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
@@ -556,6 +558,8 @@ export default function App() {
       setHubTab('projects')
       navReplace({ screen: 'projects' })
       setProject(null)
+      // Хабы прежнего пользователя гасим до setAuth: иначе соединения доживут под старым токеном
+      void resetConnection(); void resetTerminalConnection(); void resetAgentHubs()
       setAuth(null)
     }
     window.addEventListener('cc-unauthorized', onUnauthorized)
@@ -1232,6 +1236,7 @@ export default function App() {
     setHubTab('projects')
     navReplace({ screen: 'projects' })
     setProject(null)
+    void resetConnection(); void resetTerminalConnection(); void resetAgentHubs()
     setAuth(null)
   }
 

@@ -583,9 +583,6 @@ export function ContextRowView(props: ContextRowViewProps) {
         padding: `${COMPOSER_LIP.edge}px ${gitBare ? COMPOSER_LIP.padX : NOM.pad / 2}px ${inner}px`,
         ...(gitBare ? { gap: GIT_ROW_GAP } : null),
         overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
-        // Без тени вверх (SHADOW.lift): над губой во всю ширину лежит лента, и тень заливала её
-        // низ мутной полосой. Губу от ленты отделяет рамка
-        boxShadow: 'none',
       };
 
   const primaryNode = primary && (
@@ -610,9 +607,9 @@ export function ContextRowView(props: ContextRowViewProps) {
   const mobileLine: CSSProperties = { display: 'flex', alignItems: 'center', gap: SP.sm - 2, minWidth: 0 };
 
   return (
-    // Десктоп — без отступа сверху: лента обрезается по верху композера, и отступ давал полосу
-    // пустого фона между обрезом текста и губой во всю ширину
-    <div data-context-row-host="" style={{ position: 'relative', margin: isMobile ? `${SP.xs}px 0 0` : 0 }}>
+    // Десктоп — отступ сверху, как у прежней Git-полосы (10): тень губы вверх (SHADOW.lift из
+    // composerLip) ложится на этот зазор, а не на низ ленты
+    <div data-context-row-host="" style={{ position: 'relative', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
       <FlatChips.Provider value>

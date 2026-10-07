@@ -194,7 +194,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         if (call.Locked is not null)
             return Fail(call.ErrorCode, call.Error + " Если человек настаивает на другом формате — повтори с force=true.");
         if (call.Written is { Status: VideoThreadWriteStatus.Ok } && ExplicitFormat(args, settings) is { } given)
-            await WriteAgentFormatAsync(owner, scope, session, given);
+            await WriteAgentFormatAsync(owner, scope, session, given, scene);
         return await ThreadsResultAsync(call, owner, session, scope, "Настройки сцены сохранены.");
     }
 
@@ -307,14 +307,26 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
     // Явный формат агента меняет формат видео проекта (решение 2 Андрея): желание в префы с By = Agent и тихая строка
     // «✦ Claude сменил формат видео проекта». Ту же правку человека (PUT prefs) снимает ✦
-    private async Task WriteAgentFormatAsync(string owner, VideoEditScope scope, Session session, MediaFormat wish)
+    // scene — сцена до правки (video_scene_set): формат меняется и у неё, строка называет оба уровня, как делает человек в чипе
+    private async Task WriteAgentFormatAsync(string owner, VideoEditScope scope, Session session, MediaFormat wish, VideoSceneDto? scene = null)
     {
         var before = _prefs.Get(owner, scope);
-        if (before.Format is { } had && had.Mode == wish.Mode && had.Aspect == wish.Aspect && had.Tier == wish.Tier) return;
-        _prefs.Save(owner, scope, before with { Format = wish, Aspect = wish.Aspect }, ContextActor.Agent);
+        var prefsSame = before.Format is { } had && had.Mode == wish.Mode && had.Aspect == wish.Aspect && had.Tier == wish.Tier;
+        var sceneBefore = scene is null ? null : scene.Settings.Format ?? FormatOfAspect(scene.Settings.Aspect);
+        var sceneSame = scene is null
+            || (sceneBefore is { } sb && sb.Mode == wish.Mode && sb.Aspect == wish.Aspect && sb.Tier == wish.Tier);
+        if (prefsSame && sceneSame) return;
+        if (!prefsSame) _prefs.Save(owner, scope, before with { Format = wish, Aspect = wish.Aspect }, ContextActor.Agent);
+        var was = MediaFormatText.Wish(scene is not null && !sceneSame ? sceneBefore : before.Format ?? FormatOfAspect(before.Aspect));
+        var what = (scene is not null && !sceneSame, !prefsSame) switch
+        {
+            (true, true) => $"формат сцены «{scene!.Name}» и видео проекта",
+            (true, false) => $"формат сцены «{scene!.Name}»",
+            _ => "формат видео проекта",
+        };
         await _threads.NoteAsync(session.Id,
-            $"✦ Claude сменил формат видео проекта: {MediaFormatText.Wish(before.Format ?? FormatOfAspect(before.Aspect))} → {MediaFormatText.Wish(wish)}",
-            new { kind = "video_format", by = "agent", before = before.Format, after = wish });
+            $"✦ Claude сменил {what}: {was} → {MediaFormatText.Wish(wish)}",
+            new { kind = "video_format", by = "agent", before = scene is not null && !sceneSame ? sceneBefore : before.Format, after = wish });
     }
 
     private static FrameRef? ParseFrame(JsonObject obj)

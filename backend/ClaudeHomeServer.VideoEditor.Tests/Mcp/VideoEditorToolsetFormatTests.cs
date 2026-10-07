@@ -116,6 +116,38 @@ public sealed class VideoEditorToolsetFormatTests
         settings.Aspect.Should().Be("9:16");
     }
 
+    // Регрессия круга 3: сцена без выбранной модели (caps == null) показывала агенту и хвосту «как у модели — не задан»
+    [Fact]
+    public async Task Scene_set_aspect_shows_agent_wish_in_dto_state_tail_and_names_the_scene_in_quiet_line()
+    {
+        using var w = new AgentWorld();
+        var scene = w.NewScene();
+        w.F.Threads.SetSettings(w.Owner, w.Chat, scene.SceneId, scene.Settings with
+        {
+            Format = new MediaFormat(FormatModes.Aspect, "9:16", FormatTier.Max, null, null, ContextActor.Human, DateTime.UtcNow), Aspect = "9:16",
+        }, null);
+
+        var result = await w.Call(ToolSceneSet, new JsonObject { ["sceneId"] = scene.SceneId, ["aspect"] = "16:9" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var settings = w.F.Threads.Get(w.Owner, w.Chat).ToDto().Scenes.Single().Settings;
+        settings.Format.Should().Match<MediaFormat>(f => f.Aspect == "16:9" && f.Tier == FormatTier.Max && f.By == ContextActor.Agent);
+        settings.Aspect.Should().Be("16:9");
+
+        var sceneJson = AgentWorld.Parse(await w.Call(ToolState))["scenes"]![0]!["settings"]!["format"]!;
+        sceneJson["aspect"]!.GetValue<string>().Should().Be("16:9");
+        sceneJson["by"]!.ToString().Should().Be("agent", "в video_state формат сцены с пометкой агента");
+
+        var session = new ClaudeHomeServer.Models.Session { Id = w.Chat, OwnerId = w.Owner };
+        var item = new ContextItem("i", "video-scene", new JsonObject { ["sceneId"] = scene.SceneId }, null, ContextActor.Human, DateTime.UtcNow);
+        var tail = new ClaudeHomeServer.Services.VideoEditor.ChatContext.VideoContextKind(w.F.Threads)
+            .DescribeFormat(new ContextScope(w.Owner, session, null), item);
+        tail.Should().Contain("16:9").And.Contain("✦ поставил Claude").And.NotContain("не задан");
+
+        w.F.Feed.Records.Select(r => r.Record.Fallback).Where(t => t.Contains("сменил формат")).Should().ContainSingle()
+            .Which.Should().Be("✦ Claude сменил формат сцены «Сцена 1» и видео проекта: 9:16 · Макс → 16:9 · Макс");
+    }
+
     [Fact]
     public async Task Quality_without_aspect_and_bad_values_are_refused_with_hint()
     {

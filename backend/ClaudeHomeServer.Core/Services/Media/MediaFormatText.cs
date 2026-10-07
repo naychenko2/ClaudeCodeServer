@@ -43,7 +43,9 @@ public static class MediaFormatText
         if (wish is null || wish.Mode == FormatModes.Model)
             return "как у модели — не задан; не передавай aspect/quality/width/height без просьбы человека";
         var who = wish.By == ContextActor.Agent ? "✦ поставил Claude" : "выбор человека";
-        var text = $"{Resolved(resolved)} — {who}";
+        // Модель не выбрана или размеров не сообщает: Resolve вернул «как у модели», но желание задано — его и называем
+        var shown = resolved.Mode == FormatModes.Model ? Wish(wish) + " (модель не выбрана или размеров не сообщает — уйдёт как есть)" : Resolved(resolved);
+        var text = $"{shown} — {who}";
         if (resolved.Substituted)
             text += $"; желание {Wish(wish)}, модель его не умеет: {resolved.Note}";
         return text;

@@ -80,13 +80,52 @@ public sealed class VideoEditorToolsetFormatTests
             && f.By == ContextActor.Agent);
         prefs.Aspect.Should().Be("16:9", "Aspect — зеркало Format.Aspect");
         var lines = w.F.Feed.Records.Select(r => r.Record.Fallback).Where(t => t.Contains("сменил формат")).ToList();
-        lines.Should().ContainSingle().Which.Should().Be("✦ Claude сменил формат видео проекта: как у модели → 16:9 · Высокое");
+        lines.Should().ContainSingle().Which.Should().Be("✦ Claude сменил формат сцены «Сцена 1» и видео проекта: 16:9 → 16:9 · Высокое");
+        // Формат ложится и в саму сцену, а не только в запуск и префы: на чипе и в video_state он виден
+        w.F.Threads.Get(w.Owner, w.Chat).Scenes.Single().Settings.Format.Should().Match<MediaFormat>(f =>
+            f.Aspect == "16:9" && f.Tier == FormatTier.High && f.By == ContextActor.Agent);
 
         await w.WaitJobsAsync();
         // Тот же формат повторно — строки нет
         await w.Call(ToolShoot, new JsonObject { ["sceneId"] = scene.SceneId, ["aspect"] = "16:9", ["quality"] = "high" });
         await w.WaitJobsAsync();
         w.F.Feed.Records.Count(r => r.Record.Fallback.Contains("сменил формат")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Shoot_writes_format_to_scene_even_when_prefs_already_have_it()
+    {
+        using var w = new AgentWorld();
+        var scene = w.NewScene();
+        w.Prefs.Save(w.Owner, w.F.Scope, w.Prefs.Get(w.Owner, w.F.Scope) with
+        {
+            Format = new MediaFormat(FormatModes.Aspect, "9:16", FormatTier.High, null, null, ContextActor.Human, DateTime.UtcNow),
+            Aspect = "9:16",
+        }, ContextActor.Human);
+
+        var result = await w.Call(ToolShoot, new JsonObject { ["sceneId"] = scene.SceneId, ["aspect"] = "9:16", ["quality"] = "high" });
+        await w.WaitJobsAsync();
+
+        result.IsError.Should().BeFalse(result.Text);
+        w.F.Threads.Get(w.Owner, w.Chat).Scenes.Single().Settings.Format.Should().Match<MediaFormat>(f =>
+            f.Aspect == "9:16" && f.Tier == FormatTier.High && f.By == ContextActor.Agent);
+        w.F.Feed.Records.Select(r => r.Record.Fallback).Should().ContainSingle(t => t.Contains("сменил формат сцены"));
+    }
+
+    [Fact]
+    public async Task New_scene_inherits_prefs_format_without_agent_mark()
+    {
+        using var w = new AgentWorld();
+        var human = new MediaFormat(FormatModes.Aspect, "9:16", FormatTier.High, null, null, ContextActor.Human, new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc));
+        w.Prefs.Save(w.Owner, w.F.Scope, w.Prefs.Get(w.Owner, w.F.Scope) with { Format = human, Aspect = "9:16" }, ContextActor.Human);
+
+        var result = await w.Call(ToolNew, new JsonObject { ["text"] = "закат" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var format = w.F.Threads.Get(w.Owner, w.Chat).Scenes.Single().Settings.Format;
+        format.Should().NotBeNull();
+        format!.By.Should().Be(ContextActor.Human, "формат унаследован из префов человека: ✦ агента здесь ложь");
+        format.At.Should().Be(w.Prefs.Get(w.Owner, w.F.Scope).Format!.At, "время тоже из префов, а не штамп этой правки");
     }
 
     [Fact]

@@ -384,7 +384,15 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             new VideoQuoteRequest(session.Id, sceneId, Str(args, "provider"), Str(args, "model"), count, duration,
                 null, Bool(args, "sound"), Format: shootFormat), ct);
         if (quote.Value is not { } q) return Fail(quote.ErrorCode, quote.Error, quote.Retry);
-        if (shootFormat is not null) await WriteAgentFormatAsync(owner, scope, session, shootFormat);
+        if (shootFormat is not null)
+        {
+            // Формат пишется в сцену тем же путём, что у video_scene_set (с той же тихой строкой): иначе ролик снят
+            // в формате, которого не видно ни в сцене, ни на чипе. Сцену могли занять (идёт съёмка) — тогда формат
+            // остаётся в запуске и в префах
+            var applied = await _scenes.SettingsAsync(owner, scope, session.Id, sceneId,
+                sceneNow.Settings with { Format = shootFormat }, null, by: ContextActor.Agent);
+            await WriteAgentFormatAsync(owner, scope, session, shootFormat, applied.Written is { Status: VideoThreadWriteStatus.Ok } ? sceneNow : null);
+        }
 
         var started = await _jobs.StartAsync(owner, scope,
             new VideoLaunchRequest(q.QuoteId, session.Id, sceneId, VideoInitiators.Agent, args["params"] as JsonObject, Long(args, "seed")), ct);

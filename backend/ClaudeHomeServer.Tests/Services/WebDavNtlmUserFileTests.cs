@@ -233,6 +233,79 @@ public class WebDavNtlmUserFileTests : IDisposable
         ntlm.NegotiateAvailable.Should().BeTrue();
     }
 
+    // Боевой экземпляр владеет файлом; дев-стенд с тем же ключом в Local.json — чужой
+    private IConfiguration ForeignConfig() =>
+        Config(new() { ["DataPath"] = Path.Combine(_dataDir, "dev", "projects.json") });
+
+    private void SeedOwnedByProd(params (string User, string Password)[] users)
+    {
+        var prod = NtlmFile(Config());
+        foreach (var (u, p) in users) prod.Record(u, p);
+    }
+
+    [Fact]
+    public void ЧужаяМетка_ФайлНеМеняется_NegotiateВыключен()
+    {
+        // Боевой файл с admin и alice, дев-стенд знает только admin с дев-паролем
+        SeedOwnedByProd(("admin", "prod-secret"), ("alice", "alice-pass"));
+        var before = File.ReadAllBytes(_ntlmPath);
+
+        var ntlm = NtlmFile(ForeignConfig());
+        var store = Store(ntlm, ForeignConfig()); // Retain в конструкторе, admin заводится сам
+        store.Add("bob", "password", "user");
+        ntlm.Record("admin", "dev-password");
+        ntlm.Remove("alice");
+        ntlm.Retain(["admin"]);
+
+        File.ReadAllBytes(_ntlmPath).Should().Equal(before);
+        ntlm.NegotiateAvailable.Should().BeFalse();
+        ntlm.Contains("alice").Should().BeFalse("чужой файл не читается");
+    }
+
+    [Fact]
+    public void СвояМетка_ПишетсяКакПрежде()
+    {
+        SeedOwnedByProd(("admin", "prod-secret"));
+
+        var ntlm = NtlmFile(Config());
+        ntlm.Contains("admin").Should().BeTrue();
+        ntlm.Record("bob", "password");
+
+        Lines("bob").Should().HaveCount(3);
+        Lines("admin").Should().HaveCount(3);
+        ntlm.NegotiateAvailable.Should().BeTrue();
+    }
+
+    [Fact]
+    public void МеткиНет_СтарыйФормат_СтавитсяМеткаИСтрокиСохраняются()
+    {
+        Directory.CreateDirectory(_secretsDir);
+        File.WriteAllText(_ntlmPath, "# старая шапка\nbob:0:AAD3B435B51404EEAAD3B435B51404EE:" + PasswordNtHash + ":[U          ]:LCT-00000000:\n");
+
+        var ntlm = NtlmFile(Config());
+
+        NtlmUserFile.ReadOwnerMark(_ntlmPath).Should().Be(NtlmUserFile.CanonicalPath(Path.Combine(_dataDir, "users.json")));
+        ntlm.Contains("bob").Should().BeTrue();
+        Lines("bob").Should().NotBeEmpty();
+        ntlm.NegotiateAvailable.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ЧужойЭкземпляр_ПослеЗахватаСтаройМетки_ВторойУжеЧужой()
+    {
+        // Старый файл без метки забрал первый стартовавший; второй экземпляр обязан отступить
+        Directory.CreateDirectory(_secretsDir);
+        File.WriteAllText(_ntlmPath, "# старая шапка\n");
+        NtlmFile(Config());
+        var before = File.ReadAllBytes(_ntlmPath);
+
+        var second = NtlmFile(ForeignConfig());
+        second.Record("admin", "dev-password");
+
+        File.ReadAllBytes(_ntlmPath).Should().Equal(before);
+        second.NegotiateAvailable.Should().BeFalse();
+    }
+
     [Fact]
     public void МеханизмGss_ОпределяетсяПоMechD()
     {

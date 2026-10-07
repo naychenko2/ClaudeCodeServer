@@ -5,7 +5,7 @@
 // отсюда же, чтобы полоса и кнопка не разошлись.
 
 import { useCallback, useMemo } from 'react';
-import { api as appApi, clearGenDraft, FLAGS, followChat, getFlag, showToast } from 'aihome_shell/kit';
+import { api as appApi, clearGenDraft, followChat, showToast } from 'aihome_shell/kit';
 import {
   AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditOp, type ImageEditQuoteRequest,
 } from '../api';
@@ -21,7 +21,7 @@ import {
 } from '../editorInputs';
 import { isPersonalScope } from '../scope';
 import {
-  activeChoice, DEFAULT_CHOICE, effectiveMode, footPrice, getCreateRatio, isOneVariant, launchMarks, modeOp, queueText, quickOf,
+  activeChoice, DEFAULT_CHOICE, effectiveMode, footPrice, isOneVariant, launchMarks, modeOp, queueText, quickOf,
   runVerb, usePanelChoiceVersion, type PanelChoice,
 } from '../context/ops';
 import { useQuote } from '../useQuote';
@@ -177,12 +177,11 @@ export async function launchThread(
   const noSamples = own || route?.maxReferences === 0;
   const withMask = plan.useMask && hasMask;
   const withMarks = marksSent(plan.op, hasImage, marks);
-  // Пропорции новой картинки из «Ещё настроек» «Создать»; у дорисовки — свои
-  // Под флагом дорисовка из «Формата» несёт пропорцию желанием котировки (любые W:H: 4:3, 21:9…), а не `aspectRatio`
+  // Дорисовка из «Формата» несёт пропорцию желанием котировки (любые W:H: 4:3, 21:9…), а не `aspectRatio`
   // запуска, где у сервера белый список трёх значений правки
-  const outpaintFormat = outpaintFormatWish(getFlag(FLAGS.mediaFormat), !!cx, plan) ?? undefined;
+  const outpaintFormat = outpaintFormatWish(!!cx, plan) ?? undefined;
   const aspectRatio = outpaintFormat ? undefined : plan.aspectRatio
-    ?? (cx ? (fromScratch ? cx.aspect : null) : mode === 'create' && fromScratch ? getCreateRatio(projectId) : null);
+    ?? (cx && fromScratch ? cx.aspect : null);
   try {
     // Запуск по ревизии берёт образцы и персонажа из контекста чата; без неё — из памяти вкладки и prefs
     const inputCounts = () => noSamples ? { references: 0, hasCharacter: false }

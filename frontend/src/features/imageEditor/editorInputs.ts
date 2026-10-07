@@ -101,10 +101,10 @@ export function quickPlan(action: QuickAction, ratio: OutpaintRatio): LaunchPlan
 }
 
 // Дорисовка из «Формата» (ADR-025): пропорции холста — любые читаемые W:H (4:3, 21:9…) — несёт желание котировки,
-// а не `aspectRatio` запуска: у него серверный белый список трёх значений правки. Без флага или вне строки
+// а не `aspectRatio` запуска: у него серверный белый список трёх значений правки. Вне строки
 // контекста — null, прежний путь через `aspectRatio`
-export function outpaintFormatWish(formatOn: boolean, fromContext: boolean, plan: LaunchPlan, now = new Date()): MediaFormatWish | null {
-  if (!formatOn || !fromContext || plan.op !== 'outpaint' || !plan.aspectRatio) return null;
+export function outpaintFormatWish(fromContext: boolean, plan: LaunchPlan, now = new Date()): MediaFormatWish | null {
+  if (!fromContext || plan.op !== 'outpaint' || !plan.aspectRatio) return null;
   return { mode: 'aspect', aspect: plan.aspectRatio, by: 'human', at: now.toISOString() };
 }
 

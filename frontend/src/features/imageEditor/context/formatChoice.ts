@@ -1,12 +1,11 @@
 // Выбор «других пропорций» при правке картинки и желание формата для котировки (ADR-025). Отдельный файл
 // ради цикла импорта: format.ts зовёт котировку из run.ts, а run.ts читает выбор отсюда.
 
-import { FLAGS, getFlag, notifyKindChanged, type CropAnchor, type MediaFormatWish } from 'aihome_shell/kit';
+import { notifyKindChanged, type CropAnchor, type MediaFormatWish } from 'aihome_shell/kit';
 import { getPrefs } from '../thread/prefs';
 
 // Желание проекта для котировки генерации: общий кэш котировок ключуется телом, поэтому формат уходит явно
-export const wishForQuote = (scope: string): MediaFormatWish | null | undefined =>
-  getFlag(FLAGS.mediaFormat) ? getPrefs(scope).format ?? null : undefined;
+export const wishForQuote = (scope: string): MediaFormatWish | null => getPrefs(scope).format ?? null;
 
 // ── Правка: «другие пропорции» живут одну правку ──
 

@@ -9,10 +9,6 @@ import { pickOp } from '../format';
 
 export type ImageState = 'draft' | 'file' | 'marks';
 
-// Пропорции, которые принимает сервер у дорисовки и новой картинки (ImageEditLaunchAssembler.AspectRatios)
-export const ASPECT_OPTIONS = ['16:9', '9:16', '1:1'] as const;
-// Пропорции новой картинки «как решит модель»: значение params.aspect, на сервер уходит как null
-export const ASPECT_AUTO = 'авто';
 
 export interface ImageActionInput {
   // У нити есть что править: версия с картинкой, шаг или файл
@@ -24,9 +20,9 @@ export interface ImageActionInput {
   // Какие быстрые операции умеет хоть один поставщик каталога; не умеет никто — действие серое
   offered: { removeBackground: boolean; upscale: boolean; outpaint: boolean };
   openBrush: () => void;
-  // Флаг media-format: пропорции дорисовки задаются в «Формате», а не вопросом под чипом (ADR-025);
-  // outpaintAspect — выбранные там пропорции, null — ещё не выбраны. Нет поля — флаг выключен
-  format?: { outpaintAspect: string | null; pendingAspect: boolean };
+  // Пропорции дорисовки задаются в «Формате», а не вопросом под чипом (ADR-025);
+  // outpaintAspect — выбранные там пропорции, null — ещё не выбраны
+  format: { outpaintAspect: string | null; pendingAspect: boolean };
 }
 
 export const imageState = (i: Pick<ImageActionInput, 'hasFile' | 'marks'>): ImageState =>
@@ -66,7 +62,7 @@ function rawImageActions(i: ImageActionInput): readonly ContextAction[] {
       label: marked ? 'Изменить отмеченное' : 'Изменить',
       hint: marked ? 'Изменить отмеченное место: отметки уйдут вместе с описанием' : 'Изменить картинку по описанию',
       // Другие пропорции выбраны, а способ — нет: модель сама пропорции не тянет и не режет
-      ...(i.format?.pendingAspect ? { blockReason: FORMAT_TEXT.pendingChoice } : null),
+      ...(i.format.pendingAspect ? { blockReason: FORMAT_TEXT.pendingChoice } : null),
       placeholder: marked ? 'Что сделать с отмеченным…' : 'Что изменить на картинке…',
     },
     {
@@ -80,9 +76,7 @@ function rawImageActions(i: ImageActionInput): readonly ContextAction[] {
     {
       id: 'outpaint', kind: 'run', label: 'Дорисовать', op: 'outpaint', text: 'none',
       hint: 'Дорисовать картинку за края до выбранных пропорций',
-      ...(i.format
-        ? (i.format.outpaintAspect ? null : { blockReason: FORMAT_TEXT.outpaintNeedsFormat })
-        : { question: { param: 'aspect', title: 'Пропорции', options: ASPECT_OPTIONS.map(r => ({ value: r, label: r })) } }),
+      ...(i.format.outpaintAspect ? null : { blockReason: FORMAT_TEXT.outpaintNeedsFormat }),
       ...off(i.offered.outpaint, 'дорисовывать за края'),
     },
     {

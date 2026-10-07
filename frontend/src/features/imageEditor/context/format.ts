@@ -7,7 +7,7 @@
 //  — `aspectLabel`: подпись исходника правки («4:3» у файла 400×300), а не формат — в модель не уходит.
 
 import {
-  FLAGS, FORMAT_TEXT, generateChip, getChatContextState, getFlag, notifyKindChanged, objectKey, presetAction,
+  FORMAT_TEXT, generateChip, getChatContextState, notifyKindChanged, objectKey, presetAction,
   type CropAnchor, type FormatEditModel, type FormatModel, type MediaFormatState, type MediaFormatWish, type ContextKindCtx,
 } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditOp } from '../api';
@@ -233,7 +233,7 @@ export function imageFormat(ctx: ContextKindCtx, actionId: string | null): Forma
   const out = source && aspect ? outpaintSize(source.width, source.height, aspect) : null;
   const outSize = out ? `${out.w}×${out.h}` : null;
   const cropSize = source && aspect ? cropSizeOf(scope, ctx.sessionId, thread, aspect, choice.anchor) : null;
-  const outPrice = source && aspect && getFlag(FLAGS.mediaFormat) ? outpaintPrice(ctx, thread, `${pv.key}/${m.id}`) : null;
+  const outPrice = source && aspect ? outpaintPrice(ctx, thread, `${pv.key}/${m.id}`) : null;
 
   const edit: FormatEditModel = {
     source, aspect, how, anchor: choice.anchor,

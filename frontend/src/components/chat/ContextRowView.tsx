@@ -55,7 +55,7 @@ export interface ContextRowViewProps {
   primary: ChatContextPrimary | null;
   refs: readonly ChatContextRef[];
   exec: RowExec | null;
-  // Чип «Формат» (ADR-025, флаг media-format): модель от вида; null — чипа нет (нет вида, объекта или флага)
+  // Чип «Формат» (ADR-025): модель от вида; null — чипа нет (нет вида или объекта)
   format?: FormatModel | null;
   // Имя проекта для низа всплывашки «Запомнится для картинок проекта «X»»
   projectName?: string | null;

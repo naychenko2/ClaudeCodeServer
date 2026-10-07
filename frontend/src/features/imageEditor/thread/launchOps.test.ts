@@ -22,7 +22,7 @@ const { __resetPrefs, ensurePrefs, prefsApi } = await import('./prefs');
 const { __applyThreads, __resetThreadStore, isWholeImage, setThreadMarks, setWholeImage } = await import('./threadStore');
 const { __resetImageModes, setImageMode } = await import('./modeState');
 const { launchThread } = await import('./useThreadLaunch');
-const { __resetPanelChoice, setCreateRatio } = await import('../context/ops');
+const { __resetPanelChoice } = await import('../context/ops');
 import type { ImageEditJobInput, ImageEditQuoteRequest } from '../api';
 import type { Mark } from '../marks';
 import type { ProjectPrefs } from './prefs';
@@ -97,22 +97,5 @@ describe('с режимом', () => {
     setWholeImage(t.id, false);
     await launchThread(P, S, t, { kind: 'prompt', prompt: 'небо розовое' });
     expect(quotes.at(-1)).toMatchObject({ op: 'inpaint', hasMask: true });
-  });
-
-  it('пропорции новой картинки уходят только с генерацией в «Создать»', async () => {
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    setCreateRatio(P, '9:16');
-    setImageMode(S, 'create');
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'кот' });
-    expect(quotes.at(-1)?.op).toBe('generate');
-    expect(jobs.at(-1)?.aspectRatio).toBe('9:16');
-    setImageMode(S, 'edit');
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'кот' });
-    expect(jobs.at(-1)?.aspectRatio).toBeUndefined();
-    setImageMode(S, 'create');
-    setCreateRatio(P, null);
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'кот' });
-    expect(jobs.at(-1)?.aspectRatio).toBeUndefined();
   });
 });

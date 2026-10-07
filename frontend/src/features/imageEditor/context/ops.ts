@@ -3,7 +3,6 @@
 // Прежняя панель «Картинки» удалена (ADR-023 §Д3): остался только общий код запуска.
 
 import { useSyncExternalStore } from 'react';
-import { FLAGS, getFlag } from 'aihome_shell/kit';
 import { AUTO_MODEL, type EditMode, type ImageEditEstimate, type ImageEditModel, type ImageEditOp } from '../api';
 import { etaText, isFreeUnit, money, pickOp, priceSum, variantsWord } from '../format';
 import type { OutpaintRatio, QuickAction } from '../editorInputs';
@@ -113,7 +112,6 @@ export function usePanelChoiceVersion() {
 }
 
 export function __resetPanelChoice() {
-  _createRatio.clear();
   _version++;
 }
 
@@ -121,18 +119,3 @@ export function __resetPanelChoice() {
 // стрелки, рамки и подписи остаются подсказкой модели
 export const launchMarks = <M extends { type: string }>(marks: M[], whole: boolean): M[] =>
   whole ? marks.filter(m => m.type !== 'mask') : marks;
-
-// Пропорции новой картинки («Ещё настройки» режима «Создать»): в памяти вкладки на проект,
-// null — как решит модель. Удалить после снятия флага media-format: пропорции тогда задаёт только чип «Формат»,
-// а `_createRatio`, `getCreateRatio` и `setCreateRatio` остаются лишь для прежнего поведения без флага
-const _createRatio = new Map<string, OutpaintRatio>();
-
-// Под флагом media-format пропорции новой картинки задаёт чип «Формат», память вкладки их не подставляет
-export const getCreateRatio = (projectId: string): OutpaintRatio | null => (getFlag(FLAGS.mediaFormat) ? null : _createRatio.get(projectId) ?? null);
-
-export function setCreateRatio(projectId: string, ratio: OutpaintRatio | null) {
-  if (ratio) _createRatio.set(projectId, ratio);
-  else _createRatio.delete(projectId);
-  _version++;
-  _listeners.forEach(fn => fn());
-}

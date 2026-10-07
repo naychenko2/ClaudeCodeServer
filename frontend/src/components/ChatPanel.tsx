@@ -93,6 +93,12 @@ import { openChatById } from '../lib/openChat';
 // десктопное — размах колец индикатора. Сливать в одно не надо.
 // Само значение (CHAT_GUTTER_MOBILE) живёт в lib/design: по нему же ставится ось круглешка AI
 
+// Высота мягкого затухания низа ленты над полем ввода (десктоп): строки уходят под поле
+// плавно, а не обрубаются ровной линией
+const FEED_FADE_PX = 14;
+// Маска берёт только непрозрачность цвета: подойдёт любой непрозрачный токен
+const FEED_FADE_MASK = `linear-gradient(to bottom, ${C.bgMain} calc(100% - ${FEED_FADE_PX}px), transparent)`;
+
 interface Props {
   session: Session;
   // Отсутствует для чата вне проекта (project-less) — тогда скрываем файловые возможности
@@ -808,7 +814,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
   const {
-    bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
+    bottomRef, scrollRef, contentRef, composerWrapRef, composerH, composerLipH,
     showScrollDown, scrolled, atBottomRef, handleMessagesScroll, scrollToBottom,
   } = useChatScroll(session.id, items, isHistoryLoading, online);
   // Компенсация перекоса «боковое поле слева против полосы прокрутки справа» — см.
@@ -2701,7 +2707,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера
         // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область
         // прокрутки, поэтому overflow обрезает сообщения по её нижней границе.
-        marginBottom: composerH }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
+        // На десктопе граница — верх ПОЛЯ, а не верхней губы: губа (строка контекста) — узкое
+        // непрозрачное ушко слева, текст уходит под него, а справа виден до самого поля.
+        // Мягкое затухание внизу — строки уходят под поле плавно, а не обрубаются.
+        // Телефон — как было: там строка контекста не ушко и подложки под текст нет
+        marginBottom: isMobile ? composerH : composerH - composerLipH,
+        ...(isMobile || composerLipH === 0 ? {} : { maskImage: FEED_FADE_MASK, WebkitMaskImage: FEED_FADE_MASK }) }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && showHistorySpinner && (
           <div style={{

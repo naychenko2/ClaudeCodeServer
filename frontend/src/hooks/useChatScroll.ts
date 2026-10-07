@@ -37,6 +37,10 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   // Плавающий composer переменной высоты — измеряем, чтобы лента упиралась ровно под него
   const composerWrapRef = useRef<HTMLDivElement>(null);
   const [composerH, setComposerH] = useState(_lastComposerH);
+  // Сколько от верха композера до верха поля ввода — высота верхней губы (строки контекста).
+  // Губа — узкое ушко слева, справа от неё пусто: лента на десктопе доходит до поля, а не до
+  // губы, иначе справа от ушка зияла полоса фона с обрезанным ни о что текстом
+  const [composerLipH, setComposerLipH] = useState(0);
   // Прилипание к низу: автоскролл при новых сообщениях, пока лента «приклеена» к концу.
   // ГЛАВНЫЙ ИНВАРИАНТ: отклеивает ленту жест пользователя (колесо, тач, клавиши,
   // перетаскивание полосы) либо сдвиг вверх мимо низа (scrollIntoView, фокус по Tab —
@@ -120,7 +124,13 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   useEffect(() => {
     const el = composerWrapRef.current;
     if (!el) return;
-    const update = () => { _lastComposerH = el.offsetHeight; setComposerH(el.offsetHeight); };
+    const update = () => {
+      _lastComposerH = el.offsetHeight;
+      setComposerH(el.offsetHeight);
+      // Губа меняет высоту композера — тот же наблюдатель её и ловит
+      const field = el.querySelector<HTMLElement>('[data-composer-field]');
+      setComposerLipH(field ? Math.max(0, Math.round(field.getBoundingClientRect().top - el.getBoundingClientRect().top)) : 0);
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -266,7 +276,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   }, [isHistoryLoading, applyRestore, syncScrollState]);
 
   return {
-    bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
+    bottomRef, scrollRef, contentRef, composerWrapRef, composerH, composerLipH,
     showScrollDown, scrolled, atBottomRef, handleMessagesScroll, scrollToBottom,
   };
 }

@@ -209,10 +209,14 @@ export function Anchors({ value, onChange, isMobile }: { value: CropAnchor; onCh
 
 // Вопрос «Дорисовать края / Обрезать»: сама модель пропорции не тянет и не режет — только явный выбор
 function Ask({ e, isMobile }: { e: FormatEditModel; isMobile: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const shown = !!e.source && !!e.aspect;
+  // Вопрос появляется ниже сетки пропорций и в узкой панели уезжает за край: «Обрезать» не видно без прокрутки
+  useEffect(() => { if (shown) ref.current?.scrollIntoView?.({ block: 'nearest' }); }, [shown, e.aspect]);
   if (!e.source || !e.aspect) return null;
   const src = { aspect: e.source.aspect, thumb: e.source.thumb };
   return (
-    <div data-fmt-ask="" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm - 2, padding: SP.sm, border: `1px solid ${C.accentMuted}`, borderRadius: R.md, background: C.bgCard }}>
+    <div ref={ref} data-fmt-ask="" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm - 2, padding: SP.sm, border: `1px solid ${C.accentMuted}`, borderRadius: R.md, background: C.bgCard }}>
       <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>{e.source.aspect} → {e.aspect}. Как получить {e.aspect}?</div>
       <button type="button" data-fmt-how="outpaint" onClick={() => e.onHow('outpaint')} style={optBtn}>
         <Preview source={src} target={e.aspect} mode="pad" anchor={e.anchor} />

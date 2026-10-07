@@ -280,6 +280,16 @@ for (const height of [800, 600]) {
   });
 }
 
+// Находимость «Обрезать»: после выбора пропорций вопрос «Дорисовать / Обрезать» сам прокручивается в видимую область
+// (на низком окне он иначе остаётся за краем всплывашки, и ручного пути к обрезке не видно)
+test('правка: после выбора пропорций кнопка «Обрезать» видна без прокрутки', async ({ page }) => {
+  await open(page, { width: 1280, height: 640 }, 'light', { kind: 'hero', model: NANO });
+  await expect(chip(page)).toBeVisible({ timeout: 15_000 });
+  await chip(page).click();
+  await aspect(page, '1:1').click();
+  await expect(page.locator('[data-fmt-how="crop"]')).toBeInViewport({ ratio: 1 });
+});
+
 // Ресайз окна закрывает всплывашку: высота и якорь посчитаны по прежнему окну
 test('всплывашка «Формата» закрывается при ресайзе окна', async ({ page }) => {
   await open(page, { width: 1280, height: 800 }, 'light', { kind: 'draft', model: NANO });
@@ -373,6 +383,9 @@ for (const { name, vp } of VIEWPORTS) {
     // Карточка версии та же, подпись — размер и «обрезано без ИИ», у агента с пометкой
     await expect(page.locator('[data-image-version="1"]')).toContainText('1200×1200 · 1:1 · обрезано без ИИ');
     await expect(page.locator('[data-image-version="2"]')).toContainText('обрезано без ИИ · ✦ Claude');
+    // Ручная обрезка и агентская — одна карточка: набор кнопок совпадает, различается только автор в подписи
+    const buttons = (n: string) => page.locator(`[data-image-version="${n}"] button`).allInnerTexts();
+    expect(await buttons('1')).toEqual(await buttons('2'));
     await expect(page.getByText('✦ Claude сменил формат картинок проекта: 16:9 → 9:16')).toBeVisible();
     expect(await noOverflow(page)).toBe(true);
   });

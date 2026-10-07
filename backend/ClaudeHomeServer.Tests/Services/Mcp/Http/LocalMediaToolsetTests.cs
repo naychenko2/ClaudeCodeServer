@@ -94,6 +94,25 @@ public class LocalMediaToolsetTests : IDisposable
             "состав статичный — не зависит ни от хода, ни от вызова");
     }
 
+    // Оговорка про редакторы: без неё модель, у которой есть image_generate/video_shoot, звала бы
+    // local_* мимо карточки в ленте и записи формата
+    [Theory]
+    [InlineData("local_generate_image")]
+    [InlineData("local_edit_image")]
+    [InlineData("local_face_detail")]
+    [InlineData("local_text_to_video")]
+    [InlineData("local_image_to_video")]
+    [InlineData("local_reference_to_video")]
+    [InlineData("local_video_inpaint")]
+    public void ГенерирующиеКартинкиИВидео_ОписаниеУказываетНаРедакторыСProviderLocal(string tool)
+    {
+        var env = Build();
+
+        var description = env.Toolset.ToolsFor(env.Context).Single(t => t.Name == tool).Description;
+
+        description.Should().Contain("image_generate").And.Contain("video_shoot").And.Contain("provider local");
+    }
+
     // Дефект 2 QA 1e099019: после локальной генерации модель звала local_generate_image на
     // «Нарисуй котика» без «локально». Запрет — первым предложением у каждого генерирующего
     [Fact]

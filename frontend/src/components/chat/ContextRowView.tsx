@@ -174,7 +174,7 @@ function AgentMark({ title, onClick }: { title: string; onClick?: () => void }) 
 export const changesWord = (n: number) => `${n} ${plural(n, 'изменение', 'изменения', 'изменений')}`;
 
 function gitTitle(g: RowGit) {
-  return `Ветка ${g.label} · ${g.changes ? changesWord(g.changes) : 'чисто'}${g.publishN ? ` · ${g.publishN} к публикации` : ''}`;
+  return `Ветка ${g.label} · ${g.changes ? changesWord(g.changes) : 'нет изменений'}${g.publishN ? ` · ${g.publishN} к публикации` : ''}`;
 }
 
 function GitChip({ g, form, onOpen, bare }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: (r: DOMRect) => void; bare?: boolean }) {
@@ -216,7 +216,7 @@ function GitChip({ g, form, onOpen, bare }: { g: RowGit; form: 0 | 1 | 2 | 3; on
       {form >= 2 && <span style={box.label === null ? ellipsis : { ...ellipsis, maxWidth: box.label }}>{g.label}</span>}
       <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>
       {form === 3
-        ? (g.changes ? <span style={{ flexShrink: 0 }}>{changesWord(g.changes)}</span> : (g.publishN ? null : <span style={{ flexShrink: 0 }}>чисто</span>))
+        ? (g.changes ? <span style={{ flexShrink: 0 }}>{changesWord(g.changes)}</span> : (g.publishN ? null : <span style={{ flexShrink: 0 }}>нет изменений</span>))
         : (count ?? (clean ? <span style={{ flexShrink: 0 }}>чисто</span> : null))}
       {form === 3 && g.publishN > 0 && g.changes > 0 && <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>}
       {up}
@@ -305,7 +305,7 @@ export function GitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
   const run = (fn: () => void) => () => { close(); fn(); };
   return (
     <>
-      <MenuHead><b style={{ color: C.textHeading, fontFamily: FONT.mono }}>{g.label}</b> · {g.changes ? changesWord(g.changes) : 'чисто'}{g.publishN ? ` · ↑${g.publishN}` : ''}</MenuHead>
+      <MenuHead><b style={{ color: C.textHeading, fontFamily: FONT.mono }}>{g.label}</b> · {g.changes ? changesWord(g.changes) : 'нет изменений'}{g.publishN ? ` · ↑${g.publishN}` : ''}</MenuHead>
       <MenuItem icon={<Check size={15} strokeWidth={ICON_STROKE} />} label="Зафиксировать только этот чат"
         hint={g.changes ? `${files}, которые правил этот чат` : 'изменений этого чата нет'} disabled={!g.changes} onClick={run(g.onCommitOwn)} />
       <MenuItem icon={<Check size={15} strokeWidth={ICON_STROKE} />} label="Зафиксировать всё дерево"
@@ -657,11 +657,11 @@ export function ContextRowView(props: ContextRowViewProps) {
                 Только без объекта и референсов: чипов, которые ужимает лестница, нет, и кнопки
                 не отнимают у неё ширину. Высота — по ряду губы (CHIP_H): губа не растёт */}
             {gitActions && git && <GitActions g={git} onCommit={rect => setMenu({ kind: 'commit', rect })} />}
-            {/* Чистое дерево — справа просто «чисто»: текстом без бейджа и без зелени, как прежняя
+            {/* Чистое дерево — справа просто «нет изменений»: текстом без бейджа и без зелени, как прежняя
                 строка «ветка · чисто» Git-полосы. Делать нечего, поэтому не кнопка */}
             {gitBare && !gitActions && (
               <span data-git-clean="" title="Всё закоммичено и опубликовано"
-                style={{ marginLeft: 'auto', flexShrink: 0, padding: `0 ${LIP_BTN_PAD_X}px`, fontSize: GIT_FONT, color: C.textMuted, whiteSpace: 'nowrap' }}>чисто</span>
+                style={{ marginLeft: 'auto', flexShrink: 0, padding: `0 ${LIP_BTN_PAD_X}px`, fontSize: GIT_FONT, color: C.textMuted, whiteSpace: 'nowrap' }}>нет изменений</span>
             )}
             {git && (primary || refs.length > 0) && (
               <span data-row-sep="" style={{ width: NOM.vsep, height: 16, background: C.border, flexShrink: 0 }} />

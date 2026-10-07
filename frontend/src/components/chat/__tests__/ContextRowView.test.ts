@@ -59,7 +59,7 @@ describe('ContextRowView', () => {
     expect(clean).not.toContain('lucide-chevron-down');
     expect(clean).not.toContain('data-git-actions');
     expect(clean).toContain('data-git-clean');
-    expect(clean).toContain('>чисто<');
+    expect(clean).toContain('>нет изменений<');
     const dirty = html(props({ primary: null, refs: [], git: { ...git, changes: 3, added: 12, deleted: 4, publishN: 1 } }));
     expect(dirty).toContain('data-git-actions');
     expect(dirty).toContain('>3<');

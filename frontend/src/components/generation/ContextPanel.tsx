@@ -108,7 +108,7 @@ function WhereSection({ git }: { git: RowGit }) {
         }}>
         <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
         <b style={{ color: C.textHeading, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{git.label}</b>
-        <span style={{ color: C.textMuted, flexShrink: 0 }}>· {git.changes ? changesWord(git.changes) : 'чисто'}{git.publishN ? ` · ↑${git.publishN}` : ''}</span>
+        <span style={{ color: C.textMuted, flexShrink: 0 }}>· {git.changes ? changesWord(git.changes) : 'нет изменений'}{git.publishN ? ` · ↑${git.publishN}` : ''}</span>
         <span style={{ flex: 1 }} />
         <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
       </button>

@@ -489,6 +489,26 @@ public sealed class FalVideoEngineTests
         perRun.Amount.Should().BeApproximately(0.4, 1e-12);
     }
 
+    // Прайс fal (get_pricing 2026-10-07) отдаёт одну цену на модель без разбивки по разрешению: «Высокое» не дороже
+    // «Стандарта» на бумаге, поэтому цена любой ступени помечена оценочной, а не выдана за точную. Если у ступени есть
+    // PriceFactor — он входит в сумму
+    [Theory]
+    [InlineData(FalVideoCatalog.VeoLite, "16:9")]
+    [InlineData(FalVideoCatalog.MiniMaxH3, "16:9")]
+    public async Task Estimate_OfAnyTier_IsApprox_WhenPriceDoesNotDifferByResolution(string model, string aspect)
+    {
+        _fal.Price(model, 0.05, "seconds");
+
+        var standard = await Engine().EstimateAsync(Model(model), Request(model, duration: 5,
+            format: Resolved(model, aspect, FormatTier.Standard)), CancellationToken.None);
+        var high = await Engine().EstimateAsync(Model(model), Request(model, duration: 5,
+            format: Resolved(model, aspect, FormatTier.High)), CancellationToken.None);
+
+        high.Amount.Should().BeGreaterThanOrEqualTo(standard.Amount!.Value);
+        (high.Amount > standard.Amount || high.Approx).Should().BeTrue("ступень дороже или цена помечена оценочной");
+        high.Approx.Should().BeTrue();
+    }
+
     [Fact]
     public async Task Estimate_PricingDown_CatalogHint()
     {

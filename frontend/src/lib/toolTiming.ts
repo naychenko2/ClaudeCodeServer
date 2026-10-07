@@ -63,8 +63,17 @@ export const ETA_TAIL_PERCENT = 98;
 // и отсчитывается вниз, а не пересчитывается на каждом рендере: пока хвостовые тесты висят,
 // процент стоит, а время этапа растёт — пересчёт держал бы «≈0:03» вечно. Истекла — молчим
 export function meterText(p: ToolProgress | null | undefined, stageMs: number | null, sinceMs: number | null): string | null {
+  const m = meterParts(p, stageMs, sinceMs);
+  return m ? (m.left ? `${m.percent} · осталось ${m.left}` : m.percent) : null;
+}
+
+// То же по частям — для раскладки колонками (десктоп): процент у конца полосы, оставшееся время —
+// в колонке времени шапки, слово «осталось» — в слоте статуса. left — «≈0:13» / «~1:00» или null
+export function meterParts(
+  p: ToolProgress | null | undefined, stageMs: number | null, sinceMs: number | null,
+): { percent: string; left: string | null } | null {
   if (typeof p?.percent !== 'number') return null;
-  const parts = [`${p.exact ? '' : '≈'}${Math.round(toolProgressPercent(p)!)}%`];
+  const percent = `${p.exact ? '' : '≈'}${Math.round(toolProgressPercent(p)!)}%`;
   const since = sinceMs == null ? null : Math.max(0, sinceMs);
   let left: number | null = null;
   if (since == null) left = null;
@@ -76,9 +85,10 @@ export function meterText(p: ToolProgress | null | undefined, stageMs: number | 
       left = stageAt / p.percent * (100 - p.percent) - since;
   }
   // Меньше секунды — уже «0:00»: не обещаем то, что истекает на глазах
-  if (left != null && left >= 1000)
-    parts.push(`осталось ${typeof p.etaSeconds === 'number' && p.etaSeconds > 0 ? '~' : '≈'}${formatClock(left)}`);
-  return parts.join(' · ');
+  const shown = left != null && left >= 1000
+    ? `${typeof p.etaSeconds === 'number' && p.etaSeconds > 0 ? '~' : '≈'}${formatClock(left)}`
+    : null;
+  return { percent, left: shown };
 }
 
 // Процент для полосы; null — полоса остаётся неопределённой. Потолок: у оценки 95, у настоящих

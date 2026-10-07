@@ -380,6 +380,18 @@ describe('ToolUseView — витрина Веры', () => {
     expect(estimate).toContain('repeating-linear-gradient(90deg, var(--c-text-muted)');
   });
 
+  it('десктоп: справа от полосы — процент и место шеврона, как колонки шапки', () => {
+    const html = render(wait({ progress: { stage: 'running', percent: 40, exact: true } }));
+    expect(html).toMatch(/role="progressbar"[^]*>40%<\/span><span aria-hidden="true" style="width:11px/);
+  });
+
+  it('мобила: процент одной строкой, без колонок', () => {
+    viewport.mobile = true;
+    const html = render(wait({ progress: { stage: 'running', percent: 40, exact: true } }));
+    expect(html).toContain('>40%<');
+    expect(html).not.toMatch(/>40%<\/span><span aria-hidden="true" style="width:11px/);
+  });
+
   it('п. 4: ожидание в очереди — только точка, полосы нет', () => {
     const html = render(wait({ progress: { stage: 'queued', queuePosition: 2, percent: 0 } }));
     expect(html).not.toContain('progressbar');

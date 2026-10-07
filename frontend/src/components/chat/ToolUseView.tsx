@@ -6,7 +6,7 @@ import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
 import { LiveDot, ProgressBar } from '../ui';
-import { awaitsToolStart, FAILED_RE, formatClock, isQueued, meterText, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
+import { awaitsToolStart, FAILED_RE, formatClock, isQueued, meterParts, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
 import { useRunningElapsed } from '../../hooks/useRunningElapsed';
 import { toolLabel, toolWord, toolCardLabel, testRunArg, buildArg, localJobsWaitArg, consoleCaption, isConsoleTool, operationOf, RUN_TESTS_TOOL, BUILD_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
 import { OPERATION_ICON } from '../../lib/operationIcons';
@@ -41,18 +41,30 @@ const CHEVRON_W = 11;
 // Процент прогресса: факт (настоящие шаги) — сплошная заливка, оценка — пунктир
 type ProgressPct = { value: number; estimate: boolean; label?: string };
 
-// Полоса прогресса под карточкой: дорожка на всю ширину строки — видно, где конец, — и справа
-// процент с «осталось». Высота строки фиксирована: смена подписи ленту не двигает
-function ProgressMeter({ pct, text }: { pct: ProgressPct; text: string | null }) {
+// Полоса прогресса под карточкой: дорожка на всю ширину строки — видно, где конец, — и процент
+// у её конца. Высота строки фиксирована: смена подписи ленту не двигает.
+// columns (десктоп): справа те же колонки, что у итога в шапке — оставшееся время под временем
+// «0:25», слово «осталось» в слоте статуса под «идёт», место шеврона; зазоры — как в шапке.
+// Телефон: колонок в шапке нет — «63% · осталось ≈0:13» одной строкой
+function ProgressMeter({ pct, meter, columns }: { pct: ProgressPct; meter: { percent: string; left: string | null } | null; columns: boolean }) {
+  const text = meter ? (meter.left ? `${meter.percent} · осталось ${meter.left}` : meter.percent) : null;
+  const cell: React.CSSProperties = { flexShrink: 0, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' };
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, height: CAPTION_LINE_H, paddingLeft: BELOW_PAD, paddingRight: SP.sm }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: columns ? HEAD_GAP : SP.sm, height: CAPTION_LINE_H, paddingLeft: BELOW_PAD, paddingRight: SP.sm }}>
       {/* Серая (muted): вторичная информация не спорит с акцентом главного действия */}
       <ProgressBar value={pct.value} estimate={pct.estimate} tone="muted" size="thin" label={[pct.label, text].filter(Boolean).join(' · ') || undefined} transition="width .5s linear" style={{ flex: 1, minWidth: 0 }} />
-      {text && (
-        <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-          {text}
-        </span>
-      )}
+      {columns ? (
+        <>
+          {meter && <span style={cell}>{meter.percent}</span>}
+          {meter?.left && (
+            <span data-meter-left="" style={{ ...cell, display: 'flex', alignItems: 'center', gap: SP.sm }}>
+              <span>{meter.left}</span>
+              <span style={{ minWidth: STATUS_SLOT_W }}>осталось</span>
+            </span>
+          )}
+          <span aria-hidden style={{ width: CHEVRON_W, flexShrink: 0 }} />
+        </>
+      ) : text && <span style={cell}>{text}</span>}
     </div>
   );
 }
@@ -351,7 +363,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // на клиентском Date.now(), как и progressAt из редьюсера. Date.now() в рендере не берём
   const nowMs = typeof item.startedAt === 'number' && shownElapsed != null ? item.startedAt + shownElapsed : null;
   const sinceProgress = nowMs != null && typeof item.progressAt === 'number' ? nowMs - item.progressAt : null;
-  const meter = progressPct ? meterText(item.progress, currentStage?.ms ?? null, sinceProgress) : null;
+  const meter = progressPct ? meterParts(item.progress, currentStage?.ms ?? null, sinceProgress) : null;
   // На мобиле подпись прогресса и итог — отдельной строкой под шапкой у ВСЕХ карточек
   // (шапка остаётся описанию, итог у всех стоит на одном месте). Строка держится с начала
   // выполнения, поэтому завершение ленту не сдвигает
@@ -489,7 +501,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         </div>
       )}
       {/* Полоса — последней строкой живой карточки: под подписью или этапами, к которым относится */}
-      {progressPct && <ProgressMeter pct={progressPct} text={meter} />}
+      {progressPct && <ProgressMeter pct={progressPct} meter={meter} columns={!captionBelow} />}
       {(settled || aborted) && item.totals?.failures?.length ? (
         <FailureList failures={item.totals.failures} failed={item.totals.failed} />
       ) : null}

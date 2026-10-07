@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { activeToolLabel, awaitsToolStart, captionLeadMs, formatClock, formatWaitClock, isQueued, isToolGroupDone, meterText, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption, nextTypewriterStep, typewriterDelay, typewriterText, TYPEWRITER_AT_REST, TYPEWRITER_MS, TYPEWRITER_START, type TypewriterState } from '../toolTiming';
+import { activeToolLabel, awaitsToolStart, captionLeadMs, formatClock, formatWaitClock, isQueued, isToolGroupDone, meterParts, meterText, pickActiveTool, shownFor, stageCaptionOf, tickShownClock, toolClockMs, toolElapsedMs, toolLiveness, toolProgressPercent, toolProgressText, waitingToolCaption, nextTypewriterStep, typewriterDelay, typewriterText, TYPEWRITER_AT_REST, TYPEWRITER_MS, TYPEWRITER_START, type TypewriterState } from '../toolTiming';
 
 describe('nextTypewriterStep — машинка индикатора (вариант D)', () => {
   const two = ['Тесты · dotnet', '412 из 7951'];
@@ -85,6 +85,12 @@ describe('meterText — подпись справа от полосы', () => {
   it('без метки события (после F5) — без «осталось»', () => {
     expect(meterText({ stage: 'running', percent: 25, exact: true }, 30_000, null)).toBe('25%');
     expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, null)).toBe('≈40%');
+  });
+  it('по частям — для колонок: процент отдельно, оставшееся время отдельно', () => {
+    expect(meterParts({ stage: 'running', percent: 25, exact: true }, 60_000, 30_000)).toEqual({ percent: '25%', left: '≈1:00' });
+    expect(meterParts({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 15_000)).toEqual({ percent: '≈40%', left: '~1:00' });
+    expect(meterParts({ stage: 'running', percent: 99, exact: true }, 378_000, 0)).toEqual({ percent: '99%', left: null });
+    expect(meterParts({ stage: 'running', label: 'x' }, 0, 0)).toBeNull();
   });
   it('ETA источника тоже отсчитывается', () => {
     expect(meterText({ stage: 'running', percent: 40, etaSeconds: 75 }, null, 15_000)).toBe('≈40% · осталось ~1:00');

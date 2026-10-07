@@ -32,13 +32,17 @@ public class ImageEditorControllerTests : IDisposable
     {
         public readonly ConcurrentDictionary<string, (string Owner, string Project, bool Cancelled)> Jobs = new();
         public ImageEditJobInput? LastInput;
+        public ImageEditQuoteRequest? LastQuote;
 
         public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
-            string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct) =>
-            Task.FromResult(ImageEditCallResult<ImageEditQuoteDto>.Ok(new ImageEditQuoteDto(
+            string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct)
+        {
+            LastQuote = request;
+            return Task.FromResult(ImageEditCallResult<ImageEditQuoteDto>.Ok(new ImageEditQuoteDto(
                 "q-1", request.Provider, "fal-ai/nano-banana-2/edit",
                 new ImageEditEstimateDto(0.08 * request.Count, ImageEditPriceUnits.Usd, false, ImageEditEstimateSources.Catalog),
                 DateTime.UtcNow.AddMinutes(10), 20)));
+        }
 
         public Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(
             string ownerId, string projectId, ImageEditJobInput input, CancellationToken ct)
@@ -188,6 +192,34 @@ public class ImageEditorControllerTests : IDisposable
 
         responses.Select(r => r.StatusCode).Should().AllBeEquivalentTo(HttpStatusCode.NotFound);
         jobs.Jobs.Should().BeEmpty("при выключенном флаге запуск не должен дойти до исполнителя");
+    }
+
+    // Без флага «Формат» чипа нет, и формат из префов (✦ агента) не вправе молча менять генерацию человека
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Котировка_генерации_берёт_формат_префов_только_при_флаге_Формат(bool flagOn)
+    {
+        var jobs = new FakeJobs();
+        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
+        var userId = EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        if (flagOn) factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(userId, FeatureFlagKeys.MediaFormat, true);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var project = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!;
+        await factory.Services.GetRequiredService<ClaudeHomeServer.Services.ImageEditor.Prefs.ImageProjectPrefsService>().SetFormatAsync(
+            userId, ImageEditScope.Of(project), new ClaudeHomeServer.Services.Media.MediaFormat(
+                ClaudeHomeServer.Services.Media.FormatModes.Aspect, "9:16", ClaudeHomeServer.Services.Media.FormatTier.High, null, null,
+                ClaudeHomeServer.Services.ChatContext.ContextActor.Agent, DateTime.UtcNow), ClaudeHomeServer.Services.ChatContext.ContextActor.Agent);
+        var client = factory.CreateAuthenticatedClient();
+
+        var response = await client.PostAsJsonAsync($"/api/projects/{projectId}/image-editor/quote", new
+        {
+            provider = "fal", model = "auto", mode = "fast", op = "generate", count = 1, hasMask = false,
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        if (flagOn) jobs.LastQuote!.Format!.Aspect.Should().Be("9:16");
+        else jobs.LastQuote!.Format.Should().BeNull("без флага сохранённый формат молча не подставляется");
     }
 
     [Fact]

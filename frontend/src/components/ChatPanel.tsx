@@ -92,6 +92,14 @@ import { openChatById } from '../lib/openChat';
 // Значения сейчас совпадают, но роли разные: мобильное поле держит ширину экрана,
 // десктопное — размах колец индикатора. Сливать в одно не надо.
 // Само значение (CHAT_GUTTER_MOBILE) живёт в lib/design: по нему же ставится ось круглешка AI
+
+// Мягкое затухание низа ленты над композером (десктоп): строки уходят под губу плавно,
+// а не обрубаются ровной линией. Нижний отступ ленты не меньше затухания — прокрученная
+// до конца лента последнее сообщение не гасит
+const FEED_FADE_PX = 14;
+// Маска берёт только непрозрачность цвета: подойдёт любой непрозрачный токен
+const FEED_FADE_MASK = `linear-gradient(to bottom, ${C.bgMain} calc(100% - ${FEED_FADE_PX}px), transparent)`;
+
 interface Props {
   session: Session;
   // Отсутствует для чата вне проекта (project-less) — тогда скрываем файловые возможности
@@ -2695,13 +2703,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // компенсировать некуда, поэтому остаток до CHAT_GUTTER_L добирается
         // паддингом — величину считает useChatGutter замером полосы.
         overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20,
-        paddingRight: isMobile ? CHAT_GUTTER_MOBILE : embedded ? `var(${VAR_PAD_R}, 0px)` : 0, paddingBottom: 8,
+        paddingRight: isMobile ? CHAT_GUTTER_MOBILE : embedded ? `var(${VAR_PAD_R}, 0px)` : 0, paddingBottom: isMobile ? 8 : FEED_FADE_PX,
         // Лента заканчивается НАД композером, а не подлезает под него: раньше это был
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера
         // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область
         // прокрутки, поэтому overflow обрезает сообщения по её нижней границе.
         // Граница — верх верхней губы: губа во всю ширину, под ней ленте делать нечего
-        marginBottom: composerH }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
+        marginBottom: composerH,
+        // Десктоп: последние 14 px ленты растворяются в зазоре над губой. Телефон — как было
+        ...(isMobile ? {} : { maskImage: FEED_FADE_MASK, WebkitMaskImage: FEED_FADE_MASK }) }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && showHistorySpinner && (
           <div style={{

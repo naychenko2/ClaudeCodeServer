@@ -321,17 +321,9 @@ WorkingDirectory = `project.RootPath`. Маппинг `stream-json` → `ServerM
 - **Не плодить однокоренные имена инструментов** с пересекающейся семантикой (`execute` vs
   `complete` — LLM путает).
 
-**Личный реестр MCP-серверов** (внешние серверы владельца) — **allow-list, единственная
-модель**: сервер не едет никуда, пока не включён в проекте чата ИЛИ выдан персоне чата; вне
-проекта — по `AllowOutsideProjects`. Каталог по официальному реестру —
-источник предложения, а не доверия: ссылка на него хранится как `McpCatalogRef`, а НЕ новым
-значением enum `Source` (откат кода унёс бы `mcp-servers.json` всех владельцев в `.corrupt`),
-и allow-list рантайм-флагов `uvx` ПУСТ — `--from`/`--with`/`--index*` подменяют источник пакета.
+**Личный реестр MCP-серверов** (внешние серверы владельца) — **allow-list, единственная модель**: сервер не едет никуда, пока не включён в проекте чата ИЛИ выдан персоне чата; вне проекта — по `AllowOutsideProjects`. Каталог по официальному реестру — источник предложения, а не доверия: ссылка на него хранится как `McpCatalogRef`, а НЕ новым значением enum `Source` (откат кода унёс бы `mcp-servers.json` всех владельцев в `.corrupt`), и allow-list рантайм-флагов `uvx` ПУСТ — `--from`/`--with`/`--index*` подменяют источник пакета.
 
-Состав инструментов, `websearch`, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed»
-у всех инструментов при живом бэкенде → явный `McpTasksApiUrl`) —
-[docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md); реестр, каталог и вход
-по OAuth — [docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).
+Состав инструментов, `websearch`, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех инструментов при живом бэкенде → явный `McpTasksApiUrl`) — [docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md); реестр, каталог и вход по OAuth — [docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).
 
 ## Заметки и Знания (Dify RAG)
 
@@ -441,14 +433,9 @@ OpenTelemetry в двух режимах: dev → Aspire Dashboard, prod → Sig
 
 ## Фич-флаги (feature toggles)
 
-Dark launch: фича коммитится выключенной и включается per-user в меню «Экспериментальные
-функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All`
-([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)), там же у
-каждого ключа title и описание; хранение — override в `data/users.json`; фронт — стор
-[lib/featureFlags.ts](frontend/src/lib/featureFlags.ts), хук `useFeature(FLAGS.key)`.
-Перечня флагов карта не держит: он протухает быстрее всего остального. Состав (2026-10-08): три в `FeatureFlagCatalog.All` — `workspace-destructive`, `spheres`, `change-dossiers-recall`; 15 снятых работают у всех — chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format.
-**Пометки «за флагом …» в доках — исторические**, актуальный состав только в каталоге кода
-(ADR-013, например, до сих пор описывает сторожей чатов как флажных — флаг снят 2026-09-01).
+Dark launch: фича коммитится выключенной и включается per-user в меню «Экспериментальные функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All` ([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)), там же у каждого ключа title и описание; хранение — override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts), хук `useFeature(FLAGS.key)`.
+Перечня флагов карта не держит: он протухает быстрее всего остального. Активные — `workspace-destructive`, `spheres`, `change-dossiers-recall`; снятые (15): chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format.
+**Пометки «за флагом …» в доках — исторические**, актуальный состав только в каталоге кода (ADR-013, например, до сих пор описывает сторожей чатов как флажных — флаг снят 2026-09-01).
 
 Флаги, снятые после dark launch, работают у всех безусловно: ассистент по умолчанию и
 знакомство ([onboarding-intro.md](docs/architecture/onboarding-intro.md),

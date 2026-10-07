@@ -282,7 +282,7 @@ server) не имел бы верхней границы. Истечение о�
   `deleted` не отдаём, `deprecated` — с пометкой; дедуп версий по `isLatest`, затем
   свежести. Аргументы без `default` уходят в поля формы плейсхолдерами `{name}`/`{argN}`
   — описания полей живут только в сессии импорта, в `McpServerRecord` не попадают.
-- **Эндпоинт** `GET /api/mcp/catalog/search?q=&cursor=` ([Authorize], флаг `mcp-catalog`,
+- **Эндпоинт** `GET /api/mcp/catalog/search?q=&cursor=` ([Authorize],
   rate-limit окно на владельца — дебаунс фронта не защита). Записи отсюда не создаются:
   заведение идёт обычным `POST /api/mcp/servers` с `catalogRef`.
 - **Ревизия импортированных записей** `POST /api/mcp/catalog/revision` `{names:[]}` —

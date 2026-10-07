@@ -104,8 +104,8 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 ## Редактор картинок (модуль `imageeditor`)
 
 Ручки модуля [ClaudeHomeServer.ImageEditor](../../backend/ClaudeHomeServer.ImageEditor/CLAUDE.md),
-решения — [ADR-019](../adr/ADR-019-image-editor-v3-in-chat.md). Гейт у всех один: флаг
-`image-editor` выключен или проект чужой — `404`; модуль выключен конфигом — ручек нет (`404`).
+решения — [ADR-019](../adr/ADR-019-image-editor-v3-in-chat.md). Гейт у всех один: проект
+чужой — `404`; модуль выключен конфигом — ручек нет (`404`).
 Ошибки — `{ error, code }`.
 
 ```
@@ -169,8 +169,8 @@ initiator, baseVersionId } }` — один на запуск; его верси�
 
 Ручки модуля [ClaudeHomeServer.AudioEditor](../../backend/ClaudeHomeServer.AudioEditor/CLAUDE.md),
 решения — [ADR-021](../adr/ADR-021-audio-editor-and-generation-panel.md). Гейт один на все
-(`AudioEditScopeGate`): флаг `audio-editor` выключен, проект или чат чужой — `404`; модуль выключен
-конфигом — ручек нет (`404`). Ошибки — `{ error, code }`; коды: `invalid_request` — 400,
+(`AudioEditScopeGate`): проект или чат чужой — `404`; модуль выключен конфигом — ручек нет
+(`404`). Ошибки — `{ error, code }`; коды: `invalid_request` — 400,
 `provider_unavailable`, `name_taken`, `revision_conflict`, `voice_clone_stale`, `voice_clone_missing` —
 409 (у протухшего клона ещё `recreate` — котировка пересоздания), `quote_not_found`, `thread_not_found`,
 `version_not_found`, `file_not_found`, `voice_not_found` — 404, `too_many_jobs`, `heavy_busy` — 429,
@@ -238,8 +238,8 @@ GET                 …/voices/{slug}/files/{file}       образец или �
 
 Ручки модуля [ClaudeHomeServer.VideoEditor](../../backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), решения —
 [ADR-022](../adr/ADR-022-video-editor.md), описание фичи — [video-editor.md](../features/video-editor.md). Гейт один на все
-(`VideoEditScopeGate`): флаг `video-editor` выключен, проект или чат чужой — `404`; модуль выключен конфигом — ручек
-нет (`404`). Ошибки — `{ error, code }` (константы `VideoEditorErrors`): `invalid_request`, `outside_allowed_folders`,
+(`VideoEditScopeGate`): проект или чат чужой — `404`; модуль выключен конфигом — ручек нет
+(`404`). Ошибки — `{ error, code }` (константы `VideoEditorErrors`): `invalid_request`, `outside_allowed_folders`,
 `personal_scope_no_films`, `local_unavailable_personal`, `project_local_unsupported` — 400, `provider_unavailable`,
 `name_taken`, `revision_conflict` — 409, `quote_not_found`, `scene_not_found`, `version_not_found`, `job_not_found`,
 `file_not_found`, `chat_not_found` — 404, `film_invalid`, `film_schema_unsupported` — 422, `too_many_jobs`,
@@ -295,7 +295,7 @@ variant, count, initiator, percent? }`. `percent` (0..1) необязателе�
 (по WebSocket `/ws`, шкала монотонна и до конца задачи не доходит до 1), fal — только если статус очереди отдаёт
 `progress`/`percent`, Higgsfield — не даёт. Нет данных — поля нет, клиент считает долю по `etaSeconds`.
 
-**Агент** — MCP-сервер `video-editor` (`POST /mcp/video-editor/{sessionId}`, любой чат владельца при флаге).
+**Агент** — MCP-сервер `video-editor` (`POST /mcp/video-editor/{sessionId}`, любой чат владельца).
 Всегда: `video_state`, `video_focus`, `video_new`, `video_scene_set`, `video_suggest_prompt`; при
 `VideoEditor:AgentLaunch` ещё `video_shoot`, `video_cancel`, `video_wait`, `video_save_scene`, `video_film_edit`,
 `video_film_build`. Каждый инструмент зовёт тот же сервис, что ручка выше, и пишет ту же карточку в ленту с

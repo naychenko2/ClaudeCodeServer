@@ -178,18 +178,18 @@ one-shot действия и разговор с исполнителем «Ло
 модель админ выбирает отдельно для каждого места `ImagePlaces`: `persona-avatar` и `image-editor` (у
 редактора — лишь умолчание). **Явно выбранного провайдера не подменяем**, переход — только в
 «Автоматически»; не нарисовалось — инициалы, догоняет `ImageBackfillService` ([image-generation.md](docs/features/image-generation.md)).
-Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU, только по явной просьбе (с флагом `local-media-default` — по умолчанию, облако при отказе лишь с согласия);
+Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU; провайдера выбирает админ, облако при отказе — с согласия;
 **граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста ([local-media.md](docs/features/local-media.md)).
 Аудио (музыка, голос, стемы) — там же, модели вне venv ComfyUI идут узлом `CcsAudioWorker` в общей очереди GPU1, веса — только при установке ([ADR-020](docs/adr/ADR-020-local-media-audio.md)).
 
 ## Редактор картинок (ClaudeHomeServer.ImageEditor)
 
-Динамический модуль правки картинок проекта: fal, Higgsfield, локальные модели, правки без ИИ, чат картинки с агентом; за флагом `image-editor`.
+Динамический модуль правки картинок проекта: fal, Higgsfield, локальные модели, правки без ИИ, чат картинки с агентом.
 Инварианты и подробности — [backend/ClaudeHomeServer.ImageEditor/CLAUDE.md](backend/ClaudeHomeServer.ImageEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой.
 
 ## Редактор звука (ClaudeHomeServer.AudioEditor)
 
-Динамический модуль озвучки, музыки и обработки звука в чате: fal, Higgsfield, Яндекс, локальные модели, монтаж и склейка без ИИ, «Голоса», агент; за флагом `audio-editor` ([ADR-021](docs/adr/ADR-021-audio-editor-and-generation-panel.md), [audio-editor.md](docs/features/audio-editor.md)).
+Динамический модуль озвучки, музыки и обработки звука в чате: fal, Higgsfield, Яндекс, локальные модели, монтаж и склейка без ИИ, «Голоса», агент ([ADR-021](docs/adr/ADR-021-audio-editor-and-generation-panel.md), [audio-editor.md](docs/features/audio-editor.md)).
 Инварианты и подробности — [backend/ClaudeHomeServer.AudioEditor/CLAUDE.md](backend/ClaudeHomeServer.AudioEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Раздел «Видео» (Services/Video)
@@ -197,7 +197,7 @@ one-shot действия и разговор с исполнителем «Ло
 Эфиры телеканалов и лента подписок YouTube за общим `IVideoProvider`; живой кадр рисуется оверлеем над страницами (панель, центральный остров, плавающее окно).
 Инварианты и подробности — [backend/ClaudeHomeServer.Video/CLAUDE.md](backend/ClaudeHomeServer.Video/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
-**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; выбор — вид `video-scene`/`video-film` строки контекста, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` за флагом `video-editor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
+**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; выбор — вид `video-scene`/`video-film` строки контекста, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
 
 ## Контекст хода (Services/ChatContext)
 
@@ -206,8 +206,8 @@ one-shot действия и разговор с исполнителем «Ло
 
 ## Формат картинок и видео (Services/Media)
 
-Пропорции, ступень и «Точно…» результата, чип «Формат»; сквозная фича (Core, ImageEditor, VideoEditor, фронт) за флагом `media-format` ([ADR-025](docs/adr/ADR-025-media-format.md), контракты — [ADR-025-contracts.md](docs/adr/ADR-025-contracts.md)).
-**Арифметика только в `MediaFormatResolver`** (Core), фронт её не повторяет; **хранится желание, а не подмена**; схемы MCP статичны (пропорции модели в `enum` не попадают). **Без флага поведение как раньше:** явные пропорции старого UI выше сохранённого формата, кадры видео подрезаются только по явному формату, подробности — раздел «Поведение без флага» ADR-025.
+Пропорции, ступень и «Точно…» результата, чип «Формат»; сквозная фича (Core, ImageEditor, VideoEditor, фронт) ([ADR-025](docs/adr/ADR-025-media-format.md), контракты — [ADR-025-contracts.md](docs/adr/ADR-025-contracts.md)).
+**Арифметика только в `MediaFormatResolver`** (Core), фронт её не повторяет; **хранится желание, а не подмена**; схемы MCP статичны (пропорции модели в `enum` не попадают). Кадры видео подрезаются только по явному формату.
 
 ## Сферы (Services/Spheres, Core/Models/PersonaZone)
 
@@ -221,7 +221,7 @@ one-shot действия и разговор с исполнителем «Ло
 
 ## Уборка карты проекта (Services/Docs)
 
-Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые ссылки, вложенные карты) и предлагает, что прибрать; за флагом `project-map-hygiene`.
+Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые ссылки, вложенные карты) и предлагает, что прибрать.
 Запись — только по явной отметке человека, а **вынос секции кнопкой не делается никогда** (цена ошибки — потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет.
 Устройство двух фаз — [docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план — [project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
 
@@ -323,7 +323,7 @@ WorkingDirectory = `project.RootPath`. Маппинг `stream-json` → `ServerM
 
 **Личный реестр MCP-серверов** (внешние серверы владельца) — **allow-list, единственная
 модель**: сервер не едет никуда, пока не включён в проекте чата ИЛИ выдан персоне чата; вне
-проекта — по `AllowOutsideProjects`. Каталог по официальному реестру (флаг `mcp-catalog`) —
+проекта — по `AllowOutsideProjects`. Каталог по официальному реестру —
 источник предложения, а не доверия: ссылка на него хранится как `McpCatalogRef`, а НЕ новым
 значением enum `Source` (откат кода унёс бы `mcp-servers.json` всех владельцев в `.corrupt`),
 и allow-list рантайм-флагов `uvx` ПУСТ — `--from`/`--with`/`--index*` подменяют источник пакета.
@@ -446,7 +446,7 @@ Dark launch: фича коммитится выключенной и включ�
 ([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)), там же у
 каждого ключа title и описание; хранение — override в `data/users.json`; фронт — стор
 [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts), хук `useFeature(FLAGS.key)`.
-Перечня флагов карта не держит: он протухает быстрее всего остального.
+Перечня флагов карта не держит: он протухает быстрее всего остального. Состав (2026-10-08): три в `FeatureFlagCatalog.All` — `workspace-destructive`, `spheres`, `change-dossiers-recall`; 15 снятых работают у всех — chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format.
 **Пометки «за флагом …» в доках — исторические**, актуальный состав только в каталоге кода
 (ADR-013, например, до сих пор описывает сторожей чатов как флажных — флаг снят 2026-09-01).
 

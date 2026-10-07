@@ -25,6 +25,9 @@ const CHIP_H = 22;
 export interface RowGit {
   label: string;
   changes: number;
+  // Строки диффа рабочего дерева — для пилюли «+N −M» у правого края губы
+  added?: number;
+  deleted?: number;
   ahead: number;
   publishN: number;
   onCommitOwn: () => void;
@@ -344,12 +347,17 @@ function GitActions({ g, onCommit }: { g: RowGit; onCommit: (rect: DOMRect) => v
     flexShrink: 0, whiteSpace: 'nowrap',
   };
   const files = `${g.changes} ${plural(g.changes, 'файл', 'файла', 'файлов')}`;
+  const added = g.added ?? 0, deleted = g.deleted ?? 0;
   return (
     <span data-git-actions="" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: GIT_ROW_GAP, flexShrink: 0 }}>
       {g.changes > 0 && (
-        <Button variant="ghostFilled" size="xs" onClick={g.onShowChanges} title={`Изменено ${files} — открыть изменения`}
+        <Button variant="ghostFilled" size="xs" onClick={g.onShowChanges}
+          title={`Изменено ${files}, строк +${added} −${deleted} — открыть изменения`}
           style={{ ...base, padding: `0 ${SP.md - 1}px`, fontFamily: FONT.mono, fontWeight: 400 }}>
-          {changesWord(g.changes)}
+          <span style={{ color: C.textSecondary }}>{g.changes}</span>
+          {added > 0 && <span style={{ color: C.diffAddText }}>+{added}</span>}
+          {deleted > 0 && <span style={{ color: C.diffRemText }}>−{deleted}</span>}
+          {added === 0 && deleted === 0 && <span style={{ color: C.textMuted }}>±0</span>}
         </Button>
       )}
       {g.changes > 0 && (

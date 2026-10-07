@@ -60,9 +60,12 @@ describe('ContextRowView', () => {
     expect(clean).not.toContain('data-git-actions');
     expect(clean).toContain('data-git-clean');
     expect(clean).toContain('>чисто<');
-    const dirty = html(props({ primary: null, refs: [], git: { ...git, changes: 3, publishN: 1 } }));
+    const dirty = html(props({ primary: null, refs: [], git: { ...git, changes: 3, added: 12, deleted: 4, publishN: 1 } }));
     expect(dirty).toContain('data-git-actions');
-    expect(dirty).toContain('>3 изменения<');
+    expect(dirty).toContain('>3<');
+    expect(dirty).toContain('>+12<');
+    expect(dirty).toContain('>−4<');
+    expect(dirty).not.toContain('изменения<');
     expect(dirty).toContain('Зафиксировать');
     expect(dirty).toContain('Опубликовать');
     expect(dirty).not.toContain('data-git-clean');

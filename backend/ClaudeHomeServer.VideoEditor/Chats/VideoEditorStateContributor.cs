@@ -122,6 +122,10 @@ public sealed class VideoEditorStateContributor(
     }
 
     // Общая часть правила приоритета для проекта и личного чата
+    // Ожидание съёмки — только video_wait: Bash-циклы с sleep и опрос файлов жгут ходы (QA Веры, Б2.4: 18 действий за ход)
+    public const string WaitRule =
+        "Съёмку не жди через Bash, sleep или опрос файлов — только video_wait.";
+
     private const string EditorFirst =
         "Видео — сцены между двумя кадрами и фильм из них — делай только через video_new → video_scene_set → video_shoot "
         + "(сохранить в проект — video_save_scene, фильм — video_film_edit и video_film_build): они ведут сцену и версии, "
@@ -129,10 +133,11 @@ public sealed class VideoEditorStateContributor(
         + "Не передавай provider/model, если человек сам не просил сменить. "
         + "Формат (aspect, quality, anchor) без просьбы человека тоже не передавай: он выбирает его в «Формате», а явный формат от "
         + "тебя меняет формат видео проекта. Размер задаёт только quality (standard, high, max), а не частные параметры resolution и size; "
-        + "у local MiniMax H3 «max» — съёмка плюс увеличение до 1440p, вторая тяжёлая задача видеокарты.";
+        + "у local MiniMax H3 «max» — съёмка плюс увеличение до 1440p, вторая тяжёлая задача видеокарты. "
+        + WaitRule;
 
     public const string PriorityRule = EditorFirst
-        + " Просьба снять локально / на своей видеокарте / бесплатно — video_shoot с provider local. "
+        + " Просьба снять локально / на своей видеокарте / бесплатно — video_shoot с provider local, а не local_text_to_video и не local_image_to_video. "
         + "Прямые local_text_to_video, local_image_to_video, local_reference_to_video, generate_video Higgsfield и fal "
         + "(run_model, submit_job) для видео — только если человек явно попросил сделать напрямую, мимо редактора: "
         + "иначе получится ролик без карточки сцены.";

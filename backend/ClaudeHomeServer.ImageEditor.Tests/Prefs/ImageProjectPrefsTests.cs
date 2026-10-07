@@ -345,6 +345,14 @@ public class ImageProjectPrefsTests : IDisposable
     }
 
     [Fact]
+    public void Проектное_правило_приоритета_ведёт_слово_локально_в_image_generate_а_не_в_сырой_local_media()
+    {
+        ImageEditorStateContributor.PriorityRule.Should().Contain(ImageEditorStateContributor.LocalMeansEditorRule);
+        ImageEditorStateContributor.LocalMeansEditorRule.Should().Contain("image_generate с provider local")
+            .And.Contain("а НЕ local_generate_image").And.Contain("local_edit_image");
+    }
+
+    [Fact]
     public void Личный_чат_правило_приоритета_ведёт_локальную_просьбу_в_image_generate()
     {
         ImageEditorStateContributor.PersonalPriorityRule.Should().Contain("image_generate с provider local")

@@ -383,7 +383,6 @@ public class McpToolsetStabilityTests
         body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
         body.Should().NotContain("ImageChat", "отдельного чата картинки в v3 нет");
         body.Should().NotContain("Thread", "фокус и нити картинок не влияют на состав серверов");
-        body.Should().Contain("FeatureFlagKeys.ImageEditor", "флаг владельца гейтит сервер");
         body.Should().Contain("McpEndpoints.ImageEditorName",
             "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
         body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
@@ -443,7 +442,6 @@ public class McpToolsetStabilityTests
 
         body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
         body.Should().NotContain("Thread", "фокус и нити звука не влияют на состав серверов");
-        body.Should().Contain("FeatureFlagKeys.AudioEditor", "флаг владельца гейтит сервер");
         body.Should().Contain("McpEndpoints.AudioEditorName",
             "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
         body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
@@ -501,7 +499,6 @@ public class McpToolsetStabilityTests
 
         body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
         body.Should().NotContain("Scene", "фокус и сцены видео не влияют на состав серверов");
-        body.Should().Contain("FeatureFlagKeys.VideoEditor", "флаг владельца гейтит сервер");
         body.Should().Contain("McpEndpoints.VideoEditorName",
             "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
         body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");

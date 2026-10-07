@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => {
+  const h: { startGate: Promise<void> | null } = { startGate: null };
   const mk = () => ({
     state: 'Connected',
-    start: vi.fn(async () => {}),
+    start: vi.fn(async () => { await h.startGate; }),
     stop: vi.fn(async () => {}),
     on: vi.fn(),
     off: vi.fn(),
     onclose: vi.fn(),
   });
-  return { mk, built: [] as ReturnType<typeof mk>[] };
+  return Object.assign(h, { mk, built: [] as ReturnType<typeof mk>[] });
 });
 
 vi.mock('@microsoft/signalr', () => ({
@@ -30,6 +31,7 @@ vi.mock('../deviceAgent', () => ({
 beforeEach(() => {
   vi.resetModules();
   h.built.length = 0;
+  h.startGate = null;
 });
 
 describe('resetAgentHubs', () => {
@@ -50,6 +52,23 @@ describe('resetAgentHubs', () => {
     const handler = h.built[h.built.length - 1].on.mock.calls.find(c => c[0] === 'message')![1];
     handler({ type: 'x' });
     expect(sub).toHaveBeenCalledWith({ type: 'x' });
+  });
+});
+
+describe('resetAgentHubs во время старта', () => {
+  it('не пускает в live соединение, стартовавшее до сброса, и останавливает его', async () => {
+    const mod = await import('../agentHub');
+    let release!: () => void;
+    h.startGate = new Promise<void>(r => { release = r; });
+    const starting = mod.agentHub('p1');
+    await vi.waitFor(() => expect(h.built).toHaveLength(1));
+
+    await mod.resetAgentHubs();
+    release();
+    await expect(starting).rejects.toThrow();
+
+    expect(mod.agentHubIfConnected('p1')).toBeNull();
+    expect(h.built[0].stop).toHaveBeenCalledTimes(1);
   });
 });
 

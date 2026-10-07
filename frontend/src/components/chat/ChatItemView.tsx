@@ -44,7 +44,7 @@ import { CollapsibleMarkdownBody } from './AgentContentBlocks';
 import { parseDelegationReport } from '../../lib/delegationReport';
 import { detectAutoCommand, isCancelCommand } from '../../lib/autoCommand';
 import { DelegationReportCard } from './DelegationReportCard';
-import { ToolUseView } from './ToolUseView';
+import { ToolUseView, HEAD_GAP, CHEVRON_W } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
 import { WidgetView, isWidgetShow } from './WidgetView';
@@ -217,8 +217,9 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
 // Компактная строка изменённого файла — для использования внутри общего контура
 // блока действий (рядом с карточками инструментов). Один ритм со строкой ToolUseView.
 // Справа — откуда правка: «в чате» (этот чат) или «вне чата» (дерево поменяли снаружи). Кнопки
-// «Откатить» в строке нет — откат в просмотрщике файла; метка стоит в слоте по «вне чата», и
-// обе начинаются с одной линии
+// «Откатить» в строке нет — откат в просмотрщике файла. Правый край — как у шапки карточки
+// инструмента: метка прижата вправо в слоте по «вне чата», за ней пустое место шеврона и запас
+// под полосу прокрутки, так что «в чате» кончается на одной вертикали с «готово»/«идёт»
 const FILE_ORIGIN_W = '8.5ch';
 
 export const FileChangedRow = memo(function FileChangedRow({ item, onOpenFile }: {
@@ -230,7 +231,7 @@ export const FileChangedRow = memo(function FileChangedRow({ item, onOpenFile }:
   const treePath = useContext(ChatTreePathContext);
   const relativePath = relPathTree(item.path, project?.rootPath, treePath);
   return (
-    <div style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div style={{ padding: `3px ${SP.sm}px 3px 0`, display: 'flex', alignItems: 'center', gap: HEAD_GAP }}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: C.accent }}>
         <SquarePen size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
       </span>
@@ -240,9 +241,10 @@ export const FileChangedRow = memo(function FileChangedRow({ item, onOpenFile }:
       </span>
       <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
       <span style={{ fontSize: 11.5, color: C.diffRemText, fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
-      <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0, minWidth: FILE_ORIGIN_W }}>
+      <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0, minWidth: FILE_ORIGIN_W, textAlign: 'right' }}>
         {item.external ? 'вне чата' : 'в чате'}
       </span>
+      <span aria-hidden style={{ width: CHEVRON_W, flexShrink: 0 }} />
     </div>
   );
 });

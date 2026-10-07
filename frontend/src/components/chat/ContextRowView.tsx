@@ -12,7 +12,7 @@ import { unusedBy } from '../../lib/chatContext/fill';
 import { roleLabel } from '../../lib/chatContext/roleLabels';
 import { baseName } from '../../lib/chatContext/labels';
 import type { ChatContextPrimary, ChatContextRef } from '../../lib/chatContext/types';
-import { Badge, Menu, MenuItem, MenuSep, Modal } from '../ui';
+import { Badge, Button, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { groupExecutorRows, rowPriceShort, EXECUTOR_GROUP_LABEL, type ExecutorRow } from '../generation/ExecutorList';
 
@@ -178,12 +178,15 @@ function GitChip({ g, form, onOpen, bare }: { g: RowGit; form: 0 | 1 | 2 | 3; on
   const icon = <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />;
   // bare — справа в губе стоят пилюля и кнопки Git: чип — только ветка, без счётчиков и без
   // меню (всё, что в нём было, теперь кнопками)
-  // Отделка — прежняя подпись ветки Git-полосы (до строки контекста): моно 12.5 с иконкой 15,
-  // в один кегль с пилюлей и кнопками справа, а не мельче чипов строки
+  // Геометрия — как у кнопки режима в нижней губе (и прежнего «Git ▾»): высота 28, поле 10,
+  // иконка 14, зазор 6 — иконки двух губ встают в одну вертикаль. Имя ветки — моно 12.5
   if (bare) {
     return (
-      <span data-chip="git" data-git-bare="" title={gitTitle(g)} style={{ display: 'flex', alignItems: 'center', gap: GIT_LABEL_GAP, minWidth: 0 }}>
-        <GitBranch size={GIT_LABEL_ICON} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
+      <span data-chip="git" data-git-bare="" title={gitTitle(g)} style={{
+        display: 'flex', alignItems: 'center', gap: GIT_ICON_GAP, minWidth: 0,
+        height: GIT_BTN_H, padding: `0 ${LIP_BTN_PAD_X}px`, flexShrink: 1,
+      }}>
+        <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />
         <span style={{ ...ellipsis, fontFamily: FONT.mono, fontSize: GIT_FONT, color: C.textSecondary }}>{g.label}</span>
       </span>
     );
@@ -329,39 +332,41 @@ function CommitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
 const GIT_BTN_H = 28;
 // Кегль и иконка ветки, пилюли и кнопок Git в губе — как у прежней Git-полосы: все в одном размере
 const GIT_FONT = 12.5;
-const GIT_LABEL_ICON = 15;
-const GIT_LABEL_GAP = 7;
+// Поле и зазор иконки — как у кнопки режима в нижней губе (Composer, кнопка режима)
+const LIP_BTN_PAD_X = 10;
+const GIT_ICON_GAP = 6;
 // Зазор между веткой, пилюлей и кнопками — как у прежней полосы
 const GIT_ROW_GAP = SP.md;
 function GitActions({ g, onCommit }: { g: RowGit; onCommit: (rect: DOMRect) => void }) {
+  // Button xs (24) поднят до ряда губы (28) и кегля прежней Git-полосы
   const base: CSSProperties = {
-    display: 'flex', alignItems: 'center', gap: SP.xs + 2, height: GIT_BTN_H, boxSizing: 'border-box',
-    borderRadius: R.md, cursor: 'pointer', fontSize: GIT_FONT, flexShrink: 0, whiteSpace: 'nowrap',
+    height: GIT_BTN_H, minHeight: GIT_BTN_H, fontSize: GIT_FONT, gap: GIT_ICON_GAP,
+    flexShrink: 0, whiteSpace: 'nowrap',
   };
   const files = `${g.changes} ${plural(g.changes, 'файл', 'файла', 'файлов')}`;
   return (
     <span data-git-actions="" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: GIT_ROW_GAP, flexShrink: 0 }}>
       {g.changes > 0 && (
-        <button type="button" onClick={g.onShowChanges} title={`Изменено ${files} — открыть изменения`}
-          aria-label={`Открыть изменения: ${files}`}
-          style={{ ...base, padding: `0 ${SP.md - 1}px`, border: `1px solid ${C.border}`, background: C.bgWhite, fontFamily: FONT.mono, color: C.textSecondary }}>
+        <Button variant="ghostFilled" size="xs" onClick={g.onShowChanges} title={`Изменено ${files} — открыть изменения`}
+          style={{ ...base, padding: `0 ${SP.md - 1}px`, fontFamily: FONT.mono, fontWeight: 400 }}>
           {changesWord(g.changes)}
-        </button>
+        </Button>
       )}
       {g.changes > 0 && (
-        <button type="button" onClick={e => onCommit(e.currentTarget.getBoundingClientRect())} title="Зафиксировать изменения (git commit)"
-          style={{ ...base, padding: `0 ${SP.sm + 2}px 0 ${SP.md}px`, border: `1px solid ${C.border}`, background: C.bgCard, fontFamily: FONT.sans, color: C.textHeading }}>
-          <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} />
+        <Button variant="ghostFilled" size="xs" title="Зафиксировать изменения (git commit)"
+          onClick={e => onCommit((e.currentTarget as HTMLElement).getBoundingClientRect())}
+          leftIcon={<Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} />}
+          style={{ ...base, padding: `0 ${SP.sm + 2}px 0 ${SP.md}px`, background: C.bgCard, color: C.textHeading, fontWeight: 400 }}>
           Зафиксировать
           <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} color={C.textMuted} />
-        </button>
+        </Button>
       )}
       {g.publishN > 0 && (
-        <button type="button" onClick={g.onPublish} title="Опубликовать (git push)"
-          style={{ ...base, padding: `0 ${SP.md}px`, border: 'none', background: C.accent, color: C.onAccent, fontFamily: FONT.sans, fontWeight: 600 }}>
-          <CloudUpload size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        <Button variant="primary" size="xs" onClick={g.onPublish} title="Опубликовать (git push)"
+          leftIcon={<CloudUpload size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          style={{ ...base, padding: `0 ${SP.md}px` }}>
           Опубликовать <span style={{ opacity: 0.85 }}>{g.publishN}</span>
-        </button>
+        </Button>
       )}
     </span>
   );
@@ -647,6 +652,12 @@ export function ContextRowView(props: ContextRowViewProps) {
                 Только без объекта и референсов: чипов, которые ужимает лестница, нет, и кнопки
                 не отнимают у неё ширину. Высота — по ряду губы (CHIP_H): губа не растёт */}
             {gitActions && git && <GitActions g={git} onCommit={rect => setMenu({ kind: 'commit', rect })} />}
+            {/* Чистое дерево — справа просто «чисто»: текстом без бейджа и без зелени, как прежняя
+                строка «ветка · чисто» Git-полосы. Делать нечего, поэтому не кнопка */}
+            {gitBare && !gitActions && (
+              <span data-git-clean="" title="Всё закоммичено и опубликовано"
+                style={{ marginLeft: 'auto', flexShrink: 0, padding: `0 ${LIP_BTN_PAD_X}px`, fontSize: GIT_FONT, color: C.textMuted, whiteSpace: 'nowrap' }}>чисто</span>
+            )}
             {git && (primary || refs.length > 0) && (
               <span data-row-sep="" style={{ width: NOM.vsep, height: 16, background: C.border, flexShrink: 0 }} />
             )}

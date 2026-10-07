@@ -58,11 +58,14 @@ describe('ContextRowView', () => {
     expect(clean).toContain('data-git-bare');
     expect(clean).not.toContain('lucide-chevron-down');
     expect(clean).not.toContain('data-git-actions');
+    expect(clean).toContain('data-git-clean');
+    expect(clean).toContain('>чисто<');
     const dirty = html(props({ primary: null, refs: [], git: { ...git, changes: 3, publishN: 1 } }));
     expect(dirty).toContain('data-git-actions');
     expect(dirty).toContain('>3 изменения<');
     expect(dirty).toContain('Зафиксировать');
     expect(dirty).toContain('Опубликовать');
+    expect(dirty).not.toContain('data-git-clean');
   });
 
   it('с объектом ветка — полным чипом строки, кнопок Git справа нет', () => {

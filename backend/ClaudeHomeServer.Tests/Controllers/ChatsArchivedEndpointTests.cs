@@ -218,9 +218,7 @@ public class ChatsArchivedEndpointTests(TestWebApplicationFactory factory)
         body.GetProperty("archiveAfterDays").ValueKind.Should().Be(JsonValueKind.Null);
         body.GetProperty("hasFirstRun").GetBoolean().Should().BeFalse();
 
-        // Запись порога (за флагом) отражается в чтении
-        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.ChatAutoArchive}",
-            new { enabled = true })).StatusCode.Should().Be(HttpStatusCode.OK);
+        // Запись порога отражается в чтении
         (await _client.PutAsJsonAsync("/api/chats/archive-days", new { days = 30 }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
 

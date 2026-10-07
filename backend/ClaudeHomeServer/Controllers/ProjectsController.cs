@@ -439,17 +439,14 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(WithCount(updated));
     }
 
-    // Порог автоправила архивации чатов проекта (флаг chat-auto-archive, план v4 шаг 6):
+    // Порог автоправила архивации чатов проекта (план v4 шаг 6):
     // убирать в архив чаты проекта без сообщений дольше N дней. days = null — наследовать
-    // личный порог владельца. Настройка за флагом: ручной архив и раздел «Архив» работают
-    // без него, поэтому и настраивать порог без флага нельзя (правило не работает).
+    // личный порог владельца.
     [HttpPut("{id}/archive-days")]
     public IActionResult SetArchiveDays(string id, [FromBody] SetProjectArchiveDaysRequest req)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
-            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
         if (req.Days is not null && req.Days is not (>= 1 and <= 365))
             return BadRequest(new { error = "Порог должен быть от 1 до 365 дней" });
         var updated = projects.SetArchiveAfterDays(id, req.Days);
@@ -469,8 +466,6 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
-            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
         var (archived, batchId) = await autoArchive.RunNowForProjectAsync(UserId, id, DateTime.UtcNow);
         return Ok(new { archived, batchId });
     }

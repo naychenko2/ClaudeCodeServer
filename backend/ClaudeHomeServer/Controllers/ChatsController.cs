@@ -19,7 +19,7 @@ namespace ClaudeHomeServer.Controllers;
 public class ChatsController(SessionManager sessions, ProjectManager projects, FileService files,
     DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
     ChatDigestService digest, ChatArchiveService autoArchive,
-    UserStore users, FeatureFlagService flags,
+    UserStore users,
     ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
@@ -48,8 +48,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         commands = sessions.GetSessionsWithLiveBgCommands(UserId),
     });
 
-    // Счётчик «под правило подпадёт N чатов» (настройка автоправила за флагом
-    // chat-auto-archive): та же функция отбора, что архивирует тик, — число превью
+    // Счётчик «под правило подпадёт N чатов» (настройка автоправила): та же функция отбора, что архивирует тик, — число превью
     // совпадает с результатом прохода при том же моменте времени. projectId — проект,
     // чьи чаты считаем (обязан принадлежать пользователю); без него — личный дефолт:
     // чаты вне проекта. Read-only: ничего не архивирует.
@@ -63,14 +62,12 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         return Ok(new { count });
     }
 
-    // === Автоправило архивации (флаг chat-auto-archive, шаг 6 плана v4) ===
-    // Настройка и запуск правила — за флагом; откат пачки и ручной архив — без него.
+    // === Автоправило архивации (шаг 6 плана v4) ===
 
     // Чтение настройки автоправила — первоначальное состояние экрана настройки:
     // личный порог (он же дефолт проектов без своего и правило чатов вне проектов)
     // и признак «первый проход уже был». Проектный порог сюда не входит — его отдаёт
-    // GET /api/projects[/{id}] полем archiveAfterDays. Без гейта по флагу: чтение
-    // ничего не меняет, а раздел «Архив» работает и без флага.
+    // GET /api/projects[/{id}] полем archiveAfterDays. Чтение ничего не меняет.
     [HttpGet("archive-settings")]
     public IActionResult ArchiveSettings()
     {
@@ -84,8 +81,6 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("archive-days")]
     public IActionResult SetArchiveDays([FromBody] ArchiveDaysRequest req)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
-            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
         if (req.Days is not null && req.Days is not (>= 1 and <= 365))
             return BadRequest(new { error = "Порог должен быть от 1 до 365 дней" });
         if (!users.SetArchiveAfterDays(UserId, req.Days)) return Unauthorized();
@@ -98,14 +93,12 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("archive-run")]
     public async Task<IActionResult> ArchiveRun()
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
-            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
         var (archived, batchId) = await autoArchive.RunNowAsync(UserId, DateTime.UtcNow);
         return Ok(new { archived, batchId });
     }
 
     // Откат пачки одного прохода правила (кнопка в уведомлении/разделе «Архив»): возвращает
-    // ровно чаты этого batchId, а не всю историю правила. Работает без флага — это возврат
+    // ровно чаты этого batchId, а не всю историю правила. Это возврат
     // уже убранного, как ручной «Вернуть из архива».
     [HttpPost("archive-batch/{batchId}/restore")]
     public async Task<IActionResult> RestoreArchiveBatch(string batchId)

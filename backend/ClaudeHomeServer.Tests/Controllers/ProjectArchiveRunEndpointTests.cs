@@ -20,7 +20,6 @@ public class ProjectArchiveRunEndpointTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Проход_УбираетОстывшиеЧатыПроекта()
     {
-        await SetFlagAsync(true);
         var userId = await UserIdAsync();
         var projectId = await CreateProjectAsync(_client, "Проект прохода архива");
         SetPersonalDays(userId, null);
@@ -45,7 +44,6 @@ public class ProjectArchiveRunEndpointTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Проход_ПорогНеЗаданНигде_Ноль()
     {
-        await SetFlagAsync(true);
         var userId = await UserIdAsync();
         SetPersonalDays(userId, null);
         var projectId = await CreateProjectAsync(_client, "Проект без порога архива");
@@ -63,7 +61,6 @@ public class ProjectArchiveRunEndpointTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Проход_ЧужойПроект_404()
     {
-        await SetFlagAsync(true);
         var stranger = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         var projectId = await CreateProjectAsync(stranger, "Чужой проект прохода архива");
@@ -73,25 +70,11 @@ public class ProjectArchiveRunEndpointTests(TestWebApplicationFactory factory)
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
-    [Fact]
-    public async Task Проход_ФлагВыключен_400()
-    {
-        await SetFlagAsync(true);
-        var projectId = await CreateProjectAsync(_client, "Проект прохода без флага");
-        await SetFlagAsync(false);
-
-        var resp = await _client.PostAsync($"/api/projects/{projectId}/archive-run", null);
-
-        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await resp.Content.ReadAsStringAsync()).Should().Contain("Автоправило архива выключено");
-    }
-
     // Согласие на правило — сохранение порога проекта: без снятия гейта фоновый тик
     // обходил бы владельца стороной (пока не нажата кнопка по всем сферам)
     [Fact]
     public async Task СохранениеПорогаПроекта_СнимаетГейтПервогоПрохода()
     {
-        await SetFlagAsync(true);
         var userId = await UserIdAsync();
         var users = factory.Services.GetRequiredService<UserStore>();
         users.SetArchiveRuleFirstRunAt(userId, null);
@@ -106,7 +89,6 @@ public class ProjectArchiveRunEndpointTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task СбросПорогаПроекта_ГейтНеСнимает()
     {
-        await SetFlagAsync(true);
         var userId = await UserIdAsync();
         var users = factory.Services.GetRequiredService<UserStore>();
         users.SetArchiveRuleFirstRunAt(userId, null);
@@ -122,10 +104,6 @@ public class ProjectArchiveRunEndpointTests(TestWebApplicationFactory factory)
     // --- Помощники ---
 
     private SessionManager Sessions() => factory.Services.GetRequiredService<SessionManager>();
-
-    private async Task SetFlagAsync(bool enabled) =>
-        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.ChatAutoArchive}", new { enabled }))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
 
     private void SetPersonalDays(string userId, int? days) =>
         factory.Services.GetRequiredService<UserStore>().SetArchiveAfterDays(userId, days);

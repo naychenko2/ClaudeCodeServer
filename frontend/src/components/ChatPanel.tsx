@@ -2990,8 +2990,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
-          {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023) */}
-          {!embedded && (
+          {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023).
+              Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать */}
+          {!embedded && online && (
             <ContextRow session={session} project={project ?? null} turnTree={turnTree} isMobile={isMobile === true}
               onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />
           )}

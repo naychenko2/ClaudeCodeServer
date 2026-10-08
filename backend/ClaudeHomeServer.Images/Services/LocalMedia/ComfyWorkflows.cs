@@ -56,8 +56,10 @@ public static partial class ComfyWorkflows
         return n + (((5 - n % 17) % 17) + 17) % 17;
     }
 
-    private const string QwenUnet = "qwen_image_2.1_bf16.safetensors";
-    private const string QwenClip = "qwen3vl_8b_bf16.safetensors";
+    // int8 convrot + SageAttention: на 3090 картинка 1328² за ~20–23 с вместо ~47–50 с у bf16,
+    // на пейзаже и портрете с надписью разница видна только при наложении (замер 2026-10-08)
+    private const string QwenUnet = "qwen_image_2.1_int8_convrot.safetensors";
+    private const string QwenClip = "qwen3vl_8b_int8_convrot.safetensors";
     private const string QwenVae = "qwen_image_2.1_vae_bf16.safetensors";
 
     // Промпт доводки лиц — из run_facedetail.py: он описывает ЛИЦО, а не сцену
@@ -146,7 +148,7 @@ public static partial class ComfyWorkflows
         wf["fd"] = Node("FaceDetailer", new JsonObject
         {
             ["image"] = Link("img"),
-            ["model"] = Link("unet"),
+            ["model"] = Link("sage"),
             ["clip"] = Link("clip"),
             ["vae"] = Link("vae"),
             ["guide_size"] = 768,
@@ -643,12 +645,18 @@ public static partial class ComfyWorkflows
             ["device"] = "cuda:0",
         }),
         ["vae"] = Node("VAELoader", new JsonObject { ["vae_name"] = QwenVae }),
+        ["sage"] = Node("PathchSageAttentionKJ", new JsonObject
+        {
+            ["model"] = Link("unet"),
+            ["sage_attention"] = "auto",
+            ["allow_compile"] = false,
+        }),
     };
 
     private static JsonObject KSampler(JsonArray latent, long seed, int steps) =>
         Node("KSampler", new JsonObject
         {
-            ["model"] = Link("unet"),
+            ["model"] = Link("sage"),
             ["positive"] = Link("enc"),
             ["negative"] = Link("enc", 1),
             ["latent_image"] = latent,

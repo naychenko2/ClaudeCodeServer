@@ -3180,7 +3180,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // побайтово неизменным, иначе prefix cache движка рвёт кэш всей истории), а
         // копятся здесь и уезжают хвостом — вклейкой в текст хода. Признак берём от
         // провайдера СЕССИИ, как BareMode: сигнатура запуска остаётся стабильной.
-        var recallInTurnText = LightProfile is { RecallInTurnText: true };
+        // Ручка провайдера действует и БЕЗ облегчённого контекста (персона с выключенным
+        // LightContext на local-qwen: профиль null, а кэш движка рвётся так же —
+        // LlmProviderRegistry.RecallInTurnTextFor).
+        var recallInTurnText = LightProfile is { RecallInTurnText: true }
+            || _providers?.RecallInTurnTextFor(EffectiveModel) == true;
         List<PromptSectionDto> turnRecallSections = [];
         // Секции PromptSection.InTurnTail: хвостом при любом провайдере, ближе всего к тексту хода
         List<PromptSectionDto> alwaysTailSections = [];

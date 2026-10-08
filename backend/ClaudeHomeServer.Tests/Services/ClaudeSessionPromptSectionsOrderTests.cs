@@ -293,6 +293,69 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         }
     }
 
+    // Сторож 2026-10-09: ручка RecallInTurnText провайдера действует и у персоны с ВЫКЛЮЧЕННЫМ
+    // облегчённым контекстом (LightProfileFor → null). Иначе рабочий фокус и recall памяти
+    // персоны (они меняются между чатами) стояли в середине системного блока и рвали prefix
+    // cache движка: первый вход чата персоны на local-qwen 50 с вместо 1 с при прогретом кэше.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task RecallInTurnText_ДействуетУПерсоныБезОблегчённогоКонтекста(bool? lightContext)
+    {
+        var messages = new List<ServerMessage>();
+        var info = new Session { Model = "qwen-test-27b", PersonaId = "persona-1" };
+
+        var bus = new TurnEventBus();
+        bus.OnFilter<PromptAssembling>(100, (e, next) =>
+        {
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "dossier-trailer", "МАРКЕР_DOSSIER_TRAILER"));
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "recall-notes", "МАРКЕР_RECALL_NOTES"));
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "recall-memory", "Твоё текущее дело (рабочая память): МАРКЕР_ФОКУС\nМАРКЕР_RECALL_MEMORY"));
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "persona-bindings", "МАРКЕР_PERSONA_BINDINGS"));
+            return next();
+        }, "Test.Sections");
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LlmProviders:test-local:DisplayName"] = "Тестовый локальный",
+            ["LlmProviders:test-local:AnthropicBaseUrl"] = "http://127.0.0.1:65535",
+            ["LlmProviders:test-local:IsLocal"] = "true",
+            ["LlmProviders:test-local:RecallInTurnText"] = "true",
+            ["LlmProviders:test-local:Models:0:Id"] = "qwen-test-27b",
+            ["LlmProviders:test-local:Models:0:DisplayName"] = "Qwen Test",
+        }).Build();
+
+        var context = new LlmSessionContext(
+            RootPath: _root,
+            OnMessage: m => { lock (messages) messages.Add(m); return Task.CompletedTask; },
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null,
+            MemoryMcp: new MemoryMcpContext("http://memory.invalid", () => "tok", "persona-1"),
+            Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            PersonaProvider: () => new Persona { Id = "persona-1", Name = "Тестовая Персона", LightContext = lightContext },
+            Events: bus);
+
+        var session = new ClaudeSession(info, context, providers: new LlmProviderRegistry(config));
+        await using var _ = session;
+
+        await session.SendMessageAsync("привет");
+
+        var args = await WhenAnyAsync(_argsCaptured.Task, TimeSpan.FromSeconds(15));
+        var idx = args.ToList().IndexOf("--append-system-prompt");
+        idx.Should().BeGreaterThanOrEqualTo(0, "стабильная секция непустая — аргумент обязан присутствовать");
+        var prompt = args[idx + 1];
+
+        prompt.Should().Contain("МАРКЕР_DOSSIER_TRAILER", "стабильная секция остаётся в системном блоке");
+        foreach (var marker in new[] { "МАРКЕР_RECALL_NOTES", "МАРКЕР_ФОКУС", "МАРКЕР_RECALL_MEMORY", "МАРКЕР_PERSONA_BINDINGS" })
+            prompt.Should().NotContain(marker,
+                "ручка провайдера уводит нестабильную секцию хвостом хода и без облегчённого контекста персоны");
+    }
+
     // Сторож хвоста хода (ADR-018 §10.4, риск 1 плана v2): секция InTurnTail (состояние редактора
     // картинки) уезжает хвостом хода ПРИ ЛЮБОЙ настройке RecallInTurnText и в системный блок не
     // попадает никогда. Иначе у провайдера без ручки она обнуляла бы prefix cache всей истории:

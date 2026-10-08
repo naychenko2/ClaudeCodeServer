@@ -307,6 +307,83 @@ public class WebDavNtlmUserFileTests : IDisposable
     }
 
     [Fact]
+    public void СменаСпискаДоменов_ПриСтартеПереписываетФайлСоВсемиДоменами()
+    {
+        NtlmFile(Config()).Record("bob", "password");
+        Lines("bob").Should().HaveCount(3);
+
+        var ntlm = NtlmFile(Config(new()
+        {
+            ["WebDav:NtlmDomains:0"] = ".",
+            ["WebDav:NtlmDomains:1"] = "WORKGROUP",
+            ["WebDav:NtlmDomains:2"] = "AI",
+        }));
+
+        Lines("bob").Should().Equal(
+            $".\\bob:0:AAD3B435B51404EEAAD3B435B51404EE:{PasswordNtHash}:[U          ]:LCT-00000000:",
+            $"WORKGROUP\\bob:0:AAD3B435B51404EEAAD3B435B51404EE:{PasswordNtHash}:[U          ]:LCT-00000000:",
+            $"AI\\bob:0:AAD3B435B51404EEAAD3B435B51404EE:{PasswordNtHash}:[U          ]:LCT-00000000:",
+            $"bob:0:AAD3B435B51404EEAAD3B435B51404EE:{PasswordNtHash}:[U          ]:LCT-00000000:");
+        ntlm.Contains("bob").Should().BeTrue();
+    }
+
+    [Fact]
+    public void ТеСамыеДомены_ПриСтартеФайлНеПереписывается()
+    {
+        NtlmFile(Config()).Record("bob", "password");
+        var before = File.GetLastWriteTimeUtc(_ntlmPath);
+        File.SetLastWriteTimeUtc(_ntlmPath, before.AddMinutes(-5));
+        var stamped = File.GetLastWriteTimeUtc(_ntlmPath);
+
+        NtlmFile(Config());
+
+        File.GetLastWriteTimeUtc(_ntlmPath).Should().Be(stamped);
+    }
+
+    [Fact]
+    public void ЧужаяМетка_ПриДругомСпискеДоменов_ФайлНеТрогается()
+    {
+        SeedOwnedByProd(("admin", "prod-secret"));
+        var before = File.ReadAllBytes(_ntlmPath);
+
+        var foreign = ForeignConfig();
+        foreign["WebDav:NtlmDomains:2"] = ".";
+        NtlmFile(foreign);
+
+        File.ReadAllBytes(_ntlmPath).Should().Equal(before);
+    }
+
+    [Fact]
+    public void ДоменыПоУмолчанию_ТочкаWorkgroupИмяХоста_БезРегистровыхДвойников()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_dataDir, "projects.json"),
+        }).Build();
+
+        var ntlm = NtlmFile(config);
+
+        ntlm.Domains.Should().Equal(new[] { ".", "WORKGROUP", Environment.MachineName.ToUpperInvariant() }
+            .Distinct(StringComparer.Ordinal));
+        ntlm.Domains.Should().NotContain(d => d != d.ToUpperInvariant() && d != ".");
+    }
+
+    [Fact]
+    public void ЯвныеДомены_ТочкаДопустима_ДублиПоТочномуНаписаниюУбираются_РегистрСохраняется()
+    {
+        var ntlm = NtlmFile(Config(new()
+        {
+            ["WebDav:NtlmDomains:0"] = ".",
+            ["WebDav:NtlmDomains:1"] = "WORKGROUP",
+            ["WebDav:NtlmDomains:2"] = "WORKGROUP",
+            ["WebDav:NtlmDomains:3"] = "workgroup",
+            ["WebDav:NtlmDomains:4"] = "bad:dom",
+        }));
+
+        ntlm.Domains.Should().Equal(".", "WORKGROUP", "workgroup");
+    }
+
+    [Fact]
     public void МеханизмGss_ОпределяетсяПоMechD()
     {
         var gss = Path.Combine(_secretsDir, "gss");

@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.WebDav;
 /// NTLMv2-хэш домен входит с учётом регистра, причём строка БЕЗ домена считает хэш с ПУСТЫМ
 /// доменом, а не с присланным клиентом: Type3 с непустым доменом такая строка не сойдётся.
 /// Поэтому строки с доменами идут раньше строки без домена, а на домен — ровно один вариант
-/// написания. LM-поле обязано быть валидным hex,
+/// написания (регистровые двойники недостижимы). Голый логин Windows шлёт с доменом «.». LM-поле обязано быть валидным hex,
 /// но при уровне LM_COMPAT_LEVEL по умолчанию (3) gss-ntlmssp его не читает.
 ///
 /// Файл привязан к хозяину: в шапке лежит метка — каноничный путь users.json экземпляра, который
@@ -93,9 +93,23 @@ public sealed class NtlmUserFile
         }
 
         Load();
-        // Старый формат без метки: берём файл себе, чтобы чужой экземпляр дальше его не тронул
-        if (existingOwner is null && File.Exists(Path))
+        // Файл не совпал с тем, что построили бы сейчас, — перезаписываем: старый формат без метки (берём файл
+        // себе, чтобы чужой экземпляр дальше его не тронул) либо смена WebDav:NtlmDomains (иначе новые домены
+        // попали бы в файл только при следующей записи хэша)
+        if (File.Exists(Path) && FileDiffersFromExpected())
             lock (_lock) WriteLocked();
+    }
+
+    private bool FileDiffersFromExpected()
+    {
+        try
+        {
+            return File.ReadAllText(Path!) != BuildContent(_hashes, Domains, _ownerMark);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -272,15 +286,18 @@ public sealed class NtlmUserFile
 
     private static IReadOnlyList<string> ResolveDomains(string[]? configured)
     {
-        // По умолчанию — WORKGROUP и имя хоста заглавными (так NetBIOS-имя шлёт Windows)
+        // По умолчанию — «.» (так Windows шлёт голый логин), WORKGROUP и имя хоста заглавными (так NetBIOS-имя
+        // шлёт Windows). Варианты нижнего регистра не нужны: gss-ntlmssp сравнивает домен без учёта регистра и
+        // берёт первую строку, поэтому workgroup после WORKGROUP недостижим (проверено живым Windows 2026-10-08)
         var source = configured is { Length: > 0 }
             ? configured
-            : ["WORKGROUP", Environment.MachineName.ToUpperInvariant()];
+            : [".", "WORKGROUP", Environment.MachineName.ToUpperInvariant()];
+        // Дубли убираем только по точному написанию: регистр входит в NTLMv2-хэш, и явно заданное
+        // администратором написание не схлопываем
         return source
             .Select(d => d.Trim())
             .Where(d => d.Length > 0 && IsRepresentable(d))
-            // Два написания одного домена бессмысленны: сработает только первое
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(StringComparer.Ordinal)
             .ToList();
     }
 

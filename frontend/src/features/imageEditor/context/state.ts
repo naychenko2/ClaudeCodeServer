@@ -2,7 +2,7 @@
 // Вне React: хост зовёт `actions` на каждый рендер, поэтому всё берётся из кэшей сторов.
 
 import type { ChatContextPrimary, ContextAction, ContextKindCtx, ChatContextRef } from 'aihome_shell/kit';
-import { FLAGS, getChatContextState, getFlag } from 'aihome_shell/kit';
+import { getChatContextState } from 'aihome_shell/kit';
 import { quickOffered } from '../editorInputs';
 import { hasMaskMark } from '../marks';
 import { enterScope } from '../scope';
@@ -36,7 +36,7 @@ export function inputOf(ctx: ContextKindCtx, thread: ImageThread): ImageActionIn
       outpaint: quickOffered('outpaint', catalog),
     },
     openBrush: () => openEditor(ctx.sessionId, thread.id, null, { tool: 'mask' }),
-    format: getFlag(FLAGS.mediaFormat) ? { outpaintAspect: editAspectOf(thread.id), pendingAspect: editAspectOf(thread.id) !== null && editOf(thread.id).how === null } : undefined,
+    format: { outpaintAspect: editAspectOf(thread.id), pendingAspect: editAspectOf(thread.id) !== null && editOf(thread.id).how === null },
   };
 }
 

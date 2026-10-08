@@ -68,7 +68,7 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         // версиями нити и якоря в ленте. Швы ядра (учёт, рассылка, лента, справочник чатов) необязательны
         services.AddSingleton<Jobs.AudioJobThreads>();
         services.AddSingleton<Jobs.AudioEditJobService>();
-        // Гейт ручек: флаг, свой проект, свой чат — иначе 404
+        // Гейт ручек: свой проект, свой чат — иначе 404
         services.AddSingleton<Controllers.AudioEditScopeGate>();
         // Шов «Видео → Звук» (ADR-022 §3): черновик музыки и основной файл версии для фильма
         services.AddSingleton<ClaudeHomeServer.Services.Media.IAudioTrackSource, Threads.AudioTrackSource>();

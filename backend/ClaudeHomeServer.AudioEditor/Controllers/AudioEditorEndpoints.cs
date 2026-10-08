@@ -51,9 +51,9 @@ public abstract class AudioEditorEndpoints(
     // ── Состояние, каталог, префы ────────────────────────────────────────────────
 
     protected IActionResult StateIn(AudioEditScope scope, string sessionId) =>
-        Ok(new AudioStateDto(threads.Store.Get(UserId, sessionId), AudioCatalogView.Build(engines, scope, jobs.PrefersLocal(UserId)), PrefsOf(scope)));
+        Ok(new AudioStateDto(threads.Store.Get(UserId, sessionId), AudioCatalogView.Build(engines, scope, true), PrefsOf(scope)));
 
-    protected IActionResult CatalogIn(AudioEditScope scope) => Ok(AudioCatalogView.Build(engines, scope, jobs.PrefersLocal(UserId)));
+    protected IActionResult CatalogIn(AudioEditScope scope) => Ok(AudioCatalogView.Build(engines, scope, true));
 
     protected IActionResult PrefsIn(AudioEditScope scope) => Ok(PrefsOf(scope));
 

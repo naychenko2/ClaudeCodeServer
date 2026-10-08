@@ -7,7 +7,7 @@
 import { useState, type ReactNode } from 'react';
 import { AudioLines, Download, Mic, Music, Save, Sparkles, Target, X } from 'lucide-react';
 import {
-  Badge, Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, FLAGS, isCardPick, useFeature,
+  Badge, Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, isCardPick,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { audioApi, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
@@ -144,12 +144,11 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   // Личный чат вне проекта: ctx.projectId = null, область — personal
   const scope = audioScope(ctx.projectId);
   const state = useAudioThreads(scope, ctx.sessionId);
-  const on = useFeature(FLAGS.audioEditor);
   const focusId = useFocusedThreadId(ctx.sessionId ?? null);
   const threadId = str(rec?.data.threadId);
   const thread = threadId ? state.threads.find(t => t.id === threadId) : undefined;
-  if (!on || !ctx.sessionId || !thread) {
-    // Нить удалили или модуль выключен — якорь в истории остался; рисуем след
+  if (!ctx.sessionId || !thread) {
+    // Нить удалили — якорь в истории остался; рисуем след
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
   const focused = focusId === thread.id;
@@ -242,10 +241,9 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const rec = recordOf(ctx.item);
   const scope = audioScope(ctx.projectId);
   const state = useAudioThreads(scope, ctx.sessionId);
-  const on = useFeature(FLAGS.audioEditor);
   const threadId = str(rec?.data.threadId);
   const thread = threadId ? state.threads.find(t => t.id === threadId) : undefined;
-  if (!on || !ctx.sessionId || !thread || !rec || !str(rec.data.jobId)) {
+  if (!ctx.sessionId || !thread || !rec || !str(rec.data.jobId)) {
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
   return <LaunchCard scope={scope} sessionId={ctx.sessionId} thread={thread} data={rec.data} events={state.events} />;

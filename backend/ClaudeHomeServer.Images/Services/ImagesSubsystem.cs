@@ -42,7 +42,7 @@ public sealed class ImagesSubsystem : IAppSubsystem
         services.AddSingleton<IImageRaster, SkiaImageRaster>();
         // Локальная генерация через ComfyUI (MCP-сервер local-media): тумблер LocalMedia:Enabled
         services.AddLocalMedia(config);
-        // Правило «локальная по умолчанию» хвостом хода (флаг local-media-default)
+        // Правило «локальная по умолчанию» хвостом хода
         services.AddPromptSectionContributor<LocalMediaDefaultContributor>();
     }
 }

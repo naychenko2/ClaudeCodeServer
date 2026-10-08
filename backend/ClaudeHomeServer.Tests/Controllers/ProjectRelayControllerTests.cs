@@ -61,13 +61,8 @@ public sealed class ProjectRelayControllerTests : IDisposable
 
     public void Dispose() => _factory.Dispose();
 
-    private async Task SetFlagAsync(HttpClient client, bool enabled) =>
-        (await client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.LocalProjects}", new { enabled }))
-            .EnsureSuccessStatusCode();
-
     private async Task<string> CreateAsync(string? deviceId)
     {
-        await SetFlagAsync(_client, true);
         var root = deviceId is null ? MkDir() : "/home/u/relay-" + Guid.NewGuid().ToString("N")[..8];
         // Создание спросило бы у агента папку через этот же канал и сбило бы счётчик Opened:
         // на время создания устройство — старый агент без ретранслятора, проверка пропускается
@@ -94,7 +89,6 @@ public sealed class ProjectRelayControllerTests : IDisposable
     {
         var id = await CreateAsync(Device);
         var stranger = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        await SetFlagAsync(stranger, true);
 
         (await stranger.GetAsync($"/api/projects/{id}/relay/files")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         _relay.Opened.Should().Be(0);
@@ -116,16 +110,6 @@ public sealed class ProjectRelayControllerTests : IDisposable
 
         r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await BodyAsync(r)).GetProperty("error").GetString().Should().Be(ProjectCapabilities.NotDeviceBoundReason);
-        _relay.Opened.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task ФлагВыключен_403_ДоКанала()
-    {
-        var id = await CreateAsync(Device);
-        await SetFlagAsync(_client, false);
-
-        (await _client.GetAsync($"/api/projects/{id}/relay/files")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
         _relay.Opened.Should().Be(0);
     }
 

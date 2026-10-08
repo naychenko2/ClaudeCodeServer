@@ -1,14 +1,13 @@
 // Карточка плана «Командной реализации»: блок «Замысел», ссылка на файл полного плана
 // (решение владельца 2026-08-02, docs/architecture/team-implement-mode.md) и переключатель
-// «Текстом/Схемой» под флагом visual-plan. Рендерим статикой через react-dom/server —
+// «Текстом/Схемой». Рендерим статикой через react-dom/server —
 // как соседние TeamEscalationView.test/ToolUseView.test.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem, TeamImplementBudget, TeamPlan } from '../../../types';
 import { TeamPlanView } from '../TeamPlanView';
 import { ChatOpenFileContext, TeamPlanContext } from '../contexts';
-import { setAllFlags } from '../../../lib/featureFlags';
 
 type PlanItem = Extract<ChatItem, { kind: 'team_plan' }>;
 
@@ -128,22 +127,12 @@ describe('TeamPlanView — блок «Замысел» и ссылка на по
   });
 });
 
-// Переключатель «Текстом/Схемой» (флаг visual-plan): схема детерминированная,
+// Переключатель «Текстом/Схемой»: схема детерминированная,
 // без модели и без кнопки «Собрать схему» — вид доступен сразу. Клик в статик-рендере
 // не воспроизвести, поэтому стартовый вид задаётся initialSchemeView (тот же приём,
 // что initialView у TeamPlanScheme).
-describe('TeamPlanView — переключатель «Текстом/Схемой» (флаг visual-plan)', () => {
-  afterEach(() => setAllFlags({}));
-
-  it('флаг выключен — сегмента нет, тело плана рендерится текстом', () => {
-    const html = render(card());
-    expect(html).not.toContain('Текстом');
-    expect(html).not.toContain('Схемой');
-    expect(html).toContain('Волна 1');
-  });
-
-  it('флаг включён — сегмент есть, дефолтный вид «Текстом»', () => {
-    setAllFlags({ 'visual-plan': true });
+describe('TeamPlanView — переключатель «Текстом/Схемой»', () => {
+  it('сегмент есть, дефолтный вид «Текстом»', () => {
     const html = render(card());
     expect(html).toContain('Текстом');
     expect(html).toContain('Схемой');
@@ -154,7 +143,6 @@ describe('TeamPlanView — переключатель «Текстом/Схем�
   });
 
   it('вид «Схемой» — детерминированная схема вместо текстового тела', () => {
-    setAllFlags({ 'visual-plan': true });
     const html = render(card(), () => {}, { initialSchemeView: 'scheme' });
     // Крошка «Суть», жанр-пилюля и сводка планировщика — каркас схемы на месте…
     expect(html).toContain('Суть');
@@ -164,8 +152,7 @@ describe('TeamPlanView — переключатель «Текстом/Схем�
     expect(html).not.toContain('Волна 1');
   });
 
-  it('resolved-карточка (план запущен) — сегмента нет даже с флагом', () => {
-    setAllFlags({ 'visual-plan': true });
+  it('resolved-карточка (план запущен) — сегмента нет', () => {
     const html = render(card({}, { resolved: true, approved: true }));
     expect(html).not.toContain('Текстом');
     expect(html).not.toContain('Схемой');

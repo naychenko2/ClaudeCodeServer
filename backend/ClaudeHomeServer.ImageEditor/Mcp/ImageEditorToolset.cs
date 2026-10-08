@@ -37,7 +37,7 @@ namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
 /// сессию, сброс по TurnCompleted этой сессии). Задача живёт отдельно от хода: «Стоп» её не
 /// отменяет, отмена — только image_cancel или кнопкой.
 ///
-/// ИНВАРИАНТ состава: tools/list зависит от сессии, флага владельца и настройки инстанса
+/// ИНВАРИАНТ состава: tools/list зависит от сессии и настройки инстанса
 /// ImageEditor:AgentLaunch — не от хода, фокуса и нитей (McpToolsetStabilityTests). Без
 /// выбранной картинки инструмент отвечает отказом, а не исчезает.
 /// </summary>
@@ -53,7 +53,6 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     };
 
     private readonly IMcpSessionAccessor _sessions;
-    private readonly IFeatureFlagGate _flags;
     private readonly IProjectManager _projects;
     private readonly IEnumerable<IImageEditor> _editors;
     private readonly ImageThreadService _threads;
@@ -72,7 +71,6 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
     public ImageEditorToolset(
         IMcpSessionAccessor sessions,
-        IFeatureFlagGate flags,
         IProjectManager projects,
         IEnumerable<IImageEditor> editors,
         ImageThreadService threads,
@@ -87,7 +85,6 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         ChatContext.ImageContextLaunch? context = null)
     {
         _sessions = sessions;
-        _flags = flags;
         _projects = projects;
         _editors = editors;
         _threads = threads;
@@ -669,7 +666,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
     // ── Маршрут: /mcp/image-editor/{sessionId} ─────────────────────────────────
 
-    // Чат владельца токена при включённом флаге: у чата проекта — его проект (свой), у личного —
+    // Чат владельца токена: у чата проекта — его проект (свой), у личного —
     // личная область. Сопоставление — только ImageEditScope.Of. Любой отказ одним текстом: чужой
     // чат неотличим от несуществующего, а состав у него пустой
     private bool TryResolve(McpToolCallContext context, out Session session, out ImageEditScope scope, out string error)
@@ -679,7 +676,6 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         error = "Чат не найден — инструменты редактора картинок недоступны.";
         if (!TryParseRoute(context.RouteTail, out var sessionId)) return false;
         if (_sessions.GetOwned(sessionId, context.OwnerId) is not { } owned) return false;
-        if (!_flags.IsEnabled(context.OwnerId, FeatureFlagKeys.ImageEditor)) return false;
         if (owned.ProjectId is { } projectId)
         {
             if (_projects.GetById(projectId) is not { } found || found.OwnerId != context.OwnerId) return false;

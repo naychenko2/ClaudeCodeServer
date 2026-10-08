@@ -30,8 +30,6 @@ public class ChatContextControllerTests : IDisposable
     {
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ImageEditor, true);
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.AudioEditor, true);
         _projectRoot = Path.Combine(_factory.TempDir, "ctx_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_projectRoot);
         _projectId = _factory.Services.GetRequiredService<ProjectManager>()

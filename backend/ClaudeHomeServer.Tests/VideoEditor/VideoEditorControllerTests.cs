@@ -38,7 +38,6 @@ public class VideoEditorControllerTests : IDisposable
         };
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        EnableFlag(TestWebApplicationFactory.TestUsername);
         (_projectId, _projectRoot) = CreateProject(TestWebApplicationFactory.TestUsername);
         _client = _factory.CreateAuthenticatedClient();
     }
@@ -86,12 +85,6 @@ public class VideoEditorControllerTests : IDisposable
     }
 
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();
-
-    private void EnableFlag(string username)
-    {
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(username)!.Id, FeatureFlagKeys.VideoEditor, true).Should().BeTrue();
-    }
 
     private (string Id, string Root) CreateProject(string username)
     {
@@ -146,15 +139,9 @@ public class VideoEditorControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Без_флага_и_без_входа_ручки_закрыты()
+    public async Task Без_входа_ручки_закрыты()
     {
-        var chat = await ProjectChat();
         (await _factory.CreateClient().GetAsync($"{Root}/catalog")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-
-        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(_ownerId, FeatureFlagKeys.VideoEditor, false);
-
-        (await _client.GetAsync($"{Root}/catalog")).StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await _client.GetAsync($"{Chat(chat)}/state")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -233,7 +220,6 @@ public class VideoEditorControllerTests : IDisposable
         var sceneId = await AddScene(Chat(chat));
         var versionId = await Shoot(Root, chat, sceneId);
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        EnableFlag(TestWebApplicationFactory.SecondUsername);
 
         (await second.GetAsync($"{Root}/catalog")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await second.GetAsync($"{Chat(chat)}/state")).StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -255,7 +241,6 @@ public class VideoEditorControllerTests : IDisposable
         (await _factory.CreateClient().PostAsync(url, null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
 
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        EnableFlag(TestWebApplicationFactory.SecondUsername);
         (await second.PostAsync(url, null)).StatusCode.Should().Be(HttpStatusCode.NotFound, "чужой чат неотличим от несуществующего");
 
         var healthy = await _client.PostAsync(url, null);

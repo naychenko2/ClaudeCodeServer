@@ -63,7 +63,6 @@ public sealed class AudioEditJobService : IDisposable
     private readonly ISpendCollector? _spend;
     private readonly ISessionBroadcaster? _broadcaster;
     private readonly Voices.VoiceLibrary? _voices;
-    private readonly IFeatureFlagGate? _flags;
     private readonly ChatContext.AudioContextLaunch? _context;
     private readonly ILogger<AudioEditJobService> _log;
     private readonly TimeProvider _time;
@@ -83,7 +82,6 @@ public sealed class AudioEditJobService : IDisposable
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
         Voices.VoiceLibrary? voices = null,
-        IFeatureFlagGate? flags = null,
         ChatContext.AudioContextLaunch? context = null)
     {
         _context = context;
@@ -96,13 +94,7 @@ public sealed class AudioEditJobService : IDisposable
         _broadcaster = broadcaster;
         _time = time ?? TimeProvider.System;
         _voices = voices;
-        _flags = flags;
     }
-
-    // «Авто» сначала пробует локальные модели — по флагу владельца local-media-default (ADR-021 §2).
-    // Явно выбранного поставщика флаг не трогает никогда
-    public bool PrefersLocal(string ownerId) =>
-        _flags?.IsEnabled(ownerId, FeatureFlagKeys.LocalMediaDefault) == true;
 
     private sealed record Quote(
         string Id, string OwnerId, string ScopeKey, string Mode, AudioOp Op, string Provider, AudioModelInfo Model,
@@ -221,7 +213,7 @@ public sealed class AudioEditJobService : IDisposable
         }
         else
         {
-            var candidates = AudioCatalog.AutoCandidates(_engines, scope, PrefersLocal(ownerId));
+            var candidates = AudioCatalog.AutoCandidates(_engines, scope, true);
             foreach (var candidate in candidates) await RefreshModelsQuietly(candidate, ct);
             (engine, model) = candidates
                 .Select(e => (Engine: e, Model: Pick(e, op, modelId, voiceKind)))
@@ -247,7 +239,7 @@ public sealed class AudioEditJobService : IDisposable
         var quote = new Quote(NewId(), ownerId, scope.Key, request.Mode, op, engine.Key, model, count, voiceKind, price,
             fields, Now() + QuoteTtl, Input: Billed.Of(request.Text, request.Prompt, request.Lyrics, request.DurationSec),
             ContextRevision: request.ContextRevision,
-            Executors: ChatContext.AudioExecutorRows.Build(_engines, scope, op, voiceKind, engine, model, price, PrefersLocal(ownerId)));
+            Executors: ChatContext.AudioExecutorRows.Build(_engines, scope, op, voiceKind, engine, model, price, true));
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return AudioEditCallResult<AudioQuoteDto>.Ok(ToDto(quote));

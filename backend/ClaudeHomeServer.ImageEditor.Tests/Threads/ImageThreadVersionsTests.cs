@@ -348,9 +348,7 @@ public class ImageThreadVersionsTests : IDisposable
         var launcher = new ImageEditLaunchAssembler(editors, launchJobs, raster, threads, steps);
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(Chat, Owner)).Returns(session);
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ImageEditor)).Returns(true);
-        var toolset = new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, threads, launcher,
+        var toolset = new ImageEditorToolset(accessor.Object, projects.Object, editors, threads, launcher,
             new Mock<IDelegatedTurnGate>().Object, jobs, steps: steps);
         return (toolset, threads, jobs, steps);
     }

@@ -27,7 +27,6 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/" + RelayProtocol.RouteSegment)]
 public sealed class ProjectRelayController(
     ProjectManager projects,
-    FeatureFlagService flags,
     IDeviceExecChannel? deviceExec = null,
     IDeviceRelayChannel? relay = null) : ControllerBase
 {
@@ -89,7 +88,7 @@ public sealed class ProjectRelayController(
         Conflict(new { error = reason, code = RelayProtocol.UnavailableCode });
 
     // Всё, что можно решить без устройства, решается до канала: чужой проект, чужой владелец,
-    // серверный проект, выключенный флаг, офлайн — отказ, а не таймаут
+    // серверный проект, офлайн — отказ, а не таймаут
     private async Task<IActionResult> RelayAsync(string projectId, string template,
         Func<Project, RelayRequest, RelayRequest> args, CancellationToken ct)
     {
@@ -102,9 +101,6 @@ public sealed class ProjectRelayController(
         if (project is null || project.OwnerId != UserId) return NotFound();
         if (!ProjectCapabilities.IsDeviceBound(project))
             return BadRequest(new { error = ProjectCapabilities.NotDeviceBoundReason });
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.LocalProjects))
-            return StatusCode(StatusCodes.Status403Forbidden,
-                new { error = "Локальные проекты выключены (экспериментальная функция «Локальные проекты»)" });
         if (relay is null)
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Канал устройств на сервере выключен" });
 

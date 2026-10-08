@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp, Lock, Mic, Pencil, Plus, Trash2, X } from 'lucide-react';
 import {
   Badge, Button, ConfirmDialog, ContextAddButton, EmptyState, Field, IconButton, TextArea, TextField, refOf, showToast, useChatContext,
-  useFeature, FLAGS, C, FS, R, SP, ICON_SIZE, ICON_STROKE,
+  C, FS, R, SP, ICON_SIZE, ICON_STROKE,
 } from 'aihome_shell/kit';
 import { AudioPlayer } from '../player';
 import { isPersonalScope } from '../scope';
@@ -39,12 +39,7 @@ const STATUS: Record<WhereStatus, { label: string; tone: 'success' | 'warning' |
   no: { label: 'не умеет', tone: 'neutral' },
 };
 
-export function VoicesTab(props: VoicesTabProps) {
-  const enabled = useFeature(FLAGS.audioEditor);
-  return enabled ? <VoicesTabBody {...props} /> : null;
-}
-
-function VoicesTabBody({ scope, sessionId, contextSessionId = null }: VoicesTabProps) {
+export function VoicesTab({ scope, sessionId, contextSessionId = null }: VoicesTabProps) {
   const personal = isPersonalScope(scope);
   const [list, setList] = useState<VoicesList | null>(null);
   const [error, setError] = useState<string | null>(null);

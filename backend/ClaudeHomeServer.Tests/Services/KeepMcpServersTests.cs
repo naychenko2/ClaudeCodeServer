@@ -77,8 +77,7 @@ public class KeepMcpServersTests : IDisposable
         // роняет подсказку на стороне сервера, но не сам инструмент.
         PersonasMcp: new PersonasMcpContext("http://localhost:5999", () => "tok", ProjectId: "proj1",
             MentionsToolsEnabled: false),
-        // Workspace требует Sections (даже пустой список проходит). ChatContextEnabled
-        // оставляем дефолтом (false) — context_list вне dark launch.
+        // Workspace требует Sections (даже пустой список проходит).
         WorkspaceMcp: new WorkspaceMcpContext("http://localhost:5999", () => "tok", "proj1",
             Sections: []),
         NotificationsMcp: new NotificationsMcpContext("http://localhost:5999", () => "tok"),

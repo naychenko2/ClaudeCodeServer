@@ -31,7 +31,6 @@ public class ImagePrefsEndpointTests : IDisposable
     public ImagePrefsEndpointTests()
     {
         _factory.ExtraServices = services => services.AddSingleton<ISessionBroadcaster>(_broadcaster);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.TestUsername);
         (_projectId, _root) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
@@ -140,7 +139,6 @@ public class ImagePrefsEndpointTests : IDisposable
     {
         await _client.PutAsJsonAsync(Prefs(), Body());
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
 
         (await second.GetAsync(Prefs())).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await second.PutAsJsonAsync(Prefs(), Body(provider: "higgsfield"))).StatusCode.Should().Be(HttpStatusCode.NotFound);

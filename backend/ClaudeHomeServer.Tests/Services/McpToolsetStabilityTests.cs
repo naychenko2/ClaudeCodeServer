@@ -383,7 +383,6 @@ public class McpToolsetStabilityTests
         body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
         body.Should().NotContain("ImageChat", "отдельного чата картинки в v3 нет");
         body.Should().NotContain("Thread", "фокус и нити картинок не влияют на состав серверов");
-        body.Should().Contain("FeatureFlagKeys.ImageEditor", "флаг владельца гейтит сервер");
         body.Should().Contain("McpEndpoints.ImageEditorName",
             "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
         body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
@@ -430,7 +429,7 @@ public class McpToolsetStabilityTests
 
     /// <summary>
     /// Сервер модуля «Звук» (ADR-021 §5) — по тем же правилам, что image-editor: свойства сессии,
-    /// владельца и процесса (флаг audio-editor, тулсет в реестре), а не хода, фокуса, режима и нитей.
+    /// владельца и процесса (тулсет в реестре), а не хода, фокуса, режима и нитей.
     /// </summary>
     [SkippableFact]
     public void СерверЗвука_ГейтитсяПоФлагуИРеестру()
@@ -443,7 +442,6 @@ public class McpToolsetStabilityTests
 
         body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
         body.Should().NotContain("Thread", "фокус и нити звука не влияют на состав серверов");
-        body.Should().Contain("FeatureFlagKeys.AudioEditor", "флаг владельца гейтит сервер");
         body.Should().Contain("McpEndpoints.AudioEditorName",
             "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
         body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
@@ -488,7 +486,7 @@ public class McpToolsetStabilityTests
 
     /// <summary>
     /// Сервер модуля «Видео» (ADR-022 §5) — по тем же правилам, что audio-editor: свойства сессии, владельца и
-    /// процесса (флаг video-editor, тулсет в реестре), а не хода, фокуса, поставщика и сцен.
+    /// процесса (тулсет в реестре), а не хода, фокуса, поставщика и сцен.
     /// </summary>
     [SkippableFact]
     public void СерверВидео_ГейтитсяПоФлагуИРеестру()
@@ -501,7 +499,6 @@ public class McpToolsetStabilityTests
 
         body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
         body.Should().NotContain("Scene", "фокус и сцены видео не влияют на состав серверов");
-        body.Should().Contain("FeatureFlagKeys.VideoEditor", "флаг владельца гейтит сервер");
         body.Should().Contain("McpEndpoints.VideoEditorName",
             "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
         body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
@@ -1122,8 +1119,8 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Без флага владельца chat-context инструмента нет вовсе: dark launch означает, что
-    /// схема инструмента не висит в контексте каждого хода при выключенной фиче.
+    /// Откат на stdio-скрипт: WORKSPACE_CHAT_CONTEXT=0 прячет инструмент у самого скрипта
+    /// (бэкенд выставляет всегда «1»).
     /// </summary>
     [SkippableTheory]
     [InlineData("search")]
@@ -1135,18 +1132,17 @@ public class McpToolsetStabilityTests
         if (tools is null) return;
 
         tools.Should().NotContain("context_list",
-            "флаг владельца chat-context выключен — инструмента быть не должно");
+            "env WORKSPACE_CHAT_CONTEXT=0 — stdio-скрипт инструмент не отдаёт");
         tools.Should().Contain("search_unified", "остальной состав не пострадал");
     }
 
     /// <summary>
-    /// Гейт context_list решается в BuildWorkspaceContext по ВЛАДЕЛЬЦУ (флаг chat-context),
-    /// а не по свойствам хода и не по непустоте контекста: значение уезжает в env
-    /// WORKSPACE_CHAT_CONTEXT и входит в отпечаток состава (shapes wsp) — мерцание между
+    /// context_list безусловно входит в состав wsp-сервера: BuildWorkspaceContext не зависит ни
+    /// от флагов, ни от свойств хода, ни от непустоты контекста — мерцание состава между
     /// ходами убивало бы процесс CLI.
     /// </summary>
     [SkippableFact]
-    public void ContextListГейт_РешаетсяФлагомВладельцаАНеХодом()
+    public void ContextList_СоставНеЗависитОтХода()
     {
         var path = FindSource("Services", "SessionManager.cs");
         Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
@@ -1154,10 +1150,10 @@ public class McpToolsetStabilityTests
         var body = MethodBody(File.ReadAllText(path!),
             "private WorkspaceMcpContext? BuildWorkspaceContext");
 
-        body.Should().Contain("ChatContext",
-            "инструмент context_list гейтится флагом владельца chat-context");
+        body.Should().NotContain("ChatContext",
+            "гейта фич-флага chat-context больше нет — инструмент в составе всегда");
         body.Should().NotContain(".Context",
-            "содержимое контекста чата не смеет решать состав инструментов — только флаг владельца");
+            "содержимое контекста чата не смеет решать состав инструментов");
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав инструментов рабочего пространства");
     }

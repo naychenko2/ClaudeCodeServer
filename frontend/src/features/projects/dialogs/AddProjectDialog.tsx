@@ -10,8 +10,7 @@ import { GIT_MODES, GitModeCard, GitPushRow, type GitMode } from '../components/
 import { ProjectIconSection, type DraftGlyph } from '../ProjectIconSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 import { basename } from '../../../lib/paths';
-import { FLAGS, useFeature } from '../../../lib/featureFlags';
-import { deviceLabel, isLocalProjectDevice, useNoDevicesHint } from '../../desktop/deviceOptions';
+import { deviceLabel, isLocalProjectDevice, NO_DEVICES_HINT } from '../../desktop/deviceOptions';
 
 interface Props {
   groups: ProjectGroup[];
@@ -23,18 +22,15 @@ interface Props {
 type Mode = 'new' | 'existing';
 // Тип размещения проекта (ADR-016 §3.4): 'server' — обычный проект на хосте сервера,
 // 'device' — локальный, привязан к устройству из реестра ADR-008. Сегмент показывается
-// ТОЛЬКО под флагом `local-projects`; без флага поле скрыто и сразу подставляется
-// 'server' — старые пути создания не меняются.
+// всегда; по умолчанию выбран 'server' — старые пути создания не меняются.
 type Placement = 'server' | 'device';
 
 // Единый диалог добавления проекта: сегмент «Новый / Существующий».
 //  • Новый — создаём новую папку под путём по умолчанию (path = null).
 //  • Существующий — привязываем существующую папку по пути.
-// Под флагом `local-projects` добавляется второй сегмент «Серверный / Локальный»:
+// Добавляется второй сегмент «Серверный / Локальный»:
 // локальный проект создаётся с привязкой к устройству (ADR-016 §4).
 export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }: Props) {
-  const localProjects = useFeature(FLAGS.localProjects);
-  const noDevicesHint = useNoDevicesHint();
   const [mode, setMode] = useState<Mode>('new');
   const [placement, setPlacement] = useState<Placement>('server');
   const [name, setName] = useState('');
@@ -141,15 +137,13 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
     }
   };
 
-  // Сегмент размещения: показываем только под флагом local-projects. ВАЖНО — это
+  // Сегмент размещения. ВАЖНО — это
   // НЕ сегмент «локальный/серверный» вообще, а переключатель «что именно создаём»:
   // «Серверный» = старый сценарий, «Локальный» = новый
-  const placementOptions: { value: Placement; label: string }[] = localProjects
-    ? [
-        { value: 'server', label: 'Серверный' },
-        { value: 'device', label: 'Локальный' },
-      ]
-    : [];
+  const placementOptions: { value: Placement; label: string }[] = [
+    { value: 'server', label: 'Серверный' },
+    { value: 'device', label: 'Локальный' },
+  ];
 
   // Локальные проекты не ведут git со стороны сервера — агент устройства сам
   // управляет файлами. Скрываем секцию git, чтобы не обещать лишнего
@@ -233,7 +227,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
               />
             ) : (
               <div style={{ fontSize: FS.base, color: C.textSecondary, padding: `${SP.sm}px 0` }}>
-                {noDevicesHint}
+                {NO_DEVICES_HINT}
               </div>
             )}
           </Field>

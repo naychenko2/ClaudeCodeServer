@@ -18,21 +18,6 @@ public sealed class AudioSchemaEndpointTests : IDisposable
 
     public void Dispose() => _factory.Dispose();
 
-    private void Flag(bool on)
-    {
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, FeatureFlagKeys.AudioEditor, on);
-    }
-
-    [Fact]
-    public async Task FlagOff_404()
-    {
-        Flag(false);
-        var response = await _factory.CreateAuthenticatedClient().GetAsync(ChatterboxSchema);
-
-        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
-
     [Fact]
     public async Task Anonymous_401()
     {
@@ -42,9 +27,8 @@ public sealed class AudioSchemaEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task FlagOn_LocalSchema_WithNotPassedParams_ForeignModel404()
+    public async Task LocalSchema_WithNotPassedParams_ForeignModel404()
     {
-        Flag(true);
         var client = _factory.CreateAuthenticatedClient();
 
         var response = await client.GetAsync(ChatterboxSchema);

@@ -1,9 +1,9 @@
 // Манифест MF-модуля «Редактор картинок» (ADR-018 §10.3, ADR-019). Ключ совпадает с
 // ImageEditorSubsystem.Key бэкенда: гейт слотов сверяется с активными подсистемами
-// из /api/auth/me. Фич-флаг владельца (image-editor) проверяют сами входы.
+// из /api/auth/me.
 
 import { Contact } from 'lucide-react';
-import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
+import { ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
   ContextOpenerApi, SubsystemManifest, FileViewerToolbarCtx, ChatItemToolCtx, ComposerChipApi, ComposerChipCtx,
   WorkspacePanelDefApi, WorkspacePanelDefCtx,
@@ -79,7 +79,6 @@ export const manifest: SubsystemManifest = {
         action: {
           title: 'Персонажи',
           icon: <Contact size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-          isAvailable: () => getFlag(FLAGS.imageEditor),
         } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],

@@ -96,13 +96,10 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
                     turnText);
             }
 
-            // Выделение досье в свою секцию (план «Секции промптов» этап 3) — под тем же
-            // флагом, что и prompt-sections (единый dark launch). Выключен — досье остаётся
-            // внутри recall-memory, как до фичи.
-            var splitDossier = _flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.SpecialtyPromptSections);
+            // Досье выделяется в свою секцию (план «Секции промптов» этап 3).
             var recallTask = _recall.BuildRecallAsync(
                 sessionContext.OwnerId, sessionContext.Persona.Id, query,
-                topK, minScore, dossier, splitDossier, session.ProjectId);
+                topK, minScore, dossier, splitDossier: true, session.ProjectId);
             var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
             if (completed != recallTask) return null;
             var recall = await recallTask;
@@ -115,13 +112,12 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
                     $"Паспорт {d.CommitSha[..Math.Min(7, d.CommitSha.Length)]}: {d.CommitSubject}", null)))
                 .ToList();
 
-            // Селекция секций: основной блок всегда идёт; dossier-блок — только когда
-            // выделен (splitDossier=true) и непустой, иначе секция не добавляется.
+            // Селекция секций: основной блок всегда идёт; dossier-блок — только непустой.
             var sections = new List<PromptSection>
             {
                 new(Key, recall.Text ?? string.Empty),
             };
-            if (splitDossier && !string.IsNullOrWhiteSpace(recall.DossierText))
+            if (!string.IsNullOrWhiteSpace(recall.DossierText))
             {
                 sections.Add(new PromptSection("dossier-recall", recall.DossierText!));
             }

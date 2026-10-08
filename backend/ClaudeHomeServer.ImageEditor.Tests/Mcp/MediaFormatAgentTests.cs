@@ -74,12 +74,10 @@ public class MediaFormatAgentTests : IDisposable
             new RecordingBroadcaster(), steps, _prefs);
         var launcher = new ImageEditLaunchAssembler(editors, _jobs, new SkiaImageRaster(), _threads);
 
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor)).Returns(true);
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(ChatId, Owner)).Returns(session);
         var gate = new Mock<IDelegatedTurnGate>();
-        _toolset = new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, _threads, launcher,
+        _toolset = new ImageEditorToolset(accessor.Object, projects.Object, editors, _threads, launcher,
             gate.Object, _jobs, steps: steps, prefs: _prefs, config: TestImages.Config((ImageEditorToolset.AgentLaunchKey, "true")));
         _editor.SetupGet(e => e.Key).Returns("fake");
     }

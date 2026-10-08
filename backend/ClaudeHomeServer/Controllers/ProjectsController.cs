@@ -22,7 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, SphereManager spheres, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, SphereManager spheres, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -73,9 +73,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         d.HarnessProblem,
     };
 
-    // Отказ привязать проект к устройству: флаг local-projects + возможность exec (ADR-016 §1)
-    private string? BindRefusal(string deviceId) => ProjectCapabilities.BindRefusal(
-        flags.IsEnabled(UserId, FeatureFlagKeys.LocalProjects), deviceExec?.GetStatus(UserId, deviceId));
+    // Отказ привязать проект к устройству: возможность exec у устройства (ADR-016 §1)
+    private string? BindRefusal(string deviceId) => ProjectCapabilities.BindRefusal(deviceExec?.GetStatus(UserId, deviceId));
 
     // Папка на устройстве под проект: агент сам создаёт и разрешает её (DeviceFolderCheck.BindAsync),
     // старый агент — только проверка. Refusal — отказ; Notice — что агент создал или разрешил
@@ -439,17 +438,14 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(WithCount(updated));
     }
 
-    // Порог автоправила архивации чатов проекта (флаг chat-auto-archive, план v4 шаг 6):
+    // Порог автоправила архивации чатов проекта (план v4 шаг 6):
     // убирать в архив чаты проекта без сообщений дольше N дней. days = null — наследовать
-    // личный порог владельца. Настройка за флагом: ручной архив и раздел «Архив» работают
-    // без него, поэтому и настраивать порог без флага нельзя (правило не работает).
+    // личный порог владельца.
     [HttpPut("{id}/archive-days")]
     public IActionResult SetArchiveDays(string id, [FromBody] SetProjectArchiveDaysRequest req)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
-            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
         if (req.Days is not null && req.Days is not (>= 1 and <= 365))
             return BadRequest(new { error = "Порог должен быть от 1 до 365 дней" });
         var updated = projects.SetArchiveAfterDays(id, req.Days);
@@ -469,8 +465,6 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
-            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
         var (archived, batchId) = await autoArchive.RunNowForProjectAsync(UserId, id, DateTime.UtcNow);
         return Ok(new { archived, batchId });
     }

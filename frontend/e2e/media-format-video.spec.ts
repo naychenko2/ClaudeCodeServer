@@ -18,7 +18,6 @@ const VIEWPORTS = [
   { name: '1440', vp: { width: 1440, height: 900 } },
   { name: '360', vp: { width: 360, height: 780 } },
 ] as const;
-const FLAG_ON = { 'media-format': true };
 
 async function shot(page: Page, name: string) {
   if (!SHOTS) return;
@@ -50,7 +49,7 @@ async function open(page: Page, o: Setup) {
   // Как у бэкенда: основной объект «Видео» зеркалится в серверный фокус сцен (выбор «Чем» пишется в сцену фокуса)
   await openVideoChat(page, o.primary ?? scene5, {
     focus: o.focus ?? { sceneId: 'scene-5' },
-    vp: o.vp, theme: o.theme, frames: true, flags: o.flags ?? FLAG_ON, scenes: o.scenes, films: o.films, feed: o.feed, autoFinish: false,
+    vp: o.vp, theme: o.theme, frames: true, flags: o.flags ?? {}, scenes: o.scenes, films: o.films, feed: o.feed, autoFinish: false,
     extra: mockFormat,
   });
 }

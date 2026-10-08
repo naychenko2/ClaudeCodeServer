@@ -34,14 +34,8 @@ public sealed class AudioEditorStateContributorTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
-    private sealed class Flags(params string[] on) : IFeatureFlagGate
-    {
-        public bool IsEnabled(string userId, string key) => on.Contains(key);
-    }
-
-    private AudioEditorStateContributor Contributor(bool flag = true, bool agentLaunch = true) =>
-        new(flag ? new Flags(FeatureFlagKeys.AudioEditor) : new Flags(),
-            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+    private AudioEditorStateContributor Contributor(bool agentLaunch = true) =>
+        new(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 [AudioEditorToolset.AgentLaunchKey] = agentLaunch ? "true" : "false",
             }).Build());
@@ -55,17 +49,13 @@ public sealed class AudioEditorStateContributorTests : IDisposable
         .Sections.Should().ContainSingle().Subject;
 
     [Fact]
-    public void Сервер_доставлен_и_флаг_включён_блок_есть() =>
+    public void Сервер_доставлен_блок_есть() =>
         Contributor().IsEnabled(Context()).Should().BeTrue();
 
     // TrimMcpServers без audio-editor или выключенный модуль: audio_* у хода нет, звать их нельзя
     [Fact]
     public void Сервер_не_доставлен_блока_нет() =>
         Contributor().IsEnabled(Context(hasAudioEditorMcp: false)).Should().BeFalse();
-
-    [Fact]
-    public void Флаг_выключен_блока_нет() =>
-        Contributor(flag: false).IsEnabled(Context()).Should().BeFalse();
 
     [Fact]
     public async Task Едет_хвостом_хода_с_правилом_приоритета()

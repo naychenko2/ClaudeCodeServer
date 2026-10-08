@@ -56,7 +56,6 @@ public sealed class VideoEditJobService : IDisposable
     private readonly VideoContextLaunch? _context;
     private readonly ISpendCollector? _spend;
     private readonly ISessionBroadcaster? _broadcaster;
-    private readonly IFeatureFlagGate? _flags;
     private readonly ILogger<VideoEditJobService> _log;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, Quote> _quotes = new();
@@ -77,7 +76,6 @@ public sealed class VideoEditJobService : IDisposable
         ISpendCollector? spend = null,
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
-        IFeatureFlagGate? flags = null,
         VideoFrameReader? frames = null,
         VideoContextLaunch? context = null)
     {
@@ -90,14 +88,8 @@ public sealed class VideoEditJobService : IDisposable
         _spend = spend;
         _broadcaster = broadcaster;
         _time = time ?? TimeProvider.System;
-        _flags = flags;
         _frames = frames ?? new VideoFrameReader(null, workspace);
     }
-
-    // «Авто» сначала пробует локальные модели — по флагу владельца local-media-default. Явно
-    // выбранного поставщика флаг не трогает никогда
-    public bool PrefersLocal(string ownerId) =>
-        _flags?.IsEnabled(ownerId, FeatureFlagKeys.LocalMediaDefault) == true;
 
     public IEnumerable<IVideoEngine> Engines => _engines;
 
@@ -217,7 +209,7 @@ public sealed class VideoEditJobService : IDisposable
         }
         else
         {
-            var candidates = VideoCatalog.AutoCandidates(_engines, scope, PrefersLocal(ownerId));
+            var candidates = VideoCatalog.AutoCandidates(_engines, scope, preferLocal: true);
             foreach (var candidate in candidates) await RefreshModelsQuietly(candidate, ct);
             (engine, model) = candidates
                 .Select(e => (Engine: e, Model: VideoCatalog.Pick(e, modelId, need)))

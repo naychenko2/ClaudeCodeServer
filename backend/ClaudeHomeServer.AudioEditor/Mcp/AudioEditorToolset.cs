@@ -37,7 +37,7 @@ namespace ClaudeHomeServer.Services.AudioEditor.Mcp;
 /// по TurnCompleted этой сессии). Монтаж без ИИ и склейка лимит хода не расходуют: денег и GPU они не
 /// тратят. Задача живёт отдельно от хода: «Стоп» её не отменяет, отмена — audio_cancel или кнопкой.
 ///
-/// ИНВАРИАНТ состава: tools/list зависит от сессии, флага владельца и настройки инстанса
+/// ИНВАРИАНТ состава: tools/list зависит от сессии и настройки инстанса
 /// AudioEditor:AgentLaunch — не от хода, фокуса, режима, поставщика и нитей (McpToolsetStabilityTests).
 /// Без выбранного звука инструмент отвечает отказом, а не исчезает.
 /// </summary>
@@ -66,7 +66,6 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
     private static readonly HashSet<AudioOp> SpokenText = [AudioOp.Speak, AudioOp.DesignVoice, AudioOp.CloneVoice, AudioOp.Dialogue];
 
     private readonly IMcpSessionAccessor _sessions;
-    private readonly IFeatureFlagGate _flags;
     private readonly IProjectManager _projects;
     private readonly IEnumerable<IAudioEngine> _engines;
     private readonly AudioJobThreads _threads;
@@ -86,7 +85,6 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
 
     public AudioEditorToolset(
         IMcpSessionAccessor sessions,
-        IFeatureFlagGate flags,
         IProjectManager projects,
         IEnumerable<IAudioEngine> engines,
         AudioJobThreads threads,
@@ -103,7 +101,6 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
     {
         _context = context;
         _sessions = sessions;
-        _flags = flags;
         _projects = projects;
         _engines = engines;
         _threads = threads;
@@ -605,7 +602,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
                 music = _prefs.Get(ownerId, scope, AudioModes.Music),
                 process = _prefs.Get(ownerId, scope, AudioModes.Process),
             },
-            catalog = AudioCatalogView.Build(_engines, scope, _jobs.PrefersLocal(ownerId)),
+            catalog = AudioCatalogView.Build(_engines, scope, true),
             agentLaunch = _agentLaunch,
             humanChoice = HumanChoice(ownerId, scope, state.Threads.FirstOrDefault(t => t.Id == state.Focus)),
             note = (state.Threads.Count, scope.IsPersonal) switch
@@ -702,7 +699,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
 
     // ── Маршрут: /mcp/audio-editor/{sessionId} ─────────────────────────────────
 
-    // Чат владельца токена при включённом флаге: у чата проекта — его проект (свой), у личного —
+    // Чат владельца токена: у чата проекта — его проект (свой), у личного —
     // личная область. Любой отказ одним текстом: чужой чат неотличим от несуществующего, состав пустой
     private bool TryResolve(McpToolCallContext context, out Session session, out AudioEditScope scope, out string error)
     {
@@ -711,7 +708,6 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         error = "Чат не найден — инструменты звука недоступны.";
         if (!TryParseRoute(context.RouteTail, out var sessionId)) return false;
         if (_sessions.GetOwned(sessionId, context.OwnerId) is not { } owned) return false;
-        if (!_flags.IsEnabled(context.OwnerId, FeatureFlagKeys.AudioEditor)) return false;
         if (owned.ProjectId is { } projectId)
         {
             if (_projects.GetById(projectId) is not { } found || found.OwnerId != context.OwnerId) return false;

@@ -1123,7 +1123,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     }
 
     // MCP-сервер редактора картинок (ADR-019 §4): в любом чате владельца — проектном и личном,
-    // при флаге image-editor и загруженном модуле. Контекст собирается во ВСЕХ трёх точках
+    // при загруженном модуле. Контекст собирается во ВСЕХ трёх точках
     // (StartNewSessionAsync и обе ветки EnsureProcessCoreAsync) — иначе состав прыгает между
     // первым ходом и перезапуском процесса (сторож в McpToolsetStabilityTests). Последнее — наличие тулсета в реестре: модуль выключен, а
     // контекст собран — CLI получил бы сервер, отвечающий 404, и «fetch failed» у всех
@@ -1132,7 +1132,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     internal ImageEditorMcpContext? BuildImageEditorContext(string? ownerId, Session session)
     {
         if (ownerId is null) return null;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)) return null;
         _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
         if (_mcpToolsets?.Find(McpEndpoints.ImageEditorName) is null) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
@@ -1141,12 +1140,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     }
 
     // MCP-сервер модуля «Звук» (ADR-021 §5) — по тем же правилам, что image-editor: любой чат владельца,
-    // флаг audio-editor, тулсет в реестре (модуль загружен), все три точки сборки контекста. От хода,
+    // тулсет в реестре (модуль загружен), все три точки сборки контекста. От хода,
     // фокуса, режима и нитей звука состав не зависит (McpToolsetStabilityTests).
     internal AudioEditorMcpContext? BuildAudioEditorContext(string? ownerId, Session session)
     {
         if (ownerId is null) return null;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.AudioEditor)) return null;
         _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
         if (_mcpToolsets?.Find(McpEndpoints.AudioEditorName) is null) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
@@ -1154,13 +1152,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             AudioEditor.AudioEditorAgentTools.AutoAllowTools);
     }
 
-    // MCP-сервер модуля «Видео» (ADR-022 §5) — те же правила, что у «Звука»: любой чат владельца, флаг
-    // video-editor, тулсет в реестре (модуль загружен), все три точки сборки контекста. От хода, фокуса и
+    // MCP-сервер модуля «Видео» (ADR-022 §5) — те же правила, что у «Звука»: любой чат владельца,
+    // тулсет в реестре (модуль загружен), все три точки сборки контекста. От хода, фокуса и
     // поставщика состав не зависит (McpToolsetStabilityTests).
     internal VideoEditorMcpContext? BuildVideoEditorContext(string? ownerId, Session session)
     {
         if (ownerId is null) return null;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.VideoEditor)) return null;
         _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
         if (_mcpToolsets?.Find(McpEndpoints.VideoEditorName) is null) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
@@ -3680,11 +3677,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new WorkspaceMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
             plan.Sections, plan.AllowedProjectIds, selfSessionId,
-            UseHttp: HttpEndpointUsable(apiUrl),
-            // context_list (материалы контекста чата) — базовый инструмент wsp-сервера за флагом
-            // ВЛАДЕЛЬЦА chat-context: решение принимается по владельцу, а не по ходу и не по
-            // непустоте контекста, иначе состав tools/list мерцал бы между ходами.
-            ChatContextEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChatContext));
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     /// <summary>

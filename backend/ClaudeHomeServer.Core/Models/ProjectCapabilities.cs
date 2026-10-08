@@ -197,13 +197,12 @@ public sealed record ProjectCapabilities(
     }
 
     /// <summary>
-    /// Можно ли привязать проект к устройству: флаг <c>local-projects</c> владельца и возможность
-    /// <c>exec</c> у устройства. null — можно, иначе готовый текст отказа. Онлайн не требуется:
+    /// Можно ли привязать проект к устройству: устройство должно существовать и иметь возможность
+    /// <c>exec</c>. null — можно, иначе готовый текст отказа. Онлайн не требуется:
     /// возможность хранится у устройства и в офлайне.
     /// </summary>
-    public static string? BindRefusal(bool localProjectsEnabled, DeviceExecStatus? device)
+    public static string? BindRefusal(DeviceExecStatus? device)
     {
-        if (!localProjectsEnabled) return "Локальные проекты выключены (экспериментальная функция «Локальные проекты»)";
         if (device is null) return DeviceMissingReason;
         if (!device.HasCapability(DeviceCapabilities.Exec)) return NoExecReason;
         return null;

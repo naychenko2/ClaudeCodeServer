@@ -4,19 +4,9 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Шаг 2 «локальная модель по умолчанию»: флаг в каталоге и единый признак «хода без человека»
+// Шаг 2 «локальная модель по умолчанию»: единый признак «хода без человека»
 public class LocalMediaDefaultPrepTests
 {
-    [Fact]
-    public void Флаг_есть_в_каталоге_и_выключен_по_умолчанию()
-    {
-        var flag = FeatureFlagCatalog.All.SingleOrDefault(f => f.Key == "local-media-default");
-
-        flag.Should().NotBeNull();
-        flag!.Default.Should().BeFalse();
-        FeatureFlagKeys.LocalMediaDefault.Should().Be("local-media-default");
-    }
-
     [Fact]
     public void Обычный_ход_с_человеком() =>
         TurnAudience.IsUnattended(new Session(), agentDepth: 0).Should().BeFalse();

@@ -36,7 +36,6 @@ import { VideoCenter } from '../../features/video/VideoCenter';
 import { setVideoCenterBlocked, useVideoCenter, useVideoCenterSplit, VIDEO_PANEL_EVENT } from '../../lib/videoStage';
 import { ChatContextBar, type ContextTarget } from '../../features/chatContext/ChatContextBar';
 import { useHasChatContext } from '../../lib/chatContext';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { getTaskById } from '../../lib/tasks';
 import { canSplitCenter, CHAT_SPLIT_MIN_PX, SPLIT_SIDE_MIN_PX } from './splitLayout';
 
@@ -296,9 +295,8 @@ export function DesktopWorkspace(p: Props) {
   // Полоса — тонкий слой НАД существующей маршрутизацией: клик по материалу ведёт
   // ровно тем же путём, что клик по нему в панели (open-file из ленты, ридер,
   // задача-aside). Своей маршрутизации у неё нет.
-  const contextOn = useFeature(FLAGS.chatContext);
   const hasContext = useHasChatContext(p.activeSession?.id ?? null);
-  const contextVisible = contextOn && !!p.activeSession && hasContext;
+  const contextVisible = !!p.activeSession && hasContext;
   const openContextEntry = (e: SessionContextEntry) => {
     if (e.type === 'file') { p.onOpenFileFromChat(e.id); return; }
     if (e.type === 'url') { p.onOpenReader?.(e.id); return; }

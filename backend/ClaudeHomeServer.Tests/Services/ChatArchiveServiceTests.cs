@@ -14,10 +14,10 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Тесты шага 6 плана «Архив чатов» (v4): автоправило за флагом chat-auto-archive.
+// Тесты шага 6 плана «Архив чатов» (v4): автоправило архивации.
 // Порог/исключения отбора уже покрыты ChatArchivedEventTests (MatchesArchiveRule +
 // GetArchiveRuleCandidates) — здесь проходы сервиса: идемпотентность TickAsync(nowUtc),
-// потолок 200, выключенный флаг, гейт первого прохода (кнопка «Применить сейчас»),
+// потолок 200, гейт первого прохода (кнопка «Применить сейчас»),
 // наследование порога проекта, откат пачки по ArchiveBatchId и агрегированное
 // уведомление. Ожиданий на час вперёд нет — nowUtc всегда параметром.
 public class ChatArchiveServiceTests : IDisposable
@@ -29,7 +29,6 @@ public class ChatArchiveServiceTests : IDisposable
     private readonly SessionManager _sessions;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
-    private readonly FeatureFlagService _flags;
     private readonly NotificationStore _notifStore;
     private readonly ChatArchiveService _sut;
 
@@ -37,8 +36,8 @@ public class ChatArchiveServiceTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "chat_archive_rule_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
-        (_sessions, _projects, _users, _flags, _notifStore) = BuildSut(_tempDir);
-        _sut = new ChatArchiveService(_sessions, _projects, _users, _flags,
+        (_sessions, _projects, _users, _, _notifStore) = BuildSut(_tempDir);
+        _sut = new ChatArchiveService(_sessions, _projects, _users,
             BuildNotifications(_tempDir, _projects, _notifStore), NullLogger<ChatArchiveService>.Instance);
     }
 
@@ -85,17 +84,16 @@ public class ChatArchiveServiceTests : IDisposable
 
     // --- Гейты тика ---
 
+    // Главная защита от «включилось у всех»: без заданного порога правило не архивирует ничего
     [Fact]
-    public async Task Тик_ФлагВыключен_НичегоНеАрхивирует()
+    public async Task Тик_ПорогНеЗадан_НичегоНеАрхивирует()
     {
-        var owner = CreateUser(flagsOn: false);
-        _users.SetArchiveAfterDays(owner.Id, 7);
-        _users.SetArchiveRuleFirstRunAt(owner.Id, DateTime.UtcNow);
-        var stale = NewStaleChat(_sessions, owner.Id, ageDays: 30);
+        var owner = EnableRule(days: null, firstRun: true);
+        var stale = NewStaleChat(_sessions, owner.Id, ageDays: 365);
 
         await _sut.TickAsync(DateTime.UtcNow);
 
-        stale.IsArchived.Should().BeFalse("флаг chat-auto-archive выключен — тик владельца ничего не делает");
+        stale.IsArchived.Should().BeFalse("порог не задан — правило не настроено, чаты не трогаем");
     }
 
     [Fact]
@@ -188,7 +186,7 @@ public class ChatArchiveServiceTests : IDisposable
         var (_, batchId) = await _sut.RunNowAsync(owner.Id, DateTime.UtcNow);
         chat.IsArchived.Should().BeTrue();
 
-        var stranger = CreateUser(flagsOn: false);
+        var stranger = CreateUser();
         var restored = await _sessions.RestoreArchiveBatchAsync(stranger.Id, batchId!);
 
         restored.Should().Be(0, "батч чужого владельца не возвращает чужие чаты");
@@ -308,20 +306,6 @@ public class ChatArchiveServiceTests : IDisposable
         stale.IsArchived.Should().BeFalse();
     }
 
-    [Fact]
-    public async Task RunNowForProject_ФлагВыключен_НичегоНеАрхивирует()
-    {
-        var owner = CreateUser(flagsOn: false);
-        _users.SetArchiveAfterDays(owner.Id, 7);
-        var project = NewProject(owner.Id, "proj-flag-off", days: 7);
-        var stale = await NewStaleProjectChat(project.Id, ageDays: 30);
-
-        var (archived, _) = await _sut.RunNowForProjectAsync(owner.Id, project.Id, DateTime.UtcNow);
-
-        archived.Should().Be(0, "флаг chat-auto-archive выключен — защита от вызова без проверки");
-        stale.IsArchived.Should().BeFalse();
-    }
-
     // --- Плюрализация текста уведомления ---
 
     [Theory]
@@ -338,24 +322,17 @@ public class ChatArchiveServiceTests : IDisposable
 
     // --- Помощники ---
 
-    // Пользователь с флагом; days/firstRun — состояние правила (гейт первого прохода)
+    // Пользователь; days/firstRun — состояние правила (гейт первого прохода)
     private User EnableRule(int? days, bool firstRun = true)
     {
-        var owner = CreateUser(flagsOn: true);
+        var owner = CreateUser();
         _users.SetArchiveAfterDays(owner.Id, days);
         if (firstRun) _users.SetArchiveRuleFirstRunAt(owner.Id, DateTime.UtcNow);
         return owner;
     }
 
-    private User CreateUser(bool flagsOn)
-    {
-        var user = _users.Add("user_" + Guid.NewGuid().ToString("N"), "pass12345", "user");
-        if (flagsOn) user.FeatureFlags = new Dictionary<string, bool>
-        {
-            [FeatureFlagKeys.ChatAutoArchive] = true,
-        };
-        return user;
-    }
+    private User CreateUser() =>
+        _users.Add("user_" + Guid.NewGuid().ToString("N"), "pass12345", "user");
 
     // Проект владельца со своим порогом (null — наследовать личный)
     private Project NewProject(string ownerId, string dirName, int? days)

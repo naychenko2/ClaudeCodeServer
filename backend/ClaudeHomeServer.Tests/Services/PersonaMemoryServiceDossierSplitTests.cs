@@ -14,9 +14,8 @@ using Moq;
 namespace ClaudeHomeServer.Tests.Services;
 
 // Разделение блока досье из recall-memory (план «Секции промптов» этап 3): параметр
-// splitDossier у BuildRecallAsync. false (дефолт, persona_ask и выключенный флаг
-// specialty-prompt-sections) — досье остаётся ВНУТРИ Text, как до фичи; true (SessionManager
-// на ходу персоны при включённом флаге) — досье уходит в отдельное поле DossierText,
+// splitDossier у BuildRecallAsync. false (дефолт, persona_ask) — досье остаётся ВНУТРИ Text;
+// true (PersonaRecallContributor на ходу персоны) — досье уходит в отдельное поле DossierText,
 // секция dossier-recall клеится своим местом промпта (ClaudeSession).
 public class PersonaMemoryServiceDossierSplitTests : IDisposable
 {

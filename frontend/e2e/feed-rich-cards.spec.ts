@@ -118,7 +118,7 @@ async function mockApi(page: Page) {
     if (p === '/auth/me') {
       return json({
         id: 'u1', username: 'admin', displayName: 'Андрей', role: 'admin', executionEnvironment: 'local',
-        featureFlags: { 'audio-editor': true, 'image-editor': true }, subsystems: ['audioeditor', 'imageeditor'],
+        featureFlags: {}, subsystems: ['audioeditor', 'imageeditor'],
       });
     }
     if (p === '/subsystem-modules') {

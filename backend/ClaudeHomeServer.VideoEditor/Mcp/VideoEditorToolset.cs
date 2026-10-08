@@ -50,7 +50,6 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     };
 
     private readonly IMcpSessionAccessor _sessions;
-    private readonly IFeatureFlagGate _flags;
     private readonly IProjectManager _projects;
     private readonly IEnumerable<IVideoEngine> _engines;
     private readonly VideoJobThreads _threads;
@@ -65,7 +64,6 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
     public VideoEditorToolset(
         IMcpSessionAccessor sessions,
-        IFeatureFlagGate flags,
         IProjectManager projects,
         IEnumerable<IVideoEngine> engines,
         VideoJobThreads threads,
@@ -79,7 +77,6 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         IConfiguration? config = null)
     {
         _sessions = sessions;
-        _flags = flags;
         _projects = projects;
         _engines = engines;
         _threads = threads;
@@ -645,7 +642,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             scenes = state.Scenes.Select(s => DescribeScene(owner, scope, s)),
             films,
             film = openFilm,
-            catalog = VideoCatalogView.Build(_engines, scope, _jobs.PrefersLocal(owner)),
+            catalog = VideoCatalogView.Build(_engines, scope, preferLocal: true),
             humanChoice = new
             {
                 prefs = _prefs.Get(owner, scope),
@@ -740,7 +737,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
     // ── Маршрут: /mcp/video-editor/{sessionId} ─────────────────────────────────
 
-    // Чат владельца токена при включённом флаге: у чата проекта — его проект (свой), у личного — личная область.
+    // Чат владельца токена: у чата проекта — его проект (свой), у личного — личная область.
     // Любой отказ одним текстом: чужой чат неотличим от несуществующего, состав пустой
     private bool TryResolve(McpToolCallContext context, out Session session, out VideoEditScope scope, out string error)
     {
@@ -749,7 +746,6 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         error = "Чат не найден — инструменты видео недоступны.";
         if (!TryParseRoute(context.RouteTail, out var sessionId)) return false;
         if (_sessions.GetOwned(sessionId, context.OwnerId) is not { } owned) return false;
-        if (!_flags.IsEnabled(context.OwnerId, FeatureFlagKeys.VideoEditor)) return false;
         if (owned.ProjectId is { } projectId)
         {
             if (_projects.GetById(projectId) is not { } found || found.OwnerId != context.OwnerId) return false;

@@ -1,5 +1,4 @@
 import type { DesktopDevice } from '../../types';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 // Устройство годится для локального проекта, только если оно живое (не отозвано) и
 // умеет exec (агент локальных проектов). capabilities у старого бэка нет — трактуем
@@ -14,16 +13,6 @@ export function deviceLabel(d: DesktopDevice): string {
   return `${d.name}${d.platform ? ` (${d.platform})` : ''}${d.online ? '' : ' · не в сети'}`;
 }
 
-// Пункт «Устройства» в меню аватара — за флагом local-projects: без него подключать нечего
-export function useDevicesMenuVisible(): boolean {
-  return useFeature(FLAGS.localProjects);
-}
-
-// Подсказка при пустом списке устройств. Без пункта «Устройства» в меню аватара подсказка
-// обязана сначала отправить включить флаг
-export function useNoDevicesHint(): string {
-  const devicesMenu = useDevicesMenuVisible();
-  return devicesMenu
-    ? 'Нет устройств с агентом AI Home. Подключите компьютер с папкой проекта: меню аватара → «Устройства».'
-    : 'Нет устройств с агентом AI Home. Включите «Локальные проекты» в меню аватара → «Эксперименты», затем подключите компьютер с папкой проекта в пункте «Устройства» того же меню.';
-}
+// Подсказка при пустом списке устройств
+export const NO_DEVICES_HINT =
+  'Нет устройств с агентом AI Home. Подключите компьютер с папкой проекта: меню аватара → «Устройства».';

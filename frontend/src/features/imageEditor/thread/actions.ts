@@ -15,7 +15,7 @@ import {
   getThreadsState, imageDraftKey, mutate,
 } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadTake, type ImageThreadVersion } from './threadsApi';
-import { noteImageMode } from './modeState';
+import { setImageMode } from './modeState';
 
 // Шаг, который уже лежит в проекте файлом нити: версия «в проекте», а не «черновик»
 const _saved = new Map<string, string>();
@@ -61,9 +61,9 @@ function openPanel(ok: boolean, sessionId: string, threadId: string): boolean {
   return true;
 }
 
-// Картинку выбрал человек — режим «Править» (флаг image-panel-v5); выбор агента сюда не идёт
+// Картинку выбрал человек — режим «Править»; выбор агента сюда не идёт
 function humanPick(ok: boolean, sessionId: string): boolean {
-  if (ok) noteImageMode(sessionId, 'edit');
+  if (ok) setImageMode(sessionId, 'edit');
   return ok;
 }
 
@@ -105,7 +105,7 @@ export const workWithFile = async (projectId: string, sessionId: string, file: s
 export async function createDraft(projectId: string, sessionId: string, folder: string, how: RevealMode = 'auto') {
   const ok = await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { draftFolder: folder, revision: rev }));
   if (ok) {
-    noteImageMode(sessionId, 'create');
+    setImageMode(sessionId, 'create');
     // Черновик становится основным объектом на сервере; состояние контекста не ждёт события рассылки
     void refreshChatContext(sessionId);
   }

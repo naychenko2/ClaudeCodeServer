@@ -27,7 +27,6 @@ public class ThreadsEndpointTests : IDisposable
 
     public ThreadsEndpointTests()
     {
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.TestUsername);
         (_projectId, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
@@ -123,7 +122,6 @@ public class ThreadsEndpointTests : IDisposable
         Store.Create(_ownerId, chat.Id, "a.png", null, focus: true);
 
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
         var (otherProject, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.SecondUsername);
         var (myOtherProject, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
 
@@ -154,7 +152,6 @@ public class ThreadsEndpointTests : IDisposable
     {
         var chat = await Chat();
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
 
         var resp = await second.GetAsync(Threads(chat.Id));
 
@@ -176,23 +173,6 @@ public class ThreadsEndpointTests : IDisposable
         missingResp.StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await foreignResp.Content.ReadAsStringAsync()).Should().Be(await missingResp.Content.ReadAsStringAsync());
         (await Json(foreignResp)).GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.ThreadNotFound);
-    }
-
-    [Fact]
-    public async Task Флаг_выключен_404()
-    {
-        var chat = await Chat();
-        var (state, thread) = Store.Create(_ownerId, chat.Id, "a.png", null, focus: false);
-        // Флаг включён по умолчанию — выключаем override'ом пользователя
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ImageEditor, false).Should().BeTrue();
-
-        var get = await _client.GetAsync(Threads(chat.Id));
-        var put = await _client.PutAsJsonAsync($"{Threads(chat.Id)}/focus", new { threadId = thread.Id, revision = state.Revision });
-
-        get.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        put.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        Store.Get(_ownerId, chat.Id).Focus.Should().BeNull();
     }
 
     [Fact]

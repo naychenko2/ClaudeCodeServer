@@ -60,12 +60,6 @@ public class CharacterEndpointsTests : IDisposable
         return factory;
     }
 
-    internal static void EnableFlag(TestWebApplicationFactory factory, string username)
-    {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(username)!.Id, FeatureFlagKeys.ImageEditor, true).Should().BeTrue();
-    }
-
     internal static (string Id, string Root) CreateProject(TestWebApplicationFactory factory, string username)
     {
         var users = factory.Services.GetRequiredService<UserStore>();
@@ -93,36 +87,9 @@ public class CharacterEndpointsTests : IDisposable
         JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
 
     [Fact]
-    public async Task Флаг_выключен_ручки_персонажей_404()
-    {
-        var factory = Factory();
-        var (projectId, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
-        // Флаг включён по умолчанию — выключаем override'ом пользователя
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, FeatureFlagKeys.ImageEditor, false)
-            .Should().BeTrue();
-        var client = factory.CreateAuthenticatedClient();
-        var api = $"/api/projects/{projectId}/image-editor";
-
-        var responses = new[]
-        {
-            await client.GetAsync($"{api}/characters"),
-            await client.PostAsync($"{api}/characters", CharacterForm("Аня")),
-            await client.GetAsync($"{api}/characters/anya"),
-            await client.PutAsync($"{api}/characters/anya", CharacterForm("Аня", 0)),
-            await client.DeleteAsync($"{api}/characters/anya"),
-            await client.GetAsync($"{api}/characters/anya/photos/face-01.jpg"),
-        };
-
-        responses.Select(r => r.StatusCode).Should().AllBeEquivalentTo(HttpStatusCode.NotFound);
-        Directory.Exists(Path.Combine(root, "characters")).Should().BeFalse("при выключенном флаге запись не доходит до диска");
-    }
-
-    [Fact]
     public async Task Создание_список_и_фото_у_владельца()
     {
         var factory = Factory();
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var (projectId, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";
@@ -157,8 +124,6 @@ public class CharacterEndpointsTests : IDisposable
     public async Task Чужой_пользователь_не_читает_фото_персонажа()
     {
         var factory = Factory();
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
-        EnableFlag(factory, TestWebApplicationFactory.SecondUsername);
         var (projectId, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var owner = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";
@@ -180,7 +145,6 @@ public class CharacterEndpointsTests : IDisposable
     {
         var jobs = new CapturingJobs();
         var factory = Factory(jobs);
-        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
         var (projectId, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";

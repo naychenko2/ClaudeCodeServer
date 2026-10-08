@@ -188,9 +188,7 @@ public sealed class AudioContextKindTests : IDisposable
         directory.Setup(d => d.ResolveOwnerId(Moq.It.IsAny<Session>())).Returns(Owner);
         var projects = new Moq.Mock<IProjectManager>();
         projects.Setup(p => p.GetById("p-1")).Returns(new Project { Id = "p-1", OwnerId = Owner, RootPath = _root });
-        var gate = new Moq.Mock<IFeatureFlagGate>();
-        gate.Setup(g => g.IsEnabled(Owner, Moq.It.IsAny<string>())).Returns(true);
-        return new LocalAudioAdopter(_threads, _jobs, directory.Object, projects.Object, gate.Object);
+        return new LocalAudioAdopter(_threads, _jobs, directory.Object, projects.Object);
     }
 
     [Fact]

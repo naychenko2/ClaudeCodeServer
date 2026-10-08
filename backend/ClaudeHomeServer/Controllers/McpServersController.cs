@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/mcp/servers")]
 public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     PersonaBindingsService bindings, McpStatusStore statuses, McpProbeService probe,
-    PersonaManager personas, ProjectManager projects, FeatureFlagService flags,
+    PersonaManager personas, ProjectManager projects,
     UserStore users) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -137,11 +137,6 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] McpServerUpsertRequest req, CancellationToken ct)
     {
-        // Указатель на реестр-каталог принимаем только под флагом: dark launch прячет
-        // и поиск, и сам способ пометить запись каталожной (гейты безопасности у записи
-        // при этом работают всегда — они не зависят от флага)
-        if (req.CatalogRef is not null && !flags.IsEnabled(UserId, FeatureFlagKeys.McpCatalog))
-            return BadRequest(new { error = "Каталог MCP-серверов выключен" });
         var draft = new McpServerRecord { Key = req.Key ?? "" };
         if (Apply(draft, req, existing: null) is { } error) return BadRequest(new { error });
         // Каталожная запись заводится строго выключенной: «настройки взяты из каталога,

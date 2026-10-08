@@ -87,7 +87,7 @@ export const w = () => world;
 export function newWorld(o: Partial<Pick<World, 'flags' | 'hands' | 'savedFiles' | 'personal' | 'feed' | 'threads' | 'audio' | 'imageCatalog' | 'imageRemote' | 'noGit' | 'imagePrefs'>> & { ctx?: Partial<Ctx> } = {}): World {
   world = {
     ctx: { revision: 1, primary: null, refs: [], ...o.ctx },
-    flags: { 'chat-context': true, ...o.flags },
+    flags: { ...o.flags },
     hands: o.hands ?? true, savedFiles: o.savedFiles ?? [], mutations: [], invocations: [], hubs: [], personal: o.personal ?? false, feed: o.feed ?? [],
     threads: o.threads ?? null, threadsRevision: 1, imageCatalog: o.imageCatalog ?? null, imageRemote: o.imageRemote ?? false, noGit: o.noGit ?? false, audio: o.audio ?? null, audioRevision: 1, audioEdits: [], audioQuotes: [], audioJobs: [],
     imagePrefs: o.imagePrefs ?? null, imagePrefsPuts: [],

@@ -67,8 +67,6 @@ public sealed class ProjectRelayContractTests : IAsyncLifetime
             },
         };
         _client = _factory.CreateAuthenticatedClient();
-        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.LocalProjects}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
         _serverProjectId = await CreateAsync(ServerRoot, deviceId: null);
         _localProjectId = await CreateAsync(AgentRoot, Device);
     }

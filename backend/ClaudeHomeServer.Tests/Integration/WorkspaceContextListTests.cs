@@ -190,15 +190,4 @@ public class WorkspaceContextListTests
         warnings[0].GetString().Should().Contain("не найден").And.Contain("docs/gone.md",
             "молчать об отвалившемся материале нельзя — человек добавлял его осознанно");
     }
-
-    [SkippableFact]
-    public void ContextList_БезФлагаВладельца_ВызовОтклоняетсяБезПоходаНаБэкенд()
-    {
-        // Defense-in-depth: инструмента нет в tools/list, но и прямой вызов не исполняется
-        var call = CallContextList("""{"projectId":null,"entries":[]}""", chatContextEnv: "0");
-        if (call is not { } r) return;
-
-        r.IsError.Should().BeTrue("фича выключена у владельца");
-        r.Paths.Should().BeEmpty("до бэкенда дело доходить не должно");
-    }
 }

@@ -243,17 +243,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   // Фон проекта — только владельцу: участник без прав владельца фон менять не может
   // (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем за тем же
   // условием, чтобы не показывать недоступное действие.
-  // Локальные проекты (ADR-016 §3.4): секция привязки к устройству — за флагом.
-  // Без флага секция не рисуется — ручка PUT /projects/{id}/device закрыта на бэке 404
-  const localProjectsEnabled = useFeature(FLAGS.localProjects);
-  // Автоправило архива (флаг chat-auto-archive): закрывает ТОЛЬКО настройку правила
-  // и запускаемый ею проход. Ручной архив, режим «Архивные» и сводка карточки
-  // работают без тумблера — гейт скрывает лишь блок ArchiveSettings.
-  const autoArchiveEnabled = useFeature(FLAGS.chatAutoArchive);
-  // Уборка карты проекта (флаг project-map-hygiene): аккордеон в настройках проекта
-  // с фактами скана. review/apply под этим же флагом закрыты на сервере (404),
-  // так что эндпоинты не провисают при выключенной фиче
-  const mapHygieneEnabled = useFeature(FLAGS.projectMapHygiene);
   const gitAvail = useProjectFeature(project, ProjectFeature.Git);
   const mapAvail = useProjectFeature(project, ProjectFeature.MapHygiene);
   const me = useMe();
@@ -298,7 +287,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const [archiveDays, setArchiveDays] = useState<number | null>(null);
   const [archiveLoaded, setArchiveLoaded] = useState(false);
   useEffect(() => {
-    if (!autoArchiveEnabled || archiveLoaded) return;
+    if (archiveLoaded) return;
     let cancelled = false;
     archiveRuleApi.getSettings()
       .then(r => {
@@ -308,7 +297,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       })
       .catch(() => { if (!cancelled) setArchiveLoaded(true); });
     return () => { cancelled = true; };
-  }, [autoArchiveEnabled, archiveLoaded]);
+  }, [archiveLoaded]);
 
   const handleConfirm = async () => {
     setError('');
@@ -578,17 +567,16 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       </div>
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
-      {/* Секция привязки к устройству (ADR-016 §3.4) — за флагом local-projects.
-          Внутри показ/скрытие деталей идёт через поле project.device (а не deviceId
+      {/* Секция привязки к устройству (ADR-016 §3.4). Внутри показ/скрытие деталей идёт через поле project.device (а не deviceId
           руками), иначе сторож G10 краснеет на каждом обращении */}
-      {localProjectsEnabled && <DeviceSection project={project} onUpdated={onProjectUpdated} />}
-      {/* Руки (ADR-016 §7) своего флага не имеют: они есть только у локального проекта */}
-      {localProjectsEnabled && <LocalHandsSection project={project} onUpdated={onProjectUpdated} />}
+      <DeviceSection project={project} onUpdated={onProjectUpdated} />
+      {/* Руки (ADR-016 §7): есть только у локального проекта */}
+      <LocalHandsSection project={project} onUpdated={onProjectUpdated} />
       {/* Секции по матрице возможностей (ADR-016 §4): у локального проекта с офлайн-
           устройством git недоступен, а карта проекта — серверный контент, которого у
           локального проекта нет вовсе. Пустая секция с ошибкой загрузки — хуже, чем никакой */}
       {gitAvail && <GitHistorySection project={project} />}
-      {mapHygieneEnabled && mapAvail && <ProjectMapSection project={project} />}
+      {mapAvail && <ProjectMapSection project={project} />}
       {isOwner && (
         <BackgroundSection
           project={project}
@@ -598,12 +586,12 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         />
       )}
       <ProjectSyncToggle projectId={project.id} online={online} />
-      {/* Настройка автоправила архива (флаг chat-auto-archive). Порог и проход —
+      {/* Настройка автоправила архива. Порог и проход —
           по ЭТОМУ проекту; личный порог показываем лишь как унаследованный дефолт,
           пока у проекта нет своего. Рисуем только после загрузки настройки: иначе
           первоначальный null мелькает состоянием «правило выключено» до прихода
           ответа. Проход завершился — закрываем диалог. */}
-      {autoArchiveEnabled && archiveLoaded && (
+      {archiveLoaded && (
         <ArchiveSettings
           initialDays={project.archiveAfterDays ?? archiveDays}
           projectId={project.id}

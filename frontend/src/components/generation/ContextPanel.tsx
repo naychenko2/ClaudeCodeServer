@@ -52,7 +52,7 @@ export interface ContextPanelProps {
   // Выбранное run-действие; null — «Чат»
   action: ContextAction | null;
   exec: ExecutorListModel | null;
-  // Секция «Формат» под «Чем» (ADR-025, флаг media-format); null — секции нет
+  // Секция «Формат» под «Чем» (ADR-025); null — секции нет
   format?: FormatModel | null;
   projectName?: string | null;
   params: readonly LaunchParam[];

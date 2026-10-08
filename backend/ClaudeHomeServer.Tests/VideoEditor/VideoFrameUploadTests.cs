@@ -28,7 +28,6 @@ public class VideoFrameUploadTests : IDisposable
         _factory.ExtraServices = services => services.AddSingleton<IVideoEngine>(_engine);
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.VideoEditor, true).Should().BeTrue();
         _client = _factory.CreateAuthenticatedClient();
     }
 

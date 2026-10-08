@@ -36,20 +36,20 @@ public class ChatContextPromptsTests
     }
 
     /// <summary>
-    /// Сторож A5: секция собирается из ЖИВОГО провайдера и только при включённом флаге
-    /// владельца, внутри блока смонтированного wsp-сервера. Снимок состава (поле контекста
+    /// Сторож A5: секция собирается из ЖИВОГО провайдера и без гейта фич-флага,
+    /// внутри блока смонтированного wsp-сервера. Снимок состава (поле контекста
     /// вместо Func) не пережил бы добавление материала в идущем чате — вкладки у человека
     /// есть, а модель о них не знает.
     /// </summary>
     [SkippableFact]
-    public void СекцияХода_СобираетсяЖивымПровайдеромИПодФлагом()
+    public void СекцияХода_СобираетсяЖивымПровайдеромБезГейта()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         string? path = null;
         while (dir is not null && path is null)
         {
-            var candidate = Path.Combine(dir.FullName, "backend", "ClaudeHomeServer",
-                "Services", "Llm", "Claude", "ClaudeSession.cs");
+            var candidate = Path.Combine(dir.FullName, "backend", "ClaudeHomeServer.Llm",
+                "Claude", "ClaudeSession.cs");
             if (File.Exists(candidate)) path = candidate;
             dir = dir.Parent;
         }
@@ -67,8 +67,8 @@ public class ChatContextPromptsTests
 
         block.Should().Contain("_chatContextProvider?.Invoke()",
             "состав берётся живым провайдером на каждый ход, а не снимком при создании адаптера");
-        block.Should().Contain("ChatContextEnabled",
-            "подсказка появляется только при включённом флаге владельца — иначе обещала бы "
-            + "инструмент, которого нет в составе");
+        block.Should().NotContain("ChatContextEnabled",
+            "гейта фич-флага больше нет: context_list всегда в составе wsp-сервера");
+        block.Should().NotContain("_flags", "условие секции не зависит от флагов");
     }
 }

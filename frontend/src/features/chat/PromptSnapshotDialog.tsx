@@ -9,7 +9,6 @@ import { api } from '../../lib/api';
 import { useModelLabel } from '../../lib/models';
 import { C, FS, SP, R, FONT } from '../../lib/design';
 import { MapHygieneDialog } from '../projects/dialogs/MapHygieneDialog';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import type { PromptSnapshot, PromptSection, CliSkill, MapHygieneReport } from '../../types';
 
 // Шторка «какой промпт ушёл»: посекционно то, что CCS собрал и передал claude CLI на этом
@@ -40,20 +39,15 @@ const TIDY_TRIGGER_BYTES = 50 * 1024;
 
 /**
  * Видна ли кнопка «Прибраться» в строке файла слоя CLI. Отдельная функция, а не выражение
- * в разметке: условие держит dark launch второго входа, а проверить его в рендере нечем —
- * диалог грузит снимок эффектом. Флаг здесь ПЕРВЫМ и обязателен: без него при выключенной
- * фиче кнопка была видна всем, вела в модалку, и «Разобрать моделью» отдавало 404 сырым
- * текстом (тумблер обязан закрывать оба входа — и секцию настроек, и эту кнопку).
+ * в разметке: проверить условие в рендере нечем — диалог грузит снимок эффектом.
  */
 export function showTidyButton(o: {
-  featureEnabled: boolean;
   /** Сервер отдаёт корневому CLAUDE.md проекта ровно этот заголовок. */
   fileTitle: string;
   projectId?: string | null;
   sizeBytes: number;
 }): boolean {
-  return o.featureEnabled
-    && o.fileTitle === 'CLAUDE.md проекта'
+  return o.fileTitle === 'CLAUDE.md проекта'
     && !!o.projectId
     && o.sizeBytes >= TIDY_TRIGGER_BYTES;
 }
@@ -446,10 +440,6 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, projectId, context
   const [tidyReport, setTidyReport] = useState<MapHygieneReport | null>(null);
   const [tidyLoading, setTidyLoading] = useState(false);
   const [tidyError, setTidyError] = useState<string | null>(null);
-  // Второй вход в уборку карты закрыт тем же флагом, что и секция в настройках проекта:
-  // review и apply под выключенным флагом отвечают 404, и кнопка вела бы в модалку,
-  // которая падает на первом же «Разобрать моделью» сырым текстом ошибки
-  const mapHygieneEnabled = useFeature(FLAGS.projectMapHygiene);
   // Блок разбора живёт в самом низу списка секций — после ответа подводим к нему сами
   const analysisRef = useRef<HTMLDivElement>(null);
   // Открыть снимок старта прогона вместо унаследованного (кнопка на плашке)
@@ -590,7 +580,6 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, projectId, context
       // 98 КБ и ровно сейчас думает об уборке. Кнопка открывает модалку MapHygieneDialog
       // поверх шторки — без ухода со страницы чата
       const showTidy = showTidyButton({
-        featureEnabled: mapHygieneEnabled,
         fileTitle: f.title,
         projectId,
         sizeBytes: f.size ?? f.text.length,

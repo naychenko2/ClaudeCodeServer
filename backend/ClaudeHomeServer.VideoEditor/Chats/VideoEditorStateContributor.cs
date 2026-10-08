@@ -25,7 +25,6 @@ namespace ClaudeHomeServer.Services.VideoEditor.Chats;
 // инструменты, которых у хода нет. Едет хвостом хода ВСЕГДА (InTurnTail): сцена в работе и траты меняются от
 // хода к ходу, в системном блоке секция обнуляла бы prefix cache всей истории.
 public sealed class VideoEditorStateContributor(
-    IFeatureFlagGate flags,
     VideoThreadStore? threads = null,
     FilmSideStore? side = null,
     IConfiguration? config = null,
@@ -46,8 +45,7 @@ public sealed class VideoEditorStateContributor(
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.HasVideoEditorMcp
-        && sessionContext.OwnerId is { Length: > 0 } ownerId
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.VideoEditor);
+        && sessionContext.OwnerId is { Length: > 0 };
 
     public Task<PromptSectionContribution?> BuildAsync(PromptSessionContext sessionContext, string? turnText)
     {

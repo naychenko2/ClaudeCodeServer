@@ -10,7 +10,7 @@ public static class VideoCatalog
     public const string AutoModelLabel = "Авто";
 
     // Порядок поставщиков в списке: local последний намеренно — доступность GPU мигает, и «Авто» с local
-    // первым прыгало бы в облако. Сдвигает его вперёд только AutoCandidates по флагу владельца
+    // первым прыгало бы в облако. Сдвигает его вперёд только AutoCandidates с preferLocal
     public static readonly string[] ProviderOrder = ["fal", "higgsfield", "local"];
 
     public const string LocalKey = "local";
@@ -32,8 +32,8 @@ public static class VideoCatalog
     public static IReadOnlyList<IVideoEngine> Registered(IEnumerable<IVideoEngine> engines) =>
         [.. engines.Where(e => Safe(() => e.Registered)).OrderBy(e => OrderOf(e.Key)).ThenBy(e => e.Key, StringComparer.OrdinalIgnoreCase)];
 
-    // Кандидаты «Авто» в порядке перебора: доступные и работающие в этой области. С флагом владельца
-    // local-media-default локальные модели идут первыми: человек просил по умолчанию свою видеокарту.
+    // Кандидаты «Авто» в порядке перебора: доступные и работающие в этой области. С preferLocal
+    // локальные модели идут первыми: по умолчанию — своя видеокарта.
     // ЕДИНСТВЕННАЯ точка порядка «Авто» — её зовут и котировка, и каталог для фронта
     public static IReadOnlyList<IVideoEngine> AutoCandidates(IEnumerable<IVideoEngine> engines, VideoEditScope scope,
         bool preferLocal) =>

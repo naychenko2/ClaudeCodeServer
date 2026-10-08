@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { actionChips, chipSelectable, CHAT_CHIP_ID, MAX_VIEW_ACTIONS } from '../../../lib/chatContext/actionChips';
 import { pickDefaultAction } from '../../../lib/chatContext/actionMemory';
 import type { ImageEditOp } from '../api';
-import { ASPECT_OPTIONS, buildImageActions, imageState, type ImageActionInput } from './actions';
+import { buildImageActions, imageState, type ImageActionInput } from './actions';
 
 // Каталог действий картинки (ADR-023 §Д2.2): три состояния нити
 
@@ -13,6 +13,7 @@ const base: ImageActionInput = {
   hasFile: true, marks: 0, hasMask: false,
   offered: { removeBackground: true, upscale: true, outpaint: true },
   openBrush: () => {},
+  format: { outpaintAspect: null, pendingAspect: false },
 };
 const FIXTURES: Record<string, ImageActionInput> = {
   'черновик': { ...base, hasFile: false },
@@ -73,7 +74,7 @@ describe('каталог картинки: состав по состояния�
     expect(edit).toMatchObject({ label: 'Изменить', op: 'edit', text: 'required' });
     expect(removeBg).toMatchObject({ op: 'removeBackground', text: 'none' });
     expect(upscale).toMatchObject({ op: 'upscale', text: 'none' });
-    expect(outpaint).toMatchObject({ op: 'outpaint', text: 'none', question: { param: 'aspect', title: 'Пропорции' } });
+    expect(outpaint).toMatchObject({ op: 'outpaint', text: 'none', blockReason: expect.any(String) });
     expect(mark).toMatchObject({ kind: 'editor', label: 'Отметить' });
   });
 
@@ -82,12 +83,6 @@ describe('каталог картинки: состав по состояния�
     expect(masked).toMatchObject({ id: 'edit', label: 'Изменить отмеченное', op: 'inpaint' });
     const [arrows] = buildImageActions(FIXTURES['с отметками (стрелки, без кисти)']);
     expect(arrows).toMatchObject({ label: 'Изменить отмеченное', op: 'edit' });
-  });
-
-  it('вопрос «Пропорции» — только то, что принимает сервер, первое значение предвыбрано', () => {
-    const q = buildImageActions(base).find(a => a.id === 'outpaint')!.question!;
-    expect(q.options.map(o => o.value)).toEqual([...ASPECT_OPTIONS]);
-    expect(q.options[0].value).toBe('16:9');
   });
 
   it('операцию, которой не умеет ни один поставщик, делает серой с причиной, умолчание на «Изменить»', () => {

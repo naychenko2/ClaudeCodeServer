@@ -52,7 +52,7 @@ interface Setup { kind: 'draft' | 'hero'; model: string; by?: 'human' | 'agent' 
 async function open(page: Page, vp: { width: number; height: number }, theme: 'light' | 'dark', s: Setup) {
   const thread = s.kind === 'draft' ? draftThread() : heroThread();
   newWorld({
-    threads: [thread], flags: { 'image-editor': true, 'media-format': true }, imagePrefs: prefs(s.model),
+    threads: [thread], flags: {}, imagePrefs: prefs(s.model),
     ctx: { primary: primary({ by: s.by ?? 'human', label: s.kind === 'draft' ? 'Новая картинка' : 'hero.png', ref: { threadId: thread.id, ...(s.kind === 'hero' ? { versionId: 'origin' } : null) } }) },
   });
   await page.addInitScript(() => localStorage.setItem('cc-image-editor-mock', 'all'));
@@ -362,7 +362,7 @@ for (const { name, vp } of VIEWPORTS) {
       jobId, baseVersionId: 'origin', baseStepId: null, at: NOW, status: 'done', initiator: i ? 'agent' : 'human', prompt: null,
     }));
     newWorld({
-      threads: [hero], flags: { 'image-editor': true, 'media-format': true }, imagePrefs: prefs(NANO),
+      threads: [hero], flags: {}, imagePrefs: prefs(NANO),
       feed: [
         crop('crop-1', 'human', 'Вы обрезали без ИИ: 1200×1200 · 1:1 · бесплатно · версия 1', Date.parse(NOW) - 30_000),
         crop('crop-2', 'agent', '✦ Claude обрезал без ИИ: 1200×1200 · 1:1 · бесплатно · версия 2', Date.parse(NOW) - 20_000),
@@ -394,7 +394,7 @@ for (const { name, vp } of VIEWPORTS) {
 
 test('флаг media-format выключен: чипа «Формат» нет, у «Дорисовать» прежний вопрос «Пропорции»', async ({ page }) => {
   newWorld({
-    threads: [heroThread()], flags: { 'image-editor': true }, imagePrefs: prefs(NANO),
+    threads: [heroThread()], flags: {}, imagePrefs: prefs(NANO),
     ctx: { primary: primary({ ref: { threadId: 'thread-hero', versionId: 'origin' } }) },
   });
   await page.addInitScript(() => localStorage.setItem('cc-image-editor-mock', 'all'));

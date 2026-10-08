@@ -3,19 +3,18 @@
 // и все они обязаны одинаково гейтиться, одинаково подписываться и одинаково
 // переключаться. Логика собрана здесь, чтобы четыре места не разъехались.
 //
-// Кнопка живёт, только когда включён флаг chat-context И открыт чат: материал
+// Кнопка живёт, только когда открыт чат: материал
 // кладут В ЧАТ, и без чата действие бессмысленно.
 import { useCallback } from 'react';
 import type { SessionContextType } from '../../types';
 import { showToast } from '../../lib/toast';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import {
   addToChatContext, inChatContext, removeFromChatContext,
   useActiveChatForContext, useChatContext,
 } from '../../lib/chatContext';
 
 export interface ContextButtonState {
-  // false — кнопки/пункта нет вовсе (флаг выключен, чата нет, чат не в проекте)
+  // false — кнопки/пункта нет вовсе (чата нет, чат не в проекте)
   available: boolean;
   // Материал уже приложен к чату: подпись и иконка переключаются на «Убрать»
   inContext: boolean;
@@ -25,7 +24,6 @@ export interface ContextButtonState {
 
 // name — человекочитаемое имя материала: уходит в тост подтверждения
 export function useContextButton(type: SessionContextType, id: string | null, name?: string): ContextButtonState {
-  const on = useFeature(FLAGS.chatContext);
   const chat = useActiveChatForContext();
   const list = useChatContext(chat?.sessionId ?? null);
   const inCtx = !!id && inChatContext(list, type, id);
@@ -53,7 +51,7 @@ export function useContextButton(type: SessionContextType, id: string | null, na
   }, [chat, id, inCtx, list, name, type]);
 
   return {
-    available: on && !!chat && !!id,
+    available: !!chat && !!id,
     inContext: inCtx,
     title: inCtx ? 'Убрать из контекста' : 'В контекст чата',
     toggle,

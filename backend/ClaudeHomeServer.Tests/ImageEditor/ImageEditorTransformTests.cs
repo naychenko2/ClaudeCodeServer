@@ -27,12 +27,10 @@ public class ImageEditorTransformTests : IDisposable
 
     private string Root(string projectId) => $"/api/projects/{projectId}/image-editor";
 
-    private (string ProjectId, string Dir) CreateProject(bool enableFlag = true)
+    private (string ProjectId, string Dir) CreateProject()
     {
         var users = _factory.Services.GetRequiredService<UserStore>();
         var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        // Флаг включён по умолчанию — «выключен» задаём override'ом пользователя
-        users.SetFeatureFlag(user.Id, FeatureFlagKeys.ImageEditor, enableFlag).Should().BeTrue();
         var dir = Path.Combine(_factory.TempDir, "img_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var id = _factory.Services.GetRequiredService<ProjectManager>()
@@ -45,22 +43,6 @@ public class ImageEditorTransformTests : IDisposable
         @base,
         ops = new object[] { new { type = "rotate", degrees = 90 } },
     };
-
-    [Fact]
-    public async Task Флаг_выключен_transform_и_шаг_404()
-    {
-        var (projectId, dir) = CreateProject(enableFlag: false);
-        await File.WriteAllBytesAsync(Path.Combine(dir, "hero.png"), Png(40, 20));
-        var client = _factory.CreateAuthenticatedClient();
-
-        var transform = await client.PostAsJsonAsync($"{Root(projectId)}/transform", Rotate(new { path = "hero.png" }));
-        var dry = await client.PostAsJsonAsync($"{Root(projectId)}/transform?dryRun=true", Rotate(new { path = "hero.png" }));
-        var step = await client.GetAsync($"{Root(projectId)}/steps/{new string('a', 32)}");
-
-        transform.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        dry.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        step.StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
 
     [Theory]
     [InlineData("../outside.png")]

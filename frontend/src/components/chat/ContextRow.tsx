@@ -8,7 +8,6 @@ import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
 import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
 import { getKindApi } from '../../lib/chatContext/registry';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { getRunVersion, subscribeRun } from '../../lib/chatContext/actionRun';
 import { withThumb } from '../../lib/chatContext/thumbs';
 import {
@@ -111,9 +110,8 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
   // а в зависимости мемо он не входит. Цену вызова держит контракт (types.ts): вид отдаёт стабильную модель
   const sel = primary ? selectRowAction(getKindApi(primary.kind), kindCtx, primary, refs) : null;
   const action: ContextAction | null = sel?.action ?? null;
-  // Чип «Формат» (ADR-025): у вида с `format`, в том числе в «Чате» (action = null); под флагом media-format
-  const formatOn = useFeature(FLAGS.mediaFormat);
-  const format = formatOn && primary ? getKindApi(primary.kind)?.format?.(kindCtx, action?.id ?? null) ?? null : null;
+  // Чип «Формат» (ADR-025): у вида с `format`, в том числе в «Чате» (action = null)
+  const format = primary ? getKindApi(primary.kind)?.format?.(kindCtx, action?.id ?? null) ?? null : null;
   const exec: RowExec | null = sel?.executors
     ? {
         rows: sel.executors.rows, value: sel.executors.value, onChange: sel.executors.onChange,

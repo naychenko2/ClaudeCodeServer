@@ -46,7 +46,6 @@ public class ImageEditorToolsetTests : IDisposable
     private readonly RecordingFeed _feed = new();
     private readonly Mock<IDelegatedTurnGate> _turnGate = new();
     private readonly Dictionary<string, Session> _sessions = new();
-    private readonly HashSet<string> _flagOn = [Owner, Stranger];
     private readonly List<ImageEditJobService> _services = [];
     private readonly ImageThreadStore _store;
     private readonly ImageProjectPrefsStore _prefsStore;
@@ -90,9 +89,6 @@ public class ImageEditorToolsetTests : IDisposable
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
         var prefs = new ImageProjectPrefsService(_prefsStore, NullLogger<ImageProjectPrefsService>.Instance, projects.Object);
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor))
-            .Returns((string user, string _) => _flagOn.Contains(user));
         // Контекст чата (ADR-023): стор и раскладка входов, как в регистрации модуля
         var registry = new ContextKindRegistry([new ImageContextKind(_store, null, editors, workspace), new ProjectFileContextKind()]);
         _ctxStore = new ChatContextStore(Path.Combine(_dir, "chat-context"), registry);
@@ -106,7 +102,7 @@ public class ImageEditorToolsetTests : IDisposable
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string id, string owner) => _sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
-        return new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, threads, launcher,
+        return new ImageEditorToolset(accessor.Object, projects.Object, editors, threads, launcher,
             withGate ? _turnGate.Object : null, _jobs, placeSettings: placeSettings, events: _bus, config: config, prefs: prefs,
             context: context);
     }
@@ -241,9 +237,6 @@ public class ImageEditorToolsetTests : IDisposable
         toolset.ToolsFor(Ctx(owner: Stranger, tail: PersonalChat)).Should().BeEmpty("личный чат владельца B чужаку не виден");
         toolset.ToolsFor(Ctx(tail: "missing")).Should().BeEmpty();
         toolset.ToolsFor(Ctx(tail: "../chat-b")).Should().BeEmpty();
-        _flagOn.Remove(Owner);
-        toolset.ToolsFor(Ctx()).Should().BeEmpty("флаг image-editor владельца выключен");
-        toolset.ToolsFor(Ctx(tail: PersonalChat)).Should().BeEmpty("флаг image-editor владельца выключен");
     }
 
     // ── Личный чат вне проекта (ADR-019, «Изменение 29.09») ───────────────────

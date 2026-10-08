@@ -65,15 +65,12 @@ public sealed class VideoEditorToolsetTests
     }
 
     [Fact]
-    public async Task Чужой_чат_чужой_владелец_и_выключенный_флаг_дают_пустой_состав_и_отказ()
+    public async Task Чужой_чат_и_чужой_владелец_дают_пустой_состав_и_отказ()
     {
         using var w = new AgentWorld();
         w.Toolset.ToolsFor(w.Ctx(owner: "stranger")).Should().BeEmpty();
         w.Toolset.ToolsFor(w.Ctx(chat: "no-such-chat")).Should().BeEmpty();
         (await w.Toolset.CallAsync(ToolState, new JsonObject(), w.Ctx(owner: "stranger"), default)).IsError.Should().BeTrue();
-
-        using var off = new AgentWorld(flagOn: false);
-        off.Toolset.ToolsFor(off.Ctx()).Should().BeEmpty("флаг video-editor выключен у владельца");
     }
 
     // ── Основной объект контекста: агент видит выбор человека, а не запись нити ──

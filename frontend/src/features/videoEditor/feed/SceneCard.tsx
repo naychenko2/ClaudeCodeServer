@@ -9,7 +9,7 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Info, Save, Target, TriangleAlert, Zap } from 'lucide-react';
 import {
-  Badge, Button, ByClaude, C, FLAGS, FS, IconButton, Notice, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useChatContext, useFeature,
+  Badge, Button, ByClaude, C, FS, IconButton, Notice, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useChatContext,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
@@ -406,19 +406,17 @@ function Fallback({ text }: { text: string | null }) {
 }
 
 export function SceneAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
-  const on = useFeature(FLAGS.videoEditor);
   const rec = recordOf(ctx.item);
   const sceneId = str(rec?.data.sceneId);
-  if (!on || !sceneId) return <Fallback text={rec?.fallback ?? null} />;
+  if (!sceneId) return <Fallback text={rec?.fallback ?? null} />;
   return <SceneCard ctx={ctx} sceneId={sceneId} record={rec?.data} />;
 }
 
 export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
-  const on = useFeature(FLAGS.videoEditor);
   const rec = recordOf(ctx.item);
   const sceneId = str(rec?.data.sceneId);
   const jobId = str(rec?.data.jobId);
-  if (!on || !sceneId || !jobId) return <Fallback text={rec?.fallback ?? null} />;
+  if (!sceneId || !jobId) return <Fallback text={rec?.fallback ?? null} />;
   return <SceneCard ctx={ctx} sceneId={sceneId} jobId={jobId} record={rec?.data} />;
 }
 
@@ -447,13 +445,12 @@ export function QuietLineView({ v, onClick }: { v: QuietView; onClick?: () => vo
 }
 
 export function QuietLine({ ctx }: { ctx: ChatItemToolCtx }) {
-  const on = useFeature(FLAGS.videoEditor);
   const rec = recordOf(ctx.item);
   if (!rec) return null;
   const v = quietView(rec.recordType, rec.data, rec.fallback);
   const scope = videoScope(ctx.projectId);
   const sessionId = ctx.sessionId;
-  if (!on || !sessionId) return <Fallback text={v.text} />;
+  if (!sessionId) return <Fallback text={v.text} />;
   const onClick = v.filmPath && !isPersonalScope(scope)
     ? () => { void selectFilmByHuman(scope, sessionId, v.filmPath!); }
     : v.sceneId ? () => { void selectSceneByHuman(scope, sessionId, v.sceneId!); } : undefined;

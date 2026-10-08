@@ -465,9 +465,8 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     // личных hits: это чужой тип данных (TeamMemoryEntry, не PersonaMemoryHit), без scoring.
     // DossierHits — паспорта изменений (этап 2, ADR-004 §5), третий кусок того же блока.
     // DossierText — блок паспортов ОТДЕЛЬНО от Text: заполнен только при splitDossier=true
-    // (план «Секции промптов» этап 3, флаг specialty-prompt-sections) — секция dossier-recall
-    // вклеивается своим местом в промпте, рядом с секцией «история»; при splitDossier=false
-    // (дефолт, persona_ask и выключенный флаг) досье остаётся ВНУТРИ Text, как до фичи.
+    // (ход чата: секция dossier-recall вклеивается своим местом в промпте, рядом с секцией
+    // «история»); при splitDossier=false (дефолт, persona_ask, REST, MCP) досье остаётся ВНУТРИ Text.
     public sealed record PersonaRecallResult(string? Text, IReadOnlyList<PersonaMemoryHit> Hits,
         IReadOnlyList<TeamMemoryEntry> TeamHits, IReadOnlyList<ChangeDossier> DossierHits,
         string? DossierText = null, IReadOnlyList<TeamMemoryEntry>? SphereHitsOrNull = null)
@@ -488,7 +487,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     // dossierRequest — контекст паспортов изменений (проект чата + якоря хода); null —
     // вызов вне проектного контекста (REST-проверка, persona_ask), секции паспортов нет.
     // splitDossier — вынести блок досье в PersonaRecallResult.DossierText вместо инлайна
-    // в Text (см. комментарий записи выше); false (дефолт) — поведение «как до фичи».
+    // в Text (см. комментарий записи выше); false (дефолт) — досье внутри общего блока.
     public async Task<PersonaRecallResult?> BuildRecallAsync(string ownerId, string personaId, string query,
         int topK, double minScore, Dossiers.DossierRecallRequest? dossierRequest = null,
         bool splitDossier = false, string? sessionProjectId = null)

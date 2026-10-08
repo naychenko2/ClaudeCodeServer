@@ -65,7 +65,6 @@ public sealed class TurnContextMcpLiveTests : IDisposable
         };
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ImageEditor, true);
         _projectRoot = Path.Combine(_factory.TempDir, "live_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Path.Combine(_projectRoot, "art"));
         File.WriteAllBytes(Path.Combine(_projectRoot, "art", "palette.png"), [1, 2, 3]);

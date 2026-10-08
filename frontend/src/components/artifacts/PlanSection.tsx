@@ -11,7 +11,6 @@ import { MarkdownViewer } from '../MarkdownViewer';
 import { useHeadings, scrollToHeading, type Heading } from '../../hooks/useHeadings';
 import type { PlanArtifact, PlanStatus } from '../../hooks/useSessionArtifacts';
 import type { PlanMap } from '../../types';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useSlotItem } from '../../lib/subsystems/registry';
 import type { PlanChipCtx } from '../../lib/subsystems/registryCore';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
@@ -79,7 +78,6 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
   // (PlanArtifact — проекция истории), отправлять через respondPlan нельзя.
   // Слой замечаний работает на сбор: копирует текст обратной связи в буфер
   // обмена, дальше пользователь открывает план в чате и вставляет его туда.
-  const visualPlanEnabled = useFeature(FLAGS.visualPlan);
   useEffect(() => {
     setMap(null);
     setSchemeStatus('idle');
@@ -205,41 +203,39 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
 
       {/* Текст плана (скроллится) + слой замечаний под флагом visual-plan */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        {visualPlanEnabled && (
-          // Переключатель «Схемой / Текстом» + кнопка «Собрать схему» — над телом
-          // секции. Сборка ТОЛЬКО по кнопке (вики-план часть B §4): иначе любое
-          // открытие плана дёргало бы модель.
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '8px 12px 0', flexShrink: 0, flexWrap: 'wrap',
-          }}>
-            <InlineSegmented
-              value={schemeView}
-              onChange={handleSchemeViewChange}
-              options={[
-                { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
-                  tone: { bg: C.plan, fg: C.onAccent } },
-                { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
-                  tone: { bg: C.plan, fg: C.onAccent } },
-              ]}
-            />
-            {schemeView === 'scheme' && schemeStatus !== 'ready' && (
-              <Button
-                variant="ghostFilled"
-                size="sm"
-                loading={schemeStatus === 'building'}
-                onClick={buildScheme}
-                leftIcon={schemeStatus === 'building'
-                  ? <Loader2 size={12} />
-                  : <Network size={12} />}
-              >
-                {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
-              </Button>
-            )}
-          </div>
-        )}
+        {/* Переключатель «Схемой / Текстом» + кнопка «Собрать схему» — над телом
+           секции. Сборка ТОЛЬКО по кнопке (вики-план часть B §4): иначе любое
+           открытие плана дёргало бы модель. */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '8px 12px 0', flexShrink: 0, flexWrap: 'wrap',
+        }}>
+          <InlineSegmented
+            value={schemeView}
+            onChange={handleSchemeViewChange}
+            options={[
+              { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
+                tone: { bg: C.plan, fg: C.onAccent } },
+              { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
+                tone: { bg: C.plan, fg: C.onAccent } },
+            ]}
+          />
+          {schemeView === 'scheme' && schemeStatus !== 'ready' && (
+            <Button
+              variant="ghostFilled"
+              size="sm"
+              loading={schemeStatus === 'building'}
+              onClick={buildScheme}
+              leftIcon={schemeStatus === 'building'
+                ? <Loader2 size={12} />
+                : <Network size={12} />}
+            >
+              {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
+            </Button>
+          )}
+        </div>
 
-        {schemeView === 'scheme' && visualPlanEnabled ? (
+        {schemeView === 'scheme' ? (
           schemeStatus === 'ready' && map ? (
             <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', position: 'relative' }}>
               {/* Исходный план нужен PlanScheme: useHeadings берёт заголовки
@@ -287,7 +283,7 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
             {/* При отказе сборки — плашка над текстом, а не вместо него.
                 Вид уже на «Текстом» (см. buildScheme/handleSchemeViewChange),
                 человек видит и сообщение, и сам план. */}
-            {visualPlanEnabled && schemeStatus === 'failed' && (
+            {schemeStatus === 'failed' && (
               <div style={{
                 margin: '14px 16px 8px',
                 padding: '10px 12px',
@@ -326,28 +322,26 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
             а кнопки у заголовков лежат в скрытом markdown-слое и пользователю
             не видны: при возврате на текст слой пересобирается с актуальными
             узлами, и кнопки появляются снова. */}
-        {visualPlanEnabled && (
-          <PlanRemarks
-            contentRef={planContentRef}
-            planText={curPlan.plan}
-            containerToken={schemeView}
-            status={curPlan.status === 'pending' ? 'pending' : 'resolved'}
-            externalRequest={remarkRequest}
-            onSubmit={feedback => {
-              // requestId в PlanArtifact нет — отправлять в панели некуда.
-              // Сборка текста всё равно полезна: копируем в буфер, дальше
-              // пользователь открывает план в чате и отвечает там
-              // (onRespond живёт только в PlanReviewView)
-              if (navigator.clipboard) {
-                navigator.clipboard.writeText(feedback).catch(() => {});
-              }
-              showToast(
-                'Замечания скопированы',
-                'Откройте план в чате, чтобы отправить их планировщику.',
-              );
-            }}
-          />
-        )}
+        <PlanRemarks
+          contentRef={planContentRef}
+          planText={curPlan.plan}
+          containerToken={schemeView}
+          status={curPlan.status === 'pending' ? 'pending' : 'resolved'}
+          externalRequest={remarkRequest}
+          onSubmit={feedback => {
+            // requestId в PlanArtifact нет — отправлять в панели некуда.
+            // Сборка текста всё равно полезна: копируем в буфер, дальше
+            // пользователь открывает план в чате и отвечает там
+            // (onRespond живёт только в PlanReviewView)
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(feedback).catch(() => {});
+            }
+            showToast(
+              'Замечания скопированы',
+              'Откройте план в чате, чтобы отправить их планировщику.',
+            );
+          }}
+        />
       </div>
     </>
   );

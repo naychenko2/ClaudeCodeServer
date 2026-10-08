@@ -20,7 +20,6 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
-import { setAllFlags } from '../../../lib/featureFlags';
 import { __applyChatContext, __resetChatContextStore } from '../../../lib/chatContext/store';
 import type { AudioThread, AudioThreadLaunch, AudioThreadVersion } from '../api';
 import { LaunchAnchor, ThreadAnchor } from './ThreadCard';
@@ -84,7 +83,6 @@ beforeEach(() => {
   store.clear();
   __resetAudioStore();
   __resetChatContextStore();
-  setAllFlags({ 'audio-editor': true });
 });
 
 describe('лента звука: карточка на каждый вариант', () => {

@@ -7,7 +7,7 @@
 import { Suspense, useState } from 'react';
 import { Download, FileText } from 'lucide-react';
 import {
-  Button, IconButton, MidiEditor, Modal, C, FLAGS, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE, useFeature, useIsMobile,
+  Button, IconButton, MidiEditor, Modal, C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE, useIsMobile,
 } from 'aihome_shell/kit';
 import { audioApi, type AudioThread, type AudioThreadVersion } from '../api';
 import { AudioPlayer, StemMixer, type AudioSource, type Stem } from '../player';
@@ -30,21 +30,20 @@ interface Props {
 }
 
 // Строки «остальных файлов»: когда ноты показывает просмотрщик (со своим «Скачать»), строку .mid
-// не дублируем; без флага или у версии с главным звуком .mid остаётся в списке
-export function shownExtraFiles(v: AudioThreadVersion, midiOn: boolean): ExtraFile[] {
+// не дублируем; у версии с главным звуком .mid остаётся в списке
+export function shownExtraFiles(v: AudioThreadVersion): ExtraFile[] {
   const files = extraFiles(v);
-  return midiOn && midiFileOf(v) ? files.filter(f => f.role !== 'midi') : files;
+  return midiFileOf(v) ? files.filter(f => f.role !== 'midi') : files;
 }
 
 export function VersionBody(p: Props) {
   const stems = versionStems(p.version);
-  const midiOn = useFeature(FLAGS.midiEditor);
   return (
     <>
       {hasMain(p.version) && <PlayerBlock {...p} />}
-      {midiOn && midiFileOf(p.version) && <MidiBlock {...p} />}
+      {midiFileOf(p.version) && <MidiBlock {...p} />}
       {stems.length > 0 && <StemsBlock {...p} />}
-      <ExtraFiles {...p} files={shownExtraFiles(p.version, midiOn)} />
+      <ExtraFiles {...p} files={shownExtraFiles(p.version)} />
     </>
   );
 }

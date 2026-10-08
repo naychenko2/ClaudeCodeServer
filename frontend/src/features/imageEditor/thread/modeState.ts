@@ -1,22 +1,17 @@
 // Режим панели «Картинки» v5 на чат: «Создать» рисует новую, «Править» меняет выбранную
-// (docs/mockups/image-panel-v5*, вариант 1). Из фокуса режим не вывести: после генерации в
+// (макет панели «Картинки» v5, вариант 1). Из фокуса режим не вывести: после генерации в
 // фокусе готовая картинка, а режим остаётся «Создать», — поэтому он хранится отдельно, в
 // памяти и в localStorage устройства, вкладки синхронизируются событием storage.
 //
 // Переходы: выбор картинки человеком → «Править»; «Создать» и черновик «Новая картинка» →
 // «Создать»; снятие выбора (кем угодно) → «Создать»; выбор агентом режим не меняет.
-// Всё это — только при флаге image-panel-v5 (modeAware): без него режим не пишется вовсе.
 
 import { useSyncExternalStore } from 'react';
-import { FLAGS, getFlag } from 'aihome_shell/kit';
 
 export type ImageMode = 'create' | 'edit';
 
 const key = (sessionId: string) => `cc-image-mode:${sessionId}`;
 const isMode = (v: unknown): v is ImageMode => v === 'create' || v === 'edit';
-
-// Новая панель включена: режим и выбор по режиму действуют
-export const modeAware = () => getFlag(FLAGS.imagePanelV5);
 
 const _modes = new Map<string, ImageMode | null>();
 let _version = 0;
@@ -63,11 +58,6 @@ export function setImageMode(sessionId: string, mode: ImageMode) {
   _modes.set(sessionId, mode);
   try { localStorage.setItem(key(sessionId), mode); } catch { /* приватный режим */ }
   emit();
-}
-
-// Переход по правилу — только под флагом: без него поведение и хранилище прежние
-export function noteImageMode(sessionId: string, mode: ImageMode) {
-  if (modeAware()) setImageMode(sessionId, mode);
 }
 
 // Режим, который действует: «Править» без картинки не действует — режим «Создать».

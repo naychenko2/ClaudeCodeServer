@@ -255,12 +255,7 @@ export function usePrefs(projectId: string): ProjectPrefs {
   return getPrefs(projectId);
 }
 
-// Настройки, с которыми пойдёт запуск: у нити — свои, иначе умолчания проекта
-export function effectiveSettings(prefs: ProjectPrefs, own: ImageThreadSettings | null | undefined): ImageThreadSettings {
-  return own ?? { provider: prefs.provider, model: prefs.model, count: prefs.count, matchSourceSize: prefs.matchSourceSize };
-}
-
-// Выбор режима «Создать» и «Править» (флаг image-panel-v5). Поставщик и модель — парой, как на
+// Выбор режима «Создать» и «Править». Поставщик и модель — парой, как на
 // сервере: модель плоских полей могла быть выбрана у другого поставщика
 function modePick(prefs: ProjectPrefs, m: ImageCreatePrefs | null | undefined): ImageThreadSettings {
   const own = !!m && (m.provider != null || m.model != null);
@@ -294,12 +289,6 @@ export function setModeSettings(projectId: string, mode: ImageMode, patch: Parti
   setPrefs(projectId, mode === 'create'
     ? { ...flat, create: part }
     : { ...flat, edit: { ...(prefs.edit ?? EMPTY_EDIT), ...part } });
-}
-
-// Операция, режим подбора и пропорции «Править» (бывший выбор панели в памяти вкладки)
-export function setEditChoice(projectId: string, patch: Partial<Pick<ImageEditPrefs, 'op' | 'editMode' | 'ratio'>>) {
-  const prefs = getPrefs(projectId);
-  setPrefs(projectId, { edit: { ...(prefs.edit ?? EMPTY_EDIT), ...patch } });
 }
 
 export function __resetPrefs() {

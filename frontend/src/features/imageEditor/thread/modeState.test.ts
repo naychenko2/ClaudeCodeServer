@@ -18,7 +18,6 @@ vi.stubGlobal('window', win);
 const toasts: string[] = [];
 win.addEventListener('cc-local-toast', e => toasts.push((e as CustomEvent<{ title: string }>).detail.title));
 
-const { setFlagLocal, FLAGS } = await import('../../../lib/featureFlags');
 const { imageEditorApi } = await import('../api');
 const { loadCatalog } = await import('./catalog');
 const { __resetPrefs, ensurePrefs, getPrefs, prefsApi, setPrefs } = await import('./prefs');
@@ -27,7 +26,7 @@ const { threadsApi } = await import('./threadsApi');
 const { continueFrom, createDraft } = await import('./actions');
 const { __resetImageModes, effectiveImageMode, getStoredImageMode, setImageMode } = await import('./modeState');
 const { launchThread, useThreadLaunch } = await import('./useThreadLaunch');
-const { __resetPanelChoice, setPanelChoice } = await import('../context/ops');
+const { __resetPanelChoice } = await import('../context/ops');
 import type { ImageEditQuoteRequest } from '../api';
 import type { Mark } from '../marks';
 import type { ImagePrefsChangedEvent, ProjectPrefs } from './prefs';
@@ -64,7 +63,6 @@ async function withPrefs(v: ProjectPrefs) {
 beforeEach(() => {
   storage.clear();
   storage.set('cc-image-editor-mock', 'all');
-  setFlagLocal(FLAGS.imagePanelV5, true);
   __resetThreadStore();
   __resetPrefs();
   __resetPanelChoice();
@@ -75,7 +73,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   toasts.length = 0;
-  setFlagLocal(FLAGS.imagePanelV5, false);
   vi.restoreAllMocks();
 });
 
@@ -121,16 +118,6 @@ describe('режим «Создать / Править» на чат', () => {
     expect(getStoredImageMode(S)).toBeNull();
     win.dispatchEvent(Object.assign(new Event('storage'), { key: `cc-image-mode:${S}`, newValue: 'edit' }));
     expect(getStoredImageMode(S)).toBe('edit');
-  });
-
-  it('флаг выключен — режим не пишется', async () => {
-    setFlagLocal(FLAGS.imagePanelV5, false);
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    vi.spyOn(threadsApi, 'current').mockResolvedValue(state(t, 2));
-    await continueFrom(P, S, t, 'v1');
-    expect(getStoredImageMode(S)).toBeNull();
-    expect(localStorage.getItem(`cc-image-mode:${S}`)).toBeNull();
   });
 });
 
@@ -217,14 +204,6 @@ describe('запуск по режиму', () => {
     expect(getPrefs(P).edit).toEqual(MODES.edit);
     expect(getPrefs(P).count).toBe(2);
     expect(settings).not.toHaveBeenCalled();
-  });
-
-  it('выбор операции панели под флагом живёт в «Править»', async () => {
-    await withPrefs(MODES);
-    setPanelChoice(P, { op: 'removeBackground', mode: 'photoreal' });
-    expect(getPrefs(P).edit).toMatchObject({ op: 'removeBackground', editMode: 'photoreal' });
-    setPanelChoice(P, { op: 'auto' });
-    expect(getPrefs(P).edit?.op).toBe('edit');
   });
 });
 

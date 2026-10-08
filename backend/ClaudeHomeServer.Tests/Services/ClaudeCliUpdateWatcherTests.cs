@@ -299,6 +299,112 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
         Create().GetStatus().NewModels.Select(m => m.Id).Should().Equal("claude-sonnet-5-6");
     }
 
+    // --- автообновление ---
+
+    private sealed class FakeOps
+    {
+        public readonly List<string> Installed = [];
+        public readonly List<string> RolledBack = [];
+        public int Smokes;
+        public bool InstallOk = true;
+        public SmokeResult Smoke = new(true, null);
+    }
+
+    private DateTime _now = new(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+
+    private ClaudeCliUpdateWatcher CreateAuto(FakeOps f, bool autoUpdate = true) => new(
+        new StubHttpClientFactory(_npm), _users, _sender,
+        NullLogger<ClaudeCliUpdateWatcher>.Instance,
+        () => Task.FromResult(_current), StatePath, TimeSpan.FromHours(24),
+        new CliAutoUpdateOps(
+            (v, _) => { f.Installed.Add(v); if (f.InstallOk) _current = v; return Task.FromResult(f.InstallOk); },
+            _ => { f.Smokes++; return Task.FromResult(f.Smoke); },
+            (v, _) => { f.RolledBack.Add(v); _current = v; return Task.FromResult(true); }),
+        autoUpdate, soakDays: 2, utcNow: () => _now);
+
+    [Fact]
+    public async Task Auto_SoakNotPassed_DoesNotInstall_AndSendsNoUpdateHint()
+    {
+        var f = new FakeOps();
+        var w = CreateAuto(f);
+        await w.CheckOnceAsync();
+        _now = _now.AddDays(1);
+        await w.CheckOnceAsync();
+
+        f.Installed.Should().BeEmpty();
+        _sender.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Auto_SoakPassed_InstallsSmokes_AndNotifiesUpdated()
+    {
+        var f = new FakeOps();
+        var w = CreateAuto(f);
+        await w.CheckOnceAsync();
+        _now = _now.AddDays(2);
+        await w.CheckOnceAsync();
+
+        f.Installed.Should().Equal("2.1.300");
+        f.Smokes.Should().Be(1);
+        f.RolledBack.Should().BeEmpty();
+        _sender.Sent.Should().ContainSingle();
+        var req = _sender.Sent[0].Req;
+        req.Title.Should().Contain("обновлён").And.Contain("2.1.300");
+        req.Body.Should().Contain("2.1.283").And.Contain("2.1.300");
+        w.GetStatus().UpdateAvailable.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Auto_SmokeFails_RollsBack_NotifiesAndDoesNotRetryBadVersion()
+    {
+        var f = new FakeOps { Smoke = new SmokeResult(false, "маркер утёк") };
+        var w = CreateAuto(f);
+        await w.CheckOnceAsync();
+        _now = _now.AddDays(3);
+        await w.CheckOnceAsync();
+
+        f.RolledBack.Should().Equal("2.1.283");
+        _current.Should().Be("2.1.283");
+        _sender.Sent.Should().ContainSingle();
+        _sender.Sent[0].Req.Body.Should().Contain("Не обновил 2.1.300").And.Contain("маркер утёк").And.Contain("Откатил");
+
+        _now = _now.AddDays(3);
+        await CreateAuto(f).CheckOnceAsync(); // рестарт: «битая» живёт в состоянии
+        f.Installed.Should().HaveCount(1);
+        _sender.Sent.Should().ContainSingle();
+
+        _npm.Version = "2.1.301"; // новая версия снова кандидат — после выдержки
+        await w.CheckOnceAsync();
+        _now = _now.AddDays(2);
+        await w.CheckOnceAsync();
+        f.Installed.Should().Equal("2.1.300", "2.1.301");
+    }
+
+    [Fact]
+    public async Task Auto_Disabled_KeepsOldBehavior_NoInstall()
+    {
+        var f = new FakeOps();
+        var w = CreateAuto(f, autoUpdate: false);
+        await w.CheckOnceAsync();
+        _now = _now.AddDays(10);
+        await w.CheckOnceAsync();
+
+        f.Installed.Should().BeEmpty();
+        _sender.Sent.Should().ContainSingle();
+        _sender.Sent[0].Req.Title.Should().Be("Доступна новая версия claude CLI");
+    }
+
+    [Fact]
+    public void SmokeEvaluate_RequiresResult_AndDetectsLeakedMarker()
+    {
+        const string ok = "{\"type\":\"result\",\"is_error\":false,\"result\":\"UNKNOWN\"}\n";
+        ClaudeCliAutoUpdateOps.Evaluate(0, ok, "MARKERX").Ok.Should().BeTrue();
+        ClaudeCliAutoUpdateOps.Evaluate(1, ok, "MARKERX").Ok.Should().BeFalse();
+        ClaudeCliAutoUpdateOps.Evaluate(0, "{\"type\":\"system\"}\n", "MARKERX").Ok.Should().BeFalse();
+        ClaudeCliAutoUpdateOps.Evaluate(0, ok.Replace("UNKNOWN", "MARKERX"), "MARKERX").Ok.Should().BeFalse();
+        ClaudeCliAutoUpdateOps.Evaluate(0, ok.Replace("false", "true"), "MARKERX").Ok.Should().BeFalse();
+    }
+
     // --- фейки ---
 
     // Отвечает по адресу: npm latest или CHANGELOG (по умолчанию 404 — списка нет)

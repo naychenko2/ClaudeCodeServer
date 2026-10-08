@@ -22,6 +22,8 @@ public class LauncherProjectContextGuardTests(ITestOutputHelper output)
     private static readonly Dictionary<string, (int Count, string Why)> Allowed = new()
     {
         ["ClaudeHomeServer.Services.Llm.OneShotClaudeRunner.RunCliAsync"] = (1, "системный one-shot, проекта нет"),
+        ["ClaudeHomeServer.Services.Llm.Claude.ClaudeCliAutoUpdateOps.SmokeAsync"] = (1, "автообновление CLI хоста, проекта нет"),
+        ["ClaudeHomeServer.Services.Llm.Claude.ClaudeCliAutoUpdateOps.RunAsync"] = (1, "автообновление CLI хоста, проекта нет"),
         ["ClaudeHomeServer.Services.Mcp.McpProbeService.ProbeStdioAsync"] = (1, "проба сервера из личного реестра MCP владельца"),
         ["ClaudeHomeServer.Controllers.HostFilesController.GetContent"] = (1, "файл хоста по пути владельца, вне проекта"),
         ["ClaudeHomeServer.Services.SessionManager.ResolveTasksApiUrl"] = (1,

@@ -14,6 +14,13 @@ public sealed class DossierTrailerContributor : IPromptSectionContributor
     public string Title => "Трейлер истории решений";
     // Трейлер истории решений идёт ДО блоков recall — порядок, который зафиксирован
     // golden-фикстурой 1 («dossier-trailer → recall-notes»).
+    //
+    // 2026-10-08: секция едет ХВОСТОМ ХОДА (InTurnTail), а не системным блоком. Трейлер
+    // содержит id сессии и задачи — единственные строки системного блока, различающиеся
+    // между сессиями одной персоны в одном проекте. Стоя в середине блока, они обрывали
+    // общий префикс prefix cache vLLM на 12,5k токенов из 15k (замер 08.10.2026: первый
+    // ответ исполнителя 3,5 с при попадании против 8–10 с при промахе). В хвосте хода
+    // подсказка остаётся в истории с первого хода, а системный блок делится между сессиями.
     public int Order => 100;
     public string Group => "project";
 
@@ -31,6 +38,6 @@ public sealed class DossierTrailerContributor : IPromptSectionContributor
             "с выжимкой «зачем/решения/отказы/грабли») — без него автоматическая выжимка не соберётся. " +
             "Не убирай и не меняй значение при amend/squash.";
         return Task.FromResult<PromptSectionContribution?>(
-            new PromptSectionContribution([new PromptSection(Key, text)]));
+            new PromptSectionContribution([new PromptSection(Key, text, InTurnTail: true)]));
     }
 }

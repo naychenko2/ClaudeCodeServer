@@ -282,6 +282,10 @@ sudo systemctl restart ccs.service
 deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на месте
 ```
 
+**Проверка `+ccs3` (2026-10-08, стенд `192.168.7.83:5443`, `.so` с sha256 `04b38842…`).** Живой Windows: 200 на голый
+логин, `VIDEO\`, `ANYTHING\`, `workgroup\`, `WORKGROUP\`, `.\`; 401 на неверный пароль (`VIDEO\andrey`, голый). На `+ccs2`
+те же домены, кроме голого, давали `GenericFailure`.
+
 **Проверка.** Живой Windows (curl.exe `--negotiate`, Word по WebDAV) и бой 2026-10-06: `200`, в логе
 `WebDAV: NTLM-вход WORKGROUP\andrey`, неверный пароль — `401`. Воспроизведение без боевого сервера —
 дев-стенд [test/stand](../../deploy/gss-ntlmssp/test/stand) и клиент [client.py](../../deploy/gss-ntlmssp/test/client.py);

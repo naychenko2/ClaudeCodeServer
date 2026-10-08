@@ -12,7 +12,7 @@
 # output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
-import gzip, http.client, json, os, re, sys, threading, time
+import gzip, hashlib, http.client, json, os, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -25,6 +25,11 @@ PORT = int(os.environ.get("LISTEN_PORT", "18021"))
 #   on     — пропускаем output_config: размышления включены, длина не ограничена;
 #   budget — как on, плюс thinking_token_budget=THINKING_BUDGET (нужен патч Anthropic-роутера
 #            vLLM, иначе поле молча игнорируется — см. vllm-patch/).
+#   hybrid — решение на каждый запрос по телу (thinking_decision): шаг планирования (последнее
+#            сообщение — текст человека, или результат инструмента с is_error) идёт как budget,
+#            продолжение после инструмента — как off плюс SAMPLING_FAST. Повод — замеры
+#            2026-10-08: на шагах после инструмента размышления не улучшают вызовы, а токены
+#            удваивают; без размышлений нужна защита от петли presence_penalty (карточка Qwen).
 THINKING_MODE = os.environ.get("THINKING_MODE", "off")
 THINKING_BUDGET = int(os.environ.get("THINKING_BUDGET", "512"))
 STRIP_KEYS = ("output_config",) if THINKING_MODE == "off" else ()
@@ -34,8 +39,35 @@ STRIP_KEYS = ("output_config",) if THINKING_MODE == "off" else ()
 # Формат key=value через запятую (temperature=0.7,top_p=0.8,top_k=20): JSON в Environment=
 # systemd не переживает — кавычки он снимает. Перебивает значения CLI в запросе на локаль;
 # пусто — не трогать. В облако (автосжатие) не применяется: тело для него снимается до правки.
-SAMPLING = {k: (int(v) if v.lstrip("-").isdigit() else float(v))
-            for k, v in (kv.split("=", 1) for kv in os.environ.get("SAMPLING", "").split(",") if kv)}
+def _parse_kv(text):
+    return {k: (int(v) if v.lstrip("-").isdigit() else float(v))
+            for k, v in (kv.split("=", 1) for kv in text.split(",") if kv)}
+
+
+SAMPLING = _parse_kv(os.environ.get("SAMPLING", ""))
+# Добавка к сэмплингу на шагах БЕЗ размышлений (off и быстрая ветка hybrid): presence_penalty=1.5 —
+# штатная защита Qwen от повторов в режиме без размышлений; внутри размышлений штраф вреден
+# (смешение языков, синтаксис кода), поэтому на шагах с размышлениями не применяется.
+# Поле presence_penalty принимает только патченный Anthropic-роутер (vllm-patch/presence-penalty).
+SAMPLING_FAST = _parse_kv(os.environ.get("SAMPLING_FAST", ""))
+# Гибрид v2 (замер 2026-10-08 вечером): быстрая ветка — только после результатов инструментов ЧТЕНИЯ.
+# В v1 (fast после любого tool_result) модель без размышлений теряла дисциплину «прочитал →
+# записал → следующий»: читала всё подряд, писала документ разом в лимит вывода, сводку без мысли
+# (hyb-2a: 101k токенов, 25 ошибок фактов). После Write/Edit/Bash и перед сводкой размышления нужны.
+HYBRID_FAST_AFTER = frozenset(x for x in os.environ.get("HYBRID_FAST_AFTER", "Read,Grep,Glob").split(",") if x)
+# Подмена усилия рассуждений (замер 2026-10-08: medium против low). CLI шлёт output_config.effort
+# из --effort (ccs даёт только low); шаблон Qwen3.8 принимает xhigh/medium/low. Пусто — не трогать.
+EFFORT_OVERRIDE = os.environ.get("EFFORT_OVERRIDE", "")
+# Снимок префикса первого хода (хранитель кэша, 2026-10-08): у первого запроса сессии (одно
+# сообщение) сохраняем model + tools + system в PREFIX_SNAPSHOT_DIR/<подпись>.json — ровно
+# то, что у всех сессий одной персоны в одном проекте совпадает (замер: 12,5–15k токенов из
+# 20,7k). prefix_keeper.py раз в несколько минут на холостом движке шлёт этот снимок с
+# max_tokens=1 и держит префикс в кэше: первый ответ 3,5 с вместо 8–10. Текста человека в
+# снимке нет (messages не сохраняются). Пусто — выключено. Повторная запись одной подписи —
+# не чаще раза в 10 минут.
+PREFIX_SNAPSHOT_DIR = os.environ.get("PREFIX_SNAPSHOT_DIR", "")
+PREFIX_SNAPSHOT_MIN_INTERVAL = int(os.environ.get("PREFIX_SNAPSHOT_MIN_INTERVAL", "600"))
+_prefix_snapshot_written = {}
 HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "te",
        "trailer", "upgrade", "content-length", "host"}
 
@@ -258,7 +290,8 @@ EVENT_SESSION_HEADER = os.environ.get("EVENT_SESSION_HEADER", "X-CCS-Session")
 
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
          "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
-         "events_sent": 0, "events_failed": 0}
+         "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
+         "prefix_snapshots": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -649,14 +682,148 @@ def is_compact_request(doc, min_context_tokens=None):
     return compact_verdict(doc, min_context_tokens)[0] == "route"
 
 
-def apply_sampling(doc):
-    """Подставляет SAMPLING в тело запроса; True — тело изменилось."""
+def prefix_snapshot_body(doc):
+    """Снимок префикса из тела первого хода или None, если это не первый ход.
+
+    Берём model, tools и system. Строки трейлера «CCS-Session:»/«CCS-Task:» (если они ещё
+    в системном блоке — до переноса в хвост хода) обрезаем вместе со всем, что после них:
+    они различаются между сессиями, общий префикс заканчивается перед ними.
+    """
+    msgs = doc.get("messages")
+    if not isinstance(msgs, list):
+        return None
+    # Первый ход — ровно одно сообщение человека; служебные сообщения role=system, которые CLI
+    # дописывает следом (напоминания, снимок окружения), ходом не считаются.
+    turn = [m for m in msgs if not (isinstance(m, dict) and m.get("role") == "system")]
+    if len(turn) != 1 or not isinstance(turn[0], dict) or turn[0].get("role") != "user":
+        return None
+    system = doc.get("system")
+    if isinstance(system, str):
+        blocks = [{"type": "text", "text": system}]
+    elif isinstance(system, list):
+        blocks = [dict(b) for b in system if isinstance(b, dict)]
+    else:
+        return None
+    cut = []
+    for b in blocks:
+        t = b.get("text", "")
+        m = re.search(r"^CCS-(Session|Task): ", t, re.M)
+        if m:
+            b = dict(b, text=t[:m.start()])
+            cut.append(b)
+            break
+        cut.append(b)
+    return {"model": doc.get("model"), "tools": doc.get("tools"), "system": cut}
+
+
+def prefix_signature(body):
+    raw = json.dumps({"model": body.get("model"), "tools": body.get("tools"), "system": body.get("system")},
+                     ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:16]
+
+
+def save_prefix_snapshot(doc):
+    """Пишет снимок префикса первого хода; True — записан. Любая осечка — молча (fail-open)."""
+    if not PREFIX_SNAPSHOT_DIR:
+        return False
+    try:
+        body = prefix_snapshot_body(doc)
+        if body is None or not body.get("tools"):
+            return False
+        sig = prefix_signature(body)
+        now = time.time()
+        if now - _prefix_snapshot_written.get(sig, 0) < PREFIX_SNAPSHOT_MIN_INTERVAL:
+            return False
+        os.makedirs(PREFIX_SNAPSHOT_DIR, mode=0o700, exist_ok=True)
+        path = os.path.join(PREFIX_SNAPSHOT_DIR, f"{sig}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(body, f, ensure_ascii=False)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        _prefix_snapshot_written[sig] = now
+        with lock:
+            stats["prefix_snapshots"] += 1
+        return True
+    except Exception as e:
+        print(f"снимок префикса не записан: {e}", file=sys.stderr, flush=True)
+        return False
+
+
+def apply_sampling(doc, params=None):
+    """Подставляет SAMPLING (или params) в тело запроса; True — тело изменилось."""
     changed = False
-    for k, v in SAMPLING.items():
+    for k, v in (SAMPLING if params is None else params).items():
         if doc.get(k) != v:
             doc[k] = v
             changed = True
     return changed
+
+
+def thinking_decision(doc):
+    """Гибрид: "think" — шаг планирования, "fast" — продолжение после инструмента.
+
+    Решение только по телу, состояния нет. Последнее сообщение — текст человека (новый вопрос,
+    постановка задачи) → think. Последнее сообщение — результаты инструментов без ошибок → fast.
+    Хотя бы один результат с is_error → think: застревание на одном и том же падающем вызове —
+    тот случай, где рассуждение нужно. Непонятная форма → think (безопаснее).
+    """
+    msgs = doc.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return "think"
+    # CLI дописывает после результата инструмента служебные сообщения role=system (напоминания,
+    # снимки окружения) — они не ход, их пропускаем; решает последнее содержательное сообщение.
+    # Замер 2026-10-08: без этого быстрая ветка не срабатывала ни разу (59 think / 0 fast).
+    last = next((m for m in reversed(msgs) if not (isinstance(m, dict) and m.get("role") == "system")), None)
+    if not isinstance(last, dict) or last.get("role") != "user":
+        return "think"
+    content = last.get("content")
+    if not isinstance(content, list):
+        return "think"
+    results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+    if not results:
+        return "think"
+    if any(b.get("is_error") for b in results):
+        return "think"
+    # Имя инструмента у результата — по парному tool_use в предыдущем сообщении ассистента.
+    # Неизвестный id (история обрезана, чужая форма) → think: безопаснее подумать лишний раз.
+    names = {}
+    for m in reversed(msgs):
+        if isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("content"), list):
+            names = {b.get("id"): b.get("name") for b in m["content"]
+                     if isinstance(b, dict) and b.get("type") == "tool_use"}
+            break
+    if all(names.get(b.get("tool_use_id")) in HYBRID_FAST_AFTER for b in results):
+        return "fast"
+    return "think"
+
+
+def apply_thinking_mode(doc):
+    """Применяет THINKING_MODE к телу: (изменилось ли тело, решение гибрида или None).
+
+    off — вырезать output_config (серверный дефолт без размышлений) и добавить SAMPLING_FAST;
+    budget — добавить thinking_token_budget; on — ничего; hybrid — budget или off по
+    thinking_decision. Ровно то же, что раньше делали STRIP_KEYS и ветка budget в обработчике.
+    """
+    mode, decision = THINKING_MODE, None
+    if mode == "hybrid":
+        decision = thinking_decision(doc)
+        mode = "budget" if decision == "think" else "off"
+    changed = False
+    if mode == "off":
+        if "output_config" in doc:
+            del doc["output_config"]
+            changed = True
+        if SAMPLING_FAST and apply_sampling(doc, SAMPLING_FAST):
+            changed = True
+    elif mode == "budget" and "thinking_token_budget" not in doc:
+        doc["thinking_token_budget"] = THINKING_BUDGET
+        changed = True
+    if mode != "off" and EFFORT_OVERRIDE and isinstance(doc.get("output_config"), dict) \
+            and doc["output_config"].get("effort") != EFFORT_OVERRIDE:
+        doc["output_config"]["effort"] = EFFORT_OVERRIDE
+        changed = True
+    return changed, decision
 
 
 def compact_body(doc):
@@ -1075,7 +1242,9 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             msg = json.dumps(dict(stats, prune=PRUNE_MODE, thinking=THINKING_MODE,
                                   compact=COMPACT_MODEL if COMPACT_UPSTREAM else "off",
-                                  sampling=SAMPLING or "off")).encode()
+                                  sampling=SAMPLING or "off",
+                                  sampling_fast=SAMPLING_FAST or "off",
+                                  effort=EFFORT_OVERRIDE or "cli", budget=THINKING_BUDGET)).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(msg)))
@@ -1134,15 +1303,16 @@ class Handler(BaseHTTPRequestHandler):
                                   f"подними CLAUDE_CODE_AUTO_COMPACT_WINDOW (>= 196192) или "
                                   f"опусти COMPACT_MIN_CONTEXT_TOKENS",
                                   file=sys.stderr, flush=True)
-                    for k in STRIP_KEYS:
-                        if k in doc:
-                            del doc[k]
-                            stripped = True
                     if apply_sampling(doc):
                         stripped = True
-                    if THINKING_MODE == "budget" and "thinking_token_budget" not in doc:
-                        doc["thinking_token_budget"] = THINKING_BUDGET
+                    изменено, решение = apply_thinking_mode(doc)
+                    if изменено:
                         stripped = True
+                    if решение is not None:
+                        with lock:
+                            stats["hybrid_" + решение] += 1
+                    if compact is None:
+                        save_prefix_snapshot(doc)
                     msgs = doc.get("messages")
                     if isinstance(msgs, list):
                         kept, seen_env = [], False

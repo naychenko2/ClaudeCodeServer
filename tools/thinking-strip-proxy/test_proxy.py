@@ -84,6 +84,114 @@ class СэмплингTests(unittest.TestCase):
             self.assertEqual(doc, {"temperature": 1})
 
 
+class ГибридTests(unittest.TestCase):
+    def _doc(self, last_content, output_config=True):
+        doc = {"model": "m", "messages": [{"role": "user", "content": "задача"},
+                                          {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]},
+                                          {"role": "user", "content": last_content}]}
+        if output_config:
+            doc["output_config"] = {"effort": "low"}
+        return doc
+
+    def test_решение_по_последнему_сообщению(self):
+        self.assertEqual(proxy.thinking_decision({"messages": [{"role": "user", "content": "привет"}]}), "think")
+        self.assertEqual(proxy.thinking_decision(self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}])), "fast")
+        self.assertEqual(proxy.thinking_decision(self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "boom", "is_error": True},
+                                                            {"type": "tool_result", "tool_use_id": "t2", "content": "ok"}])), "think")
+        self.assertEqual(proxy.thinking_decision(self._doc([{"type": "text", "text": "а теперь другое"}])), "think")
+        self.assertEqual(proxy.thinking_decision({"messages": []}), "think")
+        # служебные system-сообщения CLI в хвосте не считаются ходом
+        d = self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}])
+        d["messages"].append({"role": "system", "content": "<total_tokens>1000 tokens left</total_tokens>"})
+        d["messages"].append({"role": "system", "content": [{"type": "text", "text": "# Environment\n…"}]})
+        self.assertEqual(proxy.thinking_decision(d), "fast")
+        d["messages"][-3]["content"][0]["is_error"] = True
+        self.assertEqual(proxy.thinking_decision(d), "think")
+        self.assertEqual(proxy.thinking_decision({"messages": [{"role": "assistant", "content": "x"}]}), "think")
+
+    def test_v2_быстро_только_после_инструментов_чтения(self):
+        d = self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}])
+        self.assertEqual(proxy.thinking_decision(d), "fast")  # t1 — Read
+        d["messages"][1]["content"][0]["name"] = "Write"
+        self.assertEqual(proxy.thinking_decision(d), "think")
+        d["messages"][1]["content"] = [{"type": "tool_use", "id": "t1", "name": "Grep", "input": {}},
+                                       {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}}]
+        d["messages"][2]["content"] = [{"type": "tool_result", "tool_use_id": "t1", "content": "a"},
+                                       {"type": "tool_result", "tool_use_id": "t2", "content": "b"}]
+        self.assertEqual(proxy.thinking_decision(d), "think")  # смешанный пакет — думать
+        d["messages"][2]["content"] = [{"type": "tool_result", "tool_use_id": "t9", "content": "a"}]
+        self.assertEqual(proxy.thinking_decision(d), "think")  # неизвестный id — думать
+
+    def test_hybrid_быстрый_шаг_режет_output_config_и_ставит_presence(self):
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "hybrid"), \
+             unittest.mock.patch.object(proxy, "SAMPLING_FAST", {"presence_penalty": 1.5}):
+            doc = self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (True, "fast"))
+            self.assertNotIn("output_config", doc)
+            self.assertEqual(doc["presence_penalty"], 1.5)
+            self.assertNotIn("thinking_token_budget", doc)
+
+    def test_hybrid_шаг_планирования_оставляет_размышления_с_бюджетом(self):
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "hybrid"), \
+             unittest.mock.patch.object(proxy, "THINKING_BUDGET", 1024), \
+             unittest.mock.patch.object(proxy, "SAMPLING_FAST", {"presence_penalty": 1.5}):
+            doc = self._doc([{"type": "text", "text": "вопрос"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (True, "think"))
+            self.assertEqual(doc["output_config"], {"effort": "low"})
+            self.assertEqual(doc["thinking_token_budget"], 1024)
+            self.assertNotIn("presence_penalty", doc)
+
+    def test_прежние_режимы_не_изменились(self):
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "off"), unittest.mock.patch.object(proxy, "SAMPLING_FAST", {}):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (True, None)); self.assertNotIn("output_config", doc)
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "budget"), unittest.mock.patch.object(proxy, "THINKING_BUDGET", 1024):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (True, None)); self.assertEqual(doc["thinking_token_budget"], 1024); self.assertIn("output_config", doc)
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "on"):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (False, None)); self.assertIn("output_config", doc)
+
+    def test_подмена_усилия_только_при_размышлениях(self):
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "budget"), unittest.mock.patch.object(proxy, "EFFORT_OVERRIDE", "medium"):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            proxy.apply_thinking_mode(doc)
+            self.assertEqual(doc["output_config"]["effort"], "medium")
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "off"), unittest.mock.patch.object(proxy, "EFFORT_OVERRIDE", "medium"):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            proxy.apply_thinking_mode(doc)
+            self.assertNotIn("output_config", doc)
+
+    def test_снимок_префикса_только_первый_ход_и_обрезка_трейлера(self):
+        doc = {"model": "m", "tools": [{"name": "Read"}],
+               "system": [{"type": "text", "text": "карта\n"}, {"type": "text", "text": "правила\nCCS-Session: abc\nCCS-Task: t1\nхвост"}],
+               "messages": [{"role": "user", "content": "задача"}]}
+        body = proxy.prefix_snapshot_body(doc)
+        self.assertEqual([b["text"] for b in body["system"]], ["карта\n", "правила\n"])
+        self.assertEqual(body["tools"], [{"name": "Read"}])
+        doc2 = dict(doc, messages=doc["messages"] + [{"role": "assistant", "content": "ок"}, {"role": "user", "content": "ещё"}])
+        self.assertIsNone(proxy.prefix_snapshot_body(doc2))
+        doc4 = dict(doc, messages=doc["messages"] + [{"role": "system", "content": "<total_tokens>1 tokens left</total_tokens>"}])
+        self.assertIsNotNone(proxy.prefix_snapshot_body(doc4))  # хвостовое system-сообщение CLI — не ход
+        doc3 = dict(doc, system="строка без трейлера")
+        self.assertEqual(proxy.prefix_snapshot_body(doc3)["system"], [{"type": "text", "text": "строка без трейлера"}])
+        self.assertEqual(proxy.prefix_signature(body), proxy.prefix_signature(proxy.prefix_snapshot_body(dict(doc, messages=[{"role": "user", "content": "другая задача"}]))))
+
+    def test_снимок_префикса_пишется_в_каталог(self):
+        with tempfile.TemporaryDirectory() as d, unittest.mock.patch.object(proxy, "PREFIX_SNAPSHOT_DIR", d), \
+             unittest.mock.patch.object(proxy, "_prefix_snapshot_written", {}):
+            doc = {"model": "m", "tools": [{"name": "Read"}], "system": "карта", "messages": [{"role": "user", "content": "задача"}]}
+            self.assertTrue(proxy.save_prefix_snapshot(doc))
+            files = os.listdir(d); self.assertEqual(len(files), 1)
+            saved = json.load(open(os.path.join(d, files[0]), encoding="utf-8"))
+            self.assertEqual(saved["system"], [{"type": "text", "text": "карта"}]); self.assertNotIn("messages", saved)
+            self.assertFalse(proxy.save_prefix_snapshot(doc))  # повтор той же подписи раньше интервала — не пишем
+
+    def test_разбор_kv(self):
+        self.assertEqual(proxy._parse_kv("temperature=0.7,top_k=20,presence_penalty=1.5"), {"temperature": 0.7, "top_k": 20, "presence_penalty": 1.5})
+        self.assertEqual(proxy._parse_kv(""), {})
+
+
 class PruneTests(unittest.TestCase):
     def test_детерминизм(self):
         msgs = history(120)

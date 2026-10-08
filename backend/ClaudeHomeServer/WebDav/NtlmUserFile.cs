@@ -309,19 +309,20 @@ public sealed class NtlmUserFile
         string.Equals(a, b, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>
-    /// Без патча +ccs2 Windows SSPI (KEY_EXCH без SIGN/SEAL) получает InvalidToken при верном хэше:
-    /// при apt upgrade патч слетает молча, поэтому громко пишем об этом при старте.
+    /// Без патча +ccs3 Windows SSPI (KEY_EXCH без SIGN/SEAL) получает InvalidToken при верном хэше,
+    /// а логин с неизвестным доменом клиента (имя машины) не проходит: при apt upgrade патч слетает
+    /// молча, поэтому громко пишем об этом при старте.
     /// Установка и откат — docs/operations/remote-access.md.
     /// </summary>
     private void WarnIfUnpatched(string? version)
     {
         if (version is null || IsPatchedVersion(version)) return;
-        _logger.LogWarning("gss-ntlmssp {Version} без патча '+ccs2' или новее: Windows SSPI получит InvalidToken при верном хэше "
-            + "(KEY_EXCH без SIGN/SEAL). Поставьте пропатченный пакет, см. docs/operations/remote-access.md", version);
+        _logger.LogWarning("gss-ntlmssp {Version} без патча '+ccs3' или новее: Windows SSPI получит InvalidToken при верном хэше "
+            + "(KEY_EXCH без SIGN/SEAL), а домен клиента вне списка строк не пройдёт. Поставьте пропатченный пакет, см. docs/operations/remote-access.md", version);
     }
 
-    /// <summary>Минимальный номер локальной сборки: +ccs1 без правки Type2 (MsvAvFlags) Windows по-прежнему не пускает.</summary>
-    private const int MinCcsBuild = 2;
+    /// <summary>Минимальный номер локальной сборки: +ccs1 без правки Type2 (MsvAvFlags) Windows не пускает, +ccs2 не принимает произвольный домен клиента.</summary>
+    private const int MinCcsBuild = 3;
 
     internal static bool IsPatchedVersion(string version)
     {

@@ -25,6 +25,9 @@ public sealed class SandboxOptions
     // Лимиты контейнера (--memory/--cpus); пусто — без лимита
     public string Memory { get; init; } = "";
     public string Cpus { get; init; } = "";
+    // Брать claude CLI с хоста (bind-mount каталога версий): одна версия у хоста и песочницы.
+    // false — только npm-копия, вшитая в образ.
+    public bool UseHostCli { get; init; } = true;
 
     public bool Enabled => !string.IsNullOrWhiteSpace(ProjectsRoot);
 
@@ -41,6 +44,7 @@ public sealed class SandboxOptions
         Proxy = config["Sandbox:Proxy"] ?? "",
         Memory = config["Sandbox:Memory"] ?? "",
         Cpus = config["Sandbox:Cpus"] ?? "",
+        UseHostCli = !bool.TryParse(config["Sandbox:UseHostCli"], out var uhc) || uhc,
     };
 }
 
@@ -64,6 +68,8 @@ public sealed class SandboxManager
     public const string ProfilesMount = "/sandbox-profiles";
     public const string TmpMount = "/turn-tmp";
     public const string SystemPromptsMount = "/app/SystemPrompts";
+    // Каталог версий нативного claude CLI хоста (read-only)
+    public const string HostCliMount = "/opt/claude-host/versions";
 
     public SandboxManager(IConfiguration config, ILogger<SandboxManager> log)
     {
@@ -151,7 +157,8 @@ public sealed class SandboxManager
         SandboxOptions opts,
         string profilesHostDir,
         string tmpHostDir,
-        string confHash)
+        string confHash,
+        string? hostCliVersions = null)
     {
         var portEnd = opts.PortRangeStart + opts.PortRangeSize - 1;
         // Каталога нет (поставка без карты — bareProvider.SystemPromptFile пустой или
@@ -172,6 +179,8 @@ public sealed class SandboxManager
         };
         if (systemPromptsExists)
             args.AddRange(["-v", $"{systemPromptsHost}:{SystemPromptsMount}"]);
+        if (hostCliVersions is { Length: > 0 })
+            args.AddRange(["-v", $"{hostCliVersions}:{HostCliMount}:ro"]);
         // Токен подписки в контейнер здесь НЕ кладём: он запёкся бы в момент создания и не
         // обновлялся бы после — единая точка правды теперь DockerProcessRunner.BuildTurnEnv
         // (доставка per-exec, на каждый docker exec заново).
@@ -202,8 +211,23 @@ public sealed class SandboxManager
     internal static string DefaultSystemPromptsHost() =>
         Path.Combine(AppContext.BaseDirectory, "SystemPrompts");
 
+    // Каталог версий CLI хоста для mount'а: только Linux-хост, опция не выключена и каталог
+    // существует; иначе null — песочница идёт на npm-копии образа. isLinux/userProfile —
+    // параметры под тесты.
+    internal static string? HostCliVersionsDir(SandboxOptions opts, string userProfile, bool isLinux)
+    {
+        if (!isLinux || !opts.UseHostCli || string.IsNullOrEmpty(userProfile)) return null;
+        var dir = Path.Combine(userProfile, ".local", "share", "claude", "versions");
+        return Directory.Exists(dir) ? dir : null;
+    }
+
+    internal static string? DefaultHostCliVersionsDir(SandboxOptions opts) =>
+        HostCliVersionsDir(opts, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            OperatingSystem.IsLinux());
+
     private List<string> BuildRunArgs(string confHash) =>
-        BuildRunArgsForHost(DefaultSystemPromptsHost(), Options, ProfilesHostDir, TmpHostDir, confHash);
+        BuildRunArgsForHost(DefaultSystemPromptsHost(), Options, ProfilesHostDir, TmpHostDir, confHash,
+            DefaultHostCliVersionsDir(Options));
 
     // Хеш параметров запуска: несовпадение метки на контейнере → пересоздать
     // (смена диапазона портов/mount'ов/прокси не применяется к живому контейнеру)
@@ -212,19 +236,22 @@ public sealed class SandboxManager
         SandboxOptions opts,
         string profilesHostDir,
         string tmpHostDir,
-        string imageId)
+        string imageId,
+        string? hostCliVersions = null)
     {
         var systemPromptsExists = Directory.Exists(systemPromptsHost);
         var payload = string.Join("\n",
             imageId, opts.ProjectsRoot, profilesHostDir, tmpHostDir,
             opts.PortRangeStart.ToString(), opts.PortRangeSize.ToString(),
             opts.Proxy, opts.Memory, opts.Cpus,
-            systemPromptsExists ? systemPromptsHost : "");
+            systemPromptsExists ? systemPromptsHost : "",
+            hostCliVersions ?? "");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))[..16];
     }
 
     private string ConfigHash(string imageId) =>
-        ConfigHashForHost(DefaultSystemPromptsHost(), Options, ProfilesHostDir, TmpHostDir, imageId);
+        ConfigHashForHost(DefaultSystemPromptsHost(), Options, ProfilesHostDir, TmpHostDir, imageId,
+            DefaultHostCliVersionsDir(Options));
 
     // Команда сборки образа песочницы. uid передаём явно: без --build-arg APP_UID
     // пользователь app получает дефолт Dockerfile, а bind-mount на Linux сверяет права

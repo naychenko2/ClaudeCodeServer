@@ -44,8 +44,9 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
     // Рубильник на случай CLI старее флага --no-session-persistence (см. BuildArgs): CLI
-    // валидирует аргументы и падает с кодом 1 на незнакомом, а образ песочницы может нести
-    // версию старее хостовой. true — вернуть прежнее поведение с записью транскриптов.
+    // валидирует аргументы и падает с кодом 1 на незнакомом, а в песочнице при выключенном
+    // Sandbox:UseHostCli (или без каталога версий хоста) CLI берётся из образа и может быть
+    // старее хостового. true — вернуть прежнее поведение с записью транскриптов.
     private readonly bool _persistSessions = config.GetValue("Claude:PersistOneShotSessions", false);
     private int _spendNullWarned;
 
@@ -283,7 +284,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         // пользователя протекали в тон продуктовых текстов. CLAUDE_CONFIG_DIR так не
         // умеет (память CLI грузит мимо него), --bare ломает OAuth-авторизацию
         // (пропускает чтение кредов). Только локально: флаг появился в CLI 2.1.169,
-        // песочница может нести версию старее — там не рискуем.
+        // песочница с npm-копией образа (UseHostCli выключен или каталога версий хоста нет) может
+        // нести версию старее — там не рискуем.
         if (safeMode) args.Add("--safe-mode");
         // Инструменты жестко выключены. Это контракт (пустая temp-cwd и раньше
         // подразумевала «без файлов», но не мешала Read по абсолютному пути) и защита

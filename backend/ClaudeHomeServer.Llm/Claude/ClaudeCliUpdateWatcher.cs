@@ -33,7 +33,9 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // После установки — дымовой прогон; не прошёл → откат на прежнюю версию и пометка «битая»
 // (BadVersions), чтобы не ставить её повторно каждые сутки. Исключение — дым, упавший на
 // авторизации: это не вина версии, откатываемся, но «битой» не помечаем.
-// Установка и дым идут вне _lock, как и CHANGELOG. Песочница cc-sandbox вне скоупа.
+// Установка и дым идут вне _lock, как и CHANGELOG. Песочница cc-sandbox идёт за хостом сама: при Sandbox:UseHostCli
+// она запускает нативный бинарь из смонтированного каталога версий хоста (по симлинку
+// ~/.local/bin/claude), так что отдельного обновления ей не нужно; фолбэк — npm-копия образа.
 public sealed class ClaudeCliUpdateWatcher : BackgroundService
 {
     public const string HttpClientName = "claude-cli-npm";

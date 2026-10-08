@@ -51,6 +51,7 @@ OPS = {
     "master": "sep",
     "music_edit": "acestep",
     "transcribe": "asr",
+    "transcribe_diarize": "whisperx",
 }
 
 OUTPUT_SUBFOLDER = "ccs-local-media"
@@ -77,8 +78,17 @@ def _safe_input(name):
     return full
 
 
-def _free_vram():
-    mm.unload_all_models()
+# Запас сверх бюджета семейства: CUDA-контекст процесса воркера и фрагментация
+HEADROOM_MB = 1536
+
+
+def _free_vram(need_mb=None):
+    """С бюджетом (vram_mb семейства в workers.json) освобождает только нужное: модели ComfyUI
+    частично уходят в ОЗУ и потом возвращаются без пересборки. Без бюджета — выгрузить всё."""
+    if need_mb:
+        mm.free_memory((need_mb + HEADROOM_MB) * 2**20, mm.get_torch_device())
+    else:
+        mm.unload_all_models()
     gc.collect()
     mm.soft_empty_cache(force=True)
 
@@ -106,6 +116,9 @@ class CcsAudioWorker:
         return float("nan")
 
     def run(self, op, params_json, inputs, filename_prefix, timeout_minutes):
+        return self._run(op, params_json, inputs, filename_prefix, timeout_minutes, soft=True)
+
+    def _run(self, op, params_json, inputs, filename_prefix, timeout_minutes, soft):
         if op not in OPS:
             raise ValueError(f"неизвестная операция {op}")
         params = json.loads(params_json or "{}")
@@ -118,7 +131,8 @@ class CcsAudioWorker:
         out_dir = os.path.join(folder_paths.get_output_directory(), OUTPUT_SUBFOLDER)
         os.makedirs(out_dir, exist_ok=True)
 
-        _free_vram()
+        need_mb = family.get("vram_mb") if soft else None
+        _free_vram(need_mb)
 
         job = {"op": op, "params": params, "inputs": in_paths, "out_dir": out_dir, "prefix": prefix}
         fd, job_path = tempfile.mkstemp(prefix="ccs-audio-", suffix=".json")
@@ -183,6 +197,10 @@ class CcsAudioWorker:
                 break
         if proc.returncode != 0 or result is None:
             tail = "\n".join(l for l in lines if not l.startswith(RESULT_MARK))[-2000:]
+            # бюджет оказался мал — повтор с полной выгрузкой, как было до бюджетов
+            if need_mb and "out of memory" in tail.lower():
+                log.warning("аудио-воркер %s: OOM при бюджете %d МБ — повтор с полной выгрузкой", op, need_mb)
+                return self._run(op, params_json, inputs, filename_prefix, timeout_minutes, soft=False)
             raise RuntimeError(f"воркер {op} завершился с кодом {proc.returncode}: {tail}")
 
         files = []

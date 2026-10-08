@@ -12,6 +12,7 @@
   --prefail  перед основным прогоном — рукопожатие с неверным паролем на том же соединении
   --abandon  перед основным рукопожатием отправить лишний Type1 без Type3
   --kxk-ess  KeyExchangeKey = HMAC(SessionBaseKey, ServerChallenge‖LM[0..8]) — клиент, читающий KXKEY буквально (на стенде обязан дать отказ)
+  --user=, --domain=  логин и домен клиента (по умолчанию andrey и WORKGROUP; --domain= пустой — без домена)
   --no-mechmic  в SPNEGO не класть mechListMIC (по умолчанию кладётся, как Windows)
 Запускает ./acceptor, прогоняет Type1 → Type2 → Type3, печатает итог одной строкой (OK/FAIL)."""
 import hashlib, hmac, os, struct, subprocess, sys, time
@@ -74,7 +75,7 @@ def main():
     flags1 = int(sys.argv[1], 16); password = sys.argv[2]; tamper = '--tamper-mic' in sys.argv
     opt = {a.split('=')[0]: (a.split('=', 1)[1] if '=' in a else True) for a in sys.argv[3:]}
     win_version = b'\x0a\0\x63\x45\0\0\0\x0f' if '--win' in opt else b'\0' * 8
-    user, domain = 'andrey', 'WORKGROUP'
+    user, domain = opt.get('--user', 'andrey'), opt.get('--domain', 'WORKGROUP')  # --domain= пустой — голый логин
     sent = {'n': 0}
     wrap = None  # в SPNEGO заворачиваем только на --http --spnego
     if '--http' in opt:

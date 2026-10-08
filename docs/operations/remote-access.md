@@ -253,23 +253,30 @@ Basic. Иначе Mini-Redirector цепляется за Negotiate и крут�
 2. Type2 всегда нёс `MsvAvFlags=0`. Windows SSPI правит эту пару в своей копии CHALLENGE_MESSAGE на месте
    (`|= MIC_PRESENT`) и считает MIC по изменённому Type2, поэтому подпись не сходилась. Без этой пары
    Windows считает MIC по Type2 с провода, как и клиенты по спецификации.
+3. Домен входит в NTLMv2-хэш в написании клиента, а Windows шлёт его непредсказуемо (`.`, имя клиентской
+   машины, в другом регистре). Строка без домена считалась с пустым доменом, строка с доменом — с написанием из
+   файла, поэтому чужой домен и `workgroup` вместо `WORKGROUP` давали `GenericFailure` (бой 2026-10-08, `VIDEO\anna`).
 
-**Патчи** (проверка MIC не ослаблена, меняется только выбор ключа и состав Type2):
+**Патчи** (проверка MIC и NTProofStr не ослаблена, меняются выбор ключа, состав Type2 и домен в хэше):
 [ntlm-key-exch-requires-sign-seal.diff](../../deploy/gss-ntlmssp/ntlm-key-exch-requires-sign-seal.diff) (`+ccs1`) и
-[ntlm-no-empty-msvavflags-in-type2.diff](../../deploy/gss-ntlmssp/ntlm-no-empty-msvavflags-in-type2.diff) (`+ccs2`).
-Пакет `1.2.0-1build5+ccs2` (Ubuntu 26.04) собирает [build-deb.sh](../../deploy/gss-ntlmssp/build-deb.sh) в контейнере;
+[ntlm-no-empty-msvavflags-in-type2.diff](../../deploy/gss-ntlmssp/ntlm-no-empty-msvavflags-in-type2.diff) (`+ccs2`) и
+[ntlm-domainless-row-uses-client-domain.diff](../../deploy/gss-ntlmssp/ntlm-domainless-row-uses-client-domain.diff) (`+ccs3`):
+`gssntlm_srv_auth` пробует NTOWFv2 с доменом строки файла, затем с доменом из Type3 в точном написании клиента,
+затем без домена — строка без домена принимает любой домен клиента, `workgroup` проходит по строке `WORKGROUP`.
+Каждая попытка сверяется по NTProofStr, неверный пароль отказывает при любом домене.
+Пакет `1.2.0-1build5+ccs3` (Ubuntu 26.04) собирает [build-deb.sh](../../deploy/gss-ntlmssp/build-deb.sh) в контейнере;
 готовый .deb лежит в `deploy/gss-ntlmssp/out/` (в git не коммитится), тесты матрицы флагов — `build-deb.sh --test`.
-Пакет правит только акцептор (`gss_sec_ctx.c`). `+ccs1` Windows не пускает: нужен `+ccs2` или новее.
+Пакет правит только акцептор (`gss_sec_ctx.c`, `gss_auth.c`). `+ccs1` Windows не пускает, `+ccs2` не принимает произвольный домен клиента: нужен `+ccs3` или новее. Откат с `+ccs3` на `+ccs2` безопасен: строки `.`/`WORKGROUP`/`AI` и голая в файле остаются, как работали.
 
 **Установка (делает человек, на хосте с боевым `ccs.service`).** Пакет:
-`/home/an/ccs-packages/gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb`, sha256
-`ea89f8576e721462da21e49c8801fa56a9cec7b4a9bc28eb4ebb512b1ec426e6` (`gssntlmssp.so` внутри — sha256
-`3f2c5b9803469985a801663eca9f7819918122cc8501e331e4ef2ab73f38ed97`; повторная сборка даёт ту же `.so`, но другой
-sha256 самого `.deb`).
+`/home/an/ccs-packages/gss-ntlmssp_1.2.0-1build5+ccs3_amd64.deb`, sha256
+`bc92de5799fbb59e732152c4551a24ae7173179ab20f20658b79a728bfe49d7e` (`gssntlmssp.so` внутри — sha256
+`04b388420b46db2a32193d4aa9f36ccac600cd48edf81e155353fa6c27933a92`; повторная сборка даёт ту же `.so`, но другой
+sha256 самого `.deb`). Прежний `+ccs2` (sha256 `ea89f857…26e6`) лежит рядом для отката.
 
 ```bash
-sha256sum gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb   # сверить с суммой выше
-sudo dpkg -i gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb
+sha256sum gss-ntlmssp_1.2.0-1build5+ccs3_amd64.deb   # сверить с суммой выше
+sudo dpkg -i gss-ntlmssp_1.2.0-1build5+ccs3_amd64.deb
 sudo apt-mark hold gss-ntlmssp
 sudo systemctl restart ccs.service
 deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на месте
@@ -282,9 +289,9 @@ deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на �
 Трассировка gss-ntlmssp — `Environment=GSSNTLMSSP_DEBUG=/tmp/gssntlm.log` в юните (после проверки убрать).
 
 **Сторож отката.** `apt upgrade` без hold молча вернёт оригинал. Защиты две: hold и проверка
-[check-gss-ntlmssp.sh](../../deploy/gss-ntlmssp/check-gss-ntlmssp.sh) (exit 1 — версия без `+ccs2` или новее, exit 2 —
+[check-gss-ntlmssp.sh](../../deploy/gss-ntlmssp/check-gss-ntlmssp.sh) (exit 1 — версия без `+ccs3` или новее, exit 2 —
 нет hold; печатает `WARNING` в stderr; добавьте вызов в `/opt/ccs/check-release.sh` или cron). Плюс сервер при
-старте пишет warning `gss-ntlmssp … без патча '+ccs2' или новее` (`NtlmUserFile`), если читает
+старте пишет warning `gss-ntlmssp … без патча '+ccs3' или новее` (`NtlmUserFile`), если читает
 `/var/lib/dpkg/status` и версия без суффикса.
 
 **Откат:** `sudo apt-mark unhold gss-ntlmssp && sudo apt install --reinstall gss-ntlmssp=1.2.0-1build5`

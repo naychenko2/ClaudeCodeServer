@@ -37,9 +37,10 @@ public class WebDavNtlmUserFileTests : IDisposable
     [Theory]
     [InlineData("1.2.0-1build5", false)]
     [InlineData("1.2.0-1build5+ccs1", false)]
-    [InlineData("1.2.0-1build5+ccs2", true)]
+    [InlineData("1.2.0-1build5+ccs2", false)]
+    [InlineData("1.2.0-1build5+ccs3", true)]
     [InlineData("1.2.0-1build5+ccs10", true)]
-    public void IsPatchedVersion_требует_ccs2_или_новее(string version, bool expected) =>
+    public void IsPatchedVersion_требует_ccs3_или_новее(string version, bool expected) =>
         NtlmUserFile.IsPatchedVersion(version).Should().Be(expected);
 
     [Fact]

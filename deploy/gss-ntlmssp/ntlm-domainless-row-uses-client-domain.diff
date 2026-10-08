@@ -1,0 +1,49 @@
+Description: NTLMv2 на акцепторе считается и с доменом, присланным клиентом
+ Windows шлёт голый логин с доменом, который заранее не угадать: "." или имя
+ клиентской машины. Строка файла NTLM_USER_FILE без домена считалась с пустым
+ доменом, строка с доменом - с написанием из файла, поэтому не проходили
+ неизвестный домен клиента и вариант в другом регистре (домен входит в NTOWFv2
+ с точным написанием, а поиск строки регистр не учитывает).
+ Теперь gssntlm_srv_auth пробует по очереди домен строки файла, домен из Type3
+ в точном написании клиента и пустой домен; совпадающие попытки пропускаются.
+ Каждая попытка проверяется по NTProofStr, поэтому неверный пароль отказывает
+ при любом домене, а домен не секрет и в модель безопасности не входит.
+Author: Claude Code Server <noreply@anthropic.com>
+Forwarded: no
+Last-Update: 2026-10-08
+
+--- a/src/gss_auth.c	2026-10-08 14:56:03.393100204 +0300
++++ b/src/gss_auth.c	2026-10-08 14:56:19.239144077 +0300
+@@ -354,12 +354,29 @@
+                                                  client_chal);
+             }
+ 
+-        } else for (retries = 2; retries > 0; retries--) {
++        } else for (retries = 3; retries > 0; retries--) {
+ 
+-            if (retries == 2) {
+-                domstr = cred->cred.user.user.data.user.domain;
++            /* The domain used for NTOWFv2 is whatever the client used, so
++             * try, in this order: the domain of the matched file entry (if
++             * any), the domain sent by the client in its exact spelling
++             * (covers entries without a domain and case differences), and
++             * no domain at all. A try equal to a previous one is skipped.
++             * Every try is verified against NTProofStr below. */
++            const char *entry_dom = cred->cred.user.user.data.user.domain;
++            const char *client_dom = ctx->source_name.data.user.domain;
++
++            if (client_dom && client_dom[0] == '\0') client_dom = NULL;
++            if (retries == 3) {
++                domstr = entry_dom;
++            } else if (retries == 2) {
++                domstr = client_dom;
++                if (domstr == entry_dom ||
++                    (domstr && entry_dom && strcmp(domstr, entry_dom) == 0)) {
++                    continue;
++                }
+             } else {
+                 domstr = NULL;
++                if (entry_dom == NULL) continue;
+             }
+ 
+             /* NTLMv2 Key */

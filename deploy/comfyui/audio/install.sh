@@ -93,7 +93,7 @@ echo "== конфиг воркеров"
 W="$DEPLOY/workers"
 cat > "$AUDIO_ROOT/workers.json" <<JSON
 {"families": {
-  "tts": {"python": "$AUDIO_ROOT/qwen3tts-env/.venv/bin/python", "script": "$W/worker_tts.py"},
+  "tts": {"python": "$AUDIO_ROOT/qwen3tts-env/.venv/bin/python", "script": "$W/worker_tts.py", "vram_mb": 4400},
   "chatterbox": {"python": "$AUDIO_ROOT/chatterbox/.venv/bin/python", "script": "$W/worker_chatterbox.py"},
   "moss": {"python": "$AUDIO_ROOT/moss-tts/.venv/bin/python", "script": "$W/worker_moss.py"},
   "sep": {"python": "$AUDIO_ROOT/util/.venv/bin/python", "script": "$W/worker_sep.py"},

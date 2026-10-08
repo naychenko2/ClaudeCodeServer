@@ -159,6 +159,7 @@ public class LlmProviderRegistry
     //    сменили без ведома человека, и полный контекст на ней он не выбирал;
     //  • чат без персоны — как раньше, решает провайдер модели: у него свой профиль
     //    (BareMode/Trim/KeepMcpTools/RecallInTurnText) или его нет;
+    //  • RecallInTurnText при этом читается и отдельно, мимо профиля — RecallInTurnTextFor;
     //  • иначе в чате с персоной решает Persona.LightContext, в том числе на локальной модели,
     //    выбранной человеком (модель чата, персоны, слот): выкл → null; вкл → профиль провайдера
     //    модели, а у модели без своего профиля (Opus/Sonnet) — общая секция LightProfile.
@@ -175,6 +176,14 @@ public class LlmProviderRegistry
         if (persona is null) return own;
         return persona.LightContext == true ? own ?? _lightProfile : null;
     }
+
+    // Хвостовой recall (RecallInTurnText) — свойство ПРОВАЙДЕРА модели, а не облегчённого
+    // контекста: ручка про механику prefix cache движка (нестабильные секции рвут кэш в
+    // середине системного блока), и рвут они его одинаково при полном и облегчённом контексте.
+    // Поэтому её читают мимо LightProfileFor: у персоны с выключенным LightContext на
+    // local-qwen профиль null, а recall всё равно обязан ехать хвостом (замер 2026-10-09:
+    // смена рабочего фокуса/recall персоны между чатами — 50 с первого входа вместо 1 с).
+    public bool RecallInTurnTextFor(string? model) => ResolveByModel(model)?.RecallInTurnText == true;
 
     // Wire-токен провайдера модели ("claude" | key) — для guard смены провайдера и фронта
     public string ProviderKey(string? model) => ResolveByModel(model)?.Key ?? "claude";

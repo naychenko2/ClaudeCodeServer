@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import diff_miss
@@ -66,6 +67,21 @@ P = dict(keep_tail_tokens=_в_токенах(20 * len(BIG)),
          step_tokens=_в_токенах(10 * len(BIG), вверх=True),
          min_chars=2000, min_tokens=_в_токенах(30000),
          min_context_tokens=оценка(history(120)) - ЗАПАС_НАД_ГЕЙТОМ)
+
+
+class СэмплингTests(unittest.TestCase):
+    def test_перебивает_температуру_cli_и_не_трогает_остальное(self):
+        with unittest.mock.patch.object(proxy, "SAMPLING", {"temperature": 0.7, "top_p": 0.8, "top_k": 20}):
+            doc = {"model": "m", "temperature": 1, "messages": []}
+            self.assertTrue(proxy.apply_sampling(doc))
+            self.assertEqual(doc, {"model": "m", "temperature": 0.7, "top_p": 0.8, "top_k": 20, "messages": []})
+            self.assertFalse(proxy.apply_sampling(doc))
+
+    def test_пустой_sampling_ничего_не_меняет(self):
+        with unittest.mock.patch.object(proxy, "SAMPLING", {}):
+            doc = {"temperature": 1}
+            self.assertFalse(proxy.apply_sampling(doc))
+            self.assertEqual(doc, {"temperature": 1})
 
 
 class PruneTests(unittest.TestCase):

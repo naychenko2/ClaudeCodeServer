@@ -28,6 +28,14 @@ PORT = int(os.environ.get("LISTEN_PORT", "18021"))
 THINKING_MODE = os.environ.get("THINKING_MODE", "off")
 THINKING_BUDGET = int(os.environ.get("THINKING_BUDGET", "512"))
 STRIP_KEYS = ("output_config",) if THINKING_MODE == "off" else ()
+# Сэмплинг локальной модели (замер 2026-10-08, flashnext-logs/sweep/verb-*): CLI шлёт
+# temperature=1 всегда, а у 27B при 1.0 — 4,7% ответов текстом вместо вызова инструмента и
+# ответы в среднем 920 токенов; при 0.7/0.8/20 — 0,7% и 790 (с директивой краткости в карте — 540).
+# Формат key=value через запятую (temperature=0.7,top_p=0.8,top_k=20): JSON в Environment=
+# systemd не переживает — кавычки он снимает. Перебивает значения CLI в запросе на локаль;
+# пусто — не трогать. В облако (автосжатие) не применяется: тело для него снимается до правки.
+SAMPLING = {k: (int(v) if v.lstrip("-").isdigit() else float(v))
+            for k, v in (kv.split("=", 1) for kv in os.environ.get("SAMPLING", "").split(",") if kv)}
 HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "te",
        "trailer", "upgrade", "content-length", "host"}
 
@@ -639,6 +647,16 @@ def is_compact_request(doc, min_context_tokens=None):
     return compact_verdict(doc, min_context_tokens)[0] == "route"
 
 
+def apply_sampling(doc):
+    """Подставляет SAMPLING в тело запроса; True — тело изменилось."""
+    changed = False
+    for k, v in SAMPLING.items():
+        if doc.get(k) != v:
+            doc[k] = v
+            changed = True
+    return changed
+
+
 def compact_body(doc):
     """Тело для облака: то же самое, только `model` подменена. Вход не мутирует.
 
@@ -1054,7 +1072,8 @@ class Handler(BaseHTTPRequestHandler):
     def _stats(self):
         with lock:
             msg = json.dumps(dict(stats, prune=PRUNE_MODE, thinking=THINKING_MODE,
-                                  compact=COMPACT_MODEL if COMPACT_UPSTREAM else "off")).encode()
+                                  compact=COMPACT_MODEL if COMPACT_UPSTREAM else "off",
+                                  sampling=SAMPLING or "off")).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(msg)))
@@ -1117,6 +1136,8 @@ class Handler(BaseHTTPRequestHandler):
                         if k in doc:
                             del doc[k]
                             stripped = True
+                    if apply_sampling(doc):
+                        stripped = True
                     if THINKING_MODE == "budget" and "thinking_token_budget" not in doc:
                         doc["thinking_token_budget"] = THINKING_BUDGET
                         stripped = True

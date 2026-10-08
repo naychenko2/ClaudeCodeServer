@@ -381,6 +381,50 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task Auto_DailyReleases_InstallsOldestSoakedCandidate_NotNever()
+    {
+        var f = new FakeOps();
+        var w = CreateAuto(f);
+        _npm.Version = "2.1.290"; await w.CheckOnceAsync();            // день 0: A
+        _now = _now.AddDays(1); _npm.Version = "2.1.291"; await w.CheckOnceAsync();   // день 1: B
+        f.Installed.Should().BeEmpty();
+        _now = _now.AddDays(1); _npm.Version = "2.1.292"; await w.CheckOnceAsync();   // день 2: C, A выдержана
+
+        f.Installed.Should().Equal("2.1.290");
+        _now = _now.AddDays(1); _npm.Version = "2.1.293"; await w.CheckOnceAsync();   // день 3: B выдержана
+        f.Installed.Should().Equal("2.1.290", "2.1.291");
+    }
+
+    [Fact]
+    public async Task Auto_SmokeAuthFailure_RollsBack_ButDoesNotMarkBad()
+    {
+        var f = new FakeOps { Smoke = new SmokeResult(false, "Not logged in", AuthFailed: true) };
+        var w = CreateAuto(f);
+        await w.CheckOnceAsync();
+        _now = _now.AddDays(3);
+        await w.CheckOnceAsync();
+
+        f.RolledBack.Should().Equal("2.1.283");
+        _sender.Sent.Should().ContainSingle();
+        _sender.Sent[0].Req.Body.Should().Contain("не смог авторизоваться").And.NotContain("битой и повторно");
+
+        f.Smoke = new SmokeResult(true, null);
+        _now = _now.AddDays(1);
+        await w.CheckOnceAsync();
+        f.Installed.Should().Equal("2.1.300", "2.1.300");
+    }
+
+    [Fact]
+    public void SmokeEvaluate_DetectsAuthFailure_OnlyInErrorText()
+    {
+        ClaudeCliAutoUpdateOps.Evaluate(1, "Not logged in · Please run /login\n", "M").AuthFailed.Should().BeTrue();
+        ClaudeCliAutoUpdateOps.Evaluate(1, "", "M", "OAuth session expired").AuthFailed.Should().BeTrue();
+        ClaudeCliAutoUpdateOps.Evaluate(0, "{\"type\":\"result\",\"is_error\":true,\"result\":\"API Error: 401 Unauthorized\"}\n", "M")
+            .AuthFailed.Should().BeTrue();
+        ClaudeCliAutoUpdateOps.Evaluate(1, "{\"type\":\"system\",\"oauth\":\"401\"}\n", "M", "segfault").AuthFailed.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Auto_Disabled_KeepsOldBehavior_NoInstall()
     {
         var f = new FakeOps();

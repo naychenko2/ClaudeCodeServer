@@ -24,12 +24,15 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // Смотрит только CLI хоста: у песочницы container-владельцев своя копия.
 //
 // Автообновление (ClaudeCliUpdate:AutoUpdate, по умолчанию выключено): сервер сам ставит
-// `claude install <latest>`, когда версия пролежала в `latest` не меньше SoakDays. Выдержку
-// считаем от ПЕРВОГО НАБЛЮДЕНИЯ версии как latest (State.LatestSeenAt), а не от даты публикации
-// в npm: пакет-документ с полем `time` весит мегабайты, а момент наблюдения всегда не раньше
-// публикации, то есть ошибается только в сторону осторожности (рестарт со сбросом состояния
-// лишь продлит ожидание). После установки — дымовой прогон; не прошёл → откат на прежнюю
-// версию и пометка «битая» (BadVersions), чтобы не ставить её повторно каждые сутки.
+// `claude install <версия>` для самой новой версии, пролежавшей в `latest` не меньше SoakDays.
+// Выдержку считаем от ПЕРВОГО НАБЛЮДЕНИЯ версии как latest (State.SeenAt: версия → момент), а не
+// от даты публикации в npm: пакет-документ с полем `time` весит мегабайты, а момент наблюдения
+// всегда не раньше публикации, то есть ошибается только в сторону осторожности. Карта, а не одна
+// версия: CLI выходит почти ежедневно, и часы единственной latest при каждом релизе сбрасывались
+// бы — обновление не случилось бы никогда. Ставим кандидата, даже если он уже не latest.
+// После установки — дымовой прогон; не прошёл → откат на прежнюю версию и пометка «битая»
+// (BadVersions), чтобы не ставить её повторно каждые сутки. Исключение — дым, упавший на
+// авторизации: это не вина версии, откатываемся, но «битой» не помечаем.
 // Установка и дым идут вне _lock, как и CHANGELOG. Песочница cc-sandbox вне скоупа.
 public sealed class ClaudeCliUpdateWatcher : BackgroundService
 {
@@ -56,9 +59,8 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
         public string? DigestPair { get; set; }
         // Пара, для которой дайджест ПОЛНЫЙ (нашлась секция latest) — перекачка не нужна
         public string? DigestFor { get; set; }
-        // Автообновление: версия, впервые замеченная как latest, и момент замечания (UTC)
-        public string? LatestSeenVersion { get; set; }
-        public DateTime? LatestSeenAt { get; set; }
+        // Автообновление: версия → момент первого наблюдения как latest (UTC); записи ≤ Current чистятся
+        public Dictionary<string, DateTime> SeenAt { get; set; } = [];
         // Версии, не прошедшие установку/дым: автоматически не ставятся
         public List<string> BadVersions { get; set; } = [];
     }
@@ -80,11 +82,13 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
     private State _state;
 
     public ClaudeCliUpdateWatcher(IHttpClientFactory http, IUserStore users,
-        INotificationSender notifications, IConfiguration config, ILogger<ClaudeCliUpdateWatcher> log)
+        INotificationSender notifications, IConfiguration config, ILogger<ClaudeCliUpdateWatcher> log,
+        OneShotClaudeRunner runner, ILauncherFactory launchers, LlmProviderRegistry llmProviders)
         : this(http, users, notifications, log, ClaudeCliVersion.RefreshAsync,
             Path.Combine(SubsystemHostingExtensions.ResolveDataDir(config), StateFileName),
             config.GetValue("ClaudeCliUpdate:Interval", TimeSpan.FromHours(24)),
-            CliAutoUpdateOps.Real, config.GetValue("ClaudeCliUpdate:AutoUpdate", false),
+            CliAutoUpdateOps.Real(new ClaudeCliAutoUpdateOps(runner, launchers, llmProviders, log)),
+            config.GetValue("ClaudeCliUpdate:AutoUpdate", false),
             Math.Max(0, config.GetValue("ClaudeCliUpdate:SoakDays", 2)))
     {
     }
@@ -95,7 +99,7 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
         Func<Task<string?>> refreshCurrent, string statePath, TimeSpan interval,
         CliAutoUpdateOps? ops = null, bool autoUpdate = false, int soakDays = 2, Func<DateTime>? utcNow = null)
     {
-        _ops = ops ?? CliAutoUpdateOps.Real;
+        _ops = ops ?? CliAutoUpdateOps.Disabled;
         _autoUpdate = autoUpdate;
         _soakDays = soakDays;
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
@@ -165,12 +169,9 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
             if (latest is not null)
             {
                 _state.Latest = latest;
-                if (latest != _state.LatestSeenVersion)
-                {
-                    _state.LatestSeenVersion = latest;
-                    _state.LatestSeenAt = _utcNow();
-                }
+                _state.SeenAt.TryAdd(latest, _utcNow());
             }
+            PruneSeen();
             _state.CheckedAt = DateTime.UtcNow;
             if (UpdateAvailable(_state.Current, _state.Latest) == true)
             {
@@ -237,17 +238,17 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
             await _lock.WaitAsync(ct);
             try
             {
-                if (UpdateAvailable(_state.Current, _state.Latest) != true) return;
-                if (_state.BadVersions.Contains(_state.Latest!)) return;
-                // Выдержка: latest должна пролежать ≥ SoakDays с момента первого наблюдения
-                if (_state.LatestSeenVersion != _state.Latest || _state.LatestSeenAt is not { } seen
-                    || _utcNow() - seen < TimeSpan.FromDays(_soakDays)) return;
-                (current, latest) = (_state.Current!, _state.Latest!);
-                models = _state.Digest?.NewModels ?? [];
+                if (_state.Current is null) return;
+                // Кандидат — самая новая версия новее Current, пролежавшая в latest ≥ SoakDays и не битая
+                var candidate = PickCandidate();
+                if (candidate is null) return;
+                (current, latest) = (_state.Current, candidate);
+                models = candidate == _state.Latest ? _state.Digest?.NewModels ?? [] : [];
             }
             finally { _lock.Release(); }
 
             string? failure = null;
+            var authFailed = false;
             try
             {
                 if (!await _ops.Install(latest, ct)) failure = "claude install завершился ошибкой";
@@ -258,7 +259,11 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
                     else
                     {
                         var smoke = await _ops.Smoke(ct);
-                        if (!smoke.Ok) failure = "дымовой прогон не прошёл: " + smoke.Reason;
+                        if (!smoke.Ok)
+                        {
+                            failure = "дымовой прогон не прошёл: " + smoke.Reason;
+                            authFailed = smoke.AuthFailed;
+                        }
                     }
                 }
             }
@@ -277,7 +282,7 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
                 await _lock.WaitAsync(ct);
                 try
                 {
-                    if (!_state.BadVersions.Contains(latest)) _state.BadVersions.Add(latest);
+                    if (!authFailed && !_state.BadVersions.Contains(latest)) _state.BadVersions.Add(latest);
                     if (after is not null) _state.Current = after;
                     Save();
                 }
@@ -285,7 +290,9 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
 
                 var tail = rolledBack ? $"Откатил на {current}." : $"Откат на {current} НЕ удался — проверьте claude на сервере.";
                 await SendToAdminsAsync($"claude CLI не обновлён до {latest}",
-                    $"Не обновил {latest}: {failure}. {tail} Версия помечена битой и повторно ставиться не будет.");
+                    authFailed
+                        ? $"Не обновил {latest}: дым не смог авторизоваться ({failure}). {tail} Версия битой не помечена — проверьте вход claude на сервере, попытка повторится."
+                        : $"Не обновил {latest}: {failure}. {tail} Версия помечена битой и повторно ставиться не будет.");
                 return;
             }
 
@@ -293,6 +300,7 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
             try
             {
                 _state.Current = latest;
+                PruneSeen();
                 _state.Digest = null;
                 _state.DigestPair = null;
                 _state.DigestFor = null;
@@ -305,6 +313,29 @@ public sealed class ClaudeCliUpdateWatcher : BackgroundService
             await SendToAdminsAsync(title, body);
         }
         finally { _updateGate.Release(); }
+    }
+
+    // Под _lock
+    private string? PickCandidate()
+    {
+        var soak = TimeSpan.FromDays(_soakDays);
+        var now = _utcNow();
+        string? best = null;
+        Version? bestV = null;
+        foreach (var (ver, seen) in _state.SeenAt)
+        {
+            if (UpdateAvailable(_state.Current, ver) != true || _state.BadVersions.Contains(ver)
+                || now - seen < soak || !Version.TryParse(ver, out var v)) continue;
+            if (bestV is null || v > bestV) (best, bestV) = (ver, v);
+        }
+        return best;
+    }
+
+    // Под _lock: версии не новее Current выдерживать незачем
+    private void PruneSeen()
+    {
+        foreach (var ver in _state.SeenAt.Keys.ToList())
+            if (UpdateAvailable(_state.Current, ver) == false) _state.SeenAt.Remove(ver);
     }
 
     internal static (string Title, string Body) UpdatedText(string from, string to, IReadOnlyList<NewModel> models)

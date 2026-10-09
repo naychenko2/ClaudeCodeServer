@@ -1,7 +1,7 @@
 import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
 import type { Project } from '../types';
 import { canRunTurn } from '../lib/projectCapabilities';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, CornerUpLeft, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z, composerLip } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -1920,11 +1920,14 @@ export function Composer({
         </div>
       )}
     </div>
-    {/* Исполнитель: переход к чату-постановщику — тем же бейджем, что ⇥, прижат вправо */}
+    {/* Исполнитель: переход к чату-постановщику — тем же бейджем, что ⇥, прижат вправо.
+        На мобиле подпись съедала поле ввода до «Написа…» — там только иконка */}
     {executorTask?.onOpenParent && (
       <FieldBadge onClick={executorTask.onOpenParent} title="Открыть чат, из которого поставлена задача"
-        style={{ marginLeft: SP.sm }}>
-        к постановщику
+        style={isMobile
+          ? { marginLeft: SP.xs, padding: '5px 7px', display: 'inline-flex', alignItems: 'center' }
+          : { marginLeft: SP.sm }}>
+        {isMobile ? <CornerUpLeft size={14} aria-label="к постановщику" /> : 'к постановщику'}
       </FieldBadge>
     )}
     </div>

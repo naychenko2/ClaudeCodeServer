@@ -1120,6 +1120,26 @@ const windowWidth = useWindowWidth();
     }
   };
 
+  // Открытый чат ушёл (архив, удаление) — центр и запись истории переводим на соседа,
+  // null — в пустое состояние. Открытая шторка чатов лежит в истории своей записью
+  // поверх записи этого чата: navReplace затёр бы её флаг, и запись ушедшего чата
+  // осталась бы под соседом. Сперва снимаем запись шторки, перезаписываем — ту, что
+  // под ней. Соседа выбираем тоже после: popstate снятия видит в снимке ушедший чат,
+  // и при уже выбранном соседе кинулся бы его восстанавливать (а удалённого нет —
+  // увёл бы на список проекта)
+  const leaveActiveChat = (neighbor: Session | null) => {
+    afterChatSwitcherClosed(() => {
+      if (neighbor) {
+        handleSelectSession(neighbor, undefined, true);
+        navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, chatId: neighbor.id });
+      } else {
+        handleClearSession();
+        if (isMobile) setMobileView('sidebar');
+        navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+      }
+    });
+  };
+
   // ЕДИНСТВЕННАЯ точка реакции на обновление сессии: обновляем activeSession и —
   // если только что ушёл в архив АКТИВНЫЙ чат — уводим центр на соседа и
   // показываем тост с «Отменить». Сюда стекаются оба пути архивации:
@@ -1147,19 +1167,7 @@ const windowWidth = useWindowWidth();
         // отсутствует, и центр открыл бы ещё одного призрака. Фильтры живут в SessionList
         // (scope project.id) — читаем ту же персистентную копию.
         const neighbor = chatNeighborForArchive(list, updated.id, matchChatFilter(loadChatFilters(project.id)));
-        // Открытая шторка чатов лежит в истории своей записью поверх записи этого чата:
-        // navReplace затёр бы её флаг, и запись ушедшего в архив чата осталась бы под
-        // соседом. Сперва снимаем запись шторки, перезаписываем — ту, что под ней
-        afterChatSwitcherClosed(() => {
-          if (neighbor) {
-            handleSelectSession(neighbor, undefined, true);
-            navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, chatId: neighbor.id });
-          } else {
-            handleClearSession();
-            if (isMobile) setMobileView('sidebar');
-            navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
-          }
-        });
+        leaveActiveChat(neighbor ?? null);
         showArchivedToast(updated, handleSessionUpdated);
       }).catch(() => { /* офлайн — без соседа, без тоста; карточка в SessionList подтянется */ });
     }
@@ -1842,7 +1850,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsListChanged={handleSessionsListChanged} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsListChanged={handleSessionsListChanged} onCleared={handleClearSession} onActiveDeleted={leaveActiveChat} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'changes'
               // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
               // экран в чат на каждую смену скоупа

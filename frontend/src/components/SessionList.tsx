@@ -44,6 +44,10 @@ interface Props {
   // Список опустел (удалён последний чат) — центр показывает пустое состояние,
   // а не автосоздаёт новый чат. Владелец сбрасывает activeSession в null.
   onCleared?: () => void;
+  // Открытый чат удалён на сервере (другая вкладка, авто-удаление временного) — владелец
+  // сам уводит центр на соседа (null — соседа нет) и переписывает историю. Задан —
+  // onSelect/onCleared на этом пути не зовутся
+  onActiveDeleted?: (next: Session | null) => void;
   isMobile?: boolean;
   workflowRunningFor?: string;
   // Реестр общих тегов изменён (reorder ▲▼, создание тега из меню маркировки) —
@@ -77,7 +81,7 @@ function keepIfSame(prev: Session[], next: Session[]): Session[] {
   return prev;
 }
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onSessionsListChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onSessionsListChanged, onCleared, onActiveDeleted, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
   // «Сохранить в заметки» доступно только при включённой подсистеме заметок — иначе
   // кнопка/пункт в ChatCard уйдёт в архив не сохранённой, а карточка не получит
   // ссылку SummaryNoteId (часть пункта меню «Сохранить в заметки» в ChatCard).
@@ -109,6 +113,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { onSelectRef.current = onSelect; });
   const onClearedRef = useRef(onCleared);
   useEffect(() => { onClearedRef.current = onCleared; });
+  const onActiveDeletedRef = useRef(onActiveDeleted);
+  useEffect(() => { onActiveDeletedRef.current = onActiveDeleted; });
 
   // Значок «правки чата не зафиксированы в git». Стор подключаем сами: список живёт не
   // только в мастерской (WorkspacePage уже зовёт ensureGit), но и на Стене, где git
@@ -280,7 +286,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         setSessions(prev => {
           const updated = prev.filter(s => s.id !== msg.sessionId);
           if (activeRef.current?.id === msg.sessionId) {
-            if (updated.length > 0) queueMicrotask(() => onSelectRef.current(updated[0], undefined, true));
+            const handler = onActiveDeletedRef.current;
+            if (handler) queueMicrotask(() => handler(updated[0] ?? null));
+            else if (updated.length > 0) queueMicrotask(() => onSelectRef.current(updated[0], undefined, true));
             // Удалён последний активный чат — сбрасываем в пустое состояние
             else queueMicrotask(() => onClearedRef.current?.());
           }

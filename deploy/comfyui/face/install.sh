@@ -37,7 +37,14 @@ if [ "${1:-}" != "--link-only" ]; then
 
   echo "== веса (только вне шлагбаума: узел работает офлайн)"
   export HF_HUB_DISABLE_XET=1   # xet-клиент не видит HTTPS_PROXY
+  export TQDM_DISABLE=1         # глушит прогресс insightface при скачивании buffalo_l
   "$P/bin/python" "$DEPLOY/warm_models.py" "$FACE_MODELS"
+  unset TQDM_DISABLE
+
+  # buffalo_l.zip (~289 МБ) insightface распаковывает рядом с моделью и забывает удалить.
+  # На диске остаётся только распакованная модель (~280 МБ). На повторной установке zip
+  # уже нет — find молча выходит с нулём, ошибки не будет.
+  find "$FACE_MODELS" -type f -name 'buffalo_l.zip' -delete
 fi  # --link-only: только копия узла, при выкатке новой версии
 
 echo "== конфиг воркера"

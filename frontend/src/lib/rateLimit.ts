@@ -208,7 +208,8 @@ export function ratePillSegments(windows: RateWindow[]): RatePillSegment[] {
     .map(toSegment);
 }
 
-// Десктоп: не больше max окон в постоянном порядке, остальные — счётчиком «+N»
+// Не больше max окон в постоянном порядке; more — сколько не влезло (у кольцевой пилюли
+// эти окна живут только строками поповера, счётчика на лицевой стороне нет)
 export const PILL_MAX_WINDOWS = 3;
 
 export function ratePillVisible(windows: RateWindow[], max: number = PILL_MAX_WINDOWS): { segments: RatePillSegment[]; more: number } {
@@ -216,15 +217,82 @@ export function ratePillVisible(windows: RateWindow[], max: number = PILL_MAX_WI
   return { segments: all.slice(0, max), more: Math.max(0, all.length - max) };
 }
 
-// Сжатая форма для мобилы/планшета: худшее окно + сколько окон ещё («5ч 41% +2»)
-export function ratePillCompact(windows: RateWindow[]): { head: RatePillSegment; more: number } | null {
-  const worst = worstWindow(windows);
-  return worst ? { head: toSegment(worst), more: windows.length - 1 } : null;
+// Колец под окна на пилюле шапки два (mid и inner), внешнее — контекст
+export const RING_WINDOWS = 2;
+
+// Кандидат на текст кольцевой пилюли: контекст, окно лимита или квота провайдера
+export interface RingPillCandidate {
+  label: string;                        // «Ctx», «5ч», «GLM»; пусто — без подписи (баланс DeepSeek)
+  text: string;                         // «62%», «100%+», «4.20 USD»
+  pct: number | null;                   // null — процента нет (окно без utilization, баланс)
+  level: RateWindow['level'];
+  stale?: boolean;                      // окно с устаревшими данными
 }
 
-// Хвост «+N» с неразрывным отступом: без него выходило «41%+2», а при перерасходе «100%++2»
-export function ratePillMoreText(more: number): string {
-  return more > 0 ? ` +${more}` : '';
+// Что написать на пилюле: одно значение, без «+N»
+export interface RingPillHead {
+  label: string;
+  text: string;
+  level: RateWindow['level'];
+  // value — обычное значение; fresh — «Ctx ✦» после сжатия; calm — «в норме» (процентов
+  // нет ни у кого); unknown — «—» (все окна устарели)
+  kind: 'value' | 'fresh' | 'calm' | 'unknown';
+}
+
+const LEVEL_RANK: Record<RateWindow['level'], number> = { danger: 2, warn: 1, normal: 0 };
+
+// Оценка контекста как кандидат: подпись «Ctx», процент, если он есть
+export function contextCandidate(estimate: { pct?: number; level: RateWindow['level'] }): RingPillCandidate {
+  return {
+    label: 'Ctx',
+    text: estimate.pct !== undefined ? `${estimate.pct}%` : '—',
+    pct: estimate.pct ?? null,
+    level: estimate.level,
+  };
+}
+
+// Окна лимитов как кандидаты — в порядке колец (pillRank), включая окна вне колец
+export function windowCandidates(windows: RateWindow[]): RingPillCandidate[] {
+  return ratePillSegments(windows).map(s => ({ label: s.label, text: s.text, pct: s.pct, level: s.level, stale: s.stale }));
+}
+
+// Худший кандидат: выше уровень → больший процент → с процентом важнее, чем без →
+// порядок кандидатов (контекст, затем кольца). Сортировка стабильная — ничья держит порядок
+export function worstRingCandidate(candidates: RingPillCandidate[]): RingPillCandidate | undefined {
+  return [...candidates].sort((a, b) =>
+    (LEVEL_RANK[b.level] - LEVEL_RANK[a.level]) || ((b.pct ?? -1) - (a.pct ?? -1)))[0];
+}
+
+// Текст кольцевой пилюли. ctx — оценка контекста (null — её нет вовсе), others — окна
+// или квота провайдера в порядке колец. idle — что написать, когда сказать больше нечего:
+// баланс DeepSeek в норме в начале сессии, пока оценки контекста нет (спека 5.8b).
+// null — показывать нечего
+export function ringPillHead(
+  ctx: { pct?: number; level: RateWindow['level']; fresh?: boolean } | null,
+  others: RingPillCandidate[],
+  idle?: RingPillCandidate,
+): RingPillHead | null {
+  // Только что сжатый контекст без оценки — «Ctx ✦», пока ни одно окно не тревожит
+  if (ctx && ctx.pct === undefined && ctx.fresh && !others.some(o => o.level !== 'normal'))
+    return { label: 'Ctx', text: '✦', level: 'normal', kind: 'fresh' };
+  const worst = worstRingCandidate([...(ctx ? [contextCandidate(ctx)] : []), ...others]);
+  if (!worst) return idle ? { label: idle.label, text: idle.text, level: idle.level, kind: 'value' } : null;
+  if (worst.pct === null && worst.level === 'normal') {
+    // Процентов нет ни у кого: «худшее» выбралось бы наугад, его подпись ничего не значит
+    const allStale = others.length > 0 && others.every(o => o.stale);
+    return allStale
+      ? { label: '', text: '—', level: 'normal', kind: 'unknown' }
+      : { label: '', text: 'в норме', level: 'normal', kind: 'calm' };
+  }
+  return { label: worst.label, text: worst.text, level: worst.level, kind: 'value' };
+}
+
+// Длина дуги кольца: доля окружности L, но не короче 3px (малая доля на внутреннем
+// кольце иначе становится точкой) и, пока не 100%, не длиннее L − 1.5 (99% ≠ 100%)
+export function ringArcLength(pct: number | null, circumference: number): number {
+  if (pct === null || pct <= 0) return 0;
+  const arc = Math.max((Math.min(100, pct) / 100) * circumference, 3);
+  return pct < 100 ? Math.min(arc, circumference - 1.5) : arc;
 }
 
 // Точки {время(мс), доля} по каждому окну, отсортированные — для спарклайна тренда

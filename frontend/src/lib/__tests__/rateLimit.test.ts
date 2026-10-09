@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RateLimitInfo, UsageSnapshot } from '../../types';
-import { toRateWindows, worstWindow, fmtReset, windowLabel, latestPerWindow, latestWithUtilization, snapshotFreshnessLabel, overageLabel, withAccountFallback, ratePillSegments, ratePillCompact, ratePillVisible, ratePillMoreText, shortWindowLabel } from '../rateLimit';
+import { toRateWindows, worstWindow, fmtReset, windowLabel, latestPerWindow, latestWithUtilization, snapshotFreshnessLabel, overageLabel, withAccountFallback, ratePillSegments, ratePillVisible, shortWindowLabel, ringPillHead, worstRingCandidate, windowCandidates, ringArcLength, RING_WINDOWS, type RingPillCandidate } from '../rateLimit';
 
 const win = (limitType: string, over: Partial<RateLimitInfo> = {}): RateLimitInfo =>
   ({ limitType, ...over });
@@ -140,7 +140,6 @@ describe('пилюля лимитов в шапке чата', () => {
       { limitType: 'seven_day', label: 'Нед', text: '12%', pct: 12, level: 'normal' },
       { limitType: 'seven_day_opus', label: 'Opus', text: '30%', pct: 30, level: 'normal' },
     ]);
-    expect(ratePillCompact(windows)).toEqual({ head: { limitType: 'five_hour', label: '5ч', text: '41%', pct: 41, level: 'normal' }, more: 2 });
   });
 
   it('окно без utilization в чате берёт процент из снимка аккаунта (то же окно)', () => {
@@ -190,19 +189,17 @@ describe('пилюля лимитов в шапке чата', () => {
     expect(ratePillSegments(out)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '—', pct: null, level: 'normal' }]);
   });
 
-  it('пустой набор → нет сегментов и нет сжатой формы', () => {
+  it('пустой набор → нет сегментов', () => {
     expect(ratePillSegments([])).toEqual([]);
-    expect(ratePillCompact([])).toBeNull();
     expect(withAccountFallback([], [], NOW)).toEqual([]);
   });
 
-  it('danger: сжатая форма показывает окно у предела, перерасход помечен «+»', () => {
+  it('danger: окно у предела помечено своим уровнем', () => {
     const windows = toRateWindows({
       five_hour: win('five_hour', { utilization: 0.5 }),
       seven_day: win('seven_day', { utilization: 1, isUsingOverage: true }),
       seven_day_opus: win('seven_day_opus', { utilization: 0.2 }),
     });
-    expect(ratePillCompact(windows)).toEqual({ head: { limitType: 'seven_day', label: 'Нед', text: '100%+', pct: 100, level: 'danger' }, more: 2 });
     expect(ratePillSegments(windows).find(s => s.limitType === 'seven_day')?.level).toBe('danger');
   });
 
@@ -256,19 +253,7 @@ describe('пилюля лимитов в шапке чата', () => {
     expect(ratePillSegments(out)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '—', pct: null, level: 'normal' }]);
   });
 
-  it('хвост «+N» отделён отступом, в том числе после перерасхода', () => {
-    expect(ratePillMoreText(2)).toBe(' +2');
-    expect(ratePillMoreText(0)).toBe('');
-    const windows = toRateWindows({
-      five_hour: win('five_hour', { utilization: 0.5 }),
-      seven_day: win('seven_day', { utilization: 1, isUsingOverage: true }),
-      seven_day_opus: win('seven_day_opus', { utilization: 0.2 }),
-    });
-    const c = ratePillCompact(windows)!;
-    expect(c.head.text + ratePillMoreText(c.more)).toBe('100%+ +2');
-  });
-
-  it('десктоп: не больше трёх окон в постоянном порядке, остальные — счётчиком', () => {
+  it('не больше max окон в постоянном порядке, остальные считаются в more', () => {
     const windows = toRateWindows({
       extra_usage: win('extra_usage', { utilization: 0.9 }),
       seven_day_opus: win('seven_day_opus', { utilization: 0.3 }),
@@ -454,5 +439,141 @@ describe('snapshotFreshnessLabel', () => {
 
   it('метка в будущем (расхождение часов) → «только что», не отрицательный возраст', () => {
     expect(snapshotFreshnessLabel('probe', ago(-30_000), NOW)).toBe('Пинг · только что');
+  });
+});
+
+describe('кольцевая пилюля шапки: текст худшего показателя', () => {
+  const c = (label: string, pct: number | null, level: RingPillCandidate['level'] = 'normal', stale?: boolean): RingPillCandidate =>
+    ({ label, text: pct === null ? '—' : `${pct}%`, pct, level, stale });
+
+  it('уровень важнее процента: warn 61% бьёт normal 90%', () => {
+    expect(worstRingCandidate([c('Ctx', 90), c('5ч', 61, 'warn')])?.label).toBe('5ч');
+  });
+
+  it('при равном уровне — больший процент', () => {
+    expect(ringPillHead({ pct: 40, level: 'normal' }, [c('5ч', 55), c('Нед', 12)]))
+      .toEqual({ label: '5ч', text: '55%', level: 'normal', kind: 'value' });
+  });
+
+  it('кандидат без процента проигрывает любому с процентом того же уровня', () => {
+    expect(worstRingCandidate([c('5ч', null), c('Нед', 0)])?.label).toBe('Нед');
+  });
+
+  it('полная ничья — по порядку колец: контекст, затем окна', () => {
+    expect(ringPillHead({ pct: 30, level: 'normal' }, [c('5ч', 30), c('Нед', 30)])?.label).toBe('Ctx');
+    expect(worstRingCandidate([c('5ч', 30), c('Нед', 30)])?.label).toBe('5ч');
+  });
+
+  it('окно вне колец (Opus 95%) тоже кандидат', () => {
+    const windows = toRateWindows({
+      five_hour: win('five_hour', { utilization: 0.41 }),
+      seven_day: win('seven_day', { utilization: 0.12 }),
+      seven_day_opus: win('seven_day_opus', { utilization: 0.95 }),
+    });
+    expect(ringPillHead({ pct: 62, level: 'normal' }, windowCandidates(windows)))
+      .toEqual({ label: 'Opus', text: '95%', level: 'warn', kind: 'value' });
+  });
+
+  it('перерасход: текст «100%+» окна danger', () => {
+    const windows = toRateWindows({ seven_day: win('seven_day', { utilization: 1, isUsingOverage: true }) });
+    expect(ringPillHead({ pct: 92, level: 'danger' }, windowCandidates(windows))?.text).toBe('100%+');
+  });
+
+  it('контекст danger перебивает окна в норме', () => {
+    expect(ringPillHead({ pct: 92, level: 'danger' }, [c('5ч', 81)]))
+      .toEqual({ label: 'Ctx', text: '92%', level: 'danger', kind: 'value' });
+  });
+
+  it('свежесжатый контекст: «Ctx ✦», пока окна спокойны', () => {
+    expect(ringPillHead({ level: 'normal', fresh: true }, [c('5ч', 41)]))
+      .toEqual({ label: 'Ctx', text: '✦', level: 'normal', kind: 'fresh' });
+  });
+
+  it('свежесжатый контекст уступает тревожному окну', () => {
+    expect(ringPillHead({ level: 'normal', fresh: true }, [c('5ч', 41), c('Нед', 70, 'warn')]))
+      .toEqual({ label: 'Нед', text: '70%', level: 'warn', kind: 'value' });
+  });
+
+  it('только контекст (нет окон)', () => {
+    expect(ringPillHead({ pct: 62, level: 'normal' }, [])?.text).toBe('62%');
+  });
+
+  it('только лимиты (оценки контекста нет)', () => {
+    expect(ringPillHead(null, [c('5ч', 81, 'warn'), c('Нед', 34)])?.label).toBe('5ч');
+  });
+
+  it('процентов нет ни у кого → «в норме»; все окна устарели → «—»', () => {
+    expect(ringPillHead(null, [c('5ч', null), c('Нед', null)])).toEqual({ label: '', text: 'в норме', level: 'normal', kind: 'calm' });
+    expect(ringPillHead(null, [c('5ч', null, 'normal', true)])).toEqual({ label: '', text: '—', level: 'normal', kind: 'unknown' });
+  });
+
+  it('нечего показывать → null', () => {
+    expect(ringPillHead(null, [])).toBeNull();
+  });
+
+  it('провайдер: квота GLM под своим именем соревнуется с контекстом', () => {
+    expect(ringPillHead({ pct: 20, level: 'normal' }, [c('GLM', 34)])?.label).toBe('GLM');
+    expect(ringPillHead({ pct: 20, level: 'normal' }, [c('GLM', 97, 'danger')]))
+      .toEqual({ label: 'GLM', text: '97%', level: 'danger', kind: 'value' });
+  });
+
+  it('провайдер: тревожный денежный баланс без процента бьёт контекст в норме', () => {
+    const money: RingPillCandidate = { label: '', text: '0.80 USD', pct: null, level: 'warn' };
+    expect(ringPillHead({ pct: 62, level: 'normal' }, [money]))
+      .toEqual({ label: '', text: '0.80 USD', level: 'warn', kind: 'value' });
+  });
+
+  it('DeepSeek в начале сессии (5.8b): баланс в норме, оценки контекста нет → баланс, не «—»', () => {
+    const money: RingPillCandidate = { label: '', text: '4.20 USD', pct: null, level: 'normal' };
+    expect(ringPillHead(null, [], money))
+      .toEqual({ label: '', text: '4.20 USD', level: 'normal', kind: 'value' });
+    // Есть что сказать и без него — idle не перебивает
+    expect(ringPillHead({ pct: 62, level: 'normal' }, [], money)?.text).toBe('62%');
+  });
+});
+
+describe('кольцевая пилюля шапки: много окон', () => {
+  // Четыре окна: два в кольцах (5ч, Нед), два вне колец (Opus, Sonnet)
+  const windows = toRateWindows({
+    five_hour: win('five_hour', { utilization: 0.41 }),
+    seven_day: win('seven_day', { utilization: 0.12 }),
+    seven_day_opus: win('seven_day_opus', { utilization: 0.3 }),
+    seven_day_sonnet: win('seven_day_sonnet', { utilization: 0.97 }),
+  });
+
+  it('колец не больше трёх: под окна — ровно RING_WINDOWS, первые по порядку колец', () => {
+    const { segments } = ratePillVisible(windows, RING_WINDOWS);
+    expect(RING_WINDOWS).toBe(2);                      // + внешнее кольцо контекста = 3
+    expect(segments.map(s => s.label)).toEqual(['5ч', 'Нед']);
+  });
+
+  it('на пилюле ровно один худший показатель, без счётчика «+N»', () => {
+    const head = ringPillHead({ pct: 62, level: 'normal' }, windowCandidates(windows));
+    expect(head).toEqual({ label: 'Sonnet', text: '97%', level: 'warn', kind: 'value' });
+    expect(Object.keys(head!)).not.toContain('more');
+    expect(head!.text).not.toMatch(/\+\d/);
+  });
+
+  it('тон обводки — худшее окно, даже если оно вне колец', () => {
+    expect(worstWindow(windows)?.limitType).toBe('seven_day_sonnet');
+    expect(worstWindow(windows)?.level).toBe('warn');
+  });
+});
+
+describe('длина дуги кольца', () => {
+  const L = 20.4;
+  it('0 и нет процента — без дуги', () => {
+    expect(ringArcLength(0, L)).toBe(0);
+    expect(ringArcLength(null, L)).toBe(0);
+  });
+  it('малая доля не короче 3px', () => {
+    expect(ringArcLength(1, L)).toBe(3);
+  });
+  it('99% не дотягивает до полного круга, 100% — полный', () => {
+    expect(ringArcLength(99, L)).toBeCloseTo(L - 1.5);
+    expect(ringArcLength(100, L)).toBeCloseTo(L);
+  });
+  it('середина — пропорционально', () => {
+    expect(ringArcLength(50, 64.4)).toBeCloseTo(32.2);
   });
 });

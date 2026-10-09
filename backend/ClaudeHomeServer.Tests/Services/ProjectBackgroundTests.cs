@@ -89,15 +89,74 @@ public class ProjectBackgroundTests : IDisposable
     }
 
     [Fact]
-    public void Фигура_вылезающая_за_тайл_отбрасывается()
+    public void Слишком_крупная_фигура_отбрасывается()
     {
-        // x = 240 плюс габарит 40 → выезд за 250: в repeat-паттерне такая фигура рвётся
+        // Габарит 80 при потолке 60: такая фигура съедает полтайла
         var answer = """
-            {"colorKey":"blue","shapes":[{"x":240,"y":10,"paths":["M0 0h40v40H0z"]}]}
+            {"colorKey":"blue","shapes":[{"paths":["M0 0h80v80H0z"]}]}
             """;
         var result = ProjectDoodleTile.Build(answer);
         Assert.False(result.Ok);
         Assert.Equal("rejected", result.FailReason);
+    }
+
+    // ---------- Раскладка ----------
+
+    // Центры фигур из собранного документа: translate — локальный ноль, центр = ноль + габарит/2
+    private static List<(double X, double Y)> Origins(string svg) =>
+        System.Text.RegularExpressions.Regex.Matches(svg, @"translate\((-?[\d.]+),(-?[\d.]+)\)")
+            .Select(m => (double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture),
+                          double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture)))
+            .ToList();
+
+    [Fact]
+    public void Координаты_модели_игнорируются_раскладку_делает_сервер()
+    {
+        // В Answer модель кладёт все фигуры в узкую полосу у верхнего края (x 10..31, y 20..27)
+        var svg = ProjectDoodleTile.Build(Answer(12), new Random(42)).Svg!;
+        var origins = Origins(svg);
+        Assert.Contains(origins, o => o.Y > 100);
+        Assert.Contains(origins, o => o.X > 100);
+    }
+
+    [Fact]
+    public void Раскладка_детерминирована_при_одном_seed()
+    {
+        var a = ProjectDoodleTile.Build(Answer(12), new Random(7)).Svg;
+        var b = ProjectDoodleTile.Build(Answer(12), new Random(7)).Svg;
+        Assert.Equal(a, b);
+    }
+
+    [Fact]
+    public void Фигуры_не_скучиваются_на_торе()
+    {
+        var shapes = Enumerable.Range(0, 12)
+            .Select(_ => new TileShape(0, 0, 0, ["M0 0h20v20H0z"], [], 20)).ToList();
+        for (var seed = 0; seed < 20; seed++)
+        {
+            var placed = ProjectDoodleTile.Place(shapes, new Random(seed));
+            var centers = placed.Select(s => (X: s.X + 10, Y: s.Y + 10)).ToList();
+            for (var i = 0; i < centers.Count; i++)
+                for (var j = i + 1; j < centers.Count; j++)
+                {
+                    var dx = Math.Abs(centers[i].X - centers[j].X);
+                    var dy = Math.Abs(centers[i].Y - centers[j].Y);
+                    dx = Math.Min(dx, ProjectDoodleTile.TileSize - dx);
+                    dy = Math.Min(dy, ProjectDoodleTile.TileSize - dy);
+                    // 12 фигур 20×20 на 260×260 места хватает с запасом: наложение — брак раскладки
+                    Assert.True(Math.Sqrt(dx * dx + dy * dy) >= 20, $"seed {seed}: фигуры {i} и {j} наложились");
+                }
+        }
+    }
+
+    [Fact]
+    public void Фигура_на_стыке_рисуется_и_с_другой_стороны_тайла()
+    {
+        // Центр (5, 130): левый край выходит за 0 — нужна копия со сдвигом +260 по x
+        var svg = ProjectDoodleTile.Render([new TileShape(-5, 120, 0, ["M0 0h20v20H0z"], [], 20)]);
+        Assert.Contains("translate(-5,120)", svg);
+        Assert.Contains("translate(255,120)", svg);
+        Assert.Equal(2, svg.Split("<g ").Length - 1);
     }
 
     // ---------- Порог годности и цвет ----------
@@ -117,7 +176,7 @@ public class ProjectBackgroundTests : IDisposable
         Assert.True(result.Ok);
         Assert.Equal("green", result.ColorKey);
         Assert.Contains("<svg", result.Svg);
-        Assert.Equal(8, result.Svg!.Split("<g ").Length - 1);
+        Assert.Equal(8, result.Shapes);
     }
 
     [Fact]
@@ -125,7 +184,7 @@ public class ProjectBackgroundTests : IDisposable
     {
         var result = ProjectDoodleTile.Build(Answer(20));
         Assert.True(result.Ok);
-        Assert.Equal(ProjectDoodleTile.MaxShapes, result.Svg!.Split("<g ").Length - 1);
+        Assert.Equal(ProjectDoodleTile.MaxShapes, result.Shapes);
     }
 
     [Fact]
@@ -174,7 +233,7 @@ public class ProjectBackgroundTests : IDisposable
         {
             var svg = ProjectDoodleTile.Render(
                 [new TileShape(10.5, 20.5, -7.5, ["M0 0h10"], [new TileCircle(1.5, 2.5, 3.5)])]);
-            Assert.Contains("translate(10.5,20.5) rotate(-7.5)", svg);
+            Assert.Contains("translate(10.5,20.5) rotate(-7.5,0,0)", svg);
             Assert.Contains("r=\"3.5\"", svg);
             Assert.DoesNotContain(",5", svg.Replace("10.5,20.5", ""));
         }

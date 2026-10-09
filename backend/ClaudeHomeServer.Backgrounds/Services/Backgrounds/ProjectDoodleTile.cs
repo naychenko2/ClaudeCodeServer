@@ -8,15 +8,21 @@ namespace ClaudeHomeServer.Services.Backgrounds;
 /// <summary>Круг фигуры дудла (второй примитив: дугой <c>A</c> модели круг рисуют кляксой).</summary>
 public sealed record TileCircle(double Cx, double Cy, double R);
 
-/// <summary>Одна фигура тайла: позиция, поворот и до четырёх путей и кругов.</summary>
+/// <summary>
+/// Одна фигура тайла: позиция, поворот и до четырёх путей и кругов. <paramref name="Size"/> —
+/// габарит фигуры от её локального нуля: вокруг его середины фигура поворачивается, по нему
+/// раскладка держит зазоры и решает, нужна ли копия через стык плиток.
+/// </summary>
 public sealed record TileShape(
-    double X, double Y, double Rotate, IReadOnlyList<string> Paths, IReadOnlyList<TileCircle> Circles);
+    double X, double Y, double Rotate, IReadOnlyList<string> Paths, IReadOnlyList<TileCircle> Circles,
+    double Size = 0);
 
 /// <summary>
 /// Итог разбора ответа модели: либо собранный документ, либо причина отказа
 /// (<c>bad-json</c> — ответ не разобрался, <c>rejected</c> — годных фигур меньше порога).
+/// <paramref name="Shapes"/> — сколько фигур легло в тайл (без копий через стык).
 /// </summary>
-public sealed record TileBuildResult(string? Svg, string? ColorKey, string? FailReason)
+public sealed record TileBuildResult(string? Svg, string? ColorKey, string? FailReason, int Shapes = 0)
 {
     public bool Ok => Svg is not null;
 }
@@ -38,15 +44,26 @@ public static class ProjectDoodleTile
     private const int MaxPathsPerShape = 4;
     private const int MaxCirclesPerShape = 4;
     private const int MaxCommandsPerPath = 40;
-    // Габарит фигуры от её локального нуля: дальше она выедет за тайл и порвётся в repeat
-    private const double MaxOrigin = 250;
+    // Габарит фигуры от её локального нуля: крупнее — это уже не дудл, а клякса на полтайла
+    private const double MaxShapeSize = 60;
+    // Самая мелкая фигура всё равно занимает место под зазор, иначе точку зажмёт соседями
+    private const double MinShapeSize = 12;
+    // Поворот задаёт сервер: модель его держала в ±12°, и ряды выходили ровными
+    private const double MaxRotate = 20;
+    // Кандидатов на каждую фигуру (best-candidate Митчелла): больше — ровнее зазоры,
+    // но и ближе к той самой сетке; 30 даёт россыпь без скучиваний
+    private const int PlacementCandidates = 30;
 
     /// <summary>Девять ключей палитры AGENT_COLORS — единственные принимаемые значения цвета.</summary>
     public static readonly IReadOnlyList<string> ColorKeys =
         ["yellow", "orange", "blue", "green", "purple", "red", "brown", "cyan", "pink"];
 
-    /// <summary>Разбирает ответ модели и собирает тайл; при отказе <see cref="TileBuildResult.Svg"/> = null.</summary>
-    public static TileBuildResult Build(string? raw)
+    /// <summary>
+    /// Разбирает ответ модели и собирает тайл; при отказе <see cref="TileBuildResult.Svg"/> = null.
+    /// От модели берутся только сами фигуры: позицию и поворот задаёт <see cref="Place"/>.
+    /// </summary>
+    /// <param name="random">Источник случайности раскладки; тесты передают с фиксированным seed.</param>
+    public static TileBuildResult Build(string? raw, Random? random = null)
     {
         var json = ExtractJsonObject(raw);
         if (json is null) return new TileBuildResult(null, null, "bad-json");
@@ -80,8 +97,57 @@ public static class ProjectDoodleTile
 
             return shapes.Count < MinShapes
                 ? new TileBuildResult(null, colorKey, "rejected")
-                : new TileBuildResult(Render(shapes), colorKey, null);
+                : new TileBuildResult(Render(Place(shapes, random ?? Random.Shared)), colorKey, null, shapes.Count);
         }
+    }
+
+    /// <summary>
+    /// Раскладка фигур по тайлу. Модель на «рассыпь равномерно» стабильно отвечала сеткой
+    /// 4×3, а repeat размножал её в решётку на весь экран — поэтому координаты ставит сервер:
+    /// best-candidate Митчелла (из нескольких случайных точек берётся самая далёкая от уже
+    /// поставленных) даёт россыпь без сетки и без скучиваний. Расстояния считаются на торе:
+    /// тайл повторяется, и соседи через стык плиток — такие же соседи.
+    /// </summary>
+    public static IReadOnlyList<TileShape> Place(IReadOnlyList<TileShape> shapes, Random random)
+    {
+        // Крупные ставятся первыми: им труднее найти место среди уже поставленных
+        var order = shapes.OrderByDescending(s => s.Size).ToList();
+        var placed = new List<(double Cx, double Cy, double R, TileShape Shape)>(order.Count);
+        foreach (var shape in order)
+        {
+            var size = Math.Max(shape.Size, MinShapeSize);
+            var r = size / 2;
+            double bestX = 0, bestY = 0, bestGap = double.NegativeInfinity;
+            var candidates = placed.Count == 0 ? 1 : PlacementCandidates;
+            for (var k = 0; k < candidates; k++)
+            {
+                var x = random.NextDouble() * TileSize;
+                var y = random.NextDouble() * TileSize;
+                var gap = double.PositiveInfinity;
+                foreach (var p in placed)
+                    gap = Math.Min(gap, TorusDistance(x, y, p.Cx, p.Cy) - r - p.R);
+                if (gap > bestGap) (bestX, bestY, bestGap) = (x, y, gap);
+            }
+            var rotate = Math.Round((random.NextDouble() * 2 - 1) * MaxRotate, 1);
+            // X, Y — локальный ноль фигуры: центр минус половина габарита
+            var at = shape with
+            {
+                X = Math.Round(bestX - shape.Size / 2, 1),
+                Y = Math.Round(bestY - shape.Size / 2, 1),
+                Rotate = rotate,
+            };
+            placed.Add((bestX, bestY, r, at));
+        }
+        return placed.Select(p => p.Shape).ToList();
+    }
+
+    private static double TorusDistance(double x1, double y1, double x2, double y2)
+    {
+        var dx = Math.Abs(x1 - x2);
+        var dy = Math.Abs(y1 - y2);
+        dx = Math.Min(dx, TileSize - dx);
+        dy = Math.Min(dy, TileSize - dy);
+        return Math.Sqrt(dx * dx + dy * dy);
     }
 
     /// <summary>
@@ -112,29 +178,47 @@ public static class ProjectDoodleTile
 
             foreach (var shape in shapes)
             {
-                w.WriteStartElement("g");
-                w.WriteAttributeString("transform",
-                    $"translate({N(shape.X)},{N(shape.Y)}) rotate({N(shape.Rotate)})");
-                foreach (var d in shape.Paths)
-                {
-                    w.WriteStartElement("path");
-                    w.WriteAttributeString("d", d);
-                    w.WriteEndElement();
-                }
-                foreach (var c in shape.Circles)
-                {
-                    w.WriteStartElement("circle");
-                    w.WriteAttributeString("cx", N(c.Cx));
-                    w.WriteAttributeString("cy", N(c.Cy));
-                    w.WriteAttributeString("r", N(c.R));
-                    w.WriteEndElement();
-                }
-                w.WriteEndElement();
+                // Фигура на стыке рисуется ещё раз со сдвигом на тайл с другой стороны:
+                // иначе repeat режет её по краю плитки. Охват — описанный круг габарита,
+                // он не зависит от поворота
+                var c = shape.Size / 2;
+                var reach = c * Math.Sqrt(2);
+                double[] dxs = Shifts(shape.X + c, reach), dys = Shifts(shape.Y + c, reach);
+                foreach (var dx in dxs)
+                    foreach (var dy in dys)
+                        WriteShape(w, shape, shape.X + dx, shape.Y + dy, c);
             }
 
             w.WriteEndElement();
         }
         return sb.ToString();
+    }
+
+    private static double[] Shifts(double center, double reach) =>
+        center - reach < 0 ? [0, TileSize]
+        : center + reach > TileSize ? [0, -TileSize]
+        : [0];
+
+    private static void WriteShape(XmlWriter w, TileShape shape, double x, double y, double c)
+    {
+        w.WriteStartElement("g");
+        w.WriteAttributeString("transform",
+            $"translate({N(x)},{N(y)}) rotate({N(shape.Rotate)},{N(c)},{N(c)})");
+        foreach (var d in shape.Paths)
+        {
+            w.WriteStartElement("path");
+            w.WriteAttributeString("d", d);
+            w.WriteEndElement();
+        }
+        foreach (var circle in shape.Circles)
+        {
+            w.WriteStartElement("circle");
+            w.WriteAttributeString("cx", N(circle.Cx));
+            w.WriteAttributeString("cy", N(circle.Cy));
+            w.WriteAttributeString("r", N(circle.R));
+            w.WriteEndElement();
+        }
+        w.WriteEndElement();
     }
 
     // Числа — всегда инвариантной культурой: запятая вместо точки в ru-RU молча ломает d
@@ -153,16 +237,7 @@ public static class ProjectDoodleTile
     {
         shape = null!;
         if (el.ValueKind != JsonValueKind.Object) return false;
-
-        if (!TryReadNumber(el, "x", out var x) || !InRange(x, 0, MaxOrigin) || !OneDecimal(x)) return false;
-        if (!TryReadNumber(el, "y", out var y) || !InRange(y, 0, MaxOrigin) || !OneDecimal(y)) return false;
-        // rotate отсутствует = 0, но присутствующий мусор (строка, число вне диапазона) —
-        // отказ фигуре: это не «поле забыли», а не тот ответ
-        double rotate = 0;
-        if (el.TryGetProperty("rotate", out var rotateEl) && rotateEl.ValueKind != JsonValueKind.Null)
-        {
-            if (!TryReadNumber(el, "rotate", out rotate) || !InRange(rotate, -12, 12)) return false;
-        }
+        // x, y и rotate модели, если она их всё же прислала, не читаются: раскладку делает Place
 
         var paths = new List<string>();
         var maxLocal = 0.0;
@@ -198,10 +273,10 @@ public static class ProjectDoodleTile
 
         if (paths.Count + circles.Count == 0) return false;
         // Габарит оценивается сверху: точный bbox требовал бы прогона траектории, а смысл
-        // проверки — чтобы фигура не выехала за тайл и не порвалась на стыке плиток
-        if (x + maxLocal > MaxOrigin || y + maxLocal > MaxOrigin) return false;
+        // проверки — чтобы одна фигура не съела полтайла и раскладка держала зазоры
+        if (maxLocal > MaxShapeSize) return false;
 
-        shape = new TileShape(x, y, rotate, paths, circles);
+        shape = new TileShape(0, 0, 0, paths, circles, maxLocal);
         return true;
     }
 
@@ -215,8 +290,6 @@ public static class ProjectDoodleTile
     }
 
     private static bool InRange(double v, double min, double max) => v >= min && v <= max;
-
-    private static bool OneDecimal(double v) => Math.Abs(Math.Round(v, 1) - v) < 1e-9;
 
     /// <summary>
     /// Проверка строки <c>d</c>: алфавит команд, форма чисел, синтаксис и габарит

@@ -164,8 +164,7 @@ public sealed class ProjectBackgroundService(
             {
               "colorKey": "green",
               "shapes": [
-                { "x": 18, "y": 20, "rotate": -7,
-                  "paths": ["M0 0h34v25H0z", "M7 9l4.5 4-4.5 4M17 17h10"],
+                { "paths": ["M0 0h34v25H0z", "M7 9l4.5 4-4.5 4M17 17h10"],
                   "circles": [{ "cx": 5, "cy": 5, "r": 4 }] }
               ]
             }
@@ -174,10 +173,9 @@ public sealed class ProjectBackgroundService(
         sb.AppendLine("Правила:");
         sb.AppendLine("- colorKey — ровно один ключ из: " + string.Join(", ", ProjectDoodleTile.ColorKeys) + ".");
         sb.AppendLine($"- shapes — от {ProjectDoodleTile.MinShapes} до {ProjectDoodleTile.MaxShapes} фигур"
-            + " (лучше 12), равномерно рассыпанных по площади без наложений.");
-        sb.AppendLine("- x, y — левый верхний угол фигуры на холсте 260×260, от 0 до 250, не больше одного");
-        sb.AppendLine("  знака после запятой; фигура рисуется от своего нуля и должна умещаться в 40×40,");
-        sb.AppendLine("  то есть x + размер фигуры не больше 250 (то же для y). rotate — от -12 до 12.");
+            + " (лучше 12), все разные.");
+        sb.AppendLine("- Каждая фигура рисуется от своего нуля (0,0) и умещается в 40×40. Позицию и поворот");
+        sb.AppendLine("  не указывай — фигуры по холсту расставит сам продукт.");
         sb.AppendLine($"- paths — до {4} строк атрибута d, каждая не длиннее {ProjectDoodleTile.MaxPathLength} символов;");
         sb.AppendLine("  команды только M m L l H h V v C c S s Q q T t A a Z z, числа обычные (0.5, а не .5");
         sb.AppendLine("  и не 5e2), не больше трёх цифр до и после точки.");

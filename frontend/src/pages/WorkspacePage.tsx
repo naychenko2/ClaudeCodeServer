@@ -58,6 +58,7 @@ import { plural } from '../lib/plural';
 import { applyContextUpdated, loadChatContext, setActiveChatForContext } from '../lib/chatContext';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
+import { chatToRestore, createLatestGuard } from '../lib/pendingProjectChat';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
@@ -1185,6 +1186,11 @@ const windowWidth = useWindowWidth();
 
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
   useEffect(() => {
+    // Список чатов грузится асинхронно: ответ на устаревшее событие или пришедший после
+    // размонтирования (переход в другой проект) не должен ни открывать чат, ни писать историю
+    const guard = createLatestGuard();
+    // Диплинк, чей список чатов ещё летит, — его возвращаем на размонтировании (ниже)
+    let inFlight: string | null = null;
     const consumePendingProjectChat = async () => {
       const raw = sessionStorage.getItem('cc_pending_project_chat');
       if (!raw) return;
@@ -1192,20 +1198,44 @@ const windowWidth = useWindowWidth();
       const [pid, chatId] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
       if (pid !== project.id) return;
       sessionStorage.removeItem('cc_pending_project_chat');
+      const gen = guard.next();
+      inFlight = raw;
       try {
         const sessions = await api.sessions.list(project.id);
+        if (!guard.isCurrent(gen)) return;
+        inFlight = null;
         const s = sessions.find(x => x.id === chatId);
-        if (s) {
+        if (!s) {
+          // Чата нет (удалён, нет доступа) — запись истории не должна обещать его
+          setMobileView('sidebar');
+          navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+        } else {
           setLeftTab('sessions');
           // Переход из чужого проекта уже положил запись с этим chatId (openProject) —
           // перезаписываем её. Диплинк внутри того же проекта пишет новую, «назад» вернёт в прежний чат
           handleSelectSession(s, undefined, false, getNav()?.chatId === s.id);
         }
-      } catch { /* офлайн — остаёмся как есть */ }
+      } catch {
+        // офлайн — остаёмся как есть
+        if (guard.isCurrent(gen)) inFlight = null;
+      }
     };
     consumePendingProjectChat();
     window.addEventListener('cc-pending-project-chat', consumePendingProjectChat);
-    return () => window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
+    return () => {
+      guard.dispose();
+      window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
+      // Перемонтаж StrictMode снимает эффект посреди запроса — незавершённый диплинк
+      // возвращаем, его заберёт повторный прогон тут же. При настоящем уходе из проекта
+      // его никто не заберёт — гасим через тик, чтобы не всплыл при следующем входе
+      const raw = inFlight;
+      if (raw && !sessionStorage.getItem('cc_pending_project_chat')) {
+        sessionStorage.setItem('cc_pending_project_chat', raw);
+        setTimeout(() => {
+          if (sessionStorage.getItem('cc_pending_project_chat') === raw) sessionStorage.removeItem('cc_pending_project_chat');
+        }, 0);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSelectSession немемоизирован: включение переустанавливало бы подписку каждый рендер; функция свежая на момент события (эффект после её объявления)
   }, [project.id]);
 
@@ -1443,9 +1473,12 @@ const windowWidth = useWindowWidth();
         setPersonaCreating(false);
         setPendingPersonaView(null);
       }
-      // Активный чат — восстанавливаем через существующий механизм pending (sessionStorage + событие)
-      if (s.chatId) {
-        sessionStorage.setItem('cc_pending_project_chat', `${project.id}|${s.chatId}`);
+      // Активный чат — восстанавливаем через существующий механизм pending (sessionStorage + событие).
+      // Снимок с уже открытым чатом пропускаем: так «назад» снимает запись шторки чатов,
+      // и восстановление гонялось бы с переходом, который шторка запускает следом
+      const restoreChatId = chatToRestore(s.chatId, activeSessionRef.current?.id);
+      if (restoreChatId) {
+        sessionStorage.setItem('cc_pending_project_chat', `${project.id}|${restoreChatId}`);
         window.dispatchEvent(new Event('cc-pending-project-chat'));
       }
     };

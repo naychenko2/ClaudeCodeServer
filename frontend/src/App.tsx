@@ -1196,7 +1196,8 @@ export default function App() {
           if (p) {
             localStorage.setItem(HUB_TAB_KEY, 'projects')
             setHubTab('projects')
-            openProject(p)
+            // chatId — в ту же запись: иначе «назад» из чата проходит лишний шаг через сайдбар
+            openProject(p, chatId)
           }
         })
         .catch(() => {})

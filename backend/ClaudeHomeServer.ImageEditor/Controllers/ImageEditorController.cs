@@ -207,7 +207,8 @@ public class ImageEditorController(
     {
         if (!ProjectGate(projectId, out _, out var denied)) return denied;
         var items = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
-        return Ok(new { available = items is not null, items = items ?? [] });
+        var own = items?.Where(n => LoraNamespace.VisibleTo(UserId, n)).ToList();
+        return Ok(new { available = own is not null, items = own ?? [] });
     }
 
     [HttpGet("characters/{slug}")]
@@ -229,14 +230,14 @@ public class ImageEditorController(
         if (lora is { Remove: true }) lora = null;
         if (loraDenied is not null) return loraDenied;
         // Имя проверяем до создания: отказ не должен оставить персонажа без LoRA на диске
-        if (lora is not null && CharacterStore.CheckLora(lora) is { } loraError) return MapCharacter(loraError, _ => Ok());
+        if (lora is not null && CharacterStore.CheckLora(UserId, lora) is { } loraError) return MapCharacter(loraError, _ => Ok());
         var photos = await PhotosAsync(form.Photos, form.Angles, ct);
         var draft = new CharacterDraft(form.Name ?? "", form.Description, photos);
         var created = CharacterStore.Create(project.RootPath, draft, DateTime.UtcNow);
         if (created.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Create);
         if (created.Value is { } made && lora is not null)
         {
-            var withLora = CharacterStore.Update(project.RootPath, made.Manifest.Slug,
+            var withLora = CharacterStore.Update(project.RootPath, UserId, made.Manifest.Slug,
                 new CharacterPatch(null, null, [], [], null, lora));
             if (withLora?.Value is { } loraChange) Notify(project.RootPath, loraChange, FileMutationKind.Write);
             created = withLora ?? created;
@@ -254,7 +255,7 @@ public class ImageEditorController(
         if (loraDenied is not null) return loraDenied;
         var photos = await PhotosAsync(form.Photos, form.Angles, ct);
         var patch = new CharacterPatch(form.Name, form.Description, photos, form.RemovePhotos ?? [], form.PrimaryPhoto, lora);
-        var updated = CharacterStore.Update(project.RootPath, slug, patch);
+        var updated = CharacterStore.Update(project.RootPath, UserId, slug, patch);
         if (updated is null) return CharacterNotFound();
         if (updated.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Write);
         return MapCharacter(updated, c => Ok(CharacterDto.From(c.Manifest)));
@@ -308,6 +309,8 @@ public class ImageEditorController(
                     "Сила должна быть числом от 0 до 2."));
             strength = parsed;
         }
+        if (!LoraNamespace.VisibleTo(UserId, form.LoraName.Trim()))
+            return (null, Error(StatusCodes.Status403Forbidden, ImageEditErrorCodes.LoraNotVisible, "Эта LoRA вам недоступна."));
         var known = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
         return (CharacterLoraPatch.Set(form.LoraName, form.LoraTrigger, strength, known), null);
     }
@@ -316,7 +319,9 @@ public class ImageEditorController(
     private IActionResult MapCharacter<T>(ImageEditCallResult<T> result, Func<T, IActionResult> ok) =>
         result.ErrorCode == ImageEditErrorCodes.ProviderUnavailable
             ? Error(StatusCodes.Status503ServiceUnavailable, result.ErrorCode, result.Error ?? "Запрос не выполнен")
-            : Map(result, ok);
+            : result.ErrorCode == ImageEditErrorCodes.LoraNotVisible
+                ? Error(StatusCodes.Status403Forbidden, result.ErrorCode, result.Error ?? "Запрос не выполнен")
+                : Map(result, ok);
 
     // Проектный гейт области: флаг и чужой проект одинаково 404 (ImageEditScopeGate)
     private bool Gate(string projectId, [NotNullWhen(true)] out ImageEditScope? scope,

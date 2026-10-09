@@ -40,7 +40,7 @@ import { useSlotItem } from '../../lib/subsystems/registry';
 import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
-import { ChatSwitcherTrigger } from '../../features/home/ChatSwitcherSheet';
+import { CHAT_SWITCHER_MIN_W, ChatSwitcherTrigger } from '../../features/home/ChatSwitcherSheet';
 import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
 import type { TeamMechanicId } from '../../features/team/teamMechanics';
 import { resolveChatOrigin } from '../../lib/chatOrigin';
@@ -1427,7 +1427,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Мобила: «назад» и имя чата — две раздельные цели. Стрелка уводит к списку, имя
   // с шевроном открывает шторку переключателя чатов (ChatSwitcherTrigger)
   const titleEl = isMobile && onBack ? (
-    <div style={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 0 }}>
+    // Минимум ширины — тач-зона имени: правый кластер не вправе ужать её до нуля
+    <div style={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: TB.iconHitMobile - SP.sm + CHAT_SWITCHER_MIN_W }}>
       <IconButton size="lg" onClick={onBack} title="Назад к списку" style={{ marginLeft: -SP.sm }}>
         <ChevronLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
       </IconButton>
@@ -1811,7 +1812,13 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       display: 'flex', alignItems: 'center', gap: TB.gap, marginLeft: 'auto', minWidth: 0,
       ...(isCompact ? null : { flexWrap: 'wrap' as const, justifyContent: 'flex-end' as const }),
     }}>
-      {badgeVisible('mechanic') && mechanicBadge}{badgeVisible('workflow') && workflowBadge}{costBadges}{actionBtns}
+      {badgeVisible('mechanic') && mechanicBadge}{badgeVisible('workflow') && workflowBadge}
+      {/* Мобила с переключателем чатов: при тесноте уступают бейджи (обрезаются слева),
+          а не кнопки действий и не тач-зона имени */}
+      {isMobile && onBack
+        ? <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, minWidth: 0, overflow: 'hidden', justifyContent: 'flex-end' }}>{costBadges}</div>
+        : costBadges}
+      {actionBtns}
     </div>
   );
 

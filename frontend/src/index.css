@@ -941,6 +941,15 @@ body {
    иначе мышь кольцо не рисует, как и у других контролов. */
 .cc-role-card:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 .cc-tools-row-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+
+/* === Переключатель чатов (мобильная шапка и шторка «Чаты») ===
+   Отклик на нажатие подложкой C.bgSelected (как у строк стены), открытый чат —
+   той же подложкой; hover — только там, где он есть, иначе на таче подложка
+   «залипает» после тапа. Кольцо фокуса — общее, на :focus-visible */
+.cc-chat-switch { background: none; }
+.cc-chat-switch[aria-current="true"], .cc-chat-switch:active { background: var(--c-bg-selected); }
+@media (hover: hover) { .cc-chat-switch:hover { background: var(--c-bg-selected); } }
+.cc-chat-switch:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 @media (prefers-reduced-motion: reduce) {
   .cc-role-card, .cc-tools-row-btn { transition: none; }
 }

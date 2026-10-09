@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ChevronDown, MessageCircle } from 'lucide-react';
 import type { HomeSessionInfo, Project } from '../../types';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { STATUS_COLOR, STATUS_PULSE, foldChatActivity, useChatActivity, type ActivityStatus } from '../../lib/projectActivity';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Modal } from '../../components/ui';
@@ -21,10 +21,18 @@ import { openSession, rowTitle } from './SessionRow';
 import { switcherSections } from './chatSwitcher';
 
 const ICON_SLOT = 20;
+// Высота строки шторки — тач-цель с двумя строками текста
+const ROW_MIN_H = 48;
+// Минимум ширины тач-зоны имени в шапке: правый кластер не ужимает её до нуля
+export const CHAT_SWITCHER_MIN_W = 96;
 // Флаг записи истории, которую шторка кладёт на открытии
 const HISTORY_FLAG = 'chatSwitcher';
 
 const hasFlag = () => !!(window.history.state as Record<string, unknown> | null)?.[HISTORY_FLAG];
+
+// Сколько шторок смонтировано сейчас — чтобы снятие записи на размонтировании
+// отличало настоящее закрытие от перемонтажа StrictMode (тот монтирует снова сразу)
+let liveSheets = 0;
 
 // Подписи статуса — про ЧАТ (как в доке стены)
 const CHAT_STATUS_TITLE: Record<ActivityStatus, string> = {
@@ -49,22 +57,38 @@ function SwitcherRow({ s, project, status, current, onPick }: {
       onClick={() => onPick(s)}
       aria-current={current ? 'true' : undefined}
       aria-label={`${rowTitle(s)} — ${projectLabel}${status ? ` — ${CHAT_STATUS_TITLE[status]}` : ''}${current ? ' — открыт сейчас' : ''}`}
+      // Подложка — классом: текущий чат (aria-current), нажатие и hover. Текущий чат
+      // выделен подложкой, без акцента: акцент в списке зарезервирован за статусом
+      className="cc-chat-switch"
       style={{
-        display: 'flex', alignItems: 'center', gap: SP.md, width: '100%', minHeight: 48,
+        display: 'flex', alignItems: 'center', gap: SP.md, width: '100%', minHeight: ROW_MIN_H,
         textAlign: 'left', border: 'none', borderRadius: R.lg, padding: `${SP.xs}px ${SP.sm}px`,
-        // Текущий чат — подложкой строки, без акцента: акцент в списке зарезервирован
-        // за статусом, и выбранная строка не должна спорить с точкой «работает»
-        background: current ? C.bgSelected : 'none', cursor: 'pointer', minWidth: 0,
-        fontFamily: FONT.sans,
+        cursor: 'pointer', minWidth: 0, fontFamily: FONT.sans,
       }}
     >
+      {/* Слот точки — всегда, чтобы строки не разъезжались. Слева, как у строк стены
+          (WallRow): статусы сканируют по левой кромке. Вид точки — общий с рельсами
+          (STATUS_COLOR/STATUS_PULSE). position: relative обязателен: заливку рисует
+          .cc-dot::after с inset: 0 */}
+      <span style={{ width: 8, height: 8, flexShrink: 0, display: 'flex' }}>
+        {status && (
+          <span
+            className={STATUS_PULSE[status].trim()}
+            style={{
+              width: 8, height: 8, borderRadius: R.full, position: 'relative',
+              '--cc-dot-c': STATUS_COLOR[status],
+              pointerEvents: 'none',
+            } as CSSProperties}
+          />
+        )}
+      </span>
       <span style={{
         width: ICON_SLOT, height: ICON_SLOT, flexShrink: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted,
       }}>
         {project
           ? <ProjectIcon project={project} size={ICON_SLOT} radius={R.sm} />
-          : <MessageCircle size={14} strokeWidth={2} />}
+          : <MessageCircle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
       </span>
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
         <span style={{
@@ -80,21 +104,6 @@ function SwitcherRow({ s, project, status, current, onPick }: {
           {projectLabel}
         </span>
       </span>
-      {/* Слот точки — всегда, чтобы правый край строк не разъезжался. Вид точки —
-          общий с рельсами (STATUS_COLOR/STATUS_PULSE). position: relative обязателен:
-          заливку рисует .cc-dot::after с inset: 0 */}
-      <span style={{ width: 8, height: 8, flexShrink: 0, display: 'flex' }}>
-        {status && (
-          <span
-            className={STATUS_PULSE[status].trim()}
-            style={{
-              width: 8, height: 8, borderRadius: R.full, position: 'relative',
-              '--cc-dot-c': STATUS_COLOR[status],
-              pointerEvents: 'none',
-            } as CSSProperties}
-          />
-        )}
-      </span>
     </button>
   );
 }
@@ -102,8 +111,9 @@ function SwitcherRow({ s, project, status, current, onPick }: {
 function SectionTitle({ children }: { children: string }) {
   return (
     <div style={{
-      fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600, color: C.textMuted,
-      textTransform: 'uppercase', letterSpacing: '0.04em', padding: `0 ${SP.sm}px`,
+      // Тот же вид, что у заголовка SidebarSection: заголовки списков чатов — одно правило
+      fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600, color: C.textSecondary,
+      textTransform: 'uppercase', letterSpacing: '.03em', padding: `0 ${SP.sm}px`,
     }}>
       {children}
     </div>
@@ -125,13 +135,18 @@ export function ChatSwitcherSheet({ currentId, onClose }: {
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
+  // Запись шторки уже снята системным «назад» — снимать её при размонтировании не надо
+  const closedByPop = useRef(false);
+
   useEffect(() => {
+    liveSheets++;
     // Повторный монтаж (StrictMode) второй записи не кладёт
     if (!hasFlag()) {
       window.history.pushState({ ...(window.history.state ?? {}), [HISTORY_FLAG]: true }, '', window.location.href);
     }
     const onPop = () => {
       if (hasFlag()) return; // ушли «вперёд» на запись шторки — не наш случай
+      closedByPop.current = true;
       const target = pendingRef.current;
       pendingRef.current = null;
       onCloseRef.current();
@@ -140,7 +155,18 @@ export function ChatSwitcherSheet({ currentId, onClose }: {
       if (target) setTimeout(() => openSession(target), 0);
     };
     window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
+    return () => {
+      liveSheets--;
+      window.removeEventListener('popstate', onPop);
+      // Шторку убрали мимо «назад» (удалён текущий чат, переход по тосту) — снимаем
+      // её запись, иначе в истории остаётся дубль и «назад» тратит лишнее нажатие.
+      // Проверка отложена: перемонтаж StrictMode успевает поднять счётчик обратно.
+      // Если поверх уже легла новая запись, флага наверху нет — трогать нечего
+      if (closedByPop.current) return;
+      setTimeout(() => {
+        if (liveSheets === 0 && hasFlag()) window.history.back();
+      }, 0);
+    };
   }, []);
 
   const close = () => {
@@ -212,10 +238,11 @@ export function ChatSwitcherTrigger({ currentId, children }: { currentId: string
       <div
         role="button" tabIndex={0}
         aria-haspopup="dialog" aria-label={title} title={title}
+        className="cc-chat-switch"
         onClick={show}
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); } }}
         style={{
-          flex: 1, minWidth: 0, minHeight: 40, display: 'flex', alignItems: 'center', gap: SP.xs,
+          flex: 1, minWidth: CHAT_SWITCHER_MIN_W, minHeight: TB.iconHitMobile, display: 'flex', alignItems: 'center', gap: SP.xs,
           cursor: 'pointer', borderRadius: R.md,
         }}
       >
@@ -227,8 +254,9 @@ export function ChatSwitcherTrigger({ currentId, children }: { currentId: string
           {other && (
             <span className={STATUS_PULSE[other]} style={{
               position: 'absolute', right: -3, top: -3, width: 8, height: 8, borderRadius: R.full,
-              // Подложка и ободок цветом холста — как у точки рельс: заливка живёт в ::after
-              background: C.bgMain, border: `2px solid ${C.bgMain}`,
+              // Подложка и ободок цветом фона шапки (TB.bg) — точка «вырезана» из шеврона,
+              // как у точки рельс; заливка живёт в ::after
+              background: TB.bg, border: `2px solid ${TB.bg}`,
               '--cc-dot-c': STATUS_COLOR[other],
               boxSizing: 'content-box', pointerEvents: 'none',
             } as CSSProperties} />

@@ -223,8 +223,9 @@ public static partial class CharacterStore
         return new EditedImage(bytes, ContentTypeOf(ImageFormatSniffer.DetectExtension(bytes)));
     }
 
-    // Персонаж для запроса: primary первым, затем остальные в порядке манифеста
-    public static CharacterForRequest? ForRequest(string root, string slug, int maxPhotos = PhotosPerRequest)
+    // Персонаж для запроса: primary первым, затем остальные в порядке манифеста;
+    // чужая владельцу LoRA из манифеста отбрасывается целиком (триггер и сила тоже)
+    public static CharacterForRequest? ForRequest(string root, string ownerId, string slug, int maxPhotos = PhotosPerRequest)
     {
         var manifest = Get(root, slug);
         var dir = CharacterDir(root, slug);
@@ -242,7 +243,9 @@ public static partial class CharacterStore
             photos.Add(new ReferenceImage(bytes, ContentTypeOf(ext), ReferenceRole.Character, manifest.Name));
         }
         if (photos.Count == 0) return null;
-        return new CharacterForRequest(new CharacterRef(manifest.Slug, manifest.Name, manifest.Description, manifest.ReadLora()), photos);
+        var lora = manifest.ReadLora();
+        if (lora is not null && !LoraNamespace.VisibleTo(ownerId, lora.Name)) lora = null;
+        return new CharacterForRequest(new CharacterRef(manifest.Slug, manifest.Name, manifest.Description, lora), photos);
     }
 
     // Абсолютный путь папки персонажа; null — slug не проходит белый список, путь вышел за

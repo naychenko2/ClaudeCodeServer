@@ -544,7 +544,7 @@ public class LocalImageEditorTests : IDisposable
             [.. Enumerable.Range(1, 3).Select(i => new CharacterPhotoUpload(TestImages.Jpeg((byte)i), null))]), DateTime.UtcNow).Value!;
         CharacterStore.Update(root, created.Manifest.Slug,
             new CharacterPatch(null, null, [], [], created.Manifest.Photos[2].File));
-        var character = CharacterStore.ForRequest(root, created.Manifest.Slug)!;
+        var character = CharacterStore.ForRequest(root, "owner", created.Manifest.Slug)!;
         var media = new FakeMedia();
 
         var job = await RunAsync(Service(Editor(media)), CharacterQuote(ImageEditOp.Generate),

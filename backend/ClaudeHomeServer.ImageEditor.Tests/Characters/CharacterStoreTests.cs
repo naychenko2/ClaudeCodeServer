@@ -55,7 +55,7 @@ public class CharacterStoreTests : IDisposable
         CharacterStore.CharacterDir(_root, slug).Should().BeNull();
         CharacterStore.Get(_root, slug).Should().BeNull();
         CharacterStore.OpenPhoto(_root, slug, "face-01.jpg").Should().BeNull();
-        CharacterStore.ForRequest(_root, slug).Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, slug).Should().BeNull();
         CharacterStore.Delete(_root, slug).Should().BeFalse();
 
         Directory.Exists(outside).Should().BeTrue("удаление по slug с обходом пути не должно ничего снести");
@@ -132,30 +132,48 @@ public class CharacterStoreTests : IDisposable
         File.WriteAllText(file, json.ToJsonString());
     }
 
+    private const string Owner = "0a1b2c3d-0000-0000-0000-000000000001";
+    private static readonly string OwnLora = LoraNamespace.PrefixFor(Owner) + "anya.safetensors";
+
     [Theory]
     [InlineData(null, 0.8)]
     [InlineData(0.55, 0.55)]
     public void Лора_из_providers_local_доходит_до_запроса(double? strength, double expected)
     {
         var m = Create("Аня");
-        var local = new JsonObject { ["lora"] = "anya.safetensors", ["trigger"] = "anya_person", ["photosHash"] = "h" };
+        var local = new JsonObject { ["lora"] = OwnLora, ["trigger"] = "anya_person", ["photosHash"] = "h" };
         if (strength is { } s) local["strength"] = s;
         SetLocal(m, local);
 
-        var lora = CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora;
+        var lora = CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.Lora;
 
-        lora.Should().Be(new CharacterLora("anya.safetensors", "anya_person", expected));
+        lora.Should().Be(new CharacterLora(OwnLora, "anya_person", expected));
+    }
+
+    [Theory]
+    [InlineData("anya.safetensors")]
+    [InlineData("ccs/ffffffffffffffffffffffffffffffff/anya.safetensors")]
+    [InlineData("ccs/0a1b2c3d000000000000000000000001/../x.safetensors")]
+    public void Чужая_лора_из_манифеста_отбрасывается(string lora)
+    {
+        var m = Create("Аня");
+        SetLocal(m, new JsonObject { ["lora"] = lora, ["trigger"] = "anya_person", ["strength"] = 0.9 });
+
+        var found = CharacterStore.ForRequest(_root, Owner, m.Slug)!;
+
+        found.Ref.Lora.Should().BeNull();
+        found.Photos.Should().NotBeEmpty();
     }
 
     [Fact]
     public void Без_блока_или_без_lora_trigger_лоры_нет()
     {
         var m = Create("Аня");
-        CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora.Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.Lora.Should().BeNull();
         SetLocal(m, new JsonObject { ["lora"] = "a.safetensors" });
-        CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora.Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.Lora.Should().BeNull();
         SetLocal(m, new JsonObject { ["trigger"] = "t" });
-        CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora.Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.Lora.Should().BeNull();
     }
 
     [Fact]
@@ -217,7 +235,7 @@ public class CharacterStoreTests : IDisposable
     public void Персонаж_уходит_в_запрос_драйвера_ссылкой_и_фото_с_ролью_character()
     {
         Create("Аня", "каре, веснушки");
-        var character = CharacterStore.ForRequest(_root, "anya")!;
+        var character = CharacterStore.ForRequest(_root, Owner, "anya")!;
         character.Photos.Should().HaveCount(3).And.OnlyContain(p => p.Role == ReferenceRole.Character);
 
         var model = new ImageEditModelInfo("m", "M",

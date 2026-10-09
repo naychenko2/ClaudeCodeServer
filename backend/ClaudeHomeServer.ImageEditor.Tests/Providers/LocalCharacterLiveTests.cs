@@ -58,7 +58,7 @@ public class LocalCharacterLiveTests
         var created = CharacterStore.Create(root, new CharacterDraft(Name, "мужчина 35 лет, борода, шрам над левой бровью",
             [new(photo1), new(photo2), new(photo3)]), DateTime.UtcNow);
         created.Value.Should().NotBeNull(created.Error);
-        var found = CharacterStore.ForRequest(root, created.Value!.Manifest.Slug)!;
+        var found = CharacterStore.ForRequest(root, "owner", created.Value!.Manifest.Slug)!;
 
         var known = new Dictionary<string, string>
         {

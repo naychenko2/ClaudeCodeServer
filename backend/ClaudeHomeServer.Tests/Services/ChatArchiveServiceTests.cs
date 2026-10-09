@@ -164,7 +164,7 @@ public class ChatArchiveServiceTests : IDisposable
         first.IsArchived.Should().BeTrue();
 
         // Второй проход: ещё один остывший чат, ДРУГОЙ батч (возврат первого чата сделал
-        // его не-кандидатом — он ещё и свежее порога после SetPinned-подобной активности)
+        // его не-кандидатом — он ещё и свежее порога после активности)
         var second = NewStaleChat(_sessions, owner.Id, ageDays: 20);
         await _sut.RunNowAsync(owner.Id, DateTime.UtcNow);
         var secondBatch = second.ArchiveBatchId!;

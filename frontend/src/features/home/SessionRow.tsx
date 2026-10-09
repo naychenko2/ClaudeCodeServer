@@ -27,7 +27,7 @@ const STATUS_LABEL: Record<HomeSessionInfo['status'], string> = {
 
 // Заголовок строки: имя чата > персона > последнее сообщение > заглушка
 // (пустой чат зовем «Новый чат» — как его называет список в разделе «Чаты»)
-function rowTitle(s: HomeSessionInfo): string {
+export function rowTitle(s: HomeSessionInfo): string {
   if (s.name?.trim()) return s.name;
   if (s.personaId) {
     const p = getPersonaById(s.personaId);

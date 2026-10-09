@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronRight, Sparkles } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
@@ -32,7 +32,7 @@ import { C, FONT, FS, R, SP, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } fro
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
-import { Badge, BackButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip } from '../ui';
+import { Badge, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip } from '../ui';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
@@ -40,6 +40,7 @@ import { useSlotItem } from '../../lib/subsystems/registry';
 import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
+import { ChatSwitcherTrigger } from '../../features/home/ChatSwitcherSheet';
 import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
 import type { TeamMechanicId } from '../../features/team/teamMechanics';
 import { resolveChatOrigin } from '../../lib/chatOrigin';
@@ -1137,7 +1138,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   useEffect(() => { setTagMenu(null); setParticipantsOpen(false); setCtxMenu(null); setExpiryMenu(null); }, [session.id]);
   // Клик по блоку персоны — карточка персоны: в проектном чате открывается в контентной зоне
   // проекта (вкладка «Команда», #/project/{id}/persona/{pid}), в глобальном — раздел «Персоны».
-  // На мобиле блок вложен в BackButton («назад к списку») — там клик остаётся за ним.
+  // На мобиле блок вложен в тач-зону переключателя чатов — там клик остаётся за ней.
   const [personaHover, setPersonaHover] = useState(false);
   const openPersonaCard = persona
     ? () => {
@@ -1200,11 +1201,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // (см. metaRow): на мобиле компактной иконкой, на десктопе коротким бейджем.
   const origin = resolveChatOrigin(session);
   const deviceBadge = projectDeviceBadge(project);
-  // Блок названия чата. На мобиле он целиком кликабелен как «назад».
+  // Блок названия чата. На мобиле он целиком открывает переключатель чатов.
   // Кликабельный стек аватаров группового чата (активный спикер — с цветным
   // кольцом) + поповер управления составом. Размер аватара параметром: компактный
   // в тулбарной шапке, крупнее в hero-шапке. stopPropagation — на мобиле стек
-  // живёт внутри BackButton-обёртки, клики не должны уходить в «Назад к списку».
+  // живёт внутри тач-зоны имени, клики не должны открывать шторку переключателя.
   const participantsStack = (avatarSize: number) => participants && participants.length > 1 ? (
     <div style={{ position: 'relative', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
       <button
@@ -1423,9 +1424,16 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       <MenuIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </ToolbarIconButton>
   ) : null;
-  const titleEl = isMobile && onBack
-    ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
-    : titleBlock;
+  // Мобила: «назад» и имя чата — две раздельные цели. Стрелка уводит к списку, имя
+  // с шевроном открывает шторку переключателя чатов (ChatSwitcherTrigger)
+  const titleEl = isMobile && onBack ? (
+    <div style={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 0 }}>
+      <IconButton size="lg" onClick={onBack} title="Назад к списку" style={{ marginLeft: -SP.sm }}>
+        <ChevronLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      <ChatSwitcherTrigger currentId={session.id}>{titleBlock}</ChatSwitcherTrigger>
+    </div>
+  ) : titleBlock;
   // Бейдж последней запущенной механики команды (только на десктопе)
   // Видимость пилюль (индикаторов) — тем же глазиком, что и кнопки действий, но
   // только в ОБЫЧНОЙ шапке: на стене пилюль нет вовсе. По умолчанию показаны все —

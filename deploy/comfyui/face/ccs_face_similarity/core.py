@@ -5,10 +5,12 @@
 insightface/cv2.
 
 Контракт:
-- drop_nonfinite(embs)        — отбрасывает векторы с NaN/Inf, возвращает список.
-- centroid_l2(embs)           — L2-нормализованный центроид непустого списка (или None).
-- cosine(a, b)                — косинус двух 1D-массивов.
-- similarity_from(variant, refs) — собирает всё: пропуски NaN/Inf, пустые эталоны, центроид.
+- drop_nonfinite(embs)           — отбрасывает векторы с NaN/Inf, возвращает список.
+- centroid_l2(embs)              — L2-нормализованный центроид непустого списка (или None).
+- cosine(a, b)                   — косинус двух 1D-массивов.
+- best_similarity_from(embs_variant, embs_ref) — сходство = максимум косинуса каждого
+  эмбеддинга варианта к центроиду эталонов; None — лиц в варианте нет или все эталоны
+  с NaN/Inf. Возвращает (similarity, used_refs) для stats воркера.
 """
 import numpy as np
 
@@ -46,23 +48,26 @@ def cosine(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
 
 
-def similarity_from(emb_variant, embs_ref):
-    """Сходство эмбеддинга варианта с центроидом эталонов. None — лица нет или все эталоны
-    с NaN/Inf. Возвращает (similarity, used_refs) для stats воркера."""
+def best_similarity_from(embs_variant, embs_ref):
+    """Сходство варианта = максимум косинуса каждого эмбеддинга лица к L2-центроиду
+    эталонов. В сценах с несколькими людьми самым крупным может оказаться не тот, кто нужен
+    (Артём: «Андрей рядом с …» — 0,549 на крупном фоне, нужное лицо — на фоне меньше);
+    максимум по всем лицам берёт правильное.
+
+    None возвращается в трёх случаях: в варианте нет лиц (пустой список), все эталоны
+    с NaN/Inf (центроид не построить), все эмбеддинги варианта с NaN/Inf. Возвращает
+    (similarity, used_refs) для stats воркера: used_refs — длина списка после drop_nonfinite,
+    даже если сходство получилось None из-за варианта."""
     centroid = centroid_l2(embs_ref)
-    used = 0 if centroid is None else len(embs_ref)
-    if emb_variant is None or centroid is None:
+    used = 0 if centroid is None else len(drop_nonfinite(embs_ref))
+    if not embs_variant or centroid is None:
         return None, used
-    arr = np.asarray(emb_variant, dtype=np.float32)
-    if not np.isfinite(arr).all():
-        return None, used
-    return cosine(arr, centroid), used
-
-
-def biggest_face(app, bgr):
-    """Самое крупное лицо в BGR-кадре (по площади bbox; при равенстве — последнее попавшееся).
-    Устойчиво к случаю, когда детекторы прыгают по score."""
-    faces = app.get(bgr)
-    if not faces:
-        return None
-    return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+    best = None
+    for e in embs_variant:
+        arr = np.asarray(e, dtype=np.float32)
+        if not np.isfinite(arr).all():
+            continue
+        s = cosine(arr, centroid)
+        if best is None or s > best:
+            best = s
+    return best, used

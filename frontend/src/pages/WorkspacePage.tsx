@@ -59,6 +59,7 @@ import { applyContextUpdated, loadChatContext, setActiveChatForContext } from '.
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { chatToRestore, createLatestGuard } from '../lib/pendingProjectChat';
+import { afterChatSwitcherClosed } from '../features/home/chatSwitcherHistory';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
@@ -1146,14 +1147,19 @@ const windowWidth = useWindowWidth();
         // отсутствует, и центр открыл бы ещё одного призрака. Фильтры живут в SessionList
         // (scope project.id) — читаем ту же персистентную копию.
         const neighbor = chatNeighborForArchive(list, updated.id, matchChatFilter(loadChatFilters(project.id)));
-        if (neighbor) {
-          handleSelectSession(neighbor, undefined, true);
-          navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, chatId: neighbor.id });
-        } else {
-          handleClearSession();
-          if (isMobile) setMobileView('sidebar');
-          navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
-        }
+        // Открытая шторка чатов лежит в истории своей записью поверх записи этого чата:
+        // navReplace затёр бы её флаг, и запись ушедшего в архив чата осталась бы под
+        // соседом. Сперва снимаем запись шторки, перезаписываем — ту, что под ней
+        afterChatSwitcherClosed(() => {
+          if (neighbor) {
+            handleSelectSession(neighbor, undefined, true);
+            navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, chatId: neighbor.id });
+          } else {
+            handleClearSession();
+            if (isMobile) setMobileView('sidebar');
+            navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+          }
+        });
         showArchivedToast(updated, handleSessionUpdated);
       }).catch(() => { /* офлайн — без соседа, без тоста; карточка в SessionList подтянется */ });
     }

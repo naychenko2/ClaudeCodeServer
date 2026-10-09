@@ -2,12 +2,9 @@
 // Закреплённые сверху, затем недавние чаты ВСЕХ проектов по времени — переход в чат
 // другого проекта за два тапа, без похода через список проектов.
 //
-// Системный «назад» закрывает шторку, а не уводит со страницы: на открытии кладём
-// в историю запись-дубль текущего снимка с флагом, «назад» её снимает. Выбор чата
-// сперва снимает эту запись и только потом открывает чат — иначе в истории между
-// прошлым и новым чатом остался бы дубль, и «назад» из нового чата тратил бы лишнее
-// нажатие.
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+// Системный «назад» закрывает шторку, а не уводит со страницы — запись шторки в
+// истории и её снятие живут в chatSwitcherHistory.ts.
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { ChevronDown, MessageCircle } from 'lucide-react';
 import type { HomeSessionInfo, Project } from '../../types';
 import { C, FONT, FS, R, SP, TB } from '../../lib/design';
@@ -19,20 +16,13 @@ import { useAllProjects } from '../projects/useAllProjects';
 import { useHomeSummary } from './useHomeSummary';
 import { openSession, rowTitle } from './SessionRow';
 import { switcherSections } from './chatSwitcher';
+import { createSwitcherController } from './chatSwitcherHistory';
 
 const ICON_SLOT = 20;
 // Высота строки шторки — тач-цель с двумя строками текста
 const ROW_MIN_H = 48;
 // Минимум ширины тач-зоны имени в шапке: правый кластер не ужимает её до нуля
 export const CHAT_SWITCHER_MIN_W = 96;
-// Флаг записи истории, которую шторка кладёт на открытии
-const HISTORY_FLAG = 'chatSwitcher';
-
-const hasFlag = () => !!(window.history.state as Record<string, unknown> | null)?.[HISTORY_FLAG];
-
-// Сколько шторок смонтировано сейчас — чтобы снятие записи на размонтировании
-// отличало настоящее закрытие от перемонтажа StrictMode (тот монтирует снова сразу)
-let liveSheets = 0;
 
 // Подписи статуса — про ЧАТ (как в доке стены)
 const CHAT_STATUS_TITLE: Record<ActivityStatus, string> = {
@@ -130,54 +120,13 @@ export function ChatSwitcherSheet({ currentId, onClose }: {
   const projectById = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
   const sections = useMemo(() => data ? switcherSections(data) : null, [data]);
 
-  // Чат, выбранный в шторке: открывается, когда «назад» снимет запись шторки
-  const pendingRef = useRef<HomeSessionInfo | null>(null);
-  const onCloseRef = useRef(onClose);
-  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  // Один контроллер на всю жизнь шторки: перемонтаж StrictMode переживает его состояние.
+  const [ctl] = useState(() => createSwitcherController<HomeSessionInfo>(window, { onClose, open: openSession }));
+  useEffect(() => { ctl.setOnClose(onClose); }, [ctl, onClose]);
+  useEffect(() => ctl.mount(), [ctl]);
 
-  // Запись шторки уже снята системным «назад» — снимать её при размонтировании не надо
-  const closedByPop = useRef(false);
-
-  useEffect(() => {
-    liveSheets++;
-    // Повторный монтаж (StrictMode) второй записи не кладёт
-    if (!hasFlag()) {
-      window.history.pushState({ ...(window.history.state ?? {}), [HISTORY_FLAG]: true }, '', window.location.href);
-    }
-    const onPop = () => {
-      if (hasFlag()) return; // ушли «вперёд» на запись шторки — не наш случай
-      closedByPop.current = true;
-      const target = pendingRef.current;
-      pendingRef.current = null;
-      onCloseRef.current();
-      // Переход — после того, как все слушатели popstate применят прежний снимок
-      // (он тот же чат): иначе они перебили бы только что открытый чат старым
-      if (target) setTimeout(() => openSession(target), 0);
-    };
-    window.addEventListener('popstate', onPop);
-    return () => {
-      liveSheets--;
-      window.removeEventListener('popstate', onPop);
-      // Шторку убрали мимо «назад» (удалён текущий чат, переход по тосту) — снимаем
-      // её запись, иначе в истории остаётся дубль и «назад» тратит лишнее нажатие.
-      // Проверка отложена: перемонтаж StrictMode успевает поднять счётчик обратно.
-      // Если поверх уже легла новая запись, флага наверху нет — трогать нечего
-      if (closedByPop.current) return;
-      setTimeout(() => {
-        if (liveSheets === 0 && hasFlag()) window.history.back();
-      }, 0);
-    };
-  }, []);
-
-  const close = () => {
-    if (hasFlag()) window.history.back();
-    else onClose();
-  };
-  const pick = (s: HomeSessionInfo) => {
-    if (s.id === currentId) { close(); return; }
-    if (hasFlag()) { pendingRef.current = s; window.history.back(); }
-    else { onClose(); openSession(s); }
-  };
+  const close = ctl.close;
+  const pick = (s: HomeSessionInfo) => ctl.pick(s, s.id === currentId);
 
   const renderRows = (list: HomeSessionInfo[]) => list.map(s => (
     <SwitcherRow

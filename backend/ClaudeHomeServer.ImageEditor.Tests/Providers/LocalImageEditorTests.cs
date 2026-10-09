@@ -37,6 +37,8 @@ public class LocalImageEditorTests : IDisposable
         public int GenerateBase { get; set; }
         // Билеты с этого номера висят в очереди вечно (чужие прогоны заняли видеокарту)
         public int? QueuedFrom { get; set; }
+        // Сходство лица, которое адаптер возвращает в каждом файле результата
+        public double? Similarity { get; set; }
         private readonly ConcurrentDictionary<string, bool> _seen = new();
 
         public IReadOnlyList<string>? Loras { get; set; } = [];
@@ -67,7 +69,7 @@ public class LocalImageEditorTests : IDisposable
                 return Task.FromResult(new LocalImagePoll(LocalImageState.Queued, 5, [], null));
             var request = Submitted.ElementAt(int.Parse(ticket[1..]) - 1);
             var files = Enumerable.Range(0, request.Count)
-                .Select(i => new LocalImageFile(TestImages.Png(8, 8, (byte)i), "image/png"))
+                .Select(i => new LocalImageFile(TestImages.Png(8, 8, (byte)i), "image/png", Similarity))
                 .ToList();
             return Task.FromResult(new LocalImagePoll(LocalImageState.Completed, null, files, null));
         }
@@ -583,5 +585,56 @@ public class LocalImageEditorTests : IDisposable
 
         request.References.Should().HaveCount(3);
         request.Prompt.Should().Contain("2–4) 3 фото лица одного и того же человека").And.Contain("на результате он один");
+    }
+
+    // ── Сходство лица: фото эталона в запросе и Similarity в результате ──
+
+    [Theory]
+    [InlineData(ImageEditOp.Generate)]
+    [InlineData(ImageEditOp.Edit)]
+    public async Task ПерсонажСФото_ФотоЭталонаУходитВFaceReferences_ImagesПрежние(ImageEditOp op)
+    {
+        var media = new FakeMedia();
+        var faces = Faces(3);
+        byte[][] photos = [TestImages.Jpeg(1), TestImages.Jpeg(2)];
+        var character = Timur with { FacePhotos = photos };
+        var source = op == ImageEditOp.Edit ? new ImageBytes(TestImages.Png(8, 8, 1), "image/png") : null;
+        var request = new ImageEditRequest(op, "сидит в кафе", source, null, faces, 1, null, null, LocalImageEditor.QwenImage, character);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.FaceReferences.Should().BeEquivalentTo(photos);
+        sent.Images.Should().HaveCount(faces.Count + (source is null ? 0 : 1), "фото эталона в Images не входят");
+    }
+
+    [Fact]
+    public async Task БезПерсонажа_FaceReferencesНет()
+    {
+        var media = new FakeMedia();
+        var request = new ImageEditRequest(ImageEditOp.Generate, "сидит в кафе", null, null, [], 1, null, null,
+            LocalImageEditor.QwenImage, null);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok);
+        media.Submitted.Should().ContainSingle().Which.FaceReferences.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Сходство_ПереноситсяВReadyИВИтог()
+    {
+        var media = new FakeMedia { Similarity = 0.77 };
+        var ready = new List<EditedImage>();
+        var request = new ImageEditRequest(ImageEditOp.Generate, "сидит в кафе", null, null, [], 1, null, null,
+            LocalImageEditor.QwenImage, Timur);
+
+        var result = await Editor(media).RunAsync(request,
+            new SyncProgress(p => { if (p.Ready is { } r) ready.AddRange(r); }), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok);
+        result.Images.Should().ContainSingle().Which.Similarity.Should().Be(0.77);
+        ready.Should().ContainSingle().Which.Similarity.Should().Be(0.77);
     }
 }

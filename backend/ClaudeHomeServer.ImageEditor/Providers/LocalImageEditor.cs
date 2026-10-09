@@ -141,7 +141,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 // Холст генерации по тексту не нужен: берутся только образцы человека. Прогон на
                 // вариант и без образцов: первый вариант виден сразу, а не после всей пачки
                 run = new LocalImageRequest(LocalImageOp.Generate, WithTrigger(req.Prompt, req), references, req.AspectRatio, 1,
-                    Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req));
+                    Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             case ImageEditOp.Edit or ImageEditOp.Inpaint
@@ -167,7 +167,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 if (req.Source is null) return Fail(EditOutcome.Failed, "Нет исходной картинки");
                 // Отдельного канала маски нет: маска уже лежит среди образцов (MaskSupport.AsReference)
                 run = new LocalImageRequest(LocalImageOp.Edit, WithTrigger(req.Prompt, req), [req.Source.Bytes, .. references], null, 1,
-                    Lora: LoraOf(req));
+                    Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             default:
@@ -208,7 +208,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                         "Локальная модель не справилась: " + (done.Error ?? "ComfyUI завершил задачу ошибкой"));
                 }
                 // Готовый прогон уходит в отчёт сразу: вариант становится версией, не дожидаясь остальных
-                List<EditedImage> ready = [.. done.Files.Select(f => new EditedImage(f.Bytes, f.ContentType))];
+                List<EditedImage> ready = [.. done.Files.Select(f => new EditedImage(f.Bytes, f.ContentType, f.Similarity))];
                 images.AddRange(ready);
                 progress.Report(at with { Stage = EditStage.Downloading, QueuePosition = null, Ready = ready });
             }

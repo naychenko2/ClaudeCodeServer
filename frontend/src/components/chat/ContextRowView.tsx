@@ -613,6 +613,13 @@ export function ContextRowView(props: ContextRowViewProps) {
   );
   // Строка губы на телефоне: одна линия, ширина строки — потолок для чипов
   const mobileLine: CSSProperties = { display: 'flex', alignItems: 'center', gap: SP.sm - 2, minWidth: 0 };
+  // Чистое дерево — справа просто «нет изменений»: текстом без бейджа и без зелени, как прежняя
+  // строка «ветка · чисто» Git-полосы. Делать нечего, поэтому не кнопка
+  const gitClean = !!git && !git.changes && !git.publishN;
+  const cleanNode = (
+    <span data-git-clean="" title="Всё закоммичено и опубликовано"
+      style={{ marginLeft: 'auto', flexShrink: 0, padding: `0 ${LIP_BTN_PAD_X}px`, fontSize: GIT_FONT, color: C.textMuted, whiteSpace: 'nowrap' }}>нет изменений</span>
+  );
 
   return (
     // Десктоп — отступ сверху, как у прежней Git-полосы (10): тень губы вверх (SHADOW.liftSoft из
@@ -635,7 +642,10 @@ export function ContextRowView(props: ContextRowViewProps) {
           <>
             {git && (
               <div data-row-line="where" style={mobileLine}>
-                <ShrinkChips.Provider value><GitChip g={git} form={f.g} onOpen={open('git')} /></ShrinkChips.Provider>
+                {/* Чистое дерево — как на десктопе: ветка подписью без меню (в нём всё серое), справа
+                    «нет изменений». Есть что делать — чип с меню: кнопок Git на телефоне нет */}
+                <ShrinkChips.Provider value><GitChip g={git} form={f.g} onOpen={open('git')} bare={gitClean} /></ShrinkChips.Provider>
+                {gitClean && cleanNode}
               </div>
             )}
             {primary && (
@@ -657,12 +667,7 @@ export function ContextRowView(props: ContextRowViewProps) {
                 Только без объекта и референсов: чипов, которые ужимает лестница, нет, и кнопки
                 не отнимают у неё ширину. Высота — по ряду губы (CHIP_H): губа не растёт */}
             {gitActions && git && <GitActions g={git} onCommit={rect => setMenu({ kind: 'commit', rect })} />}
-            {/* Чистое дерево — справа просто «нет изменений»: текстом без бейджа и без зелени, как прежняя
-                строка «ветка · чисто» Git-полосы. Делать нечего, поэтому не кнопка */}
-            {gitBare && !gitActions && (
-              <span data-git-clean="" title="Всё закоммичено и опубликовано"
-                style={{ marginLeft: 'auto', flexShrink: 0, padding: `0 ${LIP_BTN_PAD_X}px`, fontSize: GIT_FONT, color: C.textMuted, whiteSpace: 'nowrap' }}>нет изменений</span>
-            )}
+            {gitBare && !gitActions && cleanNode}
             {git && (primary || refs.length > 0) && (
               <span data-row-sep="" style={{ width: NOM.vsep, height: 16, background: C.border, flexShrink: 0 }} />
             )}

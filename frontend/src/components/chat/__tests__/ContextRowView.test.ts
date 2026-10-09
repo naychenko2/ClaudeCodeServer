@@ -136,6 +136,17 @@ describe('ContextRowView', () => {
     expect([...h.matchAll(/data-row-line="(\w+)"/g)].map(m => m[1])).toEqual(['where']);
   });
 
+  it('телефон, чистое дерево: ветка подписью без меню, справа «нет изменений»; есть изменения — чип с меню', () => {
+    const clean = html(props({ isMobile: true, width: 342, git: { ...git, changes: 0, publishN: 0 } }));
+    expect(clean).toContain('data-git-bare');
+    expect(clean).toContain('data-git-clean');
+    expect(clean).toContain('>нет изменений<');
+    expect(clean).not.toContain('lucide-chevron-down');
+    const dirty = html(props({ isMobile: true, width: 342 }));
+    expect(dirty).not.toContain('data-git-bare');
+    expect(dirty).not.toContain('data-git-clean');
+  });
+
   it('плашка «Вернуть» после снятия объекта: текст по макету, отсчёт от срока из стора', () => {
     const h = html(props({ offer: { text: 'hero.png', until: Date.now() + 3200 } }));
     expect(h).toContain('Вернуть');

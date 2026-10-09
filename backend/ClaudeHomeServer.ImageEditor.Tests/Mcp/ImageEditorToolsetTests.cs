@@ -308,8 +308,33 @@ public class ImageEditorToolsetTests : IDisposable
         string? Similarity(int variant) => versions.Single(v => v!["variant"]?.GetValue<int>() == variant)!["similarity"]?.GetValue<string>();
         Similarity(2).Should().Be("сходство с персонажем 0,77 — самый похожий в запуске");
         Similarity(1).Should().Be("сходство с персонажем 0,64");
-        Similarity(3).Should().BeNull("без сходства описание прежнее");
-            }
+        Similarity(3).Should().Be("сходство с персонажем не посчитано (лицо не найдено)");
+    }
+
+    [Fact]
+    public void Хвост_хода_сходство_пометка_лицо_не_найдено_и_запуск_без_сходства()
+    {
+        var thread = Thread();
+        _store.AddLaunch(Owner, ChatId, thread, new ImageThreadLaunch("job-1", ImageThreadVersion.OriginId, null,
+            _store.Now(), ImageThreadLaunchStatus.Running, "agent", "в куртке"));
+        _store.AddLaunchVersions(Owner, ChatId, thread, "job-1", [(1, "s1", 0.64), (2, "s2", 0.77), (3, "s3", null)]);
+        _store.FinishLaunch(Owner, ChatId, thread, "job-1", ImageThreadLaunchStatus.Done, []);
+        _store.AddLaunch(Owner, ChatId, thread, new ImageThreadLaunch("job-2", ImageThreadVersion.OriginId, null,
+            _store.Now(), ImageThreadLaunchStatus.Running, "agent", "без лица"));
+        _store.AddLaunchVersions(Owner, ChatId, thread, "job-2", [(1, "s4", null), (2, "s5", null)]);
+        _store.FinishLaunch(Owner, ChatId, thread, "job-2", ImageThreadLaunchStatus.Done, []);
+
+        var text = ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor.RenderThreads(
+            _store.Get(Owner, ChatId), [], _ => null);
+
+        var lines = text.Split('\n');
+        string Line(string prompt, int variant) => lines.Single(l => l.Contains($"вариант {variant} запуска «{prompt}»"));
+        Line("в куртке", 2).Should().Contain("сходство с персонажем 0,77 — самый похожий в запуске");
+        Line("в куртке", 1).Should().Contain("сходство с персонажем 0,64").And.NotContain("самый похожий");
+        Line("в куртке", 3).Should().Contain("сходство с персонажем не посчитано (лицо не найдено)");
+        Line("без лица", 1).Should().NotContain("сходство");
+        Line("без лица", 2).Should().NotContain("сходство");
+    }
 
     [Fact]
     public async Task Личный_чат_image_state_без_проектных_подсказок()

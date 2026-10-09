@@ -616,7 +616,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
                 from = t.Version(v.BaseVersionId) is { } b ? ImageThread.Label(b) : null,
                 jobId = v.JobId,
                 variant = v.Variant,
-                similarity = Chats.ImageEditorStateContributor.SimilarityText(v),
+                similarity = Chats.ImageEditorStateContributor.SimilarityText(t, v),
                 prompt = v.JobId is { } job ? t.Launches.FirstOrDefault(l => l.JobId == job)?.Prompt : null,
                 editsWithoutAi = v.IsOrigin ? v.Steps.Count : Math.Max(0, v.Steps.Count - 1),
             }),

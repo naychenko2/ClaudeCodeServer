@@ -161,17 +161,21 @@ public sealed class ImageEditorStateContributor(
         if (v.IsOrigin) return head + editsText;
         var prompt = t.Launches.FirstOrDefault(l => l.JobId == v.JobId)?.Prompt;
         var from = t.Version(v.BaseVersionId) is { } b ? ImageThread.Label(b) : "исходник";
-        var similarity = SimilarityText(v);
+        var similarity = SimilarityText(t, v);
         return $"{head} — вариант {v.Variant}{(prompt is null ? "" : $" запуска «{prompt}»")}, от: {from}"
             + (similarity is null ? "" : ", " + similarity) + editsText;
     }
 
-    // «сходство с персонажем 0,77 — самый похожий в запуске» / «сходство с персонажем 0,64»; null — не считалось
-    // (число всегда с запятой и двумя знаками, независимо от культуры сервера)
-    public static string? SimilarityText(ImageThreadVersion v) =>
-        v.Similarity is not { } s ? null
-            : "сходство с персонажем " + s.ToString("0.00", System.Globalization.CultureInfo.GetCultureInfo("ru-RU"))
-              + (v.MostSimilar ? " — самый похожий в запуске" : "");
+    // «сходство с персонажем 0,77 — самый похожий в запуске» / «сходство с персонажем 0,64»; у версии без числа,
+    // когда у соседей по запуску оно есть — «лицо не найдено» (то же правило, что sim в VersionCards.tsx);
+    // null — в запуске сходство не считалось (число всегда с запятой и двумя знаками, независимо от культуры сервера)
+    public static string? SimilarityText(ImageThread t, ImageThreadVersion v) =>
+        v.Similarity is { } s
+            ? "сходство с персонажем " + s.ToString("0.00", System.Globalization.CultureInfo.GetCultureInfo("ru-RU"))
+              + (v.MostSimilar ? " — самый похожий в запуске" : "")
+            : v.JobId is { } job && t.Versions.Any(x => x.JobId == job && x.Similarity is not null)
+                ? "сходство с персонажем не посчитано (лицо не найдено)"
+                : null;
 
     // Исполнитель в «Чем» хвоста «Контекст хода» — выбор человека, а персонаж и образцы берутся из контекста
     // чата (в префах проекта персонаж не читается)

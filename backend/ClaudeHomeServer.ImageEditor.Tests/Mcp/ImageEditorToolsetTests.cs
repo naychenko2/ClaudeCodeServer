@@ -294,6 +294,24 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     [Fact]
+    public async Task Image_state_версия_со_сходством_и_пометкой_самой_похожей()
+    {
+        var thread = Thread();
+        _store.AddLaunch(Owner, ChatId, thread, new ImageThreadLaunch("job-1", ImageThreadVersion.OriginId, null,
+            _store.Now(), ImageThreadLaunchStatus.Running, "agent", "в куртке"));
+        _store.AddLaunchVersions(Owner, ChatId, thread, "job-1", [(1, "s1", 0.64), (2, "s2", 0.77), (3, "s3", null)]);
+        _store.FinishLaunch(Owner, ChatId, thread, "job-1", ImageThreadLaunchStatus.Done, []);
+
+        var state = Parse(await Call(Toolset(), ImageEditorToolset.ToolState, ctx: Ctx()));
+
+        var versions = state["threads"]!.AsArray().Single(t => t!["thread"]!["threadId"]!.GetValue<string>() == thread)!["thread"]!["versions"]!.AsArray();
+        string? Similarity(int variant) => versions.Single(v => v!["variant"]?.GetValue<int>() == variant)!["similarity"]?.GetValue<string>();
+        Similarity(2).Should().Be("сходство с персонажем 0,77 — самый похожий в запуске");
+        Similarity(1).Should().Be("сходство с персонажем 0,64");
+        Similarity(3).Should().BeNull("без сходства описание прежнее");
+            }
+
+    [Fact]
     public async Task Личный_чат_image_state_без_проектных_подсказок()
     {
         AddChat(PersonalChat, Owner, projectId: null);

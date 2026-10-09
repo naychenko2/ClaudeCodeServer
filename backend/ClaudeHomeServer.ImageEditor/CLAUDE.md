@@ -247,3 +247,5 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
 **Перед правками — прочитай [ADR-019](../../docs/adr/ADR-019-image-editor-v3-in-chat.md)** (нити,
 швы ядра, тулсет, миграция) и [ADR-018](../../docs/adr/ADR-018-image-editor-v2.md), §7 «Инварианты
 под угрозой и сторожа» и §10.4 «План переноса».
+
+**Сходство версии** — поле версии (`Similarity`, `MostSimilar`): пометка ставится только в `FinishLaunch`, версии не переупорядочиваются; агенту видно в `image_state` и в хвосте хода (`ImageEditorStateContributor.SimilarityText`, число `0,77`), схемы MCP не меняются. Это справка, а не оценка качества: не предлагай «самый похожий» как лучший без просьбы человека.

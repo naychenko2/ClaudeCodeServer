@@ -14,7 +14,8 @@ ComfyUI свой torch и свои onnxruntime-конфликты; ставит�
 общего процесса.
 
 Безопасность: имена файлов references валидируются как у audio-узла — без абсолютных
-путей и «..». Внутри узла никаких записей на хост нет.
+путей, без «..», с белым списком расширений и потолком размера. Внутри узла никаких
+записей на хост нет.
 
 Конфиг:
   CCS_FACE_MODELS  каталог с buffalo_l             (по умолчанию ~/ai-data/face-models)
@@ -35,6 +36,12 @@ _FACE_APP_ROOT = None
 
 # Значение ccs_face_similarity= ставится в ui.text, валидаторов нет
 TEXT_KEY = "ccs_face_similarity"
+
+# Белый список расширений и потолок размера для эталонов: картинки крупнее 50 МБ — это уже
+# не лицо, а способ забить ОЗУ; посторонние расширения (например, .so или .py) OpenCV
+# либо уронит, либо прочитает как шум и заставит InsightFace тратить время
+ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+MAX_REF_BYTES = 50 * 1024 * 1024  # 50 МБ
 
 
 def _models_root():
@@ -78,10 +85,18 @@ def _safe_input(name):
         return None
     if os.path.isabs(name) or ".." in name.replace("\\", "/").split("/"):
         raise ValueError(f"недопустимое имя входа: {name}")
+    # root — ComfyUI input/, разрешение путей через него же; не из args ноды и не из
+    # переменных окружения, чтобы граф нельзя было перенаправить в чужой каталог
     root = os.path.realpath(folder_paths.get_input_directory())
     full = os.path.realpath(os.path.join(root, name))
     if not full.startswith(root + os.sep) or not os.path.isfile(full):
         raise ValueError(f"вход не найден: {name}")
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in ALLOWED_EXTS:
+        raise ValueError(f"расширение не из белого списка: {ext}")
+    size = os.path.getsize(full)
+    if size > MAX_REF_BYTES:
+        raise ValueError(f"эталон больше {MAX_REF_BYTES // (1024*1024)} МБ: {size}")
     return full
 
 
@@ -130,8 +145,9 @@ class CcsFaceSimilarity:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        # одна и та же пара вариант+эталоны всегда пересчитывается: для батча — это
-        # правильно, для единственного вызова — безвредно; кэшировать нечего
+        # nan — каждый запуск новая работа; совпадает с ccs_audio_worker и с прочими
+        # узлами очереди (семантика ComfyUI: «результат зависит от того, чего кэш
+        # не видит»). Файлы эталонов может переписать сборщик — кэш здесь неуместен
         return float("nan")
 
     def run(self, image, references):
@@ -147,6 +163,11 @@ class CcsFaceSimilarity:
         except Exception as e:
             log.exception("ccs_face_similarity: ошибка детектора лица на варианте")
             return {"ui": {"text": [f"{TEXT_KEY}=error:detect"]}}
+        # NaN/Inf из детектора на варианте — тоже none, иначе центроид разносит в NaN
+        # и в ui уезжает «nan»
+        if emb_image is not None and not np.isfinite(np.asarray(emb_image)).all():
+            log.warning("ccs_face_similarity: вариант дал нечисловой эмбеддинг")
+            emb_image = None
 
         embs_ref = []
         for line in (references or "").splitlines():
@@ -163,14 +184,22 @@ class CcsFaceSimilarity:
             except Exception as e:
                 log.warning("ccs_face_similarity: пропускаю эталон %s: %s", line, e)
                 continue
-            if emb is not None:
-                embs_ref.append(emb)
+            if emb is None:
+                continue
+            # NaN/Inf в эмбеддинге (битый файл, чужой формат) разносит центроид; один
+            # такой эталон съедает весь результат — отбрасываем с пометкой
+            arr = np.asarray(emb)
+            if not np.isfinite(arr).all():
+                log.warning("ccs_face_similarity: эталон %s дал нечисловой эмбеддинг", line)
+                continue
+            embs_ref.append(arr)
 
         if emb_image is None or not embs_ref:
             return {"ui": {"text": [f"{TEXT_KEY}=none"]}}
 
         # L2-нормализованный центроид эталонов: сначала единичные нормы, потом среднее
-        # и нормирование итога — иначе эмбеддинги с большей длиной будут доминировать
+        # и нормирование итога — иначе эмбеддинги с большей длиной будут доминировать.
+        # embs_ref гарантированно непустой после guard выше, деления на ноль в mean нет
         normed = [e / np.linalg.norm(e) for e in embs_ref]
         centroid = np.mean(normed, axis=0)
         centroid = centroid / np.linalg.norm(centroid)

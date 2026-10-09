@@ -35,12 +35,15 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
   }, [open, list, api, projectId]);
 
   const touch = (n: string, t: string, s: number) => {
+    // правка триггера или силы после «Убрать» отмену удаления не снимает
+    if (!n && removed) return;
     setRemoved(false);
-    onChange(n ? { name: n, trigger: t.trim(), strength: s } : undefined);
+    onChange(n ? { name: n, trigger: t.trim(), strength: Number(s.toFixed(2)) } : undefined);
   };
 
   const remove = () => {
-    setName(''); setTrigger(''); setStrength(DEFAULT_STRENGTH); setRemoved(true);
+    // триггер и силу не стираем: при повторном выборе той же LoRA они подставятся сами
+    setName(''); setRemoved(true);
     onChange('remove');
   };
 

@@ -58,7 +58,7 @@ import { plural } from '../lib/plural';
 import { applyContextUpdated, loadChatContext, setActiveChatForContext } from '../lib/chatContext';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
-import { chatToRestore, createLatestGuard } from '../lib/pendingProjectChat';
+import { chatToRestore, createLatestGuard, parsePendingChat } from '../lib/pendingProjectChat';
 import { afterChatSwitcherClosed } from '../features/home/chatSwitcherHistory';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
@@ -1208,8 +1208,7 @@ const windowWidth = useWindowWidth();
     const consumePendingProjectChat = async () => {
       const raw = sessionStorage.getItem('cc_pending_project_chat');
       if (!raw) return;
-      const sep = raw.indexOf('|');
-      const [pid, chatId] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
+      const { pid, chatId, view } = parsePendingChat(raw, project.id);
       if (pid !== project.id) return;
       sessionStorage.removeItem('cc_pending_project_chat');
       const gen = guard.next();
@@ -1227,7 +1226,18 @@ const windowWidth = useWindowWidth();
           setLeftTab('sessions');
           // Переход из чужого проекта уже положил запись с этим chatId (openProject) —
           // перезаписываем её. Диплинк внутри того же проекта пишет новую, «назад» вернёт в прежний чат
-          handleSelectSession(s, undefined, false, getNav()?.chatId === s.id);
+          const replace = getNav()?.chatId === s.id;
+          handleSelectSession(s, undefined, false, replace);
+          if (view) {
+            // «Назад» на снимок с перемонтажом: файл и задача — из снимка, а не из
+            // сохранённого состояния проекта, которое подняло монтирование. Запись,
+            // только что записанную выбором чата, перезаписываем — новой не кладём
+            setOpenFile(view.file);
+            setOpenFileDiffMode(false);
+            if (view.file === null) setFileFullscreen(false);
+            setSelectedTaskId(view.task);
+            navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: view.file, task: view.task, chatId: s.id });
+          }
         }
       } catch {
         // офлайн — остаёмся как есть

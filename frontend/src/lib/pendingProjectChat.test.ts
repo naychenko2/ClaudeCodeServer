@@ -1,16 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { chatToRestore, createLatestGuard, pendingChatOnPop } from './pendingProjectChat';
+import { chatToRestore, createLatestGuard, encodePendingChat, parsePendingChat, pendingChatOnPop } from './pendingProjectChat';
 
 describe('pendingChatOnPop', () => {
   const snap = { project: { id: 'A' }, chatId: 'X' };
+  const pop = (...a: Parameters<typeof pendingChatOnPop>) => {
+    const raw = pendingChatOnPop(...a);
+    return raw === null ? null : parsePendingChat(raw, 'другой');
+  };
 
   it('«назад» в чат другого проекта кладёт pending — его заберёт новый WorkspacePage', () => {
-    expect(pendingChatOnPop(snap, 'B', 'projects')).toBe('A|X');
+    expect(pop(snap, 'B', 'projects')).toEqual({ pid: 'A', chatId: 'X', view: { file: null, task: null } });
   });
 
   it('«назад» из раздела «Чаты» в чат «спящего» проекта — тоже pending', () => {
-    expect(pendingChatOnPop(snap, 'A', 'chats')).toBe('A|X');
-    expect(pendingChatOnPop(snap, null, 'chats')).toBe('A|X');
+    expect(pop(snap, 'A', 'chats')).toMatchObject({ pid: 'A', chatId: 'X' });
+    expect(pop(snap, null, 'chats')).toMatchObject({ pid: 'A', chatId: 'X' });
+  });
+
+  it('файл и задача снимка едут вместе с чатом — перемонтаж не подменит их сохранённым состоянием', () => {
+    const withView = { ...snap, file: 'src/a|b.ts', task: 'T1' };
+    expect(pop(withView, 'B', 'projects')).toEqual({ pid: 'A', chatId: 'X', view: { file: 'src/a|b.ts', task: 'T1' } });
   });
 
   it('внутри смонтированного проекта pending не нужен — снимок применит сам WorkspacePage', () => {
@@ -20,6 +29,21 @@ describe('pendingChatOnPop', () => {
   it('снимок без чата — восстанавливать нечего', () => {
     expect(pendingChatOnPop({ project: { id: 'A' } }, 'B', 'projects')).toBeNull();
     expect(pendingChatOnPop({ project: { id: 'A' }, chatId: null }, 'B', 'chats')).toBeNull();
+  });
+});
+
+describe('parsePendingChat', () => {
+  it('диплинк без вида — только чат', () => {
+    expect(parsePendingChat('A|X', 'P')).toEqual({ pid: 'A', chatId: 'X', view: null });
+    expect(parsePendingChat(encodePendingChat('A', 'X'), 'P')).toEqual({ pid: 'A', chatId: 'X', view: null });
+  });
+
+  it('без «projectId|» значение относится к текущему проекту', () => {
+    expect(parsePendingChat('X', 'P')).toEqual({ pid: 'P', chatId: 'X', view: null });
+  });
+
+  it('битый вид не мешает восстановить чат', () => {
+    expect(parsePendingChat('A|X\n{не json', 'P')).toEqual({ pid: 'A', chatId: 'X', view: null });
   });
 });
 

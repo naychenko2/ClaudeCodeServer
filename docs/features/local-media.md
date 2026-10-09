@@ -199,6 +199,32 @@ fal-ai). Это правило живёт в строке встроенного
 `local_voice_train`). Зачем LoRA идёт только вместе с фото-образцом — в
 [ImageEditor/CLAUDE.md](../../backend/ClaudeHomeServer.ImageEditor/CLAUDE.md), «Персонаж».
 
+### Узел CcsFaceSimilarity (InsightFace + buffalo_l)
+
+В тот же граф, что и `EditImage` режима B, ставится узел `CcsFaceSimilarity`: ветка
+после `VAEDecode` заводится во вход `image`, во вход `references` построчно кладутся
+имена файлов персонажа в `input/` ComfyUI (для проекта «Аудиотесты» — `characters/`).
+Узел считает самое крупное лицо в варианте (по площади bbox, при равенстве — по
+`det_score`), 512-мерный эмбеддинг ArcFace (buffalo_l) и косинус к L2-нормализованному
+центроиду эталонов того же персонажа. Выход — текст `ccs_face_similarity=0.771`,
+либо `ccs_face_similarity=none`, если лица нет ни в варианте, ни в эталоне. Это не
+ошибка: граф должен завершиться успешно, чтобы автопрогон вариантов не падал на одной
+картинке без лица.
+
+Узел живёт в `deploy/comfyui/face/` (копия в `~/ai-data/face-workers/ccs`, симлинк
+в `ComfyUI-h3/custom_nodes/`, веса buffalo_l в `~/ai-data/face-models/models/buffalo_l/`).
+Считается на **CPU** через onnxruntime: `onnxruntime-gpu` в venv ComfyUI конфликтует с
+torch cu128 и ломает весь ComfyUI целиком. Десятки миллисекунд на эталон — приемлемо.
+Модель держится между вызовами в модульном кеше.
+
+Зависимости — `insightface` (Apache-2.0), `onnxruntime` (MIT), `opencv-python` (Apache-2.0).
+**Модель buffalo_l — только некоммерческое использование** (лицензия InsightFace
+разрешает research и некоммерческое применение; коммерция требует отдельного
+согласования с правообладателем). Это ограничивает применение узла в коммерческих
+проектах — для них центроид эталона надо мерить иной моделью.
+
+Установка и грабли — [deploy/comfyui/face/README.md](../../deploy/comfyui/face/README.md).
+
 ## Аудио
 
 Решение и причины — [ADR-020](../adr/ADR-020-local-media-audio.md), установка на стенд —

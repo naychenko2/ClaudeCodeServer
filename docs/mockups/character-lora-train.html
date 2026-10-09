@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Фото для обучения и «Обучить персонажа» в карточке персонажа · макет</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет открывался без сервера.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R / MODAL_W из lib/design.ts. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2; --c-on-dark: #FFFFFF;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5; --c-accent-soft: #E8A990;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F; --c-danger-border: #F5C6BF;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-focus-danger: 0 0 0 3px rgba(180, 69, 47, 0.14);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-modal: 0 24px 60px rgba(23, 19, 15, 0.40);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    --shadow-press: inset 0 1px 3px rgba(60, 50, 35, 0.12);
+    /* FS */ --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-h2: 22px;
+    /* SP */ --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    /* R  */ --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-modal: 20px; --r-sheet: 22px; --r-max: 999px;
+    /* MODAL_W.confirm */ --modal-confirm: 380px;
+    /* Обвязка макета (не продукт) */
+    --doc-bg: #E9E4DA; --doc-card: #FBF8F2; --doc-line: #E0D7C8; --doc-text: #39332B; --doc-muted: #756B5E;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18; --c-on-dark: #FFFFFF;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C; --c-accent-soft: #9A5E48;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #453F37;
+    --c-overlay: rgba(0, 0, 0, 0.62);
+    --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success: #7CB86A; --c-success-bg: #232E20; --c-success-text: #8FCB79;
+    --c-warning: #E0AC5A; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72; --c-danger-border: #5A302A;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-focus-danger: 0 0 0 3px rgba(232, 120, 94, 0.26);
+    --shadow-island: 0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+    --shadow-modal: 0 28px 70px rgba(0, 0, 0, 0.65);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+    --shadow-press: inset 0 1px 4px rgba(0, 0, 0, 0.38);
+    --doc-bg: #171411; --doc-card: #24201C; --doc-line: #3D3830; --doc-text: #EDE6DB; --doc-muted: #B3A897;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px 16px 60px; background: var(--doc-bg); color: var(--doc-text);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--fs-base); }
+  button, input { font: inherit; color: inherit; }
+  .doc-wrap { max-width: 1180px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 24px; margin: 0 0 6px; line-height: 1.25; }
+  p.lead { color: var(--doc-muted); margin: 0 0 10px; max-width: 900px; line-height: 1.55; }
+
+  /* ── Демо-управление (не продукт) ── */
+  .demo { position: sticky; top: 0; z-index: 90; background: var(--doc-bg); padding: 8px 0 10px; display: flex; flex-direction: column; gap: 6px; }
+  @media (max-width: 700px) { .demo { position: static; } }
+  .demo .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .demo .lbl { font-size: 11px; color: var(--doc-muted); margin-right: 4px; min-width: 64px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--doc-line); background: var(--doc-card); border-radius: 10px; padding: 4px 9px; color: var(--doc-text); }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .tbtn.sub { border-style: dashed; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .dcard { background: var(--doc-card); border: 1px solid var(--doc-line); border-radius: 12px; padding: 10px 14px; line-height: 1.5; font-size: 12.5px; min-width: 0; }
+  .dcard h3 { margin: 0 0 4px; font-size: 14px; }
+  .dcard ul { margin: 4px 0 0; padding-left: 18px; }
+  .dcard .muted { color: var(--doc-muted); }
+  /* Пометка макета: текста нет в заметке «LoRA-обучение — тексты», ждёт решения */
+  .pend { display: inline-block; font-size: 10px; line-height: 1.4; color: var(--doc-muted); border: 1px dashed var(--c-dashed); border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: middle; font-weight: 400; white-space: nowrap; }
+
+  .stage { display: flex; justify-content: center; min-width: 0; }
+
+  /* ── Панель редактора картинок: форма персонажа ── */
+  .app { position: relative; width: 420px; max-width: 100%; height: 760px; display: flex; flex-direction: column;
+    background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: var(--r-xxl); box-shadow: var(--shadow-island); overflow: hidden; }
+  .app.mobile { border-radius: 22px; background: var(--c-bg-main); }
+  .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; }
+  .form { display: flex; flex-direction: column; gap: var(--sp-md); padding: var(--sp-md); min-width: 0; color: var(--c-text-primary); }
+  .back { display: flex; align-items: center; gap: var(--sp-xs); font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); }
+  .back svg { color: var(--c-text-muted); }
+
+  /* Field */
+  .field { display: flex; flex-direction: column; gap: var(--sp-xs); min-width: 0; }
+  .field > .flabel { font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-secondary); }
+  .hint { font-size: var(--fs-sm); color: var(--c-text-muted); line-height: 1.45; }
+  .tf { height: 36px; border-radius: var(--r-xl); border: 1px solid var(--c-border); background: var(--c-bg-white); padding: 0 var(--sp-md);
+    font-size: var(--fs-md); color: var(--c-text-primary); width: 100%; min-width: 0; outline: none; }
+  .tf:focus { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .tf.err { border-color: var(--c-danger); box-shadow: var(--shadow-focus-danger); }
+  .tf.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: var(--fs-base); }
+  .ferr { font-size: var(--fs-sm); color: var(--c-danger-text); line-height: 1.45; }
+  .app.mobile .tf { height: 44px; }
+
+  /* Сворачиваемая секция — как «LoRA для локальной модели» (CharacterLoraSection) */
+  .sec { border: 1px solid var(--c-border); border-radius: var(--r-md); min-width: 0; }
+  .sec-h { display: flex; align-items: center; gap: var(--sp-xs); width: 100%; padding: var(--sp-sm) var(--sp-md); background: none; border: none; cursor: pointer;
+    text-align: left; font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); min-width: 0; border-radius: var(--r-md); }
+  .sec-h:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .sec-h .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .app.mobile .sec-h { min-height: 44px; }
+  .sec-b { display: flex; flex-direction: column; gap: var(--sp-md); padding: 0 var(--sp-md) var(--sp-md); min-width: 0; }
+
+  /* Badge */
+  .badge { display: inline-flex; align-items: center; gap: var(--sp-xs); height: 20px; padding: 0 var(--sp-sm); border-radius: var(--r-max); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; flex: 0 0 auto; }
+  .badge.neutral { background: var(--c-bg-inset); color: var(--c-text-muted); }
+  .badge.accent { background: var(--c-accent-light); color: var(--c-accent); }
+  .badge.success { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warning { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.danger { background: var(--c-danger-bg); color: var(--c-danger-text); }
+
+  /* Button (components/ui/Button: sm 32 / md 40) */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 7px 13px; border-radius: var(--r-lg);
+    font-size: var(--fs-base); font-weight: 600; cursor: pointer; white-space: nowrap; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-primary); }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn:active { box-shadow: var(--shadow-press); }
+  .btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.md { min-height: 40px; padding: 11px 16px; font-size: var(--fs-md); border-radius: var(--r-xl); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); }
+  .btn.pri:hover { background: var(--c-accent); filter: brightness(1.04); }
+  .btn.danger { background: var(--c-danger); color: var(--c-on-accent); border-color: transparent; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover { background: var(--c-bg-selected); }
+  .btn.ghost.dng { color: var(--c-danger-text); }
+  .btn[disabled] { cursor: not-allowed; box-shadow: none; filter: none; }
+  .btn.pri[disabled] { background: var(--c-accent-soft); }
+  .btn:not(.pri)[disabled] { color: var(--c-text-muted); background: var(--c-bg-inset); }
+  .btn.ghost[disabled] { background: transparent; }
+  .btn.block { width: 100%; white-space: normal; text-align: center; }
+  .app.mobile .btn { min-height: 40px; }
+  .app.mobile .btn.md { min-height: 44px; }
+
+  /* Notice (components/ui/Notice) */
+  .notice { display: flex; align-items: flex-start; gap: var(--sp-sm); padding: var(--sp-sm) var(--sp-md); border-radius: var(--r-md); font-size: var(--fs-sm); line-height: 1.45; border: 1px solid; min-width: 0; }
+  .notice > svg { margin-top: var(--sp-xxs); }
+  .notice .nt { font-weight: 600; }
+  .notice .nb { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+  .notice.warning { background: var(--c-warning-bg); color: var(--c-warning-text); border-color: var(--c-warning); }
+  .notice.danger { background: var(--c-danger-bg); color: var(--c-danger-text); border-color: var(--c-danger-border); }
+  .notice.info { background: var(--c-info-bg); color: var(--c-text-primary); border-color: var(--c-info); }
+  .notice.info > svg { color: var(--c-info); }
+  .notice.success { background: var(--c-success-bg); color: var(--c-success-text); border-color: var(--c-success); }
+
+  /* ProgressBar (components/ui/ProgressBar): 4px на C.track */
+  .pbar { display: block; height: 4px; border-radius: var(--r-max); background: var(--c-track); overflow: hidden; }
+  .pbar > i { display: block; height: 100%; border-radius: var(--r-max); background: var(--c-accent); }
+  .pbar.est > i { background: var(--c-accent-soft); width: 35%; animation: est 1.6s ease-in-out infinite; }
+  @keyframes est { 0% { transform: translateX(-100%); } 100% { transform: translateX(290%); } }
+  @media (prefers-reduced-motion: reduce) { .pbar.est > i { animation: none; width: 100%; } .tile.skel { animation: none !important; } }
+
+  /* Счётчик и действия над сеткой */
+  .counter { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); flex-wrap: wrap; min-width: 0; }
+  .counter .num { font-size: var(--fs-sm); font-weight: 600; }
+  .ok { color: var(--c-success-text); } .low { color: var(--c-warning-text); } .mut { color: var(--c-text-muted); }
+  .status { font-size: var(--fs-sm); line-height: 1.45; }
+
+  /* Сетка фото для обучения: мельче, чем «Фото лица» (до 50 штук) */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: var(--sp-sm); min-width: 0; }
+  .tile { position: relative; aspect-ratio: 1; border-radius: var(--r-lg); border: 1px solid var(--c-border); background: var(--c-bg-inset); color: var(--c-text-muted); min-width: 0; }
+  .tile .ph { width: 100%; height: 100%; display: grid; place-items: center; border-radius: inherit; overflow: hidden; }
+  .tile .ph svg { width: 62%; height: 62%; opacity: .55; }
+  .tile.t1 { background: var(--c-accent-light); } .tile.t2 { background: var(--c-bg-selected); } .tile.t3 { background: var(--c-accent-muted); }
+  .tile.skel { animation: pulse 1.2s ease-in-out infinite; border-style: dashed; border-color: var(--c-dashed); }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .tile.bad { border-color: var(--c-danger-border); }
+  .tile.bad .ph { opacity: .45; }
+  .tile .flag { position: absolute; left: var(--sp-xs); bottom: var(--sp-xs); width: 18px; height: 18px; border-radius: var(--r-max); display: grid; place-items: center;
+    background: var(--c-danger); color: var(--c-on-accent); }
+  /* IconButton size xs variant media: скрим поверх фото, от темы не зависит */
+  .rm { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: var(--r-max); border: none; display: grid; place-items: center; cursor: pointer;
+    background: var(--c-media-scrim); color: var(--c-on-dark); padding: 0; }
+  .rm:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .app.mobile .rm { width: 24px; height: 24px; }
+  .app.mobile .rm::after { content: ''; position: absolute; inset: -6px; } /* зона касания 36×36 */
+  .more { justify-self: start; }
+
+  /* Пустое состояние зоны загрузки */
+  .drop { border: 1.5px dashed var(--c-dashed); border-radius: var(--r-xl); padding: var(--sp-lg) var(--sp-md); display: flex; flex-direction: column; align-items: center; gap: var(--sp-sm); text-align: center; }
+  .drop .ic { width: 36px; height: 36px; border-radius: var(--r-max); background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; }
+  .drop p { margin: 0; font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.45; max-width: 280px; }
+
+  /* Отказы по фото: строка-карточка с причиной */
+  .rej { display: flex; flex-direction: column; gap: var(--sp-xs); min-width: 0; }
+  .rej .rh { font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-secondary); }
+  .rrow { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-xs) var(--sp-sm); border-radius: var(--r-md); background: var(--c-danger-bg); min-width: 0; }
+  .app.mobile .rrow { flex-wrap: wrap; }
+  .app.mobile .rrow .tx { flex-basis: calc(100% - 40px); }
+  .app.mobile .rrow > .btn { margin-left: 40px; }
+  .rrow .th { width: 32px; height: 32px; flex: 0 0 auto; border-radius: var(--r-sm); background: var(--c-bg-inset); color: var(--c-text-muted); display: grid; place-items: center; }
+  .rrow .th svg { width: 60%; height: 60%; opacity: .55; }
+  .rrow .tx { flex: 1; min-width: 0; font-size: var(--fs-sm); line-height: 1.4; }
+  .rrow .tx .fn { color: var(--c-text-secondary); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rrow .tx .why { color: var(--c-danger-text); overflow-wrap: anywhere; }
+
+  /* Блок обучения */
+  .run { display: flex; flex-direction: column; gap: var(--sp-sm); padding: var(--sp-md); border-radius: var(--r-xl); background: var(--c-bg-card); border: 1px solid var(--c-border-light); min-width: 0; }
+  .run .line { display: flex; align-items: center; gap: var(--sp-sm); font-size: var(--fs-base); color: var(--c-text-heading); font-weight: 600; min-width: 0; }
+  .run .line span { min-width: 0; overflow-wrap: anywhere; }
+  .run .line svg { color: var(--c-accent); }
+  .run .eta { display: flex; justify-content: space-between; gap: var(--sp-sm); flex-wrap: wrap; font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  .done { display: flex; flex-direction: column; gap: var(--sp-sm); padding: var(--sp-md); border-radius: var(--r-xl); background: var(--c-success-bg); min-width: 0; }
+  .done .dt { display: flex; align-items: center; gap: var(--sp-sm); font-weight: 600; color: var(--c-success-text); font-size: var(--fs-base); }
+  .done p { margin: 0; font-size: var(--fs-sm); line-height: 1.45; color: var(--c-text-primary); }
+  .done .meta { font-size: var(--fs-xs); color: var(--c-text-secondary); }
+  .actions { display: flex; gap: var(--sp-sm); flex-wrap: wrap; align-items: center; }
+  .app.mobile .actions .btn { flex: 1 1 auto; }
+
+  .consent { display: flex; gap: var(--sp-xs); align-items: center; font-size: var(--fs-sm); }
+  .cb { width: 16px; height: 16px; border-radius: 4px; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; flex: 0 0 auto; }
+  .facegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: var(--sp-md); }
+
+  svg.i { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+  svg.i.s { width: 13px; height: 13px; } svg.i.xs { width: 11px; height: 11px; }
+
+  /* ── Модалка подтверждения (Modal/ConfirmDialog): десктоп — карточка 380, мобила — шторка ── */
+  .ovl { position: absolute; inset: 0; background: var(--c-overlay); display: flex; align-items: center; justify-content: center; padding: var(--sp-lg); z-index: 10; }
+  .dlg { background: var(--c-bg-main); border-radius: var(--r-modal); box-shadow: var(--shadow-modal); width: var(--modal-confirm); max-width: 100%; display: flex; flex-direction: column; }
+  .dlg .db { padding: 26px 28px 20px; display: flex; flex-direction: column; gap: var(--sp-sm); }
+  .dlg h2 { font-family: 'PT Serif', Georgia, serif; font-weight: 500; font-size: var(--fs-h2); margin: 0; color: var(--c-text-heading); line-height: 1.25; overflow-wrap: anywhere; }
+  .dlg p { margin: 0; font-size: var(--fs-md); line-height: 1.5; color: var(--c-text-primary); }
+  .dlg p b { color: var(--c-text-heading); }
+  .dlg .df { padding: 16px 28px; display: flex; justify-content: flex-end; gap: var(--sp-sm); flex-wrap: wrap; border-top: 1px solid var(--c-border-light); }
+  .app.mobile .ovl { align-items: flex-end; padding: 0; }
+  .app.mobile .dlg { width: 100%; border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); }
+  .app.mobile .dlg .grab { width: 36px; height: 4px; border-radius: var(--r-max); background: var(--c-track); margin: 10px auto 0; }
+  .app.mobile .dlg .db { padding: 8px 18px 16px; }
+  .app.mobile .dlg h2 { font-size: 21px; }
+  .app.mobile .dlg .df { padding: 12px 18px 16px; }
+  .app.mobile .dlg .df .btn { flex: 1 1 120px; }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">Фото для обучения и «Обучить персонажа»</h1>
+  <p class="lead">Два новых раздела в форме персонажа, над ручным «LoRA для локальной модели». Польза одной фразой: <b>«Персонаж стабильно похож на себя на любых картинках»</b>.
+    Тексты — дословно из заметки «LoRA-обучение — тексты». Пометка <span class="pend">нет текста</span> — такого текста в заметке нет, нужно решение.</p>
+
+  <div class="demo" id="demo"></div>
+
+  <div class="layout">
+    <div class="stage"><div class="app" id="app"><div class="scroll"><div class="form" id="form"></div></div><div id="modal"></div></div></div>
+    <div class="dcard" id="note"></div>
+  </div>
+</div>
+
+<script>
+// ── Иконки (lucide) ──
+const P = {
+  back: '<path d="m15 18-6-6 6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  alert: '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  check: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  spark: '<path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2Z"/>',
+  cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 9h6v6H9zM9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M12 8v4M12 16h.01"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+};
+const ic = (n, c = '') => `<svg class="i ${c}" viewBox="0 0 24 24" aria-hidden="true">${P[n]}</svg>`;
+const pend = (t = 'нет текста') => `<span class="pend">${t}</span>`;
+
+// ── Состояние макета ──
+const S = {
+  theme: 'light', width: 'panel', admin: false,
+  photo: 'enough', train: 'ready',
+  trigErr: false, etaUnknown: false, changed: false, allRejected: false, canceled: false,
+  modal: null, showAll: false, openPhotos: true, openTrain: true,
+};
+const PHOTO = {
+  empty:     { n: 0,  label: 'Пусто' },
+  uploading: { n: 12, label: 'Идёт загрузка' },
+  few:       { n: 12, label: '12 из 50 — мало' },
+  enough:    { n: 34, label: '34 из 50 — хватает' },
+  rejected:  { n: 34, label: 'Часть отброшена' },
+  limit:     { n: 50, label: 'Предел 50' },
+};
+const TRAIN = {
+  blocked:   'Кнопка заблокирована',
+  ready:     'Можно обучать',
+  confirm:   'Подтверждение старта',
+  queued:    'В очереди',
+  running:   'Идёт',
+  done:      'Готово',
+  error:     'Ошибка',
+  busyOther: 'Карта занята чужим',
+  busyMine:  'У меня уже идёт',
+  off:       'Выключено админом',
+  noLocal:   'Нет локальной модели',
+};
+const NOTES = {
+  empty: 'Фото ещё нет: пустая зона с одной кнопкой. Блок обучения ниже показывает заблокированную кнопку.',
+  uploading: 'Человек выбрал 8 файлов: на месте будущих фото — пульсирующие заглушки, сверху полоса прогресса. «Добавить фото» неактивна до конца загрузки.',
+  few: 'Меньше 20: счётчик и строка статуса янтарные (C.warningText), кнопка «Обучить» ниже сама говорит, сколько не хватает.',
+  enough: '20 и больше: счётчик зелёный (C.successText). Сетка показывает первые 12 фото, «Показать все» раскрывает остальные.',
+  rejected: 'Отказы двух видов: при загрузке (формат, размер, вес, дубль, предел) фото не попадает в сетку; после проверки лица (нет лица, несколько лиц) остаётся в сетке с красным флажком. Причина — строкой-карточкой под сеткой, там же «Убрать фото».',
+  limit: 'Ровно 50: «Добавить фото» неактивна, под счётчиком — причина из заметки.',
+  blocked: 'Меньше 20 фото: кнопка-подсказка во всю ширину, текст сам говорит, сколько добавить. Поле слова-метки уже видно.',
+  ready: 'Слово-метка подставлено из имени, его можно сменить. Включи «ошибка метки», чтобы увидеть валидацию: кнопка «Обучить» гаснет.',
+  confirm: 'Модалка перед стартом. На мобиле — шторка снизу. «Начать обучение» → «В очереди».',
+  queued: 'Задача ждёт карту: полоса без процента (бегущий отрезок C.accentSoft), отменить можно.',
+  running: 'Шаг N из M, процент, время до конца. «Отменить обучение» → подтверждение → после отмены — плашка «Обучение остановлено».',
+  done: 'Зелёная карточка, дата и число фото, «Обучить заново». Включи «фото изменились» — появится янтарная пометка.',
+  error: 'Красная плашка, фото на месте, «Попробовать снова». Переключатель «все фото отброшены» меняет текст.',
+  busyOther: 'Карту занял кто-то другой: показываем, когда освободится. Включи «Я админ» — появится «Остановить чужое обучение».',
+  busyMine: 'Идёт обучение другого моего персонажа: второе не запустить.',
+  off: 'Админ выключил обучение: блок есть, кнопки нет. Фото загружать можно.',
+  noLocal: 'Локальная модель недоступна: блок есть, кнопки нет.',
+};
+
+// ── Демо-панель ──
+function tb(group, val, label, extra = '') {
+  return `<button class="tbtn ${extra}" aria-pressed="${S[group] === val}" data-g="${group}" data-v="${val}">${label}</button>`;
+}
+function flag(key, label) {
+  return `<button class="tbtn sub" aria-pressed="${S[key]}" data-f="${key}">${label}</button>`;
+}
+function renderDemo() {
+  const d = document.getElementById('demo');
+  d.innerHTML = `
+    <div class="row"><span class="lbl">Вид</span>
+      ${tb('theme', 'light', 'Светлая')}${tb('theme', 'dark', 'Тёмная')}
+      ${tb('width', 'panel', 'Панель 420')}${tb('width', 'm360', 'Телефон 360')}${tb('width', 'm320', 'Телефон 320')}
+      ${flag('admin', 'Я админ')}</div>
+    <div class="row"><span class="lbl">A · Фото</span>${Object.entries(PHOTO).map(([k, v]) => tb('photo', k, v.label)).join('')}</div>
+    <div class="row"><span class="lbl">B · Обучение</span>${Object.entries(TRAIN).map(([k, v]) => tb('train', k, v)).join('')}</div>
+    <div class="row"><span class="lbl">Варианты</span>
+      ${flag('trigErr', 'ошибка метки')}${flag('etaUnknown', 'время неизвестно')}${flag('changed', 'фото изменились')}${flag('allRejected', 'все фото отброшены')}</div>`;
+}
+
+// ── Форма ──
+const face = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">${P.user}</svg>`;
+const TONES = ['t1', 't2', 't3', ''];
+function tile(i, opts = {}) {
+  return `<div class="tile ${opts.skel ? 'skel' : TONES[i % 4]} ${opts.bad ? 'bad' : ''}">
+    <div class="ph">${opts.skel ? '' : face}</div>
+    ${opts.bad ? `<span class="flag" title="Не пойдёт в обучение">${ic('alert', 'xs')}</span>` : ''}
+    ${opts.skel ? '' : `<button class="rm" title="Убрать фото" aria-label="Убрать фото">${ic('x', 'xs')}</button>`}
+  </div>`;
+}
+function counterRow(n, disabledAdd) {
+  const cls = n >= 20 ? 'ok' : (n === 0 ? 'mut' : 'low');
+  return `<div class="counter">
+    <span class="num ${cls}">${n} из 50 · нужно минимум 20</span>
+    <button class="btn" ${disabledAdd ? 'disabled' : ''}>${ic('upload', 's')}Добавить фото</button>
+  </div>`;
+}
+function photosSection() {
+  const p = S.photo, n = PHOTO[p].n;
+  let body = `<div class="hint">Загрузите 20–50 фото одного человека: лицо хорошо видно, разные ракурсы, свет и фон. Лучше всего — по одному лицу на кадре.</div>`;
+  if (p === 'empty') {
+    body += `<div class="drop"><span class="ic">${ic('upload')}</span>
+      <p>Здесь пока нет фото. Добавьте хотя бы 20 — тогда можно обучить персонажа.</p>
+      <button class="btn pri">${ic('upload', 's')}Добавить фото</button></div>`;
+    return section('photos', 'Фото для обучения', `<span class="badge neutral">0 из 50</span>`, body);
+  }
+  body += counterRow(n, p === 'uploading' || p === 'limit');
+  if (p === 'uploading') {
+    body += `<div style="display:flex;flex-direction:column;gap:var(--sp-xs)">
+      <div class="status mut">Загружаю 8 фото… 3 из 8 ${pend()}</div><span class="pbar"><i style="width:38%"></i></span></div>`;
+  } else if (n < 20) {
+    body += `<div class="status low">Нужно ещё ${20 - n} фото, чтобы начать.</div>`;
+  } else if (p === 'limit') {
+    body += `<div class="status mut">Достигнут предел — 50 фото.</div>`;
+  } else {
+    body += `<div class="status ok">Фото достаточно. Можно обучать.</div>`;
+  }
+  const bad = p === 'rejected' ? new Set([4, 9]) : new Set();
+  const total = p === 'uploading' ? n + 8 : n;
+  const cap = 12; // три ряда на телефоне, два — в панели
+  const visible = S.showAll ? total : Math.min(total, cap);
+  let tiles = '';
+  for (let i = 0; i < visible; i++) tiles += tile(i, { skel: p === 'uploading' && i >= n, bad: bad.has(i) });
+  body += `<div class="grid">${tiles}</div>`;
+  if (total > cap) {
+    body += `<button class="btn ghost more" data-act="showAll">${S.showAll ? 'Свернуть' : `Показать все ${total}`} ${pend()}</button>`;
+  }
+  if (p === 'rejected') {
+    const row = (thumb, fn, why) => `<div class="rrow"><span class="th">${thumb ? face : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">${P.file}</svg>`}</span>
+      <div class="tx"><div class="fn">${fn}</div><div class="why">${why}</div></div>
+      ${thumb ? `<button class="btn ghost" style="min-height:28px;padding:0 var(--sp-sm);font-size:var(--fs-sm)">Убрать фото</button>` : `<button class="rm" style="position:static" title="Скрыть" aria-label="Скрыть">${ic('x', 'xs')}</button>${pend('Скрыть?')}`}</div>`;
+    body += `<div class="rej"><div class="rh">Не подошли · 5 ${pend()}</div>
+      ${row(true, 'IMG_2041.jpg', 'На фото не нашли лицо — оно не пойдёт в обучение.')}
+      ${row(true, 'IMG_2077.jpg', 'На фото несколько лиц — оно не пойдёт в обучение.')}
+      ${row(false, 'scan-0001.heic', 'Формат не подходит. Нужен JPG, PNG или WebP.')}
+      ${row(false, 'avatar_small.png', 'Фото слишком маленькое. Нужна короткая сторона от 512 пикселей.')}
+      ${row(false, 'IMG_2041 (1).jpg', 'Такое фото уже добавлено.')}
+      <div class="hint">Пороги 512 пикселей и 20 МБ условные — берём из ADR-026. «Фото слишком тяжёлое. Максимум 20 МБ.» и «Достигнут предел — 50 фото.» — такие же строки.</div></div>`;
+  }
+  const badgeTone = n >= 20 ? 'success' : 'warning';
+  return section('photos', 'Фото для обучения', `<span class="badge ${badgeTone}">${p === 'uploading' ? n + '+8' : n} из 50</span>`, body);
+}
+
+function trainSection() {
+  const t = S.train;
+  const n = PHOTO[S.photo].n;
+  let body = `<div class="hint">После обучения персонаж будет заметно точнее похож на ваши фото. Работает с локальной моделью.</div>`;
+  let badge = '';
+  const trigger = (disabled) => `<div class="field"><span class="flabel">Слово-метка</span>
+      <input class="tf mono ${S.trigErr ? 'err' : ''}" value="${S.trigErr ? 'Аня-1' : 'anya_face'}" ${disabled ? 'disabled' : ''} aria-invalid="${S.trigErr}" />
+      ${S.trigErr ? `<div class="ferr">Только латинские буквы, цифры и «_», от 3 до 24 символов, начинать с буквы.</div>`
+                  : `<div class="hint">Оно подставляется само. Можно сменить: только латиница, цифры и «_», от 3 до 24 символов.</div>`}</div>`;
+  const cancelBtn = `<div class="actions"><button class="btn" data-act="cancel">${ic('stop', 's')}Отменить обучение</button></div>`;
+
+  switch (t) {
+    case 'blocked': {
+      const k = Math.max(20 - n, 1);
+      body += trigger(false);
+      body += `<button class="btn md pri block" disabled>Добавьте ещё ${k} фото</button>`;
+      break;
+    }
+    case 'ready':
+    case 'confirm':
+      if (S.canceled) body += `<div class="notice info">${ic('info', 's')}<div class="nb">Обучение остановлено. Фото на месте — можно начать заново.</div></div>`;
+      body += trigger(false);
+      body += `<button class="btn md pri block" data-act="start" ${S.trigErr ? 'disabled' : ''}>${ic('spark', 's')}Обучить</button>`;
+      break;
+    case 'queued':
+      badge = `<span class="badge neutral">${ic('clock', 'xs')}В очереди ${pend()}</span>`;
+      body += `<div class="run"><div class="line">${ic('clock')}<span>Ждёт своей очереди на видеокарте…</span></div>
+        <span class="pbar est"><i></i></span></div>${cancelBtn}`;
+      break;
+    case 'running':
+      badge = `<span class="badge accent">${S.etaUnknown ? 'Идёт' : '62 %'} ${pend()}</span>`;
+      body += S.etaUnknown
+        ? `<div class="run"><div class="line">${ic('cpu')}<span>Идёт обучение, оно займёт около 2 ч.</span></div><span class="pbar est"><i></i></span></div>`
+        : `<div class="run"><div class="line">${ic('cpu')}<span>Обучаем персонажа · шаг 1 240 из 2 000</span></div>
+           <span class="pbar"><i style="width:62%"></i></span>
+           <div class="eta"><span>Осталось примерно 45 мин</span><span>62 %</span></div></div>`;
+      body += cancelBtn;
+      break;
+    case 'done':
+      badge = `<span class="badge success">${ic('check', 'xs')}Обучен ${pend()}</span>`;
+      body += `<div class="done"><div class="dt">${ic('check')}Персонаж обучен</div>
+        <p>Обучение закончено, персонаж уже подключён. Попробуйте нарисовать его — он должен быть заметно похожее.</p>
+        <div class="meta">Обучен 10 октября · 34 фото</div></div>`;
+      if (S.changed) body += `<div class="notice warning">${ic('alert', 's')}<div class="nb">Фото изменились после обучения. Чтобы учесть их, обучите заново.</div></div>`;
+      body += `<div class="actions"><button class="btn" data-act="start">${ic('refresh', 's')}Обучить заново</button></div>`;
+      break;
+    case 'error':
+      badge = `<span class="badge danger">${ic('alert', 'xs')}Ошибка ${pend()}</span>`;
+      body += `<div class="notice danger">${ic('alert', 's')}<div class="nb"><div class="nt">Не получилось обучить</div>${S.allRejected
+        ? 'Ни одно фото не подошло: на них не нашли лицо. Загрузите другие.'
+        : 'Что-то пошло не так на видеокарте. Ваши фото не потерялись — можно попробовать ещё раз.'}</div></div>`;
+      body += S.allRejected ? '' : `<button class="btn md pri block" data-act="start">${ic('refresh', 's')}Попробовать снова</button>`;
+      break;
+    case 'busyOther':
+      body += `<div class="notice warning">${ic('clock', 's')}<div class="nb">Видеокарта сейчас занята обучением. Освободится примерно через 1 ч 20 мин. Попробуйте позже.</div></div>`;
+      body += `<button class="btn md pri block" disabled>${ic('spark', 's')}Обучить</button>`;
+      if (S.admin) body += `<div class="actions"><button class="btn ghost dng" data-act="adminStop">${ic('stop', 's')}Остановить чужое обучение</button></div>`;
+      break;
+    case 'busyMine':
+      body += `<div class="notice info">${ic('info', 's')}<div class="nb">У вас уже идёт обучение. Дождитесь его конца или отмените.</div></div>`;
+      body += `<button class="btn md pri block" disabled>${ic('spark', 's')}Обучить</button>`;
+      break;
+    case 'off':
+      body += `<div class="notice info">${ic('info', 's')}<div class="nb">Обучение пока недоступно: администратор его отключил.</div></div>`;
+      break;
+    case 'noLocal':
+      body += `<div class="notice warning">${ic('alert', 's')}<div class="nb">Обучение работает только с локальной моделью, а она сейчас недоступна.</div></div>`;
+      break;
+  }
+  return section('train', 'Обучить персонажа', badge, body);
+}
+
+function section(key, title, badge, body) {
+  const open = key === 'photos' ? S.openPhotos : S.openTrain;
+  return `<div class="sec"><button class="sec-h" aria-expanded="${open}" data-toggle="${key}">
+    ${ic(open ? 'down' : 'right', 's')}<span class="ttl">${title}</span>${badge}</button>
+    ${open ? `<div class="sec-b">${body}</div>` : ''}</div>`;
+}
+
+function renderForm() {
+  const f = document.getElementById('form');
+  let faces = '';
+  for (let i = 0; i < 3; i++) faces += `<div class="tile ${TONES[i]}" style="border-radius:var(--r-lg)"><div class="ph">${face}</div></div>`;
+  f.innerHTML = `
+    <div class="back">${ic('back')}Аня</div>
+    <div class="field"><span class="flabel">Имя</span><input class="tf" value="Аня" /></div>
+    <div class="field"><span class="flabel">Фото лица · от 1 до 4</span><div class="facegrid">${faces}</div>
+      <div class="hint">${pend('существующий блок, без изменений')}</div></div>
+    ${photosSection()}
+    ${trainSection()}
+    <div class="sec"><button class="sec-h" aria-expanded="false">${ic('right', 's')}<span class="ttl">LoRA для локальной модели</span>
+      ${S.train === 'done' ? '<span class="badge neutral">anya_face</span>' : ''}</button></div>
+    <div class="notice warning">${ic('shield', 's')}<div class="nb">CHARACTER_PHOTOS_NOTICE — как сейчас ${pend('без изменений')}</div></div>
+    <label class="consent"><span class="cb">${ic('check', 'xs')}</span>Понимаю, у людей на фото есть согласие</label>
+    <div class="actions" style="justify-content:space-between"><button class="btn ghost">Удалить</button><button class="btn md pri">Сохранить</button></div>`;
+}
+
+function renderModal() {
+  const m = document.getElementById('modal');
+  if (!S.modal) { m.innerHTML = ''; return; }
+  const D = {
+    start: { h: 'Начать обучение?', p: 'Видеокарта будет занята примерно <b>2 часа</b>. Всё это время новые картинки на локальной модели будут стоять в очереди и ждать. Отменить обучение можно в любой момент.',
+      no: 'Не сейчас', yes: 'Начать обучение', tone: 'pri', go: 'queued' },
+    cancel: { h: 'Остановить обучение?', p: 'Результат не сохранится.', no: 'Продолжить', yes: 'Остановить', tone: 'danger', go: 'ready' },
+    adminStop: { h: 'Остановить обучение, которое запустил Олег?', p: 'Результат не сохранится.', no: `Продолжить ${pend()}`, yes: `Остановить ${pend()}`, tone: 'danger', go: 'ready' },
+  }[S.modal];
+  m.innerHTML = `<div class="ovl" data-act="close"><div class="dlg" role="dialog" aria-modal="true">
+      <div class="grab" ${document.getElementById('app').classList.contains('mobile') ? '' : 'hidden'}></div>
+      <div class="db"><h2>${D.h}</h2><p>${D.p}</p></div>
+      <div class="df"><button class="btn" data-act="close">${D.no}</button><button class="btn ${D.tone}" data-go="${D.go}">${D.yes}</button></div>
+    </div></div>`;
+}
+
+function renderNote() {
+  const n = document.getElementById('note');
+  n.innerHTML = `<h3>A · ${PHOTO[S.photo].label}</h3><div class="muted">${NOTES[S.photo]}</div>
+    <h3 style="margin-top:10px">B · ${TRAIN[S.train]}</h3><div class="muted">${NOTES[S.train]}</div>
+    <h3 style="margin-top:10px">Что проверить</h3>
+    <ul class="muted"><li>Обе темы, ширины 420 / 360 / 320.</li>
+    <li>Сетка фото: на 320 — четыре колонки по ≥52 px, крестики не вылезают за рамку секции.</li>
+    <li>Модалка: на телефоне — шторка снизу, кнопки делят ряд поровну.</li>
+    <li>Пометка <span class="pend">нет текста</span> — текста нет в заметке, см. proposal.</li></ul>`;
+}
+
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  const app = document.getElementById('app');
+  app.classList.toggle('mobile', S.width !== 'panel');
+  app.style.width = { panel: '420px', m360: '360px', m320: '320px' }[S.width];
+  // «Подтверждение старта» — это «Можно обучать» с открытой модалкой
+  if (S.train === 'confirm' && !S.modal) S.modal = 'start';
+  renderDemo(); renderForm(); renderModal(); renderNote();
+}
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-g],[data-f],[data-act],[data-go],[data-toggle]');
+  if (!b) return;
+  if (b.dataset.g) {
+    S[b.dataset.g] = b.dataset.v;
+    if (b.dataset.g === 'train') {
+      S.modal = null; S.canceled = false;
+      // заблокированная кнопка имеет смысл только при нехватке фото
+      if (S.train === 'blocked' && PHOTO[S.photo].n >= 20) S.photo = 'few';
+      if (S.train !== 'blocked' && PHOTO[S.photo].n < 20) S.photo = 'enough';
+    }
+    if (b.dataset.g === 'photo') S.showAll = false;
+  } else if (b.dataset.f) {
+    S[b.dataset.f] = !S[b.dataset.f];
+    if (b.dataset.f === 'etaUnknown' && S[b.dataset.f]) S.train = 'running';
+    if (b.dataset.f === 'changed' && S[b.dataset.f]) S.train = 'done';
+    if (b.dataset.f === 'allRejected' && S[b.dataset.f]) S.train = 'error';
+    if (b.dataset.f === 'trigErr' && S[b.dataset.f]) S.train = 'ready';
+    if (b.dataset.f === 'admin' && S[b.dataset.f]) S.train = 'busyOther';
+  } else if (b.dataset.toggle) {
+    if (b.dataset.toggle === 'photos') S.openPhotos = !S.openPhotos; else S.openTrain = !S.openTrain;
+  } else if (b.dataset.go) {
+    S.train = b.dataset.go; S.canceled = S.modal === 'cancel'; S.modal = null;
+  } else {
+    const a = b.dataset.act;
+    if (a === 'close') { if (e.target !== b && b.classList.contains('ovl')) return; S.modal = null; if (S.train === 'confirm') S.train = 'ready'; }
+    if (a === 'start') { S.modal = 'start'; }
+    if (a === 'cancel') S.modal = 'cancel';
+    if (a === 'adminStop') S.modal = 'adminStop';
+    if (a === 'showAll') S.showAll = !S.showAll;
+  }
+  render();
+});
+render();
+</script>
+</body>
+</html>

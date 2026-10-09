@@ -97,17 +97,24 @@ public class CharacterEndpointsTests : IDisposable
         return form;
     }
 
+    // Имя LoRA внутри пространства владельца-тестера
+    private static string Own(TestWebApplicationFactory factory, string name) =>
+        LoraNamespace.PrefixFor(factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id) + name;
+
     private static async Task<JsonElement> Json(HttpResponseMessage resp) =>
         JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
 
     [Fact]
     public async Task Ручка_loras_отдаёт_список_или_available_false()
     {
-        var withList = Factory(media: new LoraMedia(["a.safetensors", "b.safetensors"]));
+        var all = new List<string> { "ccs/чужой/c.safetensors", "bare.safetensors" };
+        var withList = Factory(media: new LoraMedia(all));
+        all.InsertRange(0, [Own(withList, "a.safetensors"), Own(withList, "b.safetensors")]);
         var (id, _) = CreateProject(withList, TestWebApplicationFactory.TestUsername);
         var body = await Json(await withList.CreateAuthenticatedClient().GetAsync($"/api/projects/{id}/image-editor/loras"));
         body.GetProperty("available").GetBoolean().Should().BeTrue();
-        body.GetProperty("items").EnumerateArray().Select(e => e.GetString()).Should().Equal("a.safetensors", "b.safetensors");
+        body.GetProperty("items").EnumerateArray().Select(e => e.GetString()).Should().Equal(Own(withList, "a.safetensors"), Own(withList, "b.safetensors"));
 
         foreach (var factory in new[] { Factory(media: new LoraMedia(null)), Factory() })
         {
@@ -123,30 +130,33 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Создание_с_LoRA_пишет_манифест_а_неизвестное_имя_не_создаёт_персонажа()
     {
-        var factory = Factory(media: new LoraMedia(["anya.safetensors"]));
+        var known = new List<string>();
+        var factory = Factory(media: new LoraMedia(known));
+        known.Add(Own(factory, "anya.safetensors"));
         var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var anya = Own(factory, "anya.safetensors");
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{id}/image-editor";
 
         var bad = CharacterForm("Аня");
-        bad.Add(new StringContent("evil.safetensors"), "loraName");
+        bad.Add(new StringContent(Own(factory, "evil.safetensors")), "loraName");
         bad.Add(new StringContent("anya_lora"), "loraTrigger");
         (await client.PostAsync($"{api}/characters", bad)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
         Directory.Exists(Path.Combine(root, "characters")).Should().BeFalse("отказ по LoRA не оставляет персонажа");
 
         var ok = CharacterForm("Аня");
-        ok.Add(new StringContent("anya.safetensors"), "loraName");
+        ok.Add(new StringContent(anya), "loraName");
         ok.Add(new StringContent("anya_lora"), "loraTrigger");
         ok.Add(new StringContent("0.9"), "loraStrength");
         var created = await client.PostAsync($"{api}/characters", ok);
         created.StatusCode.Should().Be(HttpStatusCode.Created);
         var local = (await Json(created)).GetProperty("local");
-        local.GetProperty("lora").GetString().Should().Be("anya.safetensors");
+        local.GetProperty("lora").GetString().Should().Be(anya);
         local.GetProperty("strength").GetDouble().Should().Be(0.9);
 
         var notNumber = new MultipartFormDataContent
         {
-            { new StringContent("x"), "loraName" }, { new StringContent("t"), "loraTrigger" },
+            { new StringContent(anya), "loraName" }, { new StringContent("t"), "loraTrigger" },
             { new StringContent("много"), "loraStrength" },
         };
         (await client.PutAsync($"{api}/characters/anya", notNumber)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
@@ -159,12 +169,29 @@ public class CharacterEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Чужая_или_голая_LoRA_в_патче_отвечает_403_и_персонаж_не_создаётся()
+    {
+        var factory = Factory(media: new LoraMedia(["ccs/00000000000000000000000000000000/x.safetensors", "bare.safetensors"]));
+        var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        foreach (var name in new[] { "ccs/00000000000000000000000000000000/x.safetensors", "bare.safetensors" })
+        {
+            var form = CharacterForm("Аня");
+            form.Add(new StringContent(name), "loraName");
+            form.Add(new StringContent("anya_lora"), "loraTrigger");
+            var resp = await factory.CreateAuthenticatedClient().PostAsync($"/api/projects/{id}/image-editor/characters", form);
+            resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+            (await Json(resp)).GetProperty("code").GetString().Should().Be("lora_not_visible");
+        }
+        Directory.Exists(Path.Combine(root, "characters")).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Недоступный_ComfyUI_при_задании_LoRA_отвечает_503()
     {
         var factory = Factory(media: new LoraMedia(null));
         var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var form = CharacterForm("Аня");
-        form.Add(new StringContent("a.safetensors"), "loraName");
+        form.Add(new StringContent(Own(factory, "a.safetensors")), "loraName");
         form.Add(new StringContent("anya_lora"), "loraTrigger");
 
         var resp = await factory.CreateAuthenticatedClient().PostAsync($"/api/projects/{id}/image-editor/characters", form);

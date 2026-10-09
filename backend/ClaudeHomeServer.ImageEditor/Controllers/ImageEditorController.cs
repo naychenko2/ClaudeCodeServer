@@ -207,7 +207,8 @@ public class ImageEditorController(
     {
         if (!ProjectGate(projectId, out _, out var denied)) return denied;
         var items = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
-        return Ok(new { available = items is not null, items = items ?? [] });
+        var own = items?.Where(n => LoraNamespace.VisibleTo(UserId, n)).ToList();
+        return Ok(new { available = own is not null, items = own ?? [] });
     }
 
     [HttpGet("characters/{slug}")]
@@ -308,6 +309,8 @@ public class ImageEditorController(
                     "Сила должна быть числом от 0 до 2."));
             strength = parsed;
         }
+        if (!LoraNamespace.VisibleTo(UserId, form.LoraName.Trim()))
+            return (null, Error(StatusCodes.Status403Forbidden, "lora_not_visible", "Эта LoRA вам недоступна."));
         var known = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
         return (CharacterLoraPatch.Set(form.LoraName, form.LoraTrigger, strength, known), null);
     }

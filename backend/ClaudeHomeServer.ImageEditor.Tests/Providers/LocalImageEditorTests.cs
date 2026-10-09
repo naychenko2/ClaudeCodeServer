@@ -465,6 +465,78 @@ public class LocalImageEditorTests : IDisposable
             .And.Contain("3) маска").And.Contain("4) фото лица — персонаж «Тимур»");
     }
 
+    // ── Режим B: LoRA персонажа плюс фото-образец ──
+
+    private static readonly CharacterRef TimurLora = new("timur", "Тимур", null,
+        new CharacterLora("timur.safetensors", "andreyk", 0.8));
+
+    [Theory]
+    [InlineData(ImageEditOp.Generate)]
+    [InlineData(ImageEditOp.Edit)]
+    public async Task ПерсонажСЛорой_УходитЛорой_ТриггеромВНачале_ИОдномФото(ImageEditOp op)
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+        var faces = Faces(3);
+        var source = op == ImageEditOp.Edit ? new ImageBytes(TestImages.Png(8, 8, 1), "image/png") : null;
+
+        var job = await RunAsync(service, CharacterQuote(op),
+            new ImageEditJobInput("", "сидит в кафе", null, source, null, null, faces, op == ImageEditOp.Edit ? "images/hero.png" : null, TimurLora));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Lora.Should().Be(new LocalImageLora("timur.safetensors", 0.8));
+        sent.Prompt.Should().Contain("photo of andreyk, ");
+        sent.Images.Count(i => i.SequenceEqual(faces[0].Bytes)).Should().Be(1, "фото-образец остаётся: режим B = LoRA + образец");
+        sent.Images.Should().HaveCount(op == ImageEditOp.Edit ? 2 : 1);
+    }
+
+    [Fact]
+    public async Task ПерсонажБезЛоры_ЗапросКакРаньше()
+    {
+        var media = new FakeMedia();
+        var job = await RunAsync(Service(Editor(media)), CharacterQuote(ImageEditOp.Generate),
+            new ImageEditJobInput("", "сидит в кафе", null, null, null, null, Faces(3), null, Timur));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Lora.Should().BeNull();
+        sent.Prompt.Should().NotContain("photo of");
+    }
+
+    [Fact]
+    public async Task ДорисовкаСПерсонажемСЛорой_ЛорыНет()
+    {
+        var media = new FakeMedia();
+        var request = new ImageEditRequest(ImageEditOp.Outpaint, "дорисуй", new ImageBytes(TestImages.Png(16, 16), "image/png"),
+            null, [], 1, "16:9", null, LocalImageEditor.QwenImage, TimurLora);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok);
+        media.Submitted.Should().ContainSingle().Which.Lora.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ТриФото_ОсновноеНеПервое_ВЗапросУходитОсновное()
+    {
+        var root = Path.Combine(_dir, "proj");
+        Directory.CreateDirectory(root);
+        var created = CharacterStore.Create(root, new CharacterDraft("Тимур", null,
+            [.. Enumerable.Range(1, 3).Select(i => new CharacterPhotoUpload(TestImages.Jpeg((byte)i), null))]), DateTime.UtcNow).Value!;
+        CharacterStore.Update(root, created.Manifest.Slug,
+            new CharacterPatch(null, null, [], [], created.Manifest.Photos[2].File));
+        var character = CharacterStore.ForRequest(root, created.Manifest.Slug)!;
+        var media = new FakeMedia();
+
+        var job = await RunAsync(Service(Editor(media)), CharacterQuote(ImageEditOp.Generate),
+            new ImageEditJobInput("", "сидит в кафе", null, null, null, null, character.Photos, null, character.Ref));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Images.Should().ContainSingle().Which.Should().Equal(TestImages.Jpeg(3), "основное фото, а не первое в манифесте");
+    }
+
     [Fact]
     public async Task БольшеШестнадцатиКартинок_ЧестныйОтказДоОчереди()
     {

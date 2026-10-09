@@ -139,8 +139,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             case ImageEditOp.Generate:
                 // Холст генерации по тексту не нужен: берутся только образцы человека. Прогон на
                 // вариант и без образцов: первый вариант виден сразу, а не после всей пачки
-                run = new LocalImageRequest(LocalImageOp.Generate, req.Prompt, references, req.AspectRatio, 1,
-                    Width: req.Format?.Width, Height: req.Format?.Height);
+                run = new LocalImageRequest(LocalImageOp.Generate, WithTrigger(req.Prompt, req), references, req.AspectRatio, 1,
+                    Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req));
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             case ImageEditOp.Edit or ImageEditOp.Inpaint
@@ -165,7 +165,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             case ImageEditOp.Edit or ImageEditOp.Inpaint:
                 if (req.Source is null) return Fail(EditOutcome.Failed, "Нет исходной картинки");
                 // Отдельного канала маски нет: маска уже лежит среди образцов (MaskSupport.AsReference)
-                run = new LocalImageRequest(LocalImageOp.Edit, req.Prompt, [req.Source.Bytes, .. references], null, 1);
+                run = new LocalImageRequest(LocalImageOp.Edit, WithTrigger(req.Prompt, req), [req.Source.Bytes, .. references], null, 1,
+                    Lora: LoraOf(req));
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             default:
@@ -224,6 +225,16 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         return images.Count == 0
             ? new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets), "Локальная модель не вернула картинок")
             : new ImageEditResult(EditOutcome.Ok, images, Free, false, RemoteId(tickets), null);
+    }
+
+    // Режим B: LoRA персонажа плюс фото-образец. Только для Generate и обычной правки
+    private static LocalImageLora? LoraOf(ImageEditRequest req) =>
+        req.Character?.Lora is { } l ? new LocalImageLora(l.Name, l.Strength) : null;
+
+    private static string WithTrigger(string prompt, ImageEditRequest req)
+    {
+        if (req.Character?.Lora is not { } l) return prompt;
+        return prompt.StartsWith(l.Trigger, StringComparison.OrdinalIgnoreCase) ? prompt : $"photo of {l.Trigger}, {prompt}";
     }
 
     // at — отчёт о постановке прогона: его номер и ETA едут в каждой стадии ожидания

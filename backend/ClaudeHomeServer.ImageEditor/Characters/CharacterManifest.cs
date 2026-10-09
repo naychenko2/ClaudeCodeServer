@@ -96,11 +96,16 @@ public sealed record CharacterDto(
     string? Description,
     string Path,
     IReadOnlyList<CharacterPhoto> Photos,
-    DateTime CreatedAt)
+    DateTime CreatedAt,
+    CharacterLocalDto? Local = null)
 {
     public static CharacterDto From(CharacterManifest m) =>
-        new(m.Slug, m.Name, m.Description, $"{CharacterStore.Folder}/{m.Slug}", m.Photos, m.CreatedAt);
+        new(m.Slug, m.Name, m.Description, $"{CharacterStore.Folder}/{m.Slug}", m.Photos, m.CreatedAt,
+            m.ReadLora() is { } lora ? new CharacterLocalDto(lora.Name, lora.Trigger, lora.Strength) : null);
 }
+
+// LoRA персонажа для фронта: из providers.local наружу уходят только эти три поля
+public sealed record CharacterLocalDto(string Lora, string Trigger, double Strength);
 
 // Фото из запроса: байты как загружены, без перекодирования
 public sealed record CharacterPhotoUpload(byte[] Bytes, string? Angle = null);
@@ -113,8 +118,25 @@ public sealed record CharacterPatch(
     string? Description,
     IReadOnlyList<CharacterPhotoUpload> AddPhotos,
     IReadOnlyList<string> RemovePhotos,
-    string? PrimaryPhoto);
+    string? PrimaryPhoto,
+    CharacterLoraPatch? Lora = null);
 
+// Три состояния LoRA в патче: Lora == null у CharacterPatch — не трогать; Remove — убрать;
+// иначе задать Name/Trigger/Strength. Known — список LoRA ComfyUI от контроллера
+// (null — ComfyUI недоступен, проверить имя нельзя).
+public sealed record CharacterLoraPatch(
+    bool Remove,
+    string? Name = null,
+    string? Trigger = null,
+    double? Strength = null,
+    IReadOnlyList<string>? Known = null)
+{
+    public static CharacterLoraPatch Removal() => new(true);
+
+    public static CharacterLoraPatch Set(
+        string? name, string? trigger, double? strength, IReadOnlyList<string>? known) =>
+        new(false, name, trigger, strength, known);
+}
 // Персонаж для запроса генерации: ссылка в ImageEditRequest.Character и фото образцами
 public sealed record CharacterForRequest(
     CharacterRef Ref,

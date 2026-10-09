@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
@@ -28,6 +29,9 @@ public static partial class CharacterStore
 
     [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")]
     private static partial Regex SlugPattern();
+
+    [GeneratedRegex(@"^[\p{L}\p{N}_]+$")]
+    private static partial Regex TriggerPattern();
 
     public static bool IsValidSlug(string? slug) => slug is not null && SlugPattern().IsMatch(slug);
 
@@ -108,6 +112,7 @@ public static partial class CharacterStore
         var dir = CharacterDir(root, slug);
         if (manifest is null || dir is null) return null;
 
+        if (patch.Lora is { Remove: false } set && CheckLora(set) is { } loraError) return loraError;
         if (patch.Name is { } newName)
         {
             if (string.IsNullOrWhiteSpace(newName)) return Invalid("Укажите имя персонажа");
@@ -118,8 +123,10 @@ public static partial class CharacterStore
         var remove = patch.RemovePhotos.ToHashSet(StringComparer.Ordinal);
         if (remove.Any(f => manifest.Photos.All(p => p.File != f)))
             return Invalid("Такого фото у персонажа нет");
+        // Число фото проверяем, только когда патч их меняет: у персонажа с 11 фото на диске
+        // иначе нельзя поправить даже LoRA
         var remaining = manifest.Photos.Count - remove.Count + patch.AddPhotos.Count;
-        if (remaining is < MinPhotos or > MaxPhotos)
+        if ((remove.Count > 0 || patch.AddPhotos.Count > 0) && remaining is < MinPhotos or > MaxPhotos)
             return Invalid($"Нужно от {MinPhotos} до {MaxPhotos} фото");
         if (CheckPhotos(patch.AddPhotos) is { } bad) return Invalid(bad);
         if (patch.PrimaryPhoto is { } primary
@@ -139,6 +146,7 @@ public static partial class CharacterStore
         if (patch.PrimaryPhoto is { } chosen)
             manifest.Photos = [.. manifest.Photos.Select(p => p with { Primary = p.File == chosen })];
         EnsurePrimary(manifest);
+        if (patch.Lora is { } lora) ApplyLora(manifest, lora);
 
         // Манифест перезаписывается целиком через временный файл: оборванная запись не
         // должна оставить персонажа без character.json
@@ -148,6 +156,49 @@ public static partial class CharacterStore
         File.Move(temp, target, overwrite: true);
         written.Add(Rel(slug, ManifestFile));
         return ImageEditCallResult<CharacterChange>.Ok(new CharacterChange(manifest, written, deleted));
+    }
+
+    // Проверка «задать LoRA»: null — всё в порядке, иначе отказ. Зовёт и Update, и контроллер
+    // до создания персонажа. Для Remove проверять нечего.
+    public static ImageEditCallResult<CharacterChange>? CheckLora(CharacterLoraPatch set)
+    {
+        if (set.Remove) return null;
+        if (set.Known is null)
+            return Unavailable("ComfyUI недоступен, поэтому проверить LoRA не получилось. Ничего не сохранено, попробуйте позже.");
+        var name = set.Name?.Trim() ?? "";
+        if (name.Length == 0 || name.Contains("..") || name.StartsWith('/') || name.StartsWith('\\') || name.Contains(':')
+            || !set.Known.Contains(name, StringComparer.Ordinal))
+            return Invalid("Такой LoRA нет в ComfyUI. Выберите файл из списка.");
+        var trigger = set.Trigger?.Trim() ?? "";
+        if (!TriggerPattern().IsMatch(trigger))
+            return Invalid("Укажите слово-триггер: одно слово из букв, цифр и «_», без пробелов.");
+        if (set.Strength is { } strength && !(strength >= 0 && strength <= 2))
+            return Invalid("Сила должна быть числом от 0 до 2.");
+        return null;
+    }
+
+    // Пишет только lora/trigger/strength блока providers.local; прочие ключи блока и
+    // другие провайдеры остаются как есть. Пустой после «убрать» блок удаляется.
+    private static void ApplyLora(CharacterManifest manifest, CharacterLoraPatch patch)
+    {
+        var local = manifest.Providers[CharacterManifest.LocalProvider] as JsonObject;
+        if (patch.Remove)
+        {
+            if (local is null) return;
+            local.Remove("lora");
+            local.Remove("trigger");
+            local.Remove("strength");
+            if (local.Count == 0) manifest.Providers.Remove(CharacterManifest.LocalProvider);
+            return;
+        }
+        if (local is null)
+        {
+            local = new JsonObject();
+            manifest.Providers[CharacterManifest.LocalProvider] = local;
+        }
+        local["lora"] = patch.Name!.Trim();
+        local["trigger"] = patch.Trigger!.Trim();
+        local["strength"] = patch.Strength ?? CharacterManifest.DefaultLoraStrength;
     }
 
     // false — персонажа нет. Удаляется ровно папка персонажа внутри characters/.
@@ -302,6 +353,9 @@ public static partial class CharacterStore
         ".gif" => "image/gif",
         _ => "application/octet-stream",
     };
+
+    private static ImageEditCallResult<CharacterChange> Unavailable(string error) =>
+        ImageEditCallResult<CharacterChange>.Fail(ImageEditErrorCodes.ProviderUnavailable, error);
 
     private static ImageEditCallResult<CharacterChange> Invalid(string error) =>
         ImageEditCallResult<CharacterChange>.Fail(ImageEditErrorCodes.InvalidRequest, error);

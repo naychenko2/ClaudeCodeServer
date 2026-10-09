@@ -125,7 +125,7 @@ function RateRow({ w, pip }: { w: RateWindow; pip?: ReactNode }) {
 
 // Общая оболочка бейджа стоимости: пилюля с подписью + суммой и выпадающая разбивка по клику.
 // tone окрашивает пилюлю при приближении к лимиту (warn/danger).
-// ring — кольцевая пилюля (капсула высотой 30 с иконкой колец слева, поповер шире).
+// ring — кольцевая пилюля (капсула высотой как соседние, иконка колец слева, поповер шире).
 // wide — более широкий поповер на узких раскладках (мобил/планшет: для объединённого
 // чипа с несколькими секциями — шире → меньше переносов → ниже по высоте, помещается на экран).
 // isCompact — планшет (использует мобильную механику поповера wide).
@@ -155,9 +155,11 @@ function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact,
         style={{
           display: 'flex', alignItems: 'center',
           gap: SP.xs,
-          // Кольцевая: иконка 24 + 2+2 + рамка 1+1 = 30; слева 3 — иконка прижата к скруглению
-          padding: ring ? `${SP.xxs}px ${SP.sm + 1}px ${SP.xxs}px 3px` : '3px 9px',
-          height: ring ? 30 : undefined, boxSizing: 'border-box',
+          // Кольцевая — той же высоты, что соседние: вертикальный padding общий, высоту
+          // задаёт строка текста (иконка её не раздувает, см. RingIcon); слева 2 — иконка
+          // прижата к скруглению
+          padding: ring ? '3px 9px 3px 2px' : '3px 9px',
+          boxSizing: 'border-box',
           background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: ring ? R.max : R.lg,
           cursor: 'pointer', fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 700, color: C.accent,
           whiteSpace: 'nowrap',
@@ -168,7 +170,9 @@ function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact,
       </button>
   );
   return (
-    <div style={{ position: 'relative', flexShrink: 0 }}>
+    // flex: inline-flex обёртка Tooltip в блочном div получала строку 27px и
+    // поднимала пилюлю на 1.5px над соседними
+    <div style={{ position: 'relative', flexShrink: 0, display: 'flex' }}>
       {/* Пилюли стоят у правой кромки шапки — плашка прижата к правому краю. Пока открыт
           поповер, подсказка про то же самое не нужна */}
       {tip ? <Tooltip content={tip} align="end" disabled={open}>{button}</Tooltip> : button}
@@ -309,31 +313,36 @@ function BillingLine({ sub, billing, onBillingChange }: {
 // поэтому кольца не прыгают, когда появляется оценка.
 interface RingSlot { pct: number | null; level: RateWindow['level'] }
 
-// Радиусы колец (outer, mid, inner) в viewBox 24×24: толщина 2.5, зазор 1px, дырка Ø4
-const RING_GEOMETRY = [10.25, 6.75, 3.25].map(r => ({ r, L: 2 * Math.PI * r }));
-const RING_STROKE = 2.5;
+// Радиусы колец (outer, mid, inner) в viewBox 20×20: полоса 2, зазор 1px, дырка Ø4
+const RING_BOX = 20;
+const RING_C = RING_BOX / 2;
+const RING_GEOMETRY = [9, 6, 3].map(r => ({ r, L: 2 * Math.PI * r }));
+const RING_STROKE = 2;
 
 // Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся
 function RingCircle({ r, stroke, dash }: { r: number; stroke: string; dash?: string }) {
   return (
-    <circle cx={12} cy={12} r={r} fill="none" strokeWidth={RING_STROKE} strokeLinecap="butt"
+    <circle cx={RING_C} cy={RING_C} r={r} fill="none" strokeWidth={RING_STROKE} strokeLinecap="butt"
       strokeDasharray={dash} style={{ stroke }} />
   );
 }
 
-// Иконка пилюли 24×24. slots — [outer, mid, inner]; undefined — слота нет (не рисуется),
+// Иконка пилюли 20×20. slots — [outer, mid, inner]; undefined — слота нет (не рисуется),
 // pct null — только дорожка. spinOuter — идёт сжатие: внешнее кольцо становится спиннером.
-// forceReducedMotion — только для витрины (5.2r), в продукте решает настройка ОС
+// forceReducedMotion — только для витрины (5.2r), в продукте решает настройка ОС.
+// Обёртка нулевой высоты: иконка центрируется по строке текста, но высоту пилюли не
+// задаёт — её задаёт текст, ровно как у соседних пилюль, и ряд стоит на одной высоте
 function RingIcon({ slots, spinOuter, forceReducedMotion }: {
   slots: [RingSlot, RingSlot | undefined, RingSlot | undefined]; spinOuter?: boolean; forceReducedMotion?: boolean;
 }) {
   const reducedMotion = usePrefersReducedMotion() || !!forceReducedMotion;
   const outer = RING_GEOMETRY[0];
   return (
-    <svg width={24} height={24} viewBox="0 0 24 24" aria-hidden shapeRendering="geometricPrecision"
+    <span style={{ display: 'flex', alignItems: 'center', width: RING_BOX, height: 0, flexShrink: 0 }}>
+    <svg width={RING_BOX} height={RING_BOX} viewBox={`0 0 ${RING_BOX} ${RING_BOX}`} aria-hidden shapeRendering="geometricPrecision"
       style={{ flexShrink: 0, display: 'block' }}>
       {/* Старт дуг сверху, по часовой */}
-      <g transform="rotate(-90 12 12)">
+      <g transform={`rotate(-90 ${RING_C} ${RING_C})`}>
         {slots.map((s, i) => {
           if (!s || (i === 0 && spinOuter)) return null;
           const { r, L } = RING_GEOMETRY[i];
@@ -349,21 +358,23 @@ function RingIcon({ slots, spinOuter, forceReducedMotion }: {
       {spinOuter && (
         // Вращается только внешнее кольцо; при reduced-motion — неподвижная четверть
         // поверх пунктирной дорожки, чтобы «идёт работа» читалось и без анимации
-        <g style={{ transformOrigin: '12px 12px', animation: reducedMotion ? undefined : 'cc-spin 0.9s linear infinite' }}>
+        <g style={{ transformOrigin: `${RING_C}px ${RING_C}px`, animation: reducedMotion ? undefined : 'cc-spin 0.9s linear infinite' }}>
           <RingCircle r={outer.r} stroke={C.progressTrack} dash={reducedMotion ? '2 2' : undefined} />
           <RingCircle r={outer.r} stroke={C.accent} dash={`${outer.L * 0.25} ${outer.L}`} />
         </g>
       )}
     </svg>
+    </span>
   );
 }
 
-// Пип строки поповера — мини-копия иконки 12×12: все три слота дорожками, слот этой
-// строки залит целиком цветом уровня. Просто цветная точка не годится: все окна в норме
-// дали бы одинаковые серые точки, а по месту в мини-иконке кольцо узнаётся всегда
+// Пип строки поповера — мини-копия иконки 12×12 (та же геометрия в масштабе 0.6): все три
+// слота дорожками, слот этой строки залит целиком цветом уровня. Просто цветная точка не
+// годится: все окна в норме дали бы одинаковые серые точки, а по месту в мини-иконке
+// кольцо узнаётся всегда
 function RingPip({ slot, level }: { slot: 0 | 1 | 2; level: RateWindow['level'] }) {
   return (
-    <svg width={12} height={12} viewBox="0 0 24 24" aria-hidden shapeRendering="geometricPrecision"
+    <svg width={12} height={12} viewBox={`0 0 ${RING_BOX} ${RING_BOX}`} aria-hidden shapeRendering="geometricPrecision"
       style={{ flexShrink: 0, display: 'block' }}>
       {RING_GEOMETRY.map(({ r }, i) => (
         <RingCircle key={i} r={r} stroke={i === slot ? RATE_COLORS[level].fill : C.progressTrack} />
@@ -607,7 +618,7 @@ function FalPopoverBody({ stats }: { stats: FalCostStats }) {
 }
 
 // Бейдж трат на fal.ai (медиа). Отдельная от Claude цифра. Разбивка по моделям.
-function FalCostBadge({ stats, isCompact, resetKey }: { stats: FalCostStats; isCompact?: boolean; resetKey?: string }) {
+export function FalCostBadge({ stats, isCompact, resetKey }: { stats: FalCostStats; isCompact?: boolean; resetKey?: string }) {
   if (stats.total <= 0) return null;
   return (
     <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isCompact={isCompact} resetKey={resetKey}
@@ -672,7 +683,7 @@ function GlifPopoverBody({ stats }: { stats: GlifGenStats }) {
 
 // Бейдж генераций glif (медиа). Пер-кредитной цены нет — значение это счётчик
 // генераций (+ сумма кредитов, когда billing приехал). Разбивка по типам медиа.
-function GlifCostBadge({ stats, isCompact, resetKey }: { stats: GlifGenStats; isCompact?: boolean; resetKey?: string }) {
+export function GlifCostBadge({ stats, isCompact, resetKey }: { stats: GlifGenStats; isCompact?: boolean; resetKey?: string }) {
   if (stats.count <= 0) return null;
   const amount = `${stats.count} ген.` + (stats.hasCredits ? ` · ${fmtCredits(stats.credits)}` : '');
   return (
@@ -779,7 +790,9 @@ export function RingPillBadge(props: {
   ) : !head ? (
     apiCost ? null : <span style={{ color: C.textMuted }}>—</span>
   ) : head.kind === 'fresh' ? (
-    <><span style={labelStyle}>Ctx</span> <span style={{ color: C.accent }}>✦</span></>
+    // lineHeight 1: ✦ берётся из запасного шрифта с более высокой строкой и раздувал
+    // пилюлю на 1px — высоту пилюли задаёт строка основного шрифта
+    <><span style={labelStyle}>Ctx</span> <span style={{ color: C.accent, lineHeight: 1 }}>✦</span></>
   ) : head.kind === 'calm' ? (
     <span style={{ color: C.textSecondary }}>в норме</span>
   ) : head.kind === 'unknown' ? (

@@ -288,7 +288,9 @@ export function ringPillHead(
 }
 
 // Длина дуги кольца: доля окружности L, но не короче 3px (малая доля на внутреннем
-// кольце иначе становится точкой) и, пока не 100%, не длиннее L − 1.5 (99% ≠ 100%)
+// кольце иначе становится точкой) и, пока не 100%, не длиннее L − 1.5 (99% ≠ 100%).
+// Пороги — в экранных пикселях: иконка 20×20 рисуется в viewBox 20, единица = 1px.
+// При r 9 / 6 / 3 минимум 3px — это ≈5.3% outer, ≈8% mid, ≈15.9% inner
 export function ringArcLength(pct: number | null, circumference: number): number {
   if (pct === null || pct <= 0) return 0;
   const arc = Math.max((Math.min(100, pct) / 100) * circumference, 3);

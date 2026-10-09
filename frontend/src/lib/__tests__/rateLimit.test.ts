@@ -561,7 +561,9 @@ describe('кольцевая пилюля шапки: много окон', () =
 });
 
 describe('длина дуги кольца', () => {
-  const L = 20.4;
+  // Окружности колец иконки 20×20 (r 3 и 9): inner — самое короткое, outer — самое длинное
+  const L = 2 * Math.PI * 3;
+  const OUTER = 2 * Math.PI * 9;
   it('0 и нет процента — без дуги', () => {
     expect(ringArcLength(0, L)).toBe(0);
     expect(ringArcLength(null, L)).toBe(0);
@@ -574,6 +576,10 @@ describe('длина дуги кольца', () => {
     expect(ringArcLength(100, L)).toBeCloseTo(L);
   });
   it('середина — пропорционально', () => {
-    expect(ringArcLength(50, 64.4)).toBeCloseTo(32.2);
+    expect(ringArcLength(50, OUTER)).toBeCloseTo(OUTER / 2);
+  });
+  it('на outer 1% тоже тянется до 3px, 99% — до L − 1.5', () => {
+    expect(ringArcLength(1, OUTER)).toBe(3);
+    expect(ringArcLength(99, OUTER)).toBeCloseTo(OUTER - 1.5);
   });
 });

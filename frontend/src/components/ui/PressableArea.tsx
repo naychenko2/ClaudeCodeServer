@@ -1,5 +1,18 @@
 import type { ReactNode, CSSProperties, MouseEvent, KeyboardEvent, AriaAttributes } from 'react';
 
+type PressKey = Pick<KeyboardEvent, 'key' | 'target' | 'currentTarget' | 'preventDefault'>;
+
+// Клавиатурная активация области: Enter/Space — нажатие. Клавиша со вложенной кнопки
+// всплывает сюда: её не трогаем, иначе preventDefault погасит нативную активацию
+// вложенной кнопки, а onPress сработает вместо неё. Возвращает true, если нажатие наше.
+export function handlePressableKey<E extends PressKey>(e: E, onPress: (e: E) => void): boolean {
+  if (e.target !== e.currentTarget) return false;
+  if (e.key !== 'Enter' && e.key !== ' ') return false;
+  e.preventDefault();
+  onPress(e);
+  return true;
+}
+
 // Нажимаемая область: div с role="button" вместо <button>, когда внутри живут свои
 // кнопки (стек участников группового чата в мобильной шапке) — вложенный <button>
 // в <button> невалиден (React hydration error). Клавиатурная доступность — вручную:
@@ -19,19 +32,13 @@ export function PressableArea({
   'aria-label'?: string;
   'aria-haspopup'?: AriaAttributes['aria-haspopup'];
 }) {
-  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onPress(e);
-    }
-  };
   const cls = [feedback ? 'cc-pressable' : '', className ?? ''].filter(Boolean).join(' ');
   return (
     <div
       role="button"
       tabIndex={0}
       onClick={onPress}
-      onKeyDown={handleKeyDown}
+      onKeyDown={e => handlePressableKey(e, onPress)}
       title={title}
       aria-label={ariaLabel}
       aria-haspopup={ariaHaspopup}

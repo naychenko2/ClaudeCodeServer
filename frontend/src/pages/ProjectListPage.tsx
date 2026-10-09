@@ -95,6 +95,9 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
+  // Последняя активность проекта: свежее из updatedAt проекта и его чатов. updatedAt
+  // самого проекта двигают только правки настроек, без чатов сортировка «спит»
+  const [lastActivity, setLastActivity] = useState<Map<string, string>>(new Map());
   const [search, setSearch] = useState('');
   const [view, setView] = useState<ProjectView>('all');
   const [sortMode, setSortMode] = useState<SortMode>('activity');
@@ -127,12 +130,16 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
         setLoadState('ok');
         const results = await Promise.allSettled(list.map(p => api.sessions.list(p.id)));
         const ids = new Set<string>();
+        const last = new Map<string, string>();
         results.forEach((r, i) => {
-          if (r.status === 'fulfilled' && (r.value as Session[]).some((s: Session) => ACTIVE_STATUSES.has(s.status))) {
-            ids.add(list[i].id);
-          }
+          if (r.status !== 'fulfilled') return;
+          const sessions = r.value as Session[];
+          if (sessions.some(s => ACTIVE_STATUSES.has(s.status))) ids.add(list[i].id);
+          const at = sessions.reduce((m, s) => (Date.parse(s.updatedAt) > Date.parse(m) ? s.updatedAt : m), list[i].updatedAt);
+          last.set(list[i].id, at);
         });
         setActiveSessions(ids);
+        setLastActivity(last);
       })
       .catch(e => setLoadState(e instanceof OfflineError ? 'offline' : 'error'));
   }, [online, retryKey]);
@@ -147,12 +154,14 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
     p.rootPath.toLowerCase().includes(search.toLowerCase())
   );
 
+  const activityOf = (p: Project) => lastActivity.get(p.id) ?? p.updatedAt;
+
   const sortBlock = (arr: Project[]) => [...arr].sort((a, b) => {
     if (sortMode === 'name') return a.name.localeCompare(b.name, 'ru');
     const aa = activeSessions.has(a.id) ? 1 : 0;
     const bb = activeSessions.has(b.id) ? 1 : 0;
     if (aa !== bb) return bb - aa;
-    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    return new Date(activityOf(b)).getTime() - new Date(activityOf(a)).getTime();
   });
 
   const orderedGroups = [...groups].sort((a, b) => a.order - b.order);
@@ -419,6 +428,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                         index={idx(p)}
                         online={online}
                         hasActiveSession={activeSessions.has(p.id)}
+                        activityAt={activityOf(p)}
                         onOpen={onOpen}
                         onMove={pr => setActiveDialog({ type: 'move', project: pr })}
                         onEdit={(pr, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: pr }); }}
@@ -449,6 +459,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   // ===== Мобильный: одна колонка =====
   const renderCard = (p: Project) => (
     <ProjectCard key={p.id} project={p} index={idx(p)} online={online} hasActiveSession={activeSessions.has(p.id)}
+      activityAt={activityOf(p)}
       onOpen={onOpen}
       onMove={pr => setActiveDialog({ type: 'move', project: pr })}
       onEdit={(pr, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: pr }); }}

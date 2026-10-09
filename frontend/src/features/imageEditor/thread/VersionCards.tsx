@@ -8,10 +8,10 @@
 
 import { useState, type ReactNode } from 'react';
 import {
-  AlertTriangle, Download, Expand, RotateCcw, Save, Sparkles, Target, X,
+  AlertTriangle, ChevronDown, ChevronUp, Download, Expand, RotateCcw, Save, ScanFace, Sparkles, Target, X,
 } from 'lucide-react';
 import {
-  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick,
+  Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
@@ -26,7 +26,7 @@ import { recordOf } from './records';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadVersion } from './threadsApi';
 import { launchThread, versionSrc } from './useThreadLaunch';
-import { CardContextActions, useCardFill, useFocusedThreadId } from '../context/CardFill';
+import { CardContextActions, primaryVersion, useCardFill, useFocusedThreadId } from '../context/CardFill';
 import { queueText, useJobStatus, useProgress } from './useJobStatus';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -37,6 +37,19 @@ const PREVIEW_RATIO = '5 / 3';
 // Потолок высоты превью: на широкой, но невысокой ленте карточка не должна занимать весь
 // экран — рамка тогда становится шире 5:3, картинка вписывается через contain.
 const PREVIEW_MAX_HEIGHT = '60vh';
+
+// Сходство лица с эталоном: запятая и два знака, как в строке для агента
+const simText = (n: number) => n.toFixed(2).replace('.', ',');
+
+// Подача запуска с пометкой «самый похожий»: лучший крупно, остальные по номеру за кнопкой.
+// Только подача: версии, их номера и порядок в нити не меняются. null — свёртывать нечего
+// (одна версия, пометки нет, например нет персонажа или лицо не найдено нигде)
+export function foldLaunch(versions: ImageThreadVersion[], workingId: string | null) {
+  const best = versions.find(v => v.mostSimilar);
+  if (!best || versions.length < 2) return null;
+  const rest = versions.filter(v => v !== best).sort((a, b) => a.number - b.number);
+  return { best, rest, workingInRest: rest.some(v => v.id === workingId) };
+}
 
 function Note({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{children}</div>;
@@ -83,19 +96,25 @@ function Picture({ src, onOpen }: { src: string | null; onOpen?: () => void }) {
 }
 
 // Карточка версии: шапка, картинка, подпись «вариант 1 из 2 · от исходника · модель», действия.
-export function VersionCard({ projectId, sessionId, thread, version, focused, model, cropNote }: {
+export function VersionCard({ projectId, sessionId, thread, version, focused, model, cropNote, best }: {
   projectId: string; sessionId: string; thread: ImageThread; version: ImageThreadVersion; focused: boolean;
   model?: string | null;
   // Обрезка без ИИ (image_launch_versions с model «crop»): вместо «вариант · от версии · модель» — размер и пометка
   cropNote?: string | null;
+  // Самый похожий вариант свёрнутого запуска: бейдж в шапке
+  best?: boolean;
 }) {
+  const mobile = useIsMobile();
   const [busy, setBusy] = useState(false);
   const fill = useCardFill(sessionId, thread, version.id);
   const current = fill.working;
   const src = versionSrc(projectId, thread, version);
   const saved = versionSaved(thread, version);
   const name = `${threadName(thread)} · ${versionName(version)}`;
-  const meta = cropNote ?? versionMeta(thread, version, model);
+  const sim = typeof version.similarity === 'number' ? `сходство ${simText(version.similarity)}`
+    : version.jobId && launchVersions(thread, version.jobId).some(x => typeof x.similarity === 'number') ? 'лицо не найдено' : '';
+  const meta = cropNote ?? [versionMeta(thread, version, null), sim, model ?? ''].filter(Boolean).join(' · ');
+  const metaTitle = sim === 'лицо не найдено' ? `${meta} — сходство не посчитано` : meta;
   const done = versionDone(thread, version);
   const personal = isPersonalScope(projectId);
   const primary = versionPrimary(thread, version, focused, saved, personal);
@@ -106,18 +125,24 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   return (
     <Shell current={current} testId={String(version.number)}
       onPick={() => { void fill.pick(); }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0, flexWrap: mobile ? 'wrap' : 'nowrap' }}>
         <span title={name} style={{
-          fontSize: FS.sm, fontWeight: 600, color: C.textHeading, minWidth: 0, flex: 1,
+          fontSize: FS.sm, fontWeight: 600, color: C.textHeading, minWidth: 0, flex: mobile ? '1 1 100%' : 1,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{name}</span>
+        {best && typeof version.similarity === 'number' && (
+          <Badge size="xs" tone="info" icon={ic(ScanFace)}
+            title={`Ближе всех к персонажу: сходство по лицу ${simText(version.similarity)}. Чем ближе к 1, тем больше похоже`}>
+            Самый похожий
+          </Badge>
+        )}
         {current && <Badge size="xs" tone="accent" icon={ic(Target)}>{fill.byAgent ? 'В работе ✦' : 'В работе'}</Badge>}
         {!personal && <Badge size="xs" tone={saved ? 'success' : 'warning'}>{saved ? 'в проекте' : 'черновик'}</Badge>}
       </div>
       {done && <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{done}</div>}
       <Picture src={src} onOpen={open} />
       {meta && (
-        <div title={meta} style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div title={metaTitle} style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {meta}
         </div>
       )}
@@ -200,6 +225,10 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const state = useThreads(projectId, ctx.sessionId);
   const focusId = useFocusedThreadId(ctx.sessionId ?? '');
   const [busy, setBusy] = useState(false);
+  // null — решение человека не принято: раскрыто само, если выбранная версия среди свёрнутых
+  const [open, setOpen] = useState<boolean | null>(null);
+  const mobile = useIsMobile();
+  const { primary } = useChatContext(ctx.sessionId ?? '');
   const data = (rec?.data ?? {}) as LaunchData;
   const jobId = str(data.jobId);
   const thread = typeof data.threadId === 'string' ? state.threads.find(t => t.id === data.threadId) : undefined;
@@ -222,12 +251,27 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const crop = model === 'crop' ? data.crop as { aspect?: string; width?: number; height?: number } | undefined : undefined;
   const cropNote = crop ? `${crop.width}×${crop.height} · ${crop.aspect} · обрезано без ИИ${agent ? ' · ✦ Claude' : ''}` : null;
 
+  const workingId = thread.id === focusId && primary ? primaryVersion(primary, thread) : null;
+  const fold = status === 'running' ? null : foldLaunch(versions, workingId);
+  const expanded = !fold || (open ?? fold.workingInRest);
+  const shown = fold ? (expanded ? [fold.best, ...fold.rest] : [fold.best]) : versions;
+
   return (
     <div data-image-launch={status} style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minWidth: 0 }}>
       {crop && rec?.fallback && <Note>{rec.fallback}</Note>}
-      {versions.map(v => (
-        <VersionCard key={v.id} projectId={projectId} sessionId={sessionId} thread={thread} version={v} focused={focused} model={model} cropNote={cropNote} />
+      {shown.map(v => (
+        <VersionCard key={v.id} projectId={projectId} sessionId={sessionId} thread={thread} version={v} focused={focused} model={model} cropNote={cropNote}
+          best={fold?.best === v} />
       ))}
+      {fold && (
+        <div style={{ display: 'flex' }}>
+          <Button size={mobile ? 'sm' : 'xs'} variant="secondary" fullWidth={mobile}
+            leftIcon={ic(expanded ? ChevronUp : ChevronDown)} onClick={() => setOpen(!expanded)}>
+            {expanded ? 'Свернуть варианты'
+              : `Ещё ${variantsWord(fold.rest.length)}${fold.workingInRest ? ' · один в работе' : ''}`}
+          </Button>
+        </div>
+      )}
 
       {status === 'running' && (
         <Shell current={false} testId="running">

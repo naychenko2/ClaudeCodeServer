@@ -16,6 +16,7 @@ import { imageEditorApi } from '../api';
 import { activeStepOf, applyStep, continueFrom, saveAsInThread, saveToProject, versionSaved } from './actions';
 import { downloadName, stackSaveState, versionPrimary } from './model';
 import { __applyThreads, __resetThreadStore } from './threadStore';
+import { foldLaunch } from './VersionCards';
 import { threadsApi, type ImageThread, type ImageThreadsState, type ImageThreadVersion } from './threadsApi';
 
 // Карточки версий в ленте (изменение 27.09 к ADR-019): какая кнопка у карточки, откуда
@@ -158,5 +159,28 @@ describe('сохранение в личном чате', () => {
     expect(await saveToProject('p1', 's1', withVersions(), 's2r')).toBe('img/hero-2.png');
     expect(save).toHaveBeenCalledWith('p1', expect.objectContaining({ stepId: 's2r', mode: 'next-version' }));
     vi.unstubAllGlobals();
+  });
+});
+
+describe('свёртка запуска по сходству (LoRA-N/10)', () => {
+  const run = (...sim: (number | null | undefined)[]) =>
+    sim.map((similarity, i) => ver(`v${i + 1}`, { number: i + 1, jobId: 'j1', variant: i, similarity }));
+  const mark = (vs: ImageThreadVersion[], id: string) => vs.map(v => ({ ...v, mostSimilar: v.id === id }));
+
+  it('лучший крупно, остальные по номеру; номера версий не меняются', () => {
+    const f = foldLaunch(mark(run(0.5, 0.77, 0.6), 'v2'), null)!;
+    expect(f.best.id).toBe('v2');
+    expect(f.rest.map(v => v.number)).toEqual([1, 3]);
+    expect(f.workingInRest).toBe(false);
+  });
+
+  it('выбрана не самая похожая — группа знает, что выбранная среди свёрнутых', () => {
+    expect(foldLaunch(mark(run(0.5, 0.77), 'v2'), 'v1')!.workingInRest).toBe(true);
+    expect(foldLaunch(mark(run(0.5, 0.77), 'v2'), 'v2')!.workingInRest).toBe(false);
+  });
+
+  it('без пометки или с одной версией свёртки нет — карточка как раньше', () => {
+    expect(foldLaunch(run(null, undefined), null)).toBeNull();
+    expect(foldLaunch(mark(run(0.7), 'v1'), null)).toBeNull();
   });
 });

@@ -29,6 +29,10 @@ export interface ImageThreadVersion {
   steps: string[];
   currentStepId: string | null;
   createdAt: string;
+  // Сходство лица с эталоном персонажа (косинус); null — лицо не найдено, нет поля — не считалось
+  similarity?: number | null;
+  // Самая похожая среди версий своего запуска
+  mostSimilar?: boolean;
 }
 
 export type ImageThreadLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';

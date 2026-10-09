@@ -21,6 +21,9 @@ public interface ILocalImageMedia
     // Длина общей очереди ComfyUI (идущая плюс ждущие, с чужими прогонами); null — недоступен
     Task<int?> QueueLengthAsync(CancellationToken ct);
 
+    // Имена LoRA, которые видит ComfyUI, в порядке его ответа; null — ComfyUI недоступен или не настроен
+    Task<IReadOnlyList<string>?> ListLorasAsync(CancellationToken ct);
+
     // Ожидаемое время одного запуска по таблице замеров local-media; null — не замерено
     int? EtaSeconds(LocalImageOp op, int count, int images);
 

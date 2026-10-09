@@ -113,6 +113,22 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
     }
 
+    public async Task<IReadOnlyList<string>?> ListLorasAsync(CancellationToken ct)
+    {
+        if (!LocalMediaOptions.Read(config).Enabled) return null;
+        try
+        {
+            var loras = await comfy.ListLorasAsync(ct);
+            Remember(alive: true);
+            return loras;
+        }
+        catch (ComfyException)
+        {
+            Remember(alive: false);
+            return null;
+        }
+    }
+
     public int? EtaSeconds(LocalImageOp op, int count, int images) => op switch
     {
         LocalImageOp.Generate when images == 0 => LocalMediaService.GenerateImageEta(ComfyWorkflows.DefaultSteps, Math.Max(1, count)),

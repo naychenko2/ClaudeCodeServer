@@ -39,7 +39,11 @@ public class LocalImageEditorTests : IDisposable
         public int? QueuedFrom { get; set; }
         private readonly ConcurrentDictionary<string, bool> _seen = new();
 
+        public IReadOnlyList<string>? Loras { get; set; } = [];
+
         public Task<int?> QueueLengthAsync(CancellationToken ct) => Task.FromResult(Queue);
+
+        public Task<IReadOnlyList<string>?> ListLorasAsync(CancellationToken ct) => Task.FromResult(Loras);
 
         public int? EtaSeconds(LocalImageOp op, int count, int images) => op switch
         {

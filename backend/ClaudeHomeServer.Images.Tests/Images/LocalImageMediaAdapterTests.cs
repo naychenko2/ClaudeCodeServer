@@ -232,6 +232,22 @@ public class LocalImageMediaAdapterTests
     }
 
     [Fact]
+    public async Task Список_Lora_отдаётся_в_порядке_ComfyUI()
+    {
+        var adapter = Build(handler: new LorasComfy(_comfy, ["b.safetensors", "a.safetensors"]));
+
+        (await adapter.ListLorasAsync(default)).Should().Equal("b.safetensors", "a.safetensors");
+    }
+
+    [Fact]
+    public async Task Список_Lora_при_ошибке_ComfyUI_null_без_исключения()
+    {
+        var adapter = Build(handler: new LorasComfy(_comfy, null));
+
+        (await adapter.ListLorasAsync(default)).Should().BeNull();
+    }
+
+    [Fact]
     public async Task Lora_из_списка_ComfyUI_уходит_в_граф()
     {
         var adapter = Build(handler: new LorasComfy(_comfy, ["hero.safetensors"]));

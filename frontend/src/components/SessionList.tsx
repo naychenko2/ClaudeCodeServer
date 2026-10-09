@@ -283,9 +283,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       // если была открыта — переключаемся на первую оставшуюся
       if (msg.type === 'chat_deleted') {
         forgetChatContextOnDeleted(msg);
+        // Обновитель под StrictMode вызывается дважды с тем же prev — реакцию на
+        // удаление активного чата ставим в очередь один раз на событие
+        let reacted = false;
         setSessions(prev => {
           const updated = prev.filter(s => s.id !== msg.sessionId);
-          if (activeRef.current?.id === msg.sessionId) {
+          if (!reacted && activeRef.current?.id === msg.sessionId) {
+            reacted = true;
             const handler = onActiveDeletedRef.current;
             if (handler) queueMicrotask(() => handler(updated[0] ?? null));
             else if (updated.length > 0) queueMicrotask(() => onSelectRef.current(updated[0], undefined, true));

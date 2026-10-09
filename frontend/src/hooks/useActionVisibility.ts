@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { migrateRingPillHidden } from '../lib/chatActions';
 
 // Видимость элементов в рядах действий (шапка чата, губа композера, плитка чата).
 // Кнопка «⋯» стоит в ряду ВСЕГДА, а пользователь сам решает, что показывать
@@ -31,17 +32,43 @@ const KEYS: Record<ActionSurface, string> = {
 
 const CHANGE_EVENT = 'cc-action-visibility-change';
 
+type HiddenStore = Pick<Storage, 'getItem' | 'setItem'>;
+
+// Одноразовые переводы сохранённых наборов при смене состава ключей. Маркер ставится
+// после первого чтения — есть сохранённый набор или нет: перевод не идемпотентен
+// (после него ["cost"] уже значит «спрятать пилюлю»), повторный прогон его бы сломал
+const MIGRATIONS: Partial<Record<ActionSurface, { marker: string; run: (hidden: string[]) => string[] }>> = {
+  'chat-header': { marker: 'cc_chat_header_hidden_ring_v1', run: migrateRingPillHidden },
+};
+
+// Битое значение (не массив / не строки) — тихо считаем «ничего не скрыто»:
+// настройка косметическая, ради неё интерфейс падать не должен
+function parseHidden(raw: string | null): string[] | null {
+  if (raw === null) return null;
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) return null;
+  return parsed.filter((v): v is string => typeof v === 'string');
+}
+
 // null — настройки нет вовсе (в т.ч. когда localStorage недоступен): вызывающий
-// возьмёт дефолт. Массив — сохранённый набор, пустой в нём тоже значим («показать всё»)
-function readHidden(surface: ActionSurface): string[] | null {
+// возьмёт дефолт. Массив — сохранённый набор, пустой в нём тоже значим («показать всё»).
+// store — подмена хранилища в тестах; по умолчанию localStorage
+export function readHidden(surface: ActionSurface, store?: HiddenStore): string[] | null {
   try {
-    const raw = localStorage.getItem(KEYS[surface]);
-    if (raw === null) return null;
-    const parsed = JSON.parse(raw);
-    // Битое значение (не массив / не строки) — тихо считаем «ничего не скрыто»:
-    // настройка косметическая, ради неё интерфейс падать не должен
-    if (!Array.isArray(parsed)) return null;
-    return parsed.filter((v): v is string => typeof v === 'string');
+    const s = store ?? localStorage;
+    const migration = MIGRATIONS[surface];
+    if (migration && s.getItem(migration.marker) === null) {
+      // Битый набор переводить нечего — маркер всё равно ставим (catch ниже его не пропустит,
+      // поэтому разбор — в своём try)
+      let cur: string[] | null = null;
+      try { cur = parseHidden(s.getItem(KEYS[surface])); } catch { /* битое значение */ }
+      if (cur) {
+        const next = migration.run(cur);
+        if (next.length !== cur.length) s.setItem(KEYS[surface], JSON.stringify(next));
+      }
+      s.setItem(migration.marker, '1');
+    }
+    return parseHidden(s.getItem(KEYS[surface]));
   } catch {
     return null;
   }

@@ -71,25 +71,41 @@ export const WALL_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
 // кого-то только контекст, а у третьего шапка должна быть пустой.
 //
 // Только в ОБЫЧНОЙ шапке: в колонке «Стены» пилюль нет вовсе (там узко), а на
-// мобиле они склеены в один объединённый чип — прятать в нём нечего по частям.
-export type ChatBadgeKey = 'mechanic' | 'workflow' | 'context' | 'cost' | 'fal' | 'glif' | 'spend'
-  // мобильный объединённый чип (MobileCombinedBadge): тем же глазиком, но целиком
+// мобиле они склеены в одну кольцевую пилюлю — прятать в ней нечего по частям.
+//
+// Контекст и лимиты — одна кольцевая пилюля под ключом cost; прежнего отдельного ключа
+// context больше нет, сохранённые наборы переводит migrateRingPillHidden.
+export type ChatBadgeKey = 'mechanic' | 'workflow' | 'cost' | 'fal' | 'glif' | 'spend'
+  // мобильная кольцевая пилюля (RingPillBadge): тем же глазиком, но целиком
   | 'mobile-pills';
 
 export const CHAT_BADGE_ORDER: ChatBadgeKey[] = [
-  'mechanic', 'workflow', 'context', 'cost', 'fal', 'glif', 'spend',
+  'mechanic', 'workflow', 'cost', 'fal', 'glif', 'spend',
 ];
 
 export const CHAT_BADGE_LABELS: Record<ChatBadgeKey, string> = {
   mechanic: 'Механика команды',
   workflow: 'Прогресс workflow',
-  context: 'Контекст сессии',
-  cost: 'Стоимость модели',
+  cost: 'Контекст и лимиты',
   fal: 'Траты fal.ai',
   glif: 'Генерации glif',
   spend: 'Расход токенов',
   'mobile-pills': 'Пилюли в шапке',
 };
+
+// Перевод сохранённого набора скрытых ключей шапки на кольцевую пилюлю. Раньше
+// контекст (context) и стоимость (cost) прятались по отдельности, теперь оба живут
+// в одной пилюле под ключом cost:
+// - cost скрыт, context нет — человек прятал только стоимость, а контекст хотел
+//   видеть: снимаем cost, иначе вместе со стоимостью пропал бы и контекст;
+// - оба скрыты — пилюля остаётся скрытой;
+// - ключ-сирота context вычищается в любом случае.
+// Вызывается ОДИН раз (см. useActionVisibility): после перевода набор ["cost"]
+// означает уже «спрятать пилюлю», и повторный прогон её бы вернул
+export function migrateRingPillHidden(hidden: string[]): string[] {
+  const keepCost = hidden.includes('context');
+  return hidden.filter(k => k !== 'context' && (k !== 'cost' || keepCost));
+}
 
 // Пилюли по умолчанию показаны все — они и есть сводка состояния чата;
 // прятать их имеет смысл только осознанно (в HIDDEN-наборах их нет)

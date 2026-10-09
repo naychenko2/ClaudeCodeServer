@@ -53,6 +53,10 @@ public sealed class LocalMediaOptions
     // Потолок длины входного звука, с: стемы, смена голоса, MIDI, распознавание
     public int MaxAudioInputSeconds { get; set; } = 600;
 
+    // Обучение LoRA персонажа (ADR-026): узел CcsAudioWorker с семейством lora на GPU-машине.
+    // Выключено по умолчанию — карта на ≈2 ч уходит одному владельцу
+    public bool LoraTrainEnabled { get; set; }
+
     public bool CleanupEnabled => !string.IsNullOrWhiteSpace(ComfyInputDir) && !string.IsNullOrWhiteSpace(ComfyOutputDir);
 
     public static LocalMediaOptions Read(IConfiguration config)

@@ -1,0 +1,95 @@
+namespace ClaudeHomeServer.Services.ImageEditor;
+
+// Шов обучения LoRA персонажа (ADR-026): реализация живёт в Images, потребители берут его
+// необязательным параметром. Контракт — docs/adr/ADR-026-contracts.md, §3.
+public interface ILocalLoraTrainer
+{
+    // LocalMedia:Enabled && LocalMedia:LoraTrainEnabled. ComfyUI при этом может лежать
+    bool Enabled { get; }
+
+    // Идущее на инстансе обучение (любого владельца) или null. Mine — оно этого владельца
+    LoraTrainBusy? Busy(string ownerId);
+
+    Task<LoraTrainStartResult> StartAsync(LoraTrainStart request, CancellationToken ct);
+
+    // Чужая задача неотличима от несуществующей: null. Обновляет статус из истории ComfyUI
+    Task<LoraTrainState?> GetAsync(string ownerId, string jobId, CancellationToken ct);
+
+    // Задачи lora_train владельца, новые сверху, без опроса ComfyUI
+    IReadOnlyList<LoraTrainState> ListFor(string ownerId);
+
+    // Все задачи lora_train стора, любых владельцев. Только для фонового доводчика
+    IReadOnlyList<LoraTrainState> ListAll();
+
+    // asAdmin = true — отмена без проверки владельца; иначе чужая задача → NotFound
+    Task<LoraCancelResult> CancelAsync(string ownerId, string jobId, bool asAdmin, CancellationToken ct);
+
+    // Идемпотентно: первый вызов ставит op lora_delete, следующие отдают его исход.
+    // Deleted — каталога прогона на GPU нет (в том числе «и не было»)
+    Task<LoraDeleteState> DeleteRunAsync(string ownerId, string projectId, string slug, string runId, CancellationToken ct);
+}
+
+public static class LoraTrainPresets
+{
+    public const string Standard = "standard";
+    public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal) { Standard };
+}
+
+// HostPath — абсолютный путь файла в data/lora-training; Name — имя по регэкспу контракта,
+// под ним фото уедет в input ComfyUI
+public sealed record LoraTrainPhoto(string Name, string HostPath);
+
+public sealed record LoraTrainStart(
+    string OwnerId,
+    string ProjectId,
+    string Slug,
+    string RunId,
+    string Preset,
+    string Trigger,
+    IReadOnlyList<LoraTrainPhoto> Photos);
+
+public enum LoraTrainErrorCode
+{
+    Disabled, Unavailable, GpuBusy, OwnerBusy, QueueFull, TooFewPhotos, BadPreset, BadTrigger, BadRequest,
+}
+
+public sealed record LoraTrainBusy(DateTime? BusyUntil, bool Mine, string JobId);
+
+public sealed record LoraTrainStartResult(
+    string? JobId,
+    int? QueuePosition,
+    int? EtaSeconds,
+    LoraTrainErrorCode? Error = null,
+    string? Message = null,
+    LoraTrainBusy? Busy = null);
+
+public enum LoraTrainStatus { Queued, Running, Completed, Failed, Cancelled }
+
+// Reason: no_face | many_faces | small_face | unreadable
+public sealed record LoraPhotoRejection(string Name, string Reason);
+
+public sealed record LoraTrainFailure(string Code, string Message);
+
+public sealed record LoraTrainState(
+    string JobId,
+    string OwnerId,
+    string ProjectId,
+    string Slug,
+    string RunId,
+    string Preset,
+    LoraTrainStatus Status,
+    int? QueuePosition,
+    int? Step,
+    int? TotalSteps,
+    int? EtaSeconds,
+    DateTime CreatedAt,
+    DateTime? StartedAt,
+    DateTime? FinishedAt,
+    string? LoraFile,
+    LoraTrainFailure? Error,
+    int? PhotosKept,
+    IReadOnlyList<LoraPhotoRejection>? Rejected);
+
+public enum LoraCancelResult { Cancelled, NotFound, AlreadyFinished }
+
+public enum LoraDeleteState { Pending, Deleted, Failed }

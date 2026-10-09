@@ -24,6 +24,10 @@ public static class LocalMediaOps
     public const string AudioEnhance = "audio_enhance";
     public const string Transcribe = "transcribe";
 
+    // Обучение LoRA персонажа (ADR-026): ставит только адаптер шва, в IsKnown не входит
+    public const string LoraTrain = "lora_train";
+    public const string LoraDelete = "lora_delete";
+
     public static bool IsAudio(string? op) => op is MusicGenerate or MusicEdit or Speech or VoiceConvert or VoiceTrain
         or AudioSeparate or AudioToMidi or AudioEnhance or Transcribe;
 

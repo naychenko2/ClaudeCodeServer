@@ -468,6 +468,35 @@ public class ImageEditJobServiceTests : IDisposable
             .Should().ContainSingle().Which.Variants.Should().Equal(1, 2, 3);
     }
 
+    [Fact]
+    public async Task Сходство_ПишетсяИзReadyИИзХвостаФинала()
+    {
+        EditedImage[] images = [Variant(1) with { Similarity = 0.6 }, Variant(2), Variant(3) with { Similarity = 0.8 }];
+        var editor = new ScriptedEditor("fal", (_, progress, _) =>
+        {
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 3, Ready: [images[0], images[1]]));
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok, images, null, true, "r", null));
+        });
+        var service = Service(editor);
+        var jobId = await StartAsync(service, "owner", "fal", count: 3);
+
+        var done = await WaitDone(service, "owner", jobId);
+
+        done.Variants.Should().Equal(1, 2, 3);
+        done.Similarities.Should().BeEquivalentTo(new Dictionary<int, double> { [1] = 0.6, [3] = 0.8 });
+    }
+
+    [Fact]
+    public async Task Сходство_БезНегоСловарьNull()
+    {
+        var editor = new ScriptedEditor("fal", (_, _, _) =>
+            Task.FromResult(new ImageEditResult(EditOutcome.Ok, [Variant(1), Variant(2)], null, true, "r", null)));
+        var service = Service(editor);
+        var jobId = await StartAsync(service, "owner", "fal", count: 2);
+
+        (await WaitDone(service, "owner", jobId)).Similarities.Should().BeNull();
+    }
+
     // Разбор готового варианта медленный (приведение размера), а драйвер уже вернул итог: Finished
     // обязан дождаться очереди — иначе нить закрыла бы запуск раньше, чем узнала о последнем варианте
     [Fact]

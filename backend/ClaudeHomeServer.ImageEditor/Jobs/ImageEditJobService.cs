@@ -110,6 +110,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public int? EtaSeconds { get; set; }
         public DateTime? RunStartedAt { get; set; }
         public List<int> Variants { get; } = [];
+        // Сходство лица по номеру варианта; записи нет, если драйвер его не посчитал
+        public Dictionary<int, double> Similarities { get; } = [];
         public EditCost? Cost { get; set; }
         public EditOutcome? Outcome { get; set; }
         public bool? Charged { get; set; }
@@ -359,6 +361,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 lock (job.Gate)
                 {
                     job.Variants.Add(n);
+                    if (ready[i].Similarity is { } similarity) job.Similarities[n] = similarity;
                     if (mismatch) job.SizeNote = ImageEditSizeNotes.AspectMismatch;
                 }
             }
@@ -389,6 +392,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         lock (job.Gate)
         {
             job.Variants.AddRange(tail);
+            foreach (var n in tail)
+                if (result.Images[n - 1].Similarity is { } similarity) job.Similarities[n] = similarity;
             job.Cost = cost;
             job.Outcome = EditOutcome.Ok;
             job.Charged = result.Charged ?? true;
@@ -636,7 +641,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return new ImageEditJobDto(j.Id, j.ProjectId, j.Status, j.Quote.Provider, j.Quote.Model.Id,
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt,
                 j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId,
-                j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j));
+                j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j),
+                j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null);
     }
 
     // Сколько идёт текущий прогон по часам бэкенда; вне Running — null. Звать под j.Gate

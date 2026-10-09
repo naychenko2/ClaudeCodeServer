@@ -158,7 +158,8 @@ public record ImageEditRequest(
     // AspectRatio остаётся производным от него (откат и старые вызовы)
     ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null);
 
-public record EditedImage(byte[] Bytes, string ContentType);
+// Similarity — сходство лица с образцом персонажа (0..1); null — не считалось
+public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null);
 
 // Сумма в единицах поставщика (ImageEditPriceUnits.*)
 public record EditCost(double Amount, string Unit);

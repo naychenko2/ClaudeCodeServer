@@ -170,7 +170,9 @@ public record ImageEditJobDto(
     int? Run = null,
     int? Runs = null,
     int? EtaSeconds = null,
-    int? RunElapsedSeconds = null);
+    int? RunElapsedSeconds = null,
+    // Сходство лица с образцом персонажа по номеру варианта; null — персонажа нет или не считалось
+    IReadOnlyDictionary<int, double>? Similarities = null);
 
 public static class ImageEditSizeNotes
 {

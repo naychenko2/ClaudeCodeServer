@@ -45,7 +45,7 @@ import {
   Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge, Badge,
   SidebarSection,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
-  Menu, MenuItem, MenuSep, BackButton, WaitingIndicator,
+  Menu, MenuItem, MenuSep, BackButton, PressableArea, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel, Select,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
@@ -701,6 +701,21 @@ function OverlaysSection() {
           <BackButton onClick={() => {}} title="Назад">
             <span style={{ fontSize: FS.base, color: C.textSecondary }}>Все проекты</span>
           </BackButton>
+        </SubBlock>
+
+        {/* PressableArea: нажимаемая область, внутри которой бывают свои кнопки
+            (зона имени чата в мобильной шапке); feedback — подложка на нажатие/hover
+            и кольцо фокуса */}
+        <SubBlock label="PressableArea — нажимаемая область со своими кнопками внутри (feedback)">
+          <PressableArea
+            feedback onPress={() => {}} aria-label="Нажимаемая область"
+            style={{ display: 'flex', alignItems: 'center', gap: SP.sm, padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.md }}
+          >
+            <span style={{ fontSize: FS.base, color: C.textPrimary }}>Имя чата</span>
+            <IconButton size="sm" variant="ghost" tone="muted" title="Своя кнопка внутри" onClick={e => e.stopPropagation()}>
+              <MoreHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+            </IconButton>
+          </PressableArea>
         </SubBlock>
 
         {/* WaitingIndicator: обычный режим + с hint */}

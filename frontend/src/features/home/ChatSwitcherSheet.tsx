@@ -10,7 +10,7 @@ import type { HomeSessionInfo, Project } from '../../types';
 import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { STATUS_COLOR, STATUS_PULSE, foldChatActivity, useChatActivity, type ActivityStatus } from '../../lib/projectActivity';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Modal } from '../../components/ui';
+import { Modal, PressableArea } from '../../components/ui';
 import { ProjectIcon } from '../projects/ProjectIcon';
 import { useAllProjects } from '../projects/useAllProjects';
 import { useHomeSummary } from './useHomeSummary';
@@ -184,12 +184,12 @@ export function ChatSwitcherTrigger({ currentId, children }: { currentId: string
   const show = () => setOpen(true);
   return (
     <>
-      <div
-        role="button" tabIndex={0}
+      <PressableArea
         aria-haspopup="dialog" aria-label={title} title={title}
-        className="cc-chat-switch"
-        onClick={show}
-        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); } }}
+        // cc-chat-switch — метка переключателя (по ней зону находят e2e-сценарии),
+        // отклик и кольцо фокуса даёт feedback примитива
+        feedback className="cc-chat-switch"
+        onPress={show}
         style={{
           flex: 1, minWidth: CHAT_SWITCHER_MIN_W, minHeight: TB.iconHitMobile, display: 'flex', alignItems: 'center', gap: SP.xs,
           cursor: 'pointer', borderRadius: R.md,
@@ -211,7 +211,7 @@ export function ChatSwitcherTrigger({ currentId, children }: { currentId: string
             } as CSSProperties} />
           )}
         </span>
-      </div>
+      </PressableArea>
       {open && <ChatSwitcherSheet currentId={currentId} onClose={() => setOpen(false)} />}
     </>
   );

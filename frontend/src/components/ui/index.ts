@@ -54,6 +54,7 @@ export { Notice } from './Notice';
 export type { NoticeTone } from './Notice';
 export { SidebarSection } from './SidebarSection';
 export { BackButton } from './BackButton';
+export { PressableArea } from './PressableArea';
 export { WaitingIndicator } from './WaitingIndicator';
 export { MetaChip } from './MetaChip';
 export { Tooltip } from './Tooltip';

@@ -299,15 +299,17 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
         });
 
     // Самая похожая версия запуска (максимум Similarity, при ничьей — меньший номер) получает MostSimilar и
-    // становится текущей, но только пока текущей остаётся основа запуска или первая версия запуска
+    // становится текущей, но только при двух и более версиях с числом и пока текущей остаётся основа запуска или первая версия запуска
     // (её поставил авто-сдвиг): выбор человека не трогаем. Нет ни одного числа — ничего не меняется.
     // Moved — (первая версия запуска, самая похожая), если текущая действительно переехала на другую версию
     private static (ImageThread Thread, (string From, string To)? Moved) WithMostSimilar(ImageThread thread, ImageThreadLaunch launch)
     {
         var own = thread.Versions.Where(v => v.JobId == launch.JobId).OrderBy(v => v.Number).ToList();
-        var best = own.Where(v => v.Similarity != null)
-            .OrderByDescending(v => v.Similarity).ThenBy(v => v.Number).FirstOrDefault();
-        if (best is null) return (thread, null);
+        var scored = own.Where(v => v.Similarity != null).ToList();
+        // Пометка осмысленна, только когда есть из чего выбирать: одиночный вариант «самым похожим» не называем
+        if (scored.Count < 2) return (thread, null);
+        var best = scored
+            .OrderByDescending(v => v.Similarity).ThenBy(v => v.Number).First();
         var current = thread.CurrentVersionId;
         var follow = current == launch.BaseVersionId || (own.Count > 0 && current == own[0].Id);
         var moved = follow && best.Id != own[0].Id ? (own[0].Id, best.Id) : ((string, string)?)null;

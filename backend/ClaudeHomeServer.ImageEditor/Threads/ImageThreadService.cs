@@ -599,11 +599,18 @@ public sealed class ImageThreadService(
         if (written.NewVersions.Count > 0)
         {
             var first = written.NewVersions[0];
-            mirror?.AdvanceVersion(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId, first.BaseVersionId, first.Id);
+            // Основа, закреплённая человеком уже после появления первой версии запуска, не переезжает на следующие
+            var launchHasEarlier = store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId)?.Versions
+                .Any(v => v.JobId == first.JobId && v.Number < first.Number) == true;
+            if (!launchHasEarlier)
+                mirror?.AdvanceVersion(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId, first.BaseVersionId, first.Id);
         }
-        // Финал перевёл текущую на самую похожую: основной объект, закреплённый на версии от авто-сдвига, идёт следом
-        if (written.MovedToMostSimilar is var (from, to))
-            mirror?.AdvanceVersion(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId, from, to);
+        // Финал перевёл текущую на самую похожую: основной объект, закреплённый на версии от авто-сдвига, идёт следом.
+        // Закрепление человека на первой версии запуска не перебиваем и возвращаем на неё текущую версию нити
+        if (written.MovedToMostSimilar is var (from, to)
+            && mirror?.AdvanceVersion(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId, from, to, onlyIfAuto: true)
+                == ChatContextFocusMirror.AdvanceResult.HeldByHuman)
+            store.SetCurrentVersion(ownerId, sessionId, threadId, from, null, null);
         if (mediaEvents is null) return;
         foreach (var version in written.NewVersions)
             await mediaEvents.PublishAsync(new ImageVersionAdded(ownerId, sessionId, projectId, threadId, version.Id, initiator));

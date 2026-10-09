@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
+using ClaudeHomeServer.Services.ImageEditor.Chats;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -154,5 +155,49 @@ public sealed class ImageContextAdvanceTests : IDisposable
 
         PinnedVersion().Should().Be(Thread(id).Versions.Single(v => v.MostSimilar).Id);
         Thread(id).Versions.Single(v => v.MostSimilar).Variant.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Ручной_выбор_первой_версии_запуска_не_перебивается_самой_похожей()
+    {
+        var id = Pinned(ImageThreadVersion.OriginId);
+        Launch(id, "job-1");
+        await ProgressAsync(id, "job-1", 1, 0.5);
+        var first = Thread(id).Versions.Single(v => v.Variant == 1).Id;
+        // человек выбирает первую версию запуска сам: Ref без служебного маркера
+        _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem(ImageContextKind.Kind, id, ContextActor.Human, first), null);
+        await ProgressAsync(id, "job-1", 2, 0.9);
+        await FinishAsync(id, "job-1");
+
+        PinnedVersion().Should().Be(first);
+        Thread(id).CurrentVersionId.Should().Be(first, "сырые поля нити сходятся с выбором в контексте");
+        Thread(id).Versions.Single(v => v.Variant == 2).MostSimilar.Should().BeTrue("пометка остаётся справкой");
+    }
+
+    [Fact]
+    public async Task Ручной_выбор_основы_запуска_во_время_запуска_остаётся_на_основе()
+    {
+        var id = Pinned(ImageThreadVersion.OriginId);
+        Launch(id, "job-1");
+        await ProgressAsync(id, "job-1", 1, 0.5);
+        _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem(ImageContextKind.Kind, id, ContextActor.Human,
+            ImageThreadVersion.OriginId), null);
+        await ProgressAsync(id, "job-1", 2, 0.9);
+        await FinishAsync(id, "job-1");
+
+        PinnedVersion().Should().Be(ImageThreadVersion.OriginId);
+    }
+
+    [Fact]
+    public async Task Запуск_из_одного_варианта_не_помечает_самую_похожую_и_текущую_не_двигает()
+    {
+        var id = Pinned(ImageThreadVersion.OriginId);
+        Launch(id, "job-1");
+        await FinishAsync(id, "job-1", (1, 0.8));
+
+        var only = Thread(id).Versions.Single(v => v.Variant == 1);
+        only.MostSimilar.Should().BeFalse();
+        Thread(id).CurrentVersionId.Should().Be(only.Id);
+        ImageEditorStateContributor.SimilarityText(Thread(id), only).Should().NotContain("самый похожий");
     }
 }

@@ -28,18 +28,20 @@ def _log(msg):
     print(msg, flush=True)
 
 
-def _biggest_embedding(app, bgr):
+def _all_embeddings(app, bgr):
+    """Все эмбеддинги лиц в BGR-кадре. В сцене с несколькими людьми нужное лицо может
+    быть не самым крупным — отдаём список, максимум косинуса к центроиду берёт core."""
     faces = app.get(bgr)
     if not faces:
-        return None
-    return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])).embedding
+        return []
+    return [f.embedding for f in faces]
 
 
-def _emb_from_path(app, cv2, path):
+def _embs_from_path(app, cv2, path):
     bgr = cv2.imread(path, cv2.IMREAD_COLOR)
     if bgr is None:
         raise ValueError(f"cv2 не прочитал файл: {path}")
-    return _biggest_embedding(app, bgr)
+    return _all_embeddings(app, bgr)
 
 
 def main():
@@ -61,39 +63,38 @@ def main():
     import numpy as np
     from insightface.app import FaceAnalysis
 
-    app = FaceAnalysis(name="buffalo_l", root=face_models, providers=["CPUExecutionProvider"])
+    app = FaceAnalysis(name="buffalo_l", root=face_models, providers=["CPUExecutionProvider"],
+                       allowed_modules=["detection", "recognition"])
     app.prepare(ctx_id=-1, det_size=(det_size, det_size))
     load_s = round(time.time() - t0, 2)
 
     # core.py лежит рядом — воркер и тесты зовут одну и ту же арифметику
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from core import drop_nonfinite, similarity_from  # noqa: E402
+    from core import best_similarity_from  # noqa: E402
 
     try:
-        emb_variant = _emb_from_path(app, cv2, variant)
+        embs_variant = _embs_from_path(app, cv2, variant)
     except Exception as e:
         # ошибка детектора на варианте — это none, не валим граф
         _log(f"детектор variant: {type(e).__name__}: {e}")
-        emb_variant = None
+        embs_variant = []
 
     embs_ref = []
     for p in refs:
         try:
-            e = _emb_from_path(app, cv2, p)
+            es = _embs_from_path(app, cv2, p)
         except Exception as ex:
             _log(f"пропускаю эталон {p}: {type(ex).__name__}: {ex}")
             continue
-        if e is None:
+        if not es:
             continue
-        arr = np.asarray(e, dtype=np.float32)
+        arr = np.asarray(es[0], dtype=np.float32)
         if not np.isfinite(arr).all():
             _log(f"эталон {p}: нечисловой эмбеддинг, пропускаю")
             continue
         embs_ref.append(arr)
 
-    embs_ref = drop_nonfinite(embs_ref)
-    sim, used = similarity_from(emb_variant, embs_ref)
-    # unused-ветка reserved for будущей логики «центроид пуст, но был хоть один NaN — что делать»
+    sim, used = best_similarity_from(embs_variant, embs_ref)
 
     infer_s = round(time.time() - t0 - load_s, 2)
     total_s = round(time.time() - t0, 2)

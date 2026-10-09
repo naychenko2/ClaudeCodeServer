@@ -29,7 +29,7 @@ export interface ImageThreadVersion {
   steps: string[];
   currentStepId: string | null;
   createdAt: string;
-  // Сходство лица с эталоном персонажа (косинус); null — лицо не найдено, нет поля — не считалось
+  // Сходство лица с эталоном персонажа (косинус); нет поля — не считалось или лицо не найдено (это видно по соседям запуска)
   similarity?: number | null;
   // Самая похожая среди версий своего запуска
   mostSimilar?: boolean;

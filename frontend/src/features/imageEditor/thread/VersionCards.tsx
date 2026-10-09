@@ -127,7 +127,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
       onPick={() => { void fill.pick(); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0, flexWrap: mobile ? 'wrap' : 'nowrap' }}>
         <span title={name} style={{
-          fontSize: FS.sm, fontWeight: 600, color: C.textHeading, minWidth: 0, flex: mobile ? '1 1 100%' : 1,
+          fontSize: FS.sm, fontWeight: 600, color: C.textHeading, minWidth: 0, flex: mobile && best && typeof version.similarity === 'number' ? '1 1 100%' : 1,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{name}</span>
         {best && typeof version.similarity === 'number' && (

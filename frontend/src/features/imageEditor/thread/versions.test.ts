@@ -168,9 +168,9 @@ describe('свёртка запуска по сходству (LoRA-N/10)', () =
   const mark = (vs: ImageThreadVersion[], id: string) => vs.map(v => ({ ...v, mostSimilar: v.id === id }));
 
   it('лучший крупно, остальные по номеру; номера версий не меняются', () => {
-    const f = foldLaunch(mark(run(0.5, 0.77, 0.6), 'v2'), null)!;
+    const f = foldLaunch(mark(run(0.5, 0.77, 0.6, 0.4), 'v2').reverse(), null)!;
     expect(f.best.id).toBe('v2');
-    expect(f.rest.map(v => v.number)).toEqual([1, 3]);
+    expect(f.rest.map(v => v.number)).toEqual([1, 3, 4]);
     expect(f.workingInRest).toBe(false);
   });
 

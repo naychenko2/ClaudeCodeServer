@@ -8,6 +8,7 @@ import { ShieldAlert, Trash2, Upload, X } from 'lucide-react';
 import { BackButton, Button, Checkbox, ConfirmDialog, Field, IconButton, TextArea, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import { characterSlug, type ImageEditCharacter, type ImageEditorApi } from '../api';
 import { CharacterLoraSection, type LoraInput } from './CharacterLoraSection';
+import { CharacterLoraTrainSection } from './CharacterLoraTrainSection';
 import { CharacterTrainingPhotos } from './CharacterTrainingPhotos';
 import { MAX_PHOTO_MB, MAX_PHOTOS, MIN_PHOTOS, photosCountText, shrinkPhoto } from './photos';
 
@@ -28,6 +29,7 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
   onClose: () => void;
 }) {
   const [name, setName] = useState(character?.name ?? '');
+  const [trainPhotos, setTrainPhotos] = useState<number | null>(null);
   const [description, setDescription] = useState(character?.description ?? '');
   // основное фото — первым (бейдж «Основное» стоит на photos[0]), остальные в прежнем порядке
   const [photos, setPhotos] = useState<Photo[]>(() => {
@@ -167,7 +169,8 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
         <span style={{ color: photos.length >= MIN_PHOTOS ? C.successText : C.warningText }}>{photosCountText(photos.length)}</span>
         <span style={{ color: C.textMuted, overflowWrap: 'anywhere' }}>Папка: characters/{slug}/</span>
       </div>
-      {character && <CharacterTrainingPhotos projectId={projectId} slug={character.slug} disabled={busy} />}
+      {character && <CharacterTrainingPhotos projectId={projectId} slug={character.slug} disabled={busy} onCount={setTrainPhotos} />}
+      {character && <CharacterLoraTrainSection projectId={projectId} slug={character.slug} hasConnected={!!character.local?.lora} photoCount={trainPhotos} disabled={busy} />}
       <CharacterLoraSection key={`${character?.slug ?? 'new'}|${character?.local?.lora ?? ''}|${character?.local?.trigger ?? ''}|${character?.local?.strength ?? ''}`} api={api} projectId={projectId} current={character?.local} disabled={busy} onChange={setLora} />
       <div style={{
         display: 'flex', gap: SP.sm, alignItems: 'flex-start', fontSize: FS.sm, lineHeight: 1.45,

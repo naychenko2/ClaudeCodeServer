@@ -18,10 +18,12 @@ type Upload = { done: number; total: number };
 let rejectSeq = 0;
 const STATUS_COLOR = { muted: C.textMuted, warning: C.warningText, success: C.successText } as const;
 
-export function CharacterTrainingPhotos({ projectId, slug, disabled }: {
+export function CharacterTrainingPhotos({ projectId, slug, disabled, onCount }: {
   projectId: string;
   slug: string;
   disabled?: boolean;
+  // Сколько фото сейчас в наборе — нужно разделу обучения
+  onCount?: (n: number) => void;
 }) {
   const [dto, setDto] = useState<TrainingPhotosDto | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -37,6 +39,8 @@ export function CharacterTrainingPhotos({ projectId, slug, disabled }: {
     loraTrainApi.photos(projectId, slug).then(setDto).catch(() => setLoadError(true));
   }, [projectId, slug]);
   useEffect(() => { reload(); }, [reload]);
+
+  useEffect(() => { if (dto) onCount?.(dto.count); }, [dto, onCount]);
 
   const min = dto?.min ?? TRAIN_MIN;
   const max = dto?.max ?? TRAIN_MAX;

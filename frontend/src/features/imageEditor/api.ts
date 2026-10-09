@@ -437,6 +437,9 @@ export interface LoraVersionDto {
 }
 export interface LoraVersionsDto { items: LoraVersionDto[]; own: { lora: string } | null; limit: number; used: number }
 
+// Занятость видеокарты на уровне инстанса (ADR-026 §7.4); jobId приходит только админу
+export interface LoraActiveDto { busy: boolean; mine: boolean; busyUntil?: string; jobId?: string }
+
 export interface LoraTrainApi {
   photos(projectId: string, slug: string): Promise<TrainingPhotosDto>;
   addPhotos(projectId: string, slug: string, files: Blob[]): Promise<TrainingPhotosAddResultDto>;
@@ -445,6 +448,8 @@ export interface LoraTrainApi {
   trainState(projectId: string, slug: string): Promise<LoraTrainStateDto>;
   startTrain(projectId: string, slug: string, req: LoraTrainStartRequest): Promise<LoraTrainStartResponse>;
   cancelTrain(projectId: string, slug: string): Promise<void>;
+  active(): Promise<LoraActiveDto>;
+  cancelActive(): Promise<void>;
   versions(projectId: string, slug: string): Promise<LoraVersionsDto>;
   connectVersion(projectId: string, slug: string, runId: string): Promise<ImageEditCharacter>;
   renameVersion(projectId: string, slug: string, runId: string, title: string): Promise<LoraVersionDto>;
@@ -473,6 +478,8 @@ export const loraTrainApi: LoraTrainApi = {
       { method: 'POST', body: JSON.stringify(req) }),
   cancelTrain: (projectId, slug) =>
     request<void>(`${charUrl(projectId, slug)}/lora-train`, { method: 'DELETE' }),
+  active: () => request<LoraActiveDto>('/image-editor/lora-train/active', { live: true }),
+  cancelActive: () => request<void>('/image-editor/lora-train/active', { method: 'DELETE' }),
   versions: (projectId, slug) =>
     request<LoraVersionsDto>(`${charUrl(projectId, slug)}/lora-versions`, { live: true }),
   connectVersion: (projectId, slug, runId) =>

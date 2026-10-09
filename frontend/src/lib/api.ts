@@ -95,6 +95,20 @@ export interface DeployState {
   canLaunch: boolean;
   reason: string | null;
   status: DeployStatusFile | null;
+  // Ход идущей выкатки (deploy-progress.json раннера): null — выкатка не идёт или раннер
+  // хода не пишет. Пока продукт жив (идёт сборка), окно рисует по нему полосу.
+  progress?: DeployProgressFile | null;
+}
+
+// Ход выкатки. stage: checking | building | publishing | restarting | done; percent — 0..100
+// по весам шагов скрипта деплоя, step — подпись текущего шага, line — последняя строка вывода
+export interface DeployProgressFile {
+  startedAt: string | null;
+  stage: string | null;
+  percent: number;
+  step: string | null;
+  line: string | null;
+  updatedAt: string | null;
 }
 
 // Ответ GET /api/admin/power/status: доступно ли управление питанием машины и не

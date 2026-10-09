@@ -8,8 +8,10 @@
 Что покрыто:
 - центроид двух ортогональных → cos = 1/√2 ≈ 0.7071 (мутация «снять вторую L2-нормировку»
   красит другой тест — на длину самого центроида);
-- лица нет (None) → similarity=None;
+- лица нет (пустой список) → similarity=None;
 - NaN/Inf в эталонах → отбрасываются, иначе центроид разносит в NaN;
+- два лица в варианте, нужное — не самое крупное → берётся его сходство (мутация
+  «вернуть самое крупное» красит этот тест);
 - путь ../etc/passwd у узла → ValueError, эталон пропускается;
 - недоступный воркер у узла → ccs_face_similarity=none.
 """
@@ -111,21 +113,47 @@ class TestCore(unittest.TestCase):
         self.assertTrue(np.isfinite(centroid).all())
         self.assertAlmostEqual(cosine(good, centroid), 1.0, places=6)
 
-    def test_similarity_no_face_returns_none(self):
-        from core import similarity_from
+    def test_best_similarity_no_face_returns_none(self):
+        from core import best_similarity_from
 
-        # variant=None → результат None
-        sim, used = similarity_from(None, [np.array([1.0, 0.0])])
+        # variant пуст → None
+        sim, used = best_similarity_from([], [np.array([1.0, 0.0])])
         self.assertIsNone(sim)
 
         # refs пуст → None
-        sim, used = similarity_from(np.array([1.0, 0.0]), [])
+        sim, used = best_similarity_from([np.array([1.0, 0.0])], [])
         self.assertIsNone(sim)
 
         # все refs с NaN → None
-        sim, used = similarity_from(np.array([1.0, 0.0]),
-                                    [np.array([np.nan, 1.0])])
+        sim, used = best_similarity_from([np.array([1.0, 0.0])],
+                                        [np.array([np.nan, 1.0])])
         self.assertIsNone(sim)
+
+        # все variant emb с NaN → None
+        sim, used = best_similarity_from(
+            [np.array([np.nan, 1.0]), np.array([np.inf, 0.0])],
+            [np.array([1.0, 0.0])])
+        self.assertIsNone(sim)
+
+    def test_best_similarity_picks_max_over_variant_faces(self):
+        """Главный новый кейс: два лица в варианте с разными эмбеддингами — берётся
+        максимум косинуса к центроиду эталонов, а не «самое крупное». Старый контракт
+        выбрал бы лицо «прохожего» с чужим эмбеддингом и дал бы низкое сходство.
+        Мутация «вернуть biggest» — этот тест краснеет."""
+        from core import best_similarity_from
+
+        # Эталон — e_target. Сцена «Андрей рядом с прохожим»: эмбеддинг прохожего
+        # ортогонален эталону, эмбеддинг Андрея — параллелен.
+        e_target = np.array([1.0, 0.0, 0.0])
+        e_target_2 = np.array([0.9, 0.1, 0.0])
+        e_bystander = np.array([0.0, 1.0, 0.0])
+
+        sim, used = best_similarity_from(
+            [e_bystander, e_target],  # оба лица в варианте, target второй
+            [e_target, e_target_2])
+        self.assertEqual(used, 2)
+        # max cos(emb_variant, centroid) ≈ 1.0 (target), не 0.0 (bystander)
+        self.assertGreater(sim, 0.9)
 
 
 # ---------- worker: моки insightface и cv2, реальный numpy через core ----------
@@ -138,11 +166,38 @@ class _FakeFace:
         self.embedding = embedding
 
 
+def _faces_from_mapping_value(val):
+    """Нормализует значение mapping[path] в список _FakeFace.
+
+    None              → пустой список («лиц нет»).
+    np.ndarray        → один face с дефолтным bbox 100x100 («одно лицо в кадре»).
+    list[np.ndarray]  → несколько лиц, каждое с дефолтным bbox 100x100.
+    list[(bbox, emb)] → несколько лиц с явными bbox; для теста на максимум по лицам
+                        («нужное лицо меньше прохожего»).
+    """
+    if val is None:
+        return []
+    default_bbox = np.array([0, 0, 100, 100])
+    if isinstance(val, np.ndarray):
+        return [_FakeFace(bbox=default_bbox, embedding=val)]
+    if isinstance(val, list):
+        faces = []
+        for item in val:
+            if isinstance(item, tuple):
+                bbox, emb = item
+            else:
+                bbox, emb = default_bbox, item
+            faces.append(_FakeFace(bbox=np.asarray(bbox), embedding=emb))
+        return faces
+    raise TypeError(f"неизвестный тип значения mapping: {type(val).__name__}")
+
+
 class _FakeApp:
     """Подделка FaceAnalysis: возвращает заранее заданные эмбеддинги по имени файла."""
 
     def __init__(self, mapping):
-        # mapping: {"/abs/path.png": np.array([...]), ...} или None для «лиц нет»
+        # mapping: {"/abs/path.png": np.array|None|list} —
+        # None для «лиц нет», np.array — одно лицо, list — несколько (с явными bbox).
         self._mapping = mapping
 
     def prepare(self, ctx_id, det_size):
@@ -152,11 +207,7 @@ class _FakeApp:
         # bgr — массив; используем его форму как ключ нельзя, завяжемся на кадр через стек
         # вместо этого сохраним последний путь в очереди
         path = _FakeApp._current_path
-        emb = self._mapping.get(path)
-        if emb is None:
-            return []
-        # bbox большой, чтобы «самое крупное» было очевидным
-        return [_FakeFace(bbox=np.array([0, 0, 100, 100]), embedding=emb)]
+        return _faces_from_mapping_value(self._mapping.get(path))
 
 
 _FakeApp._current_path = None
@@ -185,7 +236,7 @@ def _install_fakes(mapping):
     fake_app_mod = type(sys)("insightface.app")
 
     class _FaceAnalysis:
-        def __new__(cls, name, root, providers):
+        def __new__(cls, name, root, providers, allowed_modules=None):
             return _FakeApp(mapping)
 
     fake_app_mod.FaceAnalysis = _FaceAnalysis
@@ -214,9 +265,9 @@ def _restore_fakes(cleanup):
 
 
 class TestWorker(unittest.TestCase):
-    def _run_worker(self, variant_emb, refs_emb):
-        """Гоняет worker_similarity.main() с моками. variant_emb — массив или None.
-        refs_emb — список кортежей (имя_файла, emb или None). Возвращает распарсенный
+    def _run_worker(self, variant_faces, refs_faces):
+        """Гоняет worker_similarity.main() с моками. variant_faces — np.array|None|list.
+        refs_faces — список кортежей (имя_файла, np.array|None|list). Возвращает распарсенный
         CCS_RESULT и захваченный stdout (на случай ошибок)."""
         tmp = tempfile.mkdtemp(prefix="ccs-face-test-")
         try:
@@ -226,12 +277,12 @@ class TestWorker(unittest.TestCase):
                 f.write(b"\x89PNG\r\n\x1a\n")
 
             ref_paths = []
-            mapping = {variant_path: variant_emb}
-            for name, emb in refs_emb:
+            mapping = {variant_path: variant_faces}
+            for name, faces in refs_faces:
                 p = os.path.join(tmp, name)
                 with open(p, "wb") as f:
                     f.write(b"\x89PNG\r\n\x1a\n")
-                mapping[p] = emb
+                mapping[p] = faces
                 ref_paths.append(p)
 
             job = {"variant": variant_path, "references": ref_paths,
@@ -289,7 +340,7 @@ class TestWorker(unittest.TestCase):
         similarity ≈ 0.7071."""
         e1 = np.array([1.0, 0.0, 0.0, 0.0])
         e2 = np.array([0.0, 1.0, 0.0, 0.0])
-        result, output, rc = self._run_worker(variant_emb=e1, refs_emb=[
+        result, output, rc = self._run_worker(variant_faces=e1, refs_faces=[
             ("r1.png", e1), ("r2.png", e2),
         ])
         self.assertIsNotNone(result, msg=f"нет CCS_RESULT в выводе:\n{output}")
@@ -300,7 +351,7 @@ class TestWorker(unittest.TestCase):
     def test_worker_no_face_on_variant_returns_none(self):
         """В варианте лиц нет → similarity=null. Граф должен завершиться успешно."""
         e1 = np.array([1.0, 0.0])
-        result, output, rc = self._run_worker(variant_emb=None, refs_emb=[
+        result, output, rc = self._run_worker(variant_faces=None, refs_faces=[
             ("r1.png", e1),
         ])
         self.assertIsNotNone(result)
@@ -309,8 +360,8 @@ class TestWorker(unittest.TestCase):
     def test_worker_no_face_in_refs_returns_none(self):
         """Все эталоны без лиц → similarity=null."""
         result, output, rc = self._run_worker(
-            variant_emb=np.array([1.0, 0.0]),
-            refs_emb=[("r1.png", None), ("r2.png", None)],
+            variant_faces=np.array([1.0, 0.0]),
+            refs_faces=[("r1.png", None), ("r2.png", None)],
         )
         self.assertIsNotNone(result)
         self.assertIsNone(result["similarity"])
@@ -319,9 +370,9 @@ class TestWorker(unittest.TestCase):
         """NaN/Inf в эталоне отбрасывается; если других эталонов нет → null."""
         e1 = np.array([1.0, 0.0])
         result, output, rc = self._run_worker(
-            variant_emb=e1,
-            refs_emb=[("r1.png", np.array([np.nan, 1.0])),
-                      ("r2.png", np.array([np.inf, 0.0]))],
+            variant_faces=e1,
+            refs_faces=[("r1.png", np.array([np.nan, 1.0])),
+                        ("r2.png", np.array([np.inf, 0.0]))],
         )
         self.assertIsNotNone(result)
         self.assertIsNone(result["similarity"])
@@ -331,14 +382,40 @@ class TestWorker(unittest.TestCase):
         e1 = np.array([1.0, 0.0])
         e_good = np.array([0.0, 1.0])
         result, output, rc = self._run_worker(
-            variant_emb=e1,
-            refs_emb=[("r1.png", e_good),
-                      ("r2.png", np.array([np.nan, 1.0]))],
+            variant_faces=e1,
+            refs_faces=[("r1.png", e_good),
+                        ("r2.png", np.array([np.nan, 1.0]))],
         )
         self.assertIsNotNone(result)
         self.assertEqual(result["stats"]["references_total"], 2)
         self.assertEqual(result["stats"]["references_used"], 1)
         self.assertAlmostEqual(result["similarity"], 0.0, places=6)
+
+    def test_worker_max_face_picks_smaller_face_with_higher_similarity(self):
+        """Сцена «Андрей рядом с прохожим»: в варианте ДВА лица — крупный прохожий
+        с ортогональным эмбеддингом и нужный Андрей с эмбеддингом эталона. Старый
+        контракт (biggest face) выбрал бы прохожего и дал 0.0. По новому контракту
+        (max cos по всем лицам) выбирается Андрей → сходство ≈ 1.0.
+
+        Мутация «вернуть biggest» в worker_similarity._all_embeddings — этот тест краснеет.
+        """
+        e_target = np.array([1.0, 0.0, 0.0])
+        e_target_2 = np.array([0.95, 0.1, 0.0])
+        e_bystander = np.array([0.0, 1.0, 0.0])
+        # bbox: прохожий крупный (300x300), Андрей меньше (100x100)
+        variant_faces = [
+            (np.array([0, 0, 300, 300]), e_bystander),
+            (np.array([0, 0, 100, 100]), e_target),
+        ]
+        result, output, rc = self._run_worker(
+            variant_faces=variant_faces,
+            refs_faces=[("r1.png", e_target), ("r2.png", e_target_2)],
+        )
+        self.assertIsNotNone(result, msg=f"нет CCS_RESULT в выводе:\n{output}")
+        self.assertEqual(result["stats"]["references_total"], 2)
+        self.assertEqual(result["stats"]["references_used"], 2)
+        # max cos(emb_variant, centroid) ≈ 1.0 (target), не 0.0 (bystander)
+        self.assertGreater(result["similarity"], 0.9)
 
 
 # ---------- node: моки subprocess.Popen, реальный folder_paths через подмену ----------

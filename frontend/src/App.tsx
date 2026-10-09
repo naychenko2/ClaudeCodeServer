@@ -15,6 +15,7 @@ import { VideoStageFrame } from './features/video/VideoStageFrame'
 import { useVideoStage } from './lib/videoStage'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { NotificationToasts } from './components/NotificationToasts'
+import { DeployHost } from './components/DeployHost'
 import { ProductHistory } from './components/ProductHistory'
 import { GlobalSearch } from './components/GlobalSearch'
 import { AiLauncher } from './components/ai/AiLauncher'
@@ -1293,6 +1294,9 @@ export default function App() {
     <>
       <UpdatePrompt />
       {auth && !authChecking && <NotificationToasts onNavigate={openNotificationUrl} />}
+      {/* Окно выкатки на бой — тоже над страницами: слежение за выкаткой переживает переход
+          между разделами, а после перезагрузки идущая выкатка подхватывается плашкой в углу */}
+      {auth?.role === 'admin' && !authChecking && <DeployHost />}
       {/* Плавающее окно с видео живёт НАД страницами: только так кадр переживает
           переход между проектами и разделами — панель и центр этого не умеют,
           они часть страницы и размонтируются вместе с ней. */}

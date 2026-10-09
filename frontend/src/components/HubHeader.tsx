@@ -20,7 +20,7 @@ import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
 import { DevicesModal } from '../features/desktop/DevicesModal';
 import { useDevicesMenuVisible } from '../features/desktop/deviceOptions';
-import { DeployModal } from './DeployModal';
+import { openDeployModal } from '../lib/deployState';
 import { PowerModal } from './PowerModal';
 import { RemoteCommandsModal } from './RemoteCommandsModal';
 import { api } from '../lib/api';
@@ -73,7 +73,6 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showModelsSpend, setShowModelsSpend] = useState(hasPendingOpen);
   const [showMcpServers, setShowMcpServers] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
-  const [showDeploy, setShowDeploy] = useState(false);
   const [showPower, setShowPower] = useState(false);
   const [showRemoteCommands, setShowRemoteCommands] = useState(false);
   // «Даже компактный ряд табов не влезает в центр таббара» — на планшете
@@ -554,7 +553,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           // Телеметрия — только админам (проброс SigNoz под [Authorize(Roles=admin)])
           // Выкатка на бой: админ И включённая в конфиге сервера фича. Одного isAdmin мало —
           // на машине, где своего раннера нет, пункт был бы кнопкой в никуда
-          onShowDeploy={isAdmin && deployEnabled ? () => setShowDeploy(true) : undefined}
+          onShowDeploy={isAdmin && deployEnabled ? openDeployModal : undefined}
           // Питание машины: тот же двойной замок, что и у выкатки
           onShowPower={isAdmin && powerEnabled ? () => setShowPower(true) : undefined}
           // Пульт управления: тот же двойной замок плюс непустой список действий
@@ -579,7 +578,6 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
       {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
       {showDevices && <DevicesModal onClose={() => setShowDevices(false)} />}
-      {showDeploy && <DeployModal onClose={() => setShowDeploy(false)} />}
       {showPower && <PowerModal onClose={() => setShowPower(false)} />}
       {showRemoteCommands && <RemoteCommandsModal onClose={() => setShowRemoteCommands(false)} />}
     </div>

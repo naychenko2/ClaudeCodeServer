@@ -71,6 +71,7 @@ import { ToolProgressSection } from './ToolProgressSection';
 import { AudioPlayerKitSection } from './AudioPlayerKitSection';
 import { GenSharedKitSection } from './GenSharedKitSection';
 import { ContextRowKitSection } from './ContextRowKitSection';
+import { RingPillKitSection } from './RingPillKitSection';
 import { ContextPanelKitSection } from './ContextPanelKitSection';
 import { ComposerActionRowKitSection } from './ComposerActionRowKitSection';
 
@@ -141,6 +142,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-panels',     label: 'Панели'             },
   { id: 'sec-visual-plan',label: 'Визуальный план'    },
   { id: 'sec-headers',    label: 'Шапки'              },
+  { id: 'sec-ring-pill',  label: 'Пилюля «кольца»'    },
   { id: 'sec-tool-progress', label: 'Прогресс инструмента' },
 ];
 
@@ -324,6 +326,11 @@ export function UiKitPage() {
             {/* Секция «Шапки» — HubHeader, ProjectRail, IslandHeader */}
             <div id="sec-headers" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <HeadersSection />
+            </div>
+
+            {/* Секция «Пилюля «кольца» шапки чата» — все состояния RingPillBadge */}
+            <div id="sec-ring-pill" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <RingPillKitSection />
             </div>
 
             {/* Секция «Карточка инструмента: прогресс» — все состояния живой карточки

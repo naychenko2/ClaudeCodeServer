@@ -27,7 +27,7 @@ public class ComfyWorkflowsTests
         "ModelSamplingAuraFlow", "DualCLIPLoader", "TextEncodeAceStepAudio1.5", "ConditioningZeroOut",
         "EmptyAceStep1.5LatentAudio", "SaveAudioMP3", "CheckpointLoaderSimple", "YuE2GenerateABC", "YuE2GenerateMusic",
         "EmptyYuE2LatentAudio", "PreviewAny", "MiniMaxMusic3TextEncode", "EmptyMiniMaxMusic3LatentAudio",
-        "VAEDecodeAudioTiled", "CcsAudioWorker", "AudioEncoderLoader", "SheetSage2AudioToABC",
+        "VAEDecodeAudioTiled", "CcsAudioWorker", "AudioEncoderLoader", "SheetSage2AudioToABC", "CcsFaceSimilarity",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -121,6 +121,35 @@ public class ComfyWorkflowsTests
         Inputs(wf, "lora")["strength_model"]!.GetValue<double>().Should().Be(0.8);
         Inputs(wf, "sage")["model"]!.ToJsonString().Should().Be("[\"lora\",0]");
         Inputs(wf, "ks")["model"]!.ToJsonString().Should().Be("[\"sage\",0]");
+    }
+
+    [Fact]
+    public void Правка_СЭталоном_УзелСходстваСмотритНаТуЖеКартинку()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", faceReferences: ["r1.png", "r2.png"]);
+
+        Class(wf, "sim").Should().Be("CcsFaceSimilarity");
+        Inputs(wf, "sim")["references"]!.GetValue<string>().Should().Be("r1.png\nr2.png");
+        Inputs(wf, "sim")["image"]!.ToJsonString().Should().Be(Inputs(wf, "save")["images"]!.ToJsonString());
+    }
+
+    [Fact]
+    public void Правка_ПустойСписокЭталона_ГрафБезУзлаСходства()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", faceReferences: []);
+
+        wf.ContainsKey("sim").Should().BeFalse();
+        wf.ToJsonString().Should().Be(OldEditGraph("x", ["a.png"], null, 7, "p").ToJsonString());
+    }
+
+    [Fact]
+    public void Правка_ЛораИЭталон_УзелСходстваТожеЕсть()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p",
+            ("minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors", 0.8), ["r1.png"]);
+
+        Class(wf, "lora").Should().Be("LoraLoaderModelOnly");
+        Class(wf, "sim").Should().Be("CcsFaceSimilarity");
     }
 
     // Сборка EditImage до правки: загрузчики Qwen-модели плюс те же ноды, что в текущей

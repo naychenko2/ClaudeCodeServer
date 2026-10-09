@@ -92,7 +92,8 @@ public static partial class ComfyWorkflows
     // Первая картинка — основная (холст по ней), остальные — дополнительные референсы.
     // Без размера холст берётся из энкодера (resolution 0 — каждый референс в своём размере)
     public static JsonObject EditImage(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
-        long seed, string filenamePrefix, (string Name, double Strength)? lora = null)
+        long seed, string filenamePrefix, (string Name, double Strength)? lora = null,
+        IReadOnlyList<string>? faceReferences = null)
     {
         if (images.Count is < 1 or > MaxEditImages)
             throw new ArgumentOutOfRangeException(nameof(images), "Нужно от 1 до 16 картинок");
@@ -141,6 +142,15 @@ public static partial class ComfyWorkflows
         }
         wf["ks"] = KSampler(latent, seed, DefaultSteps);
         AddDecodeAndSave(wf, filenamePrefix);
+        if (faceReferences is { Count: > 0 })
+        {
+            // Сходство лица с эталоном: оценивается та же картинка, что уходит в SaveImage
+            wf["sim"] = Node("CcsFaceSimilarity", new JsonObject
+            {
+                ["image"] = wf["save"]!["inputs"]!["images"]!.DeepClone(),
+                ["references"] = string.Join("\n", faceReferences),
+            });
+        }
         return wf;
     }
 

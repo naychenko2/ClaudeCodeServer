@@ -20,7 +20,8 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Тесты шага 1 плана «Архив чатов» (v4): производный признак IsArchived, мутатор
 // SetArchived (не двигает UpdatedAt/LastReadAt, копирует/возвращает транскрипт) и защита
-// UpdatedAt у «не-активностей» — пакетная простановка значков, RetitleAsync, UpdateAsync.
+// UpdatedAt у «не-активностей» — пакетная простановка значков, RetitleAsync, UpdateAsync,
+// закрепление и тумблер «Не сохранять решения».
 // Своя минимальная сборка SessionManager (как SessionManagerSubscriptionMigrationTests):
 // тестам RetitleAsync нужен cheap-раннер, который общий SessionManagerTests не передаёт.
 public class ChatArchiveFlagTests : IDisposable
@@ -115,20 +116,56 @@ public class ChatArchiveFlagTests : IDisposable
         sut.SetArchived("no-such-chat", archived: true, by: "user").Should().BeNull();
     }
 
+    // --- SetPinned: закрепление — настройка, а не активность ---
+
     [Fact]
-    public void АктивностьПинПослеАрхивации_ВозвращаетЧатИзАрхива()
+    public void SetPinned_ЗакреплениеИОткрепление_НеДвигаютUpdatedAt()
     {
-        // Пин двигает UpdatedAt — осознанное решение плана («закрепление означает: чат
-        // нужен»), и это живой публичный путь «активность снимает архив сама»
+        // Находка живой проверки мобильного переключателя чатов: пин поднимал UpdatedAt,
+        // чат прыгал по сортировке и метился непрочитанным. Наверх закреплённые поднимает
+        // сам флаг (chatTree.ts/chatGroups.ts)
+        var (sut, projects) = BuildSut();
+        var chat = NewChat(sut, projects);
+        chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        var updatedAt0 = chat.UpdatedAt;
+
+        sut.SetPinned(chat.Id, true).Should().BeTrue();
+        chat.IsPinned.Should().BeTrue();
+        chat.UpdatedAt.Should().Be(updatedAt0, "закрепление — настройка, а не активность");
+
+        sut.SetPinned(chat.Id, false).Should().BeTrue();
+        chat.IsPinned.Should().BeFalse();
+        chat.UpdatedAt.Should().Be(updatedAt0, "открепление — тоже настройка");
+    }
+
+    [Fact]
+    public void SetPinned_АрхивныйЧат_НеВыводитИзАрхива()
+    {
+        // Признак архива производный (UpdatedAt <= ArchivedAt): отметка времени от пина
+        // молча возвращала бы чат из архива
         var (sut, projects) = BuildSut();
         var chat = NewChat(sut, projects);
         sut.SetArchived(chat.Id, archived: true, by: "user");
-        chat.IsArchived.Should().BeTrue();
+        var updatedAt0 = chat.UpdatedAt;
 
         sut.SetPinned(chat.Id, true).Should().BeTrue();
 
         chat.IsPinned.Should().BeTrue();
-        chat.IsArchived.Should().BeFalse("любая активность (UpdatedAt > ArchivedAt) снимает архив сама");
+        chat.UpdatedAt.Should().Be(updatedAt0);
+        chat.IsArchived.Should().BeTrue("закрепление архивного чата не возвращает его из архива");
+    }
+
+    [Fact]
+    public void SetExcludeFromDossiers_НеДвигаетUpdatedAt()
+    {
+        var (sut, projects) = BuildSut();
+        var chat = NewChat(sut, projects);
+        chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        var updatedAt0 = chat.UpdatedAt;
+
+        sut.SetExcludeFromDossiers(chat.Id, true)!.ExcludeFromDossiers.Should().BeTrue();
+
+        chat.UpdatedAt.Should().Be(updatedAt0, "тумблер «Не сохранять решения» — настройка, а не активность");
     }
 
     // --- Сторож: пакетный прогон значков не выводит чат из архива ---

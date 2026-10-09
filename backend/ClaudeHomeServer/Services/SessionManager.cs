@@ -1683,12 +1683,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 
-    // Закрепить/открепить чат
+    // Закрепить/открепить чат.
+    // UpdatedAt намеренно НЕ обновляется (как в SetExpiry): закрепление — настройка, а не
+    // активность. Закреплённые поднимает наверх сам флаг (chatTree.ts/chatGroups.ts), а
+    // отметка времени метила бы чат непрочитанным и выводила бы его из архива (признак
+    // архива производный: UpdatedAt <= ArchivedAt).
     public bool SetPinned(string sessionId, bool pinned)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
         entry.Info.IsPinned = pinned;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return true;
     }
@@ -2036,11 +2039,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // Opt-out «Истории решений» (ADR-004 §6): тумблер «Не сохранять решения из этого чата».
     // Персистится в sessions.json; DossierCaptureService проверяет его при захвате коммита.
+    // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
     public Session? SetExcludeFromDossiers(string sessionId, bool value)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.ExcludeFromDossiers = value;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;
     }

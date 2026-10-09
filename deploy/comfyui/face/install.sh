@@ -15,29 +15,38 @@ FACE_ROOT=${FACE_ROOT:-$HOME/ai-data/face-workers}
 FACE_MODELS=${FACE_MODELS:-$HOME/ai-data/face-models}
 COMFY_ROOT=${COMFY_ROOT:-$HOME/ComfyUI-h3}
 export PATH=$HOME/.local/bin:$PATH
-TI="--index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match"
 mkdir -p "$FACE_ROOT" "$FACE_MODELS"
 
-# Узел и warm_models.py — копией вне git-дерева: симлинк ComfyUI на рабочую копию сломался
-# бы при первом checkout другой ветки или удалении worktree. Повторный install.sh обновляет
-# копию
+# Узел и воркер — копией вне git-дерева: симлинк ComfyUI на рабочую копию сломался бы при
+# первом checkout другой ветки или удалении worktree. Структура повторяет audio: внутри
+# $DEPLOY лежат папка узла (для custom_nodes) и warm_models.py (для скачивания весов)
 DEPLOY="$FACE_ROOT/ccs"
-mkdir -p "$DEPLOY"
-rsync -a --delete --exclude '__pycache__' "$HERE/" "$DEPLOY/"
+mkdir -p "$DEPLOY/ccs_face_similarity"
+rsync -a --delete --exclude '__pycache__' "$HERE/ccs_face_similarity/" "$DEPLOY/ccs_face_similarity/"
+cp -f "$HERE/warm_models.py" "$DEPLOY/warm_models.py"
 
 if [ "${1:-}" != "--link-only" ]; then
   echo "== окружения"
   # CPU-onnxruntime: buffalo_l на RTX 3090 через torch-onnxruntime запрещён — он конфликтует
   # с cu128, который в venv ComfyUI. Пусть ArcFace считается на CPU (≈0,5 с на эталон), чем
-  # мы сломаем ComfyUI
+  # мы сломаем ComfyUI. Здесь НЕТ torch/onnxruntime-gpu — face-workers живёт в своём venv
+  # только с CPU-исполнителем
   P="$FACE_ROOT/.venv"
   [ -d "$P" ] || uv venv -q -p 3.12 "$P"
-  uv pip install -q -p "$P/bin/python" $TI "numpy<2" "opencv-python<4.12" insightface onnxruntime
+  uv pip install -q -p "$P/bin/python" "numpy<2" "opencv-python<4.12" insightface onnxruntime
 
   echo "== веса (только вне шлагбаума: узел работает офлайн)"
   export HF_HUB_DISABLE_XET=1   # xet-клиент не видит HTTPS_PROXY
   "$P/bin/python" "$DEPLOY/warm_models.py" "$FACE_MODELS"
 fi  # --link-only: только копия узла, при выкатке новой версии
+
+echo "== конфиг воркера"
+cat > "$FACE_ROOT/workers.json" <<JSON
+{"families": {
+  "similarity": {"python": "$FACE_ROOT/.venv/bin/python",
+                 "script": "$DEPLOY/ccs_face_similarity/worker_similarity.py"}
+}}
+JSON
 
 echo "== узел ComfyUI"
 ln -sfn "$DEPLOY/ccs_face_similarity" "$COMFY_ROOT/custom_nodes/ccs_face_similarity"

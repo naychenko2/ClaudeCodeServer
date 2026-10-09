@@ -1,0 +1,114 @@
+"""Воркер сходства лиц для узла CcsFaceSimilarity (InsightFace + buffalo_l, CPU-onnxruntime).
+
+Запускается отдельным процессом из узла ComfyUI, чтобы venv ComfyUI не трогать
+(numpy<2 и opencv рядом с torch cu128 ломают весь ComfyUI целиком). Живёт в
+~/ai-data/face-workers/ccs/worker_similarity.py и запускается интерпретатором того
+venv, в котором стоят insightface, onnxruntime, opencv-python.
+
+Протокол: argv[1] — путь к job.json. Формат:
+
+{
+  "variant": "/abs/path/variant.png",   # то, что посчитал узел из IMAGE-тензора
+  "references": ["/abs/ref1.png", ...], # пути в input ComfyUI, проверены узлом
+  "face_models": "~/ai-data/face-models",
+  "det_size": 640,
+}
+
+Результат: одна строка CCS_RESULT {"similarity": <float|null>, "stats": {...}}
+(последняя в stdout). Любая ошибка — CCS_RESULT {"similarity": null, "stats": {...}}
+или короткое сообщение и sys.exit(2); узел трактует оба варианта как none.
+"""
+import json
+import os
+import sys
+import time
+
+
+def _log(msg):
+    print(msg, flush=True)
+
+
+def _biggest_embedding(app, bgr):
+    faces = app.get(bgr)
+    if not faces:
+        return None
+    return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])).embedding
+
+
+def _emb_from_path(app, cv2, path):
+    bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise ValueError(f"cv2 не прочитал файл: {path}")
+    return _biggest_embedding(app, bgr)
+
+
+def main():
+    if len(sys.argv) != 2:
+        _log("ОШИБКА: использование worker_similarity.py job.json")
+        sys.exit(2)
+    with open(sys.argv[1], encoding="utf-8") as f:
+        job = json.load(f)
+
+    variant = job["variant"]
+    refs = job.get("references") or []
+    face_models = job.get("face_models") or os.path.expanduser("~/ai-data/face-models")
+    det_size = int(job.get("det_size") or 640)
+    os.makedirs(face_models, exist_ok=True)
+
+    t0 = time.time()
+    # Локальные импорты: opencv/insightface/onnxruntime не должны попасть в процесс ComfyUI.
+    import cv2
+    import numpy as np
+    from insightface.app import FaceAnalysis
+
+    app = FaceAnalysis(name="buffalo_l", root=face_models, providers=["CPUExecutionProvider"])
+    app.prepare(ctx_id=-1, det_size=(det_size, det_size))
+    load_s = round(time.time() - t0, 2)
+
+    # core.py лежит рядом — воркер и тесты зовут одну и ту же арифметику
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from core import drop_nonfinite, similarity_from  # noqa: E402
+
+    try:
+        emb_variant = _emb_from_path(app, cv2, variant)
+    except Exception as e:
+        # ошибка детектора на варианте — это none, не валим граф
+        _log(f"детектор variant: {type(e).__name__}: {e}")
+        emb_variant = None
+
+    embs_ref = []
+    for p in refs:
+        try:
+            e = _emb_from_path(app, cv2, p)
+        except Exception as ex:
+            _log(f"пропускаю эталон {p}: {type(ex).__name__}: {ex}")
+            continue
+        if e is None:
+            continue
+        arr = np.asarray(e, dtype=np.float32)
+        if not np.isfinite(arr).all():
+            _log(f"эталон {p}: нечисловой эмбеддинг, пропускаю")
+            continue
+        embs_ref.append(arr)
+
+    embs_ref = drop_nonfinite(embs_ref)
+    sim, used = similarity_from(emb_variant, embs_ref)
+    # unused-ветка reserved for будущей логики «центроид пуст, но был хоть один NaN — что делать»
+
+    infer_s = round(time.time() - t0 - load_s, 2)
+    total_s = round(time.time() - t0, 2)
+    stats = {
+        "load_s": load_s,
+        "infer_s": infer_s,
+        "total_s": total_s,
+        "references_total": len(refs),
+        "references_used": used,
+    }
+    result = {"similarity": sim, "stats": stats}
+    # CCS_RESULT — последняя строка, чтобы узлу не гадать по хвосту
+    sys.stdout.write("CCS_RESULT " + json.dumps(result, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

@@ -211,19 +211,64 @@ fal-ai). Это правило живёт в строке встроенного
 ошибка: граф должен завершиться успешно, чтобы автопрогон вариантов не падал на одной
 картинке без лица.
 
-Узел живёт в `deploy/comfyui/face/` (копия в `~/ai-data/face-workers/ccs`, симлинк
-в `ComfyUI-h3/custom_nodes/`, веса buffalo_l в `~/ai-data/face-models/models/buffalo_l/`).
-Считается на **CPU** через onnxruntime: `onnxruntime-gpu` в venv ComfyUI конфликтует с
-torch cu128 и ломает весь ComfyUI целиком. Десятки миллисекунд на эталон — приемлемо.
-Модель держится между вызовами в модульном кеше.
+#### Архитектура: тонкий узел + воркер в своём venv
 
-Зависимости — `insightface` (Apache-2.0), `onnxruntime` (MIT), `opencv-python` (Apache-2.0).
+Узел **не импортирует** `insightface`/`onnxruntime`/`cv2`: на чистой машине с только
+что поставленным ComfyUI узел загружается без `ModuleNotFoundError`. Всю тяжёлую работу
+делает воркер:
+
+```
+узел CcsFaceSimilarity                воркер worker_similarity.py
+(процесс ComfyUI, тонкий):            (отдельный процесс в face-workers/.venv):
+- сохраняет IMAGE-тензор              - грузит InsightFace (CPU, onnxruntime)
+  во временный PNG                      каждый вызов, ≈2-3 с
+- парсит пути references               - считает эмбеддинги варианта и
+- собирает job.json                     эталонов (≈0,5 с на эталон)
+- запускает subprocess                 - центроид + cosine → similarity
+  ~/face-workers/.venv/bin/python      - пишет CCS_RESULT {"similarity": ...}
+   worker_similarity.py job.json       - выход
+- читает CCS_RESULT
+- ui.text = ccs_face_similarity=
+  <число> или none
+```
+
+Ошибка воркера, таймаут (60 с), отсутствие venv или путей → `ccs_face_similarity=none`
+в `ui.text` и предупреждение в логе ComfyUI. Граф НЕ роняется.
+
+Ставить `insightface`/`onnxruntime`/`cv2` в venv ComfyUI нельзя: `numpy<2` и `opencv`
+рядом с torch cu128 ComfyUI ломают весь ComfyUI целиком — это и был исходный дефект
+(LoRA-N/R1, находка 1, CRITICAL). Решение с воркером по образцу `CcsAudioWorker` — в
+LoRA-N/1c.
+
+Загрузка модели **на каждый вызов**: кеш в воркере процесс не переживает (разовый
+subprocess). Альтернатива — long-running воркер с очередью, как у `CcsAudioWorker` для
+тяжёлых моделей (AudioSR). На CPU пара секунд загрузки на фоне ~25 с генерации
+Qwen-Image не окупается.
+
+Контракт воркера: argv[1] — путь к `job.json` (`variant`, `references`, `face_models`,
+`det_size`); последняя строка stdout с маркером `CCS_RESULT` — JSON
+`{"similarity": <float|null>, "stats": {load_s, infer_s, total_s, references_total,
+references_used}}`. На любую ошибку воркер пишет `similarity: null` или короткое
+сообщение и `sys.exit(2)`; узел в обоих случаях трактует это как `none`.
+
+#### Установка
+
+Живёт в `deploy/comfyui/face/`: копия узла и воркера в
+`~/ai-data/face-workers/ccs/ccs_face_similarity/`, симлинк в `ComfyUI-h3/custom_nodes/`,
+веса buffalo_l в `~/ai-data/face-models/models/buffalo_l/`, конфиг воркера в
+`~/ai-data/face-workers/workers.json`. Считается на **CPU** через onnxruntime:
+`onnxruntime-gpu` конфликтует с torch cu128, как и раньше. Десятки миллисекунд на
+эталон + секунды на холодную загрузку — приемлемо.
+
+Зависимости воркера (venv `~/ai-data/face-workers/.venv`) — `insightface` (Apache-2.0),
+`onnxruntime` (MIT), `opencv-python` (Apache-2.0), `numpy<2` (BSD).
+
 **Модель buffalo_l — только некоммерческое использование** (лицензия InsightFace
 разрешает research и некоммерческое применение; коммерция требует отдельного
 согласования с правообладателем). Это ограничивает применение узла в коммерческих
 проектах — для них центроид эталона надо мерить иной моделью.
 
-Установка и грабли — [deploy/comfyui/face/README.md](../../deploy/comfyui/face/README.md).
+Установка, тесты, время и грабли — [deploy/comfyui/face/README.md](../../deploy/comfyui/face/README.md).
 
 ## Аудио
 

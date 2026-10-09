@@ -77,6 +77,12 @@ function WithGit(props: Props & { project: Project }) {
     onCommitAll: props.onCommitAll,
     onPublish: () => setPublish(true),
     onShowChanges: () => {
+      // На мобиле рельсы панелей нет — «Изменения» живут вкладкой проекта, её открывает WorkspacePage
+      if (props.isMobile) {
+        window.dispatchEvent(new CustomEvent('cc-open-changes-tab', { detail: { projectId: project.id } }));
+        window.dispatchEvent(new CustomEvent('cc-git-open-working'));
+        return;
+      }
       // Панель уже открыта — просим её мигнуть: иначе клик выглядит как «ничего не произошло»
       if (reveal('changes')) window.dispatchEvent(new CustomEvent('cc-panel-flash', { detail: { key: 'changes' } }));
       window.dispatchEvent(new CustomEvent('cc-git-open-working'));

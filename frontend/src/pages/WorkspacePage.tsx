@@ -1638,6 +1638,18 @@ const windowWidth = useWindowWidth();
     }
   };
 
+  // «Показать изменения» из меню ветки в строке контекста: на мобиле рельсы панелей нет,
+  // поэтому открываем вкладку «Изменения». Через ref — подписка не пересоздаётся на каждый рендер
+  const tabSwitchRef = useRef(handleTabSwitch);
+  tabSwitchRef.current = handleTabSwitch;
+  useEffect(() => {
+    const open = (e: Event) => {
+      if ((e as CustomEvent<{ projectId?: string }>).detail?.projectId === project.id) tabSwitchRef.current('changes');
+    };
+    window.addEventListener('cc-open-changes-tab', open);
+    return () => window.removeEventListener('cc-open-changes-tab', open);
+  }, [project.id]);
+
   const handleAddToKnowledge = useCallback(async (relativePath: string) => {
     setIndexingFiles(prev => new Set([...prev, relativePath]));
     try {

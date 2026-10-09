@@ -168,6 +168,29 @@ public class ChatArchiveFlagTests : IDisposable
         chat.UpdatedAt.Should().Be(updatedAt0, "тумблер «Не сохранять решения» — настройка, а не активность");
     }
 
+    // --- SetPersona: смена собеседника — активность, в отличие от настроек ---
+
+    [Fact]
+    public void SetPersona_АрхивныйЧат_ДвигаетUpdatedAt_иВыводитИзАрхива()
+    {
+        // Решение 2026-10-09: новый собеседник (PersonaSwitched, разделитель в ленте) —
+        // активность, поэтому сдвиг UpdatedAt в SwitchSpeaker безусловный и архивный чат
+        // при смене персоны возвращается из архива
+        var (sut, projects) = BuildSut();
+        var chat = NewChat(sut, projects);
+        chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        sut.SetArchived(chat.Id, archived: true, by: "user");
+        var updatedAt0 = chat.UpdatedAt;
+        var persona = _personasForBuild!.Create(TestUserId, "Новый собеседник", null, null, null,
+            null, null, PersonaScope.Global, null, null, null, memoryEnabled: false);
+
+        sut.SetPersona(chat.Id, TestUserId, persona.Id).Should().NotBeNull();
+
+        chat.PersonaId.Should().Be(persona.Id);
+        chat.UpdatedAt.Should().BeAfter(updatedAt0, "смена собеседника — активность");
+        chat.IsArchived.Should().BeFalse("смена персоны выводит чат из архива");
+    }
+
     // --- Сторож: пакетный прогон значков не выводит чат из архива ---
 
     [Fact]
@@ -365,6 +388,8 @@ public class ChatArchiveFlagTests : IDisposable
     // История последней сборки BuildSut: тестам RetitleAsync нужна для записи переписки.
     // Каждый тест зовёт BuildSut ровно раз, поэтому «последняя» здесь = «своя».
     private ChatHistoryService? _historyForBuild;
+    // Стор персон последней сборки — тесту смены персоны нужна настоящая персона владельца
+    private PersonaManager? _personasForBuild;
 
     // Событие хода мимо живого процесса CLI: OnMessageAsync — единственный путь к
     // ApplyStatusAsync, а он private (тот же приём, что в SessionManagerTests)
@@ -410,7 +435,7 @@ public class ChatArchiveFlagTests : IDisposable
         var notesSvc = new NotesService(projectManager, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
-        var personas = new PersonaManager(config);
+        var personas = _personasForBuild = new PersonaManager(config);
         var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
             knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,

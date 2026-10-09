@@ -2,7 +2,7 @@ import { CircleGauge } from 'lucide-react';
 import { Island, IslandHeader } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { C, FS, ISLAND, SP } from '../lib/design';
-import { RingPillBadge, type CostStats, type FalCostStats, type ProviderBalance } from '../components/chat/ChatHeaderBar';
+import { RingPillBadge, FalCostBadge, GlifCostBadge, type CostStats, type FalCostStats, type ProviderBalance } from '../components/chat/ChatHeaderBar';
 import type { ContextEstimate } from '../lib/context';
 import type { GlifGenStats } from '../components/chat/glifStats';
 import { toRateWindows, type RateWindow } from '../lib/rateLimit';
@@ -87,6 +87,30 @@ function RingSample({ s }: { s: Sample }) {
   );
 }
 
+const GLIF: GlifGenStats = { count: 4, credits: 0, hasCredits: false, byType: new Map([['image', 4]]) };
+
+// Ряд шапки как на десктопе: кольцевая пилюля рядом с обычными (fal, glif) — высота
+// у всех одна, верх и низ рамок на одной линии
+function HeaderRowSample() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, alignItems: 'flex-start', gridColumn: '1 / -1' }}>
+      <div style={{ fontSize: FS.sm, color: C.textMuted }}>ряд шапки — высота как у соседних</div>
+      <div data-testid="ring-pill-row" style={{ display: 'flex', alignItems: 'center', gap: SP.xs + 2 }}>
+        <RingPillBadge
+          estimate={ctx(62)} isWaiting={false} isCompacting={false}
+          canCompact compactNote={undefined} onCompact={noop} online assistantName="Claude"
+          isCliProvider={false} providerName="Claude"
+          cost={NO_COST} falCost={NO_FAL} glifCost={NO_GLIF}
+          balance={null} billing="subscription" windows={wins({ five_hour: 0.81, seven_day: 0.34 })}
+          resetKey="header-row"
+        />
+        <FalCostBadge stats={FAL} resetKey="header-row" />
+        <GlifCostBadge stats={GLIF} resetKey="header-row" />
+      </div>
+    </div>
+  );
+}
+
 export function RingPillKitSection() {
   return (
     <Island>
@@ -99,6 +123,7 @@ export function RingPillKitSection() {
         padding: ISLAND.pad,
         display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: ISLAND.gap,
       }}>
+        <HeaderRowSample />
         {SAMPLES.map(s => <RingSample key={s.caption} s={s} />)}
       </div>
     </Island>

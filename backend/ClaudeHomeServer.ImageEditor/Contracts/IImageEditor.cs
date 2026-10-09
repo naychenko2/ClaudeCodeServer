@@ -136,7 +136,7 @@ public record OutpaintSpec(int Left, int Top, int Right, int Bottom)
     private static OutpaintSpec Split(int dx, int dy) => new(dx / 2, dy / 2, dx - dx / 2, dy - dy / 2);
 }
 
-public record CharacterRef(string Slug, string Name, string? Description);
+public record CharacterRef(string Slug, string Name, string? Description, [property: System.Text.Json.Serialization.JsonIgnore] CharacterLora? Lora = null);
 
 // MaskPass — предварительная правка по маске одним вариантом (ImageEditCaps.SeparateMaskPass):
 // её результат становится исходником этого запроса. Instruction — просьба человека как есть, без

@@ -16,6 +16,8 @@ public sealed class CharacterManifest
 {
     public const int CurrentFormatVersion = 1;
     public const string HiggsfieldProvider = "higgsfield";
+    public const string LocalProvider = "local";
+    public const double DefaultLoraStrength = 0.8;
 
     public int FormatVersion { get; set; } = CurrentFormatVersion;
     public string Name { get; set; } = "";
@@ -37,6 +39,21 @@ public sealed class CharacterManifest
         ["trainedAt"] = null,
         ["photosHash"] = null,
     };
+
+    // LoRA персонажа из providers.local; null — блока нет или не хватает lora/trigger
+    public CharacterLora? ReadLora()
+    {
+        if (Providers[LocalProvider] is not JsonObject local) return null;
+        var name = StringOf(local["lora"]);
+        var trigger = StringOf(local["trigger"]);
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(trigger)) return null;
+        var strength = DefaultLoraStrength;
+        if (local["strength"] is JsonValue v && v.TryGetValue<double>(out var parsed)) strength = parsed;
+        return new CharacterLora(name, trigger, strength);
+    }
+
+    private static string? StringOf(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
     internal static readonly JsonSerializerOptions Json = new()
     {
@@ -65,6 +82,9 @@ public sealed class CharacterManifest
         }
     }
 }
+
+// LoRA персонажа для локальной генерации; имя сверяет с ComfyUI адаптер, не сервер редактора
+public sealed record CharacterLora(string Name, string Trigger, double Strength);
 
 // File — только имя файла внутри папки персонажа, без каталогов
 public sealed record CharacterPhoto(string File, bool Primary = false, string? Angle = null);

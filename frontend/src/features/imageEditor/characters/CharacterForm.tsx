@@ -27,9 +27,13 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
 }) {
   const [name, setName] = useState(character?.name ?? '');
   const [description, setDescription] = useState(character?.description ?? '');
-  const [photos, setPhotos] = useState<Photo[]>(() => (character?.photos ?? []).map(p => ({
-    kind: 'kept', key: p.file, file: p.file, url: api.characterPhotoUrl(projectId, character!.slug, p.file),
-  })));
+  // основное фото — первым (бейдж «Основное» стоит на photos[0]), остальные в прежнем порядке
+  const [photos, setPhotos] = useState<Photo[]>(() => {
+    const all = character?.photos ?? [];
+    return [...all.filter(p => p.primary), ...all.filter(p => !p.primary)].map(p => ({
+      kind: 'kept' as const, key: p.file, file: p.file, url: api.characterPhotoUrl(projectId, character!.slug, p.file),
+    }));
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);

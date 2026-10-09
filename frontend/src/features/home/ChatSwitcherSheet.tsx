@@ -192,7 +192,7 @@ export function ChatSwitcherTrigger({ currentId, children }: { currentId: string
         onPress={show}
         style={{
           flex: 1, minWidth: CHAT_SWITCHER_MIN_W, minHeight: TB.iconHitMobile, display: 'flex', alignItems: 'center', gap: SP.xs,
-          cursor: 'pointer', borderRadius: R.md,
+          borderRadius: R.md,
         }}
       >
         {/* Имя ужимается по содержимому: шеврон стоит сразу за ним, а не у правого

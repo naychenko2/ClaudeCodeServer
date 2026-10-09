@@ -1,4 +1,4 @@
-import type { ReactNode, CSSProperties, MouseEvent } from 'react';
+import type { ReactNode, CSSProperties, MouseEvent, KeyboardEvent } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { C, R } from '../../lib/design';
 import { PressableArea } from './PressableArea';
@@ -8,7 +8,7 @@ import { PressableArea } from './PressableArea';
 // Рендерится нажимаемой областью (PressableArea), а не <button>: в children бывают
 // собственные кнопки (стек участников группового чата в мобильной шапке).
 export function BackButton({ onClick, title, children, iconColor = C.textSecondary, iconSize = 16, style }: {
-  onClick: (e: MouseEvent) => void;
+  onClick: (e: MouseEvent | KeyboardEvent) => void;
   title?: string;
   children?: ReactNode;
   iconColor?: string;
@@ -17,7 +17,7 @@ export function BackButton({ onClick, title, children, iconColor = C.textSeconda
 }) {
   return (
     <PressableArea
-      onPress={e => onClick(e as MouseEvent)}
+      onPress={onClick}
       title={title ?? 'Назад'}
       style={{
         display: 'flex', alignItems: 'center', gap: 7,

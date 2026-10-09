@@ -13,6 +13,20 @@ export function chatToRestore(snapshotChatId: string | null | undefined, activeC
   return snapshotChatId;
 }
 
+/** Значение cc_pending_project_chat для «назад/вперёд» на снимок проектного чата, когда
+ *  WorkspacePage смонтируется заново: проект другой или он «спал» в другом разделе.
+ *  Свой popstate новый инстанс уже пропустил, а чат снимка ему передаёт только pending.
+ *  null — восстанавливать нечего или этим займётся смонтированный WorkspacePage сам. */
+export function pendingChatOnPop(
+  snapshot: { project?: { id: string } | null; chatId?: string | null },
+  openProjectId: string | null | undefined,
+  hubTab: string,
+): string | null {
+  if (!snapshot.project || !snapshot.chatId) return null;
+  const remount = openProjectId !== snapshot.project.id || hubTab !== 'projects';
+  return remount ? `${snapshot.project.id}|${snapshot.chatId}` : null;
+}
+
 export interface LatestGuard {
   /** Начать новое поколение; прежние после этого — устаревшие */
   next(): number;

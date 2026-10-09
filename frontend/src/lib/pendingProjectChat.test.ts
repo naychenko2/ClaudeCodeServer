@@ -1,5 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { chatToRestore, createLatestGuard } from './pendingProjectChat';
+import { chatToRestore, createLatestGuard, pendingChatOnPop } from './pendingProjectChat';
+
+describe('pendingChatOnPop', () => {
+  const snap = { project: { id: 'A' }, chatId: 'X' };
+
+  it('«назад» в чат другого проекта кладёт pending — его заберёт новый WorkspacePage', () => {
+    expect(pendingChatOnPop(snap, 'B', 'projects')).toBe('A|X');
+  });
+
+  it('«назад» из раздела «Чаты» в чат «спящего» проекта — тоже pending', () => {
+    expect(pendingChatOnPop(snap, 'A', 'chats')).toBe('A|X');
+    expect(pendingChatOnPop(snap, null, 'chats')).toBe('A|X');
+  });
+
+  it('внутри смонтированного проекта pending не нужен — снимок применит сам WorkspacePage', () => {
+    expect(pendingChatOnPop(snap, 'A', 'projects')).toBeNull();
+  });
+
+  it('снимок без чата — восстанавливать нечего', () => {
+    expect(pendingChatOnPop({ project: { id: 'A' } }, 'B', 'projects')).toBeNull();
+    expect(pendingChatOnPop({ project: { id: 'A' }, chatId: null }, 'B', 'chats')).toBeNull();
+  });
+});
 
 describe('chatToRestore', () => {
   it('снимок с уже открытым чатом не восстанавливает — так «назад» снимает запись шторки', () => {

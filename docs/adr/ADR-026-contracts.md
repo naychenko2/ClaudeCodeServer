@@ -403,7 +403,7 @@ public sealed record TrainingPhotoRejection(string FileName, string Reason);   /
 
 ### 7.2 Обучение
 
-**`GET characters/{slug}/lora-train`** → 200, `trainer: null` при отсутствии шва:
+**`GET characters/{slug}/lora-train`** → 200; нет шва — `503 no_seam`, как у остальных ручек обучения (поля `trainer` в ответе нет):
 
 ```json
 {
@@ -506,7 +506,7 @@ type LoraRunStatus = 'training' | 'ready' | 'failed' | 'cancelled'
 type LoraTrainJobStatus = 'queued' | 'running'
 interface LoraTrainCurrent {
   runId: string; jobId: string; status: LoraTrainJobStatus
-  step?: number; totalSteps?: number; etaSeconds?: number; queuePosition?: number; startedAt?: string
+  step?: number; totalSteps?: number; etaSeconds?: number; queuePosition?: number | null; startedAt?: string
 }
 interface LoraTrainStateDto {
   enabled: boolean; available: boolean
@@ -514,6 +514,8 @@ interface LoraTrainStateDto {
   current: LoraTrainCurrent | null
   defaultTrigger: string; presets: { key: 'standard'; etaSeconds: number }[]; photosChanged: boolean
 }
+interface LoraTrainStartResponse { runId: string; jobId: string; queuePosition: number; etaSeconds: number }
+interface LoraActiveDto { busy: boolean; mine: boolean; busyUntil?: string; jobId?: string }
 interface LoraVersionDto {
   runId: string; status: LoraRunStatus; title?: string | null; createdAt?: string; trainedAt?: string
   photosCount: number; photosKept?: number; trigger?: string; connected: boolean

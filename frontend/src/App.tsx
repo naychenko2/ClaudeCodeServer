@@ -847,10 +847,14 @@ export default function App() {
     // switchHubTab/openProjectFromHome зовутся через зеркала-рефы и сюда не попадают
   }, [hubTab, project]);
 
-  const openProject = (p: Project) => {
+  // chatId — сразу запись чата, а не списка проекта: переход в чат чужого проекта кладёт
+  // в историю одну запись, и «назад» из него возвращает в прежний чат
+  const openProject = (p: Project, chatId?: string) => {
     recordRecentProject(p.id)
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
-    navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
+    navPush(chatId
+      ? { screen: 'project', project: p, view: 'chat', file: null, chatId }
+      : { screen: 'project', project: p, view: 'sidebar', file: null })
     setProject(p)
   }
   // Открыть проект с дашборда «Домой»: переключаем раздел на «Проекты» + открываем проект.
@@ -1057,7 +1061,7 @@ export default function App() {
             if (p) {
               localStorage.setItem(HUB_TAB_KEY, 'projects')
               setHubTab('projects')
-              openProject(p)
+              openProject(p, target.chatId)
             }
           })
           .catch(() => {})

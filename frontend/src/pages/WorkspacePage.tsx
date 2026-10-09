@@ -42,7 +42,7 @@ import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { showArchivedToast } from '../lib/archiveToast';
-import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
+import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
@@ -1075,7 +1075,9 @@ const windowWidth = useWindowWidth();
     void buildCodeGraph(project.id);
   }, [project.id]);
 
-  const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
+  // replaceNav — перезаписать текущую запись истории вместо новой: её уже положил переход
+  // в проект с chatId (openProject из диплинка), вторая запись сломала бы «назад»
+  const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean, replaceNav?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
     // Открытый чат — прочитанный. Отмечаем и при autoSelect (восстановление чата
@@ -1106,11 +1108,12 @@ const windowWidth = useWindowWidth();
       // снимке: popstate восстанавливает file и chatId независимо, иначе «назад»
       // вернул бы чат без файла, который с экрана не уходил.
       const file = keepSplitFile ? openFile : null;
+      const nav = replaceNav ? navReplace : navPush;
       if (isMobile) {
         setMobileView('chat');
-        navPush({ screen: 'project', project, view: 'chat', file, chatId: session.id });
+        nav({ screen: 'project', project, view: 'chat', file, chatId: session.id });
       } else {
-        navPush({ screen: 'project', project, view: 'sidebar', file, chatId: session.id });
+        nav({ screen: 'project', project, view: 'sidebar', file, chatId: session.id });
       }
     }
   };
@@ -1194,7 +1197,9 @@ const windowWidth = useWindowWidth();
         const s = sessions.find(x => x.id === chatId);
         if (s) {
           setLeftTab('sessions');
-          handleSelectSession(s);
+          // Переход из чужого проекта уже положил запись с этим chatId (openProject) —
+          // перезаписываем её. Диплинк внутри того же проекта пишет новую, «назад» вернёт в прежний чат
+          handleSelectSession(s, undefined, false, getNav()?.chatId === s.id);
         }
       } catch { /* офлайн — остаёмся как есть */ }
     };

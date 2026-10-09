@@ -7,9 +7,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-const src = readFileSync(join(process.cwd(), 'src', 'pages', 'WorkspacePage.tsx'), 'utf8');
+// Путь от самого теста, а не от cwd: прогон из корня репозитория иначе не найдёт файл
+const src = readFileSync(new URL('./WorkspacePage.tsx', import.meta.url), 'utf8');
 
 // Тело стрелочной функции leaveActiveChat — до закрывающей скобки на её отступе
 function leaveActiveChatBody(): string {

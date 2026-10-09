@@ -14,6 +14,8 @@ interface Props {
   index: number;
   online: boolean;
   hasActiveSession?: boolean;
+  // Последняя активность (свежее из проекта и его чатов); нет — берём updatedAt проекта
+  activityAt?: string;
   onOpen: (p: Project) => void;
   onMove: (p: Project) => void;
   onEdit: (p: Project, e: MouseEvent) => void;
@@ -22,11 +24,11 @@ interface Props {
 }
 
 // Десктопная строка проекта: плитка + имя/путь, справа — статус, действия, шеврон.
-export function ProjectRow({ project: p, online, hasActiveSession, onOpen, onMove, onEdit, onDelete, onRemoveFromSphere }: Props) {
+export function ProjectRow({ project: p, online, hasActiveSession, activityAt, onOpen, onMove, onEdit, onDelete, onRemoveFromSphere }: Props) {
   const [hover, setHover] = useState(false);
   const pinned = usePinnedIds().includes(p.id);
 
-  const rel = relativeTime(p.updatedAt);
+  const rel = relativeTime(activityAt ?? p.updatedAt);
   const last = hasActiveSession && rel === 'только что' ? 'активна · только что' : rel;
   const path = p.relativePath || p.rootPath;
 

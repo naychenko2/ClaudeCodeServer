@@ -2973,7 +2973,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // даёт padding холста (ISLAND.pad), и губа композера встаёт на одну линию
         // с нижней кромкой соседних островов. Внутри острова (split чат|файл)
         // отступ нужен — у Island своего padding нет, композер лёг бы на рамку.
-        padding: isMobile ? `0 ${CHAT_GUTTER_MOBILE}px 12px` : `0 ${CHAT_GUTTER_L}px ${headerIsland ? 0 : 18}px`,
+        // На мобиле снизу хватает SP.sm: воздух под рядом ⚡ + ⋯ добирают
+        // зоны нажатия его кнопок, 12px поверх них давали лишнюю полосу
+        padding: isMobile ? `0 ${CHAT_GUTTER_MOBILE}px ${SP.sm}px` : `0 ${CHAT_GUTTER_L}px ${headerIsland ? 0 : 18}px`,
         pointerEvents: 'none',
       }}>
         {/* Именно этот узел — препятствие для круглешка AI: у него РЕАЛЬНАЯ геометрия

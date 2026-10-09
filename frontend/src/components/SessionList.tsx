@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { idbGet } from '../lib/idb';
 import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
+import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { useHoverWarm } from '../hooks/useSession';
@@ -280,7 +281,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const unsub = onMessage(msg => {
       if (!mounted) return;
       // Сессия удалена на сервере (в т.ч. авто-удаление временной) — убираем из списка;
-      // если была открыта — переключаемся на первую оставшуюся
+      // если была открыта — переключаемся на первую оставшуюся ВИДИМУЮ: те же фильтры,
+      // что у соседа при архивации — архивный или скрытый фильтром чат открылся бы призраком
       if (msg.type === 'chat_deleted') {
         forgetChatContextOnDeleted(msg);
         // Обновитель под StrictMode вызывается дважды с тем же prev — реакцию на
@@ -291,8 +293,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           if (!reacted && activeRef.current?.id === msg.sessionId) {
             reacted = true;
             const handler = onActiveDeletedRef.current;
-            if (handler) queueMicrotask(() => handler(updated[0] ?? null));
-            else if (updated.length > 0) queueMicrotask(() => onSelectRef.current(updated[0], undefined, true));
+            // Удалённого в updated уже нет — chatNeighborForArchive отдаёт первый живой видимый
+            const neighbor = chatNeighborForArchive(updated, msg.sessionId, matchChatFilter(loadChatFilters(project.id)));
+            if (handler) queueMicrotask(() => handler(neighbor));
+            else if (neighbor) queueMicrotask(() => onSelectRef.current(neighbor, undefined, true));
             // Удалён последний активный чат — сбрасываем в пустое состояние
             else queueMicrotask(() => onClearedRef.current?.());
           }

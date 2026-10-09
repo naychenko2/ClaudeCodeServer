@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -31,7 +32,8 @@ public class ImageEditorController(
     IConfiguration? config = null,
     IImageRaster? raster = null,
     ImageThreadService? threads = null,
-    ImageContextLaunch? context = null)
+    ImageContextLaunch? context = null,
+    ILocalImageMedia? localMedia = null)
     : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
     [HttpGet("catalog")]
@@ -198,6 +200,16 @@ public class ImageEditorController(
         return Ok(CharacterStore.List(project.RootPath).Select(CharacterDto.From));
     }
 
+    // Список LoRA ComfyUI для формы персонажа. Нет шва или ComfyUI не ответил — не ошибка:
+    // available: false, форма прячет выбор и оставляет текущую LoRA как есть
+    [HttpGet("loras")]
+    public async Task<IActionResult> Loras(string projectId, CancellationToken ct)
+    {
+        if (!ProjectGate(projectId, out _, out var denied)) return denied;
+        var items = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
+        return Ok(new { available = items is not null, items = items ?? [] });
+    }
+
     [HttpGet("characters/{slug}")]
     public IActionResult Character(string projectId, string slug)
     {
@@ -212,11 +224,24 @@ public class ImageEditorController(
     public async Task<IActionResult> CreateCharacter(string projectId, [FromForm] CharacterForm form, CancellationToken ct)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
+        var (lora, loraDenied) = await LoraPatchAsync(form, ct);
+        // «Убрать» при создании нечего: LoRA ещё нет
+        if (lora is { Remove: true }) lora = null;
+        if (loraDenied is not null) return loraDenied;
+        // Имя проверяем до создания: отказ не должен оставить персонажа без LoRA на диске
+        if (lora is not null && CharacterStore.CheckLora(lora) is { } loraError) return MapCharacter(loraError, _ => Ok());
         var photos = await PhotosAsync(form.Photos, form.Angles, ct);
         var draft = new CharacterDraft(form.Name ?? "", form.Description, photos);
         var created = CharacterStore.Create(project.RootPath, draft, DateTime.UtcNow);
         if (created.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Create);
-        return Map(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest)));
+        if (created.Value is { } made && lora is not null)
+        {
+            var withLora = CharacterStore.Update(project.RootPath, made.Manifest.Slug,
+                new CharacterPatch(null, null, [], [], null, lora));
+            if (withLora?.Value is { } loraChange) Notify(project.RootPath, loraChange, FileMutationKind.Write);
+            created = withLora ?? created;
+        }
+        return MapCharacter(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest)));
     }
 
     [HttpPut("characters/{slug}")]
@@ -225,12 +250,14 @@ public class ImageEditorController(
     public async Task<IActionResult> UpdateCharacter(string projectId, string slug, [FromForm] CharacterForm form, CancellationToken ct)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
+        var (lora, loraDenied) = await LoraPatchAsync(form, ct);
+        if (loraDenied is not null) return loraDenied;
         var photos = await PhotosAsync(form.Photos, form.Angles, ct);
-        var patch = new CharacterPatch(form.Name, form.Description, photos, form.RemovePhotos ?? [], form.PrimaryPhoto);
+        var patch = new CharacterPatch(form.Name, form.Description, photos, form.RemovePhotos ?? [], form.PrimaryPhoto, lora);
         var updated = CharacterStore.Update(project.RootPath, slug, patch);
         if (updated is null) return CharacterNotFound();
         if (updated.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Write);
-        return Map(updated, c => Ok(CharacterDto.From(c.Manifest)));
+        return MapCharacter(updated, c => Ok(CharacterDto.From(c.Manifest)));
     }
 
     [HttpDelete("characters/{slug}")]
@@ -260,7 +287,36 @@ public class ImageEditorController(
         public List<string>? Angles { get; set; }
         public List<string>? RemovePhotos { get; set; }
         public string? PrimaryPhoto { get; set; }
+        public string? LoraName { get; set; }
+        public string? LoraTrigger { get; set; }
+        public string? LoraStrength { get; set; }
+        public bool? RemoveLora { get; set; }
     }
+
+    // Патч LoRA из формы: RemoveLora — убрать, LoraName — задать, иначе null (не трогать).
+    // Список ComfyUI запрашиваем только когда LoRA задают
+    private async Task<(CharacterLoraPatch? Patch, IActionResult? Denied)> LoraPatchAsync(
+        CharacterForm form, CancellationToken ct)
+    {
+        if (form.RemoveLora == true) return (CharacterLoraPatch.Removal(), null);
+        if (string.IsNullOrWhiteSpace(form.LoraName)) return (null, null);
+        double? strength = null;
+        if (!string.IsNullOrWhiteSpace(form.LoraStrength))
+        {
+            if (!double.TryParse(form.LoraStrength.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                return (null, Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Сила должна быть числом от 0 до 2."));
+            strength = parsed;
+        }
+        var known = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
+        return (CharacterLoraPatch.Set(form.LoraName, form.LoraTrigger, strength, known), null);
+    }
+
+    // Недоступный ComfyUI при проверке LoRA — 503, а не 409 из общего Map
+    private IActionResult MapCharacter<T>(ImageEditCallResult<T> result, Func<T, IActionResult> ok) =>
+        result.ErrorCode == ImageEditErrorCodes.ProviderUnavailable
+            ? Error(StatusCodes.Status503ServiceUnavailable, result.ErrorCode, result.Error ?? "Запрос не выполнен")
+            : Map(result, ok);
 
     // Проектный гейт области: флаг и чужой проект одинаково 404 (ImageEditScopeGate)
     private bool Gate(string projectId, [NotNullWhen(true)] out ImageEditScope? scope,

@@ -48,13 +48,27 @@ public class CharacterEndpointsTests : IDisposable
         public EditedImage? OpenVariant(string ownerId, string projectId, string jobId, int variant) => null;
     }
 
-    private TestWebApplicationFactory Factory(CapturingJobs? jobs = null)
+    // Только список LoRA: остальное шва ручкам персонажей не нужно
+    private sealed class LoraMedia(IReadOnlyList<string>? loras) : ILocalImageMedia
+    {
+        public bool Available => true;
+        public bool Configured => true;
+        public Task<int?> QueueLengthAsync(CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyList<string>?> ListLorasAsync(CancellationToken ct) => Task.FromResult(loras);
+        public int? EtaSeconds(LocalImageOp op, int count, int images) => throw new NotSupportedException();
+        public Task<LocalImageSubmitted> SubmitAsync(LocalImageRequest request, CancellationToken ct) => throw new NotSupportedException();
+        public Task<LocalImagePoll> PollAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
+        public Task<bool> CancelAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
+    }
+
+    private TestWebApplicationFactory Factory(CapturingJobs? jobs = null, ILocalImageMedia? media = null)
     {
         var factory = new TestWebApplicationFactory();
         factory.ExtraServices = services =>
         {
             services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
             if (jobs is not null) services.AddSingleton<IImageEditJobs>(jobs);
+            if (media is not null) services.AddSingleton(media);
         };
         _factories.Add(factory);
         return factory;
@@ -85,6 +99,79 @@ public class CharacterEndpointsTests : IDisposable
 
     private static async Task<JsonElement> Json(HttpResponseMessage resp) =>
         JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+
+    [Fact]
+    public async Task Ручка_loras_отдаёт_список_или_available_false()
+    {
+        var withList = Factory(media: new LoraMedia(["a.safetensors", "b.safetensors"]));
+        var (id, _) = CreateProject(withList, TestWebApplicationFactory.TestUsername);
+        var body = await Json(await withList.CreateAuthenticatedClient().GetAsync($"/api/projects/{id}/image-editor/loras"));
+        body.GetProperty("available").GetBoolean().Should().BeTrue();
+        body.GetProperty("items").EnumerateArray().Select(e => e.GetString()).Should().Equal("a.safetensors", "b.safetensors");
+
+        foreach (var factory in new[] { Factory(media: new LoraMedia(null)), Factory() })
+        {
+            var (pid, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+            var resp = await factory.CreateAuthenticatedClient().GetAsync($"/api/projects/{pid}/image-editor/loras");
+            resp.StatusCode.Should().Be(HttpStatusCode.OK);
+            var down = await Json(resp);
+            down.GetProperty("available").GetBoolean().Should().BeFalse();
+            down.GetProperty("items").GetArrayLength().Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task Создание_с_LoRA_пишет_манифест_а_неизвестное_имя_не_создаёт_персонажа()
+    {
+        var factory = Factory(media: new LoraMedia(["anya.safetensors"]));
+        var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+        var api = $"/api/projects/{id}/image-editor";
+
+        var bad = CharacterForm("Аня");
+        bad.Add(new StringContent("evil.safetensors"), "loraName");
+        bad.Add(new StringContent("anya_lora"), "loraTrigger");
+        (await client.PostAsync($"{api}/characters", bad)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        Directory.Exists(Path.Combine(root, "characters")).Should().BeFalse("отказ по LoRA не оставляет персонажа");
+
+        var ok = CharacterForm("Аня");
+        ok.Add(new StringContent("anya.safetensors"), "loraName");
+        ok.Add(new StringContent("anya_lora"), "loraTrigger");
+        ok.Add(new StringContent("0.9"), "loraStrength");
+        var created = await client.PostAsync($"{api}/characters", ok);
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var local = (await Json(created)).GetProperty("local");
+        local.GetProperty("lora").GetString().Should().Be("anya.safetensors");
+        local.GetProperty("strength").GetDouble().Should().Be(0.9);
+
+        var notNumber = new MultipartFormDataContent
+        {
+            { new StringContent("x"), "loraName" }, { new StringContent("t"), "loraTrigger" },
+            { new StringContent("много"), "loraStrength" },
+        };
+        (await client.PutAsync($"{api}/characters/anya", notNumber)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        var remove = new MultipartFormDataContent { { new StringContent("true"), "removeLora" } };
+        var removed = await client.PutAsync($"{api}/characters/anya", remove);
+        removed.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(removed)).TryGetProperty("local", out var gone).Should().BeTrue();
+        gone.ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task Недоступный_ComfyUI_при_задании_LoRA_отвечает_503()
+    {
+        var factory = Factory(media: new LoraMedia(null));
+        var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var form = CharacterForm("Аня");
+        form.Add(new StringContent("a.safetensors"), "loraName");
+        form.Add(new StringContent("anya_lora"), "loraTrigger");
+
+        var resp = await factory.CreateAuthenticatedClient().PostAsync($"/api/projects/{id}/image-editor/characters", form);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        Directory.Exists(Path.Combine(root, "characters")).Should().BeFalse();
+    }
 
     [Fact]
     public async Task Создание_список_и_фото_у_владельца()

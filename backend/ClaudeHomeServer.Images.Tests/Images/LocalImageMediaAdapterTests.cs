@@ -164,6 +164,75 @@ public class LocalImageMediaAdapterTests
     }
 
     [Fact]
+    public async Task Правка_с_фото_эталона_кладёт_узел_sim_и_грузит_фото_с_префиксом_ref()
+    {
+        var adapter = Build();
+        var ref1 = LocalMediaTestImages.Png(8, 8);
+        var ref2 = LocalMediaTestImages.Png(9, 9);
+
+        var submitted = await adapter.SubmitAsync(Edit() with { FaceReferences = [ref1, ref2] }, default);
+
+        submitted.Error.Should().BeNull();
+        _comfy.Uploads.Where(u => u.Contains("-ref")).Should().HaveCount(2)
+            .And.OnlyContain(u => u.StartsWith("ie_"));
+        _comfy.Uploads.Should().Contain(u => u.EndsWith("-ref1.png")).And.Contain(u => u.EndsWith("-ref2.png"));
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph["sim"]!["class_type"]!.GetValue<string>().Should().Be("CcsFaceSimilarity");
+        graph["sim"]!["inputs"]!["references"]!.GetValue<string>().Split('\n').Should().HaveCount(2);
+        graph["enc"]!["inputs"]!.AsObject().ContainsKey("images.image_2").Should().BeFalse("фото эталона не идут в энкодер");
+    }
+
+    [Fact]
+    public async Task Правка_без_фото_эталона_без_узла_sim_и_без_лишних_загрузок()
+    {
+        var adapter = Build();
+
+        (await adapter.SubmitAsync(Edit(), default)).Error.Should().BeNull();
+
+        _comfy.Uploads.Should().ContainSingle().Which.Should().EndWith("-in1.png");
+        _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject().ContainsKey("sim").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Фото_эталона_не_картинка_отказ_до_постановки()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with { FaceReferences = [[1, 2, 3]] }, default);
+
+        submitted.Error.Should().Contain("Фото эталона 1");
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("ccs_face_similarity=0.771", 0.771)]
+    [InlineData("ccs_face_similarity=none", null)]
+    [InlineData("ccs_face_similarity=abc", null)]
+    [InlineData("другая строка", null)]
+    public async Task Сходство_разбирается_из_текстового_выхода_графа(string text, double? expected)
+    {
+        var adapter = Build();
+        var submitted = await adapter.SubmitAsync(Edit() with { FaceReferences = [LocalMediaTestImages.Png(8, 8)] }, default);
+        _comfy.Complete(submitted.Ticket!, ("ie_out_00001_.png", LocalMediaTestImages.Png(16, 16)));
+        _comfy.History[submitted.Ticket!]["outputs"]!.AsObject()["sim"] =
+            new System.Text.Json.Nodes.JsonObject { ["text"] = new System.Text.Json.Nodes.JsonArray(text) };
+
+        var done = await adapter.PollAsync(submitted.Ticket!, default);
+
+        done.Files.Should().ContainSingle().Which.Similarity.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task Без_текстового_выхода_сходство_null()
+    {
+        var adapter = Build();
+        var submitted = await adapter.SubmitAsync(Edit(), default);
+        _comfy.Complete(submitted.Ticket!, ("ie_out_00001_.png", LocalMediaTestImages.Png(16, 16)));
+
+        (await adapter.PollAsync(submitted.Ticket!, default)).Files.Should().ContainSingle().Which.Similarity.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Стирание_по_маске_без_растра_отказ_до_ComfyUI()
     {
         var adapter = Build();

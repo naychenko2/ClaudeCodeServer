@@ -46,6 +46,8 @@ public enum LocalImageOp { Generate, Edit, FaceDetail }
 // Pad — только у Edit: холст расширяется полями нейтрального серого до модели («Дорисовать за
 // края»), результат — в пропорции расширенного холста
 // Lora — только у Edit и у Generate с образцами
+// FaceReferences — фото эталона персонажа только для узла сходства лица (граф правки); в
+// энкодер модели они не идут. У FaceDetail и у генерации без образцов узла сходства нет
 public sealed record LocalImageRequest(
     LocalImageOp Op,
     string Prompt,
@@ -57,7 +59,8 @@ public sealed record LocalImageRequest(
     LocalImagePad? Pad = null,
     int? Width = null,
     int? Height = null,
-    LocalImageLora? Lora = null);
+    LocalImageLora? Lora = null,
+    IReadOnlyList<byte[]>? FaceReferences = null);
 
 // LoRA персонажа: имя файла в ComfyUI и сила применения
 public sealed record LocalImageLora(string Name, double Strength);
@@ -81,4 +84,5 @@ public sealed record LocalImagePoll(
     string? Error,
     string? Warning = null);
 
-public sealed record LocalImageFile(byte[] Bytes, string ContentType);
+// Similarity — сходство лица с эталоном (0..1); null — не считалось или лицо не найдено
+public sealed record LocalImageFile(byte[] Bytes, string ContentType, double? Similarity = null);

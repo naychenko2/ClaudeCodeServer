@@ -242,13 +242,26 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 names.Add(await comfy.UploadImageAsync(images[k], $"{OutputStem}{id}-in{k + 1}{ext}", ct));
             }
 
+            // Фото эталона — только узлу сходства; тот же префикс, что у входов, чтобы забрала чистка
+            var faceRefs = new List<string>();
+            if (request.Op is LocalImageOp.Edit or LocalImageOp.Generate && names.Count > 0)
+                for (var k = 0; k < request.FaceReferences?.Count; k++)
+                {
+                    var photo = request.FaceReferences[k];
+                    var ext = ImageFormatSniffer.DetectExtension(photo);
+                    if (ext is null) return LocalImageSubmitted.Fail($"Фото эталона {k + 1} — не PNG, JPEG или WebP.");
+                    if (photo.Length > LocalMediaService.MaxInputBytes)
+                        return LocalImageSubmitted.Fail($"Фото эталона {k + 1} больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
+                    faceRefs.Add(await comfy.UploadImageAsync(photo, $"{OutputStem}{id}-ref{k + 1}{ext}", ct));
+                }
+
             var lora = request.Lora is { } l ? (l.Name, l.Strength) : ((string, double)?)null;
             var graph = request.Op switch
             {
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
-                LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora),
-                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora),
+                LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs),
+                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs),
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);
@@ -325,12 +338,13 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             if (history.Failed) return Failed(history.Error ?? "ComfyUI завершил задачу ошибкой.");
             if (!history.Completed) return new LocalImagePoll(LocalImageState.Running, 0, [], null);
 
+            var similarity = ParseSimilarity(history.Texts);
             var files = new List<LocalImageFile>();
             foreach (var file in history.Files)
             {
                 var type = LocalMediaService.ContentTypeOf(Path.GetExtension(file.FileName));
                 if (type is null || !type.StartsWith("image/", StringComparison.Ordinal)) continue;
-                files.Add(new LocalImageFile(await comfy.DownloadAsync(file, ct), type));
+                files.Add(new LocalImageFile(await comfy.DownloadAsync(file, ct), type, similarity));
             }
             return files.Count == 0
                 ? Failed("ComfyUI не вернул картинок.")
@@ -347,6 +361,24 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
 
         static LocalImagePoll Failed(string error) => new(LocalImageState.Failed, null, [], error);
+    }
+
+    private const string SimilarityKey = "ccs_face_similarity=";
+
+    // Граф даёт одну картинку на прогон, поэтому значение относится к ней; none, мусор и
+    // отсутствие строки — не ошибка, а «сходство не посчитано»
+    internal static double? ParseSimilarity(IReadOnlyList<string> texts)
+    {
+        foreach (var text in texts)
+        {
+            var line = text.Trim();
+            if (!line.StartsWith(SimilarityKey, StringComparison.Ordinal)) continue;
+            return double.TryParse(line[SimilarityKey.Length..].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+                && double.IsFinite(value)
+                ? value
+                : null;
+        }
+        return null;
     }
 
     public async Task<bool> CancelAsync(string ticket, CancellationToken ct)

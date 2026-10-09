@@ -403,6 +403,89 @@ function characterForm(input: ImageEditCharacterInput): FormData {
 
 const charBase = (projectId: string) => `${projectBase(projectId)}/characters`;
 
+// ── Обучение LoRA персонажа (ADR-026 §7–8) ────────────────────────────────────
+export type LoraRunStatus = 'training' | 'ready' | 'failed' | 'cancelled';
+export type LoraTrainJobStatus = 'queued' | 'running';
+export type TrainingPhotoRejectReason = 'format' | 'too_big' | 'too_small' | 'duplicate' | 'limit';
+
+export interface TrainingPhoto { name: string; bytes: number; width: number; height: number }
+export interface TrainingPhotosDto { items: TrainingPhoto[]; count: number; min: number; max: number; photosHash: string }
+export interface TrainingPhotosAddResultDto {
+  photos: TrainingPhotosDto;
+  rejected: { fileName: string; reason: TrainingPhotoRejectReason }[];
+}
+
+export interface LoraTrainCurrent {
+  runId: string; jobId: string; status: LoraTrainJobStatus
+  step?: number; totalSteps?: number; etaSeconds?: number; queuePosition?: number | null; startedAt?: string
+}
+export interface LoraTrainStateDto {
+  enabled: boolean; available: boolean
+  gpu: { busy: boolean; mine: boolean; busyUntil?: string }
+  current: LoraTrainCurrent | null
+  defaultTrigger: string; presets: { key: 'standard'; etaSeconds: number }[]; photosChanged: boolean
+}
+export interface LoraTrainStartRequest { preset: 'standard'; trigger?: string; confirm: true }
+export interface LoraTrainStartResponse { runId: string; jobId: string; queuePosition: number; etaSeconds: number }
+
+export type LoraRejectReason = 'no_face' | 'many_faces' | 'small_face' | 'unreadable';
+export interface LoraVersionDto {
+  runId: string; status: LoraRunStatus; title?: string | null; createdAt?: string; trainedAt?: string
+  photosCount: number; photosKept?: number; trigger?: string; connected: boolean
+  rejected?: { name: string; reason: LoraRejectReason }[]
+  error?: { code: string; message: string }
+}
+export interface LoraVersionsDto { items: LoraVersionDto[]; own: { lora: string } | null; limit: number; used: number }
+
+export interface LoraTrainApi {
+  photos(projectId: string, slug: string): Promise<TrainingPhotosDto>;
+  addPhotos(projectId: string, slug: string, files: Blob[]): Promise<TrainingPhotosAddResultDto>;
+  deletePhoto(projectId: string, slug: string, name: string): Promise<void>;
+  photoUrl(projectId: string, slug: string, name: string): string;
+  trainState(projectId: string, slug: string): Promise<LoraTrainStateDto>;
+  startTrain(projectId: string, slug: string, req: LoraTrainStartRequest): Promise<LoraTrainStartResponse>;
+  cancelTrain(projectId: string, slug: string): Promise<void>;
+  versions(projectId: string, slug: string): Promise<LoraVersionsDto>;
+  connectVersion(projectId: string, slug: string, runId: string): Promise<ImageEditCharacter>;
+  renameVersion(projectId: string, slug: string, runId: string, title: string): Promise<LoraVersionDto>;
+  deleteVersion(projectId: string, slug: string, runId: string): Promise<{ status: 'deleting'; disconnected: boolean }>;
+}
+
+const charUrl = (projectId: string, slug: string) => `${charBase(projectId)}/${encodeURIComponent(slug)}`;
+
+export const loraTrainApi: LoraTrainApi = {
+  photos: (projectId, slug) =>
+    request<TrainingPhotosDto>(`${charUrl(projectId, slug)}/training-photos`, { live: true }),
+  addPhotos: (projectId, slug, files) => {
+    const form = new FormData();
+    files.forEach((b, i) => form.append('files', b, b instanceof File ? b.name : `photo-${i + 1}.jpg`));
+    return request<TrainingPhotosAddResultDto>(`${charUrl(projectId, slug)}/training-photos`,
+      { method: 'POST', body: form, timeoutMs: 120_000 });
+  },
+  deletePhoto: (projectId, slug, name) =>
+    request<void>(`${charUrl(projectId, slug)}/training-photos/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  photoUrl: (projectId, slug, name) =>
+    withToken(`/api${charUrl(projectId, slug)}/training-photos/${encodeURIComponent(name)}`),
+  trainState: (projectId, slug) =>
+    request<LoraTrainStateDto>(`${charUrl(projectId, slug)}/lora-train`, { live: true }),
+  startTrain: (projectId, slug, req) =>
+    request<LoraTrainStartResponse>(`${charUrl(projectId, slug)}/lora-train`,
+      { method: 'POST', body: JSON.stringify(req) }),
+  cancelTrain: (projectId, slug) =>
+    request<void>(`${charUrl(projectId, slug)}/lora-train`, { method: 'DELETE' }),
+  versions: (projectId, slug) =>
+    request<LoraVersionsDto>(`${charUrl(projectId, slug)}/lora-versions`, { live: true }),
+  connectVersion: (projectId, slug, runId) =>
+    request<ImageEditCharacter>(`${charUrl(projectId, slug)}/lora-versions/${encodeURIComponent(runId)}/connect`,
+      { method: 'POST' }),
+  renameVersion: (projectId, slug, runId, title) =>
+    request<LoraVersionDto>(`${charUrl(projectId, slug)}/lora-versions/${encodeURIComponent(runId)}`,
+      { method: 'PATCH', body: JSON.stringify({ title }) }),
+  deleteVersion: (projectId, slug, runId) =>
+    request<{ status: 'deleting'; disconnected: boolean }>(
+      `${charUrl(projectId, slug)}/lora-versions/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
+};
+
 const IMAGE_EDIT_EVENTS = new Set(['image_edit_progress', 'image_edit_completed', 'image_edit_failed']);
 
 const liveApi: ImageEditorApi = {

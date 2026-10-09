@@ -217,6 +217,27 @@
   .done .meta { font-size: var(--fs-xs); color: var(--c-text-secondary); }
   .actions { display: flex; gap: var(--sp-sm); flex-wrap: wrap; align-items: center; }
   .app.mobile .actions .btn { flex: 1 1 auto; }
+  /* Новая версия готова, но не подключена: акцентная карточка, не «успех» */
+  .done.fresh { background: var(--c-accent-light); }
+  .done.fresh .dt { color: var(--c-text-heading); }
+  .done.fresh .dt svg { color: var(--c-accent); }
+
+  /* Список версий персонажа */
+  .vlist { display: flex; flex-direction: column; gap: var(--sp-sm); min-width: 0; }
+  .vrow { display: flex; flex-direction: column; gap: var(--sp-sm); padding: var(--sp-sm) var(--sp-md); border-radius: var(--r-lg);
+    border: 1px solid var(--c-border-light); background: var(--c-bg-card); min-width: 0; }
+  .vrow.on { border-color: var(--c-success); }
+  .vrow .vh { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-xs) var(--sp-sm); min-width: 0; }
+  .vrow .vn { flex: 1 1 140px; min-width: 0; font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); line-height: 1.4; overflow-wrap: anywhere; }
+  /* Ряд действий: «Подключить» — Button sm; «Переименовать» и «Удалить» — IconButton 32×32 (телефон 40×40) с aria-label и подсказкой */
+  .vrow .va { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--sp-xs); min-width: 0; }
+  .vrow .va .btn.ghost { width: 32px; padding: 0; flex: 0 0 auto; }
+  .vrow .va .btn.ghost:first-of-type, .vrow .va .btn.con + .btn.ghost { margin-left: auto; }
+  .vrow .va .btn.ghost .bl { display: none; }
+  /* Телефон: «Подключить» — на остаток ряда, «Переименовать» и «Удалить» — IconButton 40×40 с aria-label */
+  .app.mobile .vrow .va .btn.con { flex: 1 1 auto; min-width: 0; }
+  .app.mobile .vrow .va .btn.ghost { width: 40px; }
+  .vempty { font-size: var(--fs-sm); color: var(--c-text-muted); line-height: 1.45; padding: var(--sp-sm) 0; }
 
   .consent { display: flex; gap: var(--sp-xs); align-items: center; font-size: var(--fs-sm); }
   .cb { width: 16px; height: 16px; border-radius: 4px; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; flex: 0 0 auto; }
@@ -245,7 +266,7 @@
 <body>
 <div class="doc-wrap">
   <h1 class="doc">Фото для обучения и «Обучить персонажа»</h1>
-  <p class="lead">Два новых раздела в форме персонажа, над ручным «LoRA для локальной модели». Польза одной фразой: <b>«Персонаж стабильно похож на себя на любых картинках»</b>.
+  <p class="lead">Три новых раздела в форме персонажа, над ручным «LoRA для локальной модели»: фото, обучение и версии. Первое обучение подключается само, следующие — только по «Подключить». Польза одной фразой: <b>«Персонаж стабильно похож на себя на любых картинках»</b>.
     Тексты — дословно из заметки «LoRA-обучение — тексты». Пометка <span class="pend">нет текста</span> — такого текста в заметке нет, нужно решение.</p>
 
   <div class="demo" id="demo"></div>
@@ -275,6 +296,10 @@ const P = {
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  plug: '<path d="M12 22v-5M9 8V2M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+  pencil: '<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
+  trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7Z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
 };
 const ic = (n, c = '') => `<svg class="i ${c}" viewBox="0 0 24 24" aria-hidden="true">${P[n]}</svg>`;
 const pend = (t = 'нет текста') => `<span class="pend">${t}</span>`;
@@ -284,8 +309,33 @@ const S = {
   theme: 'light', width: 'panel', admin: false,
   photo: 'enough', train: 'ready',
   trigErr: false, etaUnknown: false, changed: false, allRejected: false, canceled: false,
-  modal: null, showAll: false, openPhotos: true, openTrain: true,
+  modal: null, showAll: false, openPhotos: true, openTrain: true, openVers: true,
+  vers: 'empty', list: [], target: null, flash: null, renaming: null,
 };
+// Наборы версий: ord — порядок обучения (больше = новее), on — подключена, fresh — только что обучена
+const VERS = {
+  empty:    { label: 'Пусто', list: [] },
+  one:      { label: 'Одна, подключена', list: [
+    { id: 1, ord: 1, name: 'Обучено 10 октября, 34 фото', on: true } ] },
+  several:  { label: 'Несколько', list: [
+    { id: 3, ord: 3, name: 'Обучено 10 октября 14:20, 34 фото', on: true },
+    { id: 2, ord: 2, name: 'Обучено 10 октября 09:05, 28 фото' },
+    { id: 1, ord: 1, name: 'Для открыток' } ] },
+  newReady: { label: 'Новая не подключена', list: [
+    { id: 4, ord: 4, name: 'Обучено 12 октября, 41 фото', fresh: true },
+    { id: 3, ord: 3, name: 'Обучено 10 октября, 34 фото', on: true } ] },
+  limit:    { label: 'Предел 5 (вопрос)', list: [
+    { id: 5, ord: 5, name: 'Обучено 14 октября, 45 фото' },
+    { id: 4, ord: 4, name: 'Обучено 12 октября, 41 фото', on: true },
+    { id: 3, ord: 3, name: 'Обучено 10 октября 14:20, 34 фото' },
+    { id: 2, ord: 2, name: 'Обучено 10 октября 09:05, 28 фото' },
+    { id: 1, ord: 1, name: 'Для открыток' } ] },
+};
+function setVers(k) {
+  S.vers = k; S.list = VERS[k].list.map(v => ({ ...v })); S.flash = null; S.renaming = null;
+}
+const connected = () => S.list.find(v => v.on);
+const byId = id => S.list.find(v => v.id === +id);
 const PHOTO = {
   empty:     { n: 0,  label: 'Пусто' },
   uploading: { n: 12, label: 'Идёт загрузка' },
@@ -298,9 +348,11 @@ const TRAIN = {
   blocked:   'Кнопка заблокирована',
   ready:     'Можно обучать',
   confirm:   'Подтверждение старта',
+  confirmNext: 'Подтверждение (версия уже есть)',
   queued:    'В очереди',
   running:   'Идёт',
-  done:      'Готово',
+  doneFirst: 'Готово — первое',
+  doneNew:   'Готово — новая версия',
   error:     'Ошибка',
   busyOther: 'Карта занята чужим',
   busyMine:  'У меня уже идёт',
@@ -319,7 +371,14 @@ const NOTES = {
   confirm: 'Модалка перед стартом. На мобиле — шторка снизу. «Начать обучение» → «В очереди».',
   queued: 'Задача ждёт карту: полоса без процента (бегущий отрезок C.accentSoft), отменить можно.',
   running: 'Шаг N из M, процент, время до конца. «Отменить обучение» → подтверждение → после отмены — плашка «Обучение остановлено».',
-  done: 'Зелёная карточка, дата и число фото, «Обучить заново». Включи «фото изменились» — появится янтарная пометка.',
+  confirmNext: 'У персонажа уже есть подключённая версия: в модалке добавляется фраза «Новая версия не включится сама…». Кнопка в блоке — «Обучить заново».',
+  doneFirst: 'Первое обучение (версий не было): версия подключается сама. Зелёная карточка, дата и число фото, «Обучить заново». В списке версий — одна строка с меткой «Подключена». Включи «фото изменились» — появится янтарная пометка.',
+  doneNew: 'Версия уже была: новая НЕ подключается сама. Акцентная карточка C.accentLight, «Подключить» (primary) и «Оставить прежнюю». В списке новая версия — с меткой «Готова к подключению».',
+  v_empty: 'Версий нет: одна строка пустого состояния, без кнопок.',
+  v_one: 'Одна подключённая версия: у неё нет «Подключить», только «Переименовать» и «Удалить».',
+  v_several: 'Три версии в один день: к дате добавлено время. Третья переименована («Для открыток»). «Подключить» у более старой версии спрашивает «Вернуться к версии…?».',
+  v_newReady: '«Подключить» у новой версии подключает сразу, без вопроса, и показывает зелёную плашку подтверждения.',
+  v_limit: 'Вариант на решение Андрея: предел 5 версий. В блоке обучения — янтарная подсказка, кнопка «Обучить заново» неактивна, пока не удалят одну версию.',
   error: 'Красная плашка, фото на месте, «Попробовать снова». Переключатель «все фото отброшены» меняет текст.',
   busyOther: 'Карту занял кто-то другой: показываем, когда освободится. Включи «Я админ» — появится «Остановить чужое обучение».',
   busyMine: 'Идёт обучение другого моего персонажа: второе не запустить.',
@@ -343,6 +402,7 @@ function renderDemo() {
       ${flag('admin', 'Я админ')}</div>
     <div class="row"><span class="lbl">A · Фото</span>${Object.entries(PHOTO).map(([k, v]) => tb('photo', k, v.label)).join('')}</div>
     <div class="row"><span class="lbl">B · Обучение</span>${Object.entries(TRAIN).map(([k, v]) => tb('train', k, v)).join('')}</div>
+    <div class="row"><span class="lbl">C · Версии</span>${Object.entries(VERS).map(([k, v]) => tb('vers', k, v.label)).join('')}</div>
     <div class="row"><span class="lbl">Варианты</span>
       ${flag('trigErr', 'ошибка метки')}${flag('etaUnknown', 'время неизвестно')}${flag('changed', 'фото изменились')}${flag('allRejected', 'все фото отброшены')}</div>`;
 }
@@ -430,10 +490,16 @@ function trainSection() {
     }
     case 'ready':
     case 'confirm':
+    case 'confirmNext': {
+      const atLimit = S.list.length >= 5;
       if (S.canceled) body += `<div class="notice info">${ic('info', 's')}<div class="nb">Обучение остановлено. Фото на месте — можно начать заново.</div></div>`;
+      if (atLimit) body += `<div class="notice warning">${ic('layers', 's')}<div class="nb">У персонажа уже 5 версий — удалите ненужную, чтобы обучить новую. ${pend('нет текста · предел — вопрос')}</div></div>`;
       body += trigger(false);
-      body += `<button class="btn md pri block" data-act="start" ${S.trigErr ? 'disabled' : ''}>${ic('spark', 's')}Обучить</button>`;
+      body += S.list.length
+        ? `<button class="btn md pri block" data-act="start" ${S.trigErr || atLimit ? 'disabled' : ''}>${ic('refresh', 's')}Обучить заново</button>`
+        : `<button class="btn md pri block" data-act="start" ${S.trigErr ? 'disabled' : ''}>${ic('spark', 's')}Обучить</button>`;
       break;
+    }
     case 'queued':
       badge = `<span class="badge neutral">${ic('clock', 'xs')}В очереди ${pend()}</span>`;
       body += `<div class="run"><div class="line">${ic('clock')}<span>Ждёт своей очереди на видеокарте…</span></div>
@@ -448,14 +514,24 @@ function trainSection() {
            <div class="eta"><span>Осталось примерно 45 мин</span><span>62 %</span></div></div>`;
       body += cancelBtn;
       break;
-    case 'done':
+    case 'doneFirst':
       badge = `<span class="badge success">${ic('check', 'xs')}Обучен ${pend()}</span>`;
       body += `<div class="done"><div class="dt">${ic('check')}Персонаж обучен</div>
-        <p>Обучение закончено, персонаж уже подключён. Попробуйте нарисовать его — он должен быть заметно похожее.</p>
+        <p>Обучение закончено, и персонаж уже подключён. Попробуйте нарисовать его — он должен быть заметно похожее.</p>
         <div class="meta">Обучен 10 октября · 34 фото</div></div>`;
       if (S.changed) body += `<div class="notice warning">${ic('alert', 's')}<div class="nb">Фото изменились после обучения. Чтобы учесть их, обучите заново.</div></div>`;
       body += `<div class="actions"><button class="btn" data-act="start">${ic('refresh', 's')}Обучить заново</button></div>`;
       break;
+    case 'doneNew': {
+      const fresh = S.list.find(v => v.fresh);
+      badge = `<span class="badge accent">${ic('check', 'xs')}Новая версия ${pend()}</span>`;
+      body += `<div class="done fresh"><div class="dt">${ic('layers')}Новая версия готова</div>
+        <p>Она пока не подключена — персонаж рисуется по прежней версии. Попробуйте новую и подключите, если она вам нравится.</p>
+        <div class="meta">${fresh ? fresh.name : ''}</div>
+        <div class="actions"><button class="btn pri" data-act="vcon" data-id="${fresh ? fresh.id : ''}">${ic('plug', 's')}Подключить</button>
+          <button class="btn" data-act="keepOld">Оставить прежнюю</button></div></div>`;
+      break;
+    }
     case 'error':
       badge = `<span class="badge danger">${ic('alert', 'xs')}Ошибка ${pend()}</span>`;
       body += `<div class="notice danger">${ic('alert', 's')}<div class="nb"><div class="nt">Не получилось обучить</div>${S.allRejected
@@ -482,8 +558,35 @@ function trainSection() {
   return section('train', 'Обучить персонажа', badge, body);
 }
 
+function versionsSection() {
+  let body = '';
+  if (S.flash) body += `<div class="notice success">${ic('check', 's')}<div class="nb">Версия «${S.flash}» подключена. Новые картинки персонажа будут рисоваться по ней.</div></div>`;
+  if (!S.list.length) {
+    body += `<div class="vempty">Версий пока нет — они появятся после первого обучения.</div>`;
+    return section('vers', 'Версии персонажа', '', body);
+  }
+  body += `<div class="vlist">${S.list.map(v => {
+    if (S.renaming === v.id) {
+      return `<div class="vrow ${v.on ? 'on' : ''}">
+        <input class="tf" id="ren" value="${v.name}" placeholder="Для открыток" aria-label="Название версии" />
+        <div class="va"><button class="btn pri" data-act="vsave" data-id="${v.id}">Сохранить ${pend()}</button>
+          <button class="btn ghost" data-act="vcancel">Отмена ${pend()}</button></div></div>`;
+    }
+    const mark = v.on ? `<span class="badge success">${ic('check', 'xs')}Подключена</span>`
+                      : `<span class="badge ${v.fresh ? 'accent' : 'neutral'}">Готова к подключению</span>`;
+    return `<div class="vrow ${v.on ? 'on' : ''}">
+      <div class="vh"><span class="vn">${v.name}</span>${mark}</div>
+      <div class="va">
+        ${v.on ? '' : `<button class="btn con" data-act="vcon" data-id="${v.id}">${ic('plug', 's')}Подключить</button>`}
+        <button class="btn ghost" data-act="vren" data-id="${v.id}" aria-label="Переименовать" title="Переименовать">${ic('pencil', 's')}<span class="bl">Переименовать</span></button>
+        <button class="btn ghost dng" data-act="vdel" data-id="${v.id}" aria-label="Удалить" title="Удалить">${ic('trash', 's')}<span class="bl">Удалить</span></button>
+      </div></div>`;
+  }).join('')}</div>`;
+  return section('vers', 'Версии персонажа', `<span class="badge neutral">${S.list.length}</span>`, body);
+}
+
 function section(key, title, badge, body) {
-  const open = key === 'photos' ? S.openPhotos : S.openTrain;
+  const open = { photos: S.openPhotos, train: S.openTrain, vers: S.openVers }[key];
   return `<div class="sec"><button class="sec-h" aria-expanded="${open}" data-toggle="${key}">
     ${ic(open ? 'down' : 'right', 's')}<span class="ttl">${title}</span>${badge}</button>
     ${open ? `<div class="sec-b">${body}</div>` : ''}</div>`;
@@ -500,8 +603,9 @@ function renderForm() {
       <div class="hint">${pend('существующий блок, без изменений')}</div></div>
     ${photosSection()}
     ${trainSection()}
+    ${versionsSection()}
     <div class="sec"><button class="sec-h" aria-expanded="false">${ic('right', 's')}<span class="ttl">LoRA для локальной модели</span>
-      ${S.train === 'done' ? '<span class="badge neutral">anya_face</span>' : ''}</button></div>
+      ${connected() ? '<span class="badge neutral">anya_face</span>' : ''}</button></div>
     <div class="notice warning">${ic('shield', 's')}<div class="nb">CHARACTER_PHOTOS_NOTICE — как сейчас ${pend('без изменений')}</div></div>
     <label class="consent"><span class="cb">${ic('check', 'xs')}</span>Понимаю, у людей на фото есть согласие</label>
     <div class="actions" style="justify-content:space-between"><button class="btn ghost">Удалить</button><button class="btn md pri">Сохранить</button></div>`;
@@ -510,16 +614,26 @@ function renderForm() {
 function renderModal() {
   const m = document.getElementById('modal');
   if (!S.modal) { m.innerHTML = ''; return; }
+  const t = S.target ? byId(S.target) : null;
+  const delP = 'Освободится место на видеокарте, вернуть её не получится.';
   const D = {
-    start: { h: 'Начать обучение?', p: 'Видеокарта будет занята примерно <b>2 часа</b>. Всё это время новые картинки на локальной модели будут стоять в очереди и ждать. Отменить обучение можно в любой момент.',
+    start: { h: 'Начать обучение?', p: 'Видеокарта будет занята примерно <b>2 часа</b>. Всё это время новые картинки на локальной модели будут стоять в очереди и ждать. Отменить обучение можно в любой момент.'
+        + (connected() ? '</p><p>Новая версия не включится сама — вы выберете, подключать ли её, когда обучение закончится.' : ''),
       no: 'Не сейчас', yes: 'Начать обучение', tone: 'pri', go: 'queued' },
     cancel: { h: 'Остановить обучение?', p: 'Результат не сохранится.', no: 'Продолжить', yes: 'Остановить', tone: 'danger', go: 'ready' },
     adminStop: { h: 'Остановить обучение, которое запустил Олег?', p: 'Результат не сохранится.', no: `Продолжить ${pend()}`, yes: `Остановить ${pend()}`, tone: 'danger', go: 'ready' },
+    revert: t && { h: `Вернуться к версии «${t.name}»?`, p: `${pend('нет текста тела — можно без него')}`,
+      no: `Не сейчас ${pend()}`, yes: `Вернуться ${pend()}`, tone: 'pri', ok: 'connect' },
+    del: t && { h: `Удалить версию «${t.name}»?`, p: delP, no: 'Оставить', yes: 'Удалить', tone: 'danger', ok: 'delete' },
+    delOn: t && { h: `Удалить версию «${t.name}»?`, p: `Эта версия сейчас подключена. Если удалить, персонаж будет рисоваться без обучения.</p><p>${delP}`,
+      no: 'Оставить', yes: 'Удалить', tone: 'danger', ok: 'delete' },
   }[S.modal];
+  if (!D) { S.modal = null; m.innerHTML = ''; return; }
+  const yes = D.ok ? `data-ok="${D.ok}"` : `data-go="${D.go}"`;
   m.innerHTML = `<div class="ovl" data-act="close"><div class="dlg" role="dialog" aria-modal="true">
       <div class="grab" ${document.getElementById('app').classList.contains('mobile') ? '' : 'hidden'}></div>
       <div class="db"><h2>${D.h}</h2><p>${D.p}</p></div>
-      <div class="df"><button class="btn" data-act="close">${D.no}</button><button class="btn ${D.tone}" data-go="${D.go}">${D.yes}</button></div>
+      <div class="df"><button class="btn" data-act="close">${D.no}</button><button class="btn ${D.tone}" ${yes}>${D.yes}</button></div>
     </div></div>`;
 }
 
@@ -527,8 +641,10 @@ function renderNote() {
   const n = document.getElementById('note');
   n.innerHTML = `<h3>A · ${PHOTO[S.photo].label}</h3><div class="muted">${NOTES[S.photo]}</div>
     <h3 style="margin-top:10px">B · ${TRAIN[S.train]}</h3><div class="muted">${NOTES[S.train]}</div>
+    <h3 style="margin-top:10px">C · ${VERS[S.vers].label}</h3><div class="muted">${NOTES['v_' + S.vers]} Правило: первое обучение подключается само, все следующие — только по «Подключить». Подключена всегда одна версия.</div>
     <h3 style="margin-top:10px">Что проверить</h3>
     <ul class="muted"><li>Обе темы, ширины 420 / 360 / 320.</li>
+    <li>Строка версии: действия всегда в один ряд — «Подключить» слева (на телефоне растягивается), иконки «Переименовать» и «Удалить» справа; метка уходит под название, если не влезает.</li>
     <li>Сетка фото: на 320 — четыре колонки по ≥52 px, крестики не вылезают за рамку секции.</li>
     <li>Модалка: на телефоне — шторка снизу, кнопки делят ряд поровну.</li>
     <li>Пометка <span class="pend">нет текста</span> — текста нет в заметке, см. proposal.</li></ul>`;
@@ -540,12 +656,12 @@ function render() {
   app.classList.toggle('mobile', S.width !== 'panel');
   app.style.width = { panel: '420px', m360: '360px', m320: '320px' }[S.width];
   // «Подтверждение старта» — это «Можно обучать» с открытой модалкой
-  if (S.train === 'confirm' && !S.modal) S.modal = 'start';
+  if ((S.train === 'confirm' || S.train === 'confirmNext') && !S.modal) S.modal = 'start';
   renderDemo(); renderForm(); renderModal(); renderNote();
 }
 
 document.addEventListener('click', e => {
-  const b = e.target.closest('[data-g],[data-f],[data-act],[data-go],[data-toggle]');
+  const b = e.target.closest('[data-g],[data-f],[data-act],[data-go],[data-ok],[data-toggle]');
   if (!b) return;
   if (b.dataset.g) {
     S[b.dataset.g] = b.dataset.v;
@@ -554,22 +670,46 @@ document.addEventListener('click', e => {
       // заблокированная кнопка имеет смысл только при нехватке фото
       if (S.train === 'blocked' && PHOTO[S.photo].n >= 20) S.photo = 'few';
       if (S.train !== 'blocked' && PHOTO[S.photo].n < 20) S.photo = 'enough';
+      // состояния, которые однозначно задают список версий
+      const sync = { confirm: 'empty', confirmNext: 'several', doneFirst: 'one', doneNew: 'newReady' }[S.train];
+      if (sync) setVers(sync);
+    }
+    if (b.dataset.g === 'vers') {
+      setVers(S.vers); S.modal = null;
+      if (S.vers === 'empty' && S.train === 'doneNew') S.train = 'ready';
+      if (S.vers === 'limit') S.train = 'ready';
     }
     if (b.dataset.g === 'photo') S.showAll = false;
+  } else if (b.dataset.ok) {
+    const v = byId(S.target);
+    if (b.dataset.ok === 'connect' && v) connect(v);
+    if (b.dataset.ok === 'delete' && v) { S.list = S.list.filter(x => x !== v); S.flash = null; }
+    S.modal = null; S.target = null;
   } else if (b.dataset.f) {
     S[b.dataset.f] = !S[b.dataset.f];
     if (b.dataset.f === 'etaUnknown' && S[b.dataset.f]) S.train = 'running';
-    if (b.dataset.f === 'changed' && S[b.dataset.f]) S.train = 'done';
+    if (b.dataset.f === 'changed' && S[b.dataset.f]) { S.train = 'doneFirst'; setVers('one'); }
     if (b.dataset.f === 'allRejected' && S[b.dataset.f]) S.train = 'error';
     if (b.dataset.f === 'trigErr' && S[b.dataset.f]) S.train = 'ready';
     if (b.dataset.f === 'admin' && S[b.dataset.f]) S.train = 'busyOther';
   } else if (b.dataset.toggle) {
-    if (b.dataset.toggle === 'photos') S.openPhotos = !S.openPhotos; else S.openTrain = !S.openTrain;
+    const k = { photos: 'openPhotos', train: 'openTrain', vers: 'openVers' }[b.dataset.toggle];
+    S[k] = !S[k];
   } else if (b.dataset.go) {
     S.train = b.dataset.go; S.canceled = S.modal === 'cancel'; S.modal = null;
   } else {
     const a = b.dataset.act;
-    if (a === 'close') { if (e.target !== b && b.classList.contains('ovl')) return; S.modal = null; if (S.train === 'confirm') S.train = 'ready'; }
+    if (a === 'close') { if (e.target !== b && b.classList.contains('ovl')) return; S.modal = null; S.target = null; if (S.train === 'confirm' || S.train === 'confirmNext') S.train = 'ready'; }
+    if (a === 'vcon') {
+      const v = byId(b.dataset.id), cur = connected();
+      // возврат к более старой версии — через подтверждение, новую подключаем сразу
+      if (cur && v.ord < cur.ord) { S.modal = 'revert'; S.target = v.id; } else connect(v);
+    }
+    if (a === 'keepOld') { S.list.forEach(x => { x.fresh = false; }); S.train = 'ready'; }
+    if (a === 'vren') S.renaming = +b.dataset.id;
+    if (a === 'vcancel') S.renaming = null;
+    if (a === 'vsave') { const v = byId(b.dataset.id); const val = document.getElementById('ren').value.trim(); if (val) v.name = val; S.renaming = null; }
+    if (a === 'vdel') { const v = byId(b.dataset.id); S.target = v.id; S.modal = v.on ? 'delOn' : 'del'; }
     if (a === 'start') { S.modal = 'start'; }
     if (a === 'cancel') S.modal = 'cancel';
     if (a === 'adminStop') S.modal = 'adminStop';
@@ -577,6 +717,11 @@ document.addEventListener('click', e => {
   }
   render();
 });
+function connect(v) {
+  S.list.forEach(x => { x.on = x === v; x.fresh = false; });
+  S.flash = v.name;
+  if (S.train === 'doneNew') S.train = 'ready';
+}
 render();
 </script>
 </body>

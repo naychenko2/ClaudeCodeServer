@@ -857,6 +857,9 @@ export interface Session {
   // null/отсутствует — через API не отмечали. Непрочитанность считает chatReadState.ts:
   // updatedAt > max(локальная отметка, эта, baseline)
   lastReadAt?: string | null;
+  // Последнее сообщение, написанное владельцем руками (не автоматика и не исполнитель);
+  // по нему сортируется список проектов. null — с появления поля сюда не писали
+  lastUserMessageAt?: string | null;
   // Чат заглушён: браузерные уведомления по нему не показываются
   notificationsMuted?: boolean;
   // Голосовой режим чата: ответы озвучиваются (POST /api/tts)

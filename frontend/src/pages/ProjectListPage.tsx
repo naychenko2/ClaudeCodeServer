@@ -95,8 +95,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
-  // Последняя активность проекта: свежее из updatedAt проекта и его чатов. updatedAt
-  // самого проекта двигают только правки настроек, без чатов сортировка «спит»
+  // Когда владелец последний раз писал в чаты проекта (lastUserMessageAt). Ходы
+  // автоматики и исполнителей сюда не попадают; проект без отметки — по своему updatedAt
   const [lastActivity, setLastActivity] = useState<Map<string, string>>(new Map());
   const [search, setSearch] = useState('');
   const [view, setView] = useState<ProjectView>('all');
@@ -135,8 +135,9 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           if (r.status !== 'fulfilled') return;
           const sessions = r.value as Session[];
           if (sessions.some(s => ACTIVE_STATUSES.has(s.status))) ids.add(list[i].id);
-          const at = sessions.reduce((m, s) => (Date.parse(s.updatedAt) > Date.parse(m) ? s.updatedAt : m), list[i].updatedAt);
-          last.set(list[i].id, at);
+          const at = sessions.reduce<string | null>((m, s) =>
+            s.lastUserMessageAt && (!m || Date.parse(s.lastUserMessageAt) > Date.parse(m)) ? s.lastUserMessageAt : m, null);
+          if (at) last.set(list[i].id, at);
         });
         setActiveSessions(ids);
         setLastActivity(last);
@@ -158,9 +159,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
 
   const sortBlock = (arr: Project[]) => [...arr].sort((a, b) => {
     if (sortMode === 'name') return a.name.localeCompare(b.name, 'ru');
-    const aa = activeSessions.has(a.id) ? 1 : 0;
-    const bb = activeSessions.has(b.id) ? 1 : 0;
-    if (aa !== bb) return bb - aa;
+    // Только свежесть: проект, где владелец писал последним, — сверху
     return new Date(activityOf(b)).getTime() - new Date(activityOf(a)).getTime();
   });
 

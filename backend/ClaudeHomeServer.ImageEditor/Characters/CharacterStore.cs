@@ -191,7 +191,7 @@ public static partial class CharacterStore
             photos.Add(new ReferenceImage(bytes, ContentTypeOf(ext), ReferenceRole.Character, manifest.Name));
         }
         if (photos.Count == 0) return null;
-        return new CharacterForRequest(new CharacterRef(manifest.Slug, manifest.Name, manifest.Description), photos);
+        return new CharacterForRequest(new CharacterRef(manifest.Slug, manifest.Name, manifest.Description, manifest.ReadLora()), photos);
     }
 
     // Абсолютный путь папки персонажа; null — slug не проходит белый список, путь вышел за

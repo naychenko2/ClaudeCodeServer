@@ -124,6 +124,60 @@ public class CharacterStoreTests : IDisposable
             .Should().Equal("face-01.jpg", "face-03.jpg", "face-04.jpg");
     }
 
+    private void SetLocal(CharacterManifest m, JsonObject? local)
+    {
+        var file = Path.Combine(_root, CharacterStore.Folder, m.Slug, CharacterStore.ManifestFile);
+        var json = JsonNode.Parse(File.ReadAllText(file))!;
+        json["providers"]![CharacterManifest.LocalProvider] = local;
+        File.WriteAllText(file, json.ToJsonString());
+    }
+
+    [Theory]
+    [InlineData(null, 0.8)]
+    [InlineData(0.55, 0.55)]
+    public void Лора_из_providers_local_доходит_до_запроса(double? strength, double expected)
+    {
+        var m = Create("Аня");
+        var local = new JsonObject { ["lora"] = "anya.safetensors", ["trigger"] = "anya_person", ["photosHash"] = "h" };
+        if (strength is { } s) local["strength"] = s;
+        SetLocal(m, local);
+
+        var lora = CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora;
+
+        lora.Should().Be(new CharacterLora("anya.safetensors", "anya_person", expected));
+    }
+
+    [Fact]
+    public void Без_блока_или_без_lora_trigger_лоры_нет()
+    {
+        var m = Create("Аня");
+        CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora.Should().BeNull();
+        SetLocal(m, new JsonObject { ["lora"] = "a.safetensors" });
+        CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora.Should().BeNull();
+        SetLocal(m, new JsonObject { ["trigger"] = "t" });
+        CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora.Should().BeNull();
+    }
+
+    [Fact]
+    public void Круг_Parse_Serialize_сохраняет_providers_local_и_чужие_ключи()
+    {
+        var json = """{"name":"Аня","slug":"anya","futureField":1,"providers":{"local":{"lora":"a","trigger":"t","strength":0.7,"x":"y"},"glif":{"id":"g"}}}""";
+        var again = CharacterManifest.Parse(CharacterManifest.Parse(json)!.Serialize())!;
+        var node = JsonNode.Parse(again.Serialize())!;
+        node["providers"]!["local"]!["x"]!.GetValue<string>().Should().Be("y");
+        node["providers"]!["local"]!["strength"]!.GetValue<double>().Should().Be(0.7);
+        node["providers"]!["glif"]!["id"]!.GetValue<string>().Should().Be("g");
+        node["futureField"]!.GetValue<int>().Should().Be(1);
+    }
+
+    [Fact]
+    public void Лора_не_попадает_в_json_CharacterRef()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            new CharacterRef("anya", "Аня", null, new CharacterLora("a", "t", 0.8)));
+        json.Should().NotContainEquivalentOf("lora");
+    }
+
     [Fact]
     public void Меньше_трёх_фото_и_не_картинка_отклоняются()
     {

@@ -116,14 +116,21 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
         <TextArea value={description} onChange={setDescription} minHeight={56} autoGrow maxHeight={140}
           placeholder="девушка 25 лет, каре, веснушки" />
       </Field>
-      <Field label={`Фото лица · от ${MIN_PHOTOS} до ${MAX_PHOTOS}`} hint="Лучше разные ракурсы и освещение, лицо крупно.">
+      <Field label={`Фото лица · от ${MIN_PHOTOS} до ${MAX_PHOTOS}`} hint="Первое фото — главное: по нему AI Home узнаёт лицо в каждой картинке. Остальные добавляют ракурсы и свет.">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(62px, 1fr))', gap: SP.md }}>
-          {photos.map(p => (
+          {photos.map((p, i) => (
             <div key={p.key} style={{ position: 'relative', aspectRatio: '1' }}>
               <img src={p.url} alt="" style={{
                 width: '100%', height: '100%', objectFit: 'cover', display: 'block',
                 borderRadius: R.lg, border: `1px solid ${C.border}`,
               }} />
+              {i === 0 && (
+                <span style={{
+                  position: 'absolute', left: SP.xs, bottom: SP.xs, padding: `0 ${SP.xs}px`,
+                  fontSize: FS.xs, fontWeight: 600, lineHeight: 1.4,
+                  background: C.accent, color: C.onAccent, borderRadius: R.sm,
+                }}>Основное</span>
+              )}
               <div style={{ position: 'absolute', top: -SP.sm, right: -SP.sm }}>
                 <IconButton size="xs" variant="media" title="Убрать фото" ariaLabel="Убрать фото" disabled={busy}
                   onClick={() => setPhotos(ps => ps.filter(x => x.key !== p.key))}>
@@ -142,6 +149,10 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
         </div>
         <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden
           onChange={e => { void addFiles(e.target.files); e.target.value = ''; }} />
+        <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, marginTop: SP.xs }}>
+          Для основного подойдёт фото анфас на уровне глаз, на ровном фоне, лицо крупно, голова не запрокинута.
+          {' '}Чтобы сменить основное, уберите его — главным станет следующее.
+        </div>
       </Field>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: SP.sm, flexWrap: 'wrap', fontSize: FS.sm }}>
         <span style={{ color: photos.length >= MIN_PHOTOS ? C.successText : C.warningText }}>{photosCountText(photos.length)}</span>

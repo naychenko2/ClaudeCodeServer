@@ -355,6 +355,21 @@ public class LocalImageEditorTests : IDisposable
         media.Submitted.Should().ContainSingle().Which.Op.Should().Be(LocalImageOp.FaceDetail);
     }
 
+    // FaceDetailer образец не принимает: с персонажем в контексте лицо перерисуется «с нуля» и
+    // сходство потеряется — отказ до постановки в очередь, не после
+    [Fact]
+    public async Task УлучшитьЛица_СПерсонажем_ОтказДоОчереди()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+
+        var job = await RunAsync(service, CharacterQuote(ImageEditOp.EnhanceFaces), Input("") with { Character = Timur });
+
+        job.Status.Should().Be(ImageEditJobStatus.Failed, job.Error);
+        job.Error.Should().Contain("сходство с персонажем пропадёт");
+        media.Submitted.Should().BeEmpty("перерисовка лица без образца не должна уходить в очередь");
+    }
+
     [Fact]
     public async Task Трата_ЗаписьСНулевойСуммой_НаЗапустившего()
     {

@@ -58,7 +58,7 @@ import { plural } from '../lib/plural';
 import { applyContextUpdated, loadChatContext, setActiveChatForContext } from '../lib/chatContext';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
-import { chatToRestore, createLatestGuard, parsePendingChat } from '../lib/pendingProjectChat';
+import { chatToRestore, createLatestGuard, encodePendingChat, parsePendingChat } from '../lib/pendingProjectChat';
 import { afterChatSwitcherClosed } from '../features/home/chatSwitcherHistory';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
@@ -1229,12 +1229,13 @@ const windowWidth = useWindowWidth();
           const replace = getNav()?.chatId === s.id;
           handleSelectSession(s, undefined, false, replace);
           if (view) {
-            // «Назад» на снимок с перемонтажом: файл и задача — из снимка, а не из
-            // сохранённого состояния проекта, которое подняло монтирование. Запись,
-            // только что записанную выбором чата, перезаписываем — новой не кладём
+            // «Назад» на снимок (с перемонтажом или внутри проекта): файл и задача — из
+            // снимка, а не из сохранённого состояния проекта или замыкания первого рендера.
+            // Запись, только что записанную выбором чата, перезаписываем — новой не кладём.
+            // Снимок «чат + файл» бывает только из сплита — полноэкранный файл снимаем всегда
             setOpenFile(view.file);
             setOpenFileDiffMode(false);
-            if (view.file === null) setFileFullscreen(false);
+            setFileFullscreen(false);
             setSelectedTaskId(view.task);
             navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: view.file, task: view.task, chatId: s.id });
           }
@@ -1260,7 +1261,7 @@ const windowWidth = useWindowWidth();
         }, 0);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSelectSession немемоизирован: включение переустанавливало бы подписку каждый рендер; функция свежая на момент события (эффект после её объявления)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSelectSession немемоизирован: включение переустанавливало бы подписку каждый рендер. Обработчик держит замыкание первого рендера (openFile, isMobile, fileFullscreen — устаревшие), поэтому вид снимка приезжает в pending и дотягивается веткой view
   }, [project.id]);
 
   // Переход из карточки задачи в связанный диалог
@@ -1499,10 +1500,12 @@ const windowWidth = useWindowWidth();
       }
       // Активный чат — восстанавливаем через существующий механизм pending (sessionStorage + событие).
       // Снимок с уже открытым чатом пропускаем: так «назад» снимает запись шторки чатов,
-      // и восстановление гонялось бы с переходом, который шторка запускает следом
+      // и восстановление гонялось бы с переходом, который шторка запускает следом.
+      // Файл и задача снимка едут вместе с чатом: обработчик pending держит замыкание
+      // первого рендера, и выбор чата там закрыл бы файл, восстановленный выше
       const restoreChatId = chatToRestore(s.chatId, activeSessionRef.current?.id);
       if (restoreChatId) {
-        sessionStorage.setItem('cc_pending_project_chat', `${project.id}|${restoreChatId}`);
+        sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, restoreChatId, { file: f, task: s.task ?? null }));
         window.dispatchEvent(new Event('cc-pending-project-chat'));
       }
     };

@@ -106,13 +106,13 @@ public static partial class CharacterStore
         return ImageEditCallResult<CharacterChange>.Ok(new CharacterChange(manifest, written, []));
     }
 
-    public static ImageEditCallResult<CharacterChange>? Update(string root, string slug, CharacterPatch patch)
+    public static ImageEditCallResult<CharacterChange>? Update(string root, string ownerId, string slug, CharacterPatch patch)
     {
         var manifest = Get(root, slug);
         var dir = CharacterDir(root, slug);
         if (manifest is null || dir is null) return null;
 
-        if (patch.Lora is { Remove: false } set && CheckLora(set) is { } loraError) return loraError;
+        if (patch.Lora is { Remove: false } set && CheckLora(ownerId, set) is { } loraError) return loraError;
         if (patch.Name is { } newName)
         {
             if (string.IsNullOrWhiteSpace(newName)) return Invalid("Укажите имя персонажа");
@@ -159,15 +159,17 @@ public static partial class CharacterStore
     }
 
     // Проверка «задать LoRA»: null — всё в порядке, иначе отказ. Зовёт и Update, и контроллер
-    // до создания персонажа. Для Remove проверять нечего.
-    public static ImageEditCallResult<CharacterChange>? CheckLora(CharacterLoraPatch set)
+    // до создания персонажа. Для Remove проверять нечего. Видимость имени владельцу проверяем и здесь:
+    // нижний слой не должен полагаться на то, что верхний уже отказал (защита в глубину).
+    public static ImageEditCallResult<CharacterChange>? CheckLora(string ownerId, CharacterLoraPatch set)
     {
         if (set.Remove) return null;
         if (set.Known is null)
             return Unavailable("ComfyUI недоступен, поэтому проверить LoRA не получилось. Ничего не сохранено, попробуйте позже.");
         var name = set.Name?.Trim() ?? "";
-        if (name.Length == 0 || name.Contains("..") || name.StartsWith('/') || name.StartsWith('\\') || name.Contains(':')
-            || !set.Known.Contains(name, StringComparer.Ordinal))
+        if (!LoraNamespace.VisibleTo(ownerId, name))
+            return ImageEditCallResult<CharacterChange>.Fail(ImageEditErrorCodes.LoraNotVisible, "Эта LoRA вам недоступна.");
+        if (!set.Known.Contains(name, StringComparer.Ordinal))
             return Invalid("Такой LoRA нет в ComfyUI. Выберите файл из списка.");
         var trigger = set.Trigger?.Trim() ?? "";
         if (!TriggerPattern().IsMatch(trigger))

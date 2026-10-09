@@ -127,6 +127,12 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         {
             case ImageEditOp.EnhanceFaces:
                 if (req.Source is null) return Fail(EditOutcome.Failed, "Нет исходной картинки");
+                // FaceDetailer образец не принимает: с персонажем в контексте лицо перерисуется «с нуля»
+                // и сходство потеряется — честный отказ до постановки в очередь
+                if (req.Character is not null)
+                    return Fail(EditOutcome.Failed,
+                        "Улучшить лица перерисует лицо без образца — сходство с персонажем пропадёт. " +
+                        "Уберите персонажа из строки контекста, если всё равно нужно.");
                 run = new LocalImageRequest(LocalImageOp.FaceDetail, "", [req.Source.Bytes], null, 1);
                 runs = 1;
                 break;

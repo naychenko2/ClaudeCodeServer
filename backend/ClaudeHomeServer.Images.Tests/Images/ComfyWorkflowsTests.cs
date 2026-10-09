@@ -98,6 +98,116 @@ public class ComfyWorkflowsTests
     }
 
     [Fact]
+    public void Правка_БезЛоры_ГрафБайтВБайтКакДоПравки()
+    {
+        // Необязательный параметр: без lora граф не отличается от собранного старой сигнатурой
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p");
+
+        var expected = OldEditGraph("x", ["a.png"], null, 7, "p");
+        wf.ToJsonString().Should().Be(expected.ToJsonString());
+    }
+
+    [Fact]
+    public void Правка_СЛорой_УзелМеждуМодельюИСэйджем()
+    {
+        // Имя — из списка object_info стенда, иначе граф не прошёл бы схему нод
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p",
+            ("minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors", 0.8));
+
+        Class(wf, "lora").Should().Be("LoraLoaderModelOnly");
+        Inputs(wf, "lora")["model"]!.ToJsonString().Should().Be("[\"unet\",0]");
+        Inputs(wf, "lora")["lora_name"]!.GetValue<string>().Should()
+            .Be("minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors");
+        Inputs(wf, "lora")["strength_model"]!.GetValue<double>().Should().Be(0.8);
+        Inputs(wf, "sage")["model"]!.ToJsonString().Should().Be("[\"lora\",0]");
+        Inputs(wf, "ks")["model"]!.ToJsonString().Should().Be("[\"sage\",0]");
+    }
+
+    // Сборка EditImage до правки: загрузчики Qwen-модели плюс те же ноды, что в текущей
+    // (QwenLoaders/KSampler/AddDecodeAndSave приватные, поэтому загрузчики собраны руками)
+    private static JsonObject OldEditGraph(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
+        long seed, string prefix)
+    {
+        var wf = new JsonObject
+        {
+            ["unet"] = Node("UNETLoaderMultiGPU", new JsonObject
+            {
+                ["unet_name"] = "qwen_image_2.1_int8_convrot.safetensors",
+                ["weight_dtype"] = "default",
+                ["device"] = "cuda:0",
+            }),
+            ["clip"] = Node("CLIPLoaderMultiGPU", new JsonObject
+            {
+                ["clip_name"] = "qwen3vl_8b_int8_convrot.safetensors",
+                ["type"] = "qwen_image",
+                ["device"] = "cuda:0",
+            }),
+            ["vae"] = Node("VAELoader", new JsonObject { ["vae_name"] = "qwen_image_2.1_vae_bf16.safetensors" }),
+            ["sage"] = Node("PathchSageAttentionKJ", new JsonObject
+            {
+                ["model"] = Link("unet"),
+                ["sage_attention"] = "auto",
+                ["allow_compile"] = false,
+            }),
+        };
+        var enc = new JsonObject
+        {
+            ["clip"] = Link("clip"),
+            ["vae"] = Link("vae"),
+            ["prompt"] = prompt,
+            ["negative_prompt"] = "",
+            ["resolution"] = size is null ? 0 : 1024,
+        };
+        for (var k = 1; k <= images.Count; k++)
+        {
+            wf[$"img{k}"] = Node("LoadImage", new JsonObject { ["image"] = images[k - 1] });
+            enc[$"images.image_{k}"] = Link($"img{k}");
+        }
+        wf["enc"] = Node("TextEncodeQwenImage21", enc);
+
+        JsonArray latent;
+        if (size is { } s)
+        {
+            wf["lat"] = Node("EmptyLatentImage", new JsonObject
+            {
+                ["width"] = s.Width,
+                ["height"] = s.Height,
+                ["batch_size"] = 1,
+            });
+            latent = Link("lat");
+        }
+        else
+        {
+            latent = Link("enc", 2);
+        }
+        wf["ks"] = Node("KSampler", new JsonObject
+        {
+            ["model"] = Link("sage"),
+            ["positive"] = Link("enc"),
+            ["negative"] = Link("enc", 1),
+            ["latent_image"] = latent,
+            ["seed"] = seed,
+            ["steps"] = ComfyWorkflows.DefaultSteps,
+            ["cfg"] = 1.0,
+            ["sampler_name"] = "euler",
+            ["scheduler"] = "simple",
+            ["denoise"] = 1.0,
+        });
+        wf["dec"] = Node("VAEDecode", new JsonObject { ["samples"] = Link("ks"), ["vae"] = Link("vae") });
+        wf["save"] = Node("SaveImage", new JsonObject
+        {
+            ["images"] = Link("dec"),
+            ["filename_prefix"] = prefix,
+        });
+        return wf;
+    }
+
+    private static JsonObject Node(string classType, JsonObject inputs) =>
+        new() { ["class_type"] = classType, ["inputs"] = inputs };
+
+    private static JsonArray Link(string node, int output = 0) => new(node, output);
+
+    [Fact]
     public void ДоводкаЛиц_ПараметрыВыбранныеНаСтенде()
     {
         // Эталон — run_facedetail.py: denoise 0.65 и 16 шагов — выбор Андрея

@@ -92,12 +92,23 @@ public static partial class ComfyWorkflows
     // Первая картинка — основная (холст по ней), остальные — дополнительные референсы.
     // Без размера холст берётся из энкодера (resolution 0 — каждый референс в своём размере)
     public static JsonObject EditImage(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
-        long seed, string filenamePrefix)
+        long seed, string filenamePrefix, (string Name, double Strength)? lora = null)
     {
         if (images.Count is < 1 or > MaxEditImages)
             throw new ArgumentOutOfRangeException(nameof(images), "Нужно от 1 до 16 картинок");
 
         var wf = QwenLoaders();
+        if (lora is { } l)
+        {
+            // Персонаж: LoRA применяется к модели перед sage (как узел "lora" стека H3)
+            wf["lora"] = Node("LoraLoaderModelOnly", new JsonObject
+            {
+                ["model"] = Link("unet"),
+                ["lora_name"] = l.Name,
+                ["strength_model"] = l.Strength,
+            });
+            wf["sage"]!["inputs"]!["model"] = Link("lora");
+        }
         var enc = new JsonObject
         {
             ["clip"] = Link("clip"),

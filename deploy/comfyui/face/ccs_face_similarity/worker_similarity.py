@@ -22,26 +22,38 @@ import json
 import os
 import sys
 import time
+import warnings
 
 
 def _log(msg):
     print(msg, flush=True)
 
 
-def _all_embeddings(app, bgr):
-    """Все эмбеддинги лиц в BGR-кадре. В сцене с несколькими людьми нужное лицо может
-    быть не самым крупным — отдаём список, максимум косинуса к центроиду берёт core."""
+def _all_faces(app, bgr):
+    """Все лица в BGR-кадре. В сцене с несколькими людьми нужное лицо может
+    быть не самым крупным — отдаём список (с bbox и embedding), максимум косинуса
+    к центроиду берёт core. В эталоне берём самое крупное — _biggest_face."""
     faces = app.get(bgr)
     if not faces:
         return []
-    return [f.embedding for f in faces]
+    return list(faces)
 
 
-def _embs_from_path(app, cv2, path):
+def _biggest_face(faces):
+    """Самое крупное лицо по площади bbox. В эталоне могут быть лишние лица
+    (случайный человек на групповом фото), и по уверенности первым часто идёт
+    именно чужое — а для центроида нужно главное лицо эталона."""
+    return max(
+        faces,
+        key=lambda f: float((f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])),
+    )
+
+
+def _faces_from_path(app, cv2, path):
     bgr = cv2.imread(path, cv2.IMREAD_COLOR)
     if bgr is None:
         raise ValueError(f"cv2 не прочитал файл: {path}")
-    return _all_embeddings(app, bgr)
+    return _all_faces(app, bgr)
 
 
 def main():
@@ -63,6 +75,14 @@ def main():
     import numpy as np
     from insightface.app import FaceAnalysis
 
+    # FutureWarning «estimate is deprecated» от insightface.utils.face_align:
+    # точечно по категории и модулю, чтобы не глушить чужие варнинги.
+    warnings.filterwarnings(
+        "ignore",
+        category=FutureWarning,
+        module="insightface.utils.face_align",
+    )
+
     app = FaceAnalysis(name="buffalo_l", root=face_models, providers=["CPUExecutionProvider"],
                        allowed_modules=["detection", "recognition"])
     app.prepare(ctx_id=-1, det_size=(det_size, det_size))
@@ -73,22 +93,26 @@ def main():
     from core import best_similarity_from  # noqa: E402
 
     try:
-        embs_variant = _embs_from_path(app, cv2, variant)
+        faces_variant = _faces_from_path(app, cv2, variant)
     except Exception as e:
         # ошибка детектора на варианте — это none, не валим граф
         _log(f"детектор variant: {type(e).__name__}: {e}")
-        embs_variant = []
+        faces_variant = []
+    embs_variant = [np.asarray(f.embedding, dtype=np.float32) for f in faces_variant]
 
     embs_ref = []
     for p in refs:
         try:
-            es = _embs_from_path(app, cv2, p)
+            faces = _faces_from_path(app, cv2, p)
         except Exception as ex:
             _log(f"пропускаю эталон {p}: {type(ex).__name__}: {ex}")
             continue
-        if not es:
+        if not faces:
             continue
-        arr = np.asarray(es[0], dtype=np.float32)
+        if len(faces) > 1:
+            _log(f"эталон {p}: в эталоне {len(faces)} лиц")
+        face = _biggest_face(faces)
+        arr = np.asarray(face.embedding, dtype=np.float32)
         if not np.isfinite(arr).all():
             _log(f"эталон {p}: нечисловой эмбеддинг, пропускаю")
             continue

@@ -417,6 +417,37 @@ class TestWorker(unittest.TestCase):
         # max cos(emb_variant, centroid) ≈ 1.0 (target), не 0.0 (bystander)
         self.assertGreater(result["similarity"], 0.9)
 
+    def test_worker_picks_biggest_face_in_reference(self):
+        """Эталон с двумя лицами: нужное — крупное, лишнее — мелкое. По контракту
+        для центроида берётся самое крупное лицо эталона (по площади bbox), а не
+        «первое по уверенности»: на групповом фото главное лицо может идти вторым
+        в списке детектора.
+
+        Мутация «вернуть es[0]» в worker_similarity — этот тест краснеет:
+        es[0] здесь — мелкое лицо с ортогональным эмбеддингом, и cos с вариантом
+        был бы ≈ 0.0, а не ≈ 1.0.
+        """
+        e_target = np.array([1.0, 0.0, 0.0])
+        e_other = np.array([0.0, 1.0, 0.0])
+        # в маппинге: первым идёт мелкое чужое, вторым — крупное нужное.
+        # Если код берёт es[0], он возьмёт e_other (ортогональный) → cos ≈ 0.
+        # Если берёт самое крупное — e_target → cos ≈ 1.
+        ref_faces = [
+            (np.array([0, 0, 60, 60]), e_other),
+            (np.array([0, 0, 300, 300]), e_target),
+        ]
+        result, output, rc = self._run_worker(
+            variant_faces=e_target,
+            refs_faces=[("r1.png", ref_faces)],
+        )
+        self.assertIsNotNone(result, msg=f"нет CCS_RESULT в выводе:\n{output}")
+        self.assertEqual(result["stats"]["references_total"], 1)
+        self.assertEqual(result["stats"]["references_used"], 1)
+        # центроид из одного эталона = e_target → cos(e_target, e_target) = 1.0
+        self.assertGreater(result["similarity"], 0.9)
+        # и в логе воркер должен был предупредить, что в эталоне больше одного лица
+        self.assertIn("в эталоне 2 лиц", output)
+
 
 # ---------- node: моки subprocess.Popen, реальный folder_paths через подмену ----------
 

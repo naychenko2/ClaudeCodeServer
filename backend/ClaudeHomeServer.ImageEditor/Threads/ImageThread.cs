@@ -81,7 +81,8 @@ public sealed record ImageThread(
 // ИИ до первого запуска ложатся в него. Версия от ИИ: JobId + Variant — вариант запуска;
 // BaseVersionId и BaseStepId — версия и её шаг, от которых запускали (null — от файла или пустого
 // черновика). Steps — шаги ImageEditStep версии по порядку: у версии от ИИ первым идёт сам вариант,
-// дальше правки без ИИ; CurrentStepId — шаг версии, который сейчас её картинка
+// дальше правки без ИИ; CurrentStepId — шаг версии, который сейчас её картинка; Similarity — сходство
+// лица с эталоном персонажа (null — не считалось); MostSimilar — самая похожая среди версий своего запуска
 public sealed record ImageThreadVersion(
     string Id,
     int Number,
@@ -91,7 +92,9 @@ public sealed record ImageThreadVersion(
     string? BaseStepId,
     IReadOnlyList<string> Steps,
     string? CurrentStepId,
-    DateTime CreatedAt)
+    DateTime CreatedAt,
+    double? Similarity = null,
+    bool MostSimilar = false)
 {
     public const string OriginId = "origin";
 

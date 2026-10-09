@@ -260,11 +260,11 @@ public sealed class ImageThreadService(
             new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched, text, thread.Id, jobId));
         if (launched.Status != ImageThreadWriteStatus.Ok) return;
 
-        List<(int Variant, string StepId)> taken = [];
+        List<(int Variant, string StepId, double? Similarity)> taken = [];
         for (var n = 0; n < images.Count; n++)
         {
             var step = steps.TakeFile(ownerId, projectId, jobId, n + 1, images[n]);
-            if (step.Value is { } s) taken.Add((n + 1, s.StepId));
+            if (step.Value is { } s) taken.Add((n + 1, s.StepId, null));
             else log.LogWarning("Редактор картинок: файл {Path} задачи {JobId} не стал версией: {Error}",
                 images[n].RelativePath, jobId, step.Error);
         }
@@ -366,7 +366,7 @@ public sealed class ImageThreadService(
         if (launched.Status != ImageThreadWriteStatus.Ok)
             return Fail(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
         var finished = store.FinishLaunch(ownerId, sessionId, threadId, jobId, ImageThreadLaunchStatus.Done,
-            [(1, transformed.StepId!)],
+            [(1, transformed.StepId!, null)],
             (_, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
                 $"{(agent ? "Claude обрезал" : "Вы обрезали")} без ИИ: {label} · бесплатно · {ImageThread.Label(all[0])}", threadId, jobId));
         if (finished.Status != ImageThreadWriteStatus.Ok)
@@ -619,15 +619,15 @@ public sealed class ImageThreadService(
 
     // Варианты задачи, ещё не ставшие версиями, — шагами рабочей папки. Уже взятые пропускаются ДО
     // TakeVariant: иначе в рабочей папке остался бы лишний шаг
-    private List<(int Variant, string StepId)> TakeVariants(string ownerId, ImageEditJobDto job, ImageThread thread,
+    private List<(int Variant, string StepId, double? Similarity)> TakeVariants(string ownerId, ImageEditJobDto job, ImageThread thread,
         ImageThreadLaunch launch)
     {
-        var taken = new List<(int Variant, string StepId)>();
+        var taken = new List<(int Variant, string StepId, double? Similarity)>();
         foreach (var n in job.Variants)
         {
             if (thread.Versions.Any(v => v.JobId == job.JobId && v.Variant == n)) continue;
             var step = steps!.TakeVariant(ownerId, job.ProjectId, job.JobId, n, launch.BaseStepId, thread.File);
-            if (step.Value is { } s) taken.Add((n, s.StepId));
+            if (step.Value is { } s) taken.Add((n, s.StepId, job.Similarities is { } sim && sim.TryGetValue(n, out var similarity) ? similarity : null));
             else log.LogWarning("Редактор картинок: вариант {Variant} задачи {JobId} не стал версией: {Error}",
                 n, job.JobId, step.Error);
         }

@@ -101,7 +101,7 @@ public class ImageThreadVersionsTests : IDisposable
 
         // После запуска правка ложится уже в версию от ИИ, которая стала текущей
         _store.AddLaunch(Owner, Chat, id, Launch("job-1", ImageThreadVersion.OriginId, "s2"));
-        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "v1")]);
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "v1", null)]);
         _store.AddVersionStep(Owner, Chat, id, "s3", Revision);
 
         var t = Thread(id);
@@ -117,7 +117,7 @@ public class ImageThreadVersionsTests : IDisposable
 
         _store.AddLaunch(Owner, Chat, id, Launch("job-1", ImageThreadVersion.OriginId));
         var written = _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done,
-            [(1, "a"), (2, "b"), (3, "c")]);
+            [(1, "a", null), (2, "b", null), (3, "c", null)]);
 
         written.NewVersions.Should().HaveCount(3);
         var t = Thread(id);
@@ -129,7 +129,7 @@ public class ImageThreadVersionsTests : IDisposable
         t.CurrentVersionId.Should().Be(ai[0].Id, "следующая правка — от первого нового варианта");
         t.Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Done);
 
-        var again = _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "a")]);
+        var again = _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "a", null)]);
         again.NewVersions.Should().BeEmpty("повтор завершения ничего не дописывает");
         Thread(id).Versions.Should().HaveCount(4);
     }
@@ -140,7 +140,7 @@ public class ImageThreadVersionsTests : IDisposable
         var id = Opened();
         _store.AddLaunch(Owner, Chat, id, Launch("job-1", ImageThreadVersion.OriginId));
 
-        var partial = _store.AddLaunchVersions(Owner, Chat, id, "job-1", [(1, "a"), (2, "b")]);
+        var partial = _store.AddLaunchVersions(Owner, Chat, id, "job-1", [(1, "a", null), (2, "b", null)]);
         partial.NewVersions.Should().HaveCount(2);
         Thread(id).Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Running, "статус меняет только финал");
         var first = Thread(id).Versions.Single(v => v.Variant == 1);
@@ -149,7 +149,7 @@ public class ImageThreadVersionsTests : IDisposable
 
         IReadOnlyList<ImageThreadVersion>? logged = null;
         var finished = _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done,
-            [(1, "a"), (2, "b"), (3, "c")], (_, all) =>
+            [(1, "a", null), (2, "b", null), (3, "c", null)], (_, all) =>
             {
                 logged = all;
                 return null;
@@ -163,12 +163,101 @@ public class ImageThreadVersionsTests : IDisposable
         Thread(id).Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Done);
     }
 
+    // Варианты приходят по ходу в порядке готовности 2, 1, 4, 3
+    private void RunLaunchInReadyOrder(string id, string job, params (int Variant, double? Similarity)[] ready)
+    {
+        _store.AddLaunch(Owner, Chat, id, Launch(job, ImageThreadVersion.OriginId));
+        foreach (var (variant, similarity) in ready)
+            _store.AddLaunchVersions(Owner, Chat, id, job, [(variant, "s" + variant, similarity)]);
+    }
+
+    [Fact]
+    public void Самый_похожий_вариант_помечен_и_становится_текущей_версией()
+    {
+        var id = Opened();
+        RunLaunchInReadyOrder(id, "job-1", (2, 0.7), (1, 0.8), (4, null), (3, 0.75));
+
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, []);
+
+        var t = Thread(id);
+        var ai = t.Versions.Where(v => !v.IsOrigin).ToList();
+        ai.Select(v => v.Variant).Should().Equal(2, 1, 4, 3);
+        ai.Select(v => v.Number).Should().Equal(1, 2, 3, 4);
+        ai.Select(v => v.Similarity).Should().Equal(0.7, 0.8, null, 0.75);
+        ai.Where(v => v.MostSimilar).Should().ContainSingle().Which.Variant.Should().Be(1);
+        t.CurrentVersionId.Should().Be(ai.Single(v => v.MostSimilar).Id);
+    }
+
+    [Fact]
+    public void Ничья_по_сходству_отдаёт_пометку_меньшему_номеру()
+    {
+        var id = Opened();
+        RunLaunchInReadyOrder(id, "job-1", (1, 0.5), (2, 0.9), (3, 0.9));
+
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, []);
+
+        Thread(id).Versions.Single(v => v.MostSimilar).Number.Should().Be(2);
+    }
+
+    [Fact]
+    public void Если_человек_выбрал_другую_версию_пометка_есть_а_текущая_не_меняется()
+    {
+        var id = Opened();
+        RunLaunchInReadyOrder(id, "job-1", (2, 0.7), (1, 0.8), (3, 0.6));
+        var chosen = Thread(id).Versions.Single(v => v.Variant == 3);
+        _store.SetCurrentVersion(Owner, Chat, id, chosen.Id, null, Revision);
+
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, []);
+
+        var t = Thread(id);
+        t.Versions.Single(v => v.MostSimilar).Variant.Should().Be(1);
+        t.CurrentVersionId.Should().Be(chosen.Id, "выбор человека важнее самого похожего");
+    }
+
+    [Fact]
+    public void Без_сходства_пометки_нет_и_текущая_первая_новая_а_json_версии_прежний()
+    {
+        var id = Opened();
+        _store.AddLaunch(Owner, Chat, id, Launch("job-1", ImageThreadVersion.OriginId));
+
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "a", null), (2, "b", null)]);
+
+        var t = Thread(id);
+        var ai = t.Versions.Where(v => !v.IsOrigin).ToList();
+        ai.Should().OnlyContain(v => v.Similarity == null && !v.MostSimilar);
+        t.CurrentVersionId.Should().Be(ai[0].Id);
+        var json = System.Text.Json.JsonSerializer.Serialize(ai[0]);
+        System.Text.Json.JsonSerializer.Deserialize<ImageThreadVersion>(json)!.Similarity.Should().BeNull();
+        var old = System.Text.Json.JsonSerializer.Deserialize<ImageThreadVersion>(
+            "{\"Id\":\"x\",\"Number\":1,\"JobId\":\"j\",\"Variant\":1,\"BaseVersionId\":null,\"BaseStepId\":null,\"Steps\":[\"a\"],\"CurrentStepId\":\"a\",\"CreatedAt\":\"2026-01-01T00:00:00Z\"}");
+        old!.Similarity.Should().BeNull();
+        old.MostSimilar.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Повтор_завершения_запуска_не_двигает_пометку_и_текущую()
+    {
+        var id = Opened();
+        RunLaunchInReadyOrder(id, "job-1", (1, 0.5), (2, 0.9));
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, []);
+        var first = Thread(id);
+        var other = first.Versions.Single(v => v.Variant == 1);
+        _store.SetCurrentVersion(Owner, Chat, id, other.Id, null, Revision);
+        var before = Thread(id);
+
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(3, "c", 0.99)]);
+
+        var t = Thread(id);
+        t.CurrentVersionId.Should().Be(before.CurrentVersionId);
+        t.Versions.Should().BeEquivalentTo(before.Versions);
+    }
+
     [Fact]
     public void Продолжить_от_старой_версии_и_запуск_растят_новые_версии_от_неё_а_старые_не_тронуты()
     {
         var id = Opened();
         _store.AddLaunch(Owner, Chat, id, Launch("job-1", ImageThreadVersion.OriginId));
-        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "a"), (2, "b")]);
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "a", null), (2, "b", null)]);
         var second = Thread(id).Versions.Single(v => v.Number == 2);
         var before = Thread(id).Versions;
 
@@ -176,7 +265,7 @@ public class ImageThreadVersionsTests : IDisposable
         continued.Status.Should().Be(ImageThreadWriteStatus.Ok);
         continued.State.Focus.Should().Be(id);
         _store.AddLaunch(Owner, Chat, id, Launch("job-2", second.Id, "b"));
-        _store.FinishLaunch(Owner, Chat, id, "job-2", ImageThreadLaunchStatus.Done, [(1, "c")]);
+        _store.FinishLaunch(Owner, Chat, id, "job-2", ImageThreadLaunchStatus.Done, [(1, "c", null)]);
 
         var t = Thread(id);
         t.Versions.Take(3).Should().BeEquivalentTo(before, "продолжение ничего не удаляет и не меняет");
@@ -192,12 +281,12 @@ public class ImageThreadVersionsTests : IDisposable
     {
         var id = Opened();
         _store.AddLaunch(Owner, Chat, id, Launch("job-1", ImageThreadVersion.OriginId));
-        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "a")]);
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "a", null)]);
         var first = Thread(id).CurrentVersionId!;
         _store.AddLaunch(Owner, Chat, id, Launch("job-2", first, "a"));
 
         _store.SetCurrentVersion(Owner, Chat, id, ImageThreadVersion.OriginId, null, Revision);
-        _store.FinishLaunch(Owner, Chat, id, "job-2", ImageThreadLaunchStatus.Done, [(1, "b")]);
+        _store.FinishLaunch(Owner, Chat, id, "job-2", ImageThreadLaunchStatus.Done, [(1, "b", null)]);
 
         Thread(id).CurrentVersionId.Should().Be(ImageThreadVersion.OriginId, "человек выбрал, от чего править дальше");
     }
@@ -223,7 +312,7 @@ public class ImageThreadVersionsTests : IDisposable
         _store.AddLaunch(Owner, Chat, running, Launch("job-1", ImageThreadVersion.OriginId));
         var done = Opened("b.png");
         _store.AddLaunch(Owner, Chat, done, Launch("job-2", ImageThreadVersion.OriginId));
-        _store.FinishLaunch(Owner, Chat, done, "job-2", ImageThreadLaunchStatus.Done, [(1, "a")]);
+        _store.FinishLaunch(Owner, Chat, done, "job-2", ImageThreadLaunchStatus.Done, [(1, "a", null)]);
 
         _store.Remove(Owner, Chat, running, Revision).Status.Should().Be(ImageThreadWriteStatus.Invalid);
         _store.Remove(Owner, Chat, done, Revision).Status.Should().Be(ImageThreadWriteStatus.Invalid);
@@ -235,7 +324,7 @@ public class ImageThreadVersionsTests : IDisposable
         var id = Opened();
         _store.AddVersionStep(Owner, Chat, id, "s1", Revision);
         _store.AddLaunch(Owner, Chat, id, Launch("job-1", ImageThreadVersion.OriginId, "s1"));
-        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "v1")]);
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "v1", null)]);
 
         _store.ReferencedSteps(Owner).Should().Contain(["s1", "v1"]);
     }
@@ -288,7 +377,7 @@ public class ImageThreadVersionsTests : IDisposable
         t.Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Interrupted);
         t.HasRunningLaunch.Should().BeFalse();
         _store.Get(Owner, Chat).Events.Should().ContainSingle(e => e.Kind == ImageThreadEventKinds.Interrupted && e.JobId == "job-lost");
-        _store.FinishLaunch(Owner, Chat, id, "job-lost", ImageThreadLaunchStatus.Done, [(1, "a")]).NewVersions
+        _store.FinishLaunch(Owner, Chat, id, "job-lost", ImageThreadLaunchStatus.Done, [(1, "a", null)]).NewVersions
             .Should().BeEmpty("потерянный запуск не оживает");
         ImageEditorStateContributor.RenderThreads(_store.Get(Owner, Chat), [], _ => null)
             .Should().Contain("потерян при перезапуске сервера");
@@ -299,7 +388,7 @@ public class ImageThreadVersionsTests : IDisposable
     {
         var id = Opened();
         _store.AddLaunch(Owner, Chat, id, Launch("job-1", ImageThreadVersion.OriginId));
-        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "a"), (2, "b")]);
+        _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done, [(1, "a", null), (2, "b", null)]);
         var second = Thread(id).Versions.Single(v => v.Number == 2);
         _store.SetCurrentVersion(Owner, Chat, id, second.Id, null, Revision);
         _store.AddLaunch(Owner, Chat, id, Launch("job-2", second.Id, "b"));

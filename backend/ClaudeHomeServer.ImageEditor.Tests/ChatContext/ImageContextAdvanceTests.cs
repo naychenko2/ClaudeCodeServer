@@ -45,7 +45,7 @@ public sealed class ImageContextAdvanceTests : IDisposable
     {
         _threads.AddLaunch(Owner, Chat, threadId, new ImageThreadLaunch(jobId, baseVersion, null, _threads.Now(),
             ImageThreadLaunchStatus.Running, "human", "синий"));
-        var written = _threads.FinishLaunch(Owner, Chat, threadId, jobId, ImageThreadLaunchStatus.Done, [(1, "s-" + jobId)]);
+        var written = _threads.FinishLaunch(Owner, Chat, threadId, jobId, ImageThreadLaunchStatus.Done, [(1, "s-" + jobId, null)]);
         await _service.PublishVersionsAsync(Owner, Project, Chat, threadId, written, "human");
         return written.NewVersions.Single();
     }
@@ -74,7 +74,7 @@ public sealed class ImageContextAdvanceTests : IDisposable
 
         _threads.AddLaunch(Owner, Chat, id, new ImageThreadLaunch("job-2", ImageThreadVersion.OriginId, null, _threads.Now(),
             ImageThreadLaunchStatus.Running, "human", "x"));
-        var written = _threads.FinishLaunch(Owner, Chat, id, "job-2", ImageThreadLaunchStatus.Done, [(1, "s2")]);
+        var written = _threads.FinishLaunch(Owner, Chat, id, "job-2", ImageThreadLaunchStatus.Done, [(1, "s2", null)]);
         await _service.PublishVersionsAsync(Owner, Project, Chat, id, written, "human");
 
         PinnedVersion().Should().Be(v1.Id);

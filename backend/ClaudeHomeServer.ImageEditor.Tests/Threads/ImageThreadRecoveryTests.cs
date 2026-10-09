@@ -100,7 +100,7 @@ public class ImageThreadRecoveryTests : IDisposable
         var thread = before.Store.Create(Owner, Chat, "images/hero.png", null, focus: true).Thread;
         before.Store.AddLaunch(Owner, Chat, thread.Id, new ImageThreadLaunch("job-partial", ImageThreadVersion.OriginId, null,
             before.Store.Now(), ImageThreadLaunchStatus.Running, "human", "синий фон"));
-        before.Store.AddLaunchVersions(Owner, Chat, thread.Id, "job-partial", [(1, "a"), (2, "b")]);
+        before.Store.AddLaunchVersions(Owner, Chat, thread.Id, "job-partial", [(1, "a", null), (2, "b", null)]);
 
         var after = Instance();
         (await after.Threads.RecoverInterruptedAsync(after.Jobs, default)).Should().Be(1);

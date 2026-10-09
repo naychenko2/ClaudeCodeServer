@@ -264,7 +264,7 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     // меняет только FinishLaunch (иначе финал не нашёл бы запуск Running и потерял бы хвост).
     // Журнал не пишется: строка одна на весь запуск, в финале
     public ImageThreadWrite AddLaunchVersions(string ownerId, string sessionId, string threadId, string jobId,
-        IReadOnlyList<(int Variant, string StepId)> variants) =>
+        IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants) =>
         Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
         {
             if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
@@ -281,7 +281,7 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     // версия, если человек не сменил текущую, пока шла генерация. Запуск уже не идёт (повтор, потерян
     // при перезапуске) — ничего не меняет. log получает ВСЕ версии запуска, а не только прирост
     public ImageThreadWrite FinishLaunch(string ownerId, string sessionId, string threadId, string jobId, string status,
-        IReadOnlyList<(int Variant, string StepId)> variants,
+        IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants,
         Func<ImageThread, IReadOnlyList<ImageThreadVersion>, ImageThreadEvent?>? log = null) =>
         Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
         {
@@ -293,21 +293,40 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             {
                 Launches = [.. grown.Launches.Select(l => l.JobId == jobId ? l with { Status = status } : l)],
             };
+            after = WithMostSimilar(after, launch);
             List<ImageThreadVersion> all = [.. after.Versions.Where(v => v.JobId == jobId)];
             return Replace(state, after, log?.Invoke(after, all)) with { NewVersions = added };
         });
 
+    // Самая похожая версия запуска (максимум Similarity, при ничьей — меньший номер) получает MostSimilar и
+    // становится текущей, но только пока текущей остаётся основа запуска или первая версия запуска
+    // (её поставил авто-сдвиг): выбор человека не трогаем. Нет ни одного числа — ничего не меняется
+    private static ImageThread WithMostSimilar(ImageThread thread, ImageThreadLaunch launch)
+    {
+        var own = thread.Versions.Where(v => v.JobId == launch.JobId).OrderBy(v => v.Number).ToList();
+        var best = own.Where(v => v.Similarity != null)
+            .OrderByDescending(v => v.Similarity).ThenBy(v => v.Number).FirstOrDefault();
+        if (best is null) return thread;
+        var current = thread.CurrentVersionId;
+        var follow = current == launch.BaseVersionId || (own.Count > 0 && current == own[0].Id);
+        return thread with
+        {
+            Versions = [.. thread.Versions.Select(v => v.JobId == launch.JobId ? v with { MostSimilar = v.Id == best.Id } : v)],
+            CurrentVersionId = follow ? best.Id : current,
+        };
+    }
+
     // Версии вариантов запуска внизу нити; пара (JobId, Variant), уже ставшая версией, пропускается.
     // Текущая сдвигается на первую новую, только пока текущей остаётся основа запуска
     private (ImageThread After, List<ImageThreadVersion> Added) WithLaunchVersions(ImageThread thread,
-        ImageThreadLaunch launch, IReadOnlyList<(int Variant, string StepId)> variants)
+        ImageThreadLaunch launch, IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants)
     {
         var number = thread.Versions.Max(v => v.Number) + 1;
         var now = Now();
         List<ImageThreadVersion> added = [.. variants
             .Where(v => !thread.Versions.Any(x => x.JobId == launch.JobId && x.Variant == v.Variant))
             .Select((v, i) => new ImageThreadVersion(NewId(), number + i, launch.JobId,
-                v.Variant, launch.BaseVersionId, launch.BaseStepId, [v.StepId], v.StepId, now))];
+                v.Variant, launch.BaseVersionId, launch.BaseStepId, [v.StepId], v.StepId, now, v.Similarity))];
         var moveCurrent = added.Count > 0 && thread.CurrentVersionId == launch.BaseVersionId;
         return (thread with
         {

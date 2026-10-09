@@ -227,9 +227,56 @@ public class CharacterStoreTests : IDisposable
 
         var request = EditRequestComposer.Compose(input, ImageEditOp.Edit, model, 1).Value!;
 
-        request.Character.Should().Be(new CharacterRef("anya", "Аня", "каре, веснушки"));
+        request.Character.Should().BeEquivalentTo(new CharacterRef("anya", "Аня", "каре, веснушки"),
+            o => o.Excluding(c => c.FacePhotos));
         request.References.Where(r => r.Role == ReferenceRole.Character).Should().HaveCount(3);
         request.Prompt.Should().Contain("Аня").And.Contain("каре, веснушки");
+    }
+
+    [Fact]
+    public void FacePhotos_содержит_все_фото_а_Photos_ограничено_maxPhotos()
+    {
+        var m = Create("Аня");
+        var character = CharacterStore.ForRequest(_root, m.Slug, maxPhotos: 1)!;
+        character.Photos.Should().HaveCount(1);
+        character.Ref.FacePhotos.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void FacePhotos_не_берёт_симлинк_и_битый_файл()
+    {
+        var m = Create("Аня");
+        var dir = Path.Combine(_root, CharacterStore.Folder, m.Slug);
+        var files = m.Photos.Select(p => p.File).ToList();
+        File.WriteAllBytes(Path.Combine(dir, files[1]), [1, 2, 3]);
+        var target = Path.Combine(_base, "outside.jpg");
+        File.WriteAllBytes(target, Jpeg(7));
+        File.Delete(Path.Combine(dir, files[2]));
+        try { File.CreateSymbolicLink(Path.Combine(dir, files[2]), target); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            return; // Windows без прав на ссылки — проверка идёт в CI на Linux
+        }
+
+        CharacterStore.ForRequest(_root, m.Slug)!.Ref.FacePhotos.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void FacePhotos_не_больше_десяти_при_двенадцати_фото()
+    {
+        var m = Create("Аня");
+        var dir = Path.Combine(_root, CharacterStore.Folder, m.Slug);
+        var json = JsonNode.Parse(File.ReadAllText(ManifestPath(m)))!;
+        var photos = json["photos"]!.AsArray();
+        for (var i = 4; i <= 12; i++)
+        {
+            var file = $"face-{i:00}.jpg";
+            File.WriteAllBytes(Path.Combine(dir, file), Jpeg((byte)i));
+            photos.Add(new JsonObject { ["file"] = file });
+        }
+        File.WriteAllText(ManifestPath(m), json.ToJsonString());
+
+        CharacterStore.ForRequest(_root, m.Slug)!.Ref.FacePhotos.Should().HaveCount(10);
     }
 
     private string ManifestPath(CharacterManifest m) =>

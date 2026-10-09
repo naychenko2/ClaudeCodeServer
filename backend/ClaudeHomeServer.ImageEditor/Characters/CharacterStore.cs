@@ -230,19 +230,24 @@ public static partial class CharacterStore
         var dir = CharacterDir(root, slug);
         if (manifest is null || dir is null) return null;
 
+        var ordered = manifest.Photos.OrderByDescending(p => p.Primary).ToList();
         var photos = new List<ReferenceImage>();
-        foreach (var photo in manifest.Photos.OrderByDescending(p => p.Primary))
+        var facePhotos = new List<byte[]>();
+        foreach (var photo in ordered)
         {
-            if (photos.Count >= maxPhotos) break;
+            if (photos.Count >= maxPhotos && facePhotos.Count >= MaxPhotos) break;
             var full = PhotoPath(dir, photo.File);
             if (full is null || !File.Exists(full) || IsLink(full)) continue;
             var bytes = File.ReadAllBytes(full);
             var ext = ImageFormatSniffer.DetectExtension(bytes);
             if (ext is null) continue;
-            photos.Add(new ReferenceImage(bytes, ContentTypeOf(ext), ReferenceRole.Character, manifest.Name));
+            if (photos.Count < maxPhotos)
+                photos.Add(new ReferenceImage(bytes, ContentTypeOf(ext), ReferenceRole.Character, manifest.Name));
+            if (facePhotos.Count < MaxPhotos) facePhotos.Add(bytes);
         }
         if (photos.Count == 0) return null;
-        return new CharacterForRequest(new CharacterRef(manifest.Slug, manifest.Name, manifest.Description, manifest.ReadLora()), photos);
+        return new CharacterForRequest(
+            new CharacterRef(manifest.Slug, manifest.Name, manifest.Description, manifest.ReadLora(), facePhotos), photos);
     }
 
     // Абсолютный путь папки персонажа; null — slug не проходит белый список, путь вышел за

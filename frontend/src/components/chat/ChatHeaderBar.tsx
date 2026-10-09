@@ -32,7 +32,7 @@ import { C, FONT, FS, R, SP, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } fro
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
-import { Badge, BackButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep } from '../ui';
+import { Badge, BackButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip } from '../ui';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
@@ -129,8 +129,10 @@ function RateRow({ w, pip }: { w: RateWindow; pip?: ReactNode }) {
 // wide — более широкий поповер на узких раскладках (мобил/планшет: для объединённого
 // чипа с несколькими секциями — шире → меньше переносов → ниже по высоте, помещается на экран).
 // isCompact — планшет (использует мобильную механику поповера wide).
-function BadgeShell({ label, amount, title, ariaLabel, isMobile, isCompact, tone, ring, wide, pulse, resetKey, children }: {
+function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact, tone, ring, wide, pulse, resetKey, children }: {
   label?: string; amount: React.ReactNode; title: string; ariaLabel?: string; isMobile?: boolean; isCompact?: boolean;
+  // Оформленная подсказка вместо нативного title (тот тогда не ставится — иначе две подсказки)
+  tip?: React.ReactNode;
   tone?: 'warn' | 'danger'; ring?: boolean; wide?: boolean; pulse?: boolean;
   // Попап показывает данные конкретного чата — при смене чата закрываем
   resetKey?: string;
@@ -144,12 +146,11 @@ function BadgeShell({ label, amount, title, ariaLabel, isMobile, isCompact, tone
   // На планшете поповер следует той же мобильной геометрии — wide крепится fixed к краю
   // экрана, иначе absolute+right:0 уезжает влево за экран.
   const compact = isCompact || isMobile;
-  return (
-    <div style={{ position: 'relative', flexShrink: 0 }}>
+  const button = (
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        title={title}
+        title={tip ? undefined : title}
         aria-label={ariaLabel}
         style={{
           display: 'flex', alignItems: 'center',
@@ -165,6 +166,12 @@ function BadgeShell({ label, amount, title, ariaLabel, isMobile, isCompact, tone
         {label && <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</span>}
         {amount}
       </button>
+  );
+  return (
+    <div style={{ position: 'relative', flexShrink: 0 }}>
+      {/* Пилюли стоят у правой кромки шапки — плашка прижата к правому краю. Пока открыт
+          поповер, подсказка про то же самое не нужна */}
+      {tip ? <Tooltip content={tip} align="end" disabled={open}>{button}</Tooltip> : button}
       {/* Пульс-индикатор «на бегу» — сигнал активного workflow без отдельного чипа в ряду */}
       {pulse && <span style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: C.accent, border: `2px solid ${C.bgPanel}`, animation: 'pulsedot 1.2s ease-in-out infinite', pointerEvents: 'none' }} />}
       {open && (
@@ -784,18 +791,38 @@ export function RingPillBadge(props: {
     </>
   );
 
-  // Подсказка и aria-label — всё полными подписями, доступно без клика
-  const parts: string[] = [];
-  if (wfActive) parts.push(`Workflow ${activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт'}`);
-  if (apiCost) parts.push(`Claude по API-ключу ${fmtUsd(cost.cost)}`);
-  if (isCompacting) parts.push('Контекст: идёт сжатие');
-  else if (showCtx) parts.push(estimate.pct !== undefined ? `Контекст ${estimate.pct}%` : 'Контекст сжат');
+  // Подсказка и aria-label — всё полными подписями, доступно без клика. У строк, за
+  // которыми стоит кольцо, — пип этого кольца (как в поповере): так видно, что есть что
+  const parts: { text: string; pip?: { slot: 0 | 1 | 2; level: RateWindow['level'] } }[] = [];
+  if (wfActive) parts.push({ text: `Workflow ${activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт'}` });
+  if (apiCost) parts.push({ text: `Claude по API-ключу ${fmtUsd(cost.cost)}` });
+  const ctxPip = { slot: 0 as const, level: estimate.level };
+  if (isCompacting) parts.push({ text: 'Контекст: идёт сжатие', pip: ctxPip });
+  else if (showCtx) parts.push({ text: estimate.pct !== undefined ? `Контекст ${estimate.pct}%` : 'Контекст сжат', pip: ctxPip });
   if (isCliProvider) {
-    if (balance) parts.push(`${providerName}: ${isQuota ? 'израсходовано' : 'остаток'} ${providerPillLabel(balance)}`);
+    if (balance) parts.push({
+      text: `${providerName}: ${isQuota ? 'израсходовано' : 'остаток'} ${providerPillLabel(balance)}`,
+      pip: isQuota ? { slot: 1, level: provLevel } : undefined,
+    });
   } else {
-    parts.push(...ratePillSegments(windows).map(s => `${windowLabel(s.limitType)} ${s.text}${s.stale ? ' (данные устарели)' : ''}`));
+    parts.push(...ratePillSegments(windows).map((s, i) => ({
+      text: `${windowLabel(s.limitType)} ${s.text}${s.stale ? ' (данные устарели)' : ''}`,
+      pip: i < RING_WINDOWS ? { slot: (i + 1) as 1 | 2, level: s.level } : undefined,
+    })));
   }
-  const title = (parts.length > 0 ? parts.join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
+  const title = (parts.length > 0 ? parts.map(p => p.text).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
+  const tip = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs + 1 }}>
+      {parts.length > 0 ? parts.map(p => (
+        <div key={p.text} style={{ display: 'flex', alignItems: 'center', gap: SP.xs + 2 }}>
+          {/* Строки без кольца — с пустым местом под пип, чтобы текст шёл одной колонкой */}
+          {p.pip ? <RingPip slot={p.pip.slot} level={p.pip.level} /> : <span style={{ width: 12, flexShrink: 0 }} />}
+          <span>{p.text}</span>
+        </div>
+      )) : <div>Контекст и расход сессии</div>}
+      <div style={{ color: C.textMuted, fontSize: FS.xs }}>Нажмите для деталей</div>
+    </div>
+  );
 
   const sectionDivider: React.CSSProperties = {
     marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.bgInset}`,
@@ -821,6 +848,7 @@ export function RingPillBadge(props: {
       pulse={wfActive}
       resetKey={props.resetKey}
       title={title}
+      tip={tip}
       ariaLabel={title}
     >
       {wfActive && (

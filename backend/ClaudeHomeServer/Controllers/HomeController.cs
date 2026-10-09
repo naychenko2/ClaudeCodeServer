@@ -43,7 +43,9 @@ public class HomeController(SessionManager sessions, ProjectManager projects, IT
             // фильтра, и архивировав 10 свежих чатов, пользователь получил бы пустой блок
             // «Недавние» (план v4, шаг 4). Это не «дефолтный GET списка» — контракт не ломается.
             .Where(s => !s.IsLive() && s.Status is not SessionStatus.Orphaned && !s.IsArchived)
-            .Take(recent)
+            // Закреплённые идут вне лимита: старый закреплённый чат не должен выпадать из
+            // переключателя чатов из-за свежих. Один проход — без дублей, порядок UpdatedAt сохранён
+            .Where((s, i) => i < recent || s.IsPinned)
             .Select(s => ToDto(s, projectNames, tasks))
             .ToList();
 

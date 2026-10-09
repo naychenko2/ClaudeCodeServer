@@ -58,6 +58,40 @@ public class HomeControllerArchiveTests(TestWebApplicationFactory factory)
     }
 
     [Fact]
+    public async Task Summary_ЗакреплённыеИдутВнеЛимитаНедавних()
+    {
+        var sessions = factory.Services.GetRequiredService<SessionManager>();
+        // Старый закреплённый чат, следом пятеро свежих — лимит recent=3 его бы отсёк
+        var pinnedOld = await CreateChatAsync();
+        var fresh = new List<string>();
+        for (var i = 0; i < 5; i++) fresh.Add(await CreateChatAsync());
+        sessions.GetById(pinnedOld)!.IsPinned = true;
+        // Закреплённый архивный вне лимита не воскресает: архив режется раньше
+        sessions.GetById(fresh[0])!.IsPinned = true;
+        var resp = await _client.PutAsJsonAsync($"/api/chats/{fresh[0]}/archived", new { archived = true });
+        resp.EnsureSuccessStatusCode();
+
+        List<string?> recentIds;
+        try
+        {
+            var respSummary = await _client.GetAsync("/api/home/summary?recent=3");
+            var body = JsonSerializer.Deserialize<JsonElement>(await respSummary.Content.ReadAsStringAsync());
+            recentIds = body.GetProperty("recent").EnumerateArray()
+                .Select(e => e.GetProperty("id").GetString()).ToList();
+        }
+        finally
+        {
+            // Фикстура общая на класс: закреплённый вне лимита попал бы в выдачу соседних тестов
+            sessions.GetById(pinnedOld)!.IsPinned = false;
+        }
+
+        recentIds.Should().Contain(pinnedOld, "закреплённый чат выдаётся независимо от recent");
+        recentIds.Should().OnlyHaveUniqueItems("закреплённый в окне лимита не дублируется");
+        recentIds.Should().NotContain(fresh[0], "архивный закреплённый не возвращается");
+        recentIds.Where(id => id != pinnedOld).Should().HaveCount(3, "лимит для остальных прежний");
+    }
+
+    [Fact]
     public async Task Summary_ПолеArchivedСчитаетСервер_НаГотовомBool()
     {
         var sessions = factory.Services.GetRequiredService<SessionManager>();

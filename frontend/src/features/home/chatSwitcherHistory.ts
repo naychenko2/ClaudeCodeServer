@@ -24,16 +24,28 @@ const hasFlagIn = (win: SwitcherWindow) => !!(win.history.state as Record<string
 // отличало настоящее закрытие от перемонтажа StrictMode (тот монтирует снова сразу)
 let liveSheets = 0;
 
+// Снятие записи шторки уже идёт: «назад» асинхронен, и второй back() до его popstate
+// увёл бы на запись раньше, мимо чата под шторкой. Флаг общий для всех путей снятия
+// (контроллер шторки и afterChatSwitcherClosed): тот, кто пришёл вторым, ждёт тот же popstate
+let popping = false;
+
+/** Снять запись шторки одним «назад» на всех; then — после всех слушателей popstate:
+ *  они применяют снимок под шторкой (тот же чат), и then его перебивает */
+function popSheetRecord(win: SwitcherWindow, then?: () => void) {
+  if (then) win.addEventListener('popstate', () => setTimeout(then, 0), { once: true });
+  if (popping) return;
+  popping = true;
+  win.addEventListener('popstate', () => { popping = false; }, { once: true });
+  win.history.back();
+}
+
 /** Выполнить fn, когда запись шторки снята. Для перезаписи текущей записи истории
  *  (navReplace) при открытой шторке: replaceState затёр бы флаг, а запись под ним
  *  осталась бы дублем. Поэтому сперва «назад» снимает запись шторки (сама шторка
  *  закроется на том же popstate), и только потом fn перезаписывает запись под ней. */
 export function afterChatSwitcherClosed(fn: () => void, win: SwitcherWindow = window) {
   if (!hasFlagIn(win)) { fn(); return; }
-  // Как и выбор в шторке — после всех слушателей popstate: они применяют снимок под
-  // шторкой (тот же чат), и fn его перебивает
-  win.addEventListener('popstate', () => setTimeout(fn, 0), { once: true });
-  win.history.back();
+  popSheetRecord(win, fn);
 }
 
 export interface SwitcherController<T> {
@@ -68,7 +80,7 @@ export function createSwitcherController<T>(
   const close = () => {
     if (closing) return;
     closing = true;
-    if (hasFlag()) win.history.back();
+    if (hasFlag()) popSheetRecord(win);
     else onClose();
   };
 
@@ -91,7 +103,7 @@ export function createSwitcherController<T>(
         // afterChatSwitcherClosed — иначе снимать здесь было бы уже нечего
         if (closedByPop) return;
         setTimeout(() => {
-          if (liveSheets === 0 && hasFlag()) win.history.back();
+          if (liveSheets === 0 && hasFlag()) popSheetRecord(win);
         }, 0);
       };
     },
@@ -106,8 +118,7 @@ export function createSwitcherController<T>(
         // чем очередь дойдёт до её слушателя (popstate — дискретное событие, React
         // рендерит между слушателями), и переход потерялся бы вместе с ней. Сам переход —
         // после всех слушателей, применяющих прежний снимок: иначе они перебили бы его
-        win.addEventListener('popstate', () => setTimeout(() => deps.open(item), 0), { once: true });
-        win.history.back();
+        popSheetRecord(win, () => deps.open(item));
       }
       else { onClose(); deps.open(item); }
     },

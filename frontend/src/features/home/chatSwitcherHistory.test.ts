@@ -125,6 +125,29 @@ describe('шторка чатов: проводка истории', () => {
     t.unmount();
   });
 
+  it('закрытие шторки и перезапись записи в одном окне — один back(), запись под шторкой цела', () => {
+    const t = setup();
+    const done: unknown[] = [];
+    t.ctl.close();
+    afterChatSwitcherClosed(() => done.push(t.fw.top), t.fw.win);
+    settle();
+    expect(t.fw.backCalls).toBe(1);
+    expect(done).toEqual([X]);
+    t.unmount();
+  });
+
+  it('перезапись записи, а следом крестик шторки — один back()', () => {
+    const t = setup();
+    const done: unknown[] = [];
+    afterChatSwitcherClosed(() => done.push(t.fw.top), t.fw.win);
+    t.ctl.close();
+    settle();
+    expect(t.fw.backCalls).toBe(1);
+    expect(done).toEqual([X]);
+    expect(t.closed).toBe(1);
+    t.unmount();
+  });
+
   it('без шторки перезапись идёт сразу', () => {
     const fw = fakeWindow(X);
     let ran = false;

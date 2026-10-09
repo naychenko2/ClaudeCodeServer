@@ -42,6 +42,7 @@ public enum LocalImageOp { Generate, Edit, FaceDetail }
 // модели («удали» кистью). Маску-образец Qwen-Image не понимает, а серую заливку — да.
 // Pad — только у Edit: холст расширяется полями нейтрального серого до модели («Дорисовать за
 // края»), результат — в пропорции расширенного холста
+// Lora — только у Edit и у Generate с образцами
 public sealed record LocalImageRequest(
     LocalImageOp Op,
     string Prompt,
@@ -52,7 +53,11 @@ public sealed record LocalImageRequest(
     byte[]? EraseMask = null,
     LocalImagePad? Pad = null,
     int? Width = null,
-    int? Height = null);
+    int? Height = null,
+    LocalImageLora? Lora = null);
+
+// LoRA персонажа: имя файла в ComfyUI и сила применения
+public sealed record LocalImageLora(string Name, double Strength);
 
 // Поля в пикселях холста по сторонам
 public sealed record LocalImagePad(int Left, int Top, int Right, int Bottom);

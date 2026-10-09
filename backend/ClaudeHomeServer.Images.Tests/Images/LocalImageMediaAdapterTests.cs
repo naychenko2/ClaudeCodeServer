@@ -176,6 +176,45 @@ public class LocalImageMediaAdapterTests
         _comfy.Requests.Should().HaveCount(requestsBefore);
     }
 
+    [Fact]
+    public async Task Правка_с_Lora_кладёт_узел_lora_в_граф()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with { Lora = new LocalImageLora("hero.safetensors", 0.8) }, default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph["lora"]!["inputs"]!["lora_name"]!.GetValue<string>().Should().Be("hero.safetensors");
+        graph["lora"]!["inputs"]!["strength_model"]!.GetValue<double>().Should().Be(0.8);
+    }
+
+    [Fact]
+    public async Task Правка_без_Lora_узла_lora_нет()
+    {
+        var adapter = Build();
+
+        (await adapter.SubmitAsync(Edit(), default)).Error.Should().BeNull();
+
+        _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject().ContainsKey("lora").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Генерация_по_образцам_с_Lora_кладёт_узел_lora()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Op = LocalImageOp.Generate,
+            Aspect = "1:1",
+            Lora = new LocalImageLora("hero.safetensors", 0.8),
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject().ContainsKey("lora").Should().BeTrue();
+    }
+
     // «Дорисовать за края»: холст расширяется серыми полями до ComfyUI, латент — в пропорции холста
     [Fact]
     public async Task Дорисовка_расширяет_холст_серыми_полями_и_латент_по_холсту()

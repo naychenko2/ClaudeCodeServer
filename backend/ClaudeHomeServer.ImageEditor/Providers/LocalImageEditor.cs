@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
@@ -234,7 +235,9 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     private static string WithTrigger(string prompt, ImageEditRequest req)
     {
         if (req.Character?.Lora is not { } l) return prompt;
-        return prompt.StartsWith(l.Trigger, StringComparison.OrdinalIgnoreCase) ? prompt : $"photo of {l.Trigger}, {prompt}";
+        // Триггер уже есть в промпте отдельным словом (не обязательно в начале) — второй раз не добавляем
+        var present = Regex.IsMatch(prompt, $@"(?<![\p{{L}}\p{{N}}_]){Regex.Escape(l.Trigger)}(?![\p{{L}}\p{{N}}_])", RegexOptions.IgnoreCase);
+        return present ? prompt : $"photo of {l.Trigger}, {prompt}";
     }
 
     // at — отчёт о постановке прогона: его номер и ETA едут в каждой стадии ожидания

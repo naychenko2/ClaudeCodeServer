@@ -491,6 +491,20 @@ public class LocalImageEditorTests : IDisposable
         sent.Images.Should().HaveCount(op == ImageEditOp.Edit ? 2 : 1);
     }
 
+    [Theory]
+    [InlineData("photo of ANDREYK sitting in a cafe", "photo of ANDREYK sitting in a cafe")]
+    [InlineData("сидит в кафе", "photo of andreyk, сидит в кафе")]
+    [InlineData("andreykov в кафе", "photo of andreyk, andreykov в кафе")]
+    public async Task ТриггерЛоры_НеДублируетсяЕслиЕстьСловом(string prompt, string expected)
+    {
+        var media = new FakeMedia();
+        var job = await RunAsync(Service(Editor(media)), CharacterQuote(ImageEditOp.Generate),
+            new ImageEditJobInput("", prompt, null, null, null, null, Faces(3), null, TimurLora));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        media.Submitted.Should().ContainSingle().Which.Prompt.Should().StartWith(expected);
+    }
+
     [Fact]
     public async Task ПерсонажБезЛоры_ЗапросКакРаньше()
     {

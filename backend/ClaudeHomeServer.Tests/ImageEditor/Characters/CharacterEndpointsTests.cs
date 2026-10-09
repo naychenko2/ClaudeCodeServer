@@ -249,7 +249,9 @@ public class CharacterEndpointsTests : IDisposable
 
         started.StatusCode.Should().Be(HttpStatusCode.Accepted);
         var input = jobs.Started.Should().ContainSingle().Subject;
-        input.Character.Should().Be(new CharacterRef("anya", "Аня", null));
+        input.Character.Should().BeEquivalentTo(new CharacterRef("anya", "Аня", null), o => o.Excluding(c => c.FacePhotos));
+        input.Character!.FacePhotos.Should().NotBeNullOrEmpty().And.HaveCount(4)
+            .And.HaveCountLessThanOrEqualTo(10);
         input.References.Should().HaveCount(CharacterStore.PhotosPerRequest)
             .And.OnlyContain(r => r.Role == ReferenceRole.Character);
 

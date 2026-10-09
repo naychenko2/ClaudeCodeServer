@@ -40,12 +40,16 @@ public class TrayDeployController(DeployLauncher deploy, ILogger<TrayDeployContr
         // ответ на серию частых опросов: StartedAt «не менялся», продукт «отвечал» (из кеша!) —
         // и окно честно рапортовало «трей команду не принял» поверх успешной выкатки.
         var availability = deploy.CanLaunch();
+        var status = deploy.ReadStatus();
         return Ok(new
         {
             enabled = deploy.Enabled,
             canLaunch = availability.CanLaunch,
             reason = availability.Reason,
-            status = deploy.ReadStatus(),
+            status,
+            // Ход выкатки: раннер собирает, пока продукт жив, и окно рисует по нему полосу.
+            // null — выкатка не идёт или раннер хода не пишет; тогда окно ведёт себя как раньше.
+            progress = deploy.ReadProgress(status),
         });
     }
 

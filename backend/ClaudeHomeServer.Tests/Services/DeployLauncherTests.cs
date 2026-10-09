@@ -139,6 +139,62 @@ public class DeployLauncherTests : IDisposable
     public void ParseStamp_ЖдётФорматРаннера(string? stamp, bool parsed)
         => (DeployLauncher.ParseStamp(stamp) is not null).Should().Be(parsed);
 
+    // Ход выкатки пишет раннер рядом со статусом, camelCase — так его сериализует трей.
+    private void WriteProgress(string startedAt, int percent)
+        => File.WriteAllText(Path.Combine(_dir, "deploy-progress.json"), $$"""
+        { "startedAt": "{{startedAt}}", "stage": "building", "percent": {{percent}},
+          "step": "Сборка фронта (npm run build)...", "line": "vite build", "updatedAt": "{{startedAt}}" }
+        """);
+
+    [Fact]
+    public void ReadProgress_ИдётСвояВыкатка_ОтдаётХод()
+    {
+        var started = new DateTime(2026, 10, 9, 12, 0, 0);
+        WriteStatus("running", started);
+        WriteProgress("2026-10-09 12:00:00", 42);
+
+        var launcher = Make();
+        var progress = launcher.ReadProgress(launcher.ReadStatus());
+
+        progress.Should().NotBeNull();
+        progress!.Percent.Should().Be(42);
+        progress.Stage.Should().Be("building");
+        progress.Step.Should().StartWith("Сборка фронта");
+    }
+
+    // Хвост прошлой выкатки со своими 100% не должен рисовать полосу поверх новой.
+    [Fact]
+    public void ReadProgress_ХодОтДругогоЗапуска_Null()
+    {
+        WriteStatus("running", new DateTime(2026, 10, 9, 12, 0, 0));
+        WriteProgress("2026-10-08 09:00:00", 100);
+
+        var launcher = Make();
+        launcher.ReadProgress(launcher.ReadStatus()).Should().BeNull();
+    }
+
+    [Fact]
+    public void ReadProgress_ВыкаткаЗакончилась_Null()
+    {
+        WriteStatus("ok", new DateTime(2026, 10, 9, 12, 0, 0));
+        WriteProgress("2026-10-09 12:00:00", 100);
+
+        var launcher = Make();
+        launcher.ReadProgress(launcher.ReadStatus()).Should().BeNull();
+    }
+
+    // Старый раннер файла хода не пишет — окно обязано работать как раньше, без исключений.
+    [Fact]
+    public void ReadProgress_ФайлаНетИлиБитый_Null()
+    {
+        WriteStatus("running", new DateTime(2026, 10, 9, 12, 0, 0));
+        var launcher = Make();
+        launcher.ReadProgress(launcher.ReadStatus()).Should().BeNull();
+
+        File.WriteAllText(Path.Combine(_dir, "deploy-progress.json"), "{ \"startedAt\": \"2026-");
+        launcher.ReadProgress(launcher.ReadStatus()).Should().BeNull();
+    }
+
     private sealed class FakeTrayGate(bool alive) : ITrayGate
     {
         public bool IsAlive(string eventName) => alive;

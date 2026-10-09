@@ -24,6 +24,19 @@ public sealed record DeployStatus(
     bool? ProductUp,
     string? Note);
 
+/// <summary>
+/// Ход идущей выкатки, как его пишет трей-раннер в deploy-progress.json. Формат тоже чужой.
+/// Stage — checking | building | publishing | restarting | done; Percent — 0–100 по весам шагов
+/// скрипта деплоя; StartedAt совпадает с полем deploy-status.json того же запуска.
+/// </summary>
+public sealed record DeployProgress(
+    string? StartedAt,
+    string? Stage,
+    int Percent,
+    string? Step,
+    string? Line,
+    string? UpdatedAt);
+
 /// <summary>Можно ли запускать выкатку, и если нет — почему.</summary>
 public sealed record DeployAvailability(bool CanLaunch, string? Reason);
 
@@ -39,6 +52,7 @@ public sealed class DeployLauncher(
     IOptions<TrayDeployOptions> options, ITrayGate tray, ILogger<DeployLauncher> log)
 {
     private const string StatusFileName = "deploy-status.json";
+    private const string ProgressFileName = "deploy-progress.json";
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     private TrayDeployOptions Opt => options.Value;
@@ -46,21 +60,39 @@ public sealed class DeployLauncher(
     public bool Enabled => Opt.Enabled;
 
     /// <summary>Итог последней выкатки: null — файла нет либо прочитать его не удалось.</summary>
-    public DeployStatus? ReadStatus()
-    {
-        var path = string.IsNullOrWhiteSpace(Opt.StatusPath)
-            ? Path.Combine(AppContext.BaseDirectory, StatusFileName)
-            : Opt.StatusPath;
+    public DeployStatus? ReadStatus() => ReadJson<DeployStatus>(StatusPath);
 
+    /// <summary>
+    /// Ход выкатки, которая идёт прямо сейчас: null — выкатка не идёт, раннер старый и файла не
+    /// пишет, либо файл остался от другого запуска. Сверка по StartedAt обязательна: хвост
+    /// прошлой выкатки с её 100% показал бы полосу «готово» поверх только что начатой.
+    /// </summary>
+    public DeployProgress? ReadProgress(DeployStatus? status)
+    {
+        if (!string.Equals(status?.Result, "running", StringComparison.OrdinalIgnoreCase)) return null;
+
+        var dir = Path.GetDirectoryName(StatusPath);
+        var progress = ReadJson<DeployProgress>(
+            string.IsNullOrEmpty(dir) ? ProgressFileName : Path.Combine(dir, ProgressFileName));
+        return progress is not null && progress.StartedAt == status!.StartedAt ? progress : null;
+    }
+
+    // Файл хода раннер пишет рядом с файлом статуса — путь к нему от того же StatusPath.
+    private string StatusPath => string.IsNullOrWhiteSpace(Opt.StatusPath)
+        ? Path.Combine(AppContext.BaseDirectory, StatusFileName)
+        : Opt.StatusPath;
+
+    private T? ReadJson<T>(string path) where T : class
+    {
         try
         {
             if (!File.Exists(path)) return null;
-            return JsonSerializer.Deserialize<DeployStatus>(File.ReadAllText(path), JsonOpts);
+            return JsonSerializer.Deserialize<T>(File.ReadAllText(path), JsonOpts);
         }
         catch (Exception ex)
         {
-            // Ловим ВСЁ, а не только JsonException: файл пишет другой процесс одним
-            // File.WriteAllText, и застать его на середине записи — штатная ситуация, а не сбой.
+            // Ловим ВСЁ, а не только JsonException: файл пишет другой процесс, и застать его на
+            // середине записи — штатная ситуация, а не сбой.
             log.LogWarning(ex, "Не удалось прочитать {Path}.", path);
             return null;
         }

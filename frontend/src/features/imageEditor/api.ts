@@ -220,8 +220,12 @@ export interface ImageEditCharacter {
   // Папка персонажа от корня проекта: characters/<slug>
   path: string;
   photos: ImageEditCharacterPhoto[];
+  // LoRA для локальной модели; null — не задана
+  local?: { lora: string; trigger: string; strength: number } | null;
   createdAt: string;
 }
+
+export interface ImageEditLoras { available: boolean; items: string[] }
 
 export interface ImageEditCharacterInput {
   name: string;
@@ -229,6 +233,8 @@ export interface ImageEditCharacterInput {
   // Имена уже лежащих фото, которые убрать (только при правке)
   removePhotos?: string[];
   photos: Blob[];
+  // не задано — LoRA не трогаем; 'remove' — снять
+  lora?: { name: string; trigger: string; strength: number } | 'remove';
 }
 
 // next-version — hero.v2.png рядом с исходником; as — «Сохранить как…» (ADR-018 §5)
@@ -364,6 +370,7 @@ export interface ImageEditorApi {
   createCharacter(projectId: string, input: ImageEditCharacterInput): Promise<ImageEditCharacter>;
   updateCharacter(projectId: string, slug: string, input: ImageEditCharacterInput): Promise<ImageEditCharacter>;
   deleteCharacter(projectId: string, slug: string): Promise<void>;
+  loras(projectId: string): Promise<ImageEditLoras>;
   characterPhotoUrl(projectId: string, slug: string, file: string): string;
   saveCheck(projectId: string, req: SaveCheckRequest): Promise<SaveCheckResponse>;
   // dryRun — только посчитать вес: шаг не пишется, stepId = null
@@ -385,6 +392,12 @@ function characterForm(input: ImageEditCharacterInput): FormData {
   if (input.description) form.append('description', input.description);
   input.removePhotos?.forEach(f => form.append('removePhotos', f));
   input.photos.forEach((b, i) => form.append('photos', b, b instanceof File ? b.name : `photo-${i + 1}.jpg`));
+  if (input.lora === 'remove') form.append('removeLora', 'true');
+  else if (input.lora) {
+    form.append('loraName', input.lora.name);
+    form.append('loraTrigger', input.lora.trigger);
+    form.append('loraStrength', input.lora.strength.toString());
+  }
   return form;
 }
 
@@ -425,6 +438,7 @@ const liveApi: ImageEditorApi = {
       { method: 'PUT', body: characterForm(input), timeoutMs: 120_000 }),
   deleteCharacter: (projectId, slug) =>
     request<void>(`${charBase(projectId)}/${encodeURIComponent(slug)}`, { method: 'DELETE' }),
+  loras: projectId => request<ImageEditLoras>(`${base(projectId)}/loras`, { live: true }),
   characterPhotoUrl: (projectId, slug, file) =>
     withToken(`/api${charBase(projectId)}/${encodeURIComponent(slug)}/photos/${encodeURIComponent(file)}`),
   saveCheck: (projectId, req) => {
@@ -700,13 +714,14 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       const e = characters.find(c => c.character.slug === slug);
       if (!e) throw Object.assign(new Error('Персонаж не найден'), { status: 404 });
       const kept = e.character.photos.filter(p => !input.removePhotos?.includes(p.file));
-      e.character = mockCharacter(slug, input, kept, e.urls);
+      e.character = mockCharacter(slug, input, kept, e.urls, e.character.local);
       return delay(e.character, 300);
     },
     deleteCharacter: async (_projectId, slug) => {
       characters = characters.filter(c => c.character.slug !== slug);
       return delay(undefined);
     },
+    loras: () => delay({ available: true, items: ['anna_face_v1.safetensors', 'anna_face_v2.safetensors'] }),
     characterPhotoUrl: (_projectId, slug, file) =>
       characters.find(c => c.character.slug === slug)?.urls.get(file) ?? '',
   };
@@ -726,7 +741,8 @@ export function characterSlug(name: string): string {
   return s || 'character';
 }
 
-function mockCharacter(slug: string, input: ImageEditCharacterInput, kept: ImageEditCharacterPhoto[], urls: Map<string, string>): ImageEditCharacter {
+function mockCharacter(slug: string, input: ImageEditCharacterInput, kept: ImageEditCharacterPhoto[], urls: Map<string, string>,
+  prevLocal: ImageEditCharacter['local'] = null): ImageEditCharacter {
   const photos = [...kept];
   let n = 0;
   for (const blob of input.photos) {
@@ -739,6 +755,8 @@ function mockCharacter(slug: string, input: ImageEditCharacterInput, kept: Image
   return {
     slug, name: input.name.trim(), description: input.description?.trim() || null,
     path: `characters/${slug}`, photos, createdAt: new Date().toISOString(),
+    local: input.lora === 'remove' ? null
+      : input.lora ? { lora: input.lora.name, trigger: input.lora.trigger, strength: input.lora.strength } : prevLocal,
   };
 }
 

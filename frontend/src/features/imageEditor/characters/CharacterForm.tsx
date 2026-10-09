@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ShieldAlert, Trash2, Upload, X } from 'lucide-react';
 import { BackButton, Button, Checkbox, ConfirmDialog, Field, IconButton, TextArea, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import { characterSlug, type ImageEditCharacter, type ImageEditorApi } from '../api';
+import { CharacterLoraSection, type LoraInput } from './CharacterLoraSection';
 import { MAX_PHOTO_MB, MAX_PHOTOS, MIN_PHOTOS, photosCountText, shrinkPhoto } from './photos';
 
 export const CHARACTER_PHOTOS_NOTICE =
@@ -40,6 +41,7 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
   // Согласие не запоминается: фото уезжают при каждой генерации, подтверждать при каждом сохранении
   const [consent, setConsent] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const [lora, setLora] = useState<LoraInput | undefined>(undefined);
 
   // object URL новых фото живут, пока открыт диалог
   const created = useRef<string[]>([]);
@@ -49,6 +51,7 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
     if (!files?.length) return;
     setError(null);
     const room = MAX_PHOTOS - photos.length;
+    if (room <= 0) { setError(`Можно не больше ${MAX_PHOTOS} фото. Уберите лишние и загрузите заново.`); return; }
     const picked = Array.from(files).filter(f => f.type.startsWith('image/')).slice(0, room);
     const added: Photo[] = [];
     for (const f of picked) {
@@ -62,8 +65,8 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
         setError((e as Error).message);
       }
     }
-    if (files.length > room) setError(`Не больше ${MAX_PHOTOS} фото`);
-    setPhotos(ps => [...ps, ...added].slice(0, MAX_PHOTOS));
+    if (files.length > room) setError(`Добавлено не всё: в форме не больше ${MAX_PHOTOS} фото. Уберите лишние, если хотите добавить другие.`);
+    setPhotos(ps => [...ps, ...added].slice(0, Math.max(MAX_PHOTOS, ps.length)));
   };
 
   const valid = !!name.trim() && photos.length >= MIN_PHOTOS && consent;
@@ -83,6 +86,7 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
       description: description.trim() || undefined,
       removePhotos: (character?.photos ?? []).map(p => p.file).filter(f => !photos.some(p => p.kind === 'kept' && p.file === f)),
       photos: photos.flatMap(p => (p.kind === 'new' ? [p.blob] : [])),
+      ...(lora ? { lora } : {}),
     };
     try {
       const saved = character
@@ -162,6 +166,7 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
         <span style={{ color: photos.length >= MIN_PHOTOS ? C.successText : C.warningText }}>{photosCountText(photos.length)}</span>
         <span style={{ color: C.textMuted, overflowWrap: 'anywhere' }}>Папка: characters/{slug}/</span>
       </div>
+      <CharacterLoraSection api={api} projectId={projectId} current={character?.local} disabled={busy} onChange={setLora} />
       <div style={{
         display: 'flex', gap: SP.sm, alignItems: 'flex-start', fontSize: FS.sm, lineHeight: 1.45,
         color: C.warningText, background: C.warningBg, borderRadius: R.md, padding: `${SP.sm}px ${SP.md}px`,

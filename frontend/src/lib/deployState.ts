@@ -31,3 +31,12 @@ function subscribe(fn: () => void): () => void {
 export function useDeployInProgress(): boolean {
   return useSyncExternalStore(subscribe, () => _deploying, () => false);
 }
+
+// Окно выкатки живёт НАД страницами (DeployHost в App), а не в шапке: шапка — часть страницы и
+// размонтировалась бы при переходе между разделами, унося с собой слежение за выкаткой.
+// Пункт меню просит открыть окно событием.
+export const OPEN_DEPLOY_EVENT = 'cc-open-deploy';
+
+export function openDeployModal(): void {
+  window.dispatchEvent(new Event(OPEN_DEPLOY_EVENT));
+}

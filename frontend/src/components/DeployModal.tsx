@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LoadingOverlay, Modal, ProgressBar } from './ui';
+import { Button, LoadingOverlay, Modal, ProgressBar } from './ui';
 import { api, type DeployProgressFile, type DeployState, type DeployStatusFile } from '../lib/api';
-import { C, FONT, FS, MODAL_W, SP } from '../lib/design';
+import { C, FONT, FS, MODAL_W, R, SHADOW, SP, Z } from '../lib/design';
+import { useIsMobile } from '../lib/breakpoints';
 import { applyUpdateAndReload } from '../lib/swUpdate';
 import { setDeployInProgress } from '../lib/deployState';
 
 interface Props {
   onClose: () => void;
+  // Подхват выкатки, которая уже идёт (страницу перезагрузили): сразу следим, минуя «Выкатить»
+  resume?: boolean;
+  // Свёрнуто в плашку в углу: слежение продолжается, окно не закрывает интерфейс
+  minimized?: boolean;
+  onMinimize?: () => void;
+  onExpand?: () => void;
 }
 
 // Фазы окна. Разделение не косметическое: пока идёт выкатка, сервер лежит, и «ошибка сети»
@@ -55,8 +62,8 @@ const OVERLAY_HINT: Partial<Record<Phase, string>> = {
   updating: 'Перехожу на новую версию',
 };
 
-export function DeployModal({ onClose }: Props) {
-  const [phase, setPhase] = useState<Phase>('loading');
+export function DeployModal({ onClose, resume, minimized, onMinimize, onExpand }: Props) {
+  const [phase, setPhase] = useState<Phase>(resume ? 'running' : 'loading');
   const [state, setState] = useState<DeployState | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Ход выкатки из последнего удачного опроса. Сбрасывается при обрыве связи: тогда продукт
@@ -91,12 +98,12 @@ export function DeployModal({ onClose }: Props) {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
-
   // Ожидание после нажатия. Возвращает фазу, в которую перешли.
-  const watch = useCallback(async () => {
+  // from = 'running' — подхват уже идущей выкатки: базис пуст, и любой итог с временем
+  // начала считается своим (иного запуска, кроме подхваченного, тут не было).
+  const watch = useCallback(async (from: Phase = 'awaiting') => {
     const awaitUntil = Date.now() + AWAIT_LIMIT_MS;
-    let phaseNow: Phase = 'awaiting';
+    let phaseNow: Phase = from;
     let hasProgress = false;
 
     while (!stopped.current) {
@@ -150,6 +157,13 @@ export function DeployModal({ onClose }: Props) {
     }
   }, []);
 
+  // Базис при подхвате остаётся null, а фаза сразу 'running' (см. useState выше)
+  useEffect(() => {
+    void (resume ? watch('running') : load());
+    // Только при монтировании: смена resume у смонтированного окна ничего не перезапускает
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const launch = useCallback(async () => {
     setError(null);
     setPhase('awaiting');
@@ -182,9 +196,15 @@ export function DeployModal({ onClose }: Props) {
   // Исключение — сборка: раннер собирает на ЖИВОМ продукте и пишет ход выкатки, так что окно
   // честно показывает полосу. Заставка остаётся на короткую подмену бинарей и на старый раннер,
   // который хода не пишет и гасит продукт сразу.
+  // Свёрнутое окно — плашка в углу: слежение идёт дальше, интерфейс под ней живой
+  if (minimized) {
+    return <DeployCornerPill phase={phase} progress={progress} result={s?.result ?? null} onExpand={onExpand} />;
+  }
   if (phase === 'running' && progress) {
+    // Крестик тут сворачивает, а не закрывает: закрытие бросило бы слежение посреди выкатки
     return (
-      <Modal width={MODAL_W.form} title="Выкатить на бой" onClose={onClose} closeOnBackdrop={false}>
+      <Modal width={MODAL_W.form} title="Выкатить на бой" onClose={onMinimize ?? onClose} closeOnBackdrop={false}
+        footer={onMinimize && <Button variant="secondary" onClick={onMinimize}>Свернуть в угол</Button>}>
         <DeployProgressView progress={progress} />
       </Modal>
     );
@@ -307,8 +327,47 @@ function DeployProgressView({ progress }: { progress: DeployProgressFile }) {
         </div>
       )}
       <div style={{ color: C.textMuted, fontSize: FS.sm, lineHeight: 1.5 }}>
-        Окно можно закрыть — выкатка продолжится. На время подмены продукт ненадолго пропадёт.
+        Окно можно свернуть — выкатка продолжится, а ход останется в углу экрана. На время подмены
+        продукт ненадолго пропадёт.
       </div>
+    </div>
+  );
+}
+
+// Плашка свёрнутой выкатки в углу экрана: этап и процент, по клику окно разворачивается.
+// На мобиле — сверху по центру: снизу там композер, и плашка закрыла бы кнопку отправки.
+function DeployCornerPill({ phase, progress, result, onExpand }: {
+  phase: Phase;
+  progress: DeployProgressFile | null;
+  result: string | null;
+  onExpand?: () => void;
+}) {
+  const isMobile = useIsMobile();
+  const finished = phase !== 'awaiting' && phase !== 'running' && phase !== 'loading';
+  const known = finished ? RESULT_TEXT[result ?? ''] : undefined;
+  const label = finished
+    ? (phase === 'done' ? (known?.title ?? 'Выкатка завершена') : 'Выкатка: нужен взгляд')
+    : progress
+      ? `${STAGE_TEXT[progress.stage ?? ''] ?? 'Выкатка идёт'} · ${Math.round(progress.percent)}%`
+      : 'Выкатка: продукт перезапускается';
+
+  return (
+    <div style={{
+      position: 'fixed', zIndex: Z.floatWindow,
+      ...(isMobile
+        ? { top: SP.sm, left: '50%', transform: 'translateX(-50%)', maxWidth: `calc(100vw - ${SP.lg * 2}px)` }
+        : { right: SP.lg, bottom: SP.lg, maxWidth: 360 }),
+      background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xl,
+      boxShadow: SHADOW.island, padding: SP.sm,
+      display: 'flex', flexDirection: 'column', gap: SP.xs,
+    }}>
+      <Button variant="ghost" size="sm" onClick={onExpand} title="Развернуть окно выкатки"
+        style={{ justifyContent: 'flex-start', color: known?.tone ?? C.textPrimary, minWidth: 0 }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      </Button>
+      {!finished && (
+        <ProgressBar value={progress?.percent ?? 0} indeterminate={!progress} size="thin" label="Ход выкатки" />
+      )}
     </div>
   );
 }

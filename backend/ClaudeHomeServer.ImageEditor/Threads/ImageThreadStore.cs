@@ -293,27 +293,29 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             {
                 Launches = [.. grown.Launches.Select(l => l.JobId == jobId ? l with { Status = status } : l)],
             };
-            after = WithMostSimilar(after, launch);
+            (after, var moved) = WithMostSimilar(after, launch);
             List<ImageThreadVersion> all = [.. after.Versions.Where(v => v.JobId == jobId)];
-            return Replace(state, after, log?.Invoke(after, all)) with { NewVersions = added };
+            return Replace(state, after, log?.Invoke(after, all)) with { NewVersions = added, MovedToMostSimilar = moved };
         });
 
     // Самая похожая версия запуска (максимум Similarity, при ничьей — меньший номер) получает MostSimilar и
     // становится текущей, но только пока текущей остаётся основа запуска или первая версия запуска
-    // (её поставил авто-сдвиг): выбор человека не трогаем. Нет ни одного числа — ничего не меняется
-    private static ImageThread WithMostSimilar(ImageThread thread, ImageThreadLaunch launch)
+    // (её поставил авто-сдвиг): выбор человека не трогаем. Нет ни одного числа — ничего не меняется.
+    // Moved — (первая версия запуска, самая похожая), если текущая действительно переехала на другую версию
+    private static (ImageThread Thread, (string From, string To)? Moved) WithMostSimilar(ImageThread thread, ImageThreadLaunch launch)
     {
         var own = thread.Versions.Where(v => v.JobId == launch.JobId).OrderBy(v => v.Number).ToList();
         var best = own.Where(v => v.Similarity != null)
             .OrderByDescending(v => v.Similarity).ThenBy(v => v.Number).FirstOrDefault();
-        if (best is null) return thread;
+        if (best is null) return (thread, null);
         var current = thread.CurrentVersionId;
         var follow = current == launch.BaseVersionId || (own.Count > 0 && current == own[0].Id);
-        return thread with
+        var moved = follow && best.Id != own[0].Id ? (own[0].Id, best.Id) : ((string, string)?)null;
+        return (thread with
         {
             Versions = [.. thread.Versions.Select(v => v.JobId == launch.JobId ? v with { MostSimilar = v.Id == best.Id } : v)],
             CurrentVersionId = follow ? best.Id : current,
-        };
+        }, moved);
     }
 
     // Версии вариантов запуска внизу нити; пара (JobId, Variant), уже ставшая версией, пропускается.

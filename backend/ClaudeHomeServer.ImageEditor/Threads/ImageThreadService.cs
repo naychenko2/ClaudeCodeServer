@@ -601,6 +601,9 @@ public sealed class ImageThreadService(
             var first = written.NewVersions[0];
             mirror?.AdvanceVersion(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId, first.BaseVersionId, first.Id);
         }
+        // Финал перевёл текущую на самую похожую: основной объект, закреплённый на версии от авто-сдвига, идёт следом
+        if (written.MovedToMostSimilar is var (from, to))
+            mirror?.AdvanceVersion(ownerId, sessionId, ChatContext.ImageContextKind.Kind, threadId, from, to);
         if (mediaEvents is null) return;
         foreach (var version in written.NewVersions)
             await mediaEvents.PublishAsync(new ImageVersionAdded(ownerId, sessionId, projectId, threadId, version.Id, initiator));

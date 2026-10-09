@@ -227,6 +227,7 @@ public class ImageThreadVersionsTests : IDisposable
         ai.Should().OnlyContain(v => v.Similarity == null && !v.MostSimilar);
         t.CurrentVersionId.Should().Be(ai[0].Id);
         var json = System.Text.Json.JsonSerializer.Serialize(ai[0]);
+        json.Should().NotContain("Similarity").And.NotContain("MostSimilar");
         System.Text.Json.JsonSerializer.Deserialize<ImageThreadVersion>(json)!.Similarity.Should().BeNull();
         var old = System.Text.Json.JsonSerializer.Deserialize<ImageThreadVersion>(
             "{\"Id\":\"x\",\"Number\":1,\"JobId\":\"j\",\"Variant\":1,\"BaseVersionId\":null,\"BaseStepId\":null,\"Steps\":[\"a\"],\"CurrentStepId\":\"a\",\"CreatedAt\":\"2026-01-01T00:00:00Z\"}");

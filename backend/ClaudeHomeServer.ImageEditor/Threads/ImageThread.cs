@@ -93,8 +93,8 @@ public sealed record ImageThreadVersion(
     IReadOnlyList<string> Steps,
     string? CurrentStepId,
     DateTime CreatedAt,
-    double? Similarity = null,
-    bool MostSimilar = false)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] double? Similarity = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool MostSimilar = false)
 {
     public const string OriginId = "origin";
 
@@ -178,6 +178,8 @@ public sealed record ImageThreadWrite(ImageThreadWriteStatus Status, ImageThread
     public bool Existing { get; init; }
     // Версии, которые завела запись завершения запуска
     public IReadOnlyList<ImageThreadVersion> NewVersions { get; init; } = [];
+    // Запись завершения сдвинула текущую версию с первой версии запуска на самую похожую
+    public (string From, string To)? MovedToMostSimilar { get; init; }
 }
 
 // Откат и новая правка: FrozenStack — старая стопка, NewStack — новая. KeptFrom/KeptTo —

@@ -79,4 +79,80 @@ public sealed class ImageContextAdvanceTests : IDisposable
 
         PinnedVersion().Should().Be(v1.Id);
     }
+
+    private ImageThread Thread(string id) => _threads.Get(Owner, Chat).Threads.Single(t => t.Id == id);
+
+    private void Launch(string id, string job) =>
+        _threads.AddLaunch(Owner, Chat, id, new ImageThreadLaunch(job, ImageThreadVersion.OriginId, null, _threads.Now(),
+            ImageThreadLaunchStatus.Running, "human", "x"));
+
+    private async Task FinishAsync(string id, string job, params (int Variant, double? Similarity)[] tail)
+    {
+        var written = _threads.FinishLaunch(Owner, Chat, id, job, ImageThreadLaunchStatus.Done,
+            [.. tail.Select(t => (t.Variant, "s" + t.Variant + job, t.Similarity))]);
+        await _service.PublishVersionsAsync(Owner, Project, Chat, id, written, "human");
+    }
+
+    private async Task ProgressAsync(string id, string job, int variant, double? similarity)
+    {
+        var written = _threads.AddLaunchVersions(Owner, Chat, id, job, [(variant, "s" + variant + job, similarity)]);
+        await _service.PublishVersionsAsync(Owner, Project, Chat, id, written, "human");
+    }
+
+    [Fact]
+    public async Task Без_выбора_человека_основной_объект_и_текущая_уходят_на_самую_похожую()
+    {
+        var id = Pinned(ImageThreadVersion.OriginId);
+        Launch(id, "job-1");
+        await ProgressAsync(id, "job-1", 1, 0.5);
+        await ProgressAsync(id, "job-1", 2, 0.9);
+        await FinishAsync(id, "job-1");
+
+        var best = Thread(id).Versions.Single(v => v.MostSimilar);
+        best.Variant.Should().Be(2);
+        PinnedVersion().Should().Be(best.Id);
+        Thread(id).CurrentVersionId.Should().Be(best.Id);
+    }
+
+    [Fact]
+    public async Task Человек_закрепил_другую_версию_по_ходу_основной_и_текущая_не_двигаются()
+    {
+        var id = Pinned(ImageThreadVersion.OriginId);
+        Launch(id, "job-1");
+        await ProgressAsync(id, "job-1", 1, 0.5);
+        await ProgressAsync(id, "job-1", 2, 0.6);
+        var chosen = Thread(id).Versions.Single(v => v.Variant == 2).Id;
+        _threads.SetCurrentVersion(Owner, Chat, id, chosen, null, null);
+        _context.SetPrimary(Owner, Chat, ChatContextFocusMirror.NewItem(ImageContextKind.Kind, id, ContextActor.Human, chosen), null);
+        await FinishAsync(id, "job-1", (3, 0.9));
+
+        PinnedVersion().Should().Be(chosen);
+        Thread(id).CurrentVersionId.Should().Be(chosen);
+    }
+
+    [Fact]
+    public async Task Все_варианты_только_в_финале_основной_объект_на_самой_похожей()
+    {
+        var id = Pinned(ImageThreadVersion.OriginId);
+        Launch(id, "job-1");
+        await FinishAsync(id, "job-1", (1, 0.5), (2, 0.9), (3, 0.6));
+
+        var best = Thread(id).Versions.Single(v => v.MostSimilar);
+        best.Variant.Should().Be(2);
+        PinnedVersion().Should().Be(best.Id);
+    }
+
+    [Fact]
+    public async Task Самая_похожая_первая_версия_запуска_один_вызов_зеркала()
+    {
+        var id = Pinned(ImageThreadVersion.OriginId);
+        Launch(id, "job-1");
+        var written = _threads.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done,
+            [(1, "a", 0.9), (2, "b", 0.5)]);
+        written.MovedToMostSimilar.Should().BeNull();
+        await _service.PublishVersionsAsync(Owner, Project, Chat, id, written, "human");
+
+        PinnedVersion().Should().Be(Thread(id).Versions.Single(v => v.MostSimilar).Id);
+        Thread(id).Versions.Single(v => v.MostSimilar).Variant.Should().Be(1);
+    }
 }

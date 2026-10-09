@@ -274,6 +274,15 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         }
     }
 
+    // Имена LoRA, которые ComfyUI видит в своём каталоге: GET /models/loras — JSON-массив строк
+    public async Task<IReadOnlyList<string>> ListLorasAsync(CancellationToken ct)
+    {
+        var json = await SendJsonAsync(c => c.GetAsync("models/loras", ct), "чтение списка LoRA", ct);
+        return json is JsonArray items
+            ? items.Select(i => i?.GetValue<string>() ?? "").Where(n => n.Length > 0).ToList()
+            : [];
+    }
+
     public async Task<ComfyQueueState> GetQueueAsync(CancellationToken ct)
     {
         var json = await SendJsonAsync(c => c.GetAsync("queue", ct), "чтение очереди", ct);

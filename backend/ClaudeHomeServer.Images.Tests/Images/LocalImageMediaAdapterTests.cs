@@ -179,7 +179,7 @@ public class LocalImageMediaAdapterTests
     [Fact]
     public async Task Правка_с_Lora_кладёт_узел_lora_в_граф()
     {
-        var adapter = Build();
+        var adapter = Build(handler: new LorasComfy(_comfy, ["hero.safetensors"]));
 
         var submitted = await adapter.SubmitAsync(Edit() with { Lora = new LocalImageLora("hero.safetensors", 0.8) }, default);
 
@@ -202,7 +202,7 @@ public class LocalImageMediaAdapterTests
     [Fact]
     public async Task Генерация_по_образцам_с_Lora_кладёт_узел_lora()
     {
-        var adapter = Build();
+        var adapter = Build(handler: new LorasComfy(_comfy, ["hero.safetensors"]));
 
         var submitted = await adapter.SubmitAsync(Edit() with
         {
@@ -213,6 +213,84 @@ public class LocalImageMediaAdapterTests
 
         submitted.Error.Should().BeNull();
         _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject().ContainsKey("lora").Should().BeTrue();
+    }
+
+    // Фейк ComfyUI не знает /models/loras — отдаём список поверх него, журнал запросов общий
+    private sealed class LorasComfy(FakeComfy inner, string[]? loras) : DelegatingHandler(inner)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            if (request.RequestUri!.PathAndQuery != "/models/loras") return base.SendAsync(request, ct);
+            inner.Requests.Add($"{request.Method} /models/loras");
+            if (loras is null) throw new HttpRequestException("connection refused");
+            var body = new System.Text.Json.Nodes.JsonArray([.. loras.Select(n => (System.Text.Json.Nodes.JsonNode)n)]);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
+    [Fact]
+    public async Task Lora_из_списка_ComfyUI_уходит_в_граф()
+    {
+        var adapter = Build(handler: new LorasComfy(_comfy, ["hero.safetensors"]));
+
+        var submitted = await adapter.SubmitAsync(Edit() with { Lora = new LocalImageLora("hero.safetensors", 0.8) }, default);
+
+        submitted.Error.Should().BeNull();
+        _comfy.Prompts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Lora_не_из_списка_отказ_без_загрузки_и_очереди()
+    {
+        var adapter = Build(handler: new LorasComfy(_comfy, ["other.safetensors"]));
+
+        var submitted = await adapter.SubmitAsync(Edit() with { Lora = new LocalImageLora("hero.safetensors", 0.8) }, default);
+
+        submitted.Error.Should().Be("LoRA «hero.safetensors» не найдена в ComfyUI");
+        _comfy.Prompts.Should().BeEmpty();
+        _comfy.Requests.Should().NotContain(r => r.Contains("/upload/") || r.Contains("/prompt"));
+    }
+
+    [Theory]
+    [InlineData("../x.safetensors")]
+    [InlineData("/abs/x.safetensors")]
+    [InlineData("\\abs\\x.safetensors")]
+    [InlineData("C:x.safetensors")]
+    public async Task Lora_с_опасным_именем_отказ_без_запроса_списка(string name)
+    {
+        var adapter = Build(handler: new LorasComfy(_comfy, [name]));
+        if (adapter.Probing is { } probing) await probing;
+        var before = _comfy.Requests.Count;
+
+        var submitted = await adapter.SubmitAsync(Edit() with { Lora = new LocalImageLora(name, 0.8) }, default);
+
+        submitted.Error.Should().NotBeNull();
+        _comfy.Requests.Skip(before).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Lora_с_силой_вне_диапазона_отказ()
+    {
+        var adapter = Build(handler: new LorasComfy(_comfy, ["hero.safetensors"]));
+
+        (await adapter.SubmitAsync(Edit() with { Lora = new LocalImageLora("hero.safetensors", 2.5) }, default))
+            .Error.Should().NotBeNull();
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Список_Lora_недоступен_занято()
+    {
+        var adapter = Build(handler: new LorasComfy(_comfy, null));
+
+        var submitted = await adapter.SubmitAsync(Edit() with { Lora = new LocalImageLora("hero.safetensors", 0.8) }, default);
+
+        submitted.Error.Should().NotBeNull();
+        submitted.Busy.Should().BeTrue();
+        _comfy.Prompts.Should().BeEmpty();
     }
 
     // «Дорисовать за края»: холст расширяется серыми полями до ComfyUI, латент — в пропорции холста

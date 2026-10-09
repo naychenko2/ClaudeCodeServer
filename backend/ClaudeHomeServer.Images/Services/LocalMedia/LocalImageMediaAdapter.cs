@@ -173,6 +173,27 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             canvas = OutpaintSize(padded.Image.Width, padded.Image.Height);
         }
 
+        if (request.Lora is { } requested)
+        {
+            var name = requested.Name ?? "";
+            if (name.Length == 0 || name.Contains("..") || name.StartsWith('/') || name.StartsWith('\\') || name.Contains(':'))
+                return LocalImageSubmitted.Fail($"Имя LoRA «{name}» недопустимо.");
+            if (requested.Strength is not (>= 0 and <= 2))
+                return LocalImageSubmitted.Fail("Сила LoRA должна быть от 0 до 2.");
+            IReadOnlyList<string> known;
+            try
+            {
+                known = await comfy.ListLorasAsync(ct);
+            }
+            catch (ComfyException ex)
+            {
+                Remember(alive: false);
+                return LocalImageSubmitted.Fail($"{ex.Message}. Не удалось получить список LoRA, попробуйте позже.", busy: true);
+            }
+            if (!known.Contains(name, StringComparer.Ordinal))
+                return LocalImageSubmitted.Fail($"LoRA «{name}» не найдена в ComfyUI");
+        }
+
         ComfyQueueState queue;
         try
         {

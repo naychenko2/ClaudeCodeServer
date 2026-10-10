@@ -42,6 +42,56 @@ public sealed class CharacterTrainingPhotosTests : IDisposable
     private TrainingPhotosAddResult Add(params PhotoUpload[] ups) => _sut.Add(_owner, _project, "anya", ups);
 
     [Fact]
+    public void Purge_ЧиститТолькоСвоегоПерсонажа_СоседаИЧужогоВладельцаНеТрогает()
+    {
+        var other = Guid.NewGuid().ToString();
+        Add(Up(1));
+        _sut.Add(_owner, _project, "boris", [Up(2)]);
+        _sut.Add(other, _project, "anya", [Up(3)]);
+
+        _sut.Purge(_owner, _project, "anya");
+
+        _sut.List(_owner, _project, "anya").Should().BeEmpty();
+        _sut.List(_owner, _project, "boris").Should().HaveCount(1);
+        _sut.List(other, _project, "anya").Should().HaveCount(1);
+        _sut.Invoking(s => s.Purge(_owner, _project, "anya")).Should().NotThrow();
+    }
+
+    [Fact]
+    public void PurgeProject_ЧиститПроектВладельца_ЧужойПроектНеТрогает()
+    {
+        var otherProject = Guid.NewGuid().ToString();
+        Add(Up(1));
+        _sut.Add(_owner, otherProject, "anya", [Up(2)]);
+
+        _sut.PurgeProject(_owner, _project);
+
+        _sut.List(_owner, _project, "anya").Should().BeEmpty();
+        _sut.List(_owner, otherProject, "anya").Should().HaveCount(1);
+        _sut.Invoking(s => s.PurgeProject(_owner, _project)).Should().NotThrow();
+    }
+
+    [Fact]
+    public void НеGuidВладелец_FailClosed_БезИсключений()
+    {
+        _sut.List("not-a-guid", _project, "anya").Should().BeEmpty();
+        _sut.Remove("not-a-guid", _project, "anya", "0123456789abcdef.png").Should().BeFalse();
+        _sut.PathOf("not-a-guid", _project, "anya", "0123456789abcdef.png").Should().BeNull();
+        _sut.Invoking(s => s.Purge("not-a-guid", _project, "anya")).Should().NotThrow();
+        _sut.Add("not-a-guid", _project, "anya", [Up(1)]).Rejected.Should().ContainSingle(r => r.Reason == "character");
+    }
+
+    [Fact]
+    public void List_РазмерыИзЗаголовка_БайтыИзFileInfo()
+    {
+        var added = Add(new PhotoUpload("big.png", Png(640, 800, 5, extra: 100_000))).Added.Single();
+        var listed = _sut.List(_owner, _project, "anya").Single();
+        listed.Should().Be(added);
+        listed.Width.Should().Be(640);
+        listed.Bytes.Should().Be(24 + 4 + 100_000);
+    }
+
+    [Fact]
     public void Add_Limit_49_50_51()
     {
         Add([.. Enumerable.Range(0, 49).Select(i => Up(i))]).Added.Should().HaveCount(49);

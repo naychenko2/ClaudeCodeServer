@@ -138,6 +138,14 @@ public class BackupPathsTests
     }
 
     [Fact]
+    public void ОбучающиеФотоПерсонажа_БиометрияИсключена()
+    {
+        var dir = $"{ImageEditorPaths.TrainingDirName}/owner/project/anya";
+        BackupPaths.ShouldInclude($"{dir}/0123456789abcdef.png").Should().BeFalse();
+        BackupPaths.ShouldInclude($"{ImageEditorPaths.TrainingDirName}/owner/project/anya").Should().BeFalse();
+    }
+
+    [Fact]
     public void МодульЗвук_РабочаяПапкаИсключена_НитиИПрефыЕдут()
     {
         // Файлы вариантов задач — кеш на 7 дней (ADR-021 §2); имя из константы Core, её же

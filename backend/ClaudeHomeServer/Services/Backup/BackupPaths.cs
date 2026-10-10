@@ -104,6 +104,10 @@ public static class BackupPaths
         if (segments.Length > 1
             && root.Equals(ImageEditor.ImageEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
             return false;
+        // Обучающие фото персонажей для LoRA (ADR-026 §5): биометрия, восстанавливается повторной
+        // загрузкой — в облачный архив не едет. Формат не меняется, BackupSchema.Version не трогаем
+        if (root.Equals(ImageEditor.ImageEditorPaths.TrainingDirName, StringComparison.OrdinalIgnoreCase))
+            return false;
         // Рабочая папка задач модуля «Звук» (ADR-021 §2): файлы вариантов — кеш на 7 дней.
         // Нити (audio-threads) и префы (audio-editor-prefs) — другие корни, они в архив едут
         if (segments.Length > 1

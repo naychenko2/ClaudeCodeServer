@@ -44,6 +44,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>()));
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
+        services.AddSingleton<CharacterTrainingPhotos>();
         services.TryAddSingleton<IVersionedImageStore, VersionedImageStore>();
         services.AddSingleton<IImageEditSaver, ImageEditSaver>();
         // Шаги, на которые ссылаются нити картинок, чистка рабочей папки не трогает (ADR-019 §1)

@@ -33,7 +33,8 @@ public class ImageEditorController(
     IImageRaster? raster = null,
     ImageThreadService? threads = null,
     ImageContextLaunch? context = null,
-    ILocalImageMedia? localMedia = null)
+    ILocalImageMedia? localMedia = null,
+    CharacterTrainingPhotos? trainingPhotos = null)
     : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
     [HttpGet("catalog")]
@@ -266,6 +267,8 @@ public class ImageEditorController(
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         if (!CharacterStore.Delete(project.RootPath, slug)) return CharacterNotFound();
+        // Обучающие фото персонажа живут вне проекта (data/lora-training) — без уборки остаются сиротами
+        trainingPhotos?.Purge(UserId, projectId, slug);
         files?.NotifyMutated(project.RootPath, $"{CharacterStore.Folder}/{slug}", FileMutationKind.Delete);
         return NoContent();
     }

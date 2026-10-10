@@ -13,7 +13,7 @@ public sealed partial class CharacterTrainingPhotos(IConfiguration config)
 {
     public const int MinPhotos = 20, MaxPhotos = 50, MinShortSide = 512;
     public const int MaxPhotoMb = 8;
-    public const string Folder = "lora-training";
+    public const string Folder = ImageEditorPaths.TrainingDirName;
 
     [GeneratedRegex(@"^[0-9a-f]{16}\.(jpg|png|webp)\z")]
     private static partial Regex NamePattern();
@@ -31,11 +31,44 @@ public sealed partial class CharacterTrainingPhotos(IConfiguration config)
         {
             var name = Path.GetFileName(file);
             if (!IsValidName(name) || IsLink(file)) continue;
-            var bytes = File.ReadAllBytes(file);
-            var (w, h) = ImageDimensions.Read(bytes) ?? (0, 0);
-            result.Add(new TrainingPhoto(name, bytes.LongLength, w, h));
+            var (w, h) = ImageDimensions.Read(ReadHeader(file)) ?? (0, 0);
+            result.Add(new TrainingPhoto(name, new FileInfo(file).Length, w, h));
         }
         return [.. result.OrderBy(p => p.Name, StringComparer.Ordinal)];
+    }
+
+    // Размеры берём по первым байтам: PNG/WebP — в первых 32, JPEG — SOF в пределах заголовков
+    private const int HeaderBytes = 64 * 1024;
+
+    private static byte[] ReadHeader(string path)
+    {
+        using var fs = File.OpenRead(path);
+        var buf = new byte[(int)Math.Min(fs.Length, HeaderBytes)];
+        fs.ReadExactly(buf);
+        return buf;
+    }
+
+    // Удаляет все фото персонажа; нет каталога — не ошибка
+    public void Purge(string ownerId, string projectId, string slug)
+    {
+        var dir = Dir(ownerId, projectId, slug);
+        DeleteDir(dir);
+    }
+
+    // Удаляет все фото проекта владельца (каскад удаления проекта); нет каталога — не ошибка
+    public void PurgeProject(string ownerId, string projectId)
+    {
+        var dir = ProjectDir(ownerId, projectId);
+        DeleteDir(dir);
+    }
+
+    private void DeleteDir(string? dir)
+    {
+        if (dir is null) return;
+        lock (_lock)
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
     }
 
     public TrainingPhotosAddResult Add(string ownerId, string projectId, string slug, IReadOnlyList<PhotoUpload> uploads)
@@ -45,7 +78,8 @@ public sealed partial class CharacterTrainingPhotos(IConfiguration config)
         var dir = Dir(ownerId, projectId, slug);
         if (dir is null)
         {
-            rejected.AddRange(uploads.Select(u => new TrainingPhotoRejection(u.FileName, "format")));
+            // Каталог не собрался: slug, владелец или проект некорректны — отказ «персонаж», а не «формат»
+            rejected.AddRange(uploads.Select(u => new TrainingPhotoRejection(u.FileName, "character")));
             return new TrainingPhotosAddResult(added, rejected);
         }
 
@@ -118,12 +152,21 @@ public sealed partial class CharacterTrainingPhotos(IConfiguration config)
         return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(joined)));
     }
 
+    // Не Guid владельца/проекта или кривой slug — null (fail-closed), а не исключение
     private string? Dir(string ownerId, string projectId, string slug)
     {
         if (!CharacterStore.IsValidSlug(slug)) return null;
+        return ProjectDir(ownerId, projectId) is { } projectDir ? SafePath.Join(projectDir, slug) : null;
+    }
+
+    private string? ProjectDir(string ownerId, string projectId)
+    {
+        string owner, project;
+        try { (owner, project) = (LoraNamespace.OwnerKey(ownerId), LoraNamespace.OwnerKey(projectId)); }
+        catch (ArgumentException) { return null; }
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         var dataDir = Path.GetDirectoryName(dataPath)!;
-        return SafePath.Join(dataDir, Path.Combine(Folder, LoraNamespace.OwnerKey(ownerId), LoraNamespace.OwnerKey(projectId), slug));
+        return SafePath.Join(dataDir, Path.Combine(Folder, owner, project));
     }
 
     private static bool IsLink(string path) => new FileInfo(path).LinkTarget is not null;

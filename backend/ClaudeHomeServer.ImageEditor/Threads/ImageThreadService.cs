@@ -674,21 +674,41 @@ public sealed class ImageThreadService(
 
     // Выбор фото персонажа приходит из задачи, а запуск ложится в нить после ответа «запустить»:
     // кто из двоих позже, тот и записывает. Сначала кладём в ожидающие, потом пробуем записать;
-    // OnLaunchedAsync делает наоборот — хотя бы один из двоих увидит другого
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ImageThreadCharacter> _pendingPicks = new();
+    // OnLaunchedAsync делает наоборот — хотя бы один из двоих увидит другого. Запись, которой
+    // некуда лечь (нити нет), удаляется сразу, а забытые старше PendingPickTtl выбрасываются при
+    // следующем обращении — фоновых таймеров нет
+    private static readonly TimeSpan PendingPickTtl = TimeSpan.FromMinutes(10);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (ImageThreadCharacter Character, DateTime At)> _pendingPicks = new();
+
+    internal int PendingPickCount => _pendingPicks.Count;
 
     public Task OnCharacterPickedAsync(string ownerId, ImageEditJobDto job, ImageThreadCharacter character)
     {
         if (job is not { ThreadId: { } threadId, ChatSessionId: { } sessionId }) return Task.CompletedTask;
-        _pendingPicks[job.JobId] = character;
+        DropStalePicks();
+        _pendingPicks[job.JobId] = (character, store.Now());
         ApplyPick(ownerId, sessionId, threadId, job.JobId);
         return Task.CompletedTask;
     }
 
+    private void DropStalePicks()
+    {
+        var border = store.Now() - PendingPickTtl;
+        foreach (var (jobId, pick) in _pendingPicks)
+            if (pick.At < border) _pendingPicks.TryRemove(jobId, out _);
+    }
+
     private void ApplyPick(string ownerId, string sessionId, string threadId, string jobId)
     {
-        if (!_pendingPicks.TryGetValue(jobId, out var character)) return;
-        var written = store.SetLaunchCharacter(ownerId, sessionId, threadId, jobId, character);
+        DropStalePicks();
+        if (!_pendingPicks.TryGetValue(jobId, out var pick)) return;
+        var written = store.SetLaunchCharacter(ownerId, sessionId, threadId, jobId, pick.Character);
+        // Нити нет — писать некуда и не будет: запись не держим
+        if (written.Status == ImageThreadWriteStatus.ThreadNotFound)
+        {
+            _pendingPicks.TryRemove(jobId, out _);
+            return;
+        }
         if (written.Status == ImageThreadWriteStatus.Ok
             && store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId)
                 ?.Launches.Any(l => l.JobId == jobId && l.Character is not null) == true)

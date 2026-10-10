@@ -696,8 +696,12 @@ public class CharacterStoreTests : IDisposable
     {
         var m = Create("Аня");
         var file = m.Photos[0].File;
+        var other = m.Photos[1].File;
         CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
             Labels(file, "profile", "laugh")))!.Error.Should().BeNull();
+        CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
+            Labels(other, "front", "smile")))!.Error.Should().BeNull();
+        var before = CharacterStore.Get(_root, m.Slug)!;
         var empty = new Dictionary<string, CharacterPhotoLabels> { [file] = new(null, null, null) };
 
         CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null, empty))!
@@ -710,6 +714,14 @@ public class CharacterStoreTests : IDisposable
         photo.LabelSource.Should().BeNull();
         CharacterStore.MergeAutoLabels(_root, m.Slug, Labels(file, "front", "smile"))!.Should().Equal(file);
         CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file).LabelSource.Should().Be("auto");
+        // Соседнее фото не задето: ручные метки на месте, манифест не изменился
+        var after = CharacterStore.Get(_root, m.Slug)!;
+        var neighbour = after.Photos.Single(p => p.File == other);
+        neighbour.Angle.Should().Be("front");
+        neighbour.Emotion.Should().Be("smile");
+        neighbour.LabelSource.Should().Be("human");
+        after.Name.Should().Be(before.Name);
+        after.Description.Should().Be(before.Description);
     }
 
     [Fact]

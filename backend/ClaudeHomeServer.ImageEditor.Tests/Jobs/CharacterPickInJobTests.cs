@@ -98,12 +98,16 @@ public class CharacterPickInJobTests : IDisposable
             object? jsonFormat = null, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
-    private async Task<ImageEditRequest> Run(bool flagOn, string prompt, IReadOnlyList<string>? photos = null)
+    // withoutGate — сборщик без шлюза флагов и разбора сюжета вовсе, то есть как на master
+    private async Task<ImageEditRequest> Run(bool flagOn, string prompt, IReadOnlyList<string>? photos = null,
+        bool withoutGate = false)
     {
         var flags = new Mock<IFeatureFlagGate>();
         flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.CharacterSmartPhotos)).Returns(flagOn);
-        var assembler = new ImageEditLaunchAssembler([_editor], _service, new SkiaImageRaster(),
-            flags: flags.Object, sceneParser: new CharacterSceneParser(new NoRunner()));
+        var assembler = withoutGate
+            ? new ImageEditLaunchAssembler([_editor], _service, new SkiaImageRaster())
+            : new ImageEditLaunchAssembler([_editor], _service, new SkiaImageRaster(),
+                flags: flags.Object, sceneParser: new CharacterSceneParser(new NoRunner()));
 
         var quote = await _service.QuoteAsync(Owner, Project,
             new ImageEditQuoteRequest("fake", "fake-model", EditMode.Auto, ImageEditOp.Generate, 1, false,
@@ -140,7 +144,10 @@ public class CharacterPickInJobTests : IDisposable
     public async Task Флаг_выключен_запрос_драйверу_как_без_подбора()
     {
         var request = await Run(false, "портрет в профиль у окна");
+        var baseline = Snapshot(await Run(false, "портрет в профиль у окна", withoutGate: true));
 
+        // Побайтно: роли, подписи и байты всех референсов, эталон лица и промпт — как без подбора
+        Snapshot(request).Should().Be(baseline);
         Order(request).Should().Equal(Hex(1), Hex(2), Hex(3));
         request.Character!.FacePhotos.Select(Convert.ToHexString).Should().Equal(Hex(1), Hex(2), Hex(3));
         lock (_picks) _picks.Should().BeEmpty();
@@ -214,6 +221,13 @@ public class CharacterPickLaunchRecordTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    private sealed class ManualTime(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
     private static readonly ImageThreadCharacter Choice = new("anya", ["a.jpg", "b.jpg"], "auto", new CharacterScene("profile", null, null));
 
     private static ImageEditJobDto Job(string id) =>
@@ -245,6 +259,32 @@ public class CharacterPickLaunchRecordTests : IDisposable
         await Launched("job-2");
 
         LaunchOf("job-2")!.Character.Should().BeEquivalentTo(Choice);
+    }
+
+    [Fact]
+    public async Task Выбор_для_несуществующей_нити_не_остаётся_в_ожидающих()
+    {
+        await _service.OnCharacterPickedAsync(Owner, Job("job-x") with { ThreadId = "нет-такой" }, Choice);
+
+        _service.PendingPickCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Выбор_без_запуска_ждёт_а_по_истечении_срока_выбрасывается()
+    {
+        var time = new ManualTime(DateTimeOffset.UtcNow);
+        var store = new ImageThreadStore(_root + "-ttl", time);
+        var service = new ImageThreadService(store, NullLogger<ImageThreadService>.Instance);
+        var thread = store.Create(Owner, Chat, null, "", focus: true).Thread.Id;
+
+        await service.OnCharacterPickedAsync(Owner, Job("job-old") with { ThreadId = thread }, Choice);
+        service.PendingPickCount.Should().Be(1);
+
+        time.Advance(TimeSpan.FromMinutes(11));
+        await service.OnCharacterPickedAsync(Owner, Job("job-new") with { ThreadId = thread }, Choice);
+
+        service.PendingPickCount.Should().Be(1);
+        try { Directory.Delete(_root + "-ttl", recursive: true); } catch (DirectoryNotFoundException) { }
     }
 
     [Fact]

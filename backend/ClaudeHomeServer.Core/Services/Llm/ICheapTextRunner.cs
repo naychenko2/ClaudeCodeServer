@@ -69,6 +69,13 @@ public interface ICheapTextRunner
     // Для необязательных «украшений» (суть уведомления), где платный вызов нежелателен.
     Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default);
 
+    // То же со строгим JSON-контрактом локального шага (jsonFormat — как в RunAsync). Для мест,
+    // чьи данные в облако не уходят никогда (темы чатов): у RunFreeAsync первым шагом идёт
+    // прямой облачный адаптер. Реализация по умолчанию — без structured output: подставным
+    // раннерам тестов перегрузка не нужна, настоящий CheapTextRunner её перекрывает.
+    Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, object? jsonFormat, CancellationToken ct) =>
+        RunLocalOnlyAsync(actionKey, prompt, ct);
+
     // Бесплатная часть цепочки: прямой адаптер агрегатора → локальная модель, БЕЗ claude.
     // Шире RunLocalOnlyAsync (та требует именно Kind=Local и живой Ollama) и уже RunAsync
     // (та в конце всегда платит claude). Для «украшений», которые нужны на каждом шаге

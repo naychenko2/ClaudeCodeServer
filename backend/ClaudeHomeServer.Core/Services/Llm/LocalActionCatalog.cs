@@ -97,6 +97,9 @@ public static class LocalActionCatalog
     // «Собрать сводку», кэшируется в Session.ArchiveSummary. Не путать с SessionSummary —
     // «Итогом сессии», который выносится заметкой и трогать который нельзя
     public const string ChatDigest = "chat-digest";
+    // Темы чатов проекта: раскладка верхнеуровневых чатов проекта по
+    // реестру тем. Только локальная модель
+    public const string ChatSubjects = "chat-subjects";
     // Карта плана («Визуальный разворот плана», часть B): структурный слепок markdown-плана
     // по кнопке «Собрать схему», кэш в data/plan-maps.json
     public const string PlanMap = "plan-map";
@@ -234,6 +237,11 @@ public static class LocalActionCatalog
         // для карточки списка, поэтому Small вместо Large «Сводки сессии»: переплачивать
         // профилем за три строки незачем
         new(ChatDigest, "Сводка карточки архива", "Сессии", CheapProfile.Small, DefaultLocal: true),
+        // Темы чатов проекта: пачка чатов (название + реплики человека) → JSON назначений.
+        // Text, а не Small: 256 токенов вывода Small — ~8 назначений без запаса на новую тему.
+        // Ходит ТОЛЬКО в локальную модель (ChatSubjectSweeper зовёт RunLocalOnlyAsync, не
+        // RunFreeAsync): реплики чатов в облако не уходят, без локали чаты остаются без темы.
+        new(ChatSubjects, "Темы чатов проекта", "Сессии", CheapProfile.Text, DefaultLocal: true),
         // Карта плана: вход — markdown-план до 35 КБ, выход — структурный JSON, тот же класс
         // задачи, что у планировщика (прецедент в шапке профиля Large: потолок вывода на
         // облаке обрывал JSON плана на полуслове). DefaultLocal: false — разметка крупного

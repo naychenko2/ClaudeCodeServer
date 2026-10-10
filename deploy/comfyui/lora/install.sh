@@ -1,108 +1,83 @@
 #!/bin/bash
-# Установка воркера обучения LoRA (AD-026, op lora_train / lora_delete) на машину с ComfyUI.
-# Идемпотентно: повторный запуск доставляет недостающее.
+# Установка воркера обучения LoRA персонажа (ADR-026, op lora_train / lora_delete) на машину с ComfyUI.
+# Идемпотентно: повторный запуск доставляет недостающее. Подробности — README.md рядом.
 #
-#   LORA_ROOT   — venv и репозиторий ai-toolkit       (по умолчанию ~/ai-data/audio-workers)
-#   COMFY_ROOT  — ComfyUI                              (по умолчанию ~/ComfyUI-h3)
-#   COMFY_MODELS — каталог models/ (loras и т. п.)     (по умолчанию ~/ai-data/comfy-models)
-#   --link-only — без окружений и весов: обновить узел и воркеры после выкатки новой версии
-#
-# Сценарий:
-#   * ai-toolkit ставится в свой venv (отдельный от ComfyUI): ему нужны свои torch / diffusers.
-#   * InsightFace для кропов лиц ставится в тот же venv — у ComfyUI его нет.
-#   * Узел очереди — тот же CcsAudioWorker (правка в deploy/comfyui/audio/.../__init__.py),
-#     семейство 'lora' прописывается в workers.json на машине.
-#   * Веса qwen_image_2.1_int8_convrot лежат в ComfyUI/diffusion_models и попадают в ai-toolkit
-#     через симлинк.
+#   AUDIO_ROOT  — корень воркеров узла CcsAudioWorker   (по умолчанию ~/ai-data/audio-workers)
+#   COMFY_ROOT  — ComfyUI                               (по умолчанию ~/ComfyUI-h3)
+#   COMFY_LORAS — каталог loras ComfyUI для весов      (по умолчанию ~/ai-data/comfy-models/loras)
+#   LORA_V1     — ручной прогон v1, откуда берутся уже скачанные extras (по умолчанию ~/lora)
+#   HTTPS_PROXY — для загрузки extras мимо туннеля (README аудио, «Сеть»)
+#   --link-only — без окружения и весов: обновить узел, воркер и workers.json после выкатки
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-LORA_ROOT=${LORA_ROOT:-$HOME/ai-data/audio-workers}
+AUDIO_ROOT=${AUDIO_ROOT:-$HOME/ai-data/audio-workers}
 COMFY_ROOT=${COMFY_ROOT:-$HOME/ComfyUI-h3}
-COMFY_MODELS=${COMFY_MODELS:-$HOME/ai-data/comfy-models}
+LORA_V1=${LORA_V1:-$HOME/lora}
 export PATH=$HOME/.local/bin:$PATH
-TI="--index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match"
-T28="torch==2.8.0+cu128 torchvision==0.23.0+cu128"
+ROOT="$AUDIO_ROOT/lora"            # venv и extras
+TOOLKIT="$AUDIO_ROOT/ai-toolkit"   # ai-toolkit на зафиксированном коммите
+DEPLOY="$AUDIO_ROOT/ccs-lora"      # копия воркера: свой каталог, audio/install.sh чистит ccs/ через --delete
+AI_TOOLKIT_COMMIT=a949f21f8e021320b1af6792e3dfbf6661a8caa9
+# как у ручного v1 (~/lora/install.sh): на этой связке замерены 2,3 с/шаг
+TI="--index-url https://download.pytorch.org/whl/cu130 --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match"
+TORCH="torch==2.13.0 torchvision==0.28.0 torchaudio==2.11.0"
 
-mkdir -p "$LORA_ROOT"
-# Свои файлы (install.sh, worker_lora.py, README, шаблон) кладём в $DEPLOY/lora — чтобы не
-# мешать audio install.sh, который rsync-ит в $DEPLOY напрямую. Узел ccs_audio_worker общий
-# и обновляется из исходника $HERE/../audio/ccs_audio_worker/__init__.py (рядом в репо)
-DEPLOY="$LORA_ROOT/ccs"
-mkdir -p "$DEPLOY/lora" "$DEPLOY/workers" "$DEPLOY/ccs_audio_worker"
-rsync -a --exclude '__pycache__' "$HERE/" "$DEPLOY/lora/"
-cp "$HERE/../audio/ccs_audio_worker/__init__.py" "$DEPLOY/ccs_audio_worker/__init__.py"
+echo "== узел CcsAudioWorker и общий код воркеров (штатная выкатка аудио)"
+AUDIO_ROOT="$AUDIO_ROOT" COMFY_ROOT="$COMFY_ROOT" bash "$HERE/../audio/install.sh" --link-only
+mkdir -p "$DEPLOY" "$ROOT"
+rsync -a --delete --exclude '__pycache__' "$HERE/" "$DEPLOY/"
 
-venv() { # venv <каталог> — создаёт .venv, если его нет
-  mkdir -p "$LORA_ROOT/$1"
-  [ -d "$LORA_ROOT/$1/.venv" ] || uv venv -q -p 3.12 "$LORA_ROOT/$1/.venv"
-  echo "$LORA_ROOT/$1/.venv/bin/python"
-}
-
-clone() { [ -d "$LORA_ROOT/$2" ] || git clone -q --no-single-branch https://github.com/ostris/ai-toolkit "$LORA_ROOT/$2"; }
+EXTRAS="$ROOT/models/Qwen-Image-2.1"
+WEIGHTS=""
+for d in "$HOME/ai-data/comfy-models/diffusion_models" "$HOME/ComfyUI/models/diffusion_models"; do
+  [ -f "$d/qwen_image_2.1_int8_convrot.safetensors" ] && { WEIGHTS="$d/qwen_image_2.1_int8_convrot.safetensors"; break; }
+done
+[ -n "$WEIGHTS" ] || { echo "Нет весов qwen_image_2.1_int8_convrot.safetensors в diffusion_models ComfyUI"; exit 1; }
 
 if [ "${1:-}" != "--link-only" ]; then
-echo "== ai-toolkit + InsightFace (CPU-детектор лиц)"
-# ai-toolkit — это репо ostris; версия пинается коммитом a949f21 (фиксируем в ADR-026).
-# --no-single-branch: shallow-клон с одним коммитом не содержит a949f21 (он предок HEAD)
-clone ostris/ai-toolkit ai-toolkit
-(cd "$LORA_ROOT/ai-toolkit" && git checkout -q a949f21)
+echo "== ai-toolkit $AI_TOOLKIT_COMMIT"
+[ -d "$TOOLKIT/.git" ] || git clone -q https://github.com/ostris/ai-toolkit "$TOOLKIT"
+git -C "$TOOLKIT" cat-file -e "$AI_TOOLKIT_COMMIT^{commit}" 2>/dev/null || git -C "$TOOLKIT" fetch -q origin
+git -C "$TOOLKIT" checkout -q "$AI_TOOLKIT_COMMIT"
 
-P=$(venv lora)
-# ai-toolkit ставит свои torch/diffusers; torch — явно cu128, иначе из QA-индекса
-uv pip install -q -p "$P" $TI $T28
-# InsightFace для кропов лиц: buffalo_l (детектор + landmark); на усмотрение Марка — CPU или
-# GPU. На gpuhost CPU проще: иначе воркер держит второй CUDA-context, и аллокатор рвёт
-# память, как было с AudioSR. Релиз фиксируем, чтобы не приехала версия с переименованием API
-uv pip install -q -p "$P" "insightface==0.7.3" onnxruntime
-# ai-toolkit — набор скриптов без pyproject.toml; ставим его зависимости из requirements.txt
-# (репо — коллекция run.py + toolkit/, а не pip-пакет). requirements.txt ссылается на
-# requirements_base.txt — содержит transformers/accelerate/peft/diffusers и пр.
-uv pip install -q -p "$P" -r "$LORA_ROOT/ai-toolkit/requirements.txt"
+echo "== окружение (torch как у v1, зависимости ai-toolkit, InsightFace на CPU)"
+[ -d "$ROOT/.venv" ] || uv venv -q -p 3.12 "$ROOT/.venv"
+P="$ROOT/.venv/bin/python"
+uv pip install -q -p "$P" $TI $TORCH
+# ai-toolkit — скрипты (run.py), а не пакет: ставим только его requirements
+uv pip install -q -p "$P" $TI $TORCH -r "$TOOLKIT/requirements.txt"
+# детектор лиц на CPU: второй CUDA-контекст в процессе обучения отъедал бы видеопамять
+uv pip install -q -p "$P" $TI $TORCH "insightface==0.7.3" onnxruntime
 
-echo "== веса qwen_image_2.1_int8_convrot"
-# ai-toolkit ждёт путь к весам на диске. У ComfyUI они в diffusion_models; симлинк в
-# ai-toolkit/models/<guid> держим шум, чтобы обновление весов в ComfyUI было видно без правок.
-# Путь ищем по всем каталогам, которые знает ComfyUI (extra_model_paths.yaml): h3data
-# ($COMFY_MODELS) и photo ($COMFY_MODELS/../ComfyUI/models). Без этого ai-toolkit не найдёт
-mkdir -p "$LORA_ROOT/ai-toolkit/models"
-WEIGHT_SRC=""
-for d in "$COMFY_MODELS/diffusion_models" "${COMFY_MODELS%/comfy-models}/ComfyUI/models/diffusion_models"; do
-  if [ -f "$d/qwen_image_2.1_int8_convrot.safetensors" ]; then
-    WEIGHT_SRC="$d/qwen_image_2.1_int8_convrot.safetensors"
-    break
+echo "== extras Qwen-Image-2.1 (энкодер, VAE, конфиги; transformer — наши int8-веса ComfyUI)"
+if [ ! -f "$EXTRAS/text_encoder/model.safetensors.index.json" ]; then
+  mkdir -p "$(dirname "$EXTRAS")"
+  if [ -f "$LORA_V1/models/Qwen-Image-2.1/text_encoder/model.safetensors.index.json" ]; then
+    # жёсткие ссылки: без второй копии 16 ГБ; на другой файловой системе — обычная копия
+    cp -al "$LORA_V1/models/Qwen-Image-2.1" "$EXTRAS" 2>/dev/null \
+      || { rm -rf "$EXTRAS"; cp -a "$LORA_V1/models/Qwen-Image-2.1" "$EXTRAS"; }
+  else
+    HF_HUB_DISABLE_XET=1 "$P" -c "from huggingface_hub import snapshot_download as s; s('Qwen/Qwen-Image-2.1', local_dir='$EXTRAS', ignore_patterns=['transformer/*'])"
   fi
-done
-[ -n "$WEIGHT_SRC" ] || { echo "Нет весов qwen_image_2.1_int8_convrot — поставьте в ComfyUI/models/diffusion_models"; exit 1; }
-ln -sfn "$WEIGHT_SRC" "$LORA_ROOT/ai-toolkit/models/qwen_image_2.1_int8_convrot.safetensors"
+fi
 
-echo "== прогрев моделей InsightFace (CPU, загружается один раз)"
-"$P" - <<'PY' || true
-import os
-os.environ.setdefault("INSIGHTFACE_HOME", os.path.expanduser("~/.insightface"))
-from insightface.app import FaceAnalysis
-fa = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-fa.prepare(ctx_id=-1, det_size=(640, 640))
-print("insightface готов")
-PY
+echo "== прогрев InsightFace buffalo_l"
+"$P" -c "from insightface.app import FaceAnalysis as F; F(name='buffalo_l', providers=['CPUExecutionProvider']).prepare(ctx_id=-1)" >/dev/null
+fi  # --link-only
 
-fi  # --link-only: только копия узла и воркеров, workers.json и симлинк — при выкатке новой версии
-
-echo "== конфиг воркеров"
-W="$DEPLOY/lora"
-cat > "$LORA_ROOT/workers.json" <<JSON
+echo "== семейство lora в workers.json"
+# каталог loras секции h3data в extra_model_paths.yaml; узел при каждом запуске сверяет его со списком ComfyUI
+LORAS=${COMFY_LORAS:-$HOME/ai-data/comfy-models/loras}
+mkdir -p "$LORAS/ccs"
+cat > "$AUDIO_ROOT/workers.lora.json" <<JSON
 {"families": {
-  "lora": {
-    "python": "$LORA_ROOT/lora/.venv/bin/python",
-    "script": "$W/worker_lora.py",
-    "cwd": "$LORA_ROOT/ai-toolkit",
-    "loras_root": "$COMFY_MODELS/loras",
-    "env": {"AI_TOOLKIT_DIR": "$LORA_ROOT/ai-toolkit"}
-  }
+  "lora": {"python": "$ROOT/.venv/bin/python", "script": "$DEPLOY/worker_lora.py", "cwd": "$TOOLKIT",
+           "loras_root": "$LORAS",
+           "env": {"AI_TOOLKIT_DIR": "$TOOLKIT", "CCS_LORA_BASE_WEIGHTS": "$WEIGHTS",
+                   "CCS_LORA_EXTRAS": "$EXTRAS", "CCS_WORKERS_DIR": "$AUDIO_ROOT/ccs/workers"}}
 }}
 JSON
-
-echo "== узел ComfyUI"
-ln -sfn "$DEPLOY/ccs_audio_worker" "$COMFY_ROOT/custom_nodes/ccs_audio_worker"
-echo "Готово. Дальше: рестарт comfyui-h3 при ПУСТОЙ очереди,"
-echo "LocalMedia:LoraTrainEnabled=true в appsettings.Local.json бэкенда."
+python3 "$AUDIO_ROOT/ccs/merge_workers.py" "$AUDIO_ROOT/workers.json" "$AUDIO_ROOT/workers.lora.json"
+rm -f "$AUDIO_ROOT/workers.lora.json"
+echo "Готово. Дальше: рестарт comfyui-h3 при ПУСТОЙ очереди, LocalMedia:LoraTrainEnabled=true в appsettings.Local.json."

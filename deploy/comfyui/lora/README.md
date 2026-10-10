@@ -1,68 +1,59 @@
 # Обучение LoRA персонажа на машине с ComfyUI
 
-Решение и контракты — [ADR-026](../../../docs/adr/ADR-026-character-lora-training.md) и
-[ADR-026-contracts](../../../docs/adr/ADR-026-contracts.md). Эта страница — оперативная:
-что где живёт, как ставить, как проверять.
+Решение — [ADR-026](../../../docs/adr/ADR-026-character-lora-training.md), провод и коды ошибок —
+[ADR-026-contracts](../../../docs/adr/ADR-026-contracts.md) §5. Здесь — что где живёт и как ставить.
 
 ## Что где живёт
 
 | Что | Где |
 |---|---|
-| Узел очереди | `ccs_audio_worker/` (тот же, что для аудио), правится в `deploy/comfyui/audio/...` |
-| Семейство воркера | `lora` в `~/ai-data/audio-workers/workers.json` (пишет `install.sh`) |
-| Скрипт воркера | `workers/worker_lora.py` (копия в `~/ai-data/audio-workers/ccs/workers/`) |
-| venv и ai-toolkit | `~/ai-data/audio-workers/lora/.venv`, `~/ai-data/audio-workers/ai-toolkit/` |
-| Шаблон yaml | `deploy/comfyui/lora/templates/standard.yaml` (копия приходит через `install.sh`) |
-| Веса qwen_image_2.1 | `~/ai-data/comfy-models/diffusion_models/qwen_image_2.1_int8_convrot.safetensors` |
+| Узел очереди | `CcsAudioWorker` (`deploy/comfyui/audio/ccs_audio_worker`): op `lora_train`, `lora_delete` → `_run_lora` |
+| Воркер и шаблон пресета | `worker_lora.py`, `templates/standard.yaml` → копия в `~/ai-data/audio-workers/ccs-lora` |
+| ai-toolkit | `~/ai-data/audio-workers/ai-toolkit` на коммите `a949f21` |
+| venv и extras Qwen-Image-2.1 | `~/ai-data/audio-workers/lora/.venv`, `~/ai-data/audio-workers/lora/models/Qwen-Image-2.1` |
+| Базовые веса | `qwen_image_2.1_int8_convrot.safetensors` из `diffusion_models` ComfyUI, путь — в env семейства |
+| Результат | `~/ai-data/comfy-models/loras/ccs/<owner>/<slug>-<runId>/<slug>.safetensors` |
+| Семейство в конфиге | `lora` в `~/ai-data/audio-workers/workers.json` |
 
-Один процесс воркера — одно обучение. После выхода видеопамять освобождается; следующая
-картинка сама подгрузит свою модель. Так GPU1 общая: ComfyUI рисует, H3 распознаёт,
-аудиостеки и теперь LoRA встают в одну очередь через единый узел `CcsAudioWorker`.
-
-`Op` живёт в белом списке `OPS` узла `ccs_audio_worker` (`deploy/comfyui/audio/.../__init__.py`):
-`lora_train` → семейство `lora`, `lora_delete` → семейство `lora`. Обе op уходят в
-`_run_lora` узла и обрабатываются без общего `_run`, потому что у LoRA свои проверки
-путей и сценарий без `vram_mb` (выгрузка полная, без бюджета — на замере пик VRAM 17,6 ГБ
-из 24,6 без `/free` не влезает).
+Пресет `standard` повторяет ручной прогон v1 (`~/lora/config/andreyk.yaml`): rank/alpha 16, lr 1e-4,
+adamw8bit, bf16, convrot8 для модели и энкодера, `low_vram`, разрешения 512/768/1024, 2000 шагов,
+`save_every` 250; итог — чекпоинт шага 1750. Пробные картинки выключены (`disable_sampling`).
 
 ## Установка
 
 ```bash
-./install.sh                  # ai-toolkit + InsightFace + симлинк узла + workers.json
-./install.sh --link-only      # после выкатки новой версии: только узел, воркеры и workers.json
+./install.sh               # ai-toolkit, venv, extras, InsightFace, узел, workers.json
+./install.sh --link-only   # после выкатки: узел, воркер и workers.json
 ```
 
-Сценарий идемпотентный: повторный запуск не переустанавливает venv и не перекачивает
-веса, только обновляет копию воркера и симлинк узла.
+Оба режима сначала зовут `../audio/install.sh --link-only`: узел общий с аудио и выкатывается
+только так. Затем рестарт `comfyui-h3` при ПУСТОЙ очереди и `LocalMedia:LoraTrainEnabled=true`
+в `appsettings.Local.json` бэкенда.
 
-Узел и воркеры копируются в `~/ai-data/audio-workers/ccs`, и ComfyUI ссылается на
-копию, а не на рабочее дерево git: иначе `checkout` другой ветки или удаление worktree
-ломает LoRA. Правка узла вступает в силу после рестарта `comfyui-h3` (при пустой
-очереди), правка воркера — сразу.
+Ставить юнитом, а не из шелла ssh: `setsid`-процесс внутри `wsl -e` умирает вместе с сессией.
 
-Потом вручную:
-
-1. Весы qwen_image_2.1_int8_convrot в `~/ai-data/comfy-models/diffusion_models/`.
-2. Рестарт `comfyui-h3` — **только при пустой очереди** (`curl :8188/queue`).
-3. В `appsettings.Local.json` бэкенда — `"LocalMedia": { "LoraTrainEnabled": true }`.
+```bash
+sudo systemd-run --unit=ccs-lora-install --uid=an --setenv=HOME=$HOME bash -c './install.sh > ~/lora-install.log 2>&1'
+```
 
 ## Грабли
 
-- **Перед стартом обучения воркер ОБЯЗАН полностью выгрузить модели ComfyUI.** На замере
-  2026-10-10 пик VRAM 17,6 ГБ из 24,6 с `/free`, без него — 24,19/24,58 ГБ и задача
-  падает с OOM. Узел зовёт `_free_vram(need_mb=None)` (тот же путь, что у `_run_lora`),
-  воркер страхуется `torch.cuda.empty_cache()`.
-- **Один процесс обучения — 2 часа.** Во время него ComfyUI не может ни картинку нарисовать,
-  ни видео собрать: вся очередь встала. ADR-026 так и задумано (одно обучение на инстанс),
-  но при стейджинге это нужно помнить.
-- **InsightFace — только CPU.** На gpuhost второй CUDA-контекст рвёт память, как было с
-  AudioSR. buffalo_l детектирует на CPU за 1–3 с на фото, что укладывается в таймаут.
-- **ai-toolkit пишет чекпоинты в формате `<slug>_NNNNNNN.safetensors`**, финальный — на
-  шаге 1750 при 2000 шагах и `save_every: 250`. Если шаги или save_every поменяют —
-  править и `FINAL_CHECKPOINT_STEP` в `worker_lora.py`.
-- **Входы — только из `input/ccs/<owner>/<run>/`.** Бэкенд фильтрует имена по `^[0-9a-f]{16}`
-  и режет пути до 4 сегментов; воркер повторяет регэкспы и сверяет путь — нельзя
-  перепутать `..` и попасть в чужой каталог.
-- **После выхода воркера `input/ccs/<owner>/<run>/` и `out_dir` чистятся.** Фото и
-  промежуточные артефакты ai-toolkit (samplers/, optimizer.bin, scheduler.bin) удаляются;
-  остаётся только `<slug>.safetensors` и `config.yaml` (для отладки).
+- **`workers.json` общий с аудио.** Оба установщика пишут его только через `merge_workers.py` — своё
+  семейство, не трогая чужие. Запись целиком однажды стёрла все аудиосемейства на gpuhost.
+- **Каталоги раздельные.** Аудио выкатывается в `ccs/` с `rsync --delete`, поэтому LoRA живёт в `ccs-lora/`.
+- **Без полной выгрузки моделей ComfyUI обучение не влезает** (замер 1г: 24,19 из 24,58 ГБ) — узел
+  зовёт `_free_vram(None)`; пик самого обучения 17,6 ГБ.
+- **Extras — только при установке.** ai-toolkit берёт энкодер, VAE и конфиги из `extras_name_or_path`;
+  без локального каталога он идёт в HF и падает под `HF_HUB_OFFLINE=1`, с которым узел запускает воркер.
+- **ai-toolkit — в той же группе процессов, что и воркер**: `/interrupt` гасит группу, и обучение
+  освобождает карту вместе с воркером.
+- **`CCS_LORA_MAX_STEPS`** в env семейства укорачивает прогон для проверки на стенде; итог тогда —
+  последний шаг. В рабочем конфиге переменной быть не должно.
+
+## Миграция ручных LoRA в `ccs/<ownerKey>/`
+
+После фильтра видимости (`LoraNamespace.VisibleTo`) LoRA вне `ccs/<ownerKey>/…` не видны и не подключаются.
+Переносятся двумя парными скриптами, по умолчанию оба в `--dry-run`; применять вместе:
+
+- `migrate-manual-loras.sh` — файлы на gpuhost (`~/ComfyUI/models/loras`, корень «photo»), только `mv`, существующее не перезаписывается, имена вне `[A-Za-z0-9._-]` пропускаются. `ssh -o BatchMode=yes gpuhost 'wsl -e bash -s -- --owner-key <32 hex> [--only <имя>] [--apply]' < migrate-manual-loras.sh`; журнал отката пишется в `.ccs-migration/` рядом, откат — `--rollback <журнал>`.
+- `scripts/migrate-lora-manifests.py` — манифесты `characters/*/character.json` серверных проектов владельца (`providers.local.lora` → `ccs/<ownerKey>/<имя>`), запись атомарная, бэкап `character.json.bak-<дата>`; тесты — `python3 -m unittest scripts/test_migrate_lora_manifests.py`. `python3 scripts/migrate-lora-manifests.py --username <имя> [--apply]`.

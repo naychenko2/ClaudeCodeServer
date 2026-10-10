@@ -1,342 +1,255 @@
-"""Обучение LoRA персонажа (ADR-026) через ai-toolkit.
+"""Обучение LoRA персонажа (ADR-026) через ai-toolkit: op lora_train и lora_delete.
 
-Протокол воркера (общий с аудио-воркерами):
-  argv[1] — путь к job.json с ключами op, params, inputs (абсолютные пути), out_dir.
-  Последняя строка stdout: CCS_RESULT {"files":[…], "stats":{…}}.
+Протокол общий с аудио-воркерами (deploy/comfyui/audio/README.md): argv[1] — job.json с ключами
+op, params, inputs (абсолютные пути), out_dir, input_dir; последняя строка stdout — CCS_RESULT.
+out_dir и input_dir строит и проверяет узел CcsAudioWorker; воркер дополнительно сверяет сегменты.
 
 lora_train:
-  * Входы — обучающие фото только в input/ccs/<ownerKey>/<runId>/, имена — хеш16.{jpg,png,webp}
-  * Подготовка: детектор InsightFace (buffalo_l) → кропы лица 5.5× по короткой стороне
-    (внутри вписаны «голова» 2.6×, оба варианта по контракту ADR-026 §5.1).
-  * Отказы по фото: no_face, many_faces, small_face, unreadable — собираем в stats.rejected.
-  * Подписи: photo of <trigger>, head shot.
-  * Обучение: ai-toolkit с шаблоном templates/standard.yaml, рендерится в out_dir.
-  * Прогресс: stdout-разбор ai-toolkit → CCS_PROGRESS {"step":N,"total":M}, не реже 1/10 шагов.
-  * Результат: финальный чекпоинт *_000001750.safetensors (ADR-026 §5.1) → out_dir/<slug>.safetensors;
-    остальные артефакты ai-toolkit удаляются.
+  * фото — только input/ccs/<owner>/<run_id>/<sha16>.<ext>;
+  * InsightFace buffalo_l (CPU): ровно одно лицо → кропы «голова» 2,6× и «по пояс» 5,5× лица,
+    квадрат; отказы no_face / many_faces / small_face / unreadable уходят в stats.rejected;
+  * подписи «photo of <trigger>, head shot» / «… waist-up shot»;
+  * ai-toolkit по шаблону templates/<preset>.yaml, прогресс — CCS_PROGRESS {"step","total"};
+  * итог — чекпоинт шага 1750 → out_dir/<slug>.safetensors, остальное из out_dir удаляется;
+  * годных фото < 15 → CCS_RESULT {"error":"too_few_faces"}, код 2.
+lora_delete: удалить out_dir и in_dir прогона, без GPU и без подпроцесса.
 
-lora_delete: без выгрузки моделей и без подпроцесса. Удаляет out_dir и in_dir, если есть.
+Пути машины (веса, extras Qwen-Image-2.1, общий код воркеров) — из env семейства в workers.json.
+CCS_LORA_MAX_STEPS — только для проверки на стенде: укорачивает прогон, итог — последний шаг.
 """
-
 import glob
 import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 
-# Прямой импорт ccs_common из общего каталога воркеров ($DEPLOY/workers). Когда воркер лежит в
-# $DEPLOY/lora/ на машине, общий каталог воркеров — на уровень выше в workers/
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workers"))
+HERE = os.path.dirname(os.path.abspath(__file__))
+# общий ccs_common.py аудио-воркеров: на машине — каталог из env, в репозитории — соседний audio/workers
+sys.path.insert(0, os.environ.get("CCS_WORKERS_DIR") or os.path.join(HERE, "..", "audio", "workers"))
 from ccs_common import fail, load_job  # noqa: E402
 
-# Шаг, на котором ai-toolkit сохраняет финальный чекпоинт при 2000 шагах и save_every=250.
-# Если шаги или save_every поменяют в шаблоне — править и тут (FINAL = STEPS − SAVE_EVERY).
-FINAL_CHECKPOINT_STEP = 1750
-TOTAL_STEPS = 2000
-# Таймаут ожидания потока-читателя вывода ai-toolkit
-READER_JOIN_S = 10
-# Минимальное число годных лиц, иначе ccs_error=too_few_faces
+# Пресеты — белый список ADR-026; шаги и финальный чекпоинт живут здесь, на проводе их нет
+PRESETS = {"standard": {"steps": 2000, "checkpoint": 1750}}
 MIN_KEPT_FACES = 15
-# Регэксп имени обучающего фото — повторно сверяем, чтобы не съесть чужой файл
-_RE_PHOTO = re.compile(r"^[0-9a-f]{16}\.(jpg|png|webp)\Z")
-# Регэкспы сегментов пути воркеда. owner — 32 hex lowercase (после LoraNamespace.OwnerKey);
-# slug и runId — только [a-z0-9-] (защита от .. и абсолютных)
-_RE_OWNER = re.compile(r"^[0-9a-f]{32}\Z")
-_RE_SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
-_RE_RUN = re.compile(r"^[0-9a-f]{12}\Z")
+MIN_FACE_PX = 64
+HEAD_SCALE, WAIST_SCALE = 2.6, 5.5
+
+_RE_PHOTO = re.compile(r"[0-9a-f]{16}\.(jpg|png|webp)\Z")
+_RE_OWNER = re.compile(r"[0-9a-f]{32}\Z")
+_RE_SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
+_RE_RUN = re.compile(r"[0-9a-f]{12}\Z")
+_RE_TRIGGER = re.compile(r"[a-z][a-z0-9_]{2,23}\Z")
 
 
-def _safe_str(value, regex, what):
+def _check(value, regex, what):
     if not isinstance(value, str) or not regex.match(value):
         fail(f"недопустимый {what}: {value!r}")
     return value
 
 
-def _free_vram():
-    """Сброс VRAM перед обучением: модели ai-toolkit приедут свои, остаться от других op
-    не должно. Полная выгрузка — soft=False в узле уже делал, тут страховка на случай если
-    сосед по времени уже подгрузил что-то ещё."""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
-    except Exception:
-        pass
+def _inside(path, root):
+    path, root = os.path.realpath(path), os.path.realpath(root)
+    return path.startswith(root + os.sep)
 
 
-def _crop_face(app, src_path):
-    """Детектирует лицо. Возвращает (rgb_or_None, status, head_or_size).
-    status == "ok" при успехе, иначе причина отказа (no_face, many_faces, small_face, unreadable)."""
+def _run_dirs(job):
+    """Сегменты прогона по регэкспам §1 и каталоги, заново сверенные с корнями."""
+    p = job.params
+    owner = _check(p.get("owner"), _RE_OWNER, "owner")
+    slug = _check(p.get("slug"), _RE_SLUG, "slug")
+    run_id = _check(p.get("run_id"), _RE_RUN, "run_id")
+    if not job.input_dir:
+        fail("узел не передал input_dir")
+    in_dir = os.path.join(job.input_dir, "ccs", owner, run_id)
+    if not _inside(in_dir, job.input_dir):
+        fail("каталог фото вне input")
+    if not os.path.normpath(job.out_dir).endswith(os.sep + os.path.join("ccs", owner, f"{slug}-{run_id}")):
+        fail("out_dir не каталог этого прогона")
+    for d in (in_dir, job.out_dir):
+        if os.path.islink(d):
+            fail(f"символическая ссылка вместо каталога: {d}")
+    return owner, slug, run_id, in_dir
+
+
+def _square(cx, cy, side, w, h, top_share):
+    """Квадрат стороной side вокруг (cx, cy), лицо на top_share высоты сверху; сдвиг внутрь кадра."""
+    side = int(min(side, w, h))
+    x0 = int(cx - side / 2)
+    y0 = int(cy - side * top_share)
+    x0 = max(0, min(x0, w - side))
+    y0 = max(0, min(y0, h - side))
+    return x0, y0, side
+
+
+def _crops(app, path):
+    """[(кроп BGR, подпись-хвост)] или причина отказа строкой."""
     import cv2
-    img = cv2.imread(src_path)
+    img = cv2.imread(path)
     if img is None:
-        return None, "unreadable", None
+        return "unreadable"
     faces = app.get(img)
     if not faces:
-        return None, "no_face", None
+        return "no_face"
     if len(faces) > 1:
-        return None, "many_faces", None
-    face = faces[0]
-    bbox = face.bbox.astype(int)  # x1, y1, x2, y2
-    x1, y1, x2, y2 = bbox
-    fw, fh = x2 - x1, y2 - y1
-    if min(fw, fh) < 64:
-        return None, "small_face", None
-    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-    # ADR-026 §5.1: «голова» 2.6× и «по пояс» 5.5× лица, квадрат. Берём больший — внутри оба
-    crop_short = max(fw, fh)
-    head_half = int(round(crop_short * 2.6 / 2))
-    waist_half = int(round(crop_short * 5.5 / 2))
-    half = waist_half
-    H, W = img.shape[:2]
-    x0 = max(0, cx - half)
-    y0 = max(0, cy - half)
-    x1c = min(W, cx + half)
-    y1c = min(H, cy + half)
-    if x1c - x0 < 32 or y1c - y0 < 32:
-        return None, "small_face", None
-    cropped = img[y0:y1c, x0:x1c]
-    rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
-    return rgb, "ok", (head_half, (fw, fh))
+        return "many_faces"
+    x1, y1, x2, y2 = (int(v) for v in faces[0].bbox)
+    face = max(x2 - x1, y2 - y1)
+    if face < MIN_FACE_PX:
+        return "small_face"
+    h, w = img.shape[:2]
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    out = []
+    x0, y0, s = _square(cx, cy, face * HEAD_SCALE, w, h, 0.5)
+    out.append((img[y0:y0 + s, x0:x0 + s], "head shot"))
+    # «по пояс»: лицо в верхней четверти; кадр, который не шире «головы» в полтора раза, — не отдельный ракурс
+    x0, y0, s2 = _square(cx, cy, face * WAIST_SCALE, w, h, 0.25)
+    if s2 >= s * 1.5:
+        out.append((img[y0:y0 + s2, x0:x0 + s2], "waist-up shot"))
+    return out
 
 
-def _prepare_dataset(in_dir, out_dataset_dir, trigger):
-    """Прогоняет фото через InsightFace, делает кропы и текстовые подписи.
-    Возвращает (kept:int, rejected:[{name,reason}])."""
+def _prepare_dataset(names, in_dir, dataset_dir, trigger):
+    import cv2
     from insightface.app import FaceAnalysis
     app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
     app.prepare(ctx_id=-1, det_size=(640, 640))
-
-    rejected = []
-    kept = 0
-    # ai-toolkit ждёт файлы .png/.jpg с .txt-подписью рядом
-    os.makedirs(out_dataset_dir, exist_ok=True)
-    for entry in sorted(os.listdir(in_dir)):
-        if not _RE_PHOTO.match(entry):
+    kept, rejected, images = 0, [], 0
+    for name in names:
+        result = _crops(app, os.path.join(in_dir, name))
+        if isinstance(result, str):
+            rejected.append({"name": name, "reason": result})
             continue
-        src = os.path.join(in_dir, entry)
-        rgb, status, head = _crop_face(app, src)
-        if status != "ok":
-            rejected.append({"name": entry, "reason": status})
-            continue
-        base = os.path.splitext(entry)[0]
-        img_path = os.path.join(out_dataset_dir, base + ".png")
-        txt_path = os.path.join(out_dataset_dir, base + ".txt")
-        try:
-            import cv2
-            cv2.imwrite(img_path, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-        except Exception:
-            rejected.append({"name": entry, "reason": "unreadable"})
-            continue
-        with open(txt_path, "w", encoding="utf-8") as f:
-            f.write(f"photo of {trigger}, head shot")
+        base = name.split(".")[0]
+        for k, (crop, shot) in enumerate(result):
+            stem = os.path.join(dataset_dir, f"{base}-{k}")
+            cv2.imwrite(stem + ".png", crop)
+            with open(stem + ".txt", "w", encoding="utf-8") as f:
+                f.write(f"photo of {trigger}, {shot}")
+            images += 1
         kept += 1
-    return kept, rejected
+    return kept, rejected, images
 
 
-def _render_yaml(template_path, out_yaml, slug, run_id, trigger, out_dir, steps, dataset_dir):
-    """Рендерит шаблон templates/standard.yaml в файл config ai-toolkit."""
-    with open(template_path, encoding="utf-8") as f:
+def _render(template, target, values):
+    with open(template, encoding="utf-8") as f:
         text = f.read()
-    text = text.replace("<slug>", slug).replace("<run_id>", run_id)
-    text = text.replace("<trigger>", trigger).replace("<out_dir>", out_dir)
-    text = text.replace("<steps>", str(steps)).replace("<dataset_dir>", dataset_dir)
-    with open(out_yaml, "w", encoding="utf-8") as f:
+    for key, value in values.items():
+        text = text.replace(f"<{key}>", str(value))
+    if re.search(r"<[a-z_]+>", text):
+        fail(f"в шаблоне остались плейсхолдеры: {re.findall(r'<[a-z_]+>', text)}")
+    with open(target, "w", encoding="utf-8") as f:
         f.write(text)
 
 
-def _pump_and_progress(proc, stats):
-    """Читает stdout+stderr ai-toolkit, эмитит CCS_PROGRESS (JSON) и аккумулирует хвост в stats."""
-    last_step = -1
-    last_emit = 0.0
-    progress_re = re.compile(r"(?:step|iteration)\D+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
-    lines = []
-    try:
-        for line in iter(proc.stdout.readline, ""):
-            line = line.rstrip("\n")
-            lines.append(line)
-            m = progress_re.search(line)
-            if m:
-                step = int(m.group(1))
-                # Не реже раза в 10 шагов и не чаще 2 раз в секунду
-                if step != last_step and (step % 10 == 0 or step >= TOTAL_STEPS):
-                    if time.time() - last_emit >= 0.5:
-                        print(f"CCS_PROGRESS {json.dumps({'step': step, 'total': TOTAL_STEPS}, ensure_ascii=False)}",
-                              flush=True)
-                        last_emit = time.time()
-                last_step = step
-            elif "loss" in line.lower() or "lr" in line.lower():
-                # Спокойный лог — печатать в общий поток не чаще раза в секунду
-                if time.time() - last_emit >= 1.0:
-                    print(line[:300], flush=True)
-                    last_emit = time.time()
-    finally:
-        try:
-            proc.stdout.close()
-        except Exception:
-            pass
-    stats["_tail"] = "\n".join(lines[-30:])
+def _result_error(code, job):
+    print("CCS_RESULT " + json.dumps({"error": code, "files": [], "stats": job.stats}, ensure_ascii=False), flush=True)
+    sys.exit(2)
 
 
 def _train(job):
-    """op == lora_train. Узел уже выгрузил VRAM; тут — своя работа."""
-    params = job.params
-    owner = _safe_str(params.get("owner", ""), _RE_OWNER, "owner")
-    slug = _safe_str(params.get("slug", ""), _RE_SLUG, "slug")
-    run_id = _safe_str(params.get("run_id", ""), _RE_RUN, "run_id")
-    trigger = _safe_str(params.get("trigger", ""),
-                        re.compile(r"^[a-z][a-z0-9_]{2,23}\Z"), "trigger")
-    if params.get("preset") != "standard":
-        fail(f"неизвестный пресет: {params.get('preset')!r}")
+    owner, slug, run_id, in_dir = _run_dirs(job)
+    trigger = _check(job.params.get("trigger"), _RE_TRIGGER, "trigger")
+    preset = PRESETS.get(job.params.get("preset"))
+    if preset is None:
+        fail(f"неизвестный пресет: {job.params.get('preset')!r}")
+    steps, checkpoint = preset["steps"], preset["checkpoint"]
+    cap = int(os.environ.get("CCS_LORA_MAX_STEPS") or 0)
+    if cap > 0:
+        steps, checkpoint = min(steps, cap), None
 
-    # out_dir приходит из job.json: узел уже построил путь внутри loras_root и проверил,
-    # что loras_root совпадает с каталогом ComfyUI
-    out_dir = os.path.realpath(job.out_dir)
-    os.makedirs(out_dir, exist_ok=True)
+    names = sorted({os.path.basename(p) for p in job.inputs})
+    for p in job.inputs:
+        if os.path.dirname(os.path.realpath(p)) != os.path.realpath(in_dir) or not _RE_PHOTO.match(os.path.basename(p)):
+            fail(f"вход не фото этого прогона: {p}")
 
-    # input_dir тоже прокинут узлом — воркеру не нужны ComfyUI-модули (folder_paths)
-    input_root = os.path.realpath(getattr(job, "input_dir", None) or "")
-    if not input_root:
-        fail("input_dir не передан узлом в job.json")
-    in_dir = os.path.realpath(os.path.join(input_root, "ccs", owner, run_id))
-    if not in_dir.startswith(input_root + os.sep) or not os.path.isdir(in_dir):
-        fail(f"нет каталога фото на GPU: ccs/{owner}/{run_id}")
+    base_weights = os.environ.get("CCS_LORA_BASE_WEIGHTS")
+    extras = os.environ.get("CCS_LORA_EXTRAS")
+    ai_dir = os.environ.get("AI_TOOLKIT_DIR")
+    if not (base_weights and extras and ai_dir):
+        fail("в workers.json не заданы CCS_LORA_BASE_WEIGHTS, CCS_LORA_EXTRAS или AI_TOOLKIT_DIR")
 
-    # Валидация имён входов: узел уже проверил _safe_input, тут достаточно регэкспов имён
-    photo_names = sorted(set(os.path.basename(raw) for raw in job.inputs))
-    if not photo_names:
-        fail("нет фото входа")
-    for n in photo_names:
-        if not _RE_PHOTO.match(n):
-            fail(f"имя фото не по регэкспу: {n}")
-    if len(photo_names) < MIN_KEPT_FACES:
-        # Узел уже ушёл в граф; воркер ставит CCS_RESULT с маркером too_few_faces — узел
-        # превратит это в исключение ccs_error=too_few_faces
-        job.stats["photos_kept"] = 0
-        job.stats["rejected"] = [{"name": n, "reason": "no_face"} for n in photo_names]
-        job.stats["checkpoint"] = 0
-        print(f"CCS_RESULT {json.dumps({'error': 'too_few_faces', 'stats': job.stats}, ensure_ascii=False)}", flush=True)
-        sys.exit(2)
-    job.stats["photos_total"] = len(photo_names)
-
-    _free_vram()
-
-    # tmp-каталог с датасетом: ai-toolkit ждёт подкаталог с .png и .txt
-    dataset_dir = tempfile.mkdtemp(prefix="ccs-lora-ds-")
-    config_yaml = os.path.join(out_dir, "config.yaml")
-    template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates", "standard.yaml")
-    _render_yaml(template_path, config_yaml, slug, run_id, trigger, out_dir, TOTAL_STEPS, dataset_dir)
-
-    kept_count, rejected = 0, []
+    os.makedirs(job.out_dir, exist_ok=True)
+    work = tempfile.mkdtemp(prefix="ccs-lora-")
     success = False
     try:
-        kept_count, rejected = _prepare_dataset(in_dir, dataset_dir, trigger)
-        if kept_count < MIN_KEPT_FACES:
-            job.stats["photos_kept"] = kept_count
-            job.stats["rejected"] = rejected
-            job.stats["checkpoint"] = 0
-            print(f"CCS_RESULT {json.dumps({'error': 'too_few_faces', 'stats': job.stats}, ensure_ascii=False)}", flush=True)
-            sys.exit(2)
+        dataset = os.path.join(work, "dataset")
+        os.makedirs(dataset)
+        kept, rejected, images = _prepare_dataset(names, in_dir, dataset, trigger)
+        job.stats.update(photos_total=len(names), photos_kept=kept, rejected=rejected, images=images)
         job.lap("dataset")
+        print(f"фото: годных {kept} из {len(names)}, кропов {images}", flush=True)
+        if kept < MIN_KEPT_FACES:
+            _result_error("too_few_faces", job)
 
-        # Запуск ai-toolkit. ai-toolkit — набор скриптов (run.py), а не pip-пакет; entrypoint —
-        # python run.py config. cwd — корень репозитория (как у worker_acestep)
-        ai_dir = os.environ.get("AI_TOOLKIT_DIR")
-        if not ai_dir:
-            fail("AI_TOOLKIT_DIR не задан")
-        py = sys.executable
-        cmd = [py, "run.py", config_yaml]
-        try:
-            proc = subprocess.Popen(cmd, cwd=ai_dir, env=os.environ.copy(),
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, bufsize=1, start_new_session=True)
-        except FileNotFoundError as e:
-            fail(f"не удалось запустить ai-toolkit: {e}")
-
-        stats_progress = {}
-        reader = threading.Thread(target=_pump_and_progress,
-                                  args=(proc, stats_progress),
-                                  daemon=True)
+        name = f"ccs-{slug}-{run_id}"
+        config = os.path.join(work, "config.yaml")
+        _render(os.path.join(HERE, "templates", f"{job.params['preset']}.yaml"), config, {
+            "name": name, "training_folder": os.path.join(work, "out"), "dataset_dir": dataset,
+            "steps": steps, "base_weights": base_weights, "extras_dir": extras,
+        })
+        # без новой сессии: узел гасит группу процессов воркера, и ai-toolkit должен уйти вместе с ней
+        proc = subprocess.Popen([sys.executable, "run.py", config], cwd=ai_dir, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+        tail = []
+        reader = threading.Thread(target=_pump, args=(proc, name, steps, tail), daemon=True)
         reader.start()
-        try:
-            rc = proc.wait()
-        except BaseException:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            raise
-        reader.join(timeout=READER_JOIN_S)
-
-        if rc != 0:
-            tail = stats_progress.get("_tail", "")[-2000:]
-            if "out of memory" in tail.lower():
-                print(f"CCS_RESULT {json.dumps({'error': 'oom', 'tail': tail}, ensure_ascii=False)}", flush=True)
-                sys.exit(2)
-            fail(f"ai-toolkit завершился с кодом {rc}: {tail}")
+        rc = proc.wait()
+        reader.join(timeout=10)
         job.lap("train")
+        if rc != 0:
+            text = "\n".join(tail)
+            if "out of memory" in text.lower():
+                print(text[-1500:], flush=True)
+                _result_error("oom", job)
+            fail(f"ai-toolkit завершился с кодом {rc}:\n{text[-1500:]}")
 
-        # Сбор артефакта: финальный чекпоинт
-        ckpts = sorted(glob.glob(os.path.join(out_dir, f"{slug}_*{FINAL_CHECKPOINT_STEP:08d}.safetensors")))
-        if not ckpts:
-            any_ckpt = sorted(glob.glob(os.path.join(out_dir, f"{slug}_*.safetensors")))
-            if not any_ckpt:
-                fail(f"ai-toolkit не сохранил чекпоинт в {out_dir}")
-            ckpts = [any_ckpt[-1]]
-        final = os.path.join(out_dir, f"{slug}.safetensors")
-        shutil.move(ckpts[-1], final)
-        # Остальные артефакты ai-toolkit (samples/, optimizer.bin, scheduler.bin) удаляем
-        for p in sorted(glob.glob(os.path.join(out_dir, "*"))):
-            if p == final or p == config_yaml:
-                continue
-            if os.path.isdir(p):
-                shutil.rmtree(p, ignore_errors=True)
-            else:
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
-
-        job.stats["photos_kept"] = kept_count
-        job.stats["rejected"] = rejected
-        job.stats["checkpoint"] = FINAL_CHECKPOINT_STEP
+        run_dir = os.path.join(work, "out", name)
+        source = (os.path.join(run_dir, f"{name}_{checkpoint:09d}.safetensors") if checkpoint
+                  else os.path.join(run_dir, f"{name}.safetensors"))
+        if not os.path.isfile(source):
+            fail(f"ai-toolkit не сохранил {os.path.basename(source)}: {sorted(os.listdir(run_dir))}")
+        for p in glob.glob(os.path.join(job.out_dir, "*")):
+            shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
+        shutil.move(source, os.path.join(job.out_dir, f"{slug}.safetensors"))
+        job.files.append(f"{slug}.safetensors")
+        job.stats.update(steps=steps, checkpoint=checkpoint or steps)
         success = True
     finally:
-        shutil.rmtree(dataset_dir, ignore_errors=True)
-        # in_dir — фото больше не нужны
+        shutil.rmtree(work, ignore_errors=True)
         shutil.rmtree(in_dir, ignore_errors=True)
-        # При неуспехе — out_dir тоже убираем (узел тоже это делает в finally, но на случай
-        # падения тут родителя — добавочная страховка)
         if not success:
-            shutil.rmtree(out_dir, ignore_errors=True)
+            shutil.rmtree(job.out_dir, ignore_errors=True)
+
+
+def _pump(proc, name, total, tail):
+    """Вывод ai-toolkit: шаги из строки прогресса tqdm прогона («<name>:  6%|…| 120/2000 […]»)."""
+    step_re = re.compile(re.escape(name) + r":\s+\d+%\|[^|]*\|\s*(\d+)/(\d+)")
+    last = -1
+    for line in proc.stdout:  # text=True: «\r» tqdm режет строки так же, как «\n»
+        line = line.rstrip()
+        m = step_re.search(line)
+        if m:
+            step = int(m.group(1))
+            if step != last and (step - last >= 10 or step == total or last < 0):
+                print("CCS_PROGRESS " + json.dumps({"step": step, "total": total}), flush=True)
+                last = step
+            continue
+        if line:
+            tail.append(line)
+            del tail[:-60]
+            print(line[:300], flush=True)
 
 
 def _delete(job):
-    """op == lora_delete. Без GPU; просто снимаем каталоги."""
-    params = job.params
-    owner = _safe_str(params.get("owner", ""), _RE_OWNER, "owner")
-    slug = _safe_str(params.get("slug", ""), _RE_SLUG, "slug")
-    run_id = _safe_str(params.get("run_id", ""), _RE_RUN, "run_id")
-    out_dir = os.path.realpath(job.out_dir)
-
-    input_root = os.path.realpath(getattr(job, "input_dir", None) or "")
-    if not input_root:
-        fail("input_dir не передан узлом в job.json")
-    in_dir = os.path.realpath(os.path.join(input_root, "ccs", owner, run_id))
-    if not in_dir.startswith(input_root + os.sep):
-        fail(f"in_dir за пределами input: {in_dir}")
-
-    shutil.rmtree(out_dir, ignore_errors=True)
+    owner, slug, run_id, in_dir = _run_dirs(job)
+    shutil.rmtree(job.out_dir, ignore_errors=True)
     shutil.rmtree(in_dir, ignore_errors=True)
-    print(f"CCS_RESULT {json.dumps({'files': [], 'stats': {'deleted': f'ccs/{owner}/{slug}-{run_id}/'}}, ensure_ascii=False)}", flush=True)
-    sys.exit(0)
+    job.stats["deleted"] = f"ccs/{owner}/{slug}-{run_id}/"
 
 
 def main():

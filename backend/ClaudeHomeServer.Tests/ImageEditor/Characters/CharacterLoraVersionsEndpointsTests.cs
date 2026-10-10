@@ -96,6 +96,28 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     private const string Ready = "aaaaaaaaaaaa", Failed = "bbbbbbbbbbbb", Training = "cccccccccccc";
 
     [Fact]
+    public async Task Список_отдаёт_loraFile_только_у_ready()
+    {
+        var factory = Factory(null);
+        var lora = OwnerLora(factory);
+        var (id, root) = await ProjectWithCharacter(factory);
+        var client = factory.CreateAuthenticatedClient();
+        Runs(factory).Create(root, "anya", Run(Ready, "ready", lora));
+        Runs(factory).Create(root, "anya", Run(Failed, "failed", lora));
+        Runs(factory).Create(root, "anya", Run(Training, "training"));
+
+        var items = (await Json(await client.GetAsync(Api(id)))).GetProperty("items").EnumerateArray().ToList();
+        string? File(string runId)
+        {
+            var item = items.Single(i => i.GetProperty("runId").GetString() == runId);
+            return item.TryGetProperty("loraFile", out var v) ? v.GetString() : null;
+        }
+        File(Ready).Should().Be(lora);
+        File(Failed).Should().BeNull();
+        File(Training).Should().BeNull();
+    }
+
+    [Fact]
     public async Task Список_показывает_подключённую_версию_и_свою_LoRA()
     {
         var factory = Factory(null);

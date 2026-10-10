@@ -166,6 +166,86 @@ public class CharacterPhotoLabelingTests : IDisposable
     }
 
     [Fact]
+    public async Task Failed_третий_раз_подряд_даёт_unknown_и_больше_не_уходит()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
+        _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
+        var root = Root();
+        var m = MakeCharacter(root);
+        var svc = Service();
+
+        for (var round = 1; round <= 2; round++)
+        {
+            await svc.ProcessAsync(JobOf(root, m.Slug), default);
+            CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+                p => p.Angle == null && p.Emotion == null && p.LabelSource == null);
+        }
+        _labeler.Calls.Should().Be(4);
+
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(
+            p => p.Angle == "unknown" && p.Pitch == "unknown" && p.Emotion == "unknown" && p.LabelSource == "auto");
+        _labeler.Calls.Should().Be(6);
+
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        _labeler.Calls.Should().Be(6);
+    }
+
+    [Theory]
+    [InlineData(ImageLabelFailure.Unavailable)]
+    [InlineData(ImageLabelFailure.Timeout)]
+    public async Task Временная_недоступность_не_увеличивает_счётчик_Failed(ImageLabelFailure temporary)
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
+        var root = Root();
+        var m = MakeCharacter(root);
+        var svc = Service();
+
+        // Две Failed, затем пять временных отказов, затем снова Failed: всего три Failed, но unknown ещё не должно быть
+        _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        _labeler.Answer = _ => ImageLabelResult.Fail(temporary);
+        for (var i = 0; i < 5; i++) await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(p => p.Angle == null && p.Emotion == null);
+
+        // Третья Failed — счёт дошёл ровно до порога, временные его не сдвинули
+        _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(p => p.Angle == "unknown" && p.Emotion == "unknown");
+    }
+
+    [Fact]
+    public async Task Успешный_ответ_сбрасывает_счётчик_Failed()
+    {
+        _flags.On = true;
+        _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
+        var root = Root();
+        var m = MakeCharacter(root);
+        var svc = Service();
+
+        _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        _labeler.Answer = _ => ImageLabelResult.Ok(
+            "[{\"angle\":\"front\",\"pitch\":\"level\",\"emotion\":\"smile\"},{\"angle\":\"front\",\"pitch\":\"level\",\"emotion\":\"smile\"},{\"angle\":\"front\",\"pitch\":\"level\",\"emotion\":\"smile\"}]");
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(p => p.Angle == "front" && p.Emotion == "smile");
+
+        // Человек сбросил метки — фото снова в разметке; две новые неудачи — меньше порога, если счёт был сброшен успехом
+        var reset = m.Photos.ToDictionary(p => p.File, _ => new CharacterPhotoLabels());
+        CharacterStore.Update(root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null, reset)).Should().NotBeNull();
+        _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+        await svc.ProcessAsync(JobOf(root, m.Slug), default);
+
+        CharacterStore.Get(root, m.Slug)!.Photos.Should().OnlyContain(p => p.Angle == null && p.Emotion == null);
+    }
+
+    [Fact]
     public async Task Busy_face_pose_ничего_не_пишет()
     {
         _flags.On = true;

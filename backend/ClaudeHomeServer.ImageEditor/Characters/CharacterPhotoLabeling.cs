@@ -25,9 +25,13 @@ public sealed class CharacterPhotoLabeling(
     public const int BatchSize = 10;
     // Длинная сторона фото перед отправкой в облако (ADR-027 §4)
     public const int CloudMaxSide = 512;
+    // Столько неудач модели подряд по месту фото — и оно получает unknown, чтобы не уходить в облако бесконечно
+    public const int MaxFailures = 3;
 
     private readonly Channel<Job> _queue = Channel.CreateUnbounded<Job>();
     private readonly HashSet<(string Root, string Slug)> _pending = [];
+    // Неудачи Failed по (владелец, корень, slug, файл, место) — только в памяти: после рестарта счёт с нуля
+    private readonly Dictionary<(string Owner, string Root, string Slug, string File, string Place), int> _failures = [];
 
     public sealed record Job(string OwnerId, string Root, string Slug);
 
@@ -96,7 +100,8 @@ public sealed class CharacterPhotoLabeling(
             case ImageLabelRouteKind.FacePose:
                 return await FacePoseAsync(job, files, ct);
             case ImageLabelRouteKind.Vision:
-                var answers = await AskAsync(job, LocalActionCatalog.CharacterPhotoAngle, AnglePrompt, files, ct);
+                var answers = await AskAsync(job, LocalActionCatalog.CharacterPhotoAngle, AnglePrompt, files,
+                    new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown), ct);
                 return answers is null ? null : MapVision(files, answers, e => new CharacterPhotoLabels(
                     Pick(e, "angle", PhotoLabelValues.Angles), Pick(e, "pitch", PhotoLabelValues.Pitches)),
                     new CharacterPhotoLabels(PhotoLabelValues.Unknown, PhotoLabelValues.Unknown));
@@ -130,7 +135,8 @@ public sealed class CharacterPhotoLabeling(
     {
         var route = labeler!.RouteOf(LocalActionCatalog.CharacterPhotoEmotion, job.OwnerId);
         if (route.Kind != ImageLabelRouteKind.Vision) return null;
-        var answers = await AskAsync(job, LocalActionCatalog.CharacterPhotoEmotion, EmotionPrompt, files, ct);
+        var answers = await AskAsync(job, LocalActionCatalog.CharacterPhotoEmotion, EmotionPrompt, files,
+            new CharacterPhotoLabels(Emotion: PhotoLabelValues.Unknown), ct);
         return answers is null ? null : MapVision(files, answers,
             e => new CharacterPhotoLabels(Emotion: Pick(e, "emotion", PhotoLabelValues.Emotions)),
             new CharacterPhotoLabels(Emotion: PhotoLabelValues.Unknown));
@@ -139,7 +145,7 @@ public sealed class CharacterPhotoLabeling(
     // null — писать нечего (временный отказ); иначе разобранный массив ответов по порядку фото
     // (элементы-не-объекты и недостающие хвосты превращаются в unknown позже, в MapVision)
     private async Task<List<JsonElement>?> AskAsync(
-        Job job, string actionKey, string prompt, List<string> files, CancellationToken ct)
+        Job job, string actionKey, string prompt, List<string> files, CharacterPhotoLabels unknown, CancellationToken ct)
     {
         if (raster is null) return null;
         var photos = ReadPhotos(job, files);
@@ -157,13 +163,46 @@ public sealed class CharacterPhotoLabeling(
         switch (result.Failure)
         {
             case null:
+                ResetFailures(job, actionKey, files);
                 return ParseArray(result.Text);
             case ImageLabelFailure.NoVision or ImageLabelFailure.Refused:
                 // Модель ответила, но метки нет: «пробовали», повторно не отправляем
                 return [];
+            case ImageLabelFailure.Failed:
+                await RegisterFailureAsync(job, actionKey, files, unknown, ct);
+                return null;
             default:
+                // Busy/Unavailable/Timeout — временная занятость, не ошибка модели: без счёта
                 return null;
         }
+    }
+
+    // Failed по пачке: каждому фото +1; достигшие MaxFailures получают unknown и больше не уходят
+    private async Task RegisterFailureAsync(
+        Job job, string place, List<string> files, CharacterPhotoLabels unknown, CancellationToken ct)
+    {
+        var exhausted = new Dictionary<string, CharacterPhotoLabels>();
+        lock (_failures)
+        {
+            foreach (var file in files)
+            {
+                var key = (job.OwnerId, job.Root, job.Slug, file, place);
+                var n = _failures.GetValueOrDefault(key) + 1;
+                if (n >= MaxFailures)
+                {
+                    _failures.Remove(key);
+                    exhausted[file] = unknown;
+                }
+                else _failures[key] = n;
+            }
+        }
+        if (exhausted.Count > 0) await WriteAsync(job, exhausted, ct);
+    }
+
+    private void ResetFailures(Job job, string place, List<string> files)
+    {
+        lock (_failures)
+            foreach (var file in files) _failures.Remove((job.OwnerId, job.Root, job.Slug, file, place));
     }
 
     private List<(string File, byte[] Bytes)> ReadPhotos(Job job, List<string> files)

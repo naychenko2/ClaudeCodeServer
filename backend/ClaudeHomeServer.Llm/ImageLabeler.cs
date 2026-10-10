@@ -108,7 +108,8 @@ public sealed class ImageLabeler(
         }
         catch (LlmTimeoutException ex)
         {
-            if (ct.IsCancellationRequested) throw;
+            // Отмена вызывающего — отмена, а не Timeout и не LlmTimeoutException наружу
+            if (ct.IsCancellationRequested) throw new OperationCanceledException(ex.Message, ex, ct);
             log.LogWarning("image-labeler: {Action} — {Message}", request.ActionKey, ex.Message);
             return ImageLabelResult.Fail(ImageLabelFailure.Timeout);
         }

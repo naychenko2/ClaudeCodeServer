@@ -39,7 +39,7 @@ public class ImageLabelerTests
 
     private static (ImageLabeler Labeler, LocalActionOverridesStore Store, RecordingLogger<ImageLabeler> Log) Make(
         ImageRunFunc? run = null, Dictionary<ModelTier, string>? slots = null,
-        string? presetId = null, string? presetStep = null)
+        string? presetId = null, string? presetStep = null, string? cloudTimeoutMs = null)
     {
         var dir = Path.Combine(Path.GetTempPath(), "cc-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -50,6 +50,7 @@ public class ImageLabelerTests
             ["LlmProviders:blind:ApiKey"] = "sk-test",
             ["LlmProviders:blind:SupportsImages"] = "false",
             ["LlmProviders:blind:Models:0:Id"] = "blind-1",
+            ["Ollama:Profiles:small:CloudTimeoutMs"] = cloudTimeoutMs,
         });
         var store = new LocalActionOverridesStore(config, NullLogger<LocalActionOverridesStore>.Instance);
         var ollama = new OllamaClient(new NullHttpFactory(), config, NullLogger<OllamaClient>.Instance);
@@ -176,6 +177,42 @@ public class ImageLabelerTests
     {
         var (labeler, _) = MakeCounting(() => throw new OperationCanceledException());
         var act = () => labeler.LabelAsync(Request(), CancellationToken.None);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-5")]
+    public async Task ТаймаутМестаНеЗадан_ВРаннерУходитФолбэк120с(string cloudTimeoutMs)
+    {
+        TimeSpan? seen = null;
+        var (labeler, store, _) = Make(Fake(() => Ответ("ok"), t => seen = t), cloudTimeoutMs: cloudTimeoutMs);
+        store.Set(Action, "claude-haiku-4-5");
+
+        await labeler.LabelAsync(Request(), CancellationToken.None);
+
+        seen.Should().Be(TimeSpan.FromMilliseconds(120_000));
+    }
+
+    [Fact]
+    public async Task ТаймаутМестаЗадан_ВРаннерУходитОн()
+    {
+        TimeSpan? seen = null;
+        var (labeler, store, _) = Make(Fake(() => Ответ("ok"), t => seen = t), cloudTimeoutMs: "45000");
+        store.Set(Action, "claude-haiku-4-5");
+
+        await labeler.LabelAsync(Request(), CancellationToken.None);
+
+        seen.Should().Be(TimeSpan.FromMilliseconds(45_000));
+    }
+
+    [Fact]
+    public async Task ТаймаутПриОтмененномТокенеВызывающего_ОтменаНеСтановитсяTimeout()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var (labeler, _) = MakeCounting(() => throw new LlmTimeoutException("таймаут"));
+        var act = () => labeler.LabelAsync(Request(), cts.Token);
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 

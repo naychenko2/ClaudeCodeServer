@@ -25,6 +25,8 @@ class Job:
         # проверил realpath(out_dir) внутри realpath(loras_root) — иначе shutil.rmtree по симлинку
         # мог бы удалить данные за пределами каталога loras
         self.loras_root = d.get("loras_root") or ""
+        # рабочий каталог LoRA-воркера: создаёт и удаляет узел, он переживает SIGKILL воркера
+        self.work_dir = d.get("work_dir") or ""
         self.prefix = d.get("prefix") or "job"
         self.files = []
         self.stats = {}

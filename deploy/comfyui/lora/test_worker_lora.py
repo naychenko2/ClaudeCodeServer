@@ -149,5 +149,28 @@ class CheckRegexTests(unittest.TestCase):
             self.assertIsNone(w._RE_PHOTO.match(bad), bad)
 
 
+
+class PlanStepsTests(unittest.TestCase):
+    """Тестовый потолок шагов не должен доставаться настоящему прогону (инцидент 10.10:
+    прогон владельца, вставший в очередь в окно проверки, обучился 100 шагов вместо 2000)."""
+
+    STANDARD = {"steps": 2000, "checkpoint": 1750}
+    TEST, REAL = "0" * 28 + "beef", "61a7aec3aa8d44fc86dc4022a09010be"
+
+    def test_no_cap(self):
+        self.assertEqual(w._plan_steps(self.STANDARD, self.REAL, {}), (2000, 1750))
+
+    def test_cap_applies_to_test_owner(self):
+        env = {"CCS_LORA_MAX_STEPS": "100", "CCS_LORA_TEST_OWNER": self.TEST}
+        self.assertEqual(w._plan_steps(self.STANDARD, self.TEST, env), (100, None))
+
+    def test_cap_never_applies_to_real_owner(self):
+        env = {"CCS_LORA_MAX_STEPS": "100", "CCS_LORA_TEST_OWNER": self.TEST}
+        self.assertEqual(w._plan_steps(self.STANDARD, self.REAL, env), (2000, 1750))
+
+    def test_cap_without_test_owner_ignored(self):
+        self.assertEqual(w._plan_steps(self.STANDARD, self.REAL, {"CCS_LORA_MAX_STEPS": "100"}), (2000, 1750))
+
+
 if __name__ == "__main__":
     unittest.main()

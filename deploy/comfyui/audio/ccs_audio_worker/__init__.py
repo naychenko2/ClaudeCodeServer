@@ -313,28 +313,29 @@ class CcsAudioWorker:
 
         prefix = "".join(c for c in filename_prefix if c.isalnum() or c in "-_")[:80] or "job"
 
-        # 4) Полная выгрузка VRAM и сброс RAM-кэша: на замере пик 17.6 / 24.6 ГБ без /free не влезает
-        _free_vram(need_mb=None)
+        # 4) Полная выгрузка VRAM: на замере пик 17.6 / 24.6 ГБ без /free не влезает. lora_delete — без выгрузки
+        if op == "lora_train":
+            _free_vram(need_mb=None)
 
         # 5) job.json с out_dir, указывающим на каталог в loras_root (не OUTPUT_SUBFOLDER).
         # Воркеру нужен input_dir для очистки in_dir — прокидываем явно, чтобы он не лазил в
         # folder_paths (это ComfyUI-окружение, в воркере недоступно). loras_root нужен воркеру
         # для повторной проверки: realpath(out_dir) обязан лежать внутри realpath(loras_root),
         # иначе shutil.rmtree может удалить данные за пределами через симлинк в ccs/<owner>.
+        # work_dir (кропы фото, кэши ai-toolkit) создаёт и удаляет узел: воркер при /interrupt получает
+        # SIGKILL, и его собственный finally не выполняется — кропы лиц оставались бы в /tmp
         input_dir = folder_paths.get_input_directory()
+        work_dir = tempfile.mkdtemp(prefix="ccs-lora-")
         job = {"op": op, "params": params, "inputs": in_paths, "out_dir": out_dir,
-               "input_dir": input_dir, "loras_root": loras_root, "prefix": prefix}
+               "input_dir": input_dir, "loras_root": loras_root, "work_dir": work_dir, "prefix": prefix}
         fd, job_path = tempfile.mkstemp(prefix="ccs-audio-", suffix=".json")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(job, f, ensure_ascii=False)
 
         started = time.time()
         log.info("lora-воркер %s (%s): старт", op, OPS[op])
-        # ai-toolkit при старте тянет конфиг модели из HuggingFace через diffusers.from_single_file;
-        # HF_HUB_OFFLINE=1 падает на свежей машине, где конфиг ещё не скачан. Для lora-воркера
-        # разрешаем ходить в сеть (5–30 с на конфиг), но блокируем скачивание весов самих моделей —
-        # они уже лежат в ai-toolkit/models через симлинк.
-        env = dict(os.environ, PYTHONUNBUFFERED="1", HF_HUB_OFFLINE="0")
+        # extras Qwen-Image-2.1 (энкодер, VAE, конфиги) ставит install.sh: сеть внутри задачи держала бы очередь GPU
+        env = dict(os.environ, PYTHONUNBUFFERED="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
         for key in ("PYTHONPATH", "LD_LIBRARY_PATH", "LD_PRELOAD", "PYTORCH_CUDA_ALLOC_CONF"):
             env.pop(key, None)
         env.update({str(k): str(v) for k, v in (family.get("env") or {}).items()})
@@ -367,7 +368,7 @@ class CcsAudioWorker:
                 if not line.startswith(RESULT_MARK):
                     log.info("[%s] %s", op, line[:300])
                 if len(log_tail) > 800:
-                    del log_tail[-400:]
+                    del log_tail[:-400]
 
         reader = threading.Thread(target=pump, daemon=True)
         reader.start()
@@ -375,6 +376,7 @@ class CcsAudioWorker:
         def last_progress():
             return progress_lines[-1] if progress_lines else (None, None)
 
+        bar = None
         try:
             deadline = started + timeout_minutes * 60
             while True:
@@ -388,10 +390,8 @@ class CcsAudioWorker:
                 if step is not None and total:
                     try:
                         from comfy.utils import ProgressBar  # лениво, чтобы не требовать его вне ComfyUI
-                        if not hasattr(self, "_lora_pb") or self._lora_pb_total != total:
-                            self._lora_pb = ProgressBar(total)
-                            self._lora_pb_total = total
-                        self._lora_pb.update_absolute(step)
+                        bar = bar or ProgressBar(total)  # свой на каждый запуск: экземпляр узла переживает прогоны
+                        bar.update_absolute(step, total)
                     except Exception:
                         pass
                 mm.throw_exception_if_processing_interrupted()
@@ -407,6 +407,7 @@ class CcsAudioWorker:
                 os.remove(job_path)
             except OSError:
                 pass
+            shutil.rmtree(work_dir, ignore_errors=True)
             # Если воркер не успел — out_dir при lora_train чистится, in_dir всегда
             if proc.poll() is None or proc.returncode != 0:
                 if op == "lora_train" and os.path.isdir(out_dir):

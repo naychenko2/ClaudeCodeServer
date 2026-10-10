@@ -15,7 +15,8 @@ lora_train:
 lora_delete: удалить out_dir и in_dir прогона, без GPU и без подпроцесса.
 
 Пути машины (веса, extras Qwen-Image-2.1, общий код воркеров) — из env семейства в workers.json.
-CCS_LORA_MAX_STEPS — только для проверки на стенде: укорачивает прогон, итог — последний шаг.
+CCS_LORA_MAX_STEPS — только для проверки на стенде: укорачивает прогон (итог — последний шаг) и действует
+лишь на владельца из CCS_LORA_TEST_OWNER — настоящий прогон, вставший в очередь в то же окно, его не получит.
 """
 import glob
 import json
@@ -156,16 +157,22 @@ def _result_error(code, job):
     sys.exit(2)
 
 
+def _plan_steps(preset, owner, env):
+    """(шаги, шаг чекпоинта-итога) пресета; checkpoint None — итог последний шаг.
+    Потолок CCS_LORA_MAX_STEPS — только для тестового владельца CCS_LORA_TEST_OWNER."""
+    cap = int(env.get("CCS_LORA_MAX_STEPS") or 0)
+    if cap > 0 and env.get("CCS_LORA_TEST_OWNER") and owner == env.get("CCS_LORA_TEST_OWNER"):
+        return min(preset["steps"], cap), None
+    return preset["steps"], preset["checkpoint"]
+
+
 def _train(job):
     owner, slug, run_id, in_dir = _run_dirs(job)
     trigger = _check(job.params.get("trigger"), _RE_TRIGGER, "trigger")
     preset = PRESETS.get(job.params.get("preset"))
     if preset is None:
         fail(f"неизвестный пресет: {job.params.get('preset')!r}")
-    steps, checkpoint = preset["steps"], preset["checkpoint"]
-    cap = int(os.environ.get("CCS_LORA_MAX_STEPS") or 0)
-    if cap > 0:
-        steps, checkpoint = min(steps, cap), None
+    steps, checkpoint = _plan_steps(preset, owner, os.environ)
 
     names = sorted({os.path.basename(p) for p in job.inputs})
     for p in job.inputs:
@@ -179,7 +186,9 @@ def _train(job):
         fail("в workers.json не заданы CCS_LORA_BASE_WEIGHTS, CCS_LORA_EXTRAS или AI_TOOLKIT_DIR")
 
     os.makedirs(job.out_dir, exist_ok=True)
-    work = tempfile.mkdtemp(prefix="ccs-lora-")
+    # каталог от узла: его finally переживает SIGKILL воркера при /interrupt; без узла — свой
+    work = job.work_dir or tempfile.mkdtemp(prefix="ccs-lora-")
+    os.makedirs(work, exist_ok=True)
     success = False
     try:
         dataset = os.path.join(work, "dataset")

@@ -30,7 +30,7 @@ const folderOf = (name: string) => {
 const innerPath = (name: string) => inner(name).join('/').replace(EXT, '');
 
 // Подписи для набора имён: `имя · 10 октября`. Совпали — добавляем время, потом папку, потом путь внутри префикса.
-export function loraLabels(names: string[], trained?: Record<string, string>): Map<string, string> {
+export function loraLabels(names: string[], trained?: Record<string, string>, nameMax?: number): Map<string, string> {
   const dateOf = (n: string) => formatTrainedDate(trained?.[n]);
   const steps: Array<(n: string) => string> = [
     n => [loraDisplayName(n), dateOf(n)].filter(Boolean).join(' · '),
@@ -58,7 +58,23 @@ export function loraLabels(names: string[], trained?: Record<string, string>): M
   }
   // совпало на всех шагах — полное имя уникально по определению
   for (const n of pending) result.set(n, n);
-  return result;
+  return nameMax ? shortenNames(result, nameMax) : result;
+}
+
+// Для узкого селекта: имя режется посередине многоточием, дата/время/папка справа остаются целиком.
+// Если после сокращения подписи совпали — такие остаются полными.
+function shortenNames(labels: Map<string, string>, max: number): Map<string, string> {
+  const short = new Map<string, string>();
+  for (const [n, label] of labels) {
+    const disp = loraDisplayName(n);
+    if (!label.startsWith(disp) || disp.length <= max) { short.set(n, label); continue; }
+    const head = Math.ceil((max - 1) / 2), tail = Math.floor((max - 1) / 2);
+    short.set(n, `${disp.slice(0, head)}…${disp.slice(disp.length - tail)}${label.slice(disp.length)}`);
+  }
+  const count = new Map<string, number>();
+  for (const l of short.values()) count.set(l, (count.get(l) ?? 0) + 1);
+  for (const [n, l] of short) if (count.get(l)! > 1) short.set(n, labels.get(n)!);
+  return short;
 }
 
 // Подпись подключённой «своей» LoRA — та же, что в селекте: считается по полному списку.

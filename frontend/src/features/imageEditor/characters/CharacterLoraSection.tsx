@@ -13,6 +13,8 @@ type Lora = NonNullable<ImageEditCharacter['local']>;
 export type LoraInput = { name: string; trigger: string; strength: number } | 'remove';
 
 const DEFAULT_STRENGTH = 0.8;
+// Узкий экран: в свёрнутом селекте режется имя, а дата и папка остаются видны
+const SELECT_NAME_MAX = 12;
 
 export function CharacterLoraSection({ api, projectId, current, disabled, onChange }: {
   api: ImageEditorApi;
@@ -47,7 +49,7 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
   const options = [...(list?.items ?? [])];
   // текущее имя, которого нет в списке, не теряем
   const missing = !!name && list?.available && !options.includes(name);
-  const labels = loraLabels(missing ? [name, ...options] : options, list?.trained);
+  const labels = loraLabels(missing ? [name, ...options] : options, list?.trained, SELECT_NAME_MAX);
   const short = (n: string) => labels.get(n) ?? n;
   const selectOptions = options.map(o => ({ value: o, label: short(o) }));
   if (missing) selectOptions.unshift({ value: name, label: `${short(name)} (нет в ComfyUI)` });
@@ -80,12 +82,6 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
               <Field label="Файл LoRA" hint="Выберите из списка: AI Home берёт файлы, которые лежат в ComfyUI.">
                 <Select value={removed ? '' : name} options={selectOptions} placeholder="Не выбрана" disabled={disabled}
                   onChange={v => { setName(v); touch(v, trigger, strength); }} />
-                {has && (
-                  // нативный select не переносит строки: полная подпись целиком — под ним
-                  <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45, marginTop: SP.xs, overflowWrap: 'anywhere' }}>
-                    {short(name)}
-                  </div>
-                )}
               </Field>
               <Field label="Слово-триггер" hint="Одно слово: буквы, цифры и «_». Оно попадёт в запрос, чтобы модель включила LoRA. Возьмите то, что указано при обучении LoRA.">
                 <TextField value={trigger} placeholder="например, anna_face" disabled={disabled}

@@ -62,3 +62,18 @@ describe('ownLoraLabel', () => {
     expect(ownLoraLabel('other/face.safetensors', undefined, null)).toBe('face');
   });
 });
+
+describe('сокращение имени в селекте', () => {
+  it('режет имя, дата и время остаются', () => {
+    const l = loraLabels([A, B], { [A]: at(10, 9, 5), [B]: at(10, 14, 32) }, 12);
+    expect(l.get(B)).toBe('andrey…01750 · 10 октября, 14:32');
+  });
+  it('короткое имя не трогает', () => {
+    expect(loraLabels(['face.safetensors'], undefined, 12).get('face.safetensors')).toBe('face');
+  });
+  it('совпавшие после сокращения остаются полными', () => {
+    const a = 'aaaaaaaaaaaaaaaaaa_x.safetensors', b = 'aaaaaaaaaaaaaaaaaa_y.safetensors';
+    const l = loraLabels([a, b], undefined, 12);
+    expect(l.get(a)).not.toBe(l.get(b));
+  });
+});

@@ -28,6 +28,9 @@ public static class LocalMediaOps
     public const string LoraTrain = "lora_train";
     public const string LoraDelete = "lora_delete";
 
+    // Входы задач редактора картинок (адаптер шва): запись без результата, нужна только чистке input ComfyUI
+    public const string EditorInputs = "editor_inputs";
+
     public static bool IsLora(string? op) => op is LoraTrain or LoraDelete;
 
     public static bool IsAudio(string? op) => op is MusicGenerate or MusicEdit or Speech or VoiceConvert or VoiceTrain
@@ -90,6 +93,8 @@ public sealed class LocalMediaJob
     public List<string> ComfyOutputs { get; set; } = [];
     // Промежуточные файлы завершённой задачи уже убраны (латенты живут до забывания задачи)
     public bool TransientCleaned { get; set; }
+    // Не чистить входы раньше этого момента (задача редактора ещё могла стоять в очереди ComfyUI)
+    public DateTime? CleanAfter { get; set; }
     public string? Error { get; set; }
     public List<LocalMediaOutput> Outputs { get; set; } = [];
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -292,10 +297,11 @@ public sealed class LocalMediaJobStore
                 FileName, file.Version, FormatVersion);
             return;
         }
-        // Задачи обучения LoRA в IsKnown не входят (их ставит только адаптер шва), но рестарт переживать обязаны
+        // Задачи обучения LoRA и входы редактора в IsKnown не входят (их ставит только адаптер шва), но рестарт переживать обязаны
         _jobs = (file.Jobs ?? [])
             .Where(j => !string.IsNullOrWhiteSpace(j.Id) && !string.IsNullOrWhiteSpace(j.OwnerId)
-                && (LocalMediaOps.IsKnown(j.Op) || j.Op is LocalMediaOps.LoraTrain or LocalMediaOps.LoraDelete))
+                && (LocalMediaOps.IsKnown(j.Op) || j.Op is LocalMediaOps.LoraTrain or LocalMediaOps.LoraDelete
+                    or LocalMediaOps.EditorInputs))
             .ToList();
     }
 }

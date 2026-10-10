@@ -74,6 +74,7 @@ public class LocalImageMediaFacePoseTests
     [InlineData("ccs_face_pose=error")]
     [InlineData("ccs_face_pose=[]")]
     [InlineData("ccs_face_pose={}")]
+    [InlineData("ccs_face_pose={\"a.png\":42}")]
     [InlineData("ccs_face_pose={\"a.png\":{\"yaw\":1,\"pitch\":2}}")]
     [InlineData("ccs_face_pose={\"a.png\":{\"yaw\":1,\"pitch\":null,\"roll\":3}}")]
     [InlineData("ccs_face_pose={\"a.png\":{\"yaw\":\"1\",\"pitch\":2,\"roll\":3}}")]

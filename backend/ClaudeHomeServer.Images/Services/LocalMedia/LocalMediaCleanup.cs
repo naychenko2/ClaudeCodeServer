@@ -34,6 +34,7 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
         var outputDir = options.ComfyOutputDir.Trim();
         foreach (var job in store.TerminalUncleaned())
         {
+            if (job.CleanAfter > now) continue;
             DeleteTransient(job, inputDir, outputDir, keepForUpscale: true);
             store.Update(job.Id, job.OwnerId, j => j.TransientCleaned = true);
         }

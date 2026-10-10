@@ -21,6 +21,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     private readonly IConfiguration config;
     private readonly ILogger<LocalImageMediaAdapter> log;
     private readonly IImageRaster? raster;
+    private readonly LocalMediaJobStore? store;
 
     private readonly Lock _probeGate = new();
     private DateTime _probedAt = DateTime.MinValue;
@@ -28,8 +29,9 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     private Task? _probing;
 
     public LocalImageMediaAdapter(ComfyClient comfy, IConfiguration config, ILogger<LocalImageMediaAdapter> log,
-        IImageRaster? raster = null)
+        IImageRaster? raster = null, LocalMediaJobStore? store = null)
     {
+        this.store = store;
         this.comfy = comfy;
         this.config = config;
         this.log = log;
@@ -226,10 +228,14 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 + "Попробуйте позже или выберите другого поставщика.", busy: true);
 
         var id = Guid.NewGuid().ToString("N");
+        var jobId = LocalMediaService.JobIdPrefix + id;
         var prefix = $"{ComfyWorkflows.OutputFolder}/{OutputStem}{id}";
         var seed = request.Seed is >= 0 ? request.Seed.Value : Random.Shared.NextInt64(1, 1L << 50);
         var count = Math.Clamp(request.Count, 1, ComfyWorkflows.MaxCount);
 
+        // Всё, что ушло в input ComfyUI, — лица людей: записываем в стор, чтобы убрала общая чистка
+        var uploaded = new List<string>();
+        string? promptId = null;
         try
         {
             var names = new List<string>();
@@ -239,7 +245,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 if (ext is null) return LocalImageSubmitted.Fail($"Картинка {k + 1} — не PNG, JPEG или WebP.");
                 if (images[k].Length > LocalMediaService.MaxInputBytes)
                     return LocalImageSubmitted.Fail($"Картинка {k + 1} больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
-                names.Add(await comfy.UploadImageAsync(images[k], $"{OutputStem}{id}-in{k + 1}{ext}", ct));
+                names.Add(await UploadTrackedAsync(uploaded, images[k], $"{jobId}-in{k + 1}{ext}", ct));
             }
 
             // Фото эталона — только узлу сходства; тот же префикс, что у входов, чтобы забрала чистка
@@ -252,7 +258,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                     if (ext is null) return LocalImageSubmitted.Fail($"Фото эталона {k + 1} — не PNG, JPEG или WebP.");
                     if (photo.Length > LocalMediaService.MaxInputBytes)
                         return LocalImageSubmitted.Fail($"Фото эталона {k + 1} больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
-                    faceRefs.Add(await comfy.UploadImageAsync(photo, $"{OutputStem}{id}-ref{k + 1}{ext}", ct));
+                    faceRefs.Add(await UploadTrackedAsync(uploaded, photo, $"{jobId}-ref{k + 1}{ext}", ct));
                 }
 
             var lora = request.Lora is { } l ? (l.Name, l.Strength) : ((string, double)?)null;
@@ -265,6 +271,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);
+            promptId = queued.PromptId;
             return new LocalImageSubmitted(queued.PromptId, queue.Length, EtaSeconds(request.Op, count, names.Count), null);
         }
         catch (ComfyException ex)
@@ -272,7 +279,46 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             log.LogWarning("ComfyUI не принял задачу редактора {Op}: {Error}", request.Op, ex.Message);
             return LocalImageSubmitted.Fail(ex.Message, busy: true);
         }
+        finally
+        {
+            // Принятая задача ещё стоит в очереди и читает входы — чистка ждёт; непринятая — убирается сразу
+            RegisterInputs(jobId, uploaded, promptId is null ? null : SubmitCleanupDelay);
+        }
     }
+
+    // Входы принятой задачи не трогаем, пока она могла стоять в очереди и считаться
+    private static readonly TimeSpan SubmitCleanupDelay = TimeSpan.FromHours(2);
+    private static readonly TimeSpan FacePoseCleanupDelay = TimeSpan.FromMinutes(10);
+    // Владелец записей редактора в сторе: чужим задачам local-media они неотличимы от несуществующих
+    private const string StoreOwner = "image-editor";
+
+    private async Task<string> UploadTrackedAsync(List<string> uploaded, byte[] bytes, string fileName, CancellationToken ct)
+    {
+        var name = await comfy.UploadImageAsync(bytes, fileName, ct);
+        uploaded.Add(name);
+        return name;
+    }
+
+    // Запись без результата: задача уже «завершена», а CleanAfter откладывает чистку её входов.
+    // LocalMediaCleanup подбирает её по обычным правилам; своего чистильщика здесь нет
+    private void RegisterInputs(string jobId, IReadOnlyList<string> inputs, TimeSpan? cleanupDelay)
+    {
+        if (store is null || inputs.Count == 0) return;
+        var now = DateTime.UtcNow;
+        store.Add(new LocalMediaJob
+        {
+            Id = jobId,
+            OwnerId = StoreOwner,
+            Op = LocalMediaOps.EditorInputs,
+            Status = LocalMediaStatuses.Completed,
+            CreatedAt = now,
+            FinishedAt = now,
+            ComfyInputs = [.. inputs],
+            CleanAfter = cleanupDelay is { } delay ? now + delay : null,
+        });
+    }
+
+    private void ReleaseCleanup(string jobId) => store?.Update(jobId, StoreOwner, j => j.CleanAfter = null);
 
     // Холст генерации: точный размер формата, иначе по пропорции из таблицы Qwen-Image
     internal static (int Width, int Height) CanvasFor(LocalImageRequest request) =>
@@ -389,6 +435,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     public async Task<LocalFacePoseResult> FacePoseAsync(IReadOnlyList<byte[]> images, CancellationToken ct)
     {
         var options = LocalMediaOptions.Read(config);
+        var uploaded = new List<string>();
         if (!options.Enabled) return LocalFacePoseResult.Fail("Локальные модели выключены на этом сервере.");
         if (images.Count is < 1 or > ComfyWorkflows.MaxFacePoseImages)
             return LocalFacePoseResult.Fail($"Для ракурса нужно от 1 до {ComfyWorkflows.MaxFacePoseImages} фото.");
@@ -398,9 +445,10 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         if (length is null) return LocalFacePoseResult.Fail("ComfyUI не ответил. Попробуйте позже.", busy: true);
         if (length > 0) return LocalFacePoseResult.Fail("Очередь локальной видеокарты занята. Попробуйте позже.", busy: true);
 
-        var id = Guid.NewGuid().ToString("N");
+        var jobId = LocalMediaService.JobIdPrefix + Guid.NewGuid().ToString("N");
         string ticket;
         var names = new List<string>();
+        var queuedOk = false;
         try
         {
             for (var k = 0; k < images.Count; k++)
@@ -409,15 +457,20 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 if (ext is null) return LocalFacePoseResult.Fail($"Фото {k + 1} — не PNG, JPEG или WebP.");
                 if (images[k].Length > LocalMediaService.MaxInputBytes)
                     return LocalFacePoseResult.Fail($"Фото {k + 1} больше {LocalMediaService.MaxInputBytes / 1024 / 1024} МБ.");
-                names.Add(await comfy.UploadImageAsync(images[k], $"{OutputStem}{id}-pose{k + 1}{ext}", ct));
+                names.Add(await UploadTrackedAsync(uploaded, images[k], $"{jobId}-pose{k + 1}{ext}", ct));
             }
             ticket = (await comfy.QueuePromptAsync(ComfyWorkflows.FacePose(names), ct)).PromptId;
+            queuedOk = true;
         }
         catch (ComfyException ex)
         {
             Remember(alive: false);
             log.LogWarning("ComfyUI не принял задачу ракурса: {Error}", ex.Message);
             return LocalFacePoseResult.Fail(ex.Message, busy: true);
+        }
+        finally
+        {
+            RegisterInputs(jobId, uploaded, queuedOk ? FacePoseCleanupDelay : null);
         }
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -428,11 +481,18 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             {
                 var history = await comfy.GetHistoryAsync(ticket, timeout.Token);
                 if (history is { Failed: true })
+                {
+                    ReleaseCleanup(jobId);
                     return LocalFacePoseResult.Fail(history.Error ?? "ComfyUI завершил задачу ошибкой.");
+                }
                 if (history is { Completed: true })
+                {
+                    // Разметка короткая: расчёт кончился — входы не нужны, чистка заберёт их в свой проход
+                    ReleaseCleanup(jobId);
                     return ParseFacePoses(history.Texts, names) is { } poses
                         ? new LocalFacePoseResult(poses, null)
                         : LocalFacePoseResult.Fail("Узел ракурса вернул неожиданный ответ.");
+                }
                 await Task.Delay(FacePosePollInterval, timeout.Token);
             }
         }

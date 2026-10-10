@@ -70,7 +70,7 @@ public sealed partial class LocalMediaService(
     public const double MaxRefVideoSeconds = 15;
     public const int MaxWaitSeconds = 15;
     public const int MaxWaitJobs = 12;
-    private const string JobIdPrefix = "lm_";
+    internal const string JobIdPrefix = "lm_";
 
     // Проверка лимита и постановка — атомарно: две параллельные заявки не обходят потолок
     private readonly SemaphoreSlim _submitGate = new(1, 1);

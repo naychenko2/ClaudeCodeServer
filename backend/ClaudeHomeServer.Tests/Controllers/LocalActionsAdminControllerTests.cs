@@ -255,6 +255,35 @@ public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplication
     }
 
     [Fact]
+    public async Task FacePose_НаМестеРакурса_Принят()
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoAngle}", new { route = "face-pose" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("route").GetString().Should().Be("face-pose");
+        body.GetProperty("source").GetString().Should().Be("admin");
+
+        var usage = await _admin.GetFromJsonAsync<JsonElement>("/api/usage");
+        usage.GetProperty("ollama").GetProperty("actions").EnumerateArray()
+            .First(x => x.GetProperty("key").GetString() == LocalActionCatalog.CharacterPhotoAngle)
+            .GetProperty("route").GetString().Should().Be("face-pose");
+
+        await _admin.DeleteAsync($"/api/admin/local-actions/{LocalActionCatalog.CharacterPhotoAngle}");
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.CharacterPhotoEmotion)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    [InlineData(LocalActionCatalog.NotesTags)]
+    public async Task FacePose_НаДругихМестах_400(string key)
+    {
+        var put = await _admin.PutAsJsonAsync($"/api/admin/local-actions/{key}", new { route = "face-pose" });
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        await _admin.DeleteAsync($"/api/admin/local-actions/{key}");
+    }
+
+    [Fact]
     public async Task МестоСКартинками_ТекстОтказаДляLocal()
     {
         var put = await _admin.PutAsJsonAsync(

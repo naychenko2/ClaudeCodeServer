@@ -71,8 +71,13 @@ public class LocalActionsAdminController(
                 || CloudCheapClient.IsDirectRoute(route)))
             return BadRequest(new { error = "Этому месту нужна агентная модель — локальная и direct-модели не подходят" });
 
+        // face-pose — локальный расчёт ракурса, только месту с FacePose; остальным 400
+        if (route == LocalActionOverridesStore.FacePoseRoute && !action.FacePose)
+            return BadRequest(new { error = "Локальный расчёт ракурса подходит только месту разметки ракурса фото" });
+
         // Места с картинками на входе: слепой маршрут «разметил» бы фото вслепую (ADR-027 §2)
-        if (action.Input == ActionInput.Images && ValidateImageRoute(route, providers) is { } imageError)
+        if (action.Input == ActionInput.Images && route != LocalActionOverridesStore.FacePoseRoute
+            && ValidateImageRoute(route, providers) is { } imageError)
             return BadRequest(new { error = imageError });
 
         // preset:{id} — ссылка на пресет-цепочку (ADR-007 §3): допустимое значение места
@@ -87,7 +92,8 @@ public class LocalActionsAdminController(
         }
         else if (route is not (LocalActionOverridesStore.LocalRoute
                 or LocalActionOverridesStore.ClaudeRoute
-                or LocalActionOverridesStore.DefaultRoute)
+                or LocalActionOverridesStore.DefaultRoute
+                or LocalActionOverridesStore.FacePoseRoute)
             && LocalActionOverridesStore.ParseTierRoute(route) is null
             && await ValidateModelAsync(route, ct) is { } error)
             return BadRequest(new { error });
@@ -151,6 +157,7 @@ public class LocalActionsAdminController(
             {
                 RouteKind.Local => LocalActionOverridesStore.LocalRoute,
                 RouteKind.Claude => LocalActionOverridesStore.ClaudeRoute,
+                RouteKind.FacePose => LocalActionOverridesStore.FacePoseRoute,
                 RouteKind.Tier => LocalActionOverridesStore.TierRoute(route.Tier ?? ModelTier.Medium),
                 _ => route.Model,
             },

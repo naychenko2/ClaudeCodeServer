@@ -81,6 +81,30 @@ public class LocalImageMediaInputsCleanupTests : IDisposable
     }
 
     [Fact]
+    public async Task Входы_редактора_переживают_рестарт_и_чистка_их_убирает()
+    {
+        await _adapter.SubmitAsync(
+            new LocalImageRequest(LocalImageOp.Edit, "убери провод", Photos(1), Aspect: null, Count: 1,
+                FaceReferences: Photos(1)), default);
+        var files = TouchUploads();
+        files.Should().HaveCount(2);
+
+        // Рестарт бэкенда: новый стор читает тот же файл
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json"),
+        }).Build();
+        var restarted = new LocalMediaJobStore(config);
+
+        var job = restarted.ListByOp(LocalMediaOps.EditorInputs).Should().ContainSingle().Subject;
+        job.ComfyInputs.Should().Equal(_comfy.UploadPaths);
+
+        new LocalMediaCleanup(restarted, NullLogger<LocalMediaCleanup>.Instance)
+            .Run(Options(), DateTime.UtcNow.AddHours(3));
+        files.Should().OnlyContain(f => !File.Exists(f));
+    }
+
+    [Fact]
     public async Task Ракурс_лица_сбой_на_второй_загрузке_первое_фото_тоже_убирается()
     {
         _comfy.FailUploadsAfter = 1;

@@ -111,6 +111,13 @@ public static class ServerMetrics
         unit: "{error}",
         description: "Ошибки синхронизации с Dify (DiffSync)");
 
+    // Темы чатов: ответ локальной модели не разобрался (не JSON, оборван
+    // по окну/лимиту вывода). Без счётчика «темы молча не ставятся» снова было бы невидимо.
+    public static readonly Counter<long> ChatSubjectsParseFailed = _meter.CreateCounter<long>(
+        "ccs.chat_subjects.parse_failed",
+        unit: "{batch}",
+        description: "Пачки разбора чатов по темам с неразборчивым ответом модели");
+
     public static readonly Counter<long> TelemetryHeartbeat = _meter.CreateCounter<long>(
         "ccs.telemetry.heartbeat",
         unit: "{tick}",

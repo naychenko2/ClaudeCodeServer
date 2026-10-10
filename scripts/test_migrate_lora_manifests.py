@@ -78,6 +78,26 @@ class MigrateLoraManifestsTests(unittest.TestCase):
         self.run_cli("--apply")
         self.assertEqual(before, self._read(self.loc))
 
+    def test_манифест_без_поля_lora_не_переписывается(self):
+        path = os.path.join(self.tmp.name, "manifest.json")
+        text = json.dumps({"providers": {"local": {"other": 1}}})
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        with self.assertRaises(RuntimeError) as ctx:
+            mig.apply_item({"path": path, "old": "a.safetensors", "new": "ccs/k/a.safetensors"})
+        self.assertIn("поле lora не найдено", str(ctx.exception))
+        self.assertEqual(text, self._read(path))
+        self.assertEqual([], [n for n in os.listdir(self.tmp.name) if ".bak" in n or n.endswith(".tmp")])
+
+    def test_lora_с_другим_значением_не_переписывается(self):
+        path = os.path.join(self.tmp.name, "manifest.json")
+        text = json.dumps({"providers": {"local": {"lora": "other.safetensors"}}})
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        with self.assertRaises(RuntimeError):
+            mig.apply_item({"path": path, "old": "a.safetensors", "new": "ccs/k/a.safetensors"})
+        self.assertEqual(text, self._read(path))
+
 
 if __name__ == "__main__":
     unittest.main()

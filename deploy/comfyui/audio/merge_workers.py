@@ -17,5 +17,12 @@ with open(part, encoding="utf-8") as f:
 tmp = dst + ".tmp"
 with open(tmp, "w", encoding="utf-8") as f:
     json.dump(current, f, ensure_ascii=False, indent=1)
+    f.flush()
+    os.fsync(f.fileno())
 os.replace(tmp, dst)
+dir_fd = os.open(os.path.dirname(os.path.abspath(dst)), os.O_RDONLY)
+try:
+    os.fsync(dir_fd)
+finally:
+    os.close(dir_fd)
 print("семейства:", ", ".join(sorted(current["families"])))

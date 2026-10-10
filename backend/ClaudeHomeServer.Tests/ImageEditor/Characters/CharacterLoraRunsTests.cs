@@ -31,6 +31,17 @@ public sealed class CharacterLoraRunsTests : IDisposable
     }
 
     [Fact]
+    public void TrainingIndex_CreateRegisters_UpdateToFailedUnregisters()
+    {
+        _sut.Create(_root, Slug, Run(1, "training")).Should().BeTrue();
+        _sut.CharactersWithTraining().Should().ContainSingle().Which.Slug.Should().Be(Slug);
+
+        _sut.Update(_root, Slug, 1.ToString("x12"), r => r with { Status = "failed" });
+
+        _sut.CharactersWithTraining().Should().BeEmpty();
+    }
+
+    [Fact]
     public void List_HidesDeleting_NewestFirst_ListDeletingSeesIt()
     {
         _sut.Create(_root, Slug, Run(1));

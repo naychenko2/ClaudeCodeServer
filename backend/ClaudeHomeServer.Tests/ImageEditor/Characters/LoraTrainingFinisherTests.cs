@@ -79,6 +79,8 @@ public sealed class LoraTrainingFinisherTests : IDisposable
     [Fact]
     public async Task JobVanishesAfterFirstRound_LongLivedProcess_BecomesFailedLost()
     {
+        // холостой круг: индекс уже построен, запись training попадёт в него только через Create
+        await _sut.RunOnceAsync(default);
         Training(1, LoraTrainingFinisher.LostGrace + TimeSpan.FromMinutes(1));
         Job(1, LoraTrainStatus.Running);
         await _sut.RunOnceAsync(default);

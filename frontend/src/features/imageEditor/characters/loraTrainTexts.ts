@@ -91,3 +91,36 @@ export const TRAIN_BADGE = {
 // Отказ действия (старт/подключение) — в заметке нет текстов, кроме перечисленных выше
 export const TRAIN_ACTION_FAILED = 'Не получилось выполнить действие. Попробуйте ещё раз.';
 export const TRAIN_VERSION_LIMIT = 'У персонажа уже пять версий. Удалите ненужную — и можно обучать дальше.';
+
+// ── Список «Версии персонажа» (7г2) ────────────────────────────────────────────
+
+export const VERSIONS_TEXT = {
+  title: 'Версии персонажа',
+  empty: 'Версий пока нет — они появятся после первого обучения.',
+  connected: 'Подключена',
+  ready: 'Готова к подключению',
+  connect: 'Подключить',
+  rename: 'Переименовать',
+  remove: 'Удалить',
+  renamePlaceholder: 'Для открыток',
+  renameLabel: 'Название версии',
+  renameSave: 'Сохранить',
+  renameCancel: 'Отмена',
+  revertOk: 'Подключить',
+  revertKeep: 'Не сейчас',
+  deleteBody: 'Освободится место на видеокарте, вернуть её не получится.',
+  deleteConnected: 'Эта версия сейчас подключена. Если удалить, персонаж будет рисоваться без обучения.',
+  deleteOk: 'Удалить',
+  deleteKeep: 'Оставить',
+  // Нет в заметке (перечислены в отчёте 7г2)
+  titleTooLong: 'Название не длиннее 60 символов.',
+  trainingHint: 'Идёт обучение — ход виден в разделе «Обучить персонажа».',
+  own: 'Сейчас подключена своя LoRA: ',
+} as const;
+
+export const VERSIONS_TITLE_MAX = 60;
+export const VERSION_DEFAULT_TITLE = (date: string, n: number) => `Обучено ${date}, ${n} фото`;
+export const VERSION_REVERT_TITLE = (name: string) => `Вернуться к версии «${name}»?`;
+export const VERSION_DELETE_TITLE = (name: string) => `Удалить версию «${name}»?`;
+export const VERSION_CONNECTED_FLASH = (name: string) =>
+  `Версия «${name}» подключена. Новые картинки персонажа будут рисоваться по ней.`;

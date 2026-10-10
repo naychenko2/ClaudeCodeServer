@@ -9,6 +9,7 @@ import { BackButton, Button, Checkbox, ConfirmDialog, Field, IconButton, TextAre
 import { characterSlug, type ImageEditCharacter, type ImageEditorApi } from '../api';
 import { CharacterLoraSection, type LoraInput } from './CharacterLoraSection';
 import { CharacterLoraTrainSection } from './CharacterLoraTrainSection';
+import { CharacterLoraVersions } from './CharacterLoraVersions';
 import { CharacterTrainingPhotos } from './CharacterTrainingPhotos';
 import { MAX_PHOTO_MB, MAX_PHOTOS, MIN_PHOTOS, photosCountText, shrinkPhoto } from './photos';
 
@@ -171,6 +172,7 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
       </div>
       {character && <CharacterTrainingPhotos key={character.slug} projectId={projectId} slug={character.slug} disabled={busy} onCount={setTrainPhotos} />}
       {character && <CharacterLoraTrainSection key={character.slug} projectId={projectId} slug={character.slug} hasConnected={!!character.local?.lora} photoCount={trainPhotos} disabled={busy} />}
+      {character && <CharacterLoraVersions key={character.slug} projectId={projectId} slug={character.slug} disabled={busy} />}
       <CharacterLoraSection key={`${character?.slug ?? 'new'}|${character?.local?.lora ?? ''}|${character?.local?.trigger ?? ''}|${character?.local?.strength ?? ''}`} api={api} projectId={projectId} current={character?.local} disabled={busy} onChange={setLora} />
       <div style={{
         display: 'flex', gap: SP.sm, alignItems: 'flex-start', fontSize: FS.sm, lineHeight: 1.45,

@@ -273,7 +273,7 @@ public class CharacterStoreTests : IDisposable
     public void FacePhotos_содержит_все_фото_а_Photos_ограничено_maxPhotos()
     {
         var m = Create("Аня");
-        var character = CharacterStore.ForRequest(_root, m.Slug, maxPhotos: 1)!;
+        var character = CharacterStore.ForRequest(_root, Owner, m.Slug, maxPhotos: 1)!;
         character.Photos.Should().HaveCount(1);
         character.Ref.FacePhotos.Should().HaveCount(3);
     }
@@ -294,7 +294,7 @@ public class CharacterStoreTests : IDisposable
             return; // Windows без прав на ссылки — проверка идёт в CI на Linux
         }
 
-        CharacterStore.ForRequest(_root, m.Slug)!.Ref.FacePhotos.Should().HaveCount(1);
+        CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.FacePhotos.Should().HaveCount(1);
     }
 
     [Fact]
@@ -312,7 +312,7 @@ public class CharacterStoreTests : IDisposable
         }
         File.WriteAllText(ManifestPath(m), json.ToJsonString());
 
-        CharacterStore.ForRequest(_root, m.Slug)!.Ref.FacePhotos.Should().HaveCount(10);
+        CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.FacePhotos.Should().HaveCount(10);
     }
 
     private string ManifestPath(CharacterManifest m) =>

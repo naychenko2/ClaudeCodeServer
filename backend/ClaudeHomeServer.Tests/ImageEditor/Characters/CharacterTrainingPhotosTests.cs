@@ -72,6 +72,20 @@ public sealed class CharacterTrainingPhotosTests : IDisposable
     }
 
     [Fact]
+    public void ШовУборкиПроекта_ЭтоТотЖеСервис_ЧиститТолькоСвоёНеТрогаяЧужогоВладельца()
+    {
+        var other = Guid.NewGuid().ToString();
+        Add(Up(1));
+        _sut.Add(other, _project, "anya", [Up(2)]);
+
+        IProjectTrainingPhotoCleaner cleaner = _sut;
+        cleaner.PurgeProject(_owner, _project);
+
+        _sut.List(_owner, _project, "anya").Should().BeEmpty();
+        _sut.List(other, _project, "anya").Should().HaveCount(1);
+    }
+
+    [Fact]
     public void НеGuidВладелец_FailClosed_БезИсключений()
     {
         _sut.List("not-a-guid", _project, "anya").Should().BeEmpty();

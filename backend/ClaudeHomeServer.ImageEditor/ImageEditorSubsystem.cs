@@ -45,6 +45,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
         services.AddSingleton<CharacterTrainingPhotos>();
+        services.AddSingleton<IProjectTrainingPhotoCleaner>(sp => sp.GetRequiredService<CharacterTrainingPhotos>());
         services.AddSingleton<CharacterLoraRuns>();
         services.TryAddSingleton<IVersionedImageStore, VersionedImageStore>();
         services.AddSingleton<IImageEditSaver, ImageEditSaver>();

@@ -22,7 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, SphereManager spheres, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, SphereManager spheres, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null, ClaudeHomeServer.Services.ImageEditor.IProjectTrainingPhotoCleaner? trainingPhotos = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -522,6 +522,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // Паспорта изменений проекта: локальный стор + Dify-датасет (best-effort, тот же образец)
         try { await dossiers.DeleteProjectDossiersAsync(UserId, id); }
         catch { /* удаление проекта не зависит от уборки паспортов */ }
+        // Обучающие фото персонажей для LoRA (биометрия): шов Core, нет подсистемы ImageEditor — пропуск
+        try { trainingPhotos?.PurgeProject(UserId, id); }
+        catch (Exception ex) { logger.LogWarning(ex, "Не удалось убрать обучающие фото проекта {ProjectId}", id); }
 
         // Worktree чатов проекта: сессии при удалении проекта НЕ удаляются (осознанно),
         // но их деревья без проекта — мусор на диске и записи в .git/worktrees главной репы.

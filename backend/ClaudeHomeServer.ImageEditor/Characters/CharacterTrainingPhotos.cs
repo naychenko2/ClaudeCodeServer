@@ -9,7 +9,7 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // Обучающие фото персонажа для LoRA (ADR-026, раздел 5): data/lora-training/<owner>/<project>/<slug>/
 // <sha16>.<ext> — вне проекта и вне его git. Имя на диске — первые 16 hex SHA-256 содержимого,
 // имён из запроса здесь нет вовсе; путь собирается только через SafePath.Join от корня data.
-public sealed partial class CharacterTrainingPhotos(IConfiguration config)
+public sealed partial class CharacterTrainingPhotos(IConfiguration config) : IProjectTrainingPhotoCleaner
 {
     public const int MinPhotos = 20, MaxPhotos = 50, MinShortSide = 512;
     public const int MaxPhotoMb = 8;

@@ -25,12 +25,13 @@ TI="--index-url https://download.pytorch.org/whl/cu128 --extra-index-url https:/
 T28="torch==2.8.0+cu128 torchvision==0.23.0+cu128"
 
 mkdir -p "$LORA_ROOT"
-# Узел и воркеры — копией вне git-дерева: симлинк ComfyUI на рабочую копию сломался бы при
-# первом checkout другой ветки (или удалении worktree). Повторный запуск install.sh обновляет
-# копию
+# Свои файлы (install.sh, worker_lora.py, README, шаблон) кладём в $DEPLOY/lora — чтобы не
+# мешать audio install.sh, который rsync-ит в $DEPLOY напрямую. Узел ccs_audio_worker общий
+# и обновляется из исходника $HERE/../audio/ccs_audio_worker/__init__.py (рядом в репо)
 DEPLOY="$LORA_ROOT/ccs"
-mkdir -p "$DEPLOY"
-rsync -a --delete --exclude '__pycache__' "$HERE/" "$DEPLOY/"
+mkdir -p "$DEPLOY/lora" "$DEPLOY/workers" "$DEPLOY/ccs_audio_worker"
+rsync -a --exclude '__pycache__' "$HERE/" "$DEPLOY/lora/"
+cp "$HERE/../audio/ccs_audio_worker/__init__.py" "$DEPLOY/ccs_audio_worker/__init__.py"
 
 venv() { # venv <каталог> — создаёт .venv, если его нет
   mkdir -p "$LORA_ROOT/$1"
@@ -38,13 +39,14 @@ venv() { # venv <каталог> — создаёт .venv, если его не�
   echo "$LORA_ROOT/$1/.venv/bin/python"
 }
 
-clone() { [ -d "$LORA_ROOT/$2" ] || git clone -q https://github.com/ostris/ai-toolkit "$LORA_ROOT/$2"; }
+clone() { [ -d "$LORA_ROOT/$2" ] || git clone -q --no-single-branch https://github.com/ostris/ai-toolkit "$LORA_ROOT/$2"; }
 
 if [ "${1:-}" != "--link-only" ]; then
 echo "== ai-toolkit + InsightFace (CPU-детектор лиц)"
 # ai-toolkit — это репо ostris; версия пинается коммитом a949f21 (фиксируем в ADR-026).
+# --no-single-branch: shallow-клон с одним коммитом не содержит a949f21 (он предок HEAD)
 clone ostris/ai-toolkit ai-toolkit
-(cd "$LORA_ROOT/ai-toolkit" && git fetch -q --depth 1 origin a949f21 && git checkout -q a949f21)
+(cd "$LORA_ROOT/ai-toolkit" && git checkout -q a949f21)
 
 P=$(venv lora)
 # ai-toolkit ставит свои torch/diffusers; torch — явно cu128, иначе из QA-индекса
@@ -53,15 +55,25 @@ uv pip install -q -p "$P" $TI $T28
 # GPU. На gpuhost CPU проще: иначе воркер держит второй CUDA-context, и аллокатор рвёт
 # память, как было с AudioSR. Релиз фиксируем, чтобы не приехала версия с переименованием API
 uv pip install -q -p "$P" "insightface==0.7.3" onnxruntime
-# ai-toolkit как пакет: edittable, чтобы подтянуть его зависимости
-uv pip install -q -p "$P" -e "$LORA_ROOT/ai-toolkit"
+# ai-toolkit — набор скриптов без pyproject.toml; ставим его зависимости из requirements.txt
+# (репо — коллекция run.py + toolkit/, а не pip-пакет). requirements.txt ссылается на
+# requirements_base.txt — содержит transformers/accelerate/peft/diffusers и пр.
+uv pip install -q -p "$P" -r "$LORA_ROOT/ai-toolkit/requirements.txt"
 
 echo "== веса qwen_image_2.1_int8_convrot"
 # ai-toolkit ждёт путь к весам на диске. У ComfyUI они в diffusion_models; симлинк в
-# ai-toolkit/models/<guid> держим шум, чтобы обновление весов в ComfyUI было видно без правок
+# ai-toolkit/models/<guid> держим шум, чтобы обновление весов в ComfyUI было видно без правок.
+# Путь ищем по всем каталогам, которые знает ComfyUI (extra_model_paths.yaml): h3data
+# ($COMFY_MODELS) и photo ($COMFY_MODELS/../ComfyUI/models). Без этого ai-toolkit не найдёт
 mkdir -p "$LORA_ROOT/ai-toolkit/models"
-WEIGHT_SRC="$COMFY_MODELS/diffusion_models/qwen_image_2.1_int8_convrot.safetensors"
-[ -f "$WEIGHT_SRC" ] || { echo "Нет весов $WEIGHT_SRC — поставьте в Comfy-models"; exit 1; }
+WEIGHT_SRC=""
+for d in "$COMFY_MODELS/diffusion_models" "${COMFY_MODELS%/comfy-models}/ComfyUI/models/diffusion_models"; do
+  if [ -f "$d/qwen_image_2.1_int8_convrot.safetensors" ]; then
+    WEIGHT_SRC="$d/qwen_image_2.1_int8_convrot.safetensors"
+    break
+  fi
+done
+[ -n "$WEIGHT_SRC" ] || { echo "Нет весов qwen_image_2.1_int8_convrot — поставьте в ComfyUI/models/diffusion_models"; exit 1; }
 ln -sfn "$WEIGHT_SRC" "$LORA_ROOT/ai-toolkit/models/qwen_image_2.1_int8_convrot.safetensors"
 
 echo "== прогрев моделей InsightFace (CPU, загружается один раз)"
@@ -77,7 +89,7 @@ PY
 fi  # --link-only: только копия узла и воркеров, workers.json и симлинк — при выкатке новой версии
 
 echo "== конфиг воркеров"
-W="$DEPLOY/workers"
+W="$DEPLOY/lora"
 cat > "$LORA_ROOT/workers.json" <<JSON
 {"families": {
   "lora": {

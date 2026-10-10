@@ -20,6 +20,7 @@ class Job:
         self.params = d.get("params") or {}
         self.inputs = d.get("inputs") or []
         self.out_dir = d["out_dir"]
+        self.input_dir = d.get("input_dir") or ""  # путь к input ComfyUI; узел прокидывает явно
         self.prefix = d.get("prefix") or "job"
         self.files = []
         self.stats = {}

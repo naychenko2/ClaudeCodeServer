@@ -27,13 +27,15 @@ public static partial class CharacterStore
     public const int PhotosPerRequest = 3;
     private const int MaxSlugChars = 48;
 
-    [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")]
+    [GeneratedRegex(@"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\z")]
     private static partial Regex SlugPattern();
 
-    [GeneratedRegex(@"^[\p{L}\p{N}_]+$")]
+    [GeneratedRegex(@"^[\p{L}\p{N}_]+\z")]
     private static partial Regex TriggerPattern();
 
     public static bool IsValidSlug(string? slug) => slug is not null && SlugPattern().IsMatch(slug);
+
+    public static bool IsValidTrigger(string? trigger) => trigger is not null && TriggerPattern().IsMatch(trigger);
 
     public static string SlugFromName(string name)
     {
@@ -106,13 +108,13 @@ public static partial class CharacterStore
         return ImageEditCallResult<CharacterChange>.Ok(new CharacterChange(manifest, written, []));
     }
 
-    public static ImageEditCallResult<CharacterChange>? Update(string root, string slug, CharacterPatch patch)
+    public static ImageEditCallResult<CharacterChange>? Update(string root, string ownerId, string slug, CharacterPatch patch)
     {
         var manifest = Get(root, slug);
         var dir = CharacterDir(root, slug);
         if (manifest is null || dir is null) return null;
 
-        if (patch.Lora is { Remove: false } set && CheckLora(set) is { } loraError) return loraError;
+        if (patch.Lora is { Remove: false } set && CheckLora(ownerId, set) is { } loraError) return loraError;
         if (patch.Name is { } newName)
         {
             if (string.IsNullOrWhiteSpace(newName)) return Invalid("Укажите имя персонажа");
@@ -159,18 +161,20 @@ public static partial class CharacterStore
     }
 
     // Проверка «задать LoRA»: null — всё в порядке, иначе отказ. Зовёт и Update, и контроллер
-    // до создания персонажа. Для Remove проверять нечего.
-    public static ImageEditCallResult<CharacterChange>? CheckLora(CharacterLoraPatch set)
+    // до создания персонажа. Для Remove проверять нечего. Видимость имени владельцу проверяем и здесь:
+    // нижний слой не должен полагаться на то, что верхний уже отказал (защита в глубину).
+    public static ImageEditCallResult<CharacterChange>? CheckLora(string ownerId, CharacterLoraPatch set)
     {
         if (set.Remove) return null;
         if (set.Known is null)
             return Unavailable("ComfyUI недоступен, поэтому проверить LoRA не получилось. Ничего не сохранено, попробуйте позже.");
         var name = set.Name?.Trim() ?? "";
-        if (name.Length == 0 || name.Contains("..") || name.StartsWith('/') || name.StartsWith('\\') || name.Contains(':')
-            || !set.Known.Contains(name, StringComparer.Ordinal))
+        if (!LoraNamespace.VisibleTo(ownerId, name))
+            return ImageEditCallResult<CharacterChange>.Fail(ImageEditErrorCodes.LoraNotVisible, "Эта LoRA вам недоступна.");
+        if (!set.Known.Contains(name, StringComparer.Ordinal))
             return Invalid("Такой LoRA нет в ComfyUI. Выберите файл из списка.");
         var trigger = set.Trigger?.Trim() ?? "";
-        if (!TriggerPattern().IsMatch(trigger))
+        if (!IsValidTrigger(trigger))
             return Invalid("Укажите слово-триггер: одно слово из букв, цифр и «_», без пробелов.");
         if (set.Strength is { } strength && !(strength >= 0 && strength <= 2))
             return Invalid("Сила должна быть числом от 0 до 2.");
@@ -223,8 +227,9 @@ public static partial class CharacterStore
         return new EditedImage(bytes, ContentTypeOf(ImageFormatSniffer.DetectExtension(bytes)));
     }
 
-    // Персонаж для запроса: primary первым, затем остальные в порядке манифеста
-    public static CharacterForRequest? ForRequest(string root, string slug, int maxPhotos = PhotosPerRequest)
+    // Персонаж для запроса: primary первым, затем остальные в порядке манифеста;
+    // чужая владельцу LoRA из манифеста отбрасывается целиком (триггер и сила тоже)
+    public static CharacterForRequest? ForRequest(string root, string ownerId, string slug, int maxPhotos = PhotosPerRequest)
     {
         var manifest = Get(root, slug);
         var dir = CharacterDir(root, slug);
@@ -246,8 +251,10 @@ public static partial class CharacterStore
             if (facePhotos.Count < MaxPhotos) facePhotos.Add(bytes);
         }
         if (photos.Count == 0) return null;
+        var lora = manifest.ReadLora();
+        if (lora is not null && !LoraNamespace.VisibleTo(ownerId, lora.Name)) lora = null;
         return new CharacterForRequest(
-            new CharacterRef(manifest.Slug, manifest.Name, manifest.Description, manifest.ReadLora(), facePhotos), photos);
+            new CharacterRef(manifest.Slug, manifest.Name, manifest.Description, lora, facePhotos), photos);
     }
 
     // Абсолютный путь папки персонажа; null — slug не проходит белый список, путь вышел за

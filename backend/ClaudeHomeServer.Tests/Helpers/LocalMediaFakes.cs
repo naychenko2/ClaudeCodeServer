@@ -23,6 +23,8 @@ public sealed class FakeComfy : HttpMessageHandler
     // Срабатывает после отдачи снимка очереди — гонка «прочитали очередь, а прогон уже сменился»
     public Action? AfterQueueRead { get; set; }
     public bool Down { get; set; }
+    // Загрузка падает (500), когда уже принято столько файлов
+    public int? FailUploadsAfter { get; set; }
     public string? RejectPrompt { get; set; }
 
     private int _promptSeq;
@@ -81,6 +83,8 @@ public sealed class FakeComfy : HttpMessageHandler
 
         if (request.Method == HttpMethod.Post && path == "/upload/image")
         {
+            if (FailUploadsAfter is { } limit && Uploads.Count >= limit)
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
             var form = (MultipartFormDataContent)request.Content!;
             var file = form.First(c => c.Headers.ContentDisposition?.Name?.Trim('"') == "image");
             var name = file.Headers.ContentDisposition!.FileName!.Trim('"');

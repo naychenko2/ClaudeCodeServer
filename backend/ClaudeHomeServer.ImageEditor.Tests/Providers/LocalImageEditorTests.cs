@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Providers;
 // ILocalImageMedia: котировка без денег, маска образцом, скрытие без ComfyUI, нулевая трата
 public class LocalImageEditorTests : IDisposable
 {
+    private const string Owner = "0a1b2c3d-0000-0000-0000-000000000001";
     private const string Project = "p1";
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "ie-local-" + Guid.NewGuid().ToString("N")[..8]);
     private readonly MemorySpendStore _spend = new();
@@ -544,9 +545,9 @@ public class LocalImageEditorTests : IDisposable
         Directory.CreateDirectory(root);
         var created = CharacterStore.Create(root, new CharacterDraft("Тимур", null,
             [.. Enumerable.Range(1, 3).Select(i => new CharacterPhotoUpload(TestImages.Jpeg((byte)i), null))]), DateTime.UtcNow).Value!;
-        CharacterStore.Update(root, created.Manifest.Slug,
+        CharacterStore.Update(root, Owner, created.Manifest.Slug,
             new CharacterPatch(null, null, [], [], created.Manifest.Photos[2].File));
-        var character = CharacterStore.ForRequest(root, created.Manifest.Slug)!;
+        var character = CharacterStore.ForRequest(root, Owner, created.Manifest.Slug)!;
         var media = new FakeMedia();
 
         var job = await RunAsync(Service(Editor(media)), CharacterQuote(ImageEditOp.Generate),

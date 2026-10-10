@@ -142,7 +142,7 @@ public sealed class ImageEditLaunchAssembler(
         CharacterRef? character = null;
         if (req.CharacterSlug is { Length: > 0 } slug)
         {
-            var found = CharacterStore.ForRequest(scope.Project!.RootPath, slug);
+            var found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug);
             if (found is null) return Invalid("Персонаж не найден");
             character = found.Ref;
             references.InsertRange(0, found.Photos);

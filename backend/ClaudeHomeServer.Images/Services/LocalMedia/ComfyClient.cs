@@ -25,6 +25,9 @@ public sealed record ComfyHistoryEntry(bool Completed, bool Failed, string? Erro
     public IReadOnlyList<string> CachedNodes { get; init; } = [];
     // Текстовые выходы нод (PreviewAny: outputs.{node}.text) — партитура ABC у YuE2
     public IReadOnlyList<string> Texts { get; init; } = [];
+    // Выходы узла CcsAudioWorker при обучении LoRA (ADR-026): имя весов и статистика прогона
+    public JsonArray? CcsLora { get; init; }
+    public JsonArray? CcsStats { get; init; }
 
     // Длительность прогона по меткам ComfyUI; null — меток нет или они несостоятельны
     public double? RunSeconds => StartedAtMs is { } start && FinishedAtMs is { } end && end >= start
@@ -144,7 +147,11 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                         {
                             var text = data?["exception_message"]?.GetValue<string>();
                             var node = data?["node_type"]?.GetValue<string>();
-                            error = Trim($"{node}: {text}".Trim(' ', ':'), 400);
+                            var full = $"{node}: {text}".Trim(' ', ':');
+                            error = Trim(full, 400);
+                            // Маркер воркера (ccs_error=код) не должен потеряться в обрезанном хвосте
+                            if (CcsErrorMarker.Match(full) is { Success: true } marker && !error.Contains(marker.Value, StringComparison.Ordinal))
+                                error = $"{Trim(full, 400 - marker.Length - 2)} {marker.Value}";
                         }
                         break;
                 }
@@ -175,6 +182,14 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                     texts.AddRange(list.OfType<JsonValue>().Select(v => v.TryGetValue<string>(out var t) ? t : null)
                         .Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!));
 
+        JsonArray? ccsLora = null, ccsStats = null;
+        if (entry["outputs"] is JsonObject ccsOutputs)
+            foreach (var (_, output) in ccsOutputs)
+            {
+                ccsLora ??= (output?["ccs_lora"] as JsonArray)?.DeepClone() as JsonArray;
+                ccsStats ??= (output?["ccs_stats"] as JsonArray)?.DeepClone() as JsonArray;
+            }
+
         return new ComfyHistoryEntry(completed && !failed, failed, error ?? (failed ? "ComfyUI завершил задачу ошибкой" : null),
             files, latents)
         {
@@ -182,6 +197,8 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
             FinishedAtMs = finishedAt,
             CachedNodes = cached,
             Texts = texts,
+            CcsLora = ccsLora,
+            CcsStats = ccsStats,
         };
 
         // Метка сообщения — миллисекунды эпохи; число бывает и целым, и дробным
@@ -378,6 +395,8 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
             return Trim(body, 300);
         }
     }
+
+    private static readonly System.Text.RegularExpressions.Regex CcsErrorMarker = new(@"ccs_error=[a-z_]+", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static string Trim(string text, int max) => text.Length <= max ? text : text[..max] + "…";
 }

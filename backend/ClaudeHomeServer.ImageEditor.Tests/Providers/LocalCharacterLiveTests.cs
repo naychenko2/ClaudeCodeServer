@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Providers;
 // временной папке. В ComfyUI уходящие графы пишутся рядом с результатами
 public class LocalCharacterLiveTests
 {
+    private const string Owner = "0a1b2c3d-0000-0000-0000-000000000001";
     private const string Name = "Тимур";
 
     [Fact]
@@ -58,7 +59,7 @@ public class LocalCharacterLiveTests
         var created = CharacterStore.Create(root, new CharacterDraft(Name, "мужчина 35 лет, борода, шрам над левой бровью",
             [new(photo1), new(photo2), new(photo3)]), DateTime.UtcNow);
         created.Value.Should().NotBeNull(created.Error);
-        var found = CharacterStore.ForRequest(root, created.Value!.Manifest.Slug)!;
+        var found = CharacterStore.ForRequest(root, Owner, created.Value!.Manifest.Slug)!;
 
         var known = new Dictionary<string, string>
         {

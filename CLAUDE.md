@@ -181,6 +181,7 @@ one-shot действия и разговор с исполнителем «Ло
 Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU; провайдера выбирает админ, облако при отказе — с согласия;
 **граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста ([local-media.md](docs/features/local-media.md)).
 Аудио (музыка, голос, стемы) — там же, модели вне venv ComfyUI идут узлом `CcsAudioWorker` в общей очереди GPU1, веса — только при установке ([ADR-020](docs/adr/ADR-020-local-media-audio.md)).
+Обучение LoRA персонажа — op `lora_train` того же узла в общей очереди GPU, одно на инстанс, запуск только кнопкой человека (инструмента у агента нет), веса только в `loras/ccs/<владелец>/`, видимость — только `LoraNamespace.VisibleTo` ([ADR-026](docs/adr/ADR-026-character-lora-training.md)).
 
 ## Редактор картинок (ClaudeHomeServer.ImageEditor)
 

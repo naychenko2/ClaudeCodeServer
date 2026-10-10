@@ -38,6 +38,24 @@ public class CharacterStoreTests : IDisposable
     }
 
     [Theory]
+    [InlineData("anya\n")]
+    [InlineData("a\n")]
+    public void Slug_с_переводом_строки_на_конце_отклоняется(string slug)
+    {
+        CharacterStore.IsValidSlug(slug).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("ccsandrey\n")]
+    [InlineData("ccs andrey")]
+    [InlineData("")]
+    public void Триггер_с_переводом_строки_или_пробелом_отклоняется(string trigger)
+    {
+        CharacterStore.IsValidTrigger(trigger).Should().BeFalse();
+        CharacterStore.IsValidTrigger("ccsandrey_1").Should().BeTrue();
+    }
+
+    [Theory]
     [InlineData("../x")]
     [InlineData("..")]
     [InlineData("a/../../x")]
@@ -55,7 +73,7 @@ public class CharacterStoreTests : IDisposable
         CharacterStore.CharacterDir(_root, slug).Should().BeNull();
         CharacterStore.Get(_root, slug).Should().BeNull();
         CharacterStore.OpenPhoto(_root, slug, "face-01.jpg").Should().BeNull();
-        CharacterStore.ForRequest(_root, slug).Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, slug).Should().BeNull();
         CharacterStore.Delete(_root, slug).Should().BeFalse();
 
         Directory.Exists(outside).Should().BeTrue("удаление по slug с обходом пути не должно ничего снести");
@@ -112,7 +130,7 @@ public class CharacterStoreTests : IDisposable
         json["futureField"] = "keep";
         File.WriteAllText(file, json.ToJsonString());
 
-        var updated = CharacterStore.Update(_root, manifest.Slug,
+        var updated = CharacterStore.Update(_root, Owner, manifest.Slug,
             new CharacterPatch("Анна", null, Photos(1), [manifest.Photos[1].File], null));
 
         updated!.Error.Should().BeNull();
@@ -132,30 +150,48 @@ public class CharacterStoreTests : IDisposable
         File.WriteAllText(file, json.ToJsonString());
     }
 
+    private const string Owner = "0a1b2c3d-0000-0000-0000-000000000001";
+    private static readonly string OwnLora = LoraNamespace.PrefixFor(Owner) + "anya.safetensors";
+
     [Theory]
     [InlineData(null, 0.8)]
     [InlineData(0.55, 0.55)]
     public void Лора_из_providers_local_доходит_до_запроса(double? strength, double expected)
     {
         var m = Create("Аня");
-        var local = new JsonObject { ["lora"] = "anya.safetensors", ["trigger"] = "anya_person", ["photosHash"] = "h" };
+        var local = new JsonObject { ["lora"] = OwnLora, ["trigger"] = "anya_person", ["photosHash"] = "h" };
         if (strength is { } s) local["strength"] = s;
         SetLocal(m, local);
 
-        var lora = CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora;
+        var lora = CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.Lora;
 
-        lora.Should().Be(new CharacterLora("anya.safetensors", "anya_person", expected));
+        lora.Should().Be(new CharacterLora(OwnLora, "anya_person", expected));
+    }
+
+    [Theory]
+    [InlineData("anya.safetensors")]
+    [InlineData("ccs/ffffffffffffffffffffffffffffffff/anya.safetensors")]
+    [InlineData("ccs/0a1b2c3d000000000000000000000001/../x.safetensors")]
+    public void Чужая_лора_из_манифеста_отбрасывается(string lora)
+    {
+        var m = Create("Аня");
+        SetLocal(m, new JsonObject { ["lora"] = lora, ["trigger"] = "anya_person", ["strength"] = 0.9 });
+
+        var found = CharacterStore.ForRequest(_root, Owner, m.Slug)!;
+
+        found.Ref.Lora.Should().BeNull();
+        found.Photos.Should().NotBeEmpty();
     }
 
     [Fact]
     public void Без_блока_или_без_lora_trigger_лоры_нет()
     {
         var m = Create("Аня");
-        CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora.Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.Lora.Should().BeNull();
         SetLocal(m, new JsonObject { ["lora"] = "a.safetensors" });
-        CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora.Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.Lora.Should().BeNull();
         SetLocal(m, new JsonObject { ["trigger"] = "t" });
-        CharacterStore.ForRequest(_root, m.Slug)!.Ref.Lora.Should().BeNull();
+        CharacterStore.ForRequest(_root, Owner, m.Slug)!.Ref.Lora.Should().BeNull();
     }
 
     [Fact]
@@ -217,7 +253,7 @@ public class CharacterStoreTests : IDisposable
     public void Персонаж_уходит_в_запрос_драйвера_ссылкой_и_фото_с_ролью_character()
     {
         Create("Аня", "каре, веснушки");
-        var character = CharacterStore.ForRequest(_root, "anya")!;
+        var character = CharacterStore.ForRequest(_root, Owner, "anya")!;
         character.Photos.Should().HaveCount(3).And.OnlyContain(p => p.Role == ReferenceRole.Character);
 
         var model = new ImageEditModelInfo("m", "M",
@@ -284,7 +320,7 @@ public class CharacterStoreTests : IDisposable
 
     private static CharacterPatch LoraPatch(CharacterLoraPatch lora) => new(null, null, [], [], null, lora);
 
-    private static readonly string[] KnownLoras = ["anya.safetensors", "other.safetensors"];
+    private static readonly string[] KnownLoras = [OwnLora, LoraNamespace.PrefixFor(Owner) + "other.safetensors"];
 
     private CharacterManifest WithLocalBlock()
     {
@@ -304,13 +340,13 @@ public class CharacterStoreTests : IDisposable
     {
         var m = WithLocalBlock();
 
-        var result = CharacterStore.Update(_root, m.Slug,
-            LoraPatch(CharacterLoraPatch.Set("anya.safetensors", "anya_face", null, KnownLoras)));
+        var result = CharacterStore.Update(_root, Owner, m.Slug,
+            LoraPatch(CharacterLoraPatch.Set(OwnLora, "anya_face", null, KnownLoras)));
 
         result!.Error.Should().BeNull();
         var providers = JsonNode.Parse(File.ReadAllText(ManifestPath(m)))!["providers"]!;
         var local = providers[CharacterManifest.LocalProvider]!;
-        local["lora"]!.GetValue<string>().Should().Be("anya.safetensors");
+        local["lora"]!.GetValue<string>().Should().Be(OwnLora);
         local["trigger"]!.GetValue<string>().Should().Be("anya_face");
         local["strength"]!.GetValue<double>().Should().Be(CharacterManifest.DefaultLoraStrength);
         local["photosHash"]!.GetValue<string>().Should().Be("h1");
@@ -323,10 +359,10 @@ public class CharacterStoreTests : IDisposable
     public void Убрать_лору_снимает_три_ключа_и_оставляет_чужой()
     {
         var m = WithLocalBlock();
-        CharacterStore.Update(_root, m.Slug,
-            LoraPatch(CharacterLoraPatch.Set("anya.safetensors", "anya_face", 1.2, KnownLoras)));
+        CharacterStore.Update(_root, Owner, m.Slug,
+            LoraPatch(CharacterLoraPatch.Set(OwnLora, "anya_face", 1.2, KnownLoras)));
 
-        var result = CharacterStore.Update(_root, m.Slug, LoraPatch(CharacterLoraPatch.Removal()));
+        var result = CharacterStore.Update(_root, Owner, m.Slug, LoraPatch(CharacterLoraPatch.Removal()));
 
         result!.Error.Should().BeNull();
         var local = JsonNode.Parse(File.ReadAllText(ManifestPath(m)))!["providers"]![CharacterManifest.LocalProvider]!.AsObject();
@@ -340,10 +376,10 @@ public class CharacterStoreTests : IDisposable
     public void Убрать_лору_удаляет_опустевший_блок_local()
     {
         var m = Create("Аня");
-        CharacterStore.Update(_root, m.Slug,
-            LoraPatch(CharacterLoraPatch.Set("anya.safetensors", "anya_face", null, KnownLoras)));
+        CharacterStore.Update(_root, Owner, m.Slug,
+            LoraPatch(CharacterLoraPatch.Set(OwnLora, "anya_face", null, KnownLoras)));
 
-        CharacterStore.Update(_root, m.Slug, LoraPatch(CharacterLoraPatch.Removal()))!.Error.Should().BeNull();
+        CharacterStore.Update(_root, Owner, m.Slug, LoraPatch(CharacterLoraPatch.Removal()))!.Error.Should().BeNull();
 
         var providers = JsonNode.Parse(File.ReadAllText(ManifestPath(m)))!["providers"]!.AsObject();
         providers.ContainsKey(CharacterManifest.LocalProvider).Should().BeFalse();
@@ -355,11 +391,40 @@ public class CharacterStoreTests : IDisposable
         var m = WithLocalBlock();
         var before = File.ReadAllBytes(ManifestPath(m));
 
-        var result = CharacterStore.Update(_root, m.Slug, new CharacterPatch(null, null, [], [], null));
+        var result = CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null));
 
         result!.Error.Should().BeNull();
         var local = JsonNode.Parse(File.ReadAllText(ManifestPath(m)))!["providers"]![CharacterManifest.LocalProvider]!;
         local.ToJsonString().Should().Be(JsonNode.Parse(before)!["providers"]![CharacterManifest.LocalProvider]!.ToJsonString());
+    }
+
+    [Theory]
+    [InlineData("anya.safetensors")]
+    [InlineData("ccs/ffffffffffffffffffffffffffffffff/anya.safetensors")]
+    public void Чужая_или_голая_лора_напрямую_в_сторе_отказ_и_файл_не_меняется(string name)
+    {
+        var m = Create("Аня");
+        var before = File.ReadAllBytes(ManifestPath(m));
+        // имя есть в списке ComfyUI: отказывает именно видимость, а не «нет в списке»
+        var patch = LoraPatch(CharacterLoraPatch.Set(name, "anya_face", null, [name]));
+
+        CharacterStore.CheckLora(Owner, patch.Lora!)!.ErrorCode.Should().Be(ImageEditErrorCodes.LoraNotVisible);
+        var result = CharacterStore.Update(_root, Owner, m.Slug, patch);
+
+        result!.ErrorCode.Should().Be(ImageEditErrorCodes.LoraNotVisible);
+        File.ReadAllBytes(ManifestPath(m)).Should().Equal(before);
+    }
+
+    [Fact]
+    public void Лора_чужому_владельцу_отказ_а_без_владельца_тем_более()
+    {
+        var m = Create("Аня");
+        var patch = LoraPatch(CharacterLoraPatch.Set(OwnLora, "anya_face", null, [OwnLora]));
+
+        CharacterStore.Update(_root, "ffffffff-0000-0000-0000-000000000002", m.Slug, patch)!.ErrorCode
+            .Should().Be(ImageEditErrorCodes.LoraNotVisible);
+        CharacterStore.Update(_root, "", m.Slug, patch)!.ErrorCode.Should().Be(ImageEditErrorCodes.LoraNotVisible);
+        CharacterStore.CheckLora(Owner, patch.Lora!).Should().BeNull();
     }
 
     [Fact]
@@ -368,8 +433,8 @@ public class CharacterStoreTests : IDisposable
         var m = Create("Аня");
         var before = File.ReadAllBytes(ManifestPath(m));
 
-        var result = CharacterStore.Update(_root, m.Slug,
-            LoraPatch(CharacterLoraPatch.Set("ghost.safetensors", "anya_face", null, KnownLoras)));
+        var result = CharacterStore.Update(_root, Owner, m.Slug,
+            LoraPatch(CharacterLoraPatch.Set(LoraNamespace.PrefixFor(Owner) + "ghost.safetensors", "anya_face", null, KnownLoras)));
 
         result!.Error.Should().NotBeNull();
         result!.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -382,8 +447,8 @@ public class CharacterStoreTests : IDisposable
         var m = Create("Аня");
         var before = File.ReadAllBytes(ManifestPath(m));
 
-        var result = CharacterStore.Update(_root, m.Slug,
-            LoraPatch(CharacterLoraPatch.Set("anya.safetensors", "anya_face", null, null)));
+        var result = CharacterStore.Update(_root, Owner, m.Slug,
+            LoraPatch(CharacterLoraPatch.Set(OwnLora, "anya_face", null, null)));
 
         result!.ErrorCode.Should().Be(ImageEditErrorCodes.ProviderUnavailable);
         File.ReadAllBytes(ManifestPath(m)).Should().Equal(before);
@@ -399,8 +464,8 @@ public class CharacterStoreTests : IDisposable
         var m = Create("Аня");
         var before = File.ReadAllBytes(ManifestPath(m));
 
-        var result = CharacterStore.Update(_root, m.Slug,
-            LoraPatch(CharacterLoraPatch.Set("anya.safetensors", trigger, strength, KnownLoras)));
+        var result = CharacterStore.Update(_root, Owner, m.Slug,
+            LoraPatch(CharacterLoraPatch.Set(OwnLora, trigger, strength, KnownLoras)));
 
         result!.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
         File.ReadAllBytes(ManifestPath(m)).Should().Equal(before);
@@ -416,8 +481,8 @@ public class CharacterStoreTests : IDisposable
         for (var i = 4; i <= 11; i++) photos.Add(new JsonObject { ["file"] = $"face-{i:00}.jpg", ["primary"] = false });
         File.WriteAllText(file, json.ToJsonString());
 
-        var result = CharacterStore.Update(_root, m.Slug,
-            LoraPatch(CharacterLoraPatch.Set("anya.safetensors", "anya_face", 1.0, KnownLoras)));
+        var result = CharacterStore.Update(_root, Owner, m.Slug,
+            LoraPatch(CharacterLoraPatch.Set(OwnLora, "anya_face", 1.0, KnownLoras)));
 
         result!.Error.Should().BeNull();
         CharacterStore.Get(_root, m.Slug)!.Photos.Should().HaveCount(11);
@@ -427,12 +492,12 @@ public class CharacterStoreTests : IDisposable
     public void Dto_отдаёт_Local_и_не_отдаёт_Providers()
     {
         var m = Create("Аня");
-        CharacterStore.Update(_root, m.Slug,
-            LoraPatch(CharacterLoraPatch.Set("anya.safetensors", "anya_face", 0.9, KnownLoras)));
+        CharacterStore.Update(_root, Owner, m.Slug,
+            LoraPatch(CharacterLoraPatch.Set(OwnLora, "anya_face", 0.9, KnownLoras)));
 
         var dto = CharacterDto.From(CharacterStore.Get(_root, m.Slug)!);
 
-        dto.Local.Should().Be(new CharacterLocalDto("anya.safetensors", "anya_face", 0.9));
+        dto.Local.Should().Be(new CharacterLocalDto(OwnLora, "anya_face", 0.9));
         typeof(CharacterDto).GetProperty("Providers").Should().BeNull();
         CharacterDto.From(m).Local.Should().BeNull();
     }

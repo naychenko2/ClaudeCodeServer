@@ -244,6 +244,8 @@ public static class ImageEditErrorCodes
     public const string JobNotFound = "job_not_found";
     // 404: шага истории нет, он истёк по TTL или чужой
     public const string StepNotFound = "step_not_found";
+    // 403: LoRA вне пространства имён владельца (чужая или голое имя)
+    public const string LoraNotVisible = "lora_not_visible";
     // 404: персонажа нет в проекте (или slug не проходит белый список)
     public const string CharacterNotFound = "character_not_found";
     // 404: чата нет, он чужой или из другого проекта — неотличимо

@@ -22,6 +22,7 @@ public sealed class LocalMediaCollector(LocalMediaService media, LocalMediaClean
                 if (options.Enabled)
                 {
                     await media.CollectPendingAsync(stoppingToken);
+                    await media.SweepLoraTimeoutsAsync(stoppingToken);
                     cleanup.Run(options, DateTime.UtcNow);
                     // Контекст съёмок видео и их латенты — по таймеру, а не только при новой съёмке
                     videos?.Sweep();

@@ -244,6 +244,12 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   (0,54 → 0,13). Метрика и эталоны замера — память команды и
   `.cc-attachments/char-tests/tools/README.md`.
 
+**Обучение LoRA ([ADR-026](../../docs/adr/ADR-026-character-lora-training.md)).** Видимость LoRA
+решает только `LoraNamespace.VisibleTo`: список, патч/`connect` версии и `CharacterStore.ForRequest`
+(защита в глубину — манифест правит и агент). «Подключена» не хранится, а выводится по имени файла.
+Обучающие фото — биометрия: `data/lora-training/`, вне бэкапа, уборка при удалении проекта — шов
+`IProjectTrainingPhotoCleaner`. Запуск обучения — только кнопкой человека, инструмента у агента нет.
+
 **Перед правками — прочитай [ADR-019](../../docs/adr/ADR-019-image-editor-v3-in-chat.md)** (нити,
 швы ядра, тулсет, миграция) и [ADR-018](../../docs/adr/ADR-018-image-editor-v2.md), §7 «Инварианты
 под угрозой и сторожа» и §10.4 «План переноса».

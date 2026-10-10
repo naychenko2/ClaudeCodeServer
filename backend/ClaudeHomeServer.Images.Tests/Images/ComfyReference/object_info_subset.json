@@ -4708,6 +4708,8 @@
      [
       "audio_to_midi",
       "denoise",
+      "lora_delete",
+      "lora_train",
       "master",
       "music_edit",
       "rvc_convert",

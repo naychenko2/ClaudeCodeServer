@@ -20,6 +20,13 @@ class Job:
         self.params = d.get("params") or {}
         self.inputs = d.get("inputs") or []
         self.out_dir = d["out_dir"]
+        self.input_dir = d.get("input_dir") or ""  # путь к input ComfyUI; узел прокидывает явно
+        # loras_root — путь к весам персонажа; узел прокидывает для LoRA-воркера, чтобы он повторно
+        # проверил realpath(out_dir) внутри realpath(loras_root) — иначе shutil.rmtree по симлинку
+        # мог бы удалить данные за пределами каталога loras
+        self.loras_root = d.get("loras_root") or ""
+        # рабочий каталог LoRA-воркера: создаёт и удаляет узел, он переживает SIGKILL воркера
+        self.work_dir = d.get("work_dir") or ""
         self.prefix = d.get("prefix") or "job"
         self.files = []
         self.stats = {}

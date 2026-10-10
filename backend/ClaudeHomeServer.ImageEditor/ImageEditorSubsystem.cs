@@ -44,6 +44,12 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>()));
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
+        services.AddSingleton<CharacterTrainingPhotos>();
+        services.AddSingleton<IProjectTrainingPhotoCleaner>(sp => sp.GetRequiredService<CharacterTrainingPhotos>());
+        services.AddSingleton<CharacterLoraRuns>();
+        // Доводчик итогов обучения LoRA: шов ILocalLoraTrainer регистрирует Images; нет шва — круг пустой
+        services.AddSingleton<LoraTrainingFinisher>();
+        services.AddHostedService(sp => sp.GetRequiredService<LoraTrainingFinisher>());
         services.TryAddSingleton<IVersionedImageStore, VersionedImageStore>();
         services.AddSingleton<IImageEditSaver, ImageEditSaver>();
         // Шаги, на которые ссылаются нити картинок, чистка рабочей папки не трогает (ADR-019 §1)

@@ -412,11 +412,11 @@ public sealed record TrainingPhotoRejection(string FileName, string Reason);   /
   "gpu": { "busy": true, "mine": false, "busyUntil": "2026-10-10T10:05:00Z" },
   "current": {
     "runId": "3f9a1c2b7d10", "jobId": "lm_5d0c…", "status": "running",
-    "step": 640, "totalSteps": 2000, "etaSeconds": 4420, "queuePosition": null,
+    "step": 640, "totalSteps": 2000, "etaSeconds": 3196, "queuePosition": null,
     "startedAt": "2026-10-10T08:01:30Z"
   },
   "defaultTrigger": "ccsandrey",
-  "presets": [{ "key": "standard", "etaSeconds": 5000 }],
+  "presets": [{ "key": "standard", "etaSeconds": 4850 }],
   "photosChanged": false
 }
 ```
@@ -433,7 +433,7 @@ public sealed record TrainingPhotoRejection(string FileName, string Reason);   /
 `trigger` необязателен (по умолчанию `defaultTrigger`). Успех — 202:
 
 ```json
-{ "runId": "3f9a1c2b7d10", "jobId": "lm_5d0c…", "queuePosition": 0, "etaSeconds": 5000 }
+{ "runId": "3f9a1c2b7d10", "jobId": "lm_5d0c…", "queuePosition": 0, "etaSeconds": 4850 }
 ```
 
 Запись `training` создаётся **после** успешного `StartAsync`; сбой старта записи не оставляет.

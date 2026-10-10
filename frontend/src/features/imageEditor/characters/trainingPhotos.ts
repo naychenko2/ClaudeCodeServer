@@ -33,7 +33,7 @@ export function photosCounter(n: number, min = TRAIN_MIN, max = TRAIN_MAX) {
 export function photosStatus(state: PhotosState, n: number, min = TRAIN_MIN): { text: string; tone: StatusTone } | null {
   switch (state) {
     case 'low': return { text: TRAIN_PHOTOS_NEED(min - n), tone: 'warning' };
-    case 'enough': return { text: TRAIN_PHOTOS_TEXT.enough, tone: 'warning' };
+    case 'enough': return { text: TRAIN_PHOTOS_TEXT.enough, tone: 'success' };
     case 'limit': return { text: TRAIN_PHOTOS_TEXT.limit, tone: 'muted' };
     default: return null;
   }

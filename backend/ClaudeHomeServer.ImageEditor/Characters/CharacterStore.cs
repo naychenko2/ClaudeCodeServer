@@ -179,6 +179,8 @@ public static partial class CharacterStore
         {
             var photo = manifest.Photos[i];
             if (photo.LabelSource == PhotoLabelValues.Human || !labels.TryGetValue(photo.File, out var found)) continue;
+            // Запись без единой метки ничего не говорит о фото: источник не ставим
+            if (found.Angle is null && found.Pitch is null && found.Emotion is null) continue;
             manifest.Photos[i] = photo with
             {
                 Angle = found.Angle ?? photo.Angle,
@@ -218,6 +220,8 @@ public static partial class CharacterStore
         {
             var photo = manifest.Photos[i];
             if (!labels.TryGetValue(photo.File, out var l)) continue;
+            // Пустая запись не правка: фото не блокируем от авторазметки
+            if (l.Angle is null && l.Pitch is null && l.Emotion is null) continue;
             manifest.Photos[i] = photo with
             {
                 Angle = l.Angle ?? photo.Angle,

@@ -596,4 +596,43 @@ public class CharacterStoreTests : IDisposable
             Labels("nope.jpg", "front", "smile")));
         result!.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
     }
+
+    [Fact]
+    public void Ручная_правка_со_словом_вне_словаря_отказ()
+    {
+        var m = Create("Аня");
+        var file = m.Photos[0].File;
+        var bogus = new Dictionary<string, CharacterPhotoLabels> { [file] = new("bogus", null, null) };
+
+        var result = CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null, bogus));
+
+        result!.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    [Fact]
+    public void Ручная_правка_без_меток_не_ставит_источник_human()
+    {
+        var m = Create("Аня");
+        var file = m.Photos[0].File;
+        var empty = new Dictionary<string, CharacterPhotoLabels> { [file] = new(null, null, null) };
+
+        CharacterStore.Update(_root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null, empty))!
+            .Error.Should().BeNull();
+
+        CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file).LabelSource.Should().BeNull();
+        // и фото по-прежнему открыто для авторазметки
+        CharacterStore.MergeAutoLabels(_root, m.Slug, Labels(file, "front", "smile"))!.Should().Equal(file);
+    }
+
+    [Fact]
+    public void Авторазметка_без_меток_отбрасывается_целиком()
+    {
+        var m = Create("Аня");
+        var file = m.Photos[0].File;
+        var empty = new Dictionary<string, CharacterPhotoLabels> { [file] = new(null, null, null) };
+
+        CharacterStore.MergeAutoLabels(_root, m.Slug, empty)!.Should().BeEmpty();
+
+        CharacterStore.Get(_root, m.Slug)!.Photos.Single(p => p.File == file).LabelSource.Should().BeNull();
+    }
 }

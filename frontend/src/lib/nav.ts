@@ -182,8 +182,11 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
 export const NAV_CHANGE_EVENT = 'cc-nav-change';
 function notifyNavChange() { window.dispatchEvent(new Event(NAV_CHANGE_EVENT)); }
 
-// Новая запись истории (переход «вглубь»)
+// Новая запись истории (переход «вглубь»). Запись без снимка положил сам браузер —
+// ручная смена hash в адресной строке: она и есть этот переход, поэтому её
+// перезаписываем, а не кладём поверх дубль (иначе «назад» срабатывал со второго раза)
 export function navPush(s: NavSnapshot) {
+  if (window.history.state === null) { window.history.replaceState(s, '', toHash(s)); notifyNavChange(); return; }
   window.history.pushState(s, '', toHash(s));
   notifyNavChange();
 }

@@ -20,7 +20,8 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Тесты шага 1 плана «Архив чатов» (v4): производный признак IsArchived, мутатор
 // SetArchived (не двигает UpdatedAt/LastReadAt, копирует/возвращает транскрипт) и защита
-// UpdatedAt у «не-активностей» — пакетная простановка значков, RetitleAsync, UpdateAsync.
+// UpdatedAt у «не-активностей» — пакетная простановка значков, RetitleAsync, UpdateAsync,
+// закрепление и тумблер «Не сохранять решения».
 // Своя минимальная сборка SessionManager (как SessionManagerSubscriptionMigrationTests):
 // тестам RetitleAsync нужен cheap-раннер, который общий SessionManagerTests не передаёт.
 public class ChatArchiveFlagTests : IDisposable
@@ -115,20 +116,79 @@ public class ChatArchiveFlagTests : IDisposable
         sut.SetArchived("no-such-chat", archived: true, by: "user").Should().BeNull();
     }
 
+    // --- SetPinned: закрепление — настройка, а не активность ---
+
     [Fact]
-    public void АктивностьПинПослеАрхивации_ВозвращаетЧатИзАрхива()
+    public void SetPinned_ЗакреплениеИОткрепление_НеДвигаютUpdatedAt()
     {
-        // Пин двигает UpdatedAt — осознанное решение плана («закрепление означает: чат
-        // нужен»), и это живой публичный путь «активность снимает архив сама»
+        // Находка живой проверки мобильного переключателя чатов: пин поднимал UpdatedAt,
+        // чат прыгал по сортировке и метился непрочитанным. Наверх закреплённые поднимает
+        // сам флаг (chatTree.ts/chatGroups.ts)
+        var (sut, projects) = BuildSut();
+        var chat = NewChat(sut, projects);
+        chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        var updatedAt0 = chat.UpdatedAt;
+
+        sut.SetPinned(chat.Id, true).Should().BeTrue();
+        chat.IsPinned.Should().BeTrue();
+        chat.UpdatedAt.Should().Be(updatedAt0, "закрепление — настройка, а не активность");
+
+        sut.SetPinned(chat.Id, false).Should().BeTrue();
+        chat.IsPinned.Should().BeFalse();
+        chat.UpdatedAt.Should().Be(updatedAt0, "открепление — тоже настройка");
+    }
+
+    [Fact]
+    public void SetPinned_АрхивныйЧат_НеВыводитИзАрхива()
+    {
+        // Признак архива производный (UpdatedAt <= ArchivedAt): отметка времени от пина
+        // молча возвращала бы чат из архива
         var (sut, projects) = BuildSut();
         var chat = NewChat(sut, projects);
         sut.SetArchived(chat.Id, archived: true, by: "user");
-        chat.IsArchived.Should().BeTrue();
+        var updatedAt0 = chat.UpdatedAt;
 
         sut.SetPinned(chat.Id, true).Should().BeTrue();
 
         chat.IsPinned.Should().BeTrue();
-        chat.IsArchived.Should().BeFalse("любая активность (UpdatedAt > ArchivedAt) снимает архив сама");
+        chat.UpdatedAt.Should().Be(updatedAt0);
+        chat.IsArchived.Should().BeTrue("закрепление архивного чата не возвращает его из архива");
+    }
+
+    [Fact]
+    public void SetExcludeFromDossiers_НеДвигаетUpdatedAt()
+    {
+        var (sut, projects) = BuildSut();
+        var chat = NewChat(sut, projects);
+        chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        var updatedAt0 = chat.UpdatedAt;
+
+        sut.SetExcludeFromDossiers(chat.Id, true)!.ExcludeFromDossiers.Should().BeTrue();
+
+        chat.UpdatedAt.Should().Be(updatedAt0, "тумблер «Не сохранять решения» — настройка, а не активность");
+    }
+
+    // --- SetPersona: смена собеседника — активность, в отличие от настроек ---
+
+    [Fact]
+    public void SetPersona_АрхивныйЧат_ДвигаетUpdatedAt_иВыводитИзАрхива()
+    {
+        // Решение 2026-10-09: новый собеседник (PersonaSwitched, разделитель в ленте) —
+        // активность, поэтому сдвиг UpdatedAt в SwitchSpeaker безусловный и архивный чат
+        // при смене персоны возвращается из архива
+        var (sut, projects) = BuildSut();
+        var chat = NewChat(sut, projects);
+        chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        sut.SetArchived(chat.Id, archived: true, by: "user");
+        var updatedAt0 = chat.UpdatedAt;
+        var persona = _personasForBuild!.Create(TestUserId, "Новый собеседник", null, null, null,
+            null, null, PersonaScope.Global, null, null, null, memoryEnabled: false);
+
+        sut.SetPersona(chat.Id, TestUserId, persona.Id).Should().NotBeNull();
+
+        chat.PersonaId.Should().Be(persona.Id);
+        chat.UpdatedAt.Should().BeAfter(updatedAt0, "смена собеседника — активность");
+        chat.IsArchived.Should().BeFalse("смена персоны выводит чат из архива");
     }
 
     // --- Сторож: пакетный прогон значков не выводит чат из архива ---
@@ -328,6 +388,8 @@ public class ChatArchiveFlagTests : IDisposable
     // История последней сборки BuildSut: тестам RetitleAsync нужна для записи переписки.
     // Каждый тест зовёт BuildSut ровно раз, поэтому «последняя» здесь = «своя».
     private ChatHistoryService? _historyForBuild;
+    // Стор персон последней сборки — тесту смены персоны нужна настоящая персона владельца
+    private PersonaManager? _personasForBuild;
 
     // Событие хода мимо живого процесса CLI: OnMessageAsync — единственный путь к
     // ApplyStatusAsync, а он private (тот же приём, что в SessionManagerTests)
@@ -373,7 +435,7 @@ public class ChatArchiveFlagTests : IDisposable
         var notesSvc = new NotesService(projectManager, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
-        var personas = new PersonaManager(config);
+        var personas = _personasForBuild = new PersonaManager(config);
         var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
             knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,

@@ -694,6 +694,16 @@ public class ClaudeSession : ILlmSessionAdapter
     private static readonly string[] BuiltInMcpServerPrefixes =
         ["mcp__tasks__", "mcp__notes__", "mcp__memory__", "mcp__personas__", "mcp__wsp__", "mcp__notifications__", "mcp__widgets__", "mcp__dify__", "mcp__pmem_"];
 
+    // Полное имя инструмента прогона тестов в CLI: в «Авто» разрешается без карточки
+    internal const string RunTestsToolName = "mcp__" + McpEndpoints.TestsName + "__run_tests";
+
+    // Полное имя инструмента сборки в CLI: в «Авто» разрешается без карточки, как run_tests
+    internal const string BuildToolName = "mcp__" + McpEndpoints.DevName + "__build";
+
+    // Дев-стенд (start_stand / stop_stand): в «Авто» разрешается без карточки, как сборка
+    internal const string StartStandToolName = "mcp__" + McpEndpoints.DevName + "__start_stand";
+    internal const string StopStandToolName = "mcp__" + McpEndpoints.DevName + "__stop_stand";
+
     // Игнор служебной папки вложений в git ставится лениво один раз за жизнь сессии:
     // модель кладёт туда картинки для показа в ленте (см. подсказку про картинки в промпте),
     // а у проекта со своим .gitignore правила может не быть — при аплоаде его пишет
@@ -823,6 +833,13 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly LocalMediaMcpContext? _localMediaMcp;
     // Локальная генерация: условие как у higgsfield — схема адреса допускает http И рубильник включён
     private bool LocalMediaHttpOn() => _localMediaMcp is { UseHttp: true } && HttpMcpOnNow();
+    // MCP-сервер прогона тестов (run_tests): null — выключен или недоступен чату
+    private readonly TestsMcpContext? _testsMcp;
+    // Прогон тестов: условие как у local-media — схема адреса допускает http И рубильник включён
+    private bool TestsHttpOn() => _testsMcp is { UseHttp: true } && HttpMcpOnNow();
+    // Потолок одного вызова MCP-инструмента в env хода (см. сборку envOverrides)
+    internal const string McpToolTimeoutEnv = "MCP_TOOL_TIMEOUT";
+    internal const string McpToolTimeoutMs = "600000";
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
@@ -988,6 +1005,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _videoEditorMcp = context.VideoEditorMcp;
         _turnContextMcp = context.TurnContextMcp;
         _localMediaMcp = context.LocalMediaMcp;
+        _testsMcp = context.TestsMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
@@ -1076,6 +1094,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasTurnContext = TurnContextHttpOn();
         // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
         var hasLocalMedia = LocalMediaHttpOn();
+        // Прогон тестов: stdio-ветки нет, контекста нет у локального проекта и RO-персоны
+        var hasTests = TestsHttpOn();
+        // Сборка (dev: build): гейты те же, что у tests, — один контекст на оба узла; урезается
+        // TrimMcpServers отдельно
+        var hasDev = TestsHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
         bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
@@ -1175,6 +1198,8 @@ public class ClaudeSession : ILlmSessionAdapter
             hasVideoEditor = hasVideoEditor && Keep(McpEndpoints.VideoEditorName);
             hasTurnContext = hasTurnContext && Keep(McpEndpoints.TurnContextName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
+            hasTests = hasTests && Keep(McpEndpoints.TestsName);
+            hasDev = hasDev && Keep(McpEndpoints.DevName);
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
             hasFalAi = hasFalAi && Keep("fal-ai");
@@ -1184,7 +1209,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasTurnContext && !hasLocalMedia && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -1945,6 +1970,43 @@ public class ClaudeSession : ILlmSessionAdapter
                 shapes["local-media"] = "t:http";
             }
 
+            if (hasTests)
+            {
+                // Прогон тестов (run_tests): http-ветка только, stdio-отката нет. Процесс тестов
+                // запускает сам тулсет через среду проекта; сессия-вызыватель едет хвостом URL
+                servers[McpEndpoints.TestsName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_testsMcp!.ApiUrl, McpEndpoints.TestsName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_testsMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (один инструмент), вариативен только транспорт
+                shapes[McpEndpoints.TestsName] = "t:http";
+            }
+
+            if (hasDev)
+            {
+                // Сборка (build): http-ветка только, stdio-отката нет; контекст — общий с tests
+                servers[McpEndpoints.DevName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_testsMcp!.ApiUrl, McpEndpoints.DevName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_testsMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (build, start_stand, stop_stand), вариативен только транспорт
+                shapes[McpEndpoints.DevName] = "t:http";
+            }
+
             if (hasArchitecture)
             {
                 // C4-модель проекта (arch_*): единственная ветка — http, как у веб-поиска.
@@ -2619,6 +2681,16 @@ public class ClaudeSession : ILlmSessionAdapter
             && autoCmdEl.ValueKind == JsonValueKind.String
             && !IrreversibleCommandGuard.LooksIrreversible(autoCmdEl.GetString()))
             return "allow";
+        // Прогон тестов и сборка в «Авто» — как безопасный Bash: без карточки. Только эти два
+        // инструмента, другие MCP сюда не расширять. Персону без Bash/ReadOnly режут узел
+        // (BuildTestsContext) и сам вызов (TestsToolset, DevToolset) — авто-разрешение их не обходит.
+        if (ruleDecision == null
+            && Info.Mode == ClaudeMode.Auto
+            && (string.Equals(toolName, RunTestsToolName, StringComparison.Ordinal)
+                || string.Equals(toolName, BuildToolName, StringComparison.Ordinal)
+                || string.Equals(toolName, StartStandToolName, StringComparison.Ordinal)
+                || string.Equals(toolName, StopStandToolName, StringComparison.Ordinal)))
+            return "allow";
         // Сессия-исполнитель задачи или ход правила автоматизации персоны работают автономно —
         // отвечать на карточку разрешения некому (чат никто не открывал), и без этого исполнитель
         // вязнет в первом же permission-запросе (status=Waiting до таймаута в 60 мин) и не может
@@ -3257,6 +3329,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     ServerContent: _serverContent,
                     HasLocalMediaMcp: _localMediaMcp is not null && McpDelivered("local-media"),
                     HasImageEditorMcp: _imageEditorMcp is not null && McpDelivered(McpEndpoints.ImageEditorName),
+                    HasTestsMcp: _testsMcp is not null && McpDelivered(McpEndpoints.TestsName),
+                    HasDevMcp: _testsMcp is not null && McpDelivered(McpEndpoints.DevName),
                     HasAudioEditorMcp: _audioEditorMcp is not null && McpDelivered(McpEndpoints.AudioEditorName),
                     HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth));
@@ -3320,6 +3394,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     "он покажет пользователю кнопки для выбора. Открытый вопрос без осмысленных вариантов — как обычно, текстом.";
                 Add("ask-question", "Как задавать вопросы кнопками", askHint);
             }
+
+            // Русская подпись к инструменту: description показывается в карточке и в индикаторе
+            // ожидания. Без условий — подпись нужна и в чатах без живого зрителя (их открывают
+            // потом), а стабильный текст не рвёт prefix cache.
+            Add("tool-descriptions", "Как подписывать вызовы инструментов", Prompts.ToolDescriptionPrompts.SectionText);
 
             // Голосовой режим чата. talk — ответ слушают, а не читают: коротко и без
             // таблиц/кода/схем. digest — ответ читают с экрана и слушают выжимку: формат
@@ -3454,6 +3533,15 @@ public class ClaudeSession : ILlmSessionAdapter
                     "его содержимое текстом, достаточно короткого комментария.";
                 Add("mcp-widgets", "Как показывать виджеты в чате", widgetsHint, group: "mcp");
             }
+
+            // Подсказка «тесты — через run_tests»: контрибьютор вертикали TestRuns, гейт
+            // HasTestsMcp (сервер tests доехал до хода) — в его IsEnabled. Текст постоянный,
+            // поэтому секция стабильная и едет системным блоком, а не хвостом хода
+            if (contributorSections.TryGetValue("mcp-tests", out var testsHint))
+                Add("mcp-tests", testsHint.Title ?? "Как запускать тесты", testsHint.Text, group: "mcp");
+            // Подсказка «сборка — через build»: та же форма, гейт HasDevMcp, системный блок
+            if (contributorSections.TryGetValue("mcp-dev", out var devHint))
+                Add("mcp-dev", devHint.Title ?? "Как собирать проект", devHint.Text, group: "mcp");
 
             // Подсказка про показ картинок — только у чата с проектом: локальный путь фронт
             // резолвит относительно RootPath проекта (ChatImage), вне проекта показать нечем.
@@ -3747,6 +3835,14 @@ public class ClaudeSession : ILlmSessionAdapter
             // зарегистрировать тулы, и первый же вызов падал «No such tool available»
             // (модель ретраила, но карточка ошибки засоряла ленту).
             ["MCP_TIMEOUT"] = "30000",
+
+            // Потолок ОДНОГО вызова MCP-инструмента: прогон тестов (mcp__tests__run_tests) идёт
+            // минутами, а с дефолтом CLI обрывает вызов раньше ответа. 10 минут одобрены
+            // (docs/research/test-progress-2026-10.md); серверный потолок прогона — 540 с, чтобы
+            // ответ модели успел уйти до обрыва. Значение постоянное и от хода не зависит:
+            // сигнатура запуска (BuildLaunchSignature) между ходами не мерцает. Действует на
+            // ВСЕ MCP-серверы хода — зависший внешний держит ход до 10 минут, «Стоп» работает.
+            [McpToolTimeoutEnv] = McpToolTimeoutMs,
         };
 
         // Обход прокси для локального бэкенда — жёсткое требование HTTP-транспорта MCP
@@ -3870,6 +3966,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // найдена), иначе у облачного провайдера переменная была бы лишним шумом.
         if (_lastBareModeApplied)
             envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
+
+        // План хода (TaskCreate/TaskUpdate): с CLI 2.1.281 (24.09) план-тулы в -p отдаются
+        // лишь части моделей, остальным — только по этой переменной (гейт найден в бинарнике
+        // 2.1.292; замер: без неё у Fable 5.1 и Sonnet 5.5 их нет). Ставим всегда:
+        // исполнителю задачи план-тулы всё равно закрыты через --disallowedTools.
+        envOverrides["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1";
 
         foreach (var (k, v) in PlaywrightMcpEnv(_browserEnabled, _launcher.IsSandboxed, _rootPath))
             envOverrides[k] = v;
@@ -5405,7 +5507,17 @@ public class ClaudeSession : ILlmSessionAdapter
                 // ПЕРВИЧНЫЙ источник учёта наравне с текстовыми путями (TrackBgLaunch,
                 // <task-notification>, TaskOutput): несут готовую пару task_id↔tool_use_id
                 // без регекс-разбора текста. Текстовые пути не удаляем — фолбэк для старых CLI.
-                else if (sysSubtype == "task_started") HandleTaskStarted(run, root);
+                else if (sysSubtype == "task_started")
+                {
+                    // Фактический старт инструмента (Bash, агент) — для таймера карточки
+                    if (HandleTaskStarted(run, root) is { } started)
+                        await _onMessage(new ToolStartedMessage(started.ToolUseId));
+                }
+                // Ход сабагента: на каждый его вызов инструмента — живой прогресс карточки
+                else if (sysSubtype == "task_progress")
+                {
+                    if (ParseTaskProgress(root) is { } progress) await _onMessage(progress);
+                }
                 else if (sysSubtype == "task_notification") HandleStructuredTaskNotification(run, root);
                 else if (sysSubtype == "background_tasks_changed") HandleBackgroundTasksChanged(run, root);
                 break;
@@ -5814,6 +5926,30 @@ public class ClaudeSession : ILlmSessionAdapter
         return string.IsNullOrEmpty(taskId) || string.IsNullOrEmpty(toolUseId) ? null : (taskId, toolUseId);
     }
 
+    // task_progress сабагента (живой образец CLI 2.1.287 — docs/research/tool-progress-2026-10.md):
+    // что он делает сейчас (last_tool_name), сколько вызовов и сколько идёт (usage). Процента нет.
+    // null — без tool_use_id привязать к карточке нечем
+    internal static ToolProgressMessage? ParseTaskProgress(JsonElement root)
+    {
+        var toolUseId = StringProp(root, "tool_use_id");
+        if (string.IsNullOrEmpty(toolUseId)) return null;
+        int? toolUses = null;
+        long? durationMs = null;
+        if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+        {
+            // Только через IntProp/LongProp: null или строка в usage иначе роняет цикл чтения.
+            // Отрицательный дефолт — признак «поля нет или оно не число»
+            if (IntProp(usage, "tool_uses", -1) is >= 0 and var n) toolUses = n;
+            if (LongProp(usage, "duration_ms", -1) is >= 0 and var ms) durationMs = ms;
+        }
+        var description = StringProp(root, "description");
+        var lastTool = StringProp(root, "last_tool_name");
+        return new ToolProgressMessage(toolUseId, Stage: "working",
+            Label: string.IsNullOrWhiteSpace(description) ? null : description,
+            LastTool: string.IsNullOrWhiteSpace(lastTool) ? null : lastTool,
+            ToolUses: toolUses, DurationMs: durationMs);
+    }
+
     // task_notification (структурный): (TaskId, ToolUseId?, Aborted) — null, если task_id
     // отсутствует. Aborted = статус не "completed" (failed/stopped и любой нераспознанный
     // считаем обрывом — тот же принцип, что и у ParseTaskOutputCompletion).
@@ -6042,9 +6178,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // перезапишет тем же значением; если tool_use_id уже был учтён как неизвестный (текстовый
     // путь не смог распарсить id) — снимаем его оттуда, чтобы карточка не осталась висеть
     // в UnknownBgToolUses и не закрылась дважды при финализации прогона.
-    private void HandleTaskStarted(CliRun run, JsonElement root)
+    // Возвращает разобранную пару task_id↔tool_use_id (null — событие не разобралось),
+    // чтобы вызывающий не парсил событие второй раз
+    private (string TaskId, string ToolUseId)? HandleTaskStarted(CliRun run, JsonElement root)
     {
-        if (ParseTaskStarted(root) is not { } started) return;
+        if (ParseTaskStarted(root) is not { } started) return null;
         var (taskId, toolUseId) = started;
         run.BgTasksEmptySnapshot = false;   // старт новой задачи отменяет «работать некому»
         lock (run.PendingBg)
@@ -6059,6 +6197,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 run.PendingBgUnknown = false;
         }
         PublishBgPresence(run);
+        return started;
     }
 
     // Структурное событие CLI: завершение фоновой задачи (completed/failed/stopped) — точный

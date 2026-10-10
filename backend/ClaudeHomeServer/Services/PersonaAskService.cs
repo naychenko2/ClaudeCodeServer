@@ -64,8 +64,10 @@ public sealed class PersonaAskService(
             assignments.PersonaModel(persona, ownerId,
                 LocalActionCatalog.DefaultTierOf(LocalActionCatalog.ChatPersona)), ownerId)
             ?? persona.Model;
+        // Только именованные: ownerId и effort — соседние string?, и позиционный effort
+        // молча вставал на место владельца — ход уходил в локальную среду мимо песочницы
         var answer = await oneShot.RunAsync(sb.ToString(), oneShot.NormalizeModel(askModel),
-            timeout, ct, persona.Effort);
+            timeout: timeout, ct: ct, ownerId: ownerId, effort: persona.Effort);
         if (string.IsNullOrWhiteSpace(answer))
             throw new InvalidOperationException("Персона не ответила (пустой ответ модели)");
 

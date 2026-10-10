@@ -1,8 +1,8 @@
 import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
 import type { Project } from '../types';
 import { canRunTurn } from '../lib/projectCapabilities';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
-import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, CornerUpLeft, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
+import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z, composerLip } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
@@ -32,9 +32,10 @@ import { useAssistantName } from './chat/contexts';
 import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
+import { dativeName } from '../lib/russianName';
 import { showToast } from '../lib/toast';
-import { Button, Chip, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
-import { plusButtonTitle, useCreateShortcuts } from './chat/composerShortcuts';
+import { Button, Chip, FileTypeTile, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
+import { plusButtonTitle, shortcutOverflowItems, useCreateShortcuts } from './chat/composerShortcuts';
 import { SLOT_COMPOSER_CHIP, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx } from '../lib/subsystems/registry';
 import { modeDraftText, modeSubmitButton, nextModeDraft, nextPrefill, type ModeDraftState, type PrefillState } from '../lib/composerActionMemory';
@@ -193,6 +194,10 @@ export interface ComposerProps {
   // берётся цвет кольца у её аватара в ленте, чтобы свет и кольцо не разъезжались.
   // Не задан (чат вне проекта, говорит голос инстанса) — accent (токен auroraUser)
   auroraColorHex?: string;
+  // Чат-исполнитель задачи: поле ввода в тоне панели, название задачи в подсказке поля и
+  // бейдж «к постановщику» справа — чтобы с одного взгляда было видно, что пишешь не в основной чат.
+  // title = null — задача ещё не подгрузилась; onOpenParent нет — постановщик неизвестен
+  executorTask?: { title: string | null; onOpenParent?: () => void } | null;
 }
 
 // Раскладка полосы контролов — номиналы блоков и лестница ступеней живут в
@@ -206,30 +211,31 @@ export interface ComposerProps {
 // Щит общий — им же закрыты кнопки рельс, поднимающие плашку по удержанию.
 const iconBtnGuard = TOUCH_CALLOUT_GUARD;
 
+// Бейдж-кнопка внутри поля ввода: ⇥ у подсказки следующего сообщения и «к постановщику»
+// у чата-исполнителя. Один стиль на обе, чтобы не разъехались
+function FieldBadge({ onClick, title, style, children }: {
+  onClick: () => void; title: string; style?: React.CSSProperties; children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        pointerEvents: 'auto', flexShrink: 0, cursor: 'pointer', whiteSpace: 'nowrap',
+        border: `1px solid ${C.border}`, borderRadius: R.sm, background: 'transparent',
+        color: C.textMuted, fontSize: 11, fontWeight: 600, lineHeight: 1,
+        padding: '3px 7px', fontFamily: 'inherit',
+        ...style,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 // Получить имя файла из пути
 function basename(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
-}
-
-// Иконка файла по расширению
-function FileIcon({ name }: { name: string }) {
-  const ext = name.split('.').pop()?.toLowerCase() ?? '';
-  const color =
-    ['ts', 'tsx'].includes(ext) ? '#3178C6' :
-    ['js', 'jsx'].includes(ext) ? '#F7DF1E' :
-    ext === 'json' ? '#CB8A1F' :
-    ext === 'md' ? '#5C5246' :
-    ext === 'cs' ? '#9B4F96' :
-    '#8A8072';
-
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ flexShrink: 0 }}>
-      <rect x="2" y="1" width="8" height="11" rx="1.5" fill={color} opacity="0.18" stroke={color} strokeWidth="1" />
-      <text x="6" y="9" textAnchor="middle" fontSize="4.5" fill={color} fontFamily="monospace" fontWeight="700">
-        {ext.slice(0, 3).toUpperCase()}
-      </text>
-    </svg>
-  );
 }
 
 // SVG стоп
@@ -444,20 +450,36 @@ function ModePill({
   );
 }
 
-// Полоска-индикатор лимита подписки по верхней кромке карточки композера.
-// Absolute внутри карточки — не сдвигает ленту и композер (никаких «прыжков» высоты).
-// Толщина одна (3px) и для warn, и для danger — серьёзность несёт только цвет
-// (RATE_COLORS[level].fill). Детали — в поповере: hover на desktop, tap на mobile.
+// Плашка упёршегося лимита подписки (danger) над карточкой композера: окно, что
+// происходит и когда сброс — текстом, без наведения. Перерасход тоже danger (см.
+// rateLevel), но сообщения при нём уходят — говорим «идёт перерасход», а не «не уйдёт».
+function RateLimitNotice({ w }: { w: RateWindow }) {
+  const reset = fmtReset(w.resetsAt);
+  return (
+    <Notice
+      tone="danger"
+      icon={Ban}
+      title={`${windowLabel(w.limitType)}: ${w.isUsingOverage ? 'лимит исчерпан, идёт перерасход' : 'лимит достигнут'}`}
+      style={{ margin: `0 ${SP.sm}px ${SP.xs}px` }}
+    >
+      {reset && <>Сброс {reset}.</>}
+    </Notice>
+  );
+}
+
+// Полоска-прогресс лимита подписки по верхней кромке карточки композера — только warn:
+// ширина заливки = доля окна, дорожка под ней показывает, сколько осталось. Упёршийся
+// лимит (danger) рисуется плашкой RateLimitNotice над карточкой — тонкую полоску там
+// легко проглядеть. Absolute внутри карточки — не сдвигает ленту и композер.
+// Детали — в поповере: hover на desktop, tap на mobile.
+const RATE_STRIPE_H = 3;
 function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
   const [open, setOpen] = useState(false);
   const c = RATE_COLORS[w.level];
-  const reached = w.level === 'danger';
   const reset = fmtReset(w.resetsAt);
-  // Оверрасход всегда даёт level=danger (см. rateLevel), поэтому «+» уместен только в
-  // danger-ветке, а не в warn — здесь его нет
-  const detail = reached
-    ? `${windowLabel(w.limitType)} — лимит достигнут${reset ? ` · сброс ${reset}` : ''}`
-    : `${windowLabel(w.limitType)} — ${w.pct}%${reset ? ` · сброс ${reset}` : ''}`;
+  const detail = `${windowLabel(w.limitType)} — ${w.pct}%${reset ? ` · сброс ${reset}` : ''}`;
+  // Без процента (warn пришёл одним статусом allowed_warning) долю не знаем — полоса целиком
+  const fillPct = w.hasUtil ? w.pct : 100;
   // desktop — hover; mobile — tap с overlay для закрытия по нажатию вне
   const hostEvents = isMobile
     ? { onClick: () => setOpen(o => !o) }
@@ -474,7 +496,7 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
           // Высота хит-зоны = верхний padding карточки (mobile 8 / desktop 7), чтобы
           // зона hover/tap полоски не залезала на первую строку поля ввода
           position: 'absolute', top: 0, left: 0, right: 0, height: isMobile ? 8 : 7,
-          zIndex: 3, cursor: reached ? 'default' : 'pointer',
+          zIndex: 3, cursor: 'pointer',
         }}
       >
         {/* Маска повторяет скругление верхних углов карточки — полоска садится по кромке */}
@@ -483,7 +505,9 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
           borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
           overflow: 'hidden', pointerEvents: 'none',
         }}>
-          <div style={{ height: 3, width: '100%', background: c.fill }} />
+          <div style={{ height: RATE_STRIPE_H, background: c.bg }}>
+            <div style={{ height: '100%', width: `${fillPct}%`, background: c.fill }} />
+          </div>
         </div>
         {open && (
           <div style={{
@@ -494,9 +518,7 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: FONT.sans, fontSize: 12.5, color: c.text, lineHeight: 1.35 }}>
               <span style={{ flexShrink: 0, display: 'flex', color: c.text }}>
-                {reached
-                  ? <Ban size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                  : <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+                <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </span>
               <span>{detail}</span>
             </div>
@@ -600,8 +622,10 @@ export function Composer({
   onReplaceAttachments,
   focusSignal,
   auroraColorHex,
+  executorTask = null,
 }: ComposerProps) {
   const asstName = useAssistantName();
+  const addressee = dativeName(asstName);
   // Черновик per-session. Composer смонтирован с key={sessionId} (см. ChatPanel), поэтому
   // смена чата = полное перемонтирование, и text заново инициализируется из getDraft(sessionId).
   // Здесь — только write-through: сохраняем набранный текст в стор черновиков этого чата,
@@ -1055,6 +1079,11 @@ export function Composer({
     // узком поле («Чат» на мобиле, длинное имя ассистента) пустое поле вставало на две-три
     // строки. Высота 'auto' — это rows=1, дотянутая до minHeight режима
     if (!el.value) return;
+    // Текст укладывается в высоту 'auto' — её и оставляем. scrollHeight браузер округляет до
+    // целого, а 'auto' у одной строки дробная (22,5 + 12 = 34,5): на зуме 110/125 % явные
+    // 35px на первой букве меняли высоту композера на долю пикселя, и прыгали лента и верхняя
+    // губа. Допуск в пиксель — то самое округление
+    if (el.scrollHeight <= el.clientHeight + 1) return;
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, []);
 
@@ -1468,6 +1497,9 @@ export function Composer({
   // у однострочного поля, растянув карточку по своей высоте
   const [tallInput, setTallInput] = useState(false);
   const sideBtnH = isMobile ? 36 : 32;
+  // Иконки нижней губы — высоты её пикеров (28): ряд губы тогда совпадает с верхней,
+  // где чипы тоже 28. На телефоне цель под палец остаётся 36
+  const lipBtn = isMobile ? 36 : 28;
   const sendBtnH = isMobile ? 38 : 34;
   const columnNeed = (1 + (hasSpeech ? 1 : 0)) * (sideBtnH + 6) + sendBtnH;
   useEffect(() => {
@@ -1498,17 +1530,23 @@ export function Composer({
   // Столбец только при живом textarea: в разговоре и записи поле низкое, кнопки — ряд
   const columnRight = tallInput && !talkActive && !isListening;
 
+  // Полоска лимита закрывает верх белого поля — содержимое сдвигаем вниз на половину её
+  // толщины, чтобы оно стояло по центру видимой части. Высота карточки при этом та же
+  const stripeShift = rateWindow?.level === 'warn' ? RATE_STRIPE_H / 2 : 0;
   // Стили контейнера — поле всегда активно (доступно для ввода и во время генерации)
   const containerStyle: React.CSSProperties = {
     position: 'relative',
-    background: C.bgWhite,
+    // Исполнитель — тон панели, а не белый: отличие от основного чата. Содержимое не
+    // бледнеет и тень остаётся — иначе поле читалось бы как выключенное
+    background: executorTask ? C.bgPanel : C.bgWhite,
     border: `1px solid ${dragOver || hasText || activeMode ? C.accent : C.border}`,
     borderRadius: R.xxl,
-    padding: isMobile ? '8px 10px' : '7px 8px',
-    // Подъём как у островов, но разлётом ВВЕРХ (SHADOW.lift): композер стоит на
-    // самой кромке холста — его губа выровнена по низу соседних островов, и
-    // нижнюю половину обычной тени срезал бы край
-    boxShadow: dragOver ? SHADOW.focus : SHADOW.lift,
+    padding: isMobile
+      ? `${8 + stripeShift}px 10px ${8 - stripeShift}px`
+      : `${7 + stripeShift}px 8px ${7 - stripeShift}px`,
+    // Своей тени у поля нет: сверху оно лежит на верхней губе, снизу — на нижней,
+    // а подъём над холстом дают сами губы. Кольцо остаётся только на перетаскивании
+    boxShadow: dragOver ? SHADOW.focus : 'none',
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
@@ -1553,7 +1591,7 @@ export function Composer({
       title={plusButtonTitle(stripShortcuts)}
       aria-haspopup={stripShortcuts.length > 0 ? 'menu' : undefined}
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
         justifyContent: 'center', flexShrink: 0,
       }}
@@ -1571,7 +1609,7 @@ export function Composer({
       onClick={handleSlashButton}
       title="Выбрать скилл"
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
         justifyContent: 'center', flexShrink: 0,
         fontFamily: FONT.mono, fontSize: 16, fontWeight: 600, lineHeight: 1,
@@ -1589,7 +1627,7 @@ export function Composer({
       onClick={() => setTeamOpen(o => !o)}
       title="Обсудить с командой"
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none',
         background: teamOpen ? C.accentLight : 'none',
         cursor: 'pointer', color: teamOpen ? C.accent : C.textMuted,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -1604,6 +1642,14 @@ export function Composer({
   // чипом: сегмент-иконка открывает раскрывашку настроек (бывшая кнопка), ✕ снимает
   // режим (бывший крестик чипа) — оба действия как раньше, просто в одном контуре
   const teamMechMeta = teamMech ? teamMechanic(teamMech) : null;
+  // Подсказка обычного (однострочного) поля. «Написать Вере…»: имя в дательном; не
+  // склоняется однозначно — фраза без имени
+  const basePlaceholder = teamMechMeta ? teamMechMeta.placeholder
+    : executorTask ? 'Написать исполнителю…'
+    : addressee ? `Написать ${addressee}…` : 'Написать сообщение…';
+  // Своим слоем рисуем только в пустом однострочном поле: у режимов поле высокое, и их
+  // подсказка в несколько строк задумана
+  const placeholderOverlay = !activeMode && !suggestionVisible && text === '';
   const TeamMechIcon = teamMechMeta?.icon;
   const teamPill = teamMechMeta && TeamMechIcon ? (
     <ModePill
@@ -1664,7 +1710,7 @@ export function Composer({
       onClick={toggleWorkLoopSafe}
       title="Цикл «до готово»: агент работает итерациями, пока не отчитается о завершении, затем верификационный ход"
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none',
         background: 'none',
         cursor: 'pointer', color: C.textMuted,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -1740,7 +1786,7 @@ export function Composer({
       disabled={worktreeToggleDisabled}
       title={worktreeButtonTitle}
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none',
         background: worktreeActive ? C.accentLight : 'none',
         cursor: worktreeToggleDisabled ? 'default' : 'pointer',
         color: worktreeActive ? C.accent : C.textMuted,
@@ -1806,7 +1852,7 @@ export function Composer({
       <textarea
         autoComplete="off"
         ref={textareaRef}
-        className="cc-composer-input"
+        className={placeholderOverlay ? 'cc-composer-input cc-ph-overlay' : 'cc-composer-input'}
         value={fieldValue}
         onChange={(e) => {
           if (activeMode) { setModeText(e.target.value); return; }
@@ -1817,7 +1863,7 @@ export function Composer({
         onInput={autoResize}
         onPaste={handlePaste}
         // Пока видна ghost-подсказка, обычный плейсхолдер прячем — тексты бы наложились
-        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : `Спросите ${asstName}…`}
+        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : basePlaceholder}
         rows={1}
         style={{
           flex: 1,
@@ -1839,6 +1885,19 @@ export function Composer({
           boxSizing: 'border-box',
         }}
       />
+      {placeholderOverlay && (
+        // Подсказка пустого поля — своим слоем, в одну строку с многоточием (нативную
+        // прячет .cc-ph-overlay). Геометрия — как у ghost-подсказки ниже
+        <div aria-hidden style={{
+          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+          padding: isMobile ? '0 8px' : '0 4px', pointerEvents: 'none', boxSizing: 'border-box',
+          fontSize: isMobile ? 16 : 15, lineHeight: '1.5', color: C.textMuted, minWidth: 0,
+        }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+            {basePlaceholder}
+          </span>
+        </div>
+      )}
       {suggestionVisible && promptSuggestion && (
         // Ghost text как в Claude Code Desktop: серый текст подсказки в самом поле
         // + бейдж-клавиша ⇥ (тап — принять; на десктопе также → / Tab).
@@ -1857,21 +1916,20 @@ export function Composer({
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
             {promptSuggestion}
           </span>
-          <button
-            onClick={acceptSuggestion}
-            title="Вставить подсказку (→ или Tab)"
-            style={{
-              pointerEvents: 'auto', flexShrink: 0, cursor: 'pointer',
-              border: `1px solid ${C.border}`, borderRadius: R.sm, background: 'transparent',
-              color: C.textMuted, fontSize: 11, fontWeight: 600, lineHeight: 1,
-              padding: '3px 7px', fontFamily: 'inherit',
-            }}
-          >
-            ⇥
-          </button>
+          <FieldBadge onClick={acceptSuggestion} title="Вставить подсказку (→ или Tab)">⇥</FieldBadge>
         </div>
       )}
     </div>
+    {/* Исполнитель: переход к чату-постановщику — тем же бейджем, что ⇥, прижат вправо.
+        На мобиле подпись съедала поле ввода до «Написа…» — там только иконка */}
+    {executorTask?.onOpenParent && (
+      <FieldBadge onClick={executorTask.onOpenParent} title="Открыть чат, из которого поставлена задача"
+        style={isMobile
+          ? { marginLeft: SP.xs, padding: '5px 7px', display: 'inline-flex', alignItems: 'center' }
+          : { marginLeft: SP.sm }}>
+        {isMobile ? <CornerUpLeft size={14} aria-label="к постановщику" /> : 'к постановщику'}
+      </FieldBadge>
+    )}
     </div>
   );
 
@@ -2370,8 +2428,10 @@ export function Composer({
   // В «⋯» — ВСЕ кнопки ряда: клик по строке выполняет действие, глазик справа решает,
   // стоит ли кнопка в самой полосе. Не влезшие по ширине и скрытые пользователем
   // отличаются только состоянием глаза — отдельных секций не нужно
+  const stripKeys = new Set(shownCollapsible.slice(0, visibleCount).map(c => c.key));
   const hiddenItems: OverflowItem[] = [
     ...collapsible.map(c => ({ ...c.item, action: visAction(c.key) })),
+    ...shortcutOverflowItems(stripShortcuts, stripKeys.has('attach')),
     ...activeModeItems,
   ];
 
@@ -2379,7 +2439,6 @@ export function Composer({
   // которых в самой полосе сейчас нет: в hiddenItems теперь входит ВЕСЬ ряд
   // (ради глазиков), проверка «есть toggle» без этого гейта горела бы и тогда, когда
   // включённая кнопка стоит на виду
-  const stripKeys = new Set(shownCollapsible.slice(0, visibleCount).map(c => c.key));
   const menuOnlyActive = hiddenItems.some(i => i.toggle && !stripKeys.has(i.key));
 
   // Right-click по губе (desktop) открывает то же «Ещё» — но ВСЕГДА в полном составе,
@@ -2432,6 +2491,7 @@ export function Composer({
           Задачи и отложенные сообщения дождутся устройства сами.
         </Notice>
       )}
+      {rateWindow?.level === 'danger' && <RateLimitNotice w={rateWindow} />}
       {/* Раскрывашка «Обсудить с командой» — над полем композера */}
       {canDiscuss && (
         <TeamDrawer
@@ -2493,8 +2553,8 @@ export function Composer({
           Отпустите — прикрепим к сообщению
         </div>
       )}
-      {/* Полоска-индикатор лимита подписки по кромке карточки (warn/danger) */}
-      {rateWindow && rateWindow.level !== 'normal' && <RateStripe w={rateWindow} isMobile={isMobile} />}
+      {/* Полоска-прогресс лимита подписки по кромке карточки (warn; danger — плашкой выше) */}
+      {rateWindow?.level === 'warn' && <RateStripe w={rateWindow} isMobile={isMobile} />}
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
       {showSkillsDropdown && skills.length > 0 && (
         <SkillsDropdown
@@ -2543,57 +2603,22 @@ export function Composer({
           style={{
             display: 'flex',
             flexWrap: 'wrap',
-            gap: 7,
-            padding: '11px 12px 8px',
+            gap: SP.sm,
+            // Поле карточки (7–10 px) уже есть: по бокам — как у строки действий (SP.xxs),
+            // иначе чипы стоят на 10 px правее «Чат / Нарисовать» и плейсхолдера
+            padding: `${SP.xs}px ${SP.xxs}px`,
           }}
         >
           {leadingChips}
+          {/* Плитку типа кладём в подпись, а не в leading: leading обрезает содержимое
+              кругом под аватар и срезал бы углы квадратной плитки */}
           {attachments.map((filePath) => {
             const name = basename(filePath);
             return (
-              <div
-                key={filePath}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  background: C.accentLight,
-                  borderRadius: R.md,
-                  height: 30,
-                  padding: '0 9px 0 7px',
-                  fontSize: 12,
-                  color: C.textSecondary,
-                }}
-              >
-                <FileIcon name={name} />
-                <span title={name} style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {middleEllipsis(name, isMobile ? 22 : 30)}
-                </span>
-                <button
-                  onClick={() => onRemoveAttachment(filePath)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: 0,
-                    marginLeft: 2,
-                    width: 24,
-                    height: 24,
-                    borderRadius: R.full,
-                    color: C.textMuted,
-                    lineHeight: 1,
-                    fontSize: 13,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                  }}
-                  title="Удалить"
-                  aria-label={`Удалить вложение ${name}`}
-                >
-                  <X size={13} strokeWidth={ICON_STROKE} />
-                </button>
-              </div>
+              <Chip key={filePath} title={name} touch={isMobile} onRemove={() => onRemoveAttachment(filePath)} removeLabel={`Убрать вложение ${name}`}>
+                <FileTypeTile name={name} />
+                {middleEllipsis(name, isMobile ? 22 : 30)}
+              </Chip>
             );
           })}
         </div>
@@ -2601,7 +2626,7 @@ export function Composer({
 
       {/* Чипы подсистем (слот composer-chip): вклад сам решает, рисоваться ли */}
       {slotChips.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, padding: '0 12px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, padding: `0 ${SP.xxs}px` }}>
           {slotChips.map(c => (
             <Fragment key={c.name}>{c.render?.({ projectId: project?.id ?? null, sessionId, isMobile: !!isMobile, modeId: activeMode ? modeId : null })}</Fragment>
           ))}
@@ -2685,14 +2710,9 @@ export function Composer({
       flexWrap: 'nowrap', minWidth: 0,
       ...(isMobile
         ? { marginTop: 7, padding: '0 2px' }
-        : {
-            margin: '-12px 0 0', padding: '15px 8px 4px',
-            background: C.bgMain, border: `1px solid ${C.borderLight}`,
-            borderRadius: `0 0 ${R.xxl}px ${R.xxl}px`,
-            // Низ фигуры обводит та же тень, что у панелей-островов: губа стоит с
-            // ними на одной линии, и обрыв без тени рядом с их мягким низом виден
-            boxShadow: SHADOW.island,
-          }),
+        // Нижняя губа (геометрия — composerLip). Тень снизу — как у панелей-островов: губа стоит с ними
+        // на одной линии, и обрыв без тени рядом с их мягким низом виден
+        : composerLip('bottom')),
     }}>
       <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
         {modeButton}
@@ -2721,6 +2741,7 @@ export function Composer({
           items={hiddenItems}
           title="Ещё"
           indicator={menuOnlyActive}
+          triggerSize={isMobile ? undefined : 28}
           triggerTitle={menuOnlyActive
             ? 'Ещё · есть включённые режимы'
             : 'Ещё'}

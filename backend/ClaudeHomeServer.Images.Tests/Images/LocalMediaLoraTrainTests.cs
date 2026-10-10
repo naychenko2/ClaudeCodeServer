@@ -41,7 +41,7 @@ public class LocalMediaLoraTrainTests : IDisposable
         var config = Config(loraEnabled);
         var store = new LocalMediaJobStore(config);
         var service = new LocalMediaService(new ComfyClient(new FakeComfyFactory(_comfy), config), store,
-            new FakeProjectAccess(), config, NullLogger<LocalMediaService>.Instance, null, time)
+            new FakeProjectAccess(), config, NullLogger<LocalMediaService>.Instance, null, null, time)
         {
             // Сокет ComfyUI в тестах не открываем
             LoraProgressListener = (_, _, ct) => Task.Delay(Timeout.Infinite, ct),

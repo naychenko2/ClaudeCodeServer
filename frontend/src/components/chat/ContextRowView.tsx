@@ -3,9 +3,9 @@
 // Здесь только отрисовка по готовой модели: подписи объекта и референсов приходят из DTO
 // (`label`, `version`), своих форматтеров нет. Ширина — снаружи; форму каждого чипа выбирает
 // чистая лестница lib/chatContext/ladder.ts, открытость панели в неё не входит.
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, Cpu, Eye, GitBranch, Plus, RotateCcw, Send, Trash2, X, Check, Info } from 'lucide-react';
-import { C, FONT, FS, R, SP, SHADOW, Z } from '../../lib/design';
+import { useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight, CloudUpload, Cpu, Eye, FolderGit2, GitBranch, Info, MessageSquare, Plus, RotateCcw, Send, Trash2, X, Check } from 'lucide-react';
+import { C, COMPOSER_LIP, FONT, FS, R, SP, SHADOW, Z, composerLip } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import { contextRowLadder, CAP, gitChipBox, ladderRungs, NOM, type LadderFacts, type LadderPick } from '../../lib/chatContext/ladder';
 import { unusedBy } from '../../lib/chatContext/fill';
@@ -13,9 +13,9 @@ import { roleLabel } from '../../lib/chatContext/roleLabels';
 import { baseName } from '../../lib/chatContext/labels';
 import type { ChatContextPrimary, ChatContextRef } from '../../lib/chatContext/types';
 import type { FormatModel } from '../../lib/chatContext/formatTypes';
-import { Badge, Menu, MenuItem, MenuSep, Modal } from '../ui';
+import { Badge, Button, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { RowChip, ellipsis } from './RowChip';
+import { RowChip, ellipsis, FlatChips, ChipHeight, ShrinkChips, CHIP_H } from './RowChip';
 import { FormatBody } from '../generation/format/FormatBody';
 import { FormatChip } from '../generation/format/FormatChip';
 import { groupExecutorRows, rowPriceShort, EXECUTOR_GROUP_LABEL, type ExecutorRow } from '../generation/ExecutorList';
@@ -28,6 +28,9 @@ export const ROW_H_MOBILE = 32;
 export interface RowGit {
   label: string;
   changes: number;
+  // Строки диффа рабочего дерева — для пилюли «+N −M» у правого края губы
+  added?: number;
+  deleted?: number;
   ahead: number;
   publishN: number;
   onCommitOwn: () => void;
@@ -89,6 +92,11 @@ export const showsRow = (p: Pick<ContextRowViewProps, 'git' | 'primary'>) => !!p
 
 // ── Примитивы ──
 
+// (примитивы act, FlatChips, ChipHeight, ShrinkChips, RowChip, ellipsis перенесены в ./RowChip
+// вместе с поддержкой контекстов — чтобы чип «Формат» из components/generation/format
+// продолжал работать через тот же экспорт)
+
+const CHIP_H_MOBILE = 28;
 function XBtn({ title, onClick }: { title: string; onClick: () => void }) {
   return (
     <button type="button" data-chip-x="" title={title} aria-label={title}
@@ -126,11 +134,26 @@ function AgentMark({ title, onClick }: { title: string; onClick?: () => void }) 
 export const changesWord = (n: number) => `${n} ${plural(n, 'изменение', 'изменения', 'изменений')}`;
 
 function gitTitle(g: RowGit) {
-  return `Ветка ${g.label} · ${g.changes ? changesWord(g.changes) : 'чисто'}${g.publishN ? ` · ${g.publishN} к публикации` : ''}`;
+  return `Ветка ${g.label} · ${g.changes ? changesWord(g.changes) : 'нет изменений'}${g.publishN ? ` · ${g.publishN} к публикации` : ''}`;
 }
 
-function GitChip({ g, form, onOpen }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: (r: DOMRect) => void }) {
+function GitChip({ g, form, onOpen, bare }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: (r: DOMRect) => void; bare?: boolean }) {
   const icon = <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />;
+  // bare — справа в губе стоят пилюля и кнопки Git: чип — только ветка, без счётчиков и без
+  // меню (всё, что в нём было, теперь кнопками)
+  // Геометрия — как у кнопки режима в нижней губе (и прежнего «Git ▾»): высота 28, поле 10,
+  // иконка 14, зазор 6 — иконки двух губ встают в одну вертикаль. Имя ветки — моно 12.5
+  if (bare) {
+    return (
+      <span data-chip="git" data-git-bare="" title={gitTitle(g)} style={{
+        display: 'flex', alignItems: 'center', gap: GIT_ICON_GAP, minWidth: 0,
+        height: GIT_BTN_H, padding: `0 ${LIP_BTN_PAD_X}px`, flexShrink: 1,
+      }}>
+        <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />
+        <span style={{ ...ellipsis, fontFamily: FONT.mono, fontSize: GIT_FONT, color: C.textSecondary }}>{g.label}</span>
+      </span>
+    );
+  }
   const clean = !g.changes && !g.publishN;
   const up = g.publishN > 0 ? <span style={{ color: C.accent, fontWeight: 600, flexShrink: 0 }}>↑{g.publishN}</span> : null;
   const count = g.changes ? <span style={{ fontWeight: 600, flexShrink: 0 }}>{g.changes}</span> : null;
@@ -153,7 +176,7 @@ function GitChip({ g, form, onOpen }: { g: RowGit; form: 0 | 1 | 2 | 3; onOpen: 
       {form >= 2 && <span style={box.label === null ? ellipsis : { ...ellipsis, maxWidth: box.label }}>{g.label}</span>}
       <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>
       {form === 3
-        ? (g.changes ? <span style={{ flexShrink: 0 }}>{changesWord(g.changes)}</span> : (g.publishN ? null : <span style={{ flexShrink: 0 }}>чисто</span>))
+        ? (g.changes ? <span style={{ flexShrink: 0 }}>{changesWord(g.changes)}</span> : (g.publishN ? null : <span style={{ flexShrink: 0 }}>нет изменений</span>))
         : (count ?? (clean ? <span style={{ flexShrink: 0 }}>чисто</span> : null))}
       {form === 3 && g.publishN > 0 && g.changes > 0 && <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>}
       {up}
@@ -168,10 +191,13 @@ function PrimaryChip({ p, form, icon, onOpen, onRelease, onAgentTip }: {
   const agent = p.by === 'agent';
   const ver = p.version ? ` · ${p.version}` : '';
   const title = `${p.label}${ver}${agent ? ' · взял в работу Claude' : ''}${onOpen ? ' — открыть в панели' : ''}`;
+  // В губе основной объект выделен не рамкой, а именем: заголовочный цвет и полужирный против
+  // приглушённых референсов — иначе он сливается с ними
+  const flat = useContext(FlatChips);
   return (
-    <RowChip kind="primary" max={form === 1 ? NOM.o1 : CAP.o2} title={title} onClick={onOpen} borderColor={C.accentMuted} dim={p.missing}>
+    <RowChip kind="primary" max={form === 1 ? NOM.o1 : CAP.o2} title={title} onClick={onOpen} borderColor={flat ? undefined : C.accentMuted} dim={p.missing}>
       <Thumb item={p} icon={icon} />
-      <span data-chip-label="" style={ellipsis}>{baseName(p.label, true)}</span>
+      <span data-chip-label="" style={flat ? { ...ellipsis, color: C.textHeading, fontWeight: 600 } : ellipsis}>{baseName(p.label, true)}</span>
       {p.version && <span style={{ color: C.textMuted, flexShrink: 0 }}>· {p.version}</span>}
       {agent && <AgentMark title="Взял в работу Claude" onClick={onAgentTip} />}
       <XBtn title={`Снять «${p.label}» с работы`} onClick={onRelease} />
@@ -193,6 +219,9 @@ function ExecChip({ e, form, bare, onOpen }: { e: RowExec; form: 1 | 2 | 3; bare
   // Имя облачной модели приходит с поставщиком («fal · Nano Banana 2»): в голой форме оставляем саму модель
   const bareName = auto ? 'Авто' : row.name.split(' · ').pop() ?? row.name;
   const badge = <Badge size="xs" tone={free ? 'success' : 'neutral'}>{price}</Badge>;
+  // В губе вес держит только основной объект: имя исполнителя обычным начертанием, «Чем» узнаётся по бейджу цены
+  const flat = useContext(FlatChips);
+  const name = flat ? { fontWeight: 400 } : { color: C.textHeading, fontWeight: 600 };
   return (
     <RowChip kind="exec" max={bare ? NOM.eBare : NOM[`e${form}` as 'e1']} title={title} onClick={open}>
       {bare
@@ -200,13 +229,13 @@ function ExecChip({ e, form, bare, onOpen }: { e: RowExec; form: 1 | 2 | 3; bare
         : form === 1
         ? <Cpu size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
         : form === 2
-          ? <b style={{ ...ellipsis, color: C.textHeading, fontWeight: 600 }}>{row.name}</b>
+          ? <b style={{ ...ellipsis, ...name }}>{row.name}</b>
           : <>
               <span style={{ color: C.textMuted, flexShrink: 0 }}>Чем:</span>
               <span style={ellipsis}>
                 {auto
-                  ? <><b style={{ color: C.textHeading, fontWeight: 600 }}>Авто</b>{row.now ? ` · ${row.now}` : ''}</>
-                  : <>{row.sub ? `${row.sub} · ` : ''}<b style={{ color: C.textHeading, fontWeight: 600 }}>{row.name}</b></>}
+                  ? <><b style={name}>Авто</b>{row.now ? ` · ${row.now}` : ''}</>
+                  : <>{row.sub ? `${row.sub} · ` : ''}<b style={name}>{row.name}</b></>}
               </span>
             </>}
       {!bare && <span style={{ flexShrink: 0, display: 'inline-flex' }}>{badge}</span>}
@@ -241,7 +270,7 @@ export function GitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
   const run = (fn: () => void) => () => { close(); fn(); };
   return (
     <>
-      <MenuHead><b style={{ color: C.textHeading, fontFamily: FONT.mono }}>{g.label}</b> · {g.changes ? changesWord(g.changes) : 'чисто'}{g.publishN ? ` · ↑${g.publishN}` : ''}</MenuHead>
+      <MenuHead><b style={{ color: C.textHeading, fontFamily: FONT.mono }}>{g.label}</b> · {g.changes ? changesWord(g.changes) : 'нет изменений'}{g.publishN ? ` · ↑${g.publishN}` : ''}</MenuHead>
       <MenuItem icon={<Check size={15} strokeWidth={ICON_STROKE} />} label="Зафиксировать только этот чат"
         hint={g.changes ? `${files}, которые правил этот чат` : 'изменений этого чата нет'} disabled={!g.changes} onClick={run(g.onCommitOwn)} />
       <MenuItem icon={<Check size={15} strokeWidth={ICON_STROKE} />} label="Зафиксировать всё дерево"
@@ -252,6 +281,67 @@ export function GitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
       <MenuSep />
       <MenuItem icon={<Eye size={15} strokeWidth={ICON_STROKE} />} label="Показать изменения" onClick={run(g.onShowChanges)} />
     </>
+  );
+}
+
+// Меню кнопки «Зафиксировать» у правого края губы — область коммита, как у старой Git-полосы
+function CommitMenuBody({ g, close }: { g: RowGit; close: () => void }) {
+  const run = (fn: () => void) => () => { close(); fn(); };
+  return (
+    <>
+      <MenuItem icon={<MessageSquare size={15} strokeWidth={ICON_STROKE} />} label="Только этот чат" onClick={run(g.onCommitOwn)} />
+      <MenuItem icon={<FolderGit2 size={15} strokeWidth={ICON_STROKE} />} label="Всё дерево" onClick={run(g.onCommitAll)} />
+    </>
+  );
+}
+
+// Старые пилюля «файлы +N −M» и кнопки «Зафиксировать ▾» / «Опубликовать N» Git-полосы — в губе
+// справа, прежние отделка и размер (высота 28, кегль 12.5): ряд губы — как у нижней (32)
+const GIT_BTN_H = 28;
+// Кегль и иконка ветки, пилюли и кнопок Git в губе — как у прежней Git-полосы: все в одном размере
+const GIT_FONT = 12.5;
+// Поле и зазор иконки — как у кнопки режима в нижней губе (Composer, кнопка режима)
+const LIP_BTN_PAD_X = 10;
+const GIT_ICON_GAP = 6;
+// Зазор между веткой, пилюлей и кнопками — как у прежней полосы
+const GIT_ROW_GAP = SP.md;
+function GitActions({ g, onCommit }: { g: RowGit; onCommit: (rect: DOMRect) => void }) {
+  // Button xs (24) поднят до ряда губы (28) и кегля прежней Git-полосы
+  const base: CSSProperties = {
+    height: GIT_BTN_H, minHeight: GIT_BTN_H, fontSize: GIT_FONT, gap: GIT_ICON_GAP,
+    flexShrink: 0, whiteSpace: 'nowrap',
+  };
+  const files = `${g.changes} ${plural(g.changes, 'файл', 'файла', 'файлов')}`;
+  const added = g.added ?? 0, deleted = g.deleted ?? 0;
+  return (
+    <span data-git-actions="" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: GIT_ROW_GAP, flexShrink: 0 }}>
+      {g.changes > 0 && (
+        <Button variant="ghostFilled" size="xs" onClick={g.onShowChanges}
+          title={`Изменено ${files}, строк +${added} −${deleted} — открыть изменения`}
+          style={{ ...base, padding: `0 ${SP.md - 1}px`, fontFamily: FONT.mono, fontWeight: 400 }}>
+          <span style={{ color: C.textSecondary }}>{g.changes}</span>
+          {added > 0 && <span style={{ color: C.diffAddText }}>+{added}</span>}
+          {deleted > 0 && <span style={{ color: C.diffRemText }}>−{deleted}</span>}
+          {added === 0 && deleted === 0 && <span style={{ color: C.textMuted }}>±0</span>}
+        </Button>
+      )}
+      {g.changes > 0 && (
+        <Button variant="ghostFilled" size="xs" title="Зафиксировать изменения (git commit)"
+          onClick={e => onCommit((e.currentTarget as HTMLElement).getBoundingClientRect())}
+          leftIcon={<Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} />}
+          style={{ ...base, padding: `0 ${SP.sm + 2}px 0 ${SP.md}px`, background: C.bgCard, color: C.textHeading, fontWeight: 400 }}>
+          Зафиксировать
+          <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} color={C.textMuted} />
+        </Button>
+      )}
+      {g.publishN > 0 && (
+        <Button variant="primary" size="xs" onClick={g.onPublish} title="Опубликовать (git push)"
+          leftIcon={<CloudUpload size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          style={{ ...base, padding: `0 ${SP.md}px` }}>
+          Опубликовать <span style={{ opacity: 0.85 }}>{g.publishN}</span>
+        </Button>
+      )}
+    </span>
   );
 }
 
@@ -369,7 +459,7 @@ function FormatNote({ text, onClose }: { text: string; onClose: () => void }) {
 // иначе Menu уйдёт вниз и обрежется окном или упрётся в его верх
 const formatMenuMax = (rect: DOMRect) => Math.max(240, Math.min(560, Math.max(rect.top, window.innerHeight - rect.bottom) - 16));
 
-type OpenMenu = { kind: 'git' | 'exec' | 'refs' | 'format'; rect: DOMRect } | null;
+type OpenMenu = { kind: 'git' | 'exec' | 'refs' | 'format' | 'commit'; rect: DOMRect } | null;
 
 // Счётчик загрузок шрифтов страницы: растёт, когда шрифты готовы и после каждой догрузки (`loadingdone`)
 function useFontsEpoch(): number {
@@ -410,9 +500,13 @@ export function ContextRowView(props: ContextRowViewProps) {
     if (wasMobile.current !== isMobile) { wasMobile.current = isMobile; setMenu(m => (m?.kind === 'format' ? null : m)); }
   }, [isMobile]);
   const facts = rowFacts(props);
-  // Телефон: лестницы нет, строка прокручивается; ветка иконкой, «Чем» без подписи
+  // Телефон: лестницы нет, губа — смысловые строки «Где» (ветка целиком), «С чем» (объект и «Чем»),
+  // «Подключено» (референсы). Строка «Подключено» в одну линию: не влезшие референсы по одному
+  // уходят в «+N ›» (drop) после вёрстки
+  const [drop, setDrop] = useState(0);
+  const refsLineRef = useRef<HTMLDivElement>(null);
   const base = props.pick ?? (isMobile
-    ? { form: { g: 0 as const, o: (format && primary ? 1 : 2) as 1 | 2, e: 2 as const, k: refs.length, ...(format ? { f: 0 as const } : null) }, index: -1, count: 0, need: 0, scroll: true }
+    ? { form: { g: 0 as const, o: (format && primary ? 1 : 2) as 1 | 2, e: 2 as const, k: Math.max(0, refs.length - drop), ...(format ? { f: 0 as const } : null) }, index: -1, count: 0, need: 0, scroll: false }
     : contextRowLadder(props.width ?? 10_000, facts));
   // Номиналы ступеней — верхняя оценка (чип не шире номинала), реальные чипы уже. Поэтому после вёрстки
   // пробуем ступень богаче: влезла без прокрутки — оставляем, нет — возвращаемся на шаг назад и закрепляем
@@ -446,6 +540,17 @@ export function ContextRowView(props: ContextRowViewProps) {
     }
     wasNeeding.current = needsChoice;
   }, [needsChoice]);
+  // Строка «Подключено» на телефоне переполнилась — ещё один референс в «+N ›»
+  const lineSig = useRef('');
+  useLayoutEffect(() => {
+    const el = refsLineRef.current;
+    if (!isMobile || props.pick) return;
+    if (lineSig.current !== sig) {
+      lineSig.current = sig;
+      if (drop !== 0) { setDrop(0); return; }
+    }
+    if (el && el.scrollWidth > el.clientWidth + 1 && drop < refs.length) setDrop(drop + 1);
+  });
   const pick = shift !== 0 && rungs.length ? { ...base, form: rungs[at], index: at } : base;
   if (!showsRow(props)) {
     // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» после ✕ обязана остаться
@@ -463,9 +568,15 @@ export function ContextRowView(props: ContextRowViewProps) {
 
   const open = (kind: 'git' | 'exec' | 'refs' | 'format') => (rect: DOMRect) => setMenu({ kind, rect });
   const subNote = format?.state?.resolved.substituted ? format.state.resolved.note ?? null : null;
+  // В строке одна ветка (десктоп): ветка — прежней подписью Git-полосы без меню, и раскладка —
+  // как у полосы до строки контекста (поля и зазоры ниже). Справа пилюля и кнопки — если есть
+  // что делать; на чистом дереве — только ветка
+  const gitBare = !isMobile && !!git && !primary && refs.length === 0;
+  const gitActions = gitBare && (git.changes > 0 || git.publishN > 0);
 
   const body = !menu ? null
     : menu.kind === 'git' && git ? <GitMenuBody g={git} close={close} />
+    : menu.kind === 'commit' && git ? <CommitMenuBody g={git} close={close} />
     : menu.kind === 'exec' && exec ? <ExecMenuBody e={exec} close={close} head={!isMobile} />
     : menu.kind === 'format' && format ? (
         <FormatBody m={format} isMobile={isMobile} projectName={props.projectName ?? null}
@@ -475,46 +586,117 @@ export function ContextRowView(props: ContextRowViewProps) {
         onDetach={props.onDetach} onClear={props.onClear} close={close} />
     : null;
 
+  // Строка — верхняя губа композера: заезжает под поле (оно лежит слоем выше), горизонтальные поля —
+  // номинал лестницы, чтобы её расчёт ширины не разошёлся. Десктоп и планшет — ушко (как свёрнутая
+  // полоса): закладка по ширине содержимого у левого края, ряд по чипам (CHIP_H), лишнее сжимает
+  // лестница. Телефон — губа во всю ширину из смысловых строк и с крупными чипами
+  const inner = COMPOSER_LIP.overlap + COMPOSER_LIP.gap;
+  const shell: CSSProperties = isMobile
+    ? {
+        ...composerLip('top', { row: CHIP_H_MOBILE }),
+        width: '100%', height: 'auto', flexDirection: 'column', alignItems: 'stretch', gap: SP.xs,
+        padding: `${COMPOSER_LIP.edge}px ${NOM.pad / 2}px ${inner}px`,
+      }
+    : {
+        // Губа во всю ширину поля и той же высоты, что нижняя (ряд COMPOSER_LIP.row): композер
+        // симметричен, а в ряд встают кнопки Git прежнего размера. Чипы — по-прежнему слева
+        ...composerLip('top', { row: COMPOSER_LIP.row }),
+        width: '100%', maxWidth: '100%',
+        // Одна ветка — поля прежней Git-полосы (composerLip, padX); иначе — номинал лестницы
+        padding: `${COMPOSER_LIP.edge}px ${gitBare ? COMPOSER_LIP.padX : NOM.pad / 2}px ${inner}px`,
+        ...(gitBare ? { gap: GIT_ROW_GAP } : null),
+        overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
+      };
+
+  const primaryNode = primary && (
+    <PrimaryChip p={primary} form={f.o} icon={iconOf(primary.kind)} onOpen={props.onOpenPrimary}
+      onRelease={props.onRelease} onAgentTip={() => setTip(t => !t)} />
+  );
+  const execNode = primary && exec && <ExecChip e={exec} form={f.e} onOpen={open('exec')} />;
+  const refsNodes = (
+    <>
+      <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} aria-label="Подключено к ходу" />
+      {shown.map(r => (
+        <RefPill key={r.id} r={r} gray={grayIds.has(r.id)} icon={iconOf(r.kind)} grayHint={grayHint} onDetach={() => props.onDetach(r.id)} />
+      ))}
+      <RowChip kind="more" max={NOM.more} onClick={e => setMenu({ kind: 'refs', rect: e.currentTarget.getBoundingClientRect() })}
+        title={hidden > 0 ? `Ещё ${hidden}: показать всё подключённое` : 'Показать всё подключённое'}>
+        {hidden > 0 && <span style={{ fontWeight: 600 }}>+{hidden}</span>}
+        <ChevronRight size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+      </RowChip>
+    </>
+  );
+  // Строка губы на телефоне: одна линия, ширина строки — потолок для чипов
+  const mobileLine: CSSProperties = { display: 'flex', alignItems: 'center', gap: SP.sm - 2, minWidth: 0 };
+  // Чистое дерево — справа просто «нет изменений»: текстом без бейджа и без зелени, как прежняя
+  // строка «ветка · чисто» Git-полосы. Делать нечего, поэтому не кнопка
+  const gitClean = !!git && !git.changes && !git.publishN;
+  const cleanNode = (
+    <span data-git-clean="" title="Всё закоммичено и опубликовано"
+      style={{ marginLeft: 'auto', flexShrink: 0, padding: `0 ${LIP_BTN_PAD_X}px`, fontSize: GIT_FONT, color: C.textMuted, whiteSpace: 'nowrap' }}>нет изменений</span>
+  );
+
   return (
-    <div data-context-row-host="" style={{ position: 'relative', margin: `${SP.xs}px 0 ${SP.sm - 2}px` }}>
+    // Десктоп — отступ сверху, как у прежней Git-полосы (10): тень губы вверх (SHADOW.liftSoft из
+    // composerLip) ложится на этот зазор, а не на низ ленты
+    <div data-context-row-host="" style={{ position: 'relative', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
       {subNote && subNote !== dismissedNote && !menu && <FormatNote text={subNote} onClose={() => setDismissedNote(subNote)} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
+      <FlatChips.Provider value>
+      <ChipHeight.Provider value={isMobile ? CHIP_H_MOBILE : CHIP_H}>
       <div
         ref={rowRef}
         data-context-row="" data-ladder-step={pick.index} data-ladder-scroll={pick.scroll ? '1' : '0'}
         role="toolbar" aria-label="Контекст хода"
         style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm - 2, boxSizing: 'border-box', width: '100%',
-          height: isMobile ? ROW_H_MOBILE : ROW_H, padding: `0 ${NOM.pad / 2}px`,
-          background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
-          overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
+          display: 'flex', alignItems: 'center', gap: SP.sm - 2, boxSizing: 'border-box',
+          ...shell,
         }}
       >
-        {git && <GitChip g={git} form={isMobile ? 0 : f.g} onOpen={open('git')} />}
-        {git && (primary || refs.length > 0) && (
-          <span data-row-sep="" style={{ width: NOM.vsep, height: 16, background: C.border, flexShrink: 0 }} />
-        )}
-        {primary && (
-          <PrimaryChip p={primary} form={f.o} icon={iconOf(primary.kind)} onOpen={props.onOpenPrimary}
-            onRelease={props.onRelease} onAgentTip={() => setTip(t => !t)} />
-        )}
-        {primary && exec && <ExecChip e={exec} form={f.e} bare={isMobile && !!format} onOpen={open('exec')} />}
-        {format && <FormatChip m={format} short={f.f !== 2} bare={isMobile || f.f === 0} open={menu?.kind === 'format'} onOpen={e => open('format')(e.currentTarget.getBoundingClientRect())} />}
-        {refs.length > 0 && (
+        {isMobile ? (
           <>
-            <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} aria-label="Подключено к ходу" />
-            {shown.map(r => (
-              <RefPill key={r.id} r={r} gray={grayIds.has(r.id)} icon={iconOf(r.kind)} grayHint={grayHint} onDetach={() => props.onDetach(r.id)} />
-            ))}
-            <RowChip kind="more" max={NOM.more} onClick={e => setMenu({ kind: 'refs', rect: e.currentTarget.getBoundingClientRect() })}
-              title={hidden > 0 ? `Ещё ${hidden}: показать всё подключённое` : 'Показать всё подключённое'}>
-              {hidden > 0 && <span style={{ fontWeight: 600 }}>+{hidden}</span>}
-              <ChevronRight size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            </RowChip>
+            {git && (
+              <div data-row-line="where" style={mobileLine}>
+                {/* Чистое дерево — как на десктопе: ветка подписью без меню (в нём всё серое), справа
+                    «нет изменений». Есть что делать — чип с меню: кнопок Git на телефоне нет */}
+                <ShrinkChips.Provider value><GitChip g={git} form={f.g} onOpen={open('git')} bare={gitClean} /></ShrinkChips.Provider>
+                {gitClean && cleanNode}
+              </div>
+            )}
+            {primary && (
+              <div data-row-line="what" style={mobileLine}>
+                {/* Объект главнее «Чем»: держит до 60% строки и не ужимается, пока ужимается «Чем» */}
+                <ShrinkChips.Provider value>
+                  <span style={{ display: 'flex', minWidth: 0, flexShrink: 0, maxWidth: exec ? '60%' : '100%' }}>{primaryNode}</span>
+                  {exec && <span style={{ display: 'flex', minWidth: 0, flex: '0 1 auto', marginLeft: 'auto' }}>{execNode}</span>}
+                </ShrinkChips.Provider>
+              </div>
+            )}
+            {refs.length > 0 && <div ref={refsLineRef} data-row-line="refs" style={{ ...mobileLine, overflow: 'hidden' }}>{refsNodes}</div>}
+            {format && <FormatChip m={format} short={f.f !== 2} bare open={menu?.kind === 'format'} onOpen={e => open('format')(e.currentTarget.getBoundingClientRect())} />}
+          </>
+        ) : (
+          <>
+            {git && <GitChip g={git} form={f.g} onOpen={open('git')} bare={gitBare} />}
+            {/* Губа во всю ширину, а в строке одна ветка — место есть: справа старые пилюля и
+                кнопки Git-полосы (те же обработчики, что в меню ветки), а чип ветки — только имя.
+                Только без объекта и референсов: чипов, которые ужимает лестница, нет, и кнопки
+                не отнимают у неё ширину. Высота — по ряду губы (CHIP_H): губа не растёт */}
+            {gitActions && git && <GitActions g={git} onCommit={rect => setMenu({ kind: 'commit', rect })} />}
+            {gitBare && !gitActions && cleanNode}
+            {git && (primary || refs.length > 0) && (
+              <span data-row-sep="" style={{ width: NOM.vsep, height: 16, background: C.border, flexShrink: 0 }} />
+            )}
+            {primaryNode}
+            {exec && execNode}
+            {refs.length > 0 && refsNodes}
+            {format && <FormatChip m={format} short={f.f !== 2} bare={f.f === 0} open={menu?.kind === 'format'} onOpen={e => open('format')(e.currentTarget.getBoundingClientRect())} />}
           </>
         )}
       </div>
+      </ChipHeight.Provider>
+      </FlatChips.Provider>
       {menu && body && (isMobile
         ? <Modal title={menu.kind === 'git' ? 'Ветка' : menu.kind === 'exec' ? exec?.title ?? 'Чем выполнить' : menu.kind === 'format' ? format?.title ?? 'Формат' : 'Подключено к ходу'} onClose={close}>{body}</Modal>
         : menu.kind === 'format'

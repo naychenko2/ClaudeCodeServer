@@ -144,6 +144,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // JoinSession: без него клиент после F5 видел бы «Claude печатает…» без
         // возможности ответить, а CLI ждал бы до часового таймаута
         public ServerMessage? PendingInteraction;
+        // Карточка пришла ВНЕ пользовательского хода: её поднял фоновый агент или ход-продолжение
+        // CLI после result (чат был свободен). Ответ на неё не должен ставить Working — result
+        // продолжения ClaudeSession намеренно отбрасывает («между ходами», чтобы не закрыть им
+        // будущий ход), и снять Working было бы некому: чат висел занятым до «Стопа».
+        // Пишется при каждой карточке, пришедшей не в Waiting, — протухнуть не успевает.
+        public volatile bool InteractionOutsideTurn;
         // Контекст адаптера устарел (смена собеседника / правка персоны) — убирается
         // ЛЕНИВО перед следующим ходом, чтобы не рвать активный ход и доживающих агентов
         public volatile bool AdapterStale;
@@ -1197,6 +1203,23 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new LocalMediaMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
     }
 
+    // MCP-сервер прогона тестов (run_tests). Узел есть в конфиге хода, только когда:
+    //   1) включена подсистема test-runs (там живёт движок прогона);
+    //   2) чат проекта, чьи файлы на сервере (локальный проект ADR-016 в v1 не поддерживаем:
+    //      TRX и лог лежали бы на устройстве — тесты там агент гоняет Bash'ем);
+    //   3) персоне не запрещён Bash (ReadOnly или Custom без Bash): прогон исполняет код
+    //      проекта и пишет bin/obj и .cc-attachments — это тот же запуск кода, что и Bash.
+    // Всё это — свойства сессии, персоны и процесса, не хода. Тулсет на вызове повторяет проверки.
+    internal TestsMcpContext? BuildTestsContext(string? ownerId, string? projectId, Persona? persona)
+    {
+        if (ownerId is null || projectId is null) return null;
+        if (!Composition.SubsystemGate.IsEnabled(_config, TestRuns.TestRunsSubsystem.SubsystemKey)) return null;
+        if (!PersonaAccessPolicy.AllowsBash(persona)) return null;
+        if (_projects.GetById(projectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new TestsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
     // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
     // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
     // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
@@ -1239,8 +1262,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null,
         LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null,
         AudioEditorMcpContext? audioEditor = null, VideoEditorMcpContext? videoEditor = null,
-        TurnContextMcpContext? turnContext = null) =>
-        architecture is { UseHttp: true }
+        TurnContextMcpContext? turnContext = null, TestsMcpContext? tests = null) =>
+        architecture is { UseHttp: true } || tests is { UseHttp: true }
         || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
@@ -1657,12 +1680,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 
-    // Закрепить/открепить чат
+    // Закрепить/открепить чат.
+    // UpdatedAt намеренно НЕ обновляется (как в SetExpiry): закрепление — настройка, а не
+    // активность. Закреплённые поднимает наверх сам флаг (chatTree.ts/chatGroups.ts), а
+    // отметка времени метила бы чат непрочитанным и выводила бы его из архива (признак
+    // архива производный: UpdatedAt <= ArchivedAt).
     public bool SetPinned(string sessionId, bool pinned)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
         entry.Info.IsPinned = pinned;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return true;
     }
@@ -2010,11 +2036,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // Opt-out «Истории решений» (ADR-004 §6): тумблер «Не сохранять решения из этого чата».
     // Персистится в sessions.json; DossierCaptureService проверяет его при захвате коммита.
+    // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
     public Session? SetExcludeFromDossiers(string sessionId, bool value)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.ExcludeFromDossiers = value;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;
     }
@@ -4059,6 +4085,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             }
         }
         if (switching) entry.Info.PersonaSwitched = true;
+        // Сдвиг без гейта архива — осознанно (решение 2026-10-09): смена собеседника — это
+        // АКТИВНОСТЬ (новый собеседник, PersonaSwitched, разделитель в ленте), а не настройка
+        // чата, как SetPinned. Поэтому архивный чат при смене персоны выходит из архива;
+        // сторож — ChatArchiveFlagTests. Сдвиг намеренно безусловный и по `switching` не
+        // гейтится: двигаем и при повторном выборе той же персоны, и при назначении в
+        // неначатый чат (switching == false) — решение Гриши 2026-10-09
         entry.Info.UpdatedAt = DateTime.UtcNow;
 
         // Адаптер несёт контекст прежнего собеседника (memory-MCP, привязки) — пометим
@@ -4145,6 +4177,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var videoEditorMcp = BuildVideoEditorContext(ownerId, session);
         var turnContextMcp = BuildTurnContextContext(ownerId, session);
         var localMediaMcp = BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona);
+        var testsMcp = BuildTestsContext(ownerId, session.ProjectId, persona.Persona);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
             ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
@@ -4187,7 +4220,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                 workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp),
+                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
@@ -4202,6 +4235,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             VideoEditorMcp: videoEditorMcp,
             TurnContextMcp: turnContextMcp,
             LocalMediaMcp: localMediaMcp,
+            TestsMcp: testsMcp,
             // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
             // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
             // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
@@ -4249,6 +4283,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Человек написал в чат — цепочка автоотчётов оборвана: дальше это уже новый разговор,
             // и накопленная глубина не должна запрещать отчёты по нему
             entry.ReportChainDepth = 0;
+            // Отметка «человек писал сюда» — по ней сортируется список проектов. Сохраняем
+            // сразу: сообщение может встать в очередь, и ход с его SaveSessions будет нескоро
+            entry.Info.LastUserMessageAt = DateTime.UtcNow;
+            SaveSessions();
 
             // Режим «Командная реализация» (Э5): вводная человека начинает новую итерацию —
             // бюджет с нуля. Делаем это на приёме сообщения, ДО очереди: иначе вводная,
@@ -5756,6 +5794,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var videoEditorMcp = BuildVideoEditorContext(project.OwnerId, entry.Info);
             var turnContextMcp = BuildTurnContextContext(project.OwnerId, entry.Info);
             var localMediaMcp = BuildLocalMediaContext(project.OwnerId, project.Id, persona.Persona);
+            var testsMcp = BuildTestsContext(project.OwnerId, project.Id, persona.Persona);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null;
@@ -5796,7 +5835,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp),
+                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ArchitectureMcp: architectureMcp,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
@@ -5809,6 +5848,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 VideoEditorMcp: videoEditorMcp,
                 TurnContextMcp: turnContextMcp,
                 LocalMediaMcp: localMediaMcp,
+                TestsMcp: testsMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).
                 MainRootPath: projectRoot,
@@ -6254,6 +6294,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return true;
     }
 
+    // Статус после ответа на карточку. Внутри хода — Working: ход продолжается, закроет его
+    // result. Карточка вне хода (фоновый агент, ход-продолжение после result) — чат возвращается
+    // в свободный Active, как до карточки: result такой работы до SessionManager не доходит
+    // (ClaudeSession отбрасывает его как «между ходами»), и Working не снял бы никто. Метка
+    // LastTurnEndedAt — как у result: sweep доведёт до Finished, когда фоновая работа кончится.
+    private void ResumeAfterInteraction(string sessionId, SessionEntry entry, string what)
+    {
+        var outsideTurn = entry.InteractionOutsideTurn && entry.Info.Status == SessionStatus.Waiting;
+        entry.InteractionOutsideTurn = false;
+        var status = outsideTurn ? SessionStatus.Active : SessionStatus.Working;
+        if (outsideTurn)
+            lock (entry.PendingLock) entry.LastTurnEndedAt = DateTimeOffset.UtcNow;
+        FireAndForget(ApplyStatusAsync(sessionId, entry, status), $"смена статуса после {what} ({sessionId})");
+    }
+
     public void RespondPermission(string sessionId, string requestId, string behavior)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
@@ -6287,8 +6342,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         FireAndForget(BroadcastAsync(sessionId,
                 new InteractionResolvedMessage("permission", requestId, Decision: decision)),
             $"рассылка ответа на permission ({sessionId})");
-        FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
-            $"смена статуса после permission ({sessionId})");
+        ResumeAfterInteraction(sessionId, entry, "permission");
     }
 
     // Снять инструмент с «Разрешать всегда» этого чата: следующий его вызов снова спросит.
@@ -6995,6 +7049,48 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             _log.LogWarning(ex, "Чтение карточек остановки с диска ({SessionId}) не удалось", sessionId);
             return [];
         }
+    }
+
+    // Этапы и итоговые счётчики долгого инструмента (run_tests) — в историю его вызова: живой
+    // tool_progress идёт мимо пампа CLI, и без этой записи строка этапов и итог «174 из 177»
+    // пропадали бы после F5. persist — записать снимок на диск сразу (конец прогона: tool_result
+    // может уже не прийти, если ход оборван); промежуточные снимки ляжут с ближайшим сохранением.
+    // Аккумулятора уже нет (ход оборван раньше конца прогона) — финальный снимок дописывается
+    // в сохранённую историю по toolUseId, иначе «прервано · сборка» не пережило бы F5;
+    // промежуточные без аккумулятора не пишем — их перекроет финальный
+    public void RecordToolStages(string sessionId, string toolUseId, IReadOnlyList<ToolStage> stages,
+        ToolRunTotals? totals, bool persist) =>
+        FireAndForget(RecordToolStagesAsync(sessionId, toolUseId, stages, totals, persist),
+            $"этапы инструмента ({sessionId})");
+
+    // Снимок в аккумулятор ложится синхронно, до первого await: порядок событий сохраняется
+    internal async Task RecordToolStagesAsync(string sessionId, string toolUseId, IReadOnlyList<ToolStage> stages,
+        ToolRunTotals? totals, bool persist)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (entry.Accumulator is { } acc)
+        {
+            if (acc.OnToolStages(toolUseId, stages, totals) && persist)
+                await acc.SaveSnapshotAsync(_history);
+            return;
+        }
+        if (persist)
+            await MutateStoredAsync<StoredToolUseMessage>(entry, sessionId, m => m.Id == toolUseId,
+                m => TurnAccumulator.ApplyToolStages(m, stages, totals));
+    }
+
+    // Фактический старт MCP-инструмента с прогрессом (run_tests, build, start_stand) — из его
+    // tools/call, мимо пампа CLI. CLI выполняет такие вызовы по очереди, и без этой метки все
+    // выписанные в одном ответе карточки сразу показывали бы «идёт» с отсчётом от tool_use.
+    // Тот же tool_started, что у Bash/агентов: метка ложится в историю вызова, событие уходит
+    // в ленту сразу либо следом за tool_use, если вызов обогнал его рассылку (OnExternalToolStarted)
+    public void RecordToolStarted(string sessionId, string toolUseId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Accumulator is not { } acc) return;
+        var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (acc.OnExternalToolStarted(toolUseId, startedAt))
+            FireAndForget(BroadcastAsync(sessionId, new ToolStartedMessage(toolUseId, startedAt)),
+                $"старт инструмента ({sessionId})");
     }
 
     // Публичный (волна Д): TeamDecisionService зовёт его вместо прямой работы с
@@ -8662,8 +8758,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         FireAndForget(BroadcastAsync(sessionId,
                 new InteractionResolvedMessage("question", toolUseId, Answers: answers)),
             $"рассылка ответа на вопрос ({sessionId})");
-        FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
-            $"смена статуса после ответа на вопрос ({sessionId})");
+        ResumeAfterInteraction(sessionId, entry, "ответа на вопрос");
     }
 
     public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback)
@@ -8682,8 +8777,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         FireAndForget(BroadcastAsync(sessionId,
                 new InteractionResolvedMessage("plan", requestId, Approved: approve, Feedback: feedback)),
             $"рассылка решения по плану ({sessionId})");
-        FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
-            $"смена статуса после решения по плану ({sessionId})");
+        ResumeAfterInteraction(sessionId, entry, "решения по плану");
     }
 
     // Решение (Minor, волна 3, осознанно оставлено как есть): удаление чата-штаба НЕ отменяет
@@ -9006,13 +9100,24 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     break;
                 case AgentThinkingMessage m: acc.OnAgentThinking(m.ParentToolUseId, m.Text); break;
                 case ToolUseMessage m:
-                    acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId);
+                    // Время старта — по часам сервера и одним числом в ленту и в историю:
+                    // иначе таймер карточки после F5 начинал бы отсчёт заново
+                    m = m with { StartedAt = m.StartedAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                    msg = m;
+                    acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId, m.StartedAt);
                     TryUnmarkCommittedOnToolUse(sessionId, entry, m.Name, m.Input);
                     if (entry is not null && SpendMapping.TryExtractHiggsfieldGeneration(m.Name))
                         SpendMapping.RecordHiggsfieldGeneration(_spend, ResolveOwnerId, _log, entry.Info);
                     break;
+                case ToolStartedMessage m:
+                    m = m with { StartedAt = m.StartedAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                    msg = m;
+                    acc.OnToolStarted(m.ToolUseId, m.StartedAt.Value);
+                    break;
                 case ToolResultMessage m:
-                    acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
+                    m = m with { FinishedAt = m.FinishedAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                    msg = m;
+                    acc.OnToolResult(m.ToolUseId, m.Content, m.IsError, m.FinishedAt);
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
                     TryTrackFalCost(sessionId, m.Content); // fire-and-forget: стоимость придёт позже
                     TryTrackGlifCost(sessionId, m.Content); // синхронно: кредиты уже в tool_result
@@ -9253,6 +9358,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             if (msg is PermissionRequestMessage or AskQuestionMessage or PlanReviewMessage)
             {
+                // Вторая карточка поверх висящей наследует признак первой; иначе свободный
+                // (не Working) чат = карточка пришла между ходами
+                if (entry.Info.Status is not SessionStatus.Waiting)
+                    entry.InteractionOutsideTurn = entry.Info.Status is not SessionStatus.Working;
                 newStatus = SessionStatus.Waiting;
                 // Кэш для replay при JoinSession: после F5 клиент должен снова увидеть
                 // карточку, которую ждёт CLI
@@ -9473,6 +9582,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
 
         if (sendBroadcast) await BroadcastAsync(sessionId, msg);
+        // Карточка в ленте — старт MCP-вызова, обогнавший её рассылку, уходит следом
+        if (msg is ToolUseMessage announced && acc.OnToolAnnounced(announced.Id) is { } earlyStart)
+            await BroadcastAsync(sessionId, new ToolStartedMessage(announced.Id, earlyStart));
 
         if (entry is not null && OnSessionMessage is { } observers)
         {

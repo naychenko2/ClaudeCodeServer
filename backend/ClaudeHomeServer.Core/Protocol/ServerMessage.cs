@@ -89,14 +89,62 @@ public record AgentTextMessage(string ParentToolUseId, string Text)
 public record AgentThinkingMessage(string ParentToolUseId, string Text)
     : ServerMessage("agent_thinking");
 
-public record ToolUseMessage(string Id, string Name, object Input, string? ParentToolUseId = null)
+// StartedAt (Unix-мс UTC) — когда сервер увидел вызов: от него карточка ведёт таймер
+// «идёт M:SS». Проставляет SessionManager при приёме (часы сервера, а не браузера), тем же
+// числом оно уходит в историю — отсчёт после F5 продолжается с того же места. Уточняется
+// событием tool_started, когда CLI сообщает о фактическом старте (Bash, агенты).
+public record ToolUseMessage(string Id, string Name, object Input, string? ParentToolUseId = null,
+    long? StartedAt = null)
     : ServerMessage("tool_use");
+
+// Фактический старт выполнения инструмента — по system/task_started CLI (Bash, сабагенты)
+// либо из самого tools/call MCP-инструментов с прогрессом (run_tests, build, start_stand:
+// CLI выполняет их по очереди, SessionManager.RecordToolStarted).
+// Между tool_use и стартом может пройти заметное время (хуки PreToolUse, ожидание
+// разрешения, очередь соседних вызовов), поэтому таймер карточки сдвигается сюда.
+// StartedAt проставляет SessionManager.
+public record ToolStartedMessage(string ToolUseId, long? StartedAt = null)
+    : ServerMessage("tool_started");
+
+// Живой прогресс идущего инструмента — поверх таймера карточки (docs/research/tool-progress-2026-10.md,
+// вариант б). Percent — оценка (elapsed/ETA с потолком 95) либо, при Exact, процент по
+// настоящим шагам семплера ComfyUI (потолок 99); «готово» говорит только tool_result. Источники:
+//   • сабагент — system/task_progress CLI: LastTool, ToolUses, DurationMs, Label = описание;
+//   • local-media (local_jobs_wait) — шлёт сам MCP-тулсет мимо CLI по _meta.claudecode/toolUseId:
+//     Stage queued|running, QueuePosition, EtaSeconds, Percent, Exact, Label («шаг N из M»).
+// Само событие не персистится: после F5 карточку догонит следующее. Исключение — этапы и
+// итоговые счётчики прогона тестов (Stages, Totals): их тулсет пишет и в историю вызова
+// (StoredToolUseMessage), чтобы строка этапов и «174 из 177 · упало 3» жили после F5.
+//   • run_tests — Stages: полный снимок этапов (очередь → сборка → подсчёт → тесты) по часам
+//     сервера; Totals — только в последнем событии, когда прогон кончился.
+public record ToolProgressMessage(string ToolUseId, string? Stage = null, string? Label = null,
+    int? Percent = null, int? QueuePosition = null, int? EtaSeconds = null,
+    string? LastTool = null, int? ToolUses = null, long? DurationMs = null, bool? Exact = null,
+    IReadOnlyList<ToolStage>? Stages = null, ToolRunTotals? Totals = null)
+    : ServerMessage("tool_progress");
+
+// Этап долгого инструмента (run_tests): ключ (queued | build | list | stand | running), короткая
+// подпись для строки этапов, начало и конец — Unix-мс по часам сервера. EndedAt null — этап
+// идёт (или вызов оборвался, не успев его закрыть). Failed — этап кончился неудачей (сборка
+// упала, прогон оборван на нём): карточка рисует его крестиком, а не галочкой
+public sealed record ToolStage(string Stage, string Label, long StartedAt, long? EndedAt = null, bool? Failed = null);
+
+// Итоговые счётчики прогона тестов для закрытой карточки: «174 из 177 · упало 3».
+// Failures — первые упавшие (имя и первая строка сообщения) для списка под строкой этапов,
+// чтобы не искать их в сыром выводе; null — упавших нет или имена неизвестны
+public sealed record ToolRunTotals(int Passed, int Failed, int Total, IReadOnlyList<ToolRunFailure>? Failures = null);
+
+// Упавший тест на карточке: полное имя и первая непустая строка сообщения (может не быть —
+// имя взято из консоли)
+public sealed record ToolRunFailure(string Name, string? Message = null);
 
 // Стриминг аргументов инструмента (input_json_delta) — накопленный частичный JSON
 public record ToolInputDeltaMessage(string ToolUseId, string PartialJson)
     : ServerMessage("tool_input_delta");
 
-public record ToolResultMessage(string ToolUseId, string Content, bool IsError)
+// FinishedAt (Unix-мс UTC) — когда пришёл результат; вместе с ToolUseMessage.StartedAt даёт
+// итоговую длительность на карточке. Проставляет SessionManager, как и StartedAt.
+public record ToolResultMessage(string ToolUseId, string Content, bool IsError, long? FinishedAt = null)
     : ServerMessage("tool_result");
 
 // Завершение фоновых агентов (Agent run_in_background / Workflow): toolUseId их карточек.

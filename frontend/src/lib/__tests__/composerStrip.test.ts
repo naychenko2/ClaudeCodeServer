@@ -8,7 +8,7 @@ import {
 // уровень усилия в плашке модели (B) → собеседник (B2) → модель (C). Граничные
 // ширины ниже посчитаны руками от номиналов: база = левый блок + паддинг + два зазора.
 //   база            = 112 + 16 + 4×2          = 136
-//   A-wide влезает с = 136 + 419               = 555
+//   A-wide влезает с = 136 + 309               = 445
 //   A       влезает с = 136 + 279               = 415
 //   B       влезает с = 136 + 254               = 390
 //   B2      влезает с = 136 + 163               = 299
@@ -20,11 +20,11 @@ const form = (w: number, isMobile = false) =>
 describe('pickLayout: лестница правой группы (десктоп)', () => {
   it('широкая полоса — всё словами (A-wide)', () => {
     expect(form(1200)).toBe('A-wide');
-    expect(form(555)).toBe('A-wide'); // ровно на границе номинала
+    expect(form(445)).toBe('A-wide'); // ровно на границе номинала
   });
 
   it('сужение — подпись собеседника укорачивается первой (A)', () => {
-    expect(form(554)).toBe('A');
+    expect(form(444)).toBe('A');
     expect(form(415)).toBe('A');
   });
 
@@ -45,7 +45,7 @@ describe('pickLayout: лестница правой группы (десктоп
   });
 
   it('ширина правой группы совпадает с номиналом выбранной формы', () => {
-    expect(pickLayout(500, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.A);
+    expect(pickLayout(430, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.A);
     expect(pickLayout(400, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.B);
     expect(pickLayout(320, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.B2);
   });

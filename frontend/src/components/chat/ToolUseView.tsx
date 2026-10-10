@@ -1,21 +1,159 @@
 import { memo, useState, useEffect, useMemo, useContext } from 'react';
 import { Plug, Eye, SquarePen, Terminal, Globe, CircleUser, Sparkles, SquareCheck, Wrench } from 'lucide-react';
-import type { ChatItem } from '../../types';
-import { C, FONT } from '../../lib/design';
+import type { ChatItem, ToolRunFailure } from '../../types';
+import { C, FONT, FS, SP } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
-import { ChatProjectContext, FalCostContext, GlifCostContext } from './contexts';
+import { ChatProjectContext, FalCostContext, GlifCostContext, ToolLivenessContext } from './contexts';
+import { ProgressBar } from '../ui';
+import { awaitsToolStart, FAILED_RE, formatClock, isQueued, meterParts, stageCaptionOf, stageViews, toolClockMs, toolProgressPercent, toolProgressText, totalsText, TOOL_TIMER_MIN_MS, type StageView } from '../../lib/toolTiming';
+import { useRunningElapsed } from '../../hooks/useRunningElapsed';
+import { toolLabel, toolWord, toolCardLabel, testRunArg, buildArg, localJobsWaitArg, consoleCaption, isConsoleTool, operationOf, RUN_TESTS_TOOL, BUILD_TOOL, LOCAL_JOBS_WAIT_TOOL } from '../../lib/toolLabels';
+import { OPERATION_ICON } from '../../lib/operationIcons';
+import { useIsMobile } from '../../lib/breakpoints';
 import { CodeBlockFrame } from './CodeCopyButton';
 import { MediaBlock, extractMediaMeta, mediaLabel } from './MediaBlock';
 import { useVisibleMedia } from './mediaDedup';
 
-// Спиннер для выполняющегося инструмента
-function ToolSpinner() {
-  return <div className="tool-spinner" />;
+// Высота строки подписи прогресса и строки этапов под шапкой: фиксированная, чтобы приход
+// и смена текста не двигали ленту
+const CAPTION_LINE_H = 16;
+
+// Общая вёрстка моноширинных блоков тела: команда под подписью и вывод выглядят одной
+// парой — отступы, радиус, кегль и интерлиньяж совпадают
+const MONO_PRE_STYLE: React.CSSProperties = {
+  padding: '8px 10px', borderRadius: 7, fontFamily: FONT.mono, fontSize: 11.5, lineHeight: 1.5,
+  overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+};
+
+// Зазор между колонками шапки (и колонками полосы прогресса под ней). Общий со строкой
+// изменённого файла (FileChangedRow) — её правый край стоит на той же вертикали
+export const HEAD_GAP = 10;
+// Период «дыхания» иконки — тот же, что у .cc-live-dot в index.css
+const BREATH_MS = 2400;
+// Слот слова статуса в шапке (десктоп): по самому частому исходу «готово». Слово прижато к правому
+// краю слота — короткое «идёт» не оставляет дыры справа, время слева от слота выровнено по правому
+// краю. Редкие «прервано»/«ошибка» на пару знаков шире — сдвигают своё время влево
+const STATUS_SLOT_W = '6.5ch';
+// Место шеврона раскрытия: держится и у карточки без тела (и у строки изменённого файла)
+export const CHEVRON_W = 11;
+// Процент прогресса: факт (настоящие шаги) — сплошная заливка, оценка — пунктир
+type ProgressPct = { value: number; estimate: boolean; label?: string };
+
+// Полоса прогресса под карточкой: дорожка на всю ширину строки — видно, где конец, — и процент
+// у её конца. Высота строки фиксирована: смена подписи ленту не двигает.
+// columns (десктоп): справа те же колонки, что у итога в шапке — оставшееся время под временем
+// «0:25», слово «осталось» в слоте статуса под «идёт», место шеврона; зазоры — как в шапке.
+// Телефон: колонок в шапке нет — «63% · осталось ≈0:13» одной строкой
+// Прогноз истёк или хвост — на месте времени «почти», в слоте статуса «готово»: колонка не
+// пропадает, и полоса в конце не растягивается на её место
+function ProgressMeter({ pct, meter, columns }: { pct: ProgressPct; meter: { percent: string; left: string | null; almost: boolean } | null; columns: boolean }) {
+  const text = meter ? (meter.left ? `${meter.percent} · осталось ${meter.left}` : meter.almost ? `${meter.percent} · почти готово` : meter.percent) : null;
+  const cell: React.CSSProperties = { flexShrink: 0, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: columns ? HEAD_GAP : SP.sm, height: CAPTION_LINE_H, paddingRight: SP.sm }}>
+      {/* Серая (muted): вторичная информация не спорит с акцентом главного действия */}
+      <ProgressBar value={pct.value} estimate={pct.estimate} tone="muted" size="thin" label={[pct.label, text].filter(Boolean).join(' · ') || undefined} transition="width .5s linear" style={{ flex: 1, minWidth: 0 }} />
+      {columns ? (
+        <>
+          {meter && <span style={cell}>{meter.percent}</span>}
+          {(meter?.left || meter?.almost) && (
+            <span data-meter-left="" style={{ ...cell, display: 'flex', alignItems: 'center', gap: SP.sm }}>
+              <span>{meter.left ?? 'почти'}</span>
+              {/* Слот ровно по ширине шапки, «осталось» длиннее — выходит вправо на место
+                  шеврона (здесь оно пустое), и время остаётся в своей колонке */}
+              <span style={{ width: STATUS_SLOT_W, overflow: 'visible' }}>{meter.left ? 'осталось' : 'готово'}</span>
+            </span>
+          )}
+          <span aria-hidden style={{ width: CHEVRON_W, flexShrink: 0 }} />
+        </>
+      ) : text && <span style={cell}>{text}</span>}
+    </div>
+  );
 }
 
-// Иконка и цвет по типу инструмента — чтобы read/edit/bash/web/mcp различались с первого взгляда
-function toolMeta(name: string): { color: string; icon: React.ReactNode } {
+// Упавшие тесты на закрытой карточке — без раскрытия вывода: имя (режется слева, конец имени —
+// метод — виден всегда) и первая строка сообщения; сверх показанных — «ещё N»
+function FailureList({ failures, failed }: { failures: ToolRunFailure[]; failed: number }) {
+  const more = failed - failures.length;
+  const row: React.CSSProperties = { display: 'flex', minWidth: 0, gap: SP.xs, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, whiteSpace: 'nowrap' };
+  return (
+    <div aria-live="polite" style={{ paddingRight: SP.sm, paddingBottom: SP.xxs }}>
+      {failures.map((f, i) => (
+        <div key={i} title={f.message ? `${f.name}\n${f.message}` : f.name} style={row}>
+          <span style={{ flexShrink: 0, color: C.dangerText }}>✕</span>
+          <span className="cc-trunc-left" style={{ minWidth: 0, maxWidth: f.message ? '60%' : '100%', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', color: C.textSecondary }}>
+            {f.name}
+          </span>
+          {f.message && (
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', color: C.textMuted }}>
+              — {f.message}
+            </span>
+          )}
+        </div>
+      ))}
+      {more > 0 && <div style={{ ...row, color: C.textMuted }}>ещё {more} — в выводе</div>}
+    </div>
+  );
+}
+
+// Иконка инструмента: пока он идёт — «дышит» тем же ритмом, что LiveDot (отдельной точки и
+// пустого места под неё нет). Фаза привязана к часам — несколько живых карточек дышат в такт.
+// Пока сколько осталось неизвестно, живость несёт иконка; с процентом под карточкой встаёт
+// полоса на видимой дорожке (ProgressMeter)
+function LeadIcon({ live, children }: { live: boolean; children: React.ReactNode }) {
+  const [delay] = useState(() => -(Date.now() % BREATH_MS));
+  return live ? (
+    <span role="status" aria-label="Выполняется" className="cc-live-dot"
+      style={{ display: 'inline-flex', flexShrink: 0, animationDelay: `${delay}ms` }}>
+      {children}
+    </span>
+  ) : <>{children}</>;
+}
+
+// «упало K» — единственный тревожный сигнал живой карточки: выделен цветом ошибки
+// (регулярка общая с индикатором ожидания — FAILED_RE в lib/toolTiming)
+function ProgressCaption({ text }: { text: string }) {
+  return <>{text.split(FAILED_RE).map((part, i) =>
+    i % 2 ? <span key={i} style={{ color: C.dangerText }}>{part}</span> : part)}</>;
+}
+
+// Строка этапов прогона: «✓ сборка 1:42 · тесты 2:13 · 412 из 7951».
+// Прошедшие прижимаются и режутся многоточием, текущий этап с подписью прогресса — никогда:
+// даже на 320 px видно, что идёт сейчас. Этап, на котором оборвалось, — крестиком и красным.
+// Единственный этап (сборка) без часов: его время — то же «идёт»/«готово» в шапке
+function StageLine({ stages, caption }: { stages: StageView[]; caption: string | null }) {
+  const clock = (s: StageView) => s.ms != null && stages.length > 1 ? ` ${formatClock(s.ms)}` : '';
+  const tail = stages[stages.length - 1].state === 'done' ? null : stages[stages.length - 1];
+  const past = (tail ? stages.slice(0, -1) : stages).map(s => `✓ ${s.label}${clock(s)}`).join(' · ');
+  return (
+    <div style={{ display: 'flex', minWidth: 0, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+      {past && <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{past}</span>}
+      {tail && (
+        <span style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+          {/* Неразрывный пробел: ведущий обычный у флекс-элемента схлопывается («1:42· тесты») */}
+          {past ? ' · ' : ''}
+          {tail.state === 'failed'
+            ? <span style={{ color: C.dangerText }}>✕ {tail.label}{clock(tail)}</span>
+            : <span style={{ color: C.textSecondary, fontWeight: 600 }}>{tail.label}{clock(tail)}</span>}
+          {caption && <> · <ProgressCaption text={caption} /></>}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Иконка и цвет по типу инструмента — чтобы read/edit/bash/web/mcp различались с первого взгляда.
+// Типовая операция (тесты, сборка, git…) — иконкой по смыслу, цвет остаётся по виду инструмента
+function toolMeta(name: string, input: unknown): { color: string; icon: React.ReactNode } {
+  const base = toolKindMeta(name);
+  const op = operationOf(name, input);
+  if (!op) return base;
+  const Icon = OPERATION_ICON[op];
+  return { color: base.color, icon: <Icon size={13} strokeWidth={2} /> };
+}
+
+function toolKindMeta(name: string): { color: string; icon: React.ReactNode } {
   const n = name.toLowerCase();
   const common = { size: 13, strokeWidth: 2 } as const;
   if (n.startsWith('mcp__'))
@@ -44,42 +182,9 @@ const TASK_STATUS_RU: Record<string, string> = {
   cancelled: 'отменена', deleted: 'удалена',
 };
 
-// Русские названия инструментов для ленты чата
-const TOOL_LABELS: Record<string, string> = {
-  read: 'Чтение', edit: 'Правка', write: 'Запись', multiedit: 'Правки',
-  notebookedit: 'Правка ноутбука', bash: 'Команда', bashoutput: 'Вывод команды',
-  glob: 'Поиск файлов', grep: 'Поиск', ls: 'Список', task: 'Субагент', agent: 'Субагент',
-  websearch: 'Веб-поиск', webfetch: 'Загрузка страницы', skill: 'Навык',
-  todowrite: 'План задач', exitplanmode: 'План', toolsearch: 'Поиск инструментов',
-  taskcreate: 'Задача', taskupdate: 'Задача', tasklist: 'Список задач', taskget: 'Задача',
-  killshell: 'Остановка команды',
-};
-// Русские подписи MCP-инструментов по полному имени (mcp__server__tool) —
-// без них лента показывала бы сырое «glif · compose_project»
-const MCP_TOOL_LABELS: Record<string, string> = {
-  mcp__glif__compose_project: 'Генерация медиа glif',
-  mcp__glif__get_job_status: 'Статус генерации glif',
-  mcp__glif__view_media: 'Показ медиа glif',
-  mcp__glif__upload_file: 'Загрузка файла glif',
-  mcp__glif__get_project: 'Проекты glif',
-  mcp__glif__list_projects: 'Проекты glif',
-  mcp__glif__list_user_skills: 'Скиллы glif',
-  mcp__glif__get_user_skill: 'Скиллы glif',
-  mcp__glif__whoami: 'Аккаунт glif',
-};
-// Имя инструмента для показа: MCP — по карте, иначе «server · tool»; известные — по-русски, прочее — как есть
-export function toolLabel(name: string): string {
-  if (name.startsWith('mcp__')) return MCP_TOOL_LABELS[name] ?? name.slice(5).replace(/__/g, ' · ');
-  return TOOL_LABELS[name.toLowerCase()] ?? name;
-}
-
-// Склонение слова «действие»
-export function toolWord(n: number): string {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return 'действие';
-  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'действия';
-  return 'действий';
-}
+// Подписи инструментов живут в lib (ими же подписан живой прогресс); реэкспорт — для
+// прежних импортёров из этого файла
+export { toolLabel, toolWord };
 
 // Inline-diff для Edit/MultiEdit/Write: удалённые строки красным, добавленные зелёным
 function DiffBody({ hunks }: { hunks: Array<{ old?: string; new?: string }> }) {
@@ -122,7 +227,7 @@ export type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 // React.memo: элементы ленты иммутабельны по ссылке (кроме стримящегося последнего) —
 // при дописывании ленты завершённые строки не перерендериваются.
 export const ToolUseView = memo(function ToolUseView({ item, online = true, onOpenFile }: { item: Extract<ChatItem, { kind: 'tool_use' }>; online?: boolean; onOpenFile?: (path: string) => void }) {
-  const meta = toolMeta(item.name);
+  const meta = toolMeta(item.name, item.input);
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
   const n = item.name.toLowerCase();
@@ -134,19 +239,26 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // glob-шаблонах вырезаем абсолютный корень из текста (там путь — часть строки).
   const pathVal = inp.file_path ?? inp.path ?? inp.notebook_path;
   // Человекочитаемый аргумент для todo-задач: TaskCreate — тема, TaskUpdate — «#id → статус»
+  // Прогон тестов — цель, файлы и фильтр (вид прогона — в имени шапки)
   const taskArg = n === 'taskcreate' && typeof inp.subject === 'string' ? inp.subject
     : n === 'taskupdate' && inp.taskId != null
       ? `#${inp.taskId}${typeof inp.status === 'string' ? ` → ${TASK_STATUS_RU[inp.status] ?? inp.status}` : ''}`
+      : item.name === RUN_TESTS_TOOL ? testRunArg(inp)
+      : item.name === BUILD_TOOL ? buildArg(inp)
+      : item.name === LOCAL_JOBS_WAIT_TOOL ? localJobsWaitArg(inp)
       : null;
-  const toolArg = item.streamingArg ?? taskArg ?? String(
+  // Консольная команда с русской подписью: в шапке — подпись, команда — в теле над выводом
+  const caption = consoleCaption(item.name, item.input, item.streamingArg);
+  const commandText = caption ? stripRoot(caption.command, project?.rootPath) : null;
+  const toolArg = item.streamingArg ?? caption?.description ?? taskArg ?? String(
     (inp.command != null ? stripRoot(String(inp.command), project?.rootPath) : null)
     ?? (pathVal != null ? relPath(String(pathVal), project?.rootPath) : null)
     ?? (inp.pattern != null ? stripRoot(String(inp.pattern), project?.rootPath) : null)
     ?? inp.query ?? inp.url ?? inp.description ?? inp.prompt ?? '');
   // Аргумент-путь (Read/Edit/…) — на мобиле обрезаем слева, чтобы было видно имя файла
   const argIsPath = inp.command == null && pathVal != null && item.streamingArg == null;
-  // Имя инструмента по-русски (MCP → «server · tool»)
-  const displayName = toolLabel(item.name);
+  // Имя инструмента по-русски (MCP → «server · tool»); у прогона тестов — с видом («Тесты · vitest»)
+  const displayName = toolCardLabel(item.name, item.input);
   // Inline-diff из input (доступен сразу, не дожидаясь tool_result)
   const editHunks: Array<{ old?: string; new?: string }> =
     n === 'edit' && (typeof inp.old_string === 'string' || typeof inp.new_string === 'string')
@@ -210,21 +322,98 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   }, [costPending]);
   // Имя модели — из input вызова (в результате fal его нет)
   const falModel = ((inp.endpoint_id as string | undefined) ?? mediaMeta.model)?.split('/').pop();
-  // Медиа показываем сразу, без клика; текст/diff — за клик
-  const hasBody = hasDiff || (hasResult && !hasMedia);
+  // Медиа показываем сразу, без клика; текст/diff — за клик. Команда, ушедшая из шапки в
+  // тело, раскрывается и до результата
+  const hasBody = hasDiff || (hasResult && !hasMedia) || commandText != null;
   // Консольные инструменты (Bash/shell) → тёмный «терминальный» вывод.
   // Остальные (Read/Grep/Glob/MCP и пр.) → светлая «панель вывода», чтобы текст/код не давил тёмным фоном.
-  const isConsole = n.startsWith('bash') || n.includes('shell');
+  const isConsole = isConsoleTool(item.name);
+
+  // Таймер: пока нет результата — тикает раз в секунду (только в живом ходе, см.
+  // ToolLivenessContext), после результата — итоговая длительность. Короче порога не
+  // показываем. Результата нет — через `== null`: из истории приходит "result": null.
+  // Оборванный ход (Стоп, ошибка, падение) результата не пришлёт — карточка «прервано»
+  // Bash, агенты и MCP с прогрессом до tool_started «идёт» не показывают (см. awaitsToolStart)
+  const liveness = useContext(ToolLivenessContext);
+  const settled = item.result != null;
+  const aborted = !settled && liveness?.dead.has(item.id) === true;
+  const running = !settled && !aborted && (liveness?.live.has(item.id) ?? true) && typeof item.startedAt === 'number';
+  const shownElapsed = useRunningElapsed(item.startedAt, running && !awaitsToolStart(item));
+  // «прервано» тоже с длительностью: до момента обрыва (ToolLiveness.abortedAt)
+  const elapsed = toolClockMs(item, running, shownElapsed, aborted ? liveness?.abortedAt?.get(item.id) : null);
+  const showClock = elapsed != null && elapsed >= TOOL_TIMER_MIN_MS;
+  // Живой прогресс поверх таймера (tool_progress: сабагент, тесты, локальная генерация) —
+  // подпись и, только если источник знает процент, полоса под карточкой с процентом и
+  // «осталось» справа (в подписи их тогда нет). Ожидание в очереди полосы не даёт вовсе:
+  // ничего не выполняется, живость — точка
+  const progressValue = running && !isQueued(item.progress) ? toolProgressPercent(item.progress) : null;
+  const progressText = running ? toolProgressText(item.progress, progressValue == null) : null;
+  const progressPct: ProgressPct | null = progressValue != null
+    // Подпись для скринридера — без процента и ETA источника: их полоса добавит из того же
+    // отсчёта, что видно глазами (иначе скринридер читал бы застывшее «осталось»)
+    ? { value: progressValue, estimate: item.progress?.exact !== true, label: toolProgressText(item.progress, false) ?? undefined }
+    : null;
+  // Строка этапов прогона тестов (этапы шлёт сервер, они же в истории вызова): идёт — «сейчас»
+  // по часам карточки, закрыта — до результата или до обрыва
+  const stages = useMemo(() => stageViews(item.stages, {
+    running,
+    aborted,
+    now: running && typeof item.startedAt === 'number' && shownElapsed != null ? item.startedAt + shownElapsed : null,
+    endAt: aborted ? liveness?.abortedAt?.get(item.id) ?? null : item.finishedAt ?? null,
+  }), [item.stages, item.startedAt, item.finishedAt, item.id, running, aborted, shownElapsed, liveness]);
+  const hasStages = stages.length > 0;
+  // Завершённый прогон с одним прошедшим этапом («✓ тесты») строку не держит: её время и итог —
+  // те же «0:04 готово» в шапке, а пустая строка лишь отодвигает список упавших
+  const showStageLine = hasStages && !(stages.length === 1 && stages[0].state === 'done');
+  // С этапами подпись прогресса едет при текущем этапе, а не в шапке (тесты — счётчик,
+  // очередь — «занято 2»); «сборка» и подсчёт под «тестами» сами себе подпись — при них только
+  // счётчик этапа
+  const stageCaption = hasStages ? stageCaptionOf(item.progress, item.name) : null;
+  // «Осталось» по темпу текущего этапа — от его начала, а не от старта вызова (сборка не в счёт)
+  const currentStage = stages.length > 0 && stages[stages.length - 1].state === 'current' ? stages[stages.length - 1] : null;
+  // «Сейчас» — тот же кадр часов карточки, что у строки этапов (startedAt + shownElapsed): оба
+  // на клиентском Date.now(), как и progressAt из редьюсера. Date.now() в рендере не берём
+  const nowMs = typeof item.startedAt === 'number' && shownElapsed != null ? item.startedAt + shownElapsed : null;
+  const sinceProgress = nowMs != null && typeof item.progressAt === 'number' ? nowMs - item.progressAt : null;
+  const meter = progressPct ? meterParts(item.progress, currentStage?.ms ?? null, sinceProgress) : null;
+  // На мобиле подпись прогресса и итог — отдельной строкой под шапкой у ВСЕХ карточек
+  // (шапка остаётся описанию, итог у всех стоит на одном месте). Строка держится с начала
+  // выполнения, поэтому завершение ленту не сдвигает
+  const isMobile = useIsMobile();
+  const captionBelow = isMobile;
+  const headCaption = hasStages ? null : progressText;
+  // Итог завершённой или оборванной карточки — в шапке либо (мобила) строкой подписи. У
+  // прогона тестов — со счётчиками: «готово · 2:15 · 174 из 177 · упало 3»
+  // Упавшая сборка (dev build, сборка run_tests) — штатный результат вызова, не isError:
+  // неуспех несёт закрытый крестиком этап, и шапка обязана сказать «ошибка», а не «готово»
+  const stageFailed = settled && item.stages?.some(s => s.failed) === true;
+  const failed = item.isError || stageFailed;
+  const statusWord = failed ? 'ошибка' : item.bgAborted || aborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово';
+  const statusClock = showClock ? formatClock(elapsed) : null;
+  // Мобила: итог строкой под шапкой слева — «статус · время», как был
+  const statusText = statusWord + (statusClock ? ` · ${statusClock}` : '');
+  const statusColor = failed || item.bgAborted || aborted ? C.dangerText : C.textMuted;
+  const totals = totalsText(item.totals);
+  const status = (
+    <>
+      {statusText}
+      {totals && <span style={{ color: C.textMuted }}> · <ProgressCaption text={totals} /></span>}
+    </>
+  );
 
   return (
-    <div>
+    // data-tool-id — по нему лента следит, видна ли карточка активного инструмента: видна —
+    // индикатор ожидания не повторяет её подпись и время
+    <div data-tool-id={item.id}>
       <div
-        style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
+        // Справа — запас под полосу прокрутки ленты: таймер и итог прижаты к правому краю
+        // колонки, и полоса-накладка (её ширина в замере 0, рисуется поверх) съедала
+        // последнюю цифру «идёт 1:0». minWidth: 0 — шапка не шире колонки при любом аргументе
+        style={{ padding: `3px ${SP.sm}px 3px 0`, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
         onClick={() => hasBody && setOpen(o => !o)}
       >
-        {item.result === undefined && <ToolSpinner />}
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: meta.color }}>
-          {meta.icon}
+          <LeadIcon live={!settled && !aborted}>{meta.icon}</LeadIcon>
           <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>{displayName}</span>
         </span>
         {toolArg
@@ -238,7 +427,10 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
               const dir = sepIdx >= 0 ? toolArg.slice(0, sepIdx + 1) : '';
               const base = sepIdx >= 0 ? toolArg.slice(sepIdx + 1) : toolArg;
               return (
-                <span style={{ flex: 1, display: 'flex', alignItems: 'baseline', overflow: 'hidden', fontFamily: FONT.mono, fontSize: 11, minWidth: 0 }}>
+                <span
+                  title={commandText ?? undefined}
+                  style={{ flex: 1, display: 'flex', alignItems: 'baseline', overflow: 'hidden', fontFamily: caption ? FONT.sans : FONT.mono, fontSize: caption ? FS.xs : 11, minWidth: 0 }}
+                >
                   {dir && (
                     <span
                       className="cc-trunc-left"
@@ -250,7 +442,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
                   <span
                     onClick={clickable ? (e) => { e.stopPropagation(); onOpenFile!(relPath(String(pathVal), project?.rootPath)); } : undefined}
                     title={clickable ? 'Открыть файл' : undefined}
-                    style={{ color: clickable ? C.accent : C.textMuted, cursor: clickable ? 'pointer' : 'inherit', flexShrink: 0 }}
+                    // Имя файла держим целиком (каталог слева обрежется сам); прочий аргумент —
+                    // подпись, команда — обрезаем многоточием, а не посреди слова
+                    style={{
+                      color: clickable ? C.accent : C.textMuted, cursor: clickable ? 'pointer' : 'inherit',
+                      ...(argIsPath ? { flexShrink: 0 } : { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+                    }}
                   >
                     {base}
                   </span>
@@ -258,15 +455,67 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
               );
             })()
           : <span style={{ flex: 1 }} />}
-        {item.result !== undefined && (
-          <span style={{ fontSize: 11, color: item.isError || item.bgAborted ? C.dangerText : C.textMuted, flexShrink: 0 }}>
-            {item.isError ? 'ошибка' : item.bgAborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово'}
+        {headCaption && !captionBelow && (
+          <span title={headCaption} style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            <ProgressCaption text={headCaption} />
           </span>
         )}
-        {hasBody && (
-          <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
+        {/* Мобила: живое «идёт M:SS» в шапке — как было */}
+        {captionBelow && running && showClock && (
+          <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            идёт {formatClock(elapsed)}
+          </span>
         )}
+        {/* Десктоп: итог двумя колонками у правого края — [счётчики] [время] [слот статуса].
+            Слот фиксированной ширины, слово в нём справа: «готово», «ошибка», «прервано», «идёт»
+            кончаются на одной линии, а время, прижатое к слоту, — выровнено по правому краю. Так
+            колонка карточек в ленте ровная и при завершении ничего не прыгает. Красное — только
+            слово статуса */}
+        {!captionBelow && (settled || aborted) && totals && (
+          <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            <ProgressCaption text={totals} />
+          </span>
+        )}
+        {!captionBelow && (settled || aborted || (running && showClock)) && (
+          <span data-tool-status="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexShrink: 0, fontSize: FS.xs, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            {statusClock && <span style={{ color: C.textMuted }}>{statusClock}</span>}
+            <span style={{ minWidth: STATUS_SLOT_W, textAlign: 'right', color: running ? C.textMuted : statusColor }}>
+              {running ? 'идёт' : statusWord}
+            </span>
+          </span>
+        )}
+        {/* Место шеврона держится всегда: у карточки без тела слот статуса иначе съезжал бы
+            вправо на ширину шеврона, и колонка рвалась */}
+        <span aria-hidden={!hasBody} style={{ width: CHEVRON_W, color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', textAlign: 'center', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+          {hasBody ? '▾' : null}
+        </span>
       </div>
+      {/* Мобила: строка подписи держится с начала выполнения (пустая до первого прогресса), а
+          итог «готово · M:SS» встаёт на её место той же высоты — завершение ленту не двигает.
+          У прогона тестов подпись едет в строке этапов, поэтому отдельной строки нет */}
+      {captionBelow && running && !hasStages && (
+        <div title={progressText ?? undefined} style={{ margin: `${SP.xxs}px 0 0`, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+          {progressText && <ProgressCaption text={progressText} />}
+        </div>
+      )}
+      {captionBelow && (settled || aborted) && (
+        <div style={{ margin: `${SP.xxs}px 0 0`, height: CAPTION_LINE_H, lineHeight: `${CAPTION_LINE_H}px`, fontSize: FS.xs, color: statusColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+          {status}
+        </div>
+      )}
+      {/* Строка этапов — и пока идёт, и на закрытой карточке без раскрытия (после F5 — из
+          истории). Справа тот же запас под полосу прокрутки ленты, что у шапки: иначе на 320 px
+          хвост «упало K» уезжал под полосу-накладку */}
+      {showStageLine && (
+        <div style={{ paddingRight: SP.sm, paddingBottom: SP.xxs }}>
+          <StageLine stages={stages} caption={running ? stageCaption : null} />
+        </div>
+      )}
+      {/* Полоса — последней строкой живой карточки: под подписью или этапами, к которым относится */}
+      {progressPct && <ProgressMeter pct={progressPct} meter={meter} columns={!captionBelow} />}
+      {(settled || aborted) && item.totals?.failures?.length ? (
+        <FailureList failures={item.totals.failures} failed={item.totals.failed} />
+      ) : null}
       {/* Медиа (изображения + видео) — сразу под шапкой, без клика */}
       {hasMedia && (
         <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -279,11 +528,23 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         </div>
       )}
       {open && hasDiff && <DiffBody hunks={editHunks} />}
+      {/* Команда под русской подписью — над выводом и до результата; копируется именно она */}
+      {open && commandText != null && (
+        <CodeBlockFrame text={commandText}>
+          <pre style={{
+            ...MONO_PRE_STYLE, margin: `0 0 ${SP.xs}px`, maxHeight: 160,
+            background: C.termBg, color: C.termText,
+          }}>
+            {commandText}
+          </pre>
+        </CodeBlockFrame>
+      )}
       {open && !hasDiff && hasResult && !hasMedia && (
         <>
           <CodeBlockFrame text={outputText}>
             <pre style={{
-              margin: agentSplit?.tail ? '0 0 4px' : '0 0 9px', padding: '8px 10px', borderRadius: 7,
+              ...MONO_PRE_STYLE, maxHeight: 280,
+              margin: agentSplit?.tail ? '0 0 4px' : '0 0 9px',
               // Bash → тёмный терминал; остальное → светлая панель вывода
               background: isConsole ? C.termBg : C.outputBg,
               border: isConsole ? 'none' : `1px solid ${C.outputBorder}`,
@@ -291,9 +552,6 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
               color: isConsole
                 ? (item.isError ? C.termError : C.termText)
                 : (item.isError ? C.dangerText : C.textPrimary),
-              fontFamily: FONT.mono,
-              fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
-              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             }}>
               {outputText.length > 4000 ? outputText.slice(0, 4000) + '\n…(обрезано)' : outputText}
             </pre>

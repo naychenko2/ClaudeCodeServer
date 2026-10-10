@@ -153,6 +153,15 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     };
   }, [auth.id]);
 
+  // Чат, открытый из памяти (OPEN_CHAT_KEY: вход в раздел пилюлей, диплинком), — в снимок
+  // текущей записи. Без chatId запись обещает список: «назад» на неё закрывал бы чат,
+  // а шторка чатов, открытая из него, теряла выбранный переход вместе с шапкой
+  useEffect(() => {
+    const nav = getNav();
+    if (activeId && nav?.screen === 'chats' && !nav.chatId) navReplace({ ...nav, chatId: activeId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- только на монтировании: дальше снимок пишут сами переходы (selectChat, cc-open-chat, popstate)
+  }, []);
+
   // Back/forward браузера внутри вкладки «Чаты» — синхронизируем активный чат из истории
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {

@@ -35,9 +35,15 @@ public sealed partial class SubscriptionOAuthUsageService(
 {
     private const string Endpoint = "https://api.anthropic.com/api/oauth/usage";
     // OAuth-эндпоинт обмена refresh-токена и публичный client_id Claude Code —
-    // те же значения, какими CLI сам продлевает свой логин
-    private const string TokenEndpoint = "https://console.anthropic.com/v1/oauth/token";
+    // те же значения, какими CLI сам продлевает свой логин (адрес — из бинаря CLI 2.1.287;
+    // прежний console.anthropic.com отвечает 429 на любой запрос)
+    private const string TokenEndpoint = "https://platform.claude.com/v1/oauth/token";
     private const string OAuthClientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+    // User-Agent продления: CLI продлевает логин голым axios без своего UA. С UA claude-code/…
+    // (и браузерным) token-эндпоинт держит запрос в жёстком 429-бакете — продление не проходило
+    // четыре дня (прод 2026-10-06, проверено фальшивым refresh-токеном: axios → 400, прочие → 429).
+    // Эмпирика, не контракт: сломается снова — будет видно по статусу refresh_rate_limited
+    internal const string RefreshUserAgent = "axios/1.8.4";
     private const int DefaultPollMinutes = 10;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(5);
@@ -58,6 +64,9 @@ public sealed partial class SubscriptionOAuthUsageService(
     // rate_limited — эндпоинт ответил 429 на запрос usage: токен годный, но опрос упёрся
     // в лимит частоты (у setup-токена он около раза в час) и ждёт backoff
     public const string StatusRateLimited = "rate_limited";
+    // refresh_rate_limited — 429 на ПРОДЛЕНИИ access-токена профиля: логин живой, повтор
+    // идёт сам после backoff. Отдельно от rate_limited, чтобы вкладка не советовала claude login
+    public const string StatusRefreshRateLimited = "refresh_rate_limited";
 
     private readonly ConcurrentDictionary<string, string> _status = new();
 
@@ -234,9 +243,8 @@ public sealed partial class SubscriptionOAuthUsageService(
             return;
 
         // Заведомо протухший access-токен профиля продлеваем ДО запроса — не жечь
-        // тик на гарантированный 401. Не больше ОДНОЙ попытки рефреша за тик: token-эндпоинт
-        // живёт в том же скользящем 429-бакете UA claude-code, что и usage (наблюдалось
-        // на проде 25.07) — повторный залп только продлевает окно отказов.
+        // тик на гарантированный 401. Не больше ОДНОЙ попытки рефреша за тик: 429 token-эндпоинта —
+        // скользящее окно, повторный залп только продлевает окно отказов.
         var refreshAttempted = false;
         RefreshResult? refresh = null;
         if (profileDir is not null && ReadProfileCreds(profileDir) is { Expired: true, RefreshToken.Length: > 0 })
@@ -247,10 +255,13 @@ public sealed partial class SubscriptionOAuthUsageService(
         }
 
         // Рефреш упёрся в 429 — уводим аккаунт в общий backoff, не трогая usage-эндпоинт:
-        // запрос протухшим токеном дал бы гарантированный 401 и лишний трафик в тот же бакет
+        // запрос протухшим токеном дал бы гарантированный 401 и лишний трафик. Раньше эта ветка
+        // молчала — и продление тихо крутилось в 429 четыре дня (прод 2026-10-02..06). SetStatus —
+        // строго ПОСЛЕ ApplyBackoff: текст лога берёт время следующей попытки из _backoff
         if (refresh is { RateLimited: true })
         {
             ApplyBackoff(key, b.Strikes, retryAfter: null);
+            SetStatus(key, StatusRefreshRateLimited, 429);
             return;
         }
 
@@ -325,7 +336,7 @@ public sealed partial class SubscriptionOAuthUsageService(
     }
 
     // Продление access-токена профиля по refresh-токену — тем же путём, что сам CLI:
-    // POST console.anthropic.com/v1/oauth/token с client_id Claude Code. Свежая пара
+    // POST platform.claude.com/v1/oauth/token с client_id Claude Code и UA axios (RefreshUserAgent). Свежая пара
     // пишется обратно в .credentials.json (остальные поля файла сохраняются как есть).
     // Token=null — продлить не вышло: нет refresh-токена, эндпоинт отверг, файл не читается.
     private async Task<RefreshResult> TryRefreshProfileAsync(string key, string profileDir, CancellationToken ct)
@@ -352,7 +363,7 @@ public sealed partial class SubscriptionOAuthUsageService(
                     client_id = OAuthClientId,
                 }), Encoding.UTF8, "application/json"),
             };
-            req.Headers.TryAddWithoutValidation("User-Agent", await ResolveUserAgentAsync(cts.Token));
+            req.Headers.TryAddWithoutValidation("User-Agent", RefreshUserAgent);
 
             using var resp = await client.SendAsync(req, cts.Token);
             if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -407,6 +418,9 @@ public sealed partial class SubscriptionOAuthUsageService(
         else if (status == StatusRateLimited)
             Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP 429 — эндпоинт usage ограничил частоту опроса " +
                 $"(у setup-токена лимит около раза в час; без него — `claude login` в профиле подписки); " +
+                $"следующая попытка после {_backoff[key].AllowedAt.ToLocalTime():HH:mm}");
+        else if (status == StatusRefreshRateLimited)
+            Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP 429 на продлении access-токена профиля — " +
                 $"следующая попытка после {_backoff[key].AllowedAt.ToLocalTime():HH:mm}");
         else if (status == StatusError)
             Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP {httpCode}");

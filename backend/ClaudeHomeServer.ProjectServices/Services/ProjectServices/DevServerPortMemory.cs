@@ -54,7 +54,9 @@ public sealed class DevServerPortMemory
     /// </summary>
     public void Remember(string projectId, string serviceId, int port, int pid)
     {
-        if (port <= 0) return;
+        // Порт боя или Dify сервису не принадлежит: запомнив его, мы бы после перезапуска
+        // продукта показали Dify «поднятым снаружи» сервисом и пустили туда превью
+        if (port <= 0 || DevServerLaunchPolicy.IsForbidden(port)) return;
         var key = Key(projectId, serviceId);
         var run = new RememberedRun(port, pid);
         if (_ports.TryGetValue(key, out var known) && known == run) return;
@@ -63,12 +65,16 @@ public sealed class DevServerPortMemory
     }
 
     /// <summary>Последний известный порт сервиса, либо null.</summary>
-    public int? Get(string projectId, string serviceId) =>
-        _ports.TryGetValue(Key(projectId, serviceId), out var run) ? run.Port : null;
+    public int? Get(string projectId, string serviceId) => GetRun(projectId, serviceId)?.Port;
 
-    /// <summary>Что помним о прошлом запуске целиком (порт + процесс).</summary>
+    /// <summary>
+    /// Что помним о прошлом запуске целиком (порт + процесс). Запись с запрещённым портом —
+    /// наследие файла до запрета — не отдаём.
+    /// </summary>
     public RememberedRun? GetRun(string projectId, string serviceId) =>
-        _ports.TryGetValue(Key(projectId, serviceId), out var run) ? run : null;
+        _ports.TryGetValue(Key(projectId, serviceId), out var run) && !DevServerLaunchPolicy.IsForbidden(run.Port)
+            ? run
+            : null;
 
     /// <summary>
     /// Забыть порт. Зовётся при штатной остановке: процесс погашен нами, и притворяться,

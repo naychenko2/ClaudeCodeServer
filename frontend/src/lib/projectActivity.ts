@@ -48,6 +48,19 @@ export const STATUS_PULSE: Record<ActivityStatus, string> = {
   unread: ' cc-dot',
 };
 
+// Свёртка per-чат активности в одну точку: самое важное по всем чатам, КРОМЕ
+// исключённого (открытого сейчас — о нём и так всё видно на экране). Приоритет тот
+// же, что у точки проекта: waiting > working > unread. Тишина — null
+export function foldChatActivity(chats: ReadonlyMap<string, ActivityStatus>, excludeId?: string): ActivityStatus | null {
+  const rank = { unread: 1, working: 2, waiting: 3 } as const;
+  let best: ActivityStatus | null = null;
+  for (const [id, st] of chats) {
+    if (id === excludeId) continue;
+    if (!best || rank[st] > rank[best]) best = st;
+  }
+  return best;
+}
+
 const POLL_MS = 15_000;
 
 let _agg = new Map<string, ProjectActivity>();

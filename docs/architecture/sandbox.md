@@ -74,6 +74,19 @@
   возвращаются `MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0`,
   `UseSharedCompilation=false` (для не-сборщиков безвредны).
 
+  **Приватные узлы сборок сервера вне scope** (`ProcessSpec.PrivateBuildNodes`). Сборки, которые
+  запускает сам бэкенд, — `run_tests`, `build`, фаза сборки `start_stand`, прогрев свежего
+  worktree — несут эту метку. Вне scope (Windows, scope выключен, песочница) раннер ставит им те
+  же три запрета: `MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0`,
+  `UseSharedCompilation=false` (`LocalProcessRunner.PrivateBuildNodeEnv`, у `DockerProcessRunner` —
+  аргументами `docker exec -e`). Причина — гашение по «Стопу» и потолку идёт ДЕРЕВОМ процесса:
+  общий узел MSBuild или `VBCSCompiler` пользователя, подхваченный сборкой, либо умирал вместе с
+  ней посреди чужой компиляции, либо переживал её и висел минутами вне чьего-либо присмотра. С
+  запретами дерево сборки — только своё и кончается вместе с ней; цена — холодный `csc` на
+  проект. Явный `spec.Env` сильнее запретов; внутри scope метка ничего не меняет — там реюз
+  приватен по соли юнита и гаснет со scope. Новая серверная сборка без метки — дефект: её узлы
+  станут общими с чужими.
+
   **Сторож scope-сирот при старте** (`ScopeOrphanSweeper.Sweep`, зовётся из `Program.cs`
   фоном сразу после чтения `Execution:Isolation`). Гашение scope висит на событии `Exited`
   и живёт ровно столько, сколько процесс бэкенда: упал бэкенд во время хода или прогрева —

@@ -73,7 +73,7 @@ export function AgentActionsBlock({ entries, renderChild }: {
 }) {
   const [open, setOpen] = useState(false);
   const toolCount = entries.filter(e => e.item.kind === 'tool_use').length;
-  const label = toolCount === 1 ? '1 действие' : `${toolCount} действий`;
+  const label = `${toolCount} ${toolWord(toolCount)}`;
   return (
     <div style={{ marginLeft: 8 }}>
       <div

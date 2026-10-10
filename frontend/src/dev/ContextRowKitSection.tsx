@@ -1,5 +1,7 @@
+import { AudioLines, ChevronDown, Mic, MessageSquareText, MoreHorizontal, Plus, Zap } from 'lucide-react';
 import { Island, IslandHeader } from '../components/ui';
-import { C, FS, ISLAND, SP } from '../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
+import { C, FS, ISLAND, R, SP, composerLip } from '../lib/design';
 import { ContextRowView, rowFacts, type ContextRowViewProps, type RowExec, type RowGit } from '../components/chat/ContextRowView';
 import { ladderNominal, ladderRungs } from '../lib/chatContext/ladder';
 import type { ChatContextPrimary, ChatContextRef } from '../lib/chatContext/types';
@@ -44,6 +46,39 @@ function Frame({ caption, px, children }: { caption: string; px: number; childre
   );
 }
 
+// Композер целиком для сверки губ: сверху настоящая строка контекста, под ней поле ввода в стиле
+// боевого (белая карточка, рамка, R.xxl, подъём), снизу губа кнопок той же геометрии
+// (composerLip('bottom')). Кнопки нижней губы — макет: смысл тут в высотах и стыках губ
+function ComposerMock({ row, mobile }: { row: ContextRowViewProps; mobile?: boolean }) {
+  const lipBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: SP.xxs, fontSize: FS.base, color: C.textSecondary };
+  return (
+    <div style={{ position: 'relative' }}>
+      <ContextRowView {...row} />
+      <div style={{
+        position: 'relative', zIndex: 2, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xxl,
+        padding: mobile ? '8px 10px' : '7px 8px', display: 'flex', alignItems: 'center', gap: SP.sm,
+      }}>
+        <span style={{ flex: 1, minHeight: 34, display: 'flex', alignItems: 'center', padding: '0 4px', fontSize: mobile ? 16 : 15, color: C.textMuted }}>Написать Вере…</span>
+        <MessageSquareText size={ICON_SIZE.md} strokeWidth={ICON_STROKE} color={C.textMuted} />
+        <Mic size={ICON_SIZE.md} strokeWidth={ICON_STROKE} color={C.textMuted} />
+        <span style={{ width: 34, height: 34, borderRadius: R.pill, background: C.bgInset, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted }}>
+          <AudioLines size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+        </span>
+      </div>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: SP.md,
+        ...(mobile ? { marginTop: 7, padding: '0 2px' } : composerLip('bottom')),
+      }}>
+        <span style={lipBtn}><Zap size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> Авто <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} /></span>
+        <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textSecondary} />
+        <MoreHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textSecondary} />
+        <span style={{ ...lipBtn, marginLeft: 'auto' }}>Opus <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} /></span>
+        <span style={lipBtn}>Дизайнер <ChevronDown size={ICON_SIZE.xs - 2} strokeWidth={ICON_STROKE} /></span>
+      </div>
+    </div>
+  );
+}
+
 function Ladder({ title, base }: { title: string; base: Partial<ContextRowViewProps> }) {
   const p = view(base);
   const key = rowFacts(p);
@@ -71,6 +106,27 @@ export function ContextRowKitSection() {
     <Island>
       <IslandHeader title="Строка контекста" />
       <div style={{ display: 'flex', flexDirection: 'column', gap: ISLAND.gap, padding: SP.md }}>
+        <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>В композере</div>
+        <div data-kit-composer="desk-git" style={{ width: 860, maxWidth: '100%' }}>
+          <Frame px={860} caption="десктоп: только ветка — справа пилюля и кнопки Git">
+            <ComposerMock row={view({ primary: null, exec: null, refs: [], width: 858 })} />
+          </Frame>
+        </div>
+        <div data-kit-composer="desk-clean" style={{ width: 860, maxWidth: '100%' }}>
+          <Frame px={860} caption="десктоп: только ветка, дерево чистое — только имя ветки, без меню">
+            <ComposerMock row={view({ primary: null, exec: null, refs: [], width: 858, git: { ...git, changes: 0, ahead: 0, publishN: 0 } })} />
+          </Frame>
+        </div>
+        <div data-kit-composer="desk-full" style={{ width: 860, maxWidth: '100%' }}>
+          <Frame px={860} caption="десктоп: объект, «Чем», референсы — ветка полным чипом">
+            <ComposerMock row={view({ width: 858 })} />
+          </Frame>
+        </div>
+        <div data-kit-composer="mobile" style={{ width: 360, maxWidth: '100%' }}>
+          <Frame px={360} caption="телефон 360">
+            <ComposerMock mobile row={view({ isMobile: true, width: 358 })} />
+          </Frame>
+        </div>
         <Ladder title="Объект, «Чем», 2 референса, проект" base={{}} />
         <Ladder title="Тот же состав в «Чате»: «Чем» нет" base={{ exec: null, actionLabel: null }} />
         <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>Состояния</div>

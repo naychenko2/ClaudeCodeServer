@@ -35,10 +35,13 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         public int Calls;
+        // Хост и User-Agent каждого запроса по порядку — проверка, куда и с каким UA ушёл рефреш
+        public readonly List<(string Host, string Ua)> Seen = new();
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Interlocked.Increment(ref Calls);
+            lock (Seen) Seen.Add((request.RequestUri!.Host, request.Headers.UserAgent.ToString()));
             return Task.FromResult(respond(request));
         }
     }
@@ -371,7 +374,7 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
     // --- Рефреш протухшего access-токена профиля (sub-профили CLI не обновляет) ---
 
     private const string UsageEndpoint = "https://api.anthropic.com/api/oauth/usage";
-    private const string TokenEndpoint = "https://console.anthropic.com/v1/oauth/token";
+    private const string TokenEndpoint = "https://platform.claude.com/v1/oauth/token";
 
     private string WriteProfileCreds(string name, string access, string refresh, long expiresAtMs)
     {
@@ -451,11 +454,11 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Рефреш429_ОднаПопытка_БезЗапросаUsage_АккаунтВBackoff()
+    public async Task Рефреш429_ОднаПопытка_БезЗапросаUsage_АккаунтВBackoff_СтатусИЛог()
     {
-        // Прод 25.07: token-эндпоинт живёт в том же скользящем 429-бакете UA claude-code,
-        // что и usage — при 429 нельзя ни повторять рефреш, ни жечь usage-запрос протухшим
-        // токеном (гарантированный 401 + трафик в тот же бакет)
+        // 429 token-эндпоинта — скользящее окно: нельзя ни повторять рефреш, ни жечь usage-запрос
+        // протухшим токеном (гарантированный 401). Но и молчать нельзя: прод 2026-10-02..06
+        // продление тихо крутилось в 429 четыре дня без единой строки в логе
         var dir = WriteProfileCreds("sub-limited", "stale-token", "refresh-1",
             DateTimeOffset.UtcNow.AddHours(-2).ToUnixTimeMilliseconds());
         var handler = new StubHandler(req => req.RequestUri!.ToString().StartsWith(TokenEndpoint)
@@ -471,8 +474,32 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
         });
 
         handler.Calls.Should().Be(1, "одна попытка рефреша, без повтора и без usage-запроса");
-        svc.StatusOf("claude-2").Should().BeNull("429 бакета — не приговор токену, статус не трогаем");
-        log.Should().NotContain("рефреш токена отвергнут", "429 — молча ждать, это не отказ токена");
+        svc.StatusOf("claude-2").Should().Be(SubscriptionOAuthUsageService.StatusRefreshRateLimited,
+            "логин живой — не unauthorized и не rate_limited usage (тот советует claude login)");
+        Regex.Matches(log, "429 на продлении").Count.Should().Be(1, "лог однократный, второй тик его не дублирует");
+        log.Should().NotContain("рефреш токена отвергнут", "429 — не отказ токена");
+        log.Should().NotContain("refresh-1", "refresh-токен не должен утекать в журнал");
+    }
+
+    [Fact]
+    public async Task Рефреш_ИдётНаPlatformClaude_СUaAxios_UsageСUaClaudeCode()
+    {
+        // С UA claude-code/… token-эндпоинт держит запрос в 429-бакете (прод 2026-10-06);
+        // CLI продлевает логин голым axios. Usage, наоборот, без claude-code/… не отвечает
+        var dir = WriteProfileCreds("sub-ua", "stale-token", "refresh-1",
+            DateTimeOffset.UtcNow.AddHours(-2).ToUnixTimeMilliseconds());
+        var handler = RefreshAwareHandler("fresh-token", refreshOk: true);
+        var (svc, _) = CreateService(handler);
+
+        await CaptureErrAsync(() => svc.PollAsync("claude-2", "stale-token", dir, CancellationToken.None));
+
+        svc.StatusOf("claude-2").Should().Be(SubscriptionOAuthUsageService.StatusOk);
+        var seen = handler.Seen;
+        seen.Should().HaveCount(2);
+        seen[0].Host.Should().Be("platform.claude.com");
+        seen[0].Ua.Should().StartWith("axios/").And.NotContain("claude-code");
+        seen[1].Host.Should().Be("api.anthropic.com");
+        seen[1].Ua.Should().Be("claude-code/test");
     }
 
     [Fact]

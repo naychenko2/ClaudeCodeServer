@@ -16,3 +16,9 @@ export function deviceLabel(d: DesktopDevice): string {
 // Подсказка при пустом списке устройств
 export const NO_DEVICES_HINT =
   'Нет устройств с агентом AI Home. Подключите компьютер с папкой проекта: меню аватара → «Устройства».';
+
+// Пункт «Устройства» в меню аватара — безусловно: фича local-projects снята с флагом и
+// работает у всех, иначе скрывать нечего
+export function useDevicesMenuVisible(): boolean {
+  return true;
+}

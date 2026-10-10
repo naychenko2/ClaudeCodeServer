@@ -52,15 +52,61 @@ public sealed class LoraTrainingFinisherTests : IDisposable
 
     private string? ActiveLora() => CharacterStore.Get(_root, Slug)!.ReadLora()?.Name;
 
-    private void Training(int n) => _runs.Create(_root, Slug, new CharacterLoraRun(
+    private void Training(int n, TimeSpan? age = null) => _runs.Create(_root, Slug, new CharacterLoraRun(
         1, RunId(n), $"job{n}", CharacterLoraRuns.Status.Training, null, "standard", "ccsandrey", 30, "sha256:ab",
-        DateTimeOffset.UtcNow, null, null, null, null, null));
+        DateTimeOffset.UtcNow - (age ?? TimeSpan.Zero), null, null, null, null, null));
 
     private void Job(int n, LoraTrainStatus status, LoraTrainFailure? error = null) => _trainer.States.Add(new LoraTrainState(
         $"job{n}", Owner, _project.Id, Slug, RunId(n), "standard", status, null, null, 2000, null,
         DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, status == LoraTrainStatus.Completed ? File(n) : null,
         error, status == LoraTrainStatus.Completed ? 27 : null,
         status == LoraTrainStatus.Completed ? [new LoraPhotoRejection("a.jpg", "no_face")] : null));
+
+    [Fact]
+    public async Task TrainingWithoutJob_BecomesFailedLost()
+    {
+        Training(1, LoraTrainingFinisher.LostGrace + TimeSpan.FromMinutes(1));
+
+        await _sut.RunOnceAsync(default);
+
+        var run = _runs.Get(_root, Slug, RunId(1))!;
+        run.Status.Should().Be(CharacterLoraRuns.Status.Failed);
+        run.Error!.Code.Should().Be("lost");
+        _runs.List(_root, Slug).Any(r => r.Status == CharacterLoraRuns.Status.Training).Should().BeFalse();
+        _runs.CountTowardsLimit(_root, Slug).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task SettleAsync_TrainingWithoutJob_BecomesFailedLost()
+    {
+        Training(1, LoraTrainingFinisher.LostGrace + TimeSpan.FromMinutes(1));
+        Job(2, LoraTrainStatus.Running);
+
+        await _sut.SettleAsync(Owner, _project.Id, Slug, default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Error!.Code.Should().Be("lost");
+    }
+
+    [Fact]
+    public async Task FreshTrainingWithoutJob_InGraceWindow_Untouched()
+    {
+        Training(1);
+
+        await _sut.RunOnceAsync(default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Training);
+    }
+
+    [Fact]
+    public async Task TrainerDisabled_TrainingWithoutJob_Untouched()
+    {
+        _trainer.IsEnabled = false;
+        Training(1, LoraTrainingFinisher.LostGrace + TimeSpan.FromMinutes(1));
+
+        await _sut.RunOnceAsync(default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Training);
+    }
 
     [Fact]
     public async Task FirstVersion_BecomesReady_AndConnectsItself()
@@ -298,7 +344,8 @@ public sealed class LoraTrainingFinisherTests : IDisposable
     {
         public List<LoraTrainState> States { get; } = [];
         public Dictionary<string, LoraDeleteState> Delete { get; } = [];
-        public bool Enabled => true;
+        public bool IsEnabled { get; set; } = true;
+        public bool Enabled => IsEnabled;
         public LoraTrainBusy? Busy(string ownerId) => null;
         public Task<LoraTrainStartResult> StartAsync(LoraTrainStart request, CancellationToken ct) => throw new NotSupportedException();
         public Task<LoraTrainState?> GetAsync(string ownerId, string jobId, CancellationToken ct) => throw new NotSupportedException();

@@ -7,31 +7,87 @@ import { chatStatusOf, sortKeyOf, type ChatSortOrder } from './chatFilters';
 import { hasUnread } from './chatReadState';
 
 const COLLAPSE_KEY_PREFIX = 'cc_chat_tree_collapsed:';
+// Ветки, которые пользователь ЯВНО раскрыл: нужны только длинным веткам, свёрнутым
+// по умолчанию (AUTO_COLLAPSE_CHILDREN), — иначе раскрытие не пережило бы перезагрузку
+const EXPAND_KEY_PREFIX = 'cc_chat_tree_expanded:';
 
-// === Память свёрнутых веток (Set id чатов) ===
-export function useTreeCollapse(scopeKey: string) {
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => loadCollapsed(scopeKey));
-  const scopeRef = useRef(scopeKey);
+// Ветка, у которой видимых прямых детей больше этого числа, свёрнута по умолчанию —
+// пока пользователь не раскрыл её сам и пока через неё не идёт путь к открытому чату
+export const AUTO_COLLAPSE_CHILDREN = 5;
 
-  useEffect(() => {
-    if (scopeRef.current === scopeKey) return;
-    scopeRef.current = scopeKey;
-    setCollapsedIds(loadCollapsed(scopeKey));
-  }, [scopeKey]);
-
-  const toggleCollapse = (id: string) => {
-    const next = new Set(collapsedIds);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    try { localStorage.setItem(COLLAPSE_KEY_PREFIX + scopeKey, JSON.stringify([...next])); } catch { /* квота */ }
-    setCollapsedIds(next);
-  };
-
-  return { collapsedIds, toggleCollapse };
+// Полный список id чатов области — с меткой, ДЛЯ КАКОЙ области он загружен. Без метки
+// при смене проекта хук получал бы в первом же рендере список старого проекта под
+// ключом нового и стирал бы из памяти новой области все её ветки
+export interface KnownChatIds {
+  scope: string;
+  ids: readonly string[];
 }
 
-function loadCollapsed(scopeKey: string): Set<string> {
+// === Память свёрнутых веток: явно свёрнутые и явно раскрытые id чатов ===
+// known — полный список id чатов области: когда он приехал, из обоих наборов
+// вычищаются удалённые чаты, иначе localStorage копил бы их бесконечно
+export function useTreeCollapse(scopeKey: string, known?: KnownChatIds) {
+  const [state, setState] = useState(() => ({ scope: scopeKey, ...loadState(scopeKey) }));
+  // Смена области — перечитываем её память прямо в рендере (состояние от пропа), а не
+  // эффектом: иначе один кадр показывал бы свёрнутость чужой области
+  let cur = state;
+  if (state.scope !== scopeKey) {
+    cur = { scope: scopeKey, ...loadState(scopeKey) };
+    setState(cur);
+  }
+
+  // Список чужой области (ещё не перезагрузился после смены) — как будто его нет.
+  // Пустой список — ещё не загрузился (или чатов нет вовсе): чистить по нему тоже нельзя
+  const knownKey = known && known.scope === scopeKey ? known.ids.join(',') : '';
+  // Последний известный состав области — им же чистится и запись при переключении ветки
+  const knownRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    knownRef.current = knownKey ? new Set(knownKey.split(',')) : null;
+    if (!knownRef.current) return;
+    // Чистится только хранилище: удалённые чаты в дереве не рисуются, и держать их
+    // в состоянии рендера безвредно — следующая запись уйдёт уже без них
+    const stored = loadState(scopeKey);
+    const collapsed = keepKnown(stored.collapsed, knownRef.current);
+    const expanded = keepKnown(stored.expanded, knownRef.current);
+    if (collapsed.size === stored.collapsed.size && expanded.size === stored.expanded.size) return;
+    saveState(scopeKey, collapsed, expanded);
+  }, [scopeKey, knownKey]);
+
+  // collapsedNow — что ветка показывает СЕЙЧАС (с учётом свёрнутости по умолчанию):
+  // по одному id не понять, явное это состояние или автоматическое
+  const toggleCollapse = (id: string, collapsedNow: boolean) => {
+    const collapsed = keepKnown(cur.collapsed, knownRef.current);
+    const expanded = keepKnown(cur.expanded, knownRef.current);
+    if (collapsedNow) { collapsed.delete(id); expanded.add(id); }
+    else { expanded.delete(id); collapsed.add(id); }
+    saveState(scopeKey, collapsed, expanded);
+    setState({ scope: scopeKey, collapsed, expanded });
+  };
+
+  return { collapsedIds: cur.collapsed, expandedIds: cur.expanded, toggleCollapse };
+}
+
+// Копия набора без удалённых чатов; состав области неизвестен — копия как есть
+const keepKnown = (s: Set<string>, known: Set<string> | null) =>
+  new Set(known ? [...s].filter(id => known.has(id)) : s);
+
+function loadState(scopeKey: string) {
+  return {
+    collapsed: loadIdSet(COLLAPSE_KEY_PREFIX + scopeKey),
+    expanded: loadIdSet(EXPAND_KEY_PREFIX + scopeKey),
+  };
+}
+
+function saveState(scopeKey: string, collapsed: Set<string>, expanded: Set<string>) {
   try {
-    const raw = localStorage.getItem(COLLAPSE_KEY_PREFIX + scopeKey);
+    localStorage.setItem(COLLAPSE_KEY_PREFIX + scopeKey, JSON.stringify([...collapsed]));
+    localStorage.setItem(EXPAND_KEY_PREFIX + scopeKey, JSON.stringify([...expanded]));
+  } catch { /* квота */ }
+}
+
+function loadIdSet(key: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(key);
     if (!raw) return new Set();
     const arr = JSON.parse(raw);
     return Array.isArray(arr) ? new Set(arr.filter((x): x is string => typeof x === 'string')) : new Set();
@@ -232,7 +288,10 @@ export function buildChatTreeRows(
   chats: Session[],
   opts: {
     isVisible: (c: Session) => boolean;
+    // Явно свёрнутые пользователем ветки
     collapsedIds: Set<string>;
+    // Явно раскрытые: снимают свёрнутость длинной ветки по умолчанию
+    expandedIds?: Set<string>;
     activeId: string | null;
     // Направление сортировки детей и корней (дефолт — свежие сверху)
     sortOrder?: ChatSortOrder;
@@ -358,7 +417,15 @@ export function buildChatTreeRows(
     passBelow: { show: boolean; accent: boolean },
     ancestors: { show: boolean; accent: boolean }[],
   ) => {
-    const collapsed = opts.collapsedIds.has(node.chat.id) && node.children.length > 0;
+    const id = node.chat.id;
+    // Явное сворачивание пользователя — всегда; длинная ветка — по умолчанию, пока её
+    // явно не раскрыли и пока через неё не идёт путь к открытому чату (иначе открытый
+    // чат спрятался бы под свёрнутым предком)
+    const collapsed = node.children.length > 0 && (
+      opts.collapsedIds.has(id)
+      || (node.children.length > AUTO_COLLAPSE_CHILDREN
+        && !opts.expandedIds?.has(id)
+        && !activeAncestors.has(id)));
     rows.push({
       chat: node.chat,
       depth,

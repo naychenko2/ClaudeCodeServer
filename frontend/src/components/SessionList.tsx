@@ -109,6 +109,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // стартовый массив — не «чатов нет», а «ещё не знаем», и владелец, который по
   // этому числу решает показывать ли панель, схлопнул бы её сразу после открытия
   const [loaded, setLoaded] = useState(false);
+  // Для какого проекта приехал последний свежий список: при смене проекта sessions ещё
+  // держат чаты старого, и память свёрнутых веток нового проекта чистилась бы по ним
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -398,6 +401,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       freshArrived = true;
       setSessions(list);
       setLoaded(true);
+      setLoadedProjectId(project.id);
       if (!initializedRef.current) {
         initializedRef.current = true;
         // Автовыбор первого чата, если он есть. Пустой список чат НЕ создаём —
@@ -615,8 +619,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     setOpenSwipeId(null);
     onSelect(s);
   };
-  // Память свёрнутых веток дерева
-  const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
+  // Память свёрнутых веток дерева; удалённые чаты из неё вычищаются по полному списку.
+  // До загрузки списка не передаём ничего — пустой стартовый массив не «чатов нет»; после
+  // смены проекта список помечен старым проектом, и хук его не примет до свежего ответа
+  const { collapsedIds, expandedIds, toggleCollapse } = useTreeCollapse(
+    project.id,
+    loadedProjectId ? { scope: loadedProjectId, ids: sessions.map(s => s.id) } : undefined,
+  );
   // Чаты с живой фоновой работой (агенты или команда в фоне) — считаются работающими
   // в счётчике свёрнутой ветки, как и в переливе самой карточки
   const bgWorkIds = useBgWorkPresence();
@@ -662,10 +671,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const readVersion = useReadStateVersion();
   const tree = useMemo(
     () => hierarchy
-      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder, bgWorkIds })
+      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, expandedIds, activeId: activeSessionId, sortOrder, bgWorkIds })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, bgWorkIds, readVersion, archiveShownIds],
+    [sessions, hierarchy, sortOrder, collapsedIds, expandedIds, activeSessionId, filters, bgWorkIds, readVersion, archiveShownIds],
   );
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
   const hiddenCount = scoped.length - filteredSessions.length;

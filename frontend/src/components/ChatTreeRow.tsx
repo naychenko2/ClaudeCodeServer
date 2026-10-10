@@ -62,7 +62,8 @@ export function treeLeadingInset(row: ChatTreeRowData): number {
 interface Props {
   row: ChatTreeRowData;
   isMobile: boolean;
-  onToggleCollapse: (id: string) => void;
+  // collapsedNow — что ветка показывает сейчас (свёрнутость бывает и по умолчанию)
+  onToggleCollapse: (id: string, collapsedNow: boolean) => void;
   children: React.ReactNode;
 }
 
@@ -176,7 +177,7 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
           Все цифры остаются в подсказке. */}
       {hasChildren && (
         <button
-          onClick={e => { e.stopPropagation(); onToggleCollapse(row.chat.id); }}
+          onClick={e => { e.stopPropagation(); onToggleCollapse(row.chat.id, collapsed); }}
           // Сворачивание — не перетаскивание: гасим нажатие до сенсоров dnd-kit,
           // иначе тяга за контрол уносила бы всю ветку
           onMouseDown={e => e.stopPropagation()}
@@ -262,7 +263,7 @@ const EXPAND_MS = 200;
 interface BranchProps {
   node: ChatTreeNode;
   isMobile: boolean;
-  onToggleCollapse: (id: string) => void;
+  onToggleCollapse: (id: string, collapsedNow: boolean) => void;
   renderCard: (chat: Session, leadingInset: number) => React.ReactNode;
 }
 

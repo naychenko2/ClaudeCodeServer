@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildChatTreeRows, collapsedBranchHint, collapsedSignal, collectDescendants,
+  AUTO_COLLAPSE_CHILDREN, buildChatTreeRows, collapsedBranchHint, collapsedSignal, collectDescendants,
   formatGroupCount, rootChatForSection, splitChatTreeByRoots, withAncestors,
 } from '../chatTree';
 import type { Session } from '../../types';
@@ -262,6 +262,38 @@ describe('buildChatTreeRows', () => {
     expect(collapsedBranchHint({
       groupCount: 2, groupRunningCount: 0, groupWaitingCount: 0, groupErrorCount: 0, groupUnreadCount: 0,
     })).toBe('Развернуть: вложенных чатов 2');
+  });
+
+  describe('длинные ветки свёрнуты по умолчанию', () => {
+    // Родитель с n прямыми детьми
+    const branch = (n: number) => [mk('p'), ...Array.from({ length: n }, (_, i) => mk(`c${i}`, { parentSessionId: 'p' }))];
+
+    it(`больше ${AUTO_COLLAPSE_CHILDREN} детей — свёрнута, ровно ${AUTO_COLLAPSE_CHILDREN} — нет`, () => {
+      expect(build(branch(AUTO_COLLAPSE_CHILDREN + 1)).rows[0].collapsed).toBe(true);
+      expect(build(branch(AUTO_COLLAPSE_CHILDREN)).rows[0].collapsed).toBe(false);
+    });
+
+    it('явно раскрытая пользователем — развёрнута', () => {
+      const r = buildChatTreeRows(branch(8), {
+        isVisible: all, collapsedIds: none, expandedIds: new Set(['p']), activeId: null,
+      });
+      expect(r.rows[0].collapsed).toBe(false);
+    });
+
+    it('путь к открытому чату раскрыт', () => {
+      expect(build(branch(8), { activeId: 'c3' }).rows[0].collapsed).toBe(false);
+      // Сам открытый чат с длинной веткой под ним — не предок, его ветка свёрнута
+      expect(build(branch(8), { activeId: 'p' }).rows[0].collapsed).toBe(true);
+    });
+
+    it('явное сворачивание сильнее пути к открытому чату', () => {
+      expect(build(branch(8), { activeId: 'c3', collapsedIds: new Set(['p']) }).rows[0].collapsed).toBe(true);
+    });
+
+    it('считаются видимые дети: фильтр сократил ветку — она не свёрнута', () => {
+      const chats = branch(8).map((c, i) => (i > 3 ? { ...c, origin: 'task' as const } : c));
+      expect(build(chats, { isVisible: c => c.origin === 'manual' }).rows[0].collapsed).toBe(false);
+    });
   });
 
   it('закреплённый корень поднимается выше более активного', () => {

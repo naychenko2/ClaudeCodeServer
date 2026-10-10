@@ -75,8 +75,8 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // ни одна ветка рендера не сработает: пустой лист без empty-state. Хранилище
   // не перезаписываем — первый же явный выбор пользователя всё починит сам.
   const groupBy: ChatGroupBy = GROUP_BY_OPTIONS.includes(filters.groupBy) ? filters.groupBy : 'days';
-  // Память свёрнутых веток дерева
-  const { collapsedIds, toggleCollapse } = useTreeCollapse('global');
+  // Память свёрнутых веток дерева; удалённые чаты из неё вычищаются по полному списку
+  const { collapsedIds, expandedIds, toggleCollapse } = useTreeCollapse('global', { scope: 'global', ids: chats.map(c => c.id) });
   // Чаты с живой фоновой работой (агенты или команда в фоне) — считаются работающими
   // в счётчике свёрнутой ветки, как и в переливе самой карточки
   const bgWorkIds = useBgWorkPresence();
@@ -102,10 +102,10 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const readVersion = useReadStateVersion();
   const tree = useMemo(
     () => hierarchy
-      ? buildChatTreeRows(chats, { isVisible, collapsedIds, activeId, sortOrder, bgWorkIds })
+      ? buildChatTreeRows(chats, { isVisible, collapsedIds, expandedIds, activeId, sortOrder, bgWorkIds })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, bgWorkIds, readVersion],
+    [chats, hierarchy, sortOrder, collapsedIds, expandedIds, activeId, filters, bgWorkIds, readVersion],
   );
   // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
   // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому

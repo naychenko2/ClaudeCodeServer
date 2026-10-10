@@ -41,7 +41,7 @@ export function ContextAddButton({ sessionId, projectId, candidate, size = 'xs',
     if (lg) {
       return (
         <span data-context-add="in" style={{ display: 'flex', width: '100%' }}>
-          <Button variant="primary" size="lg" fullWidth leftIcon={ic(Check, ICON_SIZE.sm)} title="Убрать из контекста"
+          <Button variant="secondary" size="lg" fullWidth leftIcon={ic(Check, ICON_SIZE.sm)} title="Убрать из контекста"
             onClick={() => { void detachRef(sessionId, inCtx.id); }}>
             {LG_IN_LABEL}
           </Button>

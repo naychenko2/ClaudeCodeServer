@@ -584,6 +584,16 @@ public class CharacterStoreTests : IDisposable
         CharacterDto.From(m).Local.Should().BeNull();
     }
 
+    [Fact]
+    public void Dto_отдаёт_PhotosPerRequest_только_при_включённом_флаге()
+    {
+        var m = CharacterStore.Get(_root, Create("Аня").Slug)!;
+
+        CharacterDto.From(m, withLabels: true).PhotosPerRequest.Should().Be(CharacterStore.PhotosPerRequest);
+        CharacterDto.From(m).PhotosPerRequest.Should().BeNull();
+        System.Text.Json.JsonSerializer.Serialize(CharacterDto.From(m)).Should().NotContain("hotosPerRequest");
+    }
+
     // --- Метки фото (ADR-027, §1) ---
 
     private static IReadOnlyDictionary<string, CharacterPhotoLabels> Labels(string file, string angle, string emotion) =>

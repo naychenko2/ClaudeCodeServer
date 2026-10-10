@@ -122,14 +122,18 @@ public sealed record CharacterDto(
     string Path,
     IReadOnlyList<CharacterPhotoDto> Photos,
     DateTime CreatedAt,
-    CharacterLocalDto? Local = null)
+    CharacterLocalDto? Local = null,
+    // Сколько фото ложится в один запрос: окно выбора фронта берёт предел отсюда. Только при включённом
+    // флаге character-smart-photos, иначе поля в JSON нет
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? PhotosPerRequest = null)
 {
     // withLabels (ADR-027 §10) — флаг character-smart-photos у владельца: без него фото отдаются как до фичи
     // (file, primary, angle), без pitch/emotion/labelSource
     public static CharacterDto From(CharacterManifest m, bool withLabels = false) =>
         new(m.Slug, m.Name, m.Description, $"{CharacterStore.Folder}/{m.Slug}",
             [.. m.Photos.Select(p => CharacterPhotoDto.From(p, withLabels))], m.CreatedAt,
-            m.ReadLora() is { } lora ? new CharacterLocalDto(lora.Name, lora.Trigger, lora.Strength) : null);
+            m.ReadLora() is { } lora ? new CharacterLocalDto(lora.Name, lora.Trigger, lora.Strength) : null,
+            withLabels ? CharacterStore.PhotosPerRequest : null);
 }
 
 // Фото персонажа для фронта: Extra манифеста наружу не идёт. Pitch/Emotion/LabelSource у фото без метки

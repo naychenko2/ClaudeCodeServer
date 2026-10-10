@@ -33,7 +33,7 @@ export function CharacterHero({
   // null — чат не выбран, «В контекст чата» недоступна
   contextSessionId: string | null;
   disabled?: boolean;
-  onOpenPhotos: (section: 'train') => void;
+  onOpenPhotos: (section?: 'face' | 'train') => void;
   onOpenTune: () => void;
 }) {
   const { view, training, edited, dismiss, isAdmin, actionError, connectError } = train;
@@ -116,9 +116,8 @@ export function CharacterHero({
     }
     case 'progress': {
       const text = view.kind === 'running' ? view.text : TRAIN_TEXT.queued;
-      const eta = view.kind === 'running'
-        ? (view.etaText ?? TRAIN_ETA_UNKNOWN(formatDuration(TRAIN_ETA_FALLBACK_SEC)))
-        : null;
+      const unknownEta = TRAIN_ETA_UNKNOWN(formatDuration(TRAIN_ETA_FALLBACK_SEC));
+      const eta = view.kind === 'running' ? (view.etaText ?? unknownEta) : unknownEta;
       body = (
         <div data-hero="main" style={{
           background: C.accentLight, border: `1px solid ${C.accentMuted}`, borderRadius: R.lg, padding: SP.md,

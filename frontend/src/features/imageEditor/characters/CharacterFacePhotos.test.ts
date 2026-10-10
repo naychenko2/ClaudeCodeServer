@@ -61,6 +61,17 @@ describe('CharacterFacePhotos (разметка)', () => {
     expect(html).toContain(FACES.consentFirst);
     expect(html).toMatch(/<button[^>]*disabled[^>]*>(?:(?!<\/button>).)*Ещё фото/s);
   });
+  it('aria-pressed отражает выбранное фото; без onSelectPhoto атрибута нет', () => {
+    const two = [{ key: 'a', url: '/a.jpg', primary: true }, { key: 'b', url: '/b.jpg', primary: false }];
+    const sel = renderToStaticMarkup(createElement(CharacterFacePhotos, { ...props, photos: two, onSelectPhoto: () => {}, selectedKey: 'b' }));
+    expect(sel.match(/aria-pressed="true"/g)).toHaveLength(1);
+    expect(sel.match(/aria-pressed="false"/g)).toHaveLength(1);
+    expect(html).not.toContain('aria-pressed');
+  });
+  it('согласие: одна видимая метка, без дублирующего aria-label', () => {
+    expect(html).toContain(FACES.consentLabel);
+    expect(html).not.toContain('aria-label="Согласие');
+  });
   it('на минимуме фото «Убрать» заблокирована', () => {
     const three = Array.from({ length: 3 }, (_, i) => ({ key: `k${i}`, url: `/${i}.jpg`, primary: i === 0 }));
     const h = renderToStaticMarkup(createElement(CharacterFacePhotos, { ...props, photos: three }));

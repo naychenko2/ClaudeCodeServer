@@ -10,7 +10,7 @@ import { MAX_PHOTOS, MIN_PHOTOS, addGate, photoSizeError, pickFaceFiles, shrinkP
 
 export type FacePhoto = { key: string; url: string; primary: boolean };
 
-export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabled, isMobile, renderCaption, onSelectPhoto, labelsEditor, addRef }: {
+export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabled, isMobile, renderCaption, onSelectPhoto, selectedKey, labelsEditor, addRef }: {
   photos: FacePhoto[];
   onAdd: (files: File[]) => Promise<void>;
   onRemove: (key: string) => Promise<void>;
@@ -20,6 +20,8 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
   // Места под метки фото (шаг 15): подпись под фото, выбор фото, редактор под сеткой
   renderCaption?: (photo: FacePhoto) => ReactNode;
   onSelectPhoto?: (photo: FacePhoto) => void;
+  // Выбранное фото (для aria-pressed); без onSelectPhoto не используется
+  selectedKey?: string | null;
   labelsEditor?: ReactNode;
   // Вход для файлов извне (зона перетаскивания создания): идёт через тот же путь с проверкой согласия
   addRef?: MutableRefObject<((files: File[]) => Promise<void>) | null>;
@@ -98,7 +100,7 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
           return (
             <div key={p.key} style={{ position: 'relative', minWidth: 0 }}>
               {onSelectPhoto ? (
-                <button type="button" aria-pressed={false} onClick={() => onSelectPhoto(p)}
+                <button type="button" aria-pressed={p.key === selectedKey} onClick={() => onSelectPhoto(p)}
                   style={{ display: 'block', width: '100%', padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}>
                   {image}
                 </button>
@@ -144,8 +146,8 @@ export function CharacterFacePhotos({ photos, onAdd, onRemove, uploading, disabl
       {error && <div style={{ fontSize: FS.sm, color: C.dangerText, overflowWrap: 'anywhere' }}>{error}</div>}
       <Notice tone="warning" icon={ShieldAlert}>{CHARACTER_PHOTOS_NOTICE}</Notice>
       <label style={{ display: 'flex', gap: SP.xs, alignItems: 'center', fontSize: FS.sm, color: C.textPrimary }}>
-        <Checkbox checked={consent} onChange={setConsent} disabled={!!disabled || pending > 0} ariaLabel="Согласие на отправку фото" />
-        <span>Понимаю, у людей на фото есть согласие</span>
+        <Checkbox checked={consent} onChange={setConsent} disabled={!!disabled || pending > 0} />
+        <span>{FACES.consentLabel}</span>
       </label>
       {removing && (
         <ConfirmDialog title={REMOVE_PHOTO.title} subtitle={REMOVE_PHOTO.body}

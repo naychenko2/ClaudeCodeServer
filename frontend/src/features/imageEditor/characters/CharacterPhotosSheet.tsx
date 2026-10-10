@@ -16,7 +16,7 @@ export function CharacterPhotosSheet({ api, projectId, character, onChanged, onC
   onCount?: (n: number) => void;
   onClose: () => void;
   // 'train' — открыть сразу на разделе обучения
-  focus?: 'train';
+  focus?: 'face' | 'train';
 }) {
   const isMobile = useIsMobile();
   const [busy, setBusy] = useState(false);

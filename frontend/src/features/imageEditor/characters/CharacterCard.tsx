@@ -71,14 +71,14 @@ export function CharacterCard({ api, projectId, character, contextSessionId, onB
   const onChanged = useCallback((c: ImageEditCharacter) => putCharacter(projectId, c), [projectId]);
 
   const [menu, setMenu] = useState(false);
-  const [sheet, setSheet] = useState<{ kind: CardSheet; focus?: 'train' } | null>(null);
+  const [sheet, setSheet] = useState<{ kind: CardSheet; focus?: 'face' | 'train' } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // «Обучить заново» из шторки «Версии»: то же подтверждение, что у главной кнопки
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Кто вызвал шторку — туда возвращаем фокус при закрытии
   const opener = useRef<HTMLElement | null>(null);
-  const open = (kind: CardSheet, focus?: 'train') => {
+  const open = (kind: CardSheet, focus?: 'face' | 'train') => {
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSheet({ kind, focus });
   };

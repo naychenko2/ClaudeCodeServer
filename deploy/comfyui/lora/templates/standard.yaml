@@ -1,0 +1,44 @@
+# Шаблон YAML для ai-toolkit (AD-026). Рендерится воркером в каталог прогона перед стартом
+# обучения. Параметры v1 — константы; правка — только через ADR с новой версией шаблона.
+#
+# Конвенция ai-toolkit (ostris): config — это описание одной работы job. Рендер подставляет
+# training_folder, name и trigger; всё остальное — из этого шаблона.
+job: extension
+config:
+  name: "ccs-<slug>-<run_id>"
+  process:
+    - type: sd_trainer
+      training_folder: "<out_dir>"
+      device: cuda:0
+      model:
+          name_or_path: "models/qwen_image_2.1_int8_convrot.safetensors"
+          is_qwen: true
+          quantize: true
+      train:
+          steps: <steps>
+          gradient_accumulation_steps: 1
+          train_unet: true
+          train_text_encoder: false
+          resolution: [512, 768, 1024]
+          noise_scheduler: "flowmatch"
+          low_vram: true
+      network:
+          type: "lora"
+          linear: 16
+          linear_alpha: 16
+          conv: 8
+          conv_alpha: 8
+      optimizer:
+          type: "AdamW8bit"
+          lr: 1.0e-4
+          bf16: true
+      trigger_word: "<trigger>"
+      save:
+          dtype: "bf16"
+          save_every: 250
+          max_step_saves_to_keep: 1
+          push_to_hub: false
+      sample:
+          prompts: []
+          sample_every: 0   # ADR: пробные картинки в продукте выключены
+      seed: 42

@@ -3,6 +3,10 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.Llm;
 
+// Подмена запуска CLI — только для тестов; в DI не регистрируется, по умолчанию раннер
+public delegate Task<OneShotResult> ImageRunFunc(string prompt, IReadOnlyList<ImageLabelInput> images,
+    string? model, TimeSpan? timeout, CancellationToken ct, string? ownerId, string? label);
+
 // Реализация шва IImageLabeler (ADR-027 §4): one-shot claude CLI с image-блоками. Маршрут
 // места берём тем же роутером, что и текстовые действия; слот и пресет разворачиваем в
 // модель владельца. Модель без зрения — отказ, а не ответ: слепая модель «размечает» фото
@@ -11,9 +15,18 @@ namespace ClaudeHomeServer.Services.Llm;
 public sealed class ImageLabeler(
     LocalActionRouter router, LlmProviderRegistry providers, OneShotClaudeRunner runner,
     ILogger<ImageLabeler> log, ITierModelResolver? appSettings = null,
-    UserModelTierResolver? userTiers = null, ModelAssignmentResolver? assignment = null)
+    UserModelTierResolver? userTiers = null, ModelAssignmentResolver? assignment = null,
+    ImageRunFunc? run = null)
     : IImageLabeler
 {
+    // Потолки входа: ответ строит один CLI-вызов, лишние картинки только раздувают stdin
+    public const int MaxImages = 10;
+    public const long MaxTotalBytes = 30L * 1024 * 1024;
+    private const int FallbackTimeoutMs = 120_000;
+
+    private static readonly HashSet<string> AllowedContentTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "image/jpeg", "image/png", "image/gif", "image/webp" };
+
     public ImageLabelRoute RouteOf(string actionKey, string ownerId)
     {
         // Место без картинок на входе этим швом не обслуживается
@@ -63,8 +76,14 @@ public sealed class ImageLabeler(
 
     public async Task<ImageLabelResult> LabelAsync(ImageLabelRequest request, CancellationToken ct)
     {
-        if (request.Images.Count == 0)
+        if (request.Images.Count == 0 || request.Images.Count > MaxImages
+            || request.Images.Sum(i => (long)i.Bytes.Length) > MaxTotalBytes
+            || request.Images.Any(i => !AllowedContentTypes.Contains(i.ContentType ?? "")))
+        {
+            log.LogWarning("image-labeler: вход места {Action} вне лимитов — разметка отказана",
+                request.ActionKey);
             return ImageLabelResult.Fail(ImageLabelFailure.Failed);
+        }
 
         var route = RouteOf(request.ActionKey, request.OwnerId);
         if (route.Kind != ImageLabelRouteKind.Vision)
@@ -78,8 +97,9 @@ public sealed class ImageLabeler(
 
         try
         {
-            var timeout = TimeSpan.FromMilliseconds(router.CloudTimeoutMsFor(request.ActionKey));
-            var result = await runner.RunWithImagesAsync(request.Prompt, request.Images,
+            var timeoutMs = router.CloudTimeoutMsFor(request.ActionKey);
+            var timeout = TimeSpan.FromMilliseconds(timeoutMs > 0 ? timeoutMs : FallbackTimeoutMs);
+            var result = await (run ?? runner.RunWithImagesAsync)(request.Prompt, request.Images,
                 route.Model, timeout, ct, request.OwnerId, request.ActionKey);
             // Пустой ответ — модель отказалась описывать людей; вызывающий оставит unknown
             return string.IsNullOrWhiteSpace(result.Text)

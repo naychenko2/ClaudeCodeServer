@@ -1,4 +1,6 @@
 using System.Text.Json;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -30,7 +32,14 @@ public class ImageLabelerTests
     }
 
     // Провайдер glm без зрения; claude-модели картинки видят
-    private static (ImageLabeler Labeler, LocalActionOverridesStore Store, RecordingLogger<ImageLabeler> Log) Make()
+    private sealed class FakeTiers(Dictionary<ModelTier, string> slots) : ITierModelResolver
+    {
+        public string? TierModel(ModelTier tier) => slots.GetValueOrDefault(tier);
+    }
+
+    private static (ImageLabeler Labeler, LocalActionOverridesStore Store, RecordingLogger<ImageLabeler> Log) Make(
+        ImageRunFunc? run = null, Dictionary<ModelTier, string>? slots = null,
+        string? presetId = null, string? presetStep = null)
     {
         var dir = Path.Combine(Path.GetTempPath(), "cc-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -48,7 +57,20 @@ public class ImageLabelerTests
         var providers = new LlmProviderRegistry(config);
         var runner = new OneShotClaudeRunner(providers, TestLauncherFactory.Instance, config);
         var log = new RecordingLogger<ImageLabeler>();
-        return (new ImageLabeler(router, providers, runner, log), store, log);
+        ITierModelResolver? tiers = null;
+        ModelAssignmentResolver? assignment = null;
+        if (slots is not null)
+        {
+            tiers = new FakeTiers(slots);
+            var specialty = TestSpecialtyStore.Create(config);
+            if (presetId is not null)
+                specialty.SetGlobal(new SpecialtySettingsLayer
+                {
+                    Presets = { new ModelRoutePreset { Id = presetId, Name = "П", Steps = [presetStep!] } },
+                });
+            assignment = new ModelAssignmentResolver(tiers, store, null, specialty, providers);
+        }
+        return (new ImageLabeler(router, providers, runner, log, tiers, null, assignment, run), store, log);
     }
 
     private static ImageLabelRequest Request() => new(Action, "owner-1", "опиши позу",
@@ -96,6 +118,153 @@ public class ImageLabelerTests
         store.Set(Action, LocalActionOverridesStore.FacePoseRoute);
         var result = await labeler.LabelAsync(Request(), CancellationToken.None);
         result.Failure.Should().Be(ImageLabelFailure.Unavailable);
+    }
+
+    private static ImageRunFunc Fake(Func<Task<OneShotResult>> body, Action<TimeSpan?>? onTimeout = null) =>
+        (_, _, _, timeout, _, _, _) => { onTimeout?.Invoke(timeout); return body(); };
+
+    private static Task<OneShotResult> Ответ(string text) =>
+        Task.FromResult(new OneShotResult(text, null, 1));
+
+    private static (ImageLabeler Labeler, int[] Calls) MakeCounting(Func<Task<OneShotResult>> body)
+    {
+        var calls = new int[1];
+        var (labeler, store, _) = Make(Fake(() => { calls[0]++; return body(); }));
+        store.Set(Action, "claude-haiku-4-5");
+        return (labeler, calls);
+    }
+
+    [Fact]
+    public async Task НормальныйОтвет_ВозвращаетсяТекстом()
+    {
+        var (labeler, calls) = MakeCounting(() => Ответ("поза: анфас"));
+        var result = await labeler.LabelAsync(Request(), CancellationToken.None);
+        result.Text.Should().Be("поза: анфас");
+        result.Failure.Should().BeNull();
+        calls[0].Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task ПустойОтвет_Refused(string text)
+    {
+        var (labeler, _) = MakeCounting(() => Ответ(text));
+        var result = await labeler.LabelAsync(Request(), CancellationToken.None);
+        result.Failure.Should().Be(ImageLabelFailure.Refused);
+        result.Text.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LlmTimeout_Timeout()
+    {
+        var (labeler, _) = MakeCounting(() => throw new LlmTimeoutException("таймаут"));
+        var result = await labeler.LabelAsync(Request(), CancellationToken.None);
+        result.Failure.Should().Be(ImageLabelFailure.Timeout);
+    }
+
+    [Fact]
+    public async Task ПрочееИсключение_Failed()
+    {
+        var (labeler, _) = MakeCounting(() => throw new InvalidOperationException("boom"));
+        var result = await labeler.LabelAsync(Request(), CancellationToken.None);
+        result.Failure.Should().Be(ImageLabelFailure.Failed);
+    }
+
+    [Fact]
+    public async Task ОтменаВызывающего_НеГлотается()
+    {
+        var (labeler, _) = MakeCounting(() => throw new OperationCanceledException());
+        var act = () => labeler.LabelAsync(Request(), CancellationToken.None);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task ЧислоКартинокСверхЛимита_FailedБезЗапускаCli()
+    {
+        var (labeler, calls) = MakeCounting(() => Ответ("ok"));
+        var images = Enumerable.Range(0, ImageLabeler.MaxImages + 1)
+            .Select(_ => new ImageLabelInput([1], "image/jpeg")).ToList();
+        var result = await labeler.LabelAsync(Request() with { Images = images }, CancellationToken.None);
+        result.Failure.Should().Be(ImageLabelFailure.Failed);
+        calls[0].Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ДесятьКартинок_ВЛимите()
+    {
+        var (labeler, calls) = MakeCounting(() => Ответ("ok"));
+        var images = Enumerable.Range(0, ImageLabeler.MaxImages)
+            .Select(_ => new ImageLabelInput([1], "image/jpeg")).ToList();
+        var result = await labeler.LabelAsync(Request() with { Images = images }, CancellationToken.None);
+        result.Text.Should().Be("ok");
+        calls[0].Should().Be(1);
+    }
+
+    [Fact]
+    public async Task СуммарныйРазмерСверхЛимита_FailedБезЗапускаCli()
+    {
+        var (labeler, calls) = MakeCounting(() => Ответ("ok"));
+        var big = new byte[(int)(ImageLabeler.MaxTotalBytes / 2) + 1];
+        var images = new[] { new ImageLabelInput(big, "image/png"), new ImageLabelInput(big, "image/png") };
+        var result = await labeler.LabelAsync(Request() with { Images = images }, CancellationToken.None);
+        result.Failure.Should().Be(ImageLabelFailure.Failed);
+        calls[0].Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("image/svg+xml")]
+    [InlineData("application/pdf")]
+    [InlineData("")]
+    public async Task НеБелыйContentType_FailedБезЗапускаCli(string contentType)
+    {
+        var (labeler, calls) = MakeCounting(() => Ответ("ok"));
+        var images = new[] { new ImageLabelInput([1, 2], contentType) };
+        var result = await labeler.LabelAsync(Request() with { Images = images }, CancellationToken.None);
+        result.Failure.Should().Be(ImageLabelFailure.Failed);
+        calls[0].Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("image/jpeg")]
+    [InlineData("image/png")]
+    [InlineData("image/gif")]
+    [InlineData("image/webp")]
+    public async Task БелыйContentType_Проходит(string contentType)
+    {
+        var (labeler, calls) = MakeCounting(() => Ответ("ok"));
+        var images = new[] { new ImageLabelInput([1, 2], contentType) };
+        var result = await labeler.LabelAsync(Request() with { Images = images }, CancellationToken.None);
+        result.Text.Should().Be("ok");
+        calls[0].Should().Be(1);
+    }
+
+    [Fact]
+    public void СлотTierMedium_ВТирСильный_РазворачиваетсяВМодель()
+    {
+        var (labeler, store, _) = Make(slots: new()
+        {
+            [ModelTier.Medium] = LocalActionOverridesStore.TierRoute(ModelTier.Strong),
+            [ModelTier.Strong] = "claude-haiku-4-5",
+        });
+        store.Set(Action, "tier:medium");
+
+        var route = labeler.RouteOf(Action, "owner-1");
+        route.Model.Should().NotBeNull().And.NotStartWith("tier:").And.NotStartWith("preset:");
+        route.Model.Should().Contain("haiku");
+        route.Kind.Should().Be(ImageLabelRouteKind.Vision);
+    }
+
+    [Fact]
+    public void СлотПресет_РазворачиваетсяВПервыйШагЦепочки()
+    {
+        var (labeler, store, _) = Make(slots: new() { [ModelTier.Medium] = "preset:p1" },
+            presetId: "p1", presetStep: "claude-haiku-4-5");
+        store.Set(Action, "tier:medium");
+
+        var route = labeler.RouteOf(Action, "owner-1");
+        route.Model.Should().NotBeNull().And.NotStartWith("tier:").And.NotStartWith("preset:");
+        route.Model.Should().Contain("haiku");
     }
 
     [Fact]

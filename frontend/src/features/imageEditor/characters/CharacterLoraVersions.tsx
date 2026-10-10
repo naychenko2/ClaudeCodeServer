@@ -12,7 +12,8 @@ import type { LoraVersionsHandle } from './useLoraVersions';
 import {
   VERSIONS_TEXT, VERSION_CONNECTED_FLASH, VERSION_DELETE_TITLE, VERSION_REVERT_TITLE, TRAIN_VERSION_LIMIT,
 } from './loraTrainTexts';
-import { ownLoraLabel } from './loraName';
+import { loraLabelParts, ownLoraLabel } from './loraName';
+import { VERSIONS_OWN } from './characterTexts';
 import { failureText, versionFailureText } from './loraTrainView';
 import {
   atVersionLimit, needsRevertConfirm, validateVersionTitle, versionActions, versionMark, versionTitle,
@@ -20,11 +21,13 @@ import {
 
 const ico = { size: ICON_SIZE.sm, strokeWidth: ICON_STROKE } as const;
 
-export function CharacterLoraVersions({ loraList, versions, disabled }: {
+export function CharacterLoraVersions({ loraList, versions, disabled, hideTitle }: {
   // общий список ComfyUI из формы; null — ещё грузится
   loraList: ImageEditLoras | null;
   versions: LoraVersionsHandle;
   disabled?: boolean;
+  // В шторке «Версии» заголовок и счётчик рисует сама шторка, а строка про свою версию — по новому тексту
+  hideTitle?: boolean;
 }) {
   const isMobile = useIsMobile();
   const { data, ctl, pending } = versions;
@@ -146,11 +149,13 @@ export function CharacterLoraVersions({ loraList, versions, disabled }: {
 
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px` }}>
-        <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{VERSIONS_TEXT.title}</span>
-        {items.length > 0 && <Badge tone="neutral" size="sm">{items.length}</Badge>}
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, padding: `0 ${SP.md}px ${SP.md}px`, minWidth: 0 }}>
+      {!hideTitle && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px` }}>
+          <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{VERSIONS_TEXT.title}</span>
+          {items.length > 0 && <Badge tone="neutral" size="sm">{items.length}</Badge>}
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, padding: hideTitle ? SP.md : `0 ${SP.md}px ${SP.md}px`, minWidth: 0 }}>
         {flash && (
           <div role="status" style={{
             display: 'flex', gap: SP.xs, alignItems: 'flex-start', background: C.successBg, color: C.successText,
@@ -161,7 +166,8 @@ export function CharacterLoraVersions({ loraList, versions, disabled }: {
         )}
         {data?.own && (
           <Notice tone="info" icon={Info}>
-            {VERSIONS_TEXT.own}<span style={{ fontFamily: 'inherit', fontWeight: 600 }}>{ownLoraLabel(data.own.lora, data.own.trainedAt, loraList)}</span>
+            {hideTitle ? `${VERSIONS_OWN.title}: ` : VERSIONS_TEXT.own}
+            <OwnLabel label={ownLoraLabel(data.own.lora, data.own.trainedAt, loraList)} split={!!hideTitle} />
           </Notice>
         )}
         {data && atVersionLimit(data.used, data.limit) && (
@@ -186,6 +192,20 @@ export function CharacterLoraVersions({ loraList, versions, disabled }: {
           onConfirm={async () => { await ctl?.remove(target.runId); setModal(null); }} />
       )}
     </div>
+  );
+}
+
+// Подпись своей LoRA. В шторке — имя файла и дата раздельно (спека §8.4): имя режется многоточием, дата видна всегда
+export function OwnLabel({ label, split }: { label: string; split: boolean }) {
+  if (!split) return <span style={{ fontFamily: 'inherit', fontWeight: 600 }}>{label}</span>;
+  const { name, rest } = loraLabelParts(label);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: SP.xs, minWidth: 0, maxWidth: '100%', verticalAlign: 'bottom' }}>
+      <span title={label} data-lora-name style={{
+        fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{name}</span>
+      {rest && <span data-lora-date style={{ flex: '0 0 auto', whiteSpace: 'nowrap', color: C.textMuted }}>{rest}</span>}
+    </span>
   );
 }
 

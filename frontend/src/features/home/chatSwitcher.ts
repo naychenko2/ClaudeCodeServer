@@ -11,12 +11,15 @@ export interface SwitcherSections {
 // Состав шторки переключателя из сводки /api/home/summary: живые и недавние — один
 // список, порядок СТРОГО по времени последней активности (без подъёма живых наверх:
 // строка не должна прыгать под пальцем, пока у неё меняется статус). Закреплённые —
-// своей секцией сверху и в «Недавних» не повторяются; архивные не показываются вовсе
+// своей секцией сверху и в «Недавних» не повторяются; архивные не показываются вовсе.
+// Дочерние чаты (исполнители задач) в «Недавние» не идут — только корни; закреплённый
+// дочерний остаётся: закрепление — явный выбор человека
 export function switcherSections(data: HomeSummaryResponse, limit = SWITCHER_RECENT_LIMIT): SwitcherSections {
   const seen = new Set<string>();
   const all: HomeSessionInfo[] = [];
   for (const s of [...data.active, ...data.recent]) {
     if (seen.has(s.id) || (s as { archived?: unknown }).archived === true) continue;
+    if (s.parentSessionId && !s.isPinned) continue;
     seen.add(s.id);
     all.push(s);
   }

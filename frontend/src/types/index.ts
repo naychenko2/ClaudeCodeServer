@@ -955,6 +955,8 @@ export interface HomeSessionInfo {
   expiresAfterMinutes?: number | null;
   // Серверная отметка прочтения (синк между устройствами) — для точки активности проекта
   lastReadAt?: string | null;
+  // Родительский чат по той же связи, что у дерева; null — корневой
+  parentSessionId?: string | null;
 }
 
 export interface HomeSummaryResponse {

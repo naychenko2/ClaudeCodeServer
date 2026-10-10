@@ -285,6 +285,52 @@ export function stripServiceMarkers(text: string): string {
 
 const REMARK_PLUGINS = [remarkGfm];
 
+// Рендеры, не зависящие от проекта, — константа модуля: их ссылки не меняются никогда.
+// Внутри useMemo они пересоздавались бы на каждом обновлении индекса файлов (а он
+// перезагружается при любом изменении дерева, то есть каждые несколько секунд, пока агент
+// работает) — и ChatImage внутри <p> перемонтировался, теряя открытый лайтбокс.
+const STATIC_COMPONENTS: Components = {
+  p: ({ children }) => (
+    <p style={{ margin: '0 0 8px 0', lineHeight: 1.6 }}>{children}</p>
+  ),
+  h1: ({ children }) => (
+    <h1 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 20, fontWeight: 600, margin: '10px 0 6px', color: C.textHeading, letterSpacing: '-0.01em' }}>{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 17, fontWeight: 600, margin: '8px 0 5px', color: C.textHeading, letterSpacing: '-0.01em' }}>{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 15, fontWeight: 600, margin: '6px 0 4px', color: C.textHeading }}>{children}</h3>
+  ),
+  pre: ({ children }) => <>{children}</>,
+  ul: ({ children }) => <ul style={{ paddingLeft: 18, margin: '2px 0 8px' }}>{children}</ul>,
+  ol: ({ children }) => <ol style={{ paddingLeft: 18, margin: '2px 0 8px' }}>{children}</ol>,
+  li: ({ children }) => <li style={{ marginBottom: 3, lineHeight: 1.6 }}>{children}</li>,
+  blockquote: ({ children }) => (
+    <blockquote style={{ borderLeft: `3px solid ${C.accent}`, paddingLeft: 12, margin: '6px 0', color: C.textSecondary, fontStyle: 'italic' }}>
+      {children}
+    </blockquote>
+  ),
+  // Картинки из markdown: внешние URL — напрямую, локальные пути файлов проекта — через API
+  img: ({ src, alt }) => {
+    if (!src) return null;
+    return <ChatImage src={src} alt={alt ?? ''} />;
+  },
+  strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
+  hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${C.border}`, margin: '10px 0' }} />,
+  table: ({ children }) => (
+    <div style={{ overflowX: 'auto', margin: '6px 0' }}>
+      <table style={{ borderCollapse: 'collapse', minWidth: '100%', fontSize: 13 }}>{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th style={{ border: `1px solid ${C.border}`, padding: '6px 10px', background: C.bgInset, fontWeight: 600, textAlign: 'left' }}>{children}</th>
+  ),
+  td: ({ children }) => (
+    <td style={{ border: `1px solid ${C.border}`, padding: '6px 10px' }}>{children}</td>
+  ),
+};
+
 // Рендер текста Claude с поддержкой Markdown.
 // memo + мемоизированная карта components: react-markdown использует её функции как ТИПЫ
 // элементов, поэтому новая ссылка на каждый рендер размонтировала бы поддерево целиком.
@@ -325,19 +371,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
       return { path: p, label: label !== p ? label : undefined };
     };
     return {
-        p: ({ children }) => (
-          <p style={{ margin: '0 0 8px 0', lineHeight: 1.6 }}>{children}</p>
-        ),
-        h1: ({ children }) => (
-          <h1 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 20, fontWeight: 600, margin: '10px 0 6px', color: C.textHeading, letterSpacing: '-0.01em' }}>{children}</h1>
-        ),
-        h2: ({ children }) => (
-          <h2 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 17, fontWeight: 600, margin: '8px 0 5px', color: C.textHeading, letterSpacing: '-0.01em' }}>{children}</h2>
-        ),
-        h3: ({ children }) => (
-          <h3 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 15, fontWeight: 600, margin: '6px 0 4px', color: C.textHeading }}>{children}</h3>
-        ),
-        pre: ({ children }) => <>{children}</>,
+        ...STATIC_COMPONENTS,
         code: ({ className, children, ...props }) => {
           const language = /language-(\w+)/.exec(className || '')?.[1];
           const text = String(children).replace(/\n$/, '');
@@ -385,14 +419,6 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
             </code>
           );
         },
-        ul: ({ children }) => <ul style={{ paddingLeft: 18, margin: '2px 0 8px' }}>{children}</ul>,
-        ol: ({ children }) => <ol style={{ paddingLeft: 18, margin: '2px 0 8px' }}>{children}</ol>,
-        li: ({ children }) => <li style={{ marginBottom: 3, lineHeight: 1.6 }}>{children}</li>,
-        blockquote: ({ children }) => (
-          <blockquote style={{ borderLeft: `3px solid ${C.accent}`, paddingLeft: 12, margin: '6px 0', color: C.textSecondary, fontStyle: 'italic' }}>
-            {children}
-          </blockquote>
-        ),
         a: ({ children, href }) => {
           // Ссылка на файл проекта ([гайд](docs/…)) открывает его на просмотр, а не наружу.
           // Текст ссылки — как написал автор markdown, label из resolveFileMention сюда не идёт.
@@ -402,24 +428,6 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
           // живут в ReaderLinkWrap (ADR-006 §2/§5)
           return <ReaderLinkWrap href={href}>{children}</ReaderLinkWrap>;
         },
-        // Картинки из markdown: внешние URL — напрямую, локальные пути файлов проекта — через API
-        img: ({ src, alt }) => {
-          if (!src) return null;
-          return <ChatImage src={src} alt={alt ?? ''} />;
-        },
-        strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
-        hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${C.border}`, margin: '10px 0' }} />,
-        table: ({ children }) => (
-          <div style={{ overflowX: 'auto', margin: '6px 0' }}>
-            <table style={{ borderCollapse: 'collapse', minWidth: '100%', fontSize: 13 }}>{children}</table>
-          </div>
-        ),
-        th: ({ children }) => (
-          <th style={{ border: `1px solid ${C.border}`, padding: '6px 10px', background: C.bgInset, fontWeight: 600, textAlign: 'left' }}>{children}</th>
-        ),
-        td: ({ children }) => (
-          <td style={{ border: `1px solid ${C.border}`, padding: '6px 10px' }}>{children}</td>
-        ),
     };
     // treePath — в зависимостях: от него зависит короткий label абсолютного пути
   }, [project, onOpenFile, fileIndex, treePath]);

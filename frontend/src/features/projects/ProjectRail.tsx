@@ -409,7 +409,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
         // куда человек целится.
         style={dragView ? { pointerEvents: 'none' } : undefined}
       >
-        <RailHat side={side} label="Проекты" title="Переключение проектов" />
+        <RailHat side={side} label="Проекты" labelSize={6} title="Переключение проектов" />
 
         {/* Столбец иконок: закреплённые, разделитель, недавние */}
         <div ref={colRef} style={{

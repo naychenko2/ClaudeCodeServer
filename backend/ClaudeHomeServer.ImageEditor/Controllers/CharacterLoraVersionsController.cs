@@ -56,6 +56,8 @@ public class CharacterLoraVersionsController(
         if (!known.Contains(loraFile, StringComparer.Ordinal))
             return Error(StatusCodes.Status409Conflict, "lora_missing", "Файла этой LoRA нет в ComfyUI");
 
+        using var _ = await runs.LockCharacterAsync(project.RootPath, slug, ct);
+        manifest = CharacterStore.Get(project.RootPath, slug) ?? manifest;
         var strength = manifest.ReadLora()?.Strength;
         var patch = new CharacterPatch(null, null, [], [], null, CharacterLoraPatch.Set(loraFile, run.Trigger, strength, known));
         var updated = CharacterStore.Update(project.RootPath, UserId, slug, patch);
@@ -81,12 +83,14 @@ public class CharacterLoraVersionsController(
     }
 
     [HttpDelete("{runId}")]
-    public IActionResult Delete(string projectId, string slug, string runId)
+    public async Task<IActionResult> Delete(string projectId, string slug, string runId, CancellationToken ct)
     {
         if (!Character(projectId, slug, out var project, out var manifest, out var denied)) return denied;
         if (Run(project, slug, runId) is not { } run) return VersionNotFound();
         if (run.Status == CharacterLoraRuns.Status.Training) return VersionTraining();
 
+        using var _ = await runs.LockCharacterAsync(project.RootPath, slug, ct);
+        manifest = CharacterStore.Get(project.RootPath, slug) ?? manifest;
         CharacterDto? character = null;
         var disconnected = CharacterLoraRuns.IsConnected(run, manifest.ReadLora()?.Name);
         if (disconnected)

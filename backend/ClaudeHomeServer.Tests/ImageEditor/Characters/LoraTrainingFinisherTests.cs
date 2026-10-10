@@ -17,15 +17,17 @@ public sealed class LoraTrainingFinisherTests : IDisposable
     private readonly FakeTrainer _trainer = new();
     private readonly Project _project;
     private readonly LoraTrainingFinisher _sut;
+    private readonly Mock<IProjectManager> _projects = new();
+    private readonly Mock<ILocalImageMedia> _media = new();
 
     public LoraTrainingFinisherTests()
     {
         Directory.CreateDirectory(_root);
         _project = new Project { Name = "p", RootPath = _root, OwnerId = Owner };
-        var projects = new Mock<IProjectManager>();
+        var projects = _projects;
         projects.Setup(p => p.GetById(_project.Id)).Returns(_project);
         projects.Setup(p => p.GetAll()).Returns([_project]);
-        var media = new Mock<ILocalImageMedia>();
+        var media = _media;
         media.Setup(m => m.ListLorasAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<string>)[File(1), File(2), "manual.safetensors"]);
         _sut = new LoraTrainingFinisher(projects.Object, _runs, NullLogger<LoraTrainingFinisher>.Instance,
@@ -160,6 +162,98 @@ public sealed class LoraTrainingFinisherTests : IDisposable
         _trainer.Delete[RunId(2)] = LoraDeleteState.Deleted;
         await _sut.RunOnceAsync(default);
         _runs.ListDeleting(_root, Slug).Select(r => r.RunId).Should().Equal(RunId(3));
+    }
+
+    [Fact]
+    public async Task ManualConnect_DuringFinish_IsNotOverwritten()
+    {
+        Training(1);
+        Job(1, LoraTrainStatus.Completed);
+        // Человек подключает свою LoRA, пока доводчик ждёт ответ ComfyUI: перепроверка под замком не даёт её затереть
+        _media.Setup(m => m.ListLorasAsync(It.IsAny<CancellationToken>())).Returns(() =>
+        {
+            WriteCharacter("manual.safetensors");
+            return Task.FromResult<IReadOnlyList<string>?>([File(1), "manual.safetensors"]);
+        });
+
+        await _sut.RunOnceAsync(default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Ready);
+        ActiveLora().Should().Be("manual.safetensors");
+    }
+
+    [Fact]
+    public async Task ComfyUnavailable_KeepsTraining_ThenReadyAndConnectedAfterRecovery()
+    {
+        Training(1);
+        Job(1, LoraTrainStatus.Completed);
+        _media.Setup(m => m.ListLorasAsync(It.IsAny<CancellationToken>())).ReturnsAsync((IReadOnlyList<string>?)null);
+
+        await _sut.RunOnceAsync(default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Training);
+        ActiveLora().Should().BeNull();
+
+        _media.Setup(m => m.ListLorasAsync(It.IsAny<CancellationToken>())).ReturnsAsync((IReadOnlyList<string>)[File(1)]);
+        await _sut.RunOnceAsync(default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Ready);
+        ActiveLora().Should().Be(File(1));
+    }
+
+    [Fact]
+    public async Task CompletedWithoutFile_BecomesFailedWorkerError()
+    {
+        Training(1);
+        _trainer.States.Add(new LoraTrainState($"job1", Owner, _project.Id, Slug, RunId(1), "standard", LoraTrainStatus.Completed,
+            null, null, 2000, null, DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, null, null, null, null));
+
+        await _sut.RunOnceAsync(default);
+
+        var run = _runs.Get(_root, Slug, RunId(1))!;
+        run.Status.Should().Be(CharacterLoraRuns.Status.Failed);
+        run.Error!.Code.Should().Be("worker_error");
+    }
+
+    [Fact]
+    public async Task DeviceBoundProject_IsSkipped()
+    {
+        Training(1);
+        Job(1, LoraTrainStatus.Completed);
+        _project.DeviceId = Guid.NewGuid().ToString();
+
+        await _sut.RunOnceAsync(default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Training);
+    }
+
+    [Fact]
+    public async Task UnknownProject_IsSkippedWithoutError()
+    {
+        Training(1);
+        Job(1, LoraTrainStatus.Completed);
+
+        await _sut.SettleAsync(Owner, Guid.NewGuid().ToString(), Slug, default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Training);
+    }
+
+    [Fact]
+    public async Task AfterFirstPass_ProjectsWithoutDeleting_AreNotScanned_AndNewDeletingIsPickedUpViaIndex()
+    {
+        await _sut.RunOnceAsync(default);
+        _projects.Invocations.Clear();
+
+        await _sut.RunOnceAsync(default);
+        _projects.Verify(p => p.GetAll(), Times.Never);
+
+        Training(1);
+        _runs.Update(_root, Slug, RunId(1), r => r with { Status = CharacterLoraRuns.Status.Deleting });
+        _trainer.Delete[RunId(1)] = LoraDeleteState.Deleted;
+        await _sut.RunOnceAsync(default);
+
+        _runs.ListDeleting(_root, Slug).Should().BeEmpty();
+        _runs.CharactersWithDeleting().Should().BeEmpty();
     }
 
     [Fact]

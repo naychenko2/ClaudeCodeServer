@@ -256,6 +256,19 @@ public class LocalMediaLoraTrainTests : IDisposable
     }
 
     [Fact]
+    public async Task Sweep_CancelRequestedWithinCeiling_IsCancelledNotTimedOut()
+    {
+        var (service, _, clock, id, _) = await CancelRequestedWhileDownAsync();
+        clock.Now = clock.Now.AddMinutes(29);
+
+        (await service.SweepLoraTimeoutsAsync(default)).Should().Be(1);
+
+        var state = (await service.GetLoraTrainAsync(Owner, id, default))!;
+        state.Status.Should().Be(LoraTrainStatus.Cancelled);
+        state.Error.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Sweep_CancelRequestedBeyondCeiling_ComfyDown_KeepsCardBusy()
     {
         var (service, store, clock, _, _) = await CancelRequestedWhileDownAsync();

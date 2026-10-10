@@ -20,10 +20,14 @@ public sealed class LoraTrainingFinisher(
 {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
 
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+    // Полный обход проектов нужен один раз за жизнь процесса: подобрать «deleting» после падения; дальше — по индексу
+    private bool _fullScanDone;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (trainer is null) return;
-        using var timer = new PeriodicTimer(Interval, time ?? TimeProvider.System);
+        using var timer = new PeriodicTimer(Interval, _time);
         do
         {
             try { await RunOnceAsync(stoppingToken); }
@@ -42,19 +46,42 @@ public sealed class LoraTrainingFinisher(
     }
 
     // Один круг: итоги обучений и уборка версий «deleting» (в том числе осиротевших падением процесса
-    // между Update и Erase — они не привязаны к задаче, поэтому берутся обходом персонажей проектов)
+    // между Update и Erase — они не привязаны к задаче; их находит единственный полный обход при старте,
+    // а дальше персонажей с «deleting» держит индекс в CharacterLoraRuns)
     public async Task RunOnceAsync(CancellationToken ct)
     {
         if (trainer is null) return;
+        var settled = new HashSet<(string Root, string Slug)>();
         foreach (var group in trainer.ListAll().GroupBy(s => (s.OwnerId, s.ProjectId, s.Slug)))
-            await SettleAsync(group.Key.OwnerId, group.Key.ProjectId, group.Key.Slug, ct);
-
-        foreach (var project in projects.GetAll())
         {
-            // Файлы локального проекта лежат на устройстве, сервер к ним не ходит
-            if (project.DeviceId is not null || !Directory.Exists(project.RootPath)) continue;
-            foreach (var character in CharacterStore.List(project.RootPath))
-                await DeleteMarkedAsync(project, character.Slug, ct);
+            ct.ThrowIfCancellationRequested();
+            if (projects.GetById(group.Key.ProjectId) is { } p) settled.Add((p.RootPath, group.Key.Slug));
+            await SettleAsync(group.Key.OwnerId, group.Key.ProjectId, group.Key.Slug, ct);
+        }
+
+        if (!_fullScanDone)
+        {
+            foreach (var project in projects.GetAll())
+            {
+                ct.ThrowIfCancellationRequested();
+                // Файлы локального проекта лежат на устройстве, сервер к ним не ходит
+                if (!ProjectCapabilities.FilesOnServer(project) || !Directory.Exists(project.RootPath)) continue;
+                foreach (var character in CharacterStore.List(project.RootPath))
+                    if (runs.ListDeleting(project.RootPath, character.Slug).Count > 0)
+                        runs.RegisterDeleting(project.RootPath, character.Slug);
+            }
+            _fullScanDone = true;
+        }
+
+        var pending = runs.CharactersWithDeleting().Where(k => !settled.Contains(k)).ToList();
+        if (pending.Count == 0) return;
+        var byRoot = projects.GetAll().Where(ProjectCapabilities.FilesOnServer)
+            .GroupBy(p => p.RootPath).ToDictionary(g => g.Key, g => g.First());
+        foreach (var (root, slug) in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (byRoot.TryGetValue(root, out var project)) await DeleteMarkedAsync(project, slug, ct);
+            else runs.UnregisterDeletingIfEmpty(root, slug);
         }
     }
 
@@ -62,11 +89,12 @@ public sealed class LoraTrainingFinisher(
     public async Task SettleAsync(string ownerId, string projectId, string slug, CancellationToken ct)
     {
         if (trainer is null) return;
-        if (projects.GetById(projectId) is not { } project || project.OwnerId != ownerId || project.DeviceId is not null) return;
+        if (projects.GetById(projectId) is not { } project || project.OwnerId != ownerId || !ProjectCapabilities.FilesOnServer(project)) return;
         if (CharacterStore.Get(project.RootPath, slug) is null) return;
 
         foreach (var state in trainer.ListAll().Where(s => s.OwnerId == ownerId && s.ProjectId == projectId && s.Slug == slug))
         {
+            ct.ThrowIfCancellationRequested();
             if (runs.Get(project.RootPath, slug, state.RunId) is not { Status: CharacterLoraRuns.Status.Training } run) continue;
             if (run.JobId is not null && run.JobId != state.JobId) continue;
             try { await FinishAsync(project, slug, run, state, ct); }
@@ -83,6 +111,14 @@ public sealed class LoraTrainingFinisher(
         switch (state.Status)
         {
             case LoraTrainStatus.Completed when state.LoraFile is { Length: > 0 } loraFile:
+                // Без ответа ComfyUI автоподключить нечем: запись остаётся training, следующий круг доведёт.
+                // Список нужен, только если подключать есть что: при уже выбранной LoRA ComfyUI не спрашиваем.
+                IReadOnlyList<string>? known = null;
+                if (localMedia is not null && CharacterStore.Get(project.RootPath, slug)?.ReadLora() is null)
+                {
+                    known = await localMedia.ListLorasAsync(ct);
+                    if (known is null) return;
+                }
                 var rejected = state.Rejected?.Select(r => new LoraRunRejection(r.Name, r.Reason)).ToList();
                 var ready = runs.Update(project.RootPath, slug, run.RunId, r => r with
                 {
@@ -93,7 +129,7 @@ public sealed class LoraTrainingFinisher(
                     Rejected = rejected,
                     Error = null,
                 });
-                if (ready is not null) await ConnectIfFirstAsync(project, slug, ready, ct);
+                if (ready is not null) await ConnectIfFirstAsync(project, slug, ready, known, ct);
                 break;
             case LoraTrainStatus.Failed or LoraTrainStatus.Completed:
                 var failure = state.Error ?? new LoraTrainFailure("worker_error", "Обучение не дало файла LoRA");
@@ -109,11 +145,13 @@ public sealed class LoraTrainingFinisher(
         }
     }
 
-    // Подключаем только когда у персонажа нет никакой LoRA: свою версию или ручную не вытесняем
-    private async Task ConnectIfFirstAsync(Project project, string slug, CharacterLoraRun run, CancellationToken ct)
+    // Подключаем только когда у персонажа нет никакой LoRA: свою версию или ручную не вытесняем.
+    // Перепроверка ReadLora() — внутри блокировки персонажа, общей с ручками версий: между первым чтением
+    // и записью человек мог подключить свою
+    private async Task ConnectIfFirstAsync(Project project, string slug, CharacterLoraRun run, IReadOnlyList<string>? known, CancellationToken ct)
     {
+        using var _ = await runs.LockCharacterAsync(project.RootPath, slug, ct);
         if (CharacterStore.Get(project.RootPath, slug) is not { } manifest || manifest.ReadLora() is not null) return;
-        var known = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
         var patch = new CharacterPatch(null, null, [], [], null,
             CharacterLoraPatch.Set(run.LoraFile, run.Trigger, null, known));
         var result = CharacterStore.Update(project.RootPath, project.OwnerId, slug, patch);
@@ -132,6 +170,7 @@ public sealed class LoraTrainingFinisher(
         if (trainer is null) return;
         foreach (var run in runs.ListDeleting(project.RootPath, slug))
         {
+            ct.ThrowIfCancellationRequested();
             try
             {
                 var state = await trainer.DeleteRunAsync(project.OwnerId, project.Id, slug, run.RunId, ct);
@@ -142,5 +181,6 @@ public sealed class LoraTrainingFinisher(
                 log.LogWarning(ex, "Доводчик обучения LoRA: удаление версии {Run} персонажа {Slug} не удалось", run.RunId, slug);
             }
         }
+        runs.UnregisterDeletingIfEmpty(project.RootPath, slug);
     }
 }

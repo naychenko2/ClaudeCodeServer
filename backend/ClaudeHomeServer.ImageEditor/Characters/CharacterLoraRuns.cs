@@ -28,6 +28,40 @@ public sealed class CharacterLoraRuns(ILogger<CharacterLoraRuns> log)
     };
 
     private readonly object _lock = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _characterLocks = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Root, string Slug), byte> _deletingIndex = new();
+
+    // Одна блокировка на персонажа: пару «прочитать манифест → записать» берут и доводчик, и ручки версий,
+    // иначе автоподключение перезатирает выбор человека. Ключ — корень проекта без регистра разделителей.
+    public async Task<IDisposable> LockCharacterAsync(string projectRoot, string slug, CancellationToken ct = default)
+    {
+        var gate = _characterLocks.GetOrAdd(Path.GetFullPath(projectRoot) + "|" + slug, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        return new Releaser(gate);
+    }
+
+    private sealed class Releaser(SemaphoreSlim gate) : IDisposable
+    {
+        private int _released;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0) gate.Release();
+        }
+    }
+
+    // Персонажи, у которых есть записи «deleting»: доводчик обходит только их (плюс один полный проход при старте)
+    public IReadOnlyList<(string Root, string Slug)> CharactersWithDeleting() => [.. _deletingIndex.Keys];
+
+    public void RegisterDeleting(string projectRoot, string slug) => _deletingIndex[(projectRoot, slug)] = 0;
+
+    // Снимает персонажа с индекса, если «deleting» больше нет; проверка под тем же замком, что и регистрация в Update
+    public void UnregisterDeletingIfEmpty(string projectRoot, string slug)
+    {
+        lock (_lock)
+        {
+            if (ReadAll(projectRoot, slug).All(r => r.Status != Status.Deleting)) _deletingIndex.TryRemove((projectRoot, slug), out _);
+        }
+    }
 
     // Без deleting, новые сверху
     public IReadOnlyList<CharacterLoraRun> List(string projectRoot, string slug) =>
@@ -65,6 +99,7 @@ public sealed class CharacterLoraRuns(ILogger<CharacterLoraRuns> log)
             if (TryRead(path) is not { } current) return null;
             var updated = change(current) with { RunId = runId };
             Write(path, updated);
+            if (updated.Status == Status.Deleting) RegisterDeleting(projectRoot, slug);
             return updated;
         }
     }

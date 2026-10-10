@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Button, Field, Select, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
+import { loraLabels } from './loraName';
 import type { ImageEditCharacter, ImageEditLoras, ImageEditorApi } from '../api';
 
 type Lora = NonNullable<ImageEditCharacter['local']>;
@@ -51,8 +52,10 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
   const options = [...(list?.items ?? [])];
   // текущее имя, которого нет в списке, не теряем
   const missing = !!name && list?.available && !options.includes(name);
-  const selectOptions = options.map(o => ({ value: o, label: o }));
-  if (missing) selectOptions.unshift({ value: name, label: `${name} (нет в ComfyUI)` });
+  const labels = loraLabels(missing ? [name, ...options] : options, list?.trained);
+  const short = (n: string) => labels.get(n) ?? n;
+  const selectOptions = options.map(o => ({ value: o, label: short(o) }));
+  if (missing) selectOptions.unshift({ value: name, label: `${short(name)} (нет в ComfyUI)` });
 
   const hint = (text: string) => (
     <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{text}</div>
@@ -80,8 +83,8 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
           {list?.available && (list.items.length > 0 || has) && (
             <>
               <Field label="Файл LoRA" hint="Выберите из списка: AI Home берёт файлы, которые лежат в ComfyUI.">
-                <Select value={removed ? '' : name} options={selectOptions} placeholder="Не выбрана" disabled={disabled}
-                  onChange={v => { setName(v); touch(v, trigger, strength); }} />
+                <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}><Select value={removed ? '' : name} options={selectOptions} placeholder="Не выбрана" disabled={disabled}
+                  onChange={v => { setName(v); touch(v, trigger, strength); }} /></div>
               </Field>
               <Field label="Слово-триггер" hint="Одно слово: буквы, цифры и «_». Оно попадёт в запрос, чтобы модель включила LoRA. Возьмите то, что указано при обучении LoRA.">
                 <TextField value={trigger} placeholder="например, anna_face" disabled={disabled}
@@ -101,7 +104,7 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
           )}
           {list && !list.available && has && (
             <div style={{ fontSize: FS.sm, color: C.textPrimary, overflowWrap: 'anywhere' }}>
-              Файл: {name}, {trigger}, {strength.toFixed(2).replace('.', ',')}
+              Файл: {loraLabels([name]).get(name)}, {trigger}, {strength.toFixed(2).replace('.', ',')}
             </div>
           )}
           {has && (

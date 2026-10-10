@@ -12,6 +12,7 @@ import type { LoraVersionsHandle } from './useLoraVersions';
 import {
   VERSIONS_TEXT, VERSION_CONNECTED_FLASH, VERSION_DELETE_TITLE, VERSION_REVERT_TITLE, TRAIN_VERSION_LIMIT,
 } from './loraTrainTexts';
+import { loraLabels } from './loraName';
 import { failureText, versionFailureText } from './loraTrainView';
 import {
   atVersionLimit, needsRevertConfirm, validateVersionTitle, versionActions, versionMark, versionTitle,
@@ -158,7 +159,7 @@ export function CharacterLoraVersions({ versions, disabled }: {
         )}
         {data?.own && (
           <Notice tone="info" icon={Info}>
-            {VERSIONS_TEXT.own}<span style={{ fontFamily: 'inherit', fontWeight: 600 }}>{data.own.lora}</span>
+            {VERSIONS_TEXT.own}<span style={{ fontFamily: 'inherit', fontWeight: 600 }}>{loraLabels([data.own.lora], data.own.trainedAt ? { [data.own.lora]: data.own.trainedAt } : undefined).get(data.own.lora)}</span>
           </Notice>
         )}
         {data && atVersionLimit(data.used, data.limit) && (

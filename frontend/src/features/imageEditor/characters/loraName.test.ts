@@ -1,0 +1,46 @@
+import { describe, expect, it } from 'vitest';
+import { loraDisplayName, loraLabels } from './loraName';
+
+const at = (d: number, h = 12, m = 0) => new Date(2026, 9, d, h, m).toISOString();
+const A = 'ccs/a300cc8f/andreyk/andreyk_qwen21_v1_000001750.safetensors';
+const B = 'ccs/a300cc8f/andreyk2/andreyk_qwen21_v1_000001750.safetensors';
+
+describe('loraDisplayName', () => {
+  it('срезает префикс и расширение', () => {
+    expect(loraDisplayName(A)).toBe('andreyk_qwen21_v1_000001750');
+    expect(loraDisplayName('manual.safetensors')).toBe('manual');
+  });
+});
+
+describe('loraLabels', () => {
+  it('имя и дата', () => {
+    expect(loraLabels([A], { [A]: at(10) }).get(A)).toBe('andreyk_qwen21_v1_000001750 · 10 октября');
+  });
+  it('без даты — только имя', () => {
+    expect(loraLabels([A]).get(A)).toBe('andreyk_qwen21_v1_000001750');
+  });
+  it('одинаковое имя в разные дни различается датой', () => {
+    const l = loraLabels([A, B], { [A]: at(10), [B]: at(11) });
+    expect(l.get(A)).toContain('10 октября');
+    expect(l.get(B)).toContain('11 октября');
+  });
+  it('одна дата — добавляется время', () => {
+    const l = loraLabels([A, B], { [A]: at(10, 9, 5), [B]: at(10, 14, 32) });
+    expect(l.get(A)).toBe('andreyk_qwen21_v1_000001750 · 10 октября, 09:05');
+    expect(l.get(B)).toBe('andreyk_qwen21_v1_000001750 · 10 октября, 14:32');
+  });
+  it('ручные без даты различаются папкой', () => {
+    const l = loraLabels(['x/one/face.safetensors', 'x/two/face.safetensors']);
+    expect(l.get('x/one/face.safetensors')).toBe('face · one');
+    expect(l.get('x/two/face.safetensors')).toBe('face · two');
+  });
+  it('одинаковая папка — путь внутри префикса', () => {
+    const p = 'ccs/o1/same/face.safetensors', q = 'ccs/o2/same/face.safetensors';
+    const l = loraLabels([p, q]);
+    expect(l.get(p)).not.toBe(l.get(q));
+  });
+  it('все подписи уникальны', () => {
+    const names = [A, B, 'face.safetensors', 'a/face.safetensors', 'b/face.safetensors'];
+    expect(new Set(loraLabels(names).values()).size).toBe(names.length);
+  });
+});

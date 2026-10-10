@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loraDisplayName, loraLabels, ownLoraLabel, labelOrShortName } from './loraName';
+import { loraDisplayName, loraLabels, ownLoraLabel, labelOrShortName, loraLabelParts } from './loraName';
 
 const at = (d: number, h = 12, m = 0) => new Date(2026, 9, d, h, m).toISOString();
 const A = 'ccs/a300cc8f/andreyk/andreyk_qwen21_v1_000001750.safetensors';
@@ -95,5 +95,17 @@ describe('labelOrShortName', () => {
   });
   it('подпись из набора приоритетнее', () => {
     expect(labelOrShortName(new Map([[A, 'метка']]), A)).toBe('метка');
+  });
+});
+
+describe('loraLabelParts', () => {
+  it('длинное имя и дата: остаток начинается с «·»', () => {
+    expect(loraLabelParts('andreyk_qwen21_v1_000001750 · 10 октября')).toEqual({ name: 'andreyk_qwen21_v1_000001750', rest: '· 10 октября' });
+  });
+  it('дата, время и папка — делится по первому « · »', () => {
+    expect(loraLabelParts('face · 10 октября, 14:32 · andreyk2')).toEqual({ name: 'face', rest: '· 10 октября, 14:32 · andreyk2' });
+  });
+  it('подпись без « · » — всё имя, остаток пуст', () => {
+    expect(loraLabelParts('face')).toEqual({ name: 'face', rest: '' });
   });
 });

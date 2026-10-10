@@ -14,10 +14,8 @@ import { CharacterLoraSection, type LoraInput } from './CharacterLoraSection';
 import { CharacterLoraTrainSection } from './CharacterLoraTrainSection';
 import { CharacterLoraVersions } from './CharacterLoraVersions';
 import { CharacterTrainingPhotos } from './CharacterTrainingPhotos';
+import { CHARACTER_PHOTOS_NOTICE } from './characterTexts';
 import { MAX_PHOTO_MB, MAX_PHOTOS, MIN_PHOTOS, photosCountText, shrinkPhoto } from './photos';
-
-export const CHARACTER_PHOTOS_NOTICE =
-  'Фото будут отправляться выбранному сервису рисования при каждой генерации. У Higgsfield они попадут в общий аккаунт администратора. Загружайте фото чужих людей только с их согласия';
 
 type Photo = { key: string; url: string } & ({ kind: 'kept'; file: string } | { kind: 'new'; blob: Blob });
 

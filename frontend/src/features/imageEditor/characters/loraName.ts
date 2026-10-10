@@ -92,3 +92,10 @@ export function ownLoraLabel(
   const names = list?.available ? [own, ...list.items.filter(i => i !== own)] : [own];
   return loraLabels(names, trained).get(own) ?? own;
 }
+
+// Подпись делится по ПЕРВОМУ « · »: имя файла слева, остаток («· дата», «· дата, время · папка») справа.
+// Имя файла не содержит « · », поэтому первое вхождение — всегда граница имени.
+export function loraLabelParts(label: string): { name: string; rest: string } {
+  const i = label.indexOf(' · ');
+  return i < 0 ? { name: label, rest: '' } : { name: label.slice(0, i), rest: label.slice(i + 1) };
+}

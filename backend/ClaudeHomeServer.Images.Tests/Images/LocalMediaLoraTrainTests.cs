@@ -199,14 +199,46 @@ public class LocalMediaLoraTrainTests : IDisposable
     }
 
     [Fact]
-    public async Task Cancel_ComfyUnreachable_StillCancelsWithoutThrowing()
+    public async Task Cancel_ComfyUnreachable_KeepsJobActiveUntilSweepInterrupts()
     {
         var (service, store) = Build();
         var id = (await service.StartLoraTrainAsync(Start(), default)).JobId!;
+        var prompt = _comfy.Pending.Single();
+        _comfy.Pending.Clear();
+        _comfy.Running.Add(prompt);
         _comfy.Down = true;
 
         (await service.CancelLoraTrainAsync(Owner, id, asAdmin: false, default)).Should().Be(LoraCancelResult.Cancelled);
+
+        // Прогон на карте мог продолжиться — карту не освобождаем
+        store.ActiveLoraTrainCount().Should().Be(1);
+        var job = store.ListByOp(LocalMediaOps.LoraTrain, Owner).Single();
+        job.CancelRequested.Should().BeTrue();
+        job.Cancelled.Should().BeFalse();
+        (await service.SweepLoraTimeoutsAsync(default)).Should().Be(0);
+        store.ActiveLoraTrainCount().Should().Be(1);
+
+        _comfy.Down = false;
+        (await service.SweepLoraTimeoutsAsync(default)).Should().Be(1);
+
+        _comfy.Interrupted.Should().Contain(prompt);
         store.ActiveLoraTrainCount().Should().Be(0);
+        (await service.GetLoraTrainAsync(Owner, id, default))!.Status.Should().Be(LoraTrainStatus.Cancelled);
+    }
+
+    [Fact]
+    public async Task Sweep_QueuedBehindForeignRuns_IsNotTimedOutFromCreatedAt()
+    {
+        var clock = new FakeClock(DateTime.UtcNow);
+        var (service, store) = Build(time: clock);
+        _comfy.Running.Add("foreign-prompt");
+        await service.StartLoraTrainAsync(Start(), default);
+
+        clock.Now = clock.Now.AddMinutes(600);
+        (await service.SweepLoraTimeoutsAsync(default)).Should().Be(0);
+
+        store.ActiveLoraTrainCount().Should().Be(1);
+        _comfy.Interrupted.Should().BeEmpty();
     }
 
     [Fact]
@@ -355,6 +387,28 @@ public class LocalMediaLoraTrainTests : IDisposable
         var state = (await service.GetLoraTrainAsync(Owner, id, default))!;
         state.Status.Should().Be(LoraTrainStatus.Failed);
         state.Error!.Code.Should().Be(code);
+    }
+
+    [Fact]
+    public void ParseHistory_LongMessage_KeepsCcsErrorMarkerInTrimmedTail()
+    {
+        var text = new string('x', 600) + " ccs_error=too_few_faces";
+        var failed = new System.Text.Json.Nodes.JsonObject
+        {
+            ["status"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["status_str"] = "error",
+                ["completed"] = false,
+                ["messages"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonArray("execution_error",
+                    new System.Text.Json.Nodes.JsonObject { ["node_type"] = "CcsAudioWorker", ["exception_message"] = text })),
+            },
+            ["outputs"] = new System.Text.Json.Nodes.JsonObject(),
+        };
+
+        var error = ComfyClient.ParseHistory(failed).Error!;
+
+        error.Length.Should().BeLessOrEqualTo(400);
+        error.Should().EndWith("ccs_error=too_few_faces");
     }
 
     [Fact]

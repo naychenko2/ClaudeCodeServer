@@ -151,7 +151,7 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                             error = Trim(full, 400);
                             // Маркер воркера (ccs_error=код) не должен потеряться в обрезанном хвосте
                             if (CcsErrorMarker.Match(full) is { Success: true } marker && !error.Contains(marker.Value, StringComparison.Ordinal))
-                                error = $"{Trim(full, 400 - marker.Length - 1)} {marker.Value}";
+                                error = $"{Trim(full, 400 - marker.Length - 2)} {marker.Value}";
                         }
                         break;
                 }

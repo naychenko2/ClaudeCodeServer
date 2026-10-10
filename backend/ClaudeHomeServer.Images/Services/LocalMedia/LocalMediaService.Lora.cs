@@ -195,16 +195,40 @@ public sealed partial class LocalMediaService
         // Так гонка Queued→Running закрыта без _submitGate: постановку отмена не затрагивает
         var view = await RefreshAsync(job, ct);
         if (LocalMediaStatuses.IsTerminal(view.Job.Status)) return LoraCancelResult.AlreadyFinished;
+        if (!await TryStopLoraPromptAsync(job, ct))
+        {
+            // Прогон на карте мог продолжиться: терминальный статус освободил бы карту для второго обучения.
+            // Остаёмся активными, отмену довершит сторож; вызывающему это тот же «принято»
+            store.Update(job.Id, job.OwnerId, j =>
+            {
+                j.CancelRequested = true;
+                j.CancelRequestedAt ??= DateTime.UtcNow;
+            });
+            return LoraCancelResult.Cancelled;
+        }
+
+        MarkLoraCancelled(job);
+        return LoraCancelResult.Cancelled;
+    }
+
+    // true — ComfyUI принял оба запроса (для отсутствующего prompt_id они no-op, это и есть «его там нет»)
+    private async Task<bool> TryStopLoraPromptAsync(LocalMediaJob job, CancellationToken ct)
+    {
         try
         {
             await comfy.DeletePendingAsync(job.PromptId, ct);
             await comfy.InterruptAsync(job.PromptId, ct);
+            return true;
         }
         catch (ComfyException ex)
         {
             log.LogWarning("ComfyUI не подтвердил отмену обучения LoRA {Job}: {Error}", job.Id, ex.Message);
+            return false;
         }
+    }
 
+    private void MarkLoraCancelled(LocalMediaJob job)
+    {
         store.Update(job.Id, job.OwnerId, j =>
         {
             j.Status = LocalMediaStatuses.Failed;
@@ -212,7 +236,6 @@ public sealed partial class LocalMediaService
             j.FinishedAt = DateTime.UtcNow;
         });
         StopLoraProgress(job.Id);
-        return LoraCancelResult.Cancelled;
     }
 
     // Сторож зависшего обучения: потолок узла 240 мин + запас (LoraTrainTimeoutMinutes); иначе Running держит карту вечно
@@ -223,7 +246,20 @@ public sealed partial class LocalMediaService
         var swept = 0;
         foreach (var job in store.ListByOp(LocalMediaOps.LoraTrain))
         {
-            if (LocalMediaStatuses.IsTerminal(job.Status) || now - (job.StartedAt ?? job.CreatedAt) <= limit) continue;
+            if (LocalMediaStatuses.IsTerminal(job.Status)) continue;
+            if (job.CancelRequested)
+            {
+                // Повтор отмены, которую ComfyUI не подтвердил при запросе
+                if (await TryStopLoraPromptAsync(job, ct) && store.Get(job.Id, job.OwnerId) is { } pending
+                    && !LocalMediaStatuses.IsTerminal(pending.Status))
+                {
+                    MarkLoraCancelled(pending);
+                    swept++;
+                }
+                continue;
+            }
+            // Считаем от старта выполнения: задача могла долго стоять в очереди за чужими прогонами
+            if (job.StartedAt is not { } startedAt || now - startedAt <= limit) continue;
             await _collectGate.WaitAsync(ct);
             try
             {

@@ -116,6 +116,10 @@ public sealed class LocalMediaJob
     public List<LoraPhotoRejectionDto>? LoraRejected { get; set; }
     public string? ErrorCode { get; set; }
     public bool Cancelled { get; set; }
+    // Отмена запрошена, но ComfyUI не подтвердил прерывание: задача остаётся активной (держит карту в счёте),
+    // сторож повторяет прерывание и только тогда переводит её в Cancelled
+    public bool CancelRequested { get; set; }
+    public DateTime? CancelRequestedAt { get; set; }
 }
 
 public sealed class LoraPhotoRejectionDto

@@ -23,6 +23,10 @@ export interface PanelHeaderSlotValue {
   // меню открывается порталом в body, курсор уходит с карточки — и шапка гасила
   // контролы вместе с кнопкой, которой это меню открыли.
   hold: (held: boolean) => void;
+  // Корень карточки панели — рамки для попапов из её шапки (Menu boundary): меню
+  // кнопки справа в узкой панели иначе свисало за её левую кромку. Не задан — рамок
+  // нет, попап держится только в окне
+  panel?: HTMLElement | null;
 }
 
 const EMPTY: PanelHeaderSlotValue = { hasHeader: false, el: null, elLeft: null, elPinned: null, hold: () => {} };
@@ -34,6 +38,12 @@ export const PanelHeaderSlotContext = createContext<PanelHeaderSlotValue>(EMPTY)
 // флагу — как раньше делал проп hideViewSwitcher, только без участия владельца.
 export function useHasPanelHeader(): boolean {
   return useContext(PanelHeaderSlotContext).hasHeader;
+}
+
+// Карточка панели, внутри которой живёт компонент (null — панели нет). Рамку берут в
+// момент открытия попапа: getBoundingClientRect() → boundary у Menu
+export function usePanelElement(): HTMLElement | null {
+  return useContext(PanelHeaderSlotContext).panel ?? null;
 }
 
 // Пока active — контролы шапки не гаснут, даже если курсор ушёл с карточки.

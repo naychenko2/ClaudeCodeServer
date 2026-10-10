@@ -208,8 +208,8 @@ export function PanelShell({
   const [slotLeftEl, setSlotLeftEl] = useState<HTMLDivElement | null>(null);
   const [slotPinnedEl, setSlotPinnedEl] = useState<HTMLDivElement | null>(null);
   const slotValue = useMemo(
-    () => ({ hasHeader: true, el: slotEl, elLeft: slotLeftEl, elPinned: slotPinnedEl, hold }),
-    [slotEl, slotLeftEl, slotPinnedEl, hold]);
+    () => ({ hasHeader: true, el: slotEl, elLeft: slotLeftEl, elPinned: slotPinnedEl, hold, panel: rootEl }),
+    [slotEl, slotLeftEl, slotPinnedEl, hold, rootEl]);
 
   // Наведение на СЛОТ ловим нативно, а не пропсами React. Контролы приезжают в него
   // порталом, и react-события идут по React-дереву — то есть в саму панель, мимо

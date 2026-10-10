@@ -28,7 +28,28 @@ export function handleMenuEscape(e: { key: string; defaultPrevented: boolean; pr
   return true;
 }
 
-export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, children }: {
+// Горизонтальные рамки, в которых держится попап: обычно карточка панели, из шапки
+// которой его открыли (usePanelElement)
+export interface MenuBoundary { left: number; right: number }
+
+// Левый край попапа шириной width: желаемая позиция, зажатая в рамки boundary (если
+// заданы) и в окно с полями по 8 px. Попап шире рамок встаёт у их левого края; окно
+// важнее рамок — за кромку экрана не уезжает ни при каких рамках.
+export function clampPopupLeft(desired: number, width: number, viewportWidth: number, boundary?: MenuBoundary | null): number {
+  let left = desired;
+  if (boundary) left = Math.max(boundary.left, Math.min(left, boundary.right - width));
+  return Math.max(8, Math.min(left, viewportWidth - width - 8));
+}
+
+// Потолок ширины попапа, стоящего с левым краем left: не дальше правой кромки окна (с
+// полем 8 px) и правой кромки рамок — карточка растёт по содержимому, и без рамок
+// длинный пункт выводил её за правый край панели
+export function popupMaxWidth(left: number, maxWidth: number, viewportWidth: number, boundary?: MenuBoundary | null): number {
+  const right = Math.min(viewportWidth - 8, boundary ? boundary.right : Infinity);
+  return Math.min(maxWidth, right - left);
+}
+
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, boundary, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
@@ -39,6 +60,11 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   maxWidth?: number;
   // rect кнопки-триггера; задан — режим fixed (align/top/bottom игнорируются)
   anchor?: DOMRect;
+  // Рамки по горизонтали для anchor-режима (кроме anchorSide): карточка не выходит за
+  // них, даже если у якоря справа её правый край тянет влево. Меню из шапки узкой
+  // панели иначе свисало за её левую кромку. Правая кромка рамок ограничивает и
+  // потолок ширины. При fullWidth рамки игнорируются, как align/minWidth/maxWidth
+  boundary?: MenuBoundary | null;
   // высота меню для выбора направления в anchor-режиме (вверх, если снизу не влезает)
   maxHeight?: number;
   // зазор между якорем и карточкой в anchor-режиме; меньше — попап липнет к триггеру
@@ -99,12 +125,12 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   } else if (anchor) {
     const roomUp = anchor.top > maxHeight;
     const openUp = roomUp && (preferUp || anchor.bottom + gap + maxHeight > window.innerHeight);
-    const left = Math.max(8, Math.min(anchorAlign === 'start' ? anchor.left : anchor.right - minWidth, window.innerWidth - minWidth - 8));
+    const left = clampPopupLeft(anchorAlign === 'start' ? anchor.left : anchor.right - minWidth, minWidth, window.innerWidth, boundary);
     pos = {
       position: 'fixed', left,
       // Потолок ширины считаем ОТ ЛЕВОГО КРАЯ карточки: позиция выбрана по minWidth, а
       // растёт карточка по содержимому — длинный пункт уводил её правый край за окно
-      maxWidth: Math.min(maxWidth, window.innerWidth - left - 8),
+      maxWidth: popupMaxWidth(left, maxWidth, window.innerWidth, boundary),
       ...(openUp ? { bottom: window.innerHeight - anchor.top + gap } : { top: anchor.bottom + gap }),
     };
   } else {

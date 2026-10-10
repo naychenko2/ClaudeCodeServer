@@ -128,6 +128,30 @@ public class CharacterEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Ручка_loras_отдаёт_даты_только_обученных_и_только_видимых()
+    {
+        var all = new List<string> { "ccs/чужой/c.safetensors" };
+        var factory = Factory(media: new LoraMedia(all));
+        var trainedFile = Own(factory, "trained.safetensors");
+        all.InsertRange(0, [trainedFile, Own(factory, "manual.safetensors")]);
+        var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+        (await client.PostAsync($"/api/projects/{id}/image-editor/characters", CharacterForm("Аня")))
+            .StatusCode.Should().Be(HttpStatusCode.Created);
+        var at = new DateTimeOffset(2026, 10, 9, 12, 0, 0, TimeSpan.Zero);
+        var runs = factory.Services.GetRequiredService<CharacterLoraRuns>();
+        CharacterLoraRun Ready(string runId, string file) => new(1, runId, "job", "ready", null, "standard", "ccsanya",
+            30, "hash", at, at, file, null, null, null);
+        runs.Create(root, "anya", Ready("aaaaaaaaaaaa", trainedFile));
+        runs.Create(root, "anya", Ready("bbbbbbbbbbbb", "ccs/чужой/c.safetensors"));
+
+        var body = await Json(await client.GetAsync($"/api/projects/{id}/image-editor/loras"));
+        var trained = body.GetProperty("trained");
+        trained.EnumerateObject().Select(p => p.Name).Should().Equal(trainedFile);
+        trained.GetProperty(trainedFile).GetDateTimeOffset().Should().Be(at);
+    }
+
+    [Fact]
     public async Task Создание_с_LoRA_пишет_манифест_а_неизвестное_имя_не_создаёт_персонажа()
     {
         var known = new List<string>();

@@ -6,12 +6,13 @@ import { AlertCircle, Check, Cpu, Info, Layers, Pencil, Plug, Trash2 } from 'luc
 import {
   Badge, Button, ConfirmDialog, Field, IconButton, Notice, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP,
 } from 'aihome_shell/kit';
-import type { LoraVersionDto } from '../api';
+import type { ImageEditLoras, LoraVersionDto } from '../api';
 import { useIsMobile } from '../../../lib/breakpoints';
 import type { LoraVersionsHandle } from './useLoraVersions';
 import {
   VERSIONS_TEXT, VERSION_CONNECTED_FLASH, VERSION_DELETE_TITLE, VERSION_REVERT_TITLE, TRAIN_VERSION_LIMIT,
 } from './loraTrainTexts';
+import { ownLoraLabel } from './loraName';
 import { failureText, versionFailureText } from './loraTrainView';
 import {
   atVersionLimit, needsRevertConfirm, validateVersionTitle, versionActions, versionMark, versionTitle,
@@ -19,7 +20,9 @@ import {
 
 const ico = { size: ICON_SIZE.sm, strokeWidth: ICON_STROKE } as const;
 
-export function CharacterLoraVersions({ versions, disabled }: {
+export function CharacterLoraVersions({ loraList, versions, disabled }: {
+  // общий список ComfyUI из формы; null — ещё грузится
+  loraList: ImageEditLoras | null;
   versions: LoraVersionsHandle;
   disabled?: boolean;
 }) {
@@ -158,7 +161,7 @@ export function CharacterLoraVersions({ versions, disabled }: {
         )}
         {data?.own && (
           <Notice tone="info" icon={Info}>
-            {VERSIONS_TEXT.own}<span style={{ fontFamily: 'inherit', fontWeight: 600 }}>{data.own.lora}</span>
+            {VERSIONS_TEXT.own}<span style={{ fontFamily: 'inherit', fontWeight: 600 }}>{ownLoraLabel(data.own.lora, data.own.trainedAt, loraList)}</span>
           </Notice>
         )}
         {data && atVersionLimit(data.used, data.limit) && (

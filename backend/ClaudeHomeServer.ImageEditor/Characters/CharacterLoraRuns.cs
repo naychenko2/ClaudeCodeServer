@@ -128,6 +128,19 @@ public sealed class CharacterLoraRuns(ILogger<CharacterLoraRuns> log)
     public int CountTowardsLimit(string projectRoot, string slug) =>
         ReadAll(projectRoot, slug).Count(r => r.Status is Status.Ready or Status.Training);
 
+    // Даты обучения готовых LoRA всех персонажей проекта: полное имя файла → TrainedAt (при повторе имени — свежая)
+    public IReadOnlyDictionary<string, DateTimeOffset> TrainedDates(string projectRoot)
+    {
+        var result = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        foreach (var character in CharacterStore.List(projectRoot))
+            foreach (var run in ReadAll(projectRoot, character.Slug))
+            {
+                if (run.Status != Status.Ready || run.LoraFile is not { Length: > 0 } file || run.TrainedAt is not { } at) continue;
+                if (!result.TryGetValue(file, out var known) || at > known) result[file] = at;
+            }
+        return result;
+    }
+
     public static bool IsConnected(CharacterLoraRun run, string? activeLoraName) =>
         run.LoraFile is { Length: > 0 } && string.Equals(run.LoraFile, activeLoraName, StringComparison.Ordinal);
 

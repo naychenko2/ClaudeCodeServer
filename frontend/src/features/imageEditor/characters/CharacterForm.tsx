@@ -9,6 +9,7 @@ import { BackButton, Button, Checkbox, ConfirmDialog, Field, IconButton, TextAre
 import { characterSlug, type ImageEditCharacter, type ImageEditorApi } from '../api';
 import { putCharacter, reloadCharacters } from './useCharacters';
 import { useLoraVersions } from './useLoraVersions';
+import { useLoraList } from './useLoraList';
 import { CharacterLoraSection, type LoraInput } from './CharacterLoraSection';
 import { CharacterLoraTrainSection } from './CharacterLoraTrainSection';
 import { CharacterLoraVersions } from './CharacterLoraVersions';
@@ -35,6 +36,16 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
   const versions = useLoraVersions(character ? projectId : null, character?.slug ?? null, c => {
     if (c) putCharacter(projectId, c); else void reloadCharacters(projectId);
   });
+  // Один запрос списка LoRA на карточку: им пользуются и селект, и строка «своя LoRA»
+  const { list: loraList, reload: reloadLoras } = useLoraList(api, projectId);
+  // появилась/пропала готовая версия (обучение, удаление) — список с датами устарел
+  const readyKey = (versions.data?.items ?? []).filter(v => v.status === 'ready').map(v => v.runId).join('|');
+  const prevReady = useRef<string | null>(null);
+  useEffect(() => {
+    if (!versions.data) return;
+    if (prevReady.current !== null && prevReady.current !== readyKey) reloadLoras();
+    prevReady.current = readyKey;
+  }, [versions.data, readyKey, reloadLoras]);
   const [name, setName] = useState(character?.name ?? '');
   const [trainPhotos, setTrainPhotos] = useState<number | null>(null);
   const [description, setDescription] = useState(character?.description ?? '');
@@ -178,8 +189,8 @@ export function CharacterForm({ api, projectId, character, onSaved, onDeleted, o
       </div>
       {character && <CharacterTrainingPhotos key={character.slug} projectId={projectId} slug={character.slug} disabled={busy} onCount={setTrainPhotos} />}
       {character && <CharacterLoraTrainSection key={character.slug} projectId={projectId} slug={character.slug} versions={versions} hasConnected={!!character.local?.lora} photoCount={trainPhotos} disabled={busy} />}
-      {character && <CharacterLoraVersions key={character.slug} versions={versions} disabled={busy} />}
-      <CharacterLoraSection key={`${character?.slug ?? 'new'}|${character?.local?.lora ?? ''}|${character?.local?.trigger ?? ''}|${character?.local?.strength ?? ''}`} api={api} projectId={projectId} current={character?.local} disabled={busy} onChange={setLora} />
+      {character && <CharacterLoraVersions key={character.slug} loraList={loraList} versions={versions} disabled={busy} />}
+      <CharacterLoraSection key={`${character?.slug ?? 'new'}|${character?.local?.lora ?? ''}|${character?.local?.trigger ?? ''}|${character?.local?.strength ?? ''}`} list={loraList} current={character?.local} disabled={busy} onChange={setLora} />
       <div style={{
         display: 'flex', gap: SP.sm, alignItems: 'flex-start', fontSize: FS.sm, lineHeight: 1.45,
         color: C.warningText, background: C.warningBg, borderRadius: R.md, padding: `${SP.sm}px ${SP.md}px`,

@@ -1,38 +1,33 @@
 // Раздел «LoRA для локальной модели» в форме персонажа. Сворачиваемый, раскрыт сам,
-// если LoRA уже задана. Список файлов грузится при раскрытии. Наружу отдаёт ввод
+// если LoRA уже задана. Список файлов приходит от формы персонажа. Наружу отдаёт ввод
 // (или 'remove') только после того, как человек что-то тронул, — иначе LoRA не трогаем.
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Button, Field, Select, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
-import type { ImageEditCharacter, ImageEditLoras, ImageEditorApi } from '../api';
+import { labelOrShortName, loraLabels } from './loraName';
+import type { ImageEditCharacter, ImageEditLoras } from '../api';
 
 type Lora = NonNullable<ImageEditCharacter['local']>;
 export type LoraInput = { name: string; trigger: string; strength: number } | 'remove';
 
 const DEFAULT_STRENGTH = 0.8;
+// Узкий экран: в свёрнутом селекте режется имя, а дата и папка остаются видны; подпись под селектом — полная
+const SELECT_NAME_MAX = 12;
 
-export function CharacterLoraSection({ api, projectId, current, disabled, onChange }: {
-  api: ImageEditorApi;
-  projectId: string;
+export function CharacterLoraSection({ list, current, disabled, onChange }: {
+  // общий список ComfyUI, загруженный формой; null — ещё грузится
+  list: ImageEditLoras | null;
   current: Lora | null | undefined;
   disabled?: boolean;
   // undefined — человек ничего не менял
   onChange: (lora: LoraInput | undefined) => void;
 }) {
   const [open, setOpen] = useState(!!current);
-  const [list, setList] = useState<ImageEditLoras | null>(null);
   const [name, setName] = useState(current?.lora ?? '');
   const [trigger, setTrigger] = useState(current?.trigger ?? '');
   const [strength, setStrength] = useState(current?.strength ?? DEFAULT_STRENGTH);
   const [removed, setRemoved] = useState(false);
-
-  useEffect(() => {
-    if (!open || list) return;
-    let alive = true;
-    api.loras(projectId).then(r => { if (alive) setList(r); }).catch(() => { if (alive) setList({ available: false, items: [] }); });
-    return () => { alive = false; };
-  }, [open, list, api, projectId]);
 
   const touch = (n: string, t: string, s: number) => {
     // правка триггера или силы после «Убрать» отмену удаления не снимает
@@ -51,8 +46,12 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
   const options = [...(list?.items ?? [])];
   // текущее имя, которого нет в списке, не теряем
   const missing = !!name && list?.available && !options.includes(name);
-  const selectOptions = options.map(o => ({ value: o, label: o }));
-  if (missing) selectOptions.unshift({ value: name, label: `${name} (нет в ComfyUI)` });
+  const allNames = missing ? [name, ...options] : options;
+  const shortLabels = loraLabels(allNames, list?.trained, SELECT_NAME_MAX);
+  const fullLabels = loraLabels(allNames, list?.trained);
+  const short = (n: string) => labelOrShortName(shortLabels, n);
+  const selectOptions = options.map(o => ({ value: o, label: short(o) }));
+  if (missing) selectOptions.unshift({ value: name, label: `${short(name)} (нет в ComfyUI)` });
 
   const hint = (text: string) => (
     <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{text}</div>
@@ -101,7 +100,7 @@ export function CharacterLoraSection({ api, projectId, current, disabled, onChan
           )}
           {list && !list.available && has && (
             <div style={{ fontSize: FS.sm, color: C.textPrimary, overflowWrap: 'anywhere' }}>
-              Файл: {name}, {trigger}, {strength.toFixed(2).replace('.', ',')}
+              Файл: {labelOrShortName(fullLabels, name)}, {trigger}, {strength.toFixed(2).replace('.', ',')}
             </div>
           )}
           {has && (

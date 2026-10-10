@@ -258,6 +258,68 @@ public class TurnFileWatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task ПервоеКасаниеФайлаВGit_DiffСчитаетсяОтHead()
+    {
+        // Регресс: файл, которого ещё нет в кэше ватчера, считался целиком добавленным —
+        // лента показывала +274/-0 при git diff +1/-1 на панели «Изменения». Теперь база
+        // для первого касания — версия из HEAD.
+        var path = Path.Combine(_root, "file.txt");
+        File.WriteAllText(path, "line1\nline2\nline3\n");
+        RunGit("init", "-q");
+        RunGit("add", "file.txt");
+        RunGit("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+
+        var received = new ConcurrentQueue<FileChangedMessage>();
+        var signal = new SemaphoreSlim(0);
+        using var watcher = CreateWatcher(_root, received, signal);
+        watcher.Start();
+        await Task.Delay(200);
+
+        // Прогрева кэша нет намеренно — проверяется именно первое касание
+        File.WriteAllText(path, "line1\nline2X\nline3\n");
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
+
+        msg.Should().NotBeNull();
+        msg!.Added.Should().Be(1, "изменилась одна строка относительно HEAD");
+        msg.Removed.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task НовыйФайл_ЗавершающийПереводСтроки_НеСчитаетсяЛишнейСтрокой()
+    {
+        // Раньше Split('\n') давал хвостовую пустую строку: файл из 2 строк — «+3»
+        var received = new ConcurrentQueue<FileChangedMessage>();
+        var signal = new SemaphoreSlim(0);
+        using var watcher = CreateWatcher(_root, received, signal);
+        watcher.Start();
+        await Task.Delay(200);
+
+        File.WriteAllText(Path.Combine(_root, "new.txt"), "a\nb\n");
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(3));
+
+        msg.Should().NotBeNull();
+        msg!.Added.Should().Be(2);
+        msg.Removed.Should().Be(0);
+    }
+
+    private void RunGit(params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = _root,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        proc.StandardOutput.ReadToEnd();
+        var err = proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
+        proc.ExitCode.Should().Be(0, $"git {string.Join(' ', args)}: {err}");
+    }
+
+    [Fact]
     public async Task ОстановленныйВатчер_НеШлётСообщения()
     {
         var path = Path.Combine(_root, "file.txt");

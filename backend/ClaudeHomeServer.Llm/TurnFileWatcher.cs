@@ -157,7 +157,11 @@ public sealed class TurnFileWatcher : IDisposable
 
             var rel = Path.GetRelativePath(_rootPath, fullPath).Replace('\\', '/');
             var newContent = File.Exists(fullPath) ? File.ReadAllText(fullPath) : null;
-            _fileCache.TryGetValue(fullPath, out var oldContent);
+            // Первое касание файла за сессию: кэша нет, и без базы diff считал бы весь файл
+            // добавленным (+274 вместо +1 рядом с честным git diff панели «Изменения»).
+            // База — версия из HEAD; нет её (не репо, новый файл) — по-старому от пустоты.
+            if (!_fileCache.TryGetValue(fullPath, out var oldContent))
+                oldContent = await ReadHeadContentAsync(rel);
             // Кэш обновляем ДО проверки атрибуции: подавленная карточка не должна оставить
             // это правку в diff-базе для следующего события своего же хода
             _fileCache[fullPath] = newContent;
@@ -255,14 +259,48 @@ public sealed class TurnFileWatcher : IDisposable
         });
     }
 
+    // Содержимое файла в HEAD (git show HEAD:./rel) — база diff для файла, которого ещё нет
+    // в кэше. null — не репо, файла в HEAD нет, git не ответил: тогда diff от пустоты.
+    private async Task<string?> ReadHeadContentAsync(string rel)
+    {
+        if (!_isGitRepo) return null;
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = _rootPath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+            };
+            // «./» — путь от рабочей папки, а не от корня репозитория (проект бывает подпапкой)
+            foreach (var a in new[] { "show", "HEAD:./" + rel }) psi.ArgumentList.Add(a);
+            using var proc = Process.Start(psi)!;
+            // Читаем оба потока параллельно: иначе большой файл забьёт буфер pipe и git встанет
+            var stdout = proc.StandardOutput.ReadToEndAsync();
+            var stderr = proc.StandardError.ReadToEndAsync();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            try { await proc.WaitForExitAsync(cts.Token); }
+            catch (OperationCanceledException)
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return null;
+            }
+            await stderr;
+            return proc.ExitCode == 0 ? await stdout : null;
+        }
+        catch { return null; }
+    }
+
     // Мультисет-diff по содержимому строк, а не разница счётчиков: O(n) через подсчёт
     // вхождений — правка строки (без изменения их числа) даёт честные 1 добавлена/1 удалена
     // вместо 0/0. Не различает перестановку строк без изменения контента — компромисс ради
     // O(n) вместо LCS/Myers, чтобы большие файлы не подвешивали ход.
     private static (int added, int removed) CountLineDiff(string? oldContent, string? newContent)
     {
-        var oldLines = oldContent?.Split('\n') ?? [];
-        var newLines = newContent?.Split('\n') ?? [];
+        var oldLines = SplitLines(oldContent);
+        var newLines = SplitLines(newContent);
 
         var counts = new Dictionary<string, int>(oldLines.Length);
         foreach (var line in oldLines)
@@ -279,5 +317,18 @@ public sealed class TurnFileWatcher : IDisposable
 
         var removed = counts.Values.Sum(c => Math.Max(c, 0));
         return (added, removed);
+    }
+
+    // Строки без хвостового '\r': база из HEAD при core.autocrlf приходит с LF, а рабочая
+    // копия — с CRLF, и без этого каждая строка считалась бы заменённой. Завершающий '\n'
+    // не даёт лишней пустой «строки» (раньше новый файл из N строк показывался как +N+1).
+    private static string[] SplitLines(string? content)
+    {
+        if (string.IsNullOrEmpty(content)) return [];
+        var lines = content.Split('\n');
+        var count = content.EndsWith('\n') ? lines.Length - 1 : lines.Length;
+        var result = new string[count];
+        for (var i = 0; i < count; i++) result[i] = lines[i].TrimEnd('\r');
+        return result;
     }
 }

@@ -41,9 +41,10 @@ export function overageLabel(status?: string): string {
   return OVERAGE_LABELS[status ?? ''] ?? 'перерасход ограничен';
 }
 
-// Цвета по уровню (из палитры design.ts): норма — нейтральный, внимание — янтарь, лимит — красный
+// Цвета по уровню (из палитры design.ts): норма — спокойный синий, внимание — янтарь, лимит — красный
 export const RATE_COLORS: Record<RateWindow['level'], { fill: string; text: string; bg: string; border: string }> = {
-  normal: { fill: C.textMuted, text: C.textSecondary, bg: C.bgWhite, border: C.border },
+  // fill нормы — спокойный info, а не серый: серая дуга на серой дорожке читалась как выключенная
+  normal: { fill: C.info, text: C.textSecondary, bg: C.bgWhite, border: C.border },
   warn:   { fill: C.warning, text: C.warningText, bg: C.warningBg, border: C.warning },
   danger: { fill: C.danger, text: C.dangerText, bg: C.dangerBg, border: C.dangerBorder },
 };

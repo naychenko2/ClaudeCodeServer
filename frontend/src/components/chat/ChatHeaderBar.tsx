@@ -320,28 +320,45 @@ const RING_C = RING_BOX / 2;
 const RING_GEOMETRY = [9, 6, 3].map(r => ({ r, L: 2 * Math.PI * r }));
 const RING_STROKE = 2;
 
-// Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся
-function RingCircle({ r, stroke, dash }: { r: number; stroke: string; dash?: string }) {
+// Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся.
+// round — скруглённые концы дуги; animate — дуга плавно дорастает до нового значения
+function RingCircle({ r, stroke, dash, round, animate }: { r: number; stroke: string; dash?: string; round?: boolean; animate?: boolean }) {
   return (
-    <circle cx={RING_C} cy={RING_C} r={r} fill="none" strokeWidth={RING_STROKE} strokeLinecap="butt"
-      strokeDasharray={dash} style={{ stroke }} />
+    <circle cx={RING_C} cy={RING_C} r={r} fill="none" strokeWidth={RING_STROKE} strokeLinecap={round ? 'round' : 'butt'}
+      strokeDasharray={dash} style={{ stroke, transition: animate ? 'stroke-dasharray 600ms cubic-bezier(.2,.8,.2,1)' : undefined }} />
   );
 }
+
+// Дуга со скруглёнными концами: каждый конец выступает на полтолщины, поэтому штрих
+// короче на толщину — видимая длина остаётся ровно arc (и минимум 3px из ringArcLength)
+const roundArcDash = (arc: number, L: number) => `${Math.max(arc - RING_STROKE, 0.01)} ${L}`;
+
+const levelRank = (l: RateWindow['level']) => (l === 'danger' ? 2 : l === 'warn' ? 1 : 0);
 
 // Иконка пилюли 20×20. slots — [outer, mid, inner]; undefined — слота нет (не рисуется),
 // pct null — только дорожка. spinOuter — идёт сжатие: внешнее кольцо становится спиннером.
 // forceReducedMotion — только для витрины (5.2r), в продукте решает настройка ОС.
 // Обёртка нулевой высоты: иконка центрируется по строке текста, но высоту пилюли не
 // задаёт — её задаёт текст, ровно как у соседних пилюль, и ряд стоит на одной высоте
-function RingIcon({ slots, spinOuter, forceReducedMotion }: {
+function RingIcon({ slots, spinOuter, forceReducedMotion, resetKey }: {
   slots: [RingSlot, RingSlot | undefined, RingSlot | undefined]; spinOuter?: boolean; forceReducedMotion?: boolean;
+  resetKey?: string;
 }) {
   const reducedMotion = usePrefersReducedMotion() || !!forceReducedMotion;
   const outer = RING_GEOMETRY[0];
+  // Толчок — только когда уровень вырос в ЭТОМ чате; смена чата лишь запоминает новый уровень
+  const rank = Math.max(...slots.map(s => (s && s.pct !== null ? levelRank(s.level) : 0)));
+  const prev = useRef({ rank, resetKey });
+  const [bump, setBump] = useState(false);
+  useEffect(() => {
+    if (rank > prev.current.rank && resetKey === prev.current.resetKey && !reducedMotion) setBump(true);
+    prev.current = { rank, resetKey };
+  }, [rank, resetKey, reducedMotion]);
   return (
     <span style={{ display: 'flex', alignItems: 'center', width: RING_BOX, height: 0, flexShrink: 0 }}>
     <svg width={RING_BOX} height={RING_BOX} viewBox={`0 0 ${RING_BOX} ${RING_BOX}`} aria-hidden shapeRendering="geometricPrecision"
-      style={{ flexShrink: 0, display: 'block' }}>
+      onAnimationEnd={() => setBump(false)}
+      style={{ flexShrink: 0, display: 'block', transformOrigin: 'center', animation: bump ? 'cc-ring-bump 500ms ease-out' : undefined }}>
       {/* Старт дуг сверху, по часовой */}
       <g transform={`rotate(-90 ${RING_C} ${RING_C})`}>
         {slots.map((s, i) => {
@@ -351,7 +368,7 @@ function RingIcon({ slots, spinOuter, forceReducedMotion }: {
           return (
             <g key={i}>
               <RingCircle r={r} stroke={C.progressTrack} />
-              {arc > 0 && <RingCircle r={r} stroke={RATE_COLORS[s.level].fill} dash={`${arc} ${L}`} />}
+              {arc > 0 && <RingCircle r={r} stroke={RATE_COLORS[s.level].fill} dash={roundArcDash(arc, L)} round animate={!reducedMotion} />}
             </g>
           );
         })}
@@ -361,7 +378,7 @@ function RingIcon({ slots, spinOuter, forceReducedMotion }: {
         // поверх пунктирной дорожки, чтобы «идёт работа» читалось и без анимации
         <g style={{ transformOrigin: `${RING_C}px ${RING_C}px`, animation: reducedMotion ? undefined : 'cc-spin 0.9s linear infinite' }}>
           <RingCircle r={outer.r} stroke={C.progressTrack} dash={reducedMotion ? '2 2' : undefined} />
-          <RingCircle r={outer.r} stroke={C.accent} dash={`${outer.L * 0.25} ${outer.L}`} />
+          <RingCircle r={outer.r} stroke={C.accent} dash={roundArcDash(outer.L * 0.25, outer.L)} round />
         </g>
       )}
     </svg>
@@ -846,7 +863,7 @@ export function RingPillBadge(props: {
     <BadgeShell
       ring
       amount={<>
-        <RingIcon slots={slots} spinOuter={isCompacting} forceReducedMotion={props.forceReducedMotion} />
+        <RingIcon slots={slots} spinOuter={isCompacting} forceReducedMotion={props.forceReducedMotion} resetKey={props.resetKey} />
         <span>
           {apiCost && <>
             <span style={{ color: C.textSecondary }}>{fmtUsd(cost.cost)}</span>

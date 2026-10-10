@@ -327,6 +327,15 @@ body {
   .cc-live-dot { animation: none; opacity: .7; }
 }
 
+/* Кольцевая пилюля шапки чата: одиночный толчок иконки, когда уровень лимита
+   вырос (норма → предупреждение → тревога). Запускается инлайном из RingIcon,
+   при reduced-motion не ставится вовсе */
+@keyframes cc-ring-bump {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
 /* === Индикатор ожидания ответа (WaitingIndicator) === */
 @keyframes cc-pulse-ring {
   0%   { box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.45); }
